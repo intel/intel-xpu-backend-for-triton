@@ -54,7 +54,9 @@ TEST:
     --sglang-gdn
     --sglang-kda
     --sglang-spec
+    --sglang-e2e
     --install-sglang
+    --install-sgl-kernel-xpu
     --liger
     --install-liger
 
@@ -117,7 +119,9 @@ TEST_SGLANG_MAMBA=false
 TEST_SGLANG_GDN=false
 TEST_SGLANG_KDA=false
 TEST_SGLANG_SPEC=false
+TEST_SGLANG_E2E=false
 INSTALL_SGLANG=false
+INSTALL_SGL_KERNEL_XPU=false
 TEST_LIGER=false
 INSTALL_LIGER=false
 TEST_VLLM=false
@@ -324,8 +328,18 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
+    --sglang-e2e)
+      TEST_SGLANG_E2E=true
+      TEST_DEFAULT=false
+      shift
+      ;;
     --install-sglang)
       INSTALL_SGLANG=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --install-sgl-kernel-xpu)
+      INSTALL_SGL_KERNEL_XPU=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -707,7 +721,7 @@ run_tools_tests() {
   ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
-    run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose tools
+    run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose --device xpu tools
 }
 
 run_regression_tests() {
@@ -844,15 +858,10 @@ run_benchmark_flash_attention() {
   cd $TRITON_PROJ/benchmarks
   pip install .
 
-  echo "Forward - Default path (with tensor descriptor):"
+  echo "Forward:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 
-  echo "Forward - Advanced path:"
-  TRITON_INTEL_ADVANCED_PATH=1 \
-    IGC_VISAOptions=" -enableBCR" \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
-
-  echo "Backward - Default path:"
+  echo "Backward:"
   FA_KERNEL_MODE="bwd" \
     python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 }
@@ -947,6 +956,14 @@ run_sglang_install() {
   "$SCRIPTS_DIR/sglang/install-sglang.sh"
 }
 
+run_sgl_kernel_xpu_install() {
+  echo "************************************************"
+  echo "******    Installing sgl-kernel-xpu       ******"
+  echo "************************************************"
+
+  "$SCRIPTS_DIR/sglang/install-sgl-kernel-xpu.sh"
+}
+
 enter_sglang_test_env() {
   run_sglang_install
   run_test_deps_install
@@ -969,6 +986,7 @@ run_sglang_tests() {
   run_sglang_gdn_tests
   run_sglang_kda_tests
   run_sglang_spec_tests
+  run_sglang_e2e_tests
 }
 
 run_sglang_attention_tests() {
@@ -978,11 +996,15 @@ run_sglang_attention_tests() {
 
   enter_sglang_test_env
   # KV index build, decode/extend/prefill attention.
+  # unittests/dense/test_triton.py drives the same kernels through RadixAttention
+  # against HF-style torch references, and is the only thing here that covers
+  # get_num_kv_splits_triton. sglang-test-fix.patch makes it device-agnostic.
   # test_fp4_indexer.py is left out: it imports sgl_kernel, which is not installed.
   TRITON_TEST_SUITE=sglang_attention \
     run_pytest_command -vvv \
       test/registered/attention/test_create_kvindices.py \
-      test/registered/attention/test_triton_attention_kernels.py
+      test/registered/attention/test_triton_attention_kernels.py \
+      test/registered/attention/unittests/dense/test_triton.py
 }
 
 run_sglang_quant_tests() {
@@ -995,10 +1017,11 @@ run_sglang_quant_tests() {
   # test_int8_kernel.py and test_block_int8.py are left out: they import
   # srt.layers.activation, which needs sgl_kernel on XPU.
   TRITON_TEST_SUITE=sglang_quant \
-    run_pytest_command -vvv \
-      test/registered/quant/test_fp8_kernel.py \
-      test/registered/quant/test_triton_scaled_mm.py \
-      test/registered/quant/test_awq_dequant.py
+    run_pytest_command -vvv --import-mode=importlib \
+      test/registered/kernels/ops/quantization/test_fp8_kernel.py \
+      test/registered/kernels/ops/gemm/test_fp8_kernel.py \
+      test/registered/kernels/ops/gemm/test_triton_scaled_mm.py \
+      test/registered/kernels/ops/quantization/test_awq_dequant.py
 }
 
 run_sglang_moe_tests() {
@@ -1007,11 +1030,13 @@ run_sglang_moe_tests() {
   echo "********************************************************"
 
   enter_sglang_test_env
-  # Fused MoE + LoRA.
-  # test_fused_moe.py and test/manual/test_triton_moe_wna16.py are left out: same
-  # sgl_kernel import as the INT8 tests.
+  # Fused MoE + LoRA. sglang-test-fix.patch guards the optional sgl_kernel
+  # imports on the Triton MoE path and adds native fallbacks, which is what
+  # lets test_fused_moe.py import and run here.
+  # test/manual/test_triton_moe_wna16.py is still left out.
   TRITON_TEST_SUITE=sglang_moe \
     run_pytest_command -vvv \
+      test/registered/moe/test_fused_moe.py \
       test/registered/lora/test_fused_moe_lora_kernel.py
 }
 
@@ -1063,6 +1088,21 @@ run_sglang_spec_tests() {
   TRITON_TEST_SUITE=sglang_spec \
     run_pytest_command -vvv \
       test/registered/spec/dspark/test_dspark_kernel_parity.py
+}
+
+run_sglang_e2e_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang end-to-end tests          *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # The only suite that runs a real forward pass, so the only one that reaches
+  # compute_position_kernel and write_req_to_token_pool_triton: every other suite
+  # builds ForwardBatch directly and passes positions in by hand. Launches a
+  # server and downloads weights, unlike the kernel suites.
+  TRITON_TEST_SUITE=sglang_e2e \
+    run_pytest_command -vvv \
+      test/registered/xpu/test_xpu_basic.py
 }
 
 run_liger_install() {
@@ -1491,6 +1531,9 @@ test_triton() {
   if [ "$TEST_INDUCTOR" == true ]; then
     run_inductor_tests
   fi
+  if [ "$INSTALL_SGL_KERNEL_XPU" == true ]; then
+    run_sgl_kernel_xpu_install
+  fi
   if [ "$INSTALL_SGLANG" == true ]; then
     run_sglang_install
   fi
@@ -1517,6 +1560,9 @@ test_triton() {
   fi
   if [ "$TEST_SGLANG_SPEC" == true ]; then
     run_sglang_spec_tests
+  fi
+  if [ "$TEST_SGLANG_E2E" == true ]; then
+    run_sglang_e2e_tests
   fi
   if [ "$INSTALL_LIGER" == true ]; then
     run_liger_install

@@ -193,3 +193,105 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COM: A loop-carried store index stepped by a non-divisible amount must not get the
+// COM: block_io attribute: the index is odd on every other iteration, and the
+// COM: 2D block message requires an aligned X (issue #7990). Loads and stores share
+// COM: the same alignment gate, so the store side must be pinned separately.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @materialize_tensor_descriptor_loop_carried_store_index(
+  tt.func public @materialize_tensor_descriptor_loop_carried_store_index(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c3_i32 = arith.constant 3 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot_a>
+    %0 = tt.make_tensor_descriptor %arg0, [%c64_i32, %c32_i32], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    scf.for %i = %c0_i32 to %c64_i32 step %c32_i32 iter_args(%off = %c0_i32) -> (i32) : i32 {
+      // CHECK: tt.descriptor_store
+      // CHECK-NOT: ttig.block_io
+      // CHECK-SAME: !tt.tensordesc
+      tt.descriptor_store %0[%c0_i32, %off], %cst : !tt.tensordesc<64x32xf16, #dot_a>, tensor<64x32xf16, #dot_a>
+      %next = arith.addi %off, %c3_i32 : i32
+      scf.yield %next : i32
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Fix witness: padding propagation is not gated on ttig.support_2d_block_io,
+// COM: which this module lacks. The LLVM lowering reads the ABSENCE of
+// COM: ttig.desc_padding as PAD_ZERO, so stamping it only behind the capability
+// COM: gate gave this PAD_NAN descriptor a zero fill on exactly the targets that
+// COM: take the generic masked path (#8102).
+// COM:
+// COM: Pinning the whole attribute dictionary is what proves ttig.block_io is
+// COM: absent: it sorts before ttig.desc_padding, so a CHECK-NOT anchored after
+// COM: the desc_padding match would not see it.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func public @desc_padding_without_2d_block_io(
+  tt.func public @desc_padding_without_2d_block_io(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c32_i32 = arith.constant 32 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %0 = tt.make_tensor_descriptor %arg0, [%c64_i32, %c32_i32], [%pitch, %c1_i64] {padding = 2 : i32} : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    // CHECK: tt.descriptor_load {{.*}} {ttig.desc_padding = 2 : i32} :
+    %1 = tt.descriptor_load %0[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The f16 row length must be even. isDivisible proves it through subi,
+// COM: minsi, maxsi and select when every operand is (issues/8073), and still
+// COM: refuses when one operand is unknown.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @materialize_tensor_descriptor_row_length_ops(
+  tt.func public @materialize_tensor_descriptor_row_length_ops(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %a: i32 {tt.divisibility = 16 : i32}, %b: i32 {tt.divisibility = 16 : i32}, %odd: i32, %cond: i1) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i32 = arith.constant 64 : i32
+
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
+    %sub = arith.subi %a, %b : i32
+    %0 = tt.make_tensor_descriptor %base, [%c64_i32, %sub], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    %1 = tt.descriptor_load %0[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
+    %min = arith.minsi %a, %b : i32
+    %2 = tt.make_tensor_descriptor %base, [%c64_i32, %min], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    %3 = tt.descriptor_load %2[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
+    %max = arith.maxsi %a, %b : i32
+    %4 = tt.make_tensor_descriptor %base, [%c64_i32, %max], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    %5 = tt.descriptor_load %4[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
+    %sel = arith.select %cond, %a, %b : i32
+    %6 = tt.make_tensor_descriptor %base, [%c64_i32, %sel], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    %7 = tt.descriptor_load %6[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+
+    // CHECK: tt.descriptor_load
+    // CHECK-NOT: ttig.block_io
+    // CHECK: tt.return
+    %sel_odd = arith.select %cond, %a, %odd : i32
+    %8 = tt.make_tensor_descriptor %base, [%c64_i32, %sel_odd], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    %9 = tt.descriptor_load %8[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+
+    tt.return
+  }
+}

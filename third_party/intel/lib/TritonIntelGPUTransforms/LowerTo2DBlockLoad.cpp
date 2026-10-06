@@ -141,18 +141,15 @@ private:
 
     // Find all MakeTensorDescOps that could define this descriptor.
     Value desc = op.getDesc();
-    SmallVector<tt::MakeTensorDescOp> allDescs =
-        tt::intel::findAllMakeTensorDescOps(desc);
-    if (allDescs.empty()) {
+    tt::intel::DescriptorDefinitions defs =
+        tt::intel::findDescriptorDefinitions(desc);
+    if (defs.empty()) {
       LDBG("Could not find MakeTensorDescOp for: " << *op);
       return;
     }
 
-    // All candidates must have the same padding.
-    tt::PaddingOption padding = allDescs[0].getPadding();
-    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
-          return d.getPadding() == padding;
-        })) {
+    std::optional<tt::PaddingOption> padding = defs.consistentPadding();
+    if (!padding) {
       LDBG("Inconsistent padding across descriptor candidates for: " << *op);
       return;
     }
@@ -188,6 +185,68 @@ private:
       int innerDimStart = static_cast<int>(rank - 2);
       if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart) {
         LDBG("Batch dim in tile for descriptor load: " << *op);
+        return;
+      }
+    }
+
+    // The 2D block message encodes base_width (bytes), base_height (rows) and
+    // base_pitch (bytes) as value-1 in 24-bit fields, so each must be in
+    // [1, 2^24]. Where the target needs 64-byte base alignment, the lowering
+    // adds the base's misalignment (base & 63) to base_width, so base_width
+    // must leave 63 bytes of room. This is the last point a descriptor load
+    // can fall back: Subgroup2DBlockLoadOpConversion does not re-validate.
+    // Bail if ANY candidate MakeTensorDescOp has a compile-time-foldable field
+    // outside that range. Check before emitting any IR: the ttig.extract_desc
+    // values built below do not fold, so read the defining MakeTensorDescOp(s).
+    //
+    // Not checked here:
+    //  - Non-foldable (runtime) values are trusted to be in range.
+    //  - Alignment (base 4B, width multiple of 4B):
+    //    in the normal pipeline MaterializeBlockPointer checks it before it
+    //    tags the load (runtime values rely on the tt.make_tensor_descriptor
+    //    16-byte contract); hand-tagged IR is not re-checked here.
+    //  - The HW 64-byte minimum for width/pitch is deliberately not enforced;
+    //    it would move narrow descriptors off 2D block I/O.
+    //  - pitch >= width (a TritonGEN verifier rule) is not a range check and
+    //    is not enforced here either.
+    constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
+    int64_t maxBaseWidth = ttgi::needs2DBlockIOAlignmentCompensation(op)
+                               ? kMax2DBlockField - 63
+                               : kMax2DBlockField;
+    int64_t elemBytesConst = elemSizeInBits / 8;
+    auto isOutOfRange = [&](unsigned operandIdx, int64_t scale,
+                            int64_t maxValue, StringRef field) {
+      return llvm::any_of(defs, [&](tt::MakeTensorDescOp d) {
+        std::optional<int64_t> folded =
+            tt::intel::getFoldedConstantValue(d->getOperand(operandIdx));
+        if (!folded)
+          return false;
+        int64_t value;
+        if (!llvm::MulOverflow(*folded, scale, value) && value >= 1 &&
+            value <= maxValue)
+          return false;
+        LDBG("Invalid " << field << " (" << *folded << " x " << scale
+                        << ") for descriptor load: " << *op);
+        return true;
+      });
+    };
+    // MakeTensorDescOp operands: base, shape[descRank], strides[descRank].
+    if (isOutOfRange(/*inner shape*/ 1 + (descRank - 1), elemBytesConst,
+                     maxBaseWidth, "base_width") ||
+        isOutOfRange(/*outer shape*/ 1 + (descRank - 2), /*scale=*/1,
+                     kMax2DBlockField, "base_height") ||
+        isOutOfRange(/*pitch stride*/ 1 + descRank + (descRank - 2),
+                     elemBytesConst, kMax2DBlockField, "base_pitch"))
+      return;
+
+    for (tt::MakeTensorDescOp d : defs) {
+      std::optional<int64_t> stride = tt::intel::getFoldedConstantValue(
+          d->getOperand(/*pitch stride*/ 1 + descRank + (descRank - 2)));
+      if (stride && (*stride * elemBytesConst) % 16 != 0) {
+        op->emitOpError("descriptor pitch of ")
+            << *stride * elemBytesConst
+            << " bytes is not a multiple of 16 bytes";
+        signalPassFailure();
         return;
       }
     }
@@ -240,53 +299,6 @@ private:
       return v;
     };
 
-    // If the pitch stride is a known constant AND the descriptor/result ranks
-    // match, validate HW constraints (>= 64 bytes, 16-byte aligned, encoded
-    // in 24 bits per the `triton_gen.2Dblockload` verifier).
-    // For rank-reducing loads, the stride interpretation may differ from the
-    // 2D surface pitch, so skip static validation (runtime will handle it).
-    if (rank == descRank) {
-      std::optional<int64_t> pitchStride =
-          tt::intel::getFoldedConstantValue(strides[descRank - 2]);
-      if (pitchStride) {
-        int64_t pitchBytes = *pitchStride * elemSizeInBits / 8;
-        if (pitchBytes < 64 || (pitchBytes % 16) != 0 ||
-            pitchBytes > (int64_t(1) << 24)) {
-          LDBG("Invalid pitch " << pitchBytes
-                                << " for descriptor load: " << *op);
-          return;
-        }
-      }
-    }
-
-    // The 2Dblockload HW encodes base_width / base_pitch in 24 bits (the
-    // TritonGEN→LLVM lowering subtracts 1 on emission, so the user-facing
-    // max is 2^24). Bail out if any compile-time-foldable byte value
-    // exceeds that range — otherwise the top bits would be silently
-    // dropped, producing a garbage surface descriptor. Non-foldable
-    // (runtime) shapes/strides are trusted to fit — the HW verifier will
-    // complain if they don't.
-    //
-    // We chase the descriptor's defining MakeTensorDescOp(s) to reach the
-    // original SSA — `strides`/`shapes` above are ttig.extract_desc results
-    // whose defining ops the folder can't see through.
-    constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
-    int64_t elemBytesConst = elemSizeInBits / 8;
-    auto wouldOverflow = [&](unsigned operandIdx) {
-      return llvm::any_of(allDescs, [&](tt::MakeTensorDescOp d) {
-        auto folded =
-            tt::intel::getFoldedConstantValue(d->getOperand(operandIdx));
-        return folded && *folded * elemBytesConst > kMax2DBlockField;
-      });
-    };
-    // MakeTensorDescOp operands: base, shape[rank], strides[rank].
-    if (wouldOverflow(/*inner shape*/ 1 + (descRank - 1)) ||
-        wouldOverflow(/*pitch stride*/ 1 + descRank + (descRank - 2))) {
-      LDBG("Pitch/base_width exceeds HW 24-bit range for descriptor load: "
-           << *op);
-      return;
-    }
-
     // Surface width = inner dimension size * element bytes.
     // Surface height = second-to-last dimension size.
     // Pitch = stride of the second-to-last dimension * element bytes.
@@ -311,13 +323,23 @@ private:
     for (unsigned d = 0; d + 2 < rank; ++d)
       batchStrides.push_back(strides[d + (descRank - rank)]);
 
+    // Batch indices folded into base_ptr re-base the 2D surface, so they
+    // escape the hardware's clamp; the lowering needs each index and its
+    // declared extent to predicate the load. For that check only -- never for
+    // addressing, since base_ptr already carries the offsets.
+    SmallVector<Value> batchOffsets, batchShapes;
+    for (unsigned d = 0; d < numBatchDims; ++d) {
+      batchOffsets.push_back(indices[d]);
+      batchShapes.push_back(toI32(shapes[d]));
+    }
+
     // Determine padding mode from the descriptor.
-    bool padNan = padding == tt::PaddingOption::PAD_NAN;
+    bool padNan = *padding == tt::PaddingOption::PAD_NAN;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
-        offsetX, offsetY, batchStrides, padNanAttr,
+        offsetX, offsetY, batchStrides, batchOffsets, batchShapes, padNanAttr,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate one_matrix_per_load attribute if present.

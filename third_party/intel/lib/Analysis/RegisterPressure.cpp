@@ -1,4 +1,5 @@
 #include "intel/include/Analysis/RegisterPressure.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -34,16 +35,78 @@ unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
   return 0;
 }
 
-unsigned RegisterPressureAnalysis::getGRFBytesPerThread(StringRef grfMode) {
-  // Explicit GRF modes map to exact per-thread budgets.
-  // For "default" and "auto", conservatively assume 128-register mode (4096
-  // bytes) to avoid exceeding hardware limits when the compiler ultimately
-  // chooses a smaller configuration.
-  return llvm::StringSwitch<unsigned>(grfMode)
-      .Case("128", 4096)
-      .Case("256", 8192)
-      .Case("512", 16384)
-      .Default(4096);
+/// Per-hardware-thread GRF register width in bytes (256 bits); see
+/// hardware-reference.md's GRF Register Specifications.
+static constexpr unsigned GRFRegisterSizeBytes = 32;
+
+/// Per-hardware-thread budget of the smallest ("128") and largest ("512")
+/// explicit GRF modes, in bytes. Named so the `Smallest`/`Largest`
+/// fallbacks below express themselves in the same unit as
+/// `explicitGRFModeToBytes` rather than repeating the arithmetic as bare
+/// literals.
+static constexpr unsigned SmallestGRFModeBytes = 128 * GRFRegisterSizeBytes;
+static constexpr unsigned LargestGRFModeBytes = 512 * GRFRegisterSizeBytes;
+
+/// Maps an explicit GRF mode string ("128"/"256"/"512") to its exact
+/// per-hardware-thread budget in bytes (one hardware thread executes a whole
+/// subgroup/warp of lanes sharing one register file). Returns 0 for anything
+/// else ("default", "auto", empty, or an unrecognized value): 0 bytes is
+/// never a valid budget, so it is an unambiguous "not an explicit mode"
+/// signal callers can test directly, without needing std::optional.
+static unsigned explicitGRFModeToBytes(StringRef grfMode) {
+  unsigned mode = 0;
+  if (grfMode.getAsInteger(10, mode) ||
+      (mode != 128 && mode != 256 && mode != 512))
+    return 0;
+  return mode * GRFRegisterSizeBytes;
+}
+
+unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
+    StringRef grfMode, ModuleOp mod,
+    UnknownGRFSizeAssumption unknownAssumption) {
+  if (unsigned explicitBytes = explicitGRFModeToBytes(grfMode))
+    return explicitBytes;
+  assert((grfMode == "default" || grfMode == "auto") &&
+         "grfMode must be an explicit mode (\"128\"/\"256\"/\"512\"), "
+         "\"default\", or \"auto\"");
+  // "default" and "auto": the compiler chooses the GRF size at JIT time, so
+  // the true value isn't known here. Which bound is safe depends on the
+  // caller; see UnknownGRFSizeAssumption's documentation.
+  if (unknownAssumption == UnknownGRFSizeAssumption::Smallest)
+    return SmallestGRFModeBytes;
+  // A larger GRF mode reduces the maximum launchable work-group size, so a
+  // num_warps > 32 kernel can never actually run at a larger mode, no matter
+  // which mechanism would have picked it: the cap applies to both
+  // `'default'` and `'auto'`.
+  if (lookupNumWarps(mod) > 32)
+    return SmallestGRFModeBytes;
+  // Largest: the true ceiling is per-target, mirrored onto the module via the
+  // ttig.max_grf_mode attribute (see UnknownGRFSizeAssumption::Largest's
+  // documentation), and applies to both `'default'` and `'auto'`. Reuse the
+  // same explicit-mode table above so a value other than exactly
+  // "256"/"512"/"128" (a typo, a future mode, or the attribute being absent)
+  // cannot silently resolve to the wrong budget: it falls through to the
+  // behaviour-preserving 512-register-mode default below.
+  if (auto maxGRFMode = mod->getAttrOfType<StringAttr>(
+          TritonIntelGPUDialect::getMaxGRFModeAttrName()))
+    if (unsigned explicitBytes = explicitGRFModeToBytes(maxGRFMode.getValue()))
+      return explicitBytes;
+  // Absence resolves to 512-register mode here, not `driver.c`'s "256" for a
+  // missing `load_binary` argument: each side preserves its own pre-existing
+  // behaviour on absence (this one hardcoded 16384 before `ttig.max_grf_mode`
+  // existed; `driver.c` already resolved a missing arg to "unknown", which
+  // already selected 256). Not a bug, but if either fallback's rationale
+  // ever changes, check whether the other one still makes sense.
+  return LargestGRFModeBytes;
+}
+
+unsigned RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(
+    StringRef grfMode, ModuleOp mod,
+    UnknownGRFSizeAssumption unknownAssumption) {
+  unsigned grfBudget =
+      getGRFBytesPerHardwareThread(grfMode, mod, unknownAssumption);
+  int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
+  return grfBudget / static_cast<unsigned>(threadsPerWarp);
 }
 
 bool RegisterPressureAnalysis::isRematerializable(Value value) const {
@@ -73,6 +136,23 @@ bool RegisterPressureAnalysis::isRematerializable(Value value) const {
   return false;
 }
 
+unsigned RegisterPressureAnalysis::pressureContribution(Value value) const {
+  // A value nothing reads never needs to occupy a register. This also keeps the
+  // reported figures independent of which operation happens to come first in a
+  // block; see the header for why that matters. Live-in based figures are
+  // unaffected: a value is live-in to a block precisely because something below
+  // reads it.
+  //
+  // It does lower `peakPressure(loop)` for a body that defines an unread value,
+  // which `ReduceVariableLiveness` gates its sink on -- only ever downward, so
+  // that gate can keep an operand it would have sunk, never the reverse.
+  if (value.use_empty())
+    return 0;
+  if (options.excludeRematerializable && isRematerializable(value))
+    return 0;
+  return getPerThreadSizeInBytes(value.getType());
+}
+
 unsigned RegisterPressureAnalysis::pressureAt(Operation *op) const {
   unsigned pressure = 0;
 
@@ -87,13 +167,42 @@ unsigned RegisterPressureAnalysis::pressureAt(Operation *op) const {
     return 0;
   Liveness::ValueSetT liveValues = blockInfo->currentlyLiveValues(op);
 
-  for (Value liveVal : liveValues) {
-    // Skip rematerializable values if the option is enabled
-    if (options.excludeRematerializable && isRematerializable(liveVal))
-      continue;
+  for (Value liveVal : liveValues)
+    pressure += pressureContribution(liveVal);
 
-    // Accumulate the per-thread size in bytes
-    pressure += getPerThreadSizeInBytes(liveVal.getType());
+  return pressure;
+}
+
+RegisterPressureAnalysis::PressureAtPoint
+RegisterPressureAnalysis::pressureAt(Operation *op, Value value) const {
+  PressureAtPoint result;
+
+  const LivenessBlockInfo *blockInfo = liveness.getLiveness(op->getBlock());
+  if (!blockInfo)
+    return result;
+  Liveness::ValueSetT liveValues = blockInfo->currentlyLiveValues(op);
+
+  for (Value liveVal : liveValues) {
+    result.pressure += pressureContribution(liveVal);
+    if (liveVal == value)
+      result.valueLive = true;
+  }
+
+  return result;
+}
+
+unsigned RegisterPressureAnalysis::pressureBefore(Operation *op) const {
+  const LivenessBlockInfo *blockInfo = liveness.getLiveness(op->getBlock());
+  if (!blockInfo)
+    return 0;
+
+  unsigned pressure = 0;
+  for (Value liveVal : blockInfo->currentlyLiveValues(op)) {
+    // `pressureAt` counts a value at its defining op, which above `op` has not
+    // run yet. Everything else live at `op` is also live immediately above it.
+    if (liveVal.getDefiningOp() == op)
+      continue;
+    pressure += pressureContribution(liveVal);
   }
 
   return pressure;
@@ -129,16 +238,25 @@ RegisterPressureAnalysis::peakPressure(LoopLikeOpInterface loop) const {
   return peak;
 }
 
+unsigned
+RegisterPressureAnalysis::peakPressureOverNestedBlocks(Operation *root) const {
+  unsigned peak = 0;
+  root->walk([&](Block *block) { peak = std::max(peak, peakPressure(block)); });
+  return peak;
+}
+
+unsigned
+RegisterPressureAnalysis::peakPressure(FunctionOpInterface func) const {
+  return peakPressureOverNestedBlocks(func);
+}
+
 unsigned RegisterPressureAnalysis::liveInPressure(Block *block) const {
   const LivenessBlockInfo *blockInfo = liveness.getLiveness(block);
   if (!blockInfo)
     return 0;
   unsigned pressure = 0;
-  for (Value liveVal : blockInfo->in()) {
-    if (options.excludeRematerializable && isRematerializable(liveVal))
-      continue;
-    pressure += getPerThreadSizeInBytes(liveVal.getType());
-  }
+  for (Value liveVal : blockInfo->in())
+    pressure += pressureContribution(liveVal);
   return pressure;
 }
 
@@ -147,12 +265,29 @@ bool RegisterPressureAnalysis::isLiveIn(Block *block, Value value) const {
   return blockInfo && blockInfo->isLiveIn(value);
 }
 
+unsigned RegisterPressureAnalysis::liveInContribution(Block *block,
+                                                      Value value) const {
+  // Mirror liveInPressure's per-value accounting exactly, so that subtracting
+  // this result from liveInPressure(block) yields the pressure the block would
+  // report if `value` stopped being live-in.
+  const LivenessBlockInfo *blockInfo = liveness.getLiveness(block);
+  if (!blockInfo || !blockInfo->isLiveIn(value))
+    return 0;
+  return pressureContribution(value);
+}
+
 void RegisterPressureAnalysis::print(raw_ostream &os) const {
   Operation *rootOp = liveness.getOperation();
   if (!rootOp)
     return;
 
   os << "Register Pressure Analysis (per-thread bytes):\n";
+
+  // The maximum over every block below, not the maximum in any one of them,
+  // which is what a per-kernel allocation must cover. Reported first so that
+  // adding it shifts the per-block lines below by exactly one line.
+  os << "  Peak over all blocks in " << rootOp->getName() << ": "
+     << peakPressureOverNestedBlocks(rootOp) << " bytes\n";
 
   // Walk all regions and blocks to report peak pressure. Qualify each block by
   // its parent op name so blocks in different regions (all named ^bb0) are

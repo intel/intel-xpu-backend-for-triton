@@ -1,6 +1,7 @@
 import pathlib
 
 import pytest
+import torch
 import triton
 import triton.language as tl
 from triton.runtime.errors import OutOfResources
@@ -2060,3 +2061,66 @@ module {
     temp_file = tmp_path / "test_regression_7022.ttir"
     temp_file.write_text(ir)
     triton.compile(str(temp_file))
+
+
+def test_regression_7945_annotate_cache_control_enabled_on_every_os(fresh_knobs):
+    """`TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL` used to default to
+    `os.name == "nt"`, keeping the `AnnotateCacheControl` pass off on Windows
+    after the regressions reported in
+    https://github.com/intel/intel-xpu-backend-for-triton/issues/7495. The
+    harmful `cg`-to-`!nontemporal` lowering, which IGC turns into an
+    L3-bypassing LSC access, was removed in #7901, so the pass is enabled on
+    every OS again (#7945). Windows CI observes the flip here.
+    """
+    assert fresh_knobs.intel.disable_annotate_cache_control is False
+
+
+@pytest.mark.parametrize("value, expected", [("1", True), ("0", False)])
+def test_regression_7945_annotate_cache_control_env_override(fresh_knobs, monkeypatch, value, expected):
+    monkeypatch.setenv("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", value)
+    assert fresh_knobs.intel.disable_annotate_cache_control is expected
+
+
+def test_regression_8189_no_results(device):
+    """`x` is read only by the `while` condition, so canonicalization drops it
+    from the loop results while the do-block yield still carries it.
+    RemoveLayoutConversions used to map yield operand `i` to result `i`,
+    calling `getResult(0)` on a result-less `scf.while` (#8189).
+    """
+
+    @triton.jit
+    def kernel(ptr, out, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        x = tl.zeros([BLOCK], dtype=tl.int32)
+        while tl.min(x, axis=0) < 1:
+            x = tl.load(ptr + offs, volatile=True)
+        tl.store(out, 1)
+
+    src = torch.ones(1024, dtype=torch.int32, device=device)
+    out = torch.zeros(1, dtype=torch.int32, device=device)
+    compiled = kernel[(1, )](src, out, 1024, num_warps=4)
+    assert out.item() == 1
+    assert ": (tensor<1024xi32>) -> () {" in compiled.asm["ttir"], "no longer a result-less while"
+
+
+def test_regression_8189_shifted_results(device):
+    """Dropping `x` shifts the rank-2 `acc` to result 0, so the old mapping
+    put `x`'s rank-1 layout on it: a verifier error in any build type (#8189).
+    """
+
+    @triton.jit
+    def kernel(ptr, out, BLOCK: tl.constexpr, N: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        x = tl.zeros([BLOCK], dtype=tl.int32)
+        acc = tl.zeros([N, N], dtype=tl.int32)
+        while tl.min(x, axis=0) < 1:
+            x = tl.load(ptr + offs, volatile=True)
+            acc += 1
+        tl.store(out + tl.arange(0, N)[:, None] * N + tl.arange(0, N)[None, :], acc)
+
+    src = torch.ones(1024, dtype=torch.int32, device=device)
+    out = torch.zeros((32, 32), dtype=torch.int32, device=device)
+    compiled = kernel[(1, )](src, out, 1024, 32, num_warps=4)
+    assert torch.all(out == 1)
+    assert ": (tensor<1024xi32>, tensor<32x32xi32>) -> tensor<32x32xi32> {" in compiled.asm["ttir"], \
+        "while results no longer shifted"

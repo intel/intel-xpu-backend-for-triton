@@ -20,16 +20,12 @@ on:
     paths:
       - .github/workflows/nightly-wheels.yml
       - .github/pins/pytorch.txt
-      - scripts/vllm/install-vllm.sh
-      - scripts/vllm/vllm-xpu-kernels-pin.txt
   pull_request:
     branches:
       - main
     paths:
       - .github/workflows/nightly-wheels.yml
       - .github/pins/pytorch.txt
-      - scripts/vllm/install-vllm.sh
-      - scripts/vllm/vllm-xpu-kernels-pin.txt
 
 permissions: read-all
 
@@ -83,10 +79,9 @@ jobs:
           cd pytorch
           echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a $GITHUB_ENV
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a $GITHUB_ENV
+          echo "TORCHAO_COMMIT_ID=$(<.github/ci_commit_pins/torchao.txt)" | tee -a $GITHUB_ENV
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a $GITHUB_ENV
           cd ..
-          echo "VLLM_PIN=$(<scripts/vllm/vllm-pin.txt)" | tee -a $GITHUB_ENV
-          echo "VLLM_XPU_KERNELS_PIN=$(<scripts/vllm/vllm-xpu-kernels-pin.txt)" | tee -a $GITHUB_ENV
 
       - name: Identify Triton commit id
         run: |
@@ -117,6 +112,15 @@ jobs:
           ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
+      - name: Install torchao package
+        if: "!startsWith(matrix.python, '3.15')"
+        uses: ./.github/actions/install-dependency
+        with:
+          package: torchao
+          repository: pytorch/ao
+          ref: ${{ env.TORCHAO_COMMIT_ID }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
+
       - name: Install timm package
         if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
@@ -132,11 +136,6 @@ jobs:
           cd pytorch
           pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
 
-      - name: Install vLLM and vLLM XPU kernels
-        if: contains(fromJSON('["3.10", "3.11", "3.12"]'), matrix.python)
-        run: |
-          scripts/vllm/install-vllm.sh --source --force-reinstall
-
       - name: Prepare wheels for upload
         run: |
           mkdir -p wheels
@@ -144,28 +143,18 @@ jobs:
           cp -L dist/*.whl wheels/
           cp -L torchvision*/dist/*.whl wheels/ 2>/dev/null || true
           cp -L torchaudio*/dist/*.whl wheels/ 2>/dev/null || true
+          cp -L torchao*/dist/*.whl wheels/ 2>/dev/null || true
           cp -L timm*/dist/*.whl wheels/ 2>/dev/null || true
           ls -lh wheels/
 
       - name: Sign PyTorch-related wheels with Sigstore (keyless)
         # SHA-pinned for supply-chain safety; comment tracks the human-readable version.
-        uses: sigstore/gh-action-sigstore-python@a5caf349bc536fbef3668a10ed7f5cd309a4b53d # v3.2.0
+        # Skipped for fork PRs: GitHub never grants id-token: write to pull_request
+        # runs from forked repos, so OIDC-based signing always fails there.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: sigstore/gh-action-sigstore-python@790bc6befb9d733738f18d8f895854b453640ec9 # v3.5.0
         with:
           inputs: wheels/*.whl
-
-      - name: Prepare vLLM wheels for upload
-        if: contains(fromJSON('["3.10", "3.11", "3.12"]'), matrix.python)
-        run: |
-          mkdir -p wheels-vllm
-          cp -L vllm-xpu-kernels/dist/*.whl wheels-vllm/
-          ls -lh wheels-vllm/
-
-      - name: Sign vLLM wheels with Sigstore (keyless)
-        if: contains(fromJSON('["3.10", "3.11", "3.12"]'), matrix.python)
-        # SHA-pinned for supply-chain safety; comment tracks the human-readable version.
-        uses: sigstore/gh-action-sigstore-python@a5caf349bc536fbef3668a10ed7f5cd309a4b53d # v3.2.0
-        with:
-          inputs: wheels-vllm/*.whl
 
       - name: Report environment details
         run: |
@@ -188,8 +177,7 @@ jobs:
           TRITON_COMMIT_ID=$TRITON_COMMIT_ID
           TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
           TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
-          VLLM_PIN=$VLLM_PIN
-          VLLM_XPU_KERNELS_PIN=$VLLM_XPU_KERNELS_PIN
+          TORCHAO_COMMIT_ID=$TORCHAO_COMMIT_ID
           EOF
           ./scripts/capture-hw-details.sh | tee -a "$reports_file"
 
@@ -198,12 +186,4 @@ jobs:
         with:
           name: wheels-pytorch-py${{ matrix.python }}-${{ env.TIMESTAMP }}
           path: wheels
-          include-hidden-files: true
-
-      - name: Upload vLLM wheels to artifacts
-        if: contains(fromJSON('["3.10", "3.11", "3.12"]'), matrix.python)
-        uses: actions/upload-artifact@v7
-        with:
-          name: wheels-vllm-py${{ matrix.python }}-${{ env.TIMESTAMP }}
-          path: wheels-vllm
           include-hidden-files: true

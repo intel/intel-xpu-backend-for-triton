@@ -242,7 +242,9 @@ def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
         src = f"EXPORT_FUNC TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
     else:
         src = f"TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
-    src += f"  assert (algo_id < (int)sizeof({meta.orig_kernel_name}_kernels));\n"
+    src += f"  int num_algos = (int)(sizeof({meta.orig_kernel_name}_kernels) / sizeof({meta.orig_kernel_name}_kernels[0]));\n"
+    src += "  if (algo_id < 0 || algo_id >= num_algos)\n"
+    src += "    return TT_ERROR_INVALID_VALUE;\n"
     if is_cuda():
         src += f"  return {meta.orig_kernel_name}_kernels[algo_id](stream, {', '.join(meta.arg_names)});\n"
     if is_xpu():
@@ -351,7 +353,6 @@ if __name__ == "__main__":
     with args.out.with_suffix(ext).open("w") as fp:
         out = backend_prelude
         out += "#include <stdint.h>\n"
-        out += "#include <assert.h>\n"
         out += "\n"
         out += "\n".join(defs)
         out += "\n"

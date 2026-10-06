@@ -4,6 +4,7 @@ import sys
 from contextlib import nullcontext
 
 import pytest
+import sympy
 import torch
 from torch._subclasses.fake_tensor import FakeTensorMode
 import triton
@@ -24,7 +25,7 @@ from triton_kernels.tensor import (
     wrap_torch_tensor,
 )
 from triton_kernels.testing import assert_equal
-from triton._internal_testing import is_cuda, is_xpu_cri
+from triton._internal_testing import is_cuda
 from triton_kernels.tensor_details.layout import (
     BlackwellActMXScaleLayout,
     BlackwellMX4ValueShuffledLayout,
@@ -160,6 +161,19 @@ def test_layout_storage_shape_matches_conversion(logical_shape, is_fp4, layout, 
 
     assert layout.storage_shape(list(logical_shape), is_fp4) == storage_shape
     assert list(converted.storage.data.shape) == storage_shape
+
+
+@pytest.mark.parametrize(("layout", "expected"), [
+    (BlackwellMXScaleLayout(), [1, 1, 4, 2, 256]),
+    (BlackwellActMXScaleLayout(None), [1, 1, 10, 2, 256]),
+    (HopperMXScaleLayout(-1, 4), [4, 1088]),
+    (HopperMXScaleLayout(-2, 4), [320, 4]),
+    (CDNA4MXScaleLayout(), [1, 512, 2]),
+])
+def test_scale_layout_symbolic_storage_shape(layout, expected):
+    m, n = sympy.symbols("m n", integer=True, nonnegative=True)
+    shape = layout.storage_shape([m, n], False)
+    assert [sympy.sympify(dim).subs({m: 9, n: 33}) for dim in shape] == expected
 
 
 def test_ragged_layout_storage_shape():
@@ -699,15 +713,14 @@ def test_remap_ragged_tensor_metadata(n_slices, device):
     slice_map = torch.randperm(n_slices, device=device, dtype=torch.int32)
     # discard random slices
     slice_map[torch.randint(0, len(slice_map), (5, ))] = -1
-    ref_dev = 'cpu' if is_xpu_cri() else device
     tri_metadata = make_ragged_tensor_metadata(slice_sizes, n_total_rows)
-    ref_metadata = make_ragged_tensor_metadata_torch(slice_sizes.to(device=ref_dev), n_total_rows)
+    ref_metadata = make_ragged_tensor_metadata_torch(slice_sizes, n_total_rows)
     tri_metadata = remap_ragged_tensor_metadata(tri_metadata, slice_map)
-    ref_metadata = remap_ragged_tensor_metadata_torch(ref_metadata, slice_map.to(device=ref_dev))
-    assert_equal(tri_metadata.slice_sizes.to(device=ref_dev), ref_metadata.slice_sizes)
-    assert_equal(tri_metadata.slice_offs.to(device=ref_dev), ref_metadata.slice_offs)
-    assert_equal(tri_metadata.block_offs_data.to(device=ref_dev), ref_metadata.block_offs_data)
-    assert_equal(tri_metadata.block_schedule_data.to(device=ref_dev), ref_metadata.block_schedule_data)
+    ref_metadata = remap_ragged_tensor_metadata_torch(ref_metadata, slice_map)
+    assert_equal(tri_metadata.slice_sizes, ref_metadata.slice_sizes)
+    assert_equal(tri_metadata.slice_offs, ref_metadata.slice_offs)
+    assert_equal(tri_metadata.block_offs_data, ref_metadata.block_offs_data)
+    assert_equal(tri_metadata.block_schedule_data, ref_metadata.block_schedule_data)
 
 
 @pytest.mark.parametrize("n_rows", [0, 7, 256, 17111])

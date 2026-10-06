@@ -554,7 +554,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
       auto parent = yieldOp->getParentOp();
       SmallVector<Value> valuesToPropagate;
-      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent))
+      if (isa<scf::ForOp, scf::IfOp>(parent))
         valuesToPropagate.push_back(parent->getResult(use.getOperandNumber()));
       if (auto forOp = dyn_cast<scf::ForOp>(parent))
         valuesToPropagate.push_back(
@@ -594,6 +594,9 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         continue;
       }
     }
+    if (auto reshapeOp = dyn_cast<tt::ReshapeOp>(user);
+        reshapeOp && reshapeOp.getEfficientLayout())
+      continue;
     if (auto storeOp = dyn_cast<tt::StoreOp>(user)) {
       if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
         SmallVector<Value> valuesToChange{storeOp.getPtr(), storeOp.getValue()};
@@ -613,8 +616,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
-        isa<tt::ReduceOp, tt::ExpandDimsOp, tt::ReshapeOp, tt::TransOp,
-            tt::JoinOp, tt::SplitOp, ttg::ConvertLayoutOp>(user)) {
+        isa<tt::BroadcastOp, tt::ReduceOp, tt::ExpandDimsOp, tt::ReshapeOp,
+            tt::TransOp, tt::JoinOp, tt::SplitOp, ttg::ConvertLayoutOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -995,9 +998,9 @@ void LayoutPropagation::rewriteOp(Operation *op) {
       setEncodingInPlace(op->getResult(0), encoding);
     } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
                op->hasTrait<OpTrait::Elementwise>() ||
-               isa<tt::ReduceOp, tt::ExpandDimsOp, tt::ReshapeOp, tt::TransOp,
-                   tt::JoinOp, tt::SplitOp, tt::GatherOp, ttg::ConvertLayoutOp>(
-                   op)) {
+               isa<tt::BroadcastOp, tt::ReduceOp, tt::ExpandDimsOp,
+                   tt::ReshapeOp, tt::TransOp, tt::JoinOp, tt::SplitOp,
+                   tt::GatherOp, ttg::ConvertLayoutOp>(op)) {
       rewriteGenericOpInPlace(op, encoding);
     } else {
       llvm::report_fatal_error("unexpected op in rewrite");
@@ -1019,7 +1022,7 @@ bool canBeRemat(Operation *op) {
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
-  return true;
+  return !hasEffect<MemoryEffects::Write>(op);
 }
 
 // Returns true for shape-changing ops that carry no encoding constraint of

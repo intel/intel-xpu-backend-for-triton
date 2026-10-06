@@ -3,6 +3,8 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
+namespace ttgi = mlir::triton::gpu::intel;
+
 namespace mlir::triton::intel {
 namespace {
 constexpr int kPtrBitWidth = 64;
@@ -31,6 +33,8 @@ unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
     unsigned numMatrixCells = (numElements / subGroupSize) * (subGroupSize + 1);
     return numMatrixCells * bytesPerElement;
   }
+  if (gpu::intel::cvtIsSubGroupReinterpret(convertLayout))
+    return 0;
   return invalidSize;
 }
 } // namespace
@@ -42,8 +46,19 @@ unsigned allocationAnalysisScratchSizeFn(Operation *op) {
         return size == invalidSize ? defaultAllocationAnalysisScratchSizeFn(op)
                                    : size;
       })
-      .Case<ReduceOp>(
-          [](auto op) { return ReduceOpHelper(op).getScratchSizeInBytesOld(); })
+      .Case<ReduceOp>([](auto op) {
+        ReduceOpHelper helper(op);
+        return ttgi::getScratchSizeInBytesOld(helper, op);
+      })
+      .Case<HistogramOp>([](HistogramOp op) {
+        // The Intel lowering always counts in shared memory, including the
+        // small histograms upstream counts with warp ballots and no scratch.
+        RankedTensorType dstTy = op.getType();
+        int threadsPerWarp = gpu::TritonGPUDialect::getThreadsPerWarp(
+            op->getParentOfType<ModuleOp>());
+        return std::max<int>(dstTy.getNumElements(), threadsPerWarp) *
+               dstTy.getElementTypeBitWidth() / 8;
+      })
       .Default([](Operation *op) {
         return defaultAllocationAnalysisScratchSizeFn(op);
       });

@@ -12,6 +12,10 @@ on:
       - main
       - release/**
 
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.run_id || github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions: read-all
 
 env:
@@ -54,7 +58,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           pip install -U pybind11 cmake
-          pip install -v '.[build]'
+          pip install -v .
 
       - name: Clean
         if: ${{ always() }}

@@ -158,7 +158,7 @@ jobs:
         uses: ./.github/actions/setup-python
         with:
           python_version: "3.10"
-          use_pyenv: true
+          use_pyenv: false
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8

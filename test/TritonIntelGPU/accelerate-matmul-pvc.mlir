@@ -726,3 +726,40 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return %r : tensor<128x16xf32, #blocked1>
   }
 }
+
+// -----
+
+// COM: Reverse direction of the case below. Without encodings only the transpose fires, so the swapped flags stay visible.
+module attributes {ttg.target = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate} {
+  // CHECK-LABEL: tt.func public @unscaled_mn_packed_lhs_keeps_packing
+  tt.func public @unscaled_mn_packed_lhs_keeps_packing(
+      %a: tensor<64x64xi8>,
+      %b: tensor<32x128xi8>,
+      %scale_b: tensor<128x2xi8>) -> tensor<128x128xf32> {
+    // CHECK: tt.dot_scaled {{.*}} lhs = e2m1 rhs = e2m1 {fastMath = false, rhs_k_pack = false} : tensor<128x32xi8>, tensor<128x2xi8> * tensor<64x64xi8> -> tensor<128x128xf32>
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+    %d = tt.dot_scaled %a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = false} : tensor<64x64xi8> * tensor<32x128xi8>, tensor<128x2xi8> -> tensor<128x128xf32>
+    tt.return %d : tensor<128x128xf32>
+  }
+}
+
+// -----
+
+// COM: Transposing a dot_scaled with only a rhs scale must keep each operand's packing: the N-packed fp4 rhs becomes an M-packed lhs, unpacked along axis 0.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {ttg.target = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate} {
+  // CHECK-LABEL: tt.func public @unscaled_lhs_keeps_mn_packed_rhs
+  tt.func public @unscaled_lhs_keeps_mn_packed_rhs(
+      %a: tensor<128x64xbf16, #blocked_k>,
+      %b: tensor<64x64xi8, #blocked>,
+      %scale_b: tensor<128x2xi8, #blocked>) -> tensor<128x128xf32, #blocked> {
+    // CHECK-NOT: tt.dot_scaled
+    // CHECK: ttg.fp4_to_fp %{{.*}} {axis = 0 : i32} : tensor<64x64xi8, {{.*}}> -> tensor<128x64xbf16, {{.*}}>
+    // CHECK-NOT: tt.dot_scaled
+    // CHECK: tt.dot {{.*}} -> tensor<128x128xf32, #mma
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %d = tt.dot_scaled %a, %b scale %scale_b, %cst lhs = bf16 rhs = e2m1 {fastMath = false, rhs_k_pack = false} : tensor<128x64xbf16, #blocked_k> * tensor<64x64xi8, #blocked>, tensor<128x2xi8, #blocked> -> tensor<128x128xf32, #blocked>
+    tt.return %d : tensor<128x128xf32, #blocked>
+  }
+}

@@ -138,8 +138,8 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
 
   auto copyOp = ttg::AsyncCopyGlobalToLocalOp::create(
       builder, loc, loadOp.getPtr(), viewLoad, loadOp.getMask(),
-      loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
-      loadOp.getIsVolatile(), contiguity);
+      loadOp.getOther(), loadOp.getCachePolicyAttr(), loadOp.getIsVolatile(),
+      contiguity);
   auto commitOp =
       ttg::AsyncCommitGroupOp::create(builder, loc, copyOp->getResult(0));
   ttg::AsyncWaitOp waitOp =
@@ -659,6 +659,16 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
     asyncWaitCluster = 1;
     globalLoadCluster = 2;
     localLoadCluster = 3;
+    localStoreCluster = 4;
+  }
+
+  // TDM copy reordering to improve latency hiding.
+  bool tdmReorder = hasTDMLoad && hasScaledDot && !waitAtTail;
+  if (tdmReorder) {
+    globalLoadCluster = 0; // all TDM copies first
+    asyncWaitCluster = 1;  // single wait after the copies
+    localLoadCluster = 2;  // local_loads after the wait
+    computeCluster = 3;    // dot_scaled last
     localStoreCluster = 4;
   }
 

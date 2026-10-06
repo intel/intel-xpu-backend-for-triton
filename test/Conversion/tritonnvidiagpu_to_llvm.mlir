@@ -1,9 +1,10 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 -reconcile-unrealized-casts | FileCheck %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=85' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=85' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX85 %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX86 %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' --initialize-ws-cluster-barriers='compute-capability=107 ptx-version=94' -reconcile-unrealized-casts | FileCheck --check-prefix=RUBIN %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CLUSTER-MASK %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=100 ptx-version=86' --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CANONICALIZE-SM100 %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=90' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 -reconcile-unrealized-casts | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=85' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=85' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=85' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX85 %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=86' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX86 %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=107 ptx-version=94' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' --initialize-ws-cluster-barriers='compute-capability=107 ptx-version=94' -reconcile-unrealized-casts | FileCheck --check-prefix=RUBIN %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=90' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CLUSTER-MASK %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=100 ptx-version=86' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=100 ptx-version=86' --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CANONICALIZE-SM100 %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=90 --test-print-buffer-region -verify-diagnostics=only-expected -o /dev/null
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -817,13 +818,15 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // CHECK-LABEL: @local_atomic_subslice_other_cta
-  // CHECK: mapa.shared::cluster.u32
+  // CHECK: nvvm.mapa
   // CHECK: atom.shared::cluster.cluster.relaxed.add.u32
+  // CHECK: nvvm.cluster.arrive
+  // CHECK: nvvm.cluster.wait
   tt.func @local_atomic_subslice_other_cta(%out: !tt.ptr<i32>, %vals: tensor<2x32xi32, #local_subslice_blocked>) {
     %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable>
     %tile = ttg.memdesc_subslice %src [2, 0] : !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>
     %idx = arith.constant dense<0> : tensor<2x32xi32, #local_subslice_blocked>
-    %old = ttg.local_atomic_scatter_rmw add, %tile[%idx], %vals {axis = 1 : i32} : (!ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>, tensor<2x32xi32, #local_subslice_blocked>, tensor<2x32xi32, #local_subslice_blocked>) -> tensor<2x32xi32, #local_subslice_blocked>
+    %old = ttg.local_atomic_scatter_rmw add, %tile[%idx], %vals {axis = 1 : i32, allocation.offset = 256 : i32} : (!ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>, tensor<2x32xi32, #local_subslice_blocked>, tensor<2x32xi32, #local_subslice_blocked>) -> tensor<2x32xi32, #local_subslice_blocked>
     %ptrs = tt.splat %out : !tt.ptr<i32> -> tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>
     %offs = arith.constant dense<0> : tensor<2x32xi32, #local_subslice_blocked>
     %out_ptrs = tt.addptr %ptrs, %offs : tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>, tensor<2x32xi32, #local_subslice_blocked>
@@ -832,7 +835,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // CHECK-LABEL: @local_atomic_inc_subslice_other_cta
-  // CHECK: mapa.shared::cluster.u32
+  // CHECK: nvvm.mapa
   // CHECK: red.shared::cluster.cluster.relaxed.inc.u32
   tt.func @local_atomic_inc_subslice_other_cta() {
     %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable>
@@ -856,11 +859,13 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 1 : i32, "ttg.th
   // CHECK: nvvm.mapa
   // CHECK: llvm.load {{.*}} : !llvm.ptr<7> -> i32
   // CHECK: llvm.return
-  tt.func private @local_gather_sharded_16_ctas() -> tensor<32x32xi32, #local_gather_cga16_blocked> {
+  tt.func @local_gather_sharded_16_ctas(%out: tensor<32x32x!tt.ptr<i32>, #local_gather_cga16_blocked>) {
     %src = ttg.local_alloc {allocation.offset = [0 : i32]} : () -> !ttg.memdesc<32x32xi32, #local_gather_cga16_sharded, #ttg.shared_memory, mutable>
     %idx = arith.constant dense<0> : tensor<32x32xi32, #local_gather_cga16_blocked>
+    // expected-remark @+1 {{Buffers: [0, 256]}}
     %g = ttg.local_gather %src[%idx] {axis = 1 : i32} : !ttg.memdesc<32x32xi32, #local_gather_cga16_sharded, #ttg.shared_memory, mutable>, tensor<32x32xi32, #local_gather_cga16_blocked> -> tensor<32x32xi32, #local_gather_cga16_blocked>
-    tt.return %g : tensor<32x32xi32, #local_gather_cga16_blocked>
+    tt.store %out, %g : tensor<32x32x!tt.ptr<i32>, #local_gather_cga16_blocked>
+    tt.return
   }
 
   // CHECK-LABEL: @local_gather_partial_broadcast_16_ctas
@@ -878,11 +883,13 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 1 : i32, "ttg.th
   // CHECK: nvvm.mapa
   // CHECK: llvm.load {{.*}} : !llvm.ptr<7> -> i32
   // CHECK: llvm.return
-  tt.func private @local_gather_partial_broadcast_16_ctas() -> tensor<32x32xi32, #local_gather_cga16_blocked> {
+  tt.func @local_gather_partial_broadcast_16_ctas(%out: tensor<32x32x!tt.ptr<i32>, #local_gather_cga16_blocked>) {
     %src = ttg.local_alloc {allocation.offset = [0 : i32]} : () -> !ttg.memdesc<32x32xi32, #local_gather_cga16_partial, #ttg.shared_memory, mutable>
     %idx = arith.constant dense<0> : tensor<32x32xi32, #local_gather_cga16_blocked>
+    // expected-remark @+1 {{Buffers: [0, 1024]}}
     %g = ttg.local_gather %src[%idx] {axis = 1 : i32} : !ttg.memdesc<32x32xi32, #local_gather_cga16_partial, #ttg.shared_memory, mutable>, tensor<32x32xi32, #local_gather_cga16_blocked> -> tensor<32x32xi32, #local_gather_cga16_blocked>
-    tt.return %g : tensor<32x32xi32, #local_gather_cga16_blocked>
+    tt.store %out, %g : tensor<32x32x!tt.ptr<i32>, #local_gather_cga16_blocked>
+    tt.return
   }
 
   // CHECK-LABEL: @local_gather_full_broadcast_16_ctas
@@ -890,11 +897,13 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 1 : i32, "ttg.th
   // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> i32
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.return
-  tt.func private @local_gather_full_broadcast_16_ctas() -> tensor<32x32xi32, #local_gather_cga16_blocked> {
+  tt.func @local_gather_full_broadcast_16_ctas(%out: tensor<32x32x!tt.ptr<i32>, #local_gather_cga16_blocked>) {
     %src = ttg.local_alloc {allocation.offset = [0 : i32]} : () -> !ttg.memdesc<32x32xi32, #local_gather_cga16_broadcast, #ttg.shared_memory, mutable>
     %idx = arith.constant dense<0> : tensor<32x32xi32, #local_gather_cga16_blocked>
+    // expected-remark @+1 {{Buffers: [0, 4096]}}
     %g = ttg.local_gather %src[%idx] {axis = 1 : i32} : !ttg.memdesc<32x32xi32, #local_gather_cga16_broadcast, #ttg.shared_memory, mutable>, tensor<32x32xi32, #local_gather_cga16_blocked> -> tensor<32x32xi32, #local_gather_cga16_blocked>
-    tt.return %g : tensor<32x32xi32, #local_gather_cga16_blocked>
+    tt.store %out, %g : tensor<32x32x!tt.ptr<i32>, #local_gather_cga16_blocked>
+    tt.return
   }
 }
 
@@ -984,8 +993,8 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // RUBIN: %[[RUBIN_COUNTER:.*]] = llvm.load
   // RUBIN-NEXT: nvvm.barrier
   // RUBIN: %[[CTA:.*]] = nvvm.read.ptx.sreg.cluster.ctarank
-  // RUBIN-DAG: %[[ALL_CTAS:.*]] = llvm.mlir.constant(15 : i32) : i32
-  // RUBIN-DAG: %[[SELF_MASK:.*]] = llvm.shl %{{.*}}, %[[CTA]] : i32
+  // RUBIN: %[[ALL_CTAS:.*]] = llvm.mlir.constant(15 : i32) : i32
+  // RUBIN: %[[SELF_MASK:.*]] = llvm.shl %{{.*}}, %[[CTA]] : i32
   // RUBIN: %[[PEER_MASK:.*]] = llvm.xor %[[ALL_CTAS]], %[[SELF_MASK]] : i32
   // RUBIN-COUNT-1: mbarrier.arrive.release.cluster.shared::cluster.multicast::cluster::32b.b64 _, [$1], $2;
   // RUBIN-NOT: mbarrier.arrive

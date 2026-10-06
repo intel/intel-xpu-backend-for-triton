@@ -226,8 +226,8 @@ bool isLayoutAnchor(Operation *op) {
     return true;
   if (isa<LoadOp, StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<DotOpInterface, AtomicRMWOp, AtomicCASOp,
-          triton::nvidia_gpu::TMEMLoadOp>(op))
+  if (isa<DotOpInterface, AtomicOpInterface, triton::nvidia_gpu::TMEMLoadOp>(
+          op))
     return true;
   if (auto gatherOp = dyn_cast<GatherOp>(op))
     return gatherOp.getEfficientLayout();
@@ -344,8 +344,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       continue;
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
-        isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-            ConvertLayoutOp>(user)) {
+        isa<BroadcastOp, ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp,
+            SplitOp, ConvertLayoutOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -385,8 +385,7 @@ void LayoutPropagation::resolveConflicts() {
     // Hacky resolve, prefer block encoding.
     // TODO: add a proper heuristic.
     Attribute encoding = *info.encodings.begin();
-    bool isLoadOrStore =
-        op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
+    bool isLoadOrStore = op && isa<LoadOp, StoreOp, AtomicOpInterface>(op);
     for (Attribute e : info.encodings) {
       if ((isLoadOrStore && isa<BlockedEncodingAttr>(e)) ||
           (!isLoadOrStore && isa<MmaEncodingTrait>(e))) {
@@ -460,8 +459,7 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         // If we don't need to rewrite the op we still need to remap the
         // operands.
         for (OpOperand &operand : op.getOpOperands()) {
-          auto it = layouts.find(operand.get());
-          if (it == layouts.end())
+          if (!layouts.contains(operand.get()))
             continue;
           Attribute encoding = getEncodingBeforeRewrite(operand.get());
           Value newOperand = getValueAs(operand.get(), encoding);
@@ -500,7 +498,7 @@ Attribute LayoutPropagation::getEncodingBeforeRewrite(Value value) const {
 
 void LayoutPropagation::setEncodingInPlace(Value value, Attribute encoding) {
   auto tensorType = cast<RankedTensorType>(value.getType());
-  if (!originalEncodings.count(value))
+  if (!originalEncodings.contains(value))
     originalEncodings[value] = tensorType.getEncoding();
   value.setType(tensorType.cloneWithEncoding(encoding));
 }
@@ -661,9 +659,9 @@ void LayoutPropagation::rewriteOp(Operation *op) {
       setEncodingInPlace(op->getResult(0), encoding);
     } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
                op->hasTrait<OpTrait::Elementwise>() ||
-               isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-                   GatherOp, ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(
-                   op)) {
+               isa<BroadcastOp, ReduceOp, ExpandDimsOp, ReshapeOp, TransOp,
+                   JoinOp, SplitOp, GatherOp, ConvertLayoutOp,
+                   nvidia_gpu::WarpGroupDotWaitOp>(op)) {
       rewriteGenericOpInPlace(op, encoding);
     } else {
       llvm::report_fatal_error("unexpected op in rewrite");
@@ -731,7 +729,7 @@ void LayoutRematerialization::rewriteSlice(
   opsToRewrite = mlir::topologicalSort(opsToRewrite);
 
   // replaceAllUsesWith calls delayed until after initial rewrite.
-  // This is required for slice.count(value) to work mid rewrite.
+  // This is required for slice.contains(value) to work mid rewrite.
   SmallVector<std::tuple<Value, Value>> replacements;
 
   SmallVector<Operation *> deadOps;
@@ -742,7 +740,7 @@ void LayoutRematerialization::rewriteSlice(
       SmallVector<std::pair<size_t, size_t>> argMapping;
       SmallVector<Value> newOperands;
       for (auto arg : forOp.getRegionIterArgs()) {
-        if (slice.count(arg)) {
+        if (slice.contains(arg)) {
           OpOperand &initVal = *forOp.getTiedLoopInit(arg);
           argMapping.push_back(std::make_pair(
               forOp.getTiedLoopResult(&initVal).getResultNumber(),
@@ -777,7 +775,7 @@ void LayoutRematerialization::rewriteSlice(
     if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       SmallVector<Type> newTypes;
       for (auto res : ifOp.getResults()) {
-        if (slice.count(res)) {
+        if (slice.contains(res)) {
           auto it = layout.find(res);
           assert(it != layout.end());
 
@@ -791,7 +789,7 @@ void LayoutRematerialization::rewriteSlice(
       unsigned oldIdx = 0;
       unsigned newIdx = ifOp.getNumResults();
       for (auto res : ifOp.getResults()) {
-        if (slice.count(res)) {
+        if (slice.contains(res)) {
           // Why can't we use res instead of ifOp.getResult(oldIdx)?
           mapping.map(ifOp.getResult(oldIdx), newIfOp.getResult(newIdx));
           addRematValue(ifOp.getResult(oldIdx), layout[res],
@@ -841,8 +839,9 @@ void LayoutRematerialization::rewriteSlice(
   }
   // Add the rewritten convert to the replacements so it is removed from the
   // remat maps and has its uses replaced like the other ops we delete.
+  // A source already in the target encoding has no mapping.
   replacements.emplace_back(convertOp.getResult(),
-                            mapping.lookup(convertOp.getSrc()));
+                            mapping.lookupOrDefault(convertOp.getSrc()));
 
   updateRematMapping(replacements);
   for (auto &kv : replacements) {

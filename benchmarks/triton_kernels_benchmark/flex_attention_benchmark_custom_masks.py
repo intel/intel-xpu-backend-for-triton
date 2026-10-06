@@ -13,6 +13,7 @@ import torch
 import torch.nn.functional as F
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_MODULE
 
 torch._dynamo.config.recompile_limit = 200  # pylint: disable=protected-access
 
@@ -21,7 +22,7 @@ flex_attention = torch.compile(flex_attention, dynamic=False)
 
 
 @lru_cache
-def create_block_mask_cached(mask_mod, B, H, M, N, device='xpu'):
+def create_block_mask_cached(mask_mod, B, H, M, N, device=DEVICE):
     block_mask = create_block_mask(mask_mod, B, H, M, N, device=device)
     return block_mask
 
@@ -118,7 +119,7 @@ def run_bench_paged(q, k, v, score_mod, _, __):
                           kernel_options=kernel_options)
 
 
-IS_B580 = '580' in torch.xpu.get_device_name()
+IS_B580 = 'B580' in DEVICE_NAME
 MASKS = ['NATTEN', 'Alibi', 'Noop', 'Softcap', 'PagedNoop']
 fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
 
@@ -149,7 +150,7 @@ fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
     ))
 def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
     print(f'Running case: {Z=}, {H=}, {N_CTX=}, {D_HEAD=}, {MASK=}, {MODE=}, {provider=}')
-    torch.xpu.empty_cache()
+    DEVICE_MODULE.empty_cache()
 
     # There is still performance variance for triton, probably caused by random choice of autotune config
     do_bench = benchmark_suite.get_do_bench(n_warmup=200, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
@@ -178,9 +179,9 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
     mask_mod, score_mod, bench_func, requires_grad, num_pairs = MASK_CONFIGS[MASK]
 
     dtype = torch.float16
-    q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=requires_grad)
-    k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=requires_grad)
-    v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=requires_grad)
+    q = torch.randn((Z, H, N_CTX, D_HEAD), device=DEVICE, dtype=dtype, requires_grad=requires_grad)
+    k = torch.randn((Z, H, N_CTX, D_HEAD), device=DEVICE, dtype=dtype, requires_grad=requires_grad)
+    v = torch.randn((Z, H, N_CTX, D_HEAD), device=DEVICE, dtype=dtype, requires_grad=requires_grad)
 
     if MASK != 'PagedNoop':
         if mask_mod is not None:
