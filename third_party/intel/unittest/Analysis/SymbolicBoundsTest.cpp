@@ -319,17 +319,33 @@ TEST_F(SymbolicBoundsTest, NormalizationRules) {
 }
 
 TEST_F(SymbolicBoundsTest, TermBudgetAndDynamicStepAreUnknown) {
-  // 17 distinct symbols exceed kMaxTerms; `s >= s` is true but must be Unknown.
-  std::string ir = "tt.func @f(";
-  for (int i = 0; i < 17; ++i)
-    ir += (i ? ", %a" : "%a") + std::to_string(i) + ": i32";
-  ir += ") {\n  %s0 = arith.addi %a0, %a1 : i32\n";
-  for (int i = 1; i < 16; ++i)
-    ir += "  %s" + std::to_string(i) + " = arith.addi %s" +
-          std::to_string(i - 1) + ", %a" + std::to_string(i + 1) + " : i32\n";
-  ir += "  %cmp = arith.cmpi sge, %s15, %s15 : i32 loc(\"cmp\")\n  "
-        "tt.return\n}\n";
-  parse(ir);
+  // A chain of `n` distinct symbols summed into `s`, then `s >= s`, which is
+  // true for any n. The operands are i8 widened to i32 so every addi's wrap
+  // obligation discharges statically from the operand ranges: on i32 operands
+  // each addi contributes two wrap guards instead and kMaxGuards is exhausted
+  // at about six symbols, which would make this Unknown well inside kMaxTerms
+  // and leave the term budget untested.
+  auto chainOf = [](int n) {
+    std::string ir = "tt.func @f(";
+    for (int i = 0; i < n; ++i)
+      ir += (i ? ", %b" : "%b") + std::to_string(i) + ": i8";
+    ir += ") {\n";
+    for (int i = 0; i < n; ++i)
+      ir += "  %a" + std::to_string(i) + " = arith.extsi %b" +
+            std::to_string(i) + " : i8 to i32\n";
+    ir += "  %s0 = arith.addi %a0, %a1 : i32\n";
+    for (int i = 1; i < n - 1; ++i)
+      ir += "  %s" + std::to_string(i) + " = arith.addi %s" +
+            std::to_string(i - 1) + ", %a" + std::to_string(i + 1) + " : i32\n";
+    std::string last = "%s" + std::to_string(n - 2);
+    ir += "  %cmp = arith.cmpi sge, " + last + ", " + last +
+          " : i32 loc(\"cmp\")\n  tt.return\n}\n";
+    return ir;
+  };
+  // The budget is pinned from both sides, so raising kMaxTerms fails the test.
+  parse(chainOf(tt::intel::SymbolicBoundsProver::kMaxTerms));
+  EXPECT_EQ(verdict(get("cmp")), "Satisfied");
+  parse(chainOf(tt::intel::SymbolicBoundsProver::kMaxTerms + 1));
   EXPECT_EQ(verdict(get("cmp")), "Unknown");
 
   // A non-constant step makes the IV Opaque (loop contract (i)).

@@ -669,6 +669,46 @@ AffineForm
 SymbolicBoundsProver::normalizeImpl(Value v, QueryContext ctx,
                                     SmallVectorImpl<Obligation> &obligations,
                                     AxisPlacement placement, unsigned depth) {
+  MemoKey key{v.getAsOpaquePointer(),
+              ctx.loop ? ctx.loop.getOperation() : nullptr, placement};
+  auto it = memo.find(key);
+  if (it != memo.end()) {
+    const MemoEntry &e = it->second;
+    // A hit must reproduce everything the computation would have contributed,
+    // not just the form: obligations the caller has to discharge, the budget
+    // flag, and the depth the subtree would have reached from here.
+    llvm::append_range(obligations, e.obligations);
+    if (e.exhausted || depth + e.height > kMaxDepth)
+      exhausted = true;
+    deepest = std::max(deepest, depth + e.height);
+    return e.af;
+  }
+
+  size_t mark = obligations.size();
+  unsigned savedDeepest = deepest;
+  bool savedExhausted = exhausted;
+  // `deepest` and `exhausted` are measured for this subtree alone, then folded
+  // back into the enclosing query, which keeps `exhausted` sticky.
+  deepest = depth;
+  exhausted = false;
+  AffineForm af = normalizeUncached(v, ctx, obligations, placement, depth);
+
+  MemoEntry e;
+  e.af = af;
+  e.obligations.assign(obligations.begin() + mark, obligations.end());
+  e.exhausted = exhausted;
+  e.height = deepest - depth;
+  memo.try_emplace(key, std::move(e));
+
+  exhausted = savedExhausted || exhausted;
+  deepest = std::max(savedDeepest, deepest);
+  return af;
+}
+
+AffineForm SymbolicBoundsProver::normalizeUncached(
+    Value v, QueryContext ctx, SmallVectorImpl<Obligation> &obligations,
+    AxisPlacement placement, unsigned depth) {
+  deepest = std::max(deepest, depth);
   if (depth > kMaxDepth) {
     // Budgets degrade the whole query to Unknown (§4.3).
     exhausted = true;

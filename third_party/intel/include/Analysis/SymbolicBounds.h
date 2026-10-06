@@ -373,9 +373,14 @@ private:
                              SmallVectorImpl<Obligation> &obligations,
                              AxisPlacement placement);
 
+  /// The memo wrapper every recursive normalization goes through.
   AffineForm normalizeImpl(Value v, QueryContext ctx,
                            SmallVectorImpl<Obligation> &obligations,
                            AxisPlacement placement, unsigned depth);
+  /// The normalization itself, called only on a memo miss.
+  AffineForm normalizeUncached(Value v, QueryContext ctx,
+                               SmallVectorImpl<Obligation> &obligations,
+                               AxisPlacement placement, unsigned depth);
   /// An `Opaque` symbol for a value the prover does not look through.
   AffineForm opaque(Value v, AxisPlacement placement) const;
   /// The identity placement [0..rank-1] of `v`'s type, empty for a scalar.
@@ -406,6 +411,38 @@ private:
   std::map<std::pair<Symbol, Operation *>, QuotientInfo> quotientInfo;
   /// Assume facts, keyed by the subject value they constrain.
   DenseMap<Value, SmallVector<Fact, 2>> factIndex;
+
+  /// The normalization memo (§4.6). Keyed by placement as well as value,
+  /// because the same value on two axes does not normalize to the same form.
+  struct MemoKey {
+    const void *value;
+    Operation *loop;
+    AxisPlacement placement;
+    bool operator<(const MemoKey &o) const {
+      if (value != o.value)
+        return value < o.value;
+      if (loop != o.loop)
+        return loop < o.loop;
+      return std::lexicographical_compare(placement.begin(), placement.end(),
+                                          o.placement.begin(),
+                                          o.placement.end());
+    }
+  };
+  /// `height` is the deepest recursion below the value. A hit re-appends the
+  /// obligations and re-sets the flag, and a hit at depth `d` is exhausted
+  /// when `d + height > kMaxDepth`: a subtree normalized near the root must
+  /// not bypass the depth cap when it is reused below a deep chain.
+  struct MemoEntry {
+    AffineForm af;
+    SmallVector<Obligation, 4> obligations;
+    bool exhausted = false;
+    unsigned height = 0;
+  };
+  std::map<MemoKey, MemoEntry> memo;
+  /// The deepest `depth` reached since the enclosing memo miss began, which is
+  /// what makes `height` computable without threading a return value through
+  /// every recursive case.
+  unsigned deepest = 0;
 };
 
 /// Normalizes a condition in place (§4.4): folds the constant into the bound,
