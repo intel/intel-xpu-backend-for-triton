@@ -25,22 +25,28 @@ fi
 echo "target:  $TARGET"
 echo "out_dir: $OUT_DIR"
 
-if compgen -G "$OUT_DIR/*.json" > /dev/null || [[ -e "$RESULTS" ]]; then
-  echo "Error: $OUT_DIR already contains results; use a new out_dir or delete it first" >&2
+if [[ -d "$OUT_DIR" && -n "$(ls -A "$OUT_DIR")" ]]; then
+  echo "Error: $OUT_DIR is not empty: $(ls -A "$OUT_DIR")" >&2
+  exit 1
+fi
+
+REL_TARGET="$(realpath --relative-to="$VLLM_PROJ" "$TARGET")"
+if [[ "$REL_TARGET" == ..* ]]; then
+  echo "Error: target is not inside $VLLM_PROJ: $TARGET" >&2
   exit 1
 fi
 
 mkdir -p "$OUT_DIR"
 
-REL_TARGET="$(realpath --relative-to="$VLLM_PROJ" "$TARGET")"
 mapfile -t TEST_FILES < <(cd "$VLLM_PROJ" && find "$REL_TARGET" -name 'test_*.py' | sort)
 
 for test_file in "${TEST_FILES[@]}"; do
-  file_name="${test_file//\//__}"
+  out_file="$OUT_DIR/$test_file"
+  mkdir -p "$(dirname "$out_file")"
   echo "$test_file"
   rc=0
-  VLLM_USE_V2_MODEL_RUNNER=1 VLLM_KERNEL_TEST_MAP_OUT="$OUT_DIR/${file_name}.json" \
-    pytest "$VLLM_PROJ/$test_file" --continue-on-collection-errors --verbose --tb=no --timeout=300 \
-    "$@" > "$OUT_DIR/${file_name}.log" 2>&1 || rc=$?
+  VLLM_USE_V2_MODEL_RUNNER=1 VLLM_KERNEL_TEST_MAP_OUT="${out_file}.json" \
+    pytest "$VLLM_PROJ/$test_file" --continue-on-collection-errors --verbose --tb=no --timeout=600 \
+    "$@" > "${out_file}.log" 2>&1 || rc=$?
   echo "$rc $test_file" >> "$RESULTS"
 done
