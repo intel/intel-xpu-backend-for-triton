@@ -226,6 +226,11 @@ public:
   Symbol symbolFor(SymbolKind kind, Value v, int64_t divisor = 0,
                    AxisPlacement placement = {}) const;
 
+  /// Decides `lhs pred rhs` at `ctx`. Normalizes both sides and delegates to
+  /// the affine-form overload.
+  BoundProof prove(arith::CmpIPredicate pred, Value lhs, Value rhs,
+                   QueryContext ctx);
+
   /// Normalizes `v` at `ctx` and appends the wrap obligations of every
   /// operation looked through. Never fails: an unsupported operation becomes
   /// an `Opaque` symbol.
@@ -243,6 +248,16 @@ private:
                            AxisPlacement placement, unsigned depth);
   /// An `Opaque` symbol for a value the prover does not look through.
   AffineForm opaque(Value v, AxisPlacement placement) const;
+  /// The identity placement [0..rank-1] of `v`'s type, empty for a scalar.
+  static AxisPlacement identityPlacement(Value v);
+  /// Constant bounds of one symbol: exact for `Lane`, else from the range
+  /// analysis; nullopt when no range can be inferred.
+  std::optional<std::pair<int64_t, int64_t>>
+  symbolConstantBounds(const Symbol &sym) const;
+  /// Bounds an affine form from constants alone; nullopt on an unbounded
+  /// symbol or on overflow.
+  std::optional<std::pair<int64_t, int64_t>>
+  boundConstant(const AffineForm &e) const;
   /// Records the wrap obligation of one traversed arithmetic operation.
   void recordWrap(Operation *op, const AffineForm &result,
                   SmallVectorImpl<Obligation> &obligations) const;

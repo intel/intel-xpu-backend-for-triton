@@ -100,6 +100,13 @@ public:
     return found;
   }
 
+  /// Renders the verdict of the comparison named `loc("<name>")`.
+  std::string verdict(Value cmp) {
+    auto op = cast<arith::CmpIOp>(cmp.getDefiningOp());
+    return tt::intel::toString(
+        prover->prove(op.getPredicate(), op.getLhs(), op.getRhs(), at(cmp)));
+  }
+
   /// Returns argument `idx` of the (single) function in the parsed IR.
   Value arg(unsigned idx) {
     Value found;
@@ -129,6 +136,32 @@ TEST_F(SymbolicBoundsTest, ScalarAffine) {
     })");
   EXPECT_EQ(norm(get("d")), "3*arg0 + arg1 - 5");
   EXPECT_EQ(norm(get("p")), "opaque(p)"); // product of two symbols
+}
+
+TEST_F(SymbolicBoundsTest, SameLaneSameAxisCancels) {
+  parse(R"(
+    tt.func @f(%n: i32) {
+      %r = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+      %c1 = arith.constant dense<1> : tensor<64xi32>
+      %r1 = arith.addi %r, %c1 : tensor<64xi32> loc("r1")
+      %cmp = arith.cmpi slt, %r, %r1 : tensor<64xi32> loc("cmp")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Satisfied"); // r < r + 1, element-wise
+}
+
+TEST_F(SymbolicBoundsTest, SameLaneDifferentAxesDoesNotCancel) {
+  parse(R"(
+    tt.func @f() {
+      %r = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+      %col = tt.expand_dims %r {axis = 1 : i32} : tensor<64xi32> -> tensor<64x1xi32>
+      %row = tt.expand_dims %r {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+      %cb = tt.broadcast %col : tensor<64x1xi32> -> tensor<64x64xi32>
+      %rb = tt.broadcast %row : tensor<1x64xi32> -> tensor<64x64xi32>
+      %cmp = arith.cmpi slt, %cb, %rb : tensor<64x64xi32> loc("cmp")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Unknown"); // never Refuted (Review Focus 1)
 }
 
 } // namespace
