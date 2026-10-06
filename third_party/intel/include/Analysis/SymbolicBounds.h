@@ -245,6 +245,14 @@ public:
   AffineForm normalize(Value v, QueryContext ctx,
                        SmallVectorImpl<Obligation> &obligations);
 
+  /// Decides whether the i1 (or i1 tensor) `v` is true in every element at
+  /// `ctx`. Looks through `tt.splat`, `tt.expand_dims`, `tt.broadcast` and
+  /// `arith.ext*` only, and deliberately NOT through `getFinalValue`, which
+  /// substitutes an iter_arg's init value without inspecting the yield: a
+  /// loop-carried mask initialized `true` and yielding `false` would read as
+  /// always true. Any block argument is therefore `Unknown`.
+  BoundProof proveTrue(Value v, QueryContext ctx);
+
   static constexpr unsigned kMaxDepth = 16;
   static constexpr unsigned kMaxTerms = 16;
   static constexpr unsigned kMaxFactConditions = 4;

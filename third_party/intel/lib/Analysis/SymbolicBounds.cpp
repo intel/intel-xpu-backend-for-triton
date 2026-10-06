@@ -1783,4 +1783,112 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
   return {};
 }
 
+//===----------------------------------------------------------------------===//
+// Mask queries (design 4.7)
+//===----------------------------------------------------------------------===//
+
+BoundProof SymbolicBoundsProver::proveTrue(Value v, QueryContext ctx) {
+  using V = BoundProof::Verdict;
+
+  // A block argument is where the "look through" must stop. getFinalValue
+  // would substitute an iter_arg's init value without inspecting the yield, so
+  // a mask initialized `true` and yielding a computed value would read as
+  // unconditionally true and unmask an access the mask was guarding.
+  if (isa<BlockArgument>(v))
+    return {};
+
+  Operation *def = v.getDefiningOp();
+  if (!def)
+    return {};
+
+  // Shape and width changes preserve "true in every element": a splat
+  // replicates one bit, expand_dims/broadcast replicate existing ones, and
+  // extending an i1 keeps zero zero and nonzero nonzero.
+  if (auto splat = dyn_cast<tt::SplatOp>(def))
+    return proveTrue(splat.getSrc(), ctx);
+  if (auto expand = dyn_cast<tt::ExpandDimsOp>(def))
+    return proveTrue(expand.getSrc(), ctx);
+  if (auto bcast = dyn_cast<tt::BroadcastOp>(def))
+    return proveTrue(bcast.getSrc(), ctx);
+  if (auto ext = dyn_cast<arith::ExtSIOp>(def))
+    return proveTrue(ext.getIn(), ctx);
+  if (auto ext = dyn_cast<arith::ExtUIOp>(def))
+    return proveTrue(ext.getIn(), ctx);
+
+  // A constant mask needs no proof. A dense splat is handled too, since that
+  // is what a folded `tt.splat` of a constant becomes.
+  if (auto cst = dyn_cast<arith::ConstantOp>(def)) {
+    auto boolOf = [](Attribute a) -> std::optional<bool> {
+      if (auto b = dyn_cast<BoolAttr>(a))
+        return b.getValue();
+      if (auto i = dyn_cast<IntegerAttr>(a))
+        return i.getValue().getBoolValue();
+      if (auto d = dyn_cast<SplatElementsAttr>(a))
+        return d.getSplatValue<APInt>().getBoolValue();
+      return std::nullopt;
+    };
+    if (std::optional<bool> b = boolOf(cst.getValue())) {
+      BoundProof p;
+      p.verdict = *b ? V::Satisfied : V::Refuted;
+      return p;
+    }
+    return {};
+  }
+
+  if (auto cmp = dyn_cast<arith::CmpIOp>(def))
+    return prove(cmp.getPredicate(), cmp.getLhs(), cmp.getRhs(), ctx);
+
+  // `a && b` (4.7). One `Refuted` side refutes the conjunction outright, and
+  // does so unconditionally, so it needs nothing from the other side - which
+  // is why this precedes the Unknown check.
+  if (auto andOp = dyn_cast<arith::AndIOp>(def)) {
+    BoundProof a = proveTrue(andOp.getLhs(), ctx);
+    BoundProof b = proveTrue(andOp.getRhs(), ctx);
+    if (a.verdict == V::Refuted || b.verdict == V::Refuted) {
+      BoundProof p;
+      p.verdict = V::Refuted;
+      return p;
+    }
+    auto decided = [](V x) {
+      return x == V::Satisfied || x == V::ConditionallySatisfied;
+    };
+    if (!decided(a.verdict) || !decided(b.verdict))
+      return {};
+
+    BoundProof p;
+    p.verdict = a.verdict == V::Satisfied && b.verdict == V::Satisfied
+                    ? V::Satisfied
+                    : V::ConditionallySatisfied;
+    p.conditions = a.conditions;
+    for (const BoundCondition &c : b.conditions) {
+      auto it = llvm::find(p.conditions, c);
+      if (it == p.conditions.end())
+        p.conditions.push_back(c);
+      else if (c.kind < it->kind)
+        it->kind = c.kind; // one condition, several kinds: the strongest wins
+    }
+    p.factsUsed = a.factsUsed;
+    for (Operation *f : b.factsUsed)
+      if (!llvm::is_contained(p.factsUsed, f))
+        p.factsUsed.push_back(f);
+
+    // The budgets bound each side separately, so their union can exceed them;
+    // an over-budget conjunction is Unknown, not a larger guard.
+    auto count = [&](ConditionKind k) {
+      return llvm::count_if(
+          p.conditions, [&](const BoundCondition &c) { return c.kind == k; });
+    };
+    if (count(ConditionKind::Fact) > kMaxFactConditions ||
+        count(ConditionKind::Guard) > kMaxGuards)
+      return {};
+    llvm::stable_sort(p.conditions,
+                      [](const BoundCondition &x, const BoundCondition &y) {
+                        return x.kind < y.kind;
+                      });
+    return p;
+  }
+
+  return {};
+}
+
 } // namespace mlir::triton::intel
