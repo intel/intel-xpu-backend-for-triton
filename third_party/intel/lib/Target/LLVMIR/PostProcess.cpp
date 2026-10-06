@@ -333,9 +333,8 @@ static void legalizeI1VectorStore(StoreInst *store, const DataLayout &dl) {
     Value *&word = words[k / wordBits];
     word = word ? builder.CreateOr(word, bit) : bit;
   }
-  for (Value *&word : words)
-    if (!word)
-      word = ConstantInt::get(wordTy, 0);
+  assert(!llvm::is_contained(words, nullptr) &&
+         "every storage word must be written");
 
   Value *raw = words.front();
   if (storageVecTy) {
