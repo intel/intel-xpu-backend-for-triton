@@ -132,3 +132,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %d : tensor<128xf32, #blocked>
   }
 }
+
+// -----
+
+// COM: Same surviving remat of %x1 as above, reached through forwardPropagateRemat's tt.assert branch: the
+// COM: assert must keep %x1 because the recorded remat is defined after it.
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func public @kernel_assert(
+  // CHECK: [[X1:%.*]] = arith.cmpi sgt, {{.*}} : tensor<128xi32, [[ENC:#[a-z0-9]+]]>
+  // CHECK-NEXT: tt.assert [[X1]], "msg" : tensor<128xi1, [[ENC]]>
+  // CHECK-NEXT: [[A:%.*]] = ttg.convert_layout [[X1]] :
+  // CHECK: tt.return [[A]],
+  tt.func public @kernel_assert(%y: tensor<128xi32, #blocked1>) -> (tensor<128xi1, #blocked>, tensor<128xi32, #blocked>) {
+    %r = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked1>
+    %x0 = arith.addi %r, %r : tensor<128xi32, #blocked1>
+    %x1 = arith.cmpi sgt, %x0, %y : tensor<128xi32, #blocked1>
+    tt.assert %x1, "msg" : tensor<128xi1, #blocked1>
+    %a = ttg.convert_layout %x1 : tensor<128xi1, #blocked1> -> tensor<128xi1, #blocked>
+    %b = ttg.convert_layout %x0 : tensor<128xi32, #blocked1> -> tensor<128xi32, #blocked>
+    tt.return %a, %b : tensor<128xi1, #blocked>, tensor<128xi32, #blocked>
+  }
+}
+
+// -----
+
+// COM: As above, through the tt.descriptor_store branch: the store must keep %x1 as its source.
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func public @kernel_desc_store(
+  // CHECK: [[X1:%.*]] = arith.addi {{.*}}, %arg0 : tensor<128xi32, [[ENC:#[a-z0-9]+]]>
+  // CHECK-NEXT: tt.descriptor_store %arg1[{{.*}}], [[X1]] : !tt.tensordesc<128xi32>, tensor<128xi32, [[ENC]]>
+  // CHECK-NEXT: [[A:%.*]] = ttg.convert_layout [[X1]] :
+  // CHECK: tt.return [[A]],
+  tt.func public @kernel_desc_store(%y: tensor<128xi32, #blocked1>, %desc: !tt.tensordesc<128xi32>) -> (tensor<128xi32, #blocked>, tensor<128xi32, #blocked>) {
+    %c0 = arith.constant 0 : i32
+    %r = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked1>
+    %x0 = arith.addi %r, %r : tensor<128xi32, #blocked1>
+    %x1 = arith.addi %x0, %y : tensor<128xi32, #blocked1>
+    tt.descriptor_store %desc[%c0], %x1 : !tt.tensordesc<128xi32>, tensor<128xi32, #blocked1>
+    %a = ttg.convert_layout %x1 : tensor<128xi32, #blocked1> -> tensor<128xi32, #blocked>
+    %b = ttg.convert_layout %x0 : tensor<128xi32, #blocked1> -> tensor<128xi32, #blocked>
+    tt.return %a, %b : tensor<128xi32, #blocked>, tensor<128xi32, #blocked>
+  }
+}

@@ -1578,6 +1578,12 @@ void LayoutRematerialization::forwardPropagateRemat(
         if (!valuesToPropagate.contains(operand))
           continue;
         Value newOperand = getRematValue(operand, valuesToPropagate[operand]);
+        // A surviving convert recorded as a remat can sit after the assert.
+        if (!newOperand || !domInfo.properlyDominates(newOperand, assertOp)) {
+          LDBG("forwardPropagateRemat: no dominating remat for assert operand "
+               << operand);
+          continue;
+        }
         assertOp->setOperand(0, newOperand);
       } else if (auto descStore = dyn_cast<tt::DescriptorStoreOp>(&op)) {
         // Only need to deal with the store value
@@ -1585,10 +1591,10 @@ void LayoutRematerialization::forwardPropagateRemat(
         if (!valuesToPropagate.contains(operand))
           continue;
         Value newOperand = getRematValue(operand, valuesToPropagate[operand]);
-        if (!newOperand) {
+        if (!newOperand || !domInfo.properlyDominates(newOperand, descStore)) {
           LLVM_DEBUG({
-            DBGS()
-                << "forwardPropagateRemat no remet src value for desc store:\n";
+            DBGS() << "forwardPropagateRemat no dominating remat src value for "
+                      "desc store:\n";
             DBGS().indent(2) << "origin src: " << operand << "\n";
             DBGS().indent(2)
                 << "to layout:" << valuesToPropagate[operand] << "\n";
