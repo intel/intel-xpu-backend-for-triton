@@ -370,3 +370,21 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
     tt.return %0 : tensor<2x128x128xf32, #blocked>
   }
 }
+
+// -----
+
+// COM: Same op without scaled DPAS: a rank-3 dot scaled only on the rhs is decomposed in place, not transposed first.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 16], warpsPerCTA = [1, 1, 4], order = [2, 1, 0]}>
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func public @rank3_rhs_scale_only_decompose
+  tt.func public @rank3_rhs_scale_only_decompose(%a: tensor<2x128x64xbf16, #blocked>, %b: tensor<2x64x64xi8, #blocked>, %scale_b: tensor<2x128x2xi8, #blocked>) -> tensor<2x128x128xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<2x128x128xf32, #blocked>
+    // CHECK-NOT: tt.dot_scaled
+    // CHECK: ttg.fp4_to_fp %arg1 {axis = 2 : i32} : tensor<2x64x64xi8, #{{.*}}> -> tensor<2x64x128xbf16, #{{.*}}>
+    // CHECK-NOT: tt.dot_scaled
+    // CHECK: tt.dot {{.*}} -> tensor<2x128x128xf32, #{{.*}}>
+    // CHECK-NOT: tt.dot_scaled
+    %0 = tt.dot_scaled %a, %b scale %scale_b, %cst lhs = bf16 rhs = e2m1 {fastMath = false, rhs_k_pack = false} : tensor<2x128x64xbf16, #blocked> * tensor<2x64x64xi8, #blocked>, tensor<2x128x2xi8, #blocked> -> tensor<2x128x128xf32, #blocked>
+    tt.return %0 : tensor<2x128x128xf32, #blocked>
+  }
+}

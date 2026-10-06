@@ -874,7 +874,9 @@ static tt::TransOp transposeDotScaledOp(tt::DotScaledOp dotOp) {
 static void transposeDotScaledOp(ModuleOp m) {
   SmallVector<tt::DotScaledOp> toTranspose;
   m.walk([&](tt::DotScaledOp dotOp) -> void {
-    if (dotOp.getAScale() == nullptr && dotOp.getBScale() != nullptr)
+    // The rewrite uses rank-2 transposes; batched dots are decomposed as-is.
+    if (dotOp.getAScale() == nullptr && dotOp.getBScale() != nullptr &&
+        dotOp.getType().getRank() == 2)
       toTranspose.push_back(dotOp);
   });
   SmallVector<tt::TransOp> transposes;
