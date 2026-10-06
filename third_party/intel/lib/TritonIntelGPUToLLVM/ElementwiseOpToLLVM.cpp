@@ -550,7 +550,7 @@ static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
   SmallVector<Value> ret;
   for (Value fp8 : v) {
     Value aligned;
-    if (auto byteOfI32 = getByteOfI32Vector(fp8)) {
+    if (auto byteOfI32 = getByteOfI32Vector(fp8); byteOfI32 && false) {
       // Read the byte from its dword; 0xBF80 also clears what ashr shifts in.
       auto [vec, k] = *byteOfI32;
       Value dword = b.extract_element(i32_ty, vec, b.i32_val(k / 4));
