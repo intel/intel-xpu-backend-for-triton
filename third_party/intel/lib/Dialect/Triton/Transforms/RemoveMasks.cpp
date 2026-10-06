@@ -10,14 +10,18 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/xxhash.h"
 #include <optional>
 #include <type_traits>
 
 #define DEBUG_TYPE "triton-intel-remove-masks"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -28,6 +32,89 @@ namespace mlir::triton::intel {
 } // namespace mlir::triton::intel
 
 namespace {
+
+// Census scaffolding, debug-only (phase 0 of the symbolic-bounds plan). Ids are
+// stored as a discardable attribute (no dialect prefix, so no dialect verifier
+// sees it): loop clones made by versioning inherit them, and stripCensusIds
+// removes them at pass end.
+static constexpr StringLiteral kCensusIdAttr = "census_id";
+
+// Null-safe: the validators' internal calls pass op == nullptr.
+static StringRef censusId(Operation *op) {
+  auto attr = op ? op->getAttrOfType<StringAttr>(kCensusIdAttr) : StringAttr();
+  return attr ? attr.getValue() : StringRef("?");
+}
+
+// The mask a candidate op carries, or null. A superset of what the collectors
+// read: masked stores and atomics are counted but never examined.
+static Value censusMask(Operation *op) {
+  return TypeSwitch<Operation *, Value>(op)
+      .Case<tt::LoadOp, tt::StoreOp, tt::AtomicLoadOp, tt::AtomicStoreOp,
+            tt::AtomicRMWOp>([](auto o) { return o.getMask(); })
+      .Case<arith::SelectOp>([](auto o) { return o.getCondition(); })
+      .Default([](Operation *) { return Value(); });
+}
+
+// Classifies a loop bound for the census: "const", "arg" (block argument),
+// "cdiv" (divsi of an addi), or the defining op name.
+static std::string describeBound(Value v) {
+  v = tt::intel::getFinalValue(v);
+  // m_ConstantInt binds into its argument, so it needs a real APInt: passing
+  // nullptr dereferences null.
+  APInt cst;
+  if (matchPattern(v, m_ConstantInt(&cst)))
+    return "const";
+  Operation *def = v.getDefiningOp();
+  if (!def)
+    return "arg";
+  if (auto div = dyn_cast<arith::DivSIOp>(def))
+    if (div.getLhs().getDefiningOp<arith::AddIOp>())
+      return "cdiv";
+  return def->getName().getStringRef().str();
+}
+
+// id = <func>#<xxh3 of the func's printed IR>/L<pre-order loop index>/M<mask
+// index>. The hash separates specializations that share a kernel name. Every
+// masked op whose innermost enclosing loop is a scf.for gets an id and a
+// candidate line, including ops the drivers never examine, so the census
+// denominator is complete.
+static void assignCensusIds(ModuleOp mod) {
+  mod.walk([&](tt::FuncOp func) {
+    std::string text;
+    llvm::raw_string_ostream os(text);
+    // Full IR, before any attribute is set: elided dense constants could
+    // make two different functions hash the same.
+    func->print(os);
+    std::string funcKey =
+        (func.getName() + "#" +
+         llvm::utohexstr(llvm::xxh3_64bits(text), /*LowerCase=*/true))
+            .str();
+    unsigned loopIdx = 0;
+    func.walk<WalkOrder::PreOrder>([&](scf::ForOp forOp) {
+      std::string loopId = funcKey + "/L" + std::to_string(loopIdx++);
+      forOp->setAttr(kCensusIdAttr,
+                     StringAttr::get(forOp.getContext(), loopId));
+      StringRef scope = forOp->getParentOfType<scf::ForOp>() ? "nested-loop"
+                        : !forOp.getSingleInductionVar()     ? "multi-iv"
+                                                             : "outermost";
+      unsigned maskIdx = 0;
+      forOp.getBody()->walk([&](Operation *op) {
+        if (op->getParentOfType<scf::ForOp>() != forOp || !censusMask(op))
+          return; // owned by an inner loop, or not masked
+        std::string id = loopId + "/M" + std::to_string(maskIdx++);
+        op->setAttr(kCensusIdAttr, StringAttr::get(op->getContext(), id));
+        LDBG("candidate: id="
+             << id << " kind=" << op->getName().getStringRef()
+             << " scope=" << scope << " where="
+             << (op->getBlock() == forOp.getBody() ? "direct" : "in-region"));
+      });
+    });
+  });
+}
+
+static void stripCensusIds(ModuleOp mod) {
+  mod.walk([](Operation *op) { op->removeAttr(kCensusIdAttr); });
+}
 
 // Returns true if `pred` is a supported bound-check predicate.
 static bool isSupportedBoundPredicate(arith::CmpIPredicate pred) {
@@ -157,6 +244,8 @@ static Operation *dropMask(Operation *op, bool maskVal) {
 
   OpBuilder builder(op);
   Location loc = op->getLoc();
+  LDBG("outcome: id=" << censusId(op) << " result=dropped-"
+                      << (maskVal ? "true" : "false"));
   TypeSwitch<Operation *>(op)
       .Case<tt::LoadOp>([&](auto loadOp) {
         if (maskVal) {
@@ -215,6 +304,7 @@ public:
       : MaskValidatorBase(), solver(solver) {}
 
   virtual bool isValidMask(scf::ForOp &forOp, Value mask, Operation *op) const {
+    censusOp = op; // census only: classifyCmp has no access to the masked op
     MaskClassification cls = classify(forOp, mask);
     if (cls == MaskClassification::Unknown)
       return false;
@@ -352,24 +442,32 @@ private:
   MaskClassification classifyCmp(scf::ForOp &forOp, Value finalVal) const {
     std::optional<ConstantIntRanges> optRange =
         tt::intel::collectLoopIVRange(forOp, *solver);
-    if (!optRange)
+    if (!optRange) {
+      censusExit(forOp, "iv-range-unknown");
       return MaskClassification::Unknown;
+    }
 
     if (!finalVal.getDefiningOp() ||
-        !isa<arith::CmpIOp>(finalVal.getDefiningOp()))
+        !isa<arith::CmpIOp>(finalVal.getDefiningOp())) {
+      censusExit(forOp, "not-cmpi");
       return MaskClassification::Unknown;
+    }
 
     auto cmpOp = cast<arith::CmpIOp>(finalVal.getDefiningOp());
     arith::CmpIPredicate pred = cmpOp.getPredicate();
-    if (!isSupportedBoundPredicate(pred))
+    if (!isSupportedBoundPredicate(pred)) {
+      censusExit(forOp, "pred-unsupported");
       return MaskClassification::Unknown;
+    }
 
     Value lhs = tt::intel::getFinalValue(cmpOp.getLhs());
     Value rhs = tt::intel::getFinalValue(cmpOp.getRhs());
     Operation *lhsOp = tt::intel::getFinalValue(lhs).getDefiningOp();
     Operation *rhsOp = tt::intel::getFinalValue(rhs).getDefiningOp();
-    if (!lhsOp || !rhsOp)
+    if (!lhsOp || !rhsOp) {
+      censusExit(forOp, "no-defining-op");
       return MaskClassification::Unknown;
+    }
 
     auto getIntConstantValue = [](Operation *op) -> std::optional<APInt> {
       APInt intVal;
@@ -387,30 +485,55 @@ private:
 
     // TODO: consider the case where the constant is lhs.
     std::optional<APInt> constIntVal = getIntConstantValue(rhsOp);
-    if (!constIntVal)
+    if (!constIntVal) {
+      censusExit(forOp, "rhs-not-const");
       return MaskClassification::Unknown;
+    }
 
     auto addOp = dyn_cast<arith::AddIOp>(lhsOp);
-    if (!addOp)
+    if (!addOp) {
+      censusExit(forOp, "lhs-not-addi");
       return MaskClassification::Unknown;
+    }
 
     Value addLhs = tt::intel::getFinalValue(addOp.getLhs());
     Value addRhs = tt::intel::getFinalValue(addOp.getRhs());
 
     std::optional<ConstantIntRanges> lhsRange =
         getIVEquivalentRange(forOp, addLhs);
-    if (!lhsRange)
+    if (!lhsRange) {
+      censusExit(forOp, "lhs-not-iv");
       return MaskClassification::Unknown;
+    }
 
     auto makeRangeOp =
         dyn_cast_or_null<tt::MakeRangeOp>(addRhs.getDefiningOp());
-    if (!makeRangeOp)
+    if (!makeRangeOp) {
+      censusExit(forOp, "rhs-not-make-range");
       return MaskClassification::Unknown;
+    }
 
-    return classifyMask(pred, *lhsRange, makeRangeOp.getStart(),
-                        makeRangeOp.getEnd(), *constIntVal);
+    MaskClassification cls =
+        classifyMask(pred, *lhsRange, makeRangeOp.getStart(),
+                     makeRangeOp.getEnd(), *constIntVal);
+    censusExit(forOp, "classified",
+               cls == MaskClassification::AlwaysTrue    ? "true"
+               : cls == MaskClassification::AlwaysFalse ? "false"
+                                                        : "unknown");
+    return cls;
   }
 
+  // One census line per walk-1 classification exit (phase 0, debug-only).
+  void censusExit(scf::ForOp &forOp, StringRef exit,
+                  StringRef result = StringRef()) const {
+    LDBG("census: id=" << censusId(censusOp) << " walk=1 exit=" << exit
+                       << (result.empty() ? StringRef() : StringRef(" result="))
+                       << result << " ub="
+                       << describeBound(forOp.getUpperBound()) << " step="
+                       << (forOp.getConstantStep() ? "const" : "dyn"));
+  }
+
+  mutable Operation *censusOp = nullptr;
   DataFlowSolver *solver;
   mutable std::map<Operation *, bool> opToMaskValue;
 };
@@ -473,12 +596,20 @@ public:
     assert(loopIV.has_value() && "Failed to find loop induction variable");
 
     if (!defMulLhs && mulOp.getLhs() == *loopIV &&
-        isa<arith::ConstantIntOp>(defMulRhs))
-      return cast<arith::ConstantIntOp>(defMulRhs).value() == end;
+        isa<arith::ConstantIntOp>(defMulRhs)) {
+      bool matched = cast<arith::ConstantIntOp>(defMulRhs).value() == end;
+      if (matched && op)
+        LDBG("census: id=" << censusId(op) << " walk=2 exit=canonical-matched");
+      return matched;
+    }
 
     if (!defMulRhs && mulOp.getRhs() == *loopIV &&
-        isa<arith::ConstantIntOp>(defMulLhs))
-      return cast<arith::ConstantIntOp>(defMulLhs).value() == end;
+        isa<arith::ConstantIntOp>(defMulLhs)) {
+      bool matched = cast<arith::ConstantIntOp>(defMulLhs).value() == end;
+      if (matched && op)
+        LDBG("census: id=" << censusId(op) << " walk=2 exit=canonical-matched");
+      return matched;
+    }
 
     return false;
   }
@@ -646,8 +777,11 @@ public:
     // Boundary-check pattern from RewriteTensorDescriptorToPointer:
     // (splat(offset) + ext(make_range(start, end))) cmp splat(constant)
     // Accepts all comparison predicates (including sge for >= 0 checks).
-    if (isBoundaryCheckPattern(cmpOp))
+    if (isBoundaryCheckPattern(cmpOp)) {
+      if (op)
+        LDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
       return true;
+    }
 
     if (!isSupportedBoundPredicate(pred))
       return false;
@@ -670,18 +804,24 @@ public:
       assert(isa<IntegerType>(lhsVal.getType()) &&
              cast<IntegerType>(lhsVal.getType()).getWidth() == 1 &&
              "Invalid type");
+      if (op)
+        LDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
       return true;
     }
 
     if (!rhs && isa<tt::MakeRangeOp>(lhs)) {
       [[maybe_unused]] auto rangeOp = cast<tt::MakeRangeOp>(lhs);
       assert(rangeOp.getStart() < rangeOp.getEnd() && "Invalid range");
+      if (op)
+        LDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
       return true;
     }
 
     if (!lhs && isa<tt::MakeRangeOp>(rhs)) {
       [[maybe_unused]] auto rangeOp = cast<tt::MakeRangeOp>(rhs);
       assert(rangeOp.getStart() < rangeOp.getEnd() && "Invalid range");
+      if (op)
+        LDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
       return true;
     }
 
@@ -1113,6 +1253,12 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
+    // Census scaffolding (phase 0): assign stable per-mask ids before anything
+    // examines or mutates the IR, and strip them at pass end. Setting a
+    // discardable attribute creates and erases no values, so this does not
+    // affect analysis-state validity.
+    LLVM_DEBUG(assignCensusIds(moduleOp));
+
     std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
     auto *rangeAnalysis = solver->load<tt::intel::IntegerRangeAnalysis>(
         moduleOp, getAnalysis<DominanceInfo>());
@@ -1189,6 +1335,7 @@ public:
     });
 
     LLVM_DEBUG(llvm::dbgs() << "After versioning:\n" << moduleOp << "\n");
+    LLVM_DEBUG(stripCensusIds(moduleOp));
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 };
