@@ -225,6 +225,121 @@ TEST_F(SymbolicBoundsTest, UnsignedLoopNeedsSignedRepresentability) {
             "Conditional{arg1 divisible by 64; arg1 >= 0; arg1 <= 2147483584}");
 }
 
+TEST_F(SymbolicBoundsTest, OffsetIterArgNeedsRepresentability) {
+  // An i8 loop lb=120..ub=124 step 1 is well-defined - the exit value 124 fits
+  // - but an iter_arg started at lb + 5 takes 125, 126, 127, -128. Treated as
+  // IV + 5 with no obligation it would prove `o >= 0`; the obligation's
+  // hi = 123 + 5 = 128 is a constant out of range, so no guard can help (4.1).
+  parse(R"(
+    tt.func @f() {
+      %c1 = arith.constant 1 : i8
+      %c5 = arith.constant 5 : i8
+      %c0 = arith.constant 0 : i8
+      %lb = arith.constant 120 : i8
+      %ub = arith.constant 124 : i8
+      %init = arith.addi %lb, %c5 : i8
+      scf.for %i = %lb to %ub step %c1 iter_args(%o = %init) -> (i8) : i8 {
+        %cmp = arith.cmpi sge, %o, %c0 : i8 loc("cmp")
+        %next = arith.addi %o, %c1 : i8
+        scf.yield %next : i8
+      }
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Unknown");
+}
+
+TEST_F(SymbolicBoundsTest, DepthCapIsUnknown) {
+  // Fully normalized, v20 = x + 20 and `v20 < x` is Refuted (hi(d) = -20). The
+  // chain exceeds the depth budget, which degrades the query to Unknown, never
+  // to the Refuted a truncated traversal would also reach (4.3 budgets).
+  std::string ir = "tt.func @f(%a: i8) {\n  %c1 = arith.constant 1 : i32\n"
+                   "  %x = arith.extsi %a : i8 to i32\n";
+  for (int i = 1; i <= 20; ++i)
+    ir += "  %v" + std::to_string(i) + " = arith.addi %" +
+          (i == 1 ? std::string("x") : "v" + std::to_string(i - 1)) +
+          ", %c1 : i32\n";
+  ir +=
+      "  %cmp = arith.cmpi slt, %v20, %x : i32 loc(\"cmp\")\n  tt.return\n}\n";
+  parse(ir);
+  EXPECT_EQ(verdict(get("cmp")), "Unknown");
+}
+
+TEST_F(SymbolicBoundsTest, MemoHitRespectsDepthBudget) {
+  // v10 is normalized first at depth 0 (height 10, within the cap), then
+  // reached again below a 10-deep chain: 10 + 10 > 16 must exhaust, so a
+  // subtree memoized near the root cannot bypass the cap below a deep one
+  // (4.6).
+  std::string ir = "tt.func @f(%a: i8) {\n  %c1 = arith.constant 1 : i32\n"
+                   "  %v0 = arith.extsi %a : i8 to i32\n";
+  for (int i = 1; i <= 20; ++i)
+    ir += "  %v" + std::to_string(i) + " = arith.addi %v" +
+          std::to_string(i - 1) + ", %c1 : i32\n";
+  ir += "  %near = arith.cmpi slt, %v10, %v0 : i32 loc(\"near\")\n"
+        "  %deep = arith.cmpi slt, %v20, %v0 : i32 loc(\"deep\")\n  "
+        "tt.return\n}\n";
+  parse(ir);
+  EXPECT_EQ(verdict(get("near")), "Refuted"); // v10 = a + 10 < a never holds
+  EXPECT_EQ(verdict(get("deep")), "Unknown"); // memo hit on v10 at depth 10
+}
+
+TEST_F(SymbolicBoundsTest, NormalizationRules) {
+  // One case per remaining normalization rule (4.1).
+  parse(R"(
+    tt.func @f(%a: i32, %b: index) {
+      %np = tt.get_num_programs x : i32 loc("np")
+      %w = arith.index_cast %a : i32 to index loc("w")
+      %n = arith.index_cast %b : index to i32 loc("n")
+      %r = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32>
+      %c2 = arith.constant dense<2> : tensor<4xi32>
+      %q = arith.divsi %r, %c2 : tensor<4xi32>
+      %qc = tt.expand_dims %q {axis = 1 : i32} : tensor<4xi32> -> tensor<4x1xi32>
+      %qr = tt.expand_dims %q {axis = 0 : i32} : tensor<4xi32> -> tensor<1x4xi32>
+      %qcb = tt.broadcast %qc : tensor<4x1xi32> -> tensor<4x4xi32>
+      %qrb = tt.broadcast %qr : tensor<1x4xi32> -> tensor<4x4xi32>
+      %qcmp = arith.cmpi slt, %qcb, %qrb : tensor<4x4xi32> loc("qcmp")
+      %t = tt.trans %qcb {order = array<i32: 1, 0>} : tensor<4x4xi32> -> tensor<4x4xi32> loc("t")
+      %rs = tt.reshape %r : tensor<4xi32> -> tensor<2x2xi32> loc("rs")
+      %j = tt.join %r, %r : tensor<4xi32> -> tensor<4x2xi32> loc("j")
+      %lo, %hi = tt.split %j : tensor<4x2xi32> -> tensor<4xi32> loc("s")
+      %lh = arith.addi %lo, %hi : tensor<4xi32> loc("lh")
+      %hl = arith.addi %hi, %lo : tensor<4xi32> loc("hl")
+      tt.return
+    })");
+  EXPECT_EQ(norm(get("np")), "np");       // NumPrograms, rendered by loc name
+  EXPECT_EQ(norm(get("w")), "arg0");      // widening index_cast passes through
+  EXPECT_EQ(norm(get("n")), "opaque(n)"); // narrowing index_cast truncates
+  EXPECT_EQ(norm(get("t")), "opaque(t)"); // permutations are Opaque in v1
+  EXPECT_EQ(norm(get("rs")), "opaque(rs)");
+  EXPECT_EQ(norm(get("j")), "opaque(j)");
+  // Both split results, distinct symbols; the result number breaks the tie in
+  // the total symbol order, so the two sums render identically.
+  EXPECT_EQ(norm(get("lh")), "opaque(s#0) + opaque(s#1)");
+  EXPECT_EQ(norm(get("hl")), norm(get("lh")));
+  EXPECT_EQ(verdict(get("qcmp")), "Unknown"); // quotient on two axes: no cancel
+}
+
+TEST_F(SymbolicBoundsTest, TermBudgetAndDynamicStepAreUnknown) {
+  // 17 distinct symbols exceed kMaxTerms; `s >= s` is true but must be Unknown.
+  std::string ir = "tt.func @f(";
+  for (int i = 0; i < 17; ++i)
+    ir += (i ? ", %a" : "%a") + std::to_string(i) + ": i32";
+  ir += ") {\n  %s0 = arith.addi %a0, %a1 : i32\n";
+  for (int i = 1; i < 16; ++i)
+    ir += "  %s" + std::to_string(i) + " = arith.addi %s" +
+          std::to_string(i - 1) + ", %a" + std::to_string(i + 1) + " : i32\n";
+  ir += "  %cmp = arith.cmpi sge, %s15, %s15 : i32 loc(\"cmp\")\n  "
+        "tt.return\n}\n";
+  parse(ir);
+  EXPECT_EQ(verdict(get("cmp")), "Unknown");
+
+  // A non-constant step makes the IV Opaque (loop contract (i)).
+  std::string dyn = kE1;
+  dyn.replace(dyn.find("%rnumel: i32)"), 13, "%rnumel: i32, %st: i32)");
+  dyn.replace(dyn.find("step %c64"), 9, "step %st");
+  parse(dyn);
+  EXPECT_EQ(verdict(get("mask")), "Unknown");
+}
+
 TEST_F(SymbolicBoundsTest, RefutedOnlyOnConstantHi) {
   // pid >= 0 from the range analysis, so hi(d) = -pid <= 0 < 1 by sign
   // reasoning; 4.3 step 3 refutes only on a constant hi(d).
