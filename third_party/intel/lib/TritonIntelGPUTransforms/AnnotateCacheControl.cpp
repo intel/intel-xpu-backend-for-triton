@@ -551,12 +551,11 @@ private:
     if (cachePolicy.cacheModifier != tt::CacheModifier::NONE)
       return false;
 
-    // Frontend eviction-policy override — a user-specified eviction policy
-    // (evict_first / evict_last) is left to the LoadStoreOpToLLVM lowering
-    // (EVICT_LAST -> L1C_L3C; EVICT_FIRST -> DEFAULT, since its L1 line is
-    // often shared, #8109). Stamping `.cg` here would take precedence over
-    // that mapping (CG -> L1UC_L3C), so leave such loads untouched — just like
-    // an explicit cache modifier above.
+    // Frontend eviction-policy override — leave evict_first / evict_last
+    // loads to the LoadStoreOpToLLVM lowering (EVICT_LAST -> L1C_L3C;
+    // EVICT_FIRST -> DEFAULT). Stamping `.cg` (CG -> L1UC_L3C) would drop the
+    // evict_last hint, and for evict_first it bypasses an L1 line that other
+    // lanes often re-read: measured as slow as L1IAR_L3C (#8109).
     if (cachePolicy.evictionPolicy != tt::EvictionPolicy::NORMAL)
       return false;
 
