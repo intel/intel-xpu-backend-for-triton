@@ -1175,9 +1175,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
                                            ttg::ConvertLayoutOp convertOp,
                                            IRMapping &mapping) {
-  std::optional<bool> enableForLoopSupport =
-      mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
-          "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP"));
+  bool enableForLoopSupport = mlir::triton::tools::getBoolEnv(
+      "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP");
 
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.

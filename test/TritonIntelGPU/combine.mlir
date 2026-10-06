@@ -1,4 +1,4 @@
-// RUN: env TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP=0 triton-opt %s -split-input-file -allow-unregistered-dialect -tritonintelgpu-remove-layout-conversions='max-backward-remat-iterations=10' 2>&1 | FileCheck --check-prefixes=CHECK %s
+// RUN: env TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP=0 triton-opt %s -split-input-file -allow-unregistered-dialect -tritonintelgpu-remove-layout-conversions='max-backward-remat-iterations=10' 2>&1 | FileCheck --check-prefixes=CHECK,NO-FOR-SUPPORT %s
 // RUN: env TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP=1 triton-opt %s -split-input-file -allow-unregistered-dialect -tritonintelgpu-remove-layout-conversions='max-backward-remat-iterations=10' 2>&1 | FileCheck --check-prefixes=CHECK,FOR-SUPPORT %s
 
 #layout0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -349,7 +349,7 @@ tt.func @loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, 
 
 // CHECK-LABEL: loop_if
 // CHECK-NOT: ttg.convert_layout
-//     CHECK: scf.for
+//     CHECK: [[LOOP:%.*]]:2 = scf.for
 // CHECK-NOT:   ttg.convert_layout
 //     CHECK:   scf.if
 //     FOR-SUPPORT: ttg.convert_layout
@@ -358,8 +358,11 @@ tt.func @loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, 
 // CHECK-NEXT:    scf.yield
 // CHECK-NOT:     ttg.convert_layout
 //     CHECK:   scf.yield
-// CHECK-NOT: ttg.convert_layout
-//     CHECK: tt.store
+// FOR-SUPPORT-NOT: ttg.convert_layout
+//     FOR-SUPPORT: tt.store {{.*}}, [[LOOP]]#{{[0-9]+}},
+// NO-FOR-SUPPORT-NOT: ttg.convert_layout
+//     NO-FOR-SUPPORT: [[CVT:%.*]] = ttg.convert_layout [[LOOP]]#0 : tensor<64x64xf32, {{.*}}> -> tensor<64x64xf32, [[$col_layout_novec]]>
+//     NO-FOR-SUPPORT: tt.store {{.*}}, [[CVT]],
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 tt.func @loop_if(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, %arg4: i32) {
   %cst = arith.constant dense<true> : tensor<64x64xi1, #blocked1>
