@@ -318,6 +318,21 @@ private:
   /// The constant `decideResidual` compares against `g`, when there is one.
   std::optional<int64_t> residualConstant(const AffineForm &d, QueryContext ctx,
                                           CandidateSet &cs);
+  /// Tier 1 of §4.1: discharges an obligation from operand bounds, or from
+  /// the loop's no-overflow rule.
+  bool dischargeTier1(const Obligation &o, QueryContext ctx, CandidateSet &cs);
+  /// True for `iv + c` with 0 <= c <= step: the free discharge of loop
+  /// contract (iii).
+  bool isLoopIvPlusSmallConstant(arith::AddIOp add, QueryContext ctx,
+                                 const CandidateSet &cs);
+  /// Tier 2: the runtime guards that close an open obligation.
+  void guardsForObligation(const Obligation &o, QueryContext ctx,
+                           CandidateSet &cs,
+                           SmallVectorImpl<BoundCondition> &out);
+
+  /// True when the symbols' constant ranges alone imply `cond`.
+  bool impliedByRanges(const BoundCondition &cond) const;
+
   /// The single exit of every successful path (§4.3 steps 1-6).
   BoundProof finalize(BoundProof::Verdict onD, CandidateSet cs,
                       ArrayRef<Obligation> obligations, QueryContext ctx);
@@ -366,6 +381,23 @@ private:
   /// varies), so one entry serves every context the quotient is reached from.
   std::map<std::pair<Symbol, Operation *>, QuotientInfo> quotientInfo;
 };
+
+/// Normalizes a condition in place (§4.4): folds the constant into the bound,
+/// divides a single-symbol ordered condition by |k| rounding inward, and
+/// reduces `DivisibleBy` through gcd. Returns false when the condition is
+/// unsatisfiable or states a congruence `BoundGoal` cannot express; the caller
+/// then declines the candidate or leaves the obligation open.
+bool normalizeCondition(BoundCondition &cond);
+
+/// Builds the i64 guard for `conds` immediately before `before` (§4.4).
+/// Asserts that every symbol is a scalar (rank-0) SSA value that properly
+/// dominates `before`; the prover never produces a `LoopIV`, `Lane` or
+/// tensor-valued subject. "The guard cannot wrap" is a checked guarantee, not
+/// an assumption: a form that passes the static fit check uses plain i64
+/// arithmetic, and one that does not is paired with overflow predicates that
+/// make the guard false rather than wrong.
+Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
+                  OpBuilder &builder);
 
 /// Stable renderings for tests and the test pass.
 std::string toString(const AffineForm &af);

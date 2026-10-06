@@ -16,6 +16,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include <numeric>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -208,6 +209,271 @@ std::string toString(const AffineForm &af) {
   else if (c0 < 0)
     os << " - " << -c0;
   return out;
+}
+
+/// Normalizes a condition so its subject is as simple as the goal allows
+/// (design 4.4): the constant term folds into the bound, and a single-symbol
+/// ordered condition is divided by |k| with the bound rounded inward, swapping
+/// AtLeast/AtMost when k < 0. Written `-N >= 1` the checked negation of
+/// INT64_MIN overflows and rejects a launch the condition admits; written
+/// `N <= -1` it does not.
+///
+/// `DivisibleBy` is not divided that way: with g = gcd(k, c), `k*s + c0`
+/// divisible by `c` is satisfiable exactly when g divides c0, and is
+/// expressible as `DivisibleBy(s, c/g)` only when the residue is zero, i.e.
+/// when (c/g) divides (c0/g). A nonzero residue is a congruence BoundGoal
+/// cannot state, so the condition is left alone for the caller to decline.
+bool normalizeCondition(BoundCondition &cond) {
+  if (cond.expr.overflowed())
+    return false;
+
+  if (cond.goal == BoundGoal::DivisibleBy) {
+    if (cond.c <= 0 || cond.expr.numTerms() != 1)
+      return cond.expr.constant() == 0; // nothing to normalize
+    auto &[sym, k] = cond.expr.terms().front();
+    int64_t c0 = cond.expr.constant();
+    int64_t g = static_cast<int64_t>(std::gcd(
+        static_cast<uint64_t>(k < 0 ? -k : k), static_cast<uint64_t>(cond.c)));
+    if (g == 0 || c0 % g != 0)
+      return false; // unsatisfiable
+    int64_t divisor = cond.c / g;
+    if (divisor != 0 && (c0 / g) % divisor != 0)
+      return false; // nonzero residue: not expressible as DivisibleBy
+    cond.expr = AffineForm::symbol(sym);
+    cond.c = divisor;
+    return true;
+  }
+
+  // Ordered goals: fold the constant into the bound, keeping the rendering of
+  // a bare `s >= 0` unchanged.
+  int64_t c0 = cond.expr.constant();
+  int64_t bound;
+  switch (cond.goal) {
+  case BoundGoal::NonNegative:
+    bound = 0;
+    break;
+  case BoundGoal::StrictlyPositive:
+    bound = 1;
+    break;
+  default:
+    bound = cond.c;
+    break;
+  }
+  bool atMost = cond.goal == BoundGoal::AtMost;
+  if (c0 != 0) {
+    int64_t folded;
+    if (llvm::SubOverflow(bound, c0, folded))
+      return false;
+    bound = folded;
+    cond.expr = cond.expr.sub(AffineForm::constant(c0));
+    cond.goal = atMost ? BoundGoal::AtMost : BoundGoal::AtLeast;
+    cond.c = bound;
+    if (cond.expr.overflowed())
+      return false;
+  }
+
+  // Single symbol with |k| != 1: divide, rounding the bound inward.
+  if (cond.expr.numTerms() == 1 && cond.expr.constant() == 0) {
+    auto [sym, k] = cond.expr.terms().front();
+    if (k == 0)
+      return false;
+    if (k != 1) {
+      int64_t mag = k < 0 ? -k : k;
+      if (mag <= 0)
+        return false; // |INT64_MIN| is not representable
+      bool wantAtMost = atMost;
+      if (k < 0)
+        wantAtMost = !wantAtMost; // dividing by a negative swaps the relation
+      // Round inward so the divided condition is no weaker than the original.
+      int64_t num =
+          cond.goal == BoundGoal::AtMost || cond.goal == BoundGoal::AtLeast
+              ? cond.c
+              : bound;
+      int64_t div = k < 0 ? -num : num;
+      int64_t q = wantAtMost ? llvm::divideFloorSigned(div, mag)
+                             : llvm::divideCeilSigned(div, mag);
+      cond.expr = AffineForm::symbol(sym);
+      cond.goal = wantAtMost ? BoundGoal::AtMost : BoundGoal::AtLeast;
+      cond.c = q;
+    }
+  }
+  return true;
+}
+
+//===----------------------------------------------------------------------===//
+// Guard materialization (design 4.4)
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Builds one guard expression in i64, either with plain arithmetic (when the
+/// static fit check proves it cannot overflow) or with an overflow predicate
+/// per step. `ok` accumulates the predicates of the checked path; it stays
+/// null on the fast path.
+class GuardBuilder {
+public:
+  GuardBuilder(OpBuilder &b, Location loc, bool checked)
+      : b(b), loc(loc), checked(checked) {}
+
+  Value constant(int64_t v) {
+    return arith::ConstantIntOp::create(b, loc, b.getI64Type(), v);
+  }
+
+  /// Sign-extends a narrow symbol to i64. Sign extension is what makes the
+  /// i64 arithmetic agree with the narrow value the hardware computes.
+  Value extend(Value v) {
+    Type i64 = b.getI64Type();
+    if (v.getType() == i64)
+      return v;
+    if (isa<IndexType>(v.getType()))
+      return arith::IndexCastOp::create(b, loc, i64, v);
+    return arith::ExtSIOp::create(b, loc, i64, v);
+  }
+
+  Value mul(Value lhs, int64_t k) {
+    if (k == 1)
+      return lhs;
+    Value rhs = constant(k);
+    if (!checked)
+      return arith::MulIOp::create(b, loc, lhs, rhs);
+    // mulsi_extended gives the full 128-bit product as (low, high); the
+    // multiply fits i64 exactly when high is the sign extension of low. This
+    // handles INT64_MIN without taking a magnitude.
+    auto ext = arith::MulSIExtendedOp::create(b, loc, lhs, rhs);
+    Value low = ext.getLow(), high = ext.getHigh();
+    Value signBits = arith::ShRSIOp::create(b, loc, low, constant(63));
+    addOk(arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, high,
+                                signBits));
+    return low;
+  }
+
+  Value add(Value lhs, Value rhs) {
+    Value sum = arith::AddIOp::create(b, loc, lhs, rhs);
+    if (checked) {
+      // Signed add overflows exactly when both operands differ in sign from
+      // the result: ((a ^ r) & (b ^ r)) < 0.
+      Value xa = arith::XOrIOp::create(b, loc, lhs, sum);
+      Value xb = arith::XOrIOp::create(b, loc, rhs, sum);
+      Value both = arith::AndIOp::create(b, loc, xa, xb);
+      addOk(arith::CmpIOp::create(b, loc, arith::CmpIPredicate::sge, both,
+                                  constant(0)));
+    }
+    return sum;
+  }
+
+  /// Conjoins the overflow predicates with `cmp`. An overflow makes the guard
+  /// false, which forfeits the fast path for that launch and never unmasks.
+  Value finish(Value cmp) const { return ok ? andAll(cmp) : cmp; }
+
+private:
+  void addOk(Value pred) {
+    ok = ok ? arith::AndIOp::create(b, loc, ok, pred) : pred;
+  }
+  Value andAll(Value cmp) const {
+    return arith::AndIOp::create(b, loc, ok, cmp);
+  }
+
+  OpBuilder &b;
+  Location loc;
+  bool checked;
+  Value ok;
+};
+
+/// The static fit check of 4.4: `|c0| + sum(|ci| * 2^(w_i - 1)) < 2^63`, with
+/// saturating 128-bit accumulation that stops at the first partial sum
+/// reaching 2^63. Saturation matters: four i64 symbols with coefficient
+/// INT64_MIN sum to exactly 2^128, which a fixed-width 128-bit accumulator
+/// would wrap to zero and wrongly admit as "fits".
+bool guardFitsPlainI64(const AffineForm &e) {
+  const unsigned kW = 128;
+  APInt limit = APInt::getOneBitSet(kW, 63); // 2^63
+  APInt acc(kW, 0);
+  auto absToAP = [&](int64_t v) {
+    // INT64_MIN has no positive counterpart in int64_t; widen first.
+    APInt a(kW, static_cast<uint64_t>(v), /*isSigned=*/true);
+    return a.isNegative() ? APInt(kW, 0) - a : a;
+  };
+  acc = acc.uadd_sat(absToAP(e.constant()));
+  if (acc.uge(limit))
+    return false;
+  for (auto &[sym, k] : e.terms()) {
+    unsigned w = 64;
+    if (sym.value())
+      if (auto intTy = dyn_cast<IntegerType>(getElementTypeOrSelf(sym.value())))
+        w = intTy.getWidth();
+    APInt magnitude = APInt::getOneBitSet(kW, w - 1); // 2^(w-1)
+    acc = acc.uadd_sat(absToAP(k).umul_sat(magnitude));
+    if (acc.uge(limit))
+      return false;
+  }
+  return acc.ult(limit);
+}
+
+} // namespace
+
+Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
+                  OpBuilder &builder) {
+  assert(before && "need an insertion anchor");
+  Location loc = before->getLoc();
+  Type i64 = builder.getI64Type();
+  DominanceInfo domInfo(before->getParentOp());
+  Value result;
+
+  for (const BoundCondition &cond : conds) {
+    bool checked = !guardFitsPlainI64(cond.expr);
+    GuardBuilder gb(builder, loc, checked);
+
+    Value sum = gb.constant(cond.expr.constant());
+    for (auto &[sym, k] : cond.expr.terms()) {
+      Value v = sym.value();
+      assert(v && "condition subject has no SSA value");
+      assert(!isa<ShapedType>(v.getType()) &&
+             "condition subject must be a scalar");
+      assert(domInfo.properlyDominates(v, before) &&
+             "condition subject must dominate the guard");
+      Value term = gb.extend(v);
+      // A quotient's runtime value is the division itself, which equals the
+      // narrow quotient because the divisor is positive.
+      if (sym.kind() == SymbolKind::Quotient)
+        term = arith::DivSIOp::create(builder, loc, term,
+                                      gb.constant(sym.divisor()));
+      sum = gb.add(sum, gb.mul(term, k));
+    }
+
+    Value cmp;
+    switch (cond.goal) {
+    case BoundGoal::NonNegative:
+      cmp = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sge, sum,
+                                  gb.constant(0));
+      break;
+    case BoundGoal::StrictlyPositive:
+      cmp = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sgt, sum,
+                                  gb.constant(0));
+      break;
+    case BoundGoal::AtLeast:
+      cmp = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sge, sum,
+                                  gb.constant(cond.c));
+      break;
+    case BoundGoal::AtMost:
+      cmp = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sle, sum,
+                                  gb.constant(cond.c));
+      break;
+    case BoundGoal::DivisibleBy: {
+      // remsi against a positive divisor is a valid divisibility test for
+      // negative values too, and cannot overflow.
+      Value rem =
+          arith::RemSIOp::create(builder, loc, sum, gb.constant(cond.c));
+      cmp = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq, rem,
+                                  gb.constant(0));
+      break;
+    }
+    }
+    Value guard = gb.finish(cmp);
+    result =
+        result ? arith::AndIOp::create(builder, loc, result, guard).getResult()
+               : guard;
+  }
+  return result;
 }
 
 std::string toString(const BoundCondition &c) {
@@ -500,6 +766,17 @@ SymbolicBoundsProver::normalizeImpl(Value v, QueryContext ctx,
         if (info.dividend.overflowed())
           return giveUp();
         info.dividendObligations.assign(divObls.begin(), divObls.end());
+        if (info.isCdiv) {
+          // The `X + c - 1` addition is not traversed - the facts are stated
+          // about X - so its wrap obligation would otherwise be lost, yet
+          // using those facts depends on it (design 4.1).
+          AffineForm num = info.dividend.add(AffineForm::constant(*c - 1));
+          if (num.overflowed())
+            return giveUp();
+          info.dividendObligations.push_back({Obligation::Wrap,
+                                              dividend.getDefiningOp(), num,
+                                              bitWidth(dividend.getType())});
+        }
         quotientInfo[{q, varyingLoopKey(dividend)}] = std::move(info);
         return AffineForm::symbol(q);
       })
@@ -885,6 +1162,8 @@ CandidateResult SymbolicBoundsProver::addCandidate(CandidateSet &cs,
       cs.assumes.push_back(assume);
     return CandidateResult::Accepted;
   }
+  if (!normalizeCondition(cond))
+    return CandidateResult::Declined;
   if (llvm::is_contained(cs.facts, cond))
     return CandidateResult::Accepted;
   if (cs.facts.size() >= kMaxFactConditions)
@@ -894,12 +1173,168 @@ CandidateResult SymbolicBoundsProver::addCandidate(CandidateSet &cs,
   return CandidateResult::Accepted;
 }
 
+//===----------------------------------------------------------------------===//
+// Obligation discharge (design 4.1 tiers) and guard materialization (4.4)
+//===----------------------------------------------------------------------===//
+
+/// True when `op` is `iv + c` with 0 <= c <= step for the IV of `ctx.loop`.
+/// The scf.for contract makes `lb + n*step` representable, so such an addition
+/// cannot wrap: this is the free tier-1 discharge of loop contract (iii).
+bool SymbolicBoundsProver::isLoopIvPlusSmallConstant(arith::AddIOp add,
+                                                     QueryContext ctx,
+                                                     const CandidateSet &cs) {
+  if (!ctx.loop)
+    return false;
+  std::optional<int64_t> step = constantStep(ctx.loop);
+  std::optional<Value> iv = ctx.loop.getSingleInductionVar();
+  if (!step || !iv)
+    return false;
+  // An unsigned loop only gets the signed rules under its three
+  // preconditions, which symbolBounds has already emitted.
+  Value lhs = add.getLhs(), rhs = add.getRhs();
+  std::optional<int64_t> c = getFoldedConstant(rhs);
+  Value other = lhs;
+  if (!c) {
+    c = getFoldedConstant(lhs);
+    other = rhs;
+  }
+  return c && *c >= 0 && *c <= *step && other == *iv;
+}
+
+bool SymbolicBoundsProver::dischargeTier1(const Obligation &o, QueryContext ctx,
+                                          CandidateSet &cs) {
+  Bounds b = bound(o.expr, ctx, cs);
+  mergePreconditions(cs, b);
+  if (b.exhausted) {
+    // Overflowed endpoints are not bounds: the obligation can be neither
+    // discharged nor guarded, so the query ends Unknown.
+    cs.exhausted = true;
+    return false;
+  }
+  if (!b.finite)
+    return false;
+
+  if (o.kind == Obligation::NonNegative)
+    return decideResidual(b.lo, 0, ctx, cs);
+
+  if (auto add = dyn_cast_or_null<arith::AddIOp>(o.op))
+    if (isLoopIvPlusSmallConstant(add, ctx, cs))
+      return true;
+
+  // Tier 1 derives bounds from the OPERANDS, never from the range analysis's
+  // range for the result: inferAdd intersects the unsigned and signed ranges,
+  // so for i8 x in [100, 110] the result range of x + 100 is the narrow
+  // [-56, -46] - a correct description of the wrapped value and useless as a
+  // no-wrap proof (4.1).
+  std::optional<std::pair<int64_t, int64_t>> lo = boundConstant(b.lo);
+  std::optional<std::pair<int64_t, int64_t>> hi = boundConstant(b.hi);
+  if (!lo || !hi)
+    return false;
+  int64_t width = o.width ? o.width : 64;
+  return hi->second <= APInt::getSignedMaxValue(width).getSExtValue() &&
+         lo->first >= APInt::getSignedMinValue(width).getSExtValue();
+}
+
+/// The guards that close an open wrap obligation: the result must fit its
+/// width at both ends.
+void SymbolicBoundsProver::guardsForObligation(
+    const Obligation &o, QueryContext ctx, CandidateSet &cs,
+    SmallVectorImpl<BoundCondition> &out) {
+  Bounds b = bound(o.expr, ctx, cs);
+  // Substitute quotient terms first, so a dividend cancels against its other
+  // occurrences: E2's `64*q(K+63,64) - 64` collapses to `K - 1` rather than
+  // becoming a guard on an opaque division.
+  AffineForm lo = b.lo, hi = b.hi;
+  if (std::optional<AffineForm> s = substituteQuotients(lo, ctx, cs))
+    lo = *s;
+  if (std::optional<AffineForm> s = substituteQuotients(hi, ctx, cs))
+    hi = *s;
+
+  auto push = [&](AffineForm e, BoundGoal goal, int64_t c) {
+    BoundCondition cond{std::move(e), goal, c, ConditionKind::Guard};
+    if (!normalizeCondition(cond)) {
+      // Not expressible: leave the obligation open, which finalize reads as
+      // a verdict of Unknown rather than a silently dropped guard.
+      cs.exhausted = true;
+      return;
+    }
+    out.push_back(std::move(cond));
+  };
+
+  if (o.kind == Obligation::NonNegative) {
+    push(lo, BoundGoal::NonNegative, 0);
+    return;
+  }
+  int64_t width = o.width ? o.width : 64;
+  push(hi, BoundGoal::AtMost, APInt::getSignedMaxValue(width).getSExtValue());
+  push(lo, BoundGoal::AtLeast, APInt::getSignedMinValue(width).getSExtValue());
+}
+
+/// True when the symbols' constant ranges alone already imply `cond`, so it
+/// would be a guard that is true on every launch.
+bool SymbolicBoundsProver::impliedByRanges(const BoundCondition &cond) const {
+  std::optional<std::pair<int64_t, int64_t>> b = boundConstant(cond.expr);
+  if (!b)
+    return false;
+  switch (cond.goal) {
+  case BoundGoal::NonNegative:
+    return b->first >= 0;
+  case BoundGoal::StrictlyPositive:
+    return b->first >= 1;
+  case BoundGoal::AtLeast:
+    return b->first >= cond.c;
+  case BoundGoal::AtMost:
+    return b->second <= cond.c;
+  case BoundGoal::DivisibleBy:
+    // Divisibility does not follow from a range unless the range pins one
+    // value, which boundConstant reports as lo == hi.
+    return cond.c != 0 && b->first == b->second && b->first % cond.c == 0;
+  }
+  return false;
+}
+
 BoundProof SymbolicBoundsProver::finalize(BoundProof::Verdict onD,
                                           CandidateSet cs,
                                           ArrayRef<Obligation> obligations,
                                           QueryContext ctx) {
-  // Task 5 discharges obligations here; until then finalize passes them
-  // through, so a task-3 verdict is only as strong as its conditions.
+  // Step 6: close every obligation - the query's own and those inherited from
+  // the dividends of quotient facts - at tier 1, else as a runtime guard. A
+  // worklist, because closing one obligation can add another.
+  SmallVector<BoundCondition, 4> guards;
+  SmallVector<Obligation, 8> work(obligations.begin(), obligations.end());
+  SmallVector<Obligation, 8> seen;
+  for (unsigned i = 0; i < work.size(); ++i) {
+    Obligation o = work[i];
+    if (llvm::is_contained(seen, o))
+      continue;
+    seen.push_back(o);
+    if (dischargeTier1(o, ctx, cs))
+      continue;
+    if (cs.exhausted)
+      return {};
+    guardsForObligation(o, ctx, cs, guards);
+    if (guards.size() > kMaxGuards)
+      return {};
+    // Using a quotient fact pulls in its dividend's obligations.
+    for (const Obligation &extra : cs.factObligations)
+      if (!llvm::is_contained(work, extra))
+        work.push_back(extra);
+  }
+  // Index-based: closing one of these can append more (a quotient fact pulls
+  // in its dividend's obligations), so the container may grow under us.
+  for (unsigned i = 0; i < cs.factObligations.size(); ++i) {
+    Obligation extra = cs.factObligations[i];
+    if (llvm::is_contained(seen, extra))
+      continue;
+    seen.push_back(extra);
+    if (dischargeTier1(extra, ctx, cs))
+      continue;
+    if (cs.exhausted)
+      return {};
+    guardsForObligation(extra, ctx, cs, guards);
+    if (guards.size() > kMaxGuards)
+      return {};
+  }
   if (cs.exhausted)
     return {};
 
@@ -936,6 +1371,12 @@ BoundProof SymbolicBoundsProver::finalize(BoundProof::Verdict onD,
         proof.verdict = BoundProof::Unknown;
       return holds;
     }
+    // Conservative pruning (increment 1b): a condition implied by
+    // unconditional evidence alone - here the symbols' own constant ranges -
+    // is omitted. Nothing is dropped using another condition, so no condition
+    // can justify itself.
+    if (impliedByRanges(out))
+      return true;
     if (!llvm::is_contained(proof.conditions, out))
       proof.conditions.push_back(out);
     return true;
@@ -946,8 +1387,20 @@ BoundProof SymbolicBoundsProver::finalize(BoundProof::Verdict onD,
     feasible &= emit(c, ConditionKind::Fact);
   for (const BoundCondition &c : cs.extra)
     feasible &= emit(c, ConditionKind::Precondition);
+  for (const BoundCondition &c : guards)
+    feasible &= emit(c, ConditionKind::Guard);
   if (!feasible)
     return {};
+
+  // Every emitted condition must have a scalar subject that dominates the
+  // loop, or no guard can be placed. Candidate formation checks this, but an
+  // obligation guard can reach here with no candidate at all - as when extui
+  // and extsi of one tensor cancel in d (4.4).
+  for (const BoundCondition &c : proof.conditions)
+    for (auto &[sym, k] : c.expr.terms())
+      if (!sym.value() || isa<ShapedType>(sym.value().getType()) ||
+          sym.kind() == SymbolKind::TripCount)
+        return {};
 
   proof.factsUsed.assign(cs.assumes.begin(), cs.assumes.end());
   if (onD == BoundProof::Refuted) {

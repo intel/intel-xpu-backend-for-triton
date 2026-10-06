@@ -288,6 +288,15 @@ TEST_F(SymbolicBoundsTest, E2_ConditionalOnExactCdivWithPrecondition) {
             0u);
 }
 
+TEST_F(SymbolicBoundsTest, E2_GainsCdivNumeratorGuard) {
+  parse(kE2);
+  // The cdiv facts are used, so the numerator K + 63 must fit i32: the `X + c
+  // - 1` addition is never traversed (the facts are stated about X), so its
+  // wrap obligation is recorded explicitly or this guard would be lost.
+  EXPECT_EQ(verdict(get("mask")),
+            "Conditional{arg0 divisible by 64; arg0 >= 0; arg0 <= 2147483584}");
+}
+
 TEST_F(SymbolicBoundsTest, RemainderBounds) {
   parse(R"(
     tt.func @f(%x: i32) {
@@ -328,6 +337,130 @@ TEST_F(SymbolicBoundsTest, VaryingQuotientBounds) {
       tt.return
     })");
   EXPECT_NE(verdict(get("cmp")), "Refuted");
+}
+
+TEST_F(SymbolicBoundsTest, XPlusOneGreaterThanXIsUnknown) {
+  parse(R"(
+    tt.func @f(%x: i32) {
+      %c1 = arith.constant 1 : i32
+      %y = arith.addi %x, %c1 : i32 loc("y")
+      %cmp = arith.cmpi sgt, %y, %x : i32 loc("cmp")
+      tt.return
+    })");
+  // Nothing bounds x, so the wrap obligation on y stays open; a Conditional
+  // carrying x <= INT32_MAX - 1 is acceptable, Satisfied is not.
+  EXPECT_NE(verdict(get("cmp")), "Satisfied");
+  EXPECT_NE(verdict(get("cmp")), "Refuted");
+}
+
+TEST_F(SymbolicBoundsTest, NarrowResultRangeIsNotANoWrapProof) {
+  parse(R"(
+    tt.func @f(%a: i8) {
+      %c100 = arith.constant 100 : i8
+      %c110 = arith.constant 110 : i8
+      %ge = arith.cmpi sge, %a, %c100 : i8
+      llvm.intr.assume %ge : i1
+      %le = arith.cmpi sle, %a, %c110 : i8
+      llvm.intr.assume %le : i1
+      %y = arith.addi %a, %c100 : i8 loc("y")
+      %cmp = arith.cmpi sgt, %y, %a : i8 loc("cmp")
+      tt.return
+    })");
+  // The range analysis reports y in [-56, -46], the correct range of the
+  // WRAPPED result; d = 100 would say Satisfied without obligations. hi(y) is
+  // 210 > 127 from the operands, so it must not (Review Focus 2).
+  EXPECT_NE(verdict(get("cmp")), "Satisfied");
+}
+
+TEST_F(SymbolicBoundsTest, ExhaustedObligationBoundIsUnknown) {
+  // y = 2*iv wraps in i64 for iv in [2^62, 2^62 + 2): both products are
+  // negative and `y > iv` is false, although d = iv >= 2^62. Bounding the
+  // muli obligation overflows, so the query must end Unknown.
+  parse(R"(
+    tt.func @f() {
+      %c1 = arith.constant 1 : i64
+      %c2 = arith.constant 2 : i64
+      %lb = arith.constant 4611686018427387904 : i64
+      %ub = arith.constant 4611686018427387906 : i64
+      scf.for %iv = %lb to %ub step %c1 : i64 {
+        %y = arith.muli %iv, %c2 : i64
+        %cmp = arith.cmpi sgt, %y, %iv : i64 loc("cmp")
+        scf.yield
+      }
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Unknown");
+}
+
+TEST_F(SymbolicBoundsTest, E1_WrapDischargedByLoopContract) {
+  parse(kE1);
+  // r + lane discharges from the operand bounds under the final candidate
+  // set: hi = (rnumel - 64) + 63 = rnumel - 1 <= INT32_MAX - 1. No guard.
+  EXPECT_EQ(verdict(get("mask")), "Conditional{arg1 divisible by 64}");
+}
+
+TEST_F(SymbolicBoundsTest, LoopBoundWrapObligation) {
+  // ub = n - 1 wraps for n = -128 (ub = 127). Read mathematically, hi(iv) is
+  // n - 2 and `iv < n` is Satisfied, yet for n = -128 the loop runs 0..126
+  // with the mask false. The subi's obligation from bounding the IV guards it.
+  parse(R"(
+    tt.func @f(%n: i8) {
+      %c0 = arith.constant 0 : i8
+      %c1 = arith.constant 1 : i8
+      %ub = arith.subi %n, %c1 : i8
+      scf.for %iv = %c0 to %ub step %c1 : i8 {
+        %mask = arith.cmpi slt, %iv, %n : i8 loc("mask")
+        scf.yield
+      }
+      tt.return
+    })");
+  EXPECT_NE(verdict(get("mask")), "Satisfied");
+}
+
+TEST_F(SymbolicBoundsTest, PreLoopTensorLoadCannotBeGuarded) {
+  // A tensor loaded before the loop is loop-invariant but not a scalar, so it
+  // may never become a condition subject (4.4): Unknown, not Conditional.
+  parse(R"(
+    tt.func @f(%p: !tt.ptr<i32>, %n: i32) {
+      %c0 = arith.constant 0 : i32
+      %c64 = arith.constant 64 : i32
+      %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+      %ps = tt.splat %p : !tt.ptr<i32> -> tensor<64x!tt.ptr<i32>>
+      %pp = tt.addptr %ps, %lane : tensor<64x!tt.ptr<i32>>, tensor<64xi32>
+      %t = tt.load %pp : tensor<64x!tt.ptr<i32>>
+      %ns = tt.splat %n : i32 -> tensor<64xi32>
+      scf.for %i = %c0 to %n step %c64 : i32 {
+        %is = tt.splat %i : i32 -> tensor<64xi32>
+        %idx = arith.addi %is, %t : tensor<64xi32>
+        %mask = arith.cmpi slt, %idx, %ns : tensor<64xi32> loc("mask")
+        scf.yield
+      }
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("mask")), "Unknown");
+}
+
+TEST_F(SymbolicBoundsTest, TensorObligationGuardIsUnknown) {
+  // extui and extsi of the same tensor cancel in d, so the direct path reaches
+  // the verdict with no candidate; extui's NonNegative obligation is
+  // tensor-valued and cannot be guarded, so Unknown, not Satisfied.
+  parse(R"(
+    tt.func @f(%p: !tt.ptr<i32>, %n: i32) {
+      %c0 = arith.constant 0 : i32
+      %c64 = arith.constant 64 : i32
+      %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+      %ps = tt.splat %p : !tt.ptr<i32> -> tensor<64x!tt.ptr<i32>>
+      %pp = tt.addptr %ps, %lane : tensor<64x!tt.ptr<i32>>, tensor<64xi32>
+      %t = tt.load %pp : tensor<64x!tt.ptr<i32>>
+      scf.for %i = %c0 to %n step %c64 : i32 {
+        %u = arith.extui %t : tensor<64xi32> to tensor<64xi64>
+        %s = arith.extsi %t : tensor<64xi32> to tensor<64xi64>
+        %mask = arith.cmpi sge, %u, %s : tensor<64xi64> loc("mask")
+        scf.yield
+      }
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("mask")), "Unknown");
 }
 
 } // namespace
