@@ -80,6 +80,13 @@ public:
     return tt::intel::toString(prover->normalize(v, at(v), obls));
   }
 
+  /// The proof of the comparison named `loc("<name>")`, for assertions about
+  /// the conditions or the facts it used.
+  tt::intel::BoundProof proof(Value cmp) {
+    auto op = cast<arith::CmpIOp>(cmp.getDefiningOp());
+    return prover->prove(op.getPredicate(), op.getLhs(), op.getRhs(), at(cmp));
+  }
+
   /// Returns the single result of the operation carrying `loc("<name>")`, so
   /// the tests do not depend on the SSA numbering the parser assigns.
   Value get(StringRef name) {
@@ -461,6 +468,125 @@ TEST_F(SymbolicBoundsTest, TensorObligationGuardIsUnknown) {
       tt.return
     })");
   EXPECT_EQ(verdict(get("mask")), "Unknown");
+}
+
+TEST_F(SymbolicBoundsTest, AssumeUnderIfDoesNotReachLoop) {
+  parse(R"(
+    tt.func @f(%ptr: !tt.ptr<f32>, %n: i32, %flag: i1) {
+      %c0 = arith.constant 0 : i32
+      %c64 = arith.constant 64 : i32
+      %r = arith.remsi %n, %c64 : i32
+      %cmp = arith.cmpi eq, %r, %c0 : i32
+      scf.if %flag {
+        llvm.intr.assume %cmp : i1
+        scf.yield
+      }
+      %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+      %ns = tt.splat %n : i32 -> tensor<64xi32>
+      scf.for %i = %c0 to %n step %c64 : i32 {
+        %is = tt.splat %i : i32 -> tensor<64xi32>
+        %idx = arith.addi %is, %lane : tensor<64xi32>
+        %mask = arith.cmpi slt, %idx, %ns : tensor<64xi32> loc("mask")
+        scf.yield
+      }
+      tt.return
+    })");
+  // The divisibility fact is out of scope, so the condition stays runtime
+  // (Review Focus 4).
+  EXPECT_EQ(verdict(get("mask")), "Conditional{arg1 divisible by 64}");
+}
+
+TEST_F(SymbolicBoundsTest, DominatingDivisibilityAssumeSatisfies) {
+  // The assume dominates the loop, so 4a's DivisibleBy(n, 64) is established
+  // by the fact and emitted as no runtime condition.
+  parse(R"(
+    tt.func @f(%ptr: !tt.ptr<f32>, %n: i32) {
+      %c0 = arith.constant 0 : i32
+      %c64 = arith.constant 64 : i32
+      %r = arith.remsi %n, %c64 : i32
+      %cmp = arith.cmpi eq, %r, %c0 : i32
+      llvm.intr.assume %cmp : i1
+      %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+      %ns = tt.splat %n : i32 -> tensor<64xi32>
+      scf.for %i = %c0 to %n step %c64 : i32 {
+        %is = tt.splat %i : i32 -> tensor<64xi32>
+        %idx = arith.addi %is, %lane : tensor<64xi32>
+        %mask = arith.cmpi slt, %idx, %ns : tensor<64xi32> loc("mask")
+        scf.yield
+      }
+      tt.return
+    })");
+  auto p = proof(get("mask"));
+  EXPECT_EQ(tt::intel::toString(p), "Satisfied");
+  EXPECT_FALSE(p.factsUsed.empty()); // provenance recorded
+}
+
+TEST_F(SymbolicBoundsTest, NoLoopQueryUsesConstantRanges) {
+  parse(R"(
+    tt.func @f(%p: i32) {
+      %c0 = arith.constant 0 : i32
+      %pid = tt.get_program_id x : i32
+      %cmp = arith.cmpi sge, %pid, %c0 : i32 loc("cmp")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Satisfied"); // ctx.loop == null path
+}
+
+TEST_F(SymbolicBoundsTest, NoTimeoutPollBlocksBackwardAssume) {
+  // tt.atomic_poll without a timeout polls until the value matches, so for
+  // x < 0 it may spin forever and the assume after it never executes.
+  parse(R"(
+    tt.func @f(%p: !tt.ptr<i32>, %x: i32) {
+      %c0 = arith.constant 0 : i32
+      %cmp = arith.cmpi sge, %x, %c0 : i32 loc("cmp")
+      %ok = tt.atomic_poll acquire, gpu, %p, %c0 : !tt.ptr<i32>, i32 -> i1
+      %fact = arith.cmpi sge, %x, %c0 : i32
+      llvm.intr.assume %fact : i1
+      tt.return
+    })");
+  EXPECT_NE(verdict(get("cmp")), "Satisfied");
+}
+
+TEST_F(SymbolicBoundsTest, ImpureExternCallBlocksBackwardAssume) {
+  // An impure tt.extern_elementwise lowers to an external call that may never
+  // return, and it declares no CallOpInterface.
+  parse(R"(
+    tt.func @f(%x: i32) {
+      %c0 = arith.constant 0 : i32
+      %cmp = arith.cmpi sge, %x, %c0 : i32 loc("cmp")
+      %e = tt.extern_elementwise %x {libname = "l", libpath = "p", symbol = "s", pure = false} : (i32) -> i32
+      %fact = arith.cmpi sge, %x, %c0 : i32
+      llvm.intr.assume %fact : i1
+      tt.return
+    })");
+  EXPECT_NE(verdict(get("cmp")), "Satisfied");
+}
+
+TEST_F(SymbolicBoundsTest, QuotientFactIsNotDividendFact) {
+  // assume(X % 2 == 0) is indexed under X, and q = X divsi 4 stores X as its
+  // value. 4a needs `q divisible by 2`, which that fact does not give: at
+  // X = 12, q = 3, the loop runs i = 0, 2 and lane 1 of the last iteration is
+  // false (3 < 3). Matching the fact by stored value would prove Satisfied.
+  parse(R"(
+    tt.func @f(%X: i32) {
+      %c0 = arith.constant 0 : i32
+      %c2 = arith.constant 2 : i32
+      %c4 = arith.constant 4 : i32
+      %r = arith.remsi %X, %c2 : i32
+      %eq = arith.cmpi eq, %r, %c0 : i32
+      llvm.intr.assume %eq : i1
+      %q = arith.divsi %X, %c4 : i32
+      %lane = tt.make_range {start = 0 : i32, end = 2 : i32} : tensor<2xi32>
+      %qs = tt.splat %q : i32 -> tensor<2xi32>
+      scf.for %i = %c0 to %q step %c2 : i32 {
+        %is = tt.splat %i : i32 -> tensor<2xi32>
+        %idx = arith.addi %is, %lane : tensor<2xi32>
+        %mask = arith.cmpi slt, %idx, %qs : tensor<2xi32> loc("mask")
+        scf.yield
+      }
+      tt.return
+    })");
+  EXPECT_NE(verdict(get("mask")), "Satisfied");
 }
 
 } // namespace

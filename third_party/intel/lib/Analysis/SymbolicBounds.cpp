@@ -525,6 +525,7 @@ SymbolicBoundsProver::SymbolicBoundsProver(const DataFlowSolver &solver,
   // distinct values and reproducible across processes: a block's arguments as
   // the walk enters it, then each operation's results in result order. 0 is
   // reserved as "unassigned", which AffineForm::symbol asserts against.
+  buildFactIndex();
   unsigned next = 1;
   root->walk<WalkOrder::PreOrder>([&](Operation *op) {
     for (Region &region : op->getRegions())
@@ -1100,14 +1101,38 @@ bool SymbolicBoundsProver::decideResidual(const AffineForm &lo, int64_t g,
   if (std::optional<AffineForm> sub = substituteQuotients(lo, ctx, cs))
     if (decideResidual(*sub, g, ctx, cs))
       return true;
-  // Step 4: sign every remaining term from its constant range, then let the
-  // constant term decide.
+  // Step 4: sign every remaining term from its facts or its constant range,
+  // then let the constant term decide.
   for (auto &[sym, k] : lo.terms()) {
-    std::optional<std::pair<int64_t, int64_t>> b = symbolConstantBounds(sym);
-    if (!b)
-      return false;
-    if (k > 0 ? b->first < 0 : b->second > 0)
-      return false;
+    bool signed_ok = false;
+    // An applicable assume fact is checked first, and recorded as provenance.
+    if (sym.value() && sym.kind() != SymbolKind::Quotient &&
+        sym.kind() != SymbolKind::TripCount) {
+      for (const Fact &f : factsFor(sym.value())) {
+        if (!ctx.at ||
+            !assumeApplies(cast<LLVM::AssumeOp>(f.assume), ctx.at, domInfo))
+          continue;
+        bool good = k > 0 ? (f.goal == BoundGoal::NonNegative ||
+                             (f.goal == BoundGoal::AtLeast && f.c >= 0))
+                          : (f.goal == BoundGoal::AtMost && f.c <= 0);
+        if (good) {
+          if (!llvm::is_contained(cs.assumes, f.assume))
+            cs.assumes.push_back(f.assume);
+          signed_ok = true;
+          break;
+        }
+      }
+    }
+    if (!signed_ok) {
+      std::optional<std::pair<int64_t, int64_t>> b =
+          sym.kind() == SymbolKind::Lane
+              ? symbolConstantBounds(sym)
+              : rangeOf(sym.value(), ctx, &cs.assumes);
+      if (!b)
+        return false;
+      if (k > 0 ? b->first < 0 : b->second > 0)
+        return false;
+    }
   }
   return lo.constant() >= g;
 }
@@ -1137,11 +1162,198 @@ void SymbolicBoundsProver::mergePreconditions(CandidateSet &cs,
   cs.exhausted |= b.exhausted;
 }
 
-Operation *SymbolicBoundsProver::assumedBy(const BoundCondition &,
-                                           QueryContext) const {
-  // Task 6 consults the normalized fact index; until then every candidate
-  // becomes a runtime condition.
+//===----------------------------------------------------------------------===//
+// Assume facts (design 4.3)
+//===----------------------------------------------------------------------===//
+
+void SymbolicBoundsProver::buildFactIndex() {
+  // Indexed by the SUBJECT the fact is about, not by the comparison's
+  // immediate operands: `assume((n % 64) == 0)` is a fact about `n`, and
+  // IntegerRangeAnalysis::collectAssumptions would file it under the
+  // remainder value, invisible to a query about `n` (4.3).
+  root->walk([&](LLVM::AssumeOp assume) {
+    auto cmp = assume.getCond().getDefiningOp<arith::CmpIOp>();
+    if (!cmp)
+      return;
+    Value lhs = cmp.getLhs(), rhs = cmp.getRhs();
+    arith::CmpIPredicate pred = cmp.getPredicate();
+
+    // `remsi X, c == 0` -> DivisibleBy(X, c).
+    if (pred == arith::CmpIPredicate::eq) {
+      for (auto [a, b] : {std::pair{lhs, rhs}, std::pair{rhs, lhs}}) {
+        std::optional<int64_t> zero = getFoldedConstant(b);
+        auto rem = a.getDefiningOp<arith::RemSIOp>();
+        if (zero && *zero == 0 && rem)
+          if (std::optional<int64_t> c = getFoldedConstant(rem.getRhs()))
+            if (*c > 0)
+              factIndex[rem.getLhs()].push_back(
+                  {BoundGoal::DivisibleBy, *c, assume.getOperation()});
+      }
+      return; // no other eq form yields a Goal
+    }
+
+    // `X pred const`, either operand order.
+    Value subject = lhs;
+    std::optional<int64_t> k = getFoldedConstant(rhs);
+    if (!k) {
+      subject = rhs;
+      k = getFoldedConstant(lhs);
+      if (!k)
+        return;
+      // Swapping the operands mirrors the predicate.
+      pred = arith::invertPredicate(pred) == pred ? pred : pred;
+      switch (cmp.getPredicate()) {
+      case arith::CmpIPredicate::slt:
+        pred = arith::CmpIPredicate::sgt;
+        break;
+      case arith::CmpIPredicate::sle:
+        pred = arith::CmpIPredicate::sge;
+        break;
+      case arith::CmpIPredicate::sgt:
+        pred = arith::CmpIPredicate::slt;
+        break;
+      case arith::CmpIPredicate::sge:
+        pred = arith::CmpIPredicate::sle;
+        break;
+      case arith::CmpIPredicate::ult:
+        pred = arith::CmpIPredicate::ugt;
+        break;
+      case arith::CmpIPredicate::ule:
+        pred = arith::CmpIPredicate::uge;
+        break;
+      case arith::CmpIPredicate::ugt:
+        pred = arith::CmpIPredicate::ult;
+        break;
+      case arith::CmpIPredicate::uge:
+        pred = arith::CmpIPredicate::ule;
+        break;
+      default:
+        return;
+      }
+    }
+    unsigned w = bitWidth(subject.getType());
+    int64_t intMax = APInt::getSignedMaxValue(w).getSExtValue();
+    Operation *op = assume.getOperation();
+    auto add = [&](BoundGoal g, int64_t c) {
+      factIndex[subject].push_back({g, c, op});
+    };
+    // Strict bounds are translated to non-strict at the subject's width; a
+    // strict bound at the extreme is unsatisfiable and yields no fact.
+    switch (pred) {
+    case arith::CmpIPredicate::sge:
+      add(BoundGoal::AtLeast, *k);
+      if (*k >= 0)
+        add(BoundGoal::NonNegative, 0);
+      break;
+    case arith::CmpIPredicate::sgt:
+      if (*k == intMax)
+        break; // x > INT_MAX is unsatisfiable
+      add(BoundGoal::AtLeast, *k + 1);
+      if (*k + 1 >= 0)
+        add(BoundGoal::NonNegative, 0);
+      break;
+    case arith::CmpIPredicate::sle:
+      add(BoundGoal::AtMost, *k);
+      break;
+    case arith::CmpIPredicate::slt:
+      if (*k == APInt::getSignedMinValue(w).getSExtValue())
+        break; // x < INT_MIN is unsatisfiable
+      add(BoundGoal::AtMost, *k - 1);
+      break;
+    case arith::CmpIPredicate::ult:
+    case arith::CmpIPredicate::ule: {
+      // An unsigned UPPER bound within the signed range puts x in [0, c), so
+      // it gives both non-negativity and a signed upper bound.
+      int64_t bound = pred == arith::CmpIPredicate::ult ? *k - 1 : *k;
+      if (*k < 0 || *k > intMax)
+        break; // the constant itself is outside [0, INT_MAX]: no signed fact
+      add(BoundGoal::NonNegative, 0);
+      if (bound >= 0)
+        add(BoundGoal::AtMost, bound);
+      break;
+    }
+    default:
+      // uge/ugt give no signed fact: an unsigned lower bound admits negative
+      // signed values (`assume(x uge 128)` on i8 means x < 0).
+      break;
+    }
+  });
+}
+
+ArrayRef<SymbolicBoundsProver::Fact>
+SymbolicBoundsProver::factsFor(Value v) const {
+  auto it = factIndex.find(v);
+  return it != factIndex.end() ? ArrayRef<Fact>(it->second) : ArrayRef<Fact>();
+}
+
+Operation *SymbolicBoundsProver::assumedBy(const BoundCondition &cond,
+                                           QueryContext ctx) const {
+  // Only a bare single symbol: `1*s + 0`.
+  if (cond.expr.numTerms() != 1 || cond.expr.constant() != 0)
+    return nullptr;
+  auto &[sym, k] = cond.expr.terms().front();
+  if (k != 1 || !sym.value())
+    return nullptr;
+  // The index is keyed by Value, and a Quotient symbol stores its DIVIDEND,
+  // so a key match is not a subject match: a fact about X must never satisfy
+  // a condition on q(X, c). No assume names a derived value.
+  if (sym.kind() == SymbolKind::Quotient || sym.kind() == SymbolKind::TripCount)
+    return nullptr;
+  for (const Fact &f : factsFor(sym.value())) {
+    if (!ctx.at ||
+        !assumeApplies(cast<LLVM::AssumeOp>(f.assume), ctx.at, domInfo))
+      continue;
+    bool implies = false;
+    switch (cond.goal) {
+    case BoundGoal::DivisibleBy:
+      implies =
+          f.goal == BoundGoal::DivisibleBy && cond.c != 0 && f.c % cond.c == 0;
+      break;
+    case BoundGoal::AtLeast:
+      implies = f.goal == BoundGoal::AtLeast && f.c >= cond.c;
+      break;
+    case BoundGoal::AtMost:
+      implies = f.goal == BoundGoal::AtMost && f.c <= cond.c;
+      break;
+    case BoundGoal::NonNegative:
+      implies = f.goal == BoundGoal::NonNegative ||
+                (f.goal == BoundGoal::AtLeast && f.c >= 0);
+      break;
+    case BoundGoal::StrictlyPositive:
+      implies = f.goal == BoundGoal::AtLeast && f.c >= 1;
+      break;
+    }
+    if (implies)
+      return f.assume;
+  }
   return nullptr;
+}
+
+std::optional<std::pair<int64_t, int64_t>>
+SymbolicBoundsProver::rangeOf(Value v, QueryContext ctx,
+                              SmallVectorImpl<Operation *> *assumes) const {
+  std::optional<ConstantIntRanges> r = collectRange(solver, v);
+  if (!r)
+    return std::nullopt;
+  int64_t lo = r->smin().getSExtValue(), hi = r->smax().getSExtValue();
+  if (!assumes)
+    return std::make_pair(lo, hi);
+  // A leaf range can come from assumes this index does not model (eq, uge,
+  // ...) and from assumes on values UPSTREAM of the leaf, since ranges
+  // propagate forward while the lattice keeps no provenance. So when the range
+  // is narrower than the type, record every applicable assume in the function:
+  // a coarse over-approximation, never an omission (4.3).
+  unsigned w = bitWidth(v.getType());
+  bool narrowed = lo > APInt::getSignedMinValue(w).getSExtValue() ||
+                  hi < APInt::getSignedMaxValue(w).getSExtValue();
+  if (narrowed && ctx.at) {
+    if (auto func = ctx.at->getParentOfType<tt::FuncOp>())
+      func->walk([&](LLVM::AssumeOp a) {
+        if (!llvm::is_contained(*assumes, a.getOperation()))
+          assumes->push_back(a.getOperation());
+      });
+  }
+  return std::make_pair(lo, hi);
 }
 
 CandidateResult SymbolicBoundsProver::addCandidate(CandidateSet &cs,
@@ -1542,16 +1754,22 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
       continue;
 
     if (decideResidual(b.lo, g, ctx, trial)) {
+      bool declined = false;
       for (const BoundCondition &cond : candidates) {
         CandidateResult res = addCandidate(trial, cond, ctx);
         if (res == CandidateResult::Exhausted)
           return {};
         if (res == CandidateResult::Declined) {
           trial = acc; // not expressible: discard and try the next kind
+          declined = true;
           break;
         }
       }
-      if (!trial.facts.empty() || !trial.extra.empty())
+      // Always finalize once the residual decides: a candidate established by
+      // a dominating assume adds no runtime condition, so the condition set
+      // can legitimately be empty - finalize is what turns that into
+      // Satisfied rather than ConditionallySatisfied.
+      if (!declined)
         return finalize(BoundProof::ConditionallySatisfied, std::move(trial),
                         obligations, ctx);
     }

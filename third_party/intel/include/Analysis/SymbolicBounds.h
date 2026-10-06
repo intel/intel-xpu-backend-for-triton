@@ -341,8 +341,24 @@ private:
                                QueryContext ctx);
   /// Merges the evidence a bounding produced into the candidate set.
   void mergePreconditions(CandidateSet &cs, const Bounds &b) const;
-  /// The assume establishing `cond` outright, or null (Task 6).
+  /// One `llvm.intr.assume`-derived fact, normalized onto its subject.
+  struct Fact {
+    BoundGoal goal;
+    int64_t c;
+    Operation *assume;
+  };
+
+  /// Builds the normalized fact index, keyed by the subject each fact is
+  /// about rather than by the comparison's immediate operands.
+  void buildFactIndex();
+  ArrayRef<Fact> factsFor(Value v) const;
+  /// The assume establishing `cond` outright, or null.
   Operation *assumedBy(const BoundCondition &cond, QueryContext ctx) const;
+  /// The constant range of `v`, recording into `assumes` every assume that
+  /// could have narrowed it (over-approximate provenance, never an omission).
+  std::optional<std::pair<int64_t, int64_t>>
+  rangeOf(Value v, QueryContext ctx,
+          SmallVectorImpl<Operation *> *assumes = nullptr) const;
   /// A block argument's affine form: the loop IV, an IV-offset iter_arg, a
   /// function argument, else opaque.
   AffineForm leafForBlockArg(BlockArgument arg, QueryContext ctx,
@@ -380,6 +396,8 @@ private:
   /// Quotient facts, keyed by (symbol, the loop in which its dividend
   /// varies), so one entry serves every context the quotient is reached from.
   std::map<std::pair<Symbol, Operation *>, QuotientInfo> quotientInfo;
+  /// Assume facts, keyed by the subject value they constrain.
+  DenseMap<Value, SmallVector<Fact, 2>> factIndex;
 };
 
 /// Normalizes a condition in place (§4.4): folds the constant into the bound,
