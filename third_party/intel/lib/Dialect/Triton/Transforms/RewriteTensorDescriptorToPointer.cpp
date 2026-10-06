@@ -1363,7 +1363,8 @@ collectCandidateMakeTensorDescOps(Operation *op) {
 
     // Legality is decided per op over all of its descriptor-typed operands
     // and results, so their producers form one group that must be converted
-    // together.
+    // together. A region op additionally converts as a unit with its region
+    // terminators, so what they pass back joins the group.
     llvm::SmallSetVector<triton::MakeTensorDescOp, 4> group;
     bool hasUntraceable = false;
     auto addDefs = [&](Value v) {
@@ -1382,6 +1383,15 @@ collectCandidateMakeTensorDescOps(Operation *op) {
       addDefs(operand);
     for (Value result : op->getResults())
       addDefs(result);
+    // The op's own results collapse to an empty trace as soon as one incoming
+    // edge is untraceable, which hides the makers on the other edges: they are
+    // then seen only at their own terminator, stay native, and leave that
+    // terminator at the pre-expansion arity. Reach the edges directly (#8256).
+    if (isa<RegionBranchOpInterface>(op))
+      for (Region &region : op->getRegions())
+        for (Block &block : region)
+          for (Value v : block.getTerminator()->getOperands())
+            addDefs(v);
     // An untraceable descriptor contributes no producer, so the closure below
     // has nothing to spread from -- yet it already makes this op illegal
     // (`tracesToCandidates` is false for an empty trace), leaving the op
@@ -1396,8 +1406,8 @@ collectCandidateMakeTensorDescOps(Operation *op) {
 
   // With `buildMaterializations = false` legality cannot be mixed within a
   // group: one producer leaving the descriptor path (evicted, or never a
-  // candidate) drags every traced producer that shares an op with it. Close
-  // the evicted set over the groups.
+  // candidate) drags every traced producer that shares an op -- or that op's
+  // region terminators -- with it. Close the evicted set over the groups.
   auto isEvicted = [&](triton::MakeTensorDescOp d) {
     return unhandledMakeTensorDescOps.contains(d) ||
            !candidateMakeTensorDescOps.contains(d);

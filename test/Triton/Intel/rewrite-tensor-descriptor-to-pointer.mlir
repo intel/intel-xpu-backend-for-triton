@@ -1198,3 +1198,238 @@ module {
 // TWICE-NOT: tt.descriptor_load
 // TWICE: tt.load
 // TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// -----
+
+// COM: Region-terminator merges (#8256 review). A region op is converted as a
+// COM: unit with its terminators, but its own result trace collapses to empty
+// COM: as soon as one incoming edge is untraceable -- so the local maker was
+// COM: only ever seen at the yield, stayed native, and left the yield at the
+// COM: pre-expansion arity. In all four cases below %incoming sits immediately
+// COM: before a !tt.ptr argument, which fails the shape/stride layout check in
+// COM: synthesizeDescriptorsFromFuncArgs and keeps it untraceable; giving it an
+// COM: i32 successor would synthesize a maker and dissolve the case under test.
+
+// COM: `scf.if` merging the host descriptor with a directly-loaded local maker.
+module {
+  tt.func public @split_if_yield_local(%incoming: !tt.tensordesc<8x16xf16>, %base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32, %width: i32, %pitch: i64, %choose_incoming: i1, %row: i32, %col: i32) -> (tensor<8x16xf16>, tensor<8x16xf16>) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%height, %width], [%pitch, %c1_i64] : <f16>, <8x16xf16>
+    %direct = tt.descriptor_load %desc[%row, %col] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    %merged = scf.if %choose_incoming -> (!tt.tensordesc<8x16xf16>) {
+      scf.yield %incoming : !tt.tensordesc<8x16xf16>
+    } else {
+      scf.yield %desc : !tt.tensordesc<8x16xf16>
+    }
+    %v = tt.descriptor_load %merged[%row, %col] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    tt.return %direct, %v : tensor<8x16xf16>, tensor<8x16xf16>
+  }
+}
+
+// CHECK-LABEL: @split_if_yield_local
+// CHECK-SAME: %[[INCOMING_PTR:[^:]*]]: !tt.ptr<f16>, %{{[^:]*}}: i64, %{{[^:]*}}: i64, %{{[^:]*}}: i64, %{{[^:]*}}: i64, %{{[^:]*}}: i1, %{{[^:]*}}: i1,
+// CHECK-SAME: %[[BASE:[^:]*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+// CHECK-SAME: %[[COND:[^:]*]]: i1, %[[ROW:[^:]*]]: i32, %[[COL:[^:]*]]: i32)
+// CHECK: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE]],
+// CHECK-NEXT: %[[DIRECT:.*]] = tt.descriptor_load %[[DESC]][%[[ROW]], %[[COL]]] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// COM: The widened 7-result scf.if canonicalizes away; the merge survives as a
+// COM: per-component select, so the pointer the fallback load uses is chosen
+// COM: between the host descriptor's and the evicted maker's own base.
+// CHECK: arith.select %[[COND]], %[[INCOMING_PTR]], %[[BASE]] : !tt.ptr<f16>
+// CHECK: %[[V:.*]] = tt.load
+// CHECK-NEXT: tt.return %[[DIRECT]], %[[V]] : tensor<8x16xf16>, tensor<8x16xf16>
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// RAW-LABEL: @split_if_yield_local
+// RAW-SAME: %[[INCOMING_PTR:[^:]*]]: !tt.ptr<f16>
+// RAW-SAME: %[[BASE:[^:]*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+// RAW: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE]],
+// RAW-NEXT: %[[DIRECT:.*]] = tt.descriptor_load %[[DESC]][
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// RAW: %[[SEL:.*]]:7 = scf.if %{{.*}} -> (!tt.ptr<f16>, i64, i64, i64, i64, i1, i1) {
+// RAW-NEXT: scf.yield %[[INCOMING_PTR]], {{.*}} : !tt.ptr<f16>, i64, i64, i64, i64, i1, i1
+// RAW-NEXT: } else {
+// RAW-NEXT: scf.yield %[[BASE]], {{.*}} : !tt.ptr<f16>, i64, i64, i64, i64, i1, i1
+// RAW: tt.splat %[[SEL]]#0 : !tt.ptr<f16> -> tensor<8x16x!tt.ptr<f16>>
+// RAW: tt.load
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_|load }}
+
+// TWICE-LABEL: @split_if_yield_local
+// TWICE: tt.make_tensor_descriptor
+// TWICE-NEXT: tt.descriptor_load
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// TWICE: tt.load
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// -----
+
+// COM: `scf.for` twin: the host descriptor seeds the iter_arg and the local
+// COM: maker is yielded. The loop result is loaded, so the loop stays live
+// COM: through the greedy pre-rewrite that runs before candidate collection.
+module {
+  tt.func public @split_for_yield_local(%incoming: !tt.tensordesc<8x16xf16>, %base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32, %width: i32, %pitch: i64, %n: i32, %row: i32, %col: i32) -> (tensor<8x16xf16>, tensor<8x16xf16>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%height, %width], [%pitch, %c1_i64] : <f16>, <8x16xf16>
+    %direct = tt.descriptor_load %desc[%row, %col] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    %carried = scf.for %iv = %c0_i32 to %n step %c1_i32 iter_args(%cur = %incoming) -> (!tt.tensordesc<8x16xf16>) : i32 {
+      scf.yield %desc : !tt.tensordesc<8x16xf16>
+    }
+    %v = tt.descriptor_load %carried[%row, %col] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    tt.return %direct, %v : tensor<8x16xf16>, tensor<8x16xf16>
+  }
+}
+
+// CHECK-LABEL: @split_for_yield_local
+// CHECK-SAME: %[[INCOMING_PTR:[^:]*]]: !tt.ptr<f16>
+// CHECK-SAME: %[[BASE:[^:]*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+// CHECK: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE]],
+// CHECK-NEXT: %[[DIRECT:.*]] = tt.descriptor_load %[[DESC]][
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// COM: Canonicalize drops the loop-carried components the body never reads, so
+// COM: only RAW pins the full 1 -> 7 expansion. What matters here is that the
+// COM: iter_arg is seeded from the host pointer and the yield hands back the
+// COM: evicted maker's components -- both sides on the pointer path.
+// CHECK: scf.for {{.*}} iter_args(%{{[^ ]+}} = %[[INCOMING_PTR]],
+// CHECK: scf.yield %[[BASE]],
+// CHECK: %[[V:.*]] = tt.load
+// CHECK-NEXT: tt.return %[[DIRECT]], %[[V]] : tensor<8x16xf16>, tensor<8x16xf16>
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// RAW-LABEL: @split_for_yield_local
+// RAW-SAME: %[[INCOMING_PTR:[^:]*]]: !tt.ptr<f16>
+// RAW-SAME: %[[BASE:[^:]*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+// RAW: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE]],
+// RAW-NEXT: %[[DIRECT:.*]] = tt.descriptor_load %[[DESC]][
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// RAW: scf.for {{.*}} iter_args(%{{[^ ]+}} = %[[INCOMING_PTR]], {{.*}}) -> (!tt.ptr<f16>, i64, i64, i64, i64, i1, i1)
+// RAW-NEXT: scf.yield %[[BASE]], {{.*}} : !tt.ptr<f16>, i64, i64, i64, i64, i1, i1
+// RAW: tt.load
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_|load }}
+
+// TWICE-LABEL: @split_for_yield_local
+// TWICE: tt.make_tensor_descriptor
+// TWICE-NEXT: tt.descriptor_load
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// TWICE: tt.load
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// -----
+
+// COM: `scf.while` twin. `scf.condition` must forward the before-region
+// COM: argument: a condition yielding %desc instead would place it in the
+// COM: while's own operand/result group beside the untraceable init and evict
+// COM: it even before the fix, so the case would prove nothing.
+module {
+  tt.func public @split_while_yield_local(%incoming: !tt.tensordesc<8x16xf16>, %base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32, %width: i32, %pitch: i64, %keep_going: i1, %row: i32, %col: i32) -> (tensor<8x16xf16>, tensor<8x16xf16>) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%height, %width], [%pitch, %c1_i64] : <f16>, <8x16xf16>
+    %direct = tt.descriptor_load %desc[%row, %col] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    %r = scf.while (%x = %incoming) : (!tt.tensordesc<8x16xf16>) -> !tt.tensordesc<8x16xf16> {
+      scf.condition(%keep_going) %x : !tt.tensordesc<8x16xf16>
+    } do {
+    ^bb0(%y: !tt.tensordesc<8x16xf16>):
+      scf.yield %desc : !tt.tensordesc<8x16xf16>
+    }
+    %v = tt.descriptor_load %r[%row, %col] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    tt.return %direct, %v : tensor<8x16xf16>, tensor<8x16xf16>
+  }
+}
+
+// CHECK-LABEL: @split_while_yield_local
+// CHECK-SAME: %[[INCOMING_PTR:[^:]*]]: !tt.ptr<f16>
+// CHECK-SAME: %[[BASE:[^:]*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+// CHECK: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE]],
+// CHECK-NEXT: %[[DIRECT:.*]] = tt.descriptor_load %[[DESC]][
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// CHECK: scf.while (%{{[^ ]+}} = %[[INCOMING_PTR]],
+// CHECK: scf.yield %[[BASE]],
+// CHECK: %[[V:.*]] = tt.load
+// CHECK-NEXT: tt.return %[[DIRECT]], %[[V]] : tensor<8x16xf16>, tensor<8x16xf16>
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// RAW-LABEL: @split_while_yield_local
+// RAW-SAME: %[[INCOMING_PTR:[^:]*]]: !tt.ptr<f16>
+// RAW-SAME: %[[BASE:[^:]*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+// RAW: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE]],
+// RAW-NEXT: %[[DIRECT:.*]] = tt.descriptor_load %[[DESC]][
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// COM: Both of the while's regions are reached: the condition forwards the
+// COM: before-region arguments and the after-yield hands back the evicted
+// COM: maker, each at the full 7-component width.
+// RAW: scf.while (%{{[^ ]+}} = %[[INCOMING_PTR]], {{.*}}) : (!tt.ptr<f16>, i64, i64, i64, i64, i1, i1) -> (!tt.ptr<f16>, i64, i64, i64, i64, i1, i1)
+// RAW-NEXT: scf.condition(%{{[^ ]+}}) %{{.*}} : !tt.ptr<f16>, i64, i64, i64, i64, i1, i1
+// RAW: scf.yield %[[BASE]], {{.*}} : !tt.ptr<f16>, i64, i64, i64, i64, i1, i1
+// RAW: tt.load
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_|load }}
+
+// TWICE-LABEL: @split_while_yield_local
+// TWICE: tt.make_tensor_descriptor
+// TWICE-NEXT: tt.descriptor_load
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// TWICE: tt.load
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// -----
+
+// COM: The opposite direction: here the `scf.while` itself stays legal -- its
+// COM: init traces to %d0 and its result traces through `scf.condition` to %d1,
+// COM: both candidates -- while the after-yield's untraceable operand makes
+// COM: only the yield illegal, so the yield expands against an unexpanded
+// COM: before block. Loading the while result is what makes %d1 a candidate;
+// COM: without that load the existing closure already evicts %d0.
+module {
+  tt.func public @while_after_yield_untraceable(%incoming: !tt.tensordesc<8x16xf16>, %base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %other: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32, %width: i32, %pitch: i64, %keep_going: i1, %row: i32, %col: i32) -> (tensor<8x16xf16>, tensor<8x16xf16>) {
+    %c1_i64 = arith.constant 1 : i64
+    %d0 = tt.make_tensor_descriptor %base, [%height, %width], [%pitch, %c1_i64] : <f16>, <8x16xf16>
+    %direct = tt.descriptor_load %d0[%row, %col] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    %r = scf.while (%x = %d0) : (!tt.tensordesc<8x16xf16>) -> !tt.tensordesc<8x16xf16> {
+      %d1 = tt.make_tensor_descriptor %other, [%height, %width], [%pitch, %c1_i64] : <f16>, <8x16xf16>
+      scf.condition(%keep_going) %d1 : !tt.tensordesc<8x16xf16>
+    } do {
+    ^bb0(%y: !tt.tensordesc<8x16xf16>):
+      scf.yield %incoming : !tt.tensordesc<8x16xf16>
+    }
+    %v = tt.descriptor_load %r[%row, %col] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    tt.return %direct, %v : tensor<8x16xf16>, tensor<8x16xf16>
+  }
+}
+
+// CHECK-LABEL: @while_after_yield_untraceable
+// CHECK-SAME: %[[BASE:[^:]*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+// COM: %d0's clone keeps the direct load native. %d1 lived only in the
+// COM: condition, so it has no direct use to split and leaves entirely.
+// CHECK: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE]],
+// CHECK-NEXT: %[[DIRECT:.*]] = tt.descriptor_load %[[DESC]][
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// COM: The while itself is not asserted here: once both makers' components are
+// COM: CSEd the loop is dead, so it survives `--canonicalize --cse` but not
+// COM: `--cse --canonicalize --cse`. RAW pins its expansion instead.
+// CHECK: %[[V:.*]] = tt.load
+// CHECK-NEXT: tt.return %[[DIRECT]], %[[V]] : tensor<8x16xf16>, tensor<8x16xf16>
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// RAW-LABEL: @while_after_yield_untraceable
+// RAW-SAME: %[[INCOMING_PTR:[^:]*]]: !tt.ptr<f16>
+// RAW-SAME: %[[BASE:[^:]*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+// RAW-SAME: %[[OTHER:[^:]*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+// RAW: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE]],
+// RAW-NEXT: %[[DIRECT:.*]] = tt.descriptor_load %[[DESC]][
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// COM: The whole while is now expanded: init from %d0's components, the
+// COM: condition from %d1's, and the after-yield from the host's. Before the
+// COM: fix only the after-yield was converted, against a 1-input before block.
+// RAW: scf.while (%{{[^ ]+}} = %[[BASE]], {{.*}}) : (!tt.ptr<f16>, i64, i64, i64, i64, i1, i1) -> (!tt.ptr<f16>, i64, i64, i64, i64, i1, i1)
+// RAW: scf.condition(%{{[^ ]+}}) %[[OTHER]], {{.*}} : !tt.ptr<f16>, i64, i64, i64, i64, i1, i1
+// RAW: scf.yield %[[INCOMING_PTR]], {{.*}} : !tt.ptr<f16>, i64, i64, i64, i64, i1, i1
+// RAW: tt.load
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_|load }}
+
+// TWICE-LABEL: @while_after_yield_untraceable
+// TWICE: tt.make_tensor_descriptor
+// TWICE-NEXT: tt.descriptor_load
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// TWICE: tt.load
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
