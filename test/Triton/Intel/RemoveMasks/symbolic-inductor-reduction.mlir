@@ -1,0 +1,208 @@
+// RUN: env TRITON_INTEL_SYMBOLIC_MASKS=1 triton-opt %s -split-input-file -triton-intel-remove-masks -canonicalize | FileCheck %s --check-prefixes=CHECK,SYM
+// RUN: triton-opt %s -split-input-file -triton-intel-remove-masks -canonicalize | FileCheck %s --check-prefixes=CHECK,LEGACY
+
+// COM: Inductor reduction shape (spec E1): no legacy validator fires; the symbolic
+// COM: validator versions the loop on rnumel % 64 == 0 and unmasks the then-copy.
+// COM: -canonicalize removes the dead masked load dropMask leaves behind, so the
+// COM: CHECK-NOT below is meaningful.
+
+// CHECK-LABEL: tt.func @inductor_reduction
+tt.func @inductor_reduction(%ptr: !tt.ptr<f32>, %rnumel: i32) {
+  %c0 = arith.constant 0 : i32
+  %c64 = arith.constant 64 : i32
+  %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+  %ns = tt.splat %rnumel : i32 -> tensor<64xi32>
+  %ps = tt.splat %ptr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
+  // SYM:      %[[REM:.*]] = arith.remsi %{{.*}}, %{{.*}} : i64
+  // SYM:      %[[GUARD:.*]] = arith.cmpi eq, %[[REM]], %{{.*}} : i64
+  // SYM:      scf.if %[[GUARD]] {
+  // SYM:        scf.for
+  // SYM-NOT:      tt.load %{{.*}}, %{{.*}} :
+  // SYM:          tt.load %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:      } else {
+  // SYM:        scf.for
+  // SYM:          tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // LEGACY-NOT: scf.if
+  // LEGACY:     tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
+  scf.for %r = %c0 to %rnumel step %c64 : i32 {
+    %rs = tt.splat %r : i32 -> tensor<64xi32>
+    %idx = arith.addi %rs, %lane : tensor<64xi32>
+    %mask = arith.cmpi slt, %idx, %ns : tensor<64xi32>
+    %p = tt.addptr %ps, %idx : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
+    %v = tt.load %p, %mask : tensor<64x!tt.ptr<f32>>
+    tt.store %p, %v, %mask : tensor<64x!tt.ptr<f32>>
+    scf.yield
+  }
+  tt.return
+}
+
+// -----
+
+// COM: Two loads, only one provable. The second mask compares against a value
+// COM: loaded *inside* the loop body, which is loop-varying and has no range, so
+// COM: it is Opaque and the query is Unknown. The loop is still versioned for the
+// COM: first load, and the second keeps its mask in both copies. Loaded before
+// COM: the loop the same value would be a guardable invariant.
+
+// CHECK-LABEL: tt.func @two_loads_one_provable
+tt.func @two_loads_one_provable(%ptr: !tt.ptr<f32>, %qtr: !tt.ptr<i32>, %rnumel: i32) {
+  %c0 = arith.constant 0 : i32
+  %c64 = arith.constant 64 : i32
+  %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+  %ns = tt.splat %rnumel : i32 -> tensor<64xi32>
+  %ps = tt.splat %ptr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
+  // COM: Checks follow program order: provable tensor load, scalar load, then
+  // COM: the unprovable tensor load.
+  // SYM:      scf.if
+  // SYM:        scf.for
+  // SYM:          tt.load %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:          tt.load %{{.*}} : !tt.ptr<i32>
+  // SYM:          tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:      } else {
+  // SYM:        scf.for
+  // SYM:          tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:          tt.load %{{.*}} : !tt.ptr<i32>
+  // SYM:          tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // LEGACY-NOT: scf.if
+  scf.for %r = %c0 to %rnumel step %c64 : i32 {
+    %rs = tt.splat %r : i32 -> tensor<64xi32>
+    %idx = arith.addi %rs, %lane : tensor<64xi32>
+    %mask = arith.cmpi slt, %idx, %ns : tensor<64xi32>
+    %p = tt.addptr %ps, %idx : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
+    %v = tt.load %p, %mask : tensor<64x!tt.ptr<f32>>
+    %other = tt.load %qtr : !tt.ptr<i32>
+    %os = tt.splat %other : i32 -> tensor<64xi32>
+    %mask2 = arith.cmpi slt, %idx, %os : tensor<64xi32>
+    %v2 = tt.load %p, %mask2 : tensor<64x!tt.ptr<f32>>
+    tt.store %p, %v, %mask : tensor<64x!tt.ptr<f32>>
+    tt.store %p, %v2, %mask2 : tensor<64x!tt.ptr<f32>>
+    scf.yield
+  }
+  tt.return
+}
+
+// -----
+
+// COM: An arith.select consuming the provable mask. The symbolic validator
+// COM: collects selects as well as loads, and dropMask replaces the select with
+// COM: its true value, so the then-copy contains no select at all.
+
+// CHECK-LABEL: tt.func @select_mask
+tt.func @select_mask(%ptr: !tt.ptr<f32>, %rnumel: i32) {
+  %c0 = arith.constant 0 : i32
+  %c64 = arith.constant 64 : i32
+  %cst = arith.constant dense<0.000000e+00> : tensor<64xf32>
+  %one = arith.constant dense<1.000000e+00> : tensor<64xf32>
+  %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+  %ns = tt.splat %rnumel : i32 -> tensor<64xi32>
+  %ps = tt.splat %ptr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
+  // SYM:      scf.if
+  // SYM:        scf.for
+  // SYM-NOT:      arith.select
+  // SYM:      } else {
+  // SYM:        scf.for
+  // SYM:          arith.select
+  // LEGACY-NOT: scf.if
+  scf.for %r = %c0 to %rnumel step %c64 : i32 {
+    %rs = tt.splat %r : i32 -> tensor<64xi32>
+    %idx = arith.addi %rs, %lane : tensor<64xi32>
+    %mask = arith.cmpi slt, %idx, %ns : tensor<64xi32>
+    %p = tt.addptr %ps, %idx : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
+    %sel = arith.select %mask, %one, %cst : tensor<64xi1>, tensor<64xf32>
+    tt.store %p, %sel : tensor<64x!tt.ptr<f32>>
+    scf.yield
+  }
+  tt.return
+}
+
+// -----
+
+// COM: A loop-carried mask: an i1 iter_arg initialized `true` and yielding a
+// COM: computed value. proveTrue stops at the block argument rather than
+// COM: substituting the init value, which would read as unconditionally true and
+// COM: unmask a load the mask is guarding. No versioning, mask kept.
+
+// CHECK-LABEL: tt.func @loop_carried_mask
+tt.func @loop_carried_mask(%ptr: !tt.ptr<f32>, %rnumel: i32) {
+  %c0 = arith.constant 0 : i32
+  %c64 = arith.constant 64 : i32
+  %true = arith.constant true
+  %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+  %ps = tt.splat %ptr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
+  // CHECK-NOT: scf.if
+  // CHECK:     tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
+  %res = scf.for %r = %c0 to %rnumel step %c64 iter_args(%m = %true) -> (i1) : i32 {
+    %ms = tt.splat %m : i1 -> tensor<64xi1>
+    %p = tt.addptr %ps, %lane : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
+    %v = tt.load %p, %ms : tensor<64x!tt.ptr<f32>>
+    tt.store %p, %v, %ms : tensor<64x!tt.ptr<f32>>
+    %next = arith.cmpi slt, %r, %rnumel : i32
+    scf.yield %next : i1
+  }
+  tt.return
+}
+
+// -----
+
+// COM: A Refuted mask on a load with no `other`. The largest index is 127+31,
+// COM: well below 4096, so `idx >= 4096` is false in every element. A
+// COM: Refuted-only loop gets no guard, so the driver drops the mask without
+// COM: versioning: dropMask takes the getZeroAttr branch, replaces the uses with
+// COM: a zero constant, and the driver then erases the now-unused load.
+// COM: No LEGACY lines: whether legacy walk 1 classifies this mask as false has
+// COM: not been established, and this section is about the symbolic driver.
+
+// CHECK-LABEL: tt.func @refuted_no_other
+tt.func @refuted_no_other(%ptr: !tt.ptr<f32>) {
+  %c0 = arith.constant 0 : i32
+  %c32 = arith.constant 32 : i32
+  %c128 = arith.constant 128 : i32
+  %c4096 = arith.constant dense<4096> : tensor<32xi32>
+  %lane = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
+  %ps = tt.splat %ptr : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>>
+  // SYM-NOT: scf.if
+  // SYM:     arith.constant dense<0.000000e+00>
+  // SYM-NOT: tt.load
+  scf.for %r = %c0 to %c128 step %c32 : i32 {
+    %rs = tt.splat %r : i32 -> tensor<32xi32>
+    %idx = arith.addi %rs, %lane : tensor<32xi32>
+    %mask = arith.cmpi sge, %idx, %c4096 : tensor<32xi32>
+    %p = tt.addptr %ps, %idx : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
+    %v = tt.load %p, %mask : tensor<32x!tt.ptr<f32>>
+    tt.store %p, %v : tensor<32x!tt.ptr<f32>>
+    scf.yield
+  }
+  tt.return
+}
+
+// -----
+
+// COM: A Satisfied mask on a volatile load. Exactly one load must remain in the
+// COM: loop, unmasked and still volatile: only erasing the replaced load after
+// COM: dropMask achieves that, since canonicalization keeps a volatile load.
+// COM: No LEGACY lines: legacy walk 1 calls dropMask without erasing and so
+// COM: keeps the original volatile load too, a pre-existing behaviour this
+// COM: change does not alter.
+
+// CHECK-LABEL: tt.func @volatile_unconditional
+tt.func @volatile_unconditional(%ptr: !tt.ptr<f32>) {
+  %c0 = arith.constant 0 : i32
+  %c32 = arith.constant 32 : i32
+  %c128 = arith.constant 128 : i32
+  %c4096 = arith.constant dense<4096> : tensor<32xi32>
+  %cst = arith.constant dense<0.000000e+00> : tensor<32xf32>
+  %lane = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
+  %ps = tt.splat %ptr : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>>
+  // SYM:     tt.load %{{.*}} {isVolatile = true}
+  // SYM-NOT: tt.load
+  scf.for %r = %c0 to %c128 step %c32 : i32 {
+    %rs = tt.splat %r : i32 -> tensor<32xi32>
+    %idx = arith.addi %rs, %lane : tensor<32xi32>
+    %mask = arith.cmpi slt, %idx, %c4096 : tensor<32xi32>
+    %p = tt.addptr %ps, %idx : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
+    %v = tt.load %p, %mask, %cst {isVolatile = true} : tensor<32x!tt.ptr<f32>>
+    tt.store %p, %v : tensor<32x!tt.ptr<f32>>
+    scf.yield
+  }
+  tt.return
+}
