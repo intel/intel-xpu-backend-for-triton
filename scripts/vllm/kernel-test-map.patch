@@ -1,48 +1,61 @@
 diff --git a/requirements/test/xpu.txt b/requirements/test/xpu.txt
-index 40f23b95d..ad6d44614 100644
+index 8d91ac191c..eed6234b87 100644
 --- a/requirements/test/xpu.txt
 +++ b/requirements/test/xpu.txt
-@@ -472,8 +472,7 @@ pytest-forked==1.6.0
+@@ -800,8 +800,7 @@ pytest-forked==1.7.5
      # via -r requirements/test/xpu.in
- pytest-rerunfailures==14.0
+ pytest-rerunfailures==16.6
      # via -r requirements/test/xpu.in
 -pytest-shard==0.1.2
 -    # via -r requirements/test/xpu.in
 +pytest-skip
- pytest-timeout==2.3.1
+ pytest-timeout==2.4.0
      # via -r requirements/test/xpu.in
  python-dateutil==2.9.0.post0
-@@ -645,16 +644,6 @@ tokenizers==0.22.2
-     # via
-     #   -c requirements/common.txt
+@@ -1049,23 +1048,6 @@ tokenizers==0.23.1
+     #   cohere
+     #   sentence-transformers
      #   transformers
--torch==2.12.0+xpu
+-torch==2.14.0+xpu
 -    # via
 -    #   -c requirements/xpu.txt
 -    #   accelerate
+-    #   compressed-tensors
 -    #   mteb
+-    #   open-clip-torch
+-    #   runai-model-streamer
 -    #   sentence-transformers
+-    #   tensorizer
 -    #   timm
 -    #   torchvision
--torchvision==0.27.0+xpu
--    # via timm
- tqdm==4.67.3
+-    #   xgrammar
+-torchvision==0.29.0+xpu
+-    # via
+-    #   open-clip-torch
+-    #   timm
+ tqdm==4.70.0
      # via
-     #   datasets
-@@ -671,8 +660,6 @@ transformers==5.5.3
-     # via
-     #   -c requirements/common.txt
+     #   -r requirements/test/../common.txt
+@@ -1090,14 +1072,6 @@ transformers==5.17.0
+     #   mteb
      #   sentence-transformers
--triton-xpu==3.7.1
--    # via torch
- typepy==1.3.4
+     #   xgrammar
+-triton==3.8.0+xpu
+-    # via
+-    #   -c requirements/xpu.txt
+-    #   xgrammar
+-triton-xpu==3.8.0
+-    # via
+-    #   torch
+-    #   triton
+ truststore==0.10.4
      # via
-     #   dataproperty
+     #   httpcore2
 diff --git a/tests/conftest.py b/tests/conftest.py
-index 4fc43ef04..af0d2ddcc 100644
+index cd1d11917b..4ae9f69cbd 100644
 --- a/tests/conftest.py
 +++ b/tests/conftest.py
-@@ -1508,6 +1508,55 @@ def pytest_addoption(parser):
+@@ -1625,6 +1625,55 @@ def pytest_addoption(parser):
          "--optional", action="store_true", default=False, help="run optional test"
      )
  
