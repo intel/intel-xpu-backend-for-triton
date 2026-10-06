@@ -29,6 +29,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/SmallVector.h"
+#include <map>
 #include <optional>
 #include <string>
 
@@ -285,6 +286,26 @@ private:
     bool exhausted = false;
   };
 
+  /// The facts of one quotient symbol (design 4.1 division/remainder rows).
+  struct QuotientInfo {
+    /// True for the `(X + c - 1) / c` shape, whose facts are sharper.
+    bool isCdiv = false;
+    /// The dividend the facts refer to: `X'` for a cdiv, else `X`.
+    AffineForm dividend;
+    /// The wrap obligations of the dividend's own arithmetic, inherited by
+    /// any proof that uses these facts.
+    SmallVector<Obligation, 4> dividendObligations;
+  };
+
+  /// Substitutes quotient terms by their bounds so the dividend can cancel.
+  std::optional<AffineForm>
+  substituteQuotients(const AffineForm &lo, QueryContext ctx, CandidateSet &cs);
+  const QuotientInfo *findQuotientInfo(const Symbol &sym,
+                                       QueryContext ctx) const;
+  /// The innermost enclosing `scf.for` of `v`, as a map key; null when `v` is
+  /// invariant to every enclosing loop.
+  static Operation *varyingLoopKey(Value v);
+
   /// §4.2: keeps loop-invariant symbols symbolic, substitutes bounds for
   /// loop-varying ones, collects like terms.
   Bounds bound(const AffineForm &e, QueryContext ctx, const CandidateSet &cs);
@@ -341,6 +362,9 @@ private:
   /// Per-query: set when a budget is exhausted, which makes the query
   /// `Unknown` (§4.3).
   bool exhausted = false;
+  /// Quotient facts, keyed by (symbol, the loop in which its dividend
+  /// varies), so one entry serves every context the quotient is reached from.
+  std::map<std::pair<Symbol, Operation *>, QuotientInfo> quotientInfo;
 };
 
 /// Stable renderings for tests and the test pass.

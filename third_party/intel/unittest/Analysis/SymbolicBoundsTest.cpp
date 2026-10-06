@@ -259,4 +259,75 @@ TEST_F(SymbolicBoundsTest, NegativeStartLane) {
   EXPECT_EQ(verdict(get("cmp")), "Refuted"); // every lane is negative
 }
 
+// E2 of the design: the tutorial-03 K loop with a cdiv upper bound.
+static const char *kE2 = R"(
+  tt.func @e2(%K: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c63 = arith.constant 63 : i32
+    %c64 = arith.constant 64 : i32
+    %num = arith.addi %K, %c63 : i32 loc("num")
+    %q = arith.divsi %num, %c64 : i32 loc("q")
+    %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+    scf.for %k = %c0 to %q step %c1 : i32 {
+      %k64 = arith.muli %k, %c64 : i32 loc("k64")
+      %rem = arith.subi %K, %k64 : i32 loc("rem")
+      %rs = tt.splat %rem : i32 -> tensor<64xi32>
+      %mask = arith.cmpi slt, %lane, %rs : tensor<64xi32> loc("mask")
+      scf.yield
+    }
+    tt.return
+  })";
+
+TEST_F(SymbolicBoundsTest, E2_ConditionalOnExactCdivWithPrecondition) {
+  parse(kE2);
+  // A prefix check: Task 5 appends the K + 63 wrap guard, which
+  // E2_GainsCdivNumeratorGuard pins in full, so this passes before and after.
+  EXPECT_EQ(verdict(get("mask"))
+                .rfind("Conditional{arg0 divisible by 64; arg0 >= 0", 0),
+            0u);
+}
+
+TEST_F(SymbolicBoundsTest, RemainderBounds) {
+  parse(R"(
+    tt.func @f(%x: i32) {
+      %c64 = arith.constant 64 : i32
+      %c0 = arith.constant 0 : i32
+      %r = arith.remsi %x, %c64 : i32 loc("r")
+      %lt = arith.cmpi slt, %r, %c64 : i32 loc("lt")
+      %ge = arith.cmpi sge, %r, %c0 : i32 loc("ge")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("lt")), "Conditional{arg0 >= 0}");
+  // Precondition retained even though it does not change lo(d) (Review Focus
+  // 3).
+  EXPECT_EQ(verdict(get("ge")), "Conditional{arg0 >= 0}");
+}
+
+TEST_F(SymbolicBoundsTest, VaryingQuotientBounds) {
+  // X is loop-varying with range [100, 101]; q = X / 64 is 1, so q < 50 holds.
+  // Bounding q by its stored dividend's range would refute it.
+  parse(R"(
+    tt.func @f(%p: !tt.ptr<i32>, %n: i32) {
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      %c50 = arith.constant 50 : i32
+      %c64 = arith.constant 64 : i32
+      %c100 = arith.constant 100 : i32
+      %c101 = arith.constant 101 : i32
+      scf.for %i = %c0 to %n step %c1 : i32 {
+        %x = tt.load %p : !tt.ptr<i32>
+        %ge = arith.cmpi sge, %x, %c100 : i32
+        llvm.intr.assume %ge : i1
+        %le = arith.cmpi sle, %x, %c101 : i32
+        llvm.intr.assume %le : i1
+        %q = arith.divsi %x, %c64 : i32
+        %cmp = arith.cmpi slt, %q, %c50 : i32 loc("cmp")
+        scf.yield
+      }
+      tt.return
+    })");
+  EXPECT_NE(verdict(get("cmp")), "Refuted");
+}
+
 } // namespace
