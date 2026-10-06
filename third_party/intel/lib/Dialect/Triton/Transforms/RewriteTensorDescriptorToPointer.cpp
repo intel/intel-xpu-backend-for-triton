@@ -1359,6 +1359,17 @@ collectCandidateMakeTensorDescOps(Operation *op) {
                triton::intel::findDescriptorDefinitions(op.getDesc()))
             unhandledMakeTensorDescOps.insert(d);
         })
+        .Case<triton::CallOp, triton::ReturnOp>([&](auto op) {
+          // A descriptor in a function signature is unconditionally illegal
+          // (see the `FuncOp` legality below), so a descriptor crossing a
+          // call boundary always expands and the maker has to follow. Only
+          // operands need this: a call *result* already traces to nothing.
+          for (Value v : op->getOperands())
+            if (isa<triton::TensorDescType>(v.getType()))
+              for (triton::MakeTensorDescOp d :
+                   triton::intel::findDescriptorDefinitions(v))
+                unhandledMakeTensorDescOps.insert(d);
+        })
         .Default([](auto) {});
 
     // Legality is decided per op over all of its descriptor-typed operands
@@ -1582,6 +1593,8 @@ class TritonRewriteTensorDescriptorToPointerPass
               })
               .Default([&](auto *op) { return allDescValuesAreCandidate(op); });
         });
+    // Unconditional: a signature descriptor expands whether or not its maker
+    // is a candidate, which is why `tt.call` / `tt.return` operands evict.
     target.addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) {
       return !hasATensorDescriptorType(funcOp.getFunctionType().getInputs()) &&
              !hasATensorDescriptorType(funcOp.getFunctionType().getResults());

@@ -60,3 +60,25 @@ def test_merge_with_host_descriptor(make_in_branch, device, with_allocator):
         else:
             expected = 3 * b_tile
         torch.testing.assert_close(out, expected)
+
+
+@triton.jit(noinline=True)
+def _load_tile(desc, off):
+    return desc.load([off, 0])
+
+
+@triton.jit
+def _noinline_kernel(b_ptr, out_ptr, M, N, BM: tl.constexpr, BN: tl.constexpr):
+    d = tl.make_tensor_descriptor(b_ptr, shape=[M, N], strides=[N, 1], block_shape=[BM, BN])
+    x = d.load([0, 0])
+    y = _load_tile(d, BM)
+    offs = tl.arange(0, BM)[:, None] * BN + tl.arange(0, BN)[None, :]
+    tl.store(out_ptr + offs, x + 2 * y)
+
+
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific descriptor rewrite")
+def test_descriptor_passed_to_noinline(device, with_allocator):
+    b = torch.randn((M, N), device=device, dtype=torch.float16)
+    out = torch.empty((BM, BN), device=device, dtype=torch.float16)
+    _noinline_kernel[(1, )](b, out, M, N, BM, BN)
+    torch.testing.assert_close(out, b[:BM, :BN] + 2 * b[BM:2 * BM, :BN])

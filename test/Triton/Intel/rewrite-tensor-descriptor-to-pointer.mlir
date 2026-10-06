@@ -1433,3 +1433,119 @@ module {
 // TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
 // TWICE: tt.load
 // TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// -----
+
+// COM: Function-boundary merges (#8256 review). A FuncOp whose signature holds
+// COM: a descriptor is unconditionally illegal, so its arguments and results
+// COM: always expand 1 -> 7 -- but a `tt.call` operand or `tt.return` operand
+// COM: tracing to a kept maker stayed legal, so the call/return was left at the
+// COM: old arity. Evict such makers like gather/scatter; the split then keeps
+// COM: the direct access on a native clone.
+
+// COM: Descriptor crossing into a callee. The callee is private, so the
+// COM: host-descriptor synthesis pre-pass (public only) never sees it.
+module {
+  tt.func private @desc_operand_callee(%d: !tt.tensordesc<8x16xf16>, %row: i32, %col: i32) -> tensor<8x16xf16> attributes {noinline = true} {
+    %v = tt.descriptor_load %d[%row, %col] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    tt.return %v : tensor<8x16xf16>
+  }
+
+  tt.func public @split_call_operand(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32, %width: i32, %pitch: i64, %row: i32, %col: i32) -> (tensor<8x16xf16>, tensor<8x16xf16>) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%height, %width], [%pitch, %c1_i64] : <f16>, <8x16xf16>
+    %direct = tt.descriptor_load %desc[%row, %col] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    %called = tt.call @desc_operand_callee(%desc, %row, %col) : (!tt.tensordesc<8x16xf16>, i32, i32) -> tensor<8x16xf16>
+    tt.return %direct, %called : tensor<8x16xf16>, tensor<8x16xf16>
+  }
+}
+
+// CHECK-LABEL: tt.func private @desc_operand_callee
+// CHECK-SAME: %{{[^:]*}}: !tt.ptr<f16>, %{{[^:]*}}: i64, %{{[^:]*}}: i64, %{{[^:]*}}: i64, %{{[^:]*}}: i64, %{{[^:]*}}: i1, %{{[^:]*}}: i1,
+// CHECK-NOT: tt.descriptor_load
+// CHECK: tt.load
+// CHECK-LABEL: @split_call_operand
+// CHECK-SAME: %[[BASE:[^:]*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+// CHECK-SAME: %[[ROW:[^:]*]]: i32, %[[COL:[^:]*]]: i32)
+// CHECK: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE]],
+// CHECK-NEXT: %[[DIRECT:.*]] = tt.descriptor_load %[[DESC]][%[[ROW]], %[[COL]]] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// CHECK: %[[CALLED:.*]] = tt.call @desc_operand_callee(%[[BASE]], {{.*}}) : (!tt.ptr<f16>, i64, i64, i64, i64, i1, i1, i32, i32) -> tensor<8x16xf16>
+// CHECK-NEXT: tt.return %[[DIRECT]], %[[CALLED]] : tensor<8x16xf16>, tensor<8x16xf16>
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// COM: RAW bounds the clone count before cleanup: exactly one maker and one
+// COM: native load in the caller, and none in the callee.
+// RAW-LABEL: tt.func private @desc_operand_callee
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// RAW-LABEL: @split_call_operand
+// RAW-SAME: %[[BASE:[^:]*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+// RAW: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE]],
+// RAW-NEXT: %[[DIRECT:.*]] = tt.descriptor_load %[[DESC]][
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// RAW: tt.call @desc_operand_callee(%[[BASE]], {{.*}}) : (!tt.ptr<f16>, i64, i64, i64, i64, i1, i1, i32, i32) -> tensor<8x16xf16>
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// TWICE-LABEL: tt.func private @desc_operand_callee
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// TWICE-LABEL: @split_call_operand
+// TWICE: tt.make_tensor_descriptor
+// TWICE-NEXT: tt.descriptor_load
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// TWICE: tt.call @desc_operand_callee
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// -----
+
+// COM: Descriptor returned out of a helper -- @f without its untraceable
+// COM: argument, so nothing but the return operand can drive eviction.
+module {
+  tt.func private @return_desc_helper(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32, %width: i32, %pitch: i64, %row: i32, %col: i32) -> (tensor<8x16xf16>, !tt.tensordesc<8x16xf16>) attributes {noinline = true} {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%height, %width], [%pitch, %c1_i64] : <f16>, <8x16xf16>
+    %direct = tt.descriptor_load %desc[%row, %col] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    tt.return %direct, %desc : tensor<8x16xf16>, !tt.tensordesc<8x16xf16>
+  }
+
+  tt.func public @split_return_operand(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32, %width: i32, %pitch: i64, %row: i32, %col: i32) -> (tensor<8x16xf16>, tensor<8x16xf16>) {
+    %r:2 = tt.call @return_desc_helper(%base, %height, %width, %pitch, %row, %col) : (!tt.ptr<f16>, i32, i32, i64, i32, i32) -> (tensor<8x16xf16>, !tt.tensordesc<8x16xf16>)
+    %v = tt.descriptor_load %r#1[%row, %col] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    tt.return %r#0, %v : tensor<8x16xf16>, tensor<8x16xf16>
+  }
+}
+
+// CHECK-LABEL: tt.func private @return_desc_helper
+// CHECK-SAME: -> (tensor<8x16xf16>, !tt.ptr<f16>, i64, i64, i64, i64, i1, i1)
+// CHECK: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE:[^,]*]],
+// CHECK-NEXT: %[[DIRECT:.*]] = tt.descriptor_load %[[DESC]][
+// COM: The maker is evicted for the return, but its direct load rides the
+// COM: native clone -- so the helper returns the components while still
+// COM: performing a descriptor load.
+// CHECK-NEXT: tt.return %[[DIRECT]], %[[BASE]], {{.*}} : tensor<8x16xf16>, !tt.ptr<f16>, i64, i64, i64, i64, i1, i1
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// CHECK-LABEL: @split_return_operand
+// CHECK: %[[R:.*]]:8 = tt.call @return_desc_helper({{.*}}) : (!tt.ptr<f16>, i32, i32, i64, i32, i32) -> (tensor<8x16xf16>, !tt.ptr<f16>, i64, i64, i64, i64, i1, i1)
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// CHECK: tt.splat %[[R]]#1 : !tt.ptr<f16> -> tensor<8x16x!tt.ptr<f16>>
+// CHECK: %[[V:.*]] = tt.load
+// CHECK-NEXT: tt.return %[[R]]#0, %[[V]] : tensor<8x16xf16>, tensor<8x16xf16>
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// RAW-LABEL: tt.func private @return_desc_helper
+// RAW: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE:[^,]*]],
+// RAW-NEXT: %[[DIRECT:.*]] = tt.descriptor_load %[[DESC]][
+// RAW-NEXT: tt.return %[[DIRECT]], %[[BASE]], {{.*}} : tensor<8x16xf16>, !tt.ptr<f16>, i64, i64, i64, i64, i1, i1
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// RAW-LABEL: @split_return_operand
+// RAW: %[[R:.*]]:8 = tt.call @return_desc_helper(
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// RAW: tt.splat %[[R]]#1 : !tt.ptr<f16> -> tensor<8x16x!tt.ptr<f16>>
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// TWICE-LABEL: tt.func private @return_desc_helper
+// TWICE: tt.make_tensor_descriptor
+// TWICE-NEXT: tt.descriptor_load
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// TWICE-LABEL: @split_return_operand
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// TWICE: tt.load
