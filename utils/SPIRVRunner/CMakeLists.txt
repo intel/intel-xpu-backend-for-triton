@@ -43,9 +43,21 @@ set(TARGET_NAME SPIRVRunner)
 add_executable(${TARGET_NAME} ${TARGET_NAME}.cpp $<TARGET_OBJECTS:llvm_parser>)
 target_include_directories(${TARGET_NAME} PRIVATE
 	"${ONEAPI_ROOT}/compiler/latest/include" ${SYCL_FUNCTIONS_INCLUDE_DIR} ${JSON_INCLUDE_DIR})
+
+# Eventless kernel submission requires a rolling (non-LTS) driver. It's not
+# worth complicating this build with driver detection, so default to enabled
+# and let users on an LTS driver opt out via the environment.
+set(SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT "1")
+if(DEFINED ENV{SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT})
+  set(SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT "$ENV{SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT}")
+endif()
+if(NOT SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT STREQUAL "0")
+  target_compile_definitions(${TARGET_NAME} PRIVATE ENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT)
+endif()
+
 set_target_properties(${TARGET_NAME} PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS}")
 set_target_properties(${TARGET_NAME} PROPERTIES LINK_FLAGS "${LINK_FLAGS}")
 add_dependencies(${TARGET_NAME} json)
 llvm_map_components_to_libnames(LLVM_LIBS Support)
 target_link_libraries(${TARGET_NAME} PRIVATE "${TORCH_LIBRARIES}" "${LLVM_LIBS}")
-set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 17)
+set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 20)

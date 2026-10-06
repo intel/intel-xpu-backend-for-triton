@@ -1,3 +1,4 @@
+import ast
 import binascii
 import hashlib
 import importlib.util
@@ -85,6 +86,14 @@ def main():
     compile_kernel(args)
 
 
+def parse_target(target: str) -> triton.backends.compiler.GPUTarget:
+    # An XPU arch is a property dict whose repr contains ':', so rejoin the middle fields.
+    backend, *arch, warp_size = target.split(":")
+    arch = ":".join(arch)
+    return triton.backends.compiler.GPUTarget(backend,
+                                              ast.literal_eval(arch) if arch[0] == "{" else arch, int(warp_size))
+
+
 def compile_kernel(args: CompileArgs):
     out_name = args.out_name if args.out_name else args.kernel_name
     out_path = args.out_path if args.out_path else Path(out_name)
@@ -142,8 +151,7 @@ def compile_kernel(args: CompileArgs):
     attrs = {k: [["tt.divisibility", 16]] for k, v in hints.items() if v == 16}
     kernel.create_binder()
     src = kernel.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
-    target = triton.backends.compiler.GPUTarget(*args.target.split(":")) \
-        if args.target else triton.runtime.driver.active.get_current_target()
+    target = parse_target(args.target) if args.target else triton.runtime.driver.active.get_current_target()
     backend = triton.compiler.make_backend(target)
     kwargs = {"num_warps": args.num_warps, "num_stages": args.num_stages}
     if is_xpu():
@@ -218,12 +226,18 @@ def compile_kernel(args: CompileArgs):
             format_name = "native"
         else:
             format_name = "spirv"
+        # Eventless kernel submission requires a rolling (non-LTS) driver; the AOT
+        # stub is generated for this specific target, so bake the decision in now
+        # rather than deferring to a runtime check in the generated C++.
+        driver_version = target.arch.get("driver_version") if isinstance(target.arch, dict) else None
+        is_lts = backend.is_lts(driver_version)
         params |= {
             "arg_types": ", ".join(ty_to_cpp(arg) for arg in arg_types_not_1),
             "grf_mode": args.grf_mode,
             "build_flags": ccinfo.metadata.build_flags,
             "threads_per_warp": args.threads_per_warp,
             "format_name": format_name,
+            "eventless_submit_define": "" if is_lts else "#define ENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT",
         }
     output_files = []
     template_dir = Path(__file__).parent / "extra" / backend_name

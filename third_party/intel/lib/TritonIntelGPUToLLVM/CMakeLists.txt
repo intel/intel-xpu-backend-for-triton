@@ -14,13 +14,16 @@ add_triton_library(TritonIntelGPUToLLVM
     ControlFlowOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
     DotOpToLLVM/DPAS.cpp
+    DotOpToLLVM/FMA.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     Fp4ToFpOpToLLVM.cpp
     HistogramOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
+    MemoryOpToLLVM.cpp
     PrintOpToLLVM.cpp
     ReduceOpToLLVM.cpp
+    ScanOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     SPIRVTargetInfo.cpp
     TargetInfo.cpp

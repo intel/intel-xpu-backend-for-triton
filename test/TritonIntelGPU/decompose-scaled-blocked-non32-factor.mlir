@@ -30,7 +30,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, "ttg.n
   // CHECK-LABEL: tt.func public @kernel_scale_factor_16
   // CHECK-NOT: tt.dot_scaled
   // CHECK-DAG: tt.broadcast {{.*}} -> tensor<128x2x16x{{.*}}
-  // CHECK-DAG: tt.broadcast {{.*}} -> tensor<2x128x16x{{.*}}
+  // CHECK-DAG: tt.broadcast {{.*}} -> tensor<2x16x128x{{.*}}
   // CHECK: tt.dot
   tt.func public @kernel_scale_factor_16(%a: tensor<128x16xi8, #blocked2>, %scale_a: tensor<128x2xi8, #blocked1>, %b: tensor<16x128xi8, #blocked>, %scale_b: tensor<128x2xi8, #blocked1>) -> tensor<128x128xf32, #blocked> {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>

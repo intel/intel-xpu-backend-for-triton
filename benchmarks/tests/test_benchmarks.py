@@ -16,15 +16,21 @@ from triton_kernels_benchmark.benchmark_testing import (
 from triton_kernels_benchmark.benchmark_utils import BenchmarkConfigs
 from triton_kernels_benchmark.configs.benchmark_config_templates import CONFIGS
 
-_VLLM_AVAILABLE = importlib.util.find_spec("vllm") is not None
+
+def _optional_dep_available(template) -> bool:
+    # describe_metadata_only configs resolve get_benchmark -> import their optional
+    # framework (vLLM, SGLang, ...). The dependency package is identified by
+    # long_report_group ("vllm", "sglang", ...).
+    dep = template.long_report_group
+    return dep is None or importlib.util.find_spec(dep) is not None
 
 
 def _collect_cases() -> List[Tuple[str, str, str]]:
     cases: List[Tuple[str, str, str]] = []
     for template in CONFIGS:
-        # describe_metadata_only templates (vLLM) resolve get_benchmark -> import vllm
-        # when probed; skip them unless vllm is installed.
-        if template.describe_metadata_only and not _VLLM_AVAILABLE:
+        # Skip metadata-only templates whose optional dependency is not installed;
+        # probing them would import the missing framework at collection time.
+        if template.describe_metadata_only and not _optional_dep_available(template):
             continue
         probe = make_cfg(template)
         for shape in probe.supported_shapes:

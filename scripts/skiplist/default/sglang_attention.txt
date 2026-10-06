@@ -1,0 +1,2 @@
+# Torch reference OOMs on 48 GB: B=19, N_CTX=12331, H_Q=64, D=128
+registered/attention/test_triton_attention_kernels.py::TestTritonAttention::test_extend_attention_sliding_window

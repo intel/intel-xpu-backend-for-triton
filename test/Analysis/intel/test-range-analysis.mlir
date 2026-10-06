@@ -1113,19 +1113,15 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // -----
 
 
-// CHECK-LABEL: join_cat_transitive_nonneg
+// CHECK-LABEL: join_transitive_nonneg
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @join_cat_transitive_nonneg(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
+  tt.func @join_transitive_nonneg(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
     %0 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
     %1 = tt.make_range {end = 10 : i32, start = 2 : i32} : tensor<8xi32>
     // expected-remark@+1 {{unsigned : [0, 9] signed : [0, 9]}}
     %2 = tt.join %0, %1 : tensor<8xi32> -> tensor<8x2xi32>
-    %3 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32>
-    %4 = tt.make_range {end = 8 : i32, start = 4 : i32} : tensor<4xi32>
     // expected-remark@+1 {{unsigned : [0, 7] signed : [0, 7]}}
-    %5 = tt.join %3, %4 : tensor<4xi32> -> tensor<4x2xi32>
-    // expected-remark@+1 {{unsigned : [0, 7] signed : [0, 7]}}
-    %6 = tt.cat %5, %5 : tensor<4x2xi32> -> tensor<8x2xi32>
+    %6 = tt.join %0, %0 : tensor<8xi32> -> tensor<8x2xi32>
     // expected-remark@+1 {{unsigned : [0, 16] signed : [0, 16]}}
     %7 = arith.addi %2, %6 : tensor<8x2xi32>
     %zeros = arith.constant dense<0> : tensor<8x1xi32>
@@ -1148,7 +1144,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // expected-remark@+1 {{arg 2: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
   tt.func @histo_nonneg(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>, %arg2 : tensor<256xi32>) {
-    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [0, -1]}}
+    // expected-remark@+1 {{unsigned : [0, 2147483647] signed : [0, 2147483647]}}
     %0 = tt.histogram %arg2 : tensor<256xi32> -> tensor<8xi32>
     %1 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
     tt.return

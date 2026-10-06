@@ -30,6 +30,13 @@ public:
 
   StringRef getAtomicSyncScope(MemSyncScope scope) const override;
 
+  Value loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Type valueTy, Value pred,
+                    MemSyncScope scope) const override;
+
+  void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Value value, Value pred, MemSyncScope scope) const override;
+
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;
   void clusterBarrier(Location loc, RewriterBase &rewriter,
@@ -59,10 +66,20 @@ public:
                   ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
-                  triton::ReduceOp op,
-                  unsigned reduceLaneIdMask) const override;
+                  triton::ReduceOp op, unsigned reduceLaneIdMask,
+                  unsigned broadcastLaneIdMask) const override;
 
-  std::string getMulhiFuncName(Type resultElementTy) const override;
+  /// Replace the in-warp phase of a scan with a single hardware sub-group scan,
+  /// updating `acc` in place. Returns false when the scan is not eligible, in
+  /// which case the caller must emit the generic shuffle chain instead.
+  ///
+  /// `scanDim` is the number of lanes holding unique data along the scan axis;
+  /// it must equal `warpSize` because the builtin scans the whole sub-group
+  /// all-or-nothing (SPIR-V has no portable clustered scan).
+  bool warpScan(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
+                triton::ScanOp op, unsigned scanDim, unsigned warpSize) const;
+
+  unsigned getReductionTreeArity(Operation *combinerOp) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args,
@@ -89,6 +106,14 @@ protected:
   virtual Value genWarpReduce(RewriterBase &rewriter, Location loc, Value acc,
                               Operation *reduceOp, unsigned numLanesToReduce,
                               unsigned warpSize) const = 0;
+
+  /// Unlike `isSupportedWarpReduceOp`, which is handed the combine operation,
+  /// this matches it out of `op` and returns it, so the whole eligibility
+  /// decision lives in one place.
+  virtual FailureOr<Operation *>
+  matchSupportedWarpScanOp(triton::ScanOp op) const = 0;
+  virtual Value genWarpScan(RewriterBase &rewriter, Location loc, Value acc,
+                            Operation *combineOp, unsigned warpSize) const = 0;
 
 private:
   LLVM::GlobalOp getGlobalString(Location loc, RewriterBase &rewriter,

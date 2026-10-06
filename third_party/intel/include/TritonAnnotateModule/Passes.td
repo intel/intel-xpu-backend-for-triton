@@ -67,7 +67,13 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
     Option<"isFastMath", "is-fast-math", "bool", /*default*/"false",
            "whether fast-math approximations are allowed (set by TRITON_INTEL_FAST_MATH=1)">,
     Option<"sub32DPAS", "sub-32-dpas", "bool", /*default*/"false",
-           "whether to enable DPAS for 32 subgroup size kernels">
+           "whether to enable DPAS for 32 subgroup size kernels">,
+    Option<"blockIOBaseAlignment", "2d-block-io-base-alignment", "unsigned", /*default*/"64",
+           "HW base-address alignment requirement (in bytes) for 2D block IO">,
+    Option<"maxGRFMode", "max-grf-mode", "std::string", /*default*/"\"\"",
+           "largest GRF mode (\"128\", \"256\" or \"512\") the backend's automatic escalation "
+           "paths target for the device; empty (the default) means unknown, so the module "
+           "attribute is left unstamped and RegisterPressureAnalysis's own fallback applies">
   ];
 }
 

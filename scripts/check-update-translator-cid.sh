@@ -38,7 +38,7 @@ for cid in $COMMIT_IDS; do
 
     TEST_STATUS=PASS
     echo "::group::Testing Triton for $cid"
-    ./scripts/test-triton.sh --skip-pytorch-install || TEST_STATUS=FAIL
+    ./scripts/test-triton.sh --unit --minicore --skip-pytorch-install || TEST_STATUS=FAIL
     echo "::endgroup::"
 
     if [ $TEST_STATUS = PASS ]; then

@@ -1882,6 +1882,140 @@ tt.func @whileop(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %cond: i1) {
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: whileop_no_results
+// CHECK: scf.while {{.*}} : (tensor<128xi32, #blocked1>) -> ()
+// CHECK: scf.condition
+// CHECK: %[[NEXT:.+]] = tt.load %{{.*}} {isVolatile = true} : tensor<128x!tt.ptr<i32>, #blocked>
+// CHECK-NEXT: %[[CONVERTED:.+]] = ttg.convert_layout %[[NEXT]] : tensor<128xi32, #blocked> -> tensor<128xi32, #blocked1>
+// CHECK-NEXT: scf.yield %[[CONVERTED]] : tensor<128xi32, #blocked1>
+tt.func @whileop_no_results(%ptr: tensor<128x!tt.ptr<i32>, #blocked>) {
+  %zero = arith.constant dense<0> : tensor<128xi32, #blocked1>
+  %one = arith.constant 1 : i32
+  scf.while (%value = %zero) : (tensor<128xi32, #blocked1>) -> () {
+    %minimum = "tt.reduce"(%value) <{axis = 0 : i32}> ({
+      ^bb0(%lhs: i32, %rhs: i32):
+        %min = arith.minsi %lhs, %rhs : i32
+        tt.reduce.return %min : i32
+    }) : (tensor<128xi32, #blocked1>) -> i32
+    %condition = arith.cmpi slt, %minimum, %one : i32
+    scf.condition(%condition)
+  } do {
+    %next = tt.load %ptr {isVolatile = true} : tensor<128x!tt.ptr<i32>, #blocked>
+    %converted = ttg.convert_layout %next : tensor<128xi32, #blocked> -> tensor<128xi32, #blocked1>
+    scf.yield %converted : tensor<128xi32, #blocked1>
+  }
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#matrix = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 0, parent = #matrix}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: whileop_different_input_result_types
+// CHECK: scf.while {{.*}} : (tensor<128xi32, {{.*}}>) -> tensor<1x128xi32, {{.*}}>
+// CHECK: tt.expand_dims
+// CHECK: scf.condition{{.*}} : tensor<1x128xi32, {{.*}}>
+// CHECK: tt.load
+// CHECK: scf.yield {{.*}} : tensor<128xi32, {{.*}}>
+// CHECK: tt.return {{.*}} : tensor<1x128xi32, {{.*}}>
+tt.func @whileop_different_input_result_types(%ptr: tensor<128x!tt.ptr<i32>, #blocked>, %condition: i1) -> tensor<1x128xi32, #matrix> {
+  %zero = arith.constant dense<0> : tensor<128xi32, #slice>
+  %result = scf.while (%value = %zero) : (tensor<128xi32, #slice>) -> tensor<1x128xi32, #matrix> {
+    %expanded = tt.expand_dims %value {axis = 0 : i32} : tensor<128xi32, #slice> -> tensor<1x128xi32, #matrix>
+    scf.condition(%condition) %expanded : tensor<1x128xi32, #matrix>
+  } do {
+  ^bb0(%unused: tensor<1x128xi32, #matrix>):
+    %next = tt.load %ptr : tensor<128x!tt.ptr<i32>, #blocked>
+    %converted = ttg.convert_layout %next : tensor<128xi32, #blocked> -> tensor<128xi32, #slice>
+    scf.yield %converted : tensor<128xi32, #slice>
+  }
+  tt.return %result : tensor<1x128xi32, #matrix>
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: whileop_backward_negative
+// CHECK: scf.while
+// CHECK:  scf.yield
+// CHECK: ttg.convert_layout
+tt.func @whileop_backward_negative(%ptr: tensor<1024x!tt.ptr<i32>, #blocked>, %cond: i1) {
+  %1 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked1>
+  %2 = scf.while (%arg0 = %1, %arg1 = %cond) : (tensor<1024xi32, #blocked1>, i1) -> (tensor<1024xi32, #blocked1>) {
+      scf.condition(%arg1) %arg0 : tensor<1024xi32, #blocked1>
+    } do {
+    ^bb0(%arg0: tensor<1024xi32, #blocked1>):
+      %4 = ttg.convert_layout %arg0 : tensor<1024xi32, #blocked1> -> tensor<1024xi32, #blocked>
+      %5 = arith.addi %4, %4 : tensor<1024xi32, #blocked>
+      %6 = ttg.convert_layout %5 : tensor<1024xi32, #blocked> -> tensor<1024xi32, #blocked1>
+      scf.yield %6, %cond : tensor<1024xi32, #blocked1>, i1
+    }
+  %3 = ttg.convert_layout %2 : tensor<1024xi32, #blocked1> -> tensor<1024xi32, #blocked>
+  tt.store %ptr, %3 : tensor<1024x!tt.ptr<i32>, #blocked>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: warp_specialize_backward_negative
+// CHECK: ttg.warp_specialize
+// CHECK: ttg.warp_yield {{.*}} : tensor<1024xi32, #blocked>
+// CHECK: () -> tensor<1024xi32, #blocked>
+// CHECK: ttg.convert_layout {{.*}} : tensor<1024xi32, #blocked> -> tensor<1024xi32, #blocked1>
+tt.func @warp_specialize_backward_negative(%arg0: tensor<1024xi32, #blocked>) -> tensor<1024xi32, #blocked1> {
+  %0 = ttg.warp_specialize()
+  default {
+    %1 = arith.addi %arg0, %arg0 : tensor<1024xi32, #blocked>
+    ttg.warp_yield %1 : tensor<1024xi32, #blocked>
+  } : () -> tensor<1024xi32, #blocked>
+  %2 = ttg.convert_layout %0 : tensor<1024xi32, #blocked> -> tensor<1024xi32, #blocked1>
+  tt.return %2 : tensor<1024xi32, #blocked1>
+}
+}
+
+// -----
+
+// scf.index_switch is not special-cased by rewriteSlice, so retyping its result
+// would leave the scf.yield in each region at the old encoding (the same defect
+// as ttg.warp_yield above). It is blocked because it implements
+// RegionBranchOpInterface, so the convert below must survive.
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: index_switch_backward_negative
+// CHECK: %[[SW:[0-9]+]] = scf.index_switch
+// CHECK: ttg.convert_layout %[[SW]] : tensor<1024xi32, #blocked1> -> tensor<1024xi32, #blocked>
+tt.func @index_switch_backward_negative(%ptr: tensor<1024x!tt.ptr<i32>, #blocked>, %idx: index) {
+  %1 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked1>
+  %2 = scf.index_switch %idx -> tensor<1024xi32, #blocked1>
+  case 0 {
+    scf.yield %1 : tensor<1024xi32, #blocked1>
+  }
+  default {
+    %3 = arith.addi %1, %1 : tensor<1024xi32, #blocked1>
+    scf.yield %3 : tensor<1024xi32, #blocked1>
+  }
+  %4 = ttg.convert_layout %2 : tensor<1024xi32, #blocked1> -> tensor<1024xi32, #blocked>
+  tt.store %ptr, %4 : tensor<1024x!tt.ptr<i32>, #blocked>
+  tt.return
+}
+}
+
+// -----
+
 // Suppose we have a loop which yields a value from outside the loop:
 //   %x = ...
 //   %y = ...
@@ -2066,7 +2200,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blockedX = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blockedY = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func public @hoist_on_ext_broadcast_mismatch(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) -> tensor<4x1xi64, #blockedY> attributes {noinline = false} {
+  tt.func public @hoist_on_ext_broadcast_mismatch(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) -> tensor<4x2xi64, #blockedY> attributes {noinline = false} {
     %c1_i32 = arith.constant 1 : i32
     %c4_i32 = arith.constant 4 : i32
     %c0_i32 = arith.constant 0 : i32
@@ -2074,21 +2208,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %cast0 = arith.extsi %0 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blockedX}>> to tensor<4xi64, #ttg.slice<{dim = 1, parent = #blockedX}>>
     %1 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blockedX}>>
     %2 = tt.expand_dims %cast0 {axis = 1 : i32} : tensor<4xi64, #ttg.slice<{dim = 1, parent = #blockedX}>> -> tensor<4x1xi64, #blockedX>
+    %expanded = tt.broadcast %2 : tensor<4x1xi64, #blockedX> -> tensor<4x2xi64, #blockedX>
     %3 = tt.addptr %1, %cast0 : tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blockedX}>>, tensor<4xi64, #ttg.slice<{dim = 1, parent = #blockedX}>>
     %4 = tt.load %3 : tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blockedX}>>
-    %5 = tt.reshape %4 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blockedX}>> -> tensor<4x1xi32, #blockedX>
-    %6 = arith.extsi %5 : tensor<4x1xi32, #blockedX> to tensor<4x1xi64, #blockedX>
-    %7 = arith.addi %2, %6 : tensor<4x1xi64, #blockedX>
+    %5 = tt.join %4, %4 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blockedX}>> -> tensor<4x2xi32, #blockedX>
+    %6 = arith.extsi %5 : tensor<4x2xi32, #blockedX> to tensor<4x2xi64, #blockedX>
+    %7 = arith.addi %expanded, %6 : tensor<4x2xi64, #blockedX>
     // CHECK: arith.extsi
     // CHECK: arith.extsi
-    // CHECK: ttg.convert_layout
-    %8 = scf.for %arg2 = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%arg3 = %5) -> (tensor<4x1xi32, #blockedX>) : i32 {
-      scf.yield %5 : tensor<4x1xi32, #blockedX>
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.return
+    %8 = scf.for %arg2 = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%arg3 = %5) -> (tensor<4x2xi32, #blockedX>) : i32 {
+      scf.yield %5 : tensor<4x2xi32, #blockedX>
     }
-    %9 = arith.extsi %8 : tensor<4x1xi32, #blockedX> to tensor<4x1xi64, #blockedX>
-    %10 = arith.addi %7, %9 : tensor<4x1xi64, #blockedX>
-    %11 = ttg.convert_layout %10 : tensor<4x1xi64, #blockedX> -> tensor<4x1xi64, #blockedY>
-    tt.return %11 : tensor<4x1xi64, #blockedY>
+    %9 = arith.extsi %8 : tensor<4x2xi32, #blockedX> to tensor<4x2xi64, #blockedX>
+    %10 = arith.addi %7, %9 : tensor<4x2xi64, #blockedX>
+    %11 = ttg.convert_layout %10 : tensor<4x2xi64, #blockedX> -> tensor<4x2xi64, #blockedY>
+    tt.return %11 : tensor<4x2xi64, #blockedY>
   }
 }
 
@@ -2169,6 +2305,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %b = ttg.convert_layout %a : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked2>
     %c = arith.truncf %b : tensor<32xf32, #blocked2> to tensor<32xf16, #blocked2>
     tt.return %c : tensor<32xf16, #blocked2>
+  }
+}
+
+// -----
+
+// COM: A reshape marked `efficient_layout` (but not `allow_reorder`, so it is not
+// COM: a layout anchor) must not have a different encoding pushed into it by
+// COM: forward propagation: its encoding was deliberately chosen by the pass that
+// COM: created it (e.g. MaterializeBlockPointer's reshape back to 1D).  Before the
+// COM: propagateToUsers guard, the anchored load encoding flooded through and the
+// COM: reshape result was rewritten to a #ttg.linear layout.
+
+#blockedA = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blockedB = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: @efficient_layout_reshape_keeps_encoding
+  // CHECK:       [[LOAD:%.*]] = tt.load
+  // CHECK:       [[CVT:%.*]] = ttg.convert_layout [[LOAD]] : tensor<32x32xf16, #[[BA:[a-z0-9_]+]]> -> tensor<32x32xf16, #[[BB:[a-z0-9_]+]]>
+  // CHECK:       [[RES:%.*]] = tt.reshape [[CVT]] efficient_layout : tensor<32x32xf16, #[[BB]]> -> tensor<1024xf16, #[[B1D:[a-z0-9_]+]]>
+  // CHECK-NEXT:  tt.return [[RES]] : tensor<1024xf16, #[[B1D]]>
+  tt.func public @efficient_layout_reshape_keeps_encoding(%arg0: tensor<32x32x!tt.ptr<f16>, #blockedA>) -> tensor<1024xf16, #blocked1d> {
+    %mask = arith.constant dense<true> : tensor<32x32xi1, #blockedA>
+    %l = tt.load %arg0, %mask {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>, #blockedA>
+    %c = ttg.convert_layout %l : tensor<32x32xf16, #blockedA> -> tensor<32x32xf16, #blockedB>
+    %r = tt.reshape %c efficient_layout : tensor<32x32xf16, #blockedB> -> tensor<1024xf16, #blocked1d>
+    tt.return %r : tensor<1024xf16, #blocked1d>
   }
 }
 
@@ -2333,12 +2497,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: assertop
-// CHECK: %[[L:.+]] = tt.load %{{.*}} : tensor<1024x!tt.ptr<i1>, #blocked>
-// CHECK: tt.assert %[[L]]
+// CHECK: %[[L:.+]] = tt.load %{{.*}} : tensor<1024x!tt.ptr<i8>, #blocked>
+// CHECK: %[[T:.+]] = arith.trunci %[[L]]
+// CHECK: tt.assert %[[T]]
 
-tt.func @assertop(%ptr: tensor<1024x!tt.ptr<i1>, #blocked>) {
-  %0 = tt.load %ptr : tensor<1024x!tt.ptr<i1>, #blocked>
-  %1 = ttg.convert_layout %0 : tensor<1024xi1, #blocked> -> tensor<1024xi1, #blocked1>
+tt.func @assertop(%ptr: tensor<1024x!tt.ptr<i8>, #blocked>) {
+  %0 = tt.load %ptr : tensor<1024x!tt.ptr<i8>, #blocked>
+  %cond = arith.trunci %0 : tensor<1024xi8, #blocked> to tensor<1024xi1, #blocked>
+  %1 = ttg.convert_layout %cond : tensor<1024xi1, #blocked> -> tensor<1024xi1, #blocked1>
   tt.assert %1, "cond must be true " : tensor<1024xi1, #blocked1>
   tt.return
 }
@@ -3012,40 +3178,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// COM: Test that the layout conversion is NOT hoisted above the loop
-// COM: because isRematBeneficial blocks it (tt.load in the slice is expensive).
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK: hoist_layout_conversion
-  tt.func public @hoist_layout_conversion(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) -> (tensor<4x1xi64, #blocked>, i32) {
-    %c1_i32 = arith.constant 1 : i32
-    %c4_i32 = arith.constant 4 : i32
-    %c0_i32 = arith.constant 0 : i32
-    %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-    %1 = arith.extsi %0 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> to tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked1}>>
-    %2 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>
-    %3 = tt.expand_dims %1 {axis = 1 : i32} : tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<4x1xi64, #blocked1>
-    %4 = tt.addptr %2, %1 : tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked1}>>
-    %5 = tt.load %4 : tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>
-    %6 = tt.reshape %5 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<4x1xi32, #blocked1>
-    %7 = arith.extsi %6 : tensor<4x1xi32, #blocked1> to tensor<4x1xi64, #blocked1>
-    %8 = arith.addi %3, %7 : tensor<4x1xi64, #blocked1>
-    // CHECK: scf.for
-    %9:2 = scf.for %arg2 = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%arg3 = %6, %arg4 = %c1_i32) -> (tensor<4x1xi32, #blocked1>, i32)  : i32 {
-      %13 = arith.addi %arg2, %arg4 : i32
-      scf.yield %6, %13 : tensor<4x1xi32, #blocked1>, i32
-    }
-    %10 = arith.extsi %9#0 : tensor<4x1xi32, #blocked1> to tensor<4x1xi64, #blocked1>
-    %11 = arith.addi %8, %10 : tensor<4x1xi64, #blocked1>
-    // CHECK: ttg.convert_layout
-    %12 = ttg.convert_layout %11 : tensor<4x1xi64, #blocked1> -> tensor<4x1xi64, #blocked>
-    tt.return %12, %9#1 : tensor<4x1xi64, #blocked>, i32
-  }
-}
-
-// -----
-
 // COM: Verify that hoistConvertOnTopOfExtOrBroadcast does not hoist convert_layout
 // COM: when a slice value (sitofp) has an external user (divf). The expand_dims
 // COM: keeps byte count equal, so isRematBeneficial must still be checked to detect
@@ -3099,7 +3231,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
     %tmp14_13 = arith.addi %tmp12, %tmp14_12 : tensor<1x256xi64, #blocked_nll>
     %tmp14_14 = tt.splat %in_ptr1 : !tt.ptr<f32> -> tensor<1x256x!tt.ptr<f32>, #blocked_nll>
     %tmp14_15 = tt.addptr %tmp14_14, %tmp14_13 : tensor<1x256x!tt.ptr<f32>, #blocked_nll>, tensor<1x256xi64, #blocked_nll>
-    %tmp14_16 = tt.load %tmp14_15 evictionPolicy = evict_last : tensor<1x256x!tt.ptr<f32>, #blocked_nll>
+    %tmp14_16 = tt.load %tmp14_15 {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<1x256x!tt.ptr<f32>, #blocked_nll>
     %tmp16 = arith.subf %tmp14_16, %tmp15_6 : tensor<1x256xf32, #blocked_nll>
     %tmp18 = arith.subf %tmp16, %tmp17_8 : tensor<1x256xf32, #blocked_nll>
     %tmp19 = arith.subf %cst_0, %tmp18 : tensor<1x256xf32, #blocked_nll>
@@ -3120,5 +3252,124 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
     %6 = ttg.convert_layout %tmp26 : tensor<1x1xf32, #blocked_nll> -> tensor<1x1xf32, #blocked1_nll>
     tt.store %5, %6 {ttig.block_io = "column_major"} : tensor<1x1x!tt.ptr<f32>, #blocked1_nll>
     tt.return
+  }
+}
+
+// -----
+
+// Test for #7731: site-B (hoistConvertOnTopOfExtOrBroadcast) — sub-group shuffle
+// convert pricing, POSITIVE case (hoist fires under both OLD and NEW code).
+//
+// Layout pair used here (16-lane, 1D sliced shuffle):
+//   #srow = #ttg.slice<{dim=1, parent=#ttg.blocked<{sizePerThread=[1,16],
+//             threadsPerWarp=[16,1], warpsPerCTA=[1,1], order=[0,1]}>}>
+//   #scol = #ttg.slice<{dim=1, parent=#ttg.blocked<{sizePerThread=[16,1],
+//             threadsPerWarp=[1,16], warpsPerCTA=[1,1], order=[0,1]}>}>
+// cvtIsSubGroupShuffle returns true for this pair (confirmed via debug output).
+//
+// Chain: tensor<16xf32, #srow> → arith.extf → tensor<16xf64, #srow>
+//        → ttg.convert_layout → tensor<16xf64, #scol>
+//
+// The hoist is site-B (hoistConvertOnTopOfExtOrBroadcast).  Cost gate:
+//   convertLayoutCost = getConvertCost(f64[16], #scol)   [SHUFFLE_RATE × 128 = 256]
+//   newCvtCost        = getConvertCost(f32[16], #scol)   [SHUFFLE_RATE × 64  = 128]
+//   rematerialisationCost = newCvtCost + 0 (no external slice ops) = 128
+//   256 >= 128 → hoist fires; convert moved before extf.
+//
+// Under OLD code (SLM rate 96×):
+//   convertLayoutCost = 32 × max(128,128) × 3 = 12288
+//   newCvtCost        = 32 × max(64,128)  × 3 = 12288  (floor: 16<32 min elements)
+//   12288 >= 12288 → hoist also fires.
+//
+// The hoist fires under BOTH old and new, so this test is a code-path guard:
+// it ensures the shuffle branch of getConvertCost is reached and produces a
+// non-zero, non-SLM cost for both convertLayoutCost and newCvtCost.
+// A discriminating test (fires OLD, blocked NEW) is given below.
+
+// CHECK-LABEL: @shuffle_hoist_extf_fires
+// COM: extf is hoisted: convert_layout appears before extf, none after.
+// CHECK: %[[CVT:.+]] = ttg.convert_layout
+// CHECK: arith.extf %[[CVT]]
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.return
+
+#shuf_row_p = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#shuf_col_p = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+#sliced_row_p = #ttg.slice<{dim = 1, parent = #shuf_row_p}>
+#sliced_col_p = #ttg.slice<{dim = 1, parent = #shuf_col_p}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @shuffle_hoist_extf_fires(%arg0: tensor<16xf32, #sliced_row_p>)
+      -> tensor<16xf64, #sliced_col_p> {
+    %0 = arith.extf %arg0 : tensor<16xf32, #sliced_row_p> to tensor<16xf64, #sliced_row_p>
+    %1 = ttg.convert_layout %0 : tensor<16xf64, #sliced_row_p> -> tensor<16xf64, #sliced_col_p>
+    tt.return %1 : tensor<16xf64, #sliced_col_p>
+  }
+}
+
+// -----
+
+// Test for #7731: site-B (hoistConvertOnTopOfExtOrBroadcast) — sub-group shuffle
+// convert pricing, DISCRIMINATING case (hoist blocked by NEW shuffle rate, fires
+// under OLD SLM rate).
+//
+// Layout pair: same 16-lane 1D sliced shuffle pair as above but 64 elements
+// (sizePerThread=[4,16], threadsPerWarp=[16,1]).  cvtIsSubGroupShuffle returns
+// true for the 64-element sliced pair (confirmed via debug output).
+//
+// Chain:
+//   %arg0  : tensor<64xf32, #srow64>
+//   %ext   = arith.extf %arg0  → tensor<64xf64, #srow64>   ← extOrBroadcastOp
+//   %add1  = arith.addf %ext, %ext   ← externally used (returned)
+//   %add2  = arith.addf %ext, %ext   ← externally used (returned)
+//   %add3  = arith.addf %add1, %add2 ← convertOp's source
+//   %cvt   = ttg.convert_layout %add3 → tensor<64xf64, #scol64>
+//
+// Cost gate under NEW code (SHUFFLE_RATE = 2):
+//   convertLayoutCost = SHUFFLE_RATE × 64×8B = 1024
+//   newCvtCost        = SHUFFLE_RATE × 64×4B =  512  (f32 pre-ext)
+//   dup (%add1,%add2,%ext, transitively) = 3 × 1 × 64×8B = 1536
+//   rematerialisationCost = 512 + 1536 = 2048
+//   1024 >= 2048 → FALSE → hoist BLOCKED; convert_layout survives.
+//
+// Cost gate under OLD code (SLM rate 32×3 = 96×):
+//   convertLayoutCost = 96 × max(64×8B, 32×4B) = 96 × 512 = 49152
+//   newCvtCost        = 96 × max(64×4B, 32×4B) = 96 × 256 = 24576
+//   dup (same three ops, no-floor for arith): 3 × 64×8B = 1536
+//   rematerialisationCost = 24576 + 1536 = 26112
+//   49152 >= 26112 → TRUE → hoist FIRES; convert_layout eliminated.
+//
+// The new SHUFFLE_RATE=2 correctly identifies that the sub-group-shuffle convert
+// is cheap relative to duplicating the producer chain; it is therefore cheaper
+// to keep the convert than to rematerialise the producers in the new layout.
+
+// CHECK-LABEL: @shuffle_hoist_extf_blocked
+// COM: Under NEW cost: hoist blocked (shuffle rate makes convert cheap vs.
+// COM: duplicating producers). extf appears before convert_layout in the output.
+// COM: Under OLD cost: hoist would fire (SLM rate inflates convertLayoutCost).
+// CHECK-NOT: ttg.convert_layout
+// CHECK: arith.extf
+// CHECK: arith.addf
+// CHECK: ttg.convert_layout
+// CHECK: tt.return
+
+#shuf_row_d = #ttg.blocked<{sizePerThread = [4, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#shuf_col_d = #ttg.blocked<{sizePerThread = [16, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+#sliced_row_d = #ttg.slice<{dim = 1, parent = #shuf_row_d}>
+#sliced_col_d = #ttg.slice<{dim = 1, parent = #shuf_col_d}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // COM: Three arith ops (extf + two addf) with two addf results used externally.
+  // COM: The hoist is blocked because the shuffle-priced convertLayoutCost (1024)
+  // COM: is less than the rematerialisationCost (2048) under SHUFFLE_RATE=2.
+  tt.func @shuffle_hoist_extf_blocked(%arg0: tensor<64xf32, #sliced_row_d>)
+      -> (tensor<64xf64, #sliced_col_d>, tensor<64xf64, #sliced_row_d>, tensor<64xf64, #sliced_row_d>) {
+    %ext  = arith.extf %arg0 : tensor<64xf32, #sliced_row_d> to tensor<64xf64, #sliced_row_d>
+    %add1 = arith.addf %ext, %ext : tensor<64xf64, #sliced_row_d>
+    %add2 = arith.addf %ext, %ext : tensor<64xf64, #sliced_row_d>
+    %add3 = arith.addf %add1, %add2 : tensor<64xf64, #sliced_row_d>
+    %cvt  = ttg.convert_layout %add3 : tensor<64xf64, #sliced_row_d> -> tensor<64xf64, #sliced_col_d>
+    tt.return %cvt, %add1, %add2
+        : tensor<64xf64, #sliced_col_d>, tensor<64xf64, #sliced_row_d>, tensor<64xf64, #sliced_row_d>
   }
 }

@@ -64,6 +64,12 @@ on:
         description: Custom run name
         type: string
         default: "E2E accuracy"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/e2e-accuracy.yml
+      - .github/workflows/e2e-reusable.yml
   schedule:
     # twice a week, on Wednesday and Saturday
     - cron: "0 22 * * 3,6"
@@ -152,7 +158,7 @@ jobs:
         uses: ./.github/actions/setup-python
         with:
           python_version: "3.10"
-          use_pyenv: true
+          use_pyenv: false
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8

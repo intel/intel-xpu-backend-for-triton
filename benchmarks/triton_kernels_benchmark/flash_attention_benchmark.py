@@ -9,7 +9,9 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark import sycl_tla_kernel
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_MODULE, get_xpu_extension
+
+sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
 
 
 # pylint: disable=unused-argument
@@ -186,34 +188,21 @@ bwd_configs = [
 
 
 def filter_func(_dict):
-    # These combinations result in the following error:
-    # Segmentation fault from GPU at 0xff00ffffffe00000, ctx_id: 1 (CCS) type: 0 \
-    #   (NotPresent), level: 1 (PDE), access: 0 (Read), banned: 1, aborting.
-    skip_dicts = [
-        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 64, 'BLOCK_N2': 32, 'grf_mode': '256'},
-        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'grf_mode': '256'},
-        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'grf_mode': '256'},
-        {'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'grf_mode': '256'},
-        {'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'grf_mode': '256'},
-    ]
-    if _dict.kwargs in skip_dicts:
-        return False
-    return True
+    # The fused backward kernel reuses program_id(0) for both the dK/dV tile
+    # (start_n = pid * BLOCK_N1) and the dQ tile (start_m = pid * BLOCK_M2),
+    # while the launch grid is sized as N_CTX // BLOCK_N1.  The dQ path is
+    # therefore only correct when BLOCK_N1 == BLOCK_M2; otherwise the dQ grid
+    # is mis-sized and dQ/dK are computed over the wrong token ranges.
+    # Historically this manifested as a GPU segfault for a subset of the
+    # mismatched configs; post the modulo-axisinfo fix (#6227) it instead
+    # produces silently wrong gradients.  Restrict autotuning to the configs
+    # the kernel actually supports.
+    return _dict.kwargs['BLOCK_N1'] == _dict.kwargs['BLOCK_M2']
 
 
 bwd_configs = list(filter(filter_func, bwd_configs))
 
-
-def early_prune(prune_configs, named_args, **kwargs):
-    if named_args['H'] == 48 and named_args['N_CTX'] == 1024 and kwargs['HEAD_DIM'] == 64:
-        # FIXME: benchmark_suite.assert_close fails for this configuration
-        bad_case = {'BLOCK_M1': 64, 'BLOCK_N1': 128, 'BLOCK_M2': 64, 'BLOCK_N2': 64, 'grf_mode': '256'}
-        prune_configs = list(filter(lambda cfg: cfg.kwargs != bad_case, prune_configs))
-    return prune_configs
-
-
-bwd_tuner = triton.autotune(bwd_configs, key=['N_CTX', 'HEAD_DIM'],
-                            prune_configs_by={'early_config_prune': early_prune})
+bwd_tuner = triton.autotune(bwd_configs, key=['N_CTX', 'HEAD_DIM'])
 
 
 @triton.jit
@@ -466,7 +455,6 @@ def _attn_bwd(Q, K, V, sm_scale,  #
 
 class _attention(torch.autograd.Function):
     tune_attn_fwd: Callable = None
-    attn_fwd: Callable = None
     tune_attn_bwd: Callable = None
 
     @staticmethod
@@ -576,12 +564,10 @@ def get_benchmark(
     supported_providers = {
         'triton': 'Triton',
     }
-    if not use_fp8:
+    if sycl_tla_kernel is not None and not use_fp8:
         supported_providers['sycl-tla'] = 'SYCL-TLA'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
-    # Initialize _attention class forward kernel (untuned for the advanced path and tuned for the default path).
-    _attention.attn_fwd = attn_fwd
     _attention.tune_attn_fwd = tuner(attn_fwd)
     _attention.tune_attn_bwd = bwd_tuner(_attn_bwd)
 
@@ -611,18 +597,6 @@ def get_benchmark(
     # pylint: disable=too-many-branches
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
         modes = ['fwd', 'bwd']
-        if H == 48 and N_CTX == 1024 and D_HEAD == 64:
-            # Clear cache to rerun autotuning and skip problem configs using `early_config_prune` option.
-            # Note: The cache key uses only N_CTX and D_HEAD, so different Z values with the same N_CTX and D_HEAD
-            # will hit the same cache entry. For example:
-            #   Z=16, H=32, N_CTX=1024, D_HEAD=64 -> creates cache entry
-            #   Z=4, H=48, N_CTX=1024, D_HEAD=64 -> cache hit (same key, kernel doesn't depend on Z)
-            # We don't add Z or H to the cache key because the kernel doesn't depend on them, and doing so would
-            # result in more kernel compilations.
-            key = (1024, 64, 'torch.float16', 'torch.float16', 'torch.float16', 'torch.float16', 'torch.float16',
-                   'torch.float16', 'torch.float16', 'torch.float32', 'torch.float32')
-            if key in _attention.tune_attn_bwd.cache:
-                del _attention.tune_attn_bwd.cache[key]
         # This warmup logic improves performance on BMG significantly
         # For FWD mode in triton & sycl-tla: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
         # Performance is best at 250-400ms range, but we want stable, not just best at ~600ms (triton/sycl-tla providers)
@@ -634,11 +608,11 @@ def get_benchmark(
         if MODE not in modes:
             raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
         dtype = torch.float16
-        torch.xpu.empty_cache()
+        DEVICE_MODULE.empty_cache()
         torch.manual_seed(20)
-        q = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device='xpu').normal_(mean=0.0, std=0.5).requires_grad_())
-        k = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device='xpu').normal_(mean=0.0, std=0.5).requires_grad_())
-        v = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device='xpu').normal_(mean=0.0, std=0.5).requires_grad_())
+        q = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
+        k = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
+        v = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
         sm_scale = 0.125
         atol = 1e-1 if N_CTX == 16384 else 1e-2
         bwd_atol = 1e-1 if N_CTX >= 4096 else 1e-2
@@ -663,7 +637,7 @@ def get_benchmark(
                         q_ref = q.detach().to(torch.float32)
                         k_ref = k.detach().to(torch.float32)
                         v_ref = v.detach().to(torch.float32)
-                        causal_mask = torch.tril(torch.ones((N_CTX, N_CTX), device='xpu'))
+                        causal_mask = torch.tril(torch.ones((N_CTX, N_CTX), device=DEVICE))
                         p_ref = torch.matmul(q_ref, k_ref.transpose(2, 3)) * sm_scale
                         if CAUSAL:
                             p_ref[:, :, causal_mask == 0] = float('-inf')
@@ -700,7 +674,7 @@ def get_benchmark(
             if MODE == 'fwd':
                 name = 'attention'
                 func = getattr(sycl_tla_kernel, name)
-                out = torch.zeros((Z, H, N_CTX, D_HEAD), device='xpu', dtype=torch.float32, requires_grad=True)
+                out = torch.zeros((Z, H, N_CTX, D_HEAD), device=DEVICE, dtype=torch.float32, requires_grad=True)
 
                 def sycl_tla_fwd_fn():
                     func(q, k, v, out, Z, H, H, N_CTX, N_CTX, D_HEAD, D_HEAD, CAUSAL, sm_scale)

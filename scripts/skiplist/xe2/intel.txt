@@ -1,0 +1,5 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/7503
+# Windows: kernel exceeds HW PTSS (per-thread scratch space) limit for this
+# layout/shape even after the 256-GRF retry path.
+python/test/unit/intel/test_core.py::test_chain_reduce[1-max-src_layout2-256-128]
+python/test/unit/intel/test_core.py::test_chain_reduce[1-max-src_layout2-256-256]

@@ -497,7 +497,7 @@ class Config:  # pylint: disable=R0902
             choices=list(GHAWheelDownloader.WHEEL_SETS.keys()),
             help=(
                 "Filter by predefined wheel set (repeatable). "
-                "Presets: torch (torch, torchvision, torchaudio, timm), "
+                "Presets: torch (torch, torchvision, torchaudio, torchao, timm), "
                 "triton (triton), bench (triton_kernels_benchmark), pti (intel_pti)"
             ),
         )

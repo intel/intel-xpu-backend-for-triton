@@ -685,13 +685,6 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
   return tileLayout;
 }
 
-LinearLayout dotOperandDpasToLinearLayout(DotOperandEncodingAttr dotDpasLayout,
-                                          ArrayRef<int64_t> shape) {
-  auto dpasLayout = cast<intel::DpasEncodingAttr>(dotDpasLayout.getParent());
-
-  return DPAStoLinearLayout(shape, dpasLayout, dotDpasLayout.getOpIdx());
-}
-
 namespace {
 
 static LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,

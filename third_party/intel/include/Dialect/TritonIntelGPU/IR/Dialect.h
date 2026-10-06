@@ -21,6 +21,23 @@ namespace mlir::triton::gpu::intel {
 struct L2Cache : public SideEffects::Resource::Base<L2Cache> {
   StringRef getName() const final { return "<intel::L2Cache>"; }
 };
+
+/// Return true when the base address of a 2D block IO operation must be
+/// compensated to satisfy the HW base-address alignment requirement.
+///
+/// MaterializeBlockPointer guarantees a 4-byte aligned base address, so the
+/// compensation can be skipped when the target's requirement is at most 4 bytes
+/// (as advertised by the `ttig.2d_block_io_base_alignment` module attribute).
+/// Otherwise (e.g. the 64-byte requirement on BMG) the base address must be
+/// compensated. Absence of the attribute is conservatively treated as requiring
+/// compensation.
+inline bool needs2DBlockIOAlignmentCompensation(Operation *op) {
+  if (!isa<ModuleOp>(op))
+    op = op->getParentOfType<ModuleOp>();
+  auto alignment = op->getAttrOfType<IntegerAttr>(
+      TritonIntelGPUDialect::get2DBlockIOBaseAlignmentAttrName());
+  return !alignment || alignment.getInt() > 4;
+}
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_DIALECT_TRITON_INTEL_GPU_IR_DIALECT_H

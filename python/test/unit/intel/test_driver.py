@@ -1,4 +1,5 @@
 import re
+import shutil
 
 import pytest
 import torch
@@ -10,13 +11,16 @@ import pathlib
 from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
+from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
+from triton.backends.intel.driver import find_sycl_icpx
 from triton.runtime.errors import IntelGPUError, OutOfResources
 
 
-@pytest.mark.xfail(is_xpu_cri(), reason="unable to get spill_size")
 def test_auto_grf(device, monkeypatch, capfd):
     monkeypatch.setenv("TRITON_DEBUG", "1")
-    BLOCK = 1024 * 8
+    # CRI's larger (512-GRF) register file needs a bigger tile to spill; other
+    # targets already spill at 8K.
+    BLOCK = 1024 * 32 if is_xpu_cri() else 1024 * 8
     z_tri = torch.empty(BLOCK, dtype=torch.int32, device=device)
 
     @triton.jit
@@ -33,9 +37,166 @@ def test_auto_grf(device, monkeypatch, capfd):
     outs = [line for line in capfd.readouterr().out.splitlines() if line]
 
     # The output should contain the recompiling information for large GRF mode.
-    assert re.search(r"recompiling the kernel using large GRF mode", outs[0])
+    assert "retrying with large GRF mode" in outs[0]
     # The spill size of returned kernel should be same kernel as the one compiled with large GRF mode.
-    assert re.findall(r"\d+\.?\d*", outs[1])[0] == re.findall(r"\d+\.?\d*", outs[2])[0]
+    # Compare the byte counts because they identify the *binary*: both lines
+    # describe the retried build, so equality pins that it is the one returned. The
+    # gate's own comparison (bytes vs `kRebuildSpillBytesPerThread`) is covered by
+    # test_n_spills_reported_per_lane.
+    retried = re.search(r"kernel has (\d+) spill bytes per hardware thread", outs[1])
+    selected = re.search(r"Detected (\d+) spill bytes per hardware thread", outs[2])
+    assert retried is not None, f"unexpected retry log line: {outs[1]!r}"
+    assert selected is not None, f"unexpected selection log line: {outs[2]!r}"
+    assert retried.group(1) == selected.group(1)
+
+
+@pytest.mark.parametrize("warp_size", [16, 32])
+def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
+    """`n_spills` is dword-equivalents per lane, as on CUDA/HIP (issue #7896).
+
+    Level Zero reports `spillMemSize` in bytes per hardware thread, so the value
+    handed to Python is `bytes // (4 * SIMD)`. Both operands come from the log
+    line for the *selected* pass rather than from the request, because the compiled
+    width can differ from the requested `warp_size` under the auto-GRF retry; that
+    agreement is asserted separately so a divergence fails loudly instead of
+    being absorbed into the arithmetic.
+
+    Also checks the rebuild gate, which needs both logs: the selected-pass line
+    reports the post-retry spill once a rebuild succeeds, so only the retry
+    announcement testifies about the decision. The threshold equality holds on every
+    driver line -- it is a constant either way -- but it licenses no claim that the
+    two *gates* agree, since driver.c has no `is_lts` input and compiler.py rebuilds
+    on any spill for LTS.
+    """
+    monkeypatch.setenv("TRITON_DEBUG", "1")
+    # Same fixture size as test_auto_grf: CRI's larger (512-GRF) register file
+    # needs a bigger tile to spill; other targets already spill at 8K.
+    BLOCK = 1024 * 32 if is_xpu_cri() else 1024 * 8
+    z_tri = torch.empty(BLOCK, dtype=torch.int32, device=device)
+
+    # Known-spilling fixture, shared with test_auto_grf.
+    @triton.jit
+    def _kernel(z, BLOCK: tl.constexpr):
+        # make it hard to re-schedule.
+        off = tl.arange(0, BLOCK)
+        a = tl.load(z + off)
+        result = tl.sum(a, axis=0, keep_dims=True)
+        tl.store(z + off, a + result)
+
+    kernel = _kernel[(1, )](z_tri, BLOCK=BLOCK, num_warps=2, warp_size=warp_size)
+
+    out = capfd.readouterr().out
+    selected = re.compile(r"Detected (\d+) spill bytes per hardware thread; "
+                          r"n_spills (\d+) dword-equivalents/lane \(SIMD(\d+)\), "
+                          r"rebuild at (\d+) B/hardware-thread")
+    # Only the spill path logs numbers: the build-failure path enters the same branch
+    # with an unknown `Spills` and reaches neither the threshold nor this format.
+    retried = re.compile(r"Detected spills for \"[^\"]*\", retrying with large GRF mode "
+                         r"\(\w+, spill (\d+) B/hardware-thread = (\d+) dword-equivalents/lane "
+                         r"at SIMD(\d+), rebuild at (\d+) B/hardware-thread\)")
+    # Keep the last match: it describes the finally selected binary.
+    matches = selected.findall(out)
+    if not matches:
+        pytest.skip(f"fixture no longer spills on this IGC version; log was:\n{out}")
+    spill_bytes, logged_slots, logged_simd, logged_threshold = (int(group) for group in matches[-1])
+
+    # Pin the divisor against the request, so a compiled-width divergence is a
+    # failure rather than something the arithmetic below hides.
+    assert logged_simd == warp_size, f"compiled SIMD {logged_simd} != requested warp_size {warp_size}"
+    assert kernel.metadata.threads_per_warp == warp_size
+
+    assert spill_bytes > 0
+    assert logged_slots == spill_bytes // (4 * warp_size)
+    assert kernel.n_spills == logged_slots
+    # The unit really changed: raw bytes must not reach Python any more.
+    assert kernel.n_spills < spill_bytes
+
+    # driver.c is compiled at runtime and cannot import the Python constant, so the
+    # threshold is duplicated; this is what catches the two copies drifting apart.
+    assert logged_threshold == REBUILD_SPILL_BYTES_PER_THREAD
+
+    # Which log testifies about the decision depends on whether a rebuild happened, so
+    # the oracle has two sides and each is valid only where the other is not.
+    rebuilds = retried.findall(out)
+    if rebuilds:
+        pre_bytes, pre_threshold = (int(rebuilds[-1][i]) for i in (0, 3))
+        assert pre_bytes >= pre_threshold, f"rebuilt below the threshold: {rebuilds[-1]}"
+        assert pre_threshold == REBUILD_SPILL_BYTES_PER_THREAD
+    else:
+        assert spill_bytes < logged_threshold, (f"accepted {spill_bytes} B/hardware-thread at or above the "
+                                                f"{logged_threshold} B rebuild threshold")
+
+
+def test_n_spills_zero_without_spills(device):
+    """A kernel that allocates no scratch reports 0, not the -1 error sentinel."""
+
+    @triton.jit
+    def _tiny(x_ptr, y_ptr):
+        tl.store(y_ptr, tl.load(x_ptr))
+
+    x = torch.ones(1, dtype=torch.float32, device=device)
+    y = torch.empty(1, dtype=torch.float32, device=device)
+    kernel = _tiny[(1, )](x, y)
+    assert kernel.n_spills == 0
+
+
+@pytest.fixture
+def no_icpx(monkeypatch):
+    """Hide `icpx`, which `find_sycl_icpx` checks first and would return early on."""
+    real_which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda cmd, *args, **kwargs: None
+                        if cmd == "icpx" else real_which(cmd, *args, **kwargs))
+
+
+@pytest.mark.parametrize("layout, warns", [("no_compiler", False), ("header_only", True), ("lib_only", True)])
+def test_find_sycl_skips_oneapi_root(monkeypatch, no_icpx, recwarn, tmp_path: pathlib.Path, layout, warns):
+    """`ONEAPI_ROOT` is used only when a SYCL install is really under it.
+
+    Every oneAPI component's `setvars.sh` sets `ONEAPI_ROOT`, so it does not mean a compiler is
+    installed. Using it anyway hid a working `intel-sycl-rt` and broke the next build with
+    `fatal error: sycl/sycl.hpp: No such file or directory`.
+    See https://github.com/intel/intel-xpu-backend-for-triton/issues/7977.
+
+    A root with no `compiler` directory is just a component install, so it is skipped quietly. Half
+    an install is worth a warning: the header and the library directory are always used together,
+    and with only the header the build reaches the link step and fails with `cannot find -lsycl`.
+    """
+    compiler_root = tmp_path / "compiler" / "latest"
+    if layout == "no_compiler":
+        (tmp_path / "dummy_component").mkdir()  # some other component, but no compiler
+    elif layout == "header_only":
+        (compiler_root / "include" / "sycl").mkdir(parents=True)
+        (compiler_root / "include" / "sycl" / "sycl.hpp").touch()
+    else:
+        (compiler_root / "lib").mkdir(parents=True)
+    monkeypatch.setenv("ONEAPI_ROOT", str(tmp_path))
+
+    include_dir, sycl_dirs = find_sycl_icpx([])
+
+    # Check the leak first: it is the real bug, and it gives the clearer failure message.
+    assert not any(str(tmp_path) in d for d in include_dir + sycl_dirs), \
+        f"rejected ONEAPI_ROOT leaked into the compiler flags: {include_dir + sycl_dirs}"
+    warned = [str(w.message) for w in recwarn]
+    if warns:
+        assert any("does not provide SYCL" in m for m in warned), f"half an install was skipped silently: {warned}"
+    else:
+        assert not warned, f"unexpected warnings: {warned}"
+
+
+def test_find_sycl_uses_oneapi_root(monkeypatch, no_icpx, recwarn, tmp_path: pathlib.Path):
+    """A `ONEAPI_ROOT` with a full SYCL install is still used, ahead of the wheel."""
+    compiler_root = tmp_path / "compiler" / "latest"
+    (compiler_root / "include" / "sycl").mkdir(parents=True)
+    (compiler_root / "include" / "sycl" / "sycl.hpp").touch()
+    (compiler_root / "lib").mkdir()
+    monkeypatch.setenv("ONEAPI_ROOT", str(tmp_path))
+
+    include_dir, sycl_dirs = find_sycl_icpx([])
+
+    assert sycl_dirs == [str(compiler_root / "lib")]
+    assert str(compiler_root / "include") in include_dir
+    assert str(compiler_root / "include" / "sycl") in include_dir
+    assert not [str(w.message) for w in recwarn], f"unexpected warnings: {[str(w.message) for w in recwarn]}"
 
 
 def test_get_properties_error(device):
@@ -140,10 +301,6 @@ def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_
     - load_binary (generate_native_code=False): L0 runtime compilation via zeModuleCreate
     - make_zebin (generate_native_code=True): offline compilation via ocloc
     """
-    # The build failure with grf_mode="128" is not simulated on CRI properly
-    if grf_mode == "128" and is_xpu_cri():
-        pytest.xfail("grf_mode=128 build failure is not simulated on CRI properly")
-
     monkeypatch.setenv("TRITON_DEBUG", "1")
 
     @triton.jit
@@ -181,7 +338,7 @@ def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_
     outs = capfd.readouterr().out
     if expect_retry and not generate_native_code:
         # load_binary path prints a retry message to stdout.
-        assert "retrying with large GRF mode" in outs or "recompiling the kernel using large GRF mode" in outs
+        assert "retrying with large GRF mode" in outs
     elif expect_retry and generate_native_code:
         # make_zebin path retries silently via ocloc — no stdout message.
         # Success without exception is sufficient verification.

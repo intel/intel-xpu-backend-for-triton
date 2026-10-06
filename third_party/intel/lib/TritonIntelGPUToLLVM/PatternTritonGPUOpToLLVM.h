@@ -27,6 +27,13 @@ void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     const TargetInfoBase &targetInfo,
                                     PatternBenefit benefit);
 
+/// Takes the concrete `TargetInfo` rather than `TargetInfoBase`: the sub-group
+/// scan generators are Intel-specific protected virtuals on `TargetInfo`.
+void populateScanOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                  RewritePatternSet &patterns,
+                                  const TargetInfo &targetInfo,
+                                  PatternBenefit benefit);
+
 void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            const TargetInfo &targetInfo,
                                            RewritePatternSet &patterns,
@@ -46,6 +53,11 @@ void populatePrintOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
                                   const TargetInfoBase &targetInfo,
                                   PatternBenefit benefit);
+
+void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                   const TargetInfoBase &targetInfo,
+                                   RewritePatternSet &patterns,
+                                   PatternBenefit benefit);
 
 void populateWarpIdOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,

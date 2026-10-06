@@ -345,6 +345,22 @@ createDecomposeOffsetFromAdd(RewriterBase &rewriter, Location loc, Value expr,
 
 // Offset extraction logic for a multiplication op:
 // decompose(A*B) = {U(A)*U(B), NU(A)*NU(B)+NU(B)*U(A)+U(A)*NU(B)}
+//
+// Distributing (U(A)+NU(A))*(U(B)+NU(B)) materializes NU(A)*U(B) (or
+// U(A)*NU(B)) as a standalone value. That is only safe if it reflects a
+// genuine runtime*constant product already present in the original
+// expression's shape. When one operand is itself an affine mix -- i.e. it
+// decomposes to *both* a nonzero uniform part and a nonzero non-uniform part,
+// the `(x + C)` shape Inductor emits to keep `(x + C) * K` from overflowing --
+// and the other operand carries a nonzero uniform multiplier `K`, the cross
+// term collapses to a bare `x * K` computed at this expression's bitness,
+// disconnected from the compensating shift `C` that made `(x + C) * K` safe
+// in the first place. `x` alone can range far outside what `(x + C)` was
+// bounded to, so `x * K` can overflow where the fused expression never did.
+// Bail out of the distribution entirely in that case and keep the whole
+// multiply as the non-uniform part, matching the "unsupported op" fallback
+// below -- this loses the uniform-hoisting optimization for this multiply,
+// but can never miscompute the address.
 std::pair<Value, Value>
 createDecomposeOffsetFromMul(RewriterBase &rewriter, Location loc, Value expr,
                              int64_t bitness,
@@ -355,19 +371,17 @@ createDecomposeOffsetFromMul(RewriterBase &rewriter, Location loc, Value expr,
   auto [uniformOffsetR, nonUniformOffsetR] = createDecomposeOffsetFromExpr(
       rewriter, loc, mulOp.getRhs(), bitness, scalarToSplatMap);
 
-  // Distributing (U(A)+NU(A))*(U(B)+NU(B)) introduces cross terms (e.g.
-  // NU(A)*U(B)) whose magnitude can exceed anything the original,
-  // un-expanded multiplication produced for valid lanes: e.g. Inductor
-  // emits `(x1 + C) * K` where the shift C keeps the effective multiplicand
-  // small, but distributing yields a bare `x1 * K` term that overflows the
-  // original bitness even though `(x1 + C) * K` never did. Compute the
-  // cross terms at i64 so this redistribution cannot reintroduce overflow
-  // the original expression's shape had already avoided.
-  Type i64Ty = rewriter.getI64Type();
-  uniformOffsetL = createCastOffset(rewriter, loc, uniformOffsetL, i64Ty);
-  uniformOffsetR = createCastOffset(rewriter, loc, uniformOffsetR, i64Ty);
-  nonUniformOffsetL = createCastOffset(rewriter, loc, nonUniformOffsetL, i64Ty);
-  nonUniformOffsetR = createCastOffset(rewriter, loc, nonUniformOffsetR, i64Ty);
+  bool lhsIsAffineMix =
+      !isIntZero(uniformOffsetL) && !isTensorIntZero(nonUniformOffsetL);
+  bool rhsIsAffineMix =
+      !isIntZero(uniformOffsetR) && !isTensorIntZero(nonUniformOffsetR);
+  bool lhsHasUniform = !isIntZero(uniformOffsetL);
+  bool rhsHasUniform = !isIntZero(uniformOffsetR);
+  if ((lhsIsAffineMix && rhsHasUniform) || (rhsIsAffineMix && lhsHasUniform)) {
+    Value scalarZero = arith::ConstantIntOp::create(
+        rewriter, loc, static_cast<int64_t>(0), static_cast<unsigned>(bitness));
+    return {scalarZero, expr};
+  }
 
   Value uniformMul =
       arith::MulIOp::create(rewriter, loc, uniformOffsetL, uniformOffsetR);
@@ -417,16 +431,8 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
           .Case<tt::BroadcastOp>([&](auto broadcastOp) {
             auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
                 rewriter, loc, broadcastOp.getSrc(), bitness, scalarToSplatMap);
-            // nonUniform's element type may have been widened (e.g. by
-            // createDecomposeOffsetFromMul) beyond broadcastOp's original
-            // element type, so re-derive the result type instead of reusing
-            // broadcastOp.getType() verbatim.
-            auto origType = cast<RankedTensorType>(broadcastOp.getType());
-            auto newType = RankedTensorType::get(
-                origType.getShape(), getElementTypeOrSelf(nonUniform),
-                origType.getEncoding());
-            auto broadcastNonUniform =
-                tt::BroadcastOp::create(rewriter, loc, newType, nonUniform);
+            auto broadcastNonUniform = tt::BroadcastOp::create(
+                rewriter, loc, broadcastOp.getType(), nonUniform);
             return std::make_pair(uniform, broadcastNonUniform);
           })
           .Case<tt::ExpandDimsOp>([&](auto expandOp) {

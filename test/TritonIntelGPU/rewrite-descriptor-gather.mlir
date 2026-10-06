@@ -83,7 +83,8 @@ module {
 
 // COM: Case 4 - Multi-range constant offsets: x_offsets = [0,1,2,3, 8,9,10,11].
 // COM: Two contiguous sub-ranges of 4 rows each. Rewritten to two
-// COM: tt.descriptor_load ops (one per sub-range) concatenated with tt.cat.
+// COM: tt.descriptor_load ops (one per sub-range) concatenated along the row
+// COM: dimension with tt.join + tt.trans + tt.reshape.
 module {
   tt.func public @gather_multi_range_constant(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) -> (tensor<8x32xbf16>) {
     %c1_i64 = arith.constant 1 : i64
@@ -100,7 +101,9 @@ module {
 // CHECK-LABEL: @gather_multi_range_constant
 // CHECK: tt.descriptor_load
 // CHECK: tt.descriptor_load
-// CHECK: tt.cat
+// CHECK: tt.join
+// CHECK: tt.trans
+// CHECK: tt.reshape
 // CHECK-NOT: tt.load
 
 // -----
@@ -127,7 +130,7 @@ module {
 
 // COM: Case 6 - Fallback: multi-range with unequal sub-range sizes.
 // COM: x_offsets = [0,1,2,3,4, 8,9,10] has sub-ranges of size 5 and 3.
-// COM: tt.cat requires SameTypeOperands, so the pattern cannot apply.
+// COM: tt.join requires SameTypeOperands, so the pattern cannot apply.
 module {
   tt.func public @gather_unequal_ranges(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) -> (tensor<8x32xbf16>) {
     %c1_i64 = arith.constant 1 : i64

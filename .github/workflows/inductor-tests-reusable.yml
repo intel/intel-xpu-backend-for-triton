@@ -53,7 +53,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -62,6 +62,7 @@ jobs:
         with:
           ref: ${{ inputs.pytorch_ref }}
           cache: disabled
+          lts: ${{ inputs.runner_label == 'lts' }}
 
       - name: Setup Triton
         uses: ./.github/actions/setup-triton

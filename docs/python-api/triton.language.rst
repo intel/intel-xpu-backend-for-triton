@@ -79,8 +79,6 @@ Memory/Pointer Ops
     make_tensor_descriptor
     load_tensor_descriptor
     store_tensor_descriptor
-    make_block_ptr
-    advance
 
 
 Indexing Ops
@@ -171,10 +169,12 @@ Atomic Ops
     atomic_add
     atomic_and
     atomic_cas
+    atomic_load
     atomic_max
     atomic_min
     atomic_or
     atomic_poll
+    atomic_store
     atomic_xchg
     atomic_xor
 

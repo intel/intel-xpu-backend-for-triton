@@ -1,4 +1,3 @@
-python/test/unit/intel/test_mxfp_matmul.py::test_mxfp_matmul
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/3388
 python/test/unit/language/test_matmul.py::test_simple_matmul[r".*-1-32-32-32-4-float16-float16"]@regexp
 python/test/unit/language/test_matmul.py::test_simple_matmul[r".*-1-64-16-64-4-float16-float16"]@regexp
@@ -15,18 +14,18 @@ python/test/unit/language/test_matmul.py::test_simple_matmul[r".*-4-1-256-128-32
 python/test/unit/language/test_matmul.py::test_simple_matmul[r".*-4-1-256-128-32-4-float32-float16"]@regexp
 python/test/unit/language/test_matmul.py::test_simple_matmul[r".*-4-1-256-128-32-4-float32-float8e5"]@regexp
 python/test/unit/language/test_matmul.py::test_simple_matmul[r".*-4-1-256-128-32-4-float32-tensorfloat32"]@regexp
-python/test/unit/language/test_matmul.py::test_simple_matmul[True-True-4-1-512-64-32-2-float32-float32]
-python/test/unit/language/test_matmul.py::test_simple_matmul[False-True-4-1-512-64-32-2-float32-float32]
-python/test/unit/language/test_matmul.py::test_simple_matmul[True-True-8-1-64-512-32-2-float32-tensorfloat32]
-python/test/unit/language/test_matmul.py::test_simple_matmul[False-True-8-1-64-512-32-2-float32-tensorfloat32]
-python/test/unit/language/test_matmul.py::test_simple_matmul[False-True-8-1-32-32-32-4-float64-float64]
-python/test/unit/language/test_matmul.py::test_simple_matmul[False-True-8-1-64-16-64-4-float64-float64]
-python/test/unit/language/test_matmul.py::test_simple_matmul[False-False-4-1-32-32-32-4-float64-float64]
-python/test/unit/language/test_matmul.py::test_simple_matmul[False-False-4-1-64-16-64-4-float64-float64]
-python/test/unit/language/test_matmul.py::test_simple_matmul[False-False-8-1-32-32-32-4-float64-float64]
-python/test/unit/language/test_matmul.py::test_simple_matmul[False-False-8-1-64-16-64-4-float64-float64]
-python/test/unit/language/test_matmul.py::test_simple_matmul[False-True-4-1-32-32-32-4-float64-float64]
-python/test/unit/language/test_matmul.py::test_simple_matmul[False-True-4-1-64-16-64-4-float64-float64]
+python/test/unit/language/test_matmul.py::test_simple_matmul[True-4-1-512-64-32-2-float32-float32]
+python/test/unit/language/test_matmul.py::test_simple_matmul[False-4-1-512-64-32-2-float32-float32]
+python/test/unit/language/test_matmul.py::test_simple_matmul[True-8-1-64-512-32-2-float32-tensorfloat32]
+python/test/unit/language/test_matmul.py::test_simple_matmul[False-8-1-64-512-32-2-float32-tensorfloat32]
+python/test/unit/language/test_matmul.py::test_simple_matmul[True-8-1-32-32-32-4-float64-float64]
+python/test/unit/language/test_matmul.py::test_simple_matmul[True-8-1-64-16-64-4-float64-float64]
+python/test/unit/language/test_matmul.py::test_simple_matmul[False-4-1-32-32-32-4-float64-float64]
+python/test/unit/language/test_matmul.py::test_simple_matmul[False-4-1-64-16-64-4-float64-float64]
+python/test/unit/language/test_matmul.py::test_simple_matmul[False-8-1-32-32-32-4-float64-float64]
+python/test/unit/language/test_matmul.py::test_simple_matmul[False-8-1-64-16-64-4-float64-float64]
+python/test/unit/language/test_matmul.py::test_simple_matmul[True-4-1-32-32-32-4-float64-float64]
+python/test/unit/language/test_matmul.py::test_simple_matmul[True-4-1-64-16-64-4-float64-float64]
 python/test/unit/language/test_matmul.py::test_blocked_scale_mxfp[r"[^-]*-[^-]*-[^-]*-128-[^-]*-[^-]*-[^-]*-512"]@regexp
 python/test/unit/language/test_matmul.py::test_blocked_scale_mxfp[r"[^-]*-[^-]*-[^-]*-[^-]*-128-[^-]*-[^-]*-512"]@regexp
 python/test/unit/language/test_matmul.py::test_lhs_in_tmem_mxfp

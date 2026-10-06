@@ -222,8 +222,8 @@ public:
                                              strideAnalysis, benefit);
     intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                           benefit);
-    mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
-                                               targetInfo, benefit);
+    intel::populateScanOpToLLVMPatterns(typeConverter, patterns, targetInfo,
+                                        benefit);
     mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
                                                  targetInfo, benefit);
     mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
@@ -237,8 +237,10 @@ public:
                                         benefit);
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
     populateAssertOpToLLVMPattern(typeConverter, patterns, targetInfo, benefit);
-    mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
-                                                 patterns, benefit);
+    intel::populateMemoryOpToLLVMPattern(typeConverter, targetInfo, patterns,
+                                         benefit);
+    mlir::triton::populateMemoryOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
     intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                               targetInfo, benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,

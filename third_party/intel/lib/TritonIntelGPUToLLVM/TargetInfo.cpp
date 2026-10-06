@@ -10,7 +10,12 @@
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "SPIRVTargetInfo.h"
 #include "Utility.h"
+#include "Utils/LLVMIntr.h"
+#include "Utils/Mangling.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
+
+#include <limits>
+#include <numeric>
 
 #if defined(_MSC_VER) && !defined(__clang__)
 // from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
@@ -46,9 +51,43 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 }
 
 Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
-  // No nanosecond wall-clock builtin is wired up for the SPIR-V target.
-  llvm::report_fatal_error(
-      "getGlobalTimer is not implemented for the Intel SPIR-V target");
+  // There is no real time counter, so count core clock cycles instead.
+  auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  auto clockRateAttr = mod->getAttrOfType<IntegerAttr>(
+      triton::gpu::intel::TritonIntelGPUDialect::getCoreClockRateAttrName());
+  if (!clockRateAttr || clockRateAttr.getInt() <= 0)
+    llvm::report_fatal_error(
+        Twine("getGlobalTimer needs a positive ") +
+        triton::gpu::intel::TritonIntelGPUDialect::getCoreClockRateAttrName() +
+        " to report nanoseconds");
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // The LTS driver does not implement the SPIR-V shader clock builtin.
+  bool isLTS = mod->hasAttr(
+      triton::gpu::intel::TritonIntelGPUDialect::getIsLTSAttrName());
+  std::string funcName = isLTS ? "__builtin_IB_read_cycle_counter"
+                               : mlir::triton::gpu::intel::mangle(
+                                     "__spirv_ReadClockKHR_Rulong", {i32_ty});
+  SmallVector<Type> argTypes;
+  SmallVector<Value> args;
+  if (!isLTS) {
+    argTypes.push_back(i32_ty);
+    args.push_back(b.i32_val(/*Device=*/1));
+  }
+  Value ticks = mlir::triton::gpu::intel::createDeviceFunctionCall(
+                    rewriter, funcName, /*retType=*/i64_ty, argTypes, args,
+                    /*paramAttrs=*/{}, gpu::intel::noUnwindWillReturnAttrs)
+                    .getResult();
+
+  // kHz is cycles per millisecond. The rate is nominal and the core clock
+  // scales with DVFS, so a downclocked GPU makes a timeout fire late, never
+  // early. Reduce by the GCD so the multiplication does not overflow after a
+  // few hours of GPU uptime.
+  int64_t coreClockRate = clockRateAttr.getInt();
+  int64_t nsPerMs = 1000000;
+  int64_t g = std::gcd(nsPerMs, coreClockRate);
+  return b.udiv(b.mul(ticks, b.i64_val(nsPerMs / g)),
+                b.i64_val(coreClockRate / g));
 }
 
 StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
@@ -61,6 +100,37 @@ StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
     return {};
   }
   llvm_unreachable("unknown memory synchronization scope");
+}
+
+Value TargetInfo::loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Type valueTy, Value pred,
+                              MemSyncScope scope) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto results =
+      emitPredicated(rewriter, loc, pred, ValueRange{b.undef(valueTy)}, [&] {
+        unsigned alignment = valueTy.getIntOrFloatBitWidth() / 8;
+        Value loaded = LLVM::LoadOp::create(
+            rewriter, loc, valueTy, ptr, alignment, /*isVolatile=*/false,
+            /*isNonTemporal=*/false, /*isInvariant=*/false,
+            /*isInvariantGroup=*/false, LLVM::AtomicOrdering::monotonic,
+            getAtomicSyncScope(scope));
+        return SmallVector<Value>{loaded};
+      });
+  return results.front();
+}
+
+void TargetInfo::storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Value value, Value pred,
+                              MemSyncScope scope) const {
+  emitPredicated(rewriter, loc, pred, ValueRange{}, [&] {
+    unsigned alignment = value.getType().getIntOrFloatBitWidth() / 8;
+    LLVM::StoreOp::create(rewriter, loc, value, ptr, alignment,
+                          /*isVolatile=*/false, /*isNonTemporal=*/false,
+                          /*isInvariantGroup=*/false,
+                          LLVM::AtomicOrdering::monotonic,
+                          getAtomicSyncScope(scope));
+    return SmallVector<Value>{};
+  });
 }
 
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
@@ -86,8 +156,43 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   return b.i32_val(0);
 }
 
+// SPIR-V has no vector of pointers without SPV_INTEL_masked_gather_scatter.
+// Cast per element: a cast of the whole vector keeps the pointer vector type.
+static Value ptrsToInts(RewriterBase &rewriter, Location loc, Value val) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto vecTy = dyn_cast<VectorType>(val.getType());
+  if (!vecTy)
+    return b.ptrtoint(i64_ty, val);
+
+  Value res = b.undef(vecTy.clone(i64_ty));
+  for (int i = 0; i < vecTy.getNumElements(); ++i) {
+    Value idx = b.i32_val(i);
+    Value elem = b.extract_element(val, idx);
+    res = b.insert_element(res, b.ptrtoint(i64_ty, elem), idx);
+  }
+  return res;
+}
+
+static Value intsToPtrs(RewriterBase &rewriter, Location loc, Value val,
+                        Type ptrTy) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto vecTy = dyn_cast<VectorType>(ptrTy);
+  if (!vecTy)
+    return b.inttoptr(ptrTy, val);
+
+  Value res = b.undef(vecTy);
+  for (int i = 0; i < vecTy.getNumElements(); ++i) {
+    Value idx = b.i32_val(i);
+    Value elem = b.extract_element(val, idx);
+    res = b.insert_element(res, b.inttoptr(vecTy.getElementType(), elem), idx);
+  }
+  return res;
+}
+
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               Value ctaId, Value val, Value pred) const {
+  if (isa<LLVM::LLVMPointerType>(getElementTypeOrSelf(val.getType())))
+    val = ptrsToInts(rewriter, loc, val);
   LLVM::intel::createPredicatedBlock(rewriter, loc, pred, [&] {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     b.store(val, ptr);
@@ -98,6 +203,15 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               Value ctaId, Type elemTy, Value pred,
                               Operation *localLoadOp) const {
+  if (isa<LLVM::LLVMPointerType>(getElementTypeOrSelf(elemTy))) {
+    Type loadTy = i64_ty;
+    if (auto vecTy = dyn_cast<VectorType>(elemTy))
+      loadTy = vecTy.clone(i64_ty);
+    Value result =
+        loadDShared(rewriter, loc, ptr, ctaId, loadTy, pred, localLoadOp);
+    return intsToPtrs(rewriter, loc, result, elemTy);
+  }
+
   assert(cast<mlir::LLVM::LLVMPointerType>(ptr.getType()).getAddressSpace() ==
              3 &&
          "Invalid addr space for loadShared");
@@ -145,7 +259,8 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned reduceLaneIdMask) const {
+                            unsigned reduceLaneIdMask,
+                            unsigned /*broadcastLaneIdMask*/) const {
   /**
   The reduceLaneIdMask is the bit map of the bases of the linear layout to be
   reduced within warp. Here is the code pieces of ReduceOpToLLVM.cpp:
@@ -191,37 +306,45 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   // TritonGEN::SubGroupReduceOp.
   if (op.getNumOperands() != 1 || op.getNumResults() != 1)
     return false;
-  Region &combineOp = op.getCombineOp();
-  if (combineOp.getBlocks().size() > 1)
-    return false;
-  Block &block = *combineOp.begin();
-  Operation *yield = block.getTerminator();
-  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
-  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
-      reduceOp->getNumResults() != 1)
-    return false;
-  if (reduceOp->getOperand(0) != block.getArgument(0) ||
-      reduceOp->getOperand(1) != block.getArgument(1))
+  FailureOr<Operation *> reduceOp =
+      gpu::intel::matchSingleBinaryCombine(op.getCombineOp());
+  if (failed(reduceOp))
     return false;
 
   auto mod = op->getParentOfType<ModuleOp>();
   unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
-  if (!isSupportedWarpReduceOp(reduceOp, numLaneToReduce, warpSize))
+  if (!isSupportedWarpReduceOp(*reduceOp, numLaneToReduce, warpSize))
     return false;
 
   for (unsigned i = 0; i < acc.size(); ++i) {
-    acc[i] = genWarpReduce(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
+    acc[i] = genWarpReduce(rewriter, loc, acc[i], *reduceOp, numLaneToReduce,
                            warpSize);
   }
 
   return true;
 }
 
-std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
-  std::string funcName =
-      resultElementTy.isInteger(32) ? "__imf_umulhi" : "__imf_umul64hi";
-  return funcName;
+bool TargetInfo::warpScan(RewriterBase &rewriter, Location loc,
+                          SmallVector<Value> &acc, triton::ScanOp op,
+                          unsigned scanDim, unsigned warpSize) const {
+  if (!gpu::intel::isSubgroupScanEnabled())
+    return false;
+
+  // `InclusiveScan` scans the entire sub-group and SPIR-V offers no portable
+  // clustered scan, so the axis must occupy every lane. Gate on the
+  // unique-data lane count, which discounts broadcast duplicates.
+  if (scanDim != warpSize)
+    return false;
+
+  FailureOr<Operation *> combineOp = matchSupportedWarpScanOp(op);
+  if (failed(combineOp))
+    return false;
+
+  for (Value &value : acc)
+    value = genWarpScan(rewriter, loc, value, *combineOp, warpSize);
+
+  return true;
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
@@ -240,6 +363,32 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
   return emitter.assertFail(rewriter, loc, message, file, func, line);
+}
+
+unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
+  // Sole home of the within-thread fold order: treeReduce degenerates to a left
+  // fold once the arity reaches the number of values combined. #6667 needs that
+  // fold for TIMM fp16/bf16 accuracy; #6914 restricted it to non-float and
+  // sub-32-bit-float types, because left-folding fp32 costs ~1.5e-6 relative
+  // error.
+  //
+  // Classify from the *source* tensor's first element type, not the combiner's
+  // own operands: for a multi-operand reduce (argmax) operand 0 of the combiner
+  // can be the index, which would left-fold fp32 and reintroduce #6914.
+  Type elemTy;
+  if (auto reduceOp =
+          dyn_cast_or_null<triton::ReduceOp>(combinerOp->getParentOp())) {
+    elemTy = getElementTypeOrSelf(reduceOp.getOperandTypes().front());
+  } else {
+    // Detached synthesized vector combine region; single-operand by
+    // construction, so unwrapping vector<2xT> to T is exact. Unreachable
+    // today, as Intel reports false for supportBitwidth{16,32}Elementwise.
+    elemTy = getElementTypeOrSelf(combinerOp->getOperand(0).getType());
+  }
+
+  if (isa<FloatType>(elemTy) && elemTy.getIntOrFloatBitWidth() >= 32)
+    return TargetInfoBase::getReductionTreeArity(combinerOp);
+  return std::numeric_limits<unsigned>::max();
 }
 
 int TargetInfo::getSharedAddressSpace() const {

@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+# Provides the `pip` wrapper (pip or `uv pip`).
+source "$(dirname "$0")/pip-utils.sh"
+
 # Select what to install.
 BUILD_PYTORCH=false
 BUILD_LATEST=false
@@ -148,7 +151,7 @@ if [ "$PREPARE_SOURCE_ONLY" = false ]; then
   ############################################################################
   # Check installed torch pinned dependencies
 
-  PINNED_TORCH_DEPENDENCIES_REGEX="^torchaudio==|^torchvision=="
+  PINNED_TORCH_DEPENDENCIES_REGEX="^torchao==|^torchaudio==|^torchvision=="
   INSTALLED_PINNED_TORCH_DEPENDENCIES=$(pip list --format=freeze | grep -iE "$PINNED_TORCH_DEPENDENCIES_REGEX" || true)
 
   if [ -n "$INSTALLED_PINNED_TORCH_DEPENDENCIES" ]; then
@@ -162,7 +165,7 @@ if [ "$PREPARE_SOURCE_ONLY" = false ]; then
       echo "**** INFO: PyTorch pinned dependencies build from source mode is not supported. ****"
       exit 1
     fi
-    pip uninstall -y torchaudio torchvision
+    pip uninstall -y torchao torchaudio torchvision
   fi
 fi
 
@@ -185,7 +188,7 @@ if [ "$BUILD_PYTORCH" = false ]; then
     --dir $TEMP_DIR
   cd $TEMP_DIR/$WHEEL_PATTERN
   echo "**** Install PyTorch and pinned dependencies from nightly builds. ****"
-  pip install torch*
+  pip install torch*.whl
   rm -rf $TEMP_DIR
   exit 0
 fi
