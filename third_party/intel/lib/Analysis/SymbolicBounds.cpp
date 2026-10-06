@@ -37,6 +37,18 @@ bool Symbol::operator<(const Symbol &o) const {
   return placement_ < o.placement_;
 }
 
+/// The loop's step when it is a positive constant.
+static std::optional<int64_t> constantStep(scf::ForOp loop) {
+  if (std::optional<APInt> step = loop.getConstantStep())
+    return step->getSExtValue();
+  return std::nullopt;
+}
+
+/// The query context one level out, for normalizing a loop's own bounds.
+static QueryContext parentContext(scf::ForOp loop) {
+  return {loop.getOperation(), loop->getParentOfType<scf::ForOp>()};
+}
+
 //===----------------------------------------------------------------------===//
 // AffineForm
 //===----------------------------------------------------------------------===//
@@ -324,6 +336,69 @@ AxisPlacement SymbolicBoundsProver::identityPlacement(Value v) {
 }
 
 AffineForm
+SymbolicBoundsProver::leafForBlockArg(BlockArgument arg, QueryContext ctx,
+                                      SmallVectorImpl<Obligation> &obligations,
+                                      AxisPlacement placement) {
+  Operation *owner = arg.getOwner()->getParentOp();
+  if (isa_and_nonnull<tt::FuncOp>(owner))
+    return AffineForm::symbol(
+        symbolFor(SymbolKind::KernelArg, arg, 0, placement));
+
+  if (ctx.loop && owner == ctx.loop.getOperation()) {
+    // The induction variable itself.
+    if (std::optional<Value> iv = ctx.loop.getSingleInductionVar();
+        iv && *iv == arg)
+      return AffineForm::symbol(
+          symbolFor(SymbolKind::LoopIV, arg, 0, placement));
+
+    // An iter_arg equal to the IV up to an offset: init `lb + c`, yield
+    // `arg + step`. Any other iter_arg is opaque (design 4.1).
+    std::optional<int64_t> step = constantStep(ctx.loop);
+    unsigned numIVs = ctx.loop.getNumInductionVars();
+    if (step && arg.getArgNumber() >= numIVs) {
+      unsigned idx = arg.getArgNumber() - numIVs;
+      Value init = ctx.loop.getInitArgs()[idx];
+      Value yielded = cast<scf::YieldOp>(ctx.loop.getBody()->getTerminator())
+                          .getOperand(idx);
+      bool yieldIsStep = false;
+      if (auto add = yielded.getDefiningOp<arith::AddIOp>()) {
+        std::optional<int64_t> k = getFoldedConstant(add.getRhs());
+        Value other = add.getLhs();
+        if (!k) {
+          k = getFoldedConstant(add.getLhs());
+          other = add.getRhs();
+        }
+        yieldIsStep = k && *k == *step && other == arg;
+      }
+      if (yieldIsStep) {
+        QueryContext outer = parentContext(ctx.loop);
+        SmallVector<Obligation, 4> initObls;
+        AffineForm initAF = normalizeImpl(init, outer, initObls, {}, 0);
+        AffineForm lb =
+            normalizeImpl(ctx.loop.getLowerBound(), outer, initObls, {}, 0);
+        AffineForm off = initAF.sub(lb);
+        if (!off.overflowed() && off.isConstant()) {
+          AffineForm res =
+              AffineForm::symbol(symbolFor(SymbolKind::LoopIV,
+                                           *ctx.loop.getSingleInductionVar()))
+                  .add(AffineForm::constant(off.constant()));
+          // The yield's addi is never traversed and the scf.for contract
+          // covers only the IV, so `IV + c` carries its own wrap obligation
+          // (4.1): for i8 lb=120 ub=124 step=1 an iter_arg started at lb + 5
+          // wraps to -128 while the IV exit value 124 is representable.
+          unsigned width = bitWidth(arg.getType());
+          obligations.push_back(
+              {Obligation::Wrap, ctx.loop.getOperation(), res, width});
+          llvm::append_range(obligations, initObls);
+          return res;
+        }
+      }
+    }
+  }
+  return opaque(arg, placement);
+}
+
+AffineForm
 SymbolicBoundsProver::normalizeImpl(Value v, QueryContext ctx,
                                     SmallVectorImpl<Obligation> &obligations,
                                     AxisPlacement placement, unsigned depth) {
@@ -336,14 +411,8 @@ SymbolicBoundsProver::normalizeImpl(Value v, QueryContext ctx,
     return AffineForm::constant(*cst);
 
   Operation *def = v.getDefiningOp();
-  if (!def) {
-    auto blockArg = cast<BlockArgument>(v);
-    // Loop induction variables and iter_args arrive in Task 3.
-    if (isa_and_nonnull<tt::FuncOp>(blockArg.getOwner()->getParentOp()))
-      return AffineForm::symbol(
-          symbolFor(SymbolKind::KernelArg, v, 0, placement));
-    return opaque(v, placement);
-  }
+  if (!def)
+    return leafForBlockArg(cast<BlockArgument>(v), ctx, obligations, placement);
 
   // Obligations of an expression the prover stops looking through are dropped.
   size_t mark = obligations.size();
@@ -494,6 +563,256 @@ SymbolicBoundsProver::boundConstant(const AffineForm &e) const {
   return std::make_pair(lo, hi);
 }
 
+//===----------------------------------------------------------------------===//
+// Bounding over a loop's iteration space (design 4.2)
+//===----------------------------------------------------------------------===//
+
+SymbolicBoundsProver::Bounds
+SymbolicBoundsProver::symbolBounds(const Symbol &sym, QueryContext ctx,
+                                   const CandidateSet &cs) {
+  Bounds out;
+  switch (sym.kind()) {
+  case SymbolKind::Lane: {
+    auto rangeOp = cast<tt::MakeRangeOp>(sym.value().getDefiningOp());
+    // Signed attribute getters: getStart()/getEnd() return uint32_t although
+    // the attributes are signed, so [-4, 0) would bound as positive (4.1).
+    int64_t start = rangeOp.getStartAttr().getInt();
+    int64_t end = rangeOp.getEndAttr().getInt();
+    out.lo = AffineForm::constant(start);
+    out.hi = AffineForm::constant(end - 1);
+    out.isVarying = true;
+    return out;
+  }
+  case SymbolKind::LoopIV: {
+    if (!ctx.loop || sym.value() != *ctx.loop.getSingleInductionVar()) {
+      // An IV of some other loop: bounded from constants if at all.
+      break;
+    }
+    std::optional<int64_t> step = constantStep(ctx.loop);
+    if (!step || *step <= 0) {
+      // v1 supports a constant positive step only (4.1 loop contract i).
+      out.isVarying = true;
+      out.finite = false;
+      return out;
+    }
+    QueryContext outer = parentContext(ctx.loop);
+    SmallVector<Obligation, 4> boundObls;
+    AffineForm lb =
+        normalizeImpl(ctx.loop.getLowerBound(), outer, boundObls, {}, 0);
+    AffineForm ub =
+        normalizeImpl(ctx.loop.getUpperBound(), outer, boundObls, {}, 0);
+    out.lo = lb;
+    out.hi = cs.exactLoopEnd ? ub.sub(AffineForm::constant(*step))
+                             : ub.sub(AffineForm::constant(1));
+    out.isVarying = true;
+    out.finite = !lb.overflowed() && !ub.overflowed();
+    // The obligations of the bounds' own arithmetic travel with the result:
+    // a signed i8 `ub = n - 1` is 127 for n = -128, not the mathematical -129.
+    llvm::append_range(out.factObligations, boundObls);
+    if (ctx.loop.getUnsignedCmp()) {
+      // The scf.for contract reads the bounds as unsigned; treating them as
+      // signed needs all three preconditions (4.1 loop contract ii).
+      unsigned width = bitWidth(ctx.loop.getLowerBound().getType());
+      int64_t intMax = APInt::getSignedMaxValue(width).getSExtValue();
+      out.preconditions.push_back(
+          {lb, BoundGoal::NonNegative, 0, ConditionKind::Precondition});
+      out.preconditions.push_back(
+          {ub, BoundGoal::NonNegative, 0, ConditionKind::Precondition});
+      out.preconditions.push_back({ub, BoundGoal::AtMost, intMax - *step + 1,
+                                   ConditionKind::Precondition});
+    }
+    return out;
+  }
+  default:
+    break;
+  }
+  // Loop-invariant symbols stay symbolic (4.2 step 1); a symbol defined
+  // inside the loop is bounded from its constant range, or is unbounded.
+  if (ctx.loop && sym.value() &&
+      ctx.loop->isAncestor(sym.value().getParentBlock()->getParentOp())) {
+    out.isVarying = true;
+    if (std::optional<std::pair<int64_t, int64_t>> b =
+            symbolConstantBounds(sym)) {
+      out.lo = AffineForm::constant(b->first);
+      out.hi = AffineForm::constant(b->second);
+    } else {
+      out.finite = false;
+    }
+  }
+  return out;
+}
+
+SymbolicBoundsProver::Bounds
+SymbolicBoundsProver::bound(const AffineForm &e, QueryContext ctx,
+                            const CandidateSet &cs) {
+  Bounds out{AffineForm::constant(e.constant()),
+             AffineForm::constant(e.constant())};
+  for (auto &[sym, k] : e.terms()) {
+    Bounds sb = symbolBounds(sym, ctx, cs); // step 2: loop-varying only
+    out.finite &= sb.finite;
+    llvm::append_range(out.preconditions, sb.preconditions);
+    llvm::append_range(out.factObligations, sb.factObligations);
+    llvm::append_range(out.assumes, sb.assumes);
+    if (!sb.isVarying) { // step 1: keep loop-invariant symbols symbolic
+      out.lo = out.lo.add(AffineForm::symbol(sym).scale(k));
+      out.hi = out.hi.add(AffineForm::symbol(sym).scale(k));
+      continue;
+    }
+    out.lo = out.lo.add((k > 0 ? sb.lo : sb.hi).scale(k));
+    out.hi = out.hi.add((k > 0 ? sb.hi : sb.lo).scale(k));
+  }
+  // step 3: AffineForm::add already collects like terms.
+  out.exhausted = e.overflowed() || out.lo.overflowed() ||
+                  out.hi.overflowed() || out.lo.numTerms() > kMaxTerms ||
+                  out.hi.numTerms() > kMaxTerms;
+  return out;
+}
+
+bool SymbolicBoundsProver::decideResidual(const AffineForm &lo, int64_t g,
+                                          QueryContext ctx, CandidateSet &cs) {
+  if (lo.overflowed())
+    return false;
+  if (lo.isConstant())
+    return lo.constant() >= g;
+  // Step 4: sign every remaining term from its constant range, then let the
+  // constant term decide.
+  for (auto &[sym, k] : lo.terms()) {
+    std::optional<std::pair<int64_t, int64_t>> b = symbolConstantBounds(sym);
+    if (!b)
+      return false;
+    if (k > 0 ? b->first < 0 : b->second > 0)
+      return false;
+  }
+  return lo.constant() >= g;
+}
+
+std::optional<int64_t>
+SymbolicBoundsProver::residualConstant(const AffineForm &d, QueryContext ctx,
+                                       CandidateSet &cs) {
+  Bounds b = bound(d, ctx, cs);
+  if (!b.finite || b.exhausted)
+    return std::nullopt;
+  if (std::optional<std::pair<int64_t, int64_t>> cb = boundConstant(b.lo))
+    return cb->first;
+  return std::nullopt;
+}
+
+void SymbolicBoundsProver::mergePreconditions(CandidateSet &cs,
+                                              const Bounds &b) const {
+  for (const BoundCondition &c : b.preconditions)
+    if (!llvm::is_contained(cs.extra, c))
+      cs.extra.push_back(c);
+  for (const Obligation &o : b.factObligations)
+    if (!llvm::is_contained(cs.factObligations, o))
+      cs.factObligations.push_back(o);
+  for (Operation *a : b.assumes)
+    if (!llvm::is_contained(cs.assumes, a))
+      cs.assumes.push_back(a);
+  cs.exhausted |= b.exhausted;
+}
+
+Operation *SymbolicBoundsProver::assumedBy(const BoundCondition &,
+                                           QueryContext) const {
+  // Task 6 consults the normalized fact index; until then every candidate
+  // becomes a runtime condition.
+  return nullptr;
+}
+
+CandidateResult SymbolicBoundsProver::addCandidate(CandidateSet &cs,
+                                                   BoundCondition cond,
+                                                   QueryContext ctx) {
+  // Every condition subject must be a scalar that dominates the loop, so the
+  // guard can be placed before it (4.4). Checked here and again in finalize,
+  // because an obligation guard can reach the verdict with no candidate.
+  for (auto &[sym, k] : cond.expr.terms()) {
+    if (!sym.value() || sym.kind() == SymbolKind::TripCount)
+      return CandidateResult::Declined;
+    if (isa<ShapedType>(sym.value().getType()))
+      return CandidateResult::Declined;
+  }
+  if (Operation *assume = assumedBy(cond, ctx)) {
+    // Established outright: no runtime condition, but record the provenance.
+    if (!llvm::is_contained(cs.assumes, assume))
+      cs.assumes.push_back(assume);
+    return CandidateResult::Accepted;
+  }
+  if (llvm::is_contained(cs.facts, cond))
+    return CandidateResult::Accepted;
+  if (cs.facts.size() >= kMaxFactConditions)
+    return CandidateResult::Exhausted;
+  cond.kind = ConditionKind::Fact;
+  cs.facts.push_back(std::move(cond));
+  return CandidateResult::Accepted;
+}
+
+BoundProof SymbolicBoundsProver::finalize(BoundProof::Verdict onD,
+                                          CandidateSet cs,
+                                          ArrayRef<Obligation> obligations,
+                                          QueryContext ctx) {
+  // Task 5 discharges obligations here; until then finalize passes them
+  // through, so a task-3 verdict is only as strong as its conditions.
+  if (cs.exhausted)
+    return {};
+
+  BoundProof proof;
+  // Facts, then preconditions, then guards (4.4). Increment 1b prunes
+  // conservatively: a condition is dropped only when unconditional evidence
+  // alone implies it, never using another condition, so no condition can
+  // justify itself.
+  auto emit = [&](const BoundCondition &c, ConditionKind kind) {
+    BoundCondition out = c;
+    out.kind = kind;
+    if (out.expr.isConstant()) {
+      // A condition over no symbol is decided now: dropped when true, and it
+      // makes the verdict Unknown when false.
+      bool holds = false;
+      switch (out.goal) {
+      case BoundGoal::NonNegative:
+        holds = out.expr.constant() >= 0;
+        break;
+      case BoundGoal::StrictlyPositive:
+        holds = out.expr.constant() > 0;
+        break;
+      case BoundGoal::AtLeast:
+        holds = out.expr.constant() >= out.c;
+        break;
+      case BoundGoal::AtMost:
+        holds = out.expr.constant() <= out.c;
+        break;
+      case BoundGoal::DivisibleBy:
+        holds = out.c != 0 && out.expr.constant() % out.c == 0;
+        break;
+      }
+      if (!holds)
+        proof.verdict = BoundProof::Unknown;
+      return holds;
+    }
+    if (!llvm::is_contained(proof.conditions, out))
+      proof.conditions.push_back(out);
+    return true;
+  };
+
+  bool feasible = true;
+  for (const BoundCondition &c : cs.facts)
+    feasible &= emit(c, ConditionKind::Fact);
+  for (const BoundCondition &c : cs.extra)
+    feasible &= emit(c, ConditionKind::Precondition);
+  if (!feasible)
+    return {};
+
+  proof.factsUsed.assign(cs.assumes.begin(), cs.assumes.end());
+  if (onD == BoundProof::Refuted) {
+    // Refuted is only ever unconditional (4.3).
+    if (!proof.conditions.empty())
+      return {};
+    proof.verdict = BoundProof::Refuted;
+    return proof;
+  }
+  proof.verdict = proof.conditions.empty() ? BoundProof::Satisfied
+                                           : BoundProof::ConditionallySatisfied;
+  return proof;
+}
+
 BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
                                        Value rhs, QueryContext ctx) {
   SmallVector<Obligation, 4> obligations;
@@ -505,9 +824,10 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
   if (exhausted || l.overflowed() || r.overflowed())
     return {};
 
-  // Reduce the predicate to `d >= g` with d = rhs - lhs. eq/ne are declined:
-  // the predicate whitelist in RemoveMasks exists because eq produced unsound
-  // versioning conditions (#7791).
+  // Reduce the predicate to `d >= g`. eq/ne are declined: the predicate
+  // whitelist in RemoveMasks exists because eq produced unsound versioning
+  // conditions (#7791). Unsigned predicates additionally need both sides
+  // non-negative, which Task 5 turns into obligations.
   int64_t g;
   AffineForm d;
   switch (pred) {
@@ -534,22 +854,66 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
   default:
     return {};
   }
-  // An overflowed difference carries no information: INT64_MAX < INT64_MIN
-  // would otherwise wrap to d = 1 and read as a proof (§4.1).
+  // An overflowed difference carries no information: for i64 operands
+  // INT64_MAX < INT64_MIN would wrap to d = 1 and read as a proof (4.1).
   if (d.overflowed())
     return {};
 
-  std::optional<std::pair<int64_t, int64_t>> b = boundConstant(d);
-  if (!b)
-    return {};
+  CandidateSet base;
 
-  BoundProof proof;
-  if (b->first >= g)
-    proof.verdict = BoundProof::Satisfied;
-  else if (b->second < g)
-    // Refutation needs a constant hi, which boundConstant always gives here.
-    proof.verdict = BoundProof::Refuted;
-  return proof;
+  // Step 3: the direct decision, on a trial copy so a failed attempt leaks no
+  // evidence into the candidate search.
+  {
+    CandidateSet direct = base;
+    Bounds b = bound(d, ctx, direct);
+    mergePreconditions(direct, b);
+    if (b.finite && !b.exhausted && decideResidual(b.lo, g, ctx, direct))
+      return finalize(BoundProof::Satisfied, std::move(direct), obligations,
+                      ctx);
+  }
+  {
+    // Refutation bounds d too, and bounding an unsigned-loop IV yields the
+    // loop-contract preconditions; dropping them would refute `iv < 120` in an
+    // unsigned i8 loop 120 to 132 (bit pattern) step 4, whose IV 128 reads as
+    // -128. Only a constant hi refutes (4.3 step 3).
+    CandidateSet ref = base;
+    Bounds b = bound(d, ctx, ref);
+    mergePreconditions(ref, b);
+    if (b.finite && !b.exhausted && b.hi.isConstant() && b.hi.constant() < g)
+      return finalize(BoundProof::Refuted, std::move(ref), obligations, ctx);
+  }
+
+  // Step 4: the greedy accumulated search. A candidate is kept when it
+  // strictly improves lo(d), even if it does not finish the proof, and later
+  // candidates are discovered under the accumulated set. Only candidate 4a
+  // exists in this task; 4b to 4e arrive in Tasks 4 and 7.
+  CandidateSet acc = base;
+  std::optional<int64_t> best = residualConstant(d, ctx, acc);
+  if (ctx.loop && constantStep(ctx.loop)) {
+    CandidateSet trial = acc;
+    trial.exactLoopEnd = true;
+    Bounds b = bound(d, ctx, trial);
+    mergePreconditions(trial, b);
+    if (b.finite && !b.exhausted) {
+      QueryContext outer = parentContext(ctx.loop);
+      SmallVector<Obligation, 4> boundObls;
+      AffineForm lb =
+          normalizeImpl(ctx.loop.getLowerBound(), outer, boundObls, {}, 0);
+      AffineForm ub =
+          normalizeImpl(ctx.loop.getUpperBound(), outer, boundObls, {}, 0);
+      BoundCondition exact{ub.sub(lb), BoundGoal::DivisibleBy,
+                           *constantStep(ctx.loop), ConditionKind::Fact};
+      if (decideResidual(b.lo, g, ctx, trial)) {
+        CandidateResult res = addCandidate(trial, exact, ctx);
+        if (res == CandidateResult::Exhausted)
+          return {};
+        if (res == CandidateResult::Accepted)
+          return finalize(BoundProof::ConditionallySatisfied, std::move(trial),
+                          obligations, ctx);
+      }
+    }
+  }
+  return {};
 }
 
 } // namespace mlir::triton::intel

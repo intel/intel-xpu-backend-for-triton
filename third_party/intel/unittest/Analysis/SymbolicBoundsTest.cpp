@@ -164,4 +164,99 @@ TEST_F(SymbolicBoundsTest, SameLaneDifferentAxesDoesNotCancel) {
   EXPECT_EQ(verdict(get("cmp")), "Unknown"); // never Refuted (Review Focus 1)
 }
 
+// E1 of the design: the inductor reduction shape the census shows exiting
+// walk 1 at iv-range-unknown.
+static const char *kE1 = R"(
+  tt.func @e1(%ptr: !tt.ptr<f32>, %rnumel: i32) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+    %ns = tt.splat %rnumel : i32 -> tensor<64xi32>
+    scf.for %r = %c0 to %rnumel step %c64 : i32 {
+      %rs = tt.splat %r : i32 -> tensor<64xi32>
+      %idx = arith.addi %rs, %lane : tensor<64xi32> loc("idx")
+      %mask = arith.cmpi slt, %idx, %ns : tensor<64xi32> loc("mask")
+      scf.yield
+    }
+    tt.return
+  })";
+
+TEST_F(SymbolicBoundsTest, E1_ConditionalOnExactLoopEnd) {
+  parse(kE1);
+  EXPECT_EQ(verdict(get("mask")), "Conditional{arg1 divisible by 64}");
+}
+
+TEST_F(SymbolicBoundsTest, ConstantBoundsSatisfied) {
+  parse(R"(
+    tt.func @f(%ptr: !tt.ptr<f32>) {
+      %c0 = arith.constant 0 : i32
+      %c32 = arith.constant 32 : i32
+      %c128 = arith.constant 128 : i32
+      %c4096 = arith.constant dense<4096> : tensor<32xi32>
+      %lane = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
+      scf.for %i = %c0 to %c128 step %c32 : i32 {
+        %is = tt.splat %i : i32 -> tensor<32xi32>
+        %idx = arith.addi %is, %lane : tensor<32xi32>
+        %m1 = arith.cmpi slt, %idx, %c4096 : tensor<32xi32> loc("m1")
+        %m2 = arith.cmpi sge, %idx, %c4096 : tensor<32xi32> loc("m2")
+        scf.yield
+      }
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("m1")), "Satisfied"); // max 96 + 31 = 127 < 4096
+  EXPECT_EQ(verdict(get("m2")), "Refuted");   // never >= 4096
+}
+
+TEST_F(SymbolicBoundsTest, UnsignedLoopNeedsSignedRepresentability) {
+  std::string ir = kE1;
+  ir.replace(ir.find("scf.for %r"), 10, "scf.for unsigned %r");
+  parse(ir);
+  // Loop contract (ii): NonNegative(lb) discharges because lb = 0 is a
+  // constant; NonNegative(ub) and AtMost(ub, INT_MAX - step + 1) remain.
+  // Order: fact, then preconditions.
+  EXPECT_EQ(verdict(get("mask")),
+            "Conditional{arg1 divisible by 64; arg1 >= 0; arg1 <= 2147483584}");
+}
+
+TEST_F(SymbolicBoundsTest, RefutedOnlyOnConstantHi) {
+  // pid >= 0 from the range analysis, so hi(d) = -pid <= 0 < 1 by sign
+  // reasoning; 4.3 step 3 refutes only on a constant hi(d).
+  parse(R"(
+    tt.func @f() {
+      %c0 = arith.constant 0 : i32
+      %pid = tt.get_program_id x : i32
+      %cmp = arith.cmpi slt, %pid, %c0 : i32 loc("cmp")
+      tt.return
+    })");
+  EXPECT_NE(verdict(get("cmp")), "Refuted");
+}
+
+TEST_F(SymbolicBoundsTest, OverflowedDifferenceIsUnknown) {
+  // d = rhs - lhs overflows int64 in both directions. Read through the
+  // wrapped value, `a` would be a false Satisfied and `b` a false Refuted.
+  parse(R"(
+    tt.func @f() {
+      %max = arith.constant 9223372036854775807 : i64
+      %min = arith.constant -9223372036854775808 : i64
+      %a = arith.cmpi slt, %max, %min : i64 loc("a")
+      %b = arith.cmpi slt, %min, %max : i64 loc("b")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("a")), "Unknown");
+  EXPECT_EQ(verdict(get("b")), "Unknown");
+}
+
+TEST_F(SymbolicBoundsTest, NegativeStartLane) {
+  // start = -4: read through the unsigned getters the lane would bound as
+  // [4294967292, 4294967295] and `r >= 0` would be Satisfied.
+  parse(R"(
+    tt.func @f() {
+      %r = tt.make_range {start = -4 : i32, end = 0 : i32} : tensor<4xi32>
+      %z = arith.constant dense<0> : tensor<4xi32>
+      %cmp = arith.cmpi sge, %r, %z : tensor<4xi32> loc("cmp")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Refuted"); // every lane is negative
+}
+
 } // namespace

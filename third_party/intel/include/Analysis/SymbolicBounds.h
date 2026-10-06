@@ -213,6 +213,13 @@ struct QueryContext {
 //   std::optional<int64_t> minTripCount(scf::ForOp loop);
 //   BoundProof tripCountAtLeast(scf::ForOp loop, int64_t n);
 
+/// Applying a candidate has three outcomes and only one ends the query:
+/// `Accepted`; `Declined`, when the condition is not expressible (an
+/// unnormalizable divisibility, a non-scalar or non-dominating subject), in
+/// which case the trial is discarded and the search continues; and
+/// `Exhausted`, when a budget is exceeded, which is `Unknown` (§4.3).
+enum class CandidateResult { Accepted, Declined, Exhausted };
+
 class SymbolicBoundsProver {
 public:
   /// `solver` must already have `IntegerRangeAnalysis` loaded and run, as
@@ -243,6 +250,69 @@ public:
   static constexpr unsigned kMaxGuards = 8;
 
 private:
+  /// The result of bounding an affine form over a loop's iteration space
+  /// (§4.2). Side-effect free: evidence the bounding needed comes back here
+  /// and the caller merges it.
+  struct Bounds {
+    AffineForm lo, hi;
+    bool isVarying = false;
+    /// False when a bound is not finite over loop-invariant symbols.
+    bool finite = true;
+    /// `lo` or `hi` overflowed or exceeded kMaxTerms after substitution.
+    bool exhausted = false;
+    SmallVector<BoundCondition, 4> preconditions;
+    SmallVector<Obligation, 4> factObligations;
+    SmallVector<Operation *, 4> assumes;
+  };
+
+  /// The candidate conditions a proof attempt has accumulated. Every trial
+  /// runs on a copy and is committed only if it succeeds, so a failed attempt
+  /// leaks nothing into a later one (§4.3 step 4).
+  struct CandidateSet {
+    /// 4a: the IV's high bound is `ub - step` rather than `ub - 1`.
+    bool exactLoopEnd = false;
+    /// 4b: quotients known to divide exactly.
+    SmallVector<Symbol, 2> exactCdiv;
+    /// Accepted candidate conditions.
+    SmallVector<BoundCondition, 4> facts;
+    /// Preconditions of the facts actually used.
+    SmallVector<BoundCondition, 4> extra;
+    /// Assume ops that established a candidate instead of a runtime condition.
+    SmallVector<Operation *, 4> assumes;
+    /// Obligations inherited from the dividends of quotient facts used.
+    SmallVector<Obligation, 4> factObligations;
+    /// A bound overflowed while closing an obligation: the verdict is Unknown.
+    bool exhausted = false;
+  };
+
+  /// §4.2: keeps loop-invariant symbols symbolic, substitutes bounds for
+  /// loop-varying ones, collects like terms.
+  Bounds bound(const AffineForm &e, QueryContext ctx, const CandidateSet &cs);
+  /// Bounds one symbol over the loop's iteration space.
+  Bounds symbolBounds(const Symbol &sym, QueryContext ctx,
+                      const CandidateSet &cs);
+  /// §4.2 step 4: is the residual `lo` at least `g`?
+  bool decideResidual(const AffineForm &lo, int64_t g, QueryContext ctx,
+                      CandidateSet &cs);
+  /// The constant `decideResidual` compares against `g`, when there is one.
+  std::optional<int64_t> residualConstant(const AffineForm &d, QueryContext ctx,
+                                          CandidateSet &cs);
+  /// The single exit of every successful path (§4.3 steps 1-6).
+  BoundProof finalize(BoundProof::Verdict onD, CandidateSet cs,
+                      ArrayRef<Obligation> obligations, QueryContext ctx);
+  /// Adds a candidate condition, or reports why it cannot be added.
+  CandidateResult addCandidate(CandidateSet &cs, BoundCondition cond,
+                               QueryContext ctx);
+  /// Merges the evidence a bounding produced into the candidate set.
+  void mergePreconditions(CandidateSet &cs, const Bounds &b) const;
+  /// The assume establishing `cond` outright, or null (Task 6).
+  Operation *assumedBy(const BoundCondition &cond, QueryContext ctx) const;
+  /// A block argument's affine form: the loop IV, an IV-offset iter_arg, a
+  /// function argument, else opaque.
+  AffineForm leafForBlockArg(BlockArgument arg, QueryContext ctx,
+                             SmallVectorImpl<Obligation> &obligations,
+                             AxisPlacement placement);
+
   AffineForm normalizeImpl(Value v, QueryContext ctx,
                            SmallVectorImpl<Obligation> &obligations,
                            AxisPlacement placement, unsigned depth);
