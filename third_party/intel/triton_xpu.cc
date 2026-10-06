@@ -363,14 +363,15 @@ void init_triton_intel(py::module_ &m) {
         // paths with undefined behavior as dead. This can result in
         // removal of the mask path and incorrect results from legal
         // Triton kernels due to masked elements being used in
-        // computation. Run a pass to guard masked-load phi nodes used
-        // as divisors with select(divisor == 0, 1, divisor) to prevent
-        // LLVM from exploiting the division-by-zero UB.
+        // computation. Run a pass that guards every integer div/rem
+        // whose divisor is not provably non-zero with
+        // select(freeze(divisor) == 0, 1, freeze(divisor)), whatever
+        // produced the divisor (a masked-load phi, a vector lane of one,
+        // a predicated load), so LLVM cannot exploit the division-by-zero
+        // UB here or in IGC's pipeline later.
         //
         // This must run before any optimization pass (especially
-        // SimplifyCFG) which can fold conditional blocks that share the
-        // same branch condition, eliminating the phi nodes this pass
-        // needs to match.
+        // SimplifyCFG), which exploits the UB before a guard exists.
         {
           llvm::FunctionPassManager fpm;
           fpm.addPass(GuardMaskedDivRemPass());
