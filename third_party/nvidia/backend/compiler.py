@@ -38,7 +38,7 @@ def min_dot_size(target: GPUTarget):
     return check_dot_compatibility
 
 
-def get_ptxas_for_arch(arch: int) -> knobs.NvidiaTool:
+def get_ptxas(arch: int) -> knobs.NvidiaTool:
     if arch < 90:
         return knobs.nvidia.ptxas
     # The ptxas-blackwell name is misleading; keep it until legacy ptxas is removed.
@@ -46,11 +46,11 @@ def get_ptxas_for_arch(arch: int) -> knobs.NvidiaTool:
 
 
 @functools.lru_cache()
-def get_ptxas_version_for_arch(arch: int = 80):
+def get_ptxas_version(arch: int = 80):
     mock_ver = knobs.nvidia.mock_ptx_version
     if mock_ver is not None:
         return mock_ver  # This is not really a version of ptxas, but it is good enough for testing
-    version = subprocess.check_output([get_ptxas_for_arch(arch).path, "--version"]).decode("utf-8")
+    version = subprocess.check_output([get_ptxas(arch).path, "--version"]).decode("utf-8")
     return version
 
 
@@ -80,7 +80,7 @@ def ptx_get_version(cuda_version: str) -> int:
 def get_ptx_version_from_options(options, arch: int):
     ptx_version = options.ptx_version
     if ptx_version is None:
-        cuda_version = get_ptxas_for_arch(arch).version
+        cuda_version = get_ptxas(arch).version
         ptx_version = ptx_get_version(cuda_version)
     return ptx_version
 
@@ -128,7 +128,7 @@ class CUDAOptions:
     ptx_version: int = None
     ptx_options: Optional[str] = knobs.nvidia.ptxas_options
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
-    enable_fp_fusion: bool = True
+    enable_fp_fusion: bool = False
     sched4reg: bool = False
     enable_reflect_ftz: bool = True  # ftz in libdevice
     launch_cooperative_grid: bool = False
@@ -244,8 +244,7 @@ class CUDABackend(BaseBackend):
             if capability >= 90:
                 args["deprecated_fp8_dot_operand_dtypes"] = ("fp8e4b15", )
 
-        if "enable_fp_fusion" not in args:
-            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
+        args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
 
         if is_enabled(args, "gsan"):
             from triton.runtime.driver import driver
@@ -424,7 +423,6 @@ class CUDABackend(BaseBackend):
 
         if is_enabled(options, "gsan"):
             # GSan introduces layout conversions, so it must run before shared-memory allocation.
-            mod.set_attr("tti.gsan_launch_pdl", ir.builder(mod.context).get_int32_attr(int(options.launch_pdl)))
             passes.ttgpuir.add_global_sanitizer(pm)
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
@@ -576,7 +574,7 @@ class CUDABackend(BaseBackend):
         return ret
 
     def make_cubin(self, src, metadata, opt, capability):
-        ptxas = get_ptxas_for_arch(self.target.arch).path
+        ptxas = get_ptxas(self.target.arch).path
         with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.ptx') as fsrc, \
             tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
             fsrc.write(src)
@@ -677,5 +675,5 @@ please share the reproducer above with Triton project.
 
     @functools.lru_cache()
     def hash(self):
-        version = get_ptxas_version_for_arch(self.target.arch)
+        version = get_ptxas_version(self.target.arch)
         return f'{version}-{self.target.arch}'

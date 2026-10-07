@@ -42,10 +42,10 @@ def _compile_gsan_allocator() -> str:
 
 
 @functools.lru_cache()
-def get_allocator():
+def get_allocator(*, write_once: bool = False):
     from torch.cuda.memory import CUDAPluggableAllocator
     so_name = _compile_gsan_allocator()
-    return CUDAPluggableAllocator(so_name, "gsanMalloc", "gsanFree")
+    return CUDAPluggableAllocator(so_name, "gsanMallocWriteOnce" if write_once else "gsanMalloc", "gsanFree")
 
 
 def configure(
@@ -100,14 +100,20 @@ def has_live_allocations() -> bool:
     return _load_gsan_module().has_live_allocations()
 
 
+def supports_fabric_handles(device: int) -> bool:
+    """Return whether a CUDA device supports fabric allocation handles."""
+    return _load_gsan_module().supports_fabric_handles(device)
+
+
 def reset() -> None:
     """Reset GSan runtime state after all GSan allocations have been released.
 
     Runs garbage collection if allocations remain. If any are still live,
     raises ``AssertionError`` without resetting the runtime or stream clocks.
     """
-    from . import _stream_sync
+    from . import _stream_sync, graph
 
+    graph._check_reset()
     module = _load_gsan_module()
     if module.has_live_allocations():
         gc.collect()
@@ -115,14 +121,14 @@ def reset() -> None:
     _stream_sync._reset_caches()
 
 
-def create_mem_pool():
+def create_mem_pool(*, write_once: bool = False):
     from torch.cuda.memory import MemPool
-    return MemPool(get_allocator().allocator())
+    return MemPool(get_allocator(write_once=write_once).allocator())
 
 
-def gsan_malloc(size: int, device: int, stream: int = 0) -> int:
+def gsan_malloc(size: int, device: int, stream: int = 0, *, write_once: bool = False) -> int:
     module = _load_gsan_module()
-    return module.malloc(size, device, stream)
+    return module.malloc(size, device, stream, write_once)
 
 
 def gsan_free(ptr: int, device: int, size: int = 0, stream: int = 0) -> None:
@@ -151,10 +157,17 @@ def get_runtime_state_layout(device: int) -> dict[str, int]:
     return module.get_runtime_state_layout(device)
 
 
+def is_write_once_allocation(ptr: int) -> bool:
+    """Return the mode of a live GSan allocation, accepting interior pointers."""
+    return _load_gsan_module().is_write_once_allocation(ptr)
+
+
 @overload
 def export_allocation_handles(
     ptr: int,
     handle_type: Literal[ShareableHandleType.POSIX_FILE_DESCRIPTOR],
+    *,
+    write_once: bool = False,
 ) -> tuple[int, int, int]:
     ...
 
@@ -163,13 +176,16 @@ def export_allocation_handles(
 def export_allocation_handles(
     ptr: int,
     handle_type: Literal[ShareableHandleType.FABRIC],
+    *,
+    write_once: bool = False,
 ) -> tuple[bytes, bytes, int]:
     ...
 
 
-def export_allocation_handles(ptr, handle_type):
+def export_allocation_handles(ptr, handle_type, *, write_once: bool = False):
+    """Export handles, checking the mode that must also be passed to import."""
     module = _load_gsan_module()
-    return module.export_allocation_handles(ptr, handle_type)
+    return module.export_allocation_handles(ptr, handle_type, write_once)
 
 
 def export_allocation_memhandle_regions(ptr: int) -> tuple[int, int, int, int]:
@@ -184,6 +200,8 @@ def import_allocation_handles(
     alloc_size: int,
     device: int,
     handle_type: Literal[ShareableHandleType.POSIX_FILE_DESCRIPTOR],
+    *,
+    write_once: bool = False,
 ) -> int:
     ...
 
@@ -195,6 +213,8 @@ def import_allocation_handles(
     alloc_size: int,
     device: int,
     handle_type: Literal[ShareableHandleType.FABRIC],
+    *,
+    write_once: bool = False,
 ) -> int:
     ...
 
@@ -205,6 +225,8 @@ def import_allocation_handles(
     alloc_size,
     device,
     handle_type,
+    *,
+    write_once: bool = False,
 ):
     module = _load_gsan_module()
     return module.import_allocation_handles(
@@ -213,6 +235,7 @@ def import_allocation_handles(
         alloc_size,
         device,
         handle_type,
+        write_once,
     )
 
 

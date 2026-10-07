@@ -1,6 +1,15 @@
 ---
 description: 'MLIR pass writing patterns for Intel XPU backend: pass declaration, structural patterns, MLIR best practices, utilities, and complete pass inventory'
-applyTo: '**/intel/lib/**/*.cpp, **/intel/lib/**/*.h, **/intel/include/**/Transforms/**/*.td, **/intel/include/**/Transforms/**/*.h, **/intel/include/TritonGENToLLVM/**/*.td, **/intel/include/TritonIntelGPUToLLVM/**/*.td, **/intel/include/GPUToTritonGEN/**/*.td, **/intel/include/TritonAnnotateModule/**/*.td, **/triton_xpu.cc'
+paths:
+  - "**/intel/lib/**/*.cpp"
+  - "**/intel/lib/**/*.h"
+  - "**/intel/include/**/Transforms/**/*.td"
+  - "**/intel/include/**/Transforms/**/*.h"
+  - "**/intel/include/TritonGENToLLVM/**/*.td"
+  - "**/intel/include/TritonIntelGPUToLLVM/**/*.td"
+  - "**/intel/include/GPUToTritonGEN/**/*.td"
+  - "**/intel/include/TritonAnnotateModule/**/*.td"
+  - "**/triton_xpu.cc"
 ---
 
 # Intel XPU Backend — MLIR Pass Writing Patterns
