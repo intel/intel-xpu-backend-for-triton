@@ -25,7 +25,7 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-// The census trace (phase 0) sits on its own debug type so a corpus run can
+// The census trace sits on its own debug type so a corpus run can
 // enable it alone: `-debug-only=triton-intel-remove-masks` also turns on this
 // pass's after-versioning module dumps, which are two orders of magnitude more
 // output than the census itself. The printed prefix stays the pass's, so the
@@ -43,10 +43,12 @@ namespace mlir::triton::intel {
 
 namespace {
 
-// Census scaffolding, debug-only (phase 0 of the symbolic-bounds plan). Ids are
-// stored as a discardable attribute (no dialect prefix, so no dialect verifier
-// sees it): loop clones made by versioning inherit them, and stripCensusIds
-// removes them at pass end.
+// Census scaffolding, debug-only: trace lines keyed by a stable per-mask id.
+// In `census:` lines, `walk=` numbers the legacy driver's three walks in
+// order: 1 is RemovableMaskValidator, 2 CanonicalMaskValidator, 3
+// InvariantMaskValidator. Ids are stored as a discardable attribute (no
+// dialect prefix, so no dialect verifier sees it): loop clones made by
+// versioning inherit them, and stripCensusIds removes them at pass end.
 static constexpr StringLiteral kCensusIdAttr = "census_id";
 
 // Null-safe: the validators' internal calls pass op == nullptr.
@@ -84,7 +86,7 @@ static std::string describeBound(Value v) {
 }
 
 // `argN` for a function argument, else `describeBound`'s coarse
-// classification: the versioning trace (Task 11) only needs enough to join
+// classification: the versioning trace only needs enough to join
 // a `versioned:` guard against the census's `candidate:`/`verdict:` lines by
 // eye, not a full expression.
 static std::string describeArg(Value v) {
@@ -544,7 +546,7 @@ private:
     return cls;
   }
 
-  // One census line per walk-1 classification exit (phase 0, debug-only).
+  // One census line per walk-1 classification exit (debug-only).
   void censusExit(scf::ForOp &forOp, StringRef exit,
                   StringRef result = StringRef()) const {
     CDBG("census: id=" << censusId(censusOp) << " walk=1 exit=" << exit
@@ -1110,7 +1112,7 @@ struct LoopPlan {
   SmallVector<std::pair<Operation *, tt::intel::BoundProof>, 4> ops;
   // Deduplicated guard conditions, facts before preconditions before guards.
   SmallVector<tt::intel::BoundCondition, 4> conds;
-  Value guard; // set in phase B1
+  Value guard; // materialized before any unmasking
 };
 
 // ','-joined census ids, in the order given.
@@ -1474,7 +1476,7 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
-    // Census scaffolding (phase 0): assign stable per-mask ids before anything
+    // Census scaffolding: assign stable per-mask ids before anything
     // examines or mutates the IR, and strip them at pass end. Setting a
     // discardable attribute creates and erases no values, so this does not
     // affect analysis-state validity.
@@ -1507,7 +1509,7 @@ public:
 
     SmallVector<LoopPlan, 2> plans;
     moduleOp->walk<WalkOrder::PreOrder>([&](scf::ForOp forOp) {
-      // v1: outermost single-induction-variable loops only.
+      // Outermost single-induction-variable loops only.
       if (forOp->getParentOfType<scf::ForOp>() ||
           !forOp.getSingleInductionVar())
         return;
@@ -1531,7 +1533,7 @@ public:
       plans.push_back(std::move(plan));
     });
 
-    // Phase B1: materialize every guard before any other mutation, so no guard
+    // Materialize every guard before any other mutation, so no guard
     // refers to a value a later unmasking erased.
     using Prover = tt::intel::SymbolicBoundsProver;
     for (LoopPlan &plan : plans) {
@@ -1564,7 +1566,7 @@ public:
       plan.guard = tt::intel::materialize(plan.conds, plan.loop, builder);
     }
 
-    // Phase B2, per loop in reverse program order: drop the unconditional
+    // Then, per loop in reverse program order: drop the unconditional
     // masks first, so both clones inherit them, then version.
     for (LoopPlan &plan : llvm::reverse(plans)) {
       for (auto &[op, proof] : plan.ops) {
