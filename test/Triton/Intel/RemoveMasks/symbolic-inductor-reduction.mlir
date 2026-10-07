@@ -117,6 +117,59 @@ tt.func @select_mask(%ptr: !tt.ptr<f32>, %rnumel: i32) {
 
 // -----
 
+// COM: Two independent invariant masks whose `tt.load`s share a loc name
+// COM: ("offset"), increment 1c: census ids and guard dedup (spec §4.7) key
+// COM: on the SSA value, not the loc text, so sharing a name must not merge
+// COM: the two loads' evidence. Neither load has a narrowed range, and N is a
+// COM: kernel arg: the residual `N - offset - 63` has two unconstrained
+// COM: invariant symbols and no substituted IV or quotient, so only 4e
+// COM: reaches it. The two conditions it emits per load (one per `tt.load`,
+// COM: pinned by captures rather than a count: materialization also extends
+// COM: N) are what distinguishes the loads from each other.
+
+// CHECK-LABEL: tt.func @same_loc_two_guards
+tt.func @same_loc_two_guards(%ptr1: !tt.ptr<f32>, %ptr2: !tt.ptr<f32>,
+                             %offp1: !tt.ptr<i32>, %offp2: !tt.ptr<i32>,
+                             %N: i32) {
+  %c0 = arith.constant 0 : i32
+  %c64 = arith.constant 64 : i32
+  // SYM: %[[O1:.*]] = tt.load %{{.*}} : !tt.ptr<i32>
+  // SYM: %[[O2:.*]] = tt.load %{{.*}} : !tt.ptr<i32>
+  %o1 = tt.load %offp1 : !tt.ptr<i32> loc("offset")
+  %o2 = tt.load %offp2 : !tt.ptr<i32> loc("offset")
+  %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+  %ns = tt.splat %N : i32 -> tensor<64xi32>
+  %os1 = tt.splat %o1 : i32 -> tensor<64xi32>
+  %os2 = tt.splat %o2 : i32 -> tensor<64xi32>
+  %idx1 = arith.addi %lane, %os1 : tensor<64xi32>
+  %mask1 = arith.cmpi slt, %idx1, %ns : tensor<64xi32>
+  %idx2 = arith.addi %lane, %os2 : tensor<64xi32>
+  %mask2 = arith.cmpi slt, %idx2, %ns : tensor<64xi32>
+  %ps1 = tt.splat %ptr1 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
+  %ps2 = tt.splat %ptr2 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
+  // SYM-DAG: arith.extsi %[[O1]]
+  // SYM-DAG: arith.extsi %[[O2]]
+  // SYM: scf.if
+  // SYM:   scf.for
+  // SYM-NOT:   tt.load %{{.*}}, %{{.*}} :
+  // SYM:       tt.load %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:       tt.load %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM: } else {
+  // SYM:   scf.for
+  // SYM:     tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:     tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
+  scf.for %r = %c0 to %N step %c64 : i32 {
+    %v1 = tt.load %ps1, %mask1 : tensor<64x!tt.ptr<f32>>
+    %v2 = tt.load %ps2, %mask2 : tensor<64x!tt.ptr<f32>>
+    tt.store %ps1, %v1, %mask1 : tensor<64x!tt.ptr<f32>>
+    tt.store %ps2, %v2, %mask2 : tensor<64x!tt.ptr<f32>>
+    scf.yield
+  }
+  tt.return
+}
+
+// -----
+
 // COM: A loop-carried mask: an i1 iter_arg initialized `true` and yielding a
 // COM: computed value. proveTrue stops at the block argument rather than
 // COM: substituting the init value, which would read as unconditionally true and
