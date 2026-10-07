@@ -15,6 +15,7 @@ from functools import cached_property, lru_cache
 
 from triton import knobs
 import triton
+from triton.runtime import _allocation
 from triton.runtime.build import _build, platform_key, _load_module_from_path
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
@@ -700,6 +701,10 @@ class XPULauncher(object):
         self.constants = constants
         self.signature = signature
         self.dump_launch_params = os.environ.get("TRITON_DUMP_LAUNCH_PARAMS") == "1"
+        self.global_scratch_size = metadata.global_scratch_size
+        self.global_scratch_align = metadata.global_scratch_align
+        self.profile_scratch_size = metadata.profile_scratch_size
+        self.profile_scratch_align = metadata.profile_scratch_align
 
     def _resolve_dump_dir(self, cache_dir):
         dump_dir_root = knobs.intel.dump_spirv_kernel_args_dir
@@ -749,6 +754,28 @@ class XPULauncher(object):
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
+        active_driver = triton.runtime.driver.active
+
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_fn = allocator.get()
+                return alloc_fn(grid_size * size, align, stream)
+            return None
+
+        def allocate_default_profile_scratch(size, align):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                return active_driver.allocate_default_profile_scratch(grid_size * size, align, stream)
+            return None
+
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        if _allocation.has_profile_allocator():
+            profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                               _allocation._profile_allocator)
+        else:
+            profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
+
         if self.serialize_kernel_args:
             if self.print_dump_spirv_kernel_args_info:
                 print(
@@ -764,7 +791,8 @@ class XPULauncher(object):
                                       launch_enter_hook, launch_exit_hook, *args), self.constants, self.signature)
 
         self.launch(gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
-                    launch_exit_hook, self.arg_annotations, self.kernel_signature, args)
+                    launch_exit_hook, global_scratch, profile_scratch, self.arg_annotations, self.kernel_signature,
+                    args)
 
 
 class XPUDriver(DriverBase):
@@ -833,6 +861,18 @@ class XPUDriver(DriverBase):
     def get_device_interface(self):
         import torch
         return torch.xpu
+
+    def allocate_default_profile_scratch(self, size: int, alignment: int, stream):
+        import torch
+        device = self.get_active_torch_device()
+        if not stream:
+            with torch.xpu.stream(torch.xpu.current_stream(device)):
+                return torch.zeros(size, dtype=torch.int8, device=device)
+        launch_stream = torch.xpu.get_stream_from_external(stream, device=device)
+        with torch.xpu.stream(launch_stream):
+            scratch = torch.zeros(size, dtype=torch.int8, device=device)
+        scratch.record_stream(launch_stream)
+        return scratch
 
     @staticmethod
     def is_active():

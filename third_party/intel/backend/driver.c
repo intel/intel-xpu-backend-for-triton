@@ -1483,13 +1483,16 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   PyObject *launch_exit_hook = NULL;
   void *global_scratch = nullptr;
   void *profile_scratch = nullptr;
+  PyObject *global_scratch_obj = NULL;
+  PyObject *profile_scratch_obj = NULL;
   PyObject *arg_annotations = NULL;
   Py_buffer signature;
   PyObject *kernel_args = NULL;
 
-  if (!PyArg_ParseTuple(args, "iiiOOOOOOOy*O", &gridX, &gridY, &gridZ,
+  if (!PyArg_ParseTuple(args, "iiiOOOOOOOOOy*O", &gridX, &gridY, &gridZ,
                         &py_obj_stream, &py_kernel, &kernel_metadata,
                         &launch_metadata, &launch_enter_hook, &launch_exit_hook,
+                        &global_scratch_obj, &profile_scratch_obj,
                         &arg_annotations, &signature, &kernel_args)) {
     return NULL;
   }
@@ -1589,6 +1592,11 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   }
   g_pointer_check_arg_idx = -1;
   // Add scratch objects.
+  if (!extractPointer(&global_scratch, global_scratch_obj) ||
+      !extractPointer(&profile_scratch, profile_scratch_obj)) {
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
   params[params_idx++] = &global_scratch;
   params[params_idx++] = &profile_scratch;
   KernelInfo *kernel_info =

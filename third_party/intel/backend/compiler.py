@@ -591,6 +591,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         if is_enabled(opt, "fpsan"):
             passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
+            intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
         pm.run(mod, 'make_ttgir')
         return mod
 
@@ -607,6 +610,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         if is_enabled(options, "fpsan"):
             passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
+            intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -719,8 +725,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             metadata["num_warps"] = total_num_warps
         metadata["threads_per_warp"] = intel.get_threads_per_warp(src)
         metadata["warp_size"] = metadata["threads_per_warp"]
-        metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
-        metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
+        metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size") or 0
+        metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment") or 1
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
 
