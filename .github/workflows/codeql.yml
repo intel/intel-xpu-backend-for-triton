@@ -58,7 +58,7 @@ jobs:
       if: matrix.build-mode == 'manual'
       uses: ./.github/actions/setup-python
       with:
-        python_version: "3.10"
+        python_version: "3.11"
         use_pyenv: false
 
     - name: Set MAX_JOBS
