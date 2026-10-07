@@ -9,6 +9,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark import LARGE_GRF_MODE
 from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_MODULE, get_xpu_extension
 
 sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
@@ -161,7 +162,7 @@ def _attn_fwd(sm_scale, M,  #
 
 
 configs = [
-    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': '256'}, num_stages=s, num_warps=w) \
+    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': LARGE_GRF_MODE}, num_stages=s, num_warps=w) \
     for BM in [128, 256] \
     for BN in [32, 64] \
     for s in [2, 3, 4] \
@@ -176,7 +177,7 @@ bwd_configs = [
         'BLOCK_N1': bn1,
         'BLOCK_M2': bm2,
         'BLOCK_N2': bn2,
-        'grf_mode': '256',
+        'grf_mode': LARGE_GRF_MODE,
     }, num_stages=s, num_warps=w)
     for bm1 in [32, 64]
     for bn1 in [64, 128]

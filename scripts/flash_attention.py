@@ -7,6 +7,7 @@ import triton
 
 from triton_kernels_benchmark.flash_attention_benchmark import _attention, tune_attn_fwd
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark import LARGE_GRF_MODE
 
 
 def get_options():
@@ -41,8 +42,12 @@ def get_configs(options):
     warps_values = options.warps if options.warps else [8, 16, 32]
     use_barrier = options.use_barrier if options.use_barrier is not None else False
     return [
-        triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': '256', 'use_barrier': use_barrier}, num_stages=s,
-                      num_warps=w) for BM in bm_values for BN in bn_values for s in stages_values for w in warps_values
+        triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': LARGE_GRF_MODE, 'use_barrier': use_barrier},
+                      num_stages=s, num_warps=w)
+        for BM in bm_values
+        for BN in bn_values
+        for s in stages_values
+        for w in warps_values
     ]
 
 

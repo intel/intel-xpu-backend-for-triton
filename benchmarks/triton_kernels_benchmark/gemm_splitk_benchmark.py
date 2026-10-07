@@ -11,6 +11,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark import LARGE_GRF_MODE
 from triton_kernels_benchmark.benchmark_testing import DEVICE, get_xpu_extension
 
 sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
@@ -27,8 +28,9 @@ def get_autotune_configs() -> List[triton.Config]:
                           num_warps=4),
         ]
     return [
-        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 4, 'SPLIT_K': 4, 'grf_mode': '256'},
-                      num_stages=4, num_warps=32),
+        triton.Config(
+            {'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 4, 'SPLIT_K': 4, 'grf_mode': LARGE_GRF_MODE},
+            num_stages=4, num_warps=32),
     ]
 
 

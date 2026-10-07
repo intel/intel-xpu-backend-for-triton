@@ -5,14 +5,15 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark import LARGE_GRF_MODE
 from triton_kernels_benchmark.benchmark_testing import DEVICE
 
 
 def fwd_autotune_config() -> list[triton.Config]:
     return [
-        triton.Config({"BLOCK_M": 128, "BLOCK_N": 64, "grf_mode": "256", "in_loop_sink": False}, num_stages=3,
+        triton.Config({"BLOCK_M": 128, "BLOCK_N": 64, "grf_mode": LARGE_GRF_MODE, "in_loop_sink": False}, num_stages=3,
                       num_warps=8),
-        triton.Config({"BLOCK_M": 128, "BLOCK_N": 32, "grf_mode": "256", "in_loop_sink": False}, num_stages=3,
+        triton.Config({"BLOCK_M": 128, "BLOCK_N": 32, "grf_mode": LARGE_GRF_MODE, "in_loop_sink": False}, num_stages=3,
                       num_warps=16),
     ]
 
