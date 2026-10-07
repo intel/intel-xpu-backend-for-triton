@@ -330,8 +330,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 // COM: Test l2 — user-specified eviction policy (evict_first / evict_last)
-// COM: must NOT be overridden. The lowering maps these to precise LSC cache
-// COM: modes; stamping .cg here would lose the user's intent.
+// COM: must NOT be overridden. Stamping .cg here would take precedence over the
+// COM: lowering (evict_last -> L1C_L3C, evict_first -> Default).
 
 #blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
