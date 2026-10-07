@@ -1644,6 +1644,67 @@ bool conditionImplies(const BoundCondition &stronger,
     return stronger.c != 0 && weaker.c != 0 && stronger.c % weaker.c == 0;
   return false;
 }
+
+/// Task 13 step 1's metric: true when `a`'s admitted set is a (non-strict)
+/// superset of `b`'s, decided structurally rather than by evaluating over the
+/// argument domain. Sound only when it returns true: a false result means
+/// "not provably wider", not "narrower" - the two could be genuinely
+/// incomparable (different subjects), which the caller's tie-break handles.
+bool admitsAtLeast(const BoundProof &a, const BoundProof &b) {
+  for (const BoundCondition &bc : b.conditions) {
+    // Same subject is not enough to match: a subject commonly carries both
+    // an AtLeast and an AtMost (a wrap guard's two sides), and matching `bc`
+    // against whichever one `find_if` happens to see first - rather than the
+    // one in the same comparable family `conditionImplies` would actually
+    // compare it against - silently breaks the comparison instead of
+    // correctly reporting "not provably wider".
+    auto it = llvm::find_if(a.conditions, [&](const BoundCondition &ac) {
+      if (!(ac.expr == bc.expr))
+        return false;
+      if (lowerBoundOf(bc) && lowerBoundOf(ac))
+        return true;
+      if (upperBoundOf(bc) && upperBoundOf(ac))
+        return true;
+      return bc.goal == BoundGoal::DivisibleBy &&
+             ac.goal == BoundGoal::DivisibleBy;
+    });
+    // `a` names a subject `b` doesn't restrict at all: unmatched, so `a`
+    // cannot be shown to admit a superset by this structural rule.
+    if (it == a.conditions.end())
+      return false;
+    // `b`, playing "stronger", must be implied by `a`, playing "weaker": `a`
+    // admits whatever `b` does on this subject, plus whatever its own bound
+    // widens.
+    if (!conditionImplies(bc, *it))
+      return false;
+  }
+  return true;
+}
+
+/// Picks the proof with the widest admitted set among `finishers`, which all
+/// decide the same query. Project 13 step 1: exact superset comparison when
+/// one side's conditions dominate every one of the other's on a matched
+/// subject; otherwise (genuinely incomparable subject sets) fewer total
+/// conditions wins, and the earliest-discovered kind is the final tie-break -
+/// today's single-finisher behavior, preserved as the floor of this ordering
+/// so an undecidable case never becomes nondeterministic.
+size_t pickWidest(ArrayRef<BoundProof> finishers) {
+  size_t best = 0;
+  for (size_t i = 1; i < finishers.size(); ++i) {
+    const BoundProof &cand = finishers[i];
+    const BoundProof &cur = finishers[best];
+    bool candWider = admitsAtLeast(cand, cur) && !admitsAtLeast(cur, cand);
+    bool curWider = admitsAtLeast(cur, cand) && !admitsAtLeast(cand, cur);
+    if (candWider) {
+      best = i;
+    } else if (!curWider && cand.conditions.size() < cur.conditions.size()) {
+      // Neither structurally dominates the other: fewer conditions is the
+      // documented proxy, and ties keep whichever came first (do nothing).
+      best = i;
+    }
+  }
+  return best;
+}
 } // namespace
 
 BoundProof SymbolicBoundsProver::finalize(BoundProof::Verdict onD,
@@ -1864,12 +1925,19 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
       return finalize(BoundProof::Refuted, std::move(ref), obligations, ctx);
   }
 
-  // Step 4: the greedy accumulated search. Candidates are tried once each in
-  // a fixed order, re-discovered on the residual after every commit, and a
-  // candidate is kept when it strictly improves lo(d) even if it does not
-  // finish the proof.
+  // Step 4: the accumulated search (Task 13: no longer greedy). Candidates
+  // are tried once each in a fixed order, re-discovered on the residual after
+  // every commit, and a candidate is kept in `acc` when it strictly improves
+  // lo(d) even if it does not finish the proof. A kind that *does* finish is
+  // finalized and recorded in `finishers` rather than returned immediately,
+  // so every kind gets a chance - a cheap single-symbol guard (4c) must not
+  // pre-empt a wider one a later kind would have found (4e) - and does *not*
+  // feed its own trial back into `acc`: the next kind explores independently
+  // from the same baseline, not contaminated by a hypothesis that only
+  // mattered because an earlier kind happened to finish with it.
   CandidateSet acc = base;
   std::optional<int64_t> best = residualConstant(d, ctx, acc);
+  SmallVector<BoundProof, 2> finishers;
   enum CandidateKind { K4a, K4b, K4c, K4d, K4e };
   for (CandidateKind kind : {K4a, K4b, K4c, K4d, K4e}) {
     // Discover on the bounded residual, never on d: in E2 the quotient only
@@ -2054,7 +2122,16 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
       bool guardable = !pb.lo.isConstant(); // the constant case decided already
       for (auto &[sym, k] : pb.lo.terms())
         if (!sym.value() || isa<ShapedType>(sym.value().getType()) ||
-            sym.kind() == SymbolKind::TripCount) {
+            sym.kind() == SymbolKind::TripCount ||
+            sym.kind() == SymbolKind::Quotient) {
+          // A Quotient's own `.value()` is the divisor operand's raw,
+          // possibly-wrapped SSA value (the dividend `symbolFor` was given,
+          // not `QuotientInfo::dividend`'s obligation-checked form) -
+          // `materialize`'s Quotient case divides it directly, so guarding
+          // it here would read a wrapped numerator exactly like K4d exists
+          // to prevent. 4d is where a Quotient term gets a sound guard, via
+          // the translated dividend condition and its own registered wrap
+          // obligation; 4e declines rather than risk the untranslated one.
           guardable = false;
           break;
         }
@@ -2084,9 +2161,13 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
       bool declined = false;
       for (const BoundCondition &cond : candidates) {
         CandidateResult res = addCandidate(trial, cond, ctx);
-        if (res == CandidateResult::Exhausted)
-          return {};
-        if (res == CandidateResult::Declined) {
+        // Exhausted/Declined both just mean this kind's own candidate list
+        // doesn't work; unlike the pre-Task-13 greedy search, that no longer
+        // aborts the whole query, since an earlier kind may already have
+        // finished (or a later one still might) - the 5-kind loop is bounded
+        // regardless of how many individual kinds fail this way.
+        if (res == CandidateResult::Exhausted ||
+            res == CandidateResult::Declined) {
           trial = acc; // not expressible: discard and try the next kind
           declined = true;
           break;
@@ -2095,10 +2176,19 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
       // Always finalize once the residual decides: a candidate established by
       // a dominating assume adds no runtime condition, so the condition set
       // can legitimately be empty - finalize is what turns that into
-      // Satisfied rather than ConditionallySatisfied.
-      if (!declined)
-        return finalize(BoundProof::ConditionallySatisfied, std::move(trial),
-                        obligations, ctx);
+      // Satisfied rather than ConditionallySatisfied. Recorded, not returned:
+      // Satisfied is also strictly better than any ConditionallySatisfied
+      // finisher, so prefer it immediately rather than let pickWidest compare
+      // an empty condition set against a non-empty one by its generic rules.
+      if (!declined) {
+        BoundProof proof = finalize(BoundProof::ConditionallySatisfied, trial,
+                                    obligations, ctx);
+        if (proof.verdict == BoundProof::Satisfied)
+          return proof;
+        if (proof.verdict != BoundProof::Unknown)
+          finishers.push_back(std::move(proof));
+        continue; // do not fold this trial into acc (see the loop's own doc)
+      }
     }
     // Keep a candidate that strictly improves lo(d) without finishing.
     std::optional<int64_t> lo = residualConstant(d, ctx, trial);
@@ -2107,6 +2197,8 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
       best = lo;
     }
   }
+  if (!finishers.empty())
+    return finishers[pickWidest(finishers)];
   return {};
 }
 

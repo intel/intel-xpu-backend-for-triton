@@ -819,9 +819,12 @@ TEST_F(SymbolicBoundsTest, CandidateProofStillClosesObligations) {
       %cmp = arith.cmpi sge, %y, %c0 : i32 loc("cmp")
       tt.return
     })");
-  // Candidate 4c proposes x >= 0; finalize must still close the wrap obligation
-  // on y with x <= INT32_MAX - 1, otherwise x = INT32_MAX would pass.
-  EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 >= 0; arg0 <= 2147483646}");
+  // 4c's own candidate is the weaker x >= 0; since Task 13 the search also
+  // tries 4e, whose exact AtLeast(y, 0) folds to the correct, wider x >= -1
+  // (y = x + 1 >= 0 admits x = -1, which x >= 0 wrongly excluded) and wins by
+  // the width metric. finalize must still close the wrap obligation on y with
+  // x <= INT32_MAX - 1 either way, otherwise x = INT32_MAX would pass.
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 >= -1; arg0 <= 2147483646}");
 }
 
 } // namespace
