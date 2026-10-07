@@ -9,8 +9,7 @@
 // string cannot carry conveniently - a real TTGIR module with layout
 // attributes, above all.
 //
-// There is no `scf.for` remark: the trip-count API is phase 3 of the design
-// and is not implemented.
+// There is no `scf.for` remark: the prover has no trip-count API.
 //
 //===----------------------------------------------------------------------===//
 

@@ -2,24 +2,24 @@
 
 // COM: The prover's rules are unit-tested directly in
 // COM: unittest/Analysis/SymbolicBoundsTest.cpp. The sections here are the
-// COM: ones that need a whole module: the two spec examples end to end, the
+// COM: ones that need a whole module: two realistic loops end to end, the
 // COM: element-correspondence case that must never be refuted, and a TTGIR
 // COM: layout conversion, which a gtest string cannot carry.
 // COM:
 // COM: `-verify-diagnostics=only-expected` ignores unannotated remarks, so a
 // COM: comparison with no `expected-remark` above it asserts nothing; only the
-// COM: annotated ones are pinned. There is no `scf.for` remark: the trip-count
-// COM: API is phase 3 and is not implemented.
+// COM: annotated ones are pinned. There is no `scf.for` remark: the prover
+// COM: has no trip-count API.
 
-// COM: E1 of the spec, the inductor reduction shape: `r + lane < rnumel` over
+// COM: The inductor reduction shape: `r + lane < rnumel` over
 // COM: a loop `0 to rnumel step 64`. Unprovable as written - the last
 // COM: iteration's tail lanes are masked off - and provable exactly when the
-// COM: loop ends on an iteration boundary, which is candidate 4a's condition
-// COM: on the loop's own upper bound.
+// COM: loop ends on an iteration boundary, the exact-loop-end condition on
+// COM: the loop's own upper bound.
 
-// CHECK-LABEL: tt.func @e1
+// CHECK-LABEL: tt.func @reduction_loop
 module {
-  tt.func @e1(%ptr: !tt.ptr<f32>, %rnumel: i32) {
+  tt.func @reduction_loop(%ptr: !tt.ptr<f32>, %rnumel: i32) {
     %c0 = arith.constant 0 : i32
     %c64 = arith.constant 64 : i32
     %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
@@ -37,10 +37,10 @@ module {
 
 // -----
 
-// COM: E2 of the spec, the tutorial-03 K loop: `lane < K - 64*k` over a loop
+// COM: The tutorial-03 K loop: `lane < K - 64*k` over a loop
 // COM: whose upper bound is `cdiv(K, 64)`. Three conditions, in the fixed
 // COM: order facts, preconditions, guards:
-// COM:   - `arg0 divisible by 64` is candidate 4b, the exact cdiv;
+// COM:   - `arg0 divisible by 64` is the exact-cdiv candidate;
 // COM:   - `arg0 >= 0` is the precondition of the division facts, which hold
 // COM:     only for a non-negative dividend. It does not change lo(d), and
 // COM:     dropping it would prove the mask for a negative K;
@@ -50,9 +50,9 @@ module {
 // COM: The matching `K + 63 >= INT32_MIN` guard is omitted because K's own
 // COM: i32 range already implies it.
 
-// CHECK-LABEL: tt.func @e2
+// CHECK-LABEL: tt.func @cdiv_k_loop
 module {
-  tt.func @e2(%K: i32) {
+  tt.func @cdiv_k_loop(%K: i32) {
     %c0 = arith.constant 0 : i32
     %c1 = arith.constant 1 : i32
     %c63 = arith.constant 63 : i32
@@ -98,7 +98,7 @@ module {
 
 // -----
 
-// COM: A layout change moves no element (spec 4.1), so `ttg.convert_layout`
+// COM: A layout change moves no element, so `ttg.convert_layout`
 // COM: is transparent to normalization and the lane symbol on either side of
 // COM: it is the same symbol: `c < c + 1` is Satisfied element-wise. Were the
 // COM: conversion opaque instead, the two sides would be unrelated symbols
