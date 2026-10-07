@@ -1549,6 +1549,12 @@ void SymbolicBoundsProver::guardsForObligation(
     const Obligation &o, QueryContext ctx, CandidateSet &cs,
     SmallVectorImpl<BoundCondition> &out) {
   Bounds b = bound(o.expr, ctx, cs);
+  if (!b.finite || b.exhausted) {
+    // lo/hi are not bounds (a non-finite symbol is left at zero in them), so
+    // no guard closes the obligation: the query ends Unknown.
+    cs.exhausted = true;
+    return;
+  }
   // Substitute quotient terms first, so a dividend cancels against its other
   // occurrences: the tutorial-03 K loop's `64*q(K+63,64) - 64` collapses to
   // `K - 1` rather than becoming a guard on an opaque division.

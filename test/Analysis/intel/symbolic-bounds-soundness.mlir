@@ -14,6 +14,7 @@ module {
     scf.for %i = %c0 to %c1 step %c1 : i32 {
       %x = tt.load %p : !tt.ptr<i8>
       %y = arith.addi %x, %c1_i8 : i8
+      // expected-remark@+1 {{verdict: Unknown}}
       %cmp = arith.cmpi sgt, %y, %x : i8
       scf.yield
     }
