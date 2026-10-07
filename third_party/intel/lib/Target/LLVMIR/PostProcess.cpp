@@ -250,16 +250,17 @@ static bool isI1Vector(Type *ty) {
 }
 
 // The bytes LLVM's layout gives a `<N x i1>`, as a type SPIR-V can represent:
-// i8/i16/i32/i64, else a vector of i32 (or of i8).
+// i8/i16/i32/i64 or <4 x i32>. Nothing produces other sizes (the i1 relayout
+// accesses at most 16 bytes), so those accesses are left untouched.
 static Type *getI1VectorStorageType(FixedVectorType *vecTy,
                                     const DataLayout &dl) {
   LLVMContext &ctx = vecTy->getContext();
   uint64_t bytes = dl.getTypeStoreSize(vecTy).getFixedValue();
   if (bytes == 1 || bytes == 2 || bytes == 4 || bytes == 8)
     return IntegerType::get(ctx, bytes * 8);
-  if (bytes % 4 == 0)
-    return FixedVectorType::get(Type::getInt32Ty(ctx), bytes / 4);
-  return FixedVectorType::get(Type::getInt8Ty(ctx), bytes);
+  if (bytes == 16)
+    return FixedVectorType::get(Type::getInt32Ty(ctx), 4);
+  return nullptr;
 }
 
 // Element `k` of a `<N x i1>` held in its storage type `raw`: bit k of the
@@ -280,10 +281,13 @@ static Value *extractI1VectorBit(IRBuilder<> &builder, Value *raw, unsigned k) {
 
 static void legalizeI1VectorLoad(LoadInst *load, const DataLayout &dl) {
   auto *vecTy = cast<FixedVectorType>(load->getType());
+  Type *storageTy = getI1VectorStorageType(vecTy, dl);
+  if (!storageTy)
+    return;
   IRBuilder<> builder(load);
-  LoadInst *raw = builder.CreateAlignedLoad(
-      getI1VectorStorageType(vecTy, dl), load->getPointerOperand(),
-      load->getAlign(), load->isVolatile());
+  LoadInst *raw =
+      builder.CreateAlignedLoad(storageTy, load->getPointerOperand(),
+                                load->getAlign(), load->isVolatile());
   raw->copyMetadata(
       *load, {LLVMContext::MD_alias_scope, LLVMContext::MD_noalias,
               LLVMContext::MD_nontemporal, LLVMContext::MD_invariant_load});
@@ -317,8 +321,10 @@ static void legalizeI1VectorLoad(LoadInst *load, const DataLayout &dl) {
 static void legalizeI1VectorStore(StoreInst *store, const DataLayout &dl) {
   Value *bits = store->getValueOperand();
   auto *vecTy = cast<FixedVectorType>(bits->getType());
-  IRBuilder<> builder(store);
   Type *storageTy = getI1VectorStorageType(vecTy, dl);
+  if (!storageTy)
+    return;
+  IRBuilder<> builder(store);
   auto *wordTy = cast<IntegerType>(storageTy->getScalarType());
   unsigned wordBits = wordTy->getBitWidth();
   auto *storageVecTy = dyn_cast<FixedVectorType>(storageTy);
@@ -357,8 +363,8 @@ static void legalizeI1VectorStore(StoreInst *store, const DataLayout &dl) {
 // forms such accesses on its own: InstCombine folds `bitcast <M x iK> to
 // <N x i1>` into the load feeding it, and a bitcast stored value into the
 // store. IGC then either reads N bytes where LLVM meant N bits, returning the
-// wrong elements without an error, or crashes. Rewrite every such load and
-// store as an integer access of the same bytes, and do the bit (un)packing in
+// wrong elements without an error, or crashes. Rewrite such loads and stores
+// as integer accesses of the same bytes, and do the bit (un)packing in
 // registers.
 void legalizeI1VectorMemory(Module &module) {
   const DataLayout &dl = module.getDataLayout();

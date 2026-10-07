@@ -59,29 +59,16 @@ define <8 x i32> @load_whole_vector(ptr addrspace(3) %p, <8 x i32> %a, <8 x i32>
 }
 
 ; Wider vectors are accessed as a vector of i32: element 65 is bit 1 of word 2.
+; Volatility is preserved.
 ; CHECK-LABEL: @load_wide
-; CHECK:       [[RAW:%.*]] = load <4 x i32>, ptr addrspace(3) %p, align 16
+; CHECK:       [[RAW:%.*]] = load volatile <4 x i32>, ptr addrspace(3) %p, align 16
 ; CHECK:       [[W:%.*]] = extractelement <4 x i32> [[RAW]], i64 2
 ; CHECK:       [[M:%.*]] = and i32 [[W]], 2
 ; CHECK:       [[B:%.*]] = icmp ne i32 [[M]], 0
 ; CHECK:       ret i1 [[B]]
 define i1 @load_wide(ptr addrspace(3) %p) {
-  %v = load <128 x i1>, ptr addrspace(3) %p, align 16
+  %v = load volatile <128 x i1>, ptr addrspace(3) %p, align 16
   %b = extractelement <128 x i1> %v, i64 65
-  ret i1 %b
-}
-
-; A byte count that is no power of two and no multiple of 4 uses i8 lanes:
-; element 20 is bit 4 of byte 2. Volatility is preserved.
-; CHECK-LABEL: @load_odd_bytes_volatile
-; CHECK:       [[RAW:%.*]] = load volatile <3 x i8>, ptr addrspace(1) %p, align 1
-; CHECK:       [[W:%.*]] = extractelement <3 x i8> [[RAW]], i64 2
-; CHECK:       [[M:%.*]] = and i8 [[W]], 16
-; CHECK:       [[B:%.*]] = icmp ne i8 [[M]], 0
-; CHECK:       ret i1 [[B]]
-define i1 @load_odd_bytes_volatile(ptr addrspace(1) %p) {
-  %v = load volatile <24 x i1>, ptr addrspace(1) %p, align 1
-  %b = extractelement <24 x i1> %v, i64 20
   ret i1 %b
 }
 
