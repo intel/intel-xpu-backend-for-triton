@@ -101,6 +101,7 @@ module {
     %lhs = arith.muli %qcb, %c2t : tensor<4x4xi32>
     %rhs0 = arith.muli %qrb, %c2t : tensor<4x4xi32>
     %rhs = arith.addi %rhs0, %c1t : tensor<4x4xi32>
+    // expected-remark@+1 {{verdict: Unknown}}
     %cmp = arith.cmpi sle, %lhs, %rhs : tensor<4x4xi32>
     tt.return
   }

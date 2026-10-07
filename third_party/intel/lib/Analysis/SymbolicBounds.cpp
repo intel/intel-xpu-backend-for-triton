@@ -828,8 +828,10 @@ AffineForm SymbolicBoundsProver::normalizeUncached(
           }
         }
         // Normalized into a scratch vector: the dividend's arithmetic is an
-        // obligation only for a proof that actually uses these facts.
-        info.dividend = normalizeImpl(factSubject, ctx, divObls, {}, depth + 1);
+        // obligation only for a proof that actually uses these facts. Placed
+        // like q, or the dividends of q[:, None] and q[None, :] would cancel.
+        info.dividend =
+            normalizeImpl(factSubject, ctx, divObls, placement, depth + 1);
         if (info.dividend.overflowed())
           return giveUp();
         info.dividendObligations.assign(divObls.begin(), divObls.end());
@@ -855,7 +857,9 @@ AffineForm SymbolicBoundsProver::normalizeUncached(
         // matching division so that X == c*q + r holds by construction. No
         // divsi need exist: the symbol's identity and facts use X and c only.
         Value dividend = op.getLhs();
-        AffineForm x = normalizeImpl(dividend, ctx, obligations, {}, depth + 1);
+        // Placed like q: unplaced, x[:, None] and x[None, :] would cancel.
+        AffineForm x =
+            normalizeImpl(dividend, ctx, obligations, placement, depth + 1);
         if (x.overflowed())
           return giveUp();
         Symbol q = symbolFor(SymbolKind::Quotient, dividend, *c, placement);
