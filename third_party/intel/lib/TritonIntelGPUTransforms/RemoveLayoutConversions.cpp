@@ -1238,7 +1238,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   SmallVector<std::tuple<Value, Value>> replacements;
 
   SmallVector<Operation *> deadOps;
-  IRRewriter builder(slice.begin()->getContext());
+  // Hoisting or remat reuse can legitimately leave the slice empty.
+  IRRewriter builder(convertOp.getContext());
   for (Operation *op : opsToRewrite) {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       SmallVector<Value> newOperands;
@@ -1376,11 +1377,15 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       addRematValue(old, it->second, newV);
     }
   }
-  // Check mapping and see if there are existing convertOps on the old Argument
-  convertOp.replaceAllUsesWith(mapping.lookup(convertOp.getSrc()));
+  // Add the rewritten convert to the replacements so it is removed from the
+  // remat maps and has its uses replaced like the other ops we delete.
+  replacements.emplace_back(convertOp.getResult(),
+                            mapping.lookup(convertOp.getSrc()));
   opToDelete.insert(convertOp);
 
   updateRematMapping(replacements);
+  assert(!mappedValues.contains(convertOp.getResult()) &&
+         "rewritten conversion remains in rematerialization maps");
   for (auto &kv : replacements) {
     builder.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
   }

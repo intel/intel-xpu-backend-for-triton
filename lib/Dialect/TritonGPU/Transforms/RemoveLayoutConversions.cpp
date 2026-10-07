@@ -229,10 +229,8 @@ bool isLayoutAnchor(Operation *op) {
   if (isa<DotOpInterface, AtomicOpInterface, triton::nvidia_gpu::TMEMLoadOp>(
           op))
     return true;
-  if (auto gatherOp = dyn_cast<GatherOp>(op))
-    return gatherOp.getEfficientLayout();
-  if (auto reshape = dyn_cast<ReshapeOp>(op))
-    return reshape.getEfficientLayout();
+  if (hasEfficientLayout(op))
+    return true;
 
   return false;
 }
@@ -839,8 +837,9 @@ void LayoutRematerialization::rewriteSlice(
   }
   // Add the rewritten convert to the replacements so it is removed from the
   // remat maps and has its uses replaced like the other ops we delete.
+  // A source already in the target encoding has no mapping.
   replacements.emplace_back(convertOp.getResult(),
-                            mapping.lookup(convertOp.getSrc()));
+                            mapping.lookupOrDefault(convertOp.getSrc()));
 
   updateRematMapping(replacements);
   for (auto &kv : replacements) {
@@ -1159,8 +1158,8 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
       auto reduceOp = dyn_cast<ReduceOp>(op);
       ReduceOpHelper helper(reduceOp);
       if (!helper.isAssociative()) {
-        // We shouldn't rematerize a no associative reduce op if it has multiple
-        // use chain.
+        // We shouldn't rematerialize a non-associative reduce op if it has
+        // multiple use chains.
         LDBG("  skipped rematerialization due to non-associative reduce in the "
              "slice");
         return false;
@@ -1316,14 +1315,14 @@ bool LayoutRematerialization::hoistConvertDotOperand(
     auto type = dyn_cast<RankedTensorType>(loadOp->getResult(0).getType());
     if (!type)
       continue;
+    // If there is nothing to remat between the leaf op and the convert, we are
+    // done.
+    if (innerSlice.empty())
+      return false;
     auto newType = type.cloneWithEncoding(layout[loadOp->getResult(0)]);
     auto newConvertOp = ConvertLayoutOp::create(builder, convertOp.getLoc(),
                                                 newType, loadOp->getResult(0));
     mapping.map(loadOp->getResult(0), newConvertOp.getResult());
-  }
-
-  if (innerSlice.empty()) {
-    return false;
   }
 
   LLVM_DEBUG({
