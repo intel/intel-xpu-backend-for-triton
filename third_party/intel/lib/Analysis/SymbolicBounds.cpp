@@ -935,9 +935,15 @@ SymbolicBoundsProver::symbolConstantBounds(const Symbol &sym) const {
     int64_t end = rangeOp.getEndAttr().getInt();
     return std::make_pair(start, end - 1);
   }
-  if (std::optional<ConstantIntRanges> r = collectRange(solver, sym.value()))
-    return std::make_pair(r->smin().getSExtValue(), r->smax().getSExtValue());
-  return std::nullopt;
+  std::optional<ConstantIntRanges> r = collectRange(solver, sym.value());
+  if (!r)
+    return std::nullopt;
+  int64_t lo = r->smin().getSExtValue(), hi = r->smax().getSExtValue();
+  // A quotient's value is its dividend. Truncating division by a positive
+  // constant is monotone, so dividing both ends is exact.
+  if (sym.kind() == SymbolKind::Quotient)
+    return std::make_pair(lo / sym.divisor(), hi / sym.divisor());
+  return std::make_pair(lo, hi);
 }
 
 /// Bounds `e` by replacing every symbol with its constant bounds, taking the
@@ -1037,11 +1043,15 @@ SymbolicBoundsProver::symbolBounds(const Symbol &sym, QueryContext ctx,
     // that extremum as a usable bound would let a residual candidate turn any
     // unconstrained Opaque value's own type width into a "proof" that only
     // ever holds by forcing the loop empty - sound, but not the no-range
-    // Unknown this symbol is actually supposed to be.
+    // Unknown this symbol is actually supposed to be. Tested on value()'s
+    // range, a quotient's dividend, since dividing hides the full width.
+    std::optional<std::pair<int64_t, int64_t>> valueRange =
+        rangeOf(sym.value(), ctx);
     unsigned width = bitWidth(sym.value().getType());
     bool fullWidth =
-        b && b->first == APInt::getSignedMinValue(width).getSExtValue() &&
-        b->second == APInt::getSignedMaxValue(width).getSExtValue();
+        valueRange &&
+        valueRange->first == APInt::getSignedMinValue(width).getSExtValue() &&
+        valueRange->second == APInt::getSignedMaxValue(width).getSExtValue();
     if (b && !fullWidth) {
       out.lo = AffineForm::constant(b->first);
       out.hi = AffineForm::constant(b->second);
