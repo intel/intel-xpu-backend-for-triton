@@ -140,7 +140,7 @@ jobs:
           ./scripts/capture-hw-details.sh | tee -a "$REPORTS/.env"
 
       - name: Run vllm unified attention bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: false  # TEMP: diagnostics run
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -148,7 +148,7 @@ jobs:
           bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
 
       - name: Run vllm unified attention fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: false  # TEMP: diagnostics run
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -156,7 +156,7 @@ jobs:
           FP8="1" bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
 
       - name: Run vllm batched moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: false  # TEMP: diagnostics run
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -166,6 +166,10 @@ jobs:
 
       - name: Run vllm batched moe fp8
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        env:
+          TRITON_PRINT_AUTOTUNING: '1'
+          TRITON_CACHE_DIR: ${{ github.workspace }}/diag7561/triton-cache
+          DIAG_DIR: ${{ github.workspace }}/diag7561
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -173,12 +177,20 @@ jobs:
           FP8="1" bash run_benchmark.sh batched_moe --reports $REPORTS --tag $TAG
 
       - name: Run vllm fused moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: false  # TEMP: diagnostics run
         run: |
           source ./scripts/capture-hw-details.sh
 
           cd benchmarks/triton_kernels_benchmark/vllm
           bash run_benchmark.sh fused_moe --reports $REPORTS --tag $TAG
+
+      - name: Upload diagnostics (TEMP)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: diag7561
+          path: diag7561
+          retention-days: 5
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}

@@ -69,6 +69,75 @@ MM_CONFIGS_FP8 = sum(
 DEVICE_TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
 
 
+def _diag_check(triton_fn, torch_fn, C, A_q, B_q, num_expert_tokens, shape, atol, rtol, is_td):
+    """TEMP diagnostics: autotune choice, data hashes, mismatch layout, per-config results, native ISA dump."""
+    import hashlib
+    import json
+    import numpy as np
+    import vllm.model_executor.layers.fused_moe.experts.fused_batched_moe as fbm
+
+    diag_dir = os.environ.get('DIAG_DIR', '/tmp/diag7561')
+    os.makedirs(diag_dir, exist_ok=True)
+    out = triton_fn().clone()
+    ref_out = torch_fn().clone()
+    y = ref_out.float().cpu().numpy()
+
+    def nbad(t):
+        return ~np.isclose(t.float().cpu().numpy(), y, atol=atol, rtol=rtol, equal_nan=True)
+
+    def digest(t):
+        return hashlib.sha256(t.contiguous().view(torch.uint8).cpu().numpy().tobytes()).hexdigest()[:16]
+
+    bad = nbad(out)
+    nt = num_expert_tokens.cpu().tolist()
+    tuner = getattr(fbm, 'batched_triton_kernel', None)
+    info = dict(shape=shape, td=bool(is_td), bad=int(bad.sum()), ntok=nt, hA=digest(A_q), hB=digest(B_q),
+                hNT=digest(num_expert_tokens), torch=torch.__version__, best=str(getattr(tuner, 'best_config', None)))
+    if bad.any():
+        e_i, r_i, c_i = np.nonzero(bad)
+        info.update(experts=sorted(set(e_i.tolist())), rows=sorted(set(r_i.tolist())),
+                    real_row_bad=int(sum(r < nt[e] for e, r in zip(e_i, r_i))),
+                    tiles16=len(set(zip(e_i.tolist(), r_i.tolist(), (c_i // 16).tolist()))),
+                    pairs=sorted(set(zip(e_i.tolist(), r_i.tolist())))[:64], cols=[int(c_i.min()), int(c_i.max())])
+        tag = '-'.join(map(str, shape)) + ('-td' if is_td else '')
+        np.savez(os.path.join(diag_dir, f'bad-{tag}.npz'), e=e_i, r=r_i, c=c_i, got=out.float().cpu().numpy()[bad],
+                 want=y[bad], ntok=np.array(nt))
+        if hasattr(tuner, 'configs'):
+            orig = tuner.configs
+            per_cfg = {}
+            failing = []
+            for cfg in orig:
+                tuner.configs = [cfg]
+                tuner.cache.clear()
+                C.zero_()
+                n = int(nbad(triton_fn()).sum())
+                per_cfg[str(cfg)] = n
+                if n:
+                    failing.append(cfg)
+            info['per_config'] = per_cfg
+            # Recompile the failing configs to native code with an IGC shader dump into the Triton cache.
+            os.environ['TRITON_INTEL_ENABLE_IGC_SHADER_DUMP'] = '1'
+            os.environ['TRITON_XPU_GEN_NATIVE_CODE'] = '1'
+            native = {}
+            for cfg in failing:
+                tuner.configs = [cfg]
+                tuner.cache.clear()
+                C.zero_()
+                try:
+                    native[str(cfg)] = int(nbad(triton_fn()).sum())
+                except Exception as exc:  # noqa: BLE001
+                    native[str(cfg)] = f'error: {exc!r}'[:300]
+            os.environ.pop('TRITON_INTEL_ENABLE_IGC_SHADER_DUMP')
+            os.environ.pop('TRITON_XPU_GEN_NATIVE_CODE')
+            info['native_per_config'] = native
+            tuner.configs = orig
+            tuner.cache.clear()
+    print('DIAG7561 ' + json.dumps(info), flush=True)
+    with open(os.path.join(diag_dir, 'diag.jsonl'), 'a') as f:
+        f.write(json.dumps(info) + '\n')
+    return out, ref_out
+
+
 def is_enough_memory(x_val, safety_factor=0.80):
     E, M, K, N, fp8, block_quant = x_val
 
@@ -235,7 +304,9 @@ def get_batched_mm_benchmark(
                 return C
 
             # Verify correctness against reference
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol, err_msg='triton to torch')
+            out, ref_out = _diag_check(triton_fn, torch_fn, C, A_q, B_q, num_expert_tokens,
+                                       (num_experts, max_tokens_per_expert, K, N), atol, rtol, is_td_patched)
+            benchmark_suite.assert_close(lambda: out, lambda: ref_out, atol=atol, rtol=rtol, err_msg='triton to torch')
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 triton_fn,
                 n_warmup=n_warmup,
