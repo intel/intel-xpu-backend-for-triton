@@ -4,7 +4,6 @@
 Run ``--model MODEL --tune --save-dir profiles`` to generate configs.
 Use ``--batch-size``, ``--query-len`` and ``--kv-len`` for workload ranges.
 Omit ``--tune`` to benchmark configs from the same folder.
-For exact CI inputs, use ``tune_unified_attention_manifest.py --manifest inputs.json``.
 """
 
 from __future__ import annotations
@@ -24,8 +23,8 @@ from itertools import product
 from pathlib import Path
 
 import torch
-import triton
 from vllm.transformers_utils.config import get_config, get_hf_text_config
+from vllm.triton_utils import triton
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 from vllm.v1.attention.ops import triton_unified_attention_config as runtime
 from vllm.v1.attention.ops.triton_unified_attention import unified_attention
@@ -102,7 +101,7 @@ def model_dimensions(config, tp_size):
             raise ValueError("hidden_size must be divisible by num_attention_heads when head_dim is absent")
         head_size = config.hidden_size // q_heads
     if getattr(config, "global_head_dim", head_size) not in (None, head_size):
-        raise ValueError("Models with different local/global head dimensions need separate CI workloads")
+        raise ValueError("Models with different local/global head dimensions need separate workloads")
     if q_heads % kv_heads or q_heads % tp_size:
         raise ValueError("Query heads must be divisible by KV heads and tensor parallel size")
     if (kv_heads >= tp_size and kv_heads % tp_size) or (kv_heads < tp_size and tp_size % kv_heads):
@@ -160,15 +159,13 @@ def model_workloads(args):
 
 
 def successful(option, field="samples_ms"):
-    values = option.get(field, [])
-    return (option.get("status") == "ok" and bool(values)
-            and all(isinstance(value, (float, int)) and math.isfinite(value) and value > 0 for value in values))
+    return option.get("status") == "ok" and bool(option.get(field))
 
 
 def key_statistics(cases, field="samples_ms"):
     """Only compare candidates having a successful cell for every shape."""
     rows = [{option["id"]: option for option in case["options"] if successful(option, field)} for case in cases]
-    if any("fallback" not in row for row in rows):
+    if not rows or any("fallback" not in row for row in rows):
         return None
     common = set.intersection(*(set(row) for row in rows))
     # Keep initial sweep references even when they are not finalists.
@@ -180,22 +177,15 @@ def key_statistics(cases, field="samples_ms"):
             if successful(option, phase))
         for case in cases
     ]
-    fallback = [statistics.median(row["fallback"][field]) for row in rows]
     results = []
     for identifier in sorted(common):
         times = [statistics.median(row[identifier][field]) for row in rows]
         ratios = [latency / minimum for latency, minimum in zip(times, best)]
-        fallback_ratios = [latency / baseline for latency, baseline in zip(times, fallback)]
-        regressions = [ratio - 1 for ratio in fallback_ratios]
         results.append({
             "id": identifier,
             "config": rows[0][identifier]["config"],
             "max_regret": max(ratios) - 1,
             "geomean_ratio": math.exp(statistics.mean(map(math.log, ratios))),
-            "geomean_fallback_ratio": math.exp(statistics.mean(map(math.log, fallback_ratios))),
-            "max_fallback_regression": max(regressions),
-            "ratios": ratios,
-            "fallback_regressions": regressions,
         })
     return results
 
@@ -203,23 +193,17 @@ def key_statistics(cases, field="samples_ms"):
 def choose_key(cases, *, tolerance=0.01, field="confirmation_ms"):
     stats = key_statistics(cases, field)
     if stats is None:
-        return {"accepted": False, "reason": "missing or failed fallback measurement"}
+        raise ValueError(f"Missing or failed {field} fallback measurement for {[case['id'] for case in cases]}")
     optimum = min(item["max_regret"] for item in stats)
     tied = [item for item in stats if item["max_regret"] <= optimum + tolerance]
-    winner = min(tied, key=lambda item: (item["geomean_ratio"], item["id"]))
-    return {
-        "accepted": True,
-        "winner": winner,
-        "fallback": next(item for item in stats if item["id"] == "fallback"),
-        "candidates": [item for item in stats if item["id"] != "fallback"],
-    }
+    return min(tied, key=lambda item: (item["geomean_ratio"], item["id"]))
 
 
 def grouped_cases(cases):
     grouped = defaultdict(list)
     for case in cases:
         if case.get("key") is not None:
-            grouped[canonical(case["key"])].append(case)
+            grouped[runtime.AttentionKey(**case["key"])].append(case)
     return grouped
 
 
@@ -233,8 +217,7 @@ def finalists(cases, count=3):
     )
     selected = ["fallback"] + [item["id"] for item in ranked[:count]]
     initial = choose_key(cases, field="samples_ms")
-    if initial["accepted"]:
-        selected.append(initial["winner"]["id"])
+    selected.append(initial["id"])
     for case in cases:
         measured = [option for option in case["options"] if successful(option)]
         if measured:
@@ -245,12 +228,8 @@ def finalists(cases, count=3):
 def save_configs(data, output, *, tolerance=0.01):
     identity = data["identity"]
     partitions = defaultdict(list)
-    for serialized_key, cases in grouped_cases(data["cases"]).items():
-        key = runtime.AttentionKey(**json.loads(serialized_key))
-        result = choose_key(cases, tolerance=tolerance)
-        if not result["accepted"]:
-            raise ValueError(f"Cannot select a config for {[case['id'] for case in cases]}")
-        winner = result["winner"]["config"]
+    for key, cases in grouped_cases(data["cases"]).items():
+        winner = choose_key(cases, tolerance=tolerance)["config"]
         print(f"Winner for {[case['id'] for case in cases]}: {config_id(winner)}", flush=True)
         config = runtime.AttentionConfig(**winner) if winner is not None else None
         partitions[key.static_key()].append((key.dynamic_key(), config))
@@ -394,66 +373,13 @@ def graph_timer(fn, device, warmup_ms, rep_ms):
         graph.reset()
 
 
-@contextmanager
-def cold_graph_timer(fn, device, warmup_ms, rep_ms):
-    """Evict before each replay; time only the single-call attention graph."""
-    backend = getattr(torch, device.type)
-    cache = torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int32, device=device)
-    attention, eviction = backend.XPUGraph(), backend.XPUGraph()
-    try:
-        fn()
-        cache.zero_()
-        backend.synchronize(device)
-        with backend.graph(attention):
-            fn()
-        with backend.graph(eviction):
-            cache.zero_()
-        eviction.replay()
-        attention.replay()
-        backend.synchronize(device)
-
-        def batch(repeats):
-            # Fresh events avoid re-recording profiling tags across replay batches.
-            pairs = [(backend.Event(enable_timing=True), backend.Event(enable_timing=True)) for _ in range(repeats)]
-            boundary_start, boundary_end = backend.Event(enable_timing=True), backend.Event(enable_timing=True)
-            boundary_start.record()
-            for start, end in pairs:
-                eviction.replay()
-                start.record()
-                attention.replay()
-                end.record()
-            boundary_end.record()
-            backend.synchronize(device)
-            samples = [start.elapsed_time(end) for start, end in pairs]
-            total_ms = boundary_start.elapsed_time(boundary_end)
-            if not all(math.isfinite(value) and value > 0 for value in samples + [total_ms]):
-                raise RuntimeError("Invalid cold graph timing")
-            # Bound work using total time, including eviction, but exclude it from the result.
-            return statistics.median(samples), total_ms
-
-        _, estimate = batch(3)
-        per_call_ms = estimate / 3
-        warmups = max(1, min(256, math.ceil(warmup_ms / per_call_ms)))
-        batch(warmups)
-        repeats = max(1, min(256, math.ceil(rep_ms / per_call_ms)))
-
-        def elapsed():
-            return batch(repeats)[0]
-
-        yield attention, elapsed
-    finally:
-        attention.reset()
-        eviction.reset()
-
-
-def benchmark_callable(fn, device, warmup_ms, rep_ms, clear_cache=False):
+def benchmark_callable(fn, device, warmup_ms, rep_ms, *, timer=graph_timer):
     """Time complete attention calls using graph replay and device events."""
-    timer = cold_graph_timer if clear_cache else graph_timer
     with timer(fn, device, warmup_ms, rep_ms) as (_, elapsed):
         return elapsed()
 
 
-def time_options(options, inputs, device, rounds, warmup_ms, rep_ms, seed, field, clear_cache=False):
+def time_options(options, inputs, device, rounds, warmup_ms, rep_ms, seed, field, *, timer=graph_timer):
     generator = random.Random(seed)
     for _ in range(rounds):
         order = [option for option in options if option["status"] == "ok"]
@@ -463,16 +389,15 @@ def time_options(options, inputs, device, rounds, warmup_ms, rep_ms, seed, field
             try:
                 with runtime.override_config(config):
                     value = benchmark_callable(lambda: unified_attention(**inputs), device, warmup_ms, rep_ms,
-                                               clear_cache)
-                if not math.isfinite(value) or value <= 0:
-                    raise RuntimeError(f"Invalid latency {value}")
+                                               timer=timer)
                 option.setdefault(field, []).append(value)
             except triton.runtime.autotuner.OutOfResources as error:
                 option.update(status="resource_error", error=f"{type(error).__name__}: {error}")
                 synchronize(device)
 
 
-def tune(args, manifest, device):
+def tune(args, manifest, device, *, allocate=allocate_case, timer=graph_timer,
+         timing_scope="attention_sequence_graph_device"):
     identity = runtime.get_profile_identity(device)
     data = {
         "format_version": FORMAT_VERSION,
@@ -481,15 +406,14 @@ def tune(args, manifest, device):
         "manifest": manifest,
         "settings": vars(args),
         "cases": [],
-        "timing_scope":
-        "attention_sequence_cold_graph_device" if args.clear_cache else "attention_sequence_graph_device",
+        "timing_scope": timing_scope,
         "started_at": time.time(),
     }
     checkpoint(args.measurements, data)
     try:
         with torch.inference_mode():
             for index, case in enumerate(manifest):
-                inputs = allocate_case(case, device, args.seed + index)
+                inputs = allocate(case, device, args.seed + index)
                 fallback = {"id": "fallback", "config": None, "status": "pending", "samples_ms": []}
                 row = {"id": case["id"], "workload": case, "key": None, "options": [fallback]}
                 data["cases"].append(row)
@@ -498,13 +422,12 @@ def tune(args, manifest, device):
                     raise RuntimeError(f"Fallback failed for {case['id']}: {fallback.get('error')}")
                 row["key"] = fallback["key"]
                 key = runtime.AttentionKey(**row["key"])  # pylint: disable=not-a-mapping
-                for config_index, config in enumerate(candidate_configs(key)):
+                configs = (config for config in candidate_configs(key)
+                           if runtime.validate_config(runtime.AttentionConfig(**config), key, device.type))
+                for config_index, config in enumerate(configs):
                     option = {"id": config_id(config), "config": config, "status": "pending", "samples_ms": []}
                     row["options"].append(option)
-                    if not runtime.validate_config(runtime.AttentionConfig(**config), key, device.type):
-                        option["status"] = "structurally_invalid"
-                    else:
-                        prepare_option(option, inputs, device)
+                    prepare_option(option, inputs, device)
                     if config_index % 32 == 31:
                         checkpoint(args.measurements, data)
                         print(f"Prepared {config_index + 1} candidates for {case['id']}", flush=True)
@@ -517,7 +440,7 @@ def tune(args, manifest, device):
                     args.rep_ms,
                     args.seed + index,
                     "samples_ms",
-                    args.clear_cache,
+                    timer=timer,
                 )
                 checkpoint(args.measurements, data)
                 print(f"Measured {index + 1}/{len(manifest)}: {case['id']}", flush=True)
@@ -526,7 +449,7 @@ def tune(args, manifest, device):
                 selected = finalists(cases, args.finalists)
                 for row in cases:
                     index = next(i for i, case in enumerate(manifest) if case["id"] == row["id"])
-                    inputs = allocate_case(row["workload"], device, args.seed + index)
+                    inputs = allocate(row["workload"], device, args.seed + index)
                     options = [option for option in row["options"] if option["id"] in selected]
                     for option in options:
                         prepare_option(option, inputs, device)
@@ -539,7 +462,7 @@ def tune(args, manifest, device):
                         args.rep_ms,
                         args.seed + 10000 + index,
                         "confirmation_ms",
-                        args.clear_cache,
+                        timer=timer,
                     )
                     del inputs
                 checkpoint(args.measurements, data)
@@ -558,14 +481,14 @@ def checkpoint(path, data):
 
 
 @torch.inference_mode()
-def benchmark(args, manifest, device):
+def benchmark(args, manifest, device, *, allocate=allocate_case, timer=graph_timer):
     os.environ["VLLM_TUNED_CONFIG_FOLDER"] = str(Path(args.save_dir).resolve())
     runtime.clear_profile_cache()
     for index, case in enumerate(manifest):
-        inputs = allocate_case(case, device, args.seed + index)
+        inputs = allocate(case, device, args.seed + index)
         samples = [
             benchmark_callable(lambda inputs=inputs: unified_attention(**inputs), device, args.warmup_ms, args.rep_ms,
-                               args.clear_cache) for _ in range(args.rounds)
+                               timer=timer) for _ in range(args.rounds)
         ]
         print(f"{case['id']}: {statistics.median(samples) * 1000:.3f} us", flush=True)
         del inputs
@@ -573,8 +496,6 @@ def benchmark(args, manifest, device):
 
 def create_parser(description=__doc__):
     parser = FlexibleArgumentParser(description=description)
-    parser.add_argument("--clear-cache", action="store_true",
-                        help="Evict 256 MB before each graph replay, excluding eviction from timing")
     parser.add_argument("--tune", action="store_true", help="Search candidates and export winners")
     parser.add_argument("--save-dir", type=str, default="./",
                         help="Profile output folder, or profile input folder when benchmarking")
@@ -619,7 +540,8 @@ def parse_args(argv=None):
     return args
 
 
-def main(args: argparse.Namespace, workloads=None):
+def main(args: argparse.Namespace, workloads=None, *, allocate=allocate_case, timer=graph_timer,
+         timing_scope="attention_sequence_graph_device"):
     print(args)
     for name in ("rounds", "warmup_ms", "rep_ms", "confirmation_rounds", "finalists"):
         if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
@@ -637,10 +559,10 @@ def main(args: argparse.Namespace, workloads=None):
     print(f"{'Tuning' if args.tune else 'Benchmarking'} {len(workloads)} workloads")
     started = time.perf_counter()
     if args.tune:
-        result = tune(args, workloads, device)
+        result = tune(args, workloads, device, allocate=allocate, timer=timer, timing_scope=timing_scope)
         print(f"Exported {result['accepted_keys']} keys to {args.save_dir}")
     else:
-        benchmark(args, workloads, device)
+        benchmark(args, workloads, device, allocate=allocate, timer=timer)
     print(f"Finished in {time.perf_counter() - started:.1f} seconds")
 
 
