@@ -361,6 +361,7 @@ def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, 
 
 
 @pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports cudagraph replay", run=False)
+@_skip_cudagraph_test
 def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
