@@ -7,6 +7,10 @@ readonly DEFAULT_BRANCH="main"
 readonly SCRIPTS_DIR="$ROOT/scripts"
 readonly VLLM_PROJ="$ROOT/vllm"
 readonly VLLM_XPU_KERNELS_PROJ="$ROOT/vllm-xpu-kernels"
+readonly VLLM_OMNI_PROJ="$ROOT/vllm-omni"
+
+# Installed from source packages for XPU, vllm-omni must not replace them.
+readonly PROTECTED_PACKAGES=(torch triton pytorch-triton-xpu torchvision torchaudio vllm)
 
 # Provides the `pip` wrapper (pip or `uv pip`).
 source "$SCRIPTS_DIR/pip-utils.sh"
@@ -95,7 +99,11 @@ clone_repo() {
   git clone --single-branch -b "$DEFAULT_BRANCH" "$repo_url" "$target_dir"
 
   if [[ "$latest" == false ]]; then
-    git -C "$target_dir" checkout "$pinned_commit"
+    # A commit outside the default branch, such as a release tag, has to be fetched explicitly.
+    if ! git -C "$target_dir" checkout "$pinned_commit"; then
+      git -C "$target_dir" fetch origin "$pinned_commit"
+      git -C "$target_dir" checkout FETCH_HEAD
+    fi
   fi
 
   update_submodules_and_clean "$target_dir"
@@ -181,6 +189,65 @@ install_vllm() {
   )
 }
 
+# Print "<name>==<version>" for each installed protected package, skipping the ones that are absent.
+protected_versions() {
+  local package version
+
+  for package in "${PROTECTED_PACKAGES[@]}"; do
+    if version="$(pip show "$package" 2>/dev/null | awk '/^Version:/ { print $2 }')" \
+      && [[ -n "$version" ]]; then
+      echo "$package==$version"
+    fi
+  done
+}
+
+# Install vllm-omni and its dependency closure without replacing the protected packages.
+install_vllm_omni() {
+  # vllm-omni imports vllm at module scope without declaring it. It also needs torchvision for its
+  # cosmos-guardrail requirement, torchvision on PyPI pins torch==<exact release> which will pull
+  # a PyPI torch and override the installed from source one. vllm-omni also imports torchaudio without
+  # declaring it, and its s3tokenizer requirement would otherwise pull a PyPI torchaudio built for another torch.
+  local package
+  for package in vllm torchvision torchaudio; do
+    if ! pip show "$package" >/dev/null; then
+      echo "ERROR: $package must be installed from source before installing vllm-omni." >&2
+      exit 1
+    fi
+  done
+
+  local work_dir
+  work_dir="$(mktemp -d)"
+  trap "rm -rf '$work_dir'" EXIT
+  local constraints="$work_dir/constraints.txt"
+
+  protected_versions | tee "$constraints"
+
+  VLLM_OMNI_TARGET_DEVICE=xpu pip install -c "$constraints" "$VLLM_OMNI_PROJ"
+
+  if ! protected_versions | diff -u "$constraints" -; then
+    echo "ERROR: installing vllm-omni changed the XPU stack (see the diff above)." >&2
+    exit 1
+  fi
+
+  # vllm-omni picks its platform at runtime, so a replaced torch would silently run
+  # on CPU instead of failing the install -- assert the platform is XPU.
+  (cd "$work_dir" && python - <<'PY'
+import torch
+
+from vllm_omni.platforms import resolve_current_omni_platform_cls_qualname
+
+if not torch.xpu.is_available():
+    raise SystemExit(f"ERROR: torch.xpu.is_available() is False (torch {torch.__version__}).")
+
+platform = resolve_current_omni_platform_cls_qualname()
+if "xpu" not in platform.lower():
+    raise SystemExit(f"ERROR: vllm-omni resolved to {platform}, not an XPU platform.")
+
+print(f"vllm-omni on {torch.xpu.get_device_name(0)} via {platform}")
+PY
+  )
+}
+
 cd "$ROOT"
 
 prepare_source_only=false
@@ -190,9 +257,23 @@ use_venv=false
 clean=true
 build_kernels=false
 kernels_hash=""
+fix_patch=""
+omni=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --omni)
+      omni=true
+      shift
+      ;;
+    --fix-patch)
+      if [[ -z "${2:-}" ]]; then
+        echo "ERROR: --fix-patch requires an argument." >&2
+        exit 1
+      fi
+      fix_patch="$2"
+      shift 2
+      ;;
     --kernels-source)
       build_kernels=true
       shift
@@ -234,6 +315,12 @@ vLLM is built and installed from source at the pinned commit hash as an editable
 install and vLLM XPU kernels are installed from the release pinned by vLLM.
 
 Options:
+  --omni                         Install vLLM at the release targeted by the pinned vllm-omni, then vllm-omni. Use
+                                 it only in the vllm-omni test suite, it may change the vLLM dependencies.
+
+  --fix-patch <path>             Apply the given patch to the vLLM source instead of vllm-fix.patch, or
+                                 vllm-omni-vllm-fix.patch with --omni.
+
   --kernels-source               Build vLLM XPU kernels from source at the top of the $DEFAULT_BRANCH branch.
 
   --kernels-hash <hash>          Build vLLM XPU kernels from source at the given commit hash. Implies --kernels-source.
@@ -262,6 +349,7 @@ Examples:
   ./install-vllm.sh --prepare-source
   ./install-vllm.sh --prepare-source --latest
   ./install-vllm.sh --latest --venv
+  ./install-vllm.sh --omni
 EOF
       exit 0
       ;;
@@ -285,10 +373,40 @@ if [[ "$target_device" == cuda && "$build_kernels" == true ]]; then
   exit 1
 fi
 
+if [[ "$target_device" == cuda && "$omni" == true ]]; then
+  echo "ERROR: --omni is not supported on cuda." >&2
+  exit 1
+fi
+
 vllm_pinned_commit=""
-if [[ "$latest" == false ]]; then
+if [[ "$omni" == true ]]; then
+  if [[ "$latest" == true ]]; then
+    echo "ERROR: --omni and --latest cannot be used together." >&2
+    exit 1
+  fi
+
+  prepare_source "$VLLM_OMNI_PROJ" "https://github.com/vllm-project/vllm-omni.git" "$(<"$SCRIPTS_DIR/vllm/vllm-omni-pin.txt")" false
+
+  # vllm-omni targets a vLLM release, which its XPU image is built on.
+  vllm_tag="$(sed -n 's/^ARG VLLM_VERSION=//p' "$VLLM_OMNI_PROJ/docker/Dockerfile.xpu")"
+  if [[ -n "$vllm_tag" ]]; then
+    vllm_pinned_commit="$(git ls-remote https://github.com/vllm-project/vllm.git "refs/tags/$vllm_tag" "refs/tags/$vllm_tag^{}" | tail -1 | cut -f1)"
+  fi
+  if [[ -z "$vllm_pinned_commit" ]]; then
+    echo "ERROR: vLLM release '$vllm_tag' targeted by vllm-omni not found." >&2
+    exit 1
+  fi
+  echo "*** Using vllm $vllm_tag targeted by vllm-omni: $vllm_pinned_commit. ***"
+elif [[ "$latest" == false ]]; then
   vllm_pinned_commit="$(<"$SCRIPTS_DIR/vllm/vllm-pin.txt")"
   echo "*** Using the pinned vllm commit: $vllm_pinned_commit. ***"
+fi
+
+if [[ -z "$fix_patch" ]]; then
+  fix_patch="$SCRIPTS_DIR/vllm/vllm-fix.patch"
+  if [[ "$omni" == true ]]; then
+    fix_patch="$SCRIPTS_DIR/vllm/vllm-omni-vllm-fix.patch"
+  fi
 fi
 
 kernels_latest=false
@@ -306,6 +424,9 @@ if [[ "$prepare_source_only" == false && "$build_kernels" == false ]]; then
     show_installs
 
     echo "*** vllm is installed at the correct commit. ***"
+    if [[ "$omni" == true ]]; then
+      install_vllm_omni
+    fi
     exit 0
   fi
 fi
@@ -318,7 +439,7 @@ fi
 
 # Apply patches to vLLM source code.
 if [[ "$clean" == true ]]; then
-  git -C "$VLLM_PROJ" apply "$SCRIPTS_DIR/vllm/vllm-fix.patch"
+  git -C "$VLLM_PROJ" apply "$fix_patch"
   # The patcher rewrites hardcoded CUDA references in vLLM's tests to XPU ones.
   if [[ "$target_device" == xpu ]]; then
     python "$SCRIPTS_DIR/vllm/vllm_xpu_patch.py" "$VLLM_PROJ"
@@ -362,3 +483,7 @@ fi
 install_vllm
 
 show_installs
+
+if [[ "$omni" == true ]]; then
+  install_vllm_omni
+fi
