@@ -1,9 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tune XPU attention with graph replay and export device-specific JSON configs.
+r"""Tune XPU attention with graph replay and export device-specific JSON configs.
 
-Run ``--model MODEL --tune --save-dir configs`` to generate configs.
-Use ``--batch-size``, ``--query-len`` and ``--kv-len`` for workload ranges.
-Omit ``--tune`` to benchmark configs from the same folder.
+With unified_attention.patch applied, run from this script's directory::
+
+    python tune_unified_attention.py --model mistralai/Mixtral-8x7B-Instruct-v0.1 \
+      --tp-size 2 --batch-size 1 8 32 --query-len 1 --kv-len 1024 \
+      --tune --save-dir configs
+
+The script reads model configuration without loading weights and generates
+synthetic attention tensors. Use ``--batch-size``, ``--query-len`` and
+``--kv-len`` for workload ranges. Model inputs default to QKV-sliced queries
+and interleaved KV; use ``--q-layout contiguous --kv-layout contiguous`` for
+separate contiguous tensors. Omit ``--tune`` to benchmark existing configs
+from ``--save-dir``.
 """
 
 from __future__ import annotations
