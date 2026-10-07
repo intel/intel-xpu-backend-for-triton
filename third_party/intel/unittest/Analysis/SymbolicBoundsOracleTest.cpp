@@ -17,15 +17,15 @@
 //   Unknown                  no claim, so nothing to check
 //
 // Launches the kernel contract excludes are skipped, not checked: the scf.for
-// no-overflow condition of design 4.1 and a false `llvm.intr.assume`. A launch
+// no-overflow condition and a false `llvm.intr.assume`. A launch
 // that is skipped proves nothing, so the accounting below counts how many
 // launches were valid, how many had a true guard, and how many mask elements
 // were actually evaluated under a true guard; a case whose safety check never
 // runs fails.
 //
 // Each case names exactly one verdict, so a prover that regresses to a vacuous
-// Unknown fails here rather than silently stopping to prove anything (design
-// 6). The oracle is deliberately independent of the prover: it knows the IR's
+// Unknown fails here rather than silently stopping to prove anything. The
+// oracle is deliberately independent of the prover: it knows the IR's
 // wrapping semantics and nothing about affine forms.
 //
 // The last section checks coverage instead of safety: that the new guard
@@ -202,7 +202,7 @@ public:
   /// its per-element booleans. An empty result is a loop that ran zero times.
   ///
   /// Returns nullopt for a launch the kernel contract excludes - the scf.for
-  /// no-overflow condition of design 4.1, a false `llvm.intr.assume`, or
+  /// no-overflow condition, a false `llvm.intr.assume`, or
   /// undefined arithmetic (division by zero, an out-of-range shift) - which
   /// the caller skips instead of checking. An operation outside the modelled
   /// subset fails the test rather than skipping silently.
@@ -564,7 +564,7 @@ private:
     }
 
     I128 n = ub > lb ? (ub - lb + step - 1) / step : 0;
-    // Loop contract of design 4.1: the value one step past the last iteration
+    // The scf.for contract: the value one step past the last iteration
     // must be representable at the IV's width in the loop's own signedness, or
     // the loop is undefined and the launch does not count. The prover gets
     // this for free, so the oracle must grant exactly the same.
@@ -829,7 +829,7 @@ public:
   /// Materializes `p`'s conditions as one i1 guard, immediately before the
   /// comparison's enclosing scf.for, or before the comparison itself when
   /// there is no loop. Both points are dominated by every loop-invariant
-  /// symbol a condition can name (design 4.4).
+  /// symbol a condition can name.
   Value materializeAtQuery(const tt::intel::BoundProof &p, Value cmp) {
     Operation *cmpOp = cmp.getDefiningOp();
     auto loop = cmpOp->getParentOfType<scf::ForOp>();
@@ -938,7 +938,7 @@ static const char *kConstantRefutedI8 =
     tt.return
   })";
 static const char *kLoopBoundWrapI8 =
-    R"(   // Conditional{arg0 >= -127}: Task 5 LoopBoundWrapObligation
+    R"(   // Conditional{arg0 >= -127}: as LoopBoundWrapObligation
   tt.func @f(%n: i8) {
     %c0 = arith.constant 0 : i8
     %c1 = arith.constant 1 : i8
@@ -949,9 +949,9 @@ static const char *kLoopBoundWrapI8 =
     }
     tt.return
   })";
-static const char *kE1_I8Scalars =
+static const char *kReductionLoopI8 =
     R"(      // Conditional{arg0 divisible by 4}; 256 launches
-  tt.func @e1(%n8: i8) {
+  tt.func @reduction_loop(%n8: i8) {
     %c0 = arith.constant 0 : i8
     %c4 = arith.constant 4 : i8
     %lane = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32>
@@ -966,9 +966,9 @@ static const char *kE1_I8Scalars =
     }
     tt.return
   })";
-static const char *kE2_I8Scalars =
+static const char *kCdivKLoopI8 =
     R"(      // Conditional{arg0 divisible by 4; arg0 >= 0; arg0 <= 124}
-  tt.func @e2(%K: i8) {
+  tt.func @cdiv_k_loop(%K: i8) {
     %c0 = arith.constant 0 : i8
     %c1 = arith.constant 1 : i8
     %c3 = arith.constant 3 : i8
@@ -1019,7 +1019,7 @@ static const char *kUnsignedLoopI8 =
     tt.return
   })";
 static const char *kUnsignedPredI8 =
-    R"(    // Conditional{arg0 <= 99; arg0 >= 0}: 4e, normalized, then the ult obligation
+    R"(    // Conditional{arg0 <= 99; arg0 >= 0}: residual guard, then ult obligation
   tt.func @f(%x: i8) {
     %c100 = arith.constant 100 : i8
     %cmp = arith.cmpi ult, %x, %c100 : i8 loc("cmp")
@@ -1068,23 +1068,24 @@ static const char *kProductSignI4 = R"(     // Conditional{p >= 0}
 //===----------------------------------------------------------------------===//
 
 using V = tt::intel::BoundProof::Verdict;
-// Each case names exactly one verdict, so a vacuous Unknown fails (spec 6).
+// Each case names exactly one verdict, so a vacuous Unknown fails.
 // Safety is then checked by execution for every verdict except Unknown, which
 // makes no claim; Unknown cases are verdict-only, so the oracle needs no
 // tt.load support for two_axes_load.
-// `incr` is the increment whose candidates the case needs: "1b" cases use only
-// 4a, 4b and obligation guards; "1c" cases need 4c, 4d or 4e.
+// `search` is the candidates the case needs: "loop" cases use only the
+// exact-loop-end and exact-cdiv candidates and obligation guards; "residual"
+// cases need a term-sign, quotient-threshold or residual-guard candidate.
 struct Case {
   const char *name;
   std::string ir;
   const char *mask;
   std::vector<V> allowed;
-  const char *incr = "1b";
+  const char *search = "loop";
   bool vacuous = false;
 };
 static const Case kCases[] = {
-    {"e1_i8", kE1_I8Scalars, "mask", {V::ConditionallySatisfied}},
-    {"e2_i8", kE2_I8Scalars, "mask", {V::ConditionallySatisfied}},
+    {"reduction_i8", kReductionLoopI8, "mask", {V::ConditionallySatisfied}},
+    {"cdiv_k_i8", kCdivKLoopI8, "mask", {V::ConditionallySatisfied}},
     {"two_axes", kSameLaneTwoAxes, "cmp", {V::Unknown}},
     {"two_axes_load",
      kSameLoadTwoAxes,
@@ -1094,7 +1095,7 @@ static const Case kCases[] = {
      kNarrowRangeWrapI8,
      "cmp",
      {V::ConditionallySatisfied},
-     "1b",
+     "loop",
      /*vacuous=*/true}, // guard arg0 <= 27 never holds under the assumes
     {"wrap_i4",
      kScalarWrapI4,
@@ -1105,24 +1106,24 @@ static const Case kCases[] = {
      kUnsignedPredI8,
      "cmp",
      {V::ConditionallySatisfied},
-     "1c"}, // 4e bounds the residual, then the ult obligations
+     "residual"}, // residual guard, then the ult obligations
     {"extui",
      kExtUII8,
      "cmp",
      {V::ConditionallySatisfied},
-     "1c"}, // 4c proves the operand sign; the obligation alone is not search
-            // evidence
+     "residual"}, // term sign proves the operand sign; the obligation alone is
+                  // not search evidence
     {"zero_trip", kEmptyLoopI8, "mask", {V::ConditionallySatisfied}},
     {"product_wrap",
      kProductSignI8,
      "cmp",
      {V::ConditionallySatisfied},
-     "1c"}, // 4c guards p itself
+     "residual"}, // term sign guards p itself
     {"product_wrap_i4",
      kProductSignI4,
      "cmp",
      {V::ConditionallySatisfied},
-     "1c"},
+     "residual"},
     {"offset_iter_arg", kOffsetIterArgI8, "cmp", {V::Unknown}},
     {"depth_cap", kDepthCapChainI8, "cmp", {V::Unknown}}, // budget exhausted
     {"loop_bound_wrap",
@@ -1194,28 +1195,27 @@ TEST_P(SymbolicBoundsOracleTest, VerdictMatchesExhaustiveExecution) {
   RecordProperty(std::string(c.name) + "_guarded_elements", guardedElems);
 }
 
-// Two suites, so --gtest_filter selects an increment and gtest reports the
-// names: the 1b gate runs `--gtest_filter='Incr1b/*'`, which registers only
-// the cases its candidates can prove. `incr` is the single source of both
-// lists, so a case cannot be in neither or both.
-static std::vector<Case> casesFor(StringRef incr) {
+// Two suites, so --gtest_filter can select cases by the candidates they need,
+// e.g. `--gtest_filter='LoopCandidates/*'`. `search` is the single source of
+// both lists, so a case cannot be in neither or both.
+static std::vector<Case> casesFor(StringRef search) {
   std::vector<Case> out;
   for (const Case &c : kCases)
-    if (c.incr == incr)
+    if (c.search == search)
       out.push_back(c);
   return out;
 }
 
 /// Names each instantiation after its case, so a failure reads as
-/// `Incr1b/SymbolicBoundsOracleTest.VerdictMatchesExhaustiveExecution/e1_i8`.
+/// `<suite>/SymbolicBoundsOracleTest.VerdictMatchesExhaustiveExecution/<case>`.
 static std::string caseName(const ::testing::TestParamInfo<Case> &info) {
   return info.param.name;
 }
 
-INSTANTIATE_TEST_SUITE_P(Incr1b, SymbolicBoundsOracleTest,
-                         ::testing::ValuesIn(casesFor("1b")), caseName);
-INSTANTIATE_TEST_SUITE_P(Incr1c, SymbolicBoundsOracleTest,
-                         ::testing::ValuesIn(casesFor("1c")), caseName);
+INSTANTIATE_TEST_SUITE_P(LoopCandidates, SymbolicBoundsOracleTest,
+                         ::testing::ValuesIn(casesFor("loop")), caseName);
+INSTANTIATE_TEST_SUITE_P(ResidualCandidates, SymbolicBoundsOracleTest,
+                         ::testing::ValuesIn(casesFor("residual")), caseName);
 
 //===----------------------------------------------------------------------===//
 // Guard arithmetic
@@ -1223,10 +1223,10 @@ INSTANTIATE_TEST_SUITE_P(Incr1c, SymbolicBoundsOracleTest,
 
 class SymbolicBoundsGuardTest : public OracleFixture {};
 
-// Guard arithmetic near the i64 fit limit (spec 6), independent of the prover.
+// Guard arithmetic near the i64 fit limit, independent of the prover.
 // k = 2^55 takes the fast path (2^55*2^7 < 2^63); 2^56 is the first checked
 // one. The guard must equal k*a >= t in exact arithmetic, and be false wherever
-// k*a overflows i64 (spec 4.4). SymbolicBoundsGuardTest is the oracle fixture
+// k*a overflows i64. SymbolicBoundsGuardTest is the oracle fixture
 // without the parameter.
 TEST_F(SymbolicBoundsGuardTest, GuardMatchesExactArithmetic) {
   parse(R"(tt.func @f(%a: i8) { tt.return })");
@@ -1254,7 +1254,7 @@ TEST_F(SymbolicBoundsGuardTest, GuardMatchesExactArithmetic) {
 // Legacy guard implication
 //===----------------------------------------------------------------------===//
 //
-// Coverage, not safety (design 6, "Differential"): wherever a legacy validator
+// Coverage, not safety: wherever a legacy validator
 // versions a loop, the guard of the prover's proof for the same mask must hold
 // too. Per point, the legacy guard and the mask are evaluated at the family's
 // width with wrapping, the new guard as `materialize` emits it, and legacy =>
@@ -1267,9 +1267,10 @@ TEST_F(SymbolicBoundsGuardTest, GuardMatchesExactArithmetic) {
 //                   whose exact value exceeds its width
 //
 // Any other loss fails, and so does a new guard that holds over a false
-// element. The canonical kE2 shape is legacy-recognized at i4/i8 and runs as
-// real IR there; the scalar form's validator asserts i1 operands, so it runs
-// as real i1 IR, and its other widths model a build without assertions. No
+// element. The canonical tutorial-03 K loop shape is legacy-recognized at
+// i4/i8 and runs as real IR there; the scalar form's validator asserts i1
+// operands, so it runs as real i1 IR, and its other widths model a build
+// without assertions. No
 // other family has recognized IR below i32 (tt.make_range is i32-only), so at
 // i4/i8 they run on a model whose new guard is the i32 proof with its
 // width-dependent constants substituted. Every family also runs at i32/i64 on
@@ -1340,10 +1341,10 @@ std::vector<int64_t> allValues(unsigned w) {
   return out;
 }
 
-/// Boundary values of one argument (design 6): 0, +-1, +-(END-1), +-END,
+/// Boundary values of one argument: 0, +-1, +-(END-1), +-END,
 /// INT_MIN, INT_MIN+END, INT_MAX-END and INT_MAX, plus INT_MIN+1 and INT_MAX-1,
-/// which the review counterexamples need, and +-2*END, INT_MIN+(END-1) and
-/// INT_MAX-(END-1): the plan's list has no multiple of END above END, so the
+/// which the legacy counterexamples need, and +-2*END, INT_MIN+(END-1) and
+/// INT_MAX-(END-1): without them there is no multiple of END above END, so the
 /// canonical implication, whose legacy-true K run from 2*END to
 /// INT_MAX-(END-1), would be vacuous. END = 0 (no END) merges the sets for END
 /// 2, 4 and 8.
@@ -1505,11 +1506,11 @@ struct CanonicalEval {
   bool exceedsWidth = false; // kind (ii): some IR operand exceeds the width
 };
 
-/// The kE2 mask at width `w`: `for k in [0, (K + END-1) / END)`, lanes [0, END)
-/// slt K - k*END, all in `w`-bit wrapping arithmetic, compared at i32 (a narrow
-/// rem is sign-extended) or i64. The lanes enter unshifted, so every lane is
-/// evaluated; the iterations are all run, or only those discontinuitySamples
-/// picks, which is what the i32/i64 points need.
+/// The tutorial-03 K loop mask at width `w`: `for k in [0, (K + END-1) / END)`,
+/// lanes [0, END) slt K - k*END, all in `w`-bit wrapping arithmetic, compared
+/// at i32 (a narrow rem is sign-extended) or i64. The lanes enter unshifted, so
+/// every lane is evaluated; the iterations are all run, or only those
+/// discontinuitySamples picks, which is what the i32/i64 points need.
 CanonicalEval canonicalMask(int64_t k, unsigned w, int64_t end,
                             bool allIterations) {
   CanonicalEval r;
@@ -1553,14 +1554,15 @@ std::string tensorTy(int64_t n, unsigned w) {
   return "tensor<" + std::to_string(n) + "x" + intTy(w) + ">";
 }
 
-/// The kE2 shape at width `w`, with an `arith.select` `use` consuming the mask
-/// as the masked load would: the symbolic driver proves the mask there.
+/// The tutorial-03 K loop shape at width `w`, with an `arith.select` `use`
+/// consuming the mask as the masked load would: the symbolic driver proves the
+/// mask there.
 std::string canonicalIR(unsigned w, int64_t end) {
   const std::string iw = intTy(w), e = std::to_string(end);
   const unsigned cw = std::max(w, 32u);
   const std::string t32 = tensorTy(end, 32), tc = tensorTy(end, cw);
   std::string lane = "%lane", rem = "%rem";
-  std::string ir = "tt.func @e2(%K: " + iw + ") {\n";
+  std::string ir = "tt.func @cdiv_k_loop(%K: " + iw + ") {\n";
   ir += "  %c0 = arith.constant 0 : " + iw + "\n";
   ir += "  %c1 = arith.constant 1 : " + iw + "\n";
   ir += "  %cm = arith.constant " + std::to_string(end - 1) + " : " + iw + "\n";
@@ -1750,7 +1752,7 @@ bool holds(Oracle &oracle, const NewGuard &g, ArrayRef<int64_t> args) {
   }
 }
 
-/// An i32 proof's condition with the width taken out (design 6): the wrap
+/// An i32 proof's condition with the width taken out: the wrap
 /// guards AtMost(X, INT_MAX(32) - (END-1)) and AtLeast(X, INT_MIN(32)) take
 /// the width as a parameter; DivisibleBy, sign and residual conditions keep
 /// their constants. Subjects are over kernel arguments, by index.
@@ -1998,20 +2000,21 @@ public:
   /// unclassified loss, an unsound new guard, or a model mismatch.
   ///
   /// `knownSearchOrderGap`: the prover's candidate search is a fixed-order
-  /// greedy pass (design 4.3) - it returns the first candidate kind whose
+  /// greedy pass - it returns the first candidate kind whose
   /// trial decides the query, even when a later kind would have found a
-  /// wider (still sound) guard. 4c can close a single-symbol residual with a
-  /// cheap NonNegative/StrictlyPositive guard before 4e ever gets to try the
-  /// exact threshold, which is narrower than legacy's whenever legacy's own
-  /// bound is negative (`boundary_sge`/`sgt` with c < 0) or the symbol's
-  /// width leaves no room between the two (`scalar_slt`/`sle` at i1, whose
-  /// only legacy-true point needs the OTHER operand's exact sign, not a
-  /// margin 4c's floor/ceiling can express). Neither is unsound - every
-  /// unclassified loss here still passes the unsound/mismatch checks below -
-  /// and reordering the search to prefer 4e is a prover change, not a test
-  /// one: tightening it risks exactly the regression `unsigned_pred` found
-  /// (an upstream fact can also close a candidate 4c would otherwise reach),
-  /// so it is left as a known, flagged gap pending Ettore's call rather than
+  /// wider (still sound) guard. The term-sign candidate can close a
+  /// single-symbol residual with a cheap NonNegative/StrictlyPositive guard
+  /// before the residual guard ever gets to try the exact threshold, which is
+  /// narrower than legacy's whenever legacy's own bound is negative
+  /// (`boundary_sge`/`sgt` with c < 0) or the symbol's width leaves no room
+  /// between the two (`scalar_slt`/`sle` at i1, whose only legacy-true point
+  /// needs the OTHER operand's exact sign, not a margin a term-sign
+  /// floor/ceiling can express). Neither is unsound - every unclassified loss
+  /// here still passes the unsound/mismatch checks below - and reordering the
+  /// search to prefer the residual guard is a prover change, not a test one:
+  /// tightening it risks exactly the regression `unsigned_pred` found (an
+  /// upstream fact can also close a candidate the term-sign kind would
+  /// otherwise reach), so it is left as a known, flagged gap rather than
   /// silently loosened. The 1 remaining per-group loss on `boundary_sge`/
   /// `sgt` at i64 (off = INT64_MIN exactly) is a residual case of the same
   /// family, not a distinct cause.
@@ -2272,7 +2275,7 @@ void LegacyImplicationTest::checkCanonical(ImplicationLog &log) {
       }
 
       if (w == 8 && end == 4) {
-        // Spec E2: the largest i8 multiple of 4 is 124 = 127 - 3, so the wrap
+        // The largest i8 multiple of 4 is 124 = 127 - 3, so the wrap
         // guard loses nothing the legacy K % 4 == 0 && K > 4 admits.
         EXPECT_EQ(toString(p),
                   "Conditional{arg0 divisible by 4; arg0 >= 0; arg0 <= 124}");
@@ -2444,13 +2447,12 @@ implicationName(const ::testing::TestParamInfo<ImplicationCase> &info) {
   return info.param.name;
 }
 
-// Increment 1c: `--gtest_filter='Incr1c/*'` selects these with the 4c-4e cases.
-INSTANTIATE_TEST_SUITE_P(Incr1c, LegacyImplicationTest,
+INSTANTIATE_TEST_SUITE_P(Legacy, LegacyImplicationTest,
                          ::testing::ValuesIn(kImplicationCases),
                          implicationName);
 
 //===----------------------------------------------------------------------===//
-// The review counterexamples and the checker's own parts
+// Legacy counterexamples and the checker's own parts
 //===----------------------------------------------------------------------===//
 
 class LegacyImplicationParts : public OracleFixture {
@@ -2470,10 +2472,10 @@ protected:
   }
 };
 
-// Each counterexample of the reviews, at i32 and i64, through the code the
+// Each legacy counterexample, at i32 and i64, through the code the
 // parametrized test classifies with: legacy-unsound, never a conservative
 // loss, and caught only because the sampler looks between the endpoints.
-TEST_F(LegacyImplicationParts, ReviewCounterexamplesAreLegacyUnsound) {
+TEST_F(LegacyImplicationParts, LegacyCounterexamplesAreUnsound) {
   struct Example {
     const char *what;
     Pred pred;

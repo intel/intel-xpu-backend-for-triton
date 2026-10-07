@@ -7,15 +7,11 @@
 // the runtime conditions under which the comparison holds, as scalars that
 // dominate the loop, so a consumer can guard an unmasked copy.
 //
-// Design: `~/.claude/handoffs/assets/missing-analyses/
-// 2026-10-02-symbolic-bounds-prover-design.md` (v11). Section numbers in the
-// comments below refer to it.
-//
 // The prover reasons in the integers; the IR's unflagged `arith` integer ops
 // wrap. Every traversed add/subtract/multiply therefore carries a *wrap
 // obligation*, discharged statically, folded into the runtime guard, or - when
 // neither is possible - degrading the query to `Unknown`. Nothing here assumes
-// absence of overflow silently (§4.1).
+// absence of overflow silently.
 //
 //===----------------------------------------------------------------------===//
 
@@ -36,7 +32,8 @@
 namespace mlir::triton::intel {
 
 /// A symbol is an integer SSA value the prover does not look through.
-/// `TripCount` is phase 3 (design §4.5): no phase-1 path creates one.
+/// `TripCount` is reserved for the trip-count API sketched below, which is
+/// not implemented; nothing creates one yet.
 enum class SymbolKind {
   KernelArg,
   ProgramId,
@@ -51,7 +48,7 @@ enum class SymbolKind {
 /// placement[i] = the result-tensor axis occupied by the symbol's own axis i,
 /// one entry per axis of the symbol's value, size-1 axes included. Empty for
 /// scalars. Two occurrences denote the same element - and so may cancel - only
-/// if value and placement agree (§4.1, element correspondence).
+/// if value and placement agree.
 using AxisPlacement = SmallVector<int32_t, 4>;
 
 /// Built only by `SymbolicBoundsProver::symbolFor`, so `order` is always
@@ -97,7 +94,7 @@ private:
 /// method is overflow-checked: an overflow sets a sticky flag, and a flagged
 /// form is unusable - `normalize` turns it into an `Opaque` symbol, candidate
 /// formation rejects it, and a flagged comparison difference ends the query
-/// `Unknown` (§4.1, §4.4).
+/// `Unknown`.
 class AffineForm {
 public:
   AffineForm() = default;
@@ -139,7 +136,7 @@ enum class BoundGoal {
   AtMost
 };
 
-/// Budgets are per kind (§4.3), and the kind also fixes the order conditions
+/// Budgets are per kind, and the kind also fixes the order conditions
 /// render and materialize in: facts, then preconditions, then guards.
 enum class ConditionKind { Fact, Precondition, Guard };
 
@@ -147,7 +144,7 @@ enum class ConditionKind { Fact, Precondition, Guard };
 /// affine form rather than an SSA value because `ub - lb` and the wrap bounds
 /// usually have no SSA value; every symbol in it must map to one scalar
 /// (rank-0) value that dominates the loop, so `materialize` can place the
-/// guard (§4.4).
+/// guard.
 struct BoundCondition {
   AffineForm expr;
   BoundGoal goal;
@@ -162,9 +159,9 @@ struct BoundCondition {
   }
 };
 
-/// Closed by the discharge tiers of §4.1. `Wrap`: a traversed
-/// add/subtract/multiply result fits its width. `NonNegative`: `expr >= 0`,
-/// from `extui` and from unsigned predicates.
+/// Closed statically (tier 1) or by a runtime guard (tier 2). `Wrap`: a
+/// traversed add/subtract/multiply result fits its width. `NonNegative`:
+/// `expr >= 0`, from `extui` and from unsigned predicates.
 struct Obligation {
   enum Kind { Wrap, NonNegative };
 
@@ -183,7 +180,7 @@ struct Obligation {
   }
 };
 
-/// The four-valued verdict of §4.3. `Refuted` and `Unknown` are not
+/// The four-valued verdict. `Refuted` and `Unknown` are not
 /// interchangeable: `Refuted` is a positive, unconditional disproof a consumer
 /// may act on, `Unknown` means the prover gave up and the IR must be left
 /// alone.
@@ -191,7 +188,7 @@ struct BoundProof {
   enum Verdict { Satisfied, Refuted, ConditionallySatisfied, Unknown };
 
   Verdict verdict = Unknown;
-  /// Facts, then preconditions, then guards (§4.4).
+  /// Facts, then preconditions, then guards.
   SmallVector<BoundCondition, 4> conditions;
   /// The `llvm.intr.assume` operations the proof consulted.
   SmallVector<Operation *, 4> factsUsed;
@@ -205,8 +202,8 @@ struct QueryContext {
   scf::ForOp loop;
 };
 
-// Phase 3 (design §4.5), not implemented by this plan. Declared for the shape
-// its three TTGIR consumers will use:
+// Not implemented: a symbolic trip-count API, in the shape its TTGIR
+// consumers would use:
 //   struct SymbolicTripCount { AffineForm count;
 //                              SmallVector<BoundCondition> preconditions;
 //                              SmallVector<Obligation> obligations; };
@@ -218,7 +215,7 @@ struct QueryContext {
 /// `Accepted`; `Declined`, when the condition is not expressible (an
 /// unnormalizable divisibility, a non-scalar or non-dominating subject), in
 /// which case the trial is discarded and the search continues; and
-/// `Exhausted`, when a budget is exceeded, which is `Unknown` (§4.3).
+/// `Exhausted`, when a budget is exceeded, which is `Unknown`.
 enum class CandidateResult { Accepted, Declined, Exhausted };
 
 class SymbolicBoundsProver {
@@ -259,9 +256,9 @@ public:
   static constexpr unsigned kMaxGuards = 8;
 
 private:
-  /// The result of bounding an affine form over a loop's iteration space
-  /// (§4.2). Side-effect free: evidence the bounding needed comes back here
-  /// and the caller merges it.
+  /// The result of bounding an affine form over a loop's iteration space.
+  /// Side-effect free: evidence the bounding needed comes back here and the
+  /// caller merges it.
   struct Bounds {
     AffineForm lo, hi;
     bool isVarying = false;
@@ -276,11 +273,11 @@ private:
 
   /// The candidate conditions a proof attempt has accumulated. Every trial
   /// runs on a copy and is committed only if it succeeds, so a failed attempt
-  /// leaks nothing into a later one (§4.3 step 4).
+  /// leaks nothing into a later one.
   struct CandidateSet {
-    /// 4a: the IV's high bound is `ub - step` rather than `ub - 1`.
+    /// Exact loop end: the IV's high bound is `ub - step` rather than `ub - 1`.
     bool exactLoopEnd = false;
-    /// 4b: quotients known to divide exactly.
+    /// Exact cdiv: quotients known to divide exactly.
     SmallVector<Symbol, 2> exactCdiv;
     /// Accepted candidate conditions.
     SmallVector<BoundCondition, 4> facts;
@@ -292,20 +289,21 @@ private:
     SmallVector<Obligation, 4> factObligations;
     /// A bound overflowed while closing an obligation: the verdict is Unknown.
     bool exhausted = false;
-    /// 4c/4d: trial hypotheses this attempt is testing on a residual term,
-    /// consulted by `decideResidual` ahead of the general fact/range check.
-    /// `signFloor` is `sym >= bound` (used when the term's own coefficient in
-    /// the residual is positive); `signCeil` is `sym <= bound` (negative
-    /// coefficient). 4c populates these with 0 (`NonNegative`/`AtMost(_,0)`)
-    /// or 1/-1 (`StrictlyPositive`/`AtMost(_,-1)`); 4d with the quotient
-    /// threshold translated from the dividend condition it emits, so the
-    /// bound the dividend condition justifies is also usable internally,
-    /// without being emitted twice.
+    /// Term-sign and quotient-threshold candidates: trial hypotheses this
+    /// attempt is testing on a residual term, consulted by `decideResidual`
+    /// ahead of the general fact/range check. `signFloor` is `sym >= bound`
+    /// (used when the term's own coefficient in the residual is positive);
+    /// `signCeil` is `sym <= bound` (negative coefficient). The term-sign
+    /// candidate populates these with 0 (`NonNegative`/`AtMost(_,0)`) or 1/-1
+    /// (`StrictlyPositive`/`AtMost(_,-1)`); the quotient-threshold candidate
+    /// with the quotient threshold translated from the dividend condition it
+    /// emits, so the bound the dividend condition justifies is also usable
+    /// internally, without being emitted twice.
     SmallVector<std::pair<Symbol, int64_t>, 2> signFloor;
     SmallVector<std::pair<Symbol, int64_t>, 2> signCeil;
   };
 
-  /// The facts of one quotient symbol (design 4.1 division/remainder rows).
+  /// The facts of one quotient symbol.
   struct QuotientInfo {
     /// True for the `(X + c - 1) / c` shape, whose facts are sharper.
     bool isCdiv = false;
@@ -325,13 +323,13 @@ private:
   /// invariant to every enclosing loop.
   static Operation *varyingLoopKey(Value v);
 
-  /// §4.2: keeps loop-invariant symbols symbolic, substitutes bounds for
+  /// Keeps loop-invariant symbols symbolic, substitutes bounds for
   /// loop-varying ones, collects like terms.
   Bounds bound(const AffineForm &e, QueryContext ctx, const CandidateSet &cs);
   /// Bounds one symbol over the loop's iteration space.
   Bounds symbolBounds(const Symbol &sym, QueryContext ctx,
                       const CandidateSet &cs);
-  /// §4.2 step 4: is the residual `lo` at least `g`?
+  /// Is the residual `lo` at least `g`?
   bool decideResidual(const AffineForm &lo, int64_t g, QueryContext ctx,
                       CandidateSet &cs);
   /// The fact/range half of a residual term's sign check: an applicable
@@ -343,11 +341,11 @@ private:
   /// The constant `decideResidual` compares against `g`, when there is one.
   std::optional<int64_t> residualConstant(const AffineForm &d, QueryContext ctx,
                                           CandidateSet &cs);
-  /// Tier 1 of §4.1: discharges an obligation from operand bounds, or from
+  /// Tier 1: discharges an obligation from operand bounds, or from
   /// the loop's no-overflow rule.
   bool dischargeTier1(const Obligation &o, QueryContext ctx, CandidateSet &cs);
-  /// True for `iv + c` with 0 <= c <= step: the free discharge of loop
-  /// contract (iii).
+  /// True for `iv + c` with 0 <= c <= step, which the scf.for contract
+  /// discharges for free.
   bool isLoopIvPlusSmallConstant(arith::AddIOp add, QueryContext ctx,
                                  const CandidateSet &cs);
   /// Tier 2: the runtime guards that close an open obligation.
@@ -358,7 +356,7 @@ private:
   /// True when the symbols' constant ranges alone imply `cond`.
   bool impliedByRanges(const BoundCondition &cond) const;
 
-  /// The single exit of every successful path (§4.3 steps 1-6).
+  /// The single exit of every successful path.
   BoundProof finalize(BoundProof::Verdict onD, CandidateSet cs,
                       ArrayRef<Obligation> obligations, QueryContext ctx);
   /// Adds a candidate condition, or reports why it cannot be added.
@@ -421,7 +419,7 @@ private:
   /// symbol order is total and reproducible across processes.
   DenseMap<Value, unsigned> valueOrder;
   /// Per-query: set when a budget is exhausted, which makes the query
-  /// `Unknown` (§4.3).
+  /// `Unknown`.
   bool exhausted = false;
   /// Quotient facts, keyed by (symbol, the loop in which its dividend
   /// varies), so one entry serves every context the quotient is reached from.
@@ -429,7 +427,7 @@ private:
   /// Assume facts, keyed by the subject value they constrain.
   DenseMap<Value, SmallVector<Fact, 2>> factIndex;
 
-  /// The normalization memo (§4.6). Keyed by placement as well as value,
+  /// The normalization memo. Keyed by placement as well as value,
   /// because the same value on two axes does not normalize to the same form.
   struct MemoKey {
     const void *value;
@@ -462,14 +460,14 @@ private:
   unsigned deepest = 0;
 };
 
-/// Normalizes a condition in place (§4.4): folds the constant into the bound,
+/// Normalizes a condition in place: folds the constant into the bound,
 /// divides a single-symbol ordered condition by |k| rounding inward, and
 /// reduces `DivisibleBy` through gcd. Returns false when the condition is
 /// unsatisfiable or states a congruence `BoundGoal` cannot express; the caller
 /// then declines the candidate or leaves the obligation open.
 bool normalizeCondition(BoundCondition &cond);
 
-/// Builds the i64 guard for `conds` immediately before `before` (§4.4).
+/// Builds the i64 guard for `conds` immediately before `before`.
 /// Asserts that every symbol is a scalar (rank-0) SSA value that properly
 /// dominates `before`; the prover never produces a `LoopIV`, `Lane` or
 /// tensor-valued subject. "The guard cannot wrap" is a checked guarantee, not

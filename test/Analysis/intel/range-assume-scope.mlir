@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -test-intel-range-analysis -verify-diagnostics=only-expected | FileCheck %s
 
 // COM: An `llvm.intr.assume` constrains a value at a use only if it is certain
-// COM: to execute whenever that use does (design §4.3). One section per class
+// COM: to execute whenever that use does. One section per class
 // COM: the applicability helper must reject, plus a control that must keep
 // COM: working. `%use` is an identity add, so its range is exactly the range
 // COM: the analysis holds for `%n`: the full range means the fact did not

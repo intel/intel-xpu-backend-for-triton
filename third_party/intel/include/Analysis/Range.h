@@ -15,7 +15,7 @@ namespace mlir::triton::intel {
 /// This pass is based on MLIR's dataflow framework and extends upstream's
 /// IntegerRangeAnalysis to better support Triton-specific constructs.
 /// An assume constrains an SSA value at `useOp` iff it is certain to execute
-/// whenever `useOp` does (design §4.3). Forward case: the assume properly
+/// whenever `useOp` does. Forward case: the assume properly
 /// dominates `useOp`. Backward case: the assume comes later in the same block
 /// and nothing between the op enclosing `useOp` and the assume can abort, spin
 /// or fail to return.

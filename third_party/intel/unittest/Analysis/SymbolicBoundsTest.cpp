@@ -168,13 +168,13 @@ TEST_F(SymbolicBoundsTest, SameLaneDifferentAxesDoesNotCancel) {
       %cmp = arith.cmpi slt, %cb, %rb : tensor<64x64xi32> loc("cmp")
       tt.return
     })");
-  EXPECT_EQ(verdict(get("cmp")), "Unknown"); // never Refuted (Review Focus 1)
+  EXPECT_EQ(verdict(get("cmp")), "Unknown"); // never Refuted
 }
 
-// E1 of the design: the inductor reduction shape the census shows exiting
-// walk 1 at iv-range-unknown.
-static const char *kE1 = R"(
-  tt.func @e1(%ptr: !tt.ptr<f32>, %rnumel: i32) {
+// The inductor reduction shape: `r + lane < rnumel` over a loop
+// `0 to rnumel step 64`.
+static const char *kReductionLoop = R"(
+  tt.func @reduction_loop(%ptr: !tt.ptr<f32>, %rnumel: i32) {
     %c0 = arith.constant 0 : i32
     %c64 = arith.constant 64 : i32
     %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
@@ -188,8 +188,8 @@ static const char *kE1 = R"(
     tt.return
   })";
 
-TEST_F(SymbolicBoundsTest, E1_ConditionalOnExactLoopEnd) {
-  parse(kE1);
+TEST_F(SymbolicBoundsTest, ReductionLoopConditionalOnExactLoopEnd) {
+  parse(kReductionLoop);
   EXPECT_EQ(verdict(get("mask")), "Conditional{arg1 divisible by 64}");
 }
 
@@ -215,11 +215,12 @@ TEST_F(SymbolicBoundsTest, ConstantBoundsSatisfied) {
 }
 
 TEST_F(SymbolicBoundsTest, UnsignedLoopNeedsSignedRepresentability) {
-  std::string ir = kE1;
+  std::string ir = kReductionLoop;
   ir.replace(ir.find("scf.for %r"), 10, "scf.for unsigned %r");
   parse(ir);
-  // Loop contract (ii): NonNegative(lb) discharges because lb = 0 is a
-  // constant; NonNegative(ub) and AtMost(ub, INT_MAX - step + 1) remain.
+  // Reading unsigned bounds as signed needs three preconditions:
+  // NonNegative(lb) discharges because lb = 0 is a constant; NonNegative(ub)
+  // and AtMost(ub, INT_MAX - step + 1) remain.
   // Order: fact, then preconditions.
   EXPECT_EQ(verdict(get("mask")),
             "Conditional{arg1 divisible by 64; arg1 >= 0; arg1 <= 2147483584}");
@@ -229,7 +230,7 @@ TEST_F(SymbolicBoundsTest, OffsetIterArgNeedsRepresentability) {
   // An i8 loop lb=120..ub=124 step 1 is well-defined - the exit value 124 fits
   // - but an iter_arg started at lb + 5 takes 125, 126, 127, -128. Treated as
   // IV + 5 with no obligation it would prove `o >= 0`; the obligation's
-  // hi = 123 + 5 = 128 is a constant out of range, so no guard can help (4.1).
+  // hi = 123 + 5 = 128 is a constant out of range, so no guard can help.
   parse(R"(
     tt.func @f() {
       %c1 = arith.constant 1 : i8
@@ -251,7 +252,7 @@ TEST_F(SymbolicBoundsTest, OffsetIterArgNeedsRepresentability) {
 TEST_F(SymbolicBoundsTest, DepthCapIsUnknown) {
   // Fully normalized, v20 = x + 20 and `v20 < x` is Refuted (hi(d) = -20). The
   // chain exceeds the depth budget, which degrades the query to Unknown, never
-  // to the Refuted a truncated traversal would also reach (4.3 budgets).
+  // to the Refuted a truncated traversal would also reach.
   std::string ir = "tt.func @f(%a: i8) {\n  %c1 = arith.constant 1 : i32\n"
                    "  %x = arith.extsi %a : i8 to i32\n";
   for (int i = 1; i <= 20; ++i)
@@ -267,8 +268,7 @@ TEST_F(SymbolicBoundsTest, DepthCapIsUnknown) {
 TEST_F(SymbolicBoundsTest, MemoHitRespectsDepthBudget) {
   // v10 is normalized first at depth 0 (height 10, within the cap), then
   // reached again below a 10-deep chain: 10 + 10 > 16 must exhaust, so a
-  // subtree memoized near the root cannot bypass the cap below a deep one
-  // (4.6).
+  // subtree memoized near the root cannot bypass the cap below a deep one.
   std::string ir = "tt.func @f(%a: i8) {\n  %c1 = arith.constant 1 : i32\n"
                    "  %v0 = arith.extsi %a : i8 to i32\n";
   for (int i = 1; i <= 20; ++i)
@@ -283,7 +283,7 @@ TEST_F(SymbolicBoundsTest, MemoHitRespectsDepthBudget) {
 }
 
 TEST_F(SymbolicBoundsTest, NormalizationRules) {
-  // One case per remaining normalization rule (4.1).
+  // One case per remaining normalization rule.
   parse(R"(
     tt.func @f(%a: i32, %b: index) {
       %np = tt.get_num_programs x : i32 loc("np")
@@ -308,7 +308,7 @@ TEST_F(SymbolicBoundsTest, NormalizationRules) {
   EXPECT_EQ(norm(get("np")), "np");       // NumPrograms, rendered by loc name
   EXPECT_EQ(norm(get("w")), "arg0");      // widening index_cast passes through
   EXPECT_EQ(norm(get("n")), "opaque(n)"); // narrowing index_cast truncates
-  EXPECT_EQ(norm(get("t")), "opaque(t)"); // permutations are Opaque in v1
+  EXPECT_EQ(norm(get("t")), "opaque(t)"); // permutations are Opaque
   EXPECT_EQ(norm(get("rs")), "opaque(rs)");
   EXPECT_EQ(norm(get("j")), "opaque(j)");
   // Both split results, distinct symbols; the result number breaks the tie in
@@ -348,8 +348,8 @@ TEST_F(SymbolicBoundsTest, TermBudgetAndDynamicStepAreUnknown) {
   parse(chainOf(tt::intel::SymbolicBoundsProver::kMaxTerms + 1));
   EXPECT_EQ(verdict(get("cmp")), "Unknown");
 
-  // A non-constant step makes the IV Opaque (loop contract (i)).
-  std::string dyn = kE1;
+  // A non-constant step makes the IV Opaque.
+  std::string dyn = kReductionLoop;
   dyn.replace(dyn.find("%rnumel: i32)"), 13, "%rnumel: i32, %st: i32)");
   dyn.replace(dyn.find("step %c64"), 9, "step %st");
   parse(dyn);
@@ -358,7 +358,7 @@ TEST_F(SymbolicBoundsTest, TermBudgetAndDynamicStepAreUnknown) {
 
 TEST_F(SymbolicBoundsTest, RefutedOnlyOnConstantHi) {
   // pid >= 0 from the range analysis, so hi(d) = -pid <= 0 < 1 by sign
-  // reasoning; 4.3 step 3 refutes only on a constant hi(d).
+  // reasoning; refutation needs a constant hi(d).
   parse(R"(
     tt.func @f() {
       %c0 = arith.constant 0 : i32
@@ -397,9 +397,9 @@ TEST_F(SymbolicBoundsTest, NegativeStartLane) {
   EXPECT_EQ(verdict(get("cmp")), "Refuted"); // every lane is negative
 }
 
-// E2 of the design: the tutorial-03 K loop with a cdiv upper bound.
-static const char *kE2 = R"(
-  tt.func @e2(%K: i32) {
+// The tutorial-03 K loop, with a cdiv upper bound.
+static const char *kCdivKLoop = R"(
+  tt.func @cdiv_k_loop(%K: i32) {
     %c0 = arith.constant 0 : i32
     %c1 = arith.constant 1 : i32
     %c63 = arith.constant 63 : i32
@@ -417,17 +417,17 @@ static const char *kE2 = R"(
     tt.return
   })";
 
-TEST_F(SymbolicBoundsTest, E2_ConditionalOnExactCdivWithPrecondition) {
-  parse(kE2);
-  // A prefix check: Task 5 appends the K + 63 wrap guard, which
-  // E2_GainsCdivNumeratorGuard pins in full, so this passes before and after.
+TEST_F(SymbolicBoundsTest, CdivKLoopConditionalOnExactCdivWithPrecondition) {
+  parse(kCdivKLoop);
+  // A prefix check: CdivKLoopGainsCdivNumeratorGuard pins the full condition
+  // list, including the K + 63 wrap guard.
   EXPECT_EQ(verdict(get("mask"))
                 .rfind("Conditional{arg0 divisible by 64; arg0 >= 0", 0),
             0u);
 }
 
-TEST_F(SymbolicBoundsTest, E2_GainsCdivNumeratorGuard) {
-  parse(kE2);
+TEST_F(SymbolicBoundsTest, CdivKLoopGainsCdivNumeratorGuard) {
+  parse(kCdivKLoop);
   // The cdiv facts are used, so the numerator K + 63 must fit i32: the `X + c
   // - 1` addition is never traversed (the facts are stated about X), so its
   // wrap obligation is recorded explicitly or this guard would be lost.
@@ -446,8 +446,7 @@ TEST_F(SymbolicBoundsTest, RemainderBounds) {
       tt.return
     })");
   EXPECT_EQ(verdict(get("lt")), "Conditional{arg0 >= 0}");
-  // Precondition retained even though it does not change lo(d) (Review Focus
-  // 3).
+  // Precondition retained even though it does not change lo(d).
   EXPECT_EQ(verdict(get("ge")), "Conditional{arg0 >= 0}");
 }
 
@@ -506,7 +505,7 @@ TEST_F(SymbolicBoundsTest, NarrowResultRangeIsNotANoWrapProof) {
     })");
   // The range analysis reports y in [-56, -46], the correct range of the
   // WRAPPED result; d = 100 would say Satisfied without obligations. hi(y) is
-  // 210 > 127 from the operands, so it must not (Review Focus 2).
+  // 210 > 127 from the operands, so it must not.
   EXPECT_NE(verdict(get("cmp")), "Satisfied");
 }
 
@@ -530,8 +529,8 @@ TEST_F(SymbolicBoundsTest, ExhaustedObligationBoundIsUnknown) {
   EXPECT_EQ(verdict(get("cmp")), "Unknown");
 }
 
-TEST_F(SymbolicBoundsTest, E1_WrapDischargedByLoopContract) {
-  parse(kE1);
+TEST_F(SymbolicBoundsTest, ReductionLoopWrapDischargedByLoopContract) {
+  parse(kReductionLoop);
   // r + lane discharges from the operand bounds under the final candidate
   // set: hi = (rnumel - 64) + 63 = rnumel - 1 <= INT32_MAX - 1. No guard.
   EXPECT_EQ(verdict(get("mask")), "Conditional{arg1 divisible by 64}");
@@ -557,7 +556,7 @@ TEST_F(SymbolicBoundsTest, LoopBoundWrapObligation) {
 
 TEST_F(SymbolicBoundsTest, PreLoopTensorLoadCannotBeGuarded) {
   // A tensor loaded before the loop is loop-invariant but not a scalar, so it
-  // may never become a condition subject (4.4): Unknown, not Conditional.
+  // may never become a condition subject: Unknown, not Conditional.
   parse(R"(
     tt.func @f(%p: !tt.ptr<i32>, %n: i32) {
       %c0 = arith.constant 0 : i32
@@ -622,14 +621,14 @@ TEST_F(SymbolicBoundsTest, AssumeUnderIfDoesNotReachLoop) {
       }
       tt.return
     })");
-  // The divisibility fact is out of scope, so the condition stays runtime
-  // (Review Focus 4).
+  // The divisibility fact is out of scope, so the condition stays runtime.
   EXPECT_EQ(verdict(get("mask")), "Conditional{arg1 divisible by 64}");
 }
 
 TEST_F(SymbolicBoundsTest, DominatingDivisibilityAssumeSatisfies) {
-  // The assume dominates the loop, so 4a's DivisibleBy(n, 64) is established
-  // by the fact and emitted as no runtime condition.
+  // The assume dominates the loop, so the exact-loop-end candidate's
+  // DivisibleBy(n, 64) is established by the fact and emitted as no runtime
+  // condition.
   parse(R"(
     tt.func @f(%ptr: !tt.ptr<f32>, %n: i32) {
       %c0 = arith.constant 0 : i32
@@ -695,9 +694,10 @@ TEST_F(SymbolicBoundsTest, ImpureExternCallBlocksBackwardAssume) {
 
 TEST_F(SymbolicBoundsTest, QuotientFactIsNotDividendFact) {
   // assume(X % 2 == 0) is indexed under X, and q = X divsi 4 stores X as its
-  // value. 4a needs `q divisible by 2`, which that fact does not give: at
-  // X = 12, q = 3, the loop runs i = 0, 2 and lane 1 of the last iteration is
-  // false (3 < 3). Matching the fact by stored value would prove Satisfied.
+  // value. The exact loop end needs `q divisible by 2`, which that fact does
+  // not give: at X = 12, q = 3, the loop runs i = 0, 2 and lane 1 of the last
+  // iteration is false (3 < 3). Matching the fact by stored value would prove
+  // Satisfied.
   parse(R"(
     tt.func @f(%X: i32) {
       %c0 = arith.constant 0 : i32
@@ -721,10 +721,10 @@ TEST_F(SymbolicBoundsTest, QuotientFactIsNotDividendFact) {
 }
 
 //===----------------------------------------------------------------------===//
-// Task 7 (1c): residual candidates 4c, 4d, 4e
+// Residual candidates: term sign, quotient threshold, residual guard
 //===----------------------------------------------------------------------===//
 
-TEST_F(SymbolicBoundsTest, ResidualSignGuardsProductValue_4c) {
+TEST_F(SymbolicBoundsTest, ResidualSignGuardsProductValue) {
   parse(R"(
     tt.func @f(%a: i32, %b: i32) {
       %c0 = arith.constant 0 : i32
@@ -738,7 +738,7 @@ TEST_F(SymbolicBoundsTest, ResidualSignGuardsProductValue_4c) {
   EXPECT_EQ(verdict(get("cmp")), "Conditional{opaque(p) >= 0}");
 }
 
-TEST_F(SymbolicBoundsTest, ResidualStrictlyPositive_4c) {
+TEST_F(SymbolicBoundsTest, ResidualStrictlyPositive) {
   // The goal d >= 1 on an Opaque product needs p > 0, not p >= 0.
   parse(R"(
     tt.func @f(%a: i32, %b: i32) {
@@ -750,11 +750,10 @@ TEST_F(SymbolicBoundsTest, ResidualStrictlyPositive_4c) {
   EXPECT_EQ(verdict(get("cmp")), "Conditional{opaque(p) > 0}");
 }
 
-TEST_F(SymbolicBoundsTest, QuotientThresholdPositive_4d) {
-  // The positive branch E3 used to cover: q >= 2 translates to K >= 65 for the
-  // cdiv shape. It also exercises the pruning dependency, since the retained
-  // K >= 65 may only drop a 4c `q >= 0` while the K + 63 wrap guard is
-  // retained.
+TEST_F(SymbolicBoundsTest, QuotientThresholdPositive) {
+  // q >= 2 translates to K >= 65 for the cdiv shape. It also exercises the
+  // pruning dependency, since the retained K >= 65 may only drop a term-sign
+  // `q >= 0` while the K + 63 wrap guard is retained.
   parse(R"(
     tt.func @f(%K: i32) {
       %c2 = arith.constant 2 : i32
@@ -771,7 +770,7 @@ TEST_F(SymbolicBoundsTest, QuotientThresholdPositive_4d) {
   EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 >= 65; arg0 <= 2147483584}");
 }
 
-TEST_F(SymbolicBoundsTest, QuotientThresholdUpperMirror_4d) {
+TEST_F(SymbolicBoundsTest, QuotientThresholdUpperMirror) {
   // k < 0: 3 - q >= 1 needs q <= 2, i.e. (cdiv) K <= 128. The K + 63 wrap
   // guard is implied by K <= 128 and dropped; NonNegative(K) stays.
   parse(R"(
@@ -787,10 +786,9 @@ TEST_F(SymbolicBoundsTest, QuotientThresholdUpperMirror_4d) {
   EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 <= 128; arg0 >= 0}");
 }
 
-TEST_F(SymbolicBoundsTest, MultiSymbolResidualGuard_4e) {
+TEST_F(SymbolicBoundsTest, MultiSymbolResidualGuard) {
   // d = hi - lo - 7 has two symbols, so no single-symbol candidate applies;
-  // 4e guards the whole residual. Previously 4e's only coverage was the
-  // trip-count test, which moved to phase 3 with the API.
+  // the residual guard covers the whole residual.
   parse(R"(
     tt.func @f(%lo: i32, %hi: i32) {
       %c0 = arith.constant 0 : i32
@@ -801,11 +799,11 @@ TEST_F(SymbolicBoundsTest, MultiSymbolResidualGuard_4e) {
       %mask = arith.cmpi slt, %lane, %ds : tensor<8xi32> loc("mask")
       tt.return
     })");
-  // lo(d) = (hi - lo) - 7; 4e proposes AtLeast(hi - lo, 8). The subi's wrap
-  // obligation must also be closed: lo = INT32_MIN, hi = 0 satisfies the
-  // mathematical hi - lo >= 8 while the narrow subtraction wraps negative and
-  // the mask is false, so the upper representability guard is not optional.
-  // Pin the conditions in full rather than by prefix.
+  // lo(d) = (hi - lo) - 7; the residual guard is AtLeast(hi - lo, 8). The
+  // subi's wrap obligation must also be closed: lo = INT32_MIN, hi = 0
+  // satisfies the mathematical hi - lo >= 8 while the narrow subtraction wraps
+  // negative and the mask is false, so the upper representability guard is
+  // not optional. Pin the conditions in full rather than by prefix.
   EXPECT_EQ(verdict(get("mask")),
             "Conditional{-arg0 + arg1 >= 8; -arg0 + arg1 <= 2147483647}");
 }
@@ -819,11 +817,12 @@ TEST_F(SymbolicBoundsTest, CandidateProofStillClosesObligations) {
       %cmp = arith.cmpi sge, %y, %c0 : i32 loc("cmp")
       tt.return
     })");
-  // 4c's own candidate is the weaker x >= 0; since Task 13 the search also
-  // tries 4e, whose exact AtLeast(y, 0) folds to the correct, wider x >= -1
-  // (y = x + 1 >= 0 admits x = -1, which x >= 0 wrongly excluded) and wins by
-  // the width metric. finalize must still close the wrap obligation on y with
-  // x <= INT32_MAX - 1 either way, otherwise x = INT32_MAX would pass.
+  // The term-sign candidate is the weaker x >= 0; the search also tries the
+  // residual guard, whose exact AtLeast(y, 0) folds to the correct, wider
+  // x >= -1 (y = x + 1 >= 0 admits x = -1, which x >= 0 wrongly excluded) and
+  // wins by the width metric. finalize must still close the wrap obligation
+  // on y with x <= INT32_MAX - 1 either way, otherwise x = INT32_MAX would
+  // pass.
   EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 >= -1; arg0 <= 2147483646}");
 }
 
