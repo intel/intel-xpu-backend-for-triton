@@ -58,6 +58,7 @@ module {
     scf.for %iv = %c0 to %n step %c4 : i32 {
       %ivs = tt.splat %iv : i32 -> tensor<4xi32>
       %idx = arith.addi %ivs, %lane : tensor<4xi32>
+      // expected-remark@+1 {{verdict: Conditional{arg0 divisible by 4; arg1 >= 0}}}
       %cmp = arith.cmpi slt, %idx, %nms : tensor<4xi32>
       scf.yield
     }

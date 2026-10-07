@@ -2216,9 +2216,13 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
         continue; // do not fold this trial into acc (see the loop's own doc)
       }
     }
-    // Keep a candidate that strictly improves lo(d) without finishing.
+    // Keep a candidate that strictly improves lo(d) without finishing. Its
+    // conditions go with it: a later kind finishes from `acc`.
     std::optional<int64_t> lo = residualConstant(d, ctx, trial);
-    if (lo && (!best || *lo > *best)) {
+    if (lo && (!best || *lo > *best) &&
+        llvm::all_of(candidates, [&](const BoundCondition &cond) {
+          return addCandidate(trial, cond, ctx) == CandidateResult::Accepted;
+        })) {
       acc = std::move(trial);
       best = lo;
     }
