@@ -866,7 +866,9 @@ static tt::TransOp transposeDotScaledOp(tt::DotScaledOp dotOp) {
   auto result = tt::DotScaledOp::create(
       builder, dotOp.getLoc(), cTransposed.getType(), rhsTransposed,
       lhsTransposed, cTransposed, dotOp.getBScale(), dotOp.getAScale(),
-      dotOp.getBElemType(), dotOp.getAElemType(), dotOp.getFastMath());
+      dotOp.getBElemType(), dotOp.getAElemType(), dotOp.getFastMath(),
+      /*lhs_k_pack=*/dotOp.getRhsKPack(),
+      /*rhs_k_pack=*/dotOp.getLhsKPack());
   auto transOp =
       tt::TransOp::create(builder, result.getLoc(), result, transOrder);
   dotOp.replaceAllUsesWith(transOp.getOperation());

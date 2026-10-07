@@ -1120,6 +1120,21 @@ Bf16_to_Fp16WithRounding(Location loc, ConversionPatternRewriter &rewriter,
   return result;
 }
 
+// For RTNE/RTZ callers. FP16 -> FP32 extension is always exact, so the
+// requested rounding only needs to apply on the FP32 -> BF16 narrowing step.
+template <RoundingMode Rounding>
+static SmallVector<Value>
+Fp16_to_Bf16WithRounding(Location loc, ConversionPatternRewriter &rewriter,
+                         const SmallVector<Value> &v) {
+  SmallVector<Value> result;
+  result.reserve(v.size());
+  for (Value elem : v) {
+    Value fp32 = LLVM::FPExtOp::create(rewriter, loc, f32_ty, elem);
+    result.push_back(intel::convertFp32ToBf16(loc, rewriter, fp32, Rounding));
+  }
+  return result;
+}
+
 inline Type getFunctionType(Type resultType, ValueRange operands) {
   SmallVector<Type> operandTypes(operands.getTypes());
   return LLVM::LLVMFunctionType::get(resultType, operandTypes);
@@ -1418,6 +1433,11 @@ struct FpToFpOpConversion
              {Bf16_to_Fp16WithRounding<RoundingMode::RTNE>, 2}},
             {{BF16TyID, F16TyID, RoundingMode::RTZ},
              {Bf16_to_Fp16WithRounding<RoundingMode::RTZ>, 2}},
+            // F16 -> BF16
+            {{F16TyID, BF16TyID, RoundingMode::RTNE},
+             {Fp16_to_Bf16WithRounding<RoundingMode::RTNE>, 2}},
+            {{F16TyID, BF16TyID, RoundingMode::RTZ},
+             {Fp16_to_Bf16WithRounding<RoundingMode::RTZ>, 2}},
             // F32 -> F8
             {{F32TyID, F8E4M3TyID, RoundingMode::RTNE},
              {Fp_to_Fp8_RTNE<Float32Type, Float8E4M3Type>, 1}},

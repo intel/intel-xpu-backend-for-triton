@@ -7,6 +7,7 @@
 #linear = #ttg.linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>
 #blocked_reduce = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked_packed_reduce = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked_nonaxis_packed_reduce = #ttg.blocked<{sizePerThread = [2, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked_warp_reduce = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 #even_odd = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -70,6 +71,34 @@ tt.func @anchor(%ptr: !llvm.ptr, %arg0: tensor<32x16xi32, #linear>) {
   %0 = tt.call @reduce_linear_layout(%arg0) : (tensor<32x16xi32, #linear>) -> tensor<16xi32, #ttg.slice<{dim = 0, parent = #linear}>>
   %1 = builtin.unrealized_conversion_cast %0 : tensor<16xi32, #ttg.slice<{dim = 0, parent = #linear}>> to !llvm.struct<(i32, i32)>
   llvm.store volatile %1, %ptr : !llvm.struct<(i32, i32)>, !llvm.ptr
+  tt.return
+}
+
+// CHECK-LABEL: @reduce_maximum_with_print
+// CHECK: call i32 @vprintf
+// CHECK: store volatile i32
+// TERNARY-LABEL: @reduce_maximum_with_print
+// TERNARY: llvm.call @vprintf
+// TERNARY: %[[PRINT_MAX_A:.*]] = llvm.intr.smax(%{{.*}}, %{{.*}}) : (i32, i32) -> i32
+// TERNARY: llvm.call @vprintf
+// TERNARY: %[[PRINT_MAX_B:.*]] = llvm.intr.smax(%{{.*}}, %[[PRINT_MAX_A]]) : (i32, i32) -> i32
+// TERNARY: llvm.call @vprintf
+// TERNARY: %[[PRINT_MAX_C:.*]] = llvm.intr.smax(%{{.*}}, %[[PRINT_MAX_B]]) : (i32, i32) -> i32
+// TERNARY: %[[PRINT_MAX_PACKED:.*]] = llvm.insertvalue %[[PRINT_MAX_C]], %{{.*}}[0] : !llvm.struct<(i32)>
+// TERNARY: %[[PRINT_MAX_TENSOR:.*]] = builtin.unrealized_conversion_cast %[[PRINT_MAX_PACKED]] : !llvm.struct<(i32)> to tensor<128xi32, {{.*}}>
+// TERNARY: %[[PRINT_MAX_STRUCT:.*]] = builtin.unrealized_conversion_cast %[[PRINT_MAX_TENSOR]] : tensor<128xi32, {{.*}}> to !llvm.struct<(i32)>
+// TERNARY: %[[PRINT_MAX_RESULT:.*]] = llvm.extractvalue %[[PRINT_MAX_STRUCT]][0] : !llvm.struct<(i32)>
+// TERNARY: llvm.store volatile %[[PRINT_MAX_RESULT]],
+tt.func public @reduce_maximum_with_print(%ptr: !llvm.ptr, %arg0: tensor<128x4xi32, #blocked_reduce>) {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i32, %b: i32):
+    tt.print "combine" {hex = false, isSigned = array<i32: 1>} : %a : i32
+    %maximum = arith.maxsi %b, %a : i32
+    tt.reduce.return %maximum : i32
+  }) : (tensor<128x4xi32, #blocked_reduce>) -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
+  %1 = builtin.unrealized_conversion_cast %0 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked_reduce}>> to !llvm.struct<(i32)>
+  %2 = llvm.extractvalue %1[0] : !llvm.struct<(i32)>
+  llvm.store volatile %2, %ptr : i32, !llvm.ptr
   tt.return
 }
 
@@ -151,6 +180,20 @@ tt.func public @reduce_minui_i16(%arg0: tensor<128x8xi16, #blocked_packed_reduce
   tt.return
 }
 
+// A supported opcode need not combine the block arguments.
+// TERNARY-LABEL: @reduce_captured_combiner
+// TERNARY-NOT: vector<2xi16>
+// TERNARY: llvm.return
+tt.func public @reduce_captured_combiner(%arg0: tensor<256x4xi16, #blocked_nonaxis_packed_reduce>, %value: i16, %out: tensor<256x!tt.ptr<i16>, #ttg.slice<{dim = 1, parent = #blocked_nonaxis_packed_reduce}>>) {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i16, %b: i16):
+    %product = arith.muli %value, %value : i16
+    tt.reduce.return %product : i16
+  }) : (tensor<256x4xi16, #blocked_nonaxis_packed_reduce>) -> tensor<256xi16, #ttg.slice<{dim = 1, parent = #blocked_nonaxis_packed_reduce}>>
+  tt.store %out, %0 : tensor<256x!tt.ptr<i16>, #ttg.slice<{dim = 1, parent = #blocked_nonaxis_packed_reduce}>>
+  tt.return
+}
+
 // TERNARY-LABEL: @reduce_maxnum_f16
 // TERNARY: %[[PACKED_MAXNUM_A:.*]] = llvm.intr.maxnum(%{{.*}}, %{{.*}}) : (vector<2xf16>, vector<2xf16>) -> vector<2xf16>
 // TERNARY-NEXT: %[[PACKED_MAXNUM_B:.*]] = llvm.intr.maxnum(%[[PACKED_MAXNUM_A]], %{{.*}}) : (vector<2xf16>, vector<2xf16>) -> vector<2xf16>
@@ -190,6 +233,16 @@ tt.func public @reduce_maximum_f64(%arg0: tensor<128x4xf64, #blocked_reduce>) {
   tt.return
 }
 
+// CHECK-LABEL: @reduce_wide_minmax(
+// CHECK: [[MIN_HI:%.*]] = {{.*}}call i32 @llvm.nvvm.redux.sync.min(i32 [[HI:%.*]], i32 -1)
+// CHECK: [[MIN_EQ:%.*]] = icmp eq i32 [[MIN_HI]], [[HI]]
+// CHECK: [[MIN_LO:%.*]] = select i1 [[MIN_EQ]], i32 [[LO:%.*]], i32 -1
+// CHECK: [[MIN_REDUCED_LO:%.*]] = {{.*}}call i32 @llvm.nvvm.redux.sync.umin(i32 [[MIN_LO]], i32 -1)
+// CHECK: [[MAX_HI:%.*]] = {{.*}}call i32 @llvm.nvvm.redux.sync.umax(i32 [[HI]], i32 -1)
+// CHECK: [[MAX_EQ:%.*]] = icmp eq i32 [[MAX_HI]], [[HI]]
+// CHECK: [[MAX_LO:%.*]] = select i1 [[MAX_EQ]], i32 [[LO]], i32 0
+// CHECK: [[MAX_REDUCED_LO:%.*]] = {{.*}}call i32 @llvm.nvvm.redux.sync.umax(i32 [[MAX_LO]], i32 -1)
+// CHECK: ret void
 // TERNARY-LABEL: @reduce_wide_minmax
 // TERNARY: %[[MIN_HI:.*]] = nvvm.redux.sync min %{{.*}}, %{{.*}}
 // TERNARY: %[[MIN_EQ:.*]] = llvm.icmp "eq" %{{.*}}, %[[MIN_HI]] : i32
@@ -199,7 +252,10 @@ tt.func public @reduce_maximum_f64(%arg0: tensor<128x4xf64, #blocked_reduce>) {
 // TERNARY: %[[MAX_EQ:.*]] = llvm.icmp "eq" %{{.*}}, %[[MAX_HI]] : i32
 // TERNARY: %[[MAX_LO:.*]] = llvm.select %[[MAX_EQ]], %{{.*}}, %{{.*}} : i1, i32
 // TERNARY: nvvm.redux.sync umax %[[MAX_LO]], %{{.*}}
-tt.func private @reduce_wide_minmax(%arg0: tensor<4x32xi64, #blocked_warp_reduce>) -> (tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>) {
+tt.func @reduce_wide_minmax(
+    %arg0: tensor<4x32xi64, #blocked_warp_reduce>,
+    %min_out: tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>,
+    %max_out: tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>) {
   %minimum = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
   ^bb0(%a: i64, %b: i64):
     %c = arith.minsi %a, %b : i64
@@ -210,7 +266,9 @@ tt.func private @reduce_wide_minmax(%arg0: tensor<4x32xi64, #blocked_warp_reduce
     %c = arith.maxui %a, %b : i64
     tt.reduce.return %c : i64
   }) : (tensor<4x32xi64, #blocked_warp_reduce>) -> tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
-  tt.return %minimum, %maximum : tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.store %min_out, %minimum : tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.store %max_out, %maximum : tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.return
 }
 
 // CHECK-LABEL: @reduce_wide_bitwise

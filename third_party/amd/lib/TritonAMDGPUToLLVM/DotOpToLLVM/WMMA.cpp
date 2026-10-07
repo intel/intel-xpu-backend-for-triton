@@ -37,13 +37,11 @@ namespace {
 static std::optional<mlir::triton::LinearLayout>
 wmmaRepLayoutForTensor(const mlir::triton::LinearLayout &wholeTileLL,
                        const mlir::triton::LinearLayout &tileLL) {
-  llvm::SmallDenseMap<StringAttr, int64_t> shape;
-  for (auto outDim : wholeTileLL.getOutDimNames())
-    shape[outDim] = wholeTileLL.getOutDimSize(outDim);
-
   // Clamp the tileLL to the tensor's output dims so that divideLeft succeeds
   // when the tensor is smaller than the WMMA instruction shape.
-  auto clampedTileLL = ensureLayoutNotLargerThan(tileLL, shape);
+  auto clampedTileLL = ensureLayoutNotLargerThan(
+      tileLL, llvm::to_vector(wholeTileLL.getOutDimNames()),
+      SmallVector<int64_t>(wholeTileLL.getOutDimSizes()));
 
   auto quot = divideLeft(wholeTileLL, clampedTileLL);
   if (quot.has_value())
@@ -494,7 +492,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
     int nextMReg = reg + dElemsToStorePerThread;
     std::optional<int> nextM;
     if (paddedOutputElemSize == 2) {
-      if (mnProcessed.count(packMN((uint32_t)m, (uint32_t)n))) {
+      if (mnProcessed.contains(packMN((uint32_t)m, (uint32_t)n))) {
         continue;
       }
       nextM = findNextM(*repLayout, nextMReg, dElemsToStorePerThread, m, rank);

@@ -251,11 +251,13 @@ void createPrefetchOp(tt::DescriptorLoadOp loadOp) {
 
 /// Investigate opportunities for the reducing register pressure by moving DotOp
 /// operands.
+/// Loads already inside the loop are left in place when \p disableInLoopSink is
+/// true.
 /// Returns `true` if at least one operand has been moved.
 bool optimizeDotOperands(scf::ForOp forOp,
                          SmallVector<PrefetchKey> &prefetchedTiles,
                          ttg::intel::RegisterPressureAnalysis &analysis,
-                         unsigned perLaneGRFBudget) {
+                         unsigned perLaneGRFBudget, bool disableInLoopSink) {
   Block *loop = forOp.getBody();
 
   // Returns the DescriptorLoadOp that produces the value v, walking back
@@ -442,6 +444,7 @@ bool optimizeDotOperands(scf::ForOp forOp,
   // `analysis` still describes the IR exactly: `moveOperand` inserts loads and
   // prefetches the analysis has no pressure information for.
   bool sunkInLoop =
+      !disableInLoopSink &&
       sinkInLoopDotOperandLoads(forOp, analysis, perLaneGRFBudget);
 
   for (Candidate &c : candidates)
@@ -481,7 +484,7 @@ public:
     // TODO: extend the pass to handle `while` loops.
     rootOperation->walk([&](scf::ForOp forOp) {
       if (optimizeDotOperands(forOp, prefetchedTiles, analysis,
-                              perLaneGRFBudget)) {
+                              perLaneGRFBudget, disableInLoopSink)) {
         // The register pressure analysis must be re-performed before the
         // processing of each "for loop" given that the liveness of variables
         // may have changed as a result of the code, and specifically `LoadOps`,

@@ -6,8 +6,9 @@ Install SGLang and run its Triton kernel tests on Intel XPU.
 
 - `install-sglang.sh` - clones SGLang at `sglang-pin.txt`, applies
   `sglang-test-fix.patch`, uses `python/pyproject_xpu.toml`, drops
-  `torch*`/`sgl-kernel`/`timm` from the requirements so the local torch and
-  Triton survive, installs SGLang editable into `$TRITON_PROJ/sglang`.
+  `torch*`/`sglang-kernel-xpu`/`timm` from the requirements so the local torch
+  and Triton survive, installs SGLang editable into `$TRITON_PROJ/sglang`
+  without its Rust extensions.
 - `sglang-pin.txt` - upstream commit.
 - `sglang-test-fix.patch` - XPU fixes on top of the pin.
 - `install-sgl-kernel-xpu.sh` - builds `sgl-kernel-xpu` at
@@ -26,20 +27,22 @@ One flag per kernel family, each with its own `TRITON_TEST_SUITE` and skip list
 | Flag | Test files, relative to `sglang/test/` |
 |---|---|
 | `--sglang-attention` | `registered/attention/test_create_kvindices.py`, `registered/attention/test_triton_attention_kernels.py`, `registered/attention/unittests/dense/test_triton.py` |
-| `--sglang-quant` | `registered/quant/test_fp8_kernel.py`, `test_triton_scaled_mm.py`, `test_awq_dequant.py` |
-| `--sglang-moe` | `registered/lora/test_fused_moe_lora_kernel.py` |
+| `--sglang-quant` | `registered/kernels/ops/quantization/test_fp8_kernel.py`, `test_awq_dequant.py`, `registered/kernels/ops/gemm/test_fp8_kernel.py`, `test_triton_scaled_mm.py` |
+| `--sglang-moe` | `registered/moe/test_fused_moe.py`, `registered/lora/test_fused_moe_lora_kernel.py` |
 | `--sglang-mamba` | `registered/layers/mamba/test_causal_conv1d.py`, `test_mamba_ssm.py`, `test_mamba_ssm_ssd.py` |
 | `--sglang-gdn` | `registered/attention/test_chunk_gated_delta_rule.py` |
 | `--sglang-kda` | `registered/attention/test_kda_kernels.py` |
 | `--sglang-spec` | `registered/spec/dspark/test_dspark_kernel_parity.py` |
 | `--sglang-e2e` | `registered/xpu/test_xpu_basic.py` |
 
-Two things to know before editing this:
+Three things to know before editing this:
 
 - Suites run without `-n`. With `-n 4` the attention tests crash an xdist worker
   with a GPU page fault on a single-GPU runner.
 - Skip list node ids start at `registered/`, not `test/registered/`: SGLang ships
   `test/pytest.ini`, so `sglang/test` is the pytest rootdir.
+- `--sglang-quant` needs `--import-mode=importlib`: its two `test_fp8_kernel.py`
+  have no `__init__.py`, so the default mode cannot collect both.
 
 ## Kernel coverage
 
@@ -75,7 +78,8 @@ capture stream device-agnostic via `get_device_module()` and adds
 
 | Kernels | Source |
 |---|---|
-| `per_token_group_quant_fp8`, `w8a8_block_fp8_matmul`, `triton_scaled_mm` | `kernels/ops/quantization/fp8_kernel.py` |
+| `per_token_group_quant_fp8` | `kernels/ops/quantization/fp8_kernel.py` |
+| `w8a8_block_fp8_matmul`, `triton_scaled_mm` | `kernels/ops/gemm/fp8_kernel.py` |
 | `awq_dequantize`, `awq_gemm` | `kernels/ops/quantization/awq_triton.py` |
 
 `--sglang-moe`:
@@ -102,9 +106,7 @@ those paths too:
 | `chunk_gated_delta_rule_fwd_h` | `kernels/ops/attention/fla/chunk_delta_h.py` |
 | `chunk_gated_delta_rule_fwd_intra` | `kernels/ops/attention/fla/chunk_fwd.py` |
 | `chunk_fwd_o` | `kernels/ops/attention/fla/chunk_o.py` |
-| `chunk_scaled_dot_kkt_fwd` | `kernels/ops/attention/fla/chunk_scaled_dot_kkt.py` |
 | `chunk_local_cumsum` | `kernels/ops/attention/fla/cumsum.py` |
-| `solve_tril` | `kernels/ops/attention/fla/solve_tril.py` |
 | `recompute_w_u_fwd` | `kernels/ops/attention/fla/wy_fast.py` |
 | `fused_recurrent_gated_delta_rule` | `kernels/ops/attention/fla/fused_recurrent.py` |
 
@@ -129,7 +131,7 @@ fork silently picks the NVIDIA kernels instead of failing.
 |---|---|
 | `pad_verify_lens_to_bucket`, `build_qo_indptr` | `kernels/ops/speculative/ragged_verify_kernels.py` |
 | `expand_prefill_causally`, `build_page_table_positions`, `build_causal_swa_page_indices` | `kernels/ops/attention/dsv4_attn_metadata_kernels.py` |
-| `dspark_accept`, `dspark_attn_metadata`, `dspark_draft_model`, `dspark_schedule`, `dspark_verify_window` | `srt/speculative/dspark_components/kernels/` |
+| `dspark_accept`, `dspark_attn_metadata`, `dspark_draft_model`, `dspark_schedule`, `dspark_verify_window` | `kernels/ops/speculative/dspark/` |
 
 `--sglang-e2e`. The only suite that runs a real forward pass, so the only one
 that reaches these two - every other suite builds `ForwardBatch` directly and
@@ -152,30 +154,20 @@ model weights (`Qwen/Qwen2.5-1.5B-Instruct`, ungated) plus a server launch, so i
 is slower and less hermetic than the kernel suites - hence its own CI entry rather
 than joining `sglang-rest`.
 
-`get_xpu_memory_capacity()` has to be patched for any of this to start:
-`torch.xpu.mem_get_info()` raises `RuntimeError` on Data Center GPU Max, which does
-not implement the free-memory query, and the function only catches
-`AttributeError`. It escapes through `get_device_memory_capacity()` into the KV
-pool and pipeline setup. Only element `[1]` (total) is read, so the patch falls
-back to `torch.xpu.get_device_properties().total_memory` - 49136 MB either way on
-Max 1100.
-
-## Results on Max 1100
+## Results on Max 1550
 
 Local run at the current pin, one suite at a time. The skip lists come from it.
 
 | Suite | Result | Time |
 |---|---|---|
-| `--sglang-attention` | 18 passed, 2 skipped (1 upstream, 1 skip-listed) | 116s |
-| `--sglang-quant` | 5 passed | 43s |
-| `--sglang-moe` | 108 skipped, all skip-listed | 4s |
-| `--sglang-mamba` | 932 passed, 16 skipped upstream | 15s |
-| `--sglang-gdn` | 29 skipped, all skip-listed | 4s |
-| `--sglang-kda` | 1 passed, 12 skipped upstream | 6s |
-| `--sglang-spec` | 1 skipped, skip-listed | 6s |
+| `--sglang-attention` | 21 passed, 3 skipped (2 upstream, 1 skip-listed) | 24s |
+| `--sglang-quant` | 5 passed | 14s |
+| `--sglang-moe` | 110 passed | 46s |
+| `--sglang-mamba` | 940 passed, 16 skipped upstream | 19s |
+| `--sglang-gdn` | 30 passed, 1 skipped upstream | 9s |
+| `--sglang-kda` | 1 passed, 14 skipped upstream | 10s |
+| `--sglang-spec` | 1 skipped, skip-listed | 11s |
 | `--sglang-e2e` | not measured locally - needs model weights and a server launch | - |
-
-Nothing failed because of Triton codegen.
 
 ## Known gaps
 
@@ -194,19 +186,20 @@ Nothing failed because of Triton codegen.
   `rmsnorm`/`fused_add_rmsnorm` directly, so that needs real torch fallbacks
   rather than deferred import errors.
 
-  `install-sglang.sh` strips the `sgl-kernel @ git+...` requirement together with
-  the `torch==2.13.0+xpu` pin next to it: resolving it through pip builds in an
-  isolated environment without our torch, and pulls that pin over it. The
-  out-of-band build avoids both (`--no-isolation`, and `dependencies = []`
-  upstream, so nothing can replace torch or Triton).
+  `install-sglang.sh` strips the `sglang-kernel-xpu` requirement together with
+  the `torch==2.13.0+xpu` pin next to it: the requirement is a prebuilt wheel
+  linked against that torch, and the pin would replace ours. The out-of-band
+  build avoids both (`--no-isolation`, and `dependencies = []` upstream, so
+  nothing can replace torch or Triton).
 
   **No PVC.** `DPCPP_SYCL_TARGET` has no PVC value, and the kernel sources are
   architecture-gated in 79 places with no Xe-HPC branch, so there is nothing to
   target. vllm-xpu-kernels serves `max1100` and `b580` from one wheel
   (`SYCL_SUPPORTED_ARCHS` includes `intel_gpu_pvc`); this cannot.
-  Upstream ships no artifact either: not on PyPI (PyPI `sgl-kernel` is the
-  unrelated CUDA package, the XPU distribution is `sglang-kernel-xpu`) and the
-  `v0.2.0` / `v0.1.0+xpu` releases have no assets.
+  Upstream's only artifact is that wheel (`v0.3.0+xpu` in `sgl-project/whl`): it
+  is not on PyPI (PyPI `sgl-kernel` is the unrelated CUDA package, the XPU
+  distribution is `sglang-kernel-xpu`) and the `sgl-kernel-xpu` releases have no
+  assets.
 
   A `bmg` wheel does load on PVC, and the light ops fall back to SPIR-V JIT
   correctly (on Max 1550: `rmsnorm` bit-exact, `silu_and_mul` 1.2e-03 in fp16,
@@ -219,14 +212,14 @@ Nothing failed because of Triton codegen.
   FMHA/MLA instantiations. `USE_SYCL_JIT=ON` is upstream's lever for that; it
   moves the cost to the first call per configuration and needs `icpx` at test
   time, which the CI shell already provides via `setvars.sh`.
-- **Block pointers.** All 29 GDN tests and most of KDA fail to compile: SGLang's
-  fla kernels still call `tl.make_block_ptr`, removed from this Triton
+- **Block pointers.** SGLang's fla kernels still call `tl.make_block_ptr`,
+  removed from this Triton
   ([#7781](https://github.com/intel/intel-xpu-backend-for-triton/issues/7781)).
-  The XPU overrides use it too, so the fix has to come from SGLang. XPU signal
-  on the one test upstream registers for XPU is zero until then.
-- **CUDA-only tests.** `test_fused_moe_lora_kernel.py` is parametrized with
-  `device="cuda:0"` and `test_dspark_kernel_parity.py` calls `torch.cuda`; both
-  are skip-listed. Two of three `test_kda_kernels.py` classes skip themselves.
+  `sglang-test-fix.patch` moves the GDN path, XPU overrides included, to tensor
+  descriptors; the remaining uses, e.g. in `kda.py`, are not reached by the
+  suites here.
+- **CUDA-only tests.** `test_dspark_kernel_parity.py` calls `torch.cuda` and is
+  skip-listed. Three of four `test_kda_kernels.py` classes skip themselves.
 - **e2e is smoke only.** `--sglang-e2e` asserts throughput, not numerics, so a
   subtly wrong position id or token-pool write still passes. No SGLang test
   checks those two kernels against a reference.
@@ -234,18 +227,18 @@ Nothing failed because of Triton codegen.
   is enabled here. 29 more files under `registered/attention/unittests/` carry the
   same `torch.cuda.is_available()` gate, including the other Triton-backend rows
   `mla/test_triton.py`, `swa/test_triton.py`, `lightning/test_triton.py`,
-  `kda/test_triton.py` and `gdn/test_triton.py`. Eight kits besides
+  `kda/test_triton.py` and `gdn/test_triton.py`. Seven kits besides
   `speculative_draft_runner.py` also repeat the `torch.cuda` RNG pattern
   (`mla_attention.py`, `gdn_attention.py`, `kda_attention.py`, `mamba2_attention.py`,
-  `lightning_attention.py`, `dsa_attention.py`, `dsv4_attention.py`,
-  `dual_chunk_attention.py`). Enable one family at a time; `gdn/` and `kda/` stay
-  blocked on `tl.make_block_ptr` regardless (see below).
+  `lightning_attention.py`, `dsa_attention.py`, `dsv4_attention.py`). Enable one
+  family at a time; `gdn/` and `kda/` stay blocked on `tl.make_block_ptr`
+  regardless (see above).
 - **Sliding window OOM.** `test_extend_attention_sliding_window` runs the kernel
   fine, but its torch reference needs more than 48 GB. Unskip when it is chunked.
 - **BMG.** `scripts/skiplist/xe2/` is a copy of `default/`; nothing measured on
   B580 yet. `--skip-list` replaces the directory instead of merging, so the
   entries have to be duplicated.
-- `install-sglang.sh` pins `xgrammar==0.2.1` (SGLang's CUDA manifest); every
+- `install-sglang.sh` pins `xgrammar==0.2.7` (SGLang's CUDA manifest); every
   upstream XPU path pins `0.1.33`.
 
 ## CI
@@ -275,9 +268,11 @@ entry installs SGLang itself, because `run_sglang_tests` calls
 `install-sglang.sh` - there is no install step in the workflow as there is for
 vLLM.
 
-`install_sgl_kernel_xpu` adds one `--install-sgl-kernel-xpu` step before the
-suites and is only set for BMG. It is idempotent across matrix entries, but the
-pip cache key is per suite, so the first entry on a fresh runner pays the build.
+`install_sgl_kernel_xpu` is only set for BMG. The setup job builds the
+`sgl-kernel-xpu` wheel once and uploads it, and each matrix entry installs it
+with `pip install --no-deps`. The wheel is cached in `/cache`, keyed by the
+`sgl-kernel-xpu` pin, AOT target, PyTorch cache key and `icpx` version, so it is
+only rebuilt when one of them changes.
 
 ## Usage
 
