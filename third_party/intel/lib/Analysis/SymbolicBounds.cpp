@@ -210,6 +210,23 @@ std::string toString(const AffineForm &af) {
   return out;
 }
 
+/// True when the terms of `e`, its constant aside, have magnitude at most 2^63
+/// for every symbol value: no term, or one +-1 term over at most 64 bits.
+static bool symbolicPartWithin2Pow63(const AffineForm &e) {
+  if (e.isConstant())
+    return true;
+  if (e.numTerms() != 1)
+    return false;
+  auto &[sym, k] = e.terms().front();
+  if ((k != 1 && k != -1) || !sym.value() ||
+      sym.kind() == SymbolKind::TripCount)
+    return false;
+  Type t = getElementTypeOrSelf(sym.value());
+  if (auto intTy = dyn_cast<IntegerType>(t))
+    return intTy.getWidth() <= 64;
+  return isa<IndexType>(t);
+}
+
 /// Normalizes a condition so its subject is as simple as the goal allows: the
 /// constant term folds into the bound, and a single-symbol ordered condition
 /// is divided by |k| with the bound rounded inward, swapping AtLeast/AtMost
@@ -262,17 +279,13 @@ bool normalizeCondition(BoundCondition &cond) {
   if (c0 != 0) {
     int64_t folded;
     if (llvm::SubOverflow(bound, c0, folded)) {
-      // Folding would need a bound outside i64's range. The symbolic part is
-      // itself an i64-typed quantity, so it is already <= anything above
-      // INT64_MAX or >= anything below INT64_MIN - vacuously true, not
-      // inexpressible. This is the common case for a wrap guard's
-      // trivially-true half (e.g. `(x - 1) <= INT64_MAX`, bound=INT64_MAX,
-      // c0=-1): without this, closing it declined and the whole query read
-      // as Unknown instead of using the OTHER half, which is the one that
-      // actually constrains anything.
-      bool vacuous = atMost ? c0 < 0 : c0 > 0;
+      // Folding would need a bound beyond i64. A symbolic part within 2^63
+      // cannot pass it, so `(x - 1) <= INT64_MAX` is vacuous; a compound one
+      // such as `ub - lb` can.
+      bool vacuous =
+          (atMost ? c0 < 0 : c0 > 0) && symbolicPartWithin2Pow63(cond.expr);
       if (!vacuous)
-        return false; // the opposite direction is a genuine overflow: decline
+        return false; // the opposite direction, or a part that can pass it
       cond.expr = AffineForm::constant(0);
       cond.c = 0;
       return true;

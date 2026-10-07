@@ -33,6 +33,7 @@ module {
     %step = arith.constant 4611686018427387904 : i64
     scf.for %iv = %lb to %ub step %step : i64 {
       %d = arith.subi %iv, %lb : i64
+      // expected-remark@+1 {{verdict: Unknown}}
       %cmp = arith.cmpi sge, %d, %c0 : i64
       scf.yield
     }
