@@ -18,7 +18,7 @@ triton-utils pass_rate --reports ./reports
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - `gh` CLI (GitHub CLI) - required for downloading reports from CI
 
 ## Installation
