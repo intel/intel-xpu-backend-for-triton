@@ -12,7 +12,7 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x
 from triton.experimental.gsan import create_mem_pool
-from triton._C.libtriton.gsan_testing import AtomicScope, SHADOW_GRANULARITY_BYTES, ScalarClock
+from triton._C.libtriton.gsan_testing import AtomicScope, ScalarClock, shadow_granularity
 from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, store_one_i32,
                                                      thread_state_from_smid)
 
@@ -953,8 +953,10 @@ def test_atomic_load_store_vectorized_shadow(with_gsan, op, dtype):
     opcode = "st" if op == "store" else "ld"
     assert f"{opcode}.relaxed.gpu.global.{suffix}" in compiled.asm["ptx"]
     target = out if op == "store" else src
-    for byte_offset in range(0, src.numel() * dtype.itemsize, SHADOW_GRANULARITY_BYTES):
-        address = target.data_ptr() + byte_offset
+    target_ptr = target.data_ptr()
+    granularity = shadow_granularity(target_ptr)
+    for byte_offset in range(0, src.numel() * dtype.itemsize, granularity):
+        address = target_ptr + byte_offset
         if byte_offset // dtype.itemsize // 8 % 2 == 0:
             if op == "store":
                 cell = shadow_cell_from_address(address)
@@ -1005,9 +1007,11 @@ def test_masked_atomic_load_store_only_updates_active_lanes(with_gsan, dtype):
     # Keep each lane in a separate shadow cell. Byte accesses start inside the
     # cell so the value checks also catch overwrites of neighboring bytes.
     itemsize = dtype.itemsize
-    stride = max(1, SHADOW_GRANULARITY_BYTES // itemsize)
+    target = torch.empty(4, dtype=dtype, device="cuda")
+    granularity = shadow_granularity(target.data_ptr())
+    stride = max(1, granularity // itemsize)
     offset = 1 if itemsize == 1 else 0
-    target = torch.zeros(4 * stride, dtype=dtype, device="cuda")
+    target.resize_(4 * stride).zero_()
     out = torch.full_like(target, True if dtype == torch.bool else 42)
 
     _masked_atomic_load_store_kernel[(1, )](target[offset:], out[offset:], stride, num_warps=1)
@@ -1019,7 +1023,7 @@ def test_masked_atomic_load_store_only_updates_active_lanes(with_gsan, dtype):
     torch.testing.assert_close(target, expected_target)
     torch.testing.assert_close(out, expected_out)
     for index in range(4):
-        for byte_offset in range(0, itemsize, SHADOW_GRANULARITY_BYTES):
+        for byte_offset in range(0, itemsize, granularity):
             cell = shadow_cell_from_address(target[offset + index * stride].data_ptr() + byte_offset)
             if index < 2:
                 assert cell.num_reads == 1
@@ -1078,8 +1082,10 @@ def test_atomic_poll_timeout_does_not_record_read(with_gsan):
 def test_atomic_poll_tensor_only_records_matched_reads(with_gsan, block_size, dtype, sem, scope, expected_scope,
                                                        timeout):
     # Separate shadow cells let us check successful and timed-out elements independently.
-    stride = max(1, SHADOW_GRANULARITY_BYTES // torch.empty((), dtype=dtype).element_size())
-    target = torch.zeros(block_size * stride, dtype=dtype, device="cuda")
+    target = torch.empty(block_size, dtype=dtype, device="cuda")
+    granularity = shadow_granularity(target.data_ptr())
+    stride = max(1, granularity // target.element_size())
+    target.resize_(block_size * stride).zero_()
     expected = torch.arange(1, block_size + 1, dtype=dtype, device="cuda")
     target[::stride] = expected
     if timeout is not None:
@@ -1090,7 +1096,7 @@ def test_atomic_poll_tensor_only_records_matched_reads(with_gsan, block_size, dt
     torch.testing.assert_close(out, target[::stride] == expected)
 
     for index in range(block_size):
-        for byte_offset in range(0, target.element_size(), SHADOW_GRANULARITY_BYTES):
+        for byte_offset in range(0, target.element_size(), granularity):
             address = target.data_ptr() + index * stride * target.element_size() + byte_offset
             if timeout is None or index % 2:
                 _assert_atomic_read_only_shadow(address, expected_scope)
@@ -1104,8 +1110,9 @@ def test_atomic_poll_tensor_only_records_matched_reads(with_gsan, block_size, dt
 @pytest.mark.parametrize("block_size", [16, 256])
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES[1:])
 def test_atomic_poll_tensor_acquires_all_producers(with_gsan, capfd, block_size, scope, expected_scope):
-    stride = SHADOW_GRANULARITY_BYTES // 4
-    payload = torch.zeros(block_size * stride, dtype=torch.int32, device="cuda")
+    payload = torch.empty(block_size, dtype=torch.int32, device="cuda")
+    stride = max(1, shadow_granularity(payload.data_ptr()) // payload.element_size())
+    payload.resize_(block_size * stride).zero_()
     flags = torch.zeros_like(payload)
     out = torch.full((block_size, ), -1, dtype=torch.int32, device="cuda")
 
@@ -1428,7 +1435,7 @@ def _shadow_cells_for_tensor(tensor: torch.Tensor):
     row = []
     for i in range(tensor.shape[0]):
         real_ptr = tensor[i].data_ptr()
-        assert real_ptr % SHADOW_GRANULARITY_BYTES == 0
+        assert real_ptr % shadow_granularity(real_ptr) == 0
         row.append(shadow_cell_from_address(real_ptr, device_index=device_idx))
     return row
 
@@ -1675,8 +1682,137 @@ def test_host_tma_reduce_updates_atomic_shadow(with_gsan, block_x, dtype):
     torch.cuda.synchronize()
 
     torch.testing.assert_close(target, src)
+    granularity = shadow_granularity(target.data_ptr())
     for row in range(block_x):
         for col in range(block_y):
-            for byte_offset in range(0, target.element_size(), SHADOW_GRANULARITY_BYTES):
+            for byte_offset in range(0, target.element_size(), granularity):
                 address = target[row, col].data_ptr() + byte_offset
                 _assert_atomic_rmw_shadow(address, AtomicScope.GPU, is_release=False)
+
+
+@triton.jit
+def _graph_copy_kernel(Input, Output, ADD: tl.constexpr, WAIT: tl.constexpr = False, SIGNAL: tl.constexpr = False):
+    if WAIT:
+        tl.extra.cuda.gdc_wait()
+    pid = tl.program_id(0)
+    value = tl.load(Input + (tl.num_programs(0) - 1 - pid))
+    tl.store(Output + pid, value + ADD)
+    if SIGNAL:
+        tl.extra.cuda.gdc_launch_dependents()
+
+
+@triton.jit
+def _graph_join_kernel(Left, Right, Output):
+    pid = tl.program_id(0)
+    tl.store(Output + pid, tl.load(Left + pid) + tl.load(Right + pid))
+
+
+@pytest.mark.parametrize("pdl", [False, True])
+@pytest.mark.parametrize("change_stream", [False, True])
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Graph PDL requires Hopper or newer")
+def test_explicit_graph_fork_join_replay(with_gsan, pdl, change_stream):
+    from triton.experimental.gsan import graph
+    from triton.experimental.gsan._testing_utils import ExplicitGraph
+
+    #          +--full--> left --full--+
+    # root ----+                      +--> join
+    #          +--edge--> right --full-+
+    # "edge" is PDL when pdl=True (right calls gdc_wait), full otherwise.
+    # eager write --> graph replay 0 --> ... --> graph replay 8 --> eager copy
+    # Replays alternate streams when change_stream=True.
+    n = 512
+    source = torch.zeros(n, device="cuda", dtype=torch.int32)
+    root, left, right, result = [torch.empty_like(source) for _ in range(4)]
+    plan = graph.GraphPlan(torch.cuda.current_device(), [
+        graph.GraphNode(),
+        graph.GraphNode((0, )),
+        graph.GraphNode((), (0, )) if pdl else graph.GraphNode((0, )),
+        graph.GraphNode((1, 2))
+    ])
+    kernels = [
+        (_graph_copy_kernel.warmup(source, root, ADD=1, SIGNAL=pdl, grid=(n, ), num_warps=1), (source, root)),
+        (_graph_copy_kernel.warmup(root, left, ADD=2, grid=(n, ), num_warps=1), (root, left)),
+        (_graph_copy_kernel.warmup(root, right, ADD=3, WAIT=pdl, launch_pdl=pdl, grid=(n, ),
+                                   num_warps=1), (root, right)),
+        (_graph_join_kernel.warmup(left, right, result, grid=(n, ), num_warps=1), (left, right, result)),
+    ]
+    stream = torch.cuda.Stream() if change_stream else torch.cuda.current_stream()
+    with ExplicitGraph(plan) as executable:
+        for compiled, arguments in kernels:
+            executable.add_kernel(compiled, arguments, n)
+        executable.instantiate()
+        # Consume an eager producer before replay and feed an eager consumer after.
+        _write_blocks_kernel[(4, )](source, n, BLOCK_SIZE=128)
+        for iteration in range(9):
+            selected = stream if iteration % 2 else torch.cuda.current_stream()
+            if selected != torch.cuda.current_stream():
+                selected.wait_stream(torch.cuda.current_stream())
+            completion = executable.launch(selected)
+            # The same executable's next replay is ordered even on another stream.
+        torch.cuda.current_stream().wait_stream(stream)
+        graph.acquire_completions(torch.cuda.current_device(), torch.cuda.current_stream().cuda_stream, (completion, ))
+        _graph_copy_kernel[(n, )](result, source, ADD=0, num_warps=1)
+        torch.cuda.synchronize()
+        assert torch.all(source == 9)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_graph_completion_is_immutable_across_stream_slot_reuse(with_gsan):
+    from triton.experimental.gsan import graph, _stream_sync
+
+    # write --> snapshot --> write 0 --> ... --> write 6
+    #              |
+    #              +--> retained clock (unchanged as stream slots are reused)
+    device = torch.cuda.current_device()
+    stream = torch.cuda.current_stream().cuda_stream
+    values = torch.zeros(1024, device="cuda", dtype=torch.int32)
+    _write_blocks_kernel[(8, )](values, values.numel(), BLOCK_SIZE=128)
+    snapshot = graph.record_completion(device, stream)
+    expected = snapshot.clock.clone()
+    for _ in range(7):
+        _write_blocks_kernel[(8, )](values, values.numel(), BLOCK_SIZE=128)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(snapshot.clock, expected)
+    assert not torch.equal(snapshot.clock, _stream_sync._current_stream_clock(device, stream))
+
+
+def test_explicit_graph_aborted_launch_preserves_stream_order(with_gsan):
+    from triton.experimental.gsan import graph, _stream_sync
+
+    # write --> reserve empty graph --> abort (restore the write's stream clock)
+    # The empty graph would contain only entry --> exit helpers; it is not run.
+    device = torch.cuda.current_device()
+    stream = torch.cuda.current_stream().cuda_stream
+    values = torch.zeros(512, device="cuda", dtype=torch.int32)
+    _write_blocks_kernel[(4, )](values, values.numel(), BLOCK_SIZE=128)
+    expected = _stream_sync._current_stream_clock(device, stream).clone()
+    plan = graph.GraphPlan(device, ())
+    prepared = plan.prepare_launch(stream)
+    prepared.finish(submitted=False)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(_stream_sync._current_stream_clock(device, stream), expected)
+    plan.close()
+
+
+def test_explicit_graph_storage_survives_executable_close(with_gsan):
+    import gc
+    import weakref
+    from triton.experimental.gsan import graph
+    from triton.experimental.gsan._testing_utils import ExplicitGraph
+
+    # Empty graph: entry --> exit --> completion snapshot
+    # Host:       launch --> close --> synchronize --> collect retained storage
+    device = torch.cuda.current_device()
+    plan = graph.GraphPlan(device, ())
+    reference = weakref.ref(plan)
+    with ExplicitGraph(plan) as executable:
+        executable.instantiate()
+        completion = executable.launch()
+    del plan, executable
+    gc.collect()
+    # The submission owns storage until its CUDA completion event is observed.
+    assert reference() is not None
+    torch.cuda.synchronize()
+    graph._collect_pending()
+    assert reference() is None
+    assert completion.clock.numel() > 0

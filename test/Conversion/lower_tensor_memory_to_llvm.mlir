@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=103 --triton-nvidia-gpu-tmem-barrier-insertion --test-print-membar --triton-nvidia-gpu-tmem-wait-insertion --convert-triton-gpu-to-llvm=compute-capability=103 --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm -allow-unregistered-dialect | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=103 --test-print-buffer-region -allow-unregistered-dialect -verify-diagnostics=only-expected -o /dev/null
 
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, CGALayout = [[0, 0]]>
 
@@ -43,7 +44,7 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 2 : i32, "ttg.num
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
 
 module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tensor_memory_size = 64 : i32} {
   // Disjoint stores to %a, %b, and %c share a wait before overwriting %a,
@@ -84,10 +85,12 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
   // CHECK-NEXT: nvvm.tcgen05.wait <store>
   // CHECK: tcgen05.st.sync.aligned
   // CHECK-NEXT: nvvm.tcgen05.wait <store>
-  tt.func private @tmem_store_wait_unknown(%a: !ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>, %b: !ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>, %value: f32) {
+  tt.func @tmem_store_wait_unknown(%a: !ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>, %b: !ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>, %value: f32) {
     %true = arith.constant true
     %data = tt.splat %value : f32 -> tensor<128x16xf32, #blocked>
+    // expected-remark @+1 {{Buffers: unknown}}
     ttng.tmem_store %data, %a, %true : tensor<128x16xf32, #blocked> -> !ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>
+    // expected-remark @+1 {{Buffers: unknown}}
     ttng.tmem_store %data, %b, %true : tensor<128x16xf32, #blocked> -> !ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>
     tt.return
   }
@@ -97,7 +100,7 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #mixed = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [0, 1]}>
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
 
 module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tensor_memory_size = 64 : i32} {
   // Layout conversion and reduction lower to CTA barriers. The stores to
@@ -145,7 +148,7 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
 
 module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tensor_memory_size = 64 : i32} {
   // Stores to %a and %b share one wait before arrive_barrier. The load from %b
