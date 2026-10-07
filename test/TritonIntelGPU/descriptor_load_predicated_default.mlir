@@ -136,9 +136,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
   tt.func @desc_load_default_evict_first(%desc: !tt.tensordesc<128xf32>) {
     %c0_i32 = arith.constant 0 : i32
     // PREDICATED:        triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
-    // NO-PREDICATED-NOT: L1IAR_L3C
+    // NO-PREDICATED-NOT: cache_control
     // NO-PREDICATED:     llvm.cond_br
-    // NO-PREDICATED-NOT: L1IAR_L3C
+    // NO-PREDICATED-NOT: cache_control
     %val = tt.descriptor_load %desc[%c0_i32] {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>} : !tt.tensordesc<128xf32> -> tensor<128xf32, #blocked1>
     tt.return
   }
