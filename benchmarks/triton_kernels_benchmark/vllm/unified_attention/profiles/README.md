@@ -33,3 +33,6 @@ attention tensors. Model inputs default to QKV-sliced queries and interleaved KV
 use `--q-layout contiguous --kv-layout contiguous` for separate contiguous tensors.
 Omit `--tune` to benchmark existing profiles. Set `VLLM_TUNED_CONFIG_FOLDER` to use
 an external profile directory at runtime.
+
+Intel CI-specific adapters and input manifests are documented in
+[scripts/vllm/ua_tuning](../../../../../scripts/vllm/ua_tuning/README.md).
