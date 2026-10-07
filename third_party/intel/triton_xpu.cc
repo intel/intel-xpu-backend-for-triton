@@ -463,6 +463,30 @@ void init_triton_intel(py::module_ &m) {
   m.def("post_process_llir",
         [](llvm::Module *mod) { intel::postProcessLLVMIR(*mod); });
 
+  // Requests the GRF mode through SPV_INTEL_maximum_registers: the SPIR-V
+  // translator turns `!MaximumRegisters` kernel metadata into a
+  // MaximumRegistersINTEL (register count) or NamedMaximumRegistersINTEL
+  // (`AutoINTEL`) execution mode.
+  m.def("set_maximum_registers", [](llvm::Module *mod,
+                                    const std::string &grfMode) {
+    using namespace llvm;
+    LLVMContext &ctx = mod->getContext();
+    Metadata *maxRegisters;
+    unsigned numRegisters;
+    if (grfMode == "auto")
+      maxRegisters = MDString::get(ctx, "AutoINTEL");
+    else if (!StringRef(grfMode).getAsInteger(10, numRegisters))
+      maxRegisters = ConstantAsMetadata::get(
+          ConstantInt::get(Type::getInt32Ty(ctx), numRegisters));
+    else
+      throw std::invalid_argument("Unknown grf_mode: " + grfMode);
+
+    std::set<Function *> kernels;
+    findKernels(*mod, kernels);
+    for (Function *kernel : kernels)
+      kernel->setMetadata("MaximumRegisters", MDNode::get(ctx, maxRegisters));
+  });
+
   m.def(
       "translate_to_spirv",
       [](const std::string &llvmIR,

@@ -145,6 +145,7 @@ static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
          SPIRV::ExtensionID::SPV_INTEL_16bit_atomics,
          SPIRV::ExtensionID::SPV_INTEL_bfloat16_arithmetic,
          SPIRV::ExtensionID::SPV_INTEL_fp_conversions,
+         SPIRV::ExtensionID::SPV_INTEL_maximum_registers,
          SPIRV::ExtensionID::SPV_INTEL_predicated_io,
          SPIRV::ExtensionID::SPV_INTEL_sigmoid,
          SPIRV::ExtensionID::

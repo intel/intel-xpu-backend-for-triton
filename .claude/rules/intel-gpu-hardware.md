@@ -183,7 +183,7 @@ optimize_module(O3) → post_process_llir
 ```
 
 ### Stage 4: SPIR-V
-LLVM IR → SPIR-V translation via `translate_to_spirv()`. GRF mode flags added to build_flags.
+LLVM IR → SPIR-V translation via `translate_to_spirv()`. An explicit `grf_mode` (`'128'`/`'256'`/`'512'`/`'auto'`) is carried by the kernel's `SPV_INTEL_maximum_registers` execution mode (`!MaximumRegisters` metadata set in `make_llir`); only LTS still adds the `-cl-intel-*-GRF-*` build flags. The default-mode large-GRF retry still uses build flags.
 
 ### Stage 5: ZEBIN
 SPIR-V → native binary via `ocloc compile`. Auto-GRF spill detection may trigger recompilation.
