@@ -23,6 +23,14 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
+// The census trace (phase 0) sits on its own debug type so a corpus run can
+// enable it alone: `-debug-only=triton-intel-remove-masks` also turns on this
+// pass's after-versioning module dumps, which are two orders of magnitude more
+// output than the census itself. The printed prefix stays the pass's, so the
+// corpus tooling greps a single pattern either way.
+#define CENSUS_DEBUG_TYPE "triton-intel-remove-masks-census"
+#define CDBG(X) DEBUG_WITH_TYPE(CENSUS_DEBUG_TYPE, DBGS() << X << "\n")
+
 using namespace mlir;
 namespace tt = mlir::triton;
 
@@ -103,7 +111,7 @@ static void assignCensusIds(ModuleOp mod) {
           return; // owned by an inner loop, or not masked
         std::string id = loopId + "/M" + std::to_string(maskIdx++);
         op->setAttr(kCensusIdAttr, StringAttr::get(op->getContext(), id));
-        LDBG("candidate: id="
+        CDBG("candidate: id="
              << id << " kind=" << op->getName().getStringRef()
              << " scope=" << scope << " where="
              << (op->getBlock() == forOp.getBody() ? "direct" : "in-region"));
@@ -244,7 +252,7 @@ static Operation *dropMask(Operation *op, bool maskVal) {
 
   OpBuilder builder(op);
   Location loc = op->getLoc();
-  LDBG("outcome: id=" << censusId(op) << " result=dropped-"
+  CDBG("outcome: id=" << censusId(op) << " result=dropped-"
                       << (maskVal ? "true" : "false"));
   TypeSwitch<Operation *>(op)
       .Case<tt::LoadOp>([&](auto loadOp) {
@@ -526,7 +534,7 @@ private:
   // One census line per walk-1 classification exit (phase 0, debug-only).
   void censusExit(scf::ForOp &forOp, StringRef exit,
                   StringRef result = StringRef()) const {
-    LDBG("census: id=" << censusId(censusOp) << " walk=1 exit=" << exit
+    CDBG("census: id=" << censusId(censusOp) << " walk=1 exit=" << exit
                        << (result.empty() ? StringRef() : StringRef(" result="))
                        << result << " ub="
                        << describeBound(forOp.getUpperBound()) << " step="
@@ -599,7 +607,7 @@ public:
         isa<arith::ConstantIntOp>(defMulRhs)) {
       bool matched = cast<arith::ConstantIntOp>(defMulRhs).value() == end;
       if (matched && op)
-        LDBG("census: id=" << censusId(op) << " walk=2 exit=canonical-matched");
+        CDBG("census: id=" << censusId(op) << " walk=2 exit=canonical-matched");
       return matched;
     }
 
@@ -607,7 +615,7 @@ public:
         isa<arith::ConstantIntOp>(defMulLhs)) {
       bool matched = cast<arith::ConstantIntOp>(defMulLhs).value() == end;
       if (matched && op)
-        LDBG("census: id=" << censusId(op) << " walk=2 exit=canonical-matched");
+        CDBG("census: id=" << censusId(op) << " walk=2 exit=canonical-matched");
       return matched;
     }
 
@@ -779,7 +787,7 @@ public:
     // Accepts all comparison predicates (including sge for >= 0 checks).
     if (isBoundaryCheckPattern(cmpOp)) {
       if (op)
-        LDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
+        CDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
       return true;
     }
 
@@ -805,7 +813,7 @@ public:
              cast<IntegerType>(lhsVal.getType()).getWidth() == 1 &&
              "Invalid type");
       if (op)
-        LDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
+        CDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
       return true;
     }
 
@@ -813,7 +821,7 @@ public:
       [[maybe_unused]] auto rangeOp = cast<tt::MakeRangeOp>(lhs);
       assert(rangeOp.getStart() < rangeOp.getEnd() && "Invalid range");
       if (op)
-        LDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
+        CDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
       return true;
     }
 
@@ -821,7 +829,7 @@ public:
       [[maybe_unused]] auto rangeOp = cast<tt::MakeRangeOp>(rhs);
       assert(rangeOp.getStart() < rangeOp.getEnd() && "Invalid range");
       if (op)
-        LDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
+        CDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
       return true;
     }
 
@@ -1257,7 +1265,7 @@ public:
     // examines or mutates the IR, and strip them at pass end. Setting a
     // discardable attribute creates and erases no values, so this does not
     // affect analysis-state validity.
-    LLVM_DEBUG(assignCensusIds(moduleOp));
+    DEBUG_WITH_TYPE(CENSUS_DEBUG_TYPE, assignCensusIds(moduleOp));
 
     std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
     auto *rangeAnalysis = solver->load<tt::intel::IntegerRangeAnalysis>(
@@ -1335,7 +1343,7 @@ public:
     });
 
     LLVM_DEBUG(llvm::dbgs() << "After versioning:\n" << moduleOp << "\n");
-    LLVM_DEBUG(stripCensusIds(moduleOp));
+    DEBUG_WITH_TYPE(CENSUS_DEBUG_TYPE, stripCensusIds(moduleOp));
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 };
