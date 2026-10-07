@@ -203,6 +203,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 // COM: @if_consistent_padding in descriptor-load.mlir is the positive twin --
 // COM: without it this case would also pass if the pass simply failed to trace
 // COM: through scf.if at all.
+// COM:
+// COM: Refusing is correct, and it is correct for two different reasons depending
+// COM: on how the IR was reached:
+// COM:
+// COM: (a) In the normal pipeline this input cannot occur. A load with divergent
+// COM:     padding provenance is expanded to pointers before TTGIR exists (see
+// COM:     @if_divergent_padding in
+// COM:     test/Triton/Intel/rewrite-tensor-descriptor-to-pointer.mlir), where the
+// COM:     padding becomes a runtime i1 and the out-of-bounds fill becomes a select
+// COM:     between a NaN splat and a zero splat. So refusing the 2D block path here
+// COM:     is correct AND complete -- there is no case left that it mishandles.
+// COM:
+// COM: (b) For standalone hand-written TTGIR like this fixture, refusing is still
+// COM:     correct, and it is no longer the only thing standing between the user and
+// COM:     wrong results: the LLVM lowering now rejects such a load outright rather
+// COM:     than silently defaulting to PAD_ZERO. See
+// COM:     test/TritonIntelGPU/descriptor-load-divergent-padding.mlir.
+// COM:
+// COM: Issue #8102 is the silent-PAD_ZERO degradation that those two changes close.
+// COM: This case's scope is narrower: only that the 2D block conversion is refused.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {

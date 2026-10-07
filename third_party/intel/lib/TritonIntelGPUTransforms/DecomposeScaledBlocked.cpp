@@ -108,9 +108,18 @@ private:
         arith::ConstantIntOp::create(rewriter, loc, shiftValue, intWidth);
     auto shift =
         SplatOp::create(rewriter, loc, scaleTy.clone(intType), shiftConst);
-    auto shlRes = arith::ShLIOp::create(rewriter, loc, zexted, shift);
+    Value scaleBits = arith::ShLIOp::create(rewriter, loc, zexted, shift);
+    if (computeType.isBF16()) {
+      // E8M0 byte zero is 2^-127, which is subnormal in bf16 and rounds to
+      // zero in fp16.
+      auto minScaleBits =
+          arith::ConstantIntOp::create(rewriter, loc, 0x0040, 16);
+      auto minScale =
+          SplatOp::create(rewriter, loc, scaleTy.clone(intType), minScaleBits);
+      scaleBits = arith::MaxUIOp::create(rewriter, loc, scaleBits, minScale);
+    }
     Value scaleFP =
-        BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), shlRes);
+        BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), scaleBits);
     if (largeFpType != computeType) {
       scaleFP = arith::TruncFOp::create(rewriter, loc,
                                         scaleTy.clone(computeType), scaleFP);

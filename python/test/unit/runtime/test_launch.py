@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import triton
 import triton.language as tl
-from triton._internal_testing import is_cuda, is_hip, is_xpu
+from triton._internal_testing import is_cuda, is_hip, is_xpu, run_in_process
 
 
 def test_metadata() -> None:
@@ -39,7 +39,7 @@ def test_metadata() -> None:
     assert used_hook
 
 
-def test_memory_leak(device) -> None:
+def _check_memory_leak(device) -> None:
 
     @triton.jit
     def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
@@ -62,9 +62,17 @@ def test_memory_leak(device) -> None:
             kernel[(10, )](inp, out, 10, XBLOCK=16)
         gc.collect()
         end, _ = tracemalloc.get_traced_memory()
-        assert end - begin < 30000
+        assert end - begin < 1000
     finally:
         tracemalloc.stop()
+
+
+def test_memory_leak(device) -> None:
+    # tracemalloc counts allocations from every thread, including xdist's
+    # concurrent work-stealing requests. Measure launches in a separate process.
+    result = run_in_process(_check_memory_leak, (device, ))
+    if result is not None:
+        assert result.exc is None, result.exc
 
 
 def test_load_hook() -> None:
@@ -240,3 +248,21 @@ def test_interpreter_implicit_cvt_bool() -> None:
     assert value.dtype == tl.int1
     assert value.handle.data.dtype == np.bool_
     assert bool(value.handle.data[0]) is True
+
+
+@pytest.mark.xfail(not is_hip(), reason="requires HIP", run=False)
+def test_wgp_cu_mode_launch_argument():
+    arch = triton.runtime.driver.active.get_current_target().arch
+    if not arch.startswith(("gfx10", "gfx11", "gfx120")):
+        pytest.skip("target has no WGP/CU mode distinction")
+
+    @triton.jit
+    def add_one(x_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(x_ptr + offs, tl.load(x_ptr + offs) + 1)
+
+    x = torch.zeros(64, device="cuda")
+    for options, mode in [({}, 1), ({"wgp_cu_mode": "wgp"}, 1), ({"wgp_cu_mode": "cu"}, 0)]:
+        kernel = add_one[(1, )](x, BLOCK=64, **options)
+        assert f".amdhsa_workgroup_processor_mode {mode}" in kernel.asm["amdgcn"]
+    assert torch.equal(x, torch.full_like(x, 3))

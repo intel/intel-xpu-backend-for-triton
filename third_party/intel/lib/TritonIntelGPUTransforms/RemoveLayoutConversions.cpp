@@ -554,7 +554,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
       auto parent = yieldOp->getParentOp();
       SmallVector<Value> valuesToPropagate;
-      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent))
+      if (isa<scf::ForOp, scf::IfOp>(parent))
         valuesToPropagate.push_back(parent->getResult(use.getOperandNumber()));
       if (auto forOp = dyn_cast<scf::ForOp>(parent))
         valuesToPropagate.push_back(
@@ -616,8 +616,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
-        isa<tt::ReduceOp, tt::ExpandDimsOp, tt::ReshapeOp, tt::TransOp,
-            tt::JoinOp, tt::SplitOp, ttg::ConvertLayoutOp>(user)) {
+        isa<tt::BroadcastOp, tt::ReduceOp, tt::ExpandDimsOp, tt::ReshapeOp,
+            tt::TransOp, tt::JoinOp, tt::SplitOp, ttg::ConvertLayoutOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -998,9 +998,9 @@ void LayoutPropagation::rewriteOp(Operation *op) {
       setEncodingInPlace(op->getResult(0), encoding);
     } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
                op->hasTrait<OpTrait::Elementwise>() ||
-               isa<tt::ReduceOp, tt::ExpandDimsOp, tt::ReshapeOp, tt::TransOp,
-                   tt::JoinOp, tt::SplitOp, tt::GatherOp, ttg::ConvertLayoutOp>(
-                   op)) {
+               isa<tt::BroadcastOp, tt::ReduceOp, tt::ExpandDimsOp,
+                   tt::ReshapeOp, tt::TransOp, tt::JoinOp, tt::SplitOp,
+                   tt::GatherOp, ttg::ConvertLayoutOp>(op)) {
       rewriteGenericOpInPlace(op, encoding);
     } else {
       llvm::report_fatal_error("unexpected op in rewrite");
@@ -1022,7 +1022,7 @@ bool canBeRemat(Operation *op) {
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
-  return true;
+  return !hasEffect<MemoryEffects::Write>(op);
 }
 
 // Returns true for shape-changing ops that carry no encoding constraint of
@@ -1238,7 +1238,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   SmallVector<std::tuple<Value, Value>> replacements;
 
   SmallVector<Operation *> deadOps;
-  IRRewriter builder(slice.begin()->getContext());
+  // Hoisting or remat reuse can legitimately leave the slice empty.
+  IRRewriter builder(convertOp.getContext());
   for (Operation *op : opsToRewrite) {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       SmallVector<Value> newOperands;
@@ -1376,11 +1377,15 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       addRematValue(old, it->second, newV);
     }
   }
-  // Check mapping and see if there are existing convertOps on the old Argument
-  convertOp.replaceAllUsesWith(mapping.lookup(convertOp.getSrc()));
+  // Add the rewritten convert to the replacements so it is removed from the
+  // remat maps and has its uses replaced like the other ops we delete.
+  replacements.emplace_back(convertOp.getResult(),
+                            mapping.lookup(convertOp.getSrc()));
   opToDelete.insert(convertOp);
 
   updateRematMapping(replacements);
+  assert(!mappedValues.contains(convertOp.getResult()) &&
+         "rewritten conversion remains in rematerialization maps");
   for (auto &kv : replacements) {
     builder.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
   }

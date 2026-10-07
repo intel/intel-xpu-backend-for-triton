@@ -151,7 +151,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c1_i32 = arith.constant 1 : i32
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <1x64x32xf16>
+    %c32_i64 = arith.constant 32 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c32_i64, %c1_i64] : <f16>, <1x64x32xf16>
     // CHECK: %[[SHAPE0:.*]] = ttig.extract_desc %{{.*}}[0] : <1x64x32xf16> -> i64
     // CHECK: ttig.extract_desc
     // CHECK: %[[BATCH_EXT:.*]] = arith.extsi %arg4 : i32 to i64
@@ -261,7 +262,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   tt.func @descriptor_load_two_batch_dims(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i64, %bi0: i32, %bi1: i32) -> tensor<64x32xf16, #dot0> {
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3, %arg4], [%arg5, %arg5, %c1_i64, %c1_i64] : <f16>, <1x1x64x32xf16>
+    %c32_i64 = arith.constant 32 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3, %arg4], [%arg5, %arg5, %c32_i64, %c1_i64] : <f16>, <1x1x64x32xf16>
     // CHECK: %[[SHAPE0:.*]] = ttig.extract_desc %{{.*}}[0] : <1x1x64x32xf16> -> i64
     // CHECK: %[[SHAPE1:.*]] = ttig.extract_desc %{{.*}}[1] : <1x1x64x32xf16> -> i64
     // CHECK: %[[S0:.*]] = arith.trunci %[[SHAPE0]] : i64 to i32
@@ -284,6 +286,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // COM: conversion proceeds. `pad_nan` on the emitted op is the part that
 // COM: matters -- it shows the padding *value* survived the trace, not merely
 // COM: that some conversion happened.
+// COM:
+// COM: The pairing with @if_divergent_padding is what makes both cases meaningful,
+// COM: and the asymmetry between them is deliberate rather than a gap:
+// COM:
+// COM: (a) In the normal pipeline the divergent twin is unreachable -- such a load
+// COM:     is expanded to pointers before TTGIR exists, so refusing the 2D block
+// COM:     path there is correct and complete. This consistent case is the one the
+// COM:     pipeline actually produces, and it must keep its fast path; that is the
+// COM:     over-eviction guard. Its counterpart on the expansion side is
+// COM:     @if_consistent_padding in
+// COM:     test/Triton/Intel/rewrite-tensor-descriptor-to-pointer.mlir, which
+// COM:     asserts the same "do not evict a consistent descriptor" contract one
+// COM:     stage earlier.
+// COM:
+// COM: (b) For standalone hand-written TTGIR, the divergent twin is additionally
+// COM:     rejected outright by the LLVM lowering instead of silently defaulting to
+// COM:     PAD_ZERO (issue #8102); see
+// COM:     test/TritonIntelGPU/descriptor-load-divergent-padding.mlir. Nothing about
+// COM:     that hardening may touch THIS case: a consistent PAD_NAN provenance must
+// COM:     still reach ttig.2d_block_load with `pad_nan`.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {

@@ -13,7 +13,7 @@ launch with the raw `ZE_RESULT_ERROR_INVALID_GROUP_SIZE_DIMENSION`.
 The fix drops the large-GRF entries from `make_zebin`'s retry list when
 `num_warps > 32`, so both automatic upgrade triggers are covered:
 
-  * the spill-based upgrade (`spill_slots_per_lane(...) > MAX_REG_SPILL_SLOTS_PER_LANE`), and
+  * the spill-based upgrade (`not accepts_default_grf(...)`), and
   * the build-failure retry (e.g. the LTS2 degenerate-zebin case),
 
 keeping the working — if slower, spilling — default-GRF binary in both cases.
@@ -34,7 +34,7 @@ import triton
 import triton.language as tl
 
 import triton.backends.intel.compiler as intel_compiler
-from triton._internal_testing import is_xpu_cri
+from triton.backends.intel.driver import is_lts
 from triton.runtime.errors import IntelGPUError
 
 pytestmark = pytest.mark.skipif(
@@ -108,8 +108,9 @@ def _launch(num_warps, n=4096, kernel=None):
 
 @triton.jit
 def _heavy_spill(a_ptr, b_ptr, c_ptr, d_ptr, out_ptr, n, BLOCK: tl.constexpr):
-    """A kernel with enough live values to spill at a large BLOCK, so the
-    runtime spill-based recompile (driver.c, any nonzero spill bytes) fires."""
+    """A kernel with enough live values to spill at a large BLOCK, so the runtime
+    spill-based recompile (driver.c, a spill of at least 1024 B/hardware-thread)
+    fires."""
     offs = tl.arange(0, BLOCK)
     m = offs < n
     a = tl.load(a_ptr + offs, mask=m, other=0.0)
@@ -117,8 +118,10 @@ def _heavy_spill(a_ptr, b_ptr, c_ptr, d_ptr, out_ptr, n, BLOCK: tl.constexpr):
     c = tl.load(c_ptr + offs, mask=m, other=0.0)
     d = tl.load(d_ptr + offs, mask=m, other=0.0)
     acc = a
-    # Keep a wide set of intermediates live to force register spilling.
-    for i in tl.static_range(64):
+    # Keep a wide set of intermediates live to force register spilling. The
+    # spill depth comes from BLOCK -- the live vector length -- not from this
+    # unroll count, which only adds IGC compile time.
+    for i in tl.static_range(8):
         a = a * 1.001 + b
         b = b * 1.002 + c
         c = c * 1.003 + d
@@ -172,14 +175,51 @@ def _spy_on_ocloc(monkeypatch):
     return calls
 
 
-# `make_zebin` picks the large-GRF retry flag per target: CRI upgrades straight to
-# 512-GRF, everything else to 256-GRF. Match whichever this device would use, so
-# the assertions below track the guard and not the flag choice.
-LARGE_GRF_FLAG = "-cl-intel-512-GRF-per-thread" if is_xpu_cri() else "-cl-intel-256-GRF-per-thread"
+def _large_grf_flag() -> str:
+    """The large-GRF retry flag this target escalates to.
+
+    Asked of the backend rather than re-derived here: the assertions below
+    are about the num_warps guard, not about the flag choice. Deferred to
+    call time (not a module-level constant) so importing this module never
+    needs a live device: `get_current_target()` raises on a driverless box,
+    and this file's own `pytestmark` skip is only checked at collection,
+    which is too late to save an import-time exception.
+    """
+    arch = triton.runtime.driver.active.get_current_target().arch
+    max_grf_mode = arch.get("max_grf_mode", intel_compiler.get_max_grf_mode(arch))
+    return f"-cl-intel-{max_grf_mode}-GRF-per-thread"
 
 
 def _large_grf_retries(calls) -> int:
-    return sum(1 for c in calls if any(LARGE_GRF_FLAG in str(a) for a in c))
+    flag = _large_grf_flag()
+    return sum(1 for c in calls if any(flag in str(a) for a in c))
+
+
+@pytest.mark.parametrize("spill_size, expected_retries", [(960, 0), (1024, 1)])
+@_requires_warps(4)
+@pytest.mark.skipif(not _has_ocloc(), reason="`ocloc` not on PATH — AOT path can't be exercised")
+def test_spill_gate_rebuilds_at_1024_bytes_per_thread(monkeypatch, fresh_triton_cache, spill_size, expected_retries):
+    """The rebuild fires at 1024 B/hardware-thread and not one dword-per-lane below.
+
+    Stubbing the spill probe is what makes this the only place the exact boundary
+    meets the real retry loop, with no dependence on how much a kernel happens to
+    spill. The gate compares bytes, so `WARP_SIZE` does not enter into it.
+    """
+    # On LTS any positive spill rebuilds (issue #8106), so 960 B would retry too.
+    if is_lts(torch.xpu.get_device_capability(torch.xpu.current_device()).get("driver_version")):
+        pytest.skip("rolling-only: the LTS gate rebuilds on any spill")
+
+    monkeypatch.setenv("TRITON_XPU_GEN_NATIVE_CODE", "1")
+    monkeypatch.setattr(intel_compiler, "extract_spill_size_from_zebin", lambda _f: spill_size)
+    calls = _spy_on_ocloc(monkeypatch)
+
+    # `_launch` builds a fresh kernel, so the other case's compilation cannot
+    # satisfy this one out of `JITFunction`'s in-process cache.
+    x, y = _launch(num_warps=4)
+    assert torch.allclose(y, x + 1.0)
+    assert _large_grf_retries(calls) == expected_retries, (
+        f"{spill_size} B/hardware-thread at SIMD{WARP_SIZE}: expected {expected_retries} "
+        f"{_large_grf_flag()} retries, got ocloc calls: {calls}")
 
 
 def _stub_degenerate_first_build(monkeypatch):
@@ -223,7 +263,7 @@ def test_exception_retry_not_attempted_for_num_warps_64(monkeypatch, fresh_trito
     with pytest.raises(IntelGPUError):
         _launch(num_warps=64)
 
-    assert _large_grf_retries(calls) == 0, (f"no {LARGE_GRF_FLAG} retry should be attempted for num_warps > 32; "
+    assert _large_grf_retries(calls) == 0, (f"no {_large_grf_flag()} retry should be attempted for num_warps > 32; "
                                             f"got ocloc calls: {calls}")
 
 
@@ -240,7 +280,7 @@ def test_exception_retry_still_attempted_for_num_warps_32(monkeypatch, fresh_tri
     # first spill probe was stubbed to raise), so the launch succeeds.
     x, y = _launch(num_warps=32)
     assert torch.allclose(y, x + 1.0)
-    assert _large_grf_retries(calls) == 1, (f"expected exactly one {LARGE_GRF_FLAG} retry for num_warps <= 32; "
+    assert _large_grf_retries(calls) == 1, (f"expected exactly one {_large_grf_flag()} retry for num_warps <= 32; "
                                             f"got: {calls}")
 
 
