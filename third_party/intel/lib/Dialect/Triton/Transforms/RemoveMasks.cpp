@@ -1226,7 +1226,7 @@ public:
     });
     CanonicalMaskValidator::MaskInfo info =
         maskValidator.getMaskInfo(forOp, getMask(maskedOp));
-    LDBG("versioned: loop="
+    CDBG("versioned: loop="
          << censusId(forOp) << " unmasked=" << joinIds(toUnmaskTrace)
          << " guard=canonical N=" << describeArg(info.N) << " END=" << info.END
          << " w=" << info.N.getType().getIntOrFloatBitWidth());
@@ -1351,7 +1351,7 @@ public:
       llvm::sort(toUnmaskTrace, [](Operation *a, Operation *b) {
         return a->isBeforeInBlock(b);
       });
-      LDBG("versioned: loop=" << censusId(forOp)
+      CDBG("versioned: loop=" << censusId(forOp)
                               << " unmasked=" << joinIds(toUnmaskTrace)
                               << " guard=" << llvm::join(condTexts, ";"));
     }
@@ -1587,7 +1587,7 @@ public:
       for (auto &[op, proof] : plan.ops)
         if (proof.verdict == tt::intel::BoundProof::ConditionallySatisfied)
           toUnmask.push_back(op);
-      LDBG("versioned: loop=" << censusId(plan.loop)
+      CDBG("versioned: loop=" << censusId(plan.loop)
                               << " unmasked=" << joinIds(toUnmask)
                               << " guard=" << joinConditions(plan.conds));
       versionWithGuard(plan.loop, plan.guard, toUnmask);
