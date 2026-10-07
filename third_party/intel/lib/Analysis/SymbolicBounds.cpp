@@ -262,8 +262,22 @@ bool normalizeCondition(BoundCondition &cond) {
   bool atMost = cond.goal == BoundGoal::AtMost;
   if (c0 != 0) {
     int64_t folded;
-    if (llvm::SubOverflow(bound, c0, folded))
-      return false;
+    if (llvm::SubOverflow(bound, c0, folded)) {
+      // Folding would need a bound outside i64's range. The symbolic part is
+      // itself an i64-typed quantity, so it is already <= anything above
+      // INT64_MAX or >= anything below INT64_MIN - vacuously true, not
+      // inexpressible. This is the common case for a wrap guard's
+      // trivially-true half (e.g. `(x - 1) <= INT64_MAX`, bound=INT64_MAX,
+      // c0=-1): without this, closing it declined and the whole query read
+      // as Unknown instead of using the OTHER half, which is the one that
+      // actually constrains anything.
+      bool vacuous = atMost ? c0 < 0 : c0 > 0;
+      if (!vacuous)
+        return false; // the opposite direction is a genuine overflow: decline
+      cond.expr = AffineForm::constant(0);
+      cond.c = 0;
+      return true;
+    }
     bound = folded;
     cond.expr = cond.expr.sub(AffineForm::constant(c0));
     cond.goal = atMost ? BoundGoal::AtMost : BoundGoal::AtLeast;
