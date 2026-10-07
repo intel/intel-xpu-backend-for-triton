@@ -83,6 +83,17 @@ static std::string describeBound(Value v) {
   return def->getName().getStringRef().str();
 }
 
+// `argN` for a function argument, else `describeBound`'s coarse
+// classification: the versioning trace (Task 11) only needs enough to join
+// a `versioned:` guard against the census's `candidate:`/`verdict:` lines by
+// eye, not a full expression.
+static std::string describeArg(Value v) {
+  v = tt::intel::getFinalValue(v);
+  if (auto arg = dyn_cast<BlockArgument>(v))
+    return "arg" + std::to_string(arg.getArgNumber());
+  return describeBound(v);
+}
+
 // id = <func>#<xxh3 of the func's printed IR>/L<pre-order loop index>/M<mask
 // index>. The hash separates specializations that share a kernel name. Every
 // masked op whose innermost enclosing loop is a scf.for gets an id and a
@@ -736,9 +747,9 @@ public:
     return true;
   }
 
-private:
   // Assuming the mask is equivalent to the form: `END < N-i*END`, returns a
-  // structure containing `N` and `END`.
+  // structure containing `N` and `END`. Public so the versioning trace (Task
+  // 11) can render the guard text without re-parsing the mask.
   MaskInfo getMaskInfo(scf::ForOp &forOp, Value mask) const {
     assert(isValidMask(forOp, mask, /*op=*/nullptr) &&
            "Expecting a valid mask");
@@ -1208,6 +1219,18 @@ public:
     if (!verCond)
       return false;
 
+    SmallVector<Operation *> toUnmaskTrace(collector.getMaskedOps().begin(),
+                                           collector.getMaskedOps().end());
+    llvm::sort(toUnmaskTrace, [](Operation *a, Operation *b) {
+      return a->isBeforeInBlock(b);
+    });
+    CanonicalMaskValidator::MaskInfo info =
+        maskValidator.getMaskInfo(forOp, getMask(maskedOp));
+    LDBG("versioned: loop="
+         << censusId(forOp) << " unmasked=" << joinIds(toUnmaskTrace)
+         << " guard=canonical N=" << describeArg(info.N) << " END=" << info.END
+         << " w=" << info.N.getType().getIntOrFloatBitWidth());
+
     // This lambda is used to collect the types for the loop results that are
     // downward exposed (i.e. used by other operations).
     auto getUsedResults = [](const scf::ForOp &forOp) {
@@ -1307,6 +1330,30 @@ public:
       Value nextCond = (*it)->getResult(0);
       Value cond = maskValidator.getVersioningCond(forOp, nextCond);
       verCond = arith::AndIOp::create(builder, loc, verCond, cond);
+    }
+
+    {
+      // The versioner iterates `maskConds`, a SmallPtrSet with no stable
+      // order; the trace renders each conjoined cmpi's text in program order.
+      SmallVector<Operation *> condsTrace(maskConds.begin(), maskConds.end());
+      llvm::sort(condsTrace, [](Operation *a, Operation *b) {
+        return a->isBeforeInBlock(b);
+      });
+      SmallVector<std::string> condTexts;
+      for (Operation *cond : condsTrace) {
+        std::string text;
+        llvm::raw_string_ostream os(text);
+        cond->print(os, OpPrintingFlags().skipRegions());
+        condTexts.push_back(text);
+      }
+      SmallVector<Operation *> toUnmaskTrace(collector.getMaskedOps().begin(),
+                                             collector.getMaskedOps().end());
+      llvm::sort(toUnmaskTrace, [](Operation *a, Operation *b) {
+        return a->isBeforeInBlock(b);
+      });
+      LDBG("versioned: loop=" << censusId(forOp)
+                              << " unmasked=" << joinIds(toUnmaskTrace)
+                              << " guard=" << llvm::join(condTexts, ";"));
     }
 
     auto ifOp = scf::IfOp::create(builder, loc, forOp.getResultTypes(), verCond,
