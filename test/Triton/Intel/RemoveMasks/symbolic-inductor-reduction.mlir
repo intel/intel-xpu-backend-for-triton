@@ -1,7 +1,7 @@
 // RUN: env TRITON_INTEL_SYMBOLIC_MASKS=1 triton-opt %s -split-input-file -triton-intel-remove-masks -canonicalize | FileCheck %s --check-prefixes=CHECK,SYM
 // RUN: triton-opt %s -split-input-file -triton-intel-remove-masks -canonicalize | FileCheck %s --check-prefixes=CHECK,LEGACY
 
-// COM: Inductor reduction shape (spec E1): no legacy validator fires; the symbolic
+// COM: Inductor reduction shape: no legacy validator fires; the symbolic
 // COM: validator versions the loop on rnumel % 64 == 0 and unmasks the then-copy.
 // COM: -canonicalize removes the dead masked load dropMask leaves behind, so the
 // COM: CHECK-NOT below is meaningful.
@@ -118,14 +118,15 @@ tt.func @select_mask(%ptr: !tt.ptr<f32>, %rnumel: i32) {
 // -----
 
 // COM: Two independent invariant masks whose `tt.load`s share a loc name
-// COM: ("offset"), increment 1c: census ids and guard dedup (spec §4.7) key
+// COM: ("offset"). Census ids and guard dedup key
 // COM: on the SSA value, not the loc text, so sharing a name must not merge
 // COM: the two loads' evidence. Neither load has a narrowed range, and N is a
 // COM: kernel arg: the residual `N - offset - 63` has two unconstrained
-// COM: invariant symbols and no substituted IV or quotient, so only 4e
-// COM: reaches it. The two conditions it emits per load (one per `tt.load`,
-// COM: pinned by captures rather than a count: materialization also extends
-// COM: N) are what distinguishes the loads from each other.
+// COM: invariant symbols and no substituted IV or quotient, so only the
+// COM: residual-guard candidate reaches it. The two conditions it emits per
+// COM: load (one per `tt.load`, pinned by captures rather than a count:
+// COM: materialization also extends N) are what distinguishes the loads from
+// COM: each other.
 
 // CHECK-LABEL: tt.func @same_loc_two_guards
 tt.func @same_loc_two_guards(%ptr1: !tt.ptr<f32>, %ptr2: !tt.ptr<f32>,
@@ -202,8 +203,9 @@ tt.func @loop_carried_mask(%ptr: !tt.ptr<f32>, %rnumel: i32) {
 // COM: Refuted-only loop gets no guard, so the driver drops the mask without
 // COM: versioning: dropMask takes the getZeroAttr branch, replaces the uses with
 // COM: a zero constant, and the driver then erases the now-unused load.
-// COM: No LEGACY lines: whether legacy walk 1 classifies this mask as false has
-// COM: not been established, and this section is about the symbolic driver.
+// COM: No LEGACY lines: whether the legacy RemovableMaskValidator classifies
+// COM: this mask as false has not been established, and this section is
+// COM: about the symbolic driver.
 
 // CHECK-LABEL: tt.func @refuted_no_other
 tt.func @refuted_no_other(%ptr: !tt.ptr<f32>) {
@@ -233,9 +235,9 @@ tt.func @refuted_no_other(%ptr: !tt.ptr<f32>) {
 // COM: A Satisfied mask on a volatile load. Exactly one load must remain in the
 // COM: loop, unmasked and still volatile: only erasing the replaced load after
 // COM: dropMask achieves that, since canonicalization keeps a volatile load.
-// COM: No LEGACY lines: legacy walk 1 calls dropMask without erasing and so
-// COM: keeps the original volatile load too, a pre-existing behaviour this
-// COM: change does not alter.
+// COM: No LEGACY lines: the legacy RemovableMaskValidator walk calls dropMask
+// COM: without erasing and so keeps the original volatile load too, a
+// COM: pre-existing behaviour this change does not alter.
 
 // CHECK-LABEL: tt.func @volatile_unconditional
 tt.func @volatile_unconditional(%ptr: !tt.ptr<f32>) {

@@ -38,7 +38,7 @@ from triton._internal_testing import is_xpu
 
 @triton.jit
 def masked_k_sum_kernel(x_ptr, out_ptr, K, BLOCK_K: tl.constexpr):
-    # Spec E1 shape (an inductor reduction): for k in range(0, K, BLOCK_K),
+    # An inductor reduction shape: for k in range(0, K, BLOCK_K),
     # load x[k + lane] under `lane + k < K`. No legacy validator matches this
     # shape, so only the symbolic path versions the loop.
     acc = tl.zeros([BLOCK_K], dtype=tl.float32)
@@ -51,7 +51,7 @@ def masked_k_sum_kernel(x_ptr, out_ptr, K, BLOCK_K: tl.constexpr):
 
 @triton.jit
 def masked_k_matmul_kernel(a_ptr, b_ptr, c_ptr, K, BLOCK_K: tl.constexpr):
-    # Spec E2 shape (tutorial 03): one 16x16 tile, K loop with a cdiv bound.
+    # The tutorial-03 shape: one 16x16 tile, K loop with a cdiv bound.
     # The legacy canonical validator recognizes this one, so both modes version.
     offs = tl.arange(0, 16)
     offs_k = tl.arange(0, BLOCK_K)
