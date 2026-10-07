@@ -23,6 +23,3 @@ tests/v1/worker/test_gpu_model_runner.py::test_reload_weights_before_load_model
 
 # NIXL is not available: https://github.com/intel/intel-xpu-backend-for-triton/issues/7419
 tests/v1/kv_connector/unit/test_nixl_connector.py::test_reqs_to_send_deadline_rebased_to_worker_clock
-
-# Nondeterministic top-3 logprobs output mismatch:
-tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logits]
