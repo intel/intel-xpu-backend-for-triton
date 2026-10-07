@@ -5,6 +5,7 @@ import multiprocessing
 import os
 import re
 import gc
+import shutil
 import pathlib
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from contextlib import ExitStack
@@ -55,6 +56,27 @@ def test_file_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_pat
 
     os.remove(artifact_path)
     assert manager.get_group("kernel.json") is None
+
+
+def test_file_cache_manager_get_group_relocated_dir(fresh_knobs, tmp_path):
+    original, copy = tmp_path / "original", tmp_path / "copy"
+    fresh_knobs.cache.dir = str(original)
+    manager = FileCacheManager("key")
+    metadata_path = manager.put("{}", "kernel.json", binary=False)
+    artifact_path = manager.put("binary", "kernel.cubin", binary=False)
+    manager.put_group("kernel.json", {
+        "kernel.json": metadata_path,
+        "kernel.cubin": artifact_path,
+    })
+
+    shutil.copytree(original, copy)
+    shutil.rmtree(original)
+    fresh_knobs.cache.dir = str(copy)
+    manager = FileCacheManager("key")
+    assert manager.get_group("kernel.json") == {
+        "kernel.json": os.path.join(manager.cache_dir, "kernel.json"),
+        "kernel.cubin": os.path.join(manager.cache_dir, "kernel.cubin"),
+    }
 
 
 def test_remote_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):
