@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tune XPU attention with graph replay and export device-specific JSON configs.
 
-Run ``--model MODEL --tune --save-dir profiles`` to generate configs.
+Run ``--model MODEL --tune --save-dir configs`` to generate configs.
 Use ``--batch-size``, ``--query-len`` and ``--kv-len`` for workload ranges.
 Omit ``--tune`` to benchmark configs from the same folder.
 """

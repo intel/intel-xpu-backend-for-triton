@@ -616,20 +616,18 @@ index b0231dd..f2494c5 100644
          )
 diff --git a/vllm/v1/attention/ops/triton_unified_attention_config.py b/vllm/v1/attention/ops/triton_unified_attention_config.py
 new file mode 100644
-index 0000000..25441db
+index 0000000..d7b0f86
 --- /dev/null
 +++ b/vllm/v1/attention/ops/triton_unified_attention_config.py
-@@ -0,0 +1,390 @@
+@@ -0,0 +1,385 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +
 +"""Load device-specific offline attention configs without runtime benchmarking."""
 +
-+import hashlib
 +import json
 +import logging
 +import os
-+import re
 +from bisect import bisect_left
 +from contextlib import contextmanager
 +from dataclasses import asdict, dataclass, fields
@@ -871,23 +869,20 @@ index 0000000..25441db
 +
 +
 +def profile_filename(identity: dict, static_key: AttentionStaticKey) -> str:
-+    dtype = {"bfloat16": "bf16", "float16": "fp16", "float8_e4m3fn": "fp8"}.get(
-+        static_key.q_dtype, static_key.q_dtype
++    device = identity["device_name"].replace(" ", "_")
++    dtypes = (
++        static_key.q_dtype,
++        static_key.k_dtype,
++        static_key.v_dtype,
++        static_key.out_dtype,
 +    )
-+    partition = {
-+        "device_name": identity["device_name"],
-+        "static_key": asdict(static_key),
-+    }
-+    digest = hashlib.sha256(json.dumps(partition, sort_keys=True).encode()).hexdigest()[
-+        :24
-+    ]
-+    device = identity["device_name"].lower()
-+    device = re.sub(r"\((?:r|tm)\)", "", device)
-+    device = re.sub(r"\b(?:intel|arc|graphics|data|center|gpu)\b", "", device)
-+    device = re.sub(r"[^a-z0-9]+", "-", device).strip("-") or "xpu"
++    dtype = "-".join(dtypes)
 +    return (
-+        f"unified_attention_{dtype}-{device}_h{static_key.head_size}"
-+        f"_gqa{static_key.num_queries_per_kv}_b{static_key.block_size}_{digest}.json"
++        f"H={static_key.head_size},GQA={static_key.num_queries_per_kv}"
++        f",B={static_key.block_size},device_name={device},dtype={dtype}"
++        f",td={int(static_key.use_td)},kv_quant={static_key.kv_quant_mode}"
++        f",softcap={int(static_key.use_softcap)},window={static_key.sliding_window}"
++        f",q_layout={static_key.q_layout},kv_layout={static_key.kv_layout}.json"
 +    )
 +
 +

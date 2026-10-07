@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tune synthetic workloads from a manifest with the shared UA tuner.
 
-Run ``--tune --manifest inputs.json --save-dir profiles`` to generate configs.
+Run ``--tune --manifest inputs.json --save-dir configs`` to generate configs.
 Omit ``--tune`` to benchmark existing configs on the same inputs.
 Manifests specify shapes and layouts, not CI random values or FP8 scales.
 """
@@ -94,7 +94,7 @@ def main(argv=None, *, allocate=tuner.allocate_case, description=__doc__):
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--clear-cache", action="store_true",
                         help="Evict 256 MB before each graph replay, excluding eviction from timing")
-    parser.set_defaults(seed=1729, save_dir=str(BENCHMARK_DIR / "profiles"))
+    parser.set_defaults(seed=1729, save_dir=str(BENCHMARK_DIR / "configs"))
     args = parser.parse_args(argv)
     workloads = normalize_workloads(json.loads(Path(args.manifest).read_text(encoding="utf-8")))
     timer = cold_graph_timer if args.clear_cache else tuner.graph_timer

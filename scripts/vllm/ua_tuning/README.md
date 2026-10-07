@@ -11,10 +11,10 @@ Run from the repository root:
 export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
 python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
   --manifest scripts/vllm/ua_tuning/inputs/bf16.json \
-  --save-dir reports/profiles --measurements reports/bf16-measurements.json
+  --save-dir reports/configs --measurements reports/bf16-measurements.json
 python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
   --manifest scripts/vllm/ua_tuning/inputs/fp8.json \
-  --save-dir reports/profiles --measurements reports/fp8-measurements.json
+  --save-dir reports/configs --measurements reports/fp8-measurements.json
 ```
 
 Omit `--tune` to benchmark existing profiles. `--measurements` applies only to

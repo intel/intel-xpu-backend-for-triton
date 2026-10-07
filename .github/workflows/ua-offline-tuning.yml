@@ -53,7 +53,7 @@ jobs:
       - uses: ./.github/actions/install-vllm
       - name: Record environment and inputs
         run: |
-          mkdir -p reports/profiles
+          mkdir -p reports/configs
           ./scripts/capture-hw-details.sh > reports/environment.txt
           python -m pip freeze > reports/packages.txt
           git rev-parse HEAD > reports/checkout.txt
@@ -68,7 +68,7 @@ jobs:
           export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
           python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
             --manifest reports/manifests/bfloat16.json \
-            --save-dir reports/profiles --measurements reports/bf16-measurements.json \
+            --save-dir reports/configs --measurements reports/bf16-measurements.json \
             --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/bf16-tuning.log
       - name: Save BF16 profiles and measurements
         if: always()
@@ -82,7 +82,7 @@ jobs:
           export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
           python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
             --manifest reports/manifests/float8_e4m3fn.json \
-            --save-dir reports/profiles --measurements reports/fp8-measurements.json \
+            --save-dir reports/configs --measurements reports/fp8-measurements.json \
             --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/fp8-tuning.log
       - name: Upload generated JSONs and measurements
         if: always()
