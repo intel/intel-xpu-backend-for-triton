@@ -4715,9 +4715,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
                 )
         if mma == 16 and K == 64 and not (is_hip_rdna4() or is_hip_rdna4m() or is_hip_rdna3() or is_hip_gfx1250()):
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
-        # TODO: Re-enable once scaled-upcast layout selection preserves packed groups.
-        if is_hip_cdna3() and N == 32 and rhs_scale and mxfp_type == "e2m1" and mma in (0, 32):
-            pytest.skip("Incorrect scaled-upcast layout selection")
 
     @triton.jit
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
@@ -4998,7 +4995,7 @@ def _scaled_dot_scale_kernel(X, W, S, Y, RHS_SCALE: tl.constexpr, NORMAL_TYPE: t
 @pytest.mark.parametrize("fast_math", [False, True])
 @pytest.mark.enable_warmup(min_capability=9)
 def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
-    if not is_cuda() or torch.cuda.get_device_capability() < (8, 9):
+    if not (is_xpu() and not is_xpu_cri()) and (not is_cuda() or torch.cuda.get_device_capability() < (8, 9)):
         pytest.xfail("requires CUDA FP8 support")
 
     dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
@@ -5026,7 +5023,8 @@ def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
 @pytest.mark.parametrize("scale_dtype, scale_factor", [(torch.uint8, 32), (torch.float8_e4m3fn, 16)])
 @pytest.mark.enable_warmup(min_capability=9)
 def test_scaled_dot_zero_scale(rhs_scale, normal_type, scale_dtype, scale_factor, device):
-    if not is_interpreter() and (not is_cuda() or torch.cuda.get_device_capability() < (8, 9)):
+    if not is_interpreter() and not (is_xpu() and not is_xpu_cri()) and (not is_cuda() or
+                                                                         torch.cuda.get_device_capability() < (8, 9)):
         pytest.xfail("requires CUDA FP8 support")
 
     dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
