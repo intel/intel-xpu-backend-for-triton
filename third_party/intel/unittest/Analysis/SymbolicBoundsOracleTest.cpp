@@ -47,6 +47,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DynamicAPInt.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include <algorithm>
@@ -67,8 +68,58 @@ namespace {
 
 /// Trip counts and width-fit tests are computed here, one step wider than any
 /// value the IR can hold, so the check for "does this fit the IV's width" is
-/// not itself subject to the wrapping it is testing.
-using I128 = __int128;
+/// not itself subject to the wrapping it is testing. Arbitrary precision rather
+/// than `__int128`, which MSVC does not provide.
+class I128 {
+public:
+  I128(int64_t x = 0) : v(x) {}
+  /// `a` read as signed.
+  explicit I128(const APInt &a) : v(a) {}
+  explicit operator int64_t() const { return static_cast<int64_t>(v); }
+
+  /// The low 64 bits of the two's-complement pattern.
+  uint64_t low64() const {
+    if (v >= INT64_MIN && v <= INT64_MAX)
+      return static_cast<uint64_t>(static_cast<int64_t>(v));
+    static const DynamicAPInt two63 = DynamicAPInt(INT64_MAX) + 1;
+    static const DynamicAPInt two64 = two63 * 2;
+    DynamicAPInt r = mod(v, two64);
+    if (r >= two63)
+      r -= two64;
+    return static_cast<uint64_t>(static_cast<int64_t>(r));
+  }
+
+  friend I128 operator+(const I128 &a, const I128 &b) { return a.v + b.v; }
+  friend I128 operator-(const I128 &a, const I128 &b) { return a.v - b.v; }
+  friend I128 operator*(const I128 &a, const I128 &b) { return a.v * b.v; }
+  friend I128 operator/(const I128 &a, const I128 &b) { return a.v / b.v; }
+  // DynamicAPInt's small-value path computes INT64_MIN % -1 natively, which
+  // traps; x % -1 is 0 for every x.
+  friend I128 operator%(const I128 &a, const I128 &b) {
+    return b.v == -1 ? I128(0) : I128(a.v % b.v);
+  }
+  friend I128 operator<<(const I128 &a, unsigned s) {
+    DynamicAPInt r = a.v;
+    for (; s > 62; s -= 62)
+      r *= int64_t(1) << 62;
+    return r * (int64_t(1) << s);
+  }
+  I128 operator-() const { return -v; }
+  I128 &operator++() {
+    ++v;
+    return *this;
+  }
+  friend bool operator==(const I128 &a, const I128 &b) { return a.v == b.v; }
+  friend bool operator!=(const I128 &a, const I128 &b) { return a.v != b.v; }
+  friend bool operator<(const I128 &a, const I128 &b) { return a.v < b.v; }
+  friend bool operator<=(const I128 &a, const I128 &b) { return a.v <= b.v; }
+  friend bool operator>(const I128 &a, const I128 &b) { return a.v > b.v; }
+  friend bool operator>=(const I128 &a, const I128 &b) { return a.v >= b.v; }
+
+private:
+  I128(DynamicAPInt x) : v(std::move(x)) {}
+  DynamicAPInt v;
+};
 
 //===----------------------------------------------------------------------===//
 // Oracle
@@ -88,8 +139,7 @@ std::string opName(Operation *op) { return op->getName().getStringRef().str(); }
 /// pattern. APInt's constructor asserts on a value that does not fit its
 /// width, so an intended truncation has to say so.
 APInt wrapToWidth(I128 v, unsigned w) {
-  return APInt(w, static_cast<uint64_t>(static_cast<unsigned __int128>(v)),
-               /*isSigned=*/false, /*implicitTrunc=*/true);
+  return APInt(w, v.low64(), /*isSigned=*/false, /*implicitTrunc=*/true);
 }
 
 Val scalarOf(APInt v) {
@@ -213,7 +263,7 @@ private:
 
   /// A malformed fixture must fail rather than hang: no modelled loop over an
   /// i8 iteration space can run this many times.
-  static constexpr I128 kMaxIterations = 4096;
+  static constexpr int64_t kMaxIterations = 4096;
 
   Status bindArgs(tt::FuncOp f, ArrayRef<int64_t> argValues) {
     if (f.getNumArguments() != argValues.size()) {
@@ -503,8 +553,7 @@ private:
 
     auto read = [&](Value v) -> I128 {
       const APInt &a = env.find(v)->second.elems.front();
-      return uns ? static_cast<I128>(a.getZExtValue())
-                 : static_cast<I128>(a.getSExtValue());
+      return uns ? I128(a.zext(a.getBitWidth() + 1)) : I128(a);
     };
     I128 lb = read(forOp.getLowerBound());
     I128 ub = read(forOp.getUpperBound());
@@ -1193,7 +1242,7 @@ TEST_F(SymbolicBoundsGuardTest, GuardMatchesExactArithmetic) {
       OpBuilder b(term);
       Value guard = materialize({c}, term, b);
       for (int64_t a = -128; a <= 127; ++a) {
-        __int128 exact = static_cast<__int128>(k) * a;
+        I128 exact = I128(k) * a;
         bool fits = exact >= INT64_MIN && exact <= INT64_MAX;
         EXPECT_EQ(oracle.evalGuard(guard, {a}), fits && exact >= t)
             << k << " " << t << " " << a;
