@@ -720,4 +720,108 @@ TEST_F(SymbolicBoundsTest, QuotientFactIsNotDividendFact) {
   EXPECT_NE(verdict(get("mask")), "Satisfied");
 }
 
+//===----------------------------------------------------------------------===//
+// Task 7 (1c): residual candidates 4c, 4d, 4e
+//===----------------------------------------------------------------------===//
+
+TEST_F(SymbolicBoundsTest, ResidualSignGuardsProductValue_4c) {
+  parse(R"(
+    tt.func @f(%a: i32, %b: i32) {
+      %c0 = arith.constant 0 : i32
+      %p = arith.muli %a, %b : i32 loc("p")
+      %cmp = arith.cmpi sge, %p, %c0 : i32 loc("cmp")
+      tt.return
+    })");
+  // p is Opaque (product of symbols). The guard is on p's own wrapped runtime
+  // value, never on the factors: a = 65536, b = 32768 satisfy a >= 0 and b >= 0
+  // while the i32 product is INT32_MIN.
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{opaque(p) >= 0}");
+}
+
+TEST_F(SymbolicBoundsTest, ResidualStrictlyPositive_4c) {
+  // The goal d >= 1 on an Opaque product needs p > 0, not p >= 0.
+  parse(R"(
+    tt.func @f(%a: i32, %b: i32) {
+      %c0 = arith.constant 0 : i32
+      %p = arith.muli %a, %b : i32 loc("p")
+      %cmp = arith.cmpi sgt, %p, %c0 : i32 loc("cmp")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{opaque(p) > 0}");
+}
+
+TEST_F(SymbolicBoundsTest, QuotientThresholdPositive_4d) {
+  // The positive branch E3 used to cover: q >= 2 translates to K >= 65 for the
+  // cdiv shape. It also exercises the pruning dependency, since the retained
+  // K >= 65 may only drop a 4c `q >= 0` while the K + 63 wrap guard is
+  // retained.
+  parse(R"(
+    tt.func @f(%K: i32) {
+      %c2 = arith.constant 2 : i32
+      %c63 = arith.constant 63 : i32
+      %c64 = arith.constant 64 : i32
+      %num = arith.addi %K, %c63 : i32
+      %q = arith.divsi %num, %c64 : i32
+      %cmp = arith.cmpi sge, %q, %c2 : i32 loc("cmp")
+      tt.return
+    })");
+  // `arg0 >= 0` is the division facts' precondition, but the retained fact
+  // `arg0 >= 65` implies it outright, so closed-evidence pruning drops it; the
+  // numerator wrap guard stays, since nothing implies it.
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 >= 65; arg0 <= 2147483584}");
+}
+
+TEST_F(SymbolicBoundsTest, QuotientThresholdUpperMirror_4d) {
+  // k < 0: 3 - q >= 1 needs q <= 2, i.e. (cdiv) K <= 128. The K + 63 wrap
+  // guard is implied by K <= 128 and dropped; NonNegative(K) stays.
+  parse(R"(
+    tt.func @f(%K: i32) {
+      %c3 = arith.constant 3 : i32
+      %c63 = arith.constant 63 : i32
+      %c64 = arith.constant 64 : i32
+      %num = arith.addi %K, %c63 : i32
+      %q = arith.divsi %num, %c64 : i32
+      %cmp = arith.cmpi slt, %q, %c3 : i32 loc("cmp")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 <= 128; arg0 >= 0}");
+}
+
+TEST_F(SymbolicBoundsTest, MultiSymbolResidualGuard_4e) {
+  // d = hi - lo - 7 has two symbols, so no single-symbol candidate applies;
+  // 4e guards the whole residual. Previously 4e's only coverage was the
+  // trip-count test, which moved to phase 3 with the API.
+  parse(R"(
+    tt.func @f(%lo: i32, %hi: i32) {
+      %c0 = arith.constant 0 : i32
+      %c8 = arith.constant 8 : i32
+      %lane = tt.make_range {start = 0 : i32, end = 8 : i32} : tensor<8xi32>
+      %d = arith.subi %hi, %lo : i32
+      %ds = tt.splat %d : i32 -> tensor<8xi32>
+      %mask = arith.cmpi slt, %lane, %ds : tensor<8xi32> loc("mask")
+      tt.return
+    })");
+  // lo(d) = (hi - lo) - 7; 4e proposes AtLeast(hi - lo, 8). The subi's wrap
+  // obligation must also be closed: lo = INT32_MIN, hi = 0 satisfies the
+  // mathematical hi - lo >= 8 while the narrow subtraction wraps negative and
+  // the mask is false, so the upper representability guard is not optional.
+  // Pin the conditions in full rather than by prefix.
+  EXPECT_EQ(verdict(get("mask")),
+            "Conditional{-arg0 + arg1 >= 8; -arg0 + arg1 <= 2147483647}");
+}
+
+TEST_F(SymbolicBoundsTest, CandidateProofStillClosesObligations) {
+  parse(R"(
+    tt.func @f(%x: i32) {
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      %y = arith.addi %x, %c1 : i32 loc("y")
+      %cmp = arith.cmpi sge, %y, %c0 : i32 loc("cmp")
+      tt.return
+    })");
+  // Candidate 4c proposes x >= 0; finalize must still close the wrap obligation
+  // on y with x <= INT32_MAX - 1, otherwise x = INT32_MAX would pass.
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 >= 0; arg0 <= 2147483646}");
+}
+
 } // namespace

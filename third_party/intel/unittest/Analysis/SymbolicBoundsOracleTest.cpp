@@ -1158,10 +1158,7 @@ static std::string caseName(const ::testing::TestParamInfo<Case> &info) {
 
 INSTANTIATE_TEST_SUITE_P(Incr1b, SymbolicBoundsOracleTest,
                          ::testing::ValuesIn(casesFor("1b")), caseName);
-// The 1c cases are written now so the table is complete, but their candidates
-// (4c/4d/4e) do not exist until Task 7, so they would fail an unfiltered run.
-// `DISABLED_` keeps the default binary green for CI; Task 7 drops the prefix.
-INSTANTIATE_TEST_SUITE_P(DISABLED_Incr1c, SymbolicBoundsOracleTest,
+INSTANTIATE_TEST_SUITE_P(Incr1c, SymbolicBoundsOracleTest,
                          ::testing::ValuesIn(casesFor("1c")), caseName);
 
 //===----------------------------------------------------------------------===//

@@ -292,6 +292,17 @@ private:
     SmallVector<Obligation, 4> factObligations;
     /// A bound overflowed while closing an obligation: the verdict is Unknown.
     bool exhausted = false;
+    /// 4c/4d: trial hypotheses this attempt is testing on a residual term,
+    /// consulted by `decideResidual` ahead of the general fact/range check.
+    /// `signFloor` is `sym >= bound` (used when the term's own coefficient in
+    /// the residual is positive); `signCeil` is `sym <= bound` (negative
+    /// coefficient). 4c populates these with 0 (`NonNegative`/`AtMost(_,0)`)
+    /// or 1/-1 (`StrictlyPositive`/`AtMost(_,-1)`); 4d with the quotient
+    /// threshold translated from the dividend condition it emits, so the
+    /// bound the dividend condition justifies is also usable internally,
+    /// without being emitted twice.
+    SmallVector<std::pair<Symbol, int64_t>, 2> signFloor;
+    SmallVector<std::pair<Symbol, int64_t>, 2> signCeil;
   };
 
   /// The facts of one quotient symbol (design 4.1 division/remainder rows).
@@ -323,6 +334,12 @@ private:
   /// §4.2 step 4: is the residual `lo` at least `g`?
   bool decideResidual(const AffineForm &lo, int64_t g, QueryContext ctx,
                       CandidateSet &cs);
+  /// The fact/range half of a residual term's sign check: an applicable
+  /// assume, or the symbol's own constant range. Excludes `cs.signFloor` /
+  /// `signCeil`, which `decideResidual` checks first; records provenance
+  /// into `cs` on success.
+  bool termSignOk(const Symbol &sym, int64_t k, QueryContext ctx,
+                  CandidateSet &cs);
   /// The constant `decideResidual` compares against `g`, when there is one.
   std::optional<int64_t> residualConstant(const AffineForm &d, QueryContext ctx,
                                           CandidateSet &cs);
