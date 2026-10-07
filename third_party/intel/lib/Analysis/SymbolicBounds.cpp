@@ -1080,13 +1080,14 @@ SymbolicBoundsProver::bound(const AffineForm &e, QueryContext ctx,
 /// K loop's `K - 64*q(K+63, 64)` collapses to a constant. Returns nullopt when
 /// a quotient term cannot be substituted this way; the caller then decides from
 /// constant ranges alone. Appends the facts' preconditions and the dividend's
-/// wrap obligations to `cs`, since using a fact inherits them.
+/// wrap obligations to `cs`, since using a fact inherits them. `maximize`
+/// substitutes the upper bound instead, which an upper wrap guard needs.
 std::optional<AffineForm>
-SymbolicBoundsProver::substituteQuotients(const AffineForm &lo,
-                                          QueryContext ctx, CandidateSet &cs) {
-  AffineForm out = AffineForm::constant(lo.constant());
+SymbolicBoundsProver::substituteQuotients(const AffineForm &e, QueryContext ctx,
+                                          CandidateSet &cs, bool maximize) {
+  AffineForm out = AffineForm::constant(e.constant());
   bool substituted = false;
-  for (auto &[sym, k] : lo.terms()) {
+  for (auto &[sym, k] : e.terms()) {
     if (sym.kind() != SymbolKind::Quotient) {
       out = out.add(AffineForm::symbol(sym).scale(k));
       continue;
@@ -1104,20 +1105,21 @@ SymbolicBoundsProver::substituteQuotients(const AffineForm &lo,
 
     int64_t m = k / c; // k*q == m*(c*q)
     bool exact = llvm::is_contained(cs.exactCdiv, sym);
-    // The bound on c*q that minimizes m*(c*q): its low end when m > 0, its
-    // high end when m < 0.
+    // The end of c*q that minimizes m*(c*q) - the low end when m > 0 - or
+    // with `maximize` the end that maximizes it.
+    bool highEnd = (m < 0) != maximize;
     AffineForm bound;
     if (exact) {
       // The exact-cdiv candidate: the division is exact, so c*q == X.
       bound = info->dividend;
     } else if (info->isCdiv) {
       // (X + c - 1) / c gives X <= c*q <= X + c - 1.
-      bound = m > 0 ? info->dividend
-                    : info->dividend.add(AffineForm::constant(c - 1));
+      bound = highEnd ? info->dividend.add(AffineForm::constant(c - 1))
+                      : info->dividend;
     } else {
       // X - (c - 1) <= c*q <= X.
-      bound = m > 0 ? info->dividend.sub(AffineForm::constant(c - 1))
-                    : info->dividend;
+      bound = highEnd ? info->dividend
+                      : info->dividend.sub(AffineForm::constant(c - 1));
     }
     AffineForm term = bound.scale(m);
     if (term.overflowed())
@@ -1200,7 +1202,8 @@ bool SymbolicBoundsProver::decideResidual(const AffineForm &lo, int64_t g,
     return lo.constant() >= g;
   // Quotient facts first: substituting `c*q` by its bound on the dividend is
   // what lets the dividend cancel against its other occurrences.
-  if (std::optional<AffineForm> sub = substituteQuotients(lo, ctx, cs))
+  if (std::optional<AffineForm> sub =
+          substituteQuotients(lo, ctx, cs, /*maximize=*/false))
     if (decideResidual(*sub, g, ctx, cs))
       return true;
   // Every term contributes at least `k * floor` to the residual, where
@@ -1572,9 +1575,11 @@ void SymbolicBoundsProver::guardsForObligation(
   // occurrences: the tutorial-03 K loop's `64*q(K+63,64) - 64` collapses to
   // `K - 1` rather than becoming a guard on an opaque division.
   AffineForm lo = b.lo, hi = b.hi;
-  if (std::optional<AffineForm> s = substituteQuotients(lo, ctx, cs))
+  if (std::optional<AffineForm> s =
+          substituteQuotients(lo, ctx, cs, /*maximize=*/false))
     lo = *s;
-  if (std::optional<AffineForm> s = substituteQuotients(hi, ctx, cs))
+  if (std::optional<AffineForm> s =
+          substituteQuotients(hi, ctx, cs, /*maximize=*/true))
     hi = *s;
 
   auto push = [&](AffineForm e, BoundGoal goal, int64_t c) {

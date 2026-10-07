@@ -76,6 +76,7 @@ module {
     %q = arith.divsi %x, %c4 : i8
     %t = arith.muli %q, %c4 : i8
     %y = arith.addi %t, %c4 : i8
+    // expected-remark@+1 {{verdict: Conditional{arg0 >= 0; arg0 <= 123}}}
     %cmp = arith.cmpi sgt, %y, %x : i8
     tt.return
   }

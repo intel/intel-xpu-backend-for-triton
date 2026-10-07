@@ -314,9 +314,12 @@ private:
     SmallVector<Obligation, 4> dividendObligations;
   };
 
-  /// Substitutes quotient terms by their bounds so the dividend can cancel.
-  std::optional<AffineForm>
-  substituteQuotients(const AffineForm &lo, QueryContext ctx, CandidateSet &cs);
+  /// Substitutes quotient terms by their bounds so the dividend can cancel:
+  /// the bounds that minimize `e`, or with `maximize` those that maximize it.
+  std::optional<AffineForm> substituteQuotients(const AffineForm &e,
+                                                QueryContext ctx,
+                                                CandidateSet &cs,
+                                                bool maximize);
   const QuotientInfo *findQuotientInfo(const Symbol &sym,
                                        QueryContext ctx) const;
   /// The innermost enclosing `scf.for` of `v`, as a map key; null when `v` is
