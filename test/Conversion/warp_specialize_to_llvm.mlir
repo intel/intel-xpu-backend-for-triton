@@ -212,7 +212,7 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
   // CHECK: [[DEFAULT]]:
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
-  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]] {loop_annotation = #llvm.loop_annotation<licm = <disable = true>>}
+  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]] loop_annotation = <licm = <disable = true>>
 
   // CHECK: [[EXIT]]:
   // CHECK-NEXT: llvm.return
@@ -283,7 +283,7 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
   // AMD: [[DEFAULT]]:
   // AMD-NEXT: rocdl.barrier
   // AMD-NEXT: rocdl.barrier
-  // AMD-NEXT: llvm.br [[SWITCH_LOOP]] {loop_annotation = #llvm.loop_annotation<licm = <disable = true>>}
+  // AMD-NEXT: llvm.br [[SWITCH_LOOP]] loop_annotation = <licm = <disable = true>>
 
   // AMD: [[EXIT]]:
   // AMD-NEXT: llvm.return
@@ -414,9 +414,9 @@ llvm.func @pass_captures() attributes {allocation.offset = 32 : i32} {
 
   // CHECK: ^bb4:
   // CHECK-NEXT: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 0] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
-  // CHECK-NEXT: [[ARG0:%.*]] = llvm.load [[ARG0_PTR]] {alignment = 1 : i64}
+  // CHECK-NEXT: [[ARG0:%.*]] = llvm.load [[ARG0_PTR]] <alignment = 1> : !llvm.ptr<3> -> i32
   // CHECK-NEXT: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
-  // CHECK-NEXT: [[ARG1:%.*]] = llvm.load [[ARG1_PTR]] {alignment = 1 : i64}
+  // CHECK-NEXT: [[ARG1:%.*]] = llvm.load [[ARG1_PTR]] <alignment = 1> : !llvm.ptr<3> -> i64
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "use"([[ARG0]], [[ARG1]])
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
@@ -424,17 +424,17 @@ llvm.func @pass_captures() attributes {allocation.offset = 32 : i32} {
   // CHECK: ^bb5:
   // CHECK: [[INS:%.*]]:2 = "produce"()
   // CHECK: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 0] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
-  // CHECK-NEXT: llvm.store [[INS]]#0, [[ARG0_PTR]] {alignment = 1 : i64}
+  // CHECK-NEXT: llvm.store [[INS]]#0, [[ARG0_PTR]] <alignment = 1> : i32, !llvm.ptr<3>
   // CHECK-NEXT: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
-  // CHECK-NEXT: llvm.store [[INS]]#1, [[ARG1_PTR]] {alignment = 1 : i64}
+  // CHECK-NEXT: llvm.store [[INS]]#1, [[ARG1_PTR]] <alignment = 1> : i64, !llvm.ptr<3>
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
 
   // AMD: ^bb4:
   // AMD-NEXT: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 0] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
-  // AMD-NEXT: [[ARG0:%.*]] = llvm.load [[ARG0_PTR]] {alignment = 1 : i64}
+  // AMD-NEXT: [[ARG0:%.*]] = llvm.load [[ARG0_PTR]] <alignment = 1> : !llvm.ptr<3> -> i32
   // AMD-NEXT: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
-  // AMD-NEXT: [[ARG1:%.*]] = llvm.load [[ARG1_PTR]] {alignment = 1 : i64}
+  // AMD-NEXT: [[ARG1:%.*]] = llvm.load [[ARG1_PTR]] <alignment = 1> : !llvm.ptr<3> -> i64
   // AMD-NEXT: rocdl.barrier
   // AMD-NEXT: "use"([[ARG0]], [[ARG1]])
   // AMD-NEXT: rocdl.barrier
@@ -442,9 +442,9 @@ llvm.func @pass_captures() attributes {allocation.offset = 32 : i32} {
   // AMD: ^bb5:
   // AMD: [[INS:%.*]]:2 = "produce"()
   // AMD: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 0] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
-  // AMD-NEXT: llvm.store [[INS]]#0, [[ARG0_PTR]] {alignment = 1 : i64}
+  // AMD-NEXT: llvm.store [[INS]]#0, [[ARG0_PTR]] <alignment = 1> : i32, !llvm.ptr<3>
   // AMD-NEXT: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
-  // AMD-NEXT: llvm.store [[INS]]#1, [[ARG1_PTR]] {alignment = 1 : i64}
+  // AMD-NEXT: llvm.store [[INS]]#1, [[ARG1_PTR]] <alignment = 1> : i64, !llvm.ptr<3>
   // AMD-NEXT: rocdl.barrier
   // AMD-NEXT: rocdl.barrier
 

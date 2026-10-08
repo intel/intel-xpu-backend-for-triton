@@ -23,7 +23,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @umulhi_truncated_input(%seed: i64, %out: !tt.ptr<i32>) {
     // CHECK: %[[X:.*]] = llvm.trunc %arg0 : i64 to i32
     %x = arith.trunci %seed : i64 to i32
-    // CHECK: llvm.call_intrinsic "llvm.nvvm.mulhi.ui"(%[[X]], %[[X]]) : (i32, i32) -> i32
+    // CHECK: llvm.call_intrinsic "llvm.umulh"(%[[X]], %[[X]]) : (i32, i32) -> i32
     %high = tt.mulhiui %x, %x : i32
     tt.store %out, %high : !tt.ptr<i32>
     tt.return
@@ -31,7 +31,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
   // CHECK-LABEL: llvm.func @umulhi_i64
   tt.func @umulhi_i64(%seed: i64, %out: !tt.ptr<i64>) {
-    // CHECK: llvm.call_intrinsic "llvm.nvvm.mulhi.ull"(%arg0, %arg0) : (i64, i64) -> i64
+    // CHECK: llvm.call_intrinsic "llvm.umulh"(%arg0, %arg0) : (i64, i64) -> i64
     %high = tt.mulhiui %seed, %seed : i64
     tt.store %out, %high : !tt.ptr<i64>
     tt.return
@@ -1394,8 +1394,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @convert_dot_ldmatrix(%A: tensor<16x16xf16, #blocked0>, %B: tensor<16x16xf16, #blocked0>) {
     %AA = ttg.local_alloc %A : (tensor<16x16xf16, #blocked0>) -> !ttg.memdesc<16x16xf16, #shared0, #smem>
     %BB = ttg.local_alloc %B : (tensor<16x16xf16, #blocked0>) -> !ttg.memdesc<16x16xf16, #shared0, #smem>
-    // CHECK: nvvm.ldmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b16>, layout = #nvvm.mma_layout<row>, num = 4 : i32, shape = #nvvm.ld_st_matrix_shape<m = 8, n = 8>} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
-    // CHECK: nvvm.ldmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b16>, layout = #nvvm.mma_layout<col>, num = 4 : i32, shape = #nvvm.ld_st_matrix_shape<m = 8, n = 8>} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+    // CHECK: nvvm.ldmatrix %{{.*}}, num = 4, layout = <row>, shape = <m = 8, n = 8>, element_type = <b16> : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+    // CHECK: nvvm.ldmatrix %{{.*}}, num = 4, layout = <col>, shape = <m = 8, n = 8>, element_type = <b16> : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
     // CHECK-NOT: nvvm.ldmatrix
     %AA_DOT = ttg.local_load %AA : !ttg.memdesc<16x16xf16, #shared0, #smem> -> tensor<16x16xf16, #dot_operand_a>
     %BB_DOT = ttg.local_load %BB : !ttg.memdesc<16x16xf16, #shared0, #smem> -> tensor<16x16xf16, #dot_operand_b>
@@ -1424,8 +1424,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @convert_dot_ldmatrix_swizzle(%A: tensor<16x16xf16, #blocked0>, %B: tensor<16x16xf16, #blocked0>) {
     %AA = ttg.local_alloc %A : (tensor<16x16xf16, #blocked0>) -> !ttg.memdesc<16x16xf16, #shared0, #smem>
     %BB = ttg.local_alloc %B : (tensor<16x16xf16, #blocked0>) -> !ttg.memdesc<16x16xf16, #shared0, #smem>
-    // CHECK: nvvm.ldmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b16>, layout = #nvvm.mma_layout<row>, num = 4 : i32, shape = #nvvm.ld_st_matrix_shape<m = 8, n = 8>} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
-    // CHECK: nvvm.ldmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b16>, layout = #nvvm.mma_layout<col>, num = 4 : i32, shape = #nvvm.ld_st_matrix_shape<m = 8, n = 8>} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+    // CHECK: nvvm.ldmatrix %{{.*}}, num = 4, layout = <row>, shape = <m = 8, n = 8>, element_type = <b16> : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+    // CHECK: nvvm.ldmatrix %{{.*}}, num = 4, layout = <col>, shape = <m = 8, n = 8>, element_type = <b16> : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
     // CHECK-NOT: nvvm.ldmatrix
     %AA_DOT = ttg.local_load %AA : !ttg.memdesc<16x16xf16, #shared0, #smem> -> tensor<16x16xf16, #dot_operand_a>
     %BB_DOT = ttg.local_load %BB : !ttg.memdesc<16x16xf16, #shared0, #smem> -> tensor<16x16xf16, #dot_operand_b>
@@ -1506,7 +1506,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @convert_dot_fp8(%A: tensor<16x16xf8E5M2, #blocked0>, %B: tensor<16x16xf8E5M2, #blocked0>) {
     %AA = ttg.local_alloc %A : (tensor<16x16xf8E5M2, #blocked0>) -> !ttg.memdesc<16x16xf8E5M2, #shared0, #smem>
     %BB = ttg.local_alloc %B : (tensor<16x16xf8E5M2, #blocked0>) -> !ttg.memdesc<16x16xf8E5M2, #shared0, #smem>
-    // CHECK: nvvm.ldmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b16>, layout = #nvvm.mma_layout<row>, num = 2 : i32, shape = #nvvm.ld_st_matrix_shape<m = 8, n = 8>} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32)>
+    // CHECK: nvvm.ldmatrix %{{.*}}, num = 2, layout = <row>, shape = <m = 8, n = 8>, element_type = <b16> : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32)>
     // CHECK-NOT: nvvm.ldmatrix
     %AA_DOT = ttg.local_load %AA : !ttg.memdesc<16x16xf8E5M2, #shared0, #smem> -> tensor<16x16xf8E5M2, #dot_operand_a>
     %BB_DOT = ttg.local_load %BB : !ttg.memdesc<16x16xf8E5M2, #shared0, #smem> -> tensor<16x16xf8E5M2, #dot_operand_b>
@@ -2844,7 +2844,7 @@ module attributes {"ttg.target" = "cuda:75", "ttg.num-ctas" = 1 : i32, "ttg.num-
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @vectorize_shmem_load
   // CHECK: llvm.load
-  // CHECK-SAME: {alignment = 8 : i64} : !llvm.ptr<3> -> vector<2xi32>
+  // CHECK-SAME: <alignment = 8> : !llvm.ptr<3> -> vector<2xi32>
   // CHECK-NOT: llvm.load
   tt.func private @vectorize_shmem_load(%shmem : !ttg.memdesc<16x16xi8, #shared, #smem>) -> tensor<16x16xi8, #blocked> {
     %0 = ttg.local_load %shmem : !ttg.memdesc<16x16xi8, #shared, #smem> -> tensor<16x16xi8, #blocked>
@@ -2859,7 +2859,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @vectorize_shmem_store
-  // CHECK-COUNT-4:  llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<3>
+  // CHECK-COUNT-4:  llvm.store {{.*}} <alignment = 16> : vector<4xi32>, !llvm.ptr<3>
   tt.func public @vectorize_shmem_store(%block : tensor<64x64xi32, #blocked>) {
     %0 = ttg.local_alloc %block : (tensor<64x64xi32, #blocked>) -> !ttg.memdesc<64x64xi32, #shared, #smem>
     tt.return

@@ -1003,10 +1003,10 @@ tt.func @load_store_x1_unpacked(%arg0: !ttg.memdesc<128x2xf16, #tmem_x1_unpacked
 
 // CHECK-LABEL: max_reduction
 //       CHECK-DAG:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
-//       CHECK:   nvvm.redux.sync  fmax %{{.*}}, %[[M]] {nan = true} : f32 -> f32
+//       CHECK:   nvvm.redux.sync  fmax %{{.*}}, %[[M]] nan = true : f32 -> f32
 //       CHECK:   nvvm.barrier
 //   CHECK-NOT:   nvvm.shfl.sync
-//       CHECK:   nvvm.redux.sync  fmax %{{.*}}, %[[M]] {nan = true} : f32 -> f32
+//       CHECK:   nvvm.redux.sync  fmax %{{.*}}, %[[M]] nan = true : f32 -> f32
 //  CHECK-NEXT:   llvm.return
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -1050,7 +1050,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
   // CHECK-LABEL: lower_ldmatrix_trans_b8
   tt.func @lower_ldmatrix_trans_b8(%A: !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem, mutable, 1x128x64>) {
     %0 = ttg.local_load %A : !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem, mutable, 1x128x64> -> tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
-    // CHECK-COUNT-16: nvvm.ldmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b8>, layout = #nvvm.mma_layout<col>{{.*}}} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+    // CHECK-COUNT-16: nvvm.ldmatrix %{{.*}}num = 2, layout = <col>, shape = <m = 16, n = 16>, element_type = <b8> : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
     tt.return
   }
 }
@@ -1067,7 +1067,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: @ldmatrix_b8_minimise_conflicts_preserve_words
   // CHECK-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
   // CHECK-DAG: %[[TWO:.*]] = llvm.mlir.constant(2 : i32)
-  // CHECK: %[[LOAD:.*]] = nvvm.ldmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b8>, layout = #nvvm.mma_layout<col>, num = 2 : i32
+  // CHECK: %[[LOAD:.*]] = nvvm.ldmatrix %{{.*}} num = 2, layout = <col>, shape = <m = 16, n = 16>, element_type = <b8>
   // CHECK: %[[WORD:.*]] = llvm.extractvalue %[[LOAD]][0]
   // CHECK: %[[BYTES:.*]] = llvm.bitcast %[[WORD]] : i32 to vector<4xi8>
   // CHECK: %[[BYTE1:.*]] = llvm.extractelement %[[BYTES]][%[[ONE]] : i32]
@@ -1081,7 +1081,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // Selecting register [8] avoids the bank conflict caused by register [64].
   // CHECK-LABEL: @ldmatrix_b16_minimise_conflicts
   // CHECK-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
-  // CHECK: %[[LOAD:.*]] = nvvm.ldmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b16>, layout = #nvvm.mma_layout<col>, num = 4 : i32
+  // CHECK: %[[LOAD:.*]] = nvvm.ldmatrix %{{.*}} num = 4, layout = <col>, shape = <m = 8, n = 8>, element_type = <b16>
   // CHECK: %[[WORD:.*]] = llvm.extractvalue %[[LOAD]][0]
   // CHECK: %[[HALVES:.*]] = llvm.bitcast %[[WORD]] : i32 to vector<2xf16>
   // CHECK: %[[HALF1:.*]] = llvm.extractelement %[[HALVES]][%[[ONE]] : i32]
@@ -1098,7 +1098,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK: %[[PACK2:.*]] = llvm.insertelement %{{.*}}, %[[PACK1]][
   // CHECK: %[[PACK3:.*]] = llvm.insertelement %{{.*}}, %[[PACK2]][
   // CHECK: %[[WORD:.*]] = llvm.bitcast %[[PACK3]] : vector<4xi8> to i32
-  // CHECK: nvvm.stmatrix %{{[^,]+}}, %[[WORD]], %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b8>, layout = #nvvm.mma_layout<col>, shape = #nvvm.ld_st_matrix_shape<m = 16, n = 8>} : !llvm.ptr<3>, i32, i32, i32, i32
+  // CHECK: nvvm.stmatrix %{{[^,]+}}, %[[WORD]], %{{.*}} layout = <col>, shape = <m = 16, n = 8>, element_type = <b8> : !llvm.ptr<3>, i32, i32, i32, i32
   tt.func private @stmatrix_b8_minimise_conflicts(%A: !ttg.memdesc<512xi8, #shared, #smem, mutable>, %data: tensor<512xi8, #stb8>) {
     ttg.local_store %data, %A : tensor<512xi8, #stb8> -> !ttg.memdesc<512xi8, #shared, #smem, mutable>
     tt.return
@@ -1108,7 +1108,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK: %[[INPUT2:.*]] = llvm.extractvalue %{{.*}}[2]
   // CHECK: %[[PACK:.*]] = llvm.insertelement %[[INPUT2]], %{{.*}}[%[[ONE]] : i32]
   // CHECK: %[[WORD:.*]] = llvm.bitcast %[[PACK]] : vector<2xf16> to i32
-  // CHECK: nvvm.stmatrix %{{[^,]+}}, %[[WORD]], %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b16>, layout = #nvvm.mma_layout<col>, shape = #nvvm.ld_st_matrix_shape<m = 8, n = 8>} : !llvm.ptr<3>, i32, i32, i32, i32
+  // CHECK: nvvm.stmatrix %{{[^,]+}}, %[[WORD]], %{{.*}} layout = <col>, shape = <m = 8, n = 8>, element_type = <b16> : !llvm.ptr<3>, i32, i32, i32, i32
   tt.func private @stmatrix_b16_minimise_conflicts(%A: !ttg.memdesc<256xf16, #shared, #smem, mutable>, %data: tensor<256xf16, #b16>) {
     ttg.local_store %data, %A : tensor<256xf16, #b16> -> !ttg.memdesc<256xf16, #shared, #smem, mutable>
     tt.return
@@ -1123,7 +1123,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @stmatrix_b8_trans_linear
   tt.func public @stmatrix_b8_trans_linear(%data: tensor<1x1x1x16x256xf8E4M3FN, #linear3>) {
-    // CHECK-COUNT-2: nvvm.stmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b8>, layout = #nvvm.mma_layout<col>{{.*}}} : !llvm.ptr<3>, i32, i32, i32, i32
+    // CHECK-COUNT-2: nvvm.stmatrix %{{.*}}layout = <col>{{.*}}element_type = <b8> : !llvm.ptr<3>, i32, i32, i32, i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1x1x1x16x256xf8E4M3FN, #shared, #smem, mutable>
     ttg.local_store %data, %0 : tensor<1x1x1x16x256xf8E4M3FN, #linear3> -> !ttg.memdesc<1x1x1x16x256xf8E4M3FN, #shared, #smem, mutable>
     tt.return
