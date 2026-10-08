@@ -177,14 +177,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// COM: evict_first without an explicit cache modifier routes to L1IAR_L3C on
-// COM: the predicated load path.
+// COM: evict_first without an explicit cache modifier is ignored (Default) on
+// COM: the predicated load path (#8109).
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
   // CHECK-LABEL: load_evict_first_predicated
   tt.func @load_evict_first_predicated(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %mask: tensor<1024xi1, #blocked>) {
-    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1IAR_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
+    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
     %val = tt.load %ptr, %mask evictionPolicy = evict_first : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return
   }
@@ -224,10 +224,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 // COM: evict_first on the non-predicated scalar load path deliberately does NOT
 // COM: set the `nontemporal` flag on the underlying llvm.load. These loads are
 // COM: spatially coalesced across the subgroup; bypassing L1 defeats intra-line
-// COM: reuse and roughly doubles memory traffic (regression #7520). The eviction
-// COM: hint is honored via the LSC cache-control decoration on the predicated
-// COM: path (see load_evict_first_predicated), not via nontemporal. Do not
-// COM: re-add nontemporal here.
+// COM: reuse and roughly doubles memory traffic (regression #7520). The
+// COM: predicated path ignores evict_first too (see load_evict_first_predicated).
+// COM: Do not re-add nontemporal here.
 
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
@@ -250,14 +249,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
-// COM: descriptor_load with evict_first routes to L1IAR_L3C on the predicated path.
+// COM: descriptor_load with evict_first is ignored (Default) on the predicated path.
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
   // CHECK-LABEL: descriptor_load_evict_first_predicated
   tt.func @descriptor_load_evict_first_predicated(%desc: !tt.tensordesc<128xf32>) {
     %c0_i32 = arith.constant 0 : i32
-    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1IAR_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
+    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
     %val = tt.descriptor_load %desc[%c0_i32] evictionPolicy = evict_first : !tt.tensordesc<128xf32> -> tensor<128xf32, #blocked>
     tt.return
   }
