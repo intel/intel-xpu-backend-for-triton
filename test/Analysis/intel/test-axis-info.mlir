@@ -972,6 +972,144 @@ tt.func public @descriptor_load_constancy_propagation(
 
 // -----
 
+// Descriptor func args and tt.call results get a block-rank entry state, so
+// merging them with a local descriptor does not assert (#8170).
+// CHECK-LABEL: @desc_merge_select
+tt.func public @desc_merge_select(%arg0: !tt.tensordesc<128x128xf32>, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i1) {
+  %c1_i64 = arith.constant 1 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %c256_i32 = arith.constant 256 : i32
+  // CHECK: tt.make_tensor_descriptor {{.*}} => contiguity = [1, 128], divisibility = [1, 16], constancy = [1, 1], constant_value = <none>
+  %0 = tt.make_tensor_descriptor %arg1, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <128x128xf32>
+  // CHECK: arith.select {{.*}} => contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %1 = arith.select %arg2, %0, %arg0 : !tt.tensordesc<128x128xf32>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @desc_merge_if
+tt.func public @desc_merge_if(%arg0: !tt.tensordesc<128x128xf32>, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i1) {
+  %c1_i64 = arith.constant 1 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %c256_i32 = arith.constant 256 : i32
+  %0 = tt.make_tensor_descriptor %arg1, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <128x128xf32>
+  // CHECK: } => contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %1 = scf.if %arg2 -> (!tt.tensordesc<128x128xf32>) {
+    scf.yield %0 : !tt.tensordesc<128x128xf32>
+  } else {
+    scf.yield %arg0 : !tt.tensordesc<128x128xf32>
+  }
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @desc_merge_for
+tt.func public @desc_merge_for(%arg0: !tt.tensordesc<128x128xf32>, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %c256_i32 = arith.constant 256 : i32
+  %0 = tt.make_tensor_descriptor %arg1, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <128x128xf32>
+  // CHECK: } => contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %1 = scf.for %iv = %c0_i32 to %arg2 step %c1_i32 iter_args(%d = %arg0) -> (!tt.tensordesc<128x128xf32>) : i32 {
+    scf.yield %0 : !tt.tensordesc<128x128xf32>
+  }
+  tt.return
+}
+
+// -----
+
+module {
+tt.func private @make_desc(%arg0: !tt.ptr<f32>) -> !tt.tensordesc<128x128xf32> attributes {noinline = true} {
+  %c1_i64 = arith.constant 1 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %c256_i32 = arith.constant 256 : i32
+  %0 = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <128x128xf32>
+  tt.return %0 : !tt.tensordesc<128x128xf32>
+}
+
+// CHECK-LABEL: @desc_merge_call
+tt.func public @desc_merge_call(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i1) {
+  %c1_i64 = arith.constant 1 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %c256_i32 = arith.constant 256 : i32
+  %0 = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <128x128xf32>
+  %1 = tt.call @make_desc(%arg0) : (!tt.ptr<f32>) -> !tt.tensordesc<128x128xf32>
+  // CHECK: arith.select {{.*}} => contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %2 = arith.select %arg1, %0, %1 : !tt.tensordesc<128x128xf32>
+  tt.return
+}
+}
+
+// -----
+
+// A scalar hint only survives on a 1-D descriptor. On a rank-2 descriptor it is
+// dropped, and the arg can still be merged with a local descriptor.
+// CHECK-LABEL: @desc_arg_scalar_hint
+tt.func public @desc_arg_scalar_hint(%arg0: !tt.tensordesc<128x128xf32> {tt.divisibility = 16 : i32}, %arg1: !tt.tensordesc<128xf32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i1) {
+  %c1_i64 = arith.constant 1 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %c256_i32 = arith.constant 256 : i32
+  // CHECK: arith.select %arg3, %arg0, %arg0 {{.*}} => contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %0 = arith.select %arg3, %arg0, %arg0 : !tt.tensordesc<128x128xf32>
+  // CHECK: arith.select %arg3, %arg1, %arg1 {{.*}} => contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>
+  %1 = arith.select %arg3, %arg1, %arg1 : !tt.tensordesc<128xf32>
+  %2 = tt.make_tensor_descriptor %arg2, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <128x128xf32>
+  // CHECK: arith.select %arg3, %{{.*}}, %arg0 {{.*}} => contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %3 = arith.select %arg3, %2, %arg0 : !tt.tensordesc<128x128xf32>
+  tt.return
+}
+
+// -----
+
+// Dense block-rank hints on a descriptor arg are kept.
+// CHECK-LABEL: @desc_arg_dense_hints
+tt.func public @desc_arg_dense_hints(%arg0: !tt.tensordesc<128x128xf32> {tt.contiguity = dense<[1, 64]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>, tt.constancy = dense<[2, 1]> : tensor<2xi32>}, %arg1: i1) {
+  // CHECK: arith.select {{.*}} => contiguity = [1, 64], divisibility = [1, 16], constancy = [2, 1], constant_value = <none>
+  %0 = arith.select %arg1, %arg0, %arg0 : !tt.tensordesc<128x128xf32>
+  tt.return
+}
+
+// -----
+
+// A partially specified dense hint is kept; unit contiguity makes its
+// divisibility global, and the other vectors are all ones.
+// CHECK-LABEL: @desc_arg_partial_dense_hint
+tt.func public @desc_arg_partial_dense_hint(%arg0: !tt.tensordesc<128x128xf32> {tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg1: i1) {
+  // CHECK: arith.select {{.*}} => contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>
+  %0 = arith.select %arg1, %arg0, %arg0 : !tt.tensordesc<128x128xf32>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @desc_arg_rank_reducing_load
+tt.func public @desc_arg_rank_reducing_load(%arg0: !tt.tensordesc<1x1x64x64xf16>) {
+  %c0_i32 = arith.constant 0 : i32
+  // CHECK: tt.descriptor_load {{.*}} => contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %0 = tt.descriptor_load %arg0[%c0_i32, %c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x1x64x64xf16> -> tensor<64x64xf16>
+  tt.return
+}
+
+// -----
+
+// A shape count that differs from the block rank gives block-rank all ones.
+// CHECK-LABEL: @make_tensor_descriptor_rank_mismatch
+tt.func public @make_tensor_descriptor_rank_mismatch(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+  %c1_i64 = arith.constant 1 : i64
+  %c256_i32 = arith.constant 256 : i32
+  // CHECK: tt.make_tensor_descriptor {{.*}} => contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %0 = tt.make_tensor_descriptor %arg0, [%c256_i32], [%c1_i64] : <f32>, <128x128xf32>
+  // CHECK: tt.make_tensor_descriptor {{.*}} => contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %1 = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32, %c256_i32], [%c1_i64, %c1_i64, %c1_i64] : <f32>, <128x128xf32>
+  tt.return
+}
+
+// -----
+
 // CHECK-LABEL: @ptr_offset
 tt.func public @ptr_offset(%arg0: i32, %arg1: tensor<128x1xi32>) {
   // CHECK: contiguity = [1, 1], divisibility = [512, 512], constancy = [128, 1], constant_value = 512

@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from abc import abstractmethod
 from collections.abc import Iterator
@@ -147,6 +148,7 @@ class GHAWorkflow(GHAObj):
         return f"workflow: '{self.name}'('{self.path}')\nid: {self.id}\nrepo: '{self.repo}'\nbranch: '{self.branch}'\n"
 
     def get_latest_success_run(self) -> GHAWorkflowRun:
+        # No branch/status filters: filtered listings are search-backed and can return a stale subset of runs (#8318).
         data = CLIUtils.gh_json(
             [
                 "api",
@@ -156,18 +158,23 @@ class GHAWorkflow(GHAObj):
                 "--method",
                 "GET",
                 "--field",
-                f"branch={self.branch}",
-                "--field",
-                "status=completed",
-                "--field",
-                "per_page=50",
+                "per_page=100",
             ]
         )
-        runs = data["workflow_runs"]
-        for run_obj in runs:
-            if run_obj["conclusion"] == "success":
-                return GHAWorkflowRun.from_dict({"repo": self.repo, "branch": self.branch} | run_obj)
-        raise RuntimeError(f"No successful completed runs found for workflow_id={self.id} on branch='{self.branch}'.")
+        runs = [
+            run for run in data["workflow_runs"] if run["head_branch"] == self.branch and run["conclusion"] == "success"
+        ]
+        if not runs:
+            raise RuntimeError(
+                f"No successful completed runs found for workflow_id={self.id} on branch='{self.branch}'."
+            )
+        run_obj = max(runs, key=lambda run: run["run_number"])  # the listing order is not documented
+        print(
+            f"[info] Latest successful run: {run_obj['html_url']} (head_sha {run_obj['head_sha']}, "
+            f"created_at {run_obj['created_at']})",
+            file=sys.stderr,
+        )
+        return GHAWorkflowRun.from_dict({"repo": self.repo, "branch": self.branch} | run_obj)
 
     @classmethod
     def _list_all_workflows(cls, repo: str) -> list[dict]:

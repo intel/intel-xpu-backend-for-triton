@@ -20,3 +20,9 @@ tests/v1/worker/test_gpu_model_runner.py::test_update_states_pp_async_multi_requ
 tests/v1/worker/test_gpu_model_runner.py::test_update_config
 tests/v1/worker/test_gpu_model_runner.py::test_load_model_weights_inplace
 tests/v1/worker/test_gpu_model_runner.py::test_reload_weights_before_load_model
+
+# Nondeterministic top-3 logprobs output mismatch: https://github.com/intel/intel-xpu-backend-for-triton/issues/8321
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logprobs]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-processed_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-processed_logprobs]

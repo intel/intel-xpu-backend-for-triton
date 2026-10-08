@@ -125,12 +125,6 @@ struct ConvertLayoutOpConversion
       auto outVals = transferSwizzlingLocalMemImpl(
           loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase,
           sourceOp);
-      if (llvmElemTy.getIntOrFloatBitWidth() == 1) {
-        auto zero = b.int_val(8, 0);
-        for (auto &v : outVals)
-          v = b.icmp_ne(v, zero);
-        return outVals;
-      }
       for (auto &v : outVals) {
         v = b.trunc(llvmElemTy, v, LLVM::IntegerOverflowFlags::nuw);
       }
