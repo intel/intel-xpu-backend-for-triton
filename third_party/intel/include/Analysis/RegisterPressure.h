@@ -189,7 +189,7 @@ public:
   /// mode (one hardware thread executes a whole subgroup/warp of lanes sharing
   /// one register file).
   ///
-  /// Explicit sizes ("128", "192", "256", "512") map to the exact
+  /// Explicit sizes ("128", "160", "192", "256", "512") map to the exact
   /// per-hardware-thread budget, ignoring `unknownAssumption`. For "default"
   /// and "auto", returns the smallest or largest GRF size per
   /// `unknownAssumption` (see its documentation for which one a given caller

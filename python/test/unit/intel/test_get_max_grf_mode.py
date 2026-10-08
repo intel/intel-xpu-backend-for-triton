@@ -33,7 +33,7 @@ def test_get_max_grf_mode_non_cri():
 
 
 def test_get_grf_modes_cri():
-    assert get_grf_modes({"arch": "cri"}) == ("128", "192", "256", "512")
+    assert get_grf_modes({"arch": "cri"}) == ("128", "160", "192", "256", "512")
 
 
 def test_get_grf_modes_non_cri():

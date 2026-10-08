@@ -108,8 +108,8 @@ class XPUOptions:
 REBUILD_SPILL_BYTES_PER_THREAD = 1024
 
 # IGC build flag for each explicit `grf_mode` that has one. Only LTS passes these; elsewhere the mode is
-# requested through the kernel's SPV_INTEL_maximum_registers execution mode (see `make_llir`). '192' has no
-# such flag, so it requires the execution mode.
+# requested through the kernel's SPV_INTEL_maximum_registers execution mode (see `make_llir`). '160' and '192'
+# have no such flag, so they require the execution mode.
 GRF_MODE_BUILD_FLAGS = {
     '128': '-cl-intel-128-GRF-per-thread',
     '256': '-cl-intel-256-GRF-per-thread',
@@ -188,16 +188,16 @@ def get_max_grf_mode(arch: dict) -> str:
 def get_grf_modes(arch: dict) -> tuple[str, ...]:
     """
     Returns the explicit `grf_mode` register counts a target accepts, besides
-    'default' and 'auto'. "cri" additionally accepts 192 and 512, which every
-    other target (PVC, BMG, ...) rejects.
+    'default' and 'auto'. "cri" additionally accepts 160, 192 and 512, which
+    every other target (PVC, BMG, ...) rejects.
 
     Arguments:
       arch: the `target.arch` dict for the current device.
 
     Returns:
-      ("128", "192", "256", "512") if the target is "cri", otherwise ("128", "256").
+      ("128", "160", "192", "256", "512") if the target is "cri", otherwise ("128", "256").
     """
-    return ("128", "192", "256", "512") if arch.get("arch") == "cri" else ("128", "256")
+    return ("128", "160", "192", "256", "512") if arch.get("arch") == "cri" else ("128", "256")
 
 
 def accepts_default_grf(spill_size, is_lts):
@@ -780,7 +780,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # `make_zebin`'s retry below and to `driver.c`'s JIT retry via the
         # `load_binary` metadata argument.
         # Any mode above 128 GRFs lowers thread occupancy, so num_warps > 32 becomes unlaunchable.
-        if options.grf_mode in ('192', '256', '512') and options.num_warps > 32:
+        if options.grf_mode in ('160', '192', '256', '512') and options.num_warps > 32:
             raise RuntimeError(f"grf_mode = {options.grf_mode} cannot be used with num_warps > 32")
         # Off LTS a non-default mode is already carried by the SPIR-V execution mode set in `make_llir`.
         if is_lts and options.grf_mode != 'default':
