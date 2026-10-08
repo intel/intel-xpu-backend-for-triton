@@ -6,10 +6,15 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <Analysis/Utility.h>
+
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -17,6 +22,10 @@
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+
+static mlir::Type getPointeeTypeWithoutEncoding(mlir::Type type);
+static mlir::Type getI1SameShapeWithoutEncoding(mlir::Type type);
+static bool sameTensorShapeAndElementType(mlir::Type lhs, mlir::Type rhs);
 
 #define GET_OP_CLASSES
 #include "intel/include/Dialect/TritonIntelGPU/IR/Ops.cpp.inc"
@@ -26,6 +35,35 @@ using namespace mlir;
 //===----------------------------------------------------------------------===//
 // Helper functions
 //===----------------------------------------------------------------------===//
+
+static Type getPointeeTypeWithoutEncoding(Type type) {
+  auto pointeeType = triton::getPointeeType(type);
+  if (auto tensorTy = dyn_cast<RankedTensorType>(pointeeType))
+    return RankedTensorType::get(tensorTy.getShape(),
+                                 tensorTy.getElementType());
+  return pointeeType;
+}
+
+static Type getI1SameShapeWithoutEncoding(Type type) {
+  auto pointeeType = triton::getPointeeType(type);
+  auto i1Type = IntegerType::get(type.getContext(), 1);
+  if (auto tensorTy = dyn_cast<RankedTensorType>(pointeeType))
+    return RankedTensorType::get(tensorTy.getShape(), i1Type);
+  return i1Type;
+}
+
+static bool sameTensorShapeAndElementType(Type lhs, Type rhs) {
+  if (lhs == rhs)
+    return true;
+
+  auto lhsTensor = dyn_cast<RankedTensorType>(lhs);
+  auto rhsTensor = dyn_cast<RankedTensorType>(rhs);
+  if (!lhsTensor || !rhsTensor)
+    return false;
+
+  return lhsTensor.getShape() == rhsTensor.getShape() &&
+         lhsTensor.getElementType() == rhsTensor.getElementType();
+}
 
 /// Return the rank of an input tensor (or ptr to tensor).
 static unsigned getRank(Type type) {
@@ -98,6 +136,95 @@ void PrefetchOp::setPredicateOperand(Value pred) {
   getMaskMutable().assign(pred);
 }
 Type PrefetchOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
+
+//-- LoadShuffleBitcastOp --
+
+void LoadShuffleBitcastOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getPtrMutable(),
+                       mlir::triton::GlobalMemory::get());
+  if (getIsVolatile())
+    effects.emplace_back(MemoryEffects::Write::get());
+}
+
+Value LoadShuffleBitcastOp::getPredicateOperand() { return getMask(); }
+
+void LoadShuffleBitcastOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+
+Type LoadShuffleBitcastOp::getPredicateOperandTypeLike() {
+  return getPtr().getType();
+}
+
+LogicalResult LoadShuffleBitcastOp::verify() {
+  if (failed(mlir::triton::verifyCachePolicy(
+          *this, getCachePolicyAttr(),
+          mlir::triton::CachePolicyOperation::Load)))
+    return failure();
+
+  auto expectedType = getPointeeTypeWithoutEncoding(getPtr().getType());
+  if (!sameTensorShapeAndElementType(getResult().getType(), expectedType)) {
+    return emitOpError("result type must match the pointee tensor shape and "
+                       "element type of the pointer operand");
+  }
+
+  auto srcTensorType =
+      dyn_cast<RankedTensorType>(triton::getPointeeType(getPtr().getType()));
+  auto dstTensorType = dyn_cast<RankedTensorType>(getType());
+  if (srcTensorType && dstTensorType &&
+      !intel::cvtIsSubGroupReinterpret(srcTensorType, dstTensorType)) {
+    std::string srcEncoding;
+    llvm::raw_string_ostream srcEncodingStream(srcEncoding);
+    srcEncodingStream << srcTensorType.getEncoding();
+
+    std::string dstEncoding;
+    llvm::raw_string_ostream dstEncodingStream(dstEncoding);
+    dstEncodingStream << dstTensorType.getEncoding();
+
+    return emitOpError()
+           << "requires a supported sub-group reinterpret conversion, but got "
+              "pointee encoding "
+           << srcEncodingStream.str() << " and result encoding "
+           << dstEncodingStream.str();
+  }
+
+  return success();
+}
+
+// load(ptr, splat(1), ...)        -> load(ptr, ...)
+// load(ptr, splat(0), other, ...) -> other
+struct CanonicalizeMaskedLoadPattern
+    : public OpRewritePattern<LoadShuffleBitcastOp> {
+  CanonicalizeMaskedLoadPattern(MLIRContext *context)
+      : OpRewritePattern<LoadShuffleBitcastOp>(context, 1) {}
+
+  LogicalResult matchAndRewrite(LoadShuffleBitcastOp loadOp,
+                                PatternRewriter &rewriter) const override {
+    auto mask = loadOp.getMask();
+    if (!mask)
+      return failure();
+
+    if (matchPattern(mask, m_One())) {
+      rewriter.replaceOpWithNewOp<LoadShuffleBitcastOp>(
+          loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
+          loadOp.getCachePolicyAttr(), loadOp.getIsVolatile());
+      return success();
+    }
+
+    // Without "other", a false-masked load produces an undefined value.
+    if (!matchPattern(mask, m_Zero()) || !loadOp.getOther())
+      return failure();
+    rewriter.replaceOp(loadOp, loadOp.getOther());
+    return success();
+  }
+};
+
+void LoadShuffleBitcastOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.add<CanonicalizeMaskedLoadPattern>(context);
+}
 
 LogicalResult DescriptorPrefetchOp::verify() {
   auto descType = getDesc().getType();
