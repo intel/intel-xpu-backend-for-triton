@@ -13,6 +13,7 @@ def Proton_Dialect : Dialect {
   }];
 
   let dependentDialects = [];
+  let useStrictPropertiesInAssemblyFormat = 0;
 }
 
 #endif
