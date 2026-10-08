@@ -42,12 +42,8 @@ jobs:
     strategy:
       matrix:
         python:
-          - "3.10"
           - "3.11"
           - "3.12"
-          - "3.13"
-          - "3.14"
-          - "3.15.0-rc.1"
       fail-fast: false
       max-parallel: 2
     permissions:
@@ -83,6 +79,11 @@ jobs:
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a $GITHUB_ENV
           cd ..
 
+      - name: Enable stable ABI build for python>=3.12
+        if: "startsWith(matrix.python, '3.12')"
+        run: |
+          echo "TRITON_STABLE_ABI=ON" | tee -a $GITHUB_ENV
+
       - name: Identify Triton commit id
         run: |
           echo "TRITON_COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
@@ -95,7 +96,6 @@ jobs:
             python -m build --wheel --no-isolation && pip install dist/*.whl
 
       - name: Install torchvision package
-        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: torchvision
@@ -104,7 +104,6 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install torchaudio package
-        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: torchaudio
@@ -113,7 +112,6 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install torchao package
-        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: torchao
@@ -122,7 +120,6 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install timm package
-        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: timm
@@ -131,7 +128,6 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install transformers package
-        if: "!startsWith(matrix.python, '3.15')"
         run: |
           cd pytorch
           pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
@@ -149,6 +145,9 @@ jobs:
 
       - name: Sign PyTorch-related wheels with Sigstore (keyless)
         # SHA-pinned for supply-chain safety; comment tracks the human-readable version.
+        # Skipped for fork PRs: GitHub never grants id-token: write to pull_request
+        # runs from forked repos, so OIDC-based signing always fails there.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: sigstore/gh-action-sigstore-python@790bc6befb9d733738f18d8f895854b453640ec9 # v3.5.0
         with:
           inputs: wheels/*.whl

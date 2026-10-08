@@ -22,7 +22,7 @@ on:
       python_version:
         description: Python version
         type: string
-        default: "3.10"
+        default: "3.11"
       pytorch_repo:
         description: PyTorch repo (e.g. user/repo)
         type: string

@@ -87,6 +87,22 @@ index c7cf473427..02f245de36 100644
      if D is not None:
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
+diff --git a/tests/kernels/moe/test_block_fp8.py b/tests/kernels/moe/test_block_fp8.py
+--- a/tests/kernels/moe/test_block_fp8.py
++++ b/tests/kernels/moe/test_block_fp8.py
+@@ -226,7 +226,11 @@
+     # while fused_experts/the reference round SiLU to bf16 first. On large K/N this
+     # ~1-ULP gap pushes m_out past the base tol, so validate m_out against an
+     # fp32-SiLU reference — keeping the tight base tolerance, no widened override.
+-    if current_platform.is_rocm() and K >= 4096 and N >= 1024:
++    if (
++        (current_platform.is_rocm() or current_platform.is_xpu())
++        and K >= 4096
++        and N >= 1024
++    ):
+         with set_current_vllm_config(vllm_config):
+             ref_out_m = torch_w8a8_block_fp8_moe(
+                 a,
 diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
 index 8d6deac4f0..776722a6e8 100644
 --- a/tests/kernels/moe/test_moe.py

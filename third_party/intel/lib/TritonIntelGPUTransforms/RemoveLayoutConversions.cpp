@@ -292,7 +292,7 @@ private:
   SmallVector<Value> propagateToUsers(DenseMap<Value, Attribute> &values,
                                       Value value, Attribute &layout);
   void propagateLayout(DenseMap<Value, Attribute> &values);
-  Value getValueAs(Value value, Attribute encoding);
+  Value getValueAs(Value value, Attribute encoding, Operation *user);
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
   Operation *rewriteOp(Operation *op, Attribute encoding);
@@ -303,8 +303,9 @@ private:
   // Existing tuples of (value, layout) that needs to be updated when recreating
   // scf ops. This prevents keeping track of Values that have been delete when
   // rewriting slices. The Value maybe mapped to different attributes in remove
-  // layout.
-  DenseMap<Value, SmallVector<Attribute>> mappedValues;
+  // layout. A set, because a duplicate encoding would make updateRematMapping
+  // look up a key it has already moved.
+  DenseMap<Value, llvm::SmallSetVector<Attribute, 4>> mappedValues;
   // map of the values remat based on encoding.
   DenseMap<std::pair<Value, Attribute>, Value> rematMapping;
   // DenseMap<std::pair<Operation*, Attribute>, Operation*>
@@ -321,10 +322,7 @@ void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
                                             Value newV) {
   LDBG("addRematValue " << old << " encoding " << encoding << " " << newV);
   rematMapping[{old, encoding}] = newV;
-  if (mappedValues.contains(old))
-    mappedValues[old].push_back(encoding);
-  else
-    mappedValues[old] = {encoding};
+  mappedValues[old].insert(encoding);
 }
 
 // Remove unneeded values now that we are done with the rematMapping.
@@ -1151,7 +1149,7 @@ void LayoutRematerialization::updateRematMapping(
   for (auto [old, newV] : values) {
     auto it = mappedValues.find(old);
     if (it != mappedValues.end()) {
-      SmallVector<Attribute> encodings = it->second;
+      llvm::SmallSetVector<Attribute, 4> encodings = it->second;
       for (Attribute encoding : encodings) {
         auto rematIt = rematMapping.find({old, encoding});
         assert(rematIt != rematMapping.end());
@@ -1168,10 +1166,7 @@ void LayoutRematerialization::updateRematMapping(
         rematMapping[{newV, encoding}] = replacedValue;
       }
       mappedValues.erase(it);
-      if (mappedValues.contains(newV))
-        mappedValues[newV].append(encodings);
-      else
-        mappedValues[newV] = std::move(encodings);
+      mappedValues[newV].insert(encodings.begin(), encodings.end());
     }
   }
 }
@@ -1180,9 +1175,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
                                            ttg::ConvertLayoutOp convertOp,
                                            IRMapping &mapping) {
-  std::optional<bool> enableForLoopSupport =
-      mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
-          "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP"));
+  bool enableForLoopSupport = mlir::triton::tools::getBoolEnv(
+      "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP");
 
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.
@@ -1238,7 +1232,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   SmallVector<std::tuple<Value, Value>> replacements;
 
   SmallVector<Operation *> deadOps;
-  IRRewriter builder(slice.begin()->getContext());
+  // Hoisting or remat reuse can legitimately leave the slice empty.
+  IRRewriter builder(convertOp.getContext());
   for (Operation *op : opsToRewrite) {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       SmallVector<Value> newOperands;
@@ -1376,11 +1371,15 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       addRematValue(old, it->second, newV);
     }
   }
-  // Check mapping and see if there are existing convertOps on the old Argument
-  convertOp.replaceAllUsesWith(mapping.lookup(convertOp.getSrc()));
+  // Add the rewritten convert to the replacements so it is removed from the
+  // remat maps and has its uses replaced like the other ops we delete.
+  replacements.emplace_back(convertOp.getResult(),
+                            mapping.lookup(convertOp.getSrc()));
   opToDelete.insert(convertOp);
 
   updateRematMapping(replacements);
+  assert(!mappedValues.contains(convertOp.getResult()) &&
+         "rewritten conversion remains in rematerialization maps");
   for (auto &kv : replacements) {
     builder.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
   }
@@ -1466,13 +1465,22 @@ void LayoutRematerialization::propagateLayout(
   }
 }
 
-Value LayoutRematerialization::getValueAs(Value value, Attribute encoding) {
+Value LayoutRematerialization::getValueAs(Value value, Attribute encoding,
+                                          Operation *user) {
   return getValueAsImpl(
       value, encoding,
-      [this](Value v, Attribute enc) {
+      [this, user](Value v, Attribute enc) {
+        // Only reuse an existing remat if it dominates the op being rewritten;
+        // otherwise fall back to `v`, which getValueAsImpl converts right after
+        // its definition if the encoding differs. Checking `user` stands in for
+        // checking its clone because rewriteOp inserts the clone immediately
+        // before `user`.
         Value rematValue = getRematValue(v, enc);
-        if (rematValue)
+        if (!rematValue)
+          return v;
+        if (domInfo.properlyDominates(rematValue, user))
           return rematValue;
+        LDBG("getValueAs: skip non-dominating remat " << rematValue);
         return v;
       },
       [this](Value v, Attribute enc, Value converted) {
@@ -1488,8 +1496,8 @@ Operation *LayoutRematerialization::cloneElementwise(OpBuilder &rewriter,
       [](Operation *op, Attribute encoding) {
         return ttgi::inferSrcEncoding(op, encoding);
       },
-      [this](Value value, Attribute encoding) {
-        return getValueAs(value, encoding);
+      [this, op](Value value, Attribute encoding) {
+        return getValueAs(value, encoding, op);
       });
 }
 
@@ -1568,6 +1576,12 @@ void LayoutRematerialization::forwardPropagateRemat(
         if (!valuesToPropagate.contains(operand))
           continue;
         Value newOperand = getRematValue(operand, valuesToPropagate[operand]);
+        // A surviving convert recorded as a remat can sit after the assert.
+        if (!newOperand || !domInfo.properlyDominates(newOperand, assertOp)) {
+          LDBG("forwardPropagateRemat: no dominating remat for assert operand "
+               << operand);
+          continue;
+        }
         assertOp->setOperand(0, newOperand);
       } else if (auto descStore = dyn_cast<tt::DescriptorStoreOp>(&op)) {
         // Only need to deal with the store value
@@ -1575,10 +1589,10 @@ void LayoutRematerialization::forwardPropagateRemat(
         if (!valuesToPropagate.contains(operand))
           continue;
         Value newOperand = getRematValue(operand, valuesToPropagate[operand]);
-        if (!newOperand) {
+        if (!newOperand || !domInfo.properlyDominates(newOperand, descStore)) {
           LLVM_DEBUG({
-            DBGS()
-                << "forwardPropagateRemat no remet src value for desc store:\n";
+            DBGS() << "forwardPropagateRemat no dominating remat src value for "
+                      "desc store:\n";
             DBGS().indent(2) << "origin src: " << operand << "\n";
             DBGS().indent(2)
                 << "to layout:" << valuesToPropagate[operand] << "\n";
