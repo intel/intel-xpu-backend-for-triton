@@ -1,0 +1,111 @@
+{
+  "device_name": "Intel(R) Arc(TM) B580 Graphics",
+  "entries": [
+    {
+      "config": {
+        "block_m": 128,
+        "grf_mode": "default",
+        "heads_per_program": "MAX",
+        "num_stages": 1,
+        "num_warps": 8,
+        "tile_size": 32
+      },
+      "key": {
+        "is_3d": false,
+        "kv_len_bucket": 2,
+        "num_segments": 1,
+        "num_seqs": 1,
+        "q_len_bucket": 3,
+        "query_work": 262144
+      }
+    },
+    {
+      "config": {
+        "block_m": 16,
+        "grf_mode": "256",
+        "heads_per_program": "MAX",
+        "num_stages": 2,
+        "num_warps": 8,
+        "tile_size": 64
+      },
+      "key": {
+        "is_3d": true,
+        "kv_len_bucket": 3,
+        "num_segments": 16,
+        "num_seqs": 8,
+        "q_len_bucket": 0,
+        "query_work": 512
+      }
+    },
+    {
+      "config": {
+        "block_m": 16,
+        "grf_mode": "256",
+        "heads_per_program": "MAX",
+        "num_stages": 2,
+        "num_warps": 8,
+        "tile_size": 64
+      },
+      "key": {
+        "is_3d": true,
+        "kv_len_bucket": 4,
+        "num_segments": 16,
+        "num_seqs": 4,
+        "q_len_bucket": 0,
+        "query_work": 256
+      }
+    },
+    {
+      "config": {
+        "block_m": 128,
+        "grf_mode": "256",
+        "heads_per_program": "MAX",
+        "num_stages": 1,
+        "num_warps": 8,
+        "tile_size": 32
+      },
+      "key": {
+        "is_3d": false,
+        "kv_len_bucket": 2,
+        "num_segments": 1,
+        "num_seqs": 4,
+        "q_len_bucket": 3,
+        "query_work": 524288
+      }
+    },
+    {
+      "config": {
+        "block_m": 16,
+        "grf_mode": "default",
+        "heads_per_program": "MAX",
+        "num_stages": 2,
+        "num_warps": 8,
+        "tile_size": 64
+      },
+      "key": {
+        "is_3d": false,
+        "kv_len_bucket": 3,
+        "num_segments": 1,
+        "num_seqs": 256,
+        "q_len_bucket": 2,
+        "query_work": 146944
+      }
+    }
+  ],
+  "static_key": {
+    "block_size": 64,
+    "head_size": 128,
+    "k_dtype": "float8_e4m3fn",
+    "kv_layout": "contiguous",
+    "kv_quant_mode": 0,
+    "num_queries_per_kv": 8,
+    "out_dtype": "bfloat16",
+    "q_dtype": "float8_e4m3fn",
+    "q_layout": "contiguous",
+    "sliding_window": 0,
+    "use_softcap": false,
+    "use_td": true,
+    "v_dtype": "float8_e4m3fn"
+  },
+  "triton_version": "3.9.0"
+}
