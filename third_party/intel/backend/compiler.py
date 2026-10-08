@@ -107,8 +107,9 @@ class XPUOptions:
 # `accepts_default_grf`.
 REBUILD_SPILL_BYTES_PER_THREAD = 1024
 
-# IGC build flag for each explicit `grf_mode`. Only LTS passes these; elsewhere the mode is requested
-# through the kernel's SPV_INTEL_maximum_registers execution mode (see `make_llir`).
+# IGC build flag for each explicit `grf_mode` that has one. Only LTS passes these; elsewhere the mode is
+# requested through the kernel's SPV_INTEL_maximum_registers execution mode (see `make_llir`). '160' and '192'
+# have no such flag, so they require the execution mode.
 GRF_MODE_BUILD_FLAGS = {
     '128': '-cl-intel-128-GRF-per-thread',
     '256': '-cl-intel-256-GRF-per-thread',
@@ -182,6 +183,21 @@ def get_max_grf_mode(arch: dict) -> str:
       "512" if the target is "cri", otherwise "256".
     """
     return "512" if arch.get("arch") == "cri" else "256"
+
+
+def get_grf_modes(arch: dict) -> tuple[str, ...]:
+    """
+    Returns the explicit `grf_mode` register counts a target accepts, besides
+    'default' and 'auto'. "cri" additionally accepts 160, 192 and 512, which
+    every other target (PVC, BMG, ...) rejects.
+
+    Arguments:
+      arch: the `target.arch` dict for the current device.
+
+    Returns:
+      ("128", "160", "192", "256", "512") if the target is "cri", otherwise ("128", "256").
+    """
+    return ("128", "160", "192", "256", "512") if arch.get("arch") == "cri" else ("128", "256")
 
 
 def accepts_default_grf(spill_size, is_lts):
@@ -348,6 +364,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
         args["max_grf_mode"] = self.properties['max_grf_mode']
+        grf_mode = args.get("grf_mode", XPUOptions.grf_mode)
+        if grf_mode not in ("default", "auto") and grf_mode not in (grf_modes := get_grf_modes(self.target.arch)):
+            raise RuntimeError(f"Unknown grf_mode: {grf_mode}; expected 'default', 'auto' or one of {grf_modes} "
+                               f"on {self.target.arch.get('arch')}")
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         if "in_loop_sink" not in args:
@@ -723,7 +743,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.post_process_llir(llvm_mod)
         # An explicit GRF mode is requested on the kernel itself (SPV_INTEL_maximum_registers); only LTS, whose
         # translator does not enable that extension, keeps passing it as a build flag in `make_spv`.
-        if options.grf_mode in GRF_MODE_BUILD_FLAGS and not cls.is_lts(driver_version):
+        if options.grf_mode != 'default' and not cls.is_lts(driver_version):
             intel.set_maximum_registers(llvm_mod, options.grf_mode)
 
         # Get some metadata
@@ -759,14 +779,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Triton and the Gluon stage lists uniformly. Carried downstream to
         # `make_zebin`'s retry below and to `driver.c`'s JIT retry via the
         # `load_binary` metadata argument.
-        if options.grf_mode in ('256', '512') and options.num_warps > 32:
+        # Any mode above 128 GRFs lowers thread occupancy, so num_warps > 32 becomes unlaunchable.
+        if options.grf_mode in ('160', '192', '256', '512') and options.num_warps > 32:
             raise RuntimeError(f"grf_mode = {options.grf_mode} cannot be used with num_warps > 32")
-        if options.grf_mode in GRF_MODE_BUILD_FLAGS:
-            # Off LTS the mode is already carried by the SPIR-V execution mode set in `make_llir`.
-            if is_lts:
-                metadata["build_flags"] += f" {GRF_MODE_BUILD_FLAGS[options.grf_mode]}"
-        elif options.grf_mode != 'default':
-            raise RuntimeError(f"Unknown grf_mode: {options.grf_mode}")
+        # Off LTS a non-default mode is already carried by the SPIR-V execution mode set in `make_llir`.
+        if is_lts and options.grf_mode != 'default':
+            if options.grf_mode not in GRF_MODE_BUILD_FLAGS:
+                raise RuntimeError(f"grf_mode = {options.grf_mode} is not supported on the LTS driver")
+            metadata["build_flags"] += f" {GRF_MODE_BUILD_FLAGS[options.grf_mode]}"
 
         if knobs.intel.disable_igc_opt:
             metadata["build_flags"] += " -cl-opt-disable"

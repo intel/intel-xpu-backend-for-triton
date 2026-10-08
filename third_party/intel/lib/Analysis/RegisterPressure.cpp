@@ -47,16 +47,16 @@ static constexpr unsigned GRFRegisterSizeBytes = 32;
 static constexpr unsigned SmallestGRFModeBytes = 128 * GRFRegisterSizeBytes;
 static constexpr unsigned LargestGRFModeBytes = 512 * GRFRegisterSizeBytes;
 
-/// Maps an explicit GRF mode string ("128"/"256"/"512") to its exact
-/// per-hardware-thread budget in bytes (one hardware thread executes a whole
-/// subgroup/warp of lanes sharing one register file). Returns 0 for anything
-/// else ("default", "auto", empty, or an unrecognized value): 0 bytes is
-/// never a valid budget, so it is an unambiguous "not an explicit mode"
+/// Maps an explicit GRF mode string ("128"/"160"/"192"/"256"/"512") to its
+/// exact per-hardware-thread budget in bytes (one hardware thread executes a
+/// whole subgroup/warp of lanes sharing one register file). Returns 0 for
+/// anything else ("default", "auto", empty, or an unrecognized value): 0 bytes
+/// is never a valid budget, so it is an unambiguous "not an explicit mode"
 /// signal callers can test directly, without needing std::optional.
 static unsigned explicitGRFModeToBytes(StringRef grfMode) {
   unsigned mode = 0;
   if (grfMode.getAsInteger(10, mode) ||
-      (mode != 128 && mode != 256 && mode != 512))
+      (mode != 128 && mode != 160 && mode != 192 && mode != 256 && mode != 512))
     return 0;
   return mode * GRFRegisterSizeBytes;
 }

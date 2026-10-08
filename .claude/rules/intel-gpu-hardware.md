@@ -63,7 +63,7 @@ symmetric there.
 
 ### Constraints
 - **256-GRF and 512-GRF require `num_warps ≤ 32`** (256-GRF halves, and 512-GRF quarters, the hardware threads available per subslice — see the occupancy column in `.claude/reference/hardware-reference.md`'s GRF mode table — capping the launchable work-group size below what `num_warps > 32` needs)
-- `grf_mode` options: `'default'`, `'128'`, `'256'`, `'512'`, `'auto'`
+- `grf_mode` options: `'default'`, `'auto'`, `'128'`, `'256'`; CRI also accepts `'160'`, `'192'` and `'512'` (`get_grf_modes()` in `compiler.py`)
 
 ## Subgroups and SIMD Execution
 
@@ -183,7 +183,7 @@ optimize_module(O3) → post_process_llir
 ```
 
 ### Stage 4: SPIR-V
-LLVM IR → SPIR-V translation via `translate_to_spirv()`. An explicit `grf_mode` (`'128'`/`'256'`/`'512'`/`'auto'`) is carried by the kernel's `SPV_INTEL_maximum_registers` execution mode (`!MaximumRegisters` metadata set in `make_llir`); only LTS still adds the `-cl-intel-*-GRF-*` build flags. The default-mode large-GRF retry still uses build flags.
+LLVM IR → SPIR-V translation via `translate_to_spirv()`. An explicit `grf_mode` (`'128'`/`'160'`/`'192'`/`'256'`/`'512'`/`'auto'`) is carried by the kernel's `SPV_INTEL_maximum_registers` execution mode (`!MaximumRegisters` metadata set in `make_llir`); only LTS still adds the `-cl-intel-*-GRF-*` build flags (and rejects `'160'` and `'192'`, which have none). The default-mode large-GRF retry still uses build flags.
 
 ### Stage 5: ZEBIN
 SPIR-V → native binary via `ocloc compile`. Auto-GRF spill detection may trigger recompilation.

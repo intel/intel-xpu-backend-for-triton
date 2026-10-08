@@ -20,7 +20,7 @@ policy treats differently.
 Pure `dict -> str`, no device access, so this needs no XPU and no `device`
 fixture.
 """
-from triton.backends.intel.compiler import get_max_grf_mode
+from triton.backends.intel.compiler import get_grf_modes, get_max_grf_mode
 
 
 def test_get_max_grf_mode_cri():
@@ -30,3 +30,18 @@ def test_get_max_grf_mode_cri():
 def test_get_max_grf_mode_non_cri():
     assert get_max_grf_mode({"arch": "bmg"}) == "256"
     assert get_max_grf_mode({"arch": "pvc"}) == "256"
+
+
+def test_get_grf_modes_cri():
+    assert get_grf_modes({"arch": "cri"}) == ("128", "160", "192", "256", "512")
+
+
+def test_get_grf_modes_non_cri():
+    assert get_grf_modes({"arch": "bmg"}) == ("128", "256")
+    assert get_grf_modes({"arch": "pvc"}) == ("128", "256")
+
+
+def test_get_grf_modes_includes_max_grf_mode():
+    # The automatic escalation target must itself be a mode the target accepts.
+    for arch in ("cri", "bmg", "pvc"):
+        assert get_max_grf_mode({"arch": arch}) in get_grf_modes({"arch": arch})
