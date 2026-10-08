@@ -263,7 +263,6 @@ private:
                                         DotScaledOp scaledDotOp, int opIdx,
                                         FloatType computeType) const {
     auto v = opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
-    auto res = scaledDotOp.getD();
     auto scale = opIdx == 0 ? scaledDotOp.getAScale() : scaledDotOp.getBScale();
     auto isFp4 =
         ScaleDotElemType::E2M1 ==
@@ -275,13 +274,9 @@ private:
 
     // 0) Upcast value to computeType (fp16/bf16)
     if (isFp4) {
-      auto resShape = res.getType().getShape();
-      auto vShape = v.getType().getShape();
-      auto packDim = kDim;
-      if ((opIdx == 0 && resShape[rank - 2] != vShape[rank - 2]) ||
-          (opIdx == 1 && resShape[rank - 1] != vShape[rank - 1])) {
-        packDim = (packDim + 1) % 2;
-      }
+      bool kPack =
+          opIdx == 0 ? scaledDotOp.getLhsKPack() : scaledDotOp.getRhsKPack();
+      int packDim = kPack ? kDim : (opIdx == 0 ? rank - 2 : rank - 1);
       v = Fp4ToFpOp::create(rewriter, loc, v, computeType, packDim);
     } else {
       auto vType16 = v.getType().clone(computeType);

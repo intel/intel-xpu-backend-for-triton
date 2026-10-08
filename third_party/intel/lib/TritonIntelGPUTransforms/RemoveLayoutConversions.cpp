@@ -1902,12 +1902,26 @@ static SetVector<Value> getNonSliceOnlyValues(const SetVector<Value> &slice,
   return nonSliceOnlyValues;
 }
 
-/// Determine whether rematerializing \p slice is beneficial given that it will
-/// eliminate \p convertOp and require creating new convert ops with cost \p
-/// newCvtCost.
+/// Ratio by which rematerializing \p result into \p rematEncoding increases
+/// the number of unique elements each thread processes (at least 1). A layout
+/// that replicates the tensor across lanes or warps makes every elementwise op
+/// in the slice run once per replica (triton-lang/triton#10129, #8272).
+static unsigned getCostFactor(Value result, Attribute rematEncoding) {
+  if (!rematEncoding)
+    return 1;
+  auto tensorType = cast<RankedTensorType>(result.getType());
+  unsigned oldElemsPerThread = ttg::getUniqueElemsPerThread(tensorType);
+  unsigned newElemsPerThread =
+      ttg::getUniqueElemsPerThread(rematEncoding, tensorType.getShape());
+  return std::max(1u, newElemsPerThread / oldElemsPerThread);
+}
+
+/// Determine whether rematerializing \p slice into the encodings in \p layout
+/// is beneficial given that it will eliminate \p convertOp and require creating
+/// new convert ops with cost \p newCvtCost.
 static bool isRematBeneficial(
     ttg::ConvertLayoutOp convertOp, const SetVector<Value> &slice,
-    int64_t newCvtCost,
+    const DenseMap<Value, Attribute> &layout, int64_t newCvtCost,
     DenseMap<std::pair<Type, Attribute>, int64_t> &convertCostCache) {
   auto nonSliceOnlyValues = getNonSliceOnlyValues(slice, convertOp);
 
@@ -1922,25 +1936,37 @@ static bool isRematBeneficial(
 
   for (Operation *op : sliceOps) {
     auto dialect = op->getDialect();
-    // If all of the results of the op are only used within the slice, when we
-    // rematerialise, this operation does not get duplicated so it does not
-    // contribute to our cost model.
     bool isOpUsedOutsideSlice = llvm::any_of(op->getResults(), [&](Value v) {
       return nonSliceOnlyValues.contains(v);
     });
-    if (!isOpUsedOutsideSlice)
-      continue;
 
     if (isa<arith::ConstantOp>(op)) {
       continue;
-    } else if (isa<tt::LoadOp, tt::DescriptorLoadOp>(op) ||
-               isa<ttg::LocalLoadOp>(op)) {
+    } else if (isa<arith::ArithDialect, math::MathDialect>(dialect)) {
+      // An elementwise op used outside the slice is duplicated and pays its
+      // full cost in the new layout; a slice-only op is merely relabeled and
+      // pays only the per-thread work the new layout adds over the old one.
+      int64_t multiplier = isExpensiveMathOp(op) ? 8 : 1;
+      for (Value result : op->getResults()) {
+        int64_t cost = multiplier * getByteCount(result);
+        unsigned factor = getCostFactor(result, layout.lookup(result));
+        if (!isOpUsedOutsideSlice)
+          factor -= 1;
+        rematerialisationCost += cost * factor;
+      }
+      continue;
+    }
+
+    // If all of the results of the op are only used within the slice, when we
+    // rematerialise, this operation does not get duplicated so it does not
+    // contribute to our cost model.
+    if (!isOpUsedOutsideSlice)
+      continue;
+
+    if (isa<tt::LoadOp, tt::DescriptorLoadOp>(op) ||
+        isa<ttg::LocalLoadOp>(op)) {
       for (Value result : op->getResults())
         rematerialisationCost += 8 * getByteCount(result);
-    } else if (isa<arith::ArithDialect, math::MathDialect>(dialect)) {
-      int64_t multiplier = isExpensiveMathOp(op) ? 8 : 1;
-      for (Value result : op->getResults())
-        rematerialisationCost += multiplier * getByteCount(result);
     } else if (isa<tt::ReduceOp>(op)) {
       auto reduceOp = dyn_cast<tt::ReduceOp>(op);
       ReduceOpHelper helper(reduceOp);
@@ -2074,7 +2100,7 @@ void LayoutRematerialization::backwardRematerialization(
   }
 
   // 3. Determine whether rematerialisation is beneficial.
-  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0,
+  if (!isRematBeneficial(convertOp, slice, layout, /*newCvtCost=*/0,
                          convertCostCache)) {
     LDBG("  skipped rematerialization");
     return;
@@ -2386,7 +2412,8 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   }
   int64_t newCvtCost = getConvertCost(extOrBroadcastOp->getOperand(0),
                                       srcEncoding, convertCostCache);
-  if (!isRematBeneficial(convertOp, slice, newCvtCost, convertCostCache))
+  if (!isRematBeneficial(convertOp, slice, layout, newCvtCost,
+                         convertCostCache))
     return;
 
   // Move the convert before the ext op and rewrite the slice.
@@ -2540,7 +2567,7 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   // when the duplication cost exceeds the convert cost. Use newCvtCost=0
   // (matching backwardRematerialization pattern) since we're hoisting into
   // branches where the convert would be eliminated.
-  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0,
+  if (!isRematBeneficial(convertOp, slice, layout, /*newCvtCost=*/0,
                          convertCostCache)) {
     // Clean up orphaned convert ops created by hoistRemat before returning.
     for (auto it = newConverts.rbegin(); it != newConverts.rend(); ++it)
