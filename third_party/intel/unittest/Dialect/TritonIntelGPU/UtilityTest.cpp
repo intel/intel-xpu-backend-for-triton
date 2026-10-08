@@ -11,14 +11,21 @@
 // divisible.
 
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Parser/Parser.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 #include <gtest/gtest.h>
 
 using namespace mlir;
 using namespace mlir::triton::gpu::intel;
+namespace tt = mlir::triton;
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
@@ -50,6 +57,20 @@ protected:
   MLIRContext ctx;
   OpBuilder builder{&ctx};
   OwningOpRef<ModuleOp> module;
+};
+
+class IntelLoadShuffleBitcastOpTest : public ::testing::Test {
+public:
+  void SetUp() override {
+    ctx.getOrLoadDialect<arith::ArithDialect>();
+    ctx.getOrLoadDialect<tt::TritonDialect>();
+    ctx.getOrLoadDialect<ttgi::TritonIntelGPUDialect>();
+    builder = std::make_unique<OpBuilder>(&ctx);
+  }
+
+protected:
+  MLIRContext ctx;
+  std::unique_ptr<OpBuilder> builder;
 };
 
 TEST_F(IsDivisibleTest, NonPositiveDivisorIsRejected) {
@@ -100,6 +121,45 @@ TEST_F(IsDivisibleTest, SelectRequiresBothValues) {
   // The condition is not consulted, even though it is the constant `true`.
   EXPECT_FALSE(isDivisible(select(constant(48, 32), constant(1, 32)), 16));
   EXPECT_FALSE(isDivisible(select(constant(1, 32), constant(48, 32)), 16));
+}
+
+TEST_F(IntelLoadShuffleBitcastOpTest, ReportsReadAndVolatileWriteEffects) {
+  auto module = parseSourceString<ModuleOp>(R"mlir(
+module {
+  tt.func @test(%arg0: !tt.ptr<f16>) {
+    %0 = ttig.load_shuffle_bitcast %arg0 : !tt.ptr<f16>
+    tt.return
+  }
+}
+)mlir",
+                                            &ctx);
+  ASSERT_TRUE(module) << "failed to parse test module";
+
+  Operation *loadOp = nullptr;
+  module->walk([&](Operation *op) {
+    if (op->getName().getStringRef() == "ttig.load_shuffle_bitcast")
+      loadOp = op;
+  });
+  ASSERT_NE(loadOp, nullptr);
+
+  auto effectOp = dyn_cast<MemoryEffectOpInterface>(loadOp);
+  ASSERT_TRUE(effectOp);
+
+  SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effects;
+  effectOp.getEffects(effects);
+  EXPECT_TRUE(llvm::any_of(effects, [](const auto &effect) {
+    return isa<MemoryEffects::Read>(effect.getEffect());
+  }));
+  EXPECT_FALSE(llvm::any_of(effects, [](const auto &effect) {
+    return isa<MemoryEffects::Write>(effect.getEffect());
+  }));
+
+  loadOp->setAttr("isVolatile", builder->getBoolAttr(true));
+  effects.clear();
+  effectOp.getEffects(effects);
+  EXPECT_TRUE(llvm::any_of(effects, [](const auto &effect) {
+    return isa<MemoryEffects::Write>(effect.getEffect());
+  }));
 }
 
 } // namespace
