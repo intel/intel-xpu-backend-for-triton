@@ -1030,6 +1030,11 @@ TEST_F(SymbolicBoundsTest, MaskDepthCapTurnsALongChainUnknown) {
 
 // A subtree of height 40 reached near the top is within the cap; reached below
 // a 40-deep chain it is not. Both uses share the subtree.
+//
+// The tests built on this rely on 41 <= kMaxMaskDepth < 80. The shallow root
+// adds one edge above the subtree, so its deepest node sits at depth 41 (at a
+// cap of 40 even the shallow query would be cut); the deep chain puts the
+// subtree's bottom at depth 80.
 static std::string sharedSubtreeIR() {
   return funcOf(
       "", "  %t = arith.constant true\n" + chainOps("s", 40) +
@@ -1048,20 +1053,34 @@ static std::string sharedSubtreeIR() {
 TEST_F(SymbolicBoundsTest, MaskReuseShallowThenDeep) {
   parse(sharedSubtreeIR());
   Value shallow = get("shallow"), deep = get("deep");
-  EXPECT_EQ(tt::intel::toString(prover->proveTrue(shallow, at(shallow))),
+  // One context for both queries, so the subtree is looked up under the same
+  // key. With each value's own defining op as the point, the memo key differs
+  // between the queries and nothing is ever reused.
+  tt::intel::QueryContext shared{&func().getBody().front().front(), nullptr};
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(shallow, shared)),
             "Satisfied");
+  unsigned afterShallow = prover->numMaskEvaluations();
   // The cached subtree is within the cap where it was computed; reached from
   // here it is not, and the cap must still apply.
-  EXPECT_EQ(tt::intel::toString(prover->proveTrue(deep, at(deep))), "Unknown");
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(deep, shared)), "Unknown");
+  // The subtree is found in the memo and rejected for its height, so only the
+  // deep chain's own 40 conjunctions are evaluated. Recomputing the subtree
+  // instead (a key that no longer matches) would cost 66. The verdict above
+  // catches a cap bypass; this count catches a lookup that never hits.
+  EXPECT_EQ(prover->numMaskEvaluations() - afterShallow, 40u);
 }
 
 TEST_F(SymbolicBoundsTest, MaskReuseDeepThenShallow) {
   parse(sharedSubtreeIR());
   Value shallow = get("shallow"), deep = get("deep");
-  EXPECT_EQ(tt::intel::toString(prover->proveTrue(deep, at(deep))), "Unknown");
+  // One context for both queries, so the subtree is looked up under the same
+  // key. With each value's own defining op as the point, the memo key differs
+  // between the queries and nothing is ever reused.
+  tt::intel::QueryContext shared{&func().getBody().front().front(), nullptr};
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(deep, shared)), "Unknown");
   // The deep failure was a truncation, not an answer about the subtree, so it
   // must not make the shallow query fail.
-  EXPECT_EQ(tt::intel::toString(prover->proveTrue(shallow, at(shallow))),
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(shallow, shared)),
             "Satisfied");
 }
 
