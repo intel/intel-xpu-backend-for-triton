@@ -1706,34 +1706,13 @@ bool conditionImplies(const BoundCondition &stronger,
 /// "not provably wider", not "narrower" - the two could be genuinely
 /// incomparable (different subjects), which the caller's tie-break handles.
 bool admitsAtLeast(const BoundProof &a, const BoundProof &b) {
-  for (const BoundCondition &bc : b.conditions) {
-    // Same subject is not enough to match: a subject commonly carries both
-    // an AtLeast and an AtMost (a wrap guard's two sides), and matching `bc`
-    // against whichever one `find_if` happens to see first - rather than the
-    // one in the same comparable family `conditionImplies` would actually
-    // compare it against - silently breaks the comparison instead of
-    // correctly reporting "not provably wider".
-    auto it = llvm::find_if(a.conditions, [&](const BoundCondition &ac) {
-      if (!(ac.expr == bc.expr))
-        return false;
-      if (lowerBoundOf(bc) && lowerBoundOf(ac))
-        return true;
-      if (upperBoundOf(bc) && upperBoundOf(ac))
-        return true;
-      return bc.goal == BoundGoal::DivisibleBy &&
-             ac.goal == BoundGoal::DivisibleBy;
+  // Every restriction `a` imposes must follow from one of `b`'s; conditions
+  // only `b` has just narrow `b` further.
+  return llvm::all_of(a.conditions, [&](const BoundCondition &ac) {
+    return llvm::any_of(b.conditions, [&](const BoundCondition &bc) {
+      return conditionImplies(bc, ac);
     });
-    // `a` names a subject `b` doesn't restrict at all: unmatched, so `a`
-    // cannot be shown to admit a superset by this structural rule.
-    if (it == a.conditions.end())
-      return false;
-    // `b`, playing "stronger", must be implied by `a`, playing "weaker": `a`
-    // admits whatever `b` does on this subject, plus whatever its own bound
-    // widens.
-    if (!conditionImplies(bc, *it))
-      return false;
-  }
-  return true;
+  });
 }
 
 /// Picks the proof with the widest admitted set among `finishers`, which all
