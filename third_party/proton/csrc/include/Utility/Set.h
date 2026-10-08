@@ -19,7 +19,7 @@ public:
 
   bool contains(const Key &key) const {
     std::shared_lock<std::shared_mutex> lock(mutex);
-    return set.contains(key);
+    return set.count(key) > 0;
   }
 
   bool erase(const Key &key) {

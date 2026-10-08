@@ -340,7 +340,7 @@ void deserializeManualPartitions(Operation *region, Graph *graph) {
             cast<DenseI32ArrayAttr>(op->getAttr(kPartitionAttrName))
                 .asArrayRef();
         for (auto id : partitionIds) {
-          if (!manual_partitions.contains(id)) {
+          if (manual_partitions.find(id) == manual_partitions.end()) {
             auto partition = graph->addPartition();
             partition->addFlag(Flags::MANUAL);
             manual_partitions[id] = partition;
@@ -1213,7 +1213,7 @@ void duplicateCheapOps(Graph *graph, std::string funcName,
                 } else if (child->getPartition() == startPartition) {
                   // found a path, set all nodes on the path to the partition
                   node->addPartition(startPartition);
-                  while (parentMap.contains(node)) {
+                  while (parentMap.find(node) != parentMap.end()) {
                     node = parentMap[node];
                     node->addPartition(startPartition);
                   }

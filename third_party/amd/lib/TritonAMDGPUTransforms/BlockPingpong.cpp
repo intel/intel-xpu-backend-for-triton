@@ -1160,18 +1160,23 @@ void Pingponger::getDotPingponged() {
   // Prune Memory operations that may be moved to only those involved in dot
   // computation. To understand the "cluster assumptions" we also estimate
   // the impact of any additional loads/stores.
-  auto nonDotGLoads =
-      std::ranges::stable_partition(gLoadOps, [&dotGlobalLoads](tt::LoadOp op) {
-        return dotGlobalLoads.contains(op);
-      });
-  auto nonDotLLoads = std::ranges::stable_partition(
-      lLoadOps, [&dotLocalLoads](ttg::LocalLoadOp op) {
-        return dotLocalLoads.contains(op);
-      });
-  auto nonDotLStores = std::ranges::stable_partition(
-      lStoreOps, [&dotLocalStores](ttg::LocalStoreOp op) {
-        return dotLocalStores.contains(op);
-      });
+  auto nonDotGLoadsIt = std::stable_partition(
+      gLoadOps.begin(), gLoadOps.end(),
+      [&dotGlobalLoads](tt::LoadOp op) { return dotGlobalLoads.contains(op); });
+  llvm::ArrayRef<tt::LoadOp> nonDotGLoads(nonDotGLoadsIt, gLoadOps.end());
+  auto nonDotLLoadsIt =
+      std::stable_partition(lLoadOps.begin(), lLoadOps.end(),
+                            [&dotLocalLoads](ttg::LocalLoadOp op) {
+                              return dotLocalLoads.contains(op);
+                            });
+  llvm::ArrayRef<ttg::LocalLoadOp> nonDotLLoads(nonDotLLoadsIt, lLoadOps.end());
+  auto nonDotLStoresIt =
+      std::stable_partition(lStoreOps.begin(), lStoreOps.end(),
+                            [&dotLocalStores](ttg::LocalStoreOp op) {
+                              return dotLocalStores.contains(op);
+                            });
+  llvm::ArrayRef<ttg::LocalStoreOp> nonDotLStores(nonDotLStoresIt,
+                                                  lStoreOps.end());
   if (estimateNonDotMemoryImpact<tt::LoadOp>(nonDotGLoads, assumeNotTaken) !=
       0) {
     std::stringstream message;

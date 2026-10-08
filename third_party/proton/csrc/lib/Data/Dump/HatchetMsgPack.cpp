@@ -102,14 +102,14 @@ countMetricEntries(const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
   }
   if (isRoot) {
     if (metricSummary.hasKernelMetric &&
-        !metrics.contains(MetricKind::Kernel)) {
+        !metrics.count(MetricKind::Kernel)) {
       metricEntries += kKernelInclusiveCount;
     }
     if (metricSummary.hasPCSamplingMetric &&
-        !metrics.contains(MetricKind::PCSampling)) {
+        !metrics.count(MetricKind::PCSampling)) {
       metricEntries += PCSamplingMetric::Count;
     }
-    if (metricSummary.hasCycleMetric && !metrics.contains(MetricKind::Cycle)) {
+    if (metricSummary.hasCycleMetric && !metrics.count(MetricKind::Cycle)) {
       metricEntries += kCycleInclusiveCount;
     }
   }
@@ -202,14 +202,14 @@ void packMetrics(MsgPackWriter &writer,
   }
   if (isRoot) {
     if (metricSummary.hasKernelMetric &&
-        !metrics.contains(MetricKind::Kernel)) {
+        !metrics.count(MetricKind::Kernel)) {
       writer.appendBytes(kKernelDurationKey);
       writer.packUInt(0);
       writer.appendBytes(kKernelInvocationsKey);
       writer.packUInt(0);
     }
     if (metricSummary.hasPCSamplingMetric &&
-        !metrics.contains(MetricKind::PCSampling)) {
+        !metrics.count(MetricKind::PCSampling)) {
       PCSamplingMetric pcSamplingMetric;
       for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
         const auto valueName = pcSamplingMetric.getValueName(i);
@@ -217,7 +217,7 @@ void packMetrics(MsgPackWriter &writer,
         writer.packUInt(0);
       }
     }
-    if (metricSummary.hasCycleMetric && !metrics.contains(MetricKind::Cycle)) {
+    if (metricSummary.hasCycleMetric && !metrics.count(MetricKind::Cycle)) {
       writer.packStr(CycleMetric::getValueName(CycleMetric::Duration));
       writer.packUInt(0);
       writer.packStr(
@@ -348,7 +348,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     linkedChildren.reserve(virtualNode.children.size());
     for (const auto &child : virtualNode.children) {
       const auto &childNode = virtualTree->getNode(child.id);
-      if (!childNode.children.empty() || linkedMetrics.contains(child.id)) {
+      if (!childNode.children.empty() || linkedMetrics.count(child.id)) {
         linkedChildren.push_back(child.id);
       }
     }

@@ -433,8 +433,9 @@ SmallVector<Value> PkF4ToFp32(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 // OCP Bf8/Fp8 -> Bf16
-template <typename SrcFPType>
-  requires llvm::is_one_of<SrcFPType, Float8E4M3FNType, Float8E5M2Type>::value
+template <typename SrcFPType,
+          typename = std::enable_if_t<llvm::is_one_of<
+              SrcFPType, Float8E4M3FNType, Float8E5M2Type>::value>>
 SmallVector<Value> OcpF8ToBf16SW(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const SmallVector<Value> &v) {
@@ -622,11 +623,13 @@ SmallVector<Value> scalePk8DowncastToFp8(Location loc,
 // In saturation mode, inf and out-of-range numbers are converted to the largest
 // normal number, i.e. ±448. NaNs are converted to NaNs.
 // For UZ formats please check: https://onnx.ai/onnx/technical/float8.html
-template <typename SrcFPType, typename DstFPType>
-  requires llvm::is_one_of<SrcFPType, Float32Type, Float16Type,
-                           BFloat16Type>::value &&
-           llvm::is_one_of<DstFPType, Float8E4M3FNType, Float8E4M3FNUZType,
-                           Float8E5M2FNUZType>::value
+template <
+    typename SrcFPType, typename DstFPType,
+    typename = std::enable_if_t<
+        llvm::is_one_of<SrcFPType, Float32Type, Float16Type,
+                        BFloat16Type>::value &&
+        llvm::is_one_of<DstFPType, Float8E4M3FNType, Float8E4M3FNUZType,
+                        Float8E5M2FNUZType>::value>>
 Value downcastToFp8rtneOneValue(Location loc,
                                 ConversionPatternRewriter &rewriter, Value v) {
   constexpr bool isFp8UZ =

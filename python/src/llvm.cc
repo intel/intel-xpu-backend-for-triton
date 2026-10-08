@@ -24,6 +24,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
@@ -196,6 +197,14 @@ void installTritonDAGScheduler() {
       ->setInitialValue(createTritonDAGScheduler);
 }
 
+// Marks every floating-point operation in the module as contractable.
+void allowFPOpFusion(llvm::Module &module) {
+  for (llvm::Function &function : module)
+    for (llvm::Instruction &instruction : llvm::instructions(function))
+      if (llvm::isa<llvm::FPMathOperator>(&instruction))
+        instruction.setHasAllowContract(true);
+}
+
 std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
                     bool enable_fp_fusion, const std::string &features) {
@@ -205,7 +214,7 @@ createTargetMachine(llvm::Module *module, std::string proc,
   llvm::TargetOptions opt;
   bool disableLLVMOpt = mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (enable_fp_fusion)
-    opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+    allowFPOpFusion(*module);
   opt.TrapUnreachable = true;
   opt.MCOptions.AsmVerbose = true;
   opt.MCOptions.PreserveAsmComments = true;
@@ -704,7 +713,7 @@ void init_triton_llvm(py::module_ &m) {
           // registry name "vector-combine".
           const StringRef kVectorCombinePassName = "VectorCombinePass";
           passInstrCb.registerShouldRunOptionalPassCallback(
-              [kVectorCombinePassName](StringRef passName, Any) {
+              [kVectorCombinePassName](StringRef passName, llvm::IRUnitRef) {
                 return passName != kVectorCombinePassName;
               });
           enablePassInstrumentation = true;
@@ -744,7 +753,7 @@ void init_triton_llvm(py::module_ &m) {
         if (!pluginFile.empty()) {
           // TODO: Add some logging here that we inserted a pass into the LLVM
           // pass pipeline
-          auto passPlugin = llvm::PassPlugin::Load(pluginFile);
+          auto passPlugin = llvm::PassPlugin::load(pluginFile);
           if (!passPlugin) {
             llvm::Error Err = passPlugin.takeError();
             std::string ErrMsg =
@@ -936,7 +945,7 @@ void init_triton_llvm(py::module_ &m) {
       // Mark linked-in functions as internal because backends use external
       // linkage as a signifier of kernel functions.
       for (llvm::Function &fn : dstMod->functions()) {
-        if (externalFns.contains(fn.getName().str())) {
+        if (externalFns.count(fn.getName().str())) {
           fn.setLinkage(llvm::GlobalValue::InternalLinkage);
         }
       }

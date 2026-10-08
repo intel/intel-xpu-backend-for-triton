@@ -200,7 +200,7 @@ void visualize(std::string key, std::string filename, std::string title,
       tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_LOOP_ONLY");
 
   static std::map<std::string, int> keys;
-  if (!keys.contains(key)) {
+  if (keys.find(key) == keys.end()) {
     keys[key] = 0;
   }
   auto idx = keys[key];
