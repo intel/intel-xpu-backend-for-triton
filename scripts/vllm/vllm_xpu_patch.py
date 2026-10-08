@@ -308,8 +308,8 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             lines[line_idx] = line.replace(".cuda()", ".xpu()")
 
         elif ptype == "tensor_is_cuda_property":
-            # Replace the .is_cuda property with .is_xpu, but not a .is_cuda() method call (a platform guard)
-            lines[line_idx] = re.sub(r"\.is_cuda(?!\s*\()", ".is_xpu", line)
+            # Replace the .is_cuda property with .is_xpu, but not .is_cuda()/.is_cuda_alike() platform calls
+            lines[line_idx] = re.sub(r"\.is_cuda(?![\w(]|\s*\()", ".is_xpu", line)
 
         elif ptype == "cuda_only_skip_guard" and "current_platform.is_xpu()" not in line:
             # Let XPU through a CUDA-only skip: is_cuda() -> (is_cuda() or is_xpu())
