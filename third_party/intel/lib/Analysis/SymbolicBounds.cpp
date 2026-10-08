@@ -567,17 +567,29 @@ std::string toString(const BoundProof &p) {
 // SymbolicBoundsProver
 //===----------------------------------------------------------------------===//
 
+/// The operation whose values the prover numbers: `root` if it is a function,
+/// else its enclosing function, else `root`. A module has no enclosing
+/// function, so a module root numbers exactly what it always did.
+static Operation *numberingScope(Operation *root) {
+  if (isa<tt::FuncOp>(root))
+    return root;
+  if (auto func = root->getParentOfType<tt::FuncOp>())
+    return func.getOperation();
+  return root;
+}
+
 SymbolicBoundsProver::SymbolicBoundsProver(const DataFlowSolver &solver,
                                            DominanceInfo &domInfo,
                                            Operation *root)
-    : solver(solver), domInfo(domInfo), root(root) {
+    : solver(solver), domInfo(domInfo), root(root),
+      scope(numberingScope(root)) {
   // Number every value in pre-order, from 1, so the symbol sort is total over
   // distinct values and reproducible across processes: a block's arguments as
   // the walk enters it, then each operation's results in result order. 0 is
   // reserved as "unassigned", which AffineForm::symbol asserts against.
   buildFactIndex();
   unsigned next = 1;
-  root->walk<WalkOrder::PreOrder>([&](Operation *op) {
+  scope->walk<WalkOrder::PreOrder>([&](Operation *op) {
     for (Region &region : op->getRegions())
       for (Block &block : region)
         for (BlockArgument arg : block.getArguments())
@@ -585,17 +597,20 @@ SymbolicBoundsProver::SymbolicBoundsProver(const DataFlowSolver &solver,
     for (OpResult result : op->getResults())
       valueOrder.try_emplace(result, next++);
   });
+  nextOrder = next;
 }
 
 Symbol SymbolicBoundsProver::symbolFor(SymbolKind kind, Value v,
                                        int64_t divisor,
                                        AxisPlacement placement) const {
-  auto it = valueOrder.find(v);
-  // A value created after construction has no index; give it one past the end
-  // so the order stays total. Deterministic because the prover is rebuilt
-  // after any mutation.
-  unsigned order = it != valueOrder.end() ? it->second : valueOrder.size() + 1;
-  return Symbol(kind, v, divisor, std::move(placement), order);
+  // A value outside the numbering - outside `scope`, or created after
+  // construction - takes the next unused order the first time it is seen and
+  // keeps it. Sharing one fallback key would make two such values tie in the
+  // sort order, and `combine` would then cancel them as like terms.
+  auto [it, inserted] = valueOrder.try_emplace(v, nextOrder);
+  if (inserted)
+    ++nextOrder;
+  return Symbol(kind, v, divisor, std::move(placement), it->second);
 }
 
 AffineForm SymbolicBoundsProver::opaque(Value v,

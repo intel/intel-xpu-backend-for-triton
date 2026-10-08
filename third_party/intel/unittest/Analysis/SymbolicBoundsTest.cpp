@@ -867,4 +867,65 @@ TEST_F(SymbolicBoundsTest, MaterializeInsertsBeforeTheAnchor) {
   EXPECT_TRUE(b.getInsertionPoint() == Block::iterator(term));
 }
 
+TEST_F(SymbolicBoundsTest, LoopRootedProverKeepsDistinctArgumentsDistinct) {
+  const char *ir = R"(
+    tt.func @f(%a: i32, %b: i32, %n: i32) {
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      scf.for %i = %c0 to %n step %c1 : i32 {
+        %cmp = arith.cmpi sge, %a, %b : i32 loc("cmp")
+        scf.yield
+      }
+      tt.return
+    })";
+  parse(ir);
+  std::string moduleRooted = verdict(get("cmp"));
+  EXPECT_EQ(moduleRooted, "Conditional{arg0 - arg1 >= 0}");
+
+  // A prover rooted at the loop numbers only what is under the loop; the two
+  // function arguments are outside it. They used to tie in the sort order, so
+  // `a - b` cancelled to 0 and `a >= b` read as Satisfied, which is false at
+  // a = -1, b = 0.
+  scf::ForOp loop;
+  module->walk([&](scf::ForOp f) { loop = f; });
+  prover = std::make_unique<tt::intel::SymbolicBoundsProver>(*solver, *domInfo,
+                                                             loop);
+  EXPECT_EQ(verdict(get("cmp")), moduleRooted);
+  tt::intel::Symbol sa =
+      prover->symbolFor(tt::intel::SymbolKind::KernelArg, arg(0));
+  tt::intel::Symbol sb =
+      prover->symbolFor(tt::intel::SymbolKind::KernelArg, arg(1));
+  EXPECT_NE(sa.order(), sb.order());
+}
+
+TEST_F(SymbolicBoundsTest, ValuesCreatedAfterConstructionGetDistinctOrders) {
+  parse(R"(
+    tt.func @f(%a: i32) {
+      tt.return
+    })");
+
+  // Neither value exists when the prover numbers the IR, so neither is in the
+  // numbering. They used to share one fallback key, so their symbols tied.
+  OpBuilder b(func().getBody().front().getTerminator());
+  Location loc = b.getUnknownLoc();
+  Value v1 = arith::ConstantIntOp::create(b, loc, b.getI32Type(), 1);
+  Value v2 = arith::ConstantIntOp::create(b, loc, b.getI32Type(), 2);
+
+  auto opaque = [&](Value v) {
+    return prover->symbolFor(tt::intel::SymbolKind::Opaque, v);
+  };
+  unsigned o1 = opaque(v1).order(), o2 = opaque(v2).order();
+  EXPECT_NE(o1, 0u);
+  EXPECT_NE(o2, 0u);
+  EXPECT_NE(o1, o2);
+  // An order, once assigned, never changes.
+  EXPECT_EQ(opaque(v1).order(), o1);
+  EXPECT_EQ(opaque(v2).order(), o2);
+  // And so v1 - v2 does not cancel.
+  tt::intel::AffineForm diff =
+      tt::intel::AffineForm::symbol(opaque(v1))
+          .sub(tt::intel::AffineForm::symbol(opaque(v2)));
+  EXPECT_EQ(diff.numTerms(), 2u);
+}
+
 } // namespace

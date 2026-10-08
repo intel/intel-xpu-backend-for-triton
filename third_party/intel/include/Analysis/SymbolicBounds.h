@@ -52,7 +52,9 @@ enum class SymbolKind {
 using AxisPlacement = SmallVector<int32_t, 4>;
 
 /// Built only by `SymbolicBoundsProver::symbolFor`, so `order` is always
-/// assigned and two distinct values can never tie in the sort order.
+/// nonzero and two distinct values never tie in the sort order: a value the
+/// prover numbered at construction keeps its IR pre-order index, and any other
+/// value takes the next unused order when first seen and keeps it.
 class Symbol {
 public:
   SymbolKind kind() const { return kind_; }
@@ -63,7 +65,8 @@ public:
   /// `Quotient`: the divisor of `divsi X, divisor`. `TripCount`: the step.
   int64_t divisor() const { return divisor_; }
   const AxisPlacement &placement() const { return placement_; }
-  /// Sort key only: the prover's pre-order index of `value`, from 1.
+  /// Sort key only, unique per distinct value within one prover; see
+  /// `SymbolicBoundsProver::symbolFor`.
   unsigned order() const { return order_; }
 
   bool operator==(const Symbol &o) const {
@@ -90,7 +93,8 @@ private:
 
 /// `c0 + sum(ci * si)` over the integers, with int64_t coefficients. Terms are
 /// kept sorted by `Symbol::operator<` with nonzero coefficients, so equality is
-/// structural and rendering is identical across processes. Every arithmetic
+/// structural and, for values the prover numbered at construction, rendering is
+/// identical across processes. Every arithmetic
 /// method is overflow-checked: an overflow sets a sticky flag, and a flagged
 /// form is unusable - `normalize` turns it into an `Opaque` symbol, candidate
 /// formation rejects it, and a flagged comparison difference ends the query
@@ -222,12 +226,20 @@ class SymbolicBoundsProver {
 public:
   /// `solver` must already have `IntegerRangeAnalysis` loaded and run, as
   /// `SignednessProver` requires. Collects the assume facts under `root` once
-  /// and numbers every value under it for the symbol order.
+  /// and numbers every value of its enclosing function (of `root` itself, for a
+  /// module) for the symbol order, so a prover rooted at a loop still orders
+  /// the function arguments and everything else a query can reach.
   SymbolicBoundsProver(const DataFlowSolver &solver, DominanceInfo &domInfo,
                        Operation *root);
 
   /// The only way to create a `Symbol`: fills `order` from the pre-order
-  /// numbering built at construction.
+  /// numbering built at construction. A value that numbering does not cover -
+  /// outside the numbered scope, or created after construction - takes the
+  /// next unused order the first time it is seen, so distinct values never
+  /// tie. Those orders follow first-query order rather than IR position: that
+  /// can change where such a value's term renders and, among equal
+  /// coefficients, which sound candidate guard `prove` picks, never whether a
+  /// verdict is sound.
   Symbol symbolFor(SymbolKind kind, Value v, int64_t divisor = 0,
                    AxisPlacement placement = {}) const;
 
@@ -418,9 +430,16 @@ private:
   const DataFlowSolver &solver;
   DominanceInfo &domInfo;
   Operation *root;
-  /// Pre-order index of every integer value under `root`, from 1, so the
-  /// symbol order is total and reproducible across processes.
-  DenseMap<Value, unsigned> valueOrder;
+  /// The operation whose values are numbered: `root` if it is a function,
+  /// else its enclosing function, else `root` (a module).
+  Operation *scope;
+  /// The symbol order of every value seen so far: the pre-order index of each
+  /// value under `scope`, from 1, assigned at construction, then the first-seen
+  /// values after them. An order never changes once assigned. Mutable because
+  /// `symbolFor` is const and extends it.
+  mutable DenseMap<Value, unsigned> valueOrder;
+  /// The next order to hand out.
+  mutable unsigned nextOrder = 1;
   /// Per-query: set when a budget is exhausted, which makes the query
   /// `Unknown`.
   bool exhausted = false;
