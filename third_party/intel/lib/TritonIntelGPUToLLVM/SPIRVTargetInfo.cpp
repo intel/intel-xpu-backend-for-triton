@@ -91,8 +91,7 @@ Value SPIRVTargetInfo::genWarpScan(RewriterBase &rewriter, Location loc,
   // admits: an unmatched `TypeSwitch` returns a null `Value`.
   Type resultType = combineOp->getResult(0).getType();
   if (resultType.isInteger(1))
-    // Only the logical mappings that are correct for `i1`; the gate rejects
-    // `addi`/`maxsi`/`minsi`, whose entries in the shared map are wrong.
+    // The gate rejects `addi`/`maxsi`/`minsi` for `i1`.
     return TypeSwitch<mlir::Operation *, Value>(combineOp)
         .Case<arith::MulIOp, arith::MaxUIOp, arith::MinUIOp, arith::AndIOp,
               arith::OrIOp, arith::XOrIOp>([&](auto groupOp) {

@@ -119,10 +119,7 @@ inline FailureOr<Operation *> matchEligibleSubgroupScan(triton::ScanOp op) {
   // there (signed zeros likewise). Excluded rather than inherited from the
   // reduce path: cumsum/cumprod do not need them.
   //
-  // For i1, three entries of the shared arith-to-SPIR-V logical map are wrong
-  // (add should be Xor, maxsi And, minsi Or). Both are pre-existing reduce-path
-  // defects tracked in #8212; exclude the affected combinations so this second
-  // consumer does not propagate them.
+  // For i1, add/maxsi/minsi are not enabled for the scan builtin yet.
   Type resultType = (*combineOp)->getResult(0).getType();
   if (resultType.isInteger(1) &&
       isa<arith::AddIOp, arith::MaxSIOp, arith::MinSIOp>(*combineOp))
