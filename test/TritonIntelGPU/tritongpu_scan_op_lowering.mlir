@@ -104,9 +104,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// COM: Op and element type coverage. `i1` uses the logical group ops; the three
-// COM: `i1` combines whose shared mapping is wrong (add, maxsi, minsi -- #8212)
-// COM: are rejected instead, see the negative cases below.
+// COM: Op and element type coverage. `i1` uses the logical group ops; add,
+// COM: maxsi and minsi are rejected instead, see the negative cases below.
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
@@ -324,10 +323,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // -----
 
-// COM: Negative: `i1` add is mod-2 and signed `i1` true is -1, so the shared
-// COM: arith-to-SPIR-V logical map is wrong for these three combines. That is a
-// COM: pre-existing defect on the reduce path; the scan gate refuses them rather
-// COM: than becoming a second consumer of it.
+// COM: Negative: the scan gate rejects these three `i1` combines.
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {

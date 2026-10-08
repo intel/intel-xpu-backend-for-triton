@@ -86,10 +86,9 @@ def _mul(a, b):
     return a * b
 
 
-# The `i1` combines the scan gate still allows, with the builtin each must lower
-# to. `addi`/`maxsi`/`minsi` on `i1` are rejected -- `SPIRVSubgroupOps.h` maps
-# them to the wrong logical op (#8212) -- so they keep the shuffle chain and are
-# covered by the lit negatives instead.
+# The `i1` combines the scan gate allows, with the builtin each must lower to.
+# `addi`/`maxsi`/`minsi` on `i1` are rejected, so they keep the shuffle chain and
+# are covered by the lit negatives instead.
 I1_OPS = [
     pytest.param(_and, "LogicalAnd", lambda a, b: a and b, id="andi"),
     pytest.param(_or, "LogicalOr", lambda a, b: a or b, id="ori"),
