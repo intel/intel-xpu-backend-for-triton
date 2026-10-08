@@ -133,3 +133,20 @@ module {
     tt.return
   }
 }
+
+// -----
+
+// COM: i64 (0 - x) + x >= 0: the lower wrap guard of 0 - x is -x >= INT64_MIN,
+// COM: whose division by -1 needs 2^63. It holds for every x, so only the
+// COM: upper guard (x != INT64_MIN) remains.
+// CHECK-LABEL: tt.func @neg_wrap_int64_min_bound
+module {
+  tt.func @neg_wrap_int64_min_bound(%x: i64) {
+    %c0 = arith.constant 0 : i64
+    %n = arith.subi %c0, %x : i64
+    %s = arith.addi %n, %x : i64
+    // expected-remark@+1 {{verdict: Conditional{arg0 >= -9223372036854775807}}}
+    %cmp = arith.cmpi sge, %s, %c0 : i64
+    tt.return
+  }
+}

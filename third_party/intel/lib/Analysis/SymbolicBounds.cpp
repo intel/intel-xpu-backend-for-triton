@@ -194,7 +194,9 @@ std::string toString(const AffineForm &af) {
     } else {
       os << (coeff < 0 ? " - " : " + ");
     }
-    int64_t mag = coeff < 0 ? -coeff : coeff;
+    // Unsigned: the magnitude of INT64_MIN is not an int64_t.
+    uint64_t mag = coeff < 0 ? 0 - static_cast<uint64_t>(coeff)
+                             : static_cast<uint64_t>(coeff);
     if (mag != 1)
       os << mag << "*";
     os << renderSymbol(sym);
@@ -206,7 +208,7 @@ std::string toString(const AffineForm &af) {
   else if (c0 > 0)
     os << " + " << c0;
   else if (c0 < 0)
-    os << " - " << -c0;
+    os << " - " << 0 - static_cast<uint64_t>(c0);
   return out;
 }
 
@@ -248,8 +250,10 @@ bool normalizeCondition(BoundCondition &cond) {
       return cond.expr.constant() == 0; // nothing to normalize
     auto &[sym, k] = cond.expr.terms().front();
     int64_t c0 = cond.expr.constant();
-    int64_t g = static_cast<int64_t>(std::gcd(
-        static_cast<uint64_t>(k < 0 ? -k : k), static_cast<uint64_t>(cond.c)));
+    uint64_t magK =
+        k < 0 ? 0 - static_cast<uint64_t>(k) : static_cast<uint64_t>(k);
+    int64_t g =
+        static_cast<int64_t>(std::gcd(magK, static_cast<uint64_t>(cond.c)));
     if (g == 0 || c0 % g != 0)
       return false; // unsatisfiable
     int64_t divisor = cond.c / g;
@@ -304,9 +308,9 @@ bool normalizeCondition(BoundCondition &cond) {
     if (k == 0)
       return false;
     if (k != 1) {
-      int64_t mag = k < 0 ? -k : k;
-      if (mag <= 0)
+      if (k == INT64_MIN)
         return false; // |INT64_MIN| is not representable
+      int64_t mag = k < 0 ? -k : k;
       bool wantAtMost = atMost;
       if (k < 0)
         wantAtMost = !wantAtMost; // dividing by a negative swaps the relation
@@ -315,9 +319,25 @@ bool normalizeCondition(BoundCondition &cond) {
           cond.goal == BoundGoal::AtMost || cond.goal == BoundGoal::AtLeast
               ? cond.c
               : bound;
-      int64_t div = k < 0 ? -num : num;
-      int64_t q = wantAtMost ? llvm::divideFloorSigned(div, mag)
-                             : llvm::divideCeilSigned(div, mag);
+      int64_t q;
+      if (k < 0 && num == INT64_MIN) {
+        // -num is 2^63: divide in unsigned. Only mag == 1 leaves the int64_t
+        // range, where x <= 2^63 holds for any value and x >= 2^63 for none.
+        uint64_t two63 = uint64_t(1) << 63, um = static_cast<uint64_t>(mag);
+        uint64_t uq = two63 / um;
+        if (!wantAtMost && uq * um != two63)
+          ++uq;
+        if (uq > static_cast<uint64_t>(INT64_MAX)) {
+          if (!wantAtMost)
+            return false;
+          uq = INT64_MAX;
+        }
+        q = static_cast<int64_t>(uq);
+      } else {
+        int64_t div = k < 0 ? -num : num;
+        q = wantAtMost ? llvm::divideFloorSigned(div, mag)
+                       : llvm::divideCeilSigned(div, mag);
+      }
       cond.expr = AffineForm::symbol(sym);
       cond.goal = wantAtMost ? BoundGoal::AtMost : BoundGoal::AtLeast;
       cond.c = q;
@@ -1390,9 +1410,9 @@ void SymbolicBoundsProver::buildFactIndex() {
     case arith::CmpIPredicate::ule: {
       // An unsigned UPPER bound within the signed range puts x in [0, c), so
       // it gives both non-negativity and a signed upper bound.
-      int64_t bound = pred == arith::CmpIPredicate::ult ? *k - 1 : *k;
       if (*k < 0 || *k > intMax)
         break; // the constant itself is outside [0, INT_MAX]: no signed fact
+      int64_t bound = pred == arith::CmpIPredicate::ult ? *k - 1 : *k;
       add(BoundGoal::NonNegative, 0);
       if (bound >= 0)
         add(BoundGoal::AtMost, bound);
@@ -2058,7 +2078,9 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
       // regardless of which terms are chosen: a term left at its weak floor
       // still gets a guard, which the sign check genuinely requires either
       // way.
-      int64_t need = g - pb.lo.constant();
+      int64_t need;
+      if (llvm::SubOverflow(g, pb.lo.constant(), need))
+        continue; // the gap itself is not representable
       llvm::sort(undecided, [](const auto &a, const auto &b) {
         return a.second > b.second;
       });
