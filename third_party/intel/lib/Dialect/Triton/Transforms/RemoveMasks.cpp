@@ -1131,6 +1131,30 @@ static std::string joinConditions(ArrayRef<tt::intel::BoundCondition> cs) {
   return llvm::join(strs, ";");
 }
 
+// \p ops printed one per entry: in program order if they share a block, else
+// sorted by text. Program order is only defined within a block, and a
+// comparator mixing the two orders is not a strict weak ordering.
+static SmallVector<std::string> printInTraceOrder(ArrayRef<Operation *> ops) {
+  SmallVector<Operation *> sorted(ops);
+  bool sameBlock = llvm::all_of(sorted, [&](Operation *op) {
+    return op->getBlock() == sorted.front()->getBlock();
+  });
+  if (sameBlock)
+    llvm::sort(sorted, [](Operation *a, Operation *b) {
+      return a->isBeforeInBlock(b);
+    });
+  SmallVector<std::string> texts;
+  for (Operation *op : sorted) {
+    std::string text;
+    llvm::raw_string_ostream os(text);
+    op->print(os, OpPrintingFlags().skipRegions());
+    texts.push_back(text);
+  }
+  if (!sameBlock)
+    llvm::sort(texts);
+  return texts;
+}
+
 // Collects masked operations in a loop that satisfy the condition imposed by
 // the mask validator associated with this class.
 template <typename MaskValidator> class MaskedOpsCollector {
@@ -1221,17 +1245,19 @@ public:
     if (!verCond)
       return false;
 
-    SmallVector<Operation *> toUnmaskTrace(collector.getMaskedOps().begin(),
-                                           collector.getMaskedOps().end());
-    llvm::sort(toUnmaskTrace, [](Operation *a, Operation *b) {
-      return a->isBeforeInBlock(b);
+    DEBUG_WITH_TYPE(CENSUS_DEBUG_TYPE, {
+      SmallVector<Operation *> toUnmaskTrace(collector.getMaskedOps().begin(),
+                                             collector.getMaskedOps().end());
+      llvm::sort(toUnmaskTrace, [](Operation *a, Operation *b) {
+        return a->isBeforeInBlock(b);
+      });
+      CanonicalMaskValidator::MaskInfo info =
+          maskValidator.getMaskInfo(forOp, getMask(maskedOp));
+      CDBG("versioned: loop="
+           << censusId(forOp) << " unmasked=" << joinIds(toUnmaskTrace)
+           << " guard=canonical N=" << describeArg(info.N) << " END="
+           << info.END << " w=" << info.N.getType().getIntOrFloatBitWidth());
     });
-    CanonicalMaskValidator::MaskInfo info =
-        maskValidator.getMaskInfo(forOp, getMask(maskedOp));
-    CDBG("versioned: loop="
-         << censusId(forOp) << " unmasked=" << joinIds(toUnmaskTrace)
-         << " guard=canonical N=" << describeArg(info.N) << " END=" << info.END
-         << " w=" << info.N.getType().getIntOrFloatBitWidth());
 
     // This lambda is used to collect the types for the loop results that are
     // downward exposed (i.e. used by other operations).
@@ -1334,29 +1360,18 @@ public:
       verCond = arith::AndIOp::create(builder, loc, verCond, cond);
     }
 
-    {
-      // The versioner iterates `maskConds`, a SmallPtrSet with no stable
-      // order; the trace renders each conjoined cmpi's text in program order.
+    DEBUG_WITH_TYPE(CENSUS_DEBUG_TYPE, {
+      // `maskConds` is a SmallPtrSet with no stable order.
       SmallVector<Operation *> condsTrace(maskConds.begin(), maskConds.end());
-      llvm::sort(condsTrace, [](Operation *a, Operation *b) {
-        return a->isBeforeInBlock(b);
-      });
-      SmallVector<std::string> condTexts;
-      for (Operation *cond : condsTrace) {
-        std::string text;
-        llvm::raw_string_ostream os(text);
-        cond->print(os, OpPrintingFlags().skipRegions());
-        condTexts.push_back(text);
-      }
       SmallVector<Operation *> toUnmaskTrace(collector.getMaskedOps().begin(),
                                              collector.getMaskedOps().end());
       llvm::sort(toUnmaskTrace, [](Operation *a, Operation *b) {
         return a->isBeforeInBlock(b);
       });
-      CDBG("versioned: loop=" << censusId(forOp)
-                              << " unmasked=" << joinIds(toUnmaskTrace)
-                              << " guard=" << llvm::join(condTexts, ";"));
-    }
+      CDBG("versioned: loop="
+           << censusId(forOp) << " unmasked=" << joinIds(toUnmaskTrace)
+           << " guard=" << llvm::join(printInTraceOrder(condsTrace), ";"));
+    });
 
     auto ifOp = scf::IfOp::create(builder, loc, forOp.getResultTypes(), verCond,
                                   /*withThenRegion=*/true);
