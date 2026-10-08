@@ -248,7 +248,7 @@ tt.func @volatile_unconditional(%ptr: !tt.ptr<f32>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<32xf32>
   %lane = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
   %ps = tt.splat %ptr : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>>
-  // SYM:     tt.load %{{.*}} {isVolatile = true}
+  // SYM:     tt.load %{{[^ ,]+}} {isVolatile = true}
   // SYM-NOT: tt.load
   scf.for %r = %c0 to %c128 step %c32 : i32 {
     %rs = tt.splat %r : i32 -> tensor<32xi32>
