@@ -162,8 +162,6 @@ public:
     // register and lane mapping.
     LinearLayout newAoSLayout = cvtLayoutDstToSrcMap.compose(*llEncoding);
 
-    auto reinterpretComp = llEncoding->invertAndCompose(newAoSLayout);
-
     OpBuilder builder(op);
     Location loc = op.getLoc();
     builder.setInsertionPointAfter(op);
@@ -177,17 +175,15 @@ public:
       // lane 2 lane mapping information.
       return;
     }
-    auto reinterpretedResult = ttgi::ReinterpretConvertLayoutOp::create(
-        builder, loc, reinterpretedTensorType, op.getResult());
-    auto convertLayoutPair = ttg::ConvertLayoutOp::create(
-        builder, loc, tensorType, reinterpretedResult.getResult());
+    auto shuffleLoad = ttgi::LoadShuffleBitcastOp::create(
+        builder, loc, reinterpretedTensorType, op.getPtr(), op.getMask(),
+        op.getOther(), op.getCachePolicyAttr(), op.getIsVolatileAttr());
 
-    // Replace all uses except the one in reinterpretedResult to avoid
-    // self-cycle.
-    op.getResult().replaceUsesWithIf(
-        convertLayoutPair.getResult(), [&](OpOperand &use) {
-          return use.getOwner() != reinterpretedResult.getOperation();
-        });
+    auto convertLayoutPair = ttg::ConvertLayoutOp::create(
+        builder, loc, tensorType, shuffleLoad.getResult());
+
+    op.getResult().replaceAllUsesWith(convertLayoutPair.getResult());
+    op.erase();
   }
 };
 
