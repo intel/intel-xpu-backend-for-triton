@@ -559,6 +559,20 @@ static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
           b.extract_element(f16_ty, h, b.i32_val(1))};
 }
 
+// Fp8E4M3Nv_to_Fp16 for a single i16 lane that already holds the fp8 byte in
+// its high byte. The low byte may be anything: 0xBF80 also clears the bits
+// `ashr` shifts in from it.
+static Value Fp8E4M3Nv_to_Fp16FromHighByte(Location loc,
+                                           ConversionPatternRewriter &rewriter,
+                                           Value lane) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value shifted = b.ashr(i16_ty, lane, b.i16_val(1));
+  Value h = b.bitcast(b.and_(i16_ty, shifted, b.i16_val(0xBF80)), f16_ty);
+  h = b.fmul(h, b.f16_val(36864.0f));
+  h = b.fmul(h, b.f16_val(0.0069427490234375f));
+  return b.fadd(h, b.fmul(h, b.f16_val(0.0f)));
+}
+
 // Fp8E4M3 -> Fp16 (packed), integer domain. Used only on LTS drivers.
 //
 // 11 ops against the 6 of Fp8E4M3Nv_to_Fp16 above, and slower at runtime
@@ -1582,6 +1596,78 @@ struct FpToFpOpConversion
   }
 };
 
+// Returns (vec, idx) for each element of the struct `src` if every element is
+// byte idx of an <N x i32> `vec` bitcast to bytes.
+static std::optional<SmallVector<std::pair<Value, int64_t>>>
+getBytesOfI32Vectors(Value src) {
+  auto structTy = dyn_cast<LLVM::LLVMStructType>(src.getType());
+  if (!structTy)
+    return std::nullopt;
+  SmallVector<Value> elems(structTy.getBody().size());
+  for (auto insert = src.getDefiningOp<LLVM::InsertValueOp>(); insert;
+       insert = insert.getContainer().getDefiningOp<LLVM::InsertValueOp>()) {
+    if (insert.getPosition().size() != 1)
+      return std::nullopt;
+    Value &elem = elems[insert.getPosition()[0]];
+    if (!elem)
+      elem = insert.getValue();
+  }
+  SmallVector<std::pair<Value, int64_t>> bytes;
+  for (Value elem : elems) {
+    auto extract =
+        elem ? elem.getDefiningOp<LLVM::ExtractElementOp>() : nullptr;
+    if (!extract || !extract.getType().isInteger(8))
+      return std::nullopt;
+    auto bitcast = extract.getVector().getDefiningOp<LLVM::BitcastOp>();
+    APInt idx;
+    if (!bitcast || !matchPattern(extract.getPosition(), m_ConstantInt(&idx)))
+      return std::nullopt;
+    auto vecTy = dyn_cast<VectorType>(bitcast.getArg().getType());
+    if (!vecTy || !vecTy.getElementType().isInteger(32))
+      return std::nullopt;
+    bytes.emplace_back(bitcast.getArg(), idx.getSExtValue());
+  }
+  return bytes;
+}
+
+// fp8e4m3 -> fp16 of bytes that come packed in dwords, as 32-bit 2D block loads
+// return them. The block load lowering unpacks them with a bitcast that IGC
+// turns into a mov per byte; this reads each byte from its dword instead, as
+// the high byte of a 16-bit window.
+struct FpToFpOpFromDwordsConversion : public ConvertOpToLLVMPattern<FpToFpOp> {
+  using ConvertOpToLLVMPattern<FpToFpOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(FpToFpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!isa<Float8E4M3FNType>(getElementTypeOrSelf(op.getSrc().getType())) ||
+        !getElementTypeOrSelf(op.getType()).isF16() ||
+        HasAttr<SUPPORT_F8_CONV>(op) || HasAttr<IS_LTS>(op))
+      return failure();
+    std::optional<SmallVector<std::pair<Value, int64_t>>> bytes =
+        getBytesOfI32Vectors(adaptor.getSrc());
+    if (!bytes)
+      return failure();
+
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    SmallVector<Value> results;
+    for (auto [vec, idx] : *bytes) {
+      Value dword = b.extract_element(i32_ty, vec, b.i32_val(idx / 4));
+      if (idx % 4 >= 2)
+        dword = b.lshr(i32_ty, dword, b.i32_val(16));
+      Value window = b.trunc(i16_ty, dword);
+      if (idx % 2 == 0)
+        window = b.shl(i16_ty, window, b.i16_val(8));
+      results.push_back(Fp8E4M3Nv_to_Fp16FromHighByte(loc, rewriter, window));
+    }
+    rewriter.replaceOp(op, packUniqueTensorElements(loc, getTypeConverter(),
+                                                    results, rewriter,
+                                                    op.getType()));
+    return success();
+  }
+};
+
 template <typename SourceOp, typename DestOp>
 struct ElementwiseOpConversion
     : ElementwiseOpConversionBase<SourceOp,
@@ -2150,6 +2236,8 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FpToFpOpFromDwordsConversion>(typeConverter,
+                                             benefit.getBenefit() + 1);
 
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
