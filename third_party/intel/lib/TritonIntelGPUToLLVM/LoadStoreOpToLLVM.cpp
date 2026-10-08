@@ -3970,6 +3970,9 @@ struct AtomicCASOpConversion
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    insertAtomicOrderingBarriers(op, op.getSem(),
+                                 !atomicResultHasOrderingBarrier(op), rewriter,
+                                 targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
@@ -4162,6 +4165,9 @@ struct AtomicRMWOpConversion
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    insertAtomicOrderingBarriers(op, op.getSem(),
+                                 !atomicResultHasOrderingBarrier(op), rewriter,
+                                 targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
