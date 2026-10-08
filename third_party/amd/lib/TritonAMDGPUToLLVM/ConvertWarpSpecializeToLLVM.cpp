@@ -2,6 +2,7 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TypeConverter.h"
 #include "Utility.h"
+#include "llvm/Support/AMDGPUAddrSpace.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -49,7 +50,7 @@ public:
   }
 
   Type getBarrierHandleType(MLIRContext *ctx) const override {
-    return LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
+    return LLVM::LLVMPointerType::get(ctx, llvm::AMDGPUAS::BARRIER);
   }
 
   FailureOr<Value>
@@ -80,7 +81,7 @@ public:
       nbarGV = LLVM::GlobalOp::create(
           b, uloc, nbarTy, /*isConstant=*/false, LLVM::Linkage::Internal,
           nbarAttr.getValue(), /*value=*/Attribute(), /*alignment=*/0,
-          targetInfo.getSharedAddressSpace());
+          llvm::AMDGPUAS::BARRIER);
       // Add initializer region that returns 'poison'
       Block *initBlock = b.createBlock(&nbarGV.getInitializerRegion());
       b.setInsertionPointToStart(initBlock);

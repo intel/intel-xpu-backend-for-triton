@@ -389,7 +389,9 @@ struct FpToFpOpConversion
           "unsupported rounding mode for f32->bf16 conversion: " +
           stringifyRoundingMode(rounding) + "\n");
     }
-    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, bf16_ty, {v})
+    Value pzo = LLVM::createConstantI1(loc, rewriter, false);
+    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, bf16_ty,
+                                           {v, pzo})
         .getResult(0);
   }
 
@@ -947,8 +949,7 @@ struct MulhiUIOpConversion
                                    Location loc) const {
     unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
     assert(bitWidth == 32 || bitWidth == 64);
-    StringRef intrinsic =
-        bitWidth == 32 ? "llvm.nvvm.mulhi.ui" : "llvm.nvvm.mulhi.ull";
+    StringRef intrinsic = "llvm.umulh";
     // A widened multiply/shift relies on LLVM recognizing explicit extensions.
     // InstCombine can replace those extensions with masks, losing mul.hi.
     return {LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, elemTy,
