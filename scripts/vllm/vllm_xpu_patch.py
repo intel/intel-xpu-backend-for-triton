@@ -207,6 +207,40 @@ def _find_cuda_patterns(source: str) -> list[dict]:
     return patterns
 
 
+def _is_platform_cuda_check(node: ast.AST) -> bool:
+    """Match current_platform.is_cuda() and current_platform.is_cuda_alike() calls."""
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr in ("is_cuda", "is_cuda_alike") and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "current_platform")
+
+
+def _is_pytest_call(node: ast.AST, name: str) -> bool:
+    """Match pytest.<name>(...) and pytest.mark.<name>(...) calls."""
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == name
+
+
+def _find_cuda_guard_patterns(source: str) -> list[dict]:
+    """Find current_platform CUDA checks that gate a skip: skipif conditions and `if ...: pytest.skip()`."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    guards: list[ast.expr] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _is_pytest_call(node, "skipif"):
+            guards.extend(node.args)
+        elif isinstance(node, ast.If) and any(
+                _is_pytest_call(call, "skip") for stmt in node.body for call in ast.walk(stmt)):
+            guards.append(node.test)
+
+    return [{
+        "type": "cuda_only_skip_guard",
+        "line": node.lineno,
+        "col": node.col_offset,
+    } for guard in guards for node in ast.walk(guard) if isinstance(node, ast.Call) and _is_platform_cuda_check(node)]
+
+
 def _apply_patches(source: str, patterns: list[dict]) -> str:
     """Apply text-level patches guided by AST analysis."""
     lines = source.split("\n")
@@ -277,13 +311,23 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             # Replace the .is_cuda property with .is_xpu, but not a .is_cuda() method call (a platform guard)
             lines[line_idx] = re.sub(r"\.is_cuda(?!\s*\()", ".is_xpu", line)
 
+        elif ptype == "cuda_only_skip_guard" and "current_platform.is_xpu()" not in line:
+            # Let XPU through a CUDA-only skip: is_cuda() -> (is_cuda() or is_xpu())
+            lines[line_idx] = re.sub(
+                r"current_platform\.(is_cuda(?:_alike)?)\(\)",
+                r"(current_platform.\1() or current_platform.is_xpu())",
+                line,
+            )
+
     return "\n".join(lines)
 
 
-def patch_file(filepath: Path) -> bool:
+def patch_file(filepath: Path, relax_cuda_guards: bool = False) -> bool:
     """Patch a single file. Returns True if changes were made."""
     source = filepath.read_text()
     patterns = _find_cuda_patterns(source)
+    if relax_cuda_guards:
+        patterns += _find_cuda_guard_patterns(source)
     if not patterns:
         return False
 
@@ -293,7 +337,8 @@ def patch_file(filepath: Path) -> bool:
 
     filepath.write_text(patched)
     for p in patterns:
-        print(f"  L{p['line']:4d}: {p['type']}")
+        line, ptype = p["line"], p["type"]
+        print(f"  L{line:4d}: {ptype}")
     return True
 
 
@@ -321,15 +366,49 @@ def main() -> None:
         vllm_root / "vllm" / "model_executor" / "layers",
     ]
 
+    # Test files whose CUDA-only skips guard Triton kernels that also run on XPU. These get the
+    # CUDA->XPU replacements above plus their skip guards relaxed to admit XPU.
+    cuda_guard_files = {
+        vllm_root / path
+        for path in (
+            "tests/kernels/core/test_fused_embed_norm.py",
+            "tests/kernels/quantization/test_quantized_embedding.py",
+            "tests/kernels/test_compressor_kv_cache.py",
+            "tests/model_executor/layers/test_mla_short_prefill_indexer.py",
+            "tests/model_executor/test_bailing_mrope.py",
+            "tests/models/inkling/test_mtp_input_fusion.py",
+            "tests/models/inkling/test_qkvr_prep.py",
+            "tests/models/inkling/test_sconv_metadata.py",
+            "tests/models/test_deepseek_v41_replay_start.py",
+            "tests/v1/attention/test_dcp_a2a_pack_mask.py",
+            "tests/v1/attention/test_deepseek_v4_swa_visible.py",
+            "tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py",
+            "tests/v1/worker/test_gpu_block_table.py",
+            "tests/v1/worker/test_gpu_kpool_tail_slot_mapping.py",
+            "tests/v1/worker/test_gpu_rejection_sampler_chunking.py",
+            "tests/v1/worker/test_gpu_rejection_sampler_i64.py",
+            "tests/v1/worker/test_mamba_hybrid_model_state.py",
+        )
+    }
+
     total_patched = 0
+    scanned = set()
     for patch_dir in patch_dirs:
         if not patch_dir.is_dir():
             continue
         # Use rglob to recursively scan subdirectories
         for py_file in sorted(patch_dir.rglob("*.py")):
             print(f"Scanning {py_file.relative_to(vllm_root)}...")
-            if patch_file(py_file):
+            scanned.add(py_file)
+            if patch_file(py_file, relax_cuda_guards=py_file in cuda_guard_files):
                 total_patched += 1
+
+    for py_file in sorted(cuda_guard_files - scanned):
+        if not py_file.is_file():
+            continue
+        print(f"Scanning {py_file.relative_to(vllm_root)}...")
+        if patch_file(py_file, relax_cuda_guards=True):
+            total_patched += 1
 
     print(f"\nPatched {total_patched} file(s)")
 
