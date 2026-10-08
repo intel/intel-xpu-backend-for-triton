@@ -5,6 +5,7 @@
 
 namespace mlir {
 class Operation;
+struct AllocationSlice;
 namespace intel {
 /// Intel-specific callback to filter operations that need no barriers between
 /// each other.
@@ -13,7 +14,8 @@ namespace intel {
 /// quite coarse. The filter will return true if no barrier is needed between
 /// `lhsOp` and `rhsOp`.
 bool membarFilter(Operation *lhsOp, Operation *rhsOp, bool /*lhsOpIsRead*/,
-                  bool /*rhsOpIsRead*/, Allocation *allocation);
+                  bool /*rhsOpIsRead*/, Allocation *allocation,
+                  const AllocationSlice &, const AllocationSlice &);
 } // namespace intel
 } // namespace mlir
 
