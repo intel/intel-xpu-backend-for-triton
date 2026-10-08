@@ -826,4 +826,45 @@ TEST_F(SymbolicBoundsTest, CandidateProofStillClosesObligations) {
   EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 >= -1; arg0 <= 2147483646}");
 }
 
+TEST_F(SymbolicBoundsTest, MaterializeInsertsBeforeTheAnchor) {
+  parse(R"(
+    tt.func @f(%ptr: !tt.ptr<f32>, %n: i32) {
+      %c0 = arith.constant 0 : i32
+      %c64 = arith.constant 64 : i32
+      %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+      %ns = tt.splat %n : i32 -> tensor<64xi32>
+      scf.for %i = %c0 to %n step %c64 : i32 {
+        %is = tt.splat %i : i32 -> tensor<64xi32>
+        %idx = arith.addi %is, %lane : tensor<64xi32>
+        %mask = arith.cmpi slt, %idx, %ns : tensor<64xi32> loc("mask")
+        scf.yield
+      }
+      tt.return
+    })");
+  tt::intel::BoundProof p = proof(get("mask"));
+  // materialize returns a null Value for no conditions, so this must be
+  // conditional for the placement to be observable.
+  ASSERT_FALSE(p.conditions.empty());
+
+  scf::ForOp loop;
+  module->walk([&](scf::ForOp f) { loop = f; });
+  Operation *term = func().getBody().front().getTerminator();
+
+  // The builder deliberately points at the function terminator, not at the
+  // anchor: the documented contract is that the guard goes immediately before
+  // `before` whatever the caller's insertion point is.
+  OpBuilder b(term);
+  Value guard = tt::intel::materialize(p.conditions, loop, b);
+  ASSERT_TRUE(guard);
+  Operation *g = guard.getDefiningOp();
+
+  // The guard is the last op emitted and sits right before the loop, and
+  // nothing was emitted between the loop and the terminator.
+  EXPECT_EQ(g->getNextNode(), loop.getOperation());
+  EXPECT_EQ(loop->getNextNode(), term);
+  // The caller's insertion point is restored.
+  EXPECT_EQ(b.getInsertionBlock(), term->getBlock());
+  EXPECT_TRUE(b.getInsertionPoint() == Block::iterator(term));
+}
+
 } // namespace

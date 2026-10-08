@@ -460,6 +460,10 @@ bool guardFitsPlainI64(const AffineForm &e) {
 Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
                   OpBuilder &builder) {
   assert(before && "need an insertion anchor");
+  // Place the guard before `before` whatever the caller's insertion point is,
+  // and leave that insertion point as it was.
+  OpBuilder::InsertionGuard insertionGuard(builder);
+  builder.setInsertionPoint(before);
   Location loc = before->getLoc();
   Type i64 = builder.getI64Type();
   DominanceInfo domInfo(before->getParentOp());
