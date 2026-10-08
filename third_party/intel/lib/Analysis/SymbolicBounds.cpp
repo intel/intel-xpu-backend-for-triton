@@ -2277,6 +2277,7 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
 
 BoundProof SymbolicBoundsProver::proveTrue(Value v, QueryContext ctx) {
   using V = BoundProof::Verdict;
+  ++maskEvaluations;
 
   // A block argument is where the "look through" must stop. getFinalValue
   // would substitute an iter_arg's init value without inspecting the yield, so

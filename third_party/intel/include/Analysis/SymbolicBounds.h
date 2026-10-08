@@ -262,10 +262,22 @@ public:
   /// always true. Any block argument is therefore `Unknown`.
   BoundProof proveTrue(Value v, QueryContext ctx);
 
+  /// Diagnostic, for tests: how many mask nodes `proveTrue` has evaluated over
+  /// this prover's lifetime.
+  unsigned numMaskEvaluations() const { return maskEvaluations; }
+
   static constexpr unsigned kMaxDepth = 16;
   static constexpr unsigned kMaxTerms = 16;
   static constexpr unsigned kMaxFactConditions = 4;
   static constexpr unsigned kMaxGuards = 8;
+  /// Bounds on `proveTrue`'s walk over the mask expression itself, as opposed
+  /// to the comparisons it hands to `prove`. The depth is for stack safety, so
+  /// it is far above `kMaxDepth`: reusing that would turn a mask with more than
+  /// 16 nested conjuncts from decided to `Unknown`. The visits bound how many
+  /// mask nodes one query evaluates; the work inside each comparison's `prove`
+  /// is not counted against it.
+  static constexpr unsigned kMaxMaskDepth = 64;
+  static constexpr unsigned kMaxMaskVisits = 1024;
 
 private:
   /// The result of bounding an affine form over a loop's iteration space.
@@ -480,6 +492,8 @@ private:
   /// what makes `height` computable without threading a return value through
   /// every recursive case.
   unsigned deepest = 0;
+  /// Mask nodes `proveTrue` has evaluated; see `numMaskEvaluations`.
+  unsigned maskEvaluations = 0;
 };
 
 /// Normalizes a condition in place: folds the constant into the bound,

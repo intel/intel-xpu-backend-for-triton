@@ -928,4 +928,20 @@ TEST_F(SymbolicBoundsTest, ValuesCreatedAfterConstructionGetDistinctOrders) {
   EXPECT_EQ(diff.numTerms(), 2u);
 }
 
+TEST_F(SymbolicBoundsTest, MaskEvaluationsCountEachNodeOfASmallMask) {
+  parse(R"(
+    tt.func @f(%a: i32, %b: i32) {
+      %c0 = arith.constant 0 : i32
+      %x = arith.cmpi sge, %a, %c0 : i32
+      %y = arith.cmpi sge, %b, %c0 : i32
+      %m = arith.andi %x, %y : i1 loc("m")
+      tt.return
+    })");
+  EXPECT_EQ(prover->numMaskEvaluations(), 0u);
+  Value m = get("m");
+  prover->proveTrue(m, at(m));
+  // The conjunction and its two comparison operands.
+  EXPECT_EQ(prover->numMaskEvaluations(), 3u);
+}
+
 } // namespace
