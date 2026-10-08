@@ -241,6 +241,41 @@ def _find_cuda_guard_patterns(source: str) -> list[dict]:
     } for guard in guards for node in ast.walk(guard) if isinstance(node, ast.Call) and _is_platform_cuda_check(node)]
 
 
+# torch.cuda runtime APIs with a torch.xpu equivalent
+_CUDA_TO_XPU_RUNTIME = {
+    "CUDAGraph": "XPUGraph",
+    "Event": "Event",
+    "Stream": "Stream",
+    "_sleep": "_sleep",
+    "current_stream": "current_stream",
+    "graph": "graph",
+    "stream": "stream",
+    "synchronize": "synchronize",
+}
+
+
+def _to_xpu_runtime(match: re.Match[str]) -> str:
+    """re.sub callback: torch.cuda.<API> -> torch.xpu.<equivalent>, other torch.cuda.* unchanged."""
+    api = match.group(1)
+    return f"torch.xpu.{_CUDA_TO_XPU_RUNTIME[api]}" if api in _CUDA_TO_XPU_RUNTIME else match.group(0)
+
+
+def _find_cuda_runtime_patterns(source: str) -> list[dict]:
+    """Find torch.cuda.<runtime API> references that have a torch.xpu equivalent."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    return [{
+        "type": "cuda_runtime_api",
+        "line": node.lineno,
+        "col": node.col_offset,
+    } for node in ast.walk(tree) if isinstance(node, ast.Attribute) and node.attr in _CUDA_TO_XPU_RUNTIME
+            and isinstance(node.value, ast.Attribute) and node.value.attr == "cuda"
+            and isinstance(node.value.value, ast.Name) and node.value.value.id == "torch"]
+
+
 def _apply_patches(source: str, patterns: list[dict]) -> str:
     """Apply text-level patches guided by AST analysis."""
     lines = source.split("\n")
@@ -319,6 +354,10 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
                 line,
             )
 
+        elif ptype == "cuda_runtime_api":
+            # Replace torch.cuda.<API> with its torch.xpu equivalent
+            lines[line_idx] = re.sub(r"torch\.cuda\.(\w+)\b", _to_xpu_runtime, line)
+
     return "\n".join(lines)
 
 
@@ -327,7 +366,7 @@ def patch_file(filepath: Path, relax_cuda_guards: bool = False) -> bool:
     source = filepath.read_text()
     patterns = _find_cuda_patterns(source)
     if relax_cuda_guards:
-        patterns += _find_cuda_guard_patterns(source)
+        patterns += _find_cuda_guard_patterns(source) + _find_cuda_runtime_patterns(source)
     if not patterns:
         return False
 
@@ -367,11 +406,17 @@ def main() -> None:
     ]
 
     # Test files whose CUDA-only skips guard Triton kernels that also run on XPU. These get the
-    # CUDA->XPU replacements above plus their skip guards relaxed to admit XPU.
+    # CUDA->XPU replacements above, their skip guards relaxed to admit XPU, and torch.cuda
+    # runtime APIs (streams, events, graphs) mapped to torch.xpu.
     cuda_guard_files = {
         vllm_root / path
         for path in (
+            "tests/distributed/test_dcp_a2a.py",
+            "tests/kernels/attention/test_flashmla_sparse.py",
             "tests/kernels/core/test_fused_embed_norm.py",
+            "tests/kernels/core/test_fused_q_kv_rmsnorm.py",
+            "tests/kernels/mamba/test_mamba_ssm.py",
+            "tests/kernels/quantization/test_nvfp4_emulation.py",
             "tests/kernels/quantization/test_quantized_embedding.py",
             "tests/kernels/test_compressor_kv_cache.py",
             "tests/model_executor/layers/test_mla_short_prefill_indexer.py",
@@ -382,12 +427,15 @@ def main() -> None:
             "tests/models/test_deepseek_v41_replay_start.py",
             "tests/v1/attention/test_dcp_a2a_pack_mask.py",
             "tests/v1/attention/test_deepseek_v4_swa_visible.py",
+            "tests/v1/attention/test_indexer_dcp_localize.py",
             "tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py",
             "tests/v1/worker/test_gpu_block_table.py",
             "tests/v1/worker/test_gpu_kpool_tail_slot_mapping.py",
             "tests/v1/worker/test_gpu_rejection_sampler_chunking.py",
             "tests/v1/worker/test_gpu_rejection_sampler_i64.py",
+            "tests/v1/worker/test_kv_block_zeroer.py",
             "tests/v1/worker/test_mamba_hybrid_model_state.py",
+            "tests/watermarking/test_watermarking.py",
         )
     }
 
