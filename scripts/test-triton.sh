@@ -48,6 +48,7 @@ TEST:
     --vllm-lora
     --vllm-batch-invariant
     --vllm-model-ops
+    --vllm-v1-runner
     --install-vllm
     --sglang
     --sglang-attention
@@ -143,6 +144,7 @@ TEST_VLLM_TDESC=false
 TEST_VLLM_LORA=false
 TEST_VLLM_BATCH_INVARIANT=false
 TEST_VLLM_MODEL_OPS=false
+TEST_VLLM_V1_RUNNER=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
@@ -441,6 +443,11 @@ while (( $# != 0 )); do
       ;;
     --vllm-model-ops)
       TEST_VLLM_MODEL_OPS=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-v1-runner)
+      TEST_VLLM_V1_RUNNER=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -1194,6 +1201,7 @@ run_vllm_tests() {
   run_vllm_lora_tests
   run_vllm_batch_invariant_tests
   run_vllm_model_ops_tests
+  run_vllm_v1_runner_tests
 }
 
 
@@ -1245,6 +1253,9 @@ run_vllm_mrv2_tests() {
       tests/v1/worker/test_kv_block_zeroer.py \
       tests/v1/test_outputs.py \
       tests/v1/e2e/test_hybrid_chunked_prefill.py \
+      tests/models/language/pooling/test_classification.py::test_bert_model_runner_v2 \
+      tests/entrypoints/openai/chat_completion/test_logprob_token_ids.py \
+      tests/watermarking/test_watermarking.py \
       tests/v1/kv_connector/unit/test_nixl_connector.py
 }
 
@@ -1288,7 +1299,7 @@ run_vllm_triton_attn_tests() {
   # Triton attention kernels: merge_attn_states_kernel, _fwd_kernel_stage1,
   # _fwd_grouped_kernel_stage1, _fwd_kernel_stage2, kernel_unified_attention_2d,
   # kernel_unified_attention_3d, reduce_segments, reshape_and_cache_kernel_flash,
-  # plus the DeepSeek-V4 sparse MLA / compressor / KV cache kernels.
+  # plus the DeepSeek-V4 sparse MLA / compressor / KV cache, DCP and DiffKV kernels.
   VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_triton_attn \
     run_pytest_command -vvv \
       tests/v1/attention/test_mla_backends.py \
@@ -1305,7 +1316,10 @@ run_vllm_triton_attn_tests() {
       tests/kernels/test_fused_inv_rope_fp8_quant.py \
       tests/v1/attention/test_deepseek_v4_swa_visible.py \
       tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py \
-      tests/v1/attention/test_dcp_a2a_pack_mask.py
+      tests/v1/attention/test_dcp_a2a_pack_mask.py \
+      tests/v1/attention/test_indexer_dcp_localize.py \
+      tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels \
+      tests/kernels/attention/test_triton_unified_attention_diffkv.py
 }
 
 
@@ -1375,7 +1389,8 @@ run_vllm_quant_tests() {
       tests/kernels/quantization/test_per_token_group_quant.py \
       tests/kernels/quantization/test_quantized_embedding.py \
       tests/quantization/test_turboquant.py \
-      tests/quantization/test_per_token_kv_cache.py
+      tests/quantization/test_per_token_kv_cache.py \
+      tests/kernels/quantization/test_nvfp4_emulation.py
 }
 
 
@@ -1540,7 +1555,26 @@ run_vllm_model_ops_tests() {
       tests/models/inkling/test_sconv_metadata.py \
       tests/model_executor/test_bailing_mrope.py \
       tests/kernels/core/test_fused_embed_norm.py \
-      tests/kernels/core/test_vit_bilinear_pos_embed.py
+      tests/kernels/core/test_vit_bilinear_pos_embed.py \
+      tests/kernels/core/test_fused_q_kv_rmsnorm.py
+}
+
+
+run_vllm_v1_runner_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM V1 model runner tests       *******"
+  echo "********************************************************"
+
+  enter_vllm_test_env
+  # Kernels only reached on the V1 model runner: ComputeSlotMappingKernel (V1 block
+  # table), and copy_and_expand_eagle_inputs_kernel from speculative methods Model
+  # Runner V2 rejects (draft_model, parallel drafting)
+  VLLM_USE_V2_MODEL_RUNNER=0 TRITON_TEST_SUITE=vllm_v1_runner \
+    run_pytest_command -vvv \
+      "tests/v1/e2e/test_hybrid_chunked_prefill.py::test_mtp_speculative_mixed_batch_short_prefill[False-qwen]" \
+      tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_draft_model \
+      tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_parallel_drafting \
+      tests/v1/spec_decode/test_eagle.py::test_propose_stores_probabilistic_draft_probs
 }
 
 
@@ -1729,6 +1763,9 @@ test_triton() {
   fi
   if [ "$TEST_VLLM_MODEL_OPS" == true ]; then
     run_vllm_model_ops_tests
+  fi
+  if [ "$TEST_VLLM_V1_RUNNER" == true ]; then
+    run_vllm_v1_runner_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests

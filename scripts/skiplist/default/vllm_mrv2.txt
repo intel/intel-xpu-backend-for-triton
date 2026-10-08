@@ -26,3 +26,8 @@ tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logits]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logprobs]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-processed_logits]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-processed_logprobs]
+# Watermarking unit tests out of sync with vLLM APIs at the current pin: https://github.com/intel/intel-xpu-backend-for-triton/issues/8362
+tests/watermarking/test_watermarking.py::test_draft_sampler_uses_draft_key_and_advances_context
+tests/watermarking/test_watermarking.py::test_dspark_reduced_vocab_draft_sampler_applies_watermarking
+tests/watermarking/test_watermarking.py::test_dspark_target_only_watermarking_leaves_drafts_unwatermarked
+tests/watermarking/test_watermarking.py::test_gpu_sampler_warns_when_watermarking_is_enabled_for_greedy
