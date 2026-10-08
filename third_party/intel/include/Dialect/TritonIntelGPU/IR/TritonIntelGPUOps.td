@@ -64,6 +64,55 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
   }];
 }
 
+def TTIG_LoadShuffleBitcastOp : TTIG_Op<"load_shuffle_bitcast", [
+  SameLoadStoreOperandsAndResultShape,
+  AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask", "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
+  TypesMatchWith<"other matches ptr type", "ptr", "other", "getPointeeType($_self)",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+  let summary = "Load from a pointer or tensor of pointers";
+
+  let description = [{
+    Load from a pointer or tensor of pointers.
+
+    This op mirrors `tt.load` but lives in the Intel dialect so Intel-specific
+    pipelines can materialize and lower loads without first round-tripping
+    through the generic Triton dialect op.
+  }];
+
+  let arguments = (
+    ins
+    TT_PtrLike:$ptr,
+    Optional<TT_BoolLike>:$mask,
+    Optional<TT_Type>:$other,
+    OptionalAttr<AnyAttr>:$cachePolicy,
+    DefaultValuedAttr<BoolAttr, "false">:$isVolatile
+  );
+
+  let results = (outs TT_Type:$result);
+
+//  let builders = [
+//    OpBuilder<(ins "Value":$ptr,
+//                   CArg<"bool", "false">:$isVolatile)>,
+//    OpBuilder<(ins "Value":$ptr, "Value":$mask,
+//                   CArg<"bool", "false">:$isVolatile)>,
+//    OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other,
+//                   CArg<"bool", "false">:$isVolatile)>
+//  ];
+
+  let assemblyFormat = [{
+    $ptr (`,` $mask^)? (`,` $other^)?
+    attr-dict `:` type($ptr) `->` type($result)
+  }];
+
+  let hasVerifier = 1;
+  let hasCanonicalizer = 1;
+}
+
 
 def TTIG_DescriptorPrefetchOp : TTIG_Op<"descriptor_prefetch", [MemoryEffects<[MemWrite<L2Cache>]>, TT_DescriptorOpInterface]> {
   let summary = "Tensor descriptor prefetch operation";
