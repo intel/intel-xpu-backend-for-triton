@@ -110,13 +110,22 @@ bool isDivisible(Value value, int64_t divisor) {
   }
 
   // Case 4: Value is defined by arith::ExtSIOp, arith::TruncIOp,
-  // tt::AddPtrOp or arith::AddIOp operation.
+  // tt::AddPtrOp, arith::AddIOp, arith::SubIOp, arith::MinSIOp or
+  // arith::MaxSIOp operation. The result of min/max is one of its operands.
   if (auto *op = value.getDefiningOp()) {
-    if (isa<arith::ExtSIOp, arith::TruncIOp, tt::AddPtrOp, arith::AddIOp>(op)) {
+    if (isa<arith::ExtSIOp, arith::TruncIOp, tt::AddPtrOp, arith::AddIOp,
+            arith::SubIOp, arith::MinSIOp, arith::MaxSIOp>(op)) {
       return llvm::all_of(op->getOperands(), [&](Value operand) {
         return isDivisible(operand, divisor);
       });
     }
+  }
+
+  // Case 5: Value is defined by an arith.select operation. The condition is
+  // irrelevant as long as both candidate values are divisible.
+  if (auto selectOp = value.getDefiningOp<arith::SelectOp>()) {
+    return isDivisible(selectOp.getTrueValue(), divisor) &&
+           isDivisible(selectOp.getFalseValue(), divisor);
   }
 
   return false;

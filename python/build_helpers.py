@@ -752,7 +752,7 @@ def get_nvidia_toolchain_packages():
             component="cuda_nvcc",
             version=versions["ptxas-blackwell"],
             src_path=f"bin/ptxas{exe}",
-            dst_path="bin/ptxas-blackwell",
+            dst_path=f"bin/ptxas-blackwell{exe}",
             override_attr="ptxas_blackwell_path",
         ),
         NvidiaToolchainPackage(

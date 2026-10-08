@@ -83,8 +83,13 @@ def matmul_kernel_with_tensor_descriptors(
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     if transpose_a:
-        a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(K, M), strides=(stride_ak, stride_am),
-                                           block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_M))
+        # Tensor descriptors require every non-innermost stride to be 16-byte aligned. For A^T the
+        # (K, M) row stride is M elements, which is misaligned for small M (e.g. M=1, M=4 in bf16),
+        # so load A through a tensor of pointers in that case.
+        A_DESC_ALIGNED: tl.constexpr = (stride_ak * (a_ptr.dtype.element_ty.primitive_bitwidth // 8)) % 16 == 0
+        if A_DESC_ALIGNED:
+            a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(K, M), strides=(stride_ak, stride_am),
+                                               block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_M))
     else:
         a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
                                            block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
@@ -95,11 +100,20 @@ def matmul_kernel_with_tensor_descriptors(
         b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
                                            block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
+    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
         if transpose_a:
-            a = a_desc.load([off_k, pid_m * BLOCK_SIZE_M]).T
+            if A_DESC_ALIGNED:
+                a = a_desc.load([off_k, pid_m * BLOCK_SIZE_M]).T
+            else:
+                # Load in the descriptor's (K, M) orientation and transpose, like the aligned path,
+                # so the load is contiguous along M rather than strided as an (M, K) load would be.
+                a_ptrs = a_ptr + (off_k + offs_k)[:, None] * stride_ak + offs_am[None, :] * stride_am
+                a_mask = ((off_k + offs_k)[:, None] < K) & (offs_am[None, :] < M)
+                a = tl.load(a_ptrs, mask=a_mask, other=0.0).T
         else:
             a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         if transpose_b:
