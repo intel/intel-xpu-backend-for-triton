@@ -28,6 +28,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <tuple>
 
 namespace mlir::triton::intel {
 
@@ -52,7 +53,9 @@ enum class SymbolKind {
 using AxisPlacement = SmallVector<int32_t, 4>;
 
 /// Built only by `SymbolicBoundsProver::symbolFor`, so `order` is always
-/// assigned and two distinct values can never tie in the sort order.
+/// nonzero and two distinct values never tie in the sort order: a value the
+/// prover numbered at construction keeps its IR pre-order index, and any other
+/// value takes the next unused order when first seen and keeps it.
 class Symbol {
 public:
   SymbolKind kind() const { return kind_; }
@@ -63,7 +66,8 @@ public:
   /// `Quotient`: the divisor of `divsi X, divisor`. `TripCount`: the step.
   int64_t divisor() const { return divisor_; }
   const AxisPlacement &placement() const { return placement_; }
-  /// Sort key only: the prover's pre-order index of `value`, from 1.
+  /// Sort key only, unique per distinct value within one prover; see
+  /// `SymbolicBoundsProver::symbolFor`.
   unsigned order() const { return order_; }
 
   bool operator==(const Symbol &o) const {
@@ -90,7 +94,8 @@ private:
 
 /// `c0 + sum(ci * si)` over the integers, with int64_t coefficients. Terms are
 /// kept sorted by `Symbol::operator<` with nonzero coefficients, so equality is
-/// structural and rendering is identical across processes. Every arithmetic
+/// structural and, for values the prover numbered at construction, rendering is
+/// identical across processes. Every arithmetic
 /// method is overflow-checked: an overflow sets a sticky flag, and a flagged
 /// form is unusable - `normalize` turns it into an `Opaque` symbol, candidate
 /// formation rejects it, and a flagged comparison difference ends the query
@@ -190,7 +195,13 @@ struct BoundProof {
   Verdict verdict = Unknown;
   /// Facts, then preconditions, then guards.
   SmallVector<BoundCondition, 4> conditions;
-  /// The `llvm.intr.assume` operations the proof consulted.
+  /// The `llvm.intr.assume` operations the proof consulted: those that
+  /// established a candidate outright, and every assume that can have narrowed
+  /// a range the proof read (all of those in the function that owns the value,
+  /// or in the whole module when it contains a call). That is an
+  /// over-approximation and may list unrelated assumes. For any verdict but
+  /// `Unknown`, and for any `QueryContext`, an empty list means the proof used
+  /// no assume-derived range. `Unknown` carries no such claim.
   SmallVector<Operation *, 4> factsUsed;
 };
 
@@ -222,12 +233,20 @@ class SymbolicBoundsProver {
 public:
   /// `solver` must already have `IntegerRangeAnalysis` loaded and run, as
   /// `SignednessProver` requires. Collects the assume facts under `root` once
-  /// and numbers every value under it for the symbol order.
+  /// and numbers every value of its enclosing function (of `root` itself, for a
+  /// module) for the symbol order, so a prover rooted at a loop still orders
+  /// the function arguments and everything else a query can reach.
   SymbolicBoundsProver(const DataFlowSolver &solver, DominanceInfo &domInfo,
                        Operation *root);
 
   /// The only way to create a `Symbol`: fills `order` from the pre-order
-  /// numbering built at construction.
+  /// numbering built at construction. A value that numbering does not cover -
+  /// outside the numbered scope, or created after construction - takes the
+  /// next unused order the first time it is seen, so distinct values never
+  /// tie. Those orders follow first-query order rather than IR position: that
+  /// can change where such a value's term renders and, among equal
+  /// coefficients, which sound candidate guard `prove` picks, never whether a
+  /// verdict is sound.
   Symbol symbolFor(SymbolKind kind, Value v, int64_t divisor = 0,
                    AxisPlacement placement = {}) const;
 
@@ -248,12 +267,32 @@ public:
   /// substitutes an iter_arg's init value without inspecting the yield: a
   /// loop-carried mask initialized `true` and yielding `false` would read as
   /// always true. Any block argument is therefore `Unknown`.
+  ///
+  /// The walk over the mask is bounded: it goes at most `kMaxMaskDepth` deep
+  /// and evaluates at most `kMaxMaskVisits` nodes per query. A branch cut off
+  /// by the depth is `Unknown` and a refuted operand still refutes the
+  /// conjunction; running out of visits makes the whole query `Unknown`, even
+  /// if an operand was already refuted. Complete answers are memoized per
+  /// (value, point, loop), which is valid while the IR, the solver and the
+  /// dominance info are unchanged.
   BoundProof proveTrue(Value v, QueryContext ctx);
+
+  /// Diagnostic, for tests: how many mask nodes `proveTrue` has evaluated over
+  /// this prover's lifetime.
+  unsigned numMaskEvaluations() const { return maskEvaluations; }
 
   static constexpr unsigned kMaxDepth = 16;
   static constexpr unsigned kMaxTerms = 16;
   static constexpr unsigned kMaxFactConditions = 4;
   static constexpr unsigned kMaxGuards = 8;
+  /// Bounds on `proveTrue`'s walk over the mask expression itself, as opposed
+  /// to the comparisons it hands to `prove`. The depth is for stack safety, so
+  /// it is far above `kMaxDepth`: reusing that would turn a mask with more than
+  /// 16 nested conjuncts from decided to `Unknown`. The visits bound how many
+  /// mask nodes one query evaluates; the work inside each comparison's `prove`
+  /// is not counted against it.
+  static constexpr unsigned kMaxMaskDepth = 64;
+  static constexpr unsigned kMaxMaskVisits = 1024;
 
 private:
   /// The result of bounding an affine form over a loop's iteration space.
@@ -314,9 +353,12 @@ private:
     SmallVector<Obligation, 4> dividendObligations;
   };
 
-  /// Substitutes quotient terms by their bounds so the dividend can cancel.
-  std::optional<AffineForm>
-  substituteQuotients(const AffineForm &lo, QueryContext ctx, CandidateSet &cs);
+  /// Substitutes quotient terms by their bounds so the dividend can cancel:
+  /// the bounds that minimize `e`, or with `maximize` those that maximize it.
+  std::optional<AffineForm> substituteQuotients(const AffineForm &e,
+                                                QueryContext ctx,
+                                                CandidateSet &cs,
+                                                bool maximize);
   const QuotientInfo *findQuotientInfo(const Symbol &sym,
                                        QueryContext ctx) const;
   /// The innermost enclosing `scf.for` of `v`, as a map key; null when `v` is
@@ -353,8 +395,10 @@ private:
                            CandidateSet &cs,
                            SmallVectorImpl<BoundCondition> &out);
 
-  /// True when the symbols' constant ranges alone imply `cond`.
-  bool impliedByRanges(const BoundCondition &cond) const;
+  /// True when the symbols' constant ranges alone imply `cond`; `assumes`
+  /// collects the provenance of every range read, as for `rangeOf`.
+  bool impliedByRanges(const BoundCondition &cond, QueryContext ctx,
+                       SmallVectorImpl<Operation *> *assumes) const;
 
   /// The single exit of every successful path.
   BoundProof finalize(BoundProof::Verdict onD, CandidateSet cs,
@@ -378,7 +422,10 @@ private:
   /// The assume establishing `cond` outright, or null.
   Operation *assumedBy(const BoundCondition &cond, QueryContext ctx) const;
   /// The constant range of `v`, recording into `assumes` every assume that
-  /// could have narrowed it (over-approximate provenance, never an omission).
+  /// could have narrowed it: all of those in the function that owns `v`, or in
+  /// the whole module when it contains a call, since the range analysis is
+  /// interprocedural and a callee's argument takes the range of what its call
+  /// sites pass. An over-approximation, never an omission.
   std::optional<std::pair<int64_t, int64_t>>
   rangeOf(Value v, QueryContext ctx,
           SmallVectorImpl<Operation *> *assumes = nullptr) const;
@@ -401,13 +448,16 @@ private:
   /// The identity placement [0..rank-1] of `v`'s type, empty for a scalar.
   static AxisPlacement identityPlacement(Value v);
   /// Constant bounds of one symbol: exact for `Lane`, else from the range
-  /// analysis; nullopt when no range can be inferred.
+  /// analysis; nullopt when no range can be inferred. `assumes` collects the
+  /// provenance, as for `rangeOf`; null to not record.
   std::optional<std::pair<int64_t, int64_t>>
-  symbolConstantBounds(const Symbol &sym) const;
+  symbolConstantBounds(const Symbol &sym, QueryContext ctx,
+                       SmallVectorImpl<Operation *> *assumes) const;
   /// Bounds an affine form from constants alone; nullopt on an unbounded
-  /// symbol or on overflow.
+  /// symbol or on overflow. `assumes` as for `symbolConstantBounds`.
   std::optional<std::pair<int64_t, int64_t>>
-  boundConstant(const AffineForm &e) const;
+  boundConstant(const AffineForm &e, QueryContext ctx,
+                SmallVectorImpl<Operation *> *assumes) const;
   /// Records the wrap obligation of one traversed arithmetic operation.
   void recordWrap(Operation *op, const AffineForm &result,
                   SmallVectorImpl<Obligation> &obligations) const;
@@ -415,9 +465,20 @@ private:
   const DataFlowSolver &solver;
   DominanceInfo &domInfo;
   Operation *root;
-  /// Pre-order index of every integer value under `root`, from 1, so the
-  /// symbol order is total and reproducible across processes.
-  DenseMap<Value, unsigned> valueOrder;
+  /// The operation whose values are numbered: `root` if it is a function,
+  /// else its enclosing function, else `root` (a module).
+  Operation *scope;
+  /// The symbol order of every value seen so far: the pre-order index of each
+  /// value under `scope`, from 1, assigned at construction, then the first-seen
+  /// values after them. An order never changes once assigned. Mutable because
+  /// `symbolFor` is const and extends it.
+  mutable DenseMap<Value, unsigned> valueOrder;
+  /// The next order to hand out.
+  mutable unsigned nextOrder = 1;
+  /// The top-level operation when it contains a call, else null. The range
+  /// analysis then carries ranges between functions, so the assumes that can
+  /// have narrowed a range are in all of them, not just the owner's.
+  Operation *interproceduralScope = nullptr;
   /// Per-query: set when a budget is exhausted, which makes the query
   /// `Unknown`.
   bool exhausted = false;
@@ -458,6 +519,43 @@ private:
   /// what makes `height` computable without threading a return value through
   /// every recursive case.
   unsigned deepest = 0;
+  /// Mask nodes `proveTrue` has evaluated; see `numMaskEvaluations`.
+  unsigned maskEvaluations = 0;
+
+  /// One mask node's answer, with what `proveTrue` needs to cache it safely.
+  struct MaskResult {
+    BoundProof proof;
+    /// Mask nodes between this one and the deepest below it; 0 for a leaf.
+    unsigned height = 0;
+    /// A bound cut the walk short somewhere below, so `proof` may be weaker
+    /// than this node deserves. Such an answer is never cached as complete.
+    bool truncated = false;
+  };
+  /// Keyed by point and loop as well as value: they decide which assumes apply
+  /// and what the loop bounds are.
+  struct MaskMemoKey {
+    const void *value;
+    Operation *at;
+    Operation *loop;
+    bool operator<(const MaskMemoKey &o) const {
+      return std::tie(value, at, loop) < std::tie(o.value, o.at, o.loop);
+    }
+  };
+  /// A complete answer and the height of the mask below it: it is reused only
+  /// where that subtree still fits under `kMaxMaskDepth`.
+  struct MaskMemoEntry {
+    BoundProof proof;
+    unsigned height;
+  };
+  /// Memo, bounds and counters around `proveTrueNode`.
+  MaskResult proveTrueImpl(Value v, QueryContext ctx, unsigned depth);
+  /// One mask node, recursing through `proveTrueImpl`.
+  MaskResult proveTrueNode(Value v, QueryContext ctx, unsigned depth);
+  std::map<MaskMemoKey, MaskMemoEntry> maskMemo;
+  /// Per query: nodes evaluated so far, and whether that ran past
+  /// `kMaxMaskVisits`.
+  unsigned maskVisits = 0;
+  bool maskBudgetExhausted = false;
 };
 
 /// Normalizes a condition in place: folds the constant into the bound,
