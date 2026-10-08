@@ -150,3 +150,33 @@ module {
     tt.return
   }
 }
+
+// -----
+
+// COM: i128 is wider than the int64_t domain the prover reasons in. Read as its
+// COM: low 64 bits an unconstrained i128 looks non-negative, so this must be
+// COM: Unknown rather than Satisfied.
+// CHECK-LABEL: tt.func @i128_unconstrained_nonneg
+module {
+  tt.func @i128_unconstrained_nonneg(%a: i128) {
+    %c0 = arith.constant 0 : i128
+    // expected-remark@+1 {{verdict: Unknown}}
+    %cmp = arith.cmpi sge, %a, %c0 : i128
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A constant of 2^64 reads as 0 in its low 64 bits, which would make
+// COM: `2^64 <= 0` true.
+// CHECK-LABEL: tt.func @i128_constant_beyond_int64
+module {
+  tt.func @i128_constant_beyond_int64() {
+    %big = arith.constant 18446744073709551616 : i128
+    %c0 = arith.constant 0 : i128
+    // expected-remark@+1 {{verdict: Unknown}}
+    %cmp = arith.cmpi sle, %big, %c0 : i128
+    tt.return
+  }
+}

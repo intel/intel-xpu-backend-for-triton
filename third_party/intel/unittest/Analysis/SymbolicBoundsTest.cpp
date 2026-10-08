@@ -1463,4 +1463,161 @@ TEST_F(SymbolicBoundsTest, FactsUsedReachesTheCallersAssumesAcrossACall) {
   EXPECT_TRUE(usesAll(p, assumesOf(module.get())));
 }
 
+//===----------------------------------------------------------------------===//
+// Integers wider than 64 bits are outside the prover's int64_t domain.
+//===----------------------------------------------------------------------===//
+
+TEST_F(SymbolicBoundsTest, I128ConstantBeyondInt64IsUnknown) {
+  // 2^64 and 2^70 do not fit in int64_t; read as their low 64 bits, the first
+  // comparison would be `0 <= 0`.
+  parse(R"(
+    tt.func @f() {
+      %big = arith.constant 18446744073709551616 : i128
+      %zero = arith.constant 0 : i128
+      %cmp = arith.cmpi sle, %big, %zero : i128 loc("cmp")
+      %b70 = arith.constant 1180591620717411303424 : i128
+      %b71 = arith.constant 2361183241434822606848 : i128
+      %cmp2 = arith.cmpi slt, %b70, %b71 : i128 loc("cmp2")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Unknown");
+  EXPECT_EQ(verdict(get("cmp2")), "Unknown");
+}
+
+TEST_F(SymbolicBoundsTest, I128ArgumentComparisonIsUnknown) {
+  // An unconstrained i128 has the full range [-2^127, 2^127 - 1], which does
+  // not fit int64_t either.
+  parse(R"(
+    tt.func @f(%a: i128) {
+      %zero = arith.constant 0 : i128
+      %one = arith.constant 1 : i128
+      %ge = arith.cmpi sge, %a, %zero : i128 loc("ge")
+      %y = arith.addi %a, %one : i128
+      %lt = arith.cmpi slt, %a, %y : i128 loc("lt")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("ge")), "Unknown");
+  EXPECT_EQ(verdict(get("lt")), "Unknown");
+}
+
+TEST_F(SymbolicBoundsTest, I128TensorComparisonIsUnknown) {
+  parse(R"(
+    tt.func @f(%a: tensor<4xi128>) {
+      %zero = arith.constant dense<0> : tensor<4xi128>
+      %cmp = arith.cmpi sge, %a, %zero : tensor<4xi128> loc("cmp")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Unknown");
+}
+
+TEST_F(SymbolicBoundsTest, I128NormalizeIsOpaque) {
+  parse(R"(
+    tt.func @f(%a: i128) {
+      tt.return
+    })");
+  // A wide argument used to become an ordinary kernel-argument symbol, "arg0",
+  // with no range read, so it would not even crash. It is now opaque: it must
+  // not take part in affine reasoning.
+  EXPECT_EQ(norm(arg(0)), "opaque(arg0)");
+}
+
+TEST_F(SymbolicBoundsTest, I128MaskIsUnknown) {
+  parse(R"(
+    tt.func @f(%a: i128) {
+      %zero = arith.constant 0 : i128
+      %mask = arith.cmpi sge, %a, %zero : i128 loc("mask")
+      tt.return
+    })");
+  Value mask = get("mask");
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(mask, at(mask))), "Unknown");
+}
+
+TEST_F(SymbolicBoundsTest, I128AssumeDoesNotBreakConstruction) {
+  // The fact index is built over every assume in the module when the prover is
+  // constructed, whatever is queried, so a wide one must not abort it.
+  parse(R"(
+    tt.func @f(%a: i128, %x: i32) {
+      %z = arith.constant 0 : i128
+      %ge = arith.cmpi sge, %a, %z : i128
+      llvm.intr.assume %ge : i1
+      %c0 = arith.constant 0 : i32
+      %cmp = arith.cmpi sge, %x, %c0 : i32 loc("cmp")
+      tt.return
+    })");
+  std::string withAssume = verdict(get("cmp"));
+  parse(R"(
+    tt.func @f(%a: i128, %x: i32) {
+      %c0 = arith.constant 0 : i32
+      %cmp = arith.cmpi sge, %x, %c0 : i32 loc("cmp")
+      tt.return
+    })");
+  EXPECT_EQ(withAssume, verdict(get("cmp")));
+  EXPECT_EQ(withAssume, "Conditional{arg1 >= 0}");
+}
+
+TEST_F(SymbolicBoundsTest, I128InductionVariableLoopIsUnknownNotACrash) {
+  // A narrow iter_arg that steps with a wide induction variable would be
+  // rewritten as `IV + c`, putting an i128 symbol and the i128 loop bounds
+  // into an i32 comparison. The upper bound is not a constant, so the range
+  // analysis survives and it is the prover that has to decline.
+  parse(R"(
+    tt.func @f(%n: i32, %m: i32) {
+      %c0 = arith.constant 0 : i128
+      %c1 = arith.constant 1 : i128
+      %n128 = arith.extsi %n : i32 to i128
+      %ub = arith.addi %n128, %c1 : i128
+      %i0 = arith.constant 0 : i32
+      %k1 = arith.constant 1 : i32
+      %r = scf.for %iv = %c0 to %ub step %c1 iter_args(%a = %i0) -> (i32) : i128 {
+        %cmp = arith.cmpi slt, %a, %m : i32 loc("cmp")
+        %next = arith.addi %a, %k1 : i32
+        scf.yield %next : i32
+      }
+      tt.return
+    })");
+  std::string v = verdict(get("cmp"));
+  EXPECT_NE(v, "Satisfied");
+  EXPECT_NE(v, "Refuted");
+}
+
+TEST_F(SymbolicBoundsTest, I128LoopWithUnrepresentableStepIsUnknown) {
+  // An empty loop (ub < lb, not ub == lb: the range analysis computes a trip
+  // count whenever max >= min) whose step, 2^64 + 1, does not fit int64_t.
+  // The step is read before anything else about the loop.
+  parse(R"(
+    tt.func @f(%m: i32) {
+      %lb = arith.constant 1 : i128
+      %ub = arith.constant 0 : i128
+      %step = arith.constant 18446744073709551617 : i128
+      %i0 = arith.constant 0 : i32
+      %k1 = arith.constant 1 : i32
+      %r = scf.for %iv = %lb to %ub step %step iter_args(%a = %i0) -> (i32) : i128 {
+        %cmp = arith.cmpi slt, %a, %m : i32 loc("cmp")
+        %next = arith.addi %a, %k1 : i32
+        scf.yield %next : i32
+      }
+      tt.return
+    })");
+  std::string v = verdict(get("cmp"));
+  EXPECT_NE(v, "Satisfied");
+  EXPECT_NE(v, "Refuted");
+}
+
+TEST_F(SymbolicBoundsTest, WidthPolicyKeepsSixtyFourBitsAndIndexDecided) {
+  // The policy is "wider than 64 bits"; 64 bits and `index` stay supported.
+  // Opposite i64 extrema are not a usable pin: their difference overflows, so
+  // they are already Unknown.
+  parse(R"(
+    tt.func @f(%i: index) {
+      %hi = arith.constant 9223372036854775807 : i64
+      %lo = arith.constant 9223372036854775806 : i64
+      %cmp64 = arith.cmpi slt, %lo, %hi : i64 loc("cmp64")
+      %z = arith.constant 0 : index
+      %cmpIdx = arith.cmpi sge, %i, %z : index loc("cmpIdx")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp64")), "Satisfied");
+  EXPECT_EQ(verdict(get("cmpIdx")), "Conditional{arg0 >= 0}");
+}
+
 } // namespace
