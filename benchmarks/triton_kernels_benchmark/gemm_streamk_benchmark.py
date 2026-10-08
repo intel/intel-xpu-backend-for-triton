@@ -78,7 +78,10 @@ def mac_loop(
                                        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    off_k = remain_iters * BLOCK_SIZE_K
+    # Walk the segment mirrored inside its tile. When each program has at least one tile of iterations, its first
+    # segment then starts at k = 0, so programs on tiles that share A rows or B columns read the same k-panels at about
+    # the same time, as in oneDNN's reduced-cache stream-K.
+    off_k = (iters_per_tile - remain_iters - (end_iter - start_iter)) * BLOCK_SIZE_K
     for _ in range(start_iter, end_iter):
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
