@@ -171,10 +171,11 @@ tt.func @same_loc_two_guards(%ptr1: !tt.ptr<f32>, %ptr2: !tt.ptr<f32>,
 
 // -----
 
-// COM: A loop-carried mask: an i1 iter_arg initialized `true` and yielding a
-// COM: computed value. proveTrue stops at the block argument rather than
-// COM: substituting the init value, which would read as unconditionally true and
-// COM: unmask a load the mask is guarding. No versioning, mask kept.
+// COM: A loop-carried mask: an i1 iter_arg initialized `true` that turns false
+// COM: after the second iteration (r < 64 fails at r = 64, so the iteration at
+// COM: r = 128 runs with a false mask). The collector refuses a block-argument
+// COM: mask, so the prover is never asked; unmasking on the `true` init would be
+// COM: wrong. No versioning, mask kept.
 
 // CHECK-LABEL: tt.func @loop_carried_mask
 tt.func @loop_carried_mask(%ptr: !tt.ptr<f32>, %rnumel: i32) {
@@ -190,7 +191,7 @@ tt.func @loop_carried_mask(%ptr: !tt.ptr<f32>, %rnumel: i32) {
     %p = tt.addptr %ps, %lane : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
     %v = tt.load %p, %ms : tensor<64x!tt.ptr<f32>>
     tt.store %p, %v, %ms : tensor<64x!tt.ptr<f32>>
-    %next = arith.cmpi slt, %r, %rnumel : i32
+    %next = arith.cmpi slt, %r, %c64 : i32
     scf.yield %next : i1
   }
   tt.return
