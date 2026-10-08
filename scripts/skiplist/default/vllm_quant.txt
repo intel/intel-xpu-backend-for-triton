@@ -63,4 +63,3 @@ tests/kernels/quantization/test_fp8_quant.py::test_static_fp8_quant_1d_scale
 tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_functionality
 tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_multidimensional
 tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_edge_cases
-tests/kernels/quantization/test_block_fp8.py::test_per_token_group_quant_fp8
