@@ -45,7 +45,7 @@ def _nvfp4_to_mxfp8_tile_kernel(X, S, Y, YS, M: tl.constexpr, K: tl.constexpr, B
 @pytest.mark.parametrize("k", [160, 256])
 def test_nvfp4_to_mxfp8_tile(block_k, k, device):
     if not is_cuda() or not cuda_capability_geq(10, 0):
-        pytest.skip("requires Blackwell")
+        pytest.xfail("requires Blackwell")
     torch.manual_seed(42)
     m = 17
     values = torch.randint(0, 256, (m, k // 2), device=device, dtype=torch.uint8)
@@ -64,7 +64,7 @@ def test_nvfp4_to_mxfp8_tile(block_k, k, device):
 @pytest.mark.parametrize("maximum0", range(8))
 def test_nvfp4_to_mxfp8_tile_scale_pairs(maximum0, device):
     if not is_cuda() or not cuda_capability_geq(10, 0):
-        pytest.skip("requires Blackwell")
+        pytest.xfail("requires Blackwell")
     # Every finite nonnegative E4M3 scale pair, with independent FP4 maxima
     # in the two NVFP4 blocks that share one MXFP8 scale.
     cases = torch.arange(127 * 127 * 8, device=device)

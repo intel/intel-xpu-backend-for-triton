@@ -36,7 +36,7 @@ from triton_kernels.testing import assert_close
 def test_hopper_mxfp4_compiled_occupancy_budget(block_m, num_warps, occupancy, full_grid, scaled_input, device,
                                                 monkeypatch):
     if device != "cuda" or not is_cuda() or torch.cuda.get_device_capability()[0] != 9:
-        pytest.skip("requires Hopper")
+        pytest.xfail("requires Hopper")
 
     torch.manual_seed(0)
     m = block_m * torch.cuda.get_device_properties(device).multi_processor_count if full_grid else 129

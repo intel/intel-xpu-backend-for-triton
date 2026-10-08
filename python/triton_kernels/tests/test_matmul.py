@@ -696,7 +696,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 @pytest.mark.parametrize("out_dtype", [None, torch.float32])
 def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, k, tensor_scale, out_dtype, device, opt_flags_scope):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
-        pytest.skip("requires Blackwell")
+        pytest.xfail("requires Blackwell")
     torch.manual_seed(42)
     m, n = 73, 256
     source_m = 97 if mode == "gather" else m
