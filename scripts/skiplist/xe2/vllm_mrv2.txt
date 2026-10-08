@@ -20,6 +20,3 @@ tests/v1/worker/test_gpu_model_runner.py::test_update_states_pp_async_multi_requ
 tests/v1/worker/test_gpu_model_runner.py::test_update_config
 tests/v1/worker/test_gpu_model_runner.py::test_load_model_weights_inplace
 tests/v1/worker/test_gpu_model_runner.py::test_reload_weights_before_load_model
-
-# NIXL is not available: https://github.com/intel/intel-xpu-backend-for-triton/issues/7419
-tests/v1/kv_connector/unit/test_nixl_connector.py::test_reqs_to_send_deadline_rebased_to_worker_clock
