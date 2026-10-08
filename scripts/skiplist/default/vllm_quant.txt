@@ -48,7 +48,7 @@ tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_q
 tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-True-True-dtype1-shape0]
 tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-True-True-dtype2-shape0]
 
-#  : https://github.com/intel/intel-xpu-backend-for-triton/issues/
+# fp8 per-tensor scale not bit-exact vs reference for bf16: https://github.com/intel/intel-xpu-backend-for-triton/issues/8342
 tests/kernels/quantization/test_fp8_quant.py::test_dynamic_per_tensor_fp8_quant_strided_input[0-dtype0-8]
 tests/kernels/quantization/test_fp8_quant.py::test_dynamic_per_tensor_fp8_quant_strided_input[0-dtype0-16]
 
