@@ -195,7 +195,13 @@ struct BoundProof {
   Verdict verdict = Unknown;
   /// Facts, then preconditions, then guards.
   SmallVector<BoundCondition, 4> conditions;
-  /// The `llvm.intr.assume` operations the proof consulted.
+  /// The `llvm.intr.assume` operations the proof consulted: those that
+  /// established a candidate outright, and every assume that can have narrowed
+  /// a range the proof read (all of those in the function that owns the value,
+  /// or in the whole module when it contains a call). That is an
+  /// over-approximation and may list unrelated assumes. For any verdict but
+  /// `Unknown`, and for any `QueryContext`, an empty list means the proof used
+  /// no assume-derived range. `Unknown` carries no such claim.
   SmallVector<Operation *, 4> factsUsed;
 };
 
@@ -389,8 +395,10 @@ private:
                            CandidateSet &cs,
                            SmallVectorImpl<BoundCondition> &out);
 
-  /// True when the symbols' constant ranges alone imply `cond`.
-  bool impliedByRanges(const BoundCondition &cond) const;
+  /// True when the symbols' constant ranges alone imply `cond`; `assumes`
+  /// collects the provenance of every range read, as for `rangeOf`.
+  bool impliedByRanges(const BoundCondition &cond, QueryContext ctx,
+                       SmallVectorImpl<Operation *> *assumes) const;
 
   /// The single exit of every successful path.
   BoundProof finalize(BoundProof::Verdict onD, CandidateSet cs,
@@ -414,7 +422,10 @@ private:
   /// The assume establishing `cond` outright, or null.
   Operation *assumedBy(const BoundCondition &cond, QueryContext ctx) const;
   /// The constant range of `v`, recording into `assumes` every assume that
-  /// could have narrowed it (over-approximate provenance, never an omission).
+  /// could have narrowed it: all of those in the function that owns `v`, or in
+  /// the whole module when it contains a call, since the range analysis is
+  /// interprocedural and a callee's argument takes the range of what its call
+  /// sites pass. An over-approximation, never an omission.
   std::optional<std::pair<int64_t, int64_t>>
   rangeOf(Value v, QueryContext ctx,
           SmallVectorImpl<Operation *> *assumes = nullptr) const;
@@ -437,13 +448,16 @@ private:
   /// The identity placement [0..rank-1] of `v`'s type, empty for a scalar.
   static AxisPlacement identityPlacement(Value v);
   /// Constant bounds of one symbol: exact for `Lane`, else from the range
-  /// analysis; nullopt when no range can be inferred.
+  /// analysis; nullopt when no range can be inferred. `assumes` collects the
+  /// provenance, as for `rangeOf`; null to not record.
   std::optional<std::pair<int64_t, int64_t>>
-  symbolConstantBounds(const Symbol &sym) const;
+  symbolConstantBounds(const Symbol &sym, QueryContext ctx,
+                       SmallVectorImpl<Operation *> *assumes) const;
   /// Bounds an affine form from constants alone; nullopt on an unbounded
-  /// symbol or on overflow.
+  /// symbol or on overflow. `assumes` as for `symbolConstantBounds`.
   std::optional<std::pair<int64_t, int64_t>>
-  boundConstant(const AffineForm &e) const;
+  boundConstant(const AffineForm &e, QueryContext ctx,
+                SmallVectorImpl<Operation *> *assumes) const;
   /// Records the wrap obligation of one traversed arithmetic operation.
   void recordWrap(Operation *op, const AffineForm &result,
                   SmallVectorImpl<Obligation> &obligations) const;
@@ -461,6 +475,10 @@ private:
   mutable DenseMap<Value, unsigned> valueOrder;
   /// The next order to hand out.
   mutable unsigned nextOrder = 1;
+  /// The top-level operation when it contains a call, else null. The range
+  /// analysis then carries ranges between functions, so the assumes that can
+  /// have narrowed a range are in all of them, not just the owner's.
+  Operation *interproceduralScope = nullptr;
   /// Per-query: set when a budget is exhausted, which makes the query
   /// `Unknown`.
   bool exhausted = false;

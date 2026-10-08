@@ -1216,4 +1216,232 @@ TEST_F(SymbolicBoundsTest, MaskQueriesRecoverAfterTruncation) {
   EXPECT_EQ(tt::intel::toString(prover->proveTrue(ok, at(ok))), "Satisfied");
 }
 
+//===----------------------------------------------------------------------===//
+// factsUsed: every assume-derived range a proof used is reported.
+//===----------------------------------------------------------------------===//
+
+/// The `llvm.intr.assume` operations under `module`, in program order.
+static SmallVector<Operation *> assumesOf(ModuleOp module) {
+  SmallVector<Operation *> out;
+  module.walk([&](LLVM::AssumeOp a) { out.push_back(a); });
+  return out;
+}
+
+/// `proof` consulted every one of `wanted`.
+static ::testing::AssertionResult usesAll(const tt::intel::BoundProof &proof,
+                                          ArrayRef<Operation *> wanted) {
+  for (Operation *a : wanted)
+    if (!llvm::is_contained(proof.factsUsed, a)) {
+      std::string where;
+      llvm::raw_string_ostream os(where);
+      a->getLoc().print(os);
+      return ::testing::AssertionFailure()
+             << "missing the assume at " << where << "; factsUsed has "
+             << proof.factsUsed.size();
+    }
+  return ::testing::AssertionSuccess();
+}
+
+TEST_F(SymbolicBoundsTest, FactsUsedRecordsAssumesBehindAWrapDischarge) {
+  const char *withAssumes = R"(
+    tt.func @f(%a: i8) {
+      %c1 = arith.constant 1 : i8
+      %c100 = arith.constant 100 : i8
+      %c110 = arith.constant 110 : i8
+      %ge = arith.cmpi sge, %a, %c100 : i8
+      llvm.intr.assume %ge : i1
+      %le = arith.cmpi sle, %a, %c110 : i8
+      llvm.intr.assume %le : i1
+      %y = arith.addi %a, %c1 : i8
+      %cmp = arith.cmpi sgt, %y, %a : i8 loc("cmp")
+      tt.return
+    })";
+  parse(withAssumes);
+  tt::intel::BoundProof p = proof(get("cmp"));
+  // y = a + 1 cannot wrap for a in [100, 110]; only the assumes say so.
+  EXPECT_EQ(tt::intel::toString(p), "Satisfied");
+  EXPECT_TRUE(usesAll(p, assumesOf(module.get())));
+
+  // Control: without the assumes the same query needs a runtime condition.
+  parse(R"(
+    tt.func @f(%a: i8) {
+      %c1 = arith.constant 1 : i8
+      %y = arith.addi %a, %c1 : i8
+      %cmp = arith.cmpi sgt, %y, %a : i8 loc("cmp")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 <= 126}");
+}
+
+TEST_F(SymbolicBoundsTest, FactsUsedRecordsAssumesBehindAPrunedCondition) {
+  parse(R"(
+    tt.func @f(%n: i32) {
+      %c40 = arith.constant 40 : i32
+      %c50 = arith.constant 50 : i32
+      %le = arith.cmpi sle, %n, %c40 : i32
+      llvm.intr.assume %le : i1
+      %cmp = arith.cmpi slt, %n, %c50 : i32 loc("cmp")
+      tt.return
+    })");
+  tt::intel::BoundProof p = proof(get("cmp"));
+  // n <= 40 makes the runtime condition n <= 49 redundant, so it is pruned.
+  EXPECT_EQ(tt::intel::toString(p), "Satisfied");
+  EXPECT_TRUE(usesAll(p, assumesOf(module.get())));
+}
+
+// A loop-varying value that normalization leaves opaque and whose own range
+// inherits a function argument's assume-narrowed range. (A loaded value does
+// not do: it gets its entry state, and its assumes narrow only its uses.)
+static const char *kVaryingRangeIR = R"(
+    tt.func @f(%arg: i32, %n: i32) {
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      %c10 = arith.constant 10 : i32
+      %c50 = arith.constant 50 : i32
+      %c100 = arith.constant 100 : i32
+      %ge = arith.cmpi sge, %arg, %c0 : i32
+      llvm.intr.assume %ge : i1
+      %le = arith.cmpi sle, %arg, %c10 : i32
+      llvm.intr.assume %le : i1
+      %t = arith.constant true
+      scf.for %i = %c0 to %n step %c1 : i32 {
+        %y = arith.minsi %arg, %c100 : i32
+        %gt = arith.cmpi sgt, %y, %c50 : i32 loc("gt")
+        %lt = arith.cmpi slt, %y, %c50 : i32 loc("lt")
+        %gt_and_t = arith.andi %gt, %t : i1 loc("gt_and_t")
+        %t_and_gt = arith.andi %t, %gt : i1 loc("t_and_gt")
+        scf.yield
+      }
+      tt.return
+    })";
+
+TEST_F(SymbolicBoundsTest, FactsUsedRecordsAssumesBehindAVaryingRange) {
+  parse(kVaryingRangeIR);
+  SmallVector<Operation *> assumes = assumesOf(module.get());
+  tt::intel::BoundProof gt = proof(get("gt")), lt = proof(get("lt"));
+  EXPECT_EQ(tt::intel::toString(gt), "Refuted");
+  EXPECT_EQ(tt::intel::toString(lt), "Satisfied");
+  EXPECT_TRUE(usesAll(gt, assumes));
+  EXPECT_TRUE(usesAll(lt, assumes));
+}
+
+TEST_F(SymbolicBoundsTest, FactsUsedSurvivesAConjunctionThatRefutes) {
+  parse(kVaryingRangeIR);
+  SmallVector<Operation *> assumes = assumesOf(module.get());
+  // The refuted operand in either position.
+  for (const char *name : {"gt_and_t", "t_and_gt"}) {
+    Value v = get(name);
+    tt::intel::BoundProof p = prover->proveTrue(v, at(v));
+    EXPECT_EQ(tt::intel::toString(p), "Refuted") << name;
+    EXPECT_TRUE(usesAll(p, assumes)) << name;
+  }
+}
+
+// The wrap discharge of `a + 1 > a` that only holds because of the assumes on
+// `%a`, queried with no program point.
+static const char *kUpstreamAssumeLoopIR = R"(
+    tt.func @f(%a: i8, %n: i32) {
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      %k1 = arith.constant 1 : i8
+      %c100 = arith.constant 100 : i8
+      %c110 = arith.constant 110 : i8
+      %ge = arith.cmpi sge, %a, %c100 : i8
+      llvm.intr.assume %ge : i1
+      %le = arith.cmpi sle, %a, %c110 : i8
+      llvm.intr.assume %le : i1
+      scf.for %i = %c0 to %n step %c1 : i32 {
+        %y = arith.addi %a, %k1 : i8
+        %cmp = arith.cmpi sgt, %y, %a : i8 loc("cmp")
+        scf.yield
+      }
+      tt.return
+    })";
+
+/// Proves the comparison named `cmp` with no program point and no loop.
+static tt::intel::BoundProof
+proveWithoutContext(tt::intel::SymbolicBoundsProver &prover, Value cmp) {
+  auto op = cast<arith::CmpIOp>(cmp.getDefiningOp());
+  return prover.prove(op.getPredicate(), op.getLhs(), op.getRhs(),
+                      tt::intel::QueryContext{nullptr, nullptr});
+}
+
+TEST_F(SymbolicBoundsTest, FactsUsedWithNoPointReachesAssumesOutsideTheRoot) {
+  parse(kUpstreamAssumeLoopIR);
+  SmallVector<Operation *> assumes = assumesOf(module.get());
+  // Rooted at the loop, the assumes before it are outside the root; the range
+  // of `%a` still comes from them.
+  scf::ForOp loop;
+  module->walk([&](scf::ForOp f) { loop = f; });
+  prover = std::make_unique<tt::intel::SymbolicBoundsProver>(*solver, *domInfo,
+                                                             loop);
+  tt::intel::BoundProof p = proveWithoutContext(*prover, get("cmp"));
+  EXPECT_EQ(tt::intel::toString(p), "Satisfied");
+  EXPECT_TRUE(usesAll(p, assumes));
+}
+
+TEST_F(SymbolicBoundsTest, FactsUsedWithNoPointComesFromTheValuesOwnFunction) {
+  parse(R"(
+    tt.func @other(%p: i8, %n: i32) {
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      %c10 = arith.constant 10 : i8
+      %le = arith.cmpi sle, %p, %c10 : i8
+      llvm.intr.assume %le : i1
+      scf.for %i = %c0 to %n step %c1 : i32 {
+        scf.yield
+      }
+      tt.return
+    }
+    tt.func @f(%a: i8) {
+      %k1 = arith.constant 1 : i8
+      %c100 = arith.constant 100 : i8
+      %c110 = arith.constant 110 : i8
+      %ge = arith.cmpi sge, %a, %c100 : i8
+      llvm.intr.assume %ge : i1
+      %le = arith.cmpi sle, %a, %c110 : i8
+      llvm.intr.assume %le : i1
+      %y = arith.addi %a, %k1 : i8
+      %cmp = arith.cmpi sgt, %y, %a : i8 loc("cmp")
+      tt.return
+    })");
+  SmallVector<Operation *> assumes = assumesOf(module.get());
+  ASSERT_EQ(assumes.size(), 3u);
+  Operation *otherAssume = assumes[0];
+  // Rooted in the other function; the query is in this one.
+  scf::ForOp loop;
+  module->walk([&](scf::ForOp f) { loop = f; });
+  prover = std::make_unique<tt::intel::SymbolicBoundsProver>(*solver, *domInfo,
+                                                             loop);
+  tt::intel::BoundProof p = proveWithoutContext(*prover, get("cmp"));
+  EXPECT_EQ(tt::intel::toString(p), "Satisfied");
+  EXPECT_TRUE(usesAll(p, {assumes[1], assumes[2]}));
+  EXPECT_FALSE(llvm::is_contained(p.factsUsed, otherAssume));
+}
+
+TEST_F(SymbolicBoundsTest, FactsUsedReachesTheCallersAssumesAcrossACall) {
+  // The range analysis is interprocedural: a private callee's argument takes
+  // the range of what its call sites pass, so the caller's assumes narrow it.
+  parse(R"(
+    tt.func private @callee(%a: i8) -> i1 {
+      %c1 = arith.constant 1 : i8
+      %y = arith.addi %a, %c1 : i8
+      %cmp = arith.cmpi sgt, %y, %a : i8 loc("cmp")
+      tt.return %cmp : i1
+    }
+    tt.func public @caller(%x: i8) {
+      %c0 = arith.constant 0 : i8
+      %c10 = arith.constant 10 : i8
+      %ge = arith.cmpi sge, %x, %c0 : i8
+      llvm.intr.assume %ge : i1
+      %le = arith.cmpi sle, %x, %c10 : i8
+      llvm.intr.assume %le : i1
+      %r = tt.call @callee(%x) : (i8) -> i1
+      tt.return
+    })");
+  tt::intel::BoundProof p = proveWithoutContext(*prover, get("cmp"));
+  EXPECT_EQ(tt::intel::toString(p), "Satisfied");
+  EXPECT_TRUE(usesAll(p, assumesOf(module.get())));
+}
+
 } // namespace

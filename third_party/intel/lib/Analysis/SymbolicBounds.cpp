@@ -598,6 +598,17 @@ SymbolicBoundsProver::SymbolicBoundsProver(const DataFlowSolver &solver,
       valueOrder.try_emplace(result, next++);
   });
   nextOrder = next;
+
+  Operation *top = root;
+  while (Operation *parent = top->getParentOp())
+    top = parent;
+  bool hasCall = false;
+  top->walk([&](CallOpInterface) {
+    hasCall = true;
+    return WalkResult::interrupt();
+  });
+  if (hasCall)
+    interproceduralScope = top;
 }
 
 Symbol SymbolicBoundsProver::symbolFor(SymbolKind kind, Value v,
@@ -964,7 +975,9 @@ AffineForm SymbolicBoundsProver::normalizeUncached(
 /// to the range analysis, and a symbol with no inferable range is unbounded,
 /// which makes the query `Unknown`.
 std::optional<std::pair<int64_t, int64_t>>
-SymbolicBoundsProver::symbolConstantBounds(const Symbol &sym) const {
+SymbolicBoundsProver::symbolConstantBounds(
+    const Symbol &sym, QueryContext ctx,
+    SmallVectorImpl<Operation *> *assumes) const {
   if (sym.kind() == SymbolKind::Lane) {
     auto rangeOp = cast<tt::MakeRangeOp>(sym.value().getDefiningOp());
     // Signed attribute getters: the generated getStart()/getEnd() return
@@ -974,26 +987,28 @@ SymbolicBoundsProver::symbolConstantBounds(const Symbol &sym) const {
     int64_t end = rangeOp.getEndAttr().getInt();
     return std::make_pair(start, end - 1);
   }
-  std::optional<ConstantIntRanges> r = collectRange(solver, sym.value());
+  std::optional<std::pair<int64_t, int64_t>> r =
+      rangeOf(sym.value(), ctx, assumes);
   if (!r)
     return std::nullopt;
-  int64_t lo = r->smin().getSExtValue(), hi = r->smax().getSExtValue();
   // A quotient's value is its dividend. Truncating division by a positive
   // constant is monotone, so dividing both ends is exact.
   if (sym.kind() == SymbolKind::Quotient)
-    return std::make_pair(lo / sym.divisor(), hi / sym.divisor());
-  return std::make_pair(lo, hi);
+    return std::make_pair(r->first / sym.divisor(), r->second / sym.divisor());
+  return r;
 }
 
 /// Bounds `e` by replacing every symbol with its constant bounds, taking the
 /// low or high end per the sign of the coefficient.
-std::optional<std::pair<int64_t, int64_t>>
-SymbolicBoundsProver::boundConstant(const AffineForm &e) const {
+std::optional<std::pair<int64_t, int64_t>> SymbolicBoundsProver::boundConstant(
+    const AffineForm &e, QueryContext ctx,
+    SmallVectorImpl<Operation *> *assumes) const {
   if (e.overflowed())
     return std::nullopt;
   int64_t lo = e.constant(), hi = e.constant();
   for (auto &[sym, k] : e.terms()) {
-    std::optional<std::pair<int64_t, int64_t>> b = symbolConstantBounds(sym);
+    std::optional<std::pair<int64_t, int64_t>> b =
+        symbolConstantBounds(sym, ctx, assumes);
     if (!b)
       return std::nullopt;
     int64_t t1, t2, l, h;
@@ -1075,7 +1090,8 @@ SymbolicBoundsProver::symbolBounds(const Symbol &sym, QueryContext ctx,
   if (ctx.loop && sym.value() &&
       ctx.loop->isAncestor(sym.value().getParentBlock()->getParentOp())) {
     out.isVarying = true;
-    std::optional<std::pair<int64_t, int64_t>> b = symbolConstantBounds(sym);
+    std::optional<std::pair<int64_t, int64_t>> b =
+        symbolConstantBounds(sym, ctx, &out.assumes);
     // The range analysis assigns a value it never narrowed the type's own
     // full-width lattice point, not "no information" (collectRange only
     // returns nullopt for an uninitialized or empty lattice state). Treating
@@ -1240,7 +1256,7 @@ bool SymbolicBoundsProver::termSignOk(const Symbol &sym, int64_t k,
     }
   }
   std::optional<std::pair<int64_t, int64_t>> b =
-      sym.kind() == SymbolKind::Lane ? symbolConstantBounds(sym)
+      sym.kind() == SymbolKind::Lane ? symbolConstantBounds(sym, ctx, nullptr)
                                      : rangeOf(sym.value(), ctx, &cs.assumes);
   if (!b)
     return false;
@@ -1308,7 +1324,8 @@ SymbolicBoundsProver::residualConstant(const AffineForm &d, QueryContext ctx,
   Bounds b = bound(d, ctx, cs);
   if (!b.finite || b.exhausted)
     return std::nullopt;
-  if (std::optional<std::pair<int64_t, int64_t>> cb = boundConstant(b.lo))
+  if (std::optional<std::pair<int64_t, int64_t>> cb =
+          boundConstant(b.lo, ctx, &cs.assumes))
     return cb->first;
   return std::nullopt;
 }
@@ -1494,6 +1511,22 @@ Operation *SymbolicBoundsProver::assumedBy(const BoundCondition &cond,
   return nullptr;
 }
 
+/// The function that owns `v`: the one whose assumes can have narrowed its
+/// range. Null for a value in no function.
+static Operation *owningFunction(Value v) {
+  Operation *op = v.getDefiningOp();
+  if (!op)
+    if (Block *block = v.getParentBlock())
+      op = block->getParentOp();
+  if (!op)
+    return nullptr;
+  if (isa<tt::FuncOp>(op))
+    return op;
+  if (auto func = op->getParentOfType<tt::FuncOp>())
+    return func.getOperation();
+  return nullptr;
+}
+
 std::optional<std::pair<int64_t, int64_t>>
 SymbolicBoundsProver::rangeOf(Value v, QueryContext ctx,
                               SmallVectorImpl<Operation *> *assumes) const {
@@ -1506,17 +1539,26 @@ SymbolicBoundsProver::rangeOf(Value v, QueryContext ctx,
   // A leaf range can come from assumes this index does not model (eq, uge,
   // ...) and from assumes on values UPSTREAM of the leaf, since ranges
   // propagate forward while the lattice keeps no provenance. So when the range
-  // is narrower than the type, record every applicable assume in the function:
-  // a coarse over-approximation, never an omission.
+  // is narrower than the type, record every assume that can have reached it:
+  // a coarse over-approximation, never an omission. The lattice belongs to the
+  // value, so those are the assumes of the function that owns `v` whatever the
+  // query point is - or of every function, when there is a call and ranges
+  // cross them.
   unsigned w = bitWidth(v.getType());
   bool narrowed = lo > APInt::getSignedMinValue(w).getSExtValue() ||
                   hi < APInt::getSignedMaxValue(w).getSExtValue();
-  if (narrowed && ctx.at) {
-    if (auto func = ctx.at->getParentOfType<tt::FuncOp>())
-      func->walk([&](LLVM::AssumeOp a) {
-        if (!llvm::is_contained(*assumes, a.getOperation()))
-          assumes->push_back(a.getOperation());
-      });
+  if (narrowed) {
+    Operation *where =
+        interproceduralScope ? interproceduralScope : owningFunction(v);
+    if (!where && ctx.at)
+      if (auto func = ctx.at->getParentOfType<tt::FuncOp>())
+        where = func.getOperation();
+    if (!where)
+      where = root;
+    where->walk([&](LLVM::AssumeOp a) {
+      if (!llvm::is_contained(*assumes, a.getOperation()))
+        assumes->push_back(a.getOperation());
+    });
   }
   return std::make_pair(lo, hi);
 }
@@ -1603,8 +1645,10 @@ bool SymbolicBoundsProver::dischargeTier1(const Obligation &o, QueryContext ctx,
   // so for i8 x in [100, 110] the result range of x + 100 is the narrow
   // [-56, -46] - a correct description of the wrapped value and useless as a
   // no-wrap proof.
-  std::optional<std::pair<int64_t, int64_t>> lo = boundConstant(b.lo);
-  std::optional<std::pair<int64_t, int64_t>> hi = boundConstant(b.hi);
+  std::optional<std::pair<int64_t, int64_t>> lo =
+      boundConstant(b.lo, ctx, &cs.assumes);
+  std::optional<std::pair<int64_t, int64_t>> hi =
+      boundConstant(b.hi, ctx, &cs.assumes);
   if (!lo || !hi)
     return false;
   int64_t width = o.width ? o.width : 64;
@@ -1657,8 +1701,11 @@ void SymbolicBoundsProver::guardsForObligation(
 
 /// True when the symbols' constant ranges alone already imply `cond`, so it
 /// would be a guard that is true on every launch.
-bool SymbolicBoundsProver::impliedByRanges(const BoundCondition &cond) const {
-  std::optional<std::pair<int64_t, int64_t>> b = boundConstant(cond.expr);
+bool SymbolicBoundsProver::impliedByRanges(
+    const BoundCondition &cond, QueryContext ctx,
+    SmallVectorImpl<Operation *> *assumes) const {
+  std::optional<std::pair<int64_t, int64_t>> b =
+      boundConstant(cond.expr, ctx, assumes);
   if (!b)
     return false;
   switch (cond.goal) {
@@ -1842,7 +1889,7 @@ BoundProof SymbolicBoundsProver::finalize(BoundProof::Verdict onD,
     // or guard redundant, since facts emit first. Nothing is dropped
     // using a condition that was itself dropped, so no condition can justify
     // itself: `proof.conditions` holds only what survived pruning so far.
-    if (impliedByRanges(out) ||
+    if (impliedByRanges(out, ctx, &cs.assumes) ||
         llvm::any_of(proof.conditions, [&](const BoundCondition &kept) {
           return conditionImplies(kept, out);
         }))
@@ -2394,6 +2441,10 @@ SymbolicBoundsProver::proveTrueNode(Value v, QueryContext ctx, unsigned depth) {
 
     if (a.proof.verdict == V::Refuted || b.proof.verdict == V::Refuted) {
       out.proof.verdict = V::Refuted;
+      // The refutation rests on the refuting operand alone, so those are the
+      // facts it used.
+      out.proof.factsUsed =
+          (a.proof.verdict == V::Refuted ? a : b).proof.factsUsed;
       return out;
     }
     auto decided = [](V x) {
