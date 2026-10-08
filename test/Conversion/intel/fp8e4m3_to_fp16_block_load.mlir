@@ -1,7 +1,8 @@
 // RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --canonicalize | FileCheck %s
 
 // COM: Bytes of 32-bit loads (column-major B) are read from the loaded dwords;
-// COM: 8-bit loads return bytes, which take the generic lowering.
+// COM: 8-bit loads return bytes, which the generic lowering converts in pairs
+// COM: for dot operands with K < 64 and one at a time otherwise.
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.target_arch = "spir64"} {
@@ -96,10 +97,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 8, {{.*}} -> vector<32xi8>
     %x = tt.descriptor_load %desc[%arg1, %arg2] {ttig.block_io = "row_major"} : !tt.tensordesc<64x16xf8E4M3FN> -> tensor<64x16xf8E4M3FN, #dot1>
     // CHECK-NOT: llvm.trunc {{.*}} : i32 to i16
-    // CHECK-COUNT-32: llvm.bitcast {{.*}} : vector<4xi8> to vector<2xi16>
-    // CHECK-NOT: llvm.trunc {{.*}} : i32 to i16
+    // CHECK-COUNT-64: llvm.sext {{.*}} : i8 to i16
+    // CHECK-NOT: vector<4xi8> to vector<2xi16>
     %y = tt.fp_to_fp %x : tensor<64x16xf8E4M3FN, #dot1> -> tensor<64x16xf16, #dot1>
     tt.return %y : tensor<64x16xf16, #dot1>
+  }
+}
+
+// -----
+
+// COM: The same K split for dot operand A from 8-bit loads.
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.target_arch = "spir64"} {
+  // CHECK-LABEL: @fp8_upcast_dot_a_from_8bit_block_load
+  tt.func public @fp8_upcast_dot_a_from_8bit_block_load(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32, %arg2: i32) -> (tensor<8x32xf16, #dot0>, tensor<8x64xf16, #dot0>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i64 = arith.constant 64 : i64
+    %c64_i32 = arith.constant 64 : i32
+    %k32_desc = tt.make_tensor_descriptor %arg0, [%c64_i32, %c64_i32], [%c64_i64, %c1_i64] : <f8E4M3FN>, <8x32xf8E4M3FN>
+    %k64_desc = tt.make_tensor_descriptor %arg0, [%c64_i32, %c64_i32], [%c64_i64, %c1_i64] : <f8E4M3FN>, <8x64xf8E4M3FN>
+    %k32 = tt.descriptor_load %k32_desc[%arg1, %arg2] {ttig.block_io = "row_major"} : !tt.tensordesc<8x32xf8E4M3FN> -> tensor<8x32xf8E4M3FN, #dot0>
+    %k64 = tt.descriptor_load %k64_desc[%arg1, %arg2] {ttig.block_io = "row_major"} : !tt.tensordesc<8x64xf8E4M3FN> -> tensor<8x64xf8E4M3FN, #dot0>
+    // CHECK-NOT: llvm.sext {{.*}} : i8 to i16
+    // CHECK-COUNT-8: llvm.bitcast {{.*}} : vector<4xi8> to vector<2xi16>
+    // CHECK-NOT: vector<4xi8> to vector<2xi16>
+    // CHECK-COUNT-32: llvm.sext {{.*}} : i8 to i16
+    // CHECK-NOT: vector<4xi8> to vector<2xi16>
+    %k32_f16 = tt.fp_to_fp %k32 : tensor<8x32xf8E4M3FN, #dot0> -> tensor<8x32xf16, #dot0>
+    %k64_f16 = tt.fp_to_fp %k64 : tensor<8x64xf8E4M3FN, #dot0> -> tensor<8x64xf16, #dot0>
+    tt.return %k32_f16, %k64_f16 : tensor<8x32xf16, #dot0>, tensor<8x64xf16, #dot0>
   }
 }
 
@@ -110,17 +137,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.is_lts, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.target_arch = "spir64"} {
   // CHECK-LABEL: @fp8_upcast_from_block_load_lts
-  tt.func public @fp8_upcast_from_block_load_lts(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32, %arg2: i32) -> tensor<64x16xf16, #dot1> {
+  tt.func public @fp8_upcast_from_block_load_lts(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32, %arg2: i32) -> (tensor<64x16xf16, #dot1>, tensor<32x16xf16, #dot1>) {
     %c1_i64 = arith.constant 1 : i64
     %c64_i64 = arith.constant 64 : i64
     %c64_i32 = arith.constant 64 : i32
     %desc = tt.make_tensor_descriptor %arg0, [%c64_i32, %c64_i32], [%c64_i64, %c1_i64] : <f8E4M3FN>, <16x64xf8E4M3FN>
+    %row_desc = tt.make_tensor_descriptor %arg0, [%c64_i32, %c64_i32], [%c64_i64, %c1_i64] : <f8E4M3FN>, <32x16xf8E4M3FN>
     // CHECK-DAG: llvm.mlir.constant(8323199 : i32) : i32
     // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, {{.*}} transpose = true, {{.*}} -> vector<8xi32>
     %x = tt.descriptor_load %desc[%arg1, %arg2] {ttig.block_io = "column_major"} : !tt.tensordesc<16x64xf8E4M3FN> -> tensor<64x16xf8E4M3FN, #dot1>
+    %row = tt.descriptor_load %row_desc[%arg1, %arg2] {ttig.block_io = "row_major"} : !tt.tensordesc<32x16xf8E4M3FN> -> tensor<32x16xf8E4M3FN, #dot1>
     // CHECK-NOT: llvm.trunc {{.*}} : i32 to i16
+    // CHECK-NOT: vector<4xi8> to vector<2xi16>
     // CHECK-NOT: llvm.fadd
     %y = tt.fp_to_fp %x : tensor<64x16xf8E4M3FN, #dot1> -> tensor<64x16xf16, #dot1>
-    tt.return %y : tensor<64x16xf16, #dot1>
+    %row_f16 = tt.fp_to_fp %row : tensor<32x16xf8E4M3FN, #dot1> -> tensor<32x16xf16, #dot1>
+    tt.return %y, %row_f16 : tensor<64x16xf16, #dot1>, tensor<32x16xf16, #dot1>
   }
 }
