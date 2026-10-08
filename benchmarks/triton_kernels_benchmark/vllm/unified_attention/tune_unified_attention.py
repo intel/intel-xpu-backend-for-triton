@@ -22,6 +22,16 @@ and interleaved KV; use ``--q-layout contiguous --kv-layout contiguous`` for
 separate contiguous tensors. Omit ``--tune`` to benchmark existing configs
 from ``--save-dir``.
 
+For variable-length batches, pass ``--workloads workloads.json`` with a JSON list::
+
+    [
+      [[1, 2048], [128, 1024], [512, 4096]],
+      [[1, 512], [1, 8192]]
+    ]
+
+Each pair is [Q, KV]. The file replaces the sequence/batch range options;
+model properties still come from ``--model``. No file is needed for CLI inputs.
+
 Set ``VLLM_TRITON_USE_TD=0`` for pointer loads; unset or ``1`` uses TD.
 Each run tunes one mode, with separate configs for TD and pointer loads.
 """
@@ -140,10 +150,13 @@ def model_workloads(args):
     softcap = getattr(config, "attn_logit_softcapping", None) or 0.0
     softmax_scale = (getattr(config, "query_pre_attn_scalar", None) or head_size)**-0.5
     cases = []
-    batch_sizes = args.batch_size if args.batch_size is not None else [1, 8, 32]
-    batches = [([q] * batch, [kv] * batch)
-               for batch, q, kv in product(batch_sizes, args.query_len, args.kv_len)
-               if q <= kv]
+    if args.sequence_batches is not None:
+        batches = [tuple(zip(*sequences)) for sequences in args.sequence_batches]
+    else:
+        batch_sizes = args.batch_size if args.batch_size is not None else [1, 8, 32]
+        batches = [([q] * batch, [kv] * batch)
+                   for batch, q, kv in product(batch_sizes, args.query_len, args.kv_len)
+                   if q <= kv]
     for (query_lens, kv_lens), window in product(batches, windows):
         cases.append({
             "id": f"model-{len(cases):04d}",
@@ -423,6 +436,23 @@ def benchmark(args, workloads, device):
         del inputs
 
 
+def load_sequence_batches(path):
+    """Load and validate batches of [Q, KV] sequence lengths from JSON."""
+    batches = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(batches, list) or not batches:
+        raise ValueError("Workloads must be a nonempty JSON list of batches")
+    for batch in batches:
+        if not isinstance(batch, list) or not batch:
+            raise ValueError("Each batch must be a nonempty list of [Q, KV] pairs")
+        for pair in batch:
+            if not isinstance(pair, list) or len(pair) != 2 or any(not isinstance(n, int) or isinstance(n, bool)
+                                                                   for n in pair):
+                raise ValueError("Each sequence must be an integer [Q, KV] pair")
+            if not 0 < pair[0] <= pair[1]:
+                raise ValueError("Sequence lengths must satisfy 0 < Q <= KV")
+    return batches
+
+
 def parse_args(argv=None):
     """Parse command line arguments."""
     parser = FlexibleArgumentParser(description=__doc__)
@@ -444,12 +474,24 @@ def parse_args(argv=None):
                         help="Query tokens per sequence; 1 selects decode (default: 1)")
     parser.add_argument("--kv-len", type=int, nargs="+",
                         help="KV tokens per sequence, including query tokens (default: 1024)")
+    parser.add_argument("--workloads", type=Path,
+                        help="Optional JSON batches of [Q, KV] pairs; replaces batch/Q/KV range options")
     parser.add_argument("--block-size", type=int, default=32)
     parser.add_argument("--sliding-window", type=int, nargs="+",
                         help="Override model windows; 0 selects full attention")
     parser.add_argument("--q-layout", choices=("contiguous", "qkv"), default="qkv")
     parser.add_argument("--kv-layout", choices=("contiguous", "interleaved"), default="interleaved")
     args = parser.parse_args(argv)
+    args.sequence_batches = None
+    if args.workloads is not None and any(value is not None
+                                          for value in (args.batch_size, args.query_len, args.kv_len)):
+        parser.error("--workloads cannot be combined with --batch-size, --query-len or --kv-len")
+    if args.workloads is not None:
+        try:
+            # Load and validate the requested sequence batches.
+            args.sequence_batches = load_sequence_batches(args.workloads)
+        except (OSError, ValueError) as error:
+            parser.error(f"{args.workloads}: {error}")
     args.query_len = args.query_len if args.query_len is not None else [1]
     args.kv_len = args.kv_len if args.kv_len is not None else [1024]
     if min((args.batch_size or []) + args.query_len + args.kv_len + [args.tp_size, args.block_size]) <= 0:
