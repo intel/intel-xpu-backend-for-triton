@@ -261,3 +261,82 @@ tt.func @volatile_unconditional(%ptr: !tt.ptr<f32>) {
   }
   tt.return
 }
+
+// -----
+
+// COM: zext(x) <= sext(x) is false at x = -1, yet both sides normalize to x. x
+// COM: is an unconstrained scalar loaded in the loop, so the zext's
+// COM: non-negativity obligation has no bound and the query must stay Unknown.
+// COM: The explicit `other` makes a wrongly dropped mask visible.
+
+// CHECK-LABEL: tt.func @unbounded_cancel_keeps_mask
+tt.func @unbounded_cancel_keeps_mask(%ptr: !tt.ptr<f32>, %qtr: !tt.ptr<i32>, %n: i32) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %other = arith.constant dense<7.000000e+00> : tensor<4xf32>
+  %ps = tt.splat %ptr : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+  // CHECK-NOT: scf.if
+  // CHECK:     tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<4x!tt.ptr<f32>>
+  scf.for %i = %c0 to %n step %c1 : i32 {
+    %x = tt.load %qtr : !tt.ptr<i32>
+    %u = arith.extui %x : i32 to i64
+    %s = arith.extsi %x : i32 to i64
+    %m = arith.cmpi sle, %u, %s : i64
+    %ms = tt.splat %m : i1 -> tensor<4xi1>
+    %v = tt.load %ps, %ms, %other : tensor<4x!tt.ptr<f32>>
+    tt.store %ps, %v : tensor<4x!tt.ptr<f32>>
+    scf.yield
+  }
+  tt.return
+}
+
+// -----
+
+// COM: With n = 100 the i8 value y = n/2 - n/64 + 120 wraps (50 - 1 + 120 = 169),
+// COM: so zext(y) <= sext(y) is false. A quotient is bounded by its dividend
+// COM: divided by the divisor, not by the dividend, so the loop is versioned on
+// COM: n/2 - n/64 <= 7 and the else-copy keeps the mask and `other`.
+
+// CHECK-LABEL: tt.func @quotient_wrap_guard
+tt.func @quotient_wrap_guard(%ptr: !tt.ptr<f32>, %n: i8, %cnt: i32) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i8
+  %c64 = arith.constant 64 : i8
+  %c100 = arith.constant 100 : i8
+  %c120 = arith.constant 120 : i8
+  %eq = arith.cmpi eq, %n, %c100 : i8
+  llvm.intr.assume %eq : i1
+  %q2 = arith.divsi %n, %c2 : i8
+  %q64 = arith.divsi %n, %c64 : i8
+  %d = arith.subi %q2, %q64 : i8
+  %y = arith.addi %d, %c120 : i8
+  %u = arith.extui %y : i8 to i64
+  %s = arith.extsi %y : i8 to i64
+  %m = arith.cmpi sle, %u, %s : i64
+  %ms = tt.splat %m : i1 -> tensor<4xi1>
+  %other = arith.constant dense<7.000000e+00> : tensor<4xf32>
+  %ps = tt.splat %ptr : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+  // SYM-DAG:  %[[C7:.*]] = arith.constant 7 : i64
+  // SYM-DAG:  %[[C2:.*]] = arith.constant 2 : i64
+  // SYM-DAG:  %[[C64:.*]] = arith.constant 64 : i64
+  // SYM:      %[[Q2:.*]] = arith.divsi %{{.*}}, %[[C2]] : i64
+  // SYM:      %[[Q64:.*]] = arith.divsi %{{.*}}, %[[C64]] : i64
+  // SYM:      %[[DIFF:.*]] = arith.subi %[[Q2]], %[[Q64]] : i64
+  // SYM:      %[[GUARD:.*]] = arith.cmpi sle, %[[DIFF]], %[[C7]] : i64
+  // SYM:      scf.if %[[GUARD]] {
+  // SYM:        scf.for
+  // SYM-NOT:      tt.load %{{.*}}, %{{.*}}, %{{.*}} :
+  // SYM:          tt.load %{{[^,]*}} : tensor<4x!tt.ptr<f32>>
+  // SYM:      } else {
+  // SYM:        scf.for
+  // SYM:          tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<4x!tt.ptr<f32>>
+  // LEGACY-NOT: scf.if
+  // LEGACY:     tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<4x!tt.ptr<f32>>
+  scf.for %i = %c0 to %cnt step %c1 : i32 {
+    %v = tt.load %ps, %ms, %other : tensor<4x!tt.ptr<f32>>
+    tt.store %ps, %v : tensor<4x!tt.ptr<f32>>
+    scf.yield
+  }
+  tt.return
+}
