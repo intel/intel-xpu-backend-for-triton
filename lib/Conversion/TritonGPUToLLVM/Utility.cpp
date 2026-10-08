@@ -2283,7 +2283,7 @@ void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
                           SmallVectorImpl<NamedAttribute> &result) {
 
   for (const auto &attr : op->getAttrs()) {
-    if (attr.getName() == SymbolTable::getSymbolAttrName() ||
+    if (attr.getName() == op.getSymNameAttrName() ||
         attr.getName() == op.getFunctionTypeAttrName() ||
         attr.getName() == "std.varargs" ||
         attr.getName() == triton::gpu::AttrNumWarpsName ||
