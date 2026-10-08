@@ -23,7 +23,6 @@
 using namespace mlir;
 using namespace mlir::triton::gpu;
 
-using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::LLVM::AMD::getVectorSize;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
@@ -2215,7 +2214,6 @@ struct AtomicCASOpConversion
 
 bool supportsGlobalAtomicF16PackedAndDpp(ISAFamily isaFamily) {
   switch (isaFamily) {
-  case ISAFamily::CDNA1:
   case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:
   case ISAFamily::CDNA4:

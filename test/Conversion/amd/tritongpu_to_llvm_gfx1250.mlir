@@ -178,6 +178,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %1 : tensor<64xbf16, #blocked>
   }
 
+  // GFX1250-LABEL: @ocp_fp8_to_f32
+  tt.func @ocp_fp8_to_f32(%arg0: tensor<64xf8E4M3FN, #blocked>, %arg1: tensor<64xf8E5M2, #blocked>) {
+    // GFX1250: rocdl.cvt.scale.pk8.f32.fp8
+    %0 = tt.fp_to_fp %arg0 : tensor<64xf8E4M3FN, #blocked> -> tensor<64xf32, #blocked>
+    // GFX1250: rocdl.cvt.scale.pk8.f32.bf8
+    %1 = tt.fp_to_fp %arg1 : tensor<64xf8E5M2, #blocked> -> tensor<64xf32, #blocked>
+    tt.return
+  }
+
   // GFX1250-LABEL: @bf16_addf
   tt.func @bf16_addf(%arg0: tensor<64xbf16, #blocked>, %arg1: tensor<64xbf16, #blocked>) -> tensor<64xbf16, #blocked> {
     // GFX1250-NOT: llvm.fadd {{.*}} : f32
@@ -191,6 +200,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // GFX1250-NOT: llvm.fsub {{.*}} : f32
     // GFX1250: llvm.fsub {{.*}} : vector<2xbf16>
     %0 = arith.subf %arg0, %arg1 : tensor<64xbf16, #blocked>
+    tt.return %0 : tensor<64xbf16, #blocked>
+  }
+
+  // GFX1250-LABEL: @f32_fma
+  tt.func @f32_fma(%arg0: tensor<64xf32, #blocked>, %arg1: tensor<64xf32, #blocked>, %arg2: tensor<64xf32, #blocked>) -> tensor<64xf32, #blocked> {
+    // GFX1250-NOT: llvm.intr.fma({{.*}}) : (f32, f32, f32) -> f32
+    // GFX1250: llvm.intr.fma({{.*}}) : (vector<2xf32>, vector<2xf32>, vector<2xf32>) -> vector<2xf32>
+    %0 = math.fma %arg0, %arg1, %arg2 : tensor<64xf32, #blocked>
+    tt.return %0 : tensor<64xf32, #blocked>
+  }
+
+  // GFX1250-LABEL: @bf16_fma
+  tt.func @bf16_fma(%arg0: tensor<64xbf16, #blocked>, %arg1: tensor<64xbf16, #blocked>, %arg2: tensor<64xbf16, #blocked>) -> tensor<64xbf16, #blocked> {
+    // GFX1250-NOT: llvm.intr.fma({{.*}}) : (bf16, bf16, bf16) -> bf16
+    // GFX1250: llvm.intr.fma({{.*}}) : (vector<2xbf16>, vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
+    %0 = math.fma %arg0, %arg1, %arg2 : tensor<64xbf16, #blocked>
     tt.return %0 : tensor<64xbf16, #blocked>
   }
 }
