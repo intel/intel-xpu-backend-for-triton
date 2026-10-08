@@ -458,15 +458,11 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 // Note: when handled by software, this format
 // has more than a single NaN values.
 
-// Fp8E4M3 -> Fp16 (packed), oneDNN-derived. 6 arithmetic ops per 2 elements,
-// down from ~20 in the implementation this replaces, which spent 14 of them
-// on an integer NaN fixup. Runs entirely in the <2 x i16> / <2 x half>
-// domain:
+// Fp8E4M3 -> Fp16, oneDNN-derived:
 //
-//   ashr <2 x i16>, 1       reposition exp+mantissa; arithmetic, so it also
-//                           smears the sign into bit 15, placing it in the
-//                           fp16 sign position for free
-//   and  <2 x i16>, 0xBFFF  clear bit 14, which the shift duplicated
+//   shl(sext i8 -> i16, 7)  reposition exp+mantissa; the sign extension also
+//                           places the sign in bit 15, the fp16 sign position
+//   and  i16, 0xBFFF        clear bit 14, which the extension duplicated
 //   fmul 36864.0            rebias, part 1
 //   fmul 0.0069427490234375 rebias, part 2
 //   fadd(h, fmul(h, 0.0))   Inf -> NaN; oneDNN's `mad y, y, y, 0:hf`
@@ -508,11 +504,40 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 // `and 0x80008000` + `or`. That is 8 ops instead of 6 and was verified
 // bit-identical on all 256 bytes.
 //
+// One element at a time: IGC runs each element of a vector op as its own
+// instruction anyway, and the <4 x i8> to <2 x i16> bitcast of the pairs costs
+// a mov per element.
+//
 // Not used on LTS drivers, where it triggers an IGC compile-time blowup; see
-// Fp8E4M3Nv_to_Fp16Int below and the dispatch in getConversionFunc().
+// Fp8E4M3Nv_to_Fp16Int below and the dispatch in getConverter().
+static Value rebiasFp8E4M3ToFp16(Location loc,
+                                 ConversionPatternRewriter &rewriter,
+                                 Value aligned) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value h = b.bitcast(aligned, f16_ty);
+  h = b.fmul(h, b.f16_val(36864.0f));
+  h = b.fmul(h, b.f16_val(0.0069427490234375f));
+  return b.fadd(h, b.fmul(h, b.f16_val(0.0f)));
+}
+
 static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  SmallVector<Value> ret;
+  for (Value fp8 : v) {
+    Value shifted = b.shl(i16_ty, b.sext(i16_ty, fp8), b.i16_val(7));
+    ret.push_back(rebiasFp8E4M3ToFp16(
+        loc, rewriter, b.and_(i16_ty, shifted, b.i16_val(0xBFFF))));
+  }
+  return ret;
+}
+
+// Fp8E4M3Nv_to_Fp16 in pairs, for dot operands with K < 64: the packing costs
+// movs, but it keeps register pressure down.
+static SmallVector<Value>
+Fp8E4M3Nv_to_Fp16Pairs(Location loc, ConversionPatternRewriter &rewriter,
+                       const SmallVector<Value> &v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   // Pack into byte positions 1 and 3, putting each fp8 byte in the high half
@@ -560,23 +585,22 @@ static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
 }
 
 // Fp8E4M3Nv_to_Fp16 for a single i16 lane that already holds the fp8 byte in
-// its high byte. The low byte may be anything: 0xBF80 also clears the bits
-// `ashr` shifts in from it.
+// its high byte: `ashr` by 1 gives what sext and shl by 7 give for the bare
+// byte. The low byte may be anything: 0xBF80 also clears the bits `ashr` shifts
+// in from it.
 static Value Fp8E4M3Nv_to_Fp16FromHighByte(Location loc,
                                            ConversionPatternRewriter &rewriter,
                                            Value lane) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value shifted = b.ashr(i16_ty, lane, b.i16_val(1));
-  Value h = b.bitcast(b.and_(i16_ty, shifted, b.i16_val(0xBF80)), f16_ty);
-  h = b.fmul(h, b.f16_val(36864.0f));
-  h = b.fmul(h, b.f16_val(0.0069427490234375f));
-  return b.fadd(h, b.fmul(h, b.f16_val(0.0f)));
+  return rebiasFp8E4M3ToFp16(loc, rewriter,
+                             b.and_(i16_ty, shifted, b.i16_val(0xBF80)));
 }
 
 // Fp8E4M3 -> Fp16 (packed), integer domain. Used only on LTS drivers.
 //
-// 11 ops against the 6 of Fp8E4M3Nv_to_Fp16 above, and slower at runtime
-// (~1.7x on fp8 GEMMs), but it is what LTS can compile in reasonable time.
+// Slower at runtime than Fp8E4M3Nv_to_Fp16 above (~1.7x on fp8 GEMMs), but it
+// is what LTS can compile in reasonable time.
 // The LTS IGC (2.11) runs a LoopSink pass whose cost model treats the other
 // sequence -- short, straight-line, unpredicated float arithmetic -- as free
 // to rematerialize, and clones it ~6x inside the already-unrolled loop body.
@@ -1317,6 +1341,17 @@ struct Converter {
   }
 };
 
+// Returns the K extent of `op`'s operand if it is a dot operand, 0 otherwise.
+static int64_t getDotOperandK(Operation *op) {
+  auto ty = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto enc =
+      ty ? dyn_cast<triton::gpu::DotOperandEncodingAttr>(ty.getEncoding())
+         : nullptr;
+  if (!enc)
+    return 0;
+  return ty.getShape()[ty.getRank() - (enc.getOpIdx() == 0 ? 1 : 2)];
+}
+
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<FpToFpOp, FpToFpOpConversion> {
@@ -1476,20 +1511,25 @@ struct FpToFpOpConversion
         srcTy.getTypeID(), dstTy.getTypeID(),
         roundingMode.value_or(undefRounding)};
 
-    // fp8e4m3 -> fp16 has three implementations rather than the two a
-    // ConverterSelector holds: the hardware builtin where available, and
-    // otherwise one of two software sequences chosen by driver. See
-    // Fp8E4M3Nv_to_Fp16Int for why LTS needs the integer-domain one.
+    // Software fp8e4m3 -> fp16 needs more choices than the two a
+    // ConverterSelector holds: the integer-domain sequence on LTS drivers (see
+    // Fp8E4M3Nv_to_Fp16Int for why) and pairs for dot operands with K < 64.
     //
-    // FIXME: drop this early return and Fp8E4M3Nv_to_Fp16Int once the LTS
+    // FIXME: drop the LTS branch and Fp8E4M3Nv_to_Fp16Int once the LTS
     // driver line picks up an IGC that no longer mispredicts the oneDNN
     // sequence -- the rolling driver (1.17.39395+13) already does not -- so
     // every target gets the faster sequence (~1.7x at runtime on fp8 GEMMs).
     // Worth re-checking whenever the LTS driver pin is bumped.
     if (srcTy.getTypeID() == F8E4M3TyID && dstTy.getTypeID() == F16TyID &&
-        !HasAttr<SUPPORT_F8_CONV>(op) && HasAttr<IS_LTS>(op)) {
-      static Converter c{Fp8E4M3Nv_to_Fp16Int, 2};
-      return c;
+        !HasAttr<SUPPORT_F8_CONV>(op)) {
+      if (HasAttr<IS_LTS>(op)) {
+        static Converter c{Fp8E4M3Nv_to_Fp16Int, 2};
+        return c;
+      }
+      if (int64_t k = getDotOperandK(op); k && k < 64) {
+        static Converter c{Fp8E4M3Nv_to_Fp16Pairs, 2};
+        return c;
+      }
     }
 
     if (auto it = srcMap.find(key); it != srcMap.end()) {

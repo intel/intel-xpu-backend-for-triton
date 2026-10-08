@@ -7,7 +7,7 @@ across all 256 possible fp8 byte values, including NaN propagation for the
 two reserved fp8e4m3 NaN encodings (0x7F, 0xFF).
 
 Converter algorithm:
-1. Pack two fp8 bytes into a <2 x i16> vector and arithmetic-shift right by 1.
+1. Sign-extend each fp8 byte to i16 and shift it left by 7.
 2. Mask the shifted value with 0xBFFF.
 3. Multiply by 36864.0, then by 0.0069427490234375. The first multiply is
    deliberately chosen to overflow to +/-Inf only for the two reserved NaN
