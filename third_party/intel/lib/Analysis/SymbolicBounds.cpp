@@ -2276,8 +2276,59 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
 //===----------------------------------------------------------------------===//
 
 BoundProof SymbolicBoundsProver::proveTrue(Value v, QueryContext ctx) {
-  using V = BoundProof::Verdict;
+  maskVisits = 0;
+  maskBudgetExhausted = false;
+  MaskResult r = proveTrueImpl(v, ctx, 0);
+  // Running out of visits ends the whole query as Unknown, even if an operand
+  // was already refuted: otherwise the answer would depend on how far the walk
+  // happened to get before the budget ran out.
+  if (maskBudgetExhausted)
+    return {};
+  return std::move(r.proof);
+}
+
+SymbolicBoundsProver::MaskResult
+SymbolicBoundsProver::proveTrueImpl(Value v, QueryContext ctx, unsigned depth) {
+  MaskMemoKey key{v.getAsOpaquePointer(), ctx.at,
+                  ctx.loop ? ctx.loop.getOperation() : nullptr};
+  if (auto hit = maskMemo.find(key); hit != maskMemo.end()) {
+    // A complete answer is reused only where the subtree below it still fits
+    // under the cap. Reached from deeper down it would have been cut short, so
+    // it is, and the cap cannot be bypassed by an answer computed higher up.
+    const MaskMemoEntry &e = hit->second;
+    if (depth + e.height > kMaxMaskDepth)
+      return {{}, e.height, /*truncated=*/true};
+    return {e.proof, e.height, /*truncated=*/false};
+  }
+
+  if (depth > kMaxMaskDepth)
+    return {{}, 0, /*truncated=*/true};
+  if (++maskVisits > kMaxMaskVisits) {
+    maskBudgetExhausted = true;
+    return {{}, 0, /*truncated=*/true};
+  }
   ++maskEvaluations;
+
+  MaskResult r = proveTrueNode(v, ctx, depth);
+  // Only a complete answer is cached. One that depended on a cut-off branch
+  // says nothing about the node itself, and caching it would make a deep
+  // failure hide a success a shallower query could have had.
+  if (!r.truncated)
+    maskMemo.try_emplace(key, MaskMemoEntry{r.proof, r.height});
+  return r;
+}
+
+SymbolicBoundsProver::MaskResult
+SymbolicBoundsProver::proveTrueNode(Value v, QueryContext ctx, unsigned depth) {
+  using V = BoundProof::Verdict;
+
+  // A shape or width change keeps its source's answer and sits one node above
+  // it.
+  auto above = [&](Value src) {
+    MaskResult r = proveTrueImpl(src, ctx, depth + 1);
+    ++r.height;
+    return r;
+  };
 
   // A block argument is where the "look through" must stop. getFinalValue
   // would substitute an iter_arg's init value without inspecting the yield, so
@@ -2294,15 +2345,15 @@ BoundProof SymbolicBoundsProver::proveTrue(Value v, QueryContext ctx) {
   // replicates one bit, expand_dims/broadcast replicate existing ones, and
   // extending an i1 keeps zero zero and nonzero nonzero.
   if (auto splat = dyn_cast<tt::SplatOp>(def))
-    return proveTrue(splat.getSrc(), ctx);
+    return above(splat.getSrc());
   if (auto expand = dyn_cast<tt::ExpandDimsOp>(def))
-    return proveTrue(expand.getSrc(), ctx);
+    return above(expand.getSrc());
   if (auto bcast = dyn_cast<tt::BroadcastOp>(def))
-    return proveTrue(bcast.getSrc(), ctx);
+    return above(bcast.getSrc());
   if (auto ext = dyn_cast<arith::ExtSIOp>(def))
-    return proveTrue(ext.getIn(), ctx);
+    return above(ext.getIn());
   if (auto ext = dyn_cast<arith::ExtUIOp>(def))
-    return proveTrue(ext.getIn(), ctx);
+    return above(ext.getIn());
 
   // A constant mask needs no proof. A dense splat is handled too, since that
   // is what a folded `tt.splat` of a constant becomes.
@@ -2317,47 +2368,55 @@ BoundProof SymbolicBoundsProver::proveTrue(Value v, QueryContext ctx) {
       return std::nullopt;
     };
     if (std::optional<bool> b = boolOf(cst.getValue())) {
-      BoundProof p;
-      p.verdict = *b ? V::Satisfied : V::Refuted;
-      return p;
+      MaskResult r;
+      r.proof.verdict = *b ? V::Satisfied : V::Refuted;
+      return r;
     }
     return {};
   }
 
   if (auto cmp = dyn_cast<arith::CmpIOp>(def))
-    return prove(cmp.getPredicate(), cmp.getLhs(), cmp.getRhs(), ctx);
+    return {prove(cmp.getPredicate(), cmp.getLhs(), cmp.getRhs(), ctx), 0,
+            /*truncated=*/false};
 
   // `a && b`. One `Refuted` side refutes the conjunction outright, and
   // does so unconditionally, so it needs nothing from the other side - which
   // is why this precedes the Unknown check.
   if (auto andOp = dyn_cast<arith::AndIOp>(def)) {
-    BoundProof a = proveTrue(andOp.getLhs(), ctx);
-    BoundProof b = proveTrue(andOp.getRhs(), ctx);
-    if (a.verdict == V::Refuted || b.verdict == V::Refuted) {
-      BoundProof p;
-      p.verdict = V::Refuted;
-      return p;
+    MaskResult a = proveTrueImpl(andOp.getLhs(), ctx, depth + 1);
+    MaskResult b = proveTrueImpl(andOp.getRhs(), ctx, depth + 1);
+    // However the verdict comes out, this node is as tall as its taller
+    // operand and as truncated as either: a refutation that overrides a
+    // cut-off sibling is still an answer that must not be cached as complete.
+    MaskResult out;
+    out.height = 1 + std::max(a.height, b.height);
+    out.truncated = a.truncated || b.truncated;
+
+    if (a.proof.verdict == V::Refuted || b.proof.verdict == V::Refuted) {
+      out.proof.verdict = V::Refuted;
+      return out;
     }
     auto decided = [](V x) {
       return x == V::Satisfied || x == V::ConditionallySatisfied;
     };
-    if (!decided(a.verdict) || !decided(b.verdict))
-      return {};
+    if (!decided(a.proof.verdict) || !decided(b.proof.verdict))
+      return out;
 
-    BoundProof p;
-    p.verdict = a.verdict == V::Satisfied && b.verdict == V::Satisfied
-                    ? V::Satisfied
-                    : V::ConditionallySatisfied;
-    p.conditions = a.conditions;
-    for (const BoundCondition &c : b.conditions) {
+    BoundProof &p = out.proof;
+    p.verdict =
+        a.proof.verdict == V::Satisfied && b.proof.verdict == V::Satisfied
+            ? V::Satisfied
+            : V::ConditionallySatisfied;
+    p.conditions = a.proof.conditions;
+    for (const BoundCondition &c : b.proof.conditions) {
       auto it = llvm::find(p.conditions, c);
       if (it == p.conditions.end())
         p.conditions.push_back(c);
       else if (c.kind < it->kind)
         it->kind = c.kind; // one condition, several kinds: the strongest wins
     }
-    p.factsUsed = a.factsUsed;
-    for (Operation *f : b.factsUsed)
+    p.factsUsed = a.proof.factsUsed;
+    for (Operation *f : b.proof.factsUsed)
       if (!llvm::is_contained(p.factsUsed, f))
         p.factsUsed.push_back(f);
 
@@ -2368,13 +2427,15 @@ BoundProof SymbolicBoundsProver::proveTrue(Value v, QueryContext ctx) {
           p.conditions, [&](const BoundCondition &c) { return c.kind == k; });
     };
     if (count(ConditionKind::Fact) > kMaxFactConditions ||
-        count(ConditionKind::Guard) > kMaxGuards)
-      return {};
+        count(ConditionKind::Guard) > kMaxGuards) {
+      out.proof = BoundProof();
+      return out;
+    }
     llvm::stable_sort(p.conditions,
                       [](const BoundCondition &x, const BoundCondition &y) {
                         return x.kind < y.kind;
                       });
-    return p;
+    return out;
   }
 
   return {};

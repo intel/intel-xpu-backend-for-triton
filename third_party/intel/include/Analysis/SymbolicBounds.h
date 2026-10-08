@@ -28,6 +28,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <tuple>
 
 namespace mlir::triton::intel {
 
@@ -260,6 +261,14 @@ public:
   /// substitutes an iter_arg's init value without inspecting the yield: a
   /// loop-carried mask initialized `true` and yielding `false` would read as
   /// always true. Any block argument is therefore `Unknown`.
+  ///
+  /// The walk over the mask is bounded: it goes at most `kMaxMaskDepth` deep
+  /// and evaluates at most `kMaxMaskVisits` nodes per query. A branch cut off
+  /// by the depth is `Unknown` and a refuted operand still refutes the
+  /// conjunction; running out of visits makes the whole query `Unknown`, even
+  /// if an operand was already refuted. Complete answers are memoized per
+  /// (value, point, loop), which is valid while the IR, the solver and the
+  /// dominance info are unchanged.
   BoundProof proveTrue(Value v, QueryContext ctx);
 
   /// Diagnostic, for tests: how many mask nodes `proveTrue` has evaluated over
@@ -494,6 +503,41 @@ private:
   unsigned deepest = 0;
   /// Mask nodes `proveTrue` has evaluated; see `numMaskEvaluations`.
   unsigned maskEvaluations = 0;
+
+  /// One mask node's answer, with what `proveTrue` needs to cache it safely.
+  struct MaskResult {
+    BoundProof proof;
+    /// Mask nodes between this one and the deepest below it; 0 for a leaf.
+    unsigned height = 0;
+    /// A bound cut the walk short somewhere below, so `proof` may be weaker
+    /// than this node deserves. Such an answer is never cached as complete.
+    bool truncated = false;
+  };
+  /// Keyed by point and loop as well as value: they decide which assumes apply
+  /// and what the loop bounds are.
+  struct MaskMemoKey {
+    const void *value;
+    Operation *at;
+    Operation *loop;
+    bool operator<(const MaskMemoKey &o) const {
+      return std::tie(value, at, loop) < std::tie(o.value, o.at, o.loop);
+    }
+  };
+  /// A complete answer and the height of the mask below it: it is reused only
+  /// where that subtree still fits under `kMaxMaskDepth`.
+  struct MaskMemoEntry {
+    BoundProof proof;
+    unsigned height;
+  };
+  /// Memo, bounds and counters around `proveTrueNode`.
+  MaskResult proveTrueImpl(Value v, QueryContext ctx, unsigned depth);
+  /// One mask node, recursing through `proveTrueImpl`.
+  MaskResult proveTrueNode(Value v, QueryContext ctx, unsigned depth);
+  std::map<MaskMemoKey, MaskMemoEntry> maskMemo;
+  /// Per query: nodes evaluated so far, and whether that ran past
+  /// `kMaxMaskVisits`.
+  unsigned maskVisits = 0;
+  bool maskBudgetExhausted = false;
 };
 
 /// Normalizes a condition in place: folds the constant into the bound,
