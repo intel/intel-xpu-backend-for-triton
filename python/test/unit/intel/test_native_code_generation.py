@@ -93,7 +93,7 @@ def test_auto_large_grf(device, tmp_path):
 
 
 @pytest.mark.parametrize("generate_native_code", [False, True], ids=["load_binary", "make_zebin"])
-@pytest.mark.parametrize("grf_mode", ["128", "192", "256", "512", "auto"])
+@pytest.mark.parametrize("grf_mode", ["128", "160", "192", "256", "512", "auto"])
 def test_explicit_grf_mode_uses_maximum_registers(device, grf_mode, generate_native_code):
 
     @triton.jit
@@ -103,8 +103,8 @@ def test_explicit_grf_mode_uses_maximum_registers(device, grf_mode, generate_nat
 
     SIZE = 128
     x = to_triton(numpy_random(SIZE, dtype_str="int32"), device=device, dst_type="int32")
-    if grf_mode in ("192", "512") and not is_xpu_cri():
-        # Only CRI accepts 192- and 512-GRF modes; see `get_grf_modes`.
+    if grf_mode in ("160", "192", "512") and not is_xpu_cri():
+        # Only CRI accepts 160-, 192- and 512-GRF modes; see `get_grf_modes`.
         with pytest.raises(RuntimeError, match=f"Unknown grf_mode: {grf_mode}"):
             kernel[(1, )](x, SIZE=SIZE, num_warps=4, grf_mode=grf_mode, generate_native_code=generate_native_code)
         return

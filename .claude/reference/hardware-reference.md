@@ -34,6 +34,7 @@ Key performance characteristics per Xe-core:
 | Mode | Registers | Total Size | Threads per XVE | Build Flag |
 |------|-----------|------------|-----------------|------------|
 | Small GRF (128) | 128 | 4 KB | 8 (max occupancy) | `-cl-intel-128-GRF-per-thread` |
+| GRF (160, CRI only) | 160 | 5 KB | Reduced (not measured) | None (SPIR-V execution mode only) |
 | GRF (192, CRI only) | 192 | 6 KB | Reduced (not measured) | None (SPIR-V execution mode only) |
 | Large GRF (256) | 256 | 8 KB | 4 (halved occupancy) | `-cl-intel-256-GRF-per-thread` |
 | XLarge GRF (512, CRI only) | 512 | 16 KB | 2 (quartered occupancy) | `-cl-intel-512-GRF-per-thread` |
@@ -46,11 +47,11 @@ retry, `driver.c`'s JIT retry) will select is target-dependent: `"512"` on
 source of truth for this policy.
 
 The explicit `grf_mode` values a target accepts (besides `'default'` and
-`'auto'`) come from `get_grf_modes()` in the same file: `'128'`, `'192'`,
-`'256'` and `'512'` on `cri`; `'128'` and `'256'` everywhere else. Off LTS an
+`'auto'`) come from `get_grf_modes()` in the same file: `'128'`, `'160'`,
+`'192'`, `'256'` and `'512'` on `cri`; `'128'` and `'256'` everywhere else. Off LTS an
 explicit mode is requested through the kernel's `SPV_INTEL_maximum_registers`
-execution mode rather than the build flags above; `'192'` has no build flag
-and is therefore rejected on LTS.
+execution mode rather than the build flags above; `'160'` and `'192'` have no
+build flag and are therefore rejected on LTS.
 
 ### Supported Subgroup Sizes (typical)
 | Architecture | Subgroup Sizes |

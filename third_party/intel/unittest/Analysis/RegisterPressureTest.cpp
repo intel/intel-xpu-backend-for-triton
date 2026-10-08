@@ -124,10 +124,11 @@ TEST_F(RegisterPressureGRFModeTest, AutoModeRespectsMaxGRFMode) {
   EXPECT_EQ(largestBytes(*module, "auto"), 8192u);
 }
 
-TEST_F(RegisterPressureGRFModeTest, ExplicitGRFMode192) {
-  // "192" (accepted on "cri" only) is an explicit mode like the others: its
-  // exact budget, regardless of `ttig.max_grf_mode`.
+TEST_F(RegisterPressureGRFModeTest, ExplicitGRFMode160And192) {
+  // "160" and "192" (accepted on "cri" only) are explicit modes like the
+  // others: their exact budget, regardless of `ttig.max_grf_mode`.
   auto module = createModule(StringRef("512"));
+  EXPECT_EQ(largestBytes(*module, "160"), 5120u);
   EXPECT_EQ(largestBytes(*module, "192"), 6144u);
 }
 
