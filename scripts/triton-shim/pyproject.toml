@@ -7,7 +7,7 @@ name = "triton"
 version = "3.9.0+xpu"
 description = "Temporary compatibility shim for Triton XPU"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 dependencies = [
     "triton-xpu==3.9.0"

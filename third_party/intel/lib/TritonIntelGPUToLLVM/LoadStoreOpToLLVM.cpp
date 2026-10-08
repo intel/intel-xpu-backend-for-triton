@@ -507,8 +507,7 @@ struct LoadStoreConversionBase {
   // set, fall back to the frontend-provided eviction policy hint (e.g.
   // inductor's `eviction_policy='evict_last'`) and route it to the closest
   // LSC cache mode:
-  //   EVICT_FIRST -> L1IAR_L3C  (invalidate-after-read: data is used once;
-  //                              free the L1 line immediately after delivery)
+  //   EVICT_FIRST -> DEFAULT    (ignored, see below)
   //   EVICT_LAST  -> L1C_L3C    (cache at all levels: keep the line warm for
   //                              anticipated reuse)
   //   NORMAL      -> DEFAULT    (let the hardware decide)
@@ -526,17 +525,15 @@ struct LoadStoreConversionBase {
      **/
     switch (cachePolicy.cacheModifier) {
     case CacheModifier::NONE:
-      // No explicit cache modifier: honor the eviction policy hint via the LSC
-      // cache-control decoration. EVICT_FIRST reads the line without retaining
-      // it in L1 (invalidate-after-read); EVICT_LAST keeps the line cached for
-      // anticipated reuse. This decoration does NOT bypass L1 for the load, so
-      // spatially-coalesced subgroup reads still share the line (see
-      // getNonTemporalFlag() for why EVICT_FIRST must not set nontemporal).
+      // No explicit cache modifier: EVICT_LAST keeps the line cached for
+      // anticipated reuse (no L1 bypass; see getNonTemporalFlag()). EVICT_FIRST
+      // is deliberately ignored: it marks the *value* as last-use, but its L1
+      // line is often re-read by other lanes or loop iterations. Both L1IAR_L3C
+      // and L1S_L3C were measured slower than DEFAULT on such loads (#8109).
       switch (cachePolicy.evictionPolicy) {
-      case EvictionPolicy::EVICT_FIRST:
-        return TritonGEN::LoadCacheControl::L1IAR_L3C;
       case EvictionPolicy::EVICT_LAST:
         return TritonGEN::LoadCacheControl::L1C_L3C;
+      case EvictionPolicy::EVICT_FIRST:
       case EvictionPolicy::NORMAL:
         break;
       }
@@ -657,10 +654,9 @@ struct LoadStoreConversionBase {
       // spatial reuse. These loads are typically coalesced across the subgroup
       // (adjacent lanes read adjacent elements of the same L1 line), so marking
       // them nontemporal bypasses L1 and defeats that intra-line sharing,
-      // roughly doubling memory traffic (regression #7520, mobilevit_s). The
-      // eviction hint is still honored via the LSC cache-control decoration
-      // (EVICT_FIRST -> L1IAR_L3C) set in tritonToIntelCacheModifier(), which
-      // reads the coalesced line once and then does not retain it.
+      // roughly doubling memory traffic (regression #7520, mobilevit_s).
+      // tritonToIntelCacheModifier() ignores EVICT_FIRST for the same reason
+      // (#8109).
     default:
       return false;
     }
@@ -1581,17 +1577,8 @@ struct PrefetchOpConversion
         isPrefetch256BSupported);
     if (!sizeInfo.isValid())
       return failure();
-    // Extract members to regular variables for C++17 compatibility
-    // (capturing structured bindings in lambdas requires C++20)
-    int tileHeight = sizeInfo.tileHeight;
-    int tileWidth = sizeInfo.tileWidth;
-    int numPackedVals = sizeInfo.numElemPerPackedVal;
-    int vBlocks = sizeInfo.vBlocks;
-    int rowDim = sizeInfo.rowDim;
-    int colDim = sizeInfo.colDim;
-    bool isTransposeRequired = sizeInfo.transpose;
-    std::optional<SetVector<unsigned>> regPackedBases =
-        std::move(sizeInfo.regPackedBases);
+    auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
+          isTransposeRequired, _, regPackedBases] = std::move(sizeInfo);
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
     Location loc = op.getLoc();

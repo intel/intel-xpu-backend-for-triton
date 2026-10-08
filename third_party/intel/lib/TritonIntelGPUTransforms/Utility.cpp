@@ -302,9 +302,8 @@ LogicalResult getConvertBackwardSlice(
   DenseSet<std::pair<OpOperand *, Attribute>> seen;
   SmallVector<std::pair<OpOperand *, Attribute>> queue;
 
-  std::optional<bool> enableForLoopSupport =
-      mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
-          "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP"));
+  bool enableForLoopSupport = mlir::triton::tools::getBoolEnv(
+      "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP");
 
   auto enqueue = [&](OpOperand &operand, Attribute encoding) {
     auto x = std::make_pair(&operand, encoding);

@@ -74,6 +74,11 @@ static cl::opt<bool> ExpandSubByteVectorBitcast(
                    "extractelement + icmp onto the source i1 lanes"),
     cl::init(false));
 
+static cl::opt<bool> LegalizeI1VectorMemory(
+    "legalize-i1-vector-memory",
+    llvm::cl::desc("rewrite `<N x i1>` loads and stores as integer accesses"),
+    cl::init(false));
+
 namespace {
 static std::function<Error(Module *)> makeOptimizingPipeline() {
   return [](Module *m) -> Error {
@@ -99,6 +104,8 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
       mpm.addPass(ExpandSubByteBitwiseAndPass());
     if (ExpandSubByteVectorBitcast)
       mpm.addPass(ExpandSubByteVectorBitcastPass());
+    if (LegalizeI1VectorMemory)
+      mpm.addPass(LegalizeI1VectorMemoryPass());
     llvm::FunctionPassManager fpm;
     if (BreakStructPhiNodes)
       fpm.addPass(BreakStructPhiNodesPass());

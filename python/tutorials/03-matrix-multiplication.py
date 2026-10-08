@@ -165,10 +165,15 @@ def is_xpu():
     return triton.runtime.driver.active.get_current_target().backend == "xpu"
 
 
+def is_xpu_cri():
+    return triton.runtime.driver.active.get_current_target().arch['arch'] == "cri"
+
+
 def get_xpu_autotune_config():
+    grf_mode = '512' if is_xpu_cri() else '256'
     return [
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'grf_mode': grf_mode},
             num_stages=4, num_warps=32),
         triton.Config(
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'grf_mode': 'auto'},
