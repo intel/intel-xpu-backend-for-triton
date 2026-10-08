@@ -251,9 +251,7 @@ class LayerNorm(torch.autograd.Function):
         if N > BLOCK_SIZE:
             raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
         # heuristics for number of warps
-        num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
-        if is_xpu():
-            num_warps = 32
+        num_warps = min(max(BLOCK_SIZE // 256, 1), 32 if is_xpu() else 8)
         # enqueue kernel
         _layer_norm_fwd_fused[(M, )](  #
             x_arg, y, weight, bias, mean, rstd,  #
