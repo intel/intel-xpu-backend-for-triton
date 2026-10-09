@@ -18,8 +18,8 @@ import triton
 from triton.runtime.build import _build, platform_key, _load_module_from_path
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import DriverBase, decompose_descriptor
-from triton.backends.driver import expand_signature, wrap_handle_tensordesc_impl
+from triton.backends.driver import DriverBase, TensorDescABI, decompose_descriptor
+from triton.backends.driver import expand_signature, get_kernel_argument_layout, wrap_handle_tensordesc_impl
 
 # PTI's default collection mode is Local (mode 2), which with an event-less launcher hangs or
 # reports zero kernel times on the Level Zero v1 adapter (PVC); v2 (BMG and newer) is fine. Full
@@ -574,28 +574,6 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def make_kernel_signature(signature):
-    """
-    Creates a kernel signature in C to be able to efficiently extract
-    arguments in the launcher.
-    """
-
-    def _flatten_signature(sig, output):
-        # Flatten tuples
-        if isinstance(sig, tuple):
-            for x in sig:
-                _flatten_signature(x, output)
-        else:
-            output.append(sig)
-
-    flat_signature = []
-    for sig in signature:
-        _flatten_signature(sig, flat_signature)
-    kernel_signature = [x for x in flat_signature if x != "constexpr"]
-
-    return triton.runtime.driver.active.utils.build_signature_metadata((kernel_signature, ))
-
-
 def annotate_arguments(signature):
     """
     This recreates the signature with annotations as C objects which can then
@@ -686,11 +664,12 @@ class XPULauncher(object):
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
-        launcher = triton.runtime.driver.active.utils.launch
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta=None, descriptor_type="*i8")
+        utils = triton.runtime.driver.active.utils
+        expanded_signature = expand_signature(signature.values(), TensorDescABI.DECOMPOSED)
         self.arg_annotations = annotate_arguments(expanded_signature)
-        self.kernel_signature = make_kernel_signature(expanded_signature)
-        self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta=[])
+        self.kernel_signature = utils.build_signature_metadata(
+            ([ty for _, ty in get_kernel_argument_layout(signature.values(), TensorDescABI.DECOMPOSED)], ))
+        self.launch = wrap_handle_tensordesc(utils.launch, signature, tensordesc_meta=[])
 
         # Serialize KernelArguments for SPIR-V Runner
         self.serialize_kernel_args = knobs.intel.enable_dump_spirv_kernel_args
