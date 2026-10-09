@@ -68,6 +68,10 @@ bool supportsI8DotDecomposition(PatternRewriter &rewriter,
       rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
   if (getAMDArch(moduleOp))
     return false;
+  if (auto targetAttr =
+          moduleOp->getAttrOfType<StringAttr>(ttg::AttrTargetName);
+      targetAttr && targetAttr.strref().split(':').first == "xpu")
+    return false;
   return llvm::is_contained({16, 32, 64}, accElem.getWidth());
 }
 

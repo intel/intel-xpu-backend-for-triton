@@ -2014,8 +2014,6 @@ _TCGEN05_MMA_SCALED_CASES = [
 
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k"), _DOT_FMA_CASES)
 def test_dot_fma(device, type_a, type_b, acc_type, m, n, k, fresh_knobs):
-    if device != "cuda":
-        pytest.xfail("dot_fma not yet supported on non-CUDA backends")
     _require_backend(device)
     if is_cuda() and torch.cuda.get_device_capability()[0] < 9 and "e4m3" in (type_a, type_b):
         pytest.skip("E4M3 requires Hopper or newer")
@@ -2051,11 +2049,10 @@ def test_dot_fma(device, type_a, type_b, acc_type, m, n, k, fresh_knobs):
     b_bits = _random_float_bits(rs, (n, k), type_b)
     c_bits = _random_float_bits(rs, (m, n), acc_type)
     exp_bits = _mm_payload_bits(a_bits, b_bits.T, c_bits, type_a, type_b, acc_type)
-
-    _, aw = _as_float_bits_tensor(a_bits, type_a)
-    _, bw = _as_float_bits_tensor(b_bits, type_b)
-    _, cw = _as_float_bits_tensor(c_bits, acc_type)
-    out, outw = _as_float_bits_tensor(np.empty((m, n), dtype=_float_dtype_info(acc_type)[2]), acc_type)
+    _, aw = _as_float_bits_tensor(a_bits, type_a, device)
+    _, bw = _as_float_bits_tensor(b_bits, type_b, device)
+    _, cw = _as_float_bits_tensor(c_bits, acc_type, device)
+    out, outw = _as_float_bits_tensor(np.empty((m, n), dtype=_float_dtype_info(acc_type)[2]), acc_type, device)
 
     compiled = kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
     ttgir = compiled.asm["ttgir"]
