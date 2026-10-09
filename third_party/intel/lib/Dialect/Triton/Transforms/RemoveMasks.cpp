@@ -29,7 +29,8 @@
 // enable it alone: `-debug-only=triton-intel-remove-masks` also turns on this
 // pass's after-versioning module dumps, which are two orders of magnitude more
 // output than the census itself. The printed prefix stays the pass's, so the
-// corpus tooling greps a single pattern either way.
+// corpus tooling greps a single pattern either way. Helpers used only under
+// CDBG are [[maybe_unused]]: they are dead when debug output is compiled out.
 #define CENSUS_DEBUG_TYPE "triton-intel-remove-masks-census"
 #define CDBG(X) DEBUG_WITH_TYPE(CENSUS_DEBUG_TYPE, DBGS() << X << "\n")
 
@@ -89,7 +90,7 @@ static std::string describeBound(Value v) {
 // classification: the versioning trace only needs enough to join
 // a `versioned:` guard against the census's `candidate:`/`verdict:` lines by
 // eye, not a full expression.
-static std::string describeArg(Value v) {
+[[maybe_unused]] static std::string describeArg(Value v) {
   v = tt::intel::getFinalValue(v);
   if (auto arg = dyn_cast<BlockArgument>(v))
     return "arg" + std::to_string(arg.getArgNumber());
@@ -101,7 +102,7 @@ static std::string describeArg(Value v) {
 // masked op whose innermost enclosing loop is a scf.for gets an id and a
 // candidate line, including ops the drivers never examine, so the census
 // denominator is complete.
-static void assignCensusIds(ModuleOp mod) {
+[[maybe_unused]] static void assignCensusIds(ModuleOp mod) {
   mod.walk([&](tt::FuncOp func) {
     std::string text;
     llvm::raw_string_ostream os(text);
@@ -117,9 +118,10 @@ static void assignCensusIds(ModuleOp mod) {
       std::string loopId = funcKey + "/L" + std::to_string(loopIdx++);
       forOp->setAttr(kCensusIdAttr,
                      StringAttr::get(forOp.getContext(), loopId));
-      StringRef scope = forOp->getParentOfType<scf::ForOp>() ? "nested-loop"
-                        : !forOp.getSingleInductionVar()     ? "multi-iv"
-                                                             : "outermost";
+      [[maybe_unused]] StringRef scope =
+          forOp->getParentOfType<scf::ForOp>() ? "nested-loop"
+          : !forOp.getSingleInductionVar()     ? "multi-iv"
+                                               : "outermost";
       unsigned maskIdx = 0;
       forOp.getBody()->walk([&](Operation *op) {
         if (op->getParentOfType<scf::ForOp>() != forOp || !censusMask(op))
@@ -135,7 +137,7 @@ static void assignCensusIds(ModuleOp mod) {
   });
 }
 
-static void stripCensusIds(ModuleOp mod) {
+[[maybe_unused]] static void stripCensusIds(ModuleOp mod) {
   mod.walk([](Operation *op) { op->removeAttr(kCensusIdAttr); });
 }
 
@@ -1116,7 +1118,7 @@ struct LoopPlan {
 };
 
 // ','-joined census ids, in the order given.
-static std::string joinIds(ArrayRef<Operation *> ops) {
+[[maybe_unused]] static std::string joinIds(ArrayRef<Operation *> ops) {
   SmallVector<std::string> ids;
   for (Operation *op : ops)
     ids.push_back(censusId(op).str());
@@ -1124,7 +1126,8 @@ static std::string joinIds(ArrayRef<Operation *> ops) {
 }
 
 // ';'-joined conditions, in the order given.
-static std::string joinConditions(ArrayRef<tt::intel::BoundCondition> cs) {
+[[maybe_unused]] static std::string
+joinConditions(ArrayRef<tt::intel::BoundCondition> cs) {
   SmallVector<std::string> strs;
   for (const tt::intel::BoundCondition &c : cs)
     strs.push_back(tt::intel::toString(c));
@@ -1134,7 +1137,8 @@ static std::string joinConditions(ArrayRef<tt::intel::BoundCondition> cs) {
 // \p ops printed one per entry: in program order if they share a block, else
 // sorted by text. Program order is only defined within a block, and a
 // comparator mixing the two orders is not a strict weak ordering.
-static SmallVector<std::string> printInTraceOrder(ArrayRef<Operation *> ops) {
+[[maybe_unused]] static SmallVector<std::string>
+printInTraceOrder(ArrayRef<Operation *> ops) {
   SmallVector<Operation *> sorted(ops);
   bool sameBlock = llvm::all_of(sorted, [&](Operation *op) {
     return op->getBlock() == sorted.front()->getBlock();
