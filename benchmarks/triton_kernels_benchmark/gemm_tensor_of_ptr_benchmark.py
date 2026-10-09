@@ -16,8 +16,28 @@ import triton.language as tl
 from triton_kernels_benchmark import gemm_benchmark
 
 
+def get_cri_matmul_autotune_configs() -> List[triton.Config]:
+    if not gemm_benchmark.is_xpu_cri():
+        return []
+    return [
+        triton.Config(
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '512'},
+            num_stages=2, num_warps=32)
+    ]
+
+
+def get_cri_matmul_batched_autotune_configs() -> List[triton.Config]:
+    if not gemm_benchmark.is_xpu_cri():
+        return []
+    return [
+        triton.Config(
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '512'},
+            num_stages=2, num_warps=32)
+    ]
+
+
 @triton.autotune(
-    configs=gemm_benchmark.get_matmul_autotune_configs(),
+    configs=gemm_benchmark.get_matmul_autotune_configs() + get_cri_matmul_autotune_configs(),
     key=['M', 'N', 'K'],
     restore_value=['c_ptr'],
 )
@@ -70,7 +90,7 @@ def matmul_kernel(
 
 # pylint: disable=unused-argument
 @triton.autotune(
-    configs=gemm_benchmark.get_matmul_batched_autotune_configs(),
+    configs=gemm_benchmark.get_matmul_batched_autotune_configs() + get_cri_matmul_batched_autotune_configs(),
     key=['M', 'N', 'K'],
     restore_value=['c_ptr'],
 )
