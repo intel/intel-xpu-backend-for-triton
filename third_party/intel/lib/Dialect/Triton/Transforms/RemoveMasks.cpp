@@ -1,4 +1,5 @@
 #include "intel/include/Analysis/Range.h"
+#include "intel/include/Analysis/SymbolicBounds.h"
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Analysis/DataFlowFramework.h"
@@ -10,14 +11,28 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/xxhash.h"
 #include <optional>
 #include <type_traits>
 
 #define DEBUG_TYPE "triton-intel-remove-masks"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
+// The census trace sits on its own debug type so a corpus run can
+// enable it alone: `-debug-only=triton-intel-remove-masks` also turns on this
+// pass's after-versioning module dumps, which are two orders of magnitude more
+// output than the census itself. The printed prefix stays the pass's, so the
+// corpus tooling greps a single pattern either way. Helpers used only under
+// CDBG are [[maybe_unused]]: they are dead when debug output is compiled out.
+#define CENSUS_DEBUG_TYPE "triton-intel-remove-masks-census"
+#define CDBG(X) DEBUG_WITH_TYPE(CENSUS_DEBUG_TYPE, DBGS() << X << "\n")
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -28,6 +43,103 @@ namespace mlir::triton::intel {
 } // namespace mlir::triton::intel
 
 namespace {
+
+// Census scaffolding, debug-only: trace lines keyed by a stable per-mask id.
+// In `census:` lines, `walk=` numbers the legacy driver's three walks in
+// order: 1 is RemovableMaskValidator, 2 CanonicalMaskValidator, 3
+// InvariantMaskValidator. Ids are stored as a discardable attribute (no
+// dialect prefix, so no dialect verifier sees it): loop clones made by
+// versioning inherit them, and stripCensusIds removes them at pass end.
+static constexpr StringLiteral kCensusIdAttr = "census_id";
+
+// Null-safe: the validators' internal calls pass op == nullptr.
+static StringRef censusId(Operation *op) {
+  auto attr = op ? op->getAttrOfType<StringAttr>(kCensusIdAttr) : StringAttr();
+  return attr ? attr.getValue() : StringRef("?");
+}
+
+// The mask a candidate op carries, or null. A superset of what the collectors
+// read: masked stores and atomics are counted but never examined.
+static Value censusMask(Operation *op) {
+  return TypeSwitch<Operation *, Value>(op)
+      .Case<tt::LoadOp, tt::StoreOp, tt::AtomicLoadOp, tt::AtomicStoreOp,
+            tt::AtomicRMWOp>([](auto o) { return o.getMask(); })
+      .Case<arith::SelectOp>([](auto o) { return o.getCondition(); })
+      .Default([](Operation *) { return Value(); });
+}
+
+// Classifies a loop bound for the census: "const", "arg" (block argument),
+// "cdiv" (divsi of an addi), or the defining op name.
+static std::string describeBound(Value v) {
+  v = tt::intel::getFinalValue(v);
+  // m_ConstantInt binds into its argument, so it needs a real APInt: passing
+  // nullptr dereferences null.
+  APInt cst;
+  if (matchPattern(v, m_ConstantInt(&cst)))
+    return "const";
+  Operation *def = v.getDefiningOp();
+  if (!def)
+    return "arg";
+  if (auto div = dyn_cast<arith::DivSIOp>(def))
+    if (div.getLhs().getDefiningOp<arith::AddIOp>())
+      return "cdiv";
+  return def->getName().getStringRef().str();
+}
+
+// `argN` for a function argument, else `describeBound`'s coarse
+// classification: the versioning trace only needs enough to join
+// a `versioned:` guard against the census's `candidate:`/`verdict:` lines by
+// eye, not a full expression.
+[[maybe_unused]] static std::string describeArg(Value v) {
+  v = tt::intel::getFinalValue(v);
+  if (auto arg = dyn_cast<BlockArgument>(v))
+    return "arg" + std::to_string(arg.getArgNumber());
+  return describeBound(v);
+}
+
+// id = <func>#<xxh3 of the func's printed IR>/L<pre-order loop index>/M<mask
+// index>. The hash separates specializations that share a kernel name. Every
+// masked op whose innermost enclosing loop is a scf.for gets an id and a
+// candidate line, including ops the drivers never examine, so the census
+// denominator is complete.
+[[maybe_unused]] static void assignCensusIds(ModuleOp mod) {
+  mod.walk([&](tt::FuncOp func) {
+    std::string text;
+    llvm::raw_string_ostream os(text);
+    // Full IR, before any attribute is set: elided dense constants could
+    // make two different functions hash the same.
+    func->print(os);
+    std::string funcKey =
+        (func.getName() + "#" +
+         llvm::utohexstr(llvm::xxh3_64bits(text), /*LowerCase=*/true))
+            .str();
+    unsigned loopIdx = 0;
+    func.walk<WalkOrder::PreOrder>([&](scf::ForOp forOp) {
+      std::string loopId = funcKey + "/L" + std::to_string(loopIdx++);
+      forOp->setAttr(kCensusIdAttr,
+                     StringAttr::get(forOp.getContext(), loopId));
+      [[maybe_unused]] StringRef scope =
+          forOp->getParentOfType<scf::ForOp>() ? "nested-loop"
+          : !forOp.getSingleInductionVar()     ? "multi-iv"
+                                               : "outermost";
+      unsigned maskIdx = 0;
+      forOp.getBody()->walk([&](Operation *op) {
+        if (op->getParentOfType<scf::ForOp>() != forOp || !censusMask(op))
+          return; // owned by an inner loop, or not masked
+        std::string id = loopId + "/M" + std::to_string(maskIdx++);
+        op->setAttr(kCensusIdAttr, StringAttr::get(op->getContext(), id));
+        CDBG("candidate: id="
+             << id << " kind=" << op->getName().getStringRef()
+             << " scope=" << scope << " where="
+             << (op->getBlock() == forOp.getBody() ? "direct" : "in-region"));
+      });
+    });
+  });
+}
+
+[[maybe_unused]] static void stripCensusIds(ModuleOp mod) {
+  mod.walk([](Operation *op) { op->removeAttr(kCensusIdAttr); });
+}
 
 // Returns true if `pred` is a supported bound-check predicate.
 static bool isSupportedBoundPredicate(arith::CmpIPredicate pred) {
@@ -157,6 +269,8 @@ static Operation *dropMask(Operation *op, bool maskVal) {
 
   OpBuilder builder(op);
   Location loc = op->getLoc();
+  CDBG("outcome: id=" << censusId(op) << " result=dropped-"
+                      << (maskVal ? "true" : "false"));
   TypeSwitch<Operation *>(op)
       .Case<tt::LoadOp>([&](auto loadOp) {
         if (maskVal) {
@@ -215,6 +329,7 @@ public:
       : MaskValidatorBase(), solver(solver) {}
 
   virtual bool isValidMask(scf::ForOp &forOp, Value mask, Operation *op) const {
+    censusOp = op; // census only: classifyCmp has no access to the masked op
     MaskClassification cls = classify(forOp, mask);
     if (cls == MaskClassification::Unknown)
       return false;
@@ -352,24 +467,32 @@ private:
   MaskClassification classifyCmp(scf::ForOp &forOp, Value finalVal) const {
     std::optional<ConstantIntRanges> optRange =
         tt::intel::collectLoopIVRange(forOp, *solver);
-    if (!optRange)
+    if (!optRange) {
+      censusExit(forOp, "iv-range-unknown");
       return MaskClassification::Unknown;
+    }
 
     if (!finalVal.getDefiningOp() ||
-        !isa<arith::CmpIOp>(finalVal.getDefiningOp()))
+        !isa<arith::CmpIOp>(finalVal.getDefiningOp())) {
+      censusExit(forOp, "not-cmpi");
       return MaskClassification::Unknown;
+    }
 
     auto cmpOp = cast<arith::CmpIOp>(finalVal.getDefiningOp());
     arith::CmpIPredicate pred = cmpOp.getPredicate();
-    if (!isSupportedBoundPredicate(pred))
+    if (!isSupportedBoundPredicate(pred)) {
+      censusExit(forOp, "pred-unsupported");
       return MaskClassification::Unknown;
+    }
 
     Value lhs = tt::intel::getFinalValue(cmpOp.getLhs());
     Value rhs = tt::intel::getFinalValue(cmpOp.getRhs());
     Operation *lhsOp = tt::intel::getFinalValue(lhs).getDefiningOp();
     Operation *rhsOp = tt::intel::getFinalValue(rhs).getDefiningOp();
-    if (!lhsOp || !rhsOp)
+    if (!lhsOp || !rhsOp) {
+      censusExit(forOp, "no-defining-op");
       return MaskClassification::Unknown;
+    }
 
     auto getIntConstantValue = [](Operation *op) -> std::optional<APInt> {
       APInt intVal;
@@ -387,30 +510,55 @@ private:
 
     // TODO: consider the case where the constant is lhs.
     std::optional<APInt> constIntVal = getIntConstantValue(rhsOp);
-    if (!constIntVal)
+    if (!constIntVal) {
+      censusExit(forOp, "rhs-not-const");
       return MaskClassification::Unknown;
+    }
 
     auto addOp = dyn_cast<arith::AddIOp>(lhsOp);
-    if (!addOp)
+    if (!addOp) {
+      censusExit(forOp, "lhs-not-addi");
       return MaskClassification::Unknown;
+    }
 
     Value addLhs = tt::intel::getFinalValue(addOp.getLhs());
     Value addRhs = tt::intel::getFinalValue(addOp.getRhs());
 
     std::optional<ConstantIntRanges> lhsRange =
         getIVEquivalentRange(forOp, addLhs);
-    if (!lhsRange)
+    if (!lhsRange) {
+      censusExit(forOp, "lhs-not-iv");
       return MaskClassification::Unknown;
+    }
 
     auto makeRangeOp =
         dyn_cast_or_null<tt::MakeRangeOp>(addRhs.getDefiningOp());
-    if (!makeRangeOp)
+    if (!makeRangeOp) {
+      censusExit(forOp, "rhs-not-make-range");
       return MaskClassification::Unknown;
+    }
 
-    return classifyMask(pred, *lhsRange, makeRangeOp.getStart(),
-                        makeRangeOp.getEnd(), *constIntVal);
+    MaskClassification cls =
+        classifyMask(pred, *lhsRange, makeRangeOp.getStart(),
+                     makeRangeOp.getEnd(), *constIntVal);
+    censusExit(forOp, "classified",
+               cls == MaskClassification::AlwaysTrue    ? "true"
+               : cls == MaskClassification::AlwaysFalse ? "false"
+                                                        : "unknown");
+    return cls;
   }
 
+  // One census line per walk-1 classification exit (debug-only).
+  void censusExit(scf::ForOp &forOp, StringRef exit,
+                  StringRef result = StringRef()) const {
+    CDBG("census: id=" << censusId(censusOp) << " walk=1 exit=" << exit
+                       << (result.empty() ? StringRef() : StringRef(" result="))
+                       << result << " ub="
+                       << describeBound(forOp.getUpperBound()) << " step="
+                       << (forOp.getConstantStep() ? "const" : "dyn"));
+  }
+
+  mutable Operation *censusOp = nullptr;
   DataFlowSolver *solver;
   mutable std::map<Operation *, bool> opToMaskValue;
 };
@@ -473,12 +621,20 @@ public:
     assert(loopIV.has_value() && "Failed to find loop induction variable");
 
     if (!defMulLhs && mulOp.getLhs() == *loopIV &&
-        isa<arith::ConstantIntOp>(defMulRhs))
-      return cast<arith::ConstantIntOp>(defMulRhs).value() == end;
+        isa<arith::ConstantIntOp>(defMulRhs)) {
+      bool matched = cast<arith::ConstantIntOp>(defMulRhs).value() == end;
+      if (matched && op)
+        CDBG("census: id=" << censusId(op) << " walk=2 exit=canonical-matched");
+      return matched;
+    }
 
     if (!defMulRhs && mulOp.getRhs() == *loopIV &&
-        isa<arith::ConstantIntOp>(defMulLhs))
-      return cast<arith::ConstantIntOp>(defMulLhs).value() == end;
+        isa<arith::ConstantIntOp>(defMulLhs)) {
+      bool matched = cast<arith::ConstantIntOp>(defMulLhs).value() == end;
+      if (matched && op)
+        CDBG("census: id=" << censusId(op) << " walk=2 exit=canonical-matched");
+      return matched;
+    }
 
     return false;
   }
@@ -595,9 +751,9 @@ public:
     return true;
   }
 
-private:
   // Assuming the mask is equivalent to the form: `END < N-i*END`, returns a
-  // structure containing `N` and `END`.
+  // structure containing `N` and `END`. Public so the versioning trace (Task
+  // 11) can render the guard text without re-parsing the mask.
   MaskInfo getMaskInfo(scf::ForOp &forOp, Value mask) const {
     assert(isValidMask(forOp, mask, /*op=*/nullptr) &&
            "Expecting a valid mask");
@@ -646,8 +802,11 @@ public:
     // Boundary-check pattern from RewriteTensorDescriptorToPointer:
     // (splat(offset) + ext(make_range(start, end))) cmp splat(constant)
     // Accepts all comparison predicates (including sge for >= 0 checks).
-    if (isBoundaryCheckPattern(cmpOp))
+    if (isBoundaryCheckPattern(cmpOp)) {
+      if (op)
+        CDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
       return true;
+    }
 
     if (!isSupportedBoundPredicate(pred))
       return false;
@@ -670,18 +829,24 @@ public:
       assert(isa<IntegerType>(lhsVal.getType()) &&
              cast<IntegerType>(lhsVal.getType()).getWidth() == 1 &&
              "Invalid type");
+      if (op)
+        CDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
       return true;
     }
 
     if (!rhs && isa<tt::MakeRangeOp>(lhs)) {
       [[maybe_unused]] auto rangeOp = cast<tt::MakeRangeOp>(lhs);
       assert(rangeOp.getStart() < rangeOp.getEnd() && "Invalid range");
+      if (op)
+        CDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
       return true;
     }
 
     if (!lhs && isa<tt::MakeRangeOp>(rhs)) {
       [[maybe_unused]] auto rangeOp = cast<tt::MakeRangeOp>(rhs);
       assert(rangeOp.getStart() < rangeOp.getEnd() && "Invalid range");
+      if (op)
+        CDBG("census: id=" << censusId(op) << " walk=3 exit=invariant-matched");
       return true;
     }
 
@@ -876,6 +1041,125 @@ private:
   }
 };
 
+// A mask validator backed by the symbolic bounds prover. Unlike the validators
+// above it recognizes no particular mask shape: it accepts anything the prover
+// could conceivably decide and leaves the decision to `proofFor`.
+class SymbolicMaskValidator final : public MaskValidatorBase {
+public:
+  SymbolicMaskValidator(tt::intel::SymbolicBoundsProver &prover)
+      : prover(prover) {}
+
+  // Structural pre-filter only, deliberately without proving anything: the
+  // collector calls this loads-first and then selects, not in program order,
+  // and the Global Constraints require proofs in program order.
+  bool isValidMask(scf::ForOp &forOp, Value mask,
+                   Operation *op) const override {
+    // Mirror the look-through set of `proveTrue` and require it to bottom out
+    // in something that has a chance of being decided.
+    Value v = mask;
+    while (Operation *def = v.getDefiningOp()) {
+      if (auto splat = dyn_cast<tt::SplatOp>(def))
+        v = splat.getSrc();
+      else if (auto expand = dyn_cast<tt::ExpandDimsOp>(def))
+        v = expand.getSrc();
+      else if (auto bcast = dyn_cast<tt::BroadcastOp>(def))
+        v = bcast.getSrc();
+      else if (auto ext = dyn_cast<arith::ExtSIOp>(def))
+        v = ext.getIn();
+      else if (auto ext = dyn_cast<arith::ExtUIOp>(def))
+        v = ext.getIn();
+      else
+        return isa<arith::CmpIOp, arith::AndIOp, arith::ConstantOp>(def);
+    }
+    return false; // a block argument: `proveTrue` stops there
+  }
+
+  // Unused: a symbolic guard comes from the proof's conditions, which the
+  // driver materializes once per loop, not from one mask at a time.
+  Value getVersioningCond(scf::ForOp &, Value) const override {
+    return nullptr;
+  }
+
+  std::string getName() const override { return "SymbolicMaskValidator"; }
+
+  // Cached per operation. Operations sharing a mask are still queried
+  // separately: each query carries its own program point.
+  tt::intel::BoundProof proofFor(Operation *op) const {
+    auto it = proofs.find(op);
+    if (it != proofs.end())
+      return it->second;
+    Value mask = censusMask(op);
+    tt::intel::BoundProof proof;
+    if (mask)
+      proof = prover.proveTrue(mask, {op, op->getParentOfType<scf::ForOp>()});
+    CDBG("verdict: id=" << censusId(op)
+                        << " proof=" << tt::intel::toString(proof));
+    proofs.try_emplace(op, proof);
+    return proof;
+  }
+
+private:
+  tt::intel::SymbolicBoundsProver &prover;
+  mutable DenseMap<Operation *, tt::intel::BoundProof> proofs;
+};
+
+// What the analysis phase decided for one loop, consumed by the mutation
+// phases. Held across loops, so it must name no value the mutation of an
+// earlier loop could have erased.
+// The inline sizes are explicit because these elements embed BoundProof and
+// BoundCondition, whose own inline buffers push sizeof past the 256-byte limit
+// LLVM asserts on when SmallVector has to pick a default inline count.
+struct LoopPlan {
+  scf::ForOp loop;
+  // Program order. Satisfied | Refuted | ConditionallySatisfied only.
+  SmallVector<std::pair<Operation *, tt::intel::BoundProof>, 4> ops;
+  // Deduplicated guard conditions, facts before preconditions before guards.
+  SmallVector<tt::intel::BoundCondition, 4> conds;
+  Value guard; // materialized before any unmasking
+};
+
+// ','-joined census ids, in the order given.
+[[maybe_unused]] static std::string joinIds(ArrayRef<Operation *> ops) {
+  SmallVector<std::string> ids;
+  for (Operation *op : ops)
+    ids.push_back(censusId(op).str());
+  return llvm::join(ids, ",");
+}
+
+// ';'-joined conditions, in the order given.
+[[maybe_unused]] static std::string
+joinConditions(ArrayRef<tt::intel::BoundCondition> cs) {
+  SmallVector<std::string> strs;
+  for (const tt::intel::BoundCondition &c : cs)
+    strs.push_back(tt::intel::toString(c));
+  return llvm::join(strs, ";");
+}
+
+// \p ops printed one per entry: in program order if they share a block, else
+// sorted by text. Program order is only defined within a block, and a
+// comparator mixing the two orders is not a strict weak ordering.
+[[maybe_unused]] static SmallVector<std::string>
+printInTraceOrder(ArrayRef<Operation *> ops) {
+  SmallVector<Operation *> sorted(ops);
+  bool sameBlock = llvm::all_of(sorted, [&](Operation *op) {
+    return op->getBlock() == sorted.front()->getBlock();
+  });
+  if (sameBlock)
+    llvm::sort(sorted, [](Operation *a, Operation *b) {
+      return a->isBeforeInBlock(b);
+    });
+  SmallVector<std::string> texts;
+  for (Operation *op : sorted) {
+    std::string text;
+    llvm::raw_string_ostream os(text);
+    op->print(os, OpPrintingFlags().skipRegions());
+    texts.push_back(text);
+  }
+  if (!sameBlock)
+    llvm::sort(texts);
+  return texts;
+}
+
 // Collects masked operations in a loop that satisfy the condition imposed by
 // the mask validator associated with this class.
 template <typename MaskValidator> class MaskedOpsCollector {
@@ -901,9 +1185,11 @@ public:
     collectMaskedOps(forOp.getOps<tt::LoadOp>(), maskedOps);
     // `LoopVersioner::version` (the consumer of `CanonicalMaskValidator` and
     // `InvariantMaskValidator`) only knows how to drop masks from `tt.load`;
-    // only `RemovableMaskValidator` (consumed via `dropMask`, which handles
-    // both op kinds) also needs `arith.select` collected.
-    if constexpr (std::is_same_v<MaskValidator, RemovableMaskValidator>)
+    // `RemovableMaskValidator` and `SymbolicMaskValidator` consume their ops
+    // via `dropMask`, which handles both op kinds, so they also need
+    // `arith.select` collected.
+    if constexpr (std::is_same_v<MaskValidator, RemovableMaskValidator> ||
+                  std::is_same_v<MaskValidator, SymbolicMaskValidator>)
       collectMaskedOps(forOp.getOps<arith::SelectOp>(), maskedOps);
     return maskedOps.size();
   }
@@ -963,6 +1249,20 @@ public:
     Value verCond = maskValidator.getVersioningCond(forOp, getMask(maskedOp));
     if (!verCond)
       return false;
+
+    DEBUG_WITH_TYPE(CENSUS_DEBUG_TYPE, {
+      SmallVector<Operation *> toUnmaskTrace(collector.getMaskedOps().begin(),
+                                             collector.getMaskedOps().end());
+      llvm::sort(toUnmaskTrace, [](Operation *a, Operation *b) {
+        return a->isBeforeInBlock(b);
+      });
+      CanonicalMaskValidator::MaskInfo info =
+          maskValidator.getMaskInfo(forOp, getMask(maskedOp));
+      CDBG("versioned: loop="
+           << censusId(forOp) << " unmasked=" << joinIds(toUnmaskTrace)
+           << " guard=canonical N=" << describeArg(info.N) << " END="
+           << info.END << " w=" << info.N.getType().getIntOrFloatBitWidth());
+    });
 
     // This lambda is used to collect the types for the loop results that are
     // downward exposed (i.e. used by other operations).
@@ -1065,6 +1365,19 @@ public:
       verCond = arith::AndIOp::create(builder, loc, verCond, cond);
     }
 
+    DEBUG_WITH_TYPE(CENSUS_DEBUG_TYPE, {
+      // `maskConds` is a SmallPtrSet with no stable order.
+      SmallVector<Operation *> condsTrace(maskConds.begin(), maskConds.end());
+      SmallVector<Operation *> toUnmaskTrace(collector.getMaskedOps().begin(),
+                                             collector.getMaskedOps().end());
+      llvm::sort(toUnmaskTrace, [](Operation *a, Operation *b) {
+        return a->isBeforeInBlock(b);
+      });
+      CDBG("versioned: loop="
+           << censusId(forOp) << " unmasked=" << joinIds(toUnmaskTrace)
+           << " guard=" << llvm::join(printInTraceOrder(condsTrace), ";"));
+    });
+
     auto ifOp = scf::IfOp::create(builder, loc, forOp.getResultTypes(), verCond,
                                   /*withThenRegion=*/true);
 
@@ -1104,6 +1417,76 @@ public:
   }
 };
 
+// Versions \p forOp on \p guard and drops the mask of \p opsToUnmask in the
+// "then" copy. This is `LoopVersioner::version`'s canonical overload with the
+// condition supplied rather than derived, and with the unmasking restricted to
+// the operations the prover decided conditionally: the other masked operations
+// in the loop must keep their masks in both copies.
+static void versionWithGuard(scf::ForOp forOp, Value guard,
+                             ArrayRef<Operation *> opsToUnmask) {
+  assert(guard && "Expecting a valid versioning condition");
+
+  auto getUsedResults = [](const scf::ForOp &forOp) {
+    SmallVector<Type> resTypes;
+    for (Value res : forOp->getResults()) {
+      if (!res.getUsers().empty())
+        resTypes.push_back(res.getType());
+    }
+    return resTypes;
+  };
+
+  OpBuilder builder(forOp);
+  Location loc = forOp.getLoc();
+  auto ifOp = scf::IfOp::create(builder, loc, getUsedResults(forOp), guard,
+                                /*withThenRegion=*/true);
+
+  // Clone the original loop into the 2 if branches.
+  IRMapping map;
+  OpBuilder thenB = ifOp.getThenBodyBuilder();
+  Operation *thenForLoop = thenB.clone(*forOp.getOperation(), map);
+  OpBuilder elseB = ifOp.getElseBodyBuilder();
+  Operation *elseForLoop = elseB.clone(*forOp.getOperation());
+
+  auto pruneUnusedResults = [&](const scf::ForOp &forOp,
+                                Operation *clonedLoop) {
+    SmallVector<Value> prunedResults;
+    for (auto [idx, val] : llvm::enumerate(forOp->getResults())) {
+      if (!val.getUsers().empty())
+        prunedResults.push_back(clonedLoop->getResult(idx));
+    }
+    return prunedResults;
+  };
+
+  // When the 'scf.if' yields no result its regions already contain an implicit
+  // terminator, in which case no explicit yield must be created.
+  if (ifOp.getNumResults() != 0) {
+    scf::YieldOp::create(thenB, loc, pruneUnusedResults(forOp, thenForLoop));
+    scf::YieldOp::create(elseB, loc, pruneUnusedResults(forOp, elseForLoop));
+  }
+
+  // Unmask the clones in the "then" region. `dropMask` replaces the uses but
+  // leaves the original in place; erase it, because canonicalization drops a
+  // dead non-volatile load yet a volatile one also has a Write effect and
+  // would survive and still execute.
+  for (Operation *op : opsToUnmask) {
+    Operation *mappedOp = map.lookup(op);
+    if (!mappedOp)
+      continue;
+    dropMask(mappedOp, /*maskVal=*/true);
+    if (mappedOp->use_empty())
+      mappedOp->erase();
+  }
+
+  // Replace the uses of the original loop results.
+  unsigned idx = 0;
+  for (Value res : forOp.getResults()) {
+    if (!res.getUsers().empty())
+      res.replaceAllUsesWith(ifOp->getResult(idx++));
+  }
+
+  forOp.erase();
+}
+
 struct TritonIntelRemoveMasksBase
     : tt::intel::impl::TritonIntelRemoveMasksBase<TritonIntelRemoveMasksBase> {
 public:
@@ -1113,6 +1496,127 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
+    // Census scaffolding: assign stable per-mask ids before anything
+    // examines or mutates the IR, and strip them at pass end. Setting a
+    // discardable attribute creates and erases no values, so this does not
+    // affect analysis-state validity.
+    DEBUG_WITH_TYPE(CENSUS_DEBUG_TYPE, assignCensusIds(moduleOp));
+
+    if (tt::tools::getBoolEnv("TRITON_INTEL_SYMBOLIC_MASKS"))
+      runSymbolic(moduleOp);
+    else
+      runLegacy(moduleOp);
+
+    LLVM_DEBUG(llvm::dbgs() << "After versioning:\n" << moduleOp << "\n");
+    DEBUG_WITH_TYPE(CENSUS_DEBUG_TYPE, stripCensusIds(moduleOp));
+    assert(succeeded(verify(moduleOp)) && "Module verification failed");
+  }
+
+  // The symbolic driver: one read-only analysis phase over the whole module,
+  // then the mutations. Nothing between the solver and the end of the walk
+  // below touches the IR, which is what keeps the analysis state valid for
+  // every proof.
+  void runSymbolic(ModuleOp moduleOp) {
+    std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    solver->load<tt::intel::IntegerRangeAnalysis>(moduleOp,
+                                                  getAnalysis<DominanceInfo>());
+    if (failed(solver->initializeAndRun(moduleOp)))
+      return signalPassFailure();
+
+    tt::intel::SymbolicBoundsProver prover(
+        *solver, getAnalysis<DominanceInfo>(), moduleOp);
+    SymbolicMaskValidator validator(prover);
+
+    SmallVector<LoopPlan, 2> plans;
+    moduleOp->walk<WalkOrder::PreOrder>([&](scf::ForOp forOp) {
+      // Outermost single-induction-variable loops only.
+      if (forOp->getParentOfType<scf::ForOp>() ||
+          !forOp.getSingleInductionVar())
+        return;
+      MaskedOpsCollector<SymbolicMaskValidator> collector(forOp, validator);
+      if (!collector.collectMaskedOps())
+        return;
+
+      LoopPlan plan{forOp};
+      // The collector's SmallPtrSet has no stable order; the collected ops are
+      // direct children of the loop body, so isBeforeInBlock sorts them.
+      SmallVector<Operation *> ops(collector.getMaskedOps().begin(),
+                                   collector.getMaskedOps().end());
+      llvm::sort(ops, [](Operation *a, Operation *b) {
+        return a->isBeforeInBlock(b);
+      });
+      for (Operation *op : ops) {
+        tt::intel::BoundProof proof = validator.proofFor(op);
+        if (proof.verdict != tt::intel::BoundProof::Unknown)
+          plan.ops.emplace_back(op, std::move(proof));
+      }
+      plans.push_back(std::move(plan));
+    });
+
+    // Materialize every guard before any other mutation, so no guard
+    // refers to a value a later unmasking erased.
+    using Prover = tt::intel::SymbolicBoundsProver;
+    for (LoopPlan &plan : plans) {
+      for (auto &[op, proof] : plan.ops)
+        if (proof.verdict == tt::intel::BoundProof::ConditionallySatisfied)
+          for (const tt::intel::BoundCondition &c : proof.conditions) {
+            // BoundCondition::operator== is structural, never by loc name.
+            auto it = llvm::find(plan.conds, c);
+            if (it == plan.conds.end())
+              plan.conds.push_back(c);
+            else if (c.kind < it->kind)
+              it->kind = c.kind; // strongest kind wins, whatever the op order
+          }
+      // Facts, then preconditions, then guards.
+      llvm::stable_sort(plan.conds, [](const tt::intel::BoundCondition &a,
+                                       const tt::intel::BoundCondition &b) {
+        return a.kind < b.kind;
+      });
+      auto count = [&](tt::intel::ConditionKind k) {
+        return llvm::count_if(
+            plan.conds,
+            [&](const tt::intel::BoundCondition &c) { return c.kind == k; });
+      };
+      // The budgets bound one proof; this is their union over the loop.
+      if (plan.conds.empty() ||
+          count(tt::intel::ConditionKind::Fact) > Prover::kMaxFactConditions ||
+          count(tt::intel::ConditionKind::Guard) > Prover::kMaxGuards)
+        continue;
+      OpBuilder builder(plan.loop);
+      plan.guard = tt::intel::materialize(plan.conds, plan.loop, builder);
+    }
+
+    // Then, per loop in reverse program order: drop the unconditional
+    // masks first, so both clones inherit them, then version.
+    for (LoopPlan &plan : llvm::reverse(plans)) {
+      for (auto &[op, proof] : plan.ops) {
+        bool sat = proof.verdict == tt::intel::BoundProof::Satisfied;
+        if (!sat && proof.verdict != tt::intel::BoundProof::Refuted)
+          continue;
+        dropMask(op, sat);
+        // `dropMask` does not always replace: for a false load mask with no
+        // `other` it falls through when getZeroAttr() gives no attribute for
+        // the result type, leaving the op live. Erase only once nothing uses
+        // it, so a volatile load does not survive canonicalization and
+        // execute, and an unreplaced one is left alone rather than erased
+        // while still in use.
+        if (op->use_empty())
+          op->erase();
+      }
+      if (!plan.guard)
+        continue;
+      SmallVector<Operation *> toUnmask; // program order, for joinIds
+      for (auto &[op, proof] : plan.ops)
+        if (proof.verdict == tt::intel::BoundProof::ConditionallySatisfied)
+          toUnmask.push_back(op);
+      CDBG("versioned: loop=" << censusId(plan.loop)
+                              << " unmasked=" << joinIds(toUnmask)
+                              << " guard=" << joinConditions(plan.conds));
+      versionWithGuard(plan.loop, plan.guard, toUnmask);
+    }
+  }
+
+  void runLegacy(ModuleOp moduleOp) {
     std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
     auto *rangeAnalysis = solver->load<tt::intel::IntegerRangeAnalysis>(
         moduleOp, getAnalysis<DominanceInfo>());
@@ -1187,9 +1691,6 @@ public:
       }
       return WalkResult::advance();
     });
-
-    LLVM_DEBUG(llvm::dbgs() << "After versioning:\n" << moduleOp << "\n");
-    assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 };
 
