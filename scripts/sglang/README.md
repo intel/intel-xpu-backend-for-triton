@@ -160,7 +160,7 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
 
 | Suite | Result | Time |
 |---|---|---|
-| `--sglang-attention` | 21 passed, 3 skipped (2 upstream, 1 skip-listed) | 24s |
+| `--sglang-attention` | 22 passed, 2 skipped upstream | 550s |
 | `--sglang-quant` | 5 passed | 14s |
 | `--sglang-moe` | 110 passed | 46s |
 | `--sglang-mamba` | 940 passed, 16 skipped upstream | 19s |
@@ -233,8 +233,6 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
   `lightning_attention.py`, `dsa_attention.py`, `dsv4_attention.py`). Enable one
   family at a time; `gdn/` and `kda/` stay blocked on `tl.make_block_ptr`
   regardless (see above).
-- **Sliding window OOM.** `test_extend_attention_sliding_window` runs the kernel
-  fine, but its torch reference needs more than 48 GB. Unskip when it is chunked.
 - **BMG.** `scripts/skiplist/xe2/` is a copy of `default/`; nothing measured on
   B580 yet. `--skip-list` replaces the directory instead of merging, so the
   entries have to be duplicated.
