@@ -87,10 +87,35 @@ index 8ec785e18b..7ff3aa7572 100644
  if _is_musa:
      from sgl_kernel import sgl_per_token_quant_fp8
 diff --git a/test/registered/attention/test_triton_attention_kernels.py b/test/registered/attention/test_triton_attention_kernels.py
-index 347e77b14d..5964f30644 100644
+index 347e77b14d..ee80fbfff7 100644
 --- a/test/registered/attention/test_triton_attention_kernels.py
 +++ b/test/registered/attention/test_triton_attention_kernels.py
-@@ -1003,15 +1003,22 @@ class TestTritonAttention(CustomTestCase):
+@@ -94,13 +94,18 @@ def extend_attention_fwd_torch(
+ 
+         final_mask = causal_mask & window_mask
+ 
+-        attn_scores = (
+-            torch.einsum("qhd,khd->qhk", q_extend, k_full_hq) * scale
+-        )  # [extend_len, H_Q, total_len]
+-        attn_scores = attn_scores.masked_fill(~final_mask.unsqueeze(1), float("-inf"))
++        for c in range(0, extend_len, 1024):
++            attn_scores = (
++                torch.einsum("qhd,khd->qhk", q_extend[c : c + 1024], k_full_hq) * scale
++            )  # [chunk, H_Q, total_len]
++            attn_scores = attn_scores.masked_fill(
++                ~final_mask[c : c + 1024].unsqueeze(1), float("-inf")
++            )
+ 
+-        attn_weights = F.softmax(attn_scores, dim=-1)
+-        o[q_start:q_end] = torch.einsum("qhk,khd->qhd", attn_weights, v_full_hq)
++            attn_weights = F.softmax(attn_scores, dim=-1)
++            o[q_start:q_end][c : c + 1024] = torch.einsum(
++                "qhk,khd->qhd", attn_weights, v_full_hq
++            )
+ 
+ 
+ def decode_attention_fwd_torch(
+@@ -1003,15 +1008,22 @@ class TestTritonAttention(CustomTestCase):
              v_scale=1.0,
          )
  
