@@ -1253,6 +1253,7 @@ run_vllm_mrv2_tests() {
       tests/v1/worker/test_gpu_trace_replay.py \
       tests/v1/worker/test_gpu_thinking_budget.py \
       tests/v1/worker/test_kv_block_zeroer.py \
+      tests/v1/worker/test_prompt_embeds_state.py \
       tests/v1/test_outputs.py \
       tests/v1/e2e/test_hybrid_chunked_prefill.py \
       tests/models/language/pooling/test_classification.py::test_bert_model_runner_v2 \
