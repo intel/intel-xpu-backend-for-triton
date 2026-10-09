@@ -70,7 +70,7 @@ bool supportsI8DotDecomposition(PatternRewriter &rewriter,
     return false;
   if (auto targetAttr =
           moduleOp->getAttrOfType<StringAttr>(ttg::AttrTargetName);
-      targetAttr && targetAttr.strref().starts_with("xpu:"))
+      targetAttr && targetAttr.strref().split(':').first == "xpu")
     return false;
   return llvm::is_contained({16, 32, 64}, accElem.getWidth());
 }

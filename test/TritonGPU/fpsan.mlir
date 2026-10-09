@@ -168,6 +168,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+// The "triton.jit" lowering path (as opposed to Gluon) sets ttg.target to
+// the bare backend name, e.g. "xpu", not "xpu:<arch>". The i8-decomposition
+// gate must still recognize this spelling and skip emitting the
+// nvidia_mma-based decomposition for it.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @dot_i8_decomposition_xpu_bare_target
+  tt.func public @dot_i8_decomposition_xpu_bare_target() -> tensor<32x32xf32, #blocked> {
+    // CHECK-NOT: tti.dot_i8
+    %one = arith.constant 1.000000e+00 : f16
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %a = tt.splat %one : f16 -> tensor<32x32xf16, #dot_operand_a>
+    %b = tt.splat %one : f16 -> tensor<32x32xf16, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<32x32xf16, #dot_operand_a> * tensor<32x32xf16, #dot_operand_b> -> tensor<32x32xf32, #blocked>
+    tt.return %out : tensor<32x32xf32, #blocked>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
