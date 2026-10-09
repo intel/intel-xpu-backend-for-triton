@@ -88,12 +88,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // COM: constrains the tile size below what is valid for 2D block I/O.
 // COM: The mask is derived from a comparison with a runtime bound, giving
 // COM: constancy=1 in the fast-change dimension, which makes the tile invalid.
+// COM: Uses non-zero 'other' so the boundary-check mask is NOT stripped
+// COM: (hardware zero-fill doesn't match the non-zero padding).
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: tt.func @masked_load_non_power_of_2_constancy
   tt.func @masked_load_non_power_of_2_constancy(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> tensor<64x32xf16, #dot0> {
-    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    %cst = arith.constant dense<1.000000e+00> : tensor<64x32xf16, #dot0>
     %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
     %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
