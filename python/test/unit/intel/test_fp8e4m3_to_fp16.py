@@ -156,3 +156,61 @@ def test_fp8e4m3fn_to_fp16_all_bytes(device):
         if total > 20:
             msg += f"\n  ... and {total - 20} more mismatches"
         pytest.fail(f"{total} bytes mismatched (out of 256):\n{msg}")
+
+
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.parametrize("op_idx", [0, 1])
+@pytest.mark.parametrize("k", [32, 64])
+@pytest.mark.parametrize("block_io", ["row_major", "column_major"])
+def test_fp8e4m3fn_to_fp16_dot_operand(op_idx, k, block_io, device, tmp_path):
+    """Exhaustive FP8E4M3FN -> FP16 conversion in dot operand layouts loaded by 2D block loads."""
+    shape = (1024 // k, k) if op_idx == 0 else (k, 1024 // k)
+    src_shape = shape[::-1] if block_io == "column_major" else shape
+    src_ty = f"{src_shape[0]}x{src_shape[1]}xf8E4M3FN"
+    fp8_ty = f"{shape[0]}x{shape[1]}xf8E4M3FN"
+    f16_ty = f"{shape[0]}x{shape[1]}xf16"
+    support_block_io = triton.runtime.driver.active.get_current_target().arch['has_2d_block_io']
+
+    ir = f"""
+    #dpas = #ttig.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}}>
+    #dot = #ttg.dot_op<{{opIdx = {op_idx}, parent = #dpas, kWidth = {2 if op_idx == 1 else 1}}}>
+    module attributes {{{"ttig.support_2d_block_io, " if support_block_io else ""}"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
+      tt.func public @fp8_to_fp16(%src: !tt.ptr<f8E4M3FN> {{tt.divisibility = 16 : i32}}, %dst: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
+        %c0_i32 = arith.constant 0 : i32
+        %c1_i64 = arith.constant 1 : i64
+        %src_rows = arith.constant {src_shape[0]} : i32
+        %src_cols = arith.constant {src_shape[1]} : i32
+        %src_stride = arith.constant {src_shape[1]} : i64
+        %dst_rows = arith.constant {shape[0]} : i32
+        %dst_cols = arith.constant {shape[1]} : i32
+        %dst_stride = arith.constant {shape[1]} : i64
+        %src_desc = tt.make_tensor_descriptor %src, [%src_rows, %src_cols], [%src_stride, %c1_i64] : !tt.ptr<f8E4M3FN>, !tt.tensordesc<{src_ty}>
+        %x = tt.descriptor_load %src_desc[%c0_i32, %c0_i32] {{ttig.block_io = "{block_io}", ttig.desc_padding = 1 : i32}} : !tt.tensordesc<{src_ty}> -> tensor<{fp8_ty}, #dot>
+        %y = tt.fp_to_fp %x : tensor<{fp8_ty}, #dot> -> tensor<{f16_ty}, #dot>
+        %dst_desc = tt.make_tensor_descriptor %dst, [%dst_rows, %dst_cols], [%dst_stride, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<{f16_ty}>
+        tt.descriptor_store %dst_desc[%c0_i32, %c0_i32], %y : !tt.tensordesc<{f16_ty}>, tensor<{f16_ty}, #dot>
+        tt.return
+      }}
+    }}
+    """
+
+    # Every byte value at every byte position of a 32-bit word.
+    i = torch.arange(1024)
+    src = ((i // 4 + 64 * (i % 4)) % 256).to(torch.uint8).reshape(src_shape)
+    dst = torch.full(shape, float("inf"), dtype=torch.float16, device=device)
+
+    temp_file = tmp_path / "fp8e4m3fn_to_fp16_dot_operand.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+    kernel[(1, 1, 1)](src.to(device).view(torch.float8_e4m3fn), dst)
+
+    if support_block_io:
+        llir = kernel.asm["llir"]
+        assert llir.count("spirv_Subgroup2DBlockLoad") + llir.count("GenISA.LSC2DBlockRead") > 0
+
+    loaded = (src.T if block_io == "column_major" else src).to(torch.int64)
+    nan = torch.isin(loaded, torch.tensor(RESERVED_NAN_BYTES))
+    expected = torch.tensor([expected_fp16_for_byte(b) for b in range(256)])[loaded]
+    got = dst.cpu().view(torch.int16).to(torch.int64) & 0xFFFF
+    torch.testing.assert_close(got[~nan], expected[~nan])
+    assert dst.cpu()[nan].isnan().all()
