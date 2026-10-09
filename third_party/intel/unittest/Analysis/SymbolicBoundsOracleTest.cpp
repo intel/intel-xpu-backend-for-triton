@@ -1440,6 +1440,36 @@ static const TripOracleCase kTripCases[] = {
   })",
      2,
      {V::Refuted}},
+    // Inner 0..i under outer 0..3 can reach two trips: n = 2 is not refuted
+    // (an Unknown verdict is pinned, not executed), n = 3 is.
+    {"nested_boundary_outer_n2",
+     R"(
+  tt.func @f() {
+    %c0 = arith.constant 0 : i8
+    %c1 = arith.constant 1 : i8
+    %c3 = arith.constant 3 : i8
+    scf.for %i = %c0 to %c3 step %c1 : i8 {
+      scf.for %j = %c0 to %i step %c1 : i8 {
+      } loc("L")
+    }
+    tt.return
+  })",
+     2,
+     {V::Unknown}},
+    {"nested_boundary_outer_n3",
+     R"(
+  tt.func @f() {
+    %c0 = arith.constant 0 : i8
+    %c1 = arith.constant 1 : i8
+    %c3 = arith.constant 3 : i8
+    scf.for %i = %c0 to %c3 step %c1 : i8 {
+      scf.for %j = %c0 to %i step %c1 : i8 {
+      } loc("L")
+    }
+    tt.return
+  })",
+     3,
+     {V::Refuted}},
     // Entered once per outer iteration; each invocation runs exactly once.
     {"inner_iv_plus_one_n1",
      R"(

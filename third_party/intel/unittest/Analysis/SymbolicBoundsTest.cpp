@@ -1814,6 +1814,16 @@ TEST_F(SymbolicBoundsTest, TripCountAtLeast) {
         } loc("L")
       })",
        {{2, "Unknown"}}},
+      // The high end of the inner span equals the threshold (i reaches 2, so
+      // two trips are possible): not refuted for n = 2, refuted for n = 3.
+      {"NestedUnderBoundaryOuter",
+       "",
+       R"(
+      scf.for %i = %c0 to %c3 step %c1 : i32 {
+        scf.for %j = %c0 to %i step %c1 : i32 {
+        } loc("L")
+      })",
+       {{2, "Unknown"}, {3, "Refuted"}}},
       {"NestedUnderStridedOuterIsUnknown",
        "",
        R"(
