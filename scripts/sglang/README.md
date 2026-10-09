@@ -26,7 +26,7 @@ One flag per kernel family, each with its own `TRITON_TEST_SUITE` and skip list
 
 | Flag | Test files, relative to `sglang/test/` |
 |---|---|
-| `--sglang-attention` | `registered/attention/test_create_kvindices.py`, `registered/attention/test_triton_attention_kernels.py`, `registered/attention/unittests/dense/test_triton.py` |
+| `--sglang-attention` | `registered/attention/test_create_kvindices.py`, `registered/attention/test_triton_attention_kernels.py`, `registered/attention/unittests/dense/test_triton.py`, `registered/kernels/ops/attention/test_fp4_indexer.py` (only with `sgl_kernel`) |
 | `--sglang-quant` | `registered/kernels/ops/quantization/test_fp8_kernel.py`, `test_awq_dequant.py`, `registered/kernels/ops/gemm/test_fp8_kernel.py`, `test_triton_scaled_mm.py` |
 | `--sglang-moe` | `registered/moe/test_fused_moe.py`, `registered/lora/test_fused_moe_lora_kernel.py` |
 | `--sglang-mamba` | `registered/layers/mamba/test_causal_conv1d.py`, `test_mamba_ssm.py`, `test_mamba_ssm_ssd.py` |
@@ -59,6 +59,7 @@ kernels to `kernels/ops/` (RFC #29630), so recheck them after a pin bump.
 | `context_attention_fwd` | `kernels/ops/attention/prefill_attention.py` |
 | `create_flashinfer_kv_indices_triton` | `kernels/ops/kvcache/kv_indices.py`, re-exported from `kernels/ops/attention/utils.py` |
 | `get_num_kv_splits_triton` | `kernels/ops/attention/metadata.py` |
+| `quantize_fp4_indexer_tensor`, `store_fp4_index_k_cache`, `fp4_index_logits_decode` (BMG only) | `kernels/ops/attention/dsv4/fp4_indexer.py` |
 
 `unittests/dense/test_triton.py` is the second source of coverage for those
 kernels and the only one that reaches `get_num_kv_splits_triton`. Instead of

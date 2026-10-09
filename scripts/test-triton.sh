@@ -999,12 +999,18 @@ run_sglang_attention_tests() {
   # unittests/dense/test_triton.py drives the same kernels through RadixAttention
   # against HF-style torch references, and is the only thing here that covers
   # get_num_kv_splits_triton. sglang-test-fix.patch makes it device-agnostic.
-  # test_fp4_indexer.py is left out: it imports sgl_kernel, which is not installed.
+  # test_fp4_indexer.py imports sgl_kernel on XPU, so it only runs where
+  # sgl-kernel-xpu is installed (BMG).
+  local sgl_kernel_tests=()
+  if python -c 'import sgl_kernel' 2>/dev/null; then
+    sgl_kernel_tests+=(test/registered/kernels/ops/attention/test_fp4_indexer.py)
+  fi
   TRITON_TEST_SUITE=sglang_attention \
     run_pytest_command -vvv \
       test/registered/attention/test_create_kvindices.py \
       test/registered/attention/test_triton_attention_kernels.py \
-      test/registered/attention/unittests/dense/test_triton.py
+      test/registered/attention/unittests/dense/test_triton.py \
+      "${sgl_kernel_tests[@]}"
 }
 
 run_sglang_quant_tests() {
