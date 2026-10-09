@@ -1082,7 +1082,8 @@ public:
 
   std::string getName() const override { return "SymbolicMaskValidator"; }
 
-  // Memoized so a mask shared by several operations is proved once.
+  // Cached per operation. Operations sharing a mask are still queried
+  // separately: each query carries its own program point.
   tt::intel::BoundProof proofFor(Operation *op) const {
     auto it = proofs.find(op);
     if (it != proofs.end())
