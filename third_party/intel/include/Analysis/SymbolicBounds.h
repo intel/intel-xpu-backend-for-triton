@@ -411,6 +411,12 @@ private:
   /// The single exit of every successful path.
   BoundProof finalize(BoundProof::Verdict onD, CandidateSet cs,
                       ArrayRef<Obligation> obligations, QueryContext ctx);
+  /// Decides `d >= g` for an affine difference: the direct decision, the
+  /// refutation, then the candidate search. `base` seeds every attempt, so
+  /// conditions a caller already requires reach each trial copy.
+  BoundProof proveDifferenceAtLeast(AffineForm d, int64_t g, CandidateSet base,
+                                    ArrayRef<Obligation> obligations,
+                                    QueryContext ctx);
   /// Adds a candidate condition, or reports why it cannot be added.
   CandidateResult addCandidate(CandidateSet &cs, BoundCondition cond,
                                QueryContext ctx);
