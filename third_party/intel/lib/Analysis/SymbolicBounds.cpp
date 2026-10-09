@@ -2043,8 +2043,13 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
     break;
   }
 
-  CandidateSet base;
+  return proveDifferenceAtLeast(std::move(d), g, CandidateSet(), obligations,
+                                ctx);
+}
 
+BoundProof SymbolicBoundsProver::proveDifferenceAtLeast(
+    AffineForm d, int64_t g, CandidateSet base,
+    ArrayRef<Obligation> obligations, QueryContext ctx) {
   // The direct decision, on a trial copy so a failed attempt leaks no
   // evidence into the candidate search.
   {
