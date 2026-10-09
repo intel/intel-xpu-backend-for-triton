@@ -24,10 +24,11 @@ def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-intel-rewri
 
 def TritonIntelRemoveMasks
     : Pass<"triton-intel-remove-masks", "mlir::ModuleOp"> {
-  let summary = "Remove masks from tt.load and tt.store operations";
+  let summary = "Remove masks from tt.load and arith.select operations";
 
   let description = [{
-    This pass attempts to remove the mask for tt.load and tt.store operations.
+    This pass attempts to remove the mask of tt.load operations and the
+    condition of arith.select operations. Stores are not handled.
     If the masked operation is in a loop, the pass attempts to find a loop
     invariant condition equivalent to the mask condition, and then use it to
     version the loop.
