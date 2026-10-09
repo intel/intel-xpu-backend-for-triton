@@ -1555,6 +1555,20 @@ TEST_F(SymbolicBoundsTest, I128AssumeDoesNotBreakConstruction) {
   EXPECT_EQ(withAssume, "Conditional{arg1 >= 0}");
 }
 
+/// The normalized form of the (single) iter_arg of the (single) loop, in the
+/// context of the comparison named `cmp` inside it. An iter_arg that steps with
+/// the induction variable is rewritten as `IV + c`; one the prover declines
+/// stays an opaque symbol.
+static std::string normalizedIterArg(tt::intel::SymbolicBoundsProver &prover,
+                                     ModuleOp module, Value cmp) {
+  scf::ForOp loop;
+  module->walk([&](scf::ForOp f) { loop = f; });
+  SmallVector<tt::intel::Obligation, 4> obligations;
+  return tt::intel::toString(prover.normalize(
+      loop.getRegionIterArgs()[0],
+      tt::intel::QueryContext{cmp.getDefiningOp(), loop}, obligations));
+}
+
 TEST_F(SymbolicBoundsTest, I128InductionVariableLoopIsUnknownNotACrash) {
   // A narrow iter_arg that steps with a wide induction variable would be
   // rewritten as `IV + c`, putting an i128 symbol and the i128 loop bounds
@@ -1575,9 +1589,12 @@ TEST_F(SymbolicBoundsTest, I128InductionVariableLoopIsUnknownNotACrash) {
       }
       tt.return
     })");
-  std::string v = verdict(get("cmp"));
-  EXPECT_NE(v, "Satisfied");
-  EXPECT_NE(v, "Refuted");
+  // Exactly Unknown, and the iter_arg itself stays opaque: excluding Satisfied
+  // and Refuted would also let through a Conditional built on the rewrite this
+  // test exists to prevent.
+  EXPECT_EQ(verdict(get("cmp")), "Unknown");
+  EXPECT_EQ(normalizedIterArg(*prover, module.get(), get("cmp")),
+            "opaque(blockarg)");
 }
 
 TEST_F(SymbolicBoundsTest, I128LoopWithUnrepresentableStepIsUnknown) {
@@ -1598,9 +1615,35 @@ TEST_F(SymbolicBoundsTest, I128LoopWithUnrepresentableStepIsUnknown) {
       }
       tt.return
     })");
-  std::string v = verdict(get("cmp"));
-  EXPECT_NE(v, "Satisfied");
-  EXPECT_NE(v, "Refuted");
+  // Read as its low 64 bits, the step 2^64 + 1 would be 1, matching the
+  // iter_arg's own +1 and enabling the rewrite; the result would be a
+  // Conditional, which excluding Satisfied and Refuted does not catch.
+  EXPECT_EQ(verdict(get("cmp")), "Unknown");
+  EXPECT_EQ(normalizedIterArg(*prover, module.get(), get("cmp")),
+            "opaque(blockarg)");
+}
+
+TEST_F(SymbolicBoundsTest, SixtyFourBitInductionVariableLoopStillRewrites) {
+  // The same loop over a 64-bit induction variable is inside the domain: the
+  // iter_arg is rewritten as `IV + c` and the comparison is decided. This pins
+  // that the wide-loop gate does not also block ordinary 64-bit loops.
+  parse(R"(
+    tt.func @f(%n: i32, %m: i32) {
+      %c0 = arith.constant 0 : i64
+      %c1 = arith.constant 1 : i64
+      %n64 = arith.extsi %n : i32 to i64
+      %ub = arith.addi %n64, %c1 : i64
+      %i0 = arith.constant 0 : i32
+      %k1 = arith.constant 1 : i32
+      %r = scf.for %iv = %c0 to %ub step %c1 iter_args(%a = %i0) -> (i32) : i64 {
+        %cmp = arith.cmpi slt, %a, %m : i32 loc("cmp")
+        %next = arith.addi %a, %k1 : i32
+        scf.yield %next : i32
+      }
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{-arg0 + arg1 >= 1}");
+  EXPECT_EQ(normalizedIterArg(*prover, module.get(), get("cmp")), "blockarg");
 }
 
 TEST_F(SymbolicBoundsTest, WidthPolicyKeepsSixtyFourBitsAndIndexDecided) {
