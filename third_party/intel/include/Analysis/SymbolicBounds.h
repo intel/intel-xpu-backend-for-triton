@@ -569,8 +569,9 @@ private:
 /// Normalizes a condition in place: folds the constant into the bound,
 /// divides a single-symbol ordered condition by |k| rounding inward, and
 /// reduces `DivisibleBy` through gcd. Returns false when the condition is
-/// unsatisfiable or states a congruence `BoundGoal` cannot express; the caller
-/// then declines the candidate or leaves the obligation open.
+/// unsatisfiable or states a congruence `BoundGoal` cannot express, including a
+/// `DivisibleBy` whose divisor is not positive; the caller then declines the
+/// candidate or leaves the obligation open.
 bool normalizeCondition(BoundCondition &cond);
 
 /// Builds the i64 guard for `conds` immediately before `before`.
@@ -580,8 +581,8 @@ bool normalizeCondition(BoundCondition &cond);
 /// an assumption: a form that passes the static fit check uses plain i64
 /// arithmetic, and one that does not is paired with overflow predicates that
 /// make the guard false rather than wrong. Every symbol must be at most 64 bits
-/// wide (asserted): there is no way to decline, so that is the caller's
-/// precondition.
+/// wide, and a `DivisibleBy` divisor must be positive (both asserted): there is
+/// no way to decline, so those are the caller's preconditions.
 Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
                   OpBuilder &builder);
 
