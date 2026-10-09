@@ -2762,6 +2762,30 @@ private:
   }
 };
 
+struct LoadShuffleBitcastOpConversion
+    : public ConvertOpToLLVMPattern<LoadShuffleBitcastOp> {
+  using ConvertOpToLLVMPattern<LoadShuffleBitcastOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(LoadShuffleBitcastOp op, OpAdaptor /*adaptor*/,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type sourceType = triton::getPointeeType(op.getPtr().getType());
+    auto load = triton::LoadOp::create(
+        rewriter, op.getLoc(), sourceType, op.getPtr(), op.getMask(),
+        op.getOther(), op.getCachePolicyAttr(), op.getIsVolatile());
+
+    if (sourceType == op.getType()) {
+      rewriter.replaceOp(op, load.getResult());
+      return success();
+    }
+
+    auto converted = triton::gpu::ConvertLayoutOp::create(
+        rewriter, op.getLoc(), op.getType(), load.getResult());
+    rewriter.replaceOp(op, converted.getResult());
+    return success();
+  }
+};
+
 struct DescriptorLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::DescriptorLoadOp>,
       public LoadStoreConversionBase {
@@ -5124,6 +5148,10 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     const intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
     intel::ModuleStrideAnalysis &strideAnalysis, PatternBenefit benefit) {
 
+  // Lower Intel load-shuffle-bitcast through the generic Triton load/layout
+  // conversions so the existing codegen handles the final LLVM lowering.
+  patterns.add<LoadShuffleBitcastOpConversion>(typeConverter,
+                                               benefit.getBenefit() + 1);
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                DescriptorLoadOpConversion, StoreOpConversion,
                DescriptorStoreOpConversion, PrefetchOpConversion,
