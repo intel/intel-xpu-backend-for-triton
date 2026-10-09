@@ -2,14 +2,13 @@
 //
 // Emits the symbolic bounds prover's verdict for every `arith.cmpi` in the
 // module as a remark, so a lit test can pin both the verdict and the runtime
-// conditions a conditional proof depends on.
+// conditions a conditional proof depends on. Every `scf.for` gets two more:
+// "trip>=1" and "trip>=2", the verdicts of `tripCountAtLeast` for 1 and 2.
 //
 // The prover's individual rules are unit-tested directly in
 // `unittest/Analysis/SymbolicBoundsTest.cpp`; this pass covers what a gtest
 // string cannot carry conveniently - a real TTGIR module with layout
 // attributes, above all.
-//
-// There is no `scf.for` remark: the prover has no trip-count API.
 //
 //===----------------------------------------------------------------------===//
 
@@ -58,6 +57,12 @@ struct TestSymbolicBoundsPass
       BoundProof proof = prover.prove(cmpOp.getPredicate(), cmpOp.getLhs(),
                                       cmpOp.getRhs(), ctx);
       emitRemark(cmpOp.getLoc(), "verdict: " + toString(proof));
+    });
+    mod.walk<WalkOrder::PreOrder>([&](scf::ForOp forOp) {
+      for (int64_t n : {1, 2})
+        emitRemark(forOp.getLoc(),
+                   "trip>=" + std::to_string(n) + ": " +
+                       toString(prover.tripCountAtLeast(forOp, n)));
     });
   }
 };
