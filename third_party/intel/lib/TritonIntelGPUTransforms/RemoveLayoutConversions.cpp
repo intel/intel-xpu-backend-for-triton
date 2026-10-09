@@ -334,6 +334,8 @@ bool isLayoutAnchor(Operation *op) {
   if (isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
           op))
     return ttgi::isExpensiveLoadOrStore(op);
+  if (isa<ttgi::LoadShuffleBitcastOp>(op))
+    return true;
   // TODO: we should estimate the cost of the not propagating layout for
   // AtomicCAS for further performance consideration.
   if (isa<tt::DotOp, tt::DotScaledOp, tt::AtomicCASOp>(op))
@@ -2367,7 +2369,8 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     if (getBackwardSlice(convertOp.getOperation(), &slice, {filter})
             .succeeded()) {
       bool hasReinterpretCvtOp = llvm::any_of(slice, [](Operation *op) {
-        return isa_and_nonnull<ttgi::ReinterpretConvertLayoutOp>(op);
+        return isa_and_nonnull<ttgi::ReinterpretConvertLayoutOp,
+                               ttgi::LoadShuffleBitcastOp>(op);
       });
       if (hasReinterpretCvtOp) {
         LDBG("  hoist skip cvtop: backward slice contains sub-group "
