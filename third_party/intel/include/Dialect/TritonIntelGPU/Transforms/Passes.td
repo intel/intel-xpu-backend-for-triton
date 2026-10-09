@@ -104,8 +104,9 @@ def TritonIntelGPUHoistLayoutConversions
     Hoist `ttg.convert_layout` operations out of `scf.for` loops when the
     destination encoding is `DotOperandEncodingAttr` and the source is defined
     outside the loop, so a loop-invariant dot operand is converted once instead
-    of on every iteration. Two vetoes guard a hoist; whichever refuses stamps
-    `tt.no_licm` so later generic LICM does not hoist the conversion anyway.
+    of on every iteration. Two vetoes guard a hoist. A refusal that survives the
+    shared-source phase below stamps `tt.no_licm` so later generic LICM does not
+    hoist the conversion anyway.
 
     ### Loop-level live-in gate
 
@@ -126,13 +127,16 @@ def TritonIntelGPUHoistLayoutConversions
     decided cheapest-first (a hoist can lower the projection), and loops
     last-to-first (so no later hoist can add a use below a source under
     consideration). A source shared by several conversions in one loop is
-    credited once, to the last of them to leave.
+    credited once, to the last of them to leave. (If a later conversion of
+    the same source is itself refused, an earlier one can still take this
+    credit, even though it is not literally the last to leave.)
 
     ### Whole-function peak gate
 
     The live-in set cannot show what a hoist costs *outside* the loop: moving a
     conversion up creates a point where source and result are both live. This
-    gate bounds the post-hoist peak without mutating IR, as the maximum of the
+    gate bounds a single hoist's post-hoist peak without mutating IR, as the
+    maximum of the
     current peak (a hoist can move it but not remove it), the *corridor* --
     every operation from the insertion point to the conversion's old position,
     charged the arriving result and credited the departing source only where it
@@ -142,21 +146,40 @@ def TritonIntelGPUHoistLayoutConversions
     above it the rule is "do not make
     the peak worse". The gate earns its keep on the eight `_attn_bwd` configs
     with `BLOCK_N1=64` and `num_warps=16`, where the eighth hoist does raise the
-    peak.
+    peak. This bounds HLC's own output only: the twin credit below can still
+    let a downstream merge push a twin's loop past this same ceiling, by
+    design (see Twin credit).
 
     The bounded figure is the peak as `RegisterPressureAnalysis` reports it, not
-    physical allocator demand (see its header). Projection and comparand are the
-    same metric by construction: the corridor steps over a nested region as one
-    operation rather than descending into it.
+    physical allocator demand (see its header). The corridor still walks a
+    nested region the arriving result spans -- a sibling loop stepped over on
+    the way to the loop being hoisted from, say -- as the single operation
+    that region-holding op is, rather than descending into it op by op; but the
+    projection separately prices that region's own internal peak against the
+    arriving result too, so stepping over it is only about how the walk is
+    structured, not a gap in what gets priced. The same holds when the
+    conversion's own last use sits nested inside a branch of some region-holding
+    op (an `scf.if`, an inner loop): the corridor never visits that op at all,
+    but the projection prices the branch precisely and *also* prices every
+    sibling branch of that same op (an `else` the conversion never touches, say)
+    against the arriving result, since hoisting makes the result live-in to the
+    whole loop body those siblings sit in too -- this precise path requires
+    every use of the conversion's result to share one block, exactly one
+    nesting level below the mapped op; where it does not, this falls back to
+    pricing the mapped op's own whole-region peak instead (see below).
 
     Where a term cannot be established -- a corridor spanning two blocks or
-    longer than `corridor-op-cap`, an insertion point at the end of its block --
-    the projection charges the arriving result on top of the current peak, which
-    refuses unless the result costs nothing at all -- an unread conversion is
-    charged zero bytes and still fits. Reaching `peak-rebuild-cap` refuses
-    outright: each accepted hoist
-    invalidates the analysis, and a projection against a stale peak bounds
-    nothing. Conservative refusals are counted apart from measured ones
+    longer than `corridor-op-cap`, an insertion point at the end of its block,
+    the conversion's nested last use sitting more than one level below the
+    op it maps to, or that nested last use itself holding regions (an inner
+    loop the conversion's result feeds as its own `iter_args` init, say) --
+    the projection charges the arriving result on top of the
+    current peak (or, for that last case, on top of the mapped op's own
+    whole-region peak), which refuses unless the result costs nothing at all
+    -- an unread conversion is charged zero bytes and still fits. Reaching
+    `peak-rebuild-cap` refuses outright: each accepted hoist invalidates the
+    analysis, and a projection against a stale peak bounds nothing.
+    Conservative refusals are counted apart from measured ones
     (`rejected_function_peak_fallback` versus `rejected_function_peak_exact`).
 
     The departing source's credit has its own fallbacks. It is withheld whenever
@@ -167,33 +190,189 @@ def TritonIntelGPUHoistLayoutConversions
     *above* the conversion (the source dies mid-corridor, so later corridor
     operations are overpriced), a CFG cycle around the conversion, and a reader
     in an enclosing loop, whose back edge re-reads the source after the
-    corridor. That last one can leave the projection above the very peak it
-    gates, since the metric compared against is itself back-edge blind
-    (measured: 1376 projected against a post-hoist 1248).
+    corridor. That last one is not a blind spot in what `RegisterPressureAnalysis`
+    itself reports -- the analysis is back-edge aware throughout -- it is a
+    deliberate choice not to reason about the enclosing loop's own iteration
+    structure at all, so the projection prices as if the departing source were
+    still fully live. That can leave the projection above the very peak it
+    gates (measured: 1376 projected against a real post-hoist 1248).
+
+    ### Twin credit
+
+    A refused conversion is not always a permanent reader of its source. The
+    twin match looks for another conversion of the exact same source, to the
+    exact same result type, already refused by the time this hoist is
+    decided -- in the loop being hoisted from itself, or in a loop decided
+    earlier (loops are decided last-to-first, so that is a loop at or after
+    this one in program order). The *twin* does not survive
+    `remove_layout_conversions`'s backward-rematerialization cache: that
+    cache matches on (source, type) identity and replaces the twin with the
+    hoisted result wherever the hoisted conversion's position dominates it.
+    Counting the twin as a real reader would double-charge the hoisting loop
+    for a read that will not remain, which is what denies a sibling loop's
+    hoist its own credit in a shared-source cascade.
+
+    Two further conditions gate the match, independent of each other. First,
+    it requires an exact result type, and separately excludes outright a dot
+    operand whose parent layout is `BlockedEncodingAttr` (FMA, not DPAS),
+    since `remove_layout_conversions` itself never performs this merge for
+    that layout family, and crediting past a twin that will not actually be
+    replaced would be unsound, not just optimistic. Second, dominance is not
+    unconditional: for a source with no defining operation (a block-argument
+    source), the hoisted conversion lands just above its own loop rather than
+    below a defining operation, so it only dominates a twin inside that loop
+    or after it in the same block -- a twin anywhere else is a real reader,
+    not an excused one.
+
+    Crediting a hoist past a twin does not undo the twin's own refusal, and
+    does not mean the twin is free: once the merge happens, the twin's own
+    loop lives with the hoisted result instead of the twin's own, which is
+    the same substitution a hoist of the twin itself would have made. This is
+    priced the moment credit is granted -- charged to the twin's loop at the
+    same `(result bytes) - (retired source bytes)` figure the shared-source
+    phase below would compute for that loop on its own -- and a loop charged
+    this way is left out of that phase's own pricing for the same twin, so
+    the two phases cannot double-count the same merge.
+
+    The credit itself is withheld, not just the charge skipped, whenever
+    re-running the twin's own loop-level gate -- at that loop's current
+    figure, plus the delta the merge would add -- fails. This re-check does
+    not look at why the twin was originally refused: a twin the loop-level
+    gate itself refused will, by construction, still fail this same gate run
+    again unless something has since lowered its loop's figure, since its
+    own refusal already described the loop's state with the merge included.
+    A twin only the peak gate refused was never checked against the
+    loop-level gate as failing, so it commonly keeps its credit here -- but
+    that is not because the merged state is known to be no worse: this
+    re-check never examines the peak gate's own concern, the whole-function
+    peak, for the twin's loop at all. Measured on the kernel this asymmetry
+    targets (`_attn_bwd`'s forced config at grf256), the merge is not safe by
+    that measure: HLC's own peak gate refused the K twin at a projected 1876,
+    but after HLC and the downstream merge both run, the real function peak
+    is 1940, over both the twin's own refused figure and HLC's 1812 ceiling.
+    The asymmetry is kept anyway, backed by hardware evidence rather than by
+    this projection: at that config `n_spills=0`, matching `main`, so the
+    reported peak overstates physical demand on this path.
+
+    This does not reach a sibling hoisting on its own merits regardless of
+    any twin's budget, which can still merge a twin away unconditionally, as
+    it could before the twin credit existed. That merge is still charged to
+    the twin's loop, whichever of the two is decided first: a twin already
+    refused when a hoist is accepted is charged the moment that hoist is
+    accepted, whether or not this hoist's own credit actually relied on
+    excusing it, and a same-pair conversion refused only later, in a loop
+    decided after the hoisting one, is charged the moment its own refusal is
+    recorded, since its refusal does not stop the merge. Both charge the same
+    figure and flag the twin the same way, so the shared-source phase does
+    not price that merge again.
+
+    A `tt.no_licm` stamp on a surviving refusal therefore does not mean the
+    conversion survives: it only means this pass did not itself move it. The
+    conversion can still disappear later via the merge above.
+
+    ### Shared-source phase
+
+    Deciding one conversion at a time cannot see what a group sharing a source
+    is worth together: each is weighed while the others still read the source,
+    so none earns the credit for retiring it, and the peak projection charges
+    each arriving result on top of a source that stays live. One source feeding
+    a conversion in each of two sibling loops -- `_attn_bwd`'s shape, where k
+    and v each feed a conversion in both of the two dK/dV loops, and q and do
+    each feed a conversion in both of the two dQ loops -- is the
+    common case (case 16 in hoist-layout-conversions.mlir: at every GRF mode
+    the first loop's hoist is credited past its refused twin and taken alone,
+    in the phase above; the second loop's own hoist is still refused alone by
+    the peak gate at 128-GRF and default, and at 256-GRF too, and only the
+    shared-source phase below, not the credit above, is what also moves it,
+    together lowering the function's peak from 992 to 800 B/lane; tracked as
+    issue #8202). So refusals are only recorded while loops are decided; once
+    a function's loops are all decided, the refused conversions of every source
+    that is shared (two or more refused, or one refused beside one already
+    hoisted) are moved *together* and then vetted as one change: the loop-level
+    gate once per loop they leave, with the source credited when the group
+    retires it from that loop, and the peak gate by *measuring* the moved IR
+    against the same `max(current peak, threshold)` ceiling, since the
+    single-hoist projection cannot express several moves at once. A group that
+    fails either is moved back exactly. Each group is tried once, whole, in the
+    order its first refusal was made; subsets are not tried. Only then are the
+    surviving refusals stamped and counted, so every candidate is counted once,
+    as hoisted or under the reason it was first refused for.
 
     Cost is one whole-function pressure walk per candidate that follows an
-    accepted hoist, plus the initial build, and `RegisterPressureAnalysis`
-    memoizes nothing: on the module above (596 lines of TTGIR, `grf-mode=256`,
-    debug build) the pass takes 2.83s for eight hoists against 0.09s to parse and
-    print it -- eight walks there, one per hoist, only because no candidate was
-    rejected. A rejected candidate pays too. A function with no candidate reaching
-    this gate pays nothing: the analysis is built lazily on the first one.
-    Lowering `peak-rebuild-cap` bounds those rebuilds, i.e. cost, and spends
-    hoists to do it.
+    accepted hoist, plus the initial build. The pricing `QueryCache` is owned
+    by the gate, not by `RegisterPressureAnalysis` itself, and is reused
+    across every candidate considered within one generation (an "analysis
+    generation" is the period between two rebuilds, i.e. between two accepted
+    hoists); it is cleared, along with `regionPeakCache`, on every rebuild, so
+    nothing survives across generations. On a 596-line TTGIR module at
+    `grf-mode=256` (debug build) the pass takes 2.83s for eight hoists
+    against 0.09s to parse and print it -- eight generations there, one per
+    hoist, only because no candidate was rejected. A rejected candidate pays
+    too. A function with no candidate reaching this gate pays nothing: the
+    analysis is built lazily on the first one. Lowering `peak-rebuild-cap`
+    bounds those rebuilds, i.e. cost, and spends hoists to do it. Each
+    region-holding corridor entry also pays a `peakPressure` walk of that
+    region on top of the per-op pricing above -- real added cost on a kernel
+    with a sibling loop in the corridor, amortized by `regionPeakCache` for
+    repeat candidates against the same region within one generation, but the
+    first encounter of a given region within a generation still pays the full
+    walk. `siblingBlocksPeak`'s own `peakPressure` walk of every other block of
+    a branch-shaped last use's mapped op is a further, separate per-candidate
+    cost that `regionPeakCache` does not cover (it walks blocks directly, not
+    through `regionPeakThroughOp`). None of this is re-measured against the
+    2.83s figure above. The shared-source phase adds one whole-function walk
+    per group it tries (the measurement), plus the rebuild the next decision
+    after an accepted group pays; both spend `peak-rebuild-cap`, and a group
+    the cap leaves no room for is not tried. A function whose refusals share no
+    source pays nothing extra. A group whose every member was already
+    merge-charged in the phase above still pays this trial in full --
+    `peak-rebuild-cap` and the measurement walk both -- even though none of
+    its members are priced by it, since the trial does not know in advance
+    that pricing a member is unnecessary. The twin credit above adds its own,
+    separate cost term: `mergeFits` re-derives a twin's `hoistDeltaBytes`
+    inside the same per-candidate scan `isUnenforceableTwin` already runs for
+    every pending candidate on every pick, roughly
+    O(candidates^2 x users^2 x refusals^2) per loop in the worst case --
+    negligible on real kernels (a handful of refusals per function), but
+    worth weighing against this pass's overall compile-time cost alongside
+    the walks above.
 
     ### Non-goals, all deliberate
 
     * No retry at a cheaper insertion point; the point is fixed, after the
       source's defining operation or before the loop if it has none.
-    * A block-argument source is never freed for an earlier loop sharing it,
-      since the conversion still lands after that loop.
-    * Conversions sharing a source are not evaluated jointly, so a group can
-      stop partway through even where its completed net effect would have fit.
+    * A block-argument source's hoisted conversion never dominates, and so
+      never frees, a twin in an *earlier* loop sharing it, since it lands
+      just above its own loop, after every earlier one; the shared-source
+      phase inherits this. The reverse direction is not a non-goal: an
+      *earlier* loop's own hoist can be credited past a *refused* twin in a
+      *later* loop sharing the source (the twin sits inside or after the
+      hoisting loop, which the hoisted conversion's landing point does
+      dominate -- see Twin credit). A *hoisted* later sibling grants no such
+      credit -- a refusal record is what the twin match looks for, and a
+      hoisted conversion leaves none -- though `remove_layout_conversions`
+      still folds the two together as ordinary rematerialization once both
+      have landed (case 47 at 256-GRF: both hoisted, one survives). This
+      makes the pass non-monotone in one narrow sense: at 128-GRF, the later
+      loop's conversion being *refused* buys the earlier loop a credit that
+      the later loop's conversion being *hoisted* does not.
+    * The shared-source phase tries each source's refused group whole and
+      once: a group that fails (cases 45 and 46 in
+      hoist-layout-conversions.mlir) is left in place rather than searched
+      for a subset that would fit, and no group is retried after a later
+      group's hoist changes the picture. Groups are formed per source only;
+      conversions of different sources are never weighed together.
     * Neither trip count nor conversion cost is weighed against the pressure
       change.
     * `liveInPressure` ignores a value merely spanning the loop to feed code
       below it, so the loop-level baseline measures what a hoist adds, not
       absolute occupancy. The peak gate does see such a value.
+    * A merge charged when its twin is refused (see Twin credit) is seen only
+      by what is decided after that refusal. A candidate in the same loop
+      decided before it, the cheaper one by this pass's own ordering, was
+      gated on a figure without the merge, although the merge was already
+      certain once the earlier-decided loop hoisted. The loop's figure is
+      right from the refusal on; that candidate is not re-decided.
   }];
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 
@@ -211,10 +390,14 @@ def TritonIntelGPUHoistLayoutConversions
     Option<"peakRebuildCap", "peak-rebuild-cap", "unsigned", /*default*/"32",
            "Maximum whole-function pressure analysis rebuilds per function. "
            "Each accepted hoist invalidates the analysis; the next candidate "
-           "needing it spends one rebuild. Past the cap candidates are "
+           "needing it spends one rebuild, and each shared-source group trial "
+           "spends one to measure. Past the cap candidates are "
            "rejected, since a stale analysis bounds nothing. _attn_bwd's eight "
-           "hoists at HEAD_DIM=128 spend seven rebuilds -- the first build is "
-           "not a rebuild -- so a cap of seven already accepts all eight.">,
+           "hoists at HEAD_DIM=128 spent seven rebuilds in the original "
+           "measurement -- the first build is not a rebuild -- so a cap of "
+           "seven accepted all eight there; not re-measured since the "
+           "shared-source phase started spending its own rebuilds per group "
+           "trial.">,
   ];
 }
 
