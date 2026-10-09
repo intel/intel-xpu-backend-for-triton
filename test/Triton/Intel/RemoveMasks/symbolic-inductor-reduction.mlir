@@ -18,7 +18,7 @@ tt.func @inductor_reduction(%ptr: !tt.ptr<f32>, %rnumel: i32) {
   // SYM:      scf.if %[[GUARD]] {
   // SYM:        scf.for
   // SYM-NOT:      tt.load %{{.*}}, %{{.*}} :
-  // SYM:          tt.load %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:          tt.load %{{[^,]*}} : tensor<64x!tt.ptr<f32>>
   // SYM:      } else {
   // SYM:        scf.for
   // SYM:          tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
@@ -55,7 +55,7 @@ tt.func @two_loads_one_provable(%ptr: !tt.ptr<f32>, %qtr: !tt.ptr<i32>, %rnumel:
   // COM: the unprovable tensor load.
   // SYM:      scf.if
   // SYM:        scf.for
-  // SYM:          tt.load %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:          tt.load %{{[^,]*}} : tensor<64x!tt.ptr<f32>>
   // SYM:          tt.load %{{.*}} : !tt.ptr<i32>
   // SYM:          tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
   // SYM:      } else {
@@ -153,8 +153,8 @@ tt.func @same_loc_two_guards(%ptr1: !tt.ptr<f32>, %ptr2: !tt.ptr<f32>,
   // SYM: scf.if
   // SYM:   scf.for
   // SYM-NOT:   tt.load %{{.*}}, %{{.*}} :
-  // SYM:       tt.load %{{.*}} : tensor<64x!tt.ptr<f32>>
-  // SYM:       tt.load %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:       tt.load %{{[^,]*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:       tt.load %{{[^,]*}} : tensor<64x!tt.ptr<f32>>
   // SYM: } else {
   // SYM:   scf.for
   // SYM:     tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
