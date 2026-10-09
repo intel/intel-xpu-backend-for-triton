@@ -1999,26 +1999,19 @@ public:
   /// Prints the per-group table, records the totals, and fails on an
   /// unclassified loss, an unsound new guard, or a model mismatch.
   ///
-  /// `knownSearchOrderGap`: the prover's candidate search is a fixed-order
-  /// greedy pass - it returns the first candidate kind whose
-  /// trial decides the query, even when a later kind would have found a
-  /// wider (still sound) guard. The term-sign candidate can close a
-  /// single-symbol residual with a cheap NonNegative/StrictlyPositive guard
-  /// before the residual guard ever gets to try the exact threshold, which is
-  /// narrower than legacy's whenever legacy's own bound is negative
-  /// (`boundary_sge`/`sgt` with c < 0) or the symbol's width leaves no room
-  /// between the two (`scalar_slt`/`sle` at i1, whose only legacy-true point
-  /// needs the OTHER operand's exact sign, not a margin a term-sign
-  /// floor/ceiling can express). Neither is unsound - every unclassified loss
-  /// here still passes the unsound/mismatch checks below - and reordering the
-  /// search to prefer the residual guard is a prover change, not a test one:
-  /// tightening it risks exactly the regression `unsigned_pred` found (an
-  /// upstream fact can also close a candidate the term-sign kind would
-  /// otherwise reach), so it is left as a known, flagged gap rather than
-  /// silently loosened. The 1 remaining per-group loss on `boundary_sge`/
-  /// `sgt` at i64 (off = INT64_MIN exactly) is a residual case of the same
-  /// family, not a distinct cause.
-  void finish(bool legacyVacuous, bool knownSearchOrderGap = false) {
+  /// `knownCoverageGap`: the cases that set it still report their unclassified
+  /// losses but are not failed by them; the unsound and mismatch checks stay
+  /// fatal. Each loss is a sound but conservative answer outside the unsigned
+  /// and IR-wrap exception classes:
+  ///  - `scalar_slt`/`sle` at i64: the residual guard `-a + b >= k` is built
+  ///    in overflow-checked arithmetic and is false whenever `-a` or the sum
+  ///    leaves i64 (a == INT64_MIN, or b - a > INT64_MAX), though a < b holds.
+  ///  - `scalar_slt`/`sle` at i1: the one-term term-sign guard (`b > 0`) and
+  ///    the two-term residual guard tie in `pickWidest`, which keeps the
+  ///    earlier, narrower one.
+  ///  - `boundary_slt`/`sle`/`sge`/`sgt` at i64: the verdict is Unknown at the
+  ///    sampled bounds next to INT64_MIN.
+  void finish(bool legacyVacuous, bool knownCoverageGap = false) {
     uint64_t legacyTrue = 0, sound = 0, unsoundLegacy = 0, lossI = 0,
              lossII = 0, unclassified = 0;
     for (auto &[key, g] : groups) {
@@ -2045,9 +2038,9 @@ public:
       // Not silently dropped either way: the count and examples are already
       // printed above and counted into the RecordProperty totals below; this
       // is only whether a nonzero count is fatal for this named case.
-      if (knownSearchOrderGap) {
+      if (knownCoverageGap) {
         if (g.lossUnclassified.count)
-          std::cout << "      [documented, not fatal: search-order gap, see "
+          std::cout << "      [documented, not fatal: known coverage gap, see "
                        "finish()'s doc comment]\n";
       } else {
         EXPECT_EQ(g.lossUnclassified.count, 0u)
@@ -2104,9 +2097,9 @@ struct ImplicationCase {
   LegacyFamily family;
   Pred pred; // the upper side's, for andi
   bool legacyVacuous = false;
-  // See ImplicationLog::finish's doc comment: the prover's fixed-order
-  // greedy search can close with a narrower-than-legacy (but sound) guard.
-  bool knownSearchOrderGap = false;
+  // Sound but conservative losses that do not fail the case; see
+  // ImplicationLog::finish's doc comment.
+  bool knownCoverageGap = false;
 };
 
 // gtest prints a failing parameter; without this it dumps the struct's bytes.
@@ -2439,7 +2432,7 @@ TEST_P(LegacyImplicationTest, LegacyGuardImpliesNewGuard) {
     checkCanonical(log);
   else
     checkInvariant(c, log);
-  log.finish(c.legacyVacuous, c.knownSearchOrderGap);
+  log.finish(c.legacyVacuous, c.knownCoverageGap);
 }
 
 static std::string

@@ -259,7 +259,9 @@ bool normalizeCondition(BoundCondition &cond) {
     return false;
 
   if (cond.goal == BoundGoal::DivisibleBy) {
-    if (cond.c <= 0 || cond.expr.numTerms() != 1)
+    if (cond.c <= 0)
+      return false; // not a divisor `materialize` can test
+    if (cond.expr.numTerms() != 1)
       return cond.expr.constant() == 0; // nothing to normalize
     auto &[sym, k] = cond.expr.terms().front();
     int64_t c0 = cond.expr.constant();
@@ -492,6 +494,8 @@ Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
                           return !v || isSupportedWidth(v.getType());
                         }) &&
            "condition subject wider than 64 bits");
+    assert((cond.goal != BoundGoal::DivisibleBy || cond.c > 0) &&
+           "DivisibleBy needs a positive divisor");
     bool checked = !guardFitsPlainI64(cond.expr);
     GuardBuilder gb(builder, loc, checked);
 

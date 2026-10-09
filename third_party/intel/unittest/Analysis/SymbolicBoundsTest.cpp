@@ -869,6 +869,36 @@ TEST_F(SymbolicBoundsTest, MaterializeInsertsBeforeTheAnchor) {
   EXPECT_TRUE(b.getInsertionPoint() == Block::iterator(term));
 }
 
+TEST_F(SymbolicBoundsTest, NormalizeRejectsNonPositiveDivisor) {
+  parse(R"(
+    tt.func @f(%a: i32, %b: i32) {
+      tt.return
+    })");
+  using tt::intel::AffineForm;
+  using tt::intel::BoundCondition;
+  using tt::intel::BoundGoal;
+  AffineForm a = AffineForm::symbol(
+      prover->symbolFor(tt::intel::SymbolKind::KernelArg, arg(0)));
+  AffineForm b = AffineForm::symbol(
+      prover->symbolFor(tt::intel::SymbolKind::KernelArg, arg(1)));
+
+  // A zero constant term used to let any divisor through, whatever the shape
+  // of the expression: `materialize` would then emit `remsi` by it.
+  for (const AffineForm &expr : {AffineForm::constant(0), a, a.add(b)})
+    for (int64_t c : {int64_t(0), int64_t(-1), int64_t(-8), INT64_MIN}) {
+      BoundCondition cond{expr, BoundGoal::DivisibleBy, c};
+      EXPECT_FALSE(tt::intel::normalizeCondition(cond))
+          << tt::intel::toString(cond);
+    }
+
+  // A positive divisor of each shape is still accepted.
+  for (const AffineForm &expr : {AffineForm::constant(0), a, a.add(b)}) {
+    BoundCondition cond{expr, BoundGoal::DivisibleBy, 4};
+    EXPECT_TRUE(tt::intel::normalizeCondition(cond))
+        << tt::intel::toString(cond);
+  }
+}
+
 TEST_F(SymbolicBoundsTest, LoopRootedProverKeepsDistinctArgumentsDistinct) {
   const char *ir = R"(
     tt.func @f(%a: i32, %b: i32, %n: i32) {
