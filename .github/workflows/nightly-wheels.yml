@@ -44,9 +44,6 @@ jobs:
         python:
           - "3.11"
           - "3.12"
-          - "3.13"
-          - "3.14"
-          - "3.15.0-rc.1"
       fail-fast: false
       max-parallel: 2
     permissions:
@@ -82,6 +79,11 @@ jobs:
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a $GITHUB_ENV
           cd ..
 
+      - name: Enable stable ABI build for python>=3.12
+        if: "startsWith(matrix.python, '3.12')"
+        run: |
+          echo "TRITON_STABLE_ABI=ON" | tee -a $GITHUB_ENV
+
       - name: Identify Triton commit id
         run: |
           echo "TRITON_COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
@@ -94,7 +96,6 @@ jobs:
             python -m build --wheel --no-isolation && pip install dist/*.whl
 
       - name: Install torchvision package
-        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: torchvision
@@ -103,7 +104,6 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install torchaudio package
-        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: torchaudio
@@ -112,7 +112,6 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install torchao package
-        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: torchao
@@ -121,7 +120,6 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install timm package
-        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: timm
@@ -130,7 +128,6 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install transformers package
-        if: "!startsWith(matrix.python, '3.15')"
         run: |
           cd pytorch
           pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt

@@ -48,11 +48,15 @@ tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_q
 tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-True-True-dtype1-shape0]
 tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-True-True-dtype2-shape0]
 
-# Other
-tests/kernels/quantization/test_block_fp8.py::test_w8a8_block_fp8_cutlass_matmul
+# These tests never run a Triton kernel on XPU, each one calls into vllm-xpu-kernels (SYCL)
+# through torch.ops._C, and some only call the PyTorch reference.
+# Move the tests to xfail(run=False) https://github.com/intel/intel-xpu-backend-for-triton/issues/8339
 tests/kernels/quantization/test_fp8_quant.py::test_dynamic_per_tensor_fp8_quant
 tests/kernels/quantization/test_fp8_quant.py::test_dynamic_per_token_fp8_quant
 tests/kernels/quantization/test_fp8_quant.py::test_fp8_quant_large
-tests/kernels/quantization/test_int8_kernel.py::test_w8a8_fp8_fused_moe
+tests/kernels/quantization/test_fp8_quant.py::test_static_fp8_quant_group_2d
+tests/kernels/quantization/test_fp8_quant.py::test_static_fp8_quant_1d_scale
 tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_functionality
+tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_multidimensional
+tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_edge_cases
 tests/kernels/quantization/test_block_fp8.py::test_per_token_group_quant_fp8

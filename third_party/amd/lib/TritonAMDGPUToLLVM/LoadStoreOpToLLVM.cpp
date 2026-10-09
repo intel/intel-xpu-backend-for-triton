@@ -23,7 +23,6 @@
 using namespace mlir;
 using namespace mlir::triton::gpu;
 
-using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::LLVM::AMD::getVectorSize;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
@@ -31,6 +30,18 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 using triton::amdgpu::ISAFamily;
 
 namespace {
+
+Value emitCtaMulticastMaskIfSupported(RewriterBase &rewriter, Location loc,
+                                      const AMD::TargetInfo &targetInfo,
+                                      const LinearLayout &layout,
+                                      Value ctaId = Value()) {
+  if (!targetInfo.supportsMulticast())
+    return Value();
+  if (!ctaId)
+    ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+  return LLVM::AMD::emitCtaMulticastMask(
+      rewriter, loc, ctaId, layout, targetInfo.getMaxMulticastMaskPopcount());
+}
 
 std::optional<const char *> getAMDGPUMemScopeStr(MemSyncScope scope) {
   switch (scope) {
@@ -490,10 +501,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
     // Multicast is only supported for loads
     Value ctaMulticastMask;
-    if (isLoad && targetInfo.supportsMultiCTALaunch()) {
-      ctaMulticastMask = LLVM::AMD::emitCtaMulticastMask(
-          rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc),
-          globalLayout, targetInfo.getMaxMulticastMaskPopcount());
+    if (isLoad) {
+      ctaMulticastMask = emitCtaMulticastMaskIfSupported(
+          rewriter, loc, targetInfo, globalLayout);
     }
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, llShared,
@@ -613,14 +623,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           unpackTensorElements(loc, llOther, rewriter, other.getType());
 
     Value multicastMask;
-    if (targetInfo.supportsMultiCTALaunch()) {
-      if (auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType())) {
-        Value clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
-        auto regLayout = triton::gpu::toLinearLayout(tensorTy);
-        multicastMask = LLVM::AMD::emitCtaMulticastMask(
-            rewriter, loc, clusterCTAId, regLayout,
-            targetInfo.getMaxMulticastMaskPopcount());
-      }
+    if (auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType())) {
+      multicastMask = emitCtaMulticastMaskIfSupported(
+          rewriter, loc, targetInfo, triton::gpu::toLinearLayout(tensorTy));
     }
 
     // vectorized iteration through all the pointer/mask/other elements
@@ -1319,12 +1324,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       padAmount = padEnc.getPaddings()[0];
     }
 
-    Value multicastMask;
-    if (targetInfo.supportsMultiCTALaunch()) {
-      multicastMask = LLVM::AMD::emitCtaMulticastMask(
-          rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc),
-          sharedLayout, targetInfo.getMaxMulticastMaskPopcount());
-    }
+    Value multicastMask = emitCtaMulticastMaskIfSupported(
+        rewriter, loc, targetInfo, sharedLayout);
 
     SmallVector<Value> desc =
         mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, adaptor.getDesc());
@@ -1417,10 +1418,8 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
         m.padInterval = padEnc.getIntervals()[0];
         m.padAmount = padEnc.getPaddings()[0];
       }
-      if (targetInfo.supportsMultiCTALaunch())
-        m.multicastMask = LLVM::AMD::emitCtaMulticastMask(
-            rewriter, loc, ctaId, m.sharedLayout,
-            targetInfo.getMaxMulticastMaskPopcount());
+      m.multicastMask = emitCtaMulticastMaskIfSupported(
+          rewriter, loc, targetInfo, m.sharedLayout, ctaId);
 
       m.sharedEncoding = enc;
       m.shapePerCTA =
@@ -1701,14 +1700,8 @@ struct AsyncTDMGatherOpConversion
     auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
     int numWarps = triton::gpu::lookupNumWarps(op);
 
-    Value multicastMask;
-    if (targetInfo.supportsMultiCTALaunch()) {
-      // Use the sharedLayout to compute the multicast mask because the index
-      // layout only describes rows and misses information about columns.
-      multicastMask = LLVM::AMD::emitCtaMulticastMask(
-          rewriter, loc, ctaId, sharedLayout,
-          targetInfo.getMaxMulticastMaskPopcount());
-    }
+    Value multicastMask = emitCtaMulticastMaskIfSupported(
+        rewriter, loc, targetInfo, sharedLayout, ctaId);
 
     if (failed(mlir::LLVM::AMD::emitTDMGatherScatter(
             rewriter, loc, getTypeConverter(), desc, shapePerCTA, padInterval,
@@ -2221,7 +2214,6 @@ struct AtomicCASOpConversion
 
 bool supportsGlobalAtomicF16PackedAndDpp(ISAFamily isaFamily) {
   switch (isaFamily) {
-  case ISAFamily::CDNA1:
   case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:
   case ISAFamily::CDNA4:
