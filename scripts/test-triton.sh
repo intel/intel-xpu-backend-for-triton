@@ -962,6 +962,8 @@ run_vllm_test_deps_install() {
     cbor2 \
     openai_harmony \
     pybase64 \
+    pytest-asyncio \
+    "sentence-transformers>=5.2.0" \
     tblib
 }
 
