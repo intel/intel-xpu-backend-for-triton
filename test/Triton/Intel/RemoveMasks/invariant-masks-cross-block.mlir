@@ -3,6 +3,7 @@
 
 // COM: Loop-invariant masks defined in different blocks: one before an enclosing
 // COM: scf.if, the others inside it. They are still folded into one guard.
+// COM: The symbolic guard compares in i64, the legacy one in i32.
 
 // CHECK-LABEL: tt.func @two_masks_across_blocks
 // SYM-LABEL:   tt.func @two_masks_across_blocks
@@ -24,6 +25,18 @@ tt.func @two_masks_across_blocks(%ptr: !tt.ptr<f32>, %n: i32, %m: i32, %cnt: i32
   // CHECK:       scf.for
   // CHECK:         tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
   // CHECK:         tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM-DAG:  arith.cmpi {{[a-z]+}}, %{{.*}}, %{{.*}} : i64
+  // SYM-DAG:  arith.cmpi {{[a-z]+}}, %{{.*}}, %{{.*}} : i64
+  // SYM-DAG:  arith.andi %{{.*}}, %{{.*}} : i1
+  // SYM:      scf.if %{{.*}} {
+  // SYM:        scf.for
+  // SYM-NOT:      tt.load %{{.*}}, %{{.*}} :
+  // SYM:          tt.load %{{[^,]*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:          tt.load %{{[^,]*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:      } else {
+  // SYM:        scf.for
+  // SYM:          tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:          tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
   scf.if %c {
     %ms = tt.splat %m : i32 -> tensor<64xi32>
     %mask2 = arith.cmpi slt, %lane, %ms : tensor<64xi32>
@@ -66,6 +79,21 @@ tt.func @three_masks_across_blocks(%ptr: !tt.ptr<f32>, %n: i32, %m: i32, %k: i32
   // CHECK:         tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
   // CHECK:         tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
   // CHECK:         tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM-DAG:  arith.cmpi {{[a-z]+}}, %{{.*}}, %{{.*}} : i64
+  // SYM-DAG:  arith.cmpi {{[a-z]+}}, %{{.*}}, %{{.*}} : i64
+  // SYM-DAG:  arith.cmpi {{[a-z]+}}, %{{.*}}, %{{.*}} : i64
+  // SYM-DAG:  arith.andi %{{.*}}, %{{.*}} : i1
+  // SYM:      scf.if %{{.*}} {
+  // SYM:        scf.for
+  // SYM-NOT:      tt.load %{{.*}}, %{{.*}} :
+  // SYM:          tt.load %{{[^,]*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:          tt.load %{{[^,]*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:          tt.load %{{[^,]*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:      } else {
+  // SYM:        scf.for
+  // SYM:          tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:          tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
+  // SYM:          tt.load %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<f32>>
   scf.if %c {
     %ms = tt.splat %m : i32 -> tensor<64xi32>
     %mask2 = arith.cmpi slt, %lane, %ms : tensor<64xi32>
