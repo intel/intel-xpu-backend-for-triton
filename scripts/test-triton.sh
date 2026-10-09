@@ -1550,7 +1550,7 @@ run_vllm_model_ops_tests() {
 
   enter_vllm_test_env
   # Model-specific Triton ops (Inkling norm/sconv, BailingMoe mrope, Dots3
-  # fused embed+norm, CohereCompass ViT bilinear pos-embed)
+  # fused embed+norm, Qwen3-VL ViT bilinear pos-embed, fused q/kv rmsnorm)
   TRITON_TEST_SUITE=vllm_model_ops \
     run_pytest_command -vvv \
       tests/models/inkling/test_mtp_input_fusion.py \

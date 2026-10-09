@@ -60,5 +60,6 @@ tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_function
 tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_multidimensional
 tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_edge_cases
 tests/kernels/quantization/test_block_fp8.py::test_per_token_group_quant_fp8
+
 # int4 per-token-head unified attention exceeds tolerance on one element: https://github.com/intel/intel-xpu-backend-for-triton/issues/8358
 tests/quantization/test_per_token_kv_cache.py::test_triton_unified_attention_per_token_head_scale[int4-16-128-num_heads0-seq_lens1]

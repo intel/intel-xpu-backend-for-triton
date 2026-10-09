@@ -361,11 +361,11 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def patch_file(filepath: Path, relax_cuda_guards: bool = False) -> bool:
+def patch_file(filepath: Path, enable_on_xpu: bool = False) -> bool:
     """Patch a single file. Returns True if changes were made."""
     source = filepath.read_text()
     patterns = _find_cuda_patterns(source)
-    if relax_cuda_guards:
+    if enable_on_xpu:
         patterns += _find_cuda_guard_patterns(source) + _find_cuda_runtime_patterns(source)
     if not patterns:
         return False
@@ -419,18 +419,14 @@ def main() -> None:
             "tests/kernels/quantization/test_nvfp4_emulation.py",
             "tests/kernels/quantization/test_quantized_embedding.py",
             "tests/kernels/test_compressor_kv_cache.py",
-            "tests/model_executor/layers/test_mla_short_prefill_indexer.py",
             "tests/model_executor/test_bailing_mrope.py",
             "tests/models/inkling/test_mtp_input_fusion.py",
             "tests/models/inkling/test_qkvr_prep.py",
             "tests/models/inkling/test_sconv_metadata.py",
-            "tests/models/test_deepseek_v41_replay_start.py",
             "tests/v1/attention/test_dcp_a2a_pack_mask.py",
             "tests/v1/attention/test_deepseek_v4_swa_visible.py",
             "tests/v1/attention/test_indexer_dcp_localize.py",
             "tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py",
-            "tests/v1/worker/test_gpu_block_table.py",
-            "tests/v1/worker/test_gpu_kpool_tail_slot_mapping.py",
             "tests/v1/worker/test_gpu_rejection_sampler_chunking.py",
             "tests/v1/worker/test_gpu_rejection_sampler_i64.py",
             "tests/v1/worker/test_kv_block_zeroer.py",
@@ -448,14 +444,14 @@ def main() -> None:
         for py_file in sorted(patch_dir.rglob("*.py")):
             print(f"Scanning {py_file.relative_to(vllm_root)}...")
             scanned.add(py_file)
-            if patch_file(py_file, relax_cuda_guards=py_file in cuda_guard_files):
+            if patch_file(py_file, enable_on_xpu=py_file in cuda_guard_files):
                 total_patched += 1
 
     for py_file in sorted(cuda_guard_files - scanned):
         if not py_file.is_file():
             continue
         print(f"Scanning {py_file.relative_to(vllm_root)}...")
-        if patch_file(py_file, relax_cuda_guards=True):
+        if patch_file(py_file, enable_on_xpu=True):
             total_patched += 1
 
     print(f"\nPatched {total_patched} file(s)")
