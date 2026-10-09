@@ -45,6 +45,10 @@ TEST:
     --vllm-kda
     --vllm-inductor
     --vllm-tdesc
+    --vllm-lora
+    --vllm-batch-invariant
+    --vllm-model-ops
+    --vllm-v1-runner
     --install-vllm
     --sglang
     --sglang-attention
@@ -137,6 +141,10 @@ TEST_VLLM_DEEPGEMM=false
 TEST_VLLM_KDA=false
 TEST_VLLM_INDUCTOR=false
 TEST_VLLM_TDESC=false
+TEST_VLLM_LORA=false
+TEST_VLLM_BATCH_INVARIANT=false
+TEST_VLLM_MODEL_OPS=false
+TEST_VLLM_V1_RUNNER=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
@@ -420,6 +428,26 @@ while (( $# != 0 )); do
       ;;
     --vllm-tdesc)
       TEST_VLLM_TDESC=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-lora)
+      TEST_VLLM_LORA=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-batch-invariant)
+      TEST_VLLM_BATCH_INVARIANT=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-model-ops)
+      TEST_VLLM_MODEL_OPS=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-v1-runner)
+      TEST_VLLM_V1_RUNNER=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -934,6 +962,8 @@ run_vllm_test_deps_install() {
     cbor2 \
     openai_harmony \
     pybase64 \
+    pytest-asyncio \
+    "sentence-transformers>=5.2.0" \
     tblib
 }
 
@@ -1170,6 +1200,10 @@ run_vllm_tests() {
   run_vllm_kda_tests
   run_vllm_inductor_tests
   run_vllm_tdesc_tests
+  run_vllm_lora_tests
+  run_vllm_batch_invariant_tests
+  run_vllm_model_ops_tests
+  run_vllm_v1_runner_tests
 }
 
 
@@ -1188,6 +1222,10 @@ run_vllm_spec_decode_tests() {
       tests/v1/spec_decode/test_max_len.py \
       tests/v1/spec_decode/test_speculators_eagle3.py \
       tests/v1/spec_decode/test_synthetic_rejection_sampler_utils.py \
+      tests/v1/worker/test_gpu_rejection_sampler_i64.py \
+      tests/v1/worker/test_gpu_rejection_sampler_chunking.py \
+      tests/v1/spec_decode/test_acceptance_estimator.py \
+      tests/v1/spec_decode/test_dflash_prepare_inputs.py \
       tests/v1/sample/test_rejection_sampler.py
 }
 
@@ -1198,14 +1236,29 @@ run_vllm_mrv2_tests() {
   echo "********************************************************"
 
   enter_vllm_test_env
+  # test_hybrid_chunked_prefill.py is end-to-end (loads a model) and is the only
+  # test reaching the MRv2 rope/mrope position and spec-decode bookkeeping kernels.
   VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_mrv2 \
     run_pytest_command -vvv \
       tests/v1/worker/test_gpu_model_runner.py \
       tests/v1/worker/test_gpu_input_batch.py \
+      tests/v1/worker/test_gpu_input_batch_v2.py \
       tests/v1/worker/test_gpu_model_runner_v2_eplb.py \
       tests/v1/sample/test_sampler.py \
       tests/v1/sample/test_logprobs.py \
       tests/v1/worker/test_gpu_gumbel_sample.py \
+      tests/v1/worker/test_gpu_logits_processors.py \
+      tests/v1/worker/test_gpu_bad_words.py \
+      tests/v1/worker/test_gpu_batch_shard.py \
+      tests/v1/worker/test_gpu_trace_replay.py \
+      tests/v1/worker/test_gpu_thinking_budget.py \
+      tests/v1/worker/test_kv_block_zeroer.py \
+      tests/v1/worker/test_prompt_embeds_state.py \
+      tests/v1/test_outputs.py \
+      tests/v1/e2e/test_hybrid_chunked_prefill.py \
+      tests/models/language/pooling/test_classification.py::test_bert_model_runner_v2 \
+      tests/entrypoints/openai/chat_completion/test_logprob_token_ids.py \
+      tests/watermarking/test_watermarking.py \
       tests/v1/kv_connector/unit/test_nixl_connector.py
 }
 
@@ -1233,7 +1286,10 @@ run_vllm_moe_tests() {
       tests/kernels/moe/test_silu_mul_per_token_group_quant_fp8_colmajor.py \
       tests/kernels/moe/test_block_int8.py \
       tests/kernels/moe/test_block_fp8.py \
-      tests/kernels/moe/test_moe_layer.py
+      tests/kernels/moe/test_moe_layer.py \
+      tests/kernels/moe/test_zero_expert_moe.py \
+      tests/kernels/moe/test_gemma4router.py \
+      tests/kernels/moe/test_routing.py
 }
 
 
@@ -1245,15 +1301,28 @@ run_vllm_triton_attn_tests() {
   enter_vllm_test_env
   # Triton attention kernels: merge_attn_states_kernel, _fwd_kernel_stage1,
   # _fwd_grouped_kernel_stage1, _fwd_kernel_stage2, kernel_unified_attention_2d,
-  # kernel_unified_attention_3d, reduce_segments
+  # kernel_unified_attention_3d, reduce_segments, reshape_and_cache_kernel_flash,
+  # plus the DeepSeek-V4 sparse MLA / compressor / KV cache, DCP and DiffKV kernels.
   VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_triton_attn \
     run_pytest_command -vvv \
       tests/v1/attention/test_mla_backends.py \
+      tests/v1/attention/test_attention_backends.py \
       tests/kernels/attention/test_merge_attn_states.py \
       tests/kernels/attention/test_triton_decode_attention.py \
       tests/kernels/attention/test_triton_unified_attention.py \
       tests/kernels/attention/test_triton_prefill_attention.py \
-      tests/kernels/attention/test_cascade_flash_attn.py
+      tests/kernels/attention/test_cascade_flash_attn.py \
+      tests/kernels/attention/test_pack_unpack_triton.py \
+      tests/kernels/attention/test_flashmla_sparse.py \
+      tests/kernels/attention/test_xpu_mla_sparse.py \
+      tests/kernels/test_compressor_kv_cache.py \
+      tests/kernels/test_fused_inv_rope_fp8_quant.py \
+      tests/v1/attention/test_deepseek_v4_swa_visible.py \
+      tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py \
+      tests/v1/attention/test_dcp_a2a_pack_mask.py \
+      tests/v1/attention/test_indexer_dcp_localize.py \
+      tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels \
+      tests/kernels/attention/test_triton_unified_attention_diffkv.py
 }
 
 
@@ -1294,7 +1363,10 @@ run_vllm_mamba_tests() {
       tests/kernels/mamba/test_mamba_ssm.py \
       tests/kernels/mamba/test_mamba_ssm_ssd.py \
       tests/kernels/mamba/test_mamba_mixer2.py \
-      tests/kernels/mamba/test_ssu_dispatch.py
+      tests/kernels/mamba/test_ssu_dispatch.py \
+      tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py \
+      tests/v1/worker/test_mamba_utils.py \
+      tests/v1/worker/test_mamba_hybrid_model_state.py
 }
 
 
@@ -1317,7 +1389,11 @@ run_vllm_quant_tests() {
       tests/kernels/quantization/test_fp8_quant.py \
       tests/kernels/quantization/test_fp8_quant_group.py \
       tests/kernels/quantization/test_block_fp8.py \
-      tests/kernels/quantization/test_per_token_group_quant.py
+      tests/kernels/quantization/test_per_token_group_quant.py \
+      tests/kernels/quantization/test_quantized_embedding.py \
+      tests/quantization/test_turboquant.py \
+      tests/quantization/test_per_token_kv_cache.py \
+      tests/kernels/quantization/test_nvfp4_emulation.py
 }
 
 
@@ -1361,6 +1437,7 @@ run_vllm_kda_tests() {
   TRITON_TEST_SUITE=vllm_kda \
     run_pytest_command -vvv \
       tests/models/kimi_k3/test_kda.py \
+      tests/models/kimi_k3/test_attn_res.py \
       tests/kernels/core/test_fused_rms_norm_gated.py
 }
 
@@ -1432,6 +1509,75 @@ run_vllm_tdesc_tests() {
   done
 
   return $exit_status
+}
+
+
+run_vllm_lora_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM LoRA tests                  *******"
+  echo "********************************************************"
+
+  enter_vllm_test_env
+  # LoRA Triton kernels: _lora_shrink_kernel, _lora_expand_kernel,
+  # _fused_moe_lora_one_shot_kernel, _fused_moe_lora_small_batch_kernel
+  TRITON_TEST_SUITE=vllm_lora \
+    run_pytest_command -vvv \
+      tests/lora/test_punica_ops.py \
+      tests/lora/test_fused_moe_lora_kernel.py
+}
+
+
+run_vllm_batch_invariant_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM batch-invariant tests       *******"
+  echo "********************************************************"
+
+  enter_vllm_test_env
+  # Batch-invariant (VLLM_BATCH_INVARIANT) Triton kernels: _rms_norm_kernel,
+  # bmm_kernel, mean_kernel
+  TRITON_TEST_SUITE=vllm_batch_invariant \
+    run_pytest_command -vvv \
+      tests/v1/determinism/test_rms_norm_batch_invariant.py \
+      tests/v1/determinism/test_matmul_batch_invariant.py \
+      tests/v1/determinism/test_xpu_batch_invariant_ut.py
+}
+
+
+run_vllm_model_ops_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM model ops tests             *******"
+  echo "********************************************************"
+
+  enter_vllm_test_env
+  # Model-specific Triton ops (Inkling norm/sconv, BailingMoe mrope, Dots3
+  # fused embed+norm, Qwen3-VL ViT bilinear pos-embed, fused q/kv rmsnorm)
+  TRITON_TEST_SUITE=vllm_model_ops \
+    run_pytest_command -vvv \
+      tests/models/inkling/test_mtp_input_fusion.py \
+      tests/models/inkling/test_qkvr_prep.py \
+      tests/models/inkling/test_sconv_metadata.py \
+      tests/model_executor/test_bailing_mrope.py \
+      tests/kernels/core/test_fused_embed_norm.py \
+      tests/kernels/core/test_vit_bilinear_pos_embed.py \
+      tests/kernels/core/test_fused_q_kv_rmsnorm.py
+}
+
+
+run_vllm_v1_runner_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM V1 model runner tests       *******"
+  echo "********************************************************"
+
+  enter_vllm_test_env
+  # Kernels only reached on the V1 model runner: ComputeSlotMappingKernel (V1 block
+  # table), and copy_and_expand_eagle_inputs_kernel from speculative methods Model
+  # Runner V2 rejects (draft_model, parallel drafting)
+  VLLM_USE_V2_MODEL_RUNNER=0 TRITON_TEST_SUITE=vllm_v1_runner \
+    run_pytest_command -vvv \
+      "tests/v1/e2e/test_hybrid_chunked_prefill.py::test_mtp_speculative_mixed_batch_short_prefill[False-qwen]" \
+      tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_draft_model \
+      tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_parallel_drafting \
+      tests/v1/spec_decode/test_eagle.py::test_propose_stores_probabilistic_draft_probs
 }
 
 
@@ -1611,6 +1757,18 @@ test_triton() {
   fi
   if [ "$TEST_VLLM_TDESC" == true ]; then
     run_vllm_tdesc_tests
+  fi
+  if [ "$TEST_VLLM_LORA" == true ]; then
+    run_vllm_lora_tests
+  fi
+  if [ "$TEST_VLLM_BATCH_INVARIANT" == true ]; then
+    run_vllm_batch_invariant_tests
+  fi
+  if [ "$TEST_VLLM_MODEL_OPS" == true ]; then
+    run_vllm_model_ops_tests
+  fi
+  if [ "$TEST_VLLM_V1_RUNNER" == true ]; then
+    run_vllm_v1_runner_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests

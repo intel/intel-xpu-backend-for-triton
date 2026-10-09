@@ -282,7 +282,7 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-kda
 
-      # vllm-rest groups short suites: gdn-attn, linear-attn, deepgemm
+      # vllm-rest groups short suites: gdn-attn, linear-attn, deepgemm, inductor, lora, batch-invariant, model-ops, v1-runner
       - name: Run gdn-attn tests
         if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
@@ -302,6 +302,26 @@ jobs:
         if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-inductor
+
+      - name: Run lora tests
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-lora
+
+      - name: Run batch-invariant tests
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-batch-invariant
+
+      - name: Run model-ops tests
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-model-ops
+
+      - name: Run v1-runner tests
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-v1-runner
 
       - name: Run tdesc tests
         if: ${{ matrix.suite == 'vllm-tdesc' && steps.install-vllm.outcome == 'success' && !cancelled() }}

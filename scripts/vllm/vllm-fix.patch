@@ -11,6 +11,30 @@ index 80c5c853de..e6ef4c1833 100755
  
  NUM_HEADS = [(4, 4), (8, 2), (16, 2)]
  HEAD_SIZES = [128, 192, 256]
+diff --git a/tests/kernels/attention/test_triton_unified_attention_diffkv.py b/tests/kernels/attention/test_triton_unified_attention_diffkv.py
+index ea90b60a75..7876654a26 100644
+--- a/tests/kernels/attention/test_triton_unified_attention_diffkv.py
++++ b/tests/kernels/attention/test_triton_unified_attention_diffkv.py
+@@ -94,8 +94,8 @@ def test_triton_unified_attn_diffkv_vs_reference(
+ ) -> None:
+     head_size_qk, head_size_v = head_sizes
+ 
+-    # Keep the FA3/FA4 comparison on NVIDIA; ROCm uses the PyTorch oracle.
+-    if not current_platform.is_rocm():
++    # Keep the FA3/FA4 comparison on NVIDIA; ROCm and XPU use the PyTorch oracle.
++    if current_platform.is_cuda():
+         fa_version = get_flash_attn_version(
+             head_size=head_size_qk, head_size_v=head_size_v
+         )
+@@ -137,7 +137,7 @@ def test_triton_unified_attn_diffkv_vs_reference(
+         0, NUM_BLOCKS, (num_seqs, max_num_blocks_per_seq), dtype=torch.int32
+     )
+ 
+-    if current_platform.is_rocm():
++    if not current_platform.is_cuda():
+         # FP32 also keeps the helper's in-place scaling off the kernel input.
+         ref_out = ref_paged_attn(
+             query.float(),
 diff --git a/tests/kernels/core/test_fused_rms_norm_gated.py b/tests/kernels/core/test_fused_rms_norm_gated.py
 index 86b8e79656..e51b6328e8 100644
 --- a/tests/kernels/core/test_fused_rms_norm_gated.py
@@ -69,6 +93,20 @@ index 973e7885c6..e474275f57 100644
      ):
          mixer_single_gpu = Mixer2RMSNormGated(
              full_hidden_size=hidden_size,
+diff --git a/tests/kernels/mamba/test_mamba_ssm.py b/tests/kernels/mamba/test_mamba_ssm.py
+index c24f4c0f87..94b0f396fe 100644
+--- a/tests/kernels/mamba/test_mamba_ssm.py
++++ b/tests/kernels/mamba/test_mamba_ssm.py
+@@ -137,6 +137,9 @@ def selective_scan_opcheck_fn(
+     """If return_last_state is True, returns (out, last_state)
+     last_state has shape (batch, dim, dstate).
+     """
++    # XPU runs selective scan in Triton; there is no _C.selective_scan_fwd to opcheck.
++    if current_platform.is_xpu():
++        return
+     if u.stride(-1) != 1:
+         u = u.contiguous()
+     if delta.stride(-1) != 1:
 diff --git a/tests/kernels/mamba/utils.py b/tests/kernels/mamba/utils.py
 index c7cf473427..02f245de36 100644
 --- a/tests/kernels/mamba/utils.py
@@ -88,9 +126,10 @@ index c7cf473427..02f245de36 100644
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
 diff --git a/tests/kernels/moe/test_block_fp8.py b/tests/kernels/moe/test_block_fp8.py
+index 63f64c735a..7ddba15288 100644
 --- a/tests/kernels/moe/test_block_fp8.py
 +++ b/tests/kernels/moe/test_block_fp8.py
-@@ -226,7 +226,11 @@
+@@ -227,7 +227,11 @@ def test_w8a8_block_fp8_fused_moe(
      # while fused_experts/the reference round SiLU to bf16 first. On large K/N this
      # ~1-ULP gap pushes m_out past the base tol, so validate m_out against an
      # fp32-SiLU reference — keeping the tight base tolerance, no widened override.
@@ -194,8 +233,26 @@ index 399a741df0..421e7b2251 100644
              env[_SPAWN_CHILD_ENV] = "1"
  
              result = subprocess.run(
+diff --git a/tests/v1/sample/test_sampler.py b/tests/v1/sample/test_sampler.py
+index b6d4fcc9e8..a5e0c94555 100644
+--- a/tests/v1/sample/test_sampler.py
++++ b/tests/v1/sample/test_sampler.py
+@@ -25,6 +25,13 @@ DEVICES = [
+ MAX_NUM_PROMPT_TOKENS = 64
+ 
+ 
++@pytest.fixture(autouse=True)
++def _restore_default_device():
++    # Tests below call torch.set_default_device(); don't leak it into later test files.
++    yield
++    torch.set_default_device(None)
++
++
+ def _create_fake_logits(batch_size: int, vocab_size: int) -> torch.Tensor:
+     fake_logits = torch.full((batch_size, vocab_size), 1e-2, dtype=torch.float)
+     return fake_logits
 diff --git a/tests/v1/spec_decode/test_speculators_eagle3.py b/tests/v1/spec_decode/test_speculators_eagle3.py
-index 9a252cfff..617083516 100644
+index 66736cce87..25c2496e28 100644
 --- a/tests/v1/spec_decode/test_speculators_eagle3.py
 +++ b/tests/v1/spec_decode/test_speculators_eagle3.py
 @@ -3,11 +3,13 @@
@@ -212,6 +269,19 @@ index 9a252cfff..617083516 100644
  @pytest.mark.parametrize(
      "model_path",
      [
+diff --git a/tests/watermarking/test_watermarking.py b/tests/watermarking/test_watermarking.py
+index 65ea9e93ad..e79cac1aa7 100644
+--- a/tests/watermarking/test_watermarking.py
++++ b/tests/watermarking/test_watermarking.py
+@@ -711,7 +711,7 @@ def test_repeated_context_mask(context_width: int):
+ @pytest.mark.parametrize("context_width", [1, 3, 4, 16, 17])
+ def test_repeated_context_mask_accelerator_parity(context_width: int):
+     cpu_inputs = _repeated_context_inputs(context_width)
+-    accelerator_inputs = list(_repeated_context_inputs(context_width, "cuda"))
++    accelerator_inputs = list(_repeated_context_inputs(context_width, current_platform.device_type))
+     contexts = accelerator_inputs[-1]
+     storage = torch.empty(
+         contexts.shape[0], contexts.shape[1] * 2, dtype=contexts.dtype, device="cuda"
 diff --git a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
 index 18bf142491..c47cbf80ff 100644
 --- a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
@@ -248,6 +318,27 @@ index 18bf142491..c47cbf80ff 100644
 -        return
  
      logger.info("Warming up MiniMax M3 MSA kernels.")
+ 
+diff --git a/vllm/models/inkling/nvidia/ops/norm.py b/vllm/models/inkling/nvidia/ops/norm.py
+index d34c1c3259..6ed27c6fb2 100644
+--- a/vllm/models/inkling/nvidia/ops/norm.py
++++ b/vllm/models/inkling/nvidia/ops/norm.py
+@@ -7,6 +7,7 @@ from functools import lru_cache
+ import torch
+ 
+ from vllm.triton_utils import tl, triton
++from vllm.utils.platform_utils import num_compute_units
+ 
+ _MAX_FUSED_SIZE = 65536
+ 
+@@ -28,7 +29,7 @@ def _largest_power_of_2(n: int) -> int:
+ 
+ @lru_cache(maxsize=128)
+ def _get_grid_size_for_mem_bw_kernel(device: torch.device, factor: int = 8) -> int:
+-    num_sms = torch.cuda.get_device_properties(device).multi_processor_count
++    num_sms = num_compute_units(device.index or 0)
+     return _largest_power_of_2(num_sms) * factor
+ 
  
 diff --git a/vllm/models/kimi_k3/amd/ops/third_party/kda/chunk_intra.py b/vllm/models/kimi_k3/amd/ops/third_party/kda/chunk_intra.py
 index 8b9aa86f9e..07b4a38893 100644
@@ -301,3 +392,30 @@ index 9089d025e0..ee5aaf7cc8 100644
  
  
  # Resolve once at module load. Uses amdsmi (no CUDA init) so Ray workers
+diff --git a/vllm/v1/worker/gpu/model_states/prompt_embeds.py b/vllm/v1/worker/gpu/model_states/prompt_embeds.py
+index 251558f9c1..f7237e13d5 100644
+--- a/vllm/v1/worker/gpu/model_states/prompt_embeds.py
++++ b/vllm/v1/worker/gpu/model_states/prompt_embeds.py
+@@ -37,8 +37,9 @@ class PromptEmbedsState:
+ 
+         # Indexed by req_state index. Stale entries after removal are
+         # harmless: add_request rewrites all fields for every index it claims.
+-        self.embeds_ptrs = UvaBackedTensor(max_num_reqs, dtype=torch.int64)
+-        self.mask_ptrs = UvaBackedTensor(max_num_reqs, dtype=torch.int64)
++        # uint64: device pointers can be >= 2**63 (e.g. on XPU) and overflow int64.
++        self.embeds_ptrs = UvaBackedTensor(max_num_reqs, dtype=torch.uint64)
++        self.mask_ptrs = UvaBackedTensor(max_num_reqs, dtype=torch.uint64)
+         self.embeds_lens = UvaBackedTensor(max_num_reqs, dtype=torch.int32)
+ 
+     def add_request(self, req_index: int, new_req_data: NewRequestData) -> None:
+@@ -100,8 +101,8 @@ class PromptEmbedsState:
+ def _apply_prompt_embeds_kernel(
+     inputs_embeds_ptr,
+     inputs_embeds_stride,
+-    embeds_ptrs_ptr,  # int64 [max_num_reqs], device pointers (0-len = unused)
+-    mask_ptrs_ptr,  # int64 [max_num_reqs], 0 = no is-token-ids mask
++    embeds_ptrs_ptr,  # uint64 [max_num_reqs], device pointers (0-len = unused)
++    mask_ptrs_ptr,  # uint64 [max_num_reqs], 0 = no is-token-ids mask
+     embeds_lens_ptr,  # int32 [max_num_reqs]
+     idx_mapping_ptr,
+     query_start_loc_ptr,
