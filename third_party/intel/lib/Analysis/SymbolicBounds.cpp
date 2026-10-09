@@ -1058,6 +1058,19 @@ std::optional<std::pair<int64_t, int64_t>> SymbolicBoundsProver::boundConstant(
 // Bounding over a loop's iteration space
 //===----------------------------------------------------------------------===//
 
+/// The scf.for contract reads an unsigned loop's bounds as unsigned; treating
+/// them as signed needs all three preconditions.
+static void unsignedLoopPreconditions(scf::ForOp loop, const AffineForm &lb,
+                                      const AffineForm &ub, int64_t step,
+                                      SmallVectorImpl<BoundCondition> &out) {
+  unsigned width = bitWidth(loop.getLowerBound().getType());
+  int64_t intMax = APInt::getSignedMaxValue(width).getSExtValue();
+  out.push_back({lb, BoundGoal::NonNegative, 0, ConditionKind::Precondition});
+  out.push_back({ub, BoundGoal::NonNegative, 0, ConditionKind::Precondition});
+  out.push_back(
+      {ub, BoundGoal::AtMost, intMax - step + 1, ConditionKind::Precondition});
+}
+
 SymbolicBoundsProver::Bounds
 SymbolicBoundsProver::symbolBounds(const Symbol &sym, QueryContext ctx,
                                    const CandidateSet &cs) {
@@ -1100,18 +1113,8 @@ SymbolicBoundsProver::symbolBounds(const Symbol &sym, QueryContext ctx,
     // The obligations of the bounds' own arithmetic travel with the result:
     // a signed i8 `ub = n - 1` is 127 for n = -128, not the mathematical -129.
     llvm::append_range(out.factObligations, boundObls);
-    if (ctx.loop.getUnsignedCmp()) {
-      // The scf.for contract reads the bounds as unsigned; treating them as
-      // signed needs all three preconditions.
-      unsigned width = bitWidth(ctx.loop.getLowerBound().getType());
-      int64_t intMax = APInt::getSignedMaxValue(width).getSExtValue();
-      out.preconditions.push_back(
-          {lb, BoundGoal::NonNegative, 0, ConditionKind::Precondition});
-      out.preconditions.push_back(
-          {ub, BoundGoal::NonNegative, 0, ConditionKind::Precondition});
-      out.preconditions.push_back({ub, BoundGoal::AtMost, intMax - *step + 1,
-                                   ConditionKind::Precondition});
-    }
+    if (ctx.loop.getUnsignedCmp())
+      unsignedLoopPreconditions(ctx.loop, lb, ub, *step, out.preconditions);
     return out;
   }
   default:
@@ -2366,6 +2369,37 @@ BoundProof SymbolicBoundsProver::proveDifferenceAtLeast(
   if (!finishers.empty())
     return finishers[pickWidest(finishers)];
   return {};
+}
+
+BoundProof SymbolicBoundsProver::tripCountAtLeast(scf::ForOp loop, int64_t n) {
+  // Only a constant positive step: a dynamic or non-positive one has no closed
+  // trip-count formula, and constantStep also rejects unsupported widths.
+  std::optional<int64_t> step = constantStep(loop);
+  if (n < 1 || !step || *step <= 0)
+    return {};
+
+  // The loop runs at least n times exactly when ub - lb >= (n - 1) * step + 1.
+  int64_t g;
+  if (llvm::MulOverflow(n - 1, *step, g) ||
+      llvm::AddOverflow(g, static_cast<int64_t>(1), g))
+    return {};
+
+  QueryContext ctx = parentContext(loop);
+  SmallVector<Obligation, 4> obligations;
+  exhausted = false;
+  AffineForm lb = normalizeImpl(loop.getLowerBound(), ctx, obligations, {}, 0);
+  AffineForm ub = normalizeImpl(loop.getUpperBound(), ctx, obligations, {}, 0);
+  if (exhausted || lb.overflowed() || ub.overflowed())
+    return {};
+  AffineForm d = ub.sub(lb);
+  if (d.overflowed())
+    return {};
+
+  CandidateSet base;
+  if (loop.getUnsignedCmp())
+    unsignedLoopPreconditions(loop, lb, ub, *step, base.extra);
+  return proveDifferenceAtLeast(std::move(d), g, std::move(base), obligations,
+                                ctx);
 }
 
 //===----------------------------------------------------------------------===//

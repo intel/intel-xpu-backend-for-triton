@@ -39,8 +39,8 @@
 namespace mlir::triton::intel {
 
 /// A symbol is an integer SSA value the prover does not look through.
-/// `TripCount` is reserved for the trip-count API sketched below, which is
-/// not implemented; nothing creates one yet.
+/// `TripCount` is reserved for a symbolic trip count; nothing creates one yet
+/// and `tripCountAtLeast` does not need it.
 enum class SymbolKind {
   KernelArg,
   ProgramId,
@@ -219,15 +219,6 @@ struct QueryContext {
   scf::ForOp loop;
 };
 
-// Not implemented: a symbolic trip-count API, in the shape its TTGIR
-// consumers would use:
-//   struct SymbolicTripCount { AffineForm count;
-//                              SmallVector<BoundCondition> preconditions;
-//                              SmallVector<Obligation> obligations; };
-//   std::optional<SymbolicTripCount> symbolicTripCount(scf::ForOp loop);
-//   std::optional<int64_t> minTripCount(scf::ForOp loop);
-//   BoundProof tripCountAtLeast(scf::ForOp loop, int64_t n);
-
 /// Applying a candidate has three outcomes and only one ends the query:
 /// `Accepted`; `Declined`, when the condition is not expressible (an
 /// unnormalizable divisibility, a non-scalar or non-dominating subject), in
@@ -262,6 +253,16 @@ public:
   /// bits.
   BoundProof prove(arith::CmpIPredicate pred, Value lhs, Value rhs,
                    QueryContext ctx);
+
+  /// Decides whether `loop` runs at least `n` iterations every time it is
+  /// entered: `ub - lb >= (n - 1) * step + 1`. `Refuted` means fewer than `n`
+  /// iterations on every invocation, which needs the high end of `ub - lb`
+  /// over the enclosing loop to be a constant below that bound.
+  /// Valid for contract-valid executions only: the bounds and the exit value
+  /// are read with the loop's own signedness, and `lb + trips * step` is
+  /// representable, where `trips` is the actual trip count, not `n`.
+  /// `Unknown` for `n < 1` and for a non-constant or non-positive step.
+  BoundProof tripCountAtLeast(scf::ForOp loop, int64_t n);
 
   /// Normalizes `v` at `ctx` and appends the wrap obligations of every
   /// operation looked through. Never fails: an unsupported operation, or a

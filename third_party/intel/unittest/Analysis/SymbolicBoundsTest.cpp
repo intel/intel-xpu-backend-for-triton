@@ -116,6 +116,27 @@ public:
         prover->prove(op.getPredicate(), op.getLhs(), op.getRhs(), at(cmp)));
   }
 
+  /// Returns the scf.for carrying `loc("<name>")`.
+  scf::ForOp forNamed(StringRef name) {
+    scf::ForOp found;
+    unsigned matches = 0;
+    module->walk([&](scf::ForOp op) {
+      auto nameLoc = dyn_cast<NameLoc>(op.getLoc());
+      if (!nameLoc || nameLoc.getName() != name)
+        return;
+      ++matches;
+      found = op;
+    });
+    EXPECT_EQ(matches, 1u) << "expected exactly one loop named '" << name.str()
+                           << "'";
+    return found;
+  }
+
+  /// Renders `tripCountAtLeast` for the loop named `name`.
+  std::string trip(StringRef name, int64_t n) {
+    return tt::intel::toString(prover->tripCountAtLeast(forNamed(name), n));
+  }
+
   /// Returns argument `idx` of the (single) function in the parsed IR.
   Value arg(unsigned idx) {
     Value found;
@@ -1691,6 +1712,360 @@ TEST_F(SymbolicBoundsTest, WidthPolicyKeepsSixtyFourBitsAndIndexDecided) {
     })");
   EXPECT_EQ(verdict(get("cmp64")), "Satisfied");
   EXPECT_EQ(verdict(get("cmpIdx")), "Conditional{arg0 >= 0}");
+}
+
+//===----------------------------------------------------------------------===//
+// tripCountAtLeast
+//===----------------------------------------------------------------------===//
+
+// Refuted fires when the high end of ub - lb over the enclosing loop is a
+// constant below (n - 1) * step + 1, so an upper-bound assume on a kernel
+// argument never refutes and a constant outer bound alone does not either.
+struct TripCase {
+  const char *name;
+  const char *args;
+  const char *body; // the queried loop carries loc("L"), an outer one loc("O")
+  std::vector<std::pair<int64_t, const char *>> expect; // n -> verdict
+  const char *loop = "L";
+};
+
+constexpr const char *kTripConsts = R"(
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      %c2 = arith.constant 2 : i32
+      %c3 = arith.constant 3 : i32
+      %c4 = arith.constant 4 : i32
+      %c5 = arith.constant 5 : i32
+      %c64 = arith.constant 64 : i32
+      %c65 = arith.constant 65 : i32
+      %c255 = arith.constant 255 : i32
+      %cm1 = arith.constant -1 : i32)";
+
+static std::string tripFunc(const TripCase &c) {
+  return std::string("tt.func @f(") + c.args + ") {" + kTripConsts + c.body +
+         "\n      tt.return\n    }";
+}
+
+TEST_F(SymbolicBoundsTest, TripCountAtLeast) {
+  const std::vector<TripCase> cases = {
+      {"ConstSingleTrip",
+       "",
+       R"(
+      scf.for %i = %c0 to %c64 step %c64 : i32 {
+      } loc("L"))",
+       {{1, "Satisfied"}, {2, "Refuted"}}},
+      {"EmptyReversedBounds",
+       "",
+       R"(
+      scf.for %i = %c5 to %c3 step %c1 : i32 {
+      } loc("L"))",
+       {{1, "Refuted"}, {2, "Refuted"}}},
+      {"EmptyEqualBounds",
+       "",
+       R"(
+      scf.for %i = %c3 to %c3 step %c1 : i32 {
+      } loc("L"))",
+       {{1, "Refuted"}, {2, "Refuted"}}},
+      {"DynamicUpperBound",
+       "%N: i32",
+       R"(
+      scf.for %i = %c0 to %N step %c64 : i32 {
+      } loc("L"))",
+       {{1, "Conditional{arg0 > 0}"}, {2, "Conditional{arg0 >= 65}"}}},
+      // An upper-bound assume is not a constant high end of ub - lb.
+      {"DynamicUpperBoundWithUpperAssume",
+       "%N: i32",
+       R"(
+      %a = arith.cmpi sle, %N, %c64 : i32
+      llvm.intr.assume %a : i1
+      scf.for %i = %c0 to %N step %c64 : i32 {
+      } loc("L"))",
+       {{1, "Conditional{arg0 > 0}"}, {2, "Conditional{arg0 >= 65}"}}},
+      {"DynamicUpperBoundWithLowerAssume",
+       "%N: i32",
+       R"(
+      %a = arith.cmpi sge, %N, %c65 : i32
+      llvm.intr.assume %a : i1
+      scf.for %i = %c0 to %N step %c64 : i32 {
+      } loc("L"))",
+       {{1, "Satisfied"}, {2, "Satisfied"}}},
+      {"DynamicUpperBoundStepOne",
+       "%N: i32",
+       R"(
+      scf.for %i = %c0 to %N step %c1 : i32 {
+      } loc("L"))",
+       {{2, "Conditional{arg0 >= 2}"}}},
+      // Inner 0..i under outer 0..2: i <= 1, so the inner loop runs once at
+      // most. Outer 0..4 allows up to three trips; outer 0..64 step 64 has
+      // IV high end 63; a non-constant outer bound has none.
+      {"NestedUnderConstantOuterRefuted",
+       "",
+       R"(
+      scf.for %i = %c0 to %c2 step %c1 : i32 {
+        scf.for %j = %c0 to %i step %c1 : i32 {
+        } loc("L")
+      })",
+       {{1, "Unknown"}, {2, "Refuted"}}},
+      {"NestedUnderWiderOuterIsUnknown",
+       "",
+       R"(
+      scf.for %i = %c0 to %c4 step %c1 : i32 {
+        scf.for %j = %c0 to %i step %c1 : i32 {
+        } loc("L")
+      })",
+       {{2, "Unknown"}}},
+      {"NestedUnderStridedOuterIsUnknown",
+       "",
+       R"(
+      scf.for %i = %c0 to %c64 step %c64 : i32 {
+        scf.for %j = %c0 to %i step %c1 : i32 {
+        } loc("L")
+      })",
+       {{2, "Unknown"}}},
+      {"NestedUnderDynamicOuterIsUnknown",
+       "%N: i32",
+       R"(
+      scf.for %i = %c0 to %N step %c1 : i32 {
+        scf.for %j = %c0 to %i step %c1 : i32 {
+        } loc("L")
+      })",
+       {{2, "Unknown"}}},
+      {"InnerFromIvToIvPlusOne",
+       "%N: i32",
+       R"(
+      scf.for %i = %c0 to %N step %c1 : i32 {
+        %ip1 = arith.addi %i, %c1 : i32
+        scf.for %j = %i to %ip1 step %c1 : i32 {
+        } loc("L")
+      })",
+       {{1, "Satisfied"}, {2, "Refuted"}}},
+      // x..x+1 refutes only when x + 1 provably does not wrap.
+      {"RawArgumentPlusOneKeepsWrapGuard",
+       "%x: i32",
+       R"(
+      %xp1 = arith.addi %x, %c1 : i32
+      scf.for %j = %x to %xp1 step %c1 : i32 {
+      } loc("L"))",
+       {{1, "Conditional{arg0 <= 2147483646}"}, {2, "Unknown"}}},
+      {"MaskedArgumentPlusOne",
+       "%a: i32",
+       R"(
+      %x = arith.andi %a, %c255 : i32
+      %xp1 = arith.addi %x, %c1 : i32
+      scf.for %j = %x to %xp1 step %c1 : i32 {
+      } loc("L"))",
+       {{1, "Satisfied"}, {2, "Refuted"}}},
+      {"DynamicStepIsUnknown",
+       "%s: i32",
+       R"(
+      scf.for %i = %c0 to %c64 step %s : i32 {
+      } loc("L"))",
+       {{1, "Unknown"}, {2, "Unknown"}}},
+      {"NegativeStepIsUnknown",
+       "",
+       R"(
+      scf.for %i = %c5 to %c0 step %cm1 : i32 {
+      } loc("L"))",
+       {{1, "Unknown"}, {2, "Unknown"}}},
+      {"NonPositiveRequestIsUnknown",
+       "",
+       R"(
+      scf.for %i = %c0 to %c64 step %c64 : i32 {
+      } loc("L"))",
+       {{0, "Unknown"}, {-1, "Unknown"}}},
+      // (n - 1) * step overflows int64_t; with step 1 it does not.
+      {"ThresholdOverflowIsUnknown",
+       "",
+       R"(
+      scf.for %i = %c0 to %c64 step %c64 : i32 {
+      } loc("L"))",
+       {{INT64_MAX, "Unknown"}}},
+      // The span of an i64 loop from INT64_MIN to INT64_MAX does not fit.
+      {"BoundDifferenceOverflowIsUnknown",
+       "",
+       R"(
+      %lo = arith.constant -9223372036854775808 : i64
+      %hi = arith.constant 9223372036854775807 : i64
+      %one = arith.constant 1 : i64
+      scf.for %i = %lo to %hi step %one : i64 {
+      } loc("L"))",
+       {{1, "Unknown"}, {2, "Unknown"}}},
+      {"HugeThresholdStepOne",
+       "",
+       R"(
+      scf.for %i = %c0 to %c64 step %c1 : i32 {
+      } loc("L"))",
+       {{INT64_MAX, "Refuted"}}},
+      // Unsigned loops read their bounds as unsigned; the three loop-contract
+      // preconditions survive when nothing else discharges them.
+      {"UnsignedDynamic",
+       "%N: i32",
+       R"(
+      scf.for unsigned %i = %c0 to %N step %c1 : i32 {
+      } loc("L"))",
+       {{2, "Conditional{arg0 >= 2}"}}},
+      {"UnsignedConst",
+       "",
+       R"(
+      scf.for unsigned %i = %c0 to %c64 step %c64 : i32 {
+      } loc("L"))",
+       {{1, "Satisfied"}, {2, "Refuted"}}},
+      {"UnsignedCandidateKeepsPreconditions",
+       "%M: i32, %N: i32",
+       R"(
+      scf.for unsigned %i = %M to %N step %c1 : i32 {
+      } loc("L"))",
+       {{1, "Conditional{-arg0 + arg1 >= 1; arg0 >= 0; arg1 >= 0}"},
+        {2, "Conditional{-arg0 + arg1 >= 2; arg0 >= 0; arg1 >= 0}"}}},
+      {"UnsignedDirectKeepsPreconditions",
+       "%M: i32",
+       R"(
+      %ub = arith.addi %M, %c64 : i32
+      scf.for unsigned %i = %M to %ub step %c1 : i32 {
+      } loc("L"))",
+       {{2, "Conditional{arg0 >= 0; arg0 + 64 >= 0; arg0 + 64 <= 2147483647; "
+            "arg0 <= 2147483583}"}}},
+      {"UnsignedRefutationNeedingPreconditionsIsUnknown",
+       "%M: i32",
+       R"(
+      %ub = arith.addi %M, %c1 : i32
+      scf.for unsigned %i = %M to %ub step %c1 : i32 {
+      } loc("L"))",
+       {{2, "Unknown"}}},
+      {"UnsignedMaskedArgumentPlusOne",
+       "%a: i32",
+       R"(
+      %x = arith.andi %a, %c255 : i32
+      %ub = arith.addi %x, %c1 : i32
+      scf.for unsigned %i = %x to %ub step %c1 : i32 {
+      } loc("L"))",
+       {{1, "Satisfied"}, {2, "Refuted"}}},
+      {"UnsignedResidualGuardKeepsPreconditions",
+       "%N: i32",
+       R"(
+      %ub = arith.addi %N, %c64 : i32
+      scf.for unsigned %i = %c0 to %ub step %c1 : i32 {
+      } loc("L"))",
+       {{2, "Conditional{arg0 >= -62; arg0 + 64 >= 0; arg0 + 64 <= "
+            "2147483647; arg0 <= 2147483583}"}}},
+      // The contract is about the actual trip count: 0 + 1 * 64 fits in i8
+      // but 0 + 2 * 64 does not, and the n = 2 query is still answered.
+      {"NarrowConstContractValid",
+       "",
+       R"(
+      %n0 = arith.constant 0 : i8
+      %n64 = arith.constant 64 : i8
+      scf.for %i = %n0 to %n64 step %n64 : i8 {
+      } loc("L"))",
+       {{1, "Satisfied"}, {2, "Refuted"}}},
+      {"NarrowUpperBoundMinusOne",
+       "%N: i8",
+       R"(
+      %n0 = arith.constant 0 : i8
+      %n1 = arith.constant 1 : i8
+      %nm1 = arith.subi %N, %n1 : i8
+      scf.for %i = %n0 to %nm1 step %n1 : i8 {
+      } loc("L"))",
+       {{1, "Conditional{arg0 >= 2}"}, {2, "Conditional{arg0 >= 3}"}}},
+      // Assumes are judged at the loop itself, not at a comparison in its body:
+      // one after the loop, inside it, or in an unrelated branch never applies;
+      // one just before a nested loop applies to that loop only.
+      {"AssumeAfterLoopDoesNotApply",
+       "%N: i32",
+       R"(
+      scf.for %i = %c0 to %N step %c64 : i32 {
+      } loc("L")
+      %a = arith.cmpi sge, %N, %c65 : i32
+      llvm.intr.assume %a : i1)",
+       {{2, "Conditional{arg0 >= 65}"}}},
+      {"AssumeInsideLoopDoesNotApply",
+       "%N: i32",
+       R"(
+      scf.for %i = %c0 to %N step %c64 : i32 {
+        %a = arith.cmpi sge, %N, %c65 : i32
+        llvm.intr.assume %a : i1
+      } loc("L"))",
+       {{2, "Conditional{arg0 >= 65}"}}},
+      {"AssumeInUnrelatedBranchDoesNotApply",
+       "%N: i32, %p: i1",
+       R"(
+      scf.if %p {
+        %a = arith.cmpi sge, %N, %c65 : i32
+        llvm.intr.assume %a : i1
+      }
+      scf.for %i = %c0 to %N step %c64 : i32 {
+      } loc("L"))",
+       {{2, "Conditional{arg0 >= 65}"}}},
+      {"AssumeBeforeNestedLoopAppliesToIt",
+       "%N: i32, %K: i32",
+       R"(
+      scf.for %i = %c0 to %K step %c1 : i32 {
+        %a = arith.cmpi sge, %N, %c2 : i32
+        llvm.intr.assume %a : i1
+        scf.for %j = %c0 to %N step %c1 : i32 {
+        } loc("L")
+      } loc("O"))",
+       {{2, "Satisfied"}}},
+      {"AssumeBeforeNestedLoopLeavesOuterConditional",
+       "%N: i32, %K: i32",
+       R"(
+      scf.for %i = %c0 to %K step %c1 : i32 {
+        %a = arith.cmpi sge, %N, %c2 : i32
+        llvm.intr.assume %a : i1
+        scf.for %j = %c0 to %N step %c1 : i32 {
+        } loc("L")
+      } loc("O"))",
+       {{1, "Conditional{arg1 > 0}"}, {2, "Conditional{arg1 >= 2}"}},
+       "O"},
+  };
+  for (const TripCase &c : cases) {
+    SCOPED_TRACE(c.name);
+    parse(tripFunc(c));
+    for (auto [n, expected] : c.expect)
+      EXPECT_EQ(trip(c.loop, n), expected) << "n = " << n;
+  }
+}
+
+TEST_F(SymbolicBoundsTest, TripCountOverBudgetIsUnknownAndLeavesLaterQueries) {
+  // Eighteen summed arguments exhaust the normalization budget. The next
+  // query must start from a clean state, and a repeated one must agree.
+  std::string args, sum = "%a0";
+  for (int i = 0; i < 18; ++i)
+    args += (i ? ", %a" : "%a") + std::to_string(i) + ": i32";
+  std::string body = R"(
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      %c64 = arith.constant 64 : i32)";
+  for (int i = 1; i < 18; ++i) {
+    body += "\n      %s" + std::to_string(i) + " = arith.addi " + sum + ", %a" +
+            std::to_string(i) + " : i32";
+    sum = "%s" + std::to_string(i);
+  }
+  body +=
+      "\n      scf.for %i = %c0 to " + sum +
+      " step %c1 : i32 {\n      } loc(\"L\")"
+      "\n      scf.for %j = %c0 to %c64 step %c64 : i32 {\n      } loc(\"M\")";
+  parse("tt.func @f(" + args + ") {" + body + "\n      tt.return\n    }");
+  EXPECT_EQ(trip("L", 2), "Unknown");
+  EXPECT_EQ(trip("M", 2), "Refuted");
+  EXPECT_EQ(trip("L", 2), "Unknown");
+  EXPECT_EQ(trip("M", 1), "Satisfied");
+}
+
+TEST_F(SymbolicBoundsTest, TripCountOfAWideLoopIsUnknownNotACrash) {
+  // The solver runs before the query, so the bounds are not constants: wide
+  // constant bounds would trip the range analysis, not the prover.
+  parse(R"(
+    tt.func @f(%n: i32) {
+      %c0 = arith.constant 0 : i128
+      %c1 = arith.constant 1 : i128
+      %n128 = arith.extsi %n : i32 to i128
+      scf.for %iv = %c0 to %n128 step %c1 : i128 {
+      } loc("L")
+      tt.return
+    })");
+  EXPECT_EQ(trip("L", 1), "Unknown");
+  EXPECT_EQ(trip("L", 2), "Unknown");
 }
 
 } // namespace

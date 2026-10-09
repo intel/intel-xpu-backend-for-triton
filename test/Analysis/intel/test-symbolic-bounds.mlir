@@ -8,8 +8,8 @@
 // COM:
 // COM: `-verify-diagnostics=only-expected` ignores unannotated remarks, so a
 // COM: comparison with no `expected-remark` above it asserts nothing; only the
-// COM: annotated ones are pinned. There is no `scf.for` remark: the prover
-// COM: has no trip-count API.
+// COM: annotated ones are pinned. Every `scf.for` also gets a `trip>=1` and a
+// COM: `trip>=2` remark, the verdicts of `tripCountAtLeast`.
 
 // COM: The inductor reduction shape: `r + lane < rnumel` over
 // COM: a loop `0 to rnumel step 64`. Unprovable as written - the last
@@ -24,12 +24,40 @@ module {
     %c64 = arith.constant 64 : i32
     %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
     %ns = tt.splat %rnumel : i32 -> tensor<64xi32>
+    // expected-remark@+2 {{trip>=1: Conditional{arg1 > 0}}}
+    // expected-remark@+1 {{trip>=2: Conditional{arg1 >= 65}}}
     scf.for %r = %c0 to %rnumel step %c64 : i32 {
       %rs = tt.splat %r : i32 -> tensor<64xi32>
       %idx = arith.addi %rs, %lane : tensor<64xi32>
       // expected-remark@+1 {{verdict: Conditional{arg1 divisible by 64}}}
       %mask = arith.cmpi slt, %idx, %ns : tensor<64xi32>
       scf.yield
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A loop whose trip count the prover can pin exactly: `0 to 64 step 64`
+// COM: runs once, so "at least 1" holds and "at least 2" is refuted. A kernel
+// COM: argument as the upper bound is never refuted, even under an
+// COM: upper-bound assume: only a constant high end of `ub - lb` refutes.
+
+// CHECK-LABEL: tt.func @single_trip_loop
+module {
+  tt.func @single_trip_loop(%N: i32) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    // expected-remark@+2 {{trip>=1: Satisfied}}
+    // expected-remark@+1 {{trip>=2: Refuted}}
+    scf.for %i = %c0 to %c64 step %c64 : i32 {
+    }
+    %le = arith.cmpi sle, %N, %c64 : i32
+    llvm.intr.assume %le : i1
+    // expected-remark@+2 {{trip>=1: Conditional{arg0 > 0}}}
+    // expected-remark@+1 {{trip>=2: Conditional{arg0 >= 65}}}
+    scf.for %j = %c0 to %N step %c64 : i32 {
     }
     tt.return
   }
