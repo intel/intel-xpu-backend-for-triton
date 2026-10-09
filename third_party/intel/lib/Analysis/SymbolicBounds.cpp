@@ -37,10 +37,23 @@ bool Symbol::operator<(const Symbol &o) const {
   return placement_ < o.placement_;
 }
 
-/// The loop's step when it is a positive constant.
+/// The prover reasons in int64_t. An integer type wider than 64 bits cannot be
+/// represented there, so it is unsupported: the prover answers Unknown for it,
+/// reads no range of it and builds no fact from it. `index` counts as 64 bits.
+static bool isSupportedWidth(Type t) {
+  if (auto intTy = dyn_cast<IntegerType>(getElementTypeOrSelf(t)))
+    return intTy.getWidth() <= 64;
+  return true;
+}
+
+/// The loop's step when it is a constant that fits int64_t. A loop over an
+/// unsupported induction variable has none: the prover does not reason about
+/// it, which also keeps its wide bounds out of any comparison.
 static std::optional<int64_t> constantStep(scf::ForOp loop) {
+  if (!isSupportedWidth(loop.getInductionVar().getType()))
+    return std::nullopt;
   if (std::optional<APInt> step = loop.getConstantStep())
-    return step->getSExtValue();
+    return step->trySExtValue();
   return std::nullopt;
 }
 
@@ -470,6 +483,15 @@ Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
   Value result;
 
   for (const BoundCondition &cond : conds) {
+    // The guard is built in i64, and `materialize` has no way to decline, so a
+    // subject wider than 64 bits is a precondition violation. Checked before
+    // `guardFitsPlainI64`, which sizes its arithmetic from the subject's width.
+    assert(llvm::all_of(cond.expr.terms(),
+                        [](const auto &term) {
+                          Value v = term.first.value();
+                          return !v || isSupportedWidth(v.getType());
+                        }) &&
+           "condition subject wider than 64 bits");
     bool checked = !guardFitsPlainI64(cond.expr);
     GuardBuilder gb(builder, loc, checked);
 
@@ -645,12 +667,12 @@ void SymbolicBoundsProver::recordWrap(
 static std::optional<int64_t> getFoldedConstant(Value v) {
   APInt intVal;
   if (matchPattern(v, m_ConstantInt(&intVal)))
-    return intVal.getSExtValue();
+    return intVal.trySExtValue();
   DenseElementsAttr constAttr;
   if (matchPattern(v, m_Constant(&constAttr)) && constAttr.isSplat()) {
     auto attr = constAttr.getSplatValue<Attribute>();
     if (auto intAttr = dyn_cast_or_null<IntegerAttr>(attr))
-      return intAttr.getValue().getSExtValue();
+      return intAttr.getValue().trySExtValue();
   }
   return std::nullopt;
 }
@@ -787,6 +809,12 @@ AffineForm SymbolicBoundsProver::normalizeUncached(
   deepest = std::max(deepest, depth);
   if (depth > kMaxDepth) {
     // Budgets degrade the whole query to Unknown.
+    exhausted = true;
+    return opaque(v, placement);
+  }
+  if (!isSupportedWidth(v.getType())) {
+    // Outside the int64_t domain nothing about the value can be represented,
+    // so it is opaque and the query is Unknown, as for an exhausted budget.
     exhausted = true;
     return opaque(v, placement);
   }
@@ -1357,6 +1385,11 @@ void SymbolicBoundsProver::buildFactIndex() {
     auto cmp = assume.getCond().getDefiningOp<arith::CmpIOp>();
     if (!cmp)
       return;
+    // A fact about a value wider than 64 bits cannot be stated in int64_t. This
+    // runs for every assume under the root when the prover is constructed, so
+    // it must decline before any constant is read.
+    if (!isSupportedWidth(cmp.getLhs().getType()))
+      return;
     Value lhs = cmp.getLhs(), rhs = cmp.getRhs();
     arith::CmpIPredicate pred = cmp.getPredicate();
 
@@ -1530,6 +1563,8 @@ static Operation *owningFunction(Value v) {
 std::optional<std::pair<int64_t, int64_t>>
 SymbolicBoundsProver::rangeOf(Value v, QueryContext ctx,
                               SmallVectorImpl<Operation *> *assumes) const {
+  if (!isSupportedWidth(v.getType()))
+    return std::nullopt;
   std::optional<ConstantIntRanges> r = collectRange(solver, v);
   if (!r)
     return std::nullopt;
@@ -1652,6 +1687,8 @@ bool SymbolicBoundsProver::dischargeTier1(const Obligation &o, QueryContext ctx,
   if (!lo || !hi)
     return false;
   int64_t width = o.width ? o.width : 64;
+  if (width > 64)
+    return false; // the limits of such a type are not int64_t values
   return hi->second <= APInt::getSignedMaxValue(width).getSExtValue() &&
          lo->first >= APInt::getSignedMinValue(width).getSExtValue();
 }
@@ -1695,6 +1732,10 @@ void SymbolicBoundsProver::guardsForObligation(
     return;
   }
   int64_t width = o.width ? o.width : 64;
+  if (width > 64) {
+    cs.exhausted = true; // no int64_t guard can state this type's limits
+    return;
+  }
   push(hi, BoundGoal::AtMost, APInt::getSignedMaxValue(width).getSExtValue());
   push(lo, BoundGoal::AtLeast, APInt::getSignedMinValue(width).getSExtValue());
 }

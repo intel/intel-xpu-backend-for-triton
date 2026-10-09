@@ -13,6 +13,12 @@
 // neither is possible - degrading the query to `Unknown`. Nothing here assumes
 // absence of overflow silently.
 //
+// Coefficients, bounds and constants are `int64_t`, so integers wider than 64
+// bits are outside the domain: `prove` and `proveTrue` answer `Unknown`,
+// `normalize` returns an opaque symbol, no range is read and no assume is
+// turned into a fact for such a value, and `materialize` requires every
+// condition subject to be at most 64 bits wide. `index` counts as 64 bits.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef TRITON_INTEL_ANALYSIS_SYMBOLICBOUNDS_H
@@ -250,14 +256,16 @@ public:
   Symbol symbolFor(SymbolKind kind, Value v, int64_t divisor = 0,
                    AxisPlacement placement = {}) const;
 
-  /// Decides `lhs pred rhs` at `ctx`. Normalizes both sides and delegates to
-  /// the affine-form overload.
+  /// Decides `lhs pred rhs` at `ctx`: normalizes both sides, reduces the
+  /// predicate to a bound on their difference, and searches for the runtime
+  /// conditions under which it holds. `Unknown` for operands wider than 64
+  /// bits.
   BoundProof prove(arith::CmpIPredicate pred, Value lhs, Value rhs,
                    QueryContext ctx);
 
   /// Normalizes `v` at `ctx` and appends the wrap obligations of every
-  /// operation looked through. Never fails: an unsupported operation becomes
-  /// an `Opaque` symbol.
+  /// operation looked through. Never fails: an unsupported operation, or a
+  /// value wider than 64 bits, becomes an `Opaque` symbol.
   AffineForm normalize(Value v, QueryContext ctx,
                        SmallVectorImpl<Obligation> &obligations);
 
@@ -571,7 +579,9 @@ bool normalizeCondition(BoundCondition &cond);
 /// tensor-valued subject. "The guard cannot wrap" is a checked guarantee, not
 /// an assumption: a form that passes the static fit check uses plain i64
 /// arithmetic, and one that does not is paired with overflow predicates that
-/// make the guard false rather than wrong.
+/// make the guard false rather than wrong. Every symbol must be at most 64 bits
+/// wide (asserted): there is no way to decline, so that is the caller's
+/// precondition.
 Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
                   OpBuilder &builder);
 
