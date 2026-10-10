@@ -1,5 +1,0 @@
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/8241
-python/test/unit/language/test_core.py::test_enable_fp_fusion[True-False-True]
-python/test/unit/language/test_core.py::test_enable_fp_fusion[True-True-True]
-python/test/unit/language/test_core.py::test_force_disable_fp_fusion[True-False]
-python/test/unit/language/test_core.py::test_force_disable_fp_fusion[True-True]

@@ -37,7 +37,7 @@ class XPUOptions:
     cluster_dims: tuple = (1, 1, 1)
     warp_size: int = 32
     optimize_epilogue: bool = False
-    enable_fp_fusion: bool = True
+    enable_fp_fusion: bool = False
     launch_cooperative_grid: bool = False
     reduce_variable_liveness: bool = True
     in_loop_sink: bool = True
@@ -339,8 +339,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
         args["max_grf_mode"] = self.properties['max_grf_mode']
-        if "enable_fp_fusion" not in args:
-            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
+        args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
         if "in_loop_sink" not in args:
             args["in_loop_sink"] = knobs.intel.in_loop_sink
         return XPUOptions(**args)
