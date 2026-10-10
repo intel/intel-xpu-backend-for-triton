@@ -1642,7 +1642,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z32__spirv_GroupNonUniformLogicalOriib
+    // CHECK: @_Z33__spirv_GroupNonUniformLogicalXoriib
     %10 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i1, %arg5: i1):
       %48 = arith.addi %arg4, %arg5 : i1
@@ -1656,7 +1656,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       tt.reduce.return %48 : i1
     }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
 
-    // CHECK: @_Z32__spirv_GroupNonUniformLogicalOriib
+    // CHECK: @_Z33__spirv_GroupNonUniformLogicalAndiib
     %12 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i1, %arg5: i1):
       %48 = arith.maxsi %arg4, %arg5 : i1
@@ -1670,7 +1670,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       tt.reduce.return %48 : i1
     }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
 
-    // CHECK: @_Z33__spirv_GroupNonUniformLogicalAndiib
+    // CHECK: @_Z32__spirv_GroupNonUniformLogicalOriib
     %14 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i1, %arg5: i1):
       %48 = arith.minsi %arg4, %arg5 : i1
