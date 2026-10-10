@@ -2124,3 +2124,33 @@ def test_regression_8189_shifted_results(device):
     assert torch.all(out == 1)
     assert ": (tensor<1024xi32>, tensor<32x32xi32>) -> tensor<32x32xi32> {" in compiled.asm["ttir"], \
         "while results no longer shifted"
+
+
+def test_issue_8374(device):
+
+    @triton.jit
+    def masked_broadcast_load(in_ptr, out_ptr, XBLOCK: tl.constexpr):
+        xindex = tl.program_id(0) * XBLOCK + tl.arange(0, XBLOCK)[:]
+        x0 = xindex % 128  # column within a 128-wide row
+        x1 = xindex // 128  # row
+        mask = x0 >= 16  # varies WITHIN a 32/64/128-lane block
+        # address depends only on the row -> uniform (broadcast) within the block
+        v = tl.load(in_ptr + (2 + 3 * x1), mask, other=0.0)
+        tl.store(out_ptr + xindex, v.to(tl.float32), None)
+
+    rows, cols = 1536, 128
+    src = torch.arange(rows * 3, dtype=torch.float32, device=device).reshape(rows, 3).to(torch.float16)
+    ref = torch.zeros(rows, cols, dtype=torch.float32)
+    ref[:, 16:] = src.float().cpu()[:, 2:3]  # every lane right of col 16 = src[row, 2]
+
+    for xblock in (32, 64, 128, 256, 512):
+        out = torch.empty(rows, cols, dtype=torch.float32, device=device)
+        grid = ((rows * cols + xblock - 1) // xblock, )
+        masked_broadcast_load[grid](src, out, XBLOCK=xblock, num_warps=4)
+        torch.xpu.synchronize()
+        got = out.cpu()
+        md = (ref - got).abs().max().item()
+        # wrong lanes contain exactly `other` (0.0)
+        zeroed = ((got == 0) & (ref != 0)).sum().item()
+        message = f"XBLOCK={xblock:4d}: maxdiff={md:8.4g}  true-lanes-returning-other={zeroed}  {'BAD' if md > 1e-3 else 'OK'}"
+        assert not md > 1e-3, message

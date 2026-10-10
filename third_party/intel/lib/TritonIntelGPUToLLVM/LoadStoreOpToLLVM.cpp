@@ -190,6 +190,29 @@ struct LoadStoreConversionBase {
         .getMaskAlignment(mask);
   }
 
+  /// Returns true if `v` is proven uniform (the same value in every lane)
+  /// by `AxisInfo`, i.e. its constancy covers the full shape in every
+  /// dimension. Scalars are trivially uniform.
+  bool isUniform(Value v) const {
+    auto ty = dyn_cast<RankedTensorType>(v.getType());
+    if (!ty)
+      return true;
+    AxisInfo *info =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(v);
+    if (!info)
+      return false;
+    ArrayRef<int64_t> shape = ty.getShape();
+    for (unsigned d = 0, e = ty.getRank(); d < e; ++d)
+      if (info->getConstancy(d) < static_cast<unsigned>(shape[d]))
+        return false;
+    return true;
+  }
+
+  bool hasUniformAddrDivergentMask(Value ptr, Value mask) const {
+    return mask && isUniform(ptr) && !isUniform(mask);
+  }
+
   /// Compute vectorization factor for descriptor load/store gather fallback.
   /// Queries the descriptor's address-level AxisInfo (analogous to how
   /// getVectorSize queries the pointer operand's AxisInfo for LoadOp).
@@ -1748,25 +1771,6 @@ struct PrefetchOpConversion
     if (!memoryRowMajor)
       return failure();
 
-    // A tensor value is "uniform" if `AxisInfo` proves its constancy covers
-    // the full shape in every dimension (same semantics as the regular path
-    // at line 1729–1736). Scalars are trivially uniform.
-    auto isUniform = [&](Value v) {
-      auto ty = dyn_cast<RankedTensorType>(v.getType());
-      if (!ty)
-        return true;
-      AxisInfo *info =
-          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-              .getAxisInfo(v);
-      if (!info)
-        return false;
-      ArrayRef<int64_t> shape = ty.getShape();
-      for (unsigned d = 0, e = ty.getRank(); d < e; ++d)
-        if (info->getConstancy(d) < static_cast<unsigned>(shape[d]))
-          return false;
-      return true;
-    };
-
     // Collect operands that `AxisInfo` proves are uniform, descending
     // through `arith.andi` chains (as produced by `tt::getPredMask`).
     // Non-uniform leaves are dropped — safe for a prefetch hint.
@@ -2201,10 +2205,13 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                                          getNonTemporalFlag(op))};
       };
 
+      bool avoidPredicatedInstructions = hasUniformAddrDivergentMask(ptr, mask);
+
       Value ret;
       if (!pred)
         ret = createLoadWithAttrs()[0];
-      else if (canUsePredicatedInstructions(op)) {
+      else if (canUsePredicatedInstructions(op) &&
+               !avoidPredicatedInstructions) {
         auto cacheModifier = tritonToIntelCacheModifier(op);
         ret = TritonGEN::PredicatedLoadOp::create(
             rewriter, loc, retTy, addrElem, pred, other_, cacheModifier);
@@ -3819,6 +3826,9 @@ struct StoreOpConversion
       return b.bitcast(elem, valueElemTy);
     };
 
+    bool avoidPredicatedInstructions =
+        hasUniformAddrDivergentMask(ptr, op.getMask());
+
     // Dispatches a (possibly predicated) store of `value` to `addr`: an
     // unconditional store if `pred` is null, a `TritonGEN::PredicatedStoreOp`
     // if predicated instructions are available for `op`, or a branch-guarded
@@ -3827,7 +3837,8 @@ struct StoreOpConversion
                                    auto storeFn) {
       if (!pred)
         (void)storeFn();
-      else if (canUsePredicatedInstructions(op)) {
+      else if (canUsePredicatedInstructions(op) &&
+               !avoidPredicatedInstructions) {
         auto cacheModifier = tritonToIntelCacheModifier(op);
         TritonGEN::PredicatedStoreOp::create(rewriter, loc, addr, value, pred,
                                              cacheModifier);

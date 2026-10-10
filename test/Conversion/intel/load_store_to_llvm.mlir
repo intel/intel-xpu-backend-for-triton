@@ -150,6 +150,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: uniform_addr_divergent_mask
+  tt.func @uniform_addr_divergent_mask(%base: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #blocked>
+    %c16 = arith.constant dense<16> : tensor<32xi32, #blocked>
+    %mask = arith.cmpi sge, %range, %c16 : tensor<32xi32, #blocked>
+    %ptr = tt.splat %base : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>, #blocked>
+    // CHECK-NOT: triton_gen.predicated_load
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.load
+    // CHECK-NOT: triton_gen.predicated_load
+    %val = tt.load %ptr, %mask : tensor<32x!tt.ptr<f32>, #blocked>
+    // CHECK-NOT: triton_gen.predicated_store
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.store
+    // CHECK-NOT: triton_gen.predicated_store
+    tt.store %ptr, %val, %mask : tensor<32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: uniform_addr_uniform_mask
+  tt.func @uniform_addr_uniform_mask(%base: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %cond: i1) {
+    %mask = tt.splat %cond : i1 -> tensor<32xi1, #blocked>
+    %ptr = tt.splat %base : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>, #blocked>
+    // CHECK: triton_gen.predicated_load
+    %val = tt.load %ptr, %mask : tensor<32x!tt.ptr<f32>, #blocked>
+    // CHECK: triton_gen.predicated_store
+    tt.store %ptr, %val, %mask : tensor<32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: evict_first on the non-predicated scalar load path deliberately does NOT
 // COM: set the `nontemporal` flag on the underlying llvm.load. These loads are
 // COM: spatially coalesced across the subgroup; bypassing L1 defeats intra-line
