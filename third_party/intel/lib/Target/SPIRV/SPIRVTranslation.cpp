@@ -140,7 +140,8 @@ static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
   if (!isLTS) {
     AllowedExtensions.append(
         {SPIRV::ExtensionID::SPV_EXT_float8,
-         SPIRV::ExtensionID::SPV_EXT_long_vector,
+         // SPIRV::ExtensionID::SPV_EXT_long_vector,
+         SPIRV::ExtensionID::SPV_INTEL_vector_compute,
          SPIRV::ExtensionID::SPV_EXT_ocp_microscaling_types,
          SPIRV::ExtensionID::SPV_INTEL_16bit_atomics,
          SPIRV::ExtensionID::SPV_INTEL_bfloat16_arithmetic,
