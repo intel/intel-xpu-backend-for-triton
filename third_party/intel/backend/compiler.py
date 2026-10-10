@@ -107,6 +107,15 @@ class XPUOptions:
 # `accepts_default_grf`.
 REBUILD_SPILL_BYTES_PER_THREAD = 1024
 
+# IGC build flag for each explicit `grf_mode`. Only LTS passes these; elsewhere the mode is requested
+# through the kernel's SPV_INTEL_maximum_registers execution mode (see `make_llir`).
+GRF_MODE_BUILD_FLAGS = {
+    '128': '-cl-intel-128-GRF-per-thread',
+    '256': '-cl-intel-256-GRF-per-thread',
+    '512': '-cl-intel-512-GRF-per-thread',
+    'auto': '-cl-intel-enable-auto-large-GRF-mode',
+}
+
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
     r'total scratch space.*?(\d+)\s*bytes.*?max permitted PTSS\s*(\d+)\s*bytes'
@@ -718,6 +727,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         cls.optimize_llvm_mod(llvm_mod, options)
         intel.post_process_llir(llvm_mod)
+        # An explicit GRF mode is requested on the kernel itself (SPV_INTEL_maximum_registers); only LTS, whose
+        # translator does not enable that extension, keeps passing it as a build flag in `make_spv`.
+        if options.grf_mode in GRF_MODE_BUILD_FLAGS and not cls.is_lts(driver_version):
+            intel.set_maximum_registers(llvm_mod, options.grf_mode)
 
         # Get some metadata
         total_num_warps = src.get_int_attr("ttg.total-num-warps")
@@ -742,7 +755,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
-        spirv, name = intel.translate_to_spirv(src, cls.is_lts(driver_version))
+        is_lts = cls.is_lts(driver_version)
+        spirv, name = intel.translate_to_spirv(src, is_lts)
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
         # `metadata["max_grf_mode"]` is already populated from `options.__dict__`
@@ -751,18 +765,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Triton and the Gluon stage lists uniformly. Carried downstream to
         # `make_zebin`'s retry below and to `driver.c`'s JIT retry via the
         # `load_binary` metadata argument.
-        if options.grf_mode == '128':
-            metadata["build_flags"] += " -cl-intel-128-GRF-per-thread"
-        elif options.grf_mode == '256':
-            if options.num_warps > 32:
-                raise RuntimeError("grf_mode = 256 cannot be used with num_warps > 32")
-            metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-        elif options.grf_mode == '512':
-            if options.num_warps > 32:
-                raise RuntimeError("grf_mode = 512 cannot be used with num_warps > 32")
-            metadata["build_flags"] += " -cl-intel-512-GRF-per-thread"
-        elif options.grf_mode == 'auto':
-            metadata["build_flags"] += " -cl-intel-enable-auto-large-GRF-mode"
+        if options.grf_mode in ('256', '512') and options.num_warps > 32:
+            raise RuntimeError(f"grf_mode = {options.grf_mode} cannot be used with num_warps > 32")
+        if options.grf_mode in GRF_MODE_BUILD_FLAGS:
+            # Off LTS the mode is already carried by the SPIR-V execution mode set in `make_llir`.
+            if is_lts:
+                metadata["build_flags"] += f" {GRF_MODE_BUILD_FLAGS[options.grf_mode]}"
         elif options.grf_mode != 'default':
             raise RuntimeError(f"Unknown grf_mode: {options.grf_mode}")
 
@@ -804,7 +812,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                 retry_grf_mode_list = [""]  # default GRF mode by omitting the flag
                 retry_grf_mode_list.append(f"-cl-intel-{metadata['max_grf_mode']}-GRF-per-thread")
             else:
-                # Non-default GRF mode is already encoded in metadata["build_flags"] (including "auto").
+                # Non-default GRF mode (including "auto") is already encoded in the SPIR-V, or in
+                # metadata["build_flags"] on LTS.
                 retry_grf_mode_list = [""]
 
             base_build_flags = metadata["build_flags"]
