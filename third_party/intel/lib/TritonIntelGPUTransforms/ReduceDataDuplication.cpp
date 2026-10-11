@@ -21,48 +21,35 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
-/// Return where the shared-memory staging buffer that replaces \p cvtOp
-/// should be allocated, or an unset insertion point to allocate it at
-/// \p cvtOp.
+/// Return the op before which the shared-memory staging buffer that replaces
+/// \p cvtOp is allocated, or nullptr to allocate it at \p cvtOp.
 ///
-/// A conversion can sit in a loop while its source is defined outside it (an
-/// earlier pass chose to keep the conversion in the loop, e.g. to limit the
-/// dot-operand's register live range; only the local_load needs to stay
-/// there). When that happens, the store into shared memory is loop
-/// invariant. Allocating right before the op of the source's block that
-/// contains \p cvtOp (e.g. the loop) performs the store once, without relying
-/// on TritonGPUReorderInstructions to hoist the allocation later. Allocating
-/// there rather than right after the source keeps the buffer's live range
-/// short, so buffers of sibling loops can still share an offset.
-///
-/// A block-argument source (e.g. a function argument, or an outer loop's
-/// iter_arg) is left at \p cvtOp, as TritonGPUReorderInstructions does.
-OpBuilder::InsertPoint getLoopInvariantAllocPoint(ConvertLayoutOp cvtOp) {
+/// When \p cvtOp sits in a loop but its source is defined outside it, the
+/// store into shared memory is loop invariant. It is then allocated before the
+/// op of the source's block that contains \p cvtOp (e.g. the loop), so it runs
+/// once without relying on TritonGPUReorderInstructions, whose hoist is blocked
+/// by prefetches (#8283). Block-argument sources stay at \p cvtOp, as in
+/// TritonGPUReorderInstructions.
+Operation *getLoopInvariantAllocAnchor(ConvertLayoutOp cvtOp) {
   auto loop = cvtOp->getParentOfType<LoopLikeOpInterface>();
   if (!loop)
-    return {};
-  Value src = cvtOp.getSrc();
-  // Rejects values defined in the loop, including its own region arguments.
-  if (!loop.isDefinedOutsideOfLoop(src))
-    return {};
-  Operation *srcDef = src.getDefiningOp();
-  if (!srcDef)
-    return {};
+    return nullptr;
+  Operation *srcDef = cvtOp.getSrc().getDefiningOp();
+  if (!srcDef || loop->isAncestor(srcDef))
+    return nullptr;
   // Staging a scalar-derived value for the whole loop costs shared memory for
   // no benefit; TritonGPUReorderInstructions skips these for the same reason.
   if (isa<arith::ConstantOp, triton::SplatOp>(srcDef))
-    return {};
-  Block *block = srcDef->getBlock();
-  Operation *ancestor = block->findAncestorOpInBlock(*cvtOp);
-  if (!ancestor)
-    return {};
-  OpBuilder::InsertPoint ip(block, ancestor->getIterator());
+    return nullptr;
+  Operation *anchor = srcDef->getBlock()->findAncestorOpInBlock(*cvtOp);
+  if (!anchor)
+    return nullptr;
   // Keep the store after ops that may write memory, e.g. waits that complete
   // earlier asynchronous reads of shared memory, as
   // TritonGPUReorderInstructions does when hoisting allocations.
-  if (triton::gpu::intel::crossesMemoryWrite(ip, cvtOp))
-    return {};
-  return ip;
+  if (intel::crossesMemoryWrite(anchor, cvtOp))
+    return nullptr;
+  return anchor;
 }
 
 class TritonIntelGPUReduceDataDuplicationPass
@@ -119,9 +106,8 @@ public:
               mod.getContext(), dstDotOp, srcType.getShape(), sharedOrder,
               triton::gpu::getCGALayout(srcEncoding), srcType.getElementType()),
           sharedMemorySpace);
-      if (OpBuilder::InsertPoint allocPoint = getLoopInvariantAllocPoint(cvtOp);
-          allocPoint.isSet())
-        builder.restoreInsertionPoint(allocPoint);
+      if (Operation *anchor = getLoopInvariantAllocAnchor(cvtOp))
+        builder.setInsertionPoint(anchor);
       auto tmp = triton::gpu::LocalAllocOp::create(builder, cvtOp.getLoc(),
                                                    tmpType, cvtOp.getSrc());
       builder.setInsertionPoint(cvtOp);

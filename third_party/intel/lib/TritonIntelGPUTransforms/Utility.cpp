@@ -704,24 +704,21 @@ bool mayWriteMemory(Operation *op, bool ignoreSharedMemory) {
     SideEffects::Resource *resource = e.getResource();
     if (ignoreSharedMemory && isa<SharedMemory>(resource))
       return false;
-    // Resource IDs are compared directly because `isa<>` on resources is
-    // tree-based.
-    return resource->getResourceID() != L2Cache::getResourceID();
+    return !isa<L2Cache>(resource);
   });
 }
 
-bool crossesMemoryWrite(OpBuilder::InsertPoint ip, Operation *end) {
-  Block *block = ip.getBlock();
-  Operation *ancestor = block->findAncestorOpInBlock(*end);
+bool crossesMemoryWrite(Operation *first, Operation *end) {
+  Operation *ancestor = first->getBlock()->findAncestorOpInBlock(*end);
   if (!ancestor)
     return true;
-  for (Operation &op : llvm::make_range(ip.getPoint(), block->end())) {
-    if (mayWriteMemory(&op))
+  for (Operation *op = first; op; op = op->getNextNode()) {
+    if (mayWriteMemory(op))
       return true;
-    if (&op == ancestor)
+    if (op == ancestor)
       return false;
   }
-  assert(false && "insertion point does not dominate the end op");
+  assert(false && "first op does not dominate the end op");
   return true;
 }
 

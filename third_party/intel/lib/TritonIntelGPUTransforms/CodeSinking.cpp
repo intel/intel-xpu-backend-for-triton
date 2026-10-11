@@ -140,10 +140,8 @@ private:
         // No aliasing write on the path op -> sinkPoint. `regionOp` is one of
         // the intervening siblings and getEffectsRecursively recurses into its
         // regions, so an in-region store is detected here.
-        if (triton::gpu::intel::crossesMemoryWrite(
-                OpBuilder::InsertPoint(siblingOp.getBlock(),
-                                       std::next(siblingOp.getIterator())),
-                sinkPoint)) {
+        if (triton::gpu::intel::crossesMemoryWrite(siblingOp.getNextNode(),
+                                                   sinkPoint)) {
           LDBG("skip (intervening write): " << siblingOp);
           continue;
         }
