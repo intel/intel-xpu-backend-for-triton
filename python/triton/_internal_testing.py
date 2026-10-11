@@ -376,6 +376,14 @@ def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_list
     if env is not None:
         os.environ.update(env)
 
+    # By defaul AMD runtime calls abort on device assert.
+    # Following forces hip rutime to skip abort call.
+    if is_hip():
+        import resource
+
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        os.environ["HIP_SKIP_ABORT_ON_GPU_ERROR"] = "1"
+
     # Capture driver/runtime writes to stderr that bypass Python's file objects.
     with open(stderr_file, "w+b") as tmp_stderr:
         saved_stderr_fd = os.dup(2)

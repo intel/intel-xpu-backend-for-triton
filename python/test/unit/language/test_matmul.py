@@ -424,9 +424,6 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device)
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
         if (BLOCK_M == 256 or BLOCK_N == 256) and BLOCK_K == 256:
             pytest.skip("Config requires too much shared memory")
-        # TODO: Re-enable once scaled-upcast layout selection preserves packed groups.
-        if is_hip_cdna4() and nonKDim == 0 and NUM_STAGES == 3 and (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 16, 64):
-            pytest.skip("Incorrect scaled-upcast layout selection")
 
     if not is_rubin() and BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
@@ -1206,6 +1203,92 @@ def test_dot_scaled_unscaled_lhs_fp4_rhs(device):
 
 
 @triton.jit
+def batched_fp4_k_pack_matmul(A, A_SCALE, B, B_SCALE, C, BATCH: tl.constexpr, M: tl.constexpr, N: tl.constexpr,
+                              K: tl.constexpr, LHS_K_PACK: tl.constexpr, RHS_K_PACK: tl.constexpr):
+    A_ROWS: tl.constexpr = M if LHS_K_PACK else M // 2
+    A_COLS: tl.constexpr = K // 2 if LHS_K_PACK else K
+    B_ROWS: tl.constexpr = K // 2 if RHS_K_PACK else K
+    B_COLS: tl.constexpr = N if RHS_K_PACK else N // 2
+    K_SCALE: tl.constexpr = K // 32
+    offs_batch = tl.arange(0, BATCH)[:, None, None]
+    a = tl.load(A + offs_batch * A_ROWS * A_COLS + tl.arange(0, A_ROWS)[None, :, None] * A_COLS +
+                tl.arange(0, A_COLS)[None, None, :])
+    b = tl.load(B + offs_batch * B_ROWS * B_COLS + tl.arange(0, B_ROWS)[None, :, None] * B_COLS +
+                tl.arange(0, B_COLS)[None, None, :])
+    a_scale = tl.load(A_SCALE + offs_batch * M * K_SCALE + tl.arange(0, M)[None, :, None] * K_SCALE +
+                      tl.arange(0, K_SCALE)[None, None, :])
+    b_scale = tl.load(B_SCALE + offs_batch * N * K_SCALE + tl.arange(0, N)[None, :, None] * K_SCALE +
+                      tl.arange(0, K_SCALE)[None, None, :])
+    c = tl.dot_scaled(a, a_scale, "e2m1", b, b_scale, "e2m1", lhs_k_pack=LHS_K_PACK, rhs_k_pack=RHS_K_PACK)
+    tl.store(C + offs_batch * M * N + tl.arange(0, M)[None, :, None] * N + tl.arange(0, N)[None, None, :], c)
+
+
+@pytest.mark.parametrize("lhs_k_pack", [True, False])
+@pytest.mark.parametrize("rhs_k_pack", [True, False])
+def test_dot_scaled_batched_fp4_k_pack(lhs_k_pack, rhs_k_pack, device):
+    if not is_xpu():
+        pytest.skip("Only tested on XPU")
+
+    BATCH, M, N, K = 2, 128, 128, 64
+    torch.manual_seed(42)
+    a_mxfp4 = MXFP4Tensor(size=(BATCH, M, K), device=device).random()
+    b_mxfp4 = MXFP4Tensor(size=(BATCH, K, N), device=device).random()
+    a = a_mxfp4.to_packed_tensor(dim=2 if lhs_k_pack else 1)
+    b = b_mxfp4.to_packed_tensor(dim=1 if rhs_k_pack else 2)
+    a_scale = MXScaleTensor(size=(BATCH, M, K // 32), device=device).random(low=0.5, high=2.0)
+    b_scale = MXScaleTensor(size=(BATCH, N, K // 32), device=device).random(low=0.5, high=2.0)
+    output = torch.empty((BATCH, M, N), dtype=torch.float32, device=device)
+
+    batched_fp4_k_pack_matmul[(1, )](a, a_scale.data, b, b_scale.data, output, BATCH, M, N, K, LHS_K_PACK=lhs_k_pack,
+                                     RHS_K_PACK=rhs_k_pack)
+    if is_compile_warmup():
+        return
+
+    a_ref = a_mxfp4.to(torch.float32) * a_scale.to(torch.float32).repeat_interleave(32, dim=2)
+    b_ref = b_mxfp4.to(torch.float32) * b_scale.to(torch.float32).repeat_interleave(32, dim=2).transpose(1, 2)
+    ref_out = torch.bmm(a_ref, b_ref)
+    torch.testing.assert_close(output, ref_out, atol=1e-3, rtol=1e-3)
+
+
+@triton.jit
+def batched_rhs_scaled_fp4_matmul(A, B, B_SCALE, C, BATCH: tl.constexpr, M: tl.constexpr, N: tl.constexpr,
+                                  K: tl.constexpr, RHS_K_PACK: tl.constexpr):
+    B_ROWS: tl.constexpr = K // 2 if RHS_K_PACK else K
+    B_COLS: tl.constexpr = N if RHS_K_PACK else N // 2
+    K_SCALE: tl.constexpr = K // 32
+    offs_batch = tl.arange(0, BATCH)[:, None, None]
+    a = tl.load(A + offs_batch * M * K + tl.arange(0, M)[None, :, None] * K + tl.arange(0, K)[None, None, :])
+    b = tl.load(B + offs_batch * B_ROWS * B_COLS + tl.arange(0, B_ROWS)[None, :, None] * B_COLS +
+                tl.arange(0, B_COLS)[None, None, :])
+    b_scale = tl.load(B_SCALE + offs_batch * N * K_SCALE + tl.arange(0, N)[None, :, None] * K_SCALE +
+                      tl.arange(0, K_SCALE)[None, None, :])
+    c = tl.dot_scaled(a, None, "bf16", b, b_scale, "e2m1", rhs_k_pack=RHS_K_PACK)
+    tl.store(C + offs_batch * M * N + tl.arange(0, M)[None, :, None] * N + tl.arange(0, N)[None, None, :], c)
+
+
+@pytest.mark.parametrize("rhs_k_pack", [True, False])
+def test_dot_scaled_batched_unscaled_lhs_fp4_rhs(rhs_k_pack, device):
+    if not is_xpu():
+        pytest.skip("Only tested on XPU")
+
+    BATCH, M, N, K = 2, 128, 128, 64
+    torch.manual_seed(42)
+    a = torch.randn((BATCH, M, K), dtype=torch.bfloat16, device=device)
+    b_mxfp4 = MXFP4Tensor(size=(BATCH, K, N), device=device).random()
+    b = b_mxfp4.to_packed_tensor(dim=1 if rhs_k_pack else 2)
+    b_scale = MXScaleTensor(size=(BATCH, N, K // 32), device=device).random(low=0.5, high=2.0)
+    output = torch.empty((BATCH, M, N), dtype=torch.float32, device=device)
+
+    batched_rhs_scaled_fp4_matmul[(1, )](a, b, b_scale.data, output, BATCH, M, N, K, RHS_K_PACK=rhs_k_pack)
+    if is_compile_warmup():
+        return
+
+    b_ref = b_mxfp4.to(torch.float32) * b_scale.to(torch.float32).repeat_interleave(32, dim=2).transpose(1, 2)
+    ref_out = torch.bmm(a.float(), b_ref)
+    torch.testing.assert_close(output, ref_out, atol=1e-3, rtol=1e-3)
+
+
+@triton.jit
 def mxfp8_mxfp4_matmul(  #
         a_ptr, b_ptr, output_ptr,  #
         a_scale, b_scale,  #
@@ -1306,11 +1389,6 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
             pytest.skip("Float4 without scale is tested in test_block_scale_fp4")
         if (BLOCK_M == 256 or BLOCK_N == 256) and BLOCK_K == 256:
             pytest.skip("Config requires too much shared memory")
-        # TODO: Re-enable once the gfx950 FP8 x FP4 NaN failure seen with ROCm 10.1 is fixed.
-        if (is_hip_cdna4() and (nonKDim, CONST_SCALE) in ((0, False), (16, True))
-                and (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 64, 128) and NUM_STAGES == 3 and A_DATA_TYPE == "float8e5"
-                and B_DATA_TYPE == "float4" and WITH_A_SCALE and WITH_B_SCALE and not PACK_B_ALONG_K and not B_TRANS):
-            pytest.skip("NaNs in gfx950 FP8 x FP4 scaled matmul")
     elif is_xpu():
         if not is_xpu_cri() and not (WITH_A_SCALE and WITH_B_SCALE):
             pytest.xfail("None scale has not been tested on XPU backend")

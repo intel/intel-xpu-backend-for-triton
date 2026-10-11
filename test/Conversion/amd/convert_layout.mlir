@@ -285,7 +285,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     // CHECK: llvm.zext %{{.*}} : i1 to i8
     // CHECK: llvm.store
     // CHECK: llvm.load
-    // CHECK: llvm.icmp "ne" %{{.*}}, %{{.*}} : i8
+    // CHECK: llvm.trunc %{{.*}} overflow<nuw> : i8 to i1
     %0 = ttg.convert_layout %arg : tensor<128xi1, #src> -> tensor<128xi1, #dst>
     tt.return %0 : tensor<128xi1, #dst>
   }

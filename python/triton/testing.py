@@ -663,6 +663,17 @@ def perf_report(benchmarks):
     return wrapper
 
 
+# HIP reports the DRAM clock rather than the effective memory data rate.
+_AMD_MEMORY_TRANSFERS_PER_CLOCK = {
+    "gfx1100": 16,  # GDDR6
+    "gfx1101": 16,  # GDDR6
+    "gfx1102": 16,  # GDDR6
+    "gfx1151": 8,  # LPDDR5X
+    "gfx1200": 16,  # GDDR6
+    "gfx1201": 16,  # GDDR6
+}
+
+
 def get_dram_gbps(device=None):
     ''' return DRAM bandwidth in GB/s '''
 
@@ -673,9 +684,14 @@ def get_dram_gbps(device=None):
     get_bandwidth = getattr(utils, "get_bandwidth", None)
     if get_bandwidth is not None and (bw_gbps := get_bandwidth(device)) is not None:
         return bw_gbps
-    mem_clock_khz = utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
-    bus_width = utils.get_device_properties(device)["mem_bus_width"]
-    bw_gbps = mem_clock_khz * bus_width * 2 / 1e6 / 8  # In GB/s
+    properties = utils.get_device_properties(device)
+    mem_clock_khz = properties["mem_clock_rate"]  # in kHz
+    bus_width = properties["mem_bus_width"]
+    target = driver.active.get_current_target()
+    transfers_per_clock = 2
+    if target.backend == "hip":
+        transfers_per_clock = _AMD_MEMORY_TRANSFERS_PER_CLOCK.get(target.arch, transfers_per_clock)
+    bw_gbps = mem_clock_khz * bus_width * transfers_per_clock / 1e6 / 8  # In GB/s
     return bw_gbps
 
 
@@ -772,7 +788,7 @@ def get_max_simd_tflops(dtype, clock_rate, device=None):
         device = torch.cuda.current_device()
 
     num_subcores = driver.active.utils.get_device_properties(device)["multiprocessor_count"] * 4
-    capability = torch.cuda.get_device_capability()
+    capability = torch.cuda.get_device_capability(device)
     if capability[0] < 8:
         if dtype == torch.float32:
             ops_per_sub_core = 32  # 2*16

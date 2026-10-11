@@ -17,6 +17,7 @@ from triton_kernels_benchmark import (
     flex_attention_benchmark_causal_mask,
     flex_attention_benchmark_custom_masks,
     prefix_sums,
+    launch_overhead_benchmark,
 )
 
 
@@ -230,6 +231,28 @@ CONFIGS = [
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.PREFIX_SUMS},
         description="Prefix Sums kernel benchmark",
         report_name="prefix_sums",
+    ),
+    BenchmarkConfig(
+        key="launch-overhead",
+        get_benchmark=launch_overhead_benchmark.get_benchmark,
+        run_opts={},
+        categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.RUNTIME},
+        description="Kernel launch overhead by argument count and type, at the JIT and launcher level",
+        report_name="launch-overhead-sweep",
+        long_report_group="overhead",
+        long_report_param_cols="arg_type,num_args,level",
+        long_report_params=launch_overhead_benchmark.report_params,
+    ),
+    BenchmarkConfig(
+        key="launch-overhead-cold",
+        get_benchmark=launch_overhead_benchmark.get_first_launch_benchmark,
+        run_opts={},
+        categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.RUNTIME},
+        description="First kernel launches in a fresh process, with empty and populated compilation caches",
+        report_name="launch-overhead-cold",
+        long_report_group="overhead",
+        long_report_param_cols="cache,phase",
+        long_report_params=launch_overhead_benchmark.report_params,
     ),
     BenchmarkConfig(
         key="vllm-unified-attention",

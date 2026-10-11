@@ -110,13 +110,22 @@ bool isDivisible(Value value, int64_t divisor) {
   }
 
   // Case 4: Value is defined by arith::ExtSIOp, arith::TruncIOp,
-  // tt::AddPtrOp or arith::AddIOp operation.
+  // tt::AddPtrOp, arith::AddIOp, arith::SubIOp, arith::MinSIOp or
+  // arith::MaxSIOp operation. The result of min/max is one of its operands.
   if (auto *op = value.getDefiningOp()) {
-    if (isa<arith::ExtSIOp, arith::TruncIOp, tt::AddPtrOp, arith::AddIOp>(op)) {
+    if (isa<arith::ExtSIOp, arith::TruncIOp, tt::AddPtrOp, arith::AddIOp,
+            arith::SubIOp, arith::MinSIOp, arith::MaxSIOp>(op)) {
       return llvm::all_of(op->getOperands(), [&](Value operand) {
         return isDivisible(operand, divisor);
       });
     }
+  }
+
+  // Case 5: Value is defined by an arith.select operation. The condition is
+  // irrelevant as long as both candidate values are divisible.
+  if (auto selectOp = value.getDefiningOp<arith::SelectOp>()) {
+    return isDivisible(selectOp.getTrueValue(), divisor) &&
+           isDivisible(selectOp.getFalseValue(), divisor);
   }
 
   return false;
@@ -293,9 +302,8 @@ LogicalResult getConvertBackwardSlice(
   DenseSet<std::pair<OpOperand *, Attribute>> seen;
   SmallVector<std::pair<OpOperand *, Attribute>> queue;
 
-  std::optional<bool> enableForLoopSupport =
-      mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
-          "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP"));
+  bool enableForLoopSupport = mlir::triton::tools::getBoolEnv(
+      "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP");
 
   auto enqueue = [&](OpOperand &operand, Attribute encoding) {
     auto x = std::make_pair(&operand, encoding);
@@ -398,8 +406,17 @@ LogicalResult getConvertBackwardSlice(
         enqueue(definingOp->getOpOperand(0), encoding);
         continue;
       }
-      if (canUseResultEncoding(definingOp, encoding))
+      if (auto fixedOperands = canUseResultEncoding(definingOp, encoding)) {
+        // Another path through the slice must preserve these operand layouts.
+        for (OpOperand *operand : *fixedOperands) {
+          Value src = operand->get();
+          auto srcEncoding =
+              cast<RankedTensorType>(src.getType()).getEncoding();
+          if (failed(updateLayout(src, srcEncoding)))
+            return failure();
+        }
         continue;
+      }
       if (stopPropagation && stopPropagation(definingOp))
         continue;
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {

@@ -268,9 +268,11 @@ entry installs SGLang itself, because `run_sglang_tests` calls
 `install-sglang.sh` - there is no install step in the workflow as there is for
 vLLM.
 
-`install_sgl_kernel_xpu` adds one `--install-sgl-kernel-xpu` step before the
-suites and is only set for BMG. It is idempotent across matrix entries, but the
-pip cache key is per suite, so the first entry on a fresh runner pays the build.
+`install_sgl_kernel_xpu` is only set for BMG. The setup job builds the
+`sgl-kernel-xpu` wheel once and uploads it, and each matrix entry installs it
+with `pip install --no-deps`. The wheel is cached in `/cache`, keyed by the
+`sgl-kernel-xpu` pin, AOT target, PyTorch cache key and `icpx` version, so it is
+only rebuilt when one of them changes.
 
 ## Usage
 

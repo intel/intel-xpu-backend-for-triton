@@ -85,6 +85,7 @@ jobs:
           pip install -r python/requirements.txt
 
       - name: Setup PyTorch
+        id: setup-pytorch
         uses: ./.github/actions/setup-pytorch
         with:
           lts: ${{ inputs.runner_label == 'lts' }}
@@ -117,6 +118,44 @@ jobs:
       - name: Install test dependencies
         run: |
           pip install -r scripts/requirements-test.txt
+
+      - name: Identify sgl-kernel-xpu cache key
+        if: ${{ inputs.install_sgl_kernel_xpu }}
+        run: |
+          SGL_KERNEL_XPU_KEY=$(echo "$(<scripts/sglang/sgl-kernel-xpu-pin.txt)" "${DPCPP_SYCL_TARGET:-bmg}" \
+            "${{ steps.setup-pytorch.outputs.pytorch_cache_key }}" "$(icpx --version | sed -n 1p)" | sha256sum - | cut -d\  -f1)
+          echo "SGL_KERNEL_XPU_KEY=sgl-kernel-xpu-$SGL_KERNEL_XPU_KEY" | tee -a "$GITHUB_ENV"
+
+      - name: Load sgl-kernel-xpu wheel cache
+        if: ${{ inputs.install_sgl_kernel_xpu }}
+        id: sgl-kernel-xpu-cache
+        uses: ./.github/actions/load
+        with:
+          path: sgl-kernel-xpu-wheel
+          key: ${{ env.SGL_KERNEL_XPU_KEY }}
+          symlink: "false"
+
+      - name: Build sgl-kernel-xpu wheel
+        if: ${{ inputs.install_sgl_kernel_xpu && steps.sgl-kernel-xpu-cache.outputs.status == 'miss' }}
+        run: |
+          scripts/sglang/install-sgl-kernel-xpu.sh --force-reinstall --skip-install
+          mkdir -p sgl-kernel-xpu-wheel
+          cp sgl-kernel-xpu/dist/*.whl sgl-kernel-xpu-wheel/
+
+      - name: Save sgl-kernel-xpu wheel cache
+        if: ${{ inputs.install_sgl_kernel_xpu && steps.sgl-kernel-xpu-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.sgl-kernel-xpu-cache.outputs.path }}
+          dest: ${{ steps.sgl-kernel-xpu-cache.outputs.dest }}
+
+      - name: Upload sgl-kernel-xpu wheel
+        if: ${{ inputs.install_sgl_kernel_xpu }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: sgl-kernel-xpu-wheel
+          path: sgl-kernel-xpu-wheel/*.whl
+          if-no-files-found: error
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
@@ -217,10 +256,18 @@ jobs:
         run: |
           pip install -r scripts/requirements-test.txt
 
+      - name: Download sgl-kernel-xpu wheel
+        if: ${{ inputs.install_sgl_kernel_xpu }}
+        uses: actions/download-artifact@v8
+        with:
+          name: sgl-kernel-xpu-wheel
+          path: sgl-kernel-xpu-wheel/
+
       - name: Install sgl-kernel-xpu
         if: ${{ inputs.install_sgl_kernel_xpu }}
         run: |
-          ${{ needs.setup.outputs.test-triton-command }} --install-sgl-kernel-xpu
+          pip install --no-deps sgl-kernel-xpu-wheel/*.whl
+          python -c 'import sgl_kernel; print(sgl_kernel.__file__)'
 
       - name: Set test-triton command line
         run: |
