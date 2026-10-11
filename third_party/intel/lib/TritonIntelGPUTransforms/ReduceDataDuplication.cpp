@@ -21,15 +21,11 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
-/// Return the op before which the shared-memory staging buffer that replaces
-/// \p cvtOp is allocated, or nullptr to allocate it at \p cvtOp.
-///
-/// When \p cvtOp sits in a loop but its source is defined outside it, the
-/// store into shared memory is loop invariant. It is then allocated before the
-/// op of the source's block that contains \p cvtOp (e.g. the loop), so it runs
-/// once without relying on TritonGPUReorderInstructions, whose hoist is blocked
-/// by prefetches (#8283). Block-argument sources stay at \p cvtOp, as in
-/// TritonGPUReorderInstructions.
+/// Return the op before which the staging buffer replacing \p cvtOp is
+/// allocated, or nullptr to allocate it at \p cvtOp. If \p cvtOp is in a loop
+/// and its source is defined outside it, allocating before the loop runs the
+/// store once. TritonGPUReorderInstructions cannot hoist it past prefetches
+/// (#8283).
 Operation *getLoopInvariantAllocAnchor(ConvertLayoutOp cvtOp) {
   auto loop = cvtOp->getParentOfType<LoopLikeOpInterface>();
   if (!loop)
@@ -44,9 +40,8 @@ Operation *getLoopInvariantAllocAnchor(ConvertLayoutOp cvtOp) {
   Operation *anchor = srcDef->getBlock()->findAncestorOpInBlock(*cvtOp);
   if (!anchor)
     return nullptr;
-  // Do not hoist the store out of an anchor that may write memory (prefetches
-  // excepted): any of its body can run before `cvtOp` on some iteration.
-  // TritonGPUReorderInstructions applies the same check when hoisting.
+  // The anchor's body can run before `cvtOp` on some iteration, so it must not
+  // write memory (prefetches excepted).
   if (intel::mayWriteMemory(anchor))
     return nullptr;
   return anchor;

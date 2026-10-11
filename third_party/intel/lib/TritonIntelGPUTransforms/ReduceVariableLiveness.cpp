@@ -97,11 +97,9 @@ bool isLoadCandidate(tt::DescriptorLoadOp loadOp, Type expectedElementType,
 
 /// Return true if any operation strictly between \p start and \p end may write
 /// memory that a global load reads. \p start and \p end must be in the same
-/// block, with \p start before \p end.
-///
-/// A write to shared memory (`ttg.local_alloc`/`ttg.local_store`, which the SLM
-/// round trip of a `tt.trans` is lowered through) cannot change what a global
-/// load reads, so it does not block moving such a load past it.
+/// block, with \p start before \p end. Shared-memory writes (e.g. the SLM
+/// round trip of a `tt.trans`) cannot change what a global load reads, so they
+/// are skipped.
 bool crossesAliasingWrite(Operation *start, Operation *end) {
   assert(start->getBlock() == end->getBlock() && "expecting the same block");
   for (Operation *op = start->getNextNode(); op && op != end;

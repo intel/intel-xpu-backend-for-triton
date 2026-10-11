@@ -119,16 +119,13 @@ calculateDPASRepetitions(ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx,
                          unsigned opsPerChannel);
 
 // Returns true if `op` or an op nested in it may write memory. Unknown effects
-// count as writes (upstream TritonGPUReorderInstructions treats them as none).
-// L2Cache writes are ignored: prefetches declare them only to survive CSE/DCE.
-// `ignoreSharedMemory` also ignores shared-memory writes.
+// count as writes (upstream treats them as none). L2Cache writes are ignored:
+// prefetches declare them only to survive CSE/DCE.
 bool mayWriteMemory(Operation *op, bool ignoreSharedMemory = false);
 
-// Returns true if an op from `first` up to and including the ancestor of `end`
-// in the block of `first` may write memory, or if there is no such ancestor.
-// `first` must dominate `end`. The ancestor (e.g. the loop containing `end`,
-// or `end` itself) is checked as a whole: any of its body can run between the
-// two on some iteration.
+// Returns true if an op from `first` (dominating `end`) up to and including the
+// ancestor of `end` in its block may write memory, or if there is no ancestor.
+// The ancestor is checked whole, as any of its body may run in between.
 bool crossesMemoryWrite(Operation *first, Operation *end);
 
 } // namespace mlir::triton::gpu::intel
