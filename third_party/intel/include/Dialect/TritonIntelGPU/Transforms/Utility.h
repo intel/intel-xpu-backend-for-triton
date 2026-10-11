@@ -124,11 +124,11 @@ calculateDPASRepetitions(ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx,
 // `ignoreSharedMemory` also ignores shared-memory writes.
 bool mayWriteMemory(Operation *op, bool ignoreSharedMemory = false);
 
-// Returns true if an op that may write memory executes between `first`
-// (included) and `end`, where `first` dominates `end`. Ops are scanned from
-// `first` up to and including the ancestor of `end` in the block of `first`.
-// That ancestor (e.g. the loop containing `end`) is checked as a whole, since
-// any of its body can run between the two on some iteration.
+// Returns true if an op from `first` up to and including the ancestor of `end`
+// in the block of `first` may write memory, or if there is no such ancestor.
+// `first` must dominate `end`. The ancestor (e.g. the loop containing `end`,
+// or `end` itself) is checked as a whole: any of its body can run between the
+// two on some iteration.
 bool crossesMemoryWrite(Operation *first, Operation *end);
 
 } // namespace mlir::triton::gpu::intel

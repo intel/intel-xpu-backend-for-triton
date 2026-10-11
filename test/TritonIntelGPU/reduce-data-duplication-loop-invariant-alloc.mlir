@@ -80,6 +80,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.tar
 
 // -----
 
+// COM: Control: the source is defined in the loop and the conversion is nested
+// COM: deeper, in an scf.if. The allocation stays at the conversion, not before
+// COM: the scf.if.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [16, 1], order = [1, 0]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate} {
+  // RDD-LABEL: @loop_variant_cvt_src_in_if
+  // RDD-NOT:   ttg.local_alloc
+  // RDD:       scf.for
+  // RDD:       %[[DO:.*]] = tt.load
+  // RDD-NEXT:  scf.if
+  // RDD-NEXT:  %[[ALLOC:.*]] = ttg.local_alloc %[[DO]] :
+  // RDD-NEXT:  ttg.local_load %[[ALLOC]] :
+  tt.func public @loop_variant_cvt_src_in_if(%do_ptr: tensor<64x128x!tt.ptr<f16>, #blocked>, %vT: tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, %n: i32, %cond: i1) -> tensor<64x64xf32, #mma> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %res = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %cst) -> (tensor<64x64xf32, #mma>) : i32 {
+      %do = tt.load %do_ptr : tensor<64x128x!tt.ptr<f16>, #blocked>
+      %r = scf.if %cond -> (tensor<64x64xf32, #mma>) {
+        %do_cvt = ttg.convert_layout %do : tensor<64x128xf16, #blocked> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+        %dp = tt.dot %do_cvt, %vT, %acc, inputPrecision = tf32 : tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x64xf32, #mma>
+        scf.yield %dp : tensor<64x64xf32, #mma>
+      } else {
+        scf.yield %acc : tensor<64x64xf32, #mma>
+      }
+      scf.yield %r : tensor<64x64xf32, #mma>
+    }
+    tt.return %res : tensor<64x64xf32, #mma>
+  }
+}
+
+// -----
+
 // COM: Source defined outside BOTH loops; the conversion sits in the inner
 // COM: loop, which has a descriptor_prefetch before it. The source is
 // COM: invariant w.r.t. both loops, so the allocation is placed right before
@@ -159,6 +193,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.tar
       ttg.local_store %x, %buf : tensor<64x128xf16, #blocked> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
       %do_cvt = ttg.convert_layout %do : tensor<64x128xf16, #blocked> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
       %dp = tt.dot %do_cvt, %vT, %acc, inputPrecision = tf32 : tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x64xf32, #mma>
+      scf.yield %dp : tensor<64x64xf32, #mma>
+    }
+    tt.return %res : tensor<64x64xf32, #mma>
+  }
+}
+
+// -----
+
+// COM: Control: as above, but the local_store comes after the conversion. It
+// COM: still runs before the conversion of the next iteration, so the
+// COM: allocation stays at the conversion.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [16, 1], order = [1, 0]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate} {
+  // RDD-LABEL: @loop_invariant_cvt_src_before_local_store
+  // RDD:       %[[BUF:.*]] = ttg.local_alloc : ()
+  // RDD:       %[[DO:.*]] = tt.load
+  // RDD-NOT:   ttg.local_alloc
+  // RDD:       scf.for
+  // RDD-NEXT:  %[[ALLOC:.*]] = ttg.local_alloc %[[DO]] :
+  // RDD-NEXT:  ttg.local_load %[[ALLOC]] :
+  // RDD:       ttg.local_store %{{.*}}, %[[BUF]] :
+  // PIPE-LABEL: @loop_invariant_cvt_src_before_local_store
+  // PIPE:       %[[BUF:.*]] = ttg.local_alloc : ()
+  // PIPE:       %[[DO:.*]] = tt.load
+  // PIPE-NOT:   ttg.local_alloc
+  // PIPE:       scf.for
+  // PIPE-NEXT:  %[[ALLOC:.*]] = ttg.local_alloc %[[DO]] :
+  // PIPE-NEXT:  ttg.local_load %[[ALLOC]] :
+  // PIPE:       ttg.local_store %{{.*}}, %[[BUF]] :
+  tt.func public @loop_invariant_cvt_src_before_local_store(%do_ptr: tensor<64x128x!tt.ptr<f16>, #blocked>, %x_ptr: tensor<64x128x!tt.ptr<f16>, #blocked>, %vT: tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, %n: i32) -> tensor<64x64xf32, #mma> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
+    %do = tt.load %do_ptr : tensor<64x128x!tt.ptr<f16>, #blocked>
+    %res = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %cst) -> (tensor<64x64xf32, #mma>) : i32 {
+      %do_cvt = ttg.convert_layout %do : tensor<64x128xf16, #blocked> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %dp = tt.dot %do_cvt, %vT, %acc, inputPrecision = tf32 : tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x64xf32, #mma>
+      %x = tt.load %x_ptr : tensor<64x128x!tt.ptr<f16>, #blocked>
+      ttg.local_store %x, %buf : tensor<64x128xf16, #blocked> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
       scf.yield %dp : tensor<64x64xf32, #mma>
     }
     tt.return %res : tensor<64x64xf32, #mma>

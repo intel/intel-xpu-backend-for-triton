@@ -44,10 +44,10 @@ Operation *getLoopInvariantAllocAnchor(ConvertLayoutOp cvtOp) {
   Operation *anchor = srcDef->getBlock()->findAncestorOpInBlock(*cvtOp);
   if (!anchor)
     return nullptr;
-  // Keep the store after ops that may write memory, e.g. waits that complete
-  // earlier asynchronous reads of shared memory, as
-  // TritonGPUReorderInstructions does when hoisting allocations.
-  if (intel::crossesMemoryWrite(anchor, cvtOp))
+  // Do not hoist the store out of an anchor that may write memory (prefetches
+  // excepted): any of its body can run before `cvtOp` on some iteration.
+  // TritonGPUReorderInstructions applies the same check when hoisting.
+  if (intel::mayWriteMemory(anchor))
     return nullptr;
   return anchor;
 }
