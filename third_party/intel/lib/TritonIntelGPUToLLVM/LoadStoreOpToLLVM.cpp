@@ -3302,7 +3302,8 @@ struct DescriptorStoreOpToBlockIOConversion
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
 
-    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
+    unsigned contiguousDim =
+        memoryRowMajor ? tensorType.getRank() - 1 : tensorType.getRank() - 2;
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
@@ -3351,6 +3352,35 @@ struct DescriptorStoreOpToBlockIOConversion
 
     const unsigned descRowDim = mapSrcDimToDescDim(rowDim);
     const unsigned descColDim = mapSrcDimToDescDim(colDim);
+
+    // Dimensions outside the tile plane are folded into the base pointer
+    // below. Where the 2D block lowering realigns the base to 64 bytes, it adds
+    // the remainder to base_width but not to the pitch, which can leave width >
+    // pitch, so fold only if the base and every folded stride are provably
+    // 64-byte aligned.
+    if (descRank > 2 && needs2DBlockIOAlignmentCompensation(op)) {
+      // Not ttgi::isDivisible: it reads hints only from tt.func arguments, and
+      // the functions are already llvm.func here.
+      auto isDivisibleBy = [&](Value v, int64_t divisor) {
+        AxisInfo *info = const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
+                             axisAnalysisPass)
+                             .getAxisInfo(v);
+        return info && info->getDivisibility(0) % divisor == 0;
+      };
+      int64_t strideDivisor = 64 / (elemSizeInBits / 8);
+      auto isFoldedBaseAligned = [&](MakeTensorDescOp d) {
+        if (!isDivisibleBy(d.getBase(), 64))
+          return false;
+        for (unsigned dim = 0; dim < descRank; ++dim)
+          if (dim != descRowDim && dim != descColDim &&
+              !isDivisibleBy(d.getStrides()[dim], strideDivisor))
+            return false;
+        return true;
+      };
+      if (!mlir::triton::intel::findDescriptorDefinitions(op.getDesc())
+               .allSatisfy(isFoldedBaseAligned))
+        return failure();
+    }
 
     unsigned numElems = getTotalElemsPerThread(tensorType);
 
@@ -3435,7 +3465,8 @@ struct DescriptorStoreOpToBlockIOConversion
                                         {kLane, b.i32_val(0)},
                                         {kWarp, warpId},
                                         {kBlock, b.i32_val(0)}});
-      assert(offsets.size() == 2 && "only support 2D tensor for now.");
+      assert(offsets.size() == rank &&
+             "linear layout must produce one offset per tensor dimension.");
 
       Value addrElem = ptrElems[registerIdx];
 
@@ -3445,13 +3476,36 @@ struct DescriptorStoreOpToBlockIOConversion
       Value offsetX = b.add(baseOffsets[descColDim], offsets[colDim].second);
       Value offsetY = b.add(baseOffsets[descRowDim], offsets[rowDim].second);
 
+      // The payload has only the 2D tile plane, so fold every other dimension
+      // into the base pointer, as the load side's `computeAddress` does. That
+      // escapes the base_width x base_height clamp, so bounds-check it (#8023).
+      Value boundsPred;
+      for (unsigned descDim = 0; descDim < descRank; ++descDim) {
+        if (descDim == descRowDim || descDim == descColDim)
+          continue;
+        Value outerOffset = baseOffsets[descDim];
+        if (descDim >= rankDelta)
+          outerOffset =
+              b.add(outerOffset, offsets[descDim - rankDelta].second); // i32
+        Value outerOffset64 = b.zext(i64_ty, outerOffset);
+        Value elemOffset = b.mul(outerOffset64, desc.strides[descDim]);
+        addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, elemOffset);
+        // Signed: nothing verifies that a descriptor extent is non-negative.
+        // The trunc is lossless, as `tt.make_tensor_descriptor` takes i32.
+        Value isNonNegative = b.icmp_sge(outerOffset, b.i32_val(0));
+        Value isBelowShape =
+            b.icmp_slt(outerOffset, b.trunc(i32_ty, desc.shapes[descDim]));
+        boundsPred = maybeAnd(rewriter, loc, boundsPred,
+                              b.and_(isNonNegative, isBelowShape));
+      }
+
       // Tensor descriptors always encode full shape bounds, so we always
       // use the descriptor's baseWidth/baseHeight for HW boundary
       // protection (no need to expand or adjust like block pointers).
       Value adjustedBaseWidth = baseWidth;
       Value adjustedBaseHeight = baseHeight;
 
-      Value pred = threadPred;
+      Value pred = maybeAnd(rewriter, loc, threadPred, boundsPred);
       if (pred) {
         // We leverage the GPU block I/O hardware out-of-bound protection
         // feature by setting the offset to an invalid value when 'pred'
