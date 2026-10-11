@@ -351,21 +351,27 @@ struct SourceLiveness {
 
 /// Classifies the remaining users of \p cvtOp's source once for the whole
 /// corridor. \p srcUsers is the source's deduplicated user list (which
-/// includes \p cvtOp).
+/// includes \p cvtOp). \p priorRefusals only decide whether the result is
+/// exact.
 static SourceLiveness classifySource(ttg::ConvertLayoutOp cvtOp,
                                      scf::ForOp forOp,
-                                     ArrayRef<Operation *> srcUsers) {
+                                     ArrayRef<Operation *> srcUsers,
+                                     ArrayRef<Refusal> priorRefusals) {
   SourceLiveness result;
 
   // Withholding the credit is often the *correct* answer rather than a
   // conservative one: with a reader below the loop the source really is
-  // unrelieved at every corridor operation, and in the common shape -- one
-  // source read by a conversion in each of two adjacent loops -- the corridor
-  // term's exactness, not a credit, keeps the hoist alive. But a body reader
-  // *above* the conversion lets the source die mid-corridor, so every later
-  // corridor operation is overpriced, and an unorderable reader is not known
-  // either way. Those two are fallbacks, not evidence of a pressure rise.
+  // unrelieved at every corridor operation. But a body reader *above* the
+  // conversion lets the source die mid-corridor, so every later corridor
+  // operation is overpriced, an unorderable reader is not known either way,
+  // and a reader that is only a refused twin merges into this hoist (see Twin
+  // merges), which the loop-level gate may credit and this projection does not.
+  // Those three are fallbacks, not evidence of a pressure rise.
   if (!hoistRetiresSource(cvtOp, forOp)) {
+    if (hoistRetiresSource(cvtOp, forOp, priorRefusals)) {
+      result.exact = false;
+      return result;
+    }
     Block *cvtBlock = cvtOp->getBlock();
     for (Operation *user : srcUsers) {
       if (user == cvtOp.getOperation())
@@ -647,7 +653,7 @@ struct PeakProjection {
 /// `RegisterPressureAnalysis` reports it -- that hoisting \p cvtOp out of
 /// \p forOp would leave behind, without mutating any IR. \p analysis must
 /// describe the function as it stands now and \p prePeak must be its measured
-/// whole-function peak.
+/// whole-function peak. \p priorRefusals only decide `exact`.
 ///
 /// This bounds the *reported* metric, not physical allocator demand: a real
 /// allocator could still do better (rematerializing, spilling around a
@@ -657,7 +663,8 @@ struct PeakProjection {
 static PeakProjection projectedFunctionPeak(
     ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
     const ttg::intel::RegisterPressureAnalysis &analysis, uint64_t prePeak,
-    ArrayRef<Operation *> srcUsers, unsigned corridorOpCap,
+    ArrayRef<Operation *> srcUsers, ArrayRef<Refusal> priorRefusals,
+    unsigned corridorOpCap,
     ttg::intel::RegisterPressureAnalysis::QueryCache &queryCache,
     DenseMap<Operation *, uint64_t> &regionPeakCache) {
   PeakProjection projection;
@@ -696,7 +703,8 @@ static PeakProjection projectedFunctionPeak(
   }
   projection.corridorLength = corridor.size();
 
-  SourceLiveness srcLiveness = classifySource(cvtOp, forOp, srcUsers);
+  SourceLiveness srcLiveness =
+      classifySource(cvtOp, forOp, srcUsers, priorRefusals);
   projection.exact &= srcLiveness.exact;
 
   Value src = cvtOp.getSrc();
@@ -792,7 +800,9 @@ public:
   /// Decides whether hoisting \p cvtOp out of \p forOp may raise the function's
   /// reported peak pressure past `max(prePeak, threshold)`. On `Accept` the
   /// caller must perform the hoist and then call `noteHoisted`.
-  PeakVerdict decide(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp) {
+  /// \p priorRefusals only choose between the two rejections.
+  PeakVerdict decide(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
+                     ArrayRef<Refusal> priorRefusals) {
     if (!refreshAnalysis()) {
       LDBG("Skipping hoist: whole-function peak analysis rebuild cap ("
            << rebuildCap << ") reached; a stale analysis bounds nothing");
@@ -801,7 +811,7 @@ public:
 
     lastProjection = projectedFunctionPeak(
         cvtOp, forOp, *analysis, prePeak, sourceUsers(cvtOp.getSrc()),
-        corridorOpCap, *queryCache, regionPeakCache);
+        priorRefusals, corridorOpCap, *queryCache, regionPeakCache);
     uint64_t projected = lastProjection.total();
     // No ratchet. Over budget the ceiling *is* the current peak, so no sequence
     // of hoists can raise it; under budget, only as far as the threshold.
@@ -1172,7 +1182,7 @@ static void hoistCvtDotOpsOutOfLoop(
 
     // Second veto: the whole-function peak, which the live-in figure above does
     // not measure.
-    PeakVerdict verdict = peakGate.decide(cvtOp, forOp);
+    PeakVerdict verdict = peakGate.decide(cvtOp, forOp, state.refusals);
     if (verdict != PeakVerdict::Accept) {
       state.refusals.push_back({cvtOp, forOp,
                                 verdict == PeakVerdict::RejectExact

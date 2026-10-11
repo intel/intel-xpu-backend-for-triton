@@ -178,13 +178,15 @@ def TritonIntelGPUHoistLayoutConversions
     The departing source's credit has its own fallbacks. It is withheld whenever
     something other than the conversion may still read the source at a corridor
     operation, which is usually the true answer: a reader below the loop does
-    hold it live throughout. Four cases withhold it only conservatively, and so
+    hold it live throughout. Five cases withhold it only conservatively, and so
     count as fallbacks: a reader unorderable against the loop, a body reader
     *above* the conversion (the source dies mid-corridor, so later corridor
-    operations are overpriced), a CFG cycle around the conversion, and a reader
-    in an enclosing loop. The last does not reason about the enclosing loop's
-    iterations, so the projection prices the departing source as still live and
-    can exceed the real post-hoist peak.
+    operations are overpriced), a CFG cycle around the conversion, a reader in
+    an enclosing loop, and a source whose only blocking readers are refused
+    twins (see Twin credit), which this gate does not credit past. The
+    enclosing-loop case does not reason about that loop's iterations, so the
+    projection prices the departing source as still live and can exceed the
+    real post-hoist peak.
 
     ### Twin credit
 

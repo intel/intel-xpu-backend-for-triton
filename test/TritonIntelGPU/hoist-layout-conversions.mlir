@@ -20,7 +20,7 @@
 // COM: check the sum: hoisted + the three rejected counters + skipped_other must
 // COM: equal considered.
 // STATS: [HoistLayoutConversions] considered={{[0-9]+}} hoisted={{[0-9]+}} rejected_pressure={{[0-9]+}} rejected_function_peak_exact={{[0-9]+}} rejected_function_peak_fallback={{[0-9]+}} skipped_other={{[0-9]+}}
-// STATS: [HoistLayoutConversions] considered=95 hoisted=44 rejected_pressure=16 rejected_function_peak_exact=18 rejected_function_peak_fallback=8 skipped_other=9
+// STATS: [HoistLayoutConversions] considered=95 hoisted=44 rejected_pressure=16 rejected_function_peak_exact=10 rejected_function_peak_fallback=16 skipped_other=9
 // STATS-NOT: [HoistLayoutConversions]
 
 // COM: Case 1: Hoist ConvertLayoutOp with DotOperandEncoding out of scf.for loop.

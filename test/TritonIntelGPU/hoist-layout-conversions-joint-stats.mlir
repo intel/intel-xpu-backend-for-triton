@@ -53,9 +53,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // COM: Case 45's shape: loops 6..2 are refused alone by the peak. Loop 1 is
 // COM: credited past those refused twins and hoisted; the group of five is then
-// COM: refused by its measured peak. +6 considered, +1 hoisted, +5
-// COM: rejected_function_peak_exact.
-// STATS: [HoistLayoutConversions] considered=8 hoisted=3 rejected_pressure=0 rejected_function_peak_exact=5 rejected_function_peak_fallback=0 skipped_other=0
+// COM: refused by its measured peak. +6 considered, +1 hoisted. Loop 6 is
+// COM: +1 rejected_function_peak_exact; loops 5..2 are blocked only by refused
+// COM: twins, which the peak gate does not credit past: +4
+// COM: rejected_function_peak_fallback.
+// STATS: [HoistLayoutConversions] considered=8 hoisted=3 rejected_pressure=0 rejected_function_peak_exact=1 rejected_function_peak_fallback=4 skipped_other=0
 // STATS-NOT: [HoistLayoutConversions]
 
 
@@ -114,7 +116,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // COM: Case 46's shape: both refused alone by the loop-level gate, and the
 // COM: group refused by it again: +2 considered, +2 rejected_pressure.
-// STATS: [HoistLayoutConversions] considered=10 hoisted=3 rejected_pressure=2 rejected_function_peak_exact=5 rejected_function_peak_fallback=0 skipped_other=0
+// STATS: [HoistLayoutConversions] considered=10 hoisted=3 rejected_pressure=2 rejected_function_peak_exact=1 rejected_function_peak_fallback=4 skipped_other=0
 // STATS-NOT: [HoistLayoutConversions]
 
 

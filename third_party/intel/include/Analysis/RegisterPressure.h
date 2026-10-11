@@ -81,13 +81,16 @@ public:
   unsigned peakPressure(Block *block) const;
 
   /// Liveness caches, and each block's peak, shared by queries on unchanged
-  /// IR. Discard it before mutating the IR.
+  /// IR. Discard it before mutating the IR. Use it with one analysis only:
+  /// the entries depend on that analysis's root.
   class QueryCache {
   public:
     QueryCache() = default;
 
   private:
     friend class RegisterPressureAnalysis;
+    /// The analysis that filled the cache, checked by assertion only.
+    const RegisterPressureAnalysis *owner = nullptr;
     LiveValuesCache liveCache;
     AncestorLiveThroughCache ancestorCache;
     DenseMap<Block *, unsigned> blockPeakCache;
@@ -270,6 +273,9 @@ public:
   void print(raw_ostream &os) const;
 
 private:
+  /// Binds \p cache to this analysis, asserting it was not filled by another.
+  void claimCache(QueryCache &cache) const;
+
   /// Returns the raw (unfiltered) `currentlyLiveValues()` result at \p point,
   /// memoizing it in \p cache.
   const Liveness::ValueSetT &getRawLiveValuesAt(Operation *point,

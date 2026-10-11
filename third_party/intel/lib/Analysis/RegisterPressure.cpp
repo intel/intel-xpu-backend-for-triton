@@ -160,6 +160,12 @@ unsigned RegisterPressureAnalysis::pressureContribution(Value value) const {
   return it->second;
 }
 
+void RegisterPressureAnalysis::claimCache(QueryCache &cache) const {
+  assert((!cache.owner || cache.owner == this) &&
+         "QueryCache shared between two RegisterPressureAnalysis instances");
+  cache.owner = this;
+}
+
 const Liveness::ValueSetT &
 RegisterPressureAnalysis::getRawLiveValuesAt(Operation *point,
                                              LiveValuesCache &cache) const {
@@ -167,7 +173,10 @@ RegisterPressureAnalysis::getRawLiveValuesAt(Operation *point,
   // on the query, so one key must not stand for two answers.
   auto [it, inserted] = cache.try_emplace(point);
   if (inserted) {
-    // Base mlir::Liveness query: the Intel wrapper asserts on nested ops.
+    // Query the base mlir::Liveness block info directly (rather than the Intel
+    // LivenessAnalysis wrapper, which asserts the op is a direct child of the
+    // analysis root). This works for ops nested in any region, e.g. an scf.for
+    // body.
     if (const LivenessBlockInfo *blockInfo =
             liveness.getLiveness(point->getBlock()))
       it->second = blockInfo->currentlyLiveValues(point);
@@ -299,6 +308,7 @@ unsigned RegisterPressureAnalysis::pressureAt(
 
 unsigned RegisterPressureAnalysis::pressureAt(Operation *op,
                                               QueryCache &cache) const {
+  claimCache(cache);
   return pressureAt(op, cache.liveCache, cache.ancestorCache);
 }
 
@@ -312,6 +322,7 @@ RegisterPressureAnalysis::pressureAt(Operation *op, Value value) const {
 RegisterPressureAnalysis::PressureAtPoint
 RegisterPressureAnalysis::pressureAt(Operation *op, Value value,
                                      QueryCache &cache) const {
+  claimCache(cache);
   return pressureAt(op, value, cache.liveCache, cache.ancestorCache);
 }
 
@@ -329,6 +340,7 @@ RegisterPressureAnalysis::PressureAtPoint RegisterPressureAnalysis::pressureAt(
 
 bool RegisterPressureAnalysis::isLiveAt(Operation *op, Value value,
                                         QueryCache &cache) const {
+  claimCache(cache);
   if (getRawLiveValuesAt(op, cache.liveCache).contains(value))
     return true;
   Operation *rootOp = liveness.getOperation();
@@ -364,6 +376,7 @@ unsigned RegisterPressureAnalysis::peakPressure(Block *block) const {
 
 unsigned RegisterPressureAnalysis::peakPressure(Block *block,
                                                 QueryCache &cache) const {
+  claimCache(cache);
   if (auto it = cache.blockPeakCache.find(block);
       it != cache.blockPeakCache.end())
     return it->second;
@@ -475,7 +488,8 @@ void RegisterPressureAnalysis::print(raw_ostream &os) const {
     llvm::raw_string_ostream lineOs(line);
     lineOs << "  Block ";
     block->printAsOperand(lineOs);
-    // Qualify each block by its parent op name: nested blocks all print ^bb0.
+    // Qualify each block by its parent op name so blocks in different regions
+    // (all named ^bb0) are distinguishable in the output.
     lineOs << " in " << block->getParentOp()->getName() << ": peak = " << peak
            << " bytes, live-in = " << liveInPressure(block) << " bytes\n";
     blockLines.push_back(std::move(line));
