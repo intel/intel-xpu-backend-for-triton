@@ -86,14 +86,20 @@ def _mul(a, b):
     return a * b
 
 
-# The `i1` combines the scan gate allows, with the builtin each must lower to.
-# `addi`/`maxsi`/`minsi` on `i1` are rejected, so they keep the shuffle chain and
-# are covered by the lit negatives instead.
+@triton.jit
+def _add(a, b):
+    return a + b
+
+
+# The `i1` combines, with the builtin each must lower to. `i1` add is mod 2.
+# `maxsi`/`minsi` are unreachable from the frontend and are covered by the lit
+# test instead.
 I1_OPS = [
     pytest.param(_and, "LogicalAnd", lambda a, b: a and b, id="andi"),
     pytest.param(_or, "LogicalOr", lambda a, b: a or b, id="ori"),
     pytest.param(_xor, "LogicalXor", lambda a, b: a != b, id="xori"),
     pytest.param(_mul, "LogicalAnd", lambda a, b: a and b, id="muli"),
+    pytest.param(_add, "LogicalXor", lambda a, b: a != b, id="addi"),
 ]
 
 

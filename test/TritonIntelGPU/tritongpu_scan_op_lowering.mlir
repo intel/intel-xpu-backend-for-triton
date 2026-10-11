@@ -104,8 +104,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// COM: Op and element type coverage. `i1` uses the logical group ops; add,
-// COM: maxsi and minsi are rejected instead, see the negative cases below.
+// COM: Op and element type coverage. `i1` uses the logical group ops.
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
@@ -323,14 +322,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // -----
 
-// COM: Negative: the scan gate rejects these three `i1` combines.
+// COM: `i1` add is mod 2 and signed `i1` true is -1, so add scans with Xor,
+// COM: maxsi with And and minsi with Or.
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @scan_i1_addi
   tt.func public @scan_i1_addi(%f : tensor<32xi1, #blocked>) -> tensor<32xi1, #blocked> {
-    // CHECK-NOT:     GroupNonUniform
-    // CHECK-COUNT-5: llvm.call spir_funccc @_Z20sub_group_shuffle_upcj
+    // SCAN-ON:          [[SUBGROUP:%.*]] = llvm.mlir.constant(3 : i32) : i32
+    // SCAN-ON-NEXT:     [[INCLUSIVE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+    // SCAN-ON-NEXT:     llvm.call spir_funccc @_Z33__spirv_GroupNonUniformLogicalXoriib([[SUBGROUP]], [[INCLUSIVE]], %{{.*}}) {{.*}} : (i32, i32, i1) -> i1
+    // SCAN-OFF-NOT:     GroupNonUniform
+    // SCAN-OFF-COUNT-5: llvm.call spir_funccc @_Z20sub_group_shuffle_upcj
     %g = "tt.scan" (%f) ({
     ^bb0(%a: i1, %b: i1):
       %r = arith.addi %a, %b : i1
@@ -342,8 +345,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
   // CHECK-LABEL: llvm.func spir_kernelcc @scan_i1_maxsi
   tt.func public @scan_i1_maxsi(%f : tensor<32xi1, #blocked>) -> tensor<32xi1, #blocked> {
-    // CHECK-NOT:     GroupNonUniform
-    // CHECK-COUNT-5: llvm.call spir_funccc @_Z20sub_group_shuffle_upcj
+    // SCAN-ON:      [[SUBGROUP:%.*]] = llvm.mlir.constant(3 : i32) : i32
+    // SCAN-ON-NEXT: [[INCLUSIVE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+    // SCAN-ON-NEXT: llvm.call spir_funccc @_Z33__spirv_GroupNonUniformLogicalAndiib([[SUBGROUP]], [[INCLUSIVE]], %{{.*}}) {{.*}} : (i32, i32, i1) -> i1
     %g = "tt.scan" (%f) ({
     ^bb0(%a: i1, %b: i1):
       %r = arith.maxsi %a, %b : i1
@@ -355,8 +359,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
   // CHECK-LABEL: llvm.func spir_kernelcc @scan_i1_minsi
   tt.func public @scan_i1_minsi(%f : tensor<32xi1, #blocked>) -> tensor<32xi1, #blocked> {
-    // CHECK-NOT:     GroupNonUniform
-    // CHECK-COUNT-5: llvm.call spir_funccc @_Z20sub_group_shuffle_upcj
+    // SCAN-ON:      [[SUBGROUP:%.*]] = llvm.mlir.constant(3 : i32) : i32
+    // SCAN-ON-NEXT: [[INCLUSIVE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+    // SCAN-ON-NEXT: llvm.call spir_funccc @_Z32__spirv_GroupNonUniformLogicalOriib([[SUBGROUP]], [[INCLUSIVE]], %{{.*}}) {{.*}} : (i32, i32, i1) -> i1
     %g = "tt.scan" (%f) ({
     ^bb0(%a: i1, %b: i1):
       %r = arith.minsi %a, %b : i1
@@ -369,9 +374,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // -----
 
-// COM: Negative: `arith.maxnumf`/`minnumf` return the numeric operand when exactly
-// COM: one operand is NaN, but SPIR-V leaves the group FMax/FMin choice undefined
-// COM: there. Rejected rather than lowered to an undefined-on-NaN builtin.
+// COM: Negative: SPIR-V group FMax/FMin pick the numeric operand like
+// COM: `arith.maxnumf`/`minnumf`, but leave an all-NaN set undefined, which a scan
+// COM: hits on every leading-NaN prefix. Rejected rather than lowered to them.
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
