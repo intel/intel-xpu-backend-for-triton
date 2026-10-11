@@ -41,8 +41,8 @@ STATISTIC(NumRejectedFunctionPeakExact,
 STATISTIC(
     NumRejectedFunctionPeakFallback,
     "Number of convert_layout ops rejected on a conservatively charged "
-    "whole-function peak projection (a cap or a structure that could not be "
-    "walked)");
+    "whole-function peak projection (a cap, a structure that could not be "
+    "walked, or a source credit withheld for a refused twin)");
 STATISTIC(NumSkippedOther,
           "Number of convert_layout ops skipped (not eligible)");
 
@@ -359,14 +359,10 @@ static SourceLiveness classifySource(ttg::ConvertLayoutOp cvtOp,
                                      ArrayRef<Refusal> priorRefusals) {
   SourceLiveness result;
 
-  // Withholding the credit is often the *correct* answer rather than a
-  // conservative one: with a reader below the loop the source really is
-  // unrelieved at every corridor operation. But a body reader *above* the
-  // conversion lets the source die mid-corridor, so every later corridor
-  // operation is overpriced, an unorderable reader is not known either way,
-  // and a reader that is only a refused twin merges into this hoist (see Twin
-  // merges), which the loop-level gate may credit and this projection does not.
-  // Those three are fallbacks, not evidence of a pressure rise.
+  // Withholding is usually exact: a reader below the loop keeps the source live
+  // through the corridor. Three cases are fallbacks: a body reader above the
+  // conversion (the source dies mid-corridor), an unorderable reader, and a
+  // reader that is only a refused twin, which merges into this hoist.
   if (!hoistRetiresSource(cvtOp, forOp)) {
     if (hoistRetiresSource(cvtOp, forOp, priorRefusals)) {
       result.exact = false;
@@ -1222,7 +1218,8 @@ static void hoistCvtDotOpsOutOfLoop(
 /// A group is applied and measured: it must pass the loop-level gate once per
 /// loop it leaves and the peak gate on the moved IR, or it is restored
 /// exactly. Subsets are not tried. Groups are tried once each, in
-/// first-refusal order, and each trial spends one unit of `peak-rebuild-cap`.
+/// first-refusal order; a group that passes the loop-level gate spends one
+/// unit of `peak-rebuild-cap` on its measurement.
 /// A group of only `mergeCharged` refusals is tried too: its move changes the
 /// IR later trials are measured on.
 static void

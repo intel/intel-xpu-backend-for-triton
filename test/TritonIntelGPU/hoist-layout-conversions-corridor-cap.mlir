@@ -3,23 +3,14 @@
 // RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=1" 2>&1 | FileCheck %s --check-prefix=STATS1
 // RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=3" 2>&1 | FileCheck %s --check-prefix=STATS3
 
-// COM: The corridor operation cap bounds what the whole-function peak projection
-// COM: prices. The projection walks every operation between a hoist's insertion
-// COM: point and the conversion's old position, plus the loop body after the
-// COM: conversion's last use (here the scf.yield, which carries the back edge), and
-// COM: each one costs a fresh liveness set. Past the cap the walk is abandoned and
-// COM: every unwalked point is charged as prePeak + dstBytes.
-// COM: The default cap is far above any real kernel, so the file lowers it around
-// COM: two free hoists (each retires a 256 B source for a 64 B result, so the loop
-// COM: gate passes them). Loops are decided last to first: the second loop's
-// COM: corridor is 3 operations, the first loop's is 4 because it also contains
-// COM: the conversion the second hoist has already moved there.
-// COM:   cap=1: both corridors exceed the cap, both hoists are charged
-// COM:          prePeak + 64 = 992 > 928 and refused.
+// COM: The corridor cap bounds how many operations the peak projection prices;
+// COM: past it every unwalked point is charged prePeak + dstBytes. Two free
+// COM: hoists (a 256 B source retired for a 64 B result) are decided last to
+// COM: first. The second loop's corridor is 3 operations, the first loop's is 4
+// COM: (it also holds the moved conversion).
+// COM:   cap=1: both are charged prePeak + 64 = 992 > 928 and refused.
 // COM:   cap=3: the second loop's corridor is priced (928, accepted at the 928
-// COM:          ceiling) and only the first loop's bails.
-// COM: A bail reports "corridor=992 over 0 ops" in the debug output, which tells a
-// COM: conservative charge from a priced walk.
+// COM:          ceiling) and only the first loop's is charged.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>

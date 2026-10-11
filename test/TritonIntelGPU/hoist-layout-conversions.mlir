@@ -2227,9 +2227,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: 160 < 204. A flat +64 charge gives 320 + 64 + 32 = 416 and refuses %cvtX.
 // COM: No merge charge at all gives the same outcome as the right one; case 51
 // COM: is the shape that needs it. At 256-GRF %cvtX passes the loop gate directly.
-// COM: A -debug-only trace of this IR logs the peak refusal of %cvt2, the 352
-// COM: loop-gate refusal and two shared-source hoists of one conversion each;
-// COM: the -192 charge on loop 2 and the 160 are not logged.
 
 #blocked48 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas48 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -2440,9 +2437,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: 320 - 192 + 32 = 160 < 204 and hoists. Without the charge it reads
 // COM: 320 + 32 = 352 and is stamped; a flat +64 charge reads 416 and stamps it
 // COM: too. At 256-GRF %cvtX passes the loop gate directly (352 < 409.6).
-// COM: A -debug-only trace of this IR logs the five peak refusals, the group's
-// COM: 1152 > 1088 and one hoist line with thisHoist=-192; the per-loop merge
-// COM: charges and the 160 are not logged.
 
 #blocked51 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas51 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>

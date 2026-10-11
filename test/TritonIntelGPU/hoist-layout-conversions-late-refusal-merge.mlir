@@ -5,14 +5,6 @@
 // COM: the merge (+48), since remove_layout_conversions replaces %t with %h either
 // COM: way. Mirror image of hoist-layout-conversions-uncharged-merge.mlir, where
 // COM: the refusal comes first and the hoist charges it.
-// COM:
-// COM: The types and loop bodies are those of the uncharged-merge case, with the
-// COM: loops reordered. The figures below match a
-// COM: -debug-only=tritonintelgpu-hoist-layout-conversions trace, except the 184
-// COM: without the merge charge, which a trace cannot show.
-// COM: Kept in its own file: corridor-op-cap=5 makes %y's first refusal a
-// COM: fallback, and the same RUN line in a shared file would rerun every other
-// COM: case under that cap.
 // COM: Per-lane bytes at grf-mode=128 (threshold 204): loop 2's live-in is 160
 // COM: (%s 16, %q 8, %arg2 8, %arg3 128); %t adds 64 - 16 = 48, %y adds 32 - 8 = 24.
 // COM: The later group {%y} in loop 2 reads 160 + 48 + 24 = 232 >= 204 and stays

@@ -48,8 +48,8 @@ private:
   /// Memoized `currentlyLiveValues()` results, keyed by program point. MLIR
   /// does not cache that query, and a nested walk asks for the same enclosing
   /// points once per nested op. A cache lives for one top-level query or one
-  /// `QueryCache`, never in the analysis, so no state outlives the IR it
-  /// describes.
+  /// `QueryCache`, never in the analysis, so no liveness state outlives the IR
+  /// it describes.
   using LiveValuesCache = DenseMap<Operation *, Liveness::ValueSetT>;
 
   /// Memoized live-through set of a region-holding ancestor: the values that
@@ -80,16 +80,17 @@ public:
   /// less pressure than any block nested inside it.
   unsigned peakPressure(Block *block) const;
 
-  /// Liveness caches, and each block's peak, shared by queries on unchanged
-  /// IR. Discard it before mutating the IR. Use it with one analysis only:
-  /// the entries depend on that analysis's root.
+  /// Liveness caches and per-block peaks shared by queries on unchanged IR.
+  /// Discard it before mutating the IR, and use it with one analysis only.
   class QueryCache {
   public:
     QueryCache() = default;
 
   private:
     friend class RegisterPressureAnalysis;
-    /// The analysis that filled the cache, checked by assertion only.
+    /// The analysis that filled the cache, compared by address in assertions:
+    /// it catches a second analysis, not a rebuild in place, so callers reset
+    /// the cache whenever they rebuild the analysis.
     const RegisterPressureAnalysis *owner = nullptr;
     LiveValuesCache liveCache;
     AncestorLiveThroughCache ancestorCache;

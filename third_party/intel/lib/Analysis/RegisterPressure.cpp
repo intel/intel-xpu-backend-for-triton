@@ -272,13 +272,9 @@ Liveness::ValueSetT RegisterPressureAnalysis::computeLiveValues(
   for (Value liveVal : getRawLiveValuesAt(op, liveCache))
     liveValues.insert(liveVal);
 
-  // A block's liveness info only knows about values defined or used within
-  // that block's region. A value defined before an enclosing region-holding
-  // op and used after it occupies a register for the whole duration of that
-  // op, yet is neither defined nor used inside the nested block, so it is
-  // absent from the nested block's live set. Union in the live-through
-  // contribution of `op`'s immediate parent, which already transitively
-  // covers every op enclosing it up to the analysis root.
+  // A value defined before an enclosing region-holding op and used after it is
+  // absent from the nested block's liveness. Add the live-through set of
+  // `op`'s parent, which covers every enclosing op up to the root.
   Operation *rootOp = liveness.getOperation();
   if (Operation *parent = op->getParentOp();
       parent && parent != rootOp && parent->getBlock()) {

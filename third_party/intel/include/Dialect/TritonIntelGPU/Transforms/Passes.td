@@ -218,13 +218,9 @@ def TritonIntelGPUHoistLayoutConversions
     the merge is not counted twice.
 
     The credit is withheld when re-running the twin's loop-level gate, at that
-    loop's current figure plus the delta the merge adds, fails. This does not
-    look at why the twin was refused. A twin the loop gate refused still fails
-    it unless something has since lowered its loop's figure. A twin only the
-    peak gate refused usually keeps its credit, and the merge can then raise the
-    function peak past HLC's ceiling. That is accepted because on the kernel this
-    asymmetry targets (`_attn_bwd`'s backward loop) the reported peak overstates
-    what the allocator needs.
+    loop's current figure plus the delta the merge adds, fails. A twin only the
+    peak gate refused therefore usually keeps its credit, and the merge can then
+    raise the function peak past HLC's ceiling.
 
     A sibling that hoists on its own merits can also merge a twin away
     unconditionally, whatever the twin's budget. That merge is charged to the
@@ -240,10 +236,8 @@ def TritonIntelGPUHoistLayoutConversions
     Deciding one conversion at a time cannot see what a group sharing a source
     is worth together: each is weighed while the others still read the source,
     so none earns the credit for retiring it, and the peak projection charges
-    each arriving result on top of a source that stays live. `_attn_bwd`'s
-    shape is the common case: k and v each feed a conversion in both dK/dV
-    loops, and q and do each feed one in both dQ loops. So refusals are only
-    recorded while loops are decided. Once all of a function's loops are decided,
+    each arriving result on top of a source that stays live. So refusals are
+    only recorded while loops are decided. Once all of a function's loops are decided,
     the refused conversions of each shared source (two or more refused, or one
     refused beside one hoisted) are moved *together* and vetted as one change:
     the loop-level gate once per loop they leave, with the source credited when
@@ -256,22 +250,12 @@ def TritonIntelGPUHoistLayoutConversions
     the reason it was first refused for.
 
     Cost. The analysis is built lazily on the first candidate that reaches the
-    peak gate and rebuilt after each accepted hoist, so a function with no such
-    candidate pays nothing. The gate owns a `QueryCache` that every candidate of
-    one analysis generation shares; it is reset, together with `regionPeakCache`,
-    whenever the analysis is replaced. The cache memoizes each block's peak, so a
-    region-holding corridor entry or a sibling branch computes a given block's
-    peak once per generation, and the first computation pays the walk. A group trial
-    applies the move, measures it with a fresh analysis (one whole-function
-    walk) and spends one `peak-rebuild-cap` unit, accepted or not. An accepted
-    trial's analysis becomes the gate's current one, so the next decision
-    rebuilds nothing. A group whose every member is already merge-charged still
-    pays the trial in full. The twin credit adds `mergeFits`, which re-derives a
-    twin's delta inside the per-candidate scan, roughly
-    O(candidates^2 x users^2 x refusals^2) per loop in the worst case, which is
-    negligible with a handful of refusals per function. Lowering
-    `peak-rebuild-cap` bounds the rebuilds, and so the cost, at the price of lost
-    hoists. Compile time against `main` on real kernels has not been measured.
+    peak gate and rebuilt after each accepted hoist. Its query caches are shared
+    by every candidate of one analysis generation and reset when the analysis is
+    replaced. A group trial that passes the loop-level gate measures the moved IR
+    with a fresh analysis and spends one `peak-rebuild-cap` unit; an accepted
+    trial's analysis is kept. `peak-rebuild-cap` bounds the rebuilds, and so the
+    cost, at the price of lost hoists.
 
     ### Non-goals, all deliberate
 
@@ -312,8 +296,9 @@ def TritonIntelGPUHoistLayoutConversions
     Option<"peakRebuildCap", "peak-rebuild-cap", "unsigned", /*default*/"32",
            "Maximum whole-function pressure analysis rebuilds per function. "
            "Each accepted hoist invalidates the analysis, and the next "
-           "candidate that needs it spends one rebuild; each shared-source "
-           "group trial spends one to measure. Past the cap candidates are "
+           "candidate that needs it spends one rebuild; a shared-source group "
+           "that passes the loop-level gate spends one to measure. Past the "
+           "cap candidates are "
            "rejected and groups are not tried, since a stale analysis bounds "
            "nothing.">,
   ];

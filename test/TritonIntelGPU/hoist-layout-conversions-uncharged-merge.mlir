@@ -5,34 +5,8 @@
 // COM: later group {%y} in loop 2 then reads 160 + 48 + 24 = 232 >= 204 and stays
 // COM: stamped; without the charge it reads 160 + 24 = 184 and hoists. %t's own
 // COM: fate is not checked. Mirror image of
-// COM: hoist-layout-conversions-late-refusal-merge.mlir.
-// COM:
-// COM: The numbers below are quoted from a -debug-only=tritonintelgpu-hoist-
-// COM: layout-conversions trace of this RUN line, not derived by hand.
-// COM: Kept in its own file: corridor-op-cap=5 makes %y's first refusal a
-// COM: fallback, and the same RUN line in a shared file would rerun every other
-// COM: case under that cap.
-// COM:
-// COM: Trace (grf-mode=128 corridor-op-cap=5):
-// COM:   L3 %z  Hoisting ...: liveIn=8 + alreadyHoisted=0 + thisHoist=24 = 32
-// COM:   L2 %y  Skipping hoist: projected function peak 1056 B/lane (max of
-// COM:          prePeak=1024 corridor=1056 over 0 ops, newPoint=320) exceeds
-// COM:          ceiling 1024 B/lane (conservatively charged)
-// COM:   L2 %t  Skipping hoist: liveIn=160 + alreadyHoisted=0 + thisHoist=48
-// COM:          = 208 B/lane exceeds 80% of budget=256 B/lane
-// COM:   L1 %h  No twin credit: merging would leave its loop at liveIn=160 +
-// COM:          alreadyHoisted=0 + thisHoist=48 = 208 B/lane, past 80% of
-// COM:          budget=256 B/lane
-// COM:   L1 %h  Hoisting ...: liveIn=16 + alreadyHoisted=0 + thisHoist=64 = 80
-// COM:   phase 2 {%y}: Skipping joint hoist of 1 conversion(s): loop liveIn=
-// COM:                 160 + alreadyHoisted=48 + thisHoist=24 = 232 B/lane
-// COM:                 exceeds 80% of budget=256 B/lane
-// COM:   phase 2 {%t}: Function peak allows joint hoist: measured 1024 B/lane
-// COM:                 within ceiling 1024 B/lane; Hoisting jointly a group
-// COM:                 of 1 conversion(s) sharing a source
-// COM: The merge charge changes only what loop 2's netBytes reads when phase 2
-// COM: runs: %h's, %z's and %t's phase-1 decisions do not depend on it. The only
-// COM: observable that does is %y staying stamped.
+// COM: hoist-layout-conversions-late-refusal-merge.mlir. Own file because
+// COM: corridor-op-cap=5 would rerun every other case under that cap.
 
 #blk = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
