@@ -7,16 +7,13 @@
 // COM: fate is not checked. Mirror image of
 // COM: hoist-layout-conversions-late-refusal-merge.mlir.
 // COM:
-// COM: CONFIRMED against a real triton-opt build: the numbers below are
-// COM: quoted verbatim from a real -debug-only=tritonintelgpu-hoist-layout-
-// COM: conversions trace and the actual triton-opt output of this exact RUN
-// COM: line, not derived by hand.
+// COM: The numbers below are quoted from a -debug-only=tritonintelgpu-hoist-
+// COM: layout-conversions trace of this RUN line, not derived by hand.
 // COM: Kept in its own file: corridor-op-cap=5 makes %y's first refusal a
 // COM: fallback, and the same RUN line in a shared file would rerun every other
 // COM: case under that cap.
 // COM:
-// COM: Real trace (grf-mode=128 corridor-op-cap=5, quoted
-// COM: verbatim from the real build):
+// COM: Trace (grf-mode=128 corridor-op-cap=5):
 // COM:   L3 %z  Hoisting ...: liveIn=8 + alreadyHoisted=0 + thisHoist=24 = 32
 // COM:   L2 %y  Skipping hoist: projected function peak 1056 B/lane (max of
 // COM:          prePeak=1024 corridor=1056 over 0 ops, newPoint=320) exceeds

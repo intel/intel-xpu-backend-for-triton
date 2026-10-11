@@ -195,15 +195,14 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM:
 // COM: The moment where source and result are both live does move out of the
 // COM: loop and into the straight-line code before it, and the loop-level gate
-// COM: does not measure that program point. What the move costs is measured
-// COM: separately, by the second veto on the whole *function's* peak -- and here
-// COM: it costs nothing. Measured whole-function peak: 5248 bytes/lane both
-// COM: before and after the hoist. Only the block reporting it changes; the loop
-// COM: body block drops 5248 -> 4224 while the function block rises 4224 -> 5248.
-// COM: The veto's projection reproduces that: prePeak=5248, corridor=4224 over
-// COM: 1 op, newPoint=5248, ceiling 5248 -> accepted.
-// COM: Case 17 is the shape in which the same move does raise the function peak,
-// COM: and is refused for it.
+// COM: does not measure that program point. The second veto, on the whole
+// COM: *function's* peak, does, and here the move lowers that peak: 6272
+// COM: bytes/lane before (the loop body, charged for %arg0 through the whole
+// COM: loop) and 5248 after (the function block, at the hoisted conversion), as
+// COM: no_spanning_in_loop / no_spanning_hoisted in register-pressure.mlir pin.
+// COM: The projection: prePeak=6272, corridor=4224 over 2 ops, newPoint=5248,
+// COM: ceiling 6272 -> accepted. Case 17 is the same move with a value live
+// COM: across the loop.
 
 #blocked6 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpas6 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -626,11 +625,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Case 17: %span is a fat value that lives across the loop without being
-// COM: read in it. It is charged through the loop body too, so prePeak (8320)
-// COM: binds and the hoist is accepted at the ceiling in every mode. Without
-// COM: that charge prePeak is 6272, under the new point (7296), and the hoist is
-// COM: refused. The loop gate is break-even (live-in 2176 + 2048 - 2048).
+// COM: Case 17: %span (4096 B/lane) lives across the loop without being read
+// COM: in it. It is charged through the loop body too, so prePeak (10368) binds
+// COM: and the hoist is accepted at the ceiling in every mode (corridor 8320,
+// COM: new point 9344). Without that charge prePeak is 8320, under the new
+// COM: point, and the hoist is refused. Charging %span twice in the corridor or
+// COM: at the new point also crosses 10368. The loop gate is break-even
+// COM: (live-in 2176 + 2048 - 2048).
 
 #blocked17 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpas17 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -639,11 +640,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
 
   // CHECK-LABEL: tt.func @hoist_with_spanning_value
-  tt.func @hoist_with_spanning_value(%arg0: tensor<256x64xf16, #blocked17>, %arg1: tensor<64x16xf16, #dot_b17>, %arg2: tensor<256x16xf32, #dpas17>) -> (tensor<256x16xf32, #dpas17>, tensor<256x64xf16, #blocked17>) {
+  tt.func @hoist_with_spanning_value(%arg0: tensor<256x64xf16, #blocked17>, %arg1: tensor<64x16xf16, #dot_b17>, %arg2: tensor<256x16xf32, #dpas17>) -> (tensor<256x16xf32, #dpas17>, tensor<256x64xf32, #blocked17>) {
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
-    %span = arith.addf %arg0, %arg0 : tensor<256x64xf16, #blocked17>
+    %span = arith.extf %arg0 : tensor<256x64xf16, #blocked17> to tensor<256x64xf32, #blocked17>
     // CHECK: ttg.convert_layout %{{.*}} : tensor<256x64xf16, #{{.*}}> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
     // CHECK-NEXT: scf.for
     // CHECK-NOT: ttg.convert_layout
@@ -652,7 +653,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
       %dot = tt.dot %cvt, %arg1, %acc, inputPrecision = tf32 : tensor<256x64xf16, #dot_a17> * tensor<64x16xf16, #dot_b17> -> tensor<256x16xf32, #dpas17>
       scf.yield %dot : tensor<256x16xf32, #dpas17>
     }
-    tt.return %result, %span : tensor<256x16xf32, #dpas17>, tensor<256x64xf16, #blocked17>
+    tt.return %result, %span : tensor<256x16xf32, #dpas17>, tensor<256x64xf32, #blocked17>
   }
 }
 
@@ -2226,9 +2227,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: 160 < 204. A flat +64 charge gives 320 + 64 + 32 = 416 and refuses %cvtX.
 // COM: No merge charge at all gives the same outcome as the right one; case 51
 // COM: is the shape that needs it. At 256-GRF %cvtX passes the loop gate directly.
-// COM: (Predicted from static analysis, not yet confirmed against a build:
-// COM: the retyping of %cvtZ and loop 3 postdates this case's last confirmed
-// COM: trace. Every figure above is predicted to be unchanged from it.)
+// COM: A -debug-only trace of this IR logs the peak refusal of %cvt2, the 352
+// COM: loop-gate refusal and two shared-source hoists of one conversion each;
+// COM: the -192 charge on loop 2 and the 160 are not logged.
 
 #blocked48 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas48 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -2433,15 +2434,15 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: phase as in case 45. The charge from %cvt1's hoist is then the only thing
 // COM: that prices loop 2's merge before {%cvtX} is tried. %cvtZ and loop 3 are
 // COM: retyped as in case 48, for the same reason.
-// COM: At 128-GRF/default %cvt1 hoists past all five twins and loops 2 and 2b..2e
-// COM: are each charged -192. The group of five measures 640 + 6*64 + 32 + 32 +
-// COM: 64 = 1152 > 1088 and is moved back, stamped. {%cvtX} then reads 320 - 192 +
-// COM: 32 = 160 < 204 and hoists. Without the charge it reads 320 + 32 = 352 and
-// COM: is stamped; a flat +64 charge reads 416 and stamps it too. At 256-GRF
-// COM: %cvtX passes the loop gate directly (352 < 409.6).
-// COM: (Predicted from static analysis, not yet confirmed against a build:
-// COM: the retyping of %cvtZ and loop 3 postdates this case's last confirmed
-// COM: trace. Every figure above is predicted to be unchanged from it.)
+// COM: At 128-GRF/default %cvt1 hoists past all five twins, and its hoist charges
+// COM: the twins' loops for the merge. The group of five measures 640 + 6*64 +
+// COM: 32 + 32 + 64 = 1152 > 1088 and is moved back, stamped. {%cvtX} then reads
+// COM: 320 - 192 + 32 = 160 < 204 and hoists. Without the charge it reads
+// COM: 320 + 32 = 352 and is stamped; a flat +64 charge reads 416 and stamps it
+// COM: too. At 256-GRF %cvtX passes the loop gate directly (352 < 409.6).
+// COM: A -debug-only trace of this IR logs the five peak refusals, the group's
+// COM: 1152 > 1088 and one hoist line with thisHoist=-192; the per-loop merge
+// COM: charges and the 160 are not logged.
 
 #blocked51 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas51 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>

@@ -154,7 +154,10 @@ unsigned RegisterPressureAnalysis::pressureContribution(Value value) const {
     return 0;
   if (options.excludeRematerializable && isRematerializable(value))
     return 0;
-  return getPerThreadSizeInBytes(value.getType());
+  auto [it, inserted] = typeSizeCache.try_emplace(value.getType(), 0);
+  if (inserted)
+    it->second = getPerThreadSizeInBytes(value.getType());
+  return it->second;
 }
 
 const Liveness::ValueSetT &

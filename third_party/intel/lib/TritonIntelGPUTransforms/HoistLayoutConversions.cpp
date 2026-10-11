@@ -607,12 +607,11 @@ static uint64_t siblingBlocksPeak(
       // either value's liveness comes only from the ancestor set, which is the
       // same for every op in the block.
       Operation *rep = &block.front();
-      bool resultAlreadyLive =
-          analysis.pressureAt(rep, cvtResult, queryCache).valueLive;
+      bool resultAlreadyLive = analysis.isLiveAt(rep, cvtResult, queryCache);
       uint64_t priced = analysis.peakPressure(&block, queryCache) +
                         (resultAlreadyLive ? 0 : dstBytes);
       bool credit = srcLiveness.creditable &&
-                    analysis.pressureAt(rep, src, queryCache).valueLive &&
+                    analysis.isLiveAt(rep, src, queryCache) &&
                     srcDeadAfterMoveAt(srcLiveness, rep, forOp);
       if (credit)
         priced -= srcBytes;

@@ -315,6 +315,9 @@ private:
 
   LivenessAnalysis liveness;
   RegisterPressureOptions options;
+  /// `getPerThreadSizeInBytes` per type, which `pressureContribution` would
+  /// otherwise recompute (through the layout) for every live value it prices.
+  mutable DenseMap<Type, unsigned> typeSizeCache;
 };
 
 } // namespace mlir::triton::gpu::intel

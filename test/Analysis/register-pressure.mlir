@@ -401,6 +401,31 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
+// COM: %v is the loop's init and is also read after the loop, so it stays live
+// COM: through the body. Body peak 1536 = %acc 512 + %x 512 + %v 512; treating
+// COM: %v as only an init operand would give 1024.
+#blocked9 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: loop_init_read_after_loop
+  // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
+  // CHECK-NEXT: Peak over all blocks in tt.func: 1536 bytes
+  // CHECK-NEXT: Block {{.*}} in scf.for: peak = 1536 bytes, live-in = 0 bytes
+  // CHECK-NEXT: Block {{.*}} in tt.func: peak = 1536 bytes, live-in = 0 bytes
+  tt.func @loop_init_read_after_loop(%arg0: tensor<64x128xf32, #blocked9>) -> (tensor<64x128xf32, #blocked9>, tensor<64x128xf32, #blocked9>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %v = arith.addf %arg0, %arg0 : tensor<64x128xf32, #blocked9>
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %v) -> (tensor<64x128xf32, #blocked9>) : i32 {
+      %x = arith.addf %acc, %acc : tensor<64x128xf32, #blocked9>
+      scf.yield %x : tensor<64x128xf32, #blocked9>
+    }
+    tt.return %r, %v : tensor<64x128xf32, #blocked9>, tensor<64x128xf32, #blocked9>
+  }
+}
+
+// -----
+
 
 // COM: %span is computed above the loop and read below it. Hoisting the
 // COM: conversion lowers both the body peak (8320 to 6272, the conversion leaves

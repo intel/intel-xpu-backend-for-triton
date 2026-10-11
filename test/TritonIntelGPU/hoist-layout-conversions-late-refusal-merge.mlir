@@ -6,13 +6,10 @@
 // COM: way. Mirror image of hoist-layout-conversions-uncharged-merge.mlir, where
 // COM: the refusal comes first and the hoist charges it.
 // COM:
-// COM: PREDICTED FROM STATIC ANALYSIS, NOT YET CONFIRMED AGAINST A BUILD.
-// COM: Every number below is hand-derived from the pass's source and from the
-// COM: confirmed trace of hoist-layout-conversions-uncharged-merge.mlir, whose
-// COM: types and loop bodies this case reuses with the loops reordered. The
-// COM: lines marked (exact) follow from per-lane type sizes and liveInPressure
-// COM: alone; the others depend on whole-function pressure figures and need a
-// COM: real -debug-only=tritonintelgpu-hoist-layout-conversions trace.
+// COM: The types and loop bodies are those of the uncharged-merge case, with the
+// COM: loops reordered. The figures below match a
+// COM: -debug-only=tritonintelgpu-hoist-layout-conversions trace, except the 184
+// COM: without the merge charge, which a trace cannot show.
 // COM: Kept in its own file: corridor-op-cap=5 makes %y's first refusal a
 // COM: fallback, and the same RUN line in a shared file would rerun every other
 // COM: case under that cap.
@@ -40,8 +37,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %zA16 = arith.constant dense<0.000000e+00> : tensor<128x16xf16, #dot_a>
     %zAr = arith.constant dense<0.000000e+00> : tensor<128x16xf16, #dot_ar>
     %zCr = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #dpasr>
-    // COM: %h is hoisted right after %s (and %t too, in phase 2, if its
-    // COM: predicted trial holds); the first unstamped match is enough.
+    // COM: %h is hoisted right after %s, possibly with %t from phase 2; the
+    // COM: first unstamped match is enough.
     // CHECK: %[[S:.*]] = arith.addf %arg0, %arg0
     // CHECK: ttg.convert_layout %[[S]] : tensor<32x16xf16, #{{.*}}> -> tensor<32x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.*}}, kWidth = 2}>>
     %s = arith.addf %arg0, %arg0 : tensor<32x16xf16, #blk>
