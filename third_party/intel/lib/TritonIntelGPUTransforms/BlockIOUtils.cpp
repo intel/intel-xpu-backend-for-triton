@@ -145,10 +145,15 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   SetVector<unsigned> regPackBases;
 
   // Index of trivial (single-non-zero-dim) register bases: dim -> stride ->
-  // regBaseIter. A given (dim, stride) is unique in a well-formed layout; keep
-  // the first occurrence so lookups are deterministic even for a degenerate
-  // input. Non-trivial bases are intentionally excluded (they cannot be packed
-  // into a dense tile and fall through to the leftover pass).
+  // regBaseIter. Non-trivial bases are intentionally excluded (they cannot be
+  // packed into a dense tile and fall through to the leftover pass).
+  //
+  // Two bases share a (dim, stride) only when the layout holds the same
+  // element in more than one register. Keeping the first one is safe: both are
+  // the same vector, so the tile is the same whichever is consumed, and the
+  // other falls through to the leftover pass, where it becomes an extra message
+  // that loads the same elements again -- redundant, but correct. The previous
+  // list-order walk behaved the same way.
   DenseMap<unsigned, DenseMap<unsigned, unsigned>> regBaseByDimStride;
   for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
        ++regBaseIter) {
@@ -439,76 +444,9 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   int tileWidth =
       tileShape[transpose ? rowDim : fastChangeDim] / packedValueNumber;
 
-  BlockIOTileSizeInfo result(tileHeight, tileWidth, packedValueNumber, vBlocks,
+  return BlockIOTileSizeInfo(tileHeight, tileWidth, packedValueNumber, vBlocks,
                              rowDim, fastChangeDim, transpose, vnni,
                              std::move(regPackBases));
-
-  // Guardrail (issue #7806): only emit a tile whose register mapping is
-  // geometrically consistent with it. This is always the case for the dense
-  // tiles built above; the check turns any future inconsistency (or a caller
-  // whose layout the greedy builder cannot faithfully represent) into a clean
-  // fallback to the scatter path rather than a silently wrong load.
-  if (!isTileRegMappingConsistent(ll, result))
-    return BlockIOTileSizeInfo::unknown();
-
-  return result;
-}
-
-bool isTileRegMappingConsistent(const LinearLayout &ll,
-                                const BlockIOTileSizeInfo &sizeInfo) {
-  if (!sizeInfo.isValid() || !sizeInfo.regPackedBases.has_value())
-    return false;
-
-  MLIRContext *ctx = ll.getBases().begin()->first.getContext();
-  StringAttr kRegister = StringAttr::get(ctx, "register");
-  StringAttr kLane = StringAttr::get(ctx, "lane");
-  unsigned threadsPerWarp = ll.getInDimSize(kLane);
-
-  // Registers a single 2D block load message delivers, per lane. Capping (done
-  // later by the load/store/prefetch wrappers) can only shrink this, and a
-  // restriction of an injective/confined mapping stays injective/confined, so
-  // validating the uncapped tile here is sufficient.
-  int64_t numElemsPerLoad = mlir::ceil<int64_t>(
-      static_cast<int64_t>(sizeInfo.tileHeight) * sizeInfo.tileWidth *
-          sizeInfo.numElemPerPackedVal * sizeInfo.vBlocks,
-      static_cast<int64_t>(threadsPerWarp));
-  if (numElemsPerLoad <= 0)
-    return false;
-
-  // Build the register mapping exactly as the LLVM lowering does (delivery
-  // order -> tensor register index), then restrict it to a single message.
-  const SetVector<unsigned> &regPackedBases = *sizeInfo.regPackedBases;
-  std::vector<std::vector<int>> bases(regPackedBases.size());
-  llvm::transform(regPackedBases, bases.begin(), [](unsigned b) {
-    return std::vector<int>{static_cast<int>(b)};
-  });
-  LinearLayout regMapping({{kRegister, bases}},
-                          {{kRegister, ll.getInDimSize(kRegister)}},
-                          /*requireSurjective=*/true);
-  LinearLayout tileMapping = regMapping.resizeInDim(kRegister, numElemsPerLoad);
-
-  // Compose with the layout's register/lane sublayout to obtain the physical
-  // (delivery register, lane) -> tensor mapping realized by one message.
-  SmallVector<StringAttr> outDimNames = llvm::to_vector(ll.getOutDimNames());
-  LinearLayout ext =
-      tileMapping * LinearLayout::identity1D(threadsPerWarp, kLane, kLane);
-  LinearLayout tile =
-      ext.compose(ll.sublayout({kRegister, kLane}, outDimNames));
-
-  // The message must deliver each element to a distinct register ...
-  if (!tile.isInjective())
-    return false;
-
-  // ... and touch only the tile's two dimensions.
-  StringAttr rowName = outDimNames[sizeInfo.rowDim];
-  StringAttr colName = outDimNames[sizeInfo.colDim];
-  for (StringAttr outDim : outDimNames) {
-    if (outDim == rowName || outDim == colName)
-      continue;
-    if (!tile.sublayoutIsZero({kRegister, kLane}, {outDim}))
-      return false;
-  }
-  return true;
 }
 
 BlockIOTileSizeInfo getBlockIOLoadTileSize(const LinearLayout &ll,

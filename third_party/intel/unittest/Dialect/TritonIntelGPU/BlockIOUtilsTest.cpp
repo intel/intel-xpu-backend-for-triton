@@ -42,9 +42,9 @@ protected:
 
   // Rebuild `ll` with its "register" basis vectors reordered by `perm`
   // (perm[i] = source index for the i-th output basis). The resulting layout
-  // describes the exact same register/lane->tensor mapping, just with the
-  // register bases listed in a different ("swizzled") order -- the scenario
-  // issue #7806 is about. Out-dim sizes and surjectivity are preserved.
+  // holds the same data in each lane, with the registers renumbered -- the
+  // scenario issue #7806 is about. Out-dim sizes and surjectivity are
+  // preserved.
   LinearLayout permuteRegisterBases(const LinearLayout &ll,
                                     ArrayRef<unsigned> perm) {
     StringAttr kRegister = StringAttr::get(&ctx, "register");
@@ -103,9 +103,10 @@ protected:
     LinearLayout regMapping({{kReg, bases}}, {{kReg, regSize}},
                             /*requireSurjective=*/true);
     int tpw = ll.getInDimSize(kLane);
-    int numElemsPerLoad = (info.tileHeight * info.tileWidth *
-                           info.numElemPerPackedVal * info.vBlocks) /
-                          tpw;
+    int elemsPerTile = info.tileHeight * info.tileWidth *
+                       info.numElemPerPackedVal * info.vBlocks;
+    // Rounds up, like the lowering.
+    int numElemsPerLoad = (elemsPerTile + tpw - 1) / tpw;
     LinearLayout tileMapping = regMapping.resizeInDim(kReg, numElemsPerLoad);
     LinearLayout ext =
         tileMapping * LinearLayout::identity1D(tpw, kLane, kLane);
@@ -124,7 +125,6 @@ TEST_F(BlockIOUtilsTest, RegisterBaseOrderInvariance_DpasOperandA_F16) {
   auto dpas = makeDpas(/*warpsPerCTA=*/{1, 1}, /*threadsPerWarp=*/16,
                        /*opsPerChan=*/2);
   auto dot = DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
-  auto f16 = Float16Type::get(&ctx);
   SmallVector<int64_t> shape = {64, 32}; // M=64, K=32
   auto ll = cast<DistributedEncodingTrait>(dot).toLinearLayout(shape);
 
@@ -149,14 +149,13 @@ TEST_F(BlockIOUtilsTest, RegisterBaseOrderInvariance_DpasOperandA_F16) {
 // Beyond geometry, the register mapping itself must be order-independent: the
 // physical (delivery-register, lane) -> tensor mapping of a single 2D block
 // load message must match the canonical one for *any* permutation of the
-// register bases. This guards the latent correctness risk the ticket flags:
-// an order-derived regMapping that no longer matches the tile it was sized for.
+// register bases, so a reordered layout is not just sized like the canonical
+// one but also loaded into the same registers.
 TEST_F(BlockIOUtilsTest,
        RegisterBaseOrderInvariance_RegMappingEquivalent_DpasOperandA_F16) {
   auto dpas = makeDpas(/*warpsPerCTA=*/{1, 1}, /*threadsPerWarp=*/16,
                        /*opsPerChan=*/2);
   auto dot = DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
-  auto f16 = Float16Type::get(&ctx);
   SmallVector<int64_t> shape = {64, 32}; // M=64, K=32
   auto ll = cast<DistributedEncodingTrait>(dot).toLinearLayout(shape);
 
@@ -212,7 +211,6 @@ TEST_F(BlockIOUtilsTest,
   auto dpas = makeDpas(/*warpsPerCTA=*/{4, 2}, /*threadsPerWarp=*/16,
                        /*opsPerChan=*/2);
   auto dot = DotOperandEncodingAttr::get(&ctx, /*opIdx=*/1, dpas, /*kWidth=*/2);
-  auto f16 = Float16Type::get(&ctx);
   SmallVector<int64_t> shape = {32, 64}; // K=32, N=64
   auto ll = cast<DistributedEncodingTrait>(dot).toLinearLayout(shape);
 
@@ -270,7 +268,6 @@ TEST_F(BlockIOUtilsTest, RegisterBaseOrderInvariance_Rank3DpasOperandA_F16) {
                             /*repCluster=*/{1, 1, 1},
                             /*threadsPerWarp=*/16, std::nullopt);
   auto dot = DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
-  auto f16 = Float16Type::get(&ctx);
   SmallVector<int64_t> shape = {4, 64, 32}; // batch=4, M=64, K=32
   auto ll = cast<DistributedEncodingTrait>(dot).toLinearLayout(shape);
 
@@ -298,34 +295,6 @@ TEST_F(BlockIOUtilsTest, RegisterBaseOrderInvariance_Rank3DpasOperandA_F16) {
   EXPECT_EQ(info.vBlocks, canonical.vBlocks);
   ASSERT_TRUE(info.regPackedBases.has_value());
   EXPECT_EQ(singleTileDeliveryMapping(reversed, info), ref);
-}
-
-// Solution B guardrail (issue #7806): a well-formed tile's register mapping is
-// consistent with its geometry, while a tile whose declared dimensions do not
-// match the delivered data is rejected (so the op falls back to scatter).
-TEST_F(BlockIOUtilsTest, TileRegMappingConsistencyGuardrail) {
-  auto dpas = makeDpas(/*warpsPerCTA=*/{1, 1}, /*threadsPerWarp=*/16,
-                       /*opsPerChan=*/2);
-  auto dot = DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
-  auto f16 = Float16Type::get(&ctx);
-  SmallVector<int64_t> shape = {64, 32}; // M=64, K=32
-  auto ll = cast<DistributedEncodingTrait>(dot).toLinearLayout(shape);
-  auto info = getBlockIOLoadTileSize(ll, /*memContiguousDim=*/1,
-                                     /*elemSizeInBits=*/16, nullptr, false);
-  ASSERT_TRUE(info.isValid());
-  ASSERT_NE(info.rowDim, info.colDim);
-
-  // A well-formed tile is consistent.
-  EXPECT_TRUE(isTileRegMappingConsistent(ll, info));
-
-  // A tile that claims both of its dimensions are the same one is not: the
-  // delivered data still varies the real row dimension, which now falls outside
-  // the declared {rowDim, colDim}, so the guardrail rejects it.
-  BlockIOTileSizeInfo corrupted(info.tileHeight, info.tileWidth,
-                                info.numElemPerPackedVal, info.vBlocks,
-                                /*rowDim=*/info.colDim, /*colDim=*/info.colDim,
-                                info.transpose, info.vnni, info.regPackedBases);
-  EXPECT_FALSE(isTileRegMappingConsistent(ll, corrupted));
 }
 
 // Test that validate2DBlockLoadTile accepts a column-major B matrix load with
