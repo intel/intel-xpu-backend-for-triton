@@ -1238,8 +1238,7 @@ static inline uintptr_t alignUp(uintptr_t value, size_t alignment) {
 static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
                                int num_warps, int threads_per_warp,
                                int shared_memory, sycl::queue &stream,
-                               KernelInfo *kernel_info, void *global_scratch,
-                               void *profile_scratch, uint32_t num_params,
+                               KernelInfo *kernel_info, uint32_t num_params,
                                void **params, uint8_t *extractor_data) {
   sycl::kernel &kernel = *kernel_info->kernel;
 
@@ -1481,15 +1480,16 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   PyObject *launch_metadata = NULL;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
-  void *global_scratch = nullptr;
-  void *profile_scratch = nullptr;
+  PyObject *global_scratch_obj = NULL;
+  PyObject *profile_scratch_obj = NULL;
   PyObject *arg_annotations = NULL;
   Py_buffer signature;
   PyObject *kernel_args = NULL;
 
-  if (!PyArg_ParseTuple(args, "iiiOOOOOOOy*O", &gridX, &gridY, &gridZ,
+  if (!PyArg_ParseTuple(args, "iiiOOOOOOOOOy*O", &gridX, &gridY, &gridZ,
                         &py_obj_stream, &py_kernel, &kernel_metadata,
                         &launch_metadata, &launch_enter_hook, &launch_exit_hook,
+                        &global_scratch_obj, &profile_scratch_obj,
                         &arg_annotations, &signature, &kernel_args)) {
     return NULL;
   }
@@ -1589,8 +1589,16 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   }
   g_pointer_check_arg_idx = -1;
   // Add scratch objects.
-  params[params_idx++] = &global_scratch;
-  params[params_idx++] = &profile_scratch;
+  params[params_idx] = alloca(sizeof(void *));
+  if (!extractPointer(params[params_idx++], global_scratch_obj)) {
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
+  params[params_idx] = alloca(sizeof(void *));
+  if (!extractPointer(params[params_idx++], profile_scratch_obj)) {
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
   KernelInfo *kernel_info =
       reinterpret_cast<KernelInfo *>(PyCapsule_GetPointer(py_kernel, "kernel"));
   if (kernel_info == nullptr)
@@ -1605,8 +1613,8 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   Py_BEGIN_ALLOW_THREADS;
   try {
     sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp,
-                       shared_memory, stream, kernel_info, global_scratch,
-                       profile_scratch, num_params, params, extractor_data);
+                       shared_memory, stream, kernel_info, num_params, params,
+                       extractor_data);
   } catch (const std::exception &e) {
     launchFailed = true;
     launchError = e.what();

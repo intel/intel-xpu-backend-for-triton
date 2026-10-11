@@ -102,14 +102,6 @@ python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batc
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batched_gemm_3d_tma
 # test_tensor_atomic_add_access_patterns
 python/test/unit/language/test_core.py::test_tensor_atomic_add_access_patterns[shape128-random_no_duplication-3-1-float32]
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/7504
-# Windows: no NVIDIA/AMD toolchain (ptxas-blackwell, hipcc) on Intel-only CI.
-python/test/unit/language/test_compile_only.py::test_compile_only_sm100
-python/test/unit/language/test_compile_only.py::test_compile_only_expect_zero
-python/test/unit/language/test_compile_only.py::test_compile_only_dot
-python/test/unit/language/test_compile_only.py::test_compile_only_k_loop
-python/test/unit/language/test_compile_only.py::test_compile_only_dot_mxfp
-python/test/unit/language/test_compile_only.py::test_fp8_compiles_for_multiple_architectures_hip
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/8241
 python/test/unit/language/test_core.py::test_enable_fp_fusion[True-False-True]
 python/test/unit/language/test_core.py::test_enable_fp_fusion[True-True-True]
