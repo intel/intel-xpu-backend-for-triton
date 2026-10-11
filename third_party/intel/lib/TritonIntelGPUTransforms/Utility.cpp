@@ -10,6 +10,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
@@ -690,6 +691,38 @@ calculateDPASRepetitions(ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx,
   }
 
   llvm_unreachable("unexpected opIdx");
+}
+
+bool mayWriteMemory(Operation *op, bool ignoreSharedMemory) {
+  std::optional<SmallVector<MemoryEffects::EffectInstance>> effects =
+      getEffectsRecursively(op);
+  if (!effects)
+    return true;
+  return llvm::any_of(*effects, [&](const MemoryEffects::EffectInstance &e) {
+    if (!isa<MemoryEffects::Write>(e.getEffect()))
+      return false;
+    SideEffects::Resource *resource = e.getResource();
+    if (ignoreSharedMemory && isa<SharedMemory>(resource))
+      return false;
+    // Resource IDs are compared directly because `isa<>` on resources is
+    // tree-based.
+    return resource->getResourceID() != L2Cache::getResourceID();
+  });
+}
+
+bool crossesMemoryWrite(OpBuilder::InsertPoint ip, Operation *end) {
+  Block *block = ip.getBlock();
+  Operation *ancestor = block->findAncestorOpInBlock(*end);
+  if (!ancestor)
+    return true;
+  for (Operation &op : llvm::make_range(ip.getPoint(), block->end())) {
+    if (mayWriteMemory(&op))
+      return true;
+    if (&op == ancestor)
+      return false;
+  }
+  assert(false && "insertion point does not dominate the end op");
+  return true;
 }
 
 } // namespace mlir::triton::gpu::intel

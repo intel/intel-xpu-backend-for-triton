@@ -95,40 +95,18 @@ bool isLoadCandidate(tt::DescriptorLoadOp loadOp, Type expectedElementType,
   return true;
 }
 
-/// Return true if \p op may write to a resource that a global-memory 2D block
-/// load can alias, or if its effects are unknown.
-///
-/// A write to shared memory (`ttg.local_alloc`/`ttg.local_store`, which the SLM
-/// round trip of a `tt.trans` is lowered through) or to the L2 cache (a
-/// prefetch, which declares a write only to keep CSE/DCE from removing it)
-/// cannot change what a global load reads, so neither blocks moving such a load
-/// past it.
-bool mayWriteMemoryAliasingGlobalLoad(Operation *op) {
-  std::optional<SmallVector<MemoryEffects::EffectInstance>> effects =
-      getEffectsRecursively(op);
-  if (!effects)
-    return true; // conservative: unknown effects -> assume an aliasing write
-  return llvm::any_of(
-      *effects, [](const MemoryEffects::EffectInstance &effect) {
-        if (!isa<MemoryEffects::Write>(effect.getEffect()))
-          return false;
-        SideEffects::Resource *resource = effect.getResource();
-        if (isa<ttg::SharedMemory>(resource))
-          return false;
-        if (resource->getResourceID() == ttgi::L2Cache::getResourceID())
-          return false;
-        return true;
-      });
-}
-
 /// Return true if any operation strictly between \p start and \p end may write
 /// memory that a global load reads. \p start and \p end must be in the same
 /// block, with \p start before \p end.
+///
+/// A write to shared memory (`ttg.local_alloc`/`ttg.local_store`, which the SLM
+/// round trip of a `tt.trans` is lowered through) cannot change what a global
+/// load reads, so it does not block moving such a load past it.
 bool crossesAliasingWrite(Operation *start, Operation *end) {
   assert(start->getBlock() == end->getBlock() && "expecting the same block");
   for (Operation *op = start->getNextNode(); op && op != end;
        op = op->getNextNode())
-    if (mayWriteMemoryAliasingGlobalLoad(op))
+    if (ttgi::mayWriteMemory(op, /*ignoreSharedMemory=*/true))
       return true;
   return false;
 }

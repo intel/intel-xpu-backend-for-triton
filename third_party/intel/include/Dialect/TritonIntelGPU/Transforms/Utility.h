@@ -10,6 +10,7 @@
 #define TRITON_DIALECT_TRITONINTELGPU_TRANSFORMS_UTILITY_H
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/Builders.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
@@ -117,6 +118,21 @@ calculateDPASRepetitions(ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx,
                          ArrayRef<unsigned> repCluster, unsigned repeatCount,
                          unsigned systolicDepth, unsigned executionSize,
                          unsigned opsPerChannel);
+
+// Returns true if the op, or an op nested in it, may write memory, so other
+// operations must not be moved across it. Unknown effects count as a write,
+// unlike in upstream TritonGPUReorderInstructions, which treats them as none.
+// Writes to the `L2Cache` resource are ignored: `ttig.prefetch` and
+// `ttig.descriptor_prefetch` declare `MemWrite<L2Cache>` only to keep CSE/DCE
+// from removing them. If `ignoreSharedMemory` is set, writes to shared memory
+// are ignored too, for callers that only move global-memory accesses.
+bool mayWriteMemory(Operation *op, bool ignoreSharedMemory = false);
+
+// Returns true if an op that may write memory (see `mayWriteMemory`) executes
+// between `ip` and `end`, where `ip` dominates `end`. Ops are scanned from `ip`
+// up to and including the ancestor of `end` in the block of `ip`; that
+// ancestor (e.g. the loop containing `end`) is checked as a whole.
+bool crossesMemoryWrite(OpBuilder::InsertPoint ip, Operation *end);
 
 } // namespace mlir::triton::gpu::intel
 
