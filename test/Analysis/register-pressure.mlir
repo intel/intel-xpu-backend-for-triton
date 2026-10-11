@@ -8,11 +8,9 @@
 // The first report line is the peak over *every* block, which a per-kernel
 // allocation must cover; the per-block lines follow.
 //
-// A value nothing reads contributes nothing to any of these figures: it never
-// needs to occupy a register. Below, the outer tt.func block's own top-level ops
-// hold nothing for the scf.for's result (tt.return does not take it), but the
-// block's reported peak still comes from the nested loop body: a block's peak
-// covers regions nested inside it too, not just its own top-level ops.
+// A value nothing reads contributes nothing to any of these figures. A block's
+// peak includes the regions nested in it, so the outer tt.func block below
+// reports its loop body's peak.
 // CHECK-LABEL: loop_with_dpas_accumulator
 // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
 // CHECK-NEXT: Peak over all blocks in tt.func: 256 bytes
@@ -28,10 +26,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // COM: = 32 elems * 2B = 64; operand B tensor<64x16xf16,#dot1> = 64 * 2B =
     // COM: 128; accumulator iter_arg tensor<8x16xf32,#dpas> = 8 * 4B = 32; dot
     // COM: result (same type) = 32. Peak of the loop body block = 256 bytes.
-    // COM: The outer func block's own top-level ops only hold the scf.for result,
-    // COM: which tt.return does not take, so it costs 0 bytes there (nothing
-    // COM: consumes it) -- but a block's peak covers nested regions too, so the
-    // COM: func block still reports the loop body's 256 bytes.
+    // COM: The scf.for result is unread, so the func block's own ops hold nothing,
+    // COM: but its peak still includes the loop body's 256 bytes.
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
     %c0_i64 = arith.constant 0 : i64
@@ -135,9 +131,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // COM: live-in, so live-in = 64 bytes (only operand A).
     // COM: Loop body peak = operand A (64) + operand B (128) + accumulator (32)
     // COM: + dot result (32) = 256 bytes (peak occurs at the tt.dot operation).
-    // COM: The outer func block's own top-level ops hold operand A (64 bytes); the
-    // COM: loop result is unread so it adds nothing there -- but the block's peak
-    // COM: covers the nested loop body too, so it reports 256 bytes.
+    // COM: The func block's own ops hold operand A (64 bytes), but its peak
+    // COM: includes the loop body's 256 bytes.
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
     %c0_i64 = arith.constant 0 : i64
@@ -159,9 +154,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Gap 1: the peak of a block can sit inside a nested region. The loop body's
-// COM: own operations are cheap, but the scf.if it holds is not, so a block-local
-// COM: scan of the loop body would report the loop as low pressure.
+// COM: The peak of a block can sit inside a nested region: the loop body's own
+// COM: ops are cheap, the scf.if it holds is not.
 // CHECK-LABEL: loop_with_nested_if
 // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
 // CHECK-NEXT: Peak over all blocks in tt.func: 1569 bytes
@@ -175,15 +169,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @loop_with_nested_if(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f32>, %arg3: i1) {
     // COM: tensor<64x128xf32, #blocked3> is 128 elems/lane * 4B = 512 bytes/lane.
-    // COM: The peak is at the arith.addf inside the scf.if, where the two loaded
-    // COM: tensors and the sum are all live: 3 * 512 = 1536 bytes. On top of that
-    // COM: the analysis adds the values live *through* the enclosing scf.if: the
-    // COM: dot result %6, yielded after the scf.if (32), and the condition %arg3
-    // COM: (1 byte, i1). 1536 + 32 + 1 = 1569 bytes. %arg3 is live at both nesting
-    // COM: levels and is counted once, not twice. The scf.for's own result %3 is
-    // COM: not counted while its body executes: that register is the one holding
-    // COM: the yielded %6, already counted above.
-    // COM: All three blocks report 1569: a block's peak covers nested regions.
+    // COM: Peak at the arith.addf in the scf.if: 3 * 512 = 1536, plus the values
+    // COM: live through the if: the dot result %6 (32, yielded after the if) and
+    // COM: the condition %arg3 (1) = 1569. A value live at several nesting levels
+    // COM: is counted once. The scf.for's own result is not counted while its body
+    // COM: runs. All three blocks report 1569.
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
     %c0_i64 = arith.constant 0 : i64
@@ -209,10 +199,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Gap 2, on top of Gap 1: a value defined before a region-holding op and
-// COM: used after it holds a register for the whole duration of that op, yet is
-// COM: neither defined nor used inside the nested block, so the nested block's
-// COM: own liveness info does not know about it.
+// COM: A value defined before a region-holding op and used after it holds a
+// COM: register for the whole op, yet the nested block's own liveness does not
+// COM: know it.
 // CHECK-LABEL: loop_with_nested_if_and_live_through
 // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
 // CHECK-NEXT: Peak over all blocks in tt.func: 2081 bytes
@@ -225,14 +214,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 #blocked4 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @loop_with_nested_if_and_live_through(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f32>, %arg3: i1) {
-    // COM: Identical to @loop_with_nested_if except for %7, a 512 byte/lane value
-    // COM: defined immediately before the scf.if and consumed immediately after
-    // COM: it, and never referenced inside it. The peak is at the same arith.addf
-    // COM: inside the scf.if and grows by exactly 512 bytes, from 1569 to 2081:
-    // COM: the live-through value is added once, not once per nesting level.
-    // COM: %7 is invisible to the scf.if body block's own liveness info (neither
-    // COM: defined nor used there), so without the enclosing-scope walk the body
-    // COM: would still report 1569 despite %7 occupying a register throughout.
+    // COM: As @loop_with_nested_if plus %7 (512), defined before the scf.if and
+    // COM: read after it, never inside it. The body's own liveness cannot see %7,
+    // COM: yet the peak must include it, once: 1569 + 512 = 2081.
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
     %c0_i64 = arith.constant 0 : i64
@@ -272,28 +256,22 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // CHECK-NEXT: Block {{.*}} in scf.for: peak = 2594 bytes, live-in = 2 bytes
 // CHECK-NEXT: Block {{.*}} in tt.func: peak = 2594 bytes, live-in = 0 bytes
 
-// COM: A handful of the boundary crossings above under `per-op` mode, chosen to
-// COM: catch exactly the kind of drift BLOCKING-1 introduced: `pressureBefore`
-// COM: at a nested-region boundary must track what the block-peak figures above
-// COM: already assert, not recompute liveness some other, potentially
-// COM: inconsistent way. Not adjacent output lines, so plain `PEROP:` (not
-// COM: `-NEXT`) is used for all but the label.
+// COM: Per-op figures at the nested-region boundaries must agree with the block
+// COM: peaks above. The output lines are not adjacent, so they are not chained
+// COM: with -NEXT.
 // PEROP-LABEL: three_level_nesting_live_through
-// COM: Entering the second nesting level: the outer scf.if's own live-through
-// COM: contribution (the loop body's %7, 512 bytes) adds to what already lived
-// COM: through the loop (%arg3/%arg4 at 1 byte each, %6 at 32).
+// COM: Entering the second level: the outer scf.if's live-through value (the loop
+// COM: body's %7, 512) adds to what lived through the loop (%arg3/%arg4 at 1 byte
+// COM: each, %6 at 32).
 // PEROP: Before scf.if: 546 bytes
-// COM: Entering the third nesting level: the inner scf.if's own live-through
-// COM: contribution (the outer if body's %10, 512 bytes) adds on top.
+// COM: Entering the third level: the inner scf.if's live-through value (the outer
+// COM: if body's %10, 512) adds on top.
 // PEROP: Before scf.if: 1058 bytes
-// COM: Back at the outer scf.if's own nesting level, after the inner scf.if has
-// COM: closed: the inner if's live-through contribution is gone, but the outer
-// COM: if's own (%7, 512 bytes) is not -- exactly the region-boundary
-// COM: bookkeeping BLOCKING-1 got wrong.
+// COM: After the inner scf.if closes, its live-through value is gone but the
+// COM: outer if's (%7, 512) is not.
 // PEROP: Before arith.addf: 1058 bytes
-// COM: Back in the loop body, after the outer scf.if has closed entirely: only
-// COM: the loop's own live-through value (%6 at 32) and the two conditions
-// COM: remain, none of either scf.if's own contributions.
+// COM: After the outer scf.if closes, only the loop's %6 (32) and the two
+// COM: conditions remain.
 // PEROP: Before scf.yield: 34 bytes
 #dpas5 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0_5 = #ttg.dot_op<{opIdx = 0, parent = #dpas5, kWidth=1}>
@@ -301,40 +279,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 #blocked5 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @three_level_nesting_live_through(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f32>, %arg3: i1, %arg4: i1) {
-    // COM: The peak is at the arith.addf in the innermost scf.if body, three
-    // COM: levels down: 3 x 512 for its own values, plus one live-through value
-    // COM: from each enclosing scope (%10 at 512 from the outer scf.if body, %7 at
-    // COM: 512 from the loop body, %6 at 32 carried out of the loop) plus both i1
-    // COM: conditions at 1 byte each, for 2594 bytes. Each is counted once even
-    // COM: though the conditions and %6 are live at several nesting levels.
-    // COM: %arg3/%arg4 ARE operands of the scf.if they each condition, and are
-    // COM: each dropped at that scf.if's own level by the separate, non-loop
-    // COM: liveAfterAncestor rule in getLiveThroughAncestorSet -- not by
-    // COM: #8053's loop-init operand-supersession fix (isFullyForwardedThrough/
-    // COM: isLoopInitUse), which is only ever consulted when the ancestor is a
-    // COM: LoopLikeOpInterface; an scf.if is not one, so that path never runs
-    // COM: here at all. Each condition is dropped because neither is touched
-    // COM: inside its scf.if's body and neither is live immediately after it.
-    // COM: But each is separately, correctly recovered one level up: its only
-    // COM: real use is nested inside the scf.for's region too, so it is also
-    // COM: raw-live at the scf.for's own point, where it is NOT an operand (the
-    // COM: scf.for's operands are only its bounds and the accumulator init) and
-    // COM: so is kept there unconditionally. The recursive ancestor union
-    // COM: re-unions that scf.for-level contribution back in, so the byte
-    // COM: liveAfterAncestor drops at the scf.if level is restored at the
-    // COM: scf.for level and the total does not move.
-    // COM: By the time %15 executes both conditions have already branched, so
-    // COM: charging them here at all is a ~2-byte overcount -- but it is *not*
-    // COM: pre-existing or unrelated to the fix above: it is the very same
-    // COM: back-edge-unconditional charge at the scf.for level that recovers
-    // COM: %arg3/%arg4's contribution in the first place (a value merely
-    // COM: *referenced* inside a loop is charged for the loop's whole duration,
-    // COM: since MLIR's own per-block liveness cannot see the back edge). Here
-    // COM: that same rule overcounts by ~2 bytes; at the scale of a value that
-    // COM: is only read once early in a much larger loop body, the identical
-    // COM: mechanism is what costs 2048 B/lane in the cross-loop-forwarding
-    // COM: case elsewhere in this file. Both are the same accepted, deliberate
-    // COM: trade-off (soundness over precision), not two different defects.
+    // COM: Peak at the arith.addf in the innermost scf.if body, three levels down:
+    // COM: 3 x 512, plus one live-through value per enclosing scope (%10 512, %7
+    // COM: 512, %6 32) and both i1 conditions = 2594. The conditions are still
+    // COM: charged after they branch: a value read anywhere in a loop is charged
+    // COM: for the whole loop, since per-block liveness cannot see the back edge.
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
     %c0_i64 = arith.constant 0 : i64
@@ -368,9 +317,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: A loop nested in a loop, the scenario issue #8053 calls out for real
-// consumers: both loop bodies carry an iter_arg, and a value live-in to the
-// outer loop is consumed inside the inner loop body.
+// COM: A loop nested in a loop: a value live-in to the outer loop is read only
+// COM: inside the inner loop body.
 // CHECK-LABEL: nested_loops_live_through
 // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
 // CHECK-NEXT: Peak over all blocks in tt.func: 2080 bytes
@@ -384,31 +332,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @nested_loops_live_through(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f32>) {
     // COM: tensor<64x128xf32, #blocked6> is 512 bytes/lane, tensor<8x16xf32,
-    // COM: #dpas6> is 32. The peak is at %14, the second arith.addf in the inner
-    // COM: loop body, and is 2080 bytes:
-    // COM:   inner block, at %14: %12, %13 and %14 itself, 3 x 512 = 1536. The
-    // COM:     inner iter_arg %arg8 is NOT live here: it is a block argument, so
-    // COM:     its range runs from the block front to its last use at %12.
-    // COM:   enclosing outer loop body, at the inner scf.for %9: the dot result
-    // COM:     %7 (32), which is live across the inner loop because scf.yield uses
-    // COM:     it afterwards, plus %3 (512): %3's only use is inside the inner
-    // COM:     region, which liveness attributes to the scf.for op itself. That is
-    // COM:     the term the enclosing-scope walk exists for -- inside the inner
-    // COM:     block %3 looks dead from %13 onward, yet it must stay in a register
-    // COM:     for every inner iteration. The loop-carried init %8 is NOT counted
-    // COM:     here: %8's only use anywhere is as %9's own init operand, so it dies
-    // COM:     the instant %9 starts executing -- from then on the register it named
-    // COM:     is either %arg8 (iteration 0, already counted by the inner block's
-    // COM:     own live set) or the yielded %14 (later iterations, likewise already
-    // COM:     counted). Charging %8 as well would count that one physical register
-    // COM:     twice (see getLiveThroughAncestorSet's operand-supersession check).
-    // COM:   enclosing tt.func block, at the outer scf.for %4: %3 again (consumed
-    // COM:     by %4), already in the set, so it adds nothing. The tensor
-    // COM:     descriptors contribute 0 bytes and %cst is rematerializable.
-    // COM: 1536 + 32 + 512 = 2080. All three blocks report it.
-    // COM: Live-in is 512 for both loop bodies (%3, the only non-rematerializable
-    // COM: non-descriptor value defined outside and used inside); the iter_args do
-    // COM: not appear because LivenessBlockInfo::in() excludes block arguments.
+    // COM: #dpas6> is 32. Peak at %14 = 2080: %12, %13, %14 (3 x 512 = 1536), plus
+    // COM: %7 (32, read after the inner loop), plus %3 (512, read only inside the
+    // COM: inner loop, so live for its whole duration). The inner init %8 dies when
+    // COM: the inner loop starts and is not charged again.
+    // COM: Live-in is 512 for both bodies (%3); block arguments are not in
+    // COM: LivenessBlockInfo::in().
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
     %c0_i64 = arith.constant 0 : i64
@@ -438,32 +367,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Regression guard for the isFullyForwardedThrough over-application bug
-// COM: (#8053 follow-up): %v is defined before the *outer* loop and its only
-// COM: use anywhere is as the *inner* loop's own init operand -- forwarded
-// COM: through the inner loop, never read directly. That makes %v genuinely
-// COM: superseded from the inner loop's own perspective (it is the inner
-// COM: loop's own operand, so getLiveThroughAncestorSet(innerLoop, ...)
-// COM: correctly drops it), but NOT from the outer loop's: the inner loop
-// COM: re-evaluates its own init fresh every time the outer loop's back edge
-// COM: loops around, so %v must still be charged for the *outer* loop's whole
-// COM: duration. A version of isFullyForwardedThrough that checks only
-// COM: "is this some loop's own init operand" (any loop, at any nesting
-// COM: depth) rather than "is this *ancestor's* own init operand" wrongly
-// COM: drops %v at the outer level too, under-reporting the peak by exactly
-// COM: %v's 512 bytes.
-// COM: Measured (-test-register-pressure): peak = 1056 bytes everywhere
-// COM: (%arg8 512 + %arg6 32 + %v 512). Without this fix, %v is dropped from
-// COM: the outer loop's live-through set and peak drops to 544 -- confirmed
-// COM: by temporarily reverting the fix and rebuilding. Live-in is *not*
-// COM: the discriminating field here: both loop bodies' live-in figures
-// COM: (0 for the inner, 512 for the outer, from %v) are identical with or
-// COM: without the fix, since `liveInPressure` reads MLIR's own
-// COM: `LivenessBlockInfo::in()` directly -- a block-level query that is
-// COM: already region-aware on its own, unrelated to and unaffected by
-// COM: `isFullyForwardedThrough`/`getLiveThroughAncestorSet`, which only
-// COM: feed into `pressureAt`'s ancestor-climbing and therefore only affect
-// COM: the peak.
+// COM: %v is used only as the inner loop's init. It is superseded for the inner
+// COM: loop, but not for the outer one: the outer back edge re-evaluates that init
+// COM: each iteration, so the outer body is charged for %v. Peak 1056 = %arg8 512
+// COM: + %arg6 32 + %v 512; dropping %v at the outer level gives 544. Live-in
+// COM: does not depend on this rule, so the peak is the field that pins it.
 #blocked8 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas8 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
@@ -494,48 +402,18 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Originally meant as the hazard the whole-function peak line exists to
-// COM: expose, measured on the same function before and after hoisting the
-// COM: conversion by hand. With the region-aware register pressure fix, it no
-// COM: longer demonstrates that hazard: both figures below actually *fall*
-// COM: (loop body 8320 -> 6272, whole-function 8320 -> 7296), so there is no
-// COM: rise for the whole-function line to catch that the loop-level figure
-// COM: alone would miss -- hoisting is a strict win here by either metric now.
-// COM: This is a factual correction of a stale claim (a prior version of this
-// COM: comment said the whole-function figure "rises (6272 -> 7296)", citing
-// COM: the wrong pre-hoist number -- 6272 is `no_spanning_in_loop`'s loop-body
-// COM: figure below, not this case's whole-function one, which the CHECK lines
-// COM: two cases down have always correctly asserted as 8320). The underlying
-// COM: design question -- does this repo still have a case demonstrating the
-// COM: whole-function-only hazard #8068's gate exists for -- is answered by
-// COM: `gate_needed_in_loop`/`gate_needed_hoisted` at the end of this file: a
-// COM: straight-line chain of temporaries between the conversion's source and
-// COM: the loop, rather than a single value read only after it, is what
-// COM: creates the asymmetry this pair no longer can.
-// COM:
-// COM: %span is computed above the loop and read below it, so it is live across
-// COM: the whole straight-line region -- and the hoisted conversion's result now
-// COM: has to be live there too, alongside it. The loop-level figure alone still
-// COM: cannot see this: hoisting *lowers* the loop body peak (8320 -> 6272),
-// COM: because the conversion no longer executes there -- though not down to a
-// COM: convert-free loop's 4224, since #8053's enclosing-scope accounting now
-// COM: also charges the loop body for %span (and, pre-hoist, the unconverted
-// COM: %arg0 too): each is read only once, right next to the loop, but is
-// COM: charged as occupying a register for the loop's *entire* duration, since
-// COM: the loop body's own liveness info cannot see that the real last use sits
-// COM: just outside it.
+// COM: %span is computed above the loop and read below it. Hoisting the
+// COM: conversion lowers both the body peak (8320 to 6272, the conversion leaves
+// COM: the body) and the function peak (8320 to 7296). The body is still charged
+// COM: for %span, and before the hoist for %arg0, for the whole loop.
 #blockedspan = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpasspan = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
 #dot_aspan = #ttg.dot_op<{opIdx = 0, parent = #dpasspan, kWidth = 1}>
 #dot_bspan = #ttg.dot_op<{opIdx = 1, parent = #dpasspan, kWidth = 2}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: Loop body peak (8320) = the dot's own local pressure (converted A +
-  // COM: B + accumulator-in + dot result = 4224, same as a convert-free loop)
-  // COM: plus two enclosing-scope live-through values the loop body's own
-  // COM: liveness cannot see: %arg0 (2048, still read once inside the loop by
-  // COM: the convert, but charged for the loop's whole duration) and %span
-  // COM: (2048, read only after the loop, at tt.return). 4224 + 2048 + 2048 =
-  // COM: 8320.
+  // COM: Body peak 8320 = the dot's own 4224 (A 2048 + B 128 + accumulator 1024 +
+  // COM: result 1024) + %arg0 2048 (read by the convert, charged for the whole
+  // COM: loop) + %span 2048 (read after the loop).
   // CHECK-LABEL: spanning_in_loop
   // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
   // CHECK-NEXT: Peak over all blocks in tt.func: 8320 bytes
@@ -554,18 +432,9 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return %result, %span : tensor<256x16xf32, #dpasspan>, tensor<256x64xf16, #blockedspan>
   }
 
-  // COM: Loop body peak (6272) = the dot's own local pressure (4224, the
-  // COM: converted A is now a live-in rather than freshly produced, but the
-  // COM: total is the same) plus %span (2048), the one remaining live-through
-  // COM: value -- the converted A itself is no longer an extra live-through
-  // COM: charge, since it is already live-in to the loop body directly.
-  // COM: 4224 + 2048 = 6272. The whole-function peak (7296) sits elsewhere
-  // COM: entirely, at the hoisted convert itself, where %arg0 (2048, still
-  // COM: live for its own use right here), %arg1 (128) and the accumulator
-  // COM: init %arg2 (1024) are all live-through the loop alongside %span
-  // COM: (2048) and the convert's own result (2048): 2048+128+1024+2048+2048
-  // COM: = 7296, unaffected by #8053 since it is already a single block-local
-  // COM: point.
+  // COM: Body peak 6272 = 4224 + %span 2048. The function peak 7296 is at the
+  // COM: hoisted convert: %arg0 2048, %arg1 128, %arg2 1024, %span 2048, result
+  // COM: 2048.
   // CHECK-LABEL: spanning_hoisted
   // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
   // CHECK-NEXT: Peak over all blocks in tt.func: 7296 bytes
@@ -587,27 +456,16 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: The same A/B on the shape that has no spanning value, which is the shape
-// COM: issue #7993 claimed raises the whole-function peak on its own. It does
-// COM: not: with nothing spanning the hoist site, hoisting cannot raise the
-// COM: figure the way it does for the spanning pair above. But #8053's
-// COM: enclosing-scope accounting adds a different, narrower effect here:
-// COM: keeping the convert *inside* the loop conservatively charges the loop
-// COM: for %arg0's whole duration (it is read once, by the convert, but the
-// COM: loop body's own liveness cannot see that the real last use sits inside
-// COM: it rather than after it), so the in-loop peak (6272) is actually
-// COM: *higher* than the hoisted one (5248) -- hoisting *lowers* the peak here,
-// COM: the opposite direction from the spanning pair, because there is no
-// COM: spanning value to raise it and one fewer enclosing-scope charge once the
-// COM: convert moves outside the loop.
+// COM: The same A/B with nothing spanning the hoist site. Keeping the convert in
+// COM: the loop charges the body for %arg0 for the whole loop, so hoisting lowers
+// COM: the peak (6272 to 5248).
 #blockednospan = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpasnospan = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
 #dot_anospan = #ttg.dot_op<{opIdx = 0, parent = #dpasnospan, kWidth = 1}>
 #dot_bnospan = #ttg.dot_op<{opIdx = 1, parent = #dpasnospan, kWidth = 2}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: Loop body peak (6272) = the dot's own local pressure (4224) plus
-  // COM: %arg0 (2048), charged as live through the whole loop even though its
-  // COM: one real use (the convert) is the loop's first op. 4224 + 2048 = 6272.
+  // COM: Body peak 6272 = 4224 + %arg0 2048, charged for the whole loop although
+  // COM: its one use (the convert) is the loop's first op.
   // CHECK-LABEL: no_spanning_in_loop
   // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
   // CHECK-NEXT: Peak over all blocks in tt.func: 6272 bytes
@@ -645,40 +503,13 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: The hazard `spanning_in_loop`/`spanning_hoisted` above no longer demonstrates
-// COM: under the corrected analysis (see the note there): a hoist whose loop-level
-// COM: peak does not rise, but whose *whole-function* peak does, so a gate that only
-// COM: consulted the loop-level figure would take a hoist the whole-function one
-// COM: correctly rejects. This is what #8068's whole-function peak gate exists for.
-// COM:
-// COM: The shape: %span feeds the conversion inside the loop and is also read again
-// COM: after it (tt.return), same as `spanning_in_loop` above, so its own live-through
-// COM: contribution is identical whether or not the conversion is hoisted -- it cannot
-// COM: create an asymmetry on its own (this is exactly why the case above stopped
-// COM: working: %span there contributes the same either way too). The asymmetry
-// COM: instead comes from a straight-line chain of temporaries (%big1..%big3) sitting
-// COM: *between* the conversion's source and the loop, built so %big3 is also read
-// COM: after the loop (giving the chain a real peak of its own, at %big3's own point,
-// COM: rather than being dead code once computed).
-// COM:
-// COM: Pre-hoist, the conversion exists only inside the loop and never touches that
-// COM: chain, so the chain's own peak is unaffected by it: 2048 (%span) + 128 (%arg1)
-// COM: + 1024 (%arg2) + 1024 (%big1) + 1024 (%big2) + 1024 (%big3) = 6272, below the
-// COM: loop's own peak (7296), so the loop dominates and the whole-function figure
-// COM: (7296) equals it exactly.
-// COM:
-// COM: Post-hoist, the conversion's result is defined *before* the chain and used
-// COM: only inside the loop (after it), so it is live-through the entire chain too --
-// COM: a charge the pre-hoist version never had at all: 6272 + 2048 (the conversion's
-// COM: own result) = 8320, now *above* the loop's own peak. The loop's own peak is
-// COM: unchanged at 7296 either way (the conversion's own contribution there is the
-// COM: same 2048 bytes whether it is locally defined or live-through), so a gate that
-// COM: only looked at the loop would see no reason to reject this hoist -- only the
-// COM: whole-function figure (7296 -> 8320) shows the real rise. Note the *visible*
-// COM: rise (1024) is smaller than the conversion's own size (2048): part of the new
-// COM: charge is masked by the loop's pre-existing, unrelated 7296 ceiling, and only
-// COM: the portion that pushes past it is observable in the whole-function peak --
-// COM: an honest artifact of "peak", not a miscount.
+// COM: A hoist that leaves the loop peak unchanged (7296) but raises the function
+// COM: peak (7296 to 8320): the hoisted result spans the %big1..%big3 chain
+// COM: between the source and the loop. A gate that read only the loop figure
+// COM: would accept it. The chain peaks at 6272 before the hoist (%span 2048 +
+// COM: %arg1 128 + %arg2 1024 + three 1024 temporaries) and at 8320 with the
+// COM: result live through it; the visible rise (1024) is smaller than the
+// COM: result (2048) because the loop's own 7296 masks part of it.
 #blockedgate = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpasgate = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
 #dot_agate = #ttg.dot_op<{opIdx = 0, parent = #dpasgate, kWidth = 1}>

@@ -1,43 +1,25 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=1" | FileCheck %s --check-prefixes=CHECK,CAP1
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=3" | FileCheck %s --check-prefixes=CHECK,CAP2
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=3" | FileCheck %s --check-prefixes=CHECK,CAP3
 // RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=1" 2>&1 | FileCheck %s --check-prefix=STATS1
-// RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=3" 2>&1 | FileCheck %s --check-prefix=STATS2
+// RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=3" 2>&1 | FileCheck %s --check-prefix=STATS3
 
 // COM: The corridor operation cap bounds what the whole-function peak projection
-// COM: will price. The projection walks every operation between a hoist's
-// COM: insertion point and the conversion's old position, and each one costs a
-// COM: fresh liveness set; the cap is what stops a pathological input from
-// COM: turning that walk into the pass's dominant cost. Past the cap the walk is
-// COM: abandoned and every unwalked point is charged conservatively as
-// COM: prePeak + dstBytes.
-// COM:
-// COM: The default cap is far above anything a real kernel reaches, so it can only
-// COM: be exercised by lowering it. This file lowers it around a fixed pair of
-// COM: hoists whose corridors are 3 and 4 operations long (one op longer each
-// COM: than a corridor covering only the operations *above* the conversion's old
-// COM: position, since `collectCorridor` also walks the body past the
-// COM: conversion's own last use -- here just the loop's own `scf.yield` -- to
-// COM: price the loop's back edge; see `collectCorridor`'s doc comment in
-// COM: HoistLayoutConversions.cpp), which is why the same IR gives two different
-// COM: outcomes:
+// COM: prices. The projection walks every operation between a hoist's insertion
+// COM: point and the conversion's old position, plus the loop body after the
+// COM: conversion's last use (here the scf.yield, which carries the back edge), and
+// COM: each one costs a fresh liveness set. Past the cap the walk is abandoned and
+// COM: every unwalked point is charged as prePeak + dstBytes.
+// COM: The default cap is far above any real kernel, so the file lowers it around
+// COM: two free hoists (each retires a 256 B source for a 64 B result, so the loop
+// COM: gate passes them). Loops are decided last to first: the second loop's
+// COM: corridor is 3 operations, the first loop's is 4 because it also contains
+// COM: the conversion the second hoist has already moved there.
 // COM:   cap=1: both corridors exceed the cap, both hoists are charged
-// COM:          prePeak + 64 = 992 > 928 and both are refused.
-// COM:   cap=3: the 3-operation corridor is priced (928, accepted at the 928
-// COM:          ceiling) and only the 4-operation one bails.
-// COM: Both hoists are free -- each retires a 256-byte source in exchange for a
-// COM: 64-byte result -- so the loop-level gate passes them in every
-// COM: configuration and the verdicts here are the corridor cap's alone. This is
-// COM: the cap's cost made visible: it is not a speed knob, it buys bounded work
-// COM: with lost hoists.
-// COM:
-// COM: The two loops are decided last-to-first (see the sibling-loop case in
-// COM: hoist-layout-conversions.mlir), which at cap=3 is why the *second* loop's
-// COM: conversion is the one that moves: it is decided first, and its corridor is
-// COM: shorter by the loop the other candidate has to step over.
-// COM:
-// COM: A bail also resets the priced-operation count to 0 in the debug output
-// COM: ("corridor=992 over 0 ops"), which distinguishes a conservative charge from
-// COM: a walk that priced operations and found a genuine peak.
+// COM:          prePeak + 64 = 992 > 928 and refused.
+// COM:   cap=3: the second loop's corridor is priced (928, accepted at the 928
+// COM:          ceiling) and only the first loop's bails.
+// COM: A bail reports "corridor=992 over 0 ops" in the debug output, which tells a
+// COM: conservative charge from a priced walk.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -63,13 +45,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
     // COM: cap=3: the second loop's conversion moves up beside %s2, the first
     // COM: loop's stays put.
-    // CAP2: arith.addf
-    // CAP2-NEXT: arith.addf
-    // CAP2-NEXT: ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
-    // CAP2-NEXT: scf.for
-    // CAP2-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
-    // CAP2: scf.for
-    // CAP2-NOT: ttg.convert_layout
+    // CAP3: arith.addf
+    // CAP3-NEXT: arith.addf
+    // CAP3-NEXT: ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CAP3-NEXT: scf.for
+    // CAP3-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CAP3: scf.for
+    // CAP3-NOT: ttg.convert_layout
     %r1 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas>) : i32 {
       %cvt1 = ttg.convert_layout %s1 : tensor<128x16xf16, #blocked> -> tensor<128x16xf16, #dot_a>
       %d1 = tt.dot %cvt1, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a> * tensor<16x16xf16, #dot_b> -> tensor<128x16xf32, #dpas>
@@ -87,4 +69,4 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: Both refusals are counted as *fallback* rejections rather than exact ones:
 // COM: the projection that produced them never walked the corridor.
 // STATS1: [HoistLayoutConversions] considered=2 hoisted=0 rejected_pressure=0 rejected_function_peak_exact=0 rejected_function_peak_fallback=2 skipped_other=0
-// STATS2: [HoistLayoutConversions] considered=2 hoisted=1 rejected_pressure=0 rejected_function_peak_exact=0 rejected_function_peak_fallback=1 skipped_other=0
+// STATS3: [HoistLayoutConversions] considered=2 hoisted=1 rejected_pressure=0 rejected_function_peak_exact=0 rejected_function_peak_fallback=1 skipped_other=0

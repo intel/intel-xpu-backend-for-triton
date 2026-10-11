@@ -1,15 +1,14 @@
 // RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="grf-mode=default" 2>&1 | FileCheck %s --check-prefix=STATS
 
-// COM: Statistics for the shared-source phase of HoistLayoutConversions (issue
-// COM: #8202). Each candidate must be counted exactly once however many times
-// COM: it is weighed: as hoisted if either phase takes it, else under the
-// COM: reason the one-at-a-time phase first refused it for. The counters are
-// COM: process-global and printed once per -split-input-file section, so each
-// COM: section pins the running totals. A STATS-NOT follows every section's
-// COM: line, so each directive must match the next statistics line printed
-// COM: and none can skip ahead to a later section's. The IR is copied from
-// COM: cases 16, 45 and 46 of hoist-layout-conversions.mlir, which explain the
-// COM: byte math; this file runs at grf-mode=default only.
+// COM: Statistics for the shared-source phase of HoistLayoutConversions. Each
+// COM: candidate is counted exactly once however many times it is weighed: as
+// COM: hoisted if either phase takes it, else under the reason the one-at-a-time
+// COM: phase first refused it for. The counters are process-global and printed
+// COM: once per -split-input-file section, so each section pins the running
+// COM: totals; the STATS-NOT after each line stops a directive from matching a
+// COM: later section's line. The IR is copied from cases 16, 45 and 46 of
+// COM: hoist-layout-conversions.mlir, which explain the byte math; this file runs
+// COM: at grf-mode=default only.
 
 // COM: Case 16's shape: loop 2's conversion refused alone by the peak, loop
 // COM: 1's credited past that refused twin and hoisted alone, then loop 2's
@@ -52,16 +51,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 45's shape: loops 6..2 are refused alone by the peak (five
-// COM: candidates). Loop 1, decided last, is credited as if %src were fully
-// COM: retired (loops 6..2's refusals share %src's exact (source, result
-// COM: type), so hoisting %cvt1 would dominate and retire them too -- see
-// COM: hoistRetiresSource's doc comment), so it clears both gates and is
-// COM: hoisted directly. The group of five is then refused by the joint
-// COM: trial's measured peak regardless, same as before this credit fix,
-// COM: but %cvt1 is no longer part of that group (it already hoisted): +6
-// COM: considered, +1 hoisted, +5 under whichever peak counter loops 6..2's
-// COM: projections reported.
+// COM: Case 45's shape: loops 6..2 are refused alone by the peak. Loop 1 is
+// COM: credited past those refused twins and hoisted; the group of five is then
+// COM: refused by its measured peak. +6 considered, +1 hoisted, +5
+// COM: rejected_function_peak_exact.
 // STATS: [HoistLayoutConversions] considered=8 hoisted=3 rejected_pressure=0 rejected_function_peak_exact=5 rejected_function_peak_fallback=0 skipped_other=0
 // STATS-NOT: [HoistLayoutConversions]
 

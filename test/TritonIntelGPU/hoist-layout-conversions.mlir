@@ -4,11 +4,11 @@
 // RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="grf-mode=default" 2>&1 | FileCheck %s --check-prefix=STATS
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="grf-mode=default" -tritonintelgpu-remove-layout-conversions | FileCheck %s --check-prefix=MERGE
 
-// COM: The MERGE run chains this pass with remove_layout_conversions, the
-// COM: later pass whose backward-rematerialization cache the credit in
-// COM: hoistRetiresSource relies on to replace a refused "twin" (same source,
-// COM: same result type) with the hoisted conversion that dominates it. Only
-// COM: cases 45 and 50 carry MERGE checks.
+// COM: The MERGE run chains this pass with remove_layout_conversions, whose remat
+// COM: cache replaces a refused "twin" (same source, same result type) with the
+// COM: hoisted conversion that dominates it; the credit in hoistRetiresSource
+// COM: relies on that. Only @shared_source_joint_over_peak and
+// COM: @no_twin_credit_for_different_result_type carry MERGE checks.
 
 // COM: The statistics counters are process-global and are printed once per
 // COM: -split-input-file section, so the figures accumulate down the file. The
@@ -20,7 +20,7 @@
 // COM: check the sum: hoisted + the three rejected counters + skipped_other must
 // COM: equal considered.
 // STATS: [HoistLayoutConversions] considered={{[0-9]+}} hoisted={{[0-9]+}} rejected_pressure={{[0-9]+}} rejected_function_peak_exact={{[0-9]+}} rejected_function_peak_fallback={{[0-9]+}} skipped_other={{[0-9]+}}
-// STATS: [HoistLayoutConversions] considered=95 hoisted=47 rejected_pressure=16 rejected_function_peak_exact=17 rejected_function_peak_fallback=6 skipped_other=9
+// STATS: [HoistLayoutConversions] considered=95 hoisted=44 rejected_pressure=16 rejected_function_peak_exact=18 rejected_function_peak_fallback=8 skipped_other=9
 // STATS-NOT: [HoistLayoutConversions]
 
 // COM: Case 1: Hoist ConvertLayoutOp with DotOperandEncoding out of scf.for loop.
@@ -355,40 +355,17 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 11: Exercise the divide-by-32 default in
-// COM: RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes. This module
-// COM: deliberately omits ttg.threads-per-warp, so getThreadsPerWarp returns its
-// COM: 32 default and the per-hardware-thread budget is divided by 32 rather than
-// COM: the DPAS-typical 16. All layouts here are 32-lane so the module still
-// COM: verifies (deleting the attribute from a SIMD16 module would not).
-// COM:
-// COM: Measured pressure: live-in 144 bytes/lane (arg0 #blocked 128 + arg1
-// COM: #dot_b 16; the iter args are block arguments, so they are not live-in),
-// COM: plus 16 bytes/lane for the hoisted #dot_a value = 160 bytes/lane total.
-// COM:
-// COM: %arg0 is deliberately also consumed by the in-loop arith.addf, so the
-// COM: hoist does NOT retire it and the cost is genuinely additive (this is also
-// COM: the coverage for the not-retired branch of the substitution model). Were
-// COM: the convert_layout its only in-loop use, the hoist would instead swap a
-// COM: 128-byte source for a 16-byte result and pass at every GRF mode.
-// COM:
-// COM: Thresholds are 80% of the per-lane budget:
-// COM:   grf-mode=default -> 4096/32 = 128 B/lane -> threshold 102
-// COM:   grf-mode=256     -> 8192/32 = 256 B/lane -> threshold 204
-// COM: Were the divisor wrongly 16, the thresholds would be 204 and 409; the
-// COM: GRF128 rejection below (160 exceeds 80% of 128) is unaffected by the
-// COM: region-aware fix and still pins the divide-by-32 behavior on its own.
-// COM:
-// COM: GRF256 no longer hoists, though: this same %arg0, read directly inside
-// COM: the loop by the addf above (the same "deliberately also consumed"
-// COM: reference), is now correctly charged live through the loop's entire
-// COM: duration, which raises prePeak from 416 to 432 and reveals that the
-// COM: corridor (448, unaffected by the loop-level threshold math above) does
-// COM: exceed even that higher ceiling. So the whole-function peak veto now
-// COM: rejects this hoist at every GRF mode, for a reason unrelated to the
-// COM: divide-by-32 arithmetic this case exists to pin -- that arithmetic is
-// COM: only demonstrated by the GRF128 side of the original contrast now, not
-// COM: by a GRF128-rejects/GRF256-hoists split.
+// COM: Case 11: the divide-by-32 default in getPerLaneGRFBudgetInBytes. The module
+// COM: omits ttg.threads-per-warp, so the per-hardware-thread budget is divided by
+// COM: 32, not 16. All layouts are 32-lane so the module still verifies.
+// COM: %arg0 is also read by the in-loop addf, so the hoist retires nothing: the
+// COM: loop live-in is 144 B/lane (%arg0 128 + %arg1 16) and the hoist adds the
+// COM: 16 B result, 160.
+// COM: The loop gate refuses at 128-GRF (threshold 102 = 80% of 4096 / 32) and
+// COM: passes at 256-GRF (threshold 204 = 80% of 8192 / 32). With a divisor of 16
+// COM: the 128-GRF threshold is 204 and the hoist would be taken.
+// COM: The pre-loop chain %h1..%h4 puts prePeak at 560, above the corridor term
+// COM: (448), so the peak gate accepts and the loop gate alone decides.
 
 #blocked11 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpas11 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
@@ -397,11 +374,17 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 module attributes {"ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: tt.func @default_threads_per_warp
   tt.func @default_threads_per_warp(%arg0: tensor<16x16xf16, #blocked11>, %arg1: tensor<16x16xf16, #dot_b11>, %arg2: tensor<16x16xf32, #dpas11>) -> tensor<16x16xf32, #dpas11> {
+    %h1 = arith.addf %arg0, %arg0 : tensor<16x16xf16, #blocked11>
+    %h2 = arith.addf %h1, %arg0 : tensor<16x16xf16, #blocked11>
+    %h3 = arith.addf %h2, %h1 : tensor<16x16xf16, #blocked11>
+    %h4 = arith.addf %h3, %h2 : tensor<16x16xf16, #blocked11>
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
-    // CHECK: scf.for
-    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // GRF128: scf.for
+    // GRF128-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // GRF256: ttg.convert_layout %{{.*}} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // GRF256-NEXT: scf.for
     %result:2 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2, %bacc = %arg0) -> (tensor<16x16xf32, #dpas11>, tensor<16x16xf16, #blocked11>) : i32 {
       %cvt = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked11> -> tensor<16x16xf16, #dot_a11>
       %dot = tt.dot %cvt, %arg1, %acc, inputPrecision = tf32 : tensor<16x16xf16, #dot_a11> * tensor<16x16xf16, #dot_b11> -> tensor<16x16xf32, #dpas11>
@@ -591,80 +574,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 16: One loop-invariant source feeding a conversion in each of two
-// COM: *sibling* loops. This is the shape _attn_bwd has at HEAD_DIM=128, where
-// COM: every hoisting source (k, v, q, do) is read by an adjacent pair of loops.
-// COM:
-// COM: The credit for retiring %src is real for both loops, but only if the
-// COM: question "is %src still read below this loop?" is asked of the IR as it
-// COM: stands rather than of the frozen liveness analysis. For the *earlier* loop
-// COM: the honest answer depends on the later loop's conversion having already
-// COM: moved out from under it, so the pass decides loops last-to-first: loop 2 is
-// COM: considered first (nothing below it reads %src), then loop 1. See
-// COM: https://github.com/intel/intel-xpu-backend-for-triton/issues/7993 for the
-// COM: last-to-first ordering this case was originally added to pin down.
-// COM:
-// COM: Per-lane bytes: %src is 256, each #dot_a result is 64, each loop body's
-// COM: live-in is 256 (%src) + 32 (%argB) = 288 (the accumulators are iter args,
-// COM: hence block arguments, hence not live-in). Uncredited, a hoist's own
-// COM: loop-level budget check compares 288 + 64 = 352 against 80% of the
-// COM: per-lane GRF budget, which only 256-GRF's 512 B/lane clears (409.6);
-// COM: 128-GRF and default's 256 B/lane (204.8) reject it. Credited, it is
-// COM: 288 + 64 - 256 = 96, a delta of -192 that the gate never vetoes. Loop
-// COM: 2's hoist is always credited (nothing below it reads %src), so only the
-// COM: whole-function peak veto below can refuse it, and does, at every GRF
-// COM: mode.
-// COM:
-// COM: %src is produced by an arith.addf, giving it a defining operation, so
-// COM: %cvt1's hoisted landing point is right after that definition rather
-// COM: than just above loop 1 itself. Either position is before loop 2 here,
-// COM: so this case does not exercise the block-argument dominance
-// COM: restriction (a block-argument source's hoisted conversion only
-// COM: dominates a twin inside its own loop or after it in the same block,
-// COM: landing just above that loop instead of below a defining op) -- see
-// COM: case 53 for that restriction actually biting.
-// COM:
-// COM: Both hoists must also clear the whole-function peak veto, and the %t
-// COM: chain in loop 1's body is what makes that a real test rather than a
-// COM: formality. Five 128-byte #dpas values are live at once at %t4 (640
-// COM: B/lane); %src is *also* live through the whole of loop 1, a direct read
-// COM: rather than merely forwarded, so it is charged for the loop's entire
-// COM: duration regardless of where %cvt1 sits (+256 B/lane). Together that is
-// COM: the function's peak, 992 B/lane -- 256 higher than this case's pre-fix
-// COM: number (736) because the old analysis under-counted %src as not live at
-// COM: %t4 at all.
-// COM:
-// COM: Loop 2's hoist moves %cvt2 above loop 1, to just after %src's
-// COM: definition, so once hoisted alone %cvt2's own result is *also* live
-// COM: through the whole of loop 1 -- unused there, but occupying a register
-// COM: for its entire duration, the same back-edge rule that charges %src. That
-// COM: is a genuinely new 64 B/lane charge at %t4, pushing the projected peak
-// COM: to 1056 and vetoing loop 2's hoist, decided alone, at every GRF mode:
-// COM: prePeak=992, corridor=1056 over 3 ops (loop 1, stepped over as a sibling
-// COM: region and priced by its own internal peak), newPoint=480; ceiling 992.
-// COM: Loop 1's hoist, decided alone, clears the veto exactly at the ceiling:
-// COM: projected 992 (prePeak=992, corridor=608 over 2 ops, newPoint=480). Its
-// COM: loop-level gate does not refuse it either. Loop 2's refused %cvt2 has
-// COM: %cvt1's exact (source, result type), so remove_layout_conversions
-// COM: merges %cvt2 into the hoisted %cvt1 later on, and hoistRetiresSource
-// COM: excuses that unenforceable twin as a reader of %src. %cvt1 is
-// COM: credited, 288 + 64 - 256 = 96, and hoisted at every GRF mode. The merge
-// COM: charge then prices loop 2 at the same -192 the merge is worth there and
-// COM: marks %cvt2 merge-charged.
-// COM:
-// COM: Deciding one loop at a time therefore strands %cvt2 at every mode, yet
-// COM: hoisting it as well genuinely lowers the function's peak: once neither
-// COM: loop reads %src, its 256 bytes retire for real and two 64-byte results
-// COM: replace it, 640 + 2*64 + 32 (%argB) = 800 B/lane at %t4, against 992
-// COM: before. (Issue #8202; before the shared-source phase the pass stopped
-// COM: at 992 at every mode, and only a second run of the pass reached 800, and
-// COM: only at 256-GRF.) %src already has a hoisted conversion, so the
-// COM: shared-source phase tries the singleton group {%cvt2}. Its loop is
-// COM: merge-charged, so the loop-level gate skips it, and the measured peak
-// COM: is 800 <= ceiling 992. Accepted, at every mode.
-// COM: So both conversions land after %src at every mode, neither stamped.
-// COM: The order of the two hoisted conversions differs by mode (each move lands
-// COM: directly after %src), so the checks do not pin it.
+// COM: Case 16: one source feeds a conversion in each of two sibling loops, the
+// COM: shape of _attn_bwd. Loops are decided last to first, so loop 2 is judged
+// COM: first and refused alone: its result would span loop 1, which peaks at 992,
+// COM: giving 992 + 64 = 1056 against the ceiling 992. Loop 1 is credited past
+// COM: that refused twin and hoisted. The shared-source phase then moves {%cvt2}:
+// COM: measured peak 800, accepted. Both conversions land after %src and the
+// COM: order differs by mode, so it is not checked.
 
 #blocked16 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas16 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -710,31 +626,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Case 17: originally the motivating case for the whole-function peak
-// COM: veto, and the shape gap (b) of
-// COM: https://github.com/intel/intel-xpu-backend-for-triton/issues/7993
-// COM: describes: a fat value that spans the loop without being read inside it.
-// COM: %span is not the conversion's source; its job is to be live *around*
-// COM: the loop.
-// COM:
-// COM: With the region-aware register pressure fix, this case no longer
-// COM: demonstrates a veto: %span spans the loop entirely unused, so it is now
-// COM: correctly charged as live through the loop's *own* body too (the same
-// COM: back-edge accounting `RegisterPressureAnalysis::getLiveThroughAncestorSet`
-// COM: applies to any value referenced -- or, as here, merely spanning -- a
-// COM: loop), which raises prePeak from the old, under-counted 6272 to 8320 (the
-// COM: +2048 is exactly %span). The new program point's figure is unchanged at
-// COM: newPoint=7296 -- still lower than the now-correct prePeak -- so the
-// COM: projection (max of prePeak=8320, corridor=6272 over 2 ops, newPoint=7296)
-// COM: is exactly 8320, at the ceiling, and the hoist is accepted in every GRF
-// COM: mode: the loop already carried this much pressure with or without the
-// COM: hoist, which the old analysis simply could not see.
-// COM: Per-lane bytes (warpsPerCTA=[1,1]): %arg0 and the #dot_a result are both
-// COM: 2048, %span 2048, %arg1 128, %arg2 128.
-// COM: The loop-level gate has no say either way: this hoist is break-even on
-// COM: the loop body's live-in pressure (2176 + 2048 - 2048), exactly case 6's
-// COM: arithmetic, so `hoistDeltaBytes` is 0 and the budget check at
-// COM: HoistLayoutConversions.cpp's `bestDelta > 0` guard never triggers.
+// COM: Case 17: %span is a fat value that lives across the loop without being
+// COM: read in it. It is charged through the loop body too, so prePeak (8320)
+// COM: binds and the hoist is accepted at the ceiling in every mode. Without
+// COM: that charge prePeak is 6272, under the new point (7296), and the hoist is
+// COM: refused. The loop gate is break-even (live-in 2176 + 2048 - 2048).
 
 #blocked17 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpas17 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -742,8 +638,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 #dot_b17 = #ttg.dot_op<{opIdx = 1, parent = #dpas17, kWidth = 2}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
 
-  // CHECK-LABEL: tt.func @no_hoist_spanning_value
-  tt.func @no_hoist_spanning_value(%arg0: tensor<256x64xf16, #blocked17>, %arg1: tensor<64x16xf16, #dot_b17>, %arg2: tensor<256x16xf32, #dpas17>) -> (tensor<256x16xf32, #dpas17>, tensor<256x64xf16, #blocked17>) {
+  // CHECK-LABEL: tt.func @hoist_with_spanning_value
+  tt.func @hoist_with_spanning_value(%arg0: tensor<256x64xf16, #blocked17>, %arg1: tensor<64x16xf16, #dot_b17>, %arg2: tensor<256x16xf32, #dpas17>) -> (tensor<256x16xf32, #dpas17>, tensor<256x64xf16, #blocked17>) {
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
@@ -763,36 +659,12 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Case 18: unsound-credit regression. %heavy reads the conversion's source
-// COM: between the source's definition and the loop, so at %heavy the source is
-// COM: still live no matter where the conversion goes and the corridor may not
-// COM: credit it there.
-// COM:
-// COM: An earlier version of this case returned %heavy after the loop, making
-// COM: it *also* a value spanning the loop entirely unused -- exactly case 17's
-// COM: shape -- so the region-aware fix correctly charged it as live through
-// COM: the loop's own body too, raising prePeak from 6272 to 8320 (exactly
-// COM: %heavy's own 2048 bytes). Being prePeak, that floor cannot be exceeded
-// COM: by any hoist, so the decision flipped from reject to accept regardless
-// COM: of whether the credit-withholding mechanism below still worked: with
-// COM: it correctly withholding credit, corridor was 7296, still comfortably
-// COM: under the now-8320 ceiling; had it been wrongly credited instead
-// COM: (7296 - 2048 = 5248), the verdict would have been identical. The test
-// COM: could no longer tell the two apart.
-// COM:
-// COM: %heavy2 fixes this: it gives %heavy a real second reader (so %heavy
-// COM: keeps its own weight at its own corridor entry, rather than being
-// COM: filtered to 0 bytes as an unused value) without either value surviving
-// COM: past the loop, so neither is case 17's shape and prePeak stays at the
-// COM: lower, un-inflated 6272.
-// COM: Measured: prePeak=6272, corridor=7296 over 4 ops, newPoint=5248; ceiling
-// COM: 6272 -- corridor now dominates and exceeds it, so the hoist is refused,
-// COM: with credit still correctly withheld at %heavy's own entry. Had it been
-// COM: wrongly credited there instead using %src's own real size (2048 bytes,
-// COM: the same type as %heavy's, per its own entry above): 7296 - 2048 = 5248,
-// COM: well under the 6272 ceiling instead of exceeding it, so the verdict
-// COM: would flip to accept -- the two answers land on opposite sides of the
-// COM: threshold again.
+// COM: Case 18: %heavy reads %src between its definition and the loop, so %src
+// COM: is live at %heavy wherever the conversion goes and must not be credited
+// COM: there. %heavy2 gives %heavy a reader (so it keeps its weight) without
+// COM: either value outliving the loop, which would raise prePeak.
+// COM: The corridor term at %heavy is 5248 + 2048 = 7296 against prePeak 6272:
+// COM: refused. A wrongly granted credit gives 5248 and a hoist.
 
 #blocked18 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpas18 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -808,13 +680,6 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
     %src = arith.addf %arg0, %arg0 : tensor<256x64xf16, #blocked18>
     // CHECK: scf.for
     // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<256x64xf16, #{{.*}}> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
-    // %heavy must still read %src between %src's definition and the loop (the
-    // whole point of this case), and must still carry its own real weight at
-    // that point (consumed by %heavy2, also before the loop) so that entry
-    // stays the dominant one -- but neither may survive to be read *after*
-    // the loop, or it becomes case 17's shape (a value spanning the loop
-    // unused) and inflates prePeak enough to mask the credit-withholding
-    // check this case exists to pin.
     %heavy = arith.addf %src, %src : tensor<256x64xf16, #blocked18>
     %heavy2 = arith.addf %heavy, %heavy : tensor<256x64xf16, #blocked18>
     %result = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<256x16xf32, #dpas18>) : i32 {
@@ -916,43 +781,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Case 21: an intervening scf.if with high local pressure that reads
-// COM: neither the source nor the result. The corridor steps over the region as
-// COM: one operation and does not descend into it.
-// COM: That rule is load-bearing here: pressure lives *inside* the if body, at
-// COM: %h3, where four 256-byte values are live at once. Before the
-// COM: sibling-region-pricing fix, the per-op corridor walk's point-pressure
-// COM: query did not report that peak at all (the hoisted result spans the
-// COM: region unused), so the whole-function peak this candidate was checked
-// COM: against read as 1184, and adding %h3's own internal peak on top would
-// COM: have priced it at 1184 + 64 = 1248. With the fix, `projectedFunctionPeak`
-// COM: does separately check %hot's own internal peak against this candidate
-// COM: via `regionPeakThroughOp` -- see the real, current figures a few
-// COM: paragraphs below (1568, not 1184; corridor 1376, not 1248) -- so the
-// COM: "don't fail to price a stepped-over sibling's own high pressure" point this
-// COM: case was built to pin is still true and still demonstrated.
-// COM:
-// COM: %hot itself is a value that spans the *second* loop (%r) entirely
-// COM: unused -- it is defined before %r and not read again until the final
-// COM: tt.return, after %r closes -- exactly case 17/18's shape, just with the
-// COM: spanned region being a different loop than the one being hoisted from.
-// COM: With the region-aware fix, %hot is correctly charged as live through
-// COM: %r's whole body, which raises prePeak to 1568 -- a bound this candidate
-// COM: cannot lower, since %hot's live range lives in %r's body untouched by
-// COM: this hoist.
-// COM:
-// COM: %src, read only by %cvt (this candidate) and nothing else, is *also*
-// COM: live through the if -- not because the if reads it, but because %cvt,
-// COM: still sitting inside %r at this point in the walk, reads it later in
-// COM: the same block. That is credited away: the same rule the flat per-op
-// COM: charge above uses (nothing but %cvt itself still needs %src past the
-// COM: if, so the credit is exact, not conservative) applies equally to a
-// COM: stepped-over sibling's own internal peak, dropping the if's own
-// COM: internal peak by %src's 256 bytes and adding the hoisted result's 64:
-// COM: regionPeakThroughOp(if) + 64 - 256 = 1568 - 256 + 64 = 1376.
-// COM: Measured: prePeak=1568, corridor=1376 over 3 ops, newPoint=865, ceiling
-// COM: 1568 -- prePeak now dominates, and this break-even hoist sits exactly at
-// COM: the ceiling, so it is accepted in every GRF mode, matching main.
+// COM: Case 21: an scf.if with a high internal peak sits between %src and the
+// COM: loop. The corridor steps over it as one op, so its internal peak is
+// COM: priced separately, on top of the point pressure at the if.
+// COM: %v reads %src after the if, so %src is not credited there. The if is
+// COM: priced at 1568 + 64 = 1632 against prePeak 1568: refused. Without the
+// COM: separate pricing it is priced at its own point, 929 + 64, and the hoist
+// COM: is accepted.
 
 #blocked21 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas21 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -966,9 +801,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
     %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked21>
-    // CHECK: arith.addf
-    // CHECK-NEXT: %[[CVT:.*]] = ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
-    // CHECK-NEXT: scf.if
     %hot = scf.if %cond -> (tensor<128x16xf32, #dpas21>) {
       %h1 = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked21>
       %h2 = arith.addf %h1, %arg0 : tensor<128x16xf16, #blocked21>
@@ -981,9 +813,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     } else {
       scf.yield %acc1 : tensor<128x16xf32, #dpas21>
     }
+    %v = arith.addf %src, %src : tensor<128x16xf16, #blocked21>
     // CHECK: scf.for
-    // CHECK-NOT: ttg.convert_layout
-    // CHECK: tt.dot %[[CVT]]
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
     %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas21>) : i32 {
       %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked21> -> tensor<128x16xf16, #dot_a21>
       %d = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a21> * tensor<16x16xf16, #dot_b21> -> tensor<128x16xf32, #dpas21>
@@ -1039,26 +871,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Case 23: the source is read inside an intervening loop that *encloses*
-// COM: the corridor, at a point lexically before the hoist's anchor. Position
-// COM: says nothing here -- %u runs again on the next iteration, after the inner
-// COM: loop -- so the credit is withheld for every operation of the enclosing
-// COM: loop's body rather than only for those below the last user. The corridor
-// COM: and new-point terms below are exactly this credit-withholding mechanism,
-// COM: and they are unchanged by the region-aware fix (corridor is still 1376,
-// COM: newPoint still 1248): the source is still never wrongly credited.
-// COM:
-// COM: What did change is prePeak, from 1312 to 1440. %src is read directly
-// COM: inside the *outer* loop (%u, %w, %x), so it is now correctly charged as
-// COM: live through the outer loop's entire body -- including transitively
-// COM: inside the nested inner loop, which is exactly the multi-level nesting
-// COM: gap #8053 exists to fix. That +128 (%src's own per-lane contribution)
-// COM: makes prePeak the dominant term and, being prePeak, an unbeatable floor:
-// COM: the function already carries this much pressure regardless of the hoist,
-// COM: so the hoist is now accepted (at the ceiling exactly) in every GRF mode,
-// COM: to a point *inside* the outer loop, immediately above the inner loop.
-// COM: Measured: prePeak=1440, corridor=1376 over 2 ops, newPoint=1248, ceiling
-// COM: 1440.
+// COM: Case 23: %src is read in the outer loop before the hoist's anchor (%u).
+// COM: The outer back edge runs %u again after the inner loop, so the credit
+// COM: must be withheld across the whole outer body, not only below %u.
+// COM: The corridor term is 608 (544 at the inner loop op plus the 64 B result)
+// COM: against prePeak 544: refused. A wrongly granted credit gives 352 and a
+// COM: hoist. The dot result is unused so the inner body's peak (480) stays
+// COM: below the corridor term instead of mirroring it.
 
 #blocked23 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas23 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -1067,28 +886,24 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
 
   // CHECK-LABEL: tt.func @no_credit_for_recurring_use_before_anchor
-  tt.func @no_credit_for_recurring_use_before_anchor(%src: tensor<128x16xf16, #blocked23>, %arg1: tensor<128x16xf16, #blocked23>, %argB: tensor<16x16xf16, #dot_b23>, %acc0: tensor<128x16xf32, #dpas23>) -> (tensor<128x16xf32, #dpas23>, tensor<128x16xf16, #blocked23>) {
+  tt.func @no_credit_for_recurring_use_before_anchor(%src: tensor<128x16xf16, #blocked23>, %argB: tensor<16x16xf16, #dot_b23>, %acc0: tensor<128x16xf32, #dpas23>) -> tensor<128x16xf32, #dpas23> {
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
     // CHECK: scf.for
-    %outer:2 = scf.for %i = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%o = %acc0, %p = %arg1) -> (tensor<128x16xf32, #dpas23>, tensor<128x16xf16, #blocked23>) : i32 {
-      %u = arith.addf %src, %p : tensor<128x16xf16, #blocked23>
-      %w = arith.addf %src, %u : tensor<128x16xf16, #blocked23>
-      %x = arith.addf %src, %w : tensor<128x16xf16, #blocked23>
-      // CHECK: ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %outer = scf.for %i = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%o = %acc0) -> (tensor<128x16xf32, #dpas23>) : i32 {
+      %u = arith.addf %src, %src : tensor<128x16xf16, #blocked23>
+      // CHECK: arith.addf
       // CHECK-NEXT: scf.for
-      // CHECK-NOT: ttg.convert_layout
+      // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
       %r = scf.for %j = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %o) -> (tensor<128x16xf32, #dpas23>) : i32 {
         %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked23> -> tensor<128x16xf16, #dot_a23>
         %d = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a23> * tensor<16x16xf16, #dot_b23> -> tensor<128x16xf32, #dpas23>
-        scf.yield %d : tensor<128x16xf32, #dpas23>
+        scf.yield %a : tensor<128x16xf32, #dpas23>
       }
-      %y = arith.addf %u, %w : tensor<128x16xf16, #blocked23>
-      %z = arith.addf %y, %x : tensor<128x16xf16, #blocked23>
-      scf.yield %r, %z : tensor<128x16xf32, #dpas23>, tensor<128x16xf16, #blocked23>
+      scf.yield %r : tensor<128x16xf32, #dpas23>
     }
-    tt.return %outer#0, %outer#1 : tensor<128x16xf32, #dpas23>, tensor<128x16xf16, #blocked23>
+    tt.return %outer : tensor<128x16xf32, #dpas23>
   }
 }
 
@@ -1279,45 +1094,15 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Case 28: an unstructured CFG cycle on the region path above the corridor.
-// COM: The credit test bails out on any enclosing region that is not a single
-// COM: block whose terminator has no CFG successors, because inside a cycle
-// COM: lexical position carries no information about what runs again.
-// COM: ^body has exactly one predecessor and the back edge leaves from it, so a
-// COM: multi-predecessor test on the corridor's own block would miss this. %src
-// COM: has no user other than the conversion, so without the bail-out the credit
-// COM: would be granted unconditionally at every corridor operation.
-// COM: Measured: prePeak=613, corridor=613 over 2 ops, newPoint=485, ceiling
-// COM: 613. With the credit taken the corridor term is 357.
-// COM: The credit-withholding bail-out this case exists to pin is unaffected by
-// COM: the region-aware fix: the corridor term is exactly what it always was
-// COM: (613, unchanged), since it is `pressureAt` queried at the scf.for's own
-// COM: program point in ^bb2, which was already correct -- MLIR's own raw
-// COM: liveness already treats a value read inside a nested region as live at
-// COM: the region-holding op's point, independent of any ancestor-chain
-// COM: tracking. So the credit is still correctly withheld and the hoist is
-// COM: still gated on the same, unimproved corridor figure.
-// COM:
-// COM: What now separately pushes the decision to accept is prePeak, which
-// COM: rose from the old, under-counted 549 to 613: %src is read directly
-// COM: inside the scf.for's body, so -- like case 1's own loop, which this
-// COM: case otherwise mirrors -- it is now correctly charged for the loop's
-// COM: entire duration, including at the point past its own last local use
-// COM: where the loop's own dot result is produced (`peakPressure` charges a
-// COM: value at its defining op, so the dot's own 128 B/lane result is added
-// COM: on top). Being prePeak, that is an unbeatable floor once it dominates:
-// COM: the loop already carries this much pressure regardless of the hoist.
-// COM: The %u = arith.addi anchor keeps the pre-loop operations *lean* on
-// COM: purpose. Inside a CFG cycle every value used anywhere in the cycle is
-// COM: reported live at every operation of it, including values read only on a
-// COM: later iteration, so a fat operation before the loop would outrank the loop
-// COM: itself and move prePeak away from the point this case is about.
-// COM:
-// COM: The degenerate companion -- a single block whose *own* terminator has CFG
-// COM: successors, which pins the second half of the same bail-out -- has no test
-// COM: because it cannot be written: the entry block of a region is not a valid
-// COM: branch target, so `cf.br ^bb0` in a one-block tt.func is rejected by the
-// COM: parser with "reference to an undefined block".
+// COM: Case 28: the loop sits in a cf.br cycle, where lexical order says nothing
+// COM: about what runs again, so %src (read only by the conversion) must not be
+// COM: credited as retired.
+// COM: The corridor term is 613 (549 at the loop op plus the 64 B result) against
+// COM: prePeak 549: refused. A wrongly granted credit gives 357 and a hoist.
+// COM: The dot result is unused so the loop body's peak (485) stays below the
+// COM: corridor term instead of mirroring it.
+// COM: The case where a block's own terminator branches back cannot be written:
+// COM: the entry block is not a valid branch target.
 
 #blocked28 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas28 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -1336,13 +1121,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   ^body:
     %u = arith.addi %n, %n : i32
     // CHECK: arith.addi
-    // CHECK-NEXT: ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
     // CHECK-NEXT: scf.for
-    // CHECK-NOT: ttg.convert_layout
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
     %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc) -> (tensor<128x16xf32, #dpas28>) : i32 {
       %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked28> -> tensor<128x16xf16, #dot_a28>
       %d = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a28> * tensor<16x16xf16, #dot_b28> -> tensor<128x16xf32, #dpas28>
-      scf.yield %d : tensor<128x16xf32, #dpas28>
+      scf.yield %a : tensor<128x16xf32, #dpas28>
     }
     cf.br ^header(%r, %u : tensor<128x16xf32, #dpas28>, i32)
   ^exit:
@@ -1608,34 +1392,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 34 (#8053 follow-up): %cvt's only use is early inside the
-// COM: scf.if's then-branch, and a chain of high-pressure fillers (%h1..%h4)
-// COM: follows it, later in the *same* branch, before the if closes.
-// COM: lastBodyUser maps that nested use onto the scf.if itself, so
-// COM: collectCorridor excludes the if op -- and everything from %cvt up to
-// COM: it -- from the corridor, on the theory that the un-hoisted result is
-// COM: already locally live there at the same cost hoisting would add. That
-// COM: theory only holds up to the real nested use; the filler chain runs
-// COM: strictly after it, still inside the same branch, and needs the same
-// COM: post-last-use pricing any other corridor entry gets. Before either fix
-// COM: that interval was priced as zero, since the if op was never a corridor
-// COM: entry at all (neither the per-op walk nor the region-peak fallback
-// COM: -- which only fires for corridor entries -- ever reaches it).
-// COM:
-// COM: %cvt's real (not top-level-mapped) last use is %use, at the very top
-// COM: of the branch; realLastUse finds it directly since it is %cvt's only
-// COM: use, and priceTailAfter then prices only the filler chain after it
-// COM: (%h1..%h7, the yield), crediting %src the same exact way the flat
-// COM: corridor charge does -- %cvt is %src's only reader, so nothing needs
-// COM: %src past the if either.
-// COM: Measured at default GRF: prePeak=1441, corridor=1249 over 2 ops,
-// COM: newPoint=737 -- prePeak now dominates and this break-even hoist sits
-// COM: exactly at the ceiling, so it is accepted, matching main.
-// COM: A whole-region charge with no credit and no tail restriction (the
-// COM: fallback this case exercised before the tail fix) would instead price
-// COM: the if's full internal peak plus %cvt's own bytes twice over (once
-// COM: already counted from %use up to %h5, once added back on top): 1505,
-// COM: which exceeds the ceiling and wrongly refuses a hoist main accepts.
+// COM: Case 34: %cvt's only use is the first op of an scf.if branch, followed by
+// COM: a filler chain in the same branch. The corridor skips the if, so the tail
+// COM: after the use is priced on its own, with %src credited: 1441 - 192 = 1249
+// COM: against prePeak 1441, accepted. A whole-region charge without the credit
+// COM: gives 1441 + 64 = 1505 and refuses.
 
 #blocked34 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas34 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -1679,28 +1440,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Case 35 (#8053 follow-up): %cvt has two uses in *different* branches of
-// COM: the same scf.if (one in "then", one in "else"), with the same
-// COM: high-pressure filler chain (%h1..%h4) as case 34 in the "then" branch
-// COM: to make sure this case's own charge, not just prePeak, decides it (see
-// COM: below). realLastUse requires every use to share one immediate block to
-// COM: place a single last-use position; here the two users' blocks differ,
-// COM: so it returns null and priceTailAfter's precise path is skipped in
-// COM: favor of the conservative, uncredited whole-region charge -- the
-// COM: fallback case 34's fix deliberately declines to make precise.
-// COM: An earlier version of this case had no filler chain and measured
-// COM: prePeak=673, corridor=673: an exact tie that only pinned "the fallback
-// COM: fires and does not crash," not its arithmetic -- dropping `+ dstBytes`
-// COM: entirely from the fallback's charge, an undercount, left corridor at
-// COM: 609, still masked by the tied prePeak, and the test kept passing.
-// COM: With the filler chain raising the if's own internal peak, that
-// COM: masking is gone: dropping `+ dstBytes` the same way now drops corridor
-// COM: to 1441, exactly prePeak, and wrongly accepts -- caught.
-// COM: Measured at default GRF: prePeak=1441, corridor=1505 over 2 ops,
-// COM: newPoint=737 -- corridor dominates and exceeds the 1441 ceiling, so
-// COM: the hoist is refused. %src (256 bytes) is read in both branches, so
-// COM: main cannot retire it either; refusing here is not a missed
-// COM: optimization, just a conservative charge landing on the safe side.
+// COM: Case 35: %cvt is used in both branches of an scf.if, so it has no single
+// COM: last use and the whole-region fallback is charged: the if's peak plus the
+// COM: result, 1441 + 64 = 1505 against prePeak 1441, refused. Dropping the
+// COM: result from the fallback gives 1441 and accepts. The filler chain in the
+// COM: then-branch lifts the if's peak so prePeak does not mask the charge.
 
 #blocked35 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas35 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -1741,27 +1485,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Case 36 (#8053 follow-up, independent-review F1): `%cvt`'s only use is
-// COM: in the "then" branch of `%hot`, `realLastUse` succeeds, and
-// COM: `priceTailAfter` prices the (empty) tail after it precisely -- but
-// COM: never looks at the "else" branch at all, since `%hot` is never itself a
-// COM: corridor entry once its real nested last use is found. Once hoisted,
-// COM: `%cvt` is loop-invariant and, by the loop back-edge rule, live through
-// COM: the *whole* loop body, "else" included, where a 17-op filler chain
-// COM: (unrelated to `%cvt`/`%src`) drives that branch's own peak up. Before
-// COM: the fix this silently undercounted by exactly `dstBytes` (64) and
-// COM: tripped the `FunctionPeakGate` invariant assert in a Debug build
-// COM: (`freshPeak <= pendingProjection`); a Release build would have
-// COM: accepted a hoist that overruns the ceiling by 64 B/lane.
-// COM: `%src` is also read after the loop (in `%post`) so no source credit
-// COM: applies, matching the shape that actually reaches this code path in
-// COM: practice (credit alone cannot mask the gap; see the independent
-// COM: review's own note that crediting `%src` away hides the bug).
-// COM: Measured at every GRF mode: prePeak=865, corridor=929 over 2 ops
-// COM: (the "then" tail, empty, and the "else" sibling peak, 865 + 64),
-// COM: newPoint=289; ceiling 865. corridor now dominates and matches the
-// COM: real post-hoist peak (929, measured by hand-hoisting through
-// COM: `-test-register-pressure`) exactly, so the hoist is correctly refused.
+// COM: Case 36: %cvt's only use is in the then-branch; the else-branch holds a
+// COM: 17-op filler chain that peaks at 865. Once hoisted, %cvt is live through
+// COM: the else-branch too: 865 + 64 = 929 against prePeak 865, refused. Without
+// COM: pricing the sibling branch the corridor reaches at most 417 and the hoist
+// COM: is accepted. %post reads %src, so no source credit applies.
 
 #blocked36 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas36 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -1812,25 +1540,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Case 37 (#8053 follow-up, independent-review F2): `%cvt`'s only use is
-// COM: at the top of an *inner* `scf.for`'s body (`%hot`), followed by a
-// COM: 13-op filler chain reading only the dot's own result, not `%cvt`
-// COM: again. `realLastUse` succeeds and `priceTailAfter` walks the filler
-// COM: chain -- but the inner loop is itself a loop ancestor, so the
-// COM: region-aware analysis this PR adds already keeps `%cvt` live at every
-// COM: op of that chain *before* any hoisting, via the same loop back-edge
-// COM: rule that makes the hoisted result live through the outer loop.
-// COM: Charging `dstBytes` unconditionally at each op of the chain therefore
-// COM: double-counts a weight the pre-hoist measurement already includes.
-// COM: Before the fix this refused a hoist that costs nothing (measured by
-// COM: hand-hoisting: the peak is unchanged at 928) and reported the refusal
-// COM: as `rejected_function_peak_exact`, i.e. as if it were certain rather
-// COM: than an artifact of the double charge.
-// COM: `%src` is also read after the loop so no source credit applies,
-// COM: isolating the double-charge from the (separately tested) credit path.
-// COM: Measured at every GRF mode: prePeak=928, corridor=928 over 2 ops,
-// COM: newPoint=288; ceiling 928. The hoist is now accepted, matching the
-// COM: unchanged real peak.
+// COM: Case 37: %cvt's only use is at the top of an inner scf.for body, followed
+// COM: by a 13-op filler chain. The inner loop's back edge already keeps %cvt
+// COM: live over the chain, so the tail must not charge the result again: the
+// COM: tail prices at 928 = prePeak, accepted. A double charge gives 928 + 64 =
+// COM: 992 and refuses. %post reads %src, so no source credit applies.
 
 #blocked37 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas37 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -1878,19 +1592,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 38 (#8053 follow-up, broader F1 coverage): the mirror image of
-// COM: case 36 -- `%cvt`'s only use now sits in the *else* branch of `%hot`,
-// COM: and the 17-op filler chain (unrelated to `%cvt`/`%src`) sits in "then"
-// COM: instead. `siblingBlocksPeak` keys off block identity (the block being
-// COM: excluded is `nestedLast`'s own block), not a "then"/"else" name, so
-// COM: this checks the fix is not accidentally tied to which branch happens
-// COM: to hold the real use. `%src` is also read after the loop (in `%post`)
-// COM: so no source credit applies, same as case 36.
-// COM: Measured at every GRF mode: prePeak=865, corridor=929 over 2 ops (the
-// COM: "else" tail, empty, and the "then" sibling peak, 865 + 64), newPoint=
-// COM: 289; ceiling 865. Verified by hand-hoisting through
-// COM: -test-register-pressure: real pre-hoist peak 865, real post-hoist peak
-// COM: 929, exact match to the corridor term. The hoist is correctly refused.
+// COM: Case 38: case 36 mirrored. %cvt's only use is in the else-branch and the
+// COM: filler chain is in the then-branch. The sibling is found by block, not by
+// COM: branch name: 865 + 64 = 929 against prePeak 865, refused.
 
 #blocked38 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas38 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -1940,49 +1644,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 39 (#8053 follow-up, broader F2/depth coverage; replaces an
-// COM: earlier version of this case per an independent verification review,
-// COM: `review_opus55_verification_2026-09-27.md` V4): `%cvt`'s only use is
-// COM: nested two `scf.if` levels below `%hot`, the op `lastBodyUser` maps
-// COM: it to -- an inner `scf.if` sits inside `%hot`'s "then", and the real
-// COM: use is inside that inner `scf.if`'s own "then". A 17-op filler chain,
-// COM: seeded from the inner `scf.if`'s result, follows it in `%hot`'s
-// COM: "then", *after* the inner `scf.if` closes but still at depth one
-// COM: relative to `%hot`.
-// COM: The precise path's own precondition (`nestedLast`'s block's parent
-// COM: op must equal `lastUse`) correctly fails here -- the real use's
-// COM: block's parent is the inner `scf.if`, not `%hot` -- so this exercises
-// COM: the fallback (logged as "conservatively charged", `exact=false`).
-// COM: Measured at every GRF mode: prePeak=865, corridor=929 over 2 ops,
-// COM: newPoint=289; ceiling 865, so the hoist is refused. Hand-hoisting
-// COM: through -test-register-pressure confirms real pre-hoist peak 865 and
-// COM: real post-hoist peak 929 -- the fallback is exact here, not just
-// COM: safe, and matches the true cost of hoisting through two `scf.if`
-// COM: levels: the outer filler chain runs *after* the real last use, at a
-// COM: point where the un-hoisted value has already died (it is not itself
-// COM: a loop, so there is no back-edge keeping it live), so it does need
-// COM: the full `dstBytes` charge once hoisted.
-// COM: This case exists to show the depth precondition is load-bearing for
-// COM: *soundness*, not just a CHECK-line change detector: with the
-// COM: precondition removed (`nestedLast->getBlock()->getParentOp() ==
-// COM: lastUse` deleted), the precise path wrongly fires using
-// COM: `siblingBlocksPeak(lastUse=%hot, excluded=innerIfBlock)`, which reads
-// COM: `rep = block.front()` of `%hot`'s "then" block to ask whether `%cvt`
-// COM: is already live there -- and since `%cvt` *is* still live at that
-// COM: point (it is read later, inside the inner `scf.if`), the check
-// COM: answers "already live" and skips `dstBytes` on the filler chain that
-// COM: actually runs after `%cvt`'s last use. That wrongly accepts at 865
-// COM: (the real peak is 929) and trips the Debug `FunctionPeakGate`
-// COM: invariant assert (`freshPeak <= pendingProjection`); verified
-// COM: directly by temporarily deleting the precondition and rebuilding.
-// COM: The previous version of this case (two `scf.for` levels, `scf.if`
-// COM: inside `scf.for` inside `scf.for`) did not have this property: with
-// COM: the same precondition removed, it still only fell back to a *safe*
-// COM: (992) rather than exact answer, because an enclosing loop keeps
-// COM: `%cvt` live everywhere in its body regardless of depth, masking
-// COM: whether the precondition itself was doing any work. `scf.if` does
-// COM: not have that back-edge rule, which is why nesting through `scf.if`
-// COM: levels instead is what actually discriminates the precondition.
+// COM: Case 39: %cvt's only use is two scf.if levels below %hot, followed by a
+// COM: filler chain in %hot's then-branch. The precise tail path requires the use
+// COM: to sit one level below %hot, so it must not fire and the whole-region
+// COM: fallback is charged: 865 + 64 = 929 against prePeak 865, refused. If the
+// COM: precise path fired it would read %cvt as already live on the chain and
+// COM: accept at 865.
 
 #blocked39 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas39 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -2037,57 +1704,14 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 40 (#8053 follow-up, F1+F2 composition): two independent hoist
-// COM: candidates in the same loop. `%cvtA` is shaped like case 36/38 (feeds
-// COM: an `scf.if`, whose sibling branch needs `siblingBlocksPeak`'s
-// COM: pricing); `%cvtB` is shaped like case 37 (feeds an inner `scf.for`,
-// COM: whose tail walk needs `priceTailAfter`'s already-live check to avoid
-// COM: double-charging). `lastUse` cannot be both an `scf.if` and an
-// COM: `scf.for` for the *same* candidate -- it is a single, specific op --
-// COM: so this is the meaningful way the two fixes compose: on two different
-// COM: candidates in one pass invocation, sharing the same per-generation
-// COM: `QueryCache`/`regionPeakCache`, checking neither fix corrupts the
-// COM: other's cache entries or fights over the shared candidate-ordering
-// COM: and rebuild-after-accept bookkeeping.
-// COM: At GRF128 (default and 128): both candidates are rejected before
-// COM: reaching either mechanism -- their combined loop-carried live-in alone
-// COM: (161 B/lane) plus either one's 64-byte destination exceeds 80% of the
-// COM: 256 B/lane budget -- so both stay in place (counted as
-// COM: rejected_pressure, not skipped_other; confirmed via
-// COM: TRITON_INTEL_HLC_STATS=1).
-// COM: At GRF256: `%cvtA` is considered first (program order) and correctly
-// COM: rejected (prePeak=1121, corridor=1185 over 4 ops, exact -- not
-// COM: fallback); `%cvtB` is then considered against the same, unchanged
-// COM: analysis (nothing was hoisted yet) and correctly accepted via the
-// COM: already-live check in `priceTailAfter` (prePeak=corridor=1121, i.e.
-// COM: the hoist is free). Verified by running the pass's actual transformed
-// COM: output through -test-register-pressure: real peak is 1121 both before
-// COM: and after the pass, matching the "free hoist" verdict for %cvtB, and
-// COM: by inspecting the IR dump directly: %cvtA (fed from %arg0) keeps its
-// COM: `tt.no_licm` marker inside the loop, while %cvtB (fed from %arg1) is
-// COM: the one hoisted above `scf.for`.
-// COM: Checked which mechanism is actually load-bearing for each verdict by
-// COM: disabling each in turn and rebuilding: disabling the already-live
-// COM: check in `priceTailAfter` flips %cvtB from accepted to rejected here
-// COM: (corridor rises to 1185, same ceiling-exceeding value %cvtA already
-// COM: gets) -- F2's fix is decisive for %cvtB in this composed context, not
-// COM: just in case 37's isolated one. Disabling `siblingBlocksPeak` does
-// COM: *not* change %cvtA's corridor (still 1185). The actual reason (per an
-// COM: independent verification review, `review_opus55_verification_2026-
-// COM: 09-27.md` V5; an earlier version of this comment blamed cross-
-// COM: liveness to the shared `scf.yield`, which is not the mechanism):
-// COM: `collectCorridor`'s own walk -- unrelated to either
-// COM: `priceTailAfter`/`siblingBlocksPeak` or to %cvtB's own liveness --
-// COM: continues past %cvtA's `%hotA` into the rest of the outer loop body
-// COM: and reaches %hotB, a region-holding op that is not `forOp` itself, so
-// COM: it gets priced via `regionPeakThroughOp(%hotB) + dstBytes`. %hotB's
-// COM: own pre-hoist block peak is 1121 (confirmed with
-// COM: -test-register-pressure), so that term alone is already
-// COM: 1121 + 64 = 1185 -- the same ceiling-exceeding figure -- regardless
-// COM: of what `siblingBlocksPeak` contributes for %cvtA. `siblingBlocksPeak`
-// COM: still runs unconditionally on every `scf.if`-shaped candidate and
-// COM: does not corrupt or regress %cvtA's (already-conservative) rejection;
-// COM: case 38 remains the case that shows it is independently necessary.
+// COM: Case 40: two candidates in one loop, each source also read after it.
+// COM: %cvtA feeds an scf.if with a filler sibling branch (case 36's shape),
+// COM: %cvtB feeds an inner scf.for with a filler chain (case 37's shape).
+// COM: At 128-GRF the loop gate refuses both: live-in 161 + 64 = 225 >= 204.
+// COM: At 256-GRF %cvtA is refused by the peak (%hotB's region peak 1121 + 64 =
+// COM: 1185 against prePeak 1121) and %cvtB is accepted (tail priced at 1121,
+// COM: equal to prePeak). Without the already-live check in the tail walk %cvtB
+// COM: reads 1185 and is refused too.
 
 #blocked40 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas40 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -2164,31 +1788,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 41 (#8053 follow-up, F1's "other multi-region op" question,
-// COM: per `review_opus55_verification_2026-09-27.md` V6): `scf.index_switch`
-// COM: is the multi-region op class where F1's undercount can actually
-// COM: recur -- unlike `scf.while` (case investigated but not committed
-// COM: earlier this round: for a *loop*-like `lastUse`, the back-edge rule
-// COM: already keeps `%cvt` live in every one of its regions, so the
-// COM: missing-`dstBytes` undercount cannot occur there at all; only the
-// COM: safe, over-reject direction can). `scf.index_switch` is not a loop,
-// COM: so it has the same exposure `scf.if` does: `%cvt`'s only use is in
-// COM: `case 0`, a lighter `case 1` reads only `%a`, and a 17-op filler
-// COM: chain (unrelated to `%cvt`/`%src`) sits in `default`. `%src` is also
-// COM: read after the loop (in `%post`), so no source credit applies.
-// COM: `siblingBlocksPeak` iterates `op->getRegions()` generically (no
-// COM: `scf.if`-specific dispatch), so this checks that generality against a
-// COM: third, structurally different region-holding op, not just against
-// COM: `scf.while`'s two special-cased regions.
-// COM: Measured at every GRF mode: prePeak=864, corridor=928 over 2 ops
-// COM: (the `case 0` tail, empty, and the heaviest sibling case, `default`,
-// COM: 864 + 64), newPoint=288; ceiling 864. Verified by hand-hoisting
-// COM: through -test-register-pressure: real pre-hoist peak 864, real
-// COM: post-hoist peak 928, exact match. The hoist is correctly refused.
-// COM: Discriminating power confirmed by disabling `siblingBlocksPeak`
-// COM: (contributing 0) and rebuilding: this case then wrongly accepts at
-// COM: 864 and trips the Debug `FunctionPeakGate` invariant assert
-// COM: (`freshPeak <= pendingProjection`), the same as cases 36/38.
+// COM: Case 41: case 36 with scf.index_switch. %cvt's only use is in case 0, case
+// COM: 1 is light and default holds the 17-op filler chain. Sibling regions are
+// COM: priced for any multi-region op: default's 864 + 64 = 928 against prePeak
+// COM: 864, refused. %post reads %src, so no source credit applies.
 
 #blocked41 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas41 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -2244,30 +1847,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 42 (Copilot round-4): `%cvt`'s only use is as an inner `scf.for`'s
-// COM: own `iter_args` init, that inner loop itself sitting inside the outer
-// COM: `scf.if` (`lastUse`). `realLastUse` resolves to the inner loop op
-// COM: itself, so `nestedLast->getNumRegions() > 0`, and the precondition
-// COM: added this round skips the precise `priceTailAfter`/`siblingBlocksPeak`
-// COM: path entirely, falling back to `lastUse`'s own conservative
-// COM: whole-region charge. Before that precondition existed, the precise
-// COM: path still ran here: `priceTailAfter` walks strictly after
-// COM: `nestedLast`, so it never priced the inner loop's own body, and
-// COM: `siblingBlocksPeak` only covers `lastUse`'s *other* blocks, not
-// COM: `nestedLast`'s nested ones -- so the inner loop's own internal peak
-// COM: went unpriced by either.
-// COM: Measured at every GRF mode: corridor was 673 before this round's fix,
-// COM: 1505 after (the fallback's whole-region charge on `lastUse`), against
-// COM: prePeak=1441 and ceiling=1441 -- the fix correctly rejects here where
-// COM: the old code accepted. Checked directly whether the old accept was
-// COM: actually unsound, not just incomplete: hand-running
-// COM: `-test-register-pressure` on the old code's own hoisted output
-// COM: measures a real peak of 1249, under the 1441 ceiling -- so in this
-// COM: specific shape the old accept, while computed from a materially wrong
-// COM: corridor figure, was not itself a real violation. The fix closes a
-// COM: genuine gap in what gets priced either way; this case pins the
-// COM: now-conservative verdict it produces, not a confirmed prior unsound
-// COM: accept.
+// COM: Case 42: %cvt's only use is the init of an inner scf.for, which sits in an
+// COM: scf.if. The precise tail pricing starts after that use and would skip the
+// COM: inner loop's body, so a last use that holds a region falls back to the
+// COM: if's whole-region peak: 1441 + 64 = 1505 against prePeak 1441, refused.
+// COM: Without the fallback the corridor term is 673 and the hoist is accepted.
 
 #blocked42 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas42 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -2280,10 +1864,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
-    // CHECK: scf.for
     %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked42>
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
     %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas42>) : i32 {
-      // CHECK: ttg.convert_layout
       %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked42> -> tensor<128x16xf16, #dot_a42>
       %hot = scf.if %cond -> (tensor<128x16xf32, #dpas42>) {
         %inner = scf.for %j = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%c = %cvt) -> (tensor<128x16xf16, #dot_a42>) : i32 {
@@ -2307,22 +1891,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 43 (#8202): case 16 with a third sibling loop. Three loops read
-// COM: one %src; loop 1 carries case 16's %t chain, loops 2 and 3 are light.
-// COM: Per-lane bytes as in case 16; each loop's live-in is 288.
-// COM: Decided alone, last to first, identically at every mode:
-// COM:   * loop 3: nothing below reads %src, net -192, but %cvt3 would land
-// COM:     after %src and span loop 1: 992 + 64 = 1056 at %t4 > 992. Refused.
-// COM:   * loop 2: the only later reader of %src is the refused twin %cvt3,
-// COM:     which is excused, so %cvt2 is credited the same -192 and refused by
-// COM:     the peak the same way (1056).
-// COM:   * loop 1: both later readers are refused twins, so %cvt1 is credited
-// COM:     too and hoists alone at 992 as in case 16. The merge charge prices
-// COM:     loops 2 and 3 at -192 each and marks %cvt2 and %cvt3 merge-charged.
-// COM: The shared-source phase then moves the refused group {%cvt3, %cvt2}
-// COM: together. Both loops are merge-charged, so no loop-level gate applies,
-// COM: and the peak at %t4 is 640 + 3*64 + 32 = 864 <= 992. All three land
-// COM: after %src at every mode.
+// COM: Case 43: case 16 with a third sibling loop. Loops 3 and 2 are each refused
+// COM: alone by the peak (992 + 64 = 1056, their result spanning loop 1). Loop 1
+// COM: hoists past both refused twins at 992. The shared-source phase then moves
+// COM: {%cvt3, %cvt2} together: measured peak 640 + 3*64 + 32 = 864 <= 992. All
+// COM: three land after %src at every mode.
 
 #blocked43 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas43 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -2376,13 +1949,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 44 (#8202): case 16 with an unrelated loop between the two
-// COM: siblings. The middle loop has no candidate and does not read %src, but
-// COM: %src and any hoisted conversion span it. Neither the twin credit nor
-// COM: the grouping depends on adjacency, so the outcome is case 16's at every
-// COM: mode: loop 2 refused alone by the peak at 1056, loop 1 credited past
-// COM: that refused twin and hoisted alone at 992, then the singleton group
-// COM: {%cvt2} hoisted with a measured peak of 800 (640 + 2*64 + 32 at %t4).
+// COM: Case 44: case 16 with an unrelated loop between the two siblings. Neither
+// COM: the twin credit nor the grouping depends on adjacency, so the outcome is
+// COM: case 16's at every mode, ending in {%cvt2} with a measured peak of 800.
 
 #blocked44 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas44 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -2434,69 +2003,16 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 45 (#8202): a shared-source group the measured peak refuses. Six
-// COM: sibling loops read %src: loop 1 carries case 16's %t chain, loops 2-6
-// COM: are light. Hoisting all six retires %src but leaves six 64-byte results
-// COM: spanning loop 1: 640 + 6*64 + 32 = 1056 at %t4, above the 992 ceiling.
-// COM: (Five siblings would reach exactly 992 and be accepted; six is the
-// COM: smallest group this shape refuses.) No proper subset of the group
-// COM: helps either, by the same measured-peak math: moving fewer than all six
-// COM: still leaves %src live through loop 1, so the joint trial always
-// COM: measures 1056 and is moved back regardless of group size.
-// COM:
-// COM: Loops 6..2 are refused alone by the peak (1056 each). Loop 1 is decided
-// COM: last (loops are visited last-to-first) and sees loops 6..2's refusals
-// COM: already recorded: since those refused conversions share %src's exact
-// COM: (source, result type), hoisting %cvt1 would dominate and retire them
-// COM: too (remove_layout_conversions merges a dominated equivalent conversion
-// COM: into whatever dominates it), so %cvt1's hoist is credited as if %src
-// COM: were fully retired. That credit clears both the loop-level gate and the
-// COM: peak gate at 992, independent of GRF mode -- 128-GRF/default and
-// COM: 256-GRF now hoist identically. The joint phase then retries
-// COM: {%cvt6 .. %cvt2} as a group (since %src already has a hoisted sibling),
-// COM: measures 1056, and moves it back: only %cvt1 is hoisted, same outcome
-// COM: as before this credit fix at 256-GRF, now also reached at 128-GRF.
-// COM:
-// COM: The arithmetic, in per-lane bytes, identical at every mode (measured
-// COM: with -debug-only=tritonintelgpu-hoist-layout-conversions). %src is 256,
-// COM: each #dot_a result 64, %argB 32, so every loop's live-in is 288. The
-// COM: peak is case 16's, at %t4: five 128-byte #dpas values 640 + %src 256 +
-// COM: %cvt1 64 + %argB 32 = 992, which is also the ceiling at every mode
-// COM: (prePeak exceeds both 204.8 and 409.6).
-// COM:   * loop 6: the only other readers of %src are loops before it, so it
-// COM:     is credited without any twin: 288 + 64 - 256 = 96, a negative delta
-// COM:     (-192) the loop-level gate never vetoes. The peak refuses it: its
-// COM:     corridor steps over loop 1, where %cvt1 still keeps %src live, so
-// COM:     the arriving result is charged on top of loop 1's internal peak,
-// COM:     992 + 64 = 1056 > 992 (corridor of 7 ops).
-// COM:   * loops 5..2: each also has a reader *after* it, a later loop's
-// COM:     conversion, but that conversion is an already-refused twin, so it is
-// COM:     excused and each is credited the same 96. Each is then refused by
-// COM:     the peak at 1056 exactly as loop 6 is (corridors of 6, 5, 4, 3
-// COM:     ops). Before the twin credit these four had no credit, so 288 + 64 =
-// COM:     352 >= 204.8 refused them at 128-GRF/default by the loop-level gate
-// COM:     instead. That is why the STATS split for this case is five
-// COM:     rejected_function_peak_exact and no rejected_pressure, not one and
-// COM:     four (the split the joint-stats file pinned before the credit fix).
-// COM:   * loop 1: all five later readers of %src are refused twins, so %cvt1
-// COM:     is credited: 288 + 0 + (64 - 256) = 96 < 204.8. Counting the twins
-// COM:     as real readers would give 288 + 64 = 352, which clears 256-GRF's
-// COM:     409.6 but not 128-GRF's 204.8. The peak gate does not need the
-// COM:     credit: %cvt1 is already live at %t4, so the projection stays at 992
-// COM:     (corridor 608 over 2 ops, newPoint 480). Hoisted. The merge charge
-// COM:     then prices each of loops 2..6 at the -192 its twin's merge is
-// COM:     worth (288 - 192 = 96) and marks %cvt2..%cvt6 merge-charged.
-// COM:   * shared-source phase: group {%cvt6 .. %cvt2}, all moved. Every
-// COM:     member is merge-charged, so no loop-level gate applies; the
-// COM:     measured peak is 640 + 6*64 + 32 = 1056 > 992, so the group is moved
-// COM:     back and all five are stamped.
-// COM: The MERGE run shows the premise the credit rests on: after
-// COM: remove_layout_conversions, the five stamped twins are gone and every
-// COM: loop's tt.dot reads the single hoisted %cvt1. remove_layout_conversions
-// COM: alone keeps all six conversions in their loops, and -cse does not merge
-// COM: them either (tt.no_licm makes the twins' attributes differ from
-// COM: %cvt1's), so the merge needs both the hoist and that pass's
-// COM: dominance-checked remat cache.
+// COM: Case 45: a shared-source group the measured peak refuses. Six sibling
+// COM: loops read %src; loop 1 carries case 16's %t chain, loops 2..6 are light.
+// COM: Loops 6..2 are each refused alone by the peak (992 + 64 = 1056). Loop 1 is
+// COM: credited past those refused twins, which share %src and its result type
+// COM: and which remove_layout_conversions merges into %cvt1, and hoists at 992
+// COM: at every mode. The shared-source phase then tries {%cvt6 .. %cvt2}:
+// COM: measured peak 640 + 6*64 + 32 = 1056 > 992, so the group is moved back and
+// COM: all five are stamped. Five siblings would measure 992 and be accepted.
+// COM: The MERGE run shows the premise of the credit: the five stamped twins are
+// COM: gone and every tt.dot reads %cvt1.
 
 #blocked45 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas45 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -2590,17 +2106,14 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 46 (#8202): a shared-source group the loop-level gate refuses.
-// COM: Two light sibling loops read %src, and so does %keep after both, so no
-// COM: hoist ever retires %src from either loop: each loop's net change is +64
-// COM: alone and jointly, 288 + 64 = 352. The %p chain before %src puts the
-// COM: function's peak outside the loops (hand-derived: at %p4, five 128-byte
-// COM: values + %arg0 256 + %argB 32 = 928), where no hoist here reaches, so
-// COM: the peak gate never refuses and the loop-level gate alone decides.
-// COM:   * 128-GRF/default: 352 >= 204.8 for each loop alone, and again for the
-// COM:     group {%cvt2, %cvt1}, which is moved back without being measured.
-// COM:     Both are stamped.
-// COM:   * 256-GRF: 352 < 409.6, both hoist alone; no refusal, no group.
+// COM: Case 46: a shared-source group the loop-level gate refuses. Two light
+// COM: sibling loops read %src, and so does %keep after both, so no hoist retires
+// COM: %src: each loop is 288 + 64 = 352, alone and as a group. The %p chain
+// COM: before %src puts the function peak at 928 outside the loops, so the peak
+// COM: gate never refuses and the loop gate alone decides.
+// COM: At 128-GRF/default 352 >= 204.8: both are refused and the group {%cvt2,
+// COM: %cvt1} is moved back unmeasured, all stamped. At 256-GRF 352 < 409.6 and
+// COM: both hoist alone.
 
 #blocked46 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas46 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -2650,20 +2163,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 47 (#8202): case 16 with %src a block argument (%arg0), the
-// COM: non-goal the pass description records. With no defining op, a hoisted
-// COM: conversion lands right before its own loop, so %cvt2 lands *between*
+// COM: Case 47: case 16 with %src a block argument (%arg0). With no defining op a
+// COM: hoisted conversion lands right before its own loop, so %cvt2 lands between
 // COM: the loops and keeps %arg0 read below loop 1 even when both are moved.
-// COM:   * loop 2 (every mode): retires %arg0, net -192; the new point between
-// COM:     the loops holds 256 + 64 + 32 + 128 = 480 and the peak stays 992.
-// COM:     Hoisted.
-// COM:   * loop 1 at 128-GRF/default: no credit (%cvt2 still reads %arg0
-// COM:     below), 352 >= 204.8. Refused. Its source already has a hoisted
-// COM:     conversion, so the shared-source phase tries the singleton {%cvt1},
-// COM:     but moving it changes nothing below loop 1: still +64, still 352,
-// COM:     moved back and stamped.
-// COM:   * loop 1 at 256-GRF: 352 < 409.6, and %cvt1 was already live at %t4,
-// COM:     so the projection stays 992. Hoisted.
+// COM: Loop 2 retires %arg0 (net -192) and hoists at every mode. Loop 1 at
+// COM: 128-GRF/default earns no credit, 352 >= 204.8, and is refused; the
+// COM: singleton {%cvt1} changes nothing below loop 1, so it is moved back and
+// COM: stamped. At 256-GRF 352 < 409.6 and loop 1 hoists.
 
 #blocked47 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas47 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -2708,53 +2214,18 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 48 (#8053): the merge charge a twin's own loop takes once a
-// COM: sibling's hoist is credited past it. Case 16's two loops on %src, plus
-// COM: a second source %s2 (16x16xf16 #blocked, 32 B/lane) defined between
-// COM: loops 1 and 2: loop 2 also converts %s2 (%cvtX, to #dot_b, 32 B/lane)
-// COM: and reads %argB; loop 3 converts %s2 again (%cvtZ); %keep reads %s2
-// COM: after every loop, so no hoist ever retires %s2. Loop 2's live-in is
-// COM: %src 256 + %s2 32 + %argB 32 = 320. %cvtZ converts %s2 to #dot_b48r,
-// COM: not #dot_b48: its parent differs from #dpas48 only in repCluster
-// COM: ([2, 1] instead of [4, 1]), and loop 3's %argA and accumulator take
-// COM: that parent too, as case 50 does. Every per-lane size is unchanged
-// COM: (#dot_b48r 32, #dot_a48r 64, the accumulator 128). Loop 3 starts from
-// COM: a zero accumulator and %r2 is returned instead; %r2 then spans loop 3,
-// COM: which no figure below sees: liveInPressure ignores a value merely
-// COM: spanning a loop, and loop 3's own peak stays far under 1088. The types
-// COM: differ so that %cvtX is no twin of %cvtZ: with one type, %cvtX's
-// COM: refusal would be charged at once as a merge into the hoisted %cvtZ,
-// COM: {%cvtX} would skip the loop-level gate, and nothing would read the
-// COM: charge this case is about (that path is covered by
-// COM: hoist-layout-conversions-late-refusal-merge.mlir). Decided last to
-// COM: first, at 128-GRF/default:
-// COM:   * loop 3: %cvtZ, +32 on a 96 live-in (%s2 + %argA); its anchor is
-// COM:     %s2, below loop 1, so the peak is untouched. Hoisted.
-// COM:   * loop 2: %cvt2 (-192, loop 1's %cvt1 sits before loop 2) is refused
-// COM:     by the peak as in case 16; %cvtX (+32) is refused by the loop-level
-// COM:     gate, 320 + 32 = 352 >= 204.
-// COM:   * loop 1: %cvt1 is credited past its refused twin %cvt2 and hoisted;
-// COM:     the merge charge prices loop 2 at the full -192 the merge is really
-// COM:     worth (64 for %cvt1's result, less the 256 %src no longer costs
-// COM:     there once %cvt2's only remaining reader is the merged value), not
-// COM:     just %cvt1's own +64. netBytes[loop 2] = -192.
-// COM:   * shared-source phase: group {%cvt2} is merge-charged, so its loop is
-// COM:     left out of the loop-level gate; the trial is still measured, at
-// COM:     896 <= 1088, and accepted. Then group {%cvtX} (%s2 already has the
-// COM:     hoisted %cvtZ): 320 - 192 + 32 = 160 < 204, hoisted.
-// COM: At 256-GRF, %cvtX clears the loop-level gate in the first phase (352 <
-// COM: 409.6) and is hoisted there, so the charge is never consulted for it.
-// COM: All four conversions land outside their loops at every GRF mode; none
-// COM: is stamped. (An earlier, since-corrected version of this charge flat-
-// COM: debited loop 2 only +64 instead of the full -192, which double-counted
-// COM: %cvt2's 64 bytes against group {%cvt2}'s own delta and left %cvtX
-// COM: refused at 224 instead of hoisted at 160. With group {%cvt2}'s
-// COM: merge-charged skip in place, the same flat +64 gives 320 + 64 + 32 =
-// COM: 416 >= 204, refused all the same.) This case pins that correction
-// COM: only: with no merge charge at all, the accepted group {%cvt2} would
-// COM: price loop 2 at the same -192 itself, before {%cvtX} is tried, and
-// COM: the outcome would be identical. Case 51 is the shape whose outcome
-// COM: needs the charge.
+// COM: Case 48: the merge charge on a twin's loop. Case 16's loops 1 and 2 on
+// COM: %src, plus a second source %s2 (32 B/lane) defined between them and
+// COM: converted in loop 2 (%cvtX) and in loop 3 (%cvtZ); %keep reads %s2 after
+// COM: every loop, so no hoist retires it. %cvtZ is retyped (repCluster [2, 1])
+// COM: so %cvtX is no twin of it.
+// COM: At 128-GRF/default %cvt2 is refused by the peak and %cvtX by the loop gate
+// COM: (320 + 32 = 352 >= 204). Loop 1 then hoists %cvt1 past the refused twin
+// COM: %cvt2 and loop 2 is charged the full -192 the merge is worth. The
+// COM: shared-source phase accepts {%cvt2} and then {%cvtX}: 320 - 192 + 32 =
+// COM: 160 < 204. A flat +64 charge gives 320 + 64 + 32 = 416 and refuses %cvtX.
+// COM: No merge charge at all gives the same outcome as the right one; case 51
+// COM: is the shape that needs it. At 256-GRF %cvtX passes the loop gate directly.
 // COM: (Predicted from static analysis, not yet confirmed against a build:
 // COM: the retyping of %cvtZ and loop 3 postdates this case's last confirmed
 // COM: trace. Every figure above is predicted to be unchanged from it.)
@@ -2822,41 +2293,15 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 49 (#8053): the cascade the twin credit was written for, from
-// COM: _attn_bwd's backward loop: loop 2's K conversion is refused, loop 1's
-// COM: K conversion is credited past it and hoisted, and that credit is what
-// COM: frees loop 1's budget for its *own* V conversion, a second candidate
-// COM: on a different source. Case 16's two loops on %src, plus %vs (16x16xf16
-// COM: #blocked, 32 B/lane) converted in loop 1 by %cvtV (to #dot_b, 32) and
-// COM: read again by %keep after both loops, so no hoist ever retires %vs and
-// COM: %cvtV always costs its full +32. Loop 2 reads only %src and constants,
-// COM: which are rematerializable and so free. Loop 1's live-in is %src 256 +
-// COM: %vs 32 + %argB 32 = 320; the peak is at %t4: 640 + %src 256 + %cvt1 64
-// COM: + %cvtV 32 + %vs 32 + %argB 32 = 1056, also the ceiling at every mode.
-// COM: Decided last to first, at every mode:
-// COM:   * loop 2: %cvt2 is credited (-192, nothing after loop 2 reads %src)
-// COM:     but refused by the peak: hoisted, its result spans loop 1, 1056 +
-// COM:     64 = 1120 > 1056 (corridor of 6 ops).
-// COM:   * loop 1: %cvt2 is a refused twin of %cvt1 (same %src, same #dot_a),
-// COM:     so %cvt1 is credited, delta -192, and goes first as the cheapest:
-// COM:     320 - 192 = 128, peak stays 1056 (corridor 640 over 3 ops,
-// COM:     newPoint 512). Hoisted; netBytes[loop 1] = -192, and the merge
-// COM:     charge prices loop 2 at -192 too and marks %cvt2 merge-charged.
-// COM:     Then %cvtV: 320 - 192 + 32 = 160 < 204.8, peak 1056 (corridor 672
-// COM:     over 2 ops, newPoint 544). Hoisted.
-// COM:   * shared-source phase: group {%cvt2} (%src already hoisted). It is
-// COM:     merge-charged, so no loop-level gate applies; measured peak 640 +
-// COM:     2*64 + %cvtV 32 + %vs 32 + %argB 32 = 864 <= 1056. Hoisted.
-// COM: All three land above loop 1 and none is stamped. Without the credit,
-// COM: %cvt1 would cost +64, so %cvtV (+32) would be decided first at 320 + 32
-// COM: = 352 >= 204.8 and refused, and %cvt1 after it at 384. The shared-source
-// COM: phase would then rescue %cvt1 together with %cvt2, but never %cvtV: %vs
-// COM: has one refusal and no hoisted conversion, so it is not regrouped. Case
-// COM: 50 is that counterfactual, measured: the same function with only
-// COM: %cvt2's result type changed, so the twin credit cannot fire.
-// COM: The cascade is load-bearing at 128-GRF/default only: at 256-GRF %cvtV
-// COM: clears 352 < 409.6 without any credit, so the GRF256 output is the
-// COM: same here and in case 50.
+// COM: Case 49: the cascade the twin credit exists for (_attn_bwd's backward
+// COM: loop). Case 16's loops on %src, plus %vs (32 B/lane) converted in loop 1
+// COM: (%cvtV) and read by %keep after both loops, so %cvtV costs its full +32.
+// COM: Loop 2 is refused by the peak. Loop 1 credits %cvt1 past that refused twin
+// COM: (-192) and hoists it, which frees loop 1's budget for %cvtV: 320 - 192 +
+// COM: 32 = 160 < 204.8. The shared-source phase then moves {%cvt2}.
+// COM: Without the credit %cvt1 costs +64, %cvtV is decided first at 320 + 32 =
+// COM: 352 >= 204.8 and refused, and %vs is never regrouped: case 50 is that
+// COM: counterfactual. At 256-GRF %cvtV clears 352 < 409.6 either way.
 
 #blocked49 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas49 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -2910,36 +2355,17 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 50 (#8053): no twin credit for the same source converted to a
-// COM: *different* result type. Case 49 with one change: loop 2's %cvt2 converts
-// COM: %src to #dot_a50r, whose parent differs from #dpas50 only in repCluster
-// COM: ([2, 1] instead of [4, 1]), and loop 2's constants and accumulator take
-// COM: that parent too. #dot_a50r is still 64 B/lane, so every byte figure
-// COM: below is case 49's; only the type check in hoistRetiresSource's
-// COM: isUnenforceableTwin sees a difference. remove_layout_conversions keys its
-// COM: remat cache on (value, encoding) and would never merge these two, which
-// COM: is why the credit must not fire. At 128-GRF/default:
-// COM:   * loop 2: as in case 49, refused by the peak at 1120 > 1056.
-// COM:   * loop 1: %cvt2 is not a twin of %cvt1, so it counts as a real reader
-// COM:     of %src after loop 1 and %cvt1 earns no credit: +64. The cheapest
-// COM:     candidate is now %cvtV, 320 + 32 = 352 >= 204.8, refused; then %cvt1,
-// COM:     320 + 64 = 384 >= 204.8, refused. Both by the loop-level gate.
-// COM:   * shared-source phase: it groups refusals by source alone, regardless
-// COM:     of type, so {%cvt2, %cvt1} is moved together. Both loops then retire
-// COM:     %src (-192 each), and the measured peak is 864 <= 1056, so both are
-// COM:     hoisted. %cvtV is never regrouped (one refusal, nothing of %vs
-// COM:     hoisted) and stays stamped.
-// COM: So %cvt1 ends up hoisted here just as in case 49, by a type-agnostic
-// COM: mechanism that has nothing to do with the credit, and its placement
-// COM: cannot tell the two cases apart. The stamped %cvtV can: it is refused
-// COM: in the one-at-a-time phase, which the shared-source phase never
-// COM: revisits for %vs, and only because %cvt1 got no credit there.
-// COM: At 256-GRF: %cvtV goes first, 352 < 409.6, and is hoisted (peak 1056,
-// COM: corridor 608 over 3 ops, newPoint 480); %cvt1 is refused at 320 + 32 +
-// COM: 64 = 416 >= 409.6; the group {%cvt2, %cvt1} is then hoisted at 864.
-// COM: Nothing is stamped, the same as case 49 at 256-GRF.
-// COM: The MERGE run shows that remove_layout_conversions leaves both
-// COM: conversions of %src in place: one value, two encodings, two cache keys.
+// COM: Case 50: no twin credit for the same source converted to a different result
+// COM: type. Case 49 with loop 2's %cvt2 retyped to #dot_a50r, whose parent
+// COM: differs only in repCluster ([2, 1]); it is still 64 B/lane. The remat
+// COM: cache of remove_layout_conversions is keyed on (value, encoding), so it
+// COM: never merges %cvt2 into %cvt1 and the credit must not fire.
+// COM: At 128-GRF/default %cvt2 counts as a real reader of %src below loop 1, so
+// COM: %cvt1 earns no credit (+64): %cvtV is refused at 320 + 32 = 352 >= 204.8,
+// COM: then %cvt1 at 320 + 64 = 384. The shared-source phase groups by source
+// COM: alone and moves {%cvt2, %cvt1} (measured 864 <= 1056) but never regroups
+// COM: %vs, so %cvtV stays stamped; that stamp is what tells this case from case
+// COM: 49. The MERGE run keeps both conversions of %src.
 
 #blocked50 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas50 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -3001,47 +2427,18 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 51 (#8053): the shape whose outcome needs the merge charge, which
-// COM: case 48's does not (see there). Case 48 plus four more light loops
-// COM: (2b..2e) between loops 2 and 3, each converting %src to #dot_a again,
-// COM: so the refused twins of %cvt1 are five and their group fails the
-// COM: shared-source phase, as case 45's does. The charge %cvt1's hoist makes
-// COM: is then the only thing that prices loop 2's merge before {%cvtX} is
-// COM: tried. %cvtZ and loop 3 are retyped as in case 48 (to #dot_b51r and
-// COM: #dpas51r, %r2e returned instead of feeding loop 3) and for the same
-// COM: reason: with one type, %cvtX's refusal would itself be charged as a
-// COM: merge into %cvtZ, and {%cvtX} would skip the loop-level gate.
-// COM: Per-lane bytes as in case 48: %src 256, each #dot_a result 64, %s2
-// COM: and each #dot_b result 32, %argB 32, %argA 64. Loop 1's live-in is
-// COM: %src + %argB = 288, loop 2's is %src + %s2 + %argB = 320, loops
-// COM: 2b..2e's 288, loop 3's %s2 + %argA = 96. The peak is case 48's, at %t4:
-// COM: 640 + %src 256 + %cvt1 64 + %argB 32 + %argS2 32 + %argA 64 = 1088,
-// COM: also the ceiling at every mode.
-// COM: Decided last to first, at 128-GRF/default:
-// COM:   * loop 3: %cvtZ, 96 + 32 = 128 < 204. Hoisted, as in case 48.
-// COM:   * loops 2e..2b: each credited, the later readers of %src being
-// COM:     refused twins (none for 2e), 288 - 192 = 96, and each refused by the
-// COM:     peak: its result would span loop 1, where %src is still live, 1088
-// COM:     + 64 = 1152 > 1088.
-// COM:   * loop 2: %cvt2 likewise (-192, refused at 1152); %cvtX, +32 (%keep
-// COM:     reads %s2 below), 320 + 0 + 32 = 352 >= 204. Refused.
-// COM:   * loop 1: %cvt1 is credited past all five twins, 288 - 192 = 96,
-// COM:     peak 1088, hoisted. The merge charge prices loops 2 and 2b..2e at
-// COM:     -192 each: netBytes[loop 2] = -192.
-// COM:   * shared-source phase, groups in the order of their first refusal:
-// COM:     {%cvt2e, %cvt2d, %cvt2c, %cvt2b, %cvt2}, all merge-charged, so no
-// COM:     loop-level gate; measured 640 + 6*64 + 32 + 32 + 64 = 1152 > 1088,
-// COM:     moved back, all five stamped. Then {%cvtX} (%s2 already has the
-// COM:     hoisted %cvtZ): loop 2 at 320 - 192 + 32 = 160 < 204, measured 1088
-// COM:     <= 1088. Hoisted.
-// COM: Without the merge charge, loop 2's figure would still be 0 when
-// COM: {%cvtX} is tried, since the group that would have priced its merge
-// COM: failed: 320 + 0 + 32 = 352 >= 204, and %cvtX would be stamped too. A
-// COM: flat +64 charge in its place (case 48's earlier bug) gives 320 + 64 +
-// COM: 32 = 416 >= 204, and stamps %cvtX the same way.
-// COM: At 256-GRF, %cvtX clears the loop-level gate in the first phase (352 <
-// COM: 409.6) and everything else is decided as above, so the output is the
-// COM: same at every mode; only 128-GRF/default exercise the charge.
+// COM: Case 51: the shape whose outcome needs the merge charge, which case 48's
+// COM: does not. Case 48 plus four more light loops (2b..2e) converting %src, so
+// COM: the refused twins of %cvt1 are five and their group fails the shared-source
+// COM: phase as in case 45. The charge from %cvt1's hoist is then the only thing
+// COM: that prices loop 2's merge before {%cvtX} is tried. %cvtZ and loop 3 are
+// COM: retyped as in case 48, for the same reason.
+// COM: At 128-GRF/default %cvt1 hoists past all five twins and loops 2 and 2b..2e
+// COM: are each charged -192. The group of five measures 640 + 6*64 + 32 + 32 +
+// COM: 64 = 1152 > 1088 and is moved back, stamped. {%cvtX} then reads 320 - 192 +
+// COM: 32 = 160 < 204 and hoists. Without the charge it reads 320 + 32 = 352 and
+// COM: is stamped; a flat +64 charge reads 416 and stamps it too. At 256-GRF
+// COM: %cvtX passes the loop gate directly (352 < 409.6).
 // COM: (Predicted from static analysis, not yet confirmed against a build:
 // COM: the retyping of %cvtZ and loop 3 postdates this case's last confirmed
 // COM: trace. Every figure above is predicted to be unchanged from it.)
@@ -3137,35 +2534,16 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 52 (#8053): no twin credit for an FMA dot's operands. Case 45's six
-// COM: loops with the dot operands' parent a #ttg.blocked layout instead of
-// COM: #dpas, and constant B operands. remove_layout_conversions never
-// COM: rematerializes backward into a dot operand whose parent is blocked, so
-// COM: it would leave every refused twin in its loop reading %src: none of
-// COM: them is excused, and each counts as the real reader it stays.
-// COM: Per-lane bytes: %src 256 as in case 45; a #dot_a52 result 64 (2 rows of
-// COM: the full K of 16 per lane); a 128x16xf32 #fma52 value 128; %zB a
-// COM: constant, rematerializable and so free. Every loop's live-in is 256.
-// COM: The peak is at %t4: 640 + %src 256 + %cvt1 64 = 960, also the ceiling
-// COM: at every mode. Decided last to first, at 128-GRF/default:
-// COM:   * loop 6: nothing below reads %src, so it is credited, 256 + 64 -
-// COM:     256 = 64, but refused by the peak: its result would span loop 1,
-// COM:     where %src is still live, 960 + 64 = 1024 > 960.
-// COM:   * loops 5..2: each has a later refused conversion of %src to the same
-// COM:     type, not excused, so no credit: 256 + 64 = 320 >= 204.8. Refused.
-// COM:   * loop 1: likewise, 320 >= 204.8. Refused.
-// COM:   * shared-source phase: group {%cvt6 .. %cvt1}, all moved. Every loop
-// COM:     then retires %src, -192, but the measured peak is 640 + 6*64 =
-// COM:     1024 > 960, so the group is moved back and all six are stamped.
-// COM: Under a twin credit blind to the parent layout, loops 5..2 would be
-// COM: credited and refused by the peak instead, and loop 1 credited, 256 -
-// COM: 192 = 64, and hoisted at 960, leaving its stamped twins reading %src
-// COM: inside their loops after remove_layout_conversions, so the credit
-// COM: would have been unsound for loop 1.
-// COM: At 256-GRF: loops 5..2 clear the loop-level gate (320 < 409.6) and are
-// COM: refused by the peak at 1024 like loop 6; loop 1 clears it too and is
-// COM: hoisted (projected 960, %cvt1 already being live at %t4); the group
-// COM: {%cvt6 .. %cvt2} measures 1024 and is moved back.
+// COM: Case 52: no twin credit for an FMA dot's operands. Case 45's six loops with
+// COM: the dot operands' parent a #ttg.blocked layout instead of #dpas, and
+// COM: constant B operands. remove_layout_conversions never rematerializes into a
+// COM: dot operand whose parent is blocked, so every refused twin stays in its
+// COM: loop reading %src: none is excused and each counts as a real reader.
+// COM: At 128-GRF/default loops 5..1 earn no credit (256 + 64 = 320 >= 204.8) and
+// COM: loop 6 is refused by the peak (960 + 64 = 1024 > 960); the group measures
+// COM: 640 + 6*64 = 1024 > 960 and is moved back, all six stamped. A twin credit
+// COM: blind to the parent layout would credit loop 1 (256 - 192 = 64) and hoist
+// COM: it while its stamped twins keep reading %src inside their loops.
 
 #blocked52 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #fma52 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -3238,36 +2616,17 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 53 (#8053): no twin credit past a twin the hoist would not
-// COM: dominate. %arg0 is a block argument, so a hoisted conversion of it
-// COM: lands just above its own loop rather than below a defining op. Loop 1
-// COM: sits in an scf.if and loop 2 after it, both in an outer loop: %cvt1
+// COM: Case 53: no twin credit past a twin the hoist would not dominate. %arg0 is
+// COM: a block argument, so a hoisted conversion lands right above its own loop.
+// COM: Loop 1 sits in an scf.if and loop 2 after it, both in an outer loop: %cvt1
 // COM: would land inside the scf.if, which does not dominate loop 2, so
-// COM: remove_layout_conversions would leave a refused %cvt2 in place, reading
-// COM: %arg0. %cvt2 is not excused, and counts as the real reader it stays.
-// COM: Per-lane bytes: %arg0 256, each #dot_a result 64, %argB 32, each
-// COM: #dpas value 128, %cond 1. Both inner loops' live-in is %arg0 + %argB =
-// COM: 288. The peak is at loop 2's %t4: five #dpas values 640 + %arg0 256 +
-// COM: %argB 32 + %cond 1 = 929 (all three are read in the outer loop, so
-// COM: they are live through all of it), also the ceiling at every mode.
-// COM: Decided last to first, identically at every mode for loop 2:
-// COM:   * loop 2: %cvt1 sits before loop 2, so %cvt2 is credited, 288 + 64 -
-// COM:     256 = 96, but %arg0 is also read in the outer loop, whose back edge
-// COM:     the projection does not model, so it charges %cvt2's result with no
-// COM:     credit wherever it becomes newly live: 929 + 64 = 993 > 929 at %t4
-// COM:     (conservatively charged). Refused.
-// COM:   * loop 1 at 128-GRF/default: %cvt2 is not excused, so no credit: 288
-// COM:     + 64 = 352 >= 204.8. Refused.
-// COM:   * shared-source phase: group {%cvt2, %cvt1}. Moved, %cvt2 lands
-// COM:     between the scf.if and loop 2, still not dominated by %cvt1 and
-// COM:     still reading %arg0 after loop 1: loop 1 at 352 again, moved back,
-// COM:     both stamped.
-// COM:   * loop 1 at 256-GRF: 352 < 409.6, and the projection stays at 929 (its
-// COM:     corridor holds only loop 1, light, and its yield). Hoisted, to the
-// COM:     top of the scf.if's then block; the group {%cvt2} then measures 993
-// COM:     and is moved back.
-// COM: With the twin credit, %cvt1 would be credited, 288 - 192 = 96, and
-// COM: hoisted at every mode, although %arg0 stays read below loop 1.
+// COM: remove_layout_conversions would leave a refused %cvt2 reading %arg0.
+// COM: %cvt2 is not excused and counts as a real reader.
+// COM: At 128-GRF/default loop 1 therefore earns no credit: 288 + 64 = 352 >=
+// COM: 204.8, refused, and the group {%cvt2, %cvt1} is moved back. With the twin
+// COM: credit it would read 288 - 192 = 96 and hoist at every mode although
+// COM: %arg0 stays read below loop 1. At 256-GRF 352 < 409.6 and loop 1 hoists
+// COM: without credit.
 
 #blocked53 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas53 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -3320,32 +2679,14 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 54 (#8053): no twin credit past a twin the loop-level gate
-// COM: refused. When a conversion's result is per-lane fatter than its source,
-// COM: the merge leaves the twin's loop exactly as hoisting the twin would,
-// COM: which is what that gate refused, so the credit must not override it.
-// COM: Per-lane bytes: %s and %w (16x16xf16, one element per lane in each of
-// COM: four rows) 8 each, a #dot_b result 32, each #dot_a argument 64. Loop 1's
-// COM: live-in is %a1 + %a2 + %argB + %s + %w = 64 + 64 + 32 + 8 + 8 = 176;
-// COM: loop 2's is %a1 + %a2 + %a3 + %s = 200. The peak is at loop 1's %d:
-// COM: %acc 128 + %d 128 + %a1, %a2, %a3 192 + %h 32 + %argB 32 + %s 8 + %w 8
-// COM: = 528, also the ceiling at every mode.
-// COM: Decided last to first, at 128-GRF/default:
-// COM:   * loop 2: %t, credited (%h sits before loop 2), 32 - 8 = +24, 200 + 24
-// COM:     = 224 >= 204.8. Refused by the loop-level gate.
-// COM:   * loop 1: %t would merge into a hoisted %h, but that merge leaves loop
-// COM:     2 at the same 224, so %t is a real reader after loop 1 and %h gets
-// COM:     no credit: 176 + 32 = 208 >= 204.8. Refused.
-// COM:   * shared-source phase: group {%t, %h}, loop 2 at 224 again, moved
-// COM:     back, both stamped.
-// COM: At 256-GRF: %t clears the loop-level gate (224 < 409.6) but is refused
-// COM: by the peak, its result spanning loop 1, 528 + 32 = 560 > 528. %h is
-// COM: credited past it, the merge leaving loop 2 at 224 < 409.6: 176 + 24 =
-// COM: 200, and hoisted at 528. The group {%t} measures 552 > 528 and is
-// COM: moved back.
-// COM: With an unconditional twin credit, %h would also be credited at
-// COM: 128-GRF/default, 176 + 24 = 200 < 204.8, and hoisted, and after the
-// COM: merge loop 2's live-in would be the 224 its own gate refused.
+// COM: Case 54: no twin credit past a twin the loop-level gate refused. When a
+// COM: conversion's result is per-lane fatter than its source (%s to %t, %h: 8 B
+// COM: to 32 B), the merge leaves the twin's loop exactly as hoisting the twin
+// COM: would, which is what that gate refused, so the credit must not override it.
+// COM: At 128-GRF/default %t is refused by loop 2's gate: 200 + 24 = 224 >= 204.8.
+// COM: %h then earns no credit: 176 + 32 = 208 >= 204.8, refused. An
+// COM: unconditional twin credit would read 176 + 24 = 200 < 204.8 and hoist %h,
+// COM: leaving loop 2 at the 224 its own gate refused.
 
 #blk54 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas54 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>

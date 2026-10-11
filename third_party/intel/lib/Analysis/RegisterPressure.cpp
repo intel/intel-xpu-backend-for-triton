@@ -160,14 +160,11 @@ unsigned RegisterPressureAnalysis::pressureContribution(Value value) const {
 const Liveness::ValueSetT &
 RegisterPressureAnalysis::getRawLiveValuesAt(Operation *point,
                                              LiveValuesCache &cache) const {
-  // currentlyLiveValues() is expensive and MLIR does not cache it, so memoize
-  // it. What is memoized is the *unfiltered* result for `point`: whether the
-  // point's own results are dropped depends on the role `point` plays in a
-  // given query, not on `point` itself, so filtering before storing would let
-  // one key stand for two different answers. A point with no liveness info
-  // memoizes as the empty set, which is the answer it would recompute.
+  // Memoize the unfiltered set: whether the point's own results count depends
+  // on the query, so one key must not stand for two answers.
   auto [it, inserted] = cache.try_emplace(point);
   if (inserted) {
+    // Base mlir::Liveness query: the Intel wrapper asserts on nested ops.
     if (const LivenessBlockInfo *blockInfo =
             liveness.getLiveness(point->getBlock()))
       it->second = blockInfo->currentlyLiveValues(point);
@@ -175,11 +172,9 @@ RegisterPressureAnalysis::getRawLiveValuesAt(Operation *point,
   return it->second;
 }
 
-/// Returns true if \p use is exactly one of its owner's own "init" operands
-/// -- an `scf.for`/`scf.while`-style operand forwarded, unread, straight into
-/// a region entry block argument. Such a use is a pure conduit: the value
-/// dies the instant the region starts executing, renamed to that block
-/// argument, which the nested block's own liveness already counts.
+/// Returns true if \p use is a loop init operand: the value is handed, unread,
+/// to an entry block argument, which the nested block's liveness already
+/// counts.
 static bool isLoopInitUse(OpOperand &use) {
   auto loopLike = dyn_cast<LoopLikeOpInterface>(use.getOwner());
   if (!loopLike)
@@ -190,21 +185,10 @@ static bool isLoopInitUse(OpOperand &use) {
   return false;
 }
 
-/// Returns true if \p value has at least one "relevant" use with respect to
-/// \p ancestor (either \p ancestor's own operand, or a use strictly inside
-/// one of \p ancestor's regions), and *every* such relevant use is \p
-/// ancestor's own operand *and* a pure forwarding conduit into \p ancestor's
-/// own init list (`isLoopInitUse`) -- i.e. \p value's only role is to be
-/// handed down into \p ancestor's own loop-carried state, never read
-/// directly. Such a value is fully superseded: the block argument \p
-/// ancestor's own entry rebinds it to is already counted by that block's own
-/// raw liveness.
-///
-/// A relevant use nested *inside* one of \p ancestor's regions is never a
-/// conduit at \p ancestor's own level, even if that use happens to be some
-/// descendant loop's own init operand: the descendant re-evaluates that init
-/// fresh every time \p ancestor's own back edge loops around, so \p value
-/// must still be charged for \p ancestor's whole duration.
+/// Returns true if \p value has a use by or inside \p ancestor and every such
+/// use is one of \p ancestor's own loop init operands. A use nested inside
+/// \p ancestor never qualifies, even as an inner loop's init: the inner loop
+/// re-reads it on every iteration of \p ancestor.
 static bool isFullyForwardedThrough(Value value, Operation *ancestor) {
   bool hasRelevantUse = false;
   for (OpOperand &use : value.getUses()) {
@@ -225,19 +209,11 @@ const Liveness::ValueSetT &RegisterPressureAnalysis::getLiveThroughAncestorSet(
   if (auto it = ancestorCache.find(ancestor); it != ancestorCache.end())
     return it->second;
 
-  // Build the result in a local set first, and only insert it into the cache
-  // once fully built (rather than inserting a placeholder and mutating it
-  // in place): the recursive call below may itself insert into `ancestorCache`
-  // and rehash it, which would invalidate a reference obtained before the
-  // recursive call.
+  // Build locally: the recursive call below may rehash `ancestorCache`.
   Liveness::ValueSetT set;
 
-  // The "live after `ancestor`" set is fetched into a local copy *before* the
-  // loop below, rather than queried inside it: `getRawLiveValuesAt` inserts
-  // into `liveCache` on a miss, and doing that while the loop is iterating
-  // over a `const &` into that same map (the loop's own range) risks a
-  // rehash that invalidates the reference the loop is iterating over -- the
-  // same hazard the comment above this function's cache guards against.
+  // A copy: the `getRawLiveValuesAt(ancestor, ...)` miss below may rehash
+  // `liveCache`.
   Liveness::ValueSetT liveAfterAncestor;
   if (Operation *next = ancestor->getNextNode())
     liveAfterAncestor = getRawLiveValuesAt(next, liveCache);
@@ -245,31 +221,21 @@ const Liveness::ValueSetT &RegisterPressureAnalysis::getLiveThroughAncestorSet(
   bool ancestorIsLoop = isa<LoopLikeOpInterface>(ancestor);
 
   for (Value liveVal : getRawLiveValuesAt(ancestor, liveCache)) {
-    // `ancestor`'s own results don't hold a register yet while its region is
-    // still executing -- the register they will end up in is the one holding
-    // the value yielded out of the region, which the nested block's own
-    // liveness already accounts for.
+    // `ancestor`'s results are not live while its region runs. The values
+    // yielded into them are counted by the nested block.
     if (liveVal.getDefiningOp() == ancestor)
       continue;
 
     if (ancestorIsLoop) {
-      // Loops have a back edge: MLIR's own per-block liveness is blind to
-      // the region re-executing, so a value merely *referenced* inside the
-      // body -- even once, even indirectly through a nested loop's own
-      // region -- must still be charged for the loop's whole duration,
-      // unless it is genuinely superseded by a block argument at whatever
-      // depth actually carries it (`isFullyForwardedThrough`, which folds in
-      // the direct "ancestor's own init operand" case too) and is not itself
-      // needed again after this loop closes.
+      // A back edge keeps any value read in the body live for the whole loop,
+      // which per-block liveness misses. Skip only a value that is just this
+      // loop's init operand and dead after it.
       if (isFullyForwardedThrough(liveVal, ancestor) &&
           !liveAfterAncestor.contains(liveVal))
         continue;
     } else {
-      // Single-execution region (`scf.if`, ...): no back edge, so a value
-      // used only inside dies exactly where MLIR's own per-block liveness
-      // already says it dies -- the nested block's own raw liveness covers
-      // it up to that point. This level only needs to charge it if it is
-      // *also* needed again after the region closes entirely.
+      // No back edge: a value read only inside dies where block liveness
+      // says. Charge it here only if it is also live after the region.
       if (!liveAfterAncestor.contains(liveVal))
         continue;
     }
@@ -277,8 +243,6 @@ const Liveness::ValueSetT &RegisterPressureAnalysis::getLiveThroughAncestorSet(
     set.insert(liveVal);
   }
 
-  // Recurse into `ancestor`'s own parent chain, reusing (not recomputing) its
-  // memoized entry if another query already built it.
   if (Operation *parent = ancestor->getParentOp();
       parent && parent != rootOp && parent->getBlock()) {
     const Liveness::ValueSetT &parentSet =
@@ -289,11 +253,6 @@ const Liveness::ValueSetT &RegisterPressureAnalysis::getLiveThroughAncestorSet(
   return ancestorCache.try_emplace(ancestor, std::move(set)).first->second;
 }
 
-/// Returns the full region-aware live set at \p op -- its own block-local
-/// raw live values unioned with whatever lives through every enclosing
-/// region-holding op -- the one computation every accessor below shares, so
-/// they cannot disagree about what is live at a nested point (see the class
-/// doc comment).
 Liveness::ValueSetT RegisterPressureAnalysis::computeLiveValues(
     Operation *op, LiveValuesCache &liveCache,
     AncestorLiveThroughCache &ancestorCache) const {
@@ -320,9 +279,6 @@ Liveness::ValueSetT RegisterPressureAnalysis::computeLiveValues(
 }
 
 unsigned RegisterPressureAnalysis::pressureAt(Operation *op) const {
-  // Standalone query: there is no enclosing traversal to share liveness or
-  // ancestor-union results with, so both caches live exactly as long as this
-  // call.
   LiveValuesCache liveCache;
   AncestorLiveThroughCache ancestorCache;
   return pressureAt(op, liveCache, ancestorCache);
@@ -331,9 +287,7 @@ unsigned RegisterPressureAnalysis::pressureAt(Operation *op) const {
 unsigned RegisterPressureAnalysis::pressureAt(
     Operation *op, LiveValuesCache &liveCache,
     AncestorLiveThroughCache &ancestorCache) const {
-  // Accumulate the values live at `op` into a set rather than summing sizes as
-  // they are found: the same value can be live at several nesting levels, and
-  // summing per level would count it once per level.
+  // Sum over a set: a value live at several nesting levels counts once.
   unsigned pressure = 0;
   for (Value liveVal : computeLiveValues(op, liveCache, ancestorCache))
     pressure += pressureContribution(liveVal);
@@ -347,9 +301,6 @@ unsigned RegisterPressureAnalysis::pressureAt(Operation *op,
 
 RegisterPressureAnalysis::PressureAtPoint
 RegisterPressureAnalysis::pressureAt(Operation *op, Value value) const {
-  // Standalone query: there is no enclosing traversal to share liveness or
-  // ancestor-union results with, so both caches live exactly as long as this
-  // call -- same rationale as the other single-op standalone overloads.
   LiveValuesCache liveCache;
   AncestorLiveThroughCache ancestorCache;
   return pressureAt(op, value, liveCache, ancestorCache);
@@ -373,6 +324,19 @@ RegisterPressureAnalysis::PressureAtPoint RegisterPressureAnalysis::pressureAt(
   return result;
 }
 
+bool RegisterPressureAnalysis::isLiveAt(Operation *op, Value value,
+                                        QueryCache &cache) const {
+  if (getRawLiveValuesAt(op, cache.liveCache).contains(value))
+    return true;
+  Operation *rootOp = liveness.getOperation();
+  Operation *parent = op->getParentOp();
+  if (!parent || parent == rootOp || !parent->getBlock())
+    return false;
+  const Liveness::ValueSetT &liveThrough = getLiveThroughAncestorSet(
+      parent, cache.liveCache, cache.ancestorCache, rootOp);
+  return liveThrough.contains(value);
+}
+
 unsigned RegisterPressureAnalysis::pressureBefore(Operation *op) const {
   LiveValuesCache liveCache;
   AncestorLiveThroughCache ancestorCache;
@@ -390,7 +354,6 @@ unsigned RegisterPressureAnalysis::pressureBefore(Operation *op) const {
 }
 
 unsigned RegisterPressureAnalysis::peakPressure(Block *block) const {
-  // Standalone query: both caches live exactly as long as this call.
   LiveValuesCache liveCache;
   AncestorLiveThroughCache ancestorCache;
   return peakPressure(block, liveCache, ancestorCache);
@@ -398,7 +361,12 @@ unsigned RegisterPressureAnalysis::peakPressure(Block *block) const {
 
 unsigned RegisterPressureAnalysis::peakPressure(Block *block,
                                                 QueryCache &cache) const {
-  return peakPressure(block, cache.liveCache, cache.ancestorCache);
+  if (auto it = cache.blockPeakCache.find(block);
+      it != cache.blockPeakCache.end())
+    return it->second;
+  unsigned peak = peakPressure(block, cache.liveCache, cache.ancestorCache);
+  cache.blockPeakCache.try_emplace(block, peak);
+  return peak;
 }
 
 unsigned RegisterPressureAnalysis::peakPressure(
@@ -406,11 +374,8 @@ unsigned RegisterPressureAnalysis::peakPressure(
     AncestorLiveThroughCache &ancestorCache) const {
   unsigned peak = 0;
 
-  // Walk the block, descending into the regions of any nested op, and track the
-  // maximum pressure. A block whose ops are individually cheap can still reach
-  // its peak inside a nested region (an scf.if body, an inner scf.for body,
-  // ...); iterating only this block's own operations would report such a block
-  // as low pressure.
+  // Walk nested regions too: a block's peak can sit inside an scf.if or an
+  // inner loop body.
   block->walk([&](Operation *op) {
     peak = std::max(peak, pressureAt(op, liveCache, ancestorCache));
   });
@@ -422,10 +387,7 @@ unsigned
 RegisterPressureAnalysis::peakPressure(LoopLikeOpInterface loop) const {
   unsigned peak = 0;
 
-  // One pair of caches for every block examined below. The loop's blocks share
-  // their enclosing ops with one another, and a block nested in one of them
-  // shares them too, so each enclosing op's live set (and live-through union)
-  // is computed once for the whole loop rather than once per block.
+  // One cache pair for all blocks: they share enclosing ops.
   LiveValuesCache liveCache;
   AncestorLiveThroughCache ancestorCache;
 
@@ -441,31 +403,25 @@ RegisterPressureAnalysis::peakPressure(LoopLikeOpInterface loop) const {
   return peak;
 }
 
-unsigned
-RegisterPressureAnalysis::peakPressureOverNestedBlocks(Operation *root) const {
-  // One shared cache pair for every block visited below, matching every other
-  // multi-block traversal in this file (`peakPressure(LoopLikeOpInterface)`,
-  // `print()`'s per-block walk). The public, cache-less `peakPressure(Block*)`
-  // would allocate a fresh pair per block here, getting no benefit at all
-  // from the caches `peakPressure(Block*)` itself now needs to walk nested
-  // regions cheaply.
-  LiveValuesCache liveCache;
-  AncestorLiveThroughCache ancestorCache;
-
-  // A block's peak already covers every block nested inside it (see
-  // `peakPressure(Block*)`'s doc comment), so the maximum over *every* block
-  // in `root` is provably equal to the maximum over `root`'s own top-level
-  // blocks -- no need to `walk` into nested regions a second time here.
+unsigned RegisterPressureAnalysis::peakPressureOverNestedBlocks(
+    Operation *root, QueryCache &cache) const {
+  // A block's peak covers its nested blocks, so top-level blocks suffice.
   unsigned peak = 0;
   for (Region &region : root->getRegions())
     for (Block &block : region)
-      peak = std::max(peak, peakPressure(&block, liveCache, ancestorCache));
+      peak = std::max(peak, peakPressure(&block, cache));
   return peak;
 }
 
 unsigned
 RegisterPressureAnalysis::peakPressure(FunctionOpInterface func) const {
-  return peakPressureOverNestedBlocks(func);
+  QueryCache cache;
+  return peakPressureOverNestedBlocks(func, cache);
+}
+
+unsigned RegisterPressureAnalysis::peakPressure(FunctionOpInterface func,
+                                                QueryCache &cache) const {
+  return peakPressureOverNestedBlocks(func, cache);
 }
 
 unsigned RegisterPressureAnalysis::liveInPressure(Block *block) const {
@@ -501,19 +457,12 @@ void RegisterPressureAnalysis::print(raw_ostream &os) const {
 
   os << "Register Pressure Analysis (per-thread bytes):\n";
 
-  // One pair of caches for the whole traversal below, which visits every
-  // block: a nested block is walked once on its own account and once on behalf
-  // of every block enclosing it, so without sharing, the liveness of the
-  // innermost ops (and the live-through union of every enclosing op) would be
-  // recomputed once per nesting level.
+  // One cache pair for the whole walk: a nested block is also walked for each
+  // block enclosing it.
   LiveValuesCache liveCache;
   AncestorLiveThroughCache ancestorCache;
 
-  // Collect every block's line first, tracking the running maximum, so the
-  // summary line below can be printed *before* the per-block breakdown
-  // without a second traversal to compute it: a block's peak already covers
-  // every block nested inside it, so the maximum over every line collected
-  // here is exactly the whole-root peak.
+  // Buffer the lines so the overall peak prints first without a second walk.
   unsigned overallPeak = 0;
   SmallVector<std::string> blockLines;
   rootOp->walk([&](Block *block) {
@@ -523,6 +472,7 @@ void RegisterPressureAnalysis::print(raw_ostream &os) const {
     llvm::raw_string_ostream lineOs(line);
     lineOs << "  Block ";
     block->printAsOperand(lineOs);
+    // Qualify each block by its parent op name: nested blocks all print ^bb0.
     lineOs << " in " << block->getParentOp()->getName() << ": peak = " << peak
            << " bytes, live-in = " << liveInPressure(block) << " bytes\n";
     blockLines.push_back(std::move(line));

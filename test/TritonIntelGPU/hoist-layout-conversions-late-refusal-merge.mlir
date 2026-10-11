@@ -1,14 +1,10 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="grf-mode=128 corridor-op-cap=5" | FileCheck %s
 
-// COM: Case: a twin refused only *after* the hoist it merges into. Loops are
-// COM: decided last to first, so a physically later loop's conversion can be
-// COM: hoisted before a physically earlier loop's same-pair conversion is even
-// COM: weighed. When that earlier one is then refused, remove_layout_conversions
-// COM: still replaces it with the hoisted result, and its loop is now charged
-// COM: for that merge at the refusal, so a later shared-source group there
-// COM: sees the corrected figure. The mirror image of
-// COM: hoist-layout-conversions-uncharged-merge.mlir, where the refusal comes
-// COM: first and the hoist charges it.
+// COM: A twin refused only after the hoist it merges into: loop H's %h hoists
+// COM: before loop 2's %t is decided. When %t is refused its loop is charged for
+// COM: the merge (+48), since remove_layout_conversions replaces %t with %h either
+// COM: way. Mirror image of hoist-layout-conversions-uncharged-merge.mlir, where
+// COM: the refusal comes first and the hoist charges it.
 // COM:
 // COM: PREDICTED FROM STATIC ANALYSIS, NOT YET CONFIRMED AGAINST A BUILD.
 // COM: Every number below is hand-derived from the pass's source and from the
@@ -17,68 +13,14 @@
 // COM: lines marked (exact) follow from per-lane type sizes and liveInPressure
 // COM: alone; the others depend on whole-function pressure figures and need a
 // COM: real -debug-only=tritonintelgpu-hoist-layout-conversions trace.
-// COM: Kept apart from hoist-layout-conversions.mlir for the same reason that
-// COM: file is: corridor-op-cap=5 is what makes %y's phase-1 refusal a
-// COM: conservative fallback, and adding that RUN line to a shared file would
-// COM: rerun every other case there under it.
-// COM:
-// COM: Per-lane bytes (grf-mode=128: budget 256, threshold 204): %s
-// COM: (32x16xf16 #blk) 16, a #dot_b result of it 64; %q and %arg2 (16x16xf16
-// COM: #blk) 8 each, a #dot_b or #dot_br result of %q 32; %arg3 128; each
-// COM: 128x16xf32 value 128. Constants are rematerializable and free. Loop
-// COM: live-ins (exact): loop 2 %s + %q + %arg2 + %arg3 = 160, loop H %s = 16,
-// COM: loop 3 %q = 8. The function peak is the tail chain's, eight 128-byte
-// COM: values live at %p7: 1024, also the ceiling.
-// COM:
-// COM: Predicted trace, in decision order:
-// COM:   L3 %z  Hoisting ...: liveIn=8 + alreadyHoisted=0 + thisHoist=24 = 32
-// COM:          (exact; %y in loop 2 is the only other reader of %q and sits
-// COM:          before loop 3). Peak: projected 1024 (prePeak=1024, corridor
-// COM:          over 4 ops, newPoint=320), within ceiling 1024.
-// COM:   LH %h  Hoisting ...: liveIn=16 + alreadyHoisted=0 + thisHoist=48 = 64
-// COM:          (exact; %t in loop 2 sits before loop H, so %s retires: 64 -
-// COM:          16). Peak: projected 1024 (prePeak=1024, corridor over 5 ops,
-// COM:          its largest term loop 2's internal peak, about 576, + 64,
-// COM:          newPoint about 352), within ceiling 1024.
-// COM:   L2 %y  Skipping hoist: projected function peak 1056 B/lane (max of
-// COM:          prePeak=1024 corridor=1056 over 0 ops, newPoint=384) exceeds
-// COM:          ceiling 1024 B/lane (conservatively charged). %y is cheapest
-// COM:          (24, exact) and passes the loop-level gate at 184 < 204, but its
-// COM:          corridor (%z, loop 2, then %t, %d, %fx, ...) exceeds 5 ops.
-// COM:   L2 %t  Skipping hoist: liveIn=160 + alreadyHoisted=0 + thisHoist=48
-// COM:          = 208 B/lane exceeds 80% of budget=256 B/lane (exact).
-// COM:   L2 %t  Refused conversion merges into an earlier-decided loop's
-// COM:          hoist: its loop is now at alreadyHoisted=48 B/lane (exact).
-// COM:   phase 2 {%y}: Skipping joint hoist of 1 conversion(s): loop liveIn=
-// COM:                 160 + alreadyHoisted=48 + thisHoist=24 = 232 B/lane
-// COM:                 exceeds 80% of budget=256 B/lane (exact).
-// COM:   phase 2 {%t}: Function peak allows joint hoist: measured 1024 B/lane
-// COM:                 within ceiling 1024 B/lane; Hoisting jointly a group
-// COM:                 of 1 conversion(s) sharing a source.
-// COM:
-// COM: The fix: when %t is refused, %h is already hoisted (loop H, decided
-// COM: before loop 2), with %t's exact source and result type, and %s has a
-// COM: defining op, so mergesIntoHoist holds without any position condition.
-// COM: collectMergingTwins never saw %t (it was no refusal when %h hoisted);
-// COM: chargeMergeIntoPriorHoist charges it now, through chargeMergedTwins:
-// COM: netBytes[loop 2] = 0 + 48 = 48, %t.mergeCharged = true. This is the
-// COM: dst > src shape (64 > 16), where an uncharged merge is an undercharge:
-// COM: after the merge, loop 2 reads %h's 64 bytes instead of %s's 16, the
-// COM: same +48 %t's refusal said it could not afford.
-// COM:
-// COM: Phase 2 then tries {%y} first (refused first in phase 1): 160 + 48 +
-// COM: 24 = 232 >= 204, refused by the loop-level gate, so %y stays in loop
-// COM: 2, stamped tt.no_licm. Without the fix this read 160 + 0 + 24 = 184 <
-// COM: 204, and the measured peak (loop 2's internal peak plus %y's 24 net,
-// COM: well under the tail's 1024) would accept it, hoisting %y. That stamp
-// COM: is this case's discriminator.
-// COM:
-// COM: %t's own fate is not pinned. With the fix it is merge-charged, so its
-// COM: {%t} trial is gated only by the measured peak, predicted to accept it
-// COM: (it then lands right after %s, beside %h). Without the fix the order
-// COM: of outcomes flips: {%y} is hoisted, and {%t} is then gated at 160 + 24
-// COM: + 48 = 232 >= 204 and stamped. The checks below match either fate of
-// COM: %t, so they fail without the fix only through %y.
+// COM: Kept in its own file: corridor-op-cap=5 makes %y's first refusal a
+// COM: fallback, and the same RUN line in a shared file would rerun every other
+// COM: case under that cap.
+// COM: Per-lane bytes at grf-mode=128 (threshold 204): loop 2's live-in is 160
+// COM: (%s 16, %q 8, %arg2 8, %arg3 128); %t adds 64 - 16 = 48, %y adds 32 - 8 = 24.
+// COM: The later group {%y} in loop 2 reads 160 + 48 + 24 = 232 >= 204 and stays
+// COM: stamped. Without the merge charge it reads 160 + 24 = 184 and hoists. %t's
+// COM: own fate is not checked.
 
 #blk = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>

@@ -199,11 +199,7 @@ bool sinkInLoopDotOperandLoads(
     if (crossesAliasingWrite(loadOp, firstUse))
       continue;
 
-    // Highest pressure over the live range this sink would remove. One
-    // shared cache for the whole range: every op in it shares the same
-    // ancestor chain, so querying them one at a time through the public,
-    // cache-less overload would re-walk and re-union that chain from scratch
-    // for each -- exactly the cost `QueryCache` exists to amortize.
+    // Highest pressure over the live range this sink would remove.
     ttg::intel::RegisterPressureAnalysis::QueryCache queryCache;
     unsigned rangePressure = 0;
     for (Operation *op = loadOp; op && op != firstUse; op = op->getNextNode())
