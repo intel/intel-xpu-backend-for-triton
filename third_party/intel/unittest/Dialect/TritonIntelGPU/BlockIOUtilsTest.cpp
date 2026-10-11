@@ -297,6 +297,50 @@ TEST_F(BlockIOUtilsTest, RegisterBaseOrderInvariance_Rank3DpasOperandA_F16) {
   EXPECT_EQ(singleTileDeliveryMapping(reversed, info), ref);
 }
 
+// A transposed tile reads its rows along the memory contiguous dimension, so
+// the row dimension must be that dimension -- the check at the end of
+// getBlockIOTileSize rejects any other. Discovering the row dimension by
+// looking for a unit-stride register base can pick a different dimension (the
+// memory contiguous one may own only wider strides), which turned a tile the
+// transpose path can express into a scatter fallback. Rank 3 is needed to
+// expose it: at rank 2 there is only one candidate dimension.
+TEST_F(BlockIOUtilsTest, TransposeRowDimIsMemContiguousDim_Rank3Blocked) {
+  auto cga = CGAEncodingAttr::get1CTALayout(&ctx, 3);
+  SmallVector<int64_t> shape = {32, 64, 64};
+
+  // The lanes run along dim 2, so dim 2 is the column dim; memContiguousDim 0
+  // makes this a transpose. Dim 1 owns the unit-stride register base and dim 0
+  // only wider ones, so a unit-stride search picks dim 1 and the tile is
+  // rejected.
+  auto blocked = BlockedEncodingAttr::get(&ctx, /*sizePerThread=*/{1, 1, 1},
+                                          /*threadsPerWarp=*/{1, 1, 16},
+                                          /*warpsPerCTA=*/{1, 1, 1},
+                                          /*order=*/{0, 1, 2}, cga);
+  auto ll = cast<DistributedEncodingTrait>(blocked).toLinearLayout(shape);
+  auto info = getBlockIOLoadTileSize(ll, /*memContiguousDim=*/0,
+                                     /*elemSizeInBits=*/32, nullptr, false);
+  ASSERT_TRUE(info.isValid());
+  EXPECT_TRUE(info.transpose);
+  EXPECT_EQ(info.rowDim, 0);
+  EXPECT_EQ(info.tileHeight, 32);
+  EXPECT_EQ(info.tileWidth, 8);
+
+  // Same, with the canonical row-major order and a memory contiguous dim that
+  // owns no register base at all: the tile is still valid, one column wide.
+  auto blocked2 = BlockedEncodingAttr::get(&ctx, /*sizePerThread=*/{1, 1, 1},
+                                           /*threadsPerWarp=*/{1, 1, 16},
+                                           /*warpsPerCTA=*/{1, 2, 2},
+                                           /*order=*/{2, 1, 0}, cga);
+  auto ll2 = cast<DistributedEncodingTrait>(blocked2).toLinearLayout(shape);
+  auto info2 = getBlockIOLoadTileSize(ll2, /*memContiguousDim=*/1,
+                                      /*elemSizeInBits=*/32, nullptr, false);
+  ASSERT_TRUE(info2.isValid());
+  EXPECT_TRUE(info2.transpose);
+  EXPECT_EQ(info2.rowDim, 1);
+  EXPECT_EQ(info2.tileHeight, 16);
+  EXPECT_EQ(info2.tileWidth, 1);
+}
+
 // Test that validate2DBlockLoadTile accepts a column-major B matrix load with
 // sub-group-size=32 and f16/opsPerChan=2.
 //

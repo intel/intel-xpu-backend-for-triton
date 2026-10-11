@@ -351,21 +351,27 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   // clang-format on
 
   // Increase the tile shape along the row dimension. (Increase the
-  // tileHeight.) If rowDim is not yet known, discover it order-independently:
-  // the row dimension is the non-fastChange dim that owns an unconsumed
-  // unit-stride register base, i.e. the start of a row-growth doubling chain.
-  // Scan inner-to-outer (highest dim index first) so an outer/batch dimension
-  // -- which is folded into the base pointer rather than tiled -- is only
-  // chosen when no inner dimension qualifies. This matches the rowDim < 0
-  // fallback below (which prefers the last dim) and the canonical register-base
-  // ordering the previous list-order walk relied on.
+  // tileHeight.) If rowDim is not yet known, discover it order-independently.
   if (rowDim < 0) {
-    for (int dim = static_cast<int>(rank) - 1; dim >= 0; --dim) {
-      if (dim == fastChangeDim)
-        continue;
-      if (findRegBase(dim, /*stride=*/1)) {
-        rowDim = dim;
-        break;
+    if (transpose) {
+      // A transposed tile walks its rows along the memory contiguous dim, and
+      // the check after the growth loop rejects any other row dim, so there is
+      // nothing to discover. Picking an inner dim here instead would only
+      // throw away a tile the transpose path can express.
+      rowDim = memContiguousDim;
+    } else {
+      // The row dim is the non-fastChange dim that owns an unconsumed
+      // unit-stride register base, i.e. the start of a row-growth doubling
+      // chain. Scan inner-to-outer (highest dim index first) so an outer/batch
+      // dim is only chosen when no inner dim qualifies. This matches the
+      // rowDim < 0 fallback below, which prefers the last dim.
+      for (int dim = static_cast<int>(rank) - 1; dim >= 0; --dim) {
+        if (dim == fastChangeDim)
+          continue;
+        if (findRegBase(dim, /*stride=*/1)) {
+          rowDim = dim;
+          break;
+        }
       }
     }
     if (rowDim >= 0) {
