@@ -2137,7 +2137,7 @@ def test_bf16_dot_sharding(device, homomorphic_casts, fresh_knobs):
     if is_xpu():
         arch = triton.runtime.driver.active.get_current_target().arch
         if not arch.get("has_subgroup_matrix_multiply_accumulate", False):
-            pytest.skip("dot acceleration requires DPAS support")
+            pytest.xfail("dot acceleration requires DPAS support")
 
     M = N = K = 64
     HALF = K // 2
