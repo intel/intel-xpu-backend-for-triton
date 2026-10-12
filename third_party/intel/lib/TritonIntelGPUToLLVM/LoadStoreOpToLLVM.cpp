@@ -3827,9 +3827,6 @@ struct StoreOpConversion
       return b.bitcast(elem, valueElemTy);
     };
 
-    bool avoidPredicatedInstructions =
-        hasBroadcastAddrNonBroadcastMask(ptr, op.getMask());
-
     // Dispatches a (possibly predicated) store of `value` to `addr`: an
     // unconditional store if `pred` is null, a `TritonGEN::PredicatedStoreOp`
     // if predicated instructions are available for `op`, or a branch-guarded
@@ -3838,8 +3835,7 @@ struct StoreOpConversion
                                    auto storeFn) {
       if (!pred)
         (void)storeFn();
-      else if (canUsePredicatedInstructions(op) &&
-               !avoidPredicatedInstructions) {
+      else if (canUsePredicatedInstructions(op)) {
         auto cacheModifier = tritonToIntelCacheModifier(op);
         TritonGEN::PredicatedStoreOp::create(rewriter, loc, addr, value, pred,
                                              cacheModifier);
