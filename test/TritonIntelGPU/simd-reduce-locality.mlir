@@ -22,4 +22,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
     }) : (tensor<32x32xf32, #linear>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #linear}>>
     tt.return %0 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #linear}>>
   }
+
+  // CHECK-LABEL: tt.func public @simd_reduce_locality_multi_result
+  // CHECK: %[[CVT0:.+]] = ttig.reinterpret_convert_layout %arg0 : tensor<32x32xf32, #linear> -> tensor<32x32xf32,
+  // CHECK: %[[CVT1:.+]] = ttig.reinterpret_convert_layout %arg1 : tensor<32x32xf32, #linear> -> tensor<32x32xf32,
+  // CHECK: %[[RED:.+]]:2 = "tt.reduce"(%[[CVT0]], %[[CVT1]]) <{axis = 1 : i32}>
+  // CHECK: %[[OUT0:.+]] = ttg.convert_layout %[[RED]]#0 : tensor<32xf32,
+  // CHECK: %[[OUT1:.+]] = ttg.convert_layout %[[RED]]#1 : tensor<32xf32,
+  // CHECK: tt.return %[[OUT0]], %[[OUT1]] : tensor<32xf32, #ttg.slice<{dim = 1, parent = #linear}>>, tensor<32xf32, #ttg.slice<{dim = 1, parent = #linear}>>
+  tt.func public @simd_reduce_locality_multi_result(%arg0: tensor<32x32xf32, #linear>, %arg1: tensor<32x32xf32, #linear>) -> (tensor<32xf32, #ttg.slice<{dim = 1, parent = #linear}>>, tensor<32xf32, #ttg.slice<{dim = 1, parent = #linear}>>) attributes {noinline = false} {
+    %0:2 = "tt.reduce"(%arg0, %arg1) <{axis = 1 : i32}> ({
+    ^bb0(%lhs0: f32, %rhs0: f32, %lhs1: f32, %rhs1: f32):
+      %sum = arith.addf %lhs0, %rhs0 : f32
+      %max = arith.maximumf %lhs1, %rhs1 : f32
+      tt.reduce.return %sum, %max : f32, f32
+    }) : (tensor<32x32xf32, #linear>, tensor<32x32xf32, #linear>) -> (tensor<32xf32, #ttg.slice<{dim = 1, parent = #linear}>>, tensor<32xf32, #ttg.slice<{dim = 1, parent = #linear}>>)
+    tt.return %0#0, %0#1 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #linear}>>, tensor<32xf32, #ttg.slice<{dim = 1, parent = #linear}>>
+  }
 }
