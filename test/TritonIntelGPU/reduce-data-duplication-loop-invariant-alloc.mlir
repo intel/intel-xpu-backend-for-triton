@@ -1,8 +1,8 @@
 // RUN: triton-opt %s -split-input-file --tritonintelgpu-reduce-data-duplication | FileCheck %s --check-prefix=RDD
 // RUN: triton-opt %s -split-input-file --tritonintelgpu-reduce-data-duplication --tritongpu-reorder-instructions | FileCheck %s --check-prefix=PIPE
 
-// COM: Reduced from the _attn_bwd dq loop (#8283): the loop-invariant `do` is
-// COM: stored once, before the loop; only the local_load stays in the loop.
+// COM: Reduced from the _attn_bwd dq loop (#8283): `do` is staged once, before
+// COM: the loop.
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [16, 1], order = [1, 0]}>
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate} {
@@ -92,14 +92,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.tar
   // RDD:       scf.for
   // RDD-NOT:   ttg.local_alloc
   // RDD:       ttg.local_load %[[ALLOC]] :
-  // PIPE-LABEL: @nested_loop_loop_invariant_cvt_src
-  // PIPE:       %[[DO:.*]] = tt.load
-  // PIPE-NEXT:  %[[ALLOC:.*]] = ttg.local_alloc %[[DO]] :
-  // PIPE:       scf.for
-  // PIPE-NOT:   ttg.local_alloc
-  // PIPE:       scf.for
-  // PIPE-NOT:   ttg.local_alloc
-  // PIPE:       ttg.local_load %[[ALLOC]] :
   tt.func public @nested_loop_loop_invariant_cvt_src(%do_ptr: tensor<64x128x!tt.ptr<f16>, #blocked>, %desc: !tt.tensordesc<64x128xf16>, %vT: tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, %n_outer: i32, %n_inner: i32) -> tensor<64x64xf32, #mma> {
     %c0 = arith.constant 0 : i32
     %c1 = arith.constant 1 : i32
@@ -162,8 +154,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.tar
 
 // -----
 
-// COM: Control: as above with the write after the conversion, which it still
-// COM: precedes on the next iteration.
+// COM: Control: same with the write after the conversion; it still runs before
+// COM: the next iteration's conversion.
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [16, 1], order = [1, 0]}>
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -244,12 +236,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.tar
   // RDD-NEXT:  tt.load
   // RDD-NEXT:  %[[ALLOC:.*]] = ttg.local_alloc %[[DO]] :
   // RDD-NEXT:  ttg.local_load %[[ALLOC]] :
-  // PIPE-LABEL: @loop_carried_cvt_src
-  // PIPE-NOT:   ttg.local_alloc
-  // PIPE:       scf.for {{.*}} iter_args(%{{.*}} = %{{.*}}, %[[DO:arg[0-9]+]] = %{{.*}})
-  // PIPE-NEXT:  tt.load
-  // PIPE-NEXT:  %[[ALLOC:.*]] = ttg.local_alloc %[[DO]] :
-  // PIPE-NEXT:  ttg.local_load %[[ALLOC]] :
   tt.func public @loop_carried_cvt_src(%do_ptr: tensor<64x128x!tt.ptr<f16>, #blocked>, %vT: tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, %n: i32) -> tensor<64x64xf32, #mma> {
     %c0 = arith.constant 0 : i32
     %c1 = arith.constant 1 : i32

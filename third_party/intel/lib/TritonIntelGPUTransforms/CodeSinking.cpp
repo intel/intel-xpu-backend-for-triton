@@ -1,5 +1,4 @@
 #include "mlir/Interfaces/FunctionInterfaces.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/SmallVector.h"
@@ -23,6 +22,28 @@ using namespace mlir;
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace {
+
+// NOTE: mirrors the file-local helper in
+// lib/Dialect/TritonGPU/Transforms/ReorderInstructions.cpp; kept local to
+// avoid an upstream-divergence edit.
+// Return true if there is a write side effect on any path between start and
+// end ops. This assumes start dominates end.
+static bool crossWriteSideEffectingOp(Operation *start, Operation *end) {
+  Operation *ancestor = start->getBlock()->findAncestorOpInBlock(*end);
+  // Couldn't find an ancestor in the same block, conservatively assume true.
+  if (!ancestor)
+    return true;
+  Operation *nextOp = start->getNextNode();
+  while (nextOp) {
+    if (triton::gpu::intel::mayWriteMemory(nextOp))
+      return true;
+    if (nextOp == ancestor)
+      return false;
+    nextOp = nextOp->getNextNode();
+  }
+  assert(false && "op doesn't dominate other");
+  return true;
+}
 
 /// Returns the insertion point (the first use after the region-bearing op) for
 /// sinking `op`, or nullptr if `op` should not be sunk. `op` can be sunk only
@@ -140,8 +161,7 @@ private:
         // No aliasing write on the path op -> sinkPoint. `regionOp` is one of
         // the intervening siblings and getEffectsRecursively recurses into its
         // regions, so an in-region store is detected here.
-        if (triton::gpu::intel::crossesMemoryWrite(siblingOp.getNextNode(),
-                                                   sinkPoint)) {
+        if (crossWriteSideEffectingOp(&siblingOp, sinkPoint)) {
           LDBG("skip (intervening write): " << siblingOp);
           continue;
         }

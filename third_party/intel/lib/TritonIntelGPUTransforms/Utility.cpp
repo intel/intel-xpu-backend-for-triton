@@ -708,18 +708,4 @@ bool mayWriteMemory(Operation *op, bool ignoreSharedMemory) {
   });
 }
 
-bool crossesMemoryWrite(Operation *first, Operation *end) {
-  Operation *ancestor = first->getBlock()->findAncestorOpInBlock(*end);
-  if (!ancestor)
-    return true;
-  for (Operation *op = first; op; op = op->getNextNode()) {
-    if (mayWriteMemory(op))
-      return true;
-    if (op == ancestor)
-      return false;
-  }
-  assert(false && "first op does not dominate the end op");
-  return true;
-}
-
 } // namespace mlir::triton::gpu::intel

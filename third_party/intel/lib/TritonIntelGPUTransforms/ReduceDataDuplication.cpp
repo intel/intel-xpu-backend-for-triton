@@ -33,8 +33,7 @@ Operation *getLoopInvariantAllocAnchor(ConvertLayoutOp cvtOp) {
   Operation *srcDef = cvtOp.getSrc().getDefiningOp();
   if (!srcDef || loop->isAncestor(srcDef))
     return nullptr;
-  // Staging a scalar-derived value for the whole loop costs shared memory for
-  // no benefit; TritonGPUReorderInstructions skips these for the same reason.
+  // Scalar-derived: staging it only costs shared memory (as upstream).
   if (isa<arith::ConstantOp, triton::SplatOp>(srcDef))
     return nullptr;
   Operation *anchor = srcDef->getBlock()->findAncestorOpInBlock(*cvtOp);
