@@ -168,20 +168,27 @@ public:
       return;
     }
 
-    auto newReduceOp = createReduce(builder, op, reinterpretedTensorType);
-    auto convertLayoutOp =
-        createConvertLayout(builder, op->getResult(0).getType(), newReduceOp);
+    auto *newReduceOp = createReduce(builder, op, reinterpretedTensorType);
+    SmallVector<Value> convertedResults =
+        createConvertLayouts(builder, op, newReduceOp);
 
-    op.getResult().replaceAllUsesWith(convertLayoutOp);
+    for (const auto &it : llvm::enumerate(convertedResults))
+      op->getResult(it.index()).replaceAllUsesWith(it.value());
     op.erase();
   }
 
-  Operation *createConvertLayout(OpBuilder &builder, Type destType,
-                                 Operation *newReduce) const {
+  SmallVector<Value> createConvertLayouts(OpBuilder &builder, tt::ReduceOp op,
+                                          Operation *newReduce) const {
     builder.setInsertionPointAfter(newReduce);
-    auto newCvt = triton::gpu::ConvertLayoutOp::create(
-        builder, newReduce->getLoc(), destType, newReduce->getResult(0));
-    return newCvt;
+    SmallVector<Value> convertedResults;
+    convertedResults.reserve(newReduce->getNumResults());
+    for (const auto &it : llvm::enumerate(newReduce->getResults())) {
+      auto newCvt = triton::gpu::ConvertLayoutOp::create(
+          builder, newReduce->getLoc(), op->getResult(it.index()).getType(),
+          it.value());
+      convertedResults.push_back(newCvt.getResult());
+    }
+    return convertedResults;
   }
 
   Operation *createReduce(OpBuilder &builder, triton::ReduceOp reduce,
