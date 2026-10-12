@@ -271,22 +271,9 @@ private:
   computeLiveValues(Operation *op, LiveValuesCache &liveCache,
                     AncestorLiveThroughCache &ancestorCache) const;
 
-  unsigned pressureAt(Operation *op, LiveValuesCache &liveCache,
-                      AncestorLiveThroughCache &ancestorCache) const;
-
-  unsigned peakPressure(Block *block, LiveValuesCache &liveCache,
-                        AncestorLiveThroughCache &ancestorCache) const;
-
-  PressureAtPoint pressureAt(Operation *op, Value value,
-                             LiveValuesCache &liveCache,
-                             AncestorLiveThroughCache &ancestorCache) const;
-
   /// Returns true if the defining op of \p value is rematerializable (cheap to
   /// regenerate on demand, such as constants or simple range ops).
   bool isRematerializable(Value value) const;
-
-  unsigned peakPressureOverNestedBlocks(Operation *root,
-                                        QueryCache &cache) const;
 
   LivenessAnalysis liveness;
   RegisterPressureOptions options;

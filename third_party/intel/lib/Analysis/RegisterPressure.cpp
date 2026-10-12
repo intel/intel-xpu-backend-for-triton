@@ -5,7 +5,6 @@
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -280,46 +279,34 @@ Liveness::ValueSetT RegisterPressureAnalysis::computeLiveValues(
 }
 
 unsigned RegisterPressureAnalysis::pressureAt(Operation *op) const {
-  LiveValuesCache liveCache;
-  AncestorLiveThroughCache ancestorCache;
-  return pressureAt(op, liveCache, ancestorCache);
-}
-
-unsigned RegisterPressureAnalysis::pressureAt(
-    Operation *op, LiveValuesCache &liveCache,
-    AncestorLiveThroughCache &ancestorCache) const {
-  // Sum over a set: a value live at several nesting levels counts once.
-  unsigned pressure = 0;
-  for (Value liveVal : computeLiveValues(op, liveCache, ancestorCache))
-    pressure += pressureContribution(liveVal);
-  return pressure;
+  QueryCache cache;
+  return pressureAt(op, cache);
 }
 
 unsigned RegisterPressureAnalysis::pressureAt(Operation *op,
                                               QueryCache &cache) const {
   claimCache(cache);
-  return pressureAt(op, cache.liveCache, cache.ancestorCache);
+  // Sum over a set: a value live at several nesting levels counts once.
+  unsigned pressure = 0;
+  for (Value liveVal :
+       computeLiveValues(op, cache.liveCache, cache.ancestorCache))
+    pressure += pressureContribution(liveVal);
+  return pressure;
 }
 
 RegisterPressureAnalysis::PressureAtPoint
 RegisterPressureAnalysis::pressureAt(Operation *op, Value value) const {
-  LiveValuesCache liveCache;
-  AncestorLiveThroughCache ancestorCache;
-  return pressureAt(op, value, liveCache, ancestorCache);
+  QueryCache cache;
+  return pressureAt(op, value, cache);
 }
 
 RegisterPressureAnalysis::PressureAtPoint
 RegisterPressureAnalysis::pressureAt(Operation *op, Value value,
                                      QueryCache &cache) const {
   claimCache(cache);
-  return pressureAt(op, value, cache.liveCache, cache.ancestorCache);
-}
-
-RegisterPressureAnalysis::PressureAtPoint RegisterPressureAnalysis::pressureAt(
-    Operation *op, Value value, LiveValuesCache &liveCache,
-    AncestorLiveThroughCache &ancestorCache) const {
   PressureAtPoint result;
-  for (Value liveVal : computeLiveValues(op, liveCache, ancestorCache)) {
+  for (Value liveVal :
+       computeLiveValues(op, cache.liveCache, cache.ancestorCache)) {
     result.pressure += pressureContribution(liveVal);
     if (liveVal == value)
       result.valueLive = true;
@@ -342,11 +329,11 @@ bool RegisterPressureAnalysis::isLiveAt(Operation *op, Value value,
 }
 
 unsigned RegisterPressureAnalysis::pressureBefore(Operation *op) const {
-  LiveValuesCache liveCache;
-  AncestorLiveThroughCache ancestorCache;
+  QueryCache cache;
 
   unsigned pressure = 0;
-  for (Value liveVal : computeLiveValues(op, liveCache, ancestorCache)) {
+  for (Value liveVal :
+       computeLiveValues(op, cache.liveCache, cache.ancestorCache)) {
     // `pressureAt` counts a value at its defining op, which above `op` has not
     // run yet. Everything else live at `op` is also live immediately above it.
     if (liveVal.getDefiningOp() == op)
@@ -358,9 +345,8 @@ unsigned RegisterPressureAnalysis::pressureBefore(Operation *op) const {
 }
 
 unsigned RegisterPressureAnalysis::peakPressure(Block *block) const {
-  LiveValuesCache liveCache;
-  AncestorLiveThroughCache ancestorCache;
-  return peakPressure(block, liveCache, ancestorCache);
+  QueryCache cache;
+  return peakPressure(block, cache);
 }
 
 unsigned RegisterPressureAnalysis::peakPressure(Block *block,
@@ -369,30 +355,20 @@ unsigned RegisterPressureAnalysis::peakPressure(Block *block,
   if (auto it = cache.blockPeakCache.find(block);
       it != cache.blockPeakCache.end())
     return it->second;
-  unsigned peak = peakPressure(block, cache.liveCache, cache.ancestorCache);
-  cache.blockPeakCache.try_emplace(block, peak);
-  return peak;
-}
 
-unsigned RegisterPressureAnalysis::peakPressure(
-    Block *block, LiveValuesCache &liveCache,
-    AncestorLiveThroughCache &ancestorCache) const {
   unsigned peak = 0;
 
-  block->walk([&](Operation *op) {
-    peak = std::max(peak, pressureAt(op, liveCache, ancestorCache));
-  });
+  block->walk(
+      [&](Operation *op) { peak = std::max(peak, pressureAt(op, cache)); });
 
+  cache.blockPeakCache.try_emplace(block, peak);
   return peak;
 }
 
 unsigned
 RegisterPressureAnalysis::peakPressure(LoopLikeOpInterface loop) const {
   unsigned peak = 0;
-
-  // One cache pair for all blocks: they share enclosing ops.
-  LiveValuesCache liveCache;
-  AncestorLiveThroughCache ancestorCache;
+  QueryCache cache;
 
   // A loop may expose multiple body regions, each with multiple blocks; check
   // all blocks across all loop regions.
@@ -400,31 +376,26 @@ RegisterPressureAnalysis::peakPressure(LoopLikeOpInterface loop) const {
     if (!region)
       continue;
     for (Block &block : *region)
-      peak = std::max(peak, peakPressure(&block, liveCache, ancestorCache));
+      peak = std::max(peak, peakPressure(&block, cache));
   }
 
-  return peak;
-}
-
-unsigned RegisterPressureAnalysis::peakPressureOverNestedBlocks(
-    Operation *root, QueryCache &cache) const {
-  // A block's peak covers its nested blocks, so top-level blocks suffice.
-  unsigned peak = 0;
-  for (Region &region : root->getRegions())
-    for (Block &block : region)
-      peak = std::max(peak, peakPressure(&block, cache));
   return peak;
 }
 
 unsigned
 RegisterPressureAnalysis::peakPressure(FunctionOpInterface func) const {
   QueryCache cache;
-  return peakPressureOverNestedBlocks(func, cache);
+  return peakPressure(func, cache);
 }
 
 unsigned RegisterPressureAnalysis::peakPressure(FunctionOpInterface func,
                                                 QueryCache &cache) const {
-  return peakPressureOverNestedBlocks(func, cache);
+  // A block's peak covers its nested blocks, so top-level blocks suffice.
+  unsigned peak = 0;
+  for (Region &region : func->getRegions())
+    for (Block &block : region)
+      peak = std::max(peak, peakPressure(&block, cache));
+  return peak;
 }
 
 unsigned RegisterPressureAnalysis::liveInPressure(Block *block) const {
@@ -460,16 +431,13 @@ void RegisterPressureAnalysis::print(raw_ostream &os) const {
 
   os << "Register Pressure Analysis (per-thread bytes):\n";
 
-  // One cache pair for the whole walk: a nested block is also walked for each
-  // block enclosing it.
-  LiveValuesCache liveCache;
-  AncestorLiveThroughCache ancestorCache;
+  QueryCache cache;
 
   // Buffer the lines so the overall peak prints first without a second walk.
   unsigned overallPeak = 0;
   SmallVector<std::string> blockLines;
   rootOp->walk([&](Block *block) {
-    unsigned peak = peakPressure(block, liveCache, ancestorCache);
+    unsigned peak = peakPressure(block, cache);
     overallPeak = std::max(overallPeak, peak);
     std::string line;
     llvm::raw_string_ostream lineOs(line);

@@ -12,7 +12,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Debug.h"
 #include <algorithm>
 #include <cstdint>
@@ -256,7 +255,7 @@ static scf::ForOp getHoistCandidateLoop(ttg::ConvertLayoutOp cvtOp) {
 static int
 hoistDeltaBytes(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
                 const ttg::intel::RegisterPressureAnalysis &analysis,
-                ArrayRef<Refusal> priorRefusals = {},
+                ArrayRef<Refusal> priorRefusals,
                 llvm::function_ref<bool(const Refusal &)> mergeFits = {}) {
   unsigned hoistBytes =
       ttg::intel::RegisterPressureAnalysis::getPerThreadSizeInBytes(
@@ -820,7 +819,6 @@ public:
            << rebuildCap << ") reached");
       return false;
     }
-    trialCeiling = std::max(prePeak, threshold);
     return true;
   }
 
@@ -831,15 +829,14 @@ public:
     ++rebuilds;
     ttg::intel::RegisterPressureAnalysis trial(func);
     uint64_t trialPeak = trial.peakPressure(func);
-    if (trialPeak > trialCeiling) {
+    uint64_t ceiling = std::max(prePeak, threshold);
+    if (trialPeak > ceiling) {
       LDBG("Skipping joint hoist: measured function peak "
-           << trialPeak << " B/lane exceeds ceiling " << trialCeiling
-           << " B/lane");
+           << trialPeak << " B/lane exceeds ceiling " << ceiling << " B/lane");
       return PeakVerdict::RejectExact;
     }
     LDBG("Function peak allows joint hoist: measured "
-         << trialPeak << " B/lane within ceiling " << trialCeiling
-         << " B/lane");
+         << trialPeak << " B/lane within ceiling " << ceiling << " B/lane");
     analysis.emplace(std::move(trial));
     prePeak = trialPeak;
     dirty = false;
@@ -934,7 +931,6 @@ private:
   uint64_t prePeak = 0;
   PeakProjection lastProjection;
   uint64_t pendingProjection = 0;
-  uint64_t trialCeiling = 0;
   bool dirty = false;
   unsigned rebuilds = 0;
   DenseMap<Value, SmallVector<Operation *>> userCache;
@@ -951,8 +947,6 @@ struct FunctionHoistState {
   DenseMap<Operation *, int> netBytes;
   /// In the order the refusals were made.
   SmallVector<Refusal> refusals;
-  /// Sources at least one of whose conversions has been hoisted.
-  llvm::SmallPtrSet<Value, 8> hoistedSources;
   /// Every one-at-a-time hoist and its loop, for `chargeMergeIntoPriorHoist`.
   /// A merge needs the same type and, for a block-argument source, the loop.
   SmallVector<std::pair<ttg::ConvertLayoutOp, scf::ForOp>> hoisted;
@@ -1150,7 +1144,6 @@ static void hoistCvtDotOpsOutOfLoop(
 
     ++NumHoisted;
     netBytes += bestDelta;
-    state.hoistedSources.insert(cvtOp.getSrc());
     state.hoisted.push_back({cvtOp, forOp});
     peakGate.noteHoisted();
     chargeMergedTwins(mergingTwins, forOp, analysis, state);
@@ -1172,7 +1165,10 @@ reconsiderSharedSources(FunctionHoistState &state,
 
   int threshold = liveInThreshold(grfBudget);
   for (auto &[src, group] : bySource) {
-    if (group.size() < 2 && !state.hoistedSources.contains(src))
+    bool srcHoisted = llvm::any_of(state.hoisted, [s = src](auto &hoist) {
+      return hoist.first.getSrc() == s;
+    });
+    if (group.size() < 2 && !srcHoisted)
       continue;
     if (!peakGate.beginTrial())
       return;
@@ -1245,7 +1241,6 @@ reconsiderSharedSources(FunctionHoistState &state,
     }
     for (auto &[loop, delta] : deltas)
       state.netBytes[loop] += delta;
-    state.hoistedSources.insert(src);
   }
 }
 
