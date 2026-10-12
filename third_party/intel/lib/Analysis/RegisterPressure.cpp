@@ -173,10 +173,8 @@ RegisterPressureAnalysis::getRawLiveValuesAt(Operation *point,
   // on the query, so one key must not stand for two answers.
   auto [it, inserted] = cache.try_emplace(point);
   if (inserted) {
-    // Query the base mlir::Liveness block info directly (rather than the Intel
-    // LivenessAnalysis wrapper, which asserts the op is a direct child of the
-    // analysis root). This works for ops nested in any region, e.g. an scf.for
-    // body.
+    // mlir::Liveness directly: the Intel wrapper asserts a direct child of the
+    // root.
     if (const LivenessBlockInfo *blockInfo =
             liveness.getLiveness(point->getBlock()))
       it->second = blockInfo->currentlyLiveValues(point);
@@ -184,9 +182,7 @@ RegisterPressureAnalysis::getRawLiveValuesAt(Operation *point,
   return it->second;
 }
 
-/// Returns true if \p use is a loop init operand: the value is handed, unread,
-/// to an entry block argument, which the nested block's liveness already
-/// counts.
+/// True if \p use is a loop init operand, which the body's own liveness counts.
 static bool isLoopInitUse(OpOperand &use) {
   auto loopLike = dyn_cast<LoopLikeOpInterface>(use.getOwner());
   if (!loopLike)
@@ -272,9 +268,6 @@ Liveness::ValueSetT RegisterPressureAnalysis::computeLiveValues(
   for (Value liveVal : getRawLiveValuesAt(op, liveCache))
     liveValues.insert(liveVal);
 
-  // A value defined before an enclosing region-holding op and used after it is
-  // absent from the nested block's liveness. Add the live-through set of
-  // `op`'s parent, which covers every enclosing op up to the root.
   Operation *rootOp = liveness.getOperation();
   if (Operation *parent = op->getParentOp();
       parent && parent != rootOp && parent->getBlock()) {
@@ -386,8 +379,6 @@ unsigned RegisterPressureAnalysis::peakPressure(
     AncestorLiveThroughCache &ancestorCache) const {
   unsigned peak = 0;
 
-  // Walk nested regions too: a block's peak can sit inside an scf.if or an
-  // inner loop body.
   block->walk([&](Operation *op) {
     peak = std::max(peak, pressureAt(op, liveCache, ancestorCache));
   });

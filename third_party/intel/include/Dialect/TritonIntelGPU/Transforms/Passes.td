@@ -127,9 +127,7 @@ def TritonIntelGPUHoistLayoutConversions
     decided cheapest-first (a hoist can lower the projection), and loops
     last-to-first (so no later hoist can add a use below a source under
     consideration). A source shared by several conversions in one loop is
-    credited once, to the last of them to leave. (If a later conversion of
-    the same source is itself refused, an earlier one can still take this
-    credit, even though it is not literally the last to leave.)
+    credited once, to the last of them to leave.
 
     ### Whole-function peak gate
 
@@ -148,21 +146,13 @@ def TritonIntelGPUHoistLayoutConversions
     above it the rule is "do not make
     the peak worse". The gate earns its keep on the eight `_attn_bwd` configs
     with `BLOCK_N1=64` and `num_warps=16`, where the eighth hoist does raise the
-    peak. This bounds HLC's own output only: the twin credit below can still
-    let a downstream merge push a twin's loop past this same ceiling, by
-    design (see Twin credit).
+    peak.
 
-    The bounded figure is the peak as `RegisterPressureAnalysis` reports it, not
-    physical allocator demand (see its header). The corridor walks a
-    region-holding operation (a sibling loop it steps over, say) as one
-    operation, and the projection prices that region's internal peak separately
-    against the arriving result. When the conversion's last use is nested one
-    level below such an operation (in an `scf.if` branch, say), the projection
-    prices the branch after that use and every sibling branch of the operation,
-    since the hoisted result is live through all of them. This needs every use of
-    the result to share one block; otherwise (or when the nested last use is
-    deeper, or itself holds a region, such as an inner loop fed as its `iter_args`
-    init) it falls back to the operation's whole-region peak.
+    A region-holding operation on the corridor is priced at its internal peak
+    plus the arriving result. When the conversion's last use is one level down
+    in such an operation, the rest of that block and every sibling block are
+    priced too; a deeper use, uses in several blocks, or a use that holds a
+    region fall back to the operation's whole-region peak.
 
     Where a term cannot be established (a corridor spanning two blocks or longer
     than `corridor-op-cap`, or an insertion point at the end of its block) the
@@ -183,103 +173,52 @@ def TritonIntelGPUHoistLayoutConversions
     *above* the conversion (the source dies mid-corridor, so later corridor
     operations are overpriced), a CFG cycle around the conversion, a reader in
     an enclosing loop, and a source whose only blocking readers are refused
-    twins (see Twin credit), which this gate does not credit past. The
-    enclosing-loop case does not reason about that loop's iterations, so the
-    projection prices the departing source as still live and can exceed the
-    real post-hoist peak.
+    twins (see Twin credit), which this gate does not credit past.
 
     ### Twin credit
 
-    A refused conversion is not always a permanent reader of its source. The
-    twin match looks for another conversion of the same source to the same
-    result type that is already refused when this hoist is decided, in the loop
-    being hoisted from or in a loop decided earlier (loops are decided
-    last-to-first, so that is a loop at or after this one in program order).
-    `remove_layout_conversions` replaces such a twin with the hoisted result
-    wherever the hoisted conversion dominates it (its remat cache matches on
-    source and type). Counting the twin as a real reader would charge the
-    hoisting loop for a read that will not remain, and would deny a sibling
-    loop's hoist its credit in a shared-source cascade.
-
-    Two conditions gate the match. The result type must be identical, and a dot
-    operand whose parent layout is `BlockedEncodingAttr` (FMA, not DPAS) is
-    excluded, since `remove_layout_conversions` never merges for that family and
-    crediting past a twin that stays would be unsound. And the hoisted
-    conversion must dominate the twin: a block-argument source has no defining
-    operation, so its hoisted conversion lands just above its own loop and
-    dominates only a twin inside that loop or after it in the same block.
-
-    A credit past a twin does not make the twin free: after the merge the twin's
-    loop holds the hoisted result instead of the twin's own, the same
-    substitution a hoist of the twin would have made. It is charged to the
-    twin's loop when the credit is granted, at the `(result bytes) - (retired
-    source bytes)` figure the shared-source phase would compute for that loop,
-    and the loop is then left out of that phase's pricing for the same twin so
-    the merge is not counted twice.
-
-    The credit is withheld when re-running the twin's loop-level gate, at that
-    loop's current figure plus the delta the merge adds, fails. A twin only the
-    peak gate refused therefore usually keeps its credit, and the merge can then
-    raise the function peak past HLC's ceiling.
-
-    A sibling that hoists on its own merits can also merge a twin away
-    unconditionally, whatever the twin's budget. That merge is charged to the
-    twin's loop whichever of the two is decided first: at the hoist, for a twin
-    already refused, and at the refusal, for a same-pair conversion refused later
-    in a loop decided after the hoisting one. Both charge the same figure and
-    flag the twin, so the shared-source phase does not price the merge again. A
-    `tt.no_licm` stamp therefore only means this pass did not move the
-    conversion; the merge can still remove it.
+    A twin is a refused conversion of the same source to the same result type.
+    `remove_layout_conversions` replaces a twin the hoisted conversion
+    dominates with its result, so a hoist may take the source credit past a
+    twin reader. Excluded: a dot operand with a `BlockedEncodingAttr` parent
+    (never merged), and a block-argument source's twin in an earlier loop (not
+    dominated). The credit is withheld when the merge would fail the twin's own
+    loop-level gate. The merge is charged to the twin's loop once, at whichever
+    of the hoist and the refusal comes second, and the shared-source phase does
+    not price it again. A `tt.no_licm` stamp means only that this pass did not
+    move the conversion: a twin only the peak gate refused can still be merged,
+    past HLC's ceiling.
 
     ### Shared-source phase
 
-    Deciding one conversion at a time cannot see what a group sharing a source
-    is worth together: each is weighed while the others still read the source,
-    so none earns the credit for retiring it, and the peak projection charges
-    each arriving result on top of a source that stays live. So refusals are
-    only recorded while loops are decided. Once all of a function's loops are decided,
-    the refused conversions of each shared source (two or more refused, or one
-    refused beside one hoisted) are moved *together* and vetted as one change:
-    the loop-level gate once per loop they leave, with the source credited when
-    the group retires it from that loop, and the peak gate by *measuring* the
-    moved IR against the same `max(current peak, threshold)` ceiling, since the
-    single-hoist projection cannot express several moves. A failing group is
-    moved back exactly. Each group is tried once, whole, in the order of its
-    first refusal; subsets are not tried. Only then are the surviving refusals
-    stamped and counted, so each candidate is counted once, as hoisted or under
-    the reason it was first refused for.
+    Priced one at a time, conversions sharing a source each see the others keep
+    it live, so none earns the credit. After a function's loops are decided,
+    the refusals of each source shared by two or more refusals, or by a refusal
+    and a hoist, are moved together and vetted: the loop-level gate per loop
+    they leave, and the peak gate by measuring the moved IR against the same
+    ceiling. A failing group is moved back exactly; subsets are not tried and
+    groups are not retried. Refusals are then stamped and counted once, under
+    the reason first given.
 
-    Cost. The analysis is built lazily on the first candidate that reaches the
-    peak gate and rebuilt after each accepted hoist. Its query caches are shared
-    by every candidate of one analysis generation and reset when the analysis is
-    replaced. A group trial that passes the loop-level gate measures the moved IR
-    with a fresh analysis and spends one `peak-rebuild-cap` unit; an accepted
-    trial's analysis is kept. `peak-rebuild-cap` bounds the rebuilds, and so the
-    cost, at the price of lost hoists.
+    Cost. The analysis is built on the first candidate that reaches the peak
+    gate and rebuilt after each accepted hoist; its query caches live for one
+    build. Each group trial that passes the loop-level gate spends one
+    `peak-rebuild-cap` unit.
 
     ### Non-goals, all deliberate
 
     * No retry at a cheaper insertion point; the point is fixed, after the
       source's defining operation or before the loop if it has none.
     * A block-argument source's hoisted conversion lands just above its own
-      loop, so it never frees a twin in an *earlier* loop sharing the source;
-      the shared-source phase inherits this. A refused later twin can credit an
-      earlier loop's hoist, but a hoisted later sibling cannot, since the twin
-      match looks for a refusal record and a hoist leaves none. So at 128-GRF a
-      refusal can buy the earlier loop a credit that a hoist would not.
-    * The shared-source phase tries each source's refused group whole and once:
-      a failing group is left in place rather than searched for a subset that
-      would fit, and no group is retried after a later group's hoist changes the
-      picture. Groups are formed per source only.
+      loop, so it never frees a twin in an earlier loop.
+    * Groups are formed per source and tried whole, once.
     * Neither trip count nor conversion cost is weighed against the pressure
       change.
     * `liveInPressure` ignores a value merely spanning the loop to feed code
       below it, so the loop-level baseline measures what a hoist adds, not
       absolute occupancy. The peak gate does see such a value.
-    * A merge charged when its twin is refused (see Twin credit) is seen only
-      by what is decided after that refusal. A candidate in the same loop
-      decided before it (the cheaper one, by this pass's ordering) was gated
-      on a figure without the merge, and is not re-decided.
+    * A merge charged at a twin's refusal is not seen by candidates of that
+      loop decided before it.
   }];
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 
@@ -287,20 +226,13 @@ def TritonIntelGPUHoistLayoutConversions
     Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
            "GRF mode ('default', 'auto', '128', '256' or '512')">,
     Option<"corridorOpCap", "corridor-op-cap", "unsigned", /*default*/"512",
-           "Maximum number of operations in a hoist's corridor (the operations "
-           "its result newly spans: from the insertion point through the loop, "
-           "the loop body above the conversion, and the body after its last "
-           "use) that the whole-function peak projection prices individually; "
-           "past this it charges conservatively. The default is far above what "
-           "real kernels reach; lower values are for pathological input.">,
+           "Maximum corridor length (see the description) the peak projection "
+           "prices op by op; past it the hoist is charged conservatively.">,
     Option<"peakRebuildCap", "peak-rebuild-cap", "unsigned", /*default*/"32",
-           "Maximum whole-function pressure analysis rebuilds per function. "
-           "Each accepted hoist invalidates the analysis, and the next "
-           "candidate that needs it spends one rebuild; a shared-source group "
-           "that passes the loop-level gate spends one to measure. Past the "
-           "cap candidates are "
-           "rejected and groups are not tried, since a stale analysis bounds "
-           "nothing.">,
+           "Maximum analysis rebuilds per function: one per accepted hoist a "
+           "later candidate needs, and one per shared-source group that "
+           "passes the loop-level gate. Past the cap candidates are rejected "
+           "and groups are not tried.">,
   ];
 }
 

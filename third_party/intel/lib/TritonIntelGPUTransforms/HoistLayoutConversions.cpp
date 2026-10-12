@@ -74,9 +74,7 @@ struct Refusal {
   RefusalReason reason;
   /// Set once a joint hoist overturns this refusal.
   bool overturned = false;
-  /// Set once this refusal's loop is charged for its merge into a hoist (see
-  /// Twin merges), so neither `mergeFits` nor `reconsiderSharedSources`
-  /// prices that merge again.
+  /// Set once this refusal's loop is charged for a merge (see Twin merges).
   bool mergeCharged = false;
 };
 
@@ -96,19 +94,14 @@ static SubtreeOrder subtreeOrder(Operation *subject, Operation *reference) {
                                               : SubtreeOrder::Before;
 }
 
-// Twin merges. A twin of a candidate is a refused conversion of the same
-// source to the same type. Once the candidate is hoisted,
-// remove_layout_conversions replaces every twin the hoisted conversion
-// properly dominates with its result, except for a dot operand with a blocked
-// parent. The twin's loop then ends up as if the twin had been hoisted, so:
-//  - hoistRetiresSource may treat such a twin as not reading the source,
-//    subject to mergeFits;
-//  - the twin's loop is charged the twin's hoistDeltaBytes once, whichever of
-//    the hoist and the refusal is decided first (chargeMergedTwins,
-//    chargeMergeIntoPriorHoist), and each such refusal is marked
-//    mergeCharged.
-// A twin in the hoisting loop itself is marked but not charged: that loop's
-// delta already charged the result, and errs high by at most the source.
+// Twin merges. A twin is a refused conversion of the same source to the same
+// type. Once the candidate is hoisted, remove_layout_conversions replaces every
+// twin it dominates with its result (not for a dot operand with a blocked
+// parent), so the twin's loop ends up as if the twin were hoisted. The twin's
+// loop is charged the twin's hoistDeltaBytes once, at whichever of the hoist
+// and the refusal comes second (chargeMergedTwins, chargeMergeIntoPriorHoist).
+// A twin in the hoisting loop is only flagged: that loop's delta already
+// charged the result.
 
 /// Returns true if \p twin merges into \p cvtOp's result once \p cvtOp leaves
 /// \p forOp. Below a defining op, the hoisted conversion dominates every use
@@ -129,10 +122,8 @@ static bool mergesIntoHoist(ttg::ConvertLayoutOp cvtOp, Operation *twin,
   return order == SubtreeOrder::Inside || order == SubtreeOrder::After;
 }
 
-/// Appends to \p twinIdxs the index of every non-overturned refusal that
-/// merges into \p cvtOp's result once it is hoisted. Unlike
-/// `hoistRetiresSource`, ignores `mergeFits`: the merge happens whether or not
-/// the credit relied on it.
+/// Appends the index of every non-overturned refusal that merges into
+/// \p cvtOp's hoisted result, whatever `mergeFits` says.
 static void collectMergingTwins(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
                                 ArrayRef<Refusal> refusals,
                                 SmallVectorImpl<unsigned> &twinIdxs) {
@@ -161,10 +152,8 @@ static void collectMergingTwins(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
 /// loops sharing a source the pass reached first (`runOnOperation` visits loops
 /// last-to-first so this view is final).
 ///
-/// \p priorRefusals excuses a reader that is a refused twin (see Twin merges).
-/// With \p mergeFits set, a twin in another loop that is not yet
-/// `mergeCharged` is excused only if \p mergeFits accepts the merge for that
-/// loop, so the credit never pushes another loop past its gate.
+/// \p priorRefusals excuses a refused twin (see Twin merges); \p mergeFits, if
+/// set, must accept one in another, uncharged loop.
 static bool
 hoistRetiresSource(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
                    ArrayRef<Refusal> priorRefusals = {},
@@ -551,11 +540,9 @@ static uint64_t regionPeakThroughOp(
   return peak;
 }
 
-/// Prices each op after \p start in its block the way the corridor prices a
-/// body op after the last use, including any region-holding op's internal
-/// peak. \p dstBytes is added only where \p cvtResult is not already live,
-/// since an enclosing inner loop's back edge may keep it live. Returns false,
-/// with \p peak unspecified, past \p corridorOpCap ops.
+/// Prices each op after \p start in its block as the corridor does, adding
+/// \p dstBytes only where \p cvtResult is not already live (an inner loop's
+/// back edge may keep it live). Returns false past \p corridorOpCap ops.
 static bool priceTailAfter(
     Operation *start, Value src, uint64_t srcBytes, Value cvtResult,
     uint64_t dstBytes, const ttg::intel::RegisterPressureAnalysis &analysis,
@@ -589,10 +576,8 @@ static bool priceTailAfter(
   return true;
 }
 
-/// Returns the peak over the blocks of \p op's regions other than
-/// \p excluded, priced as in `priceTailAfter`. Once hoisted, the result is
-/// live through every block of the loop body, including branches that do not
-/// use it.
+/// Peak over \p op's blocks other than \p excluded, priced as in
+/// `priceTailAfter`: the hoisted result is live through every branch.
 static uint64_t siblingBlocksPeak(
     Operation *op, Block *excluded, Value src, uint64_t srcBytes,
     Value cvtResult, uint64_t dstBytes,
@@ -651,11 +636,8 @@ struct PeakProjection {
 /// describe the function as it stands now and \p prePeak must be its measured
 /// whole-function peak. \p priorRefusals only decide `exact`.
 ///
-/// This bounds the *reported* metric, not physical allocator demand: a real
-/// allocator could still do better (rematerializing, spilling around a
-/// narrow peak) than the flat per-thread-bytes figure this analysis reports,
-/// same as for the loop-level gate. The arithmetic is widened to 64 bits to
-/// keep the added terms from wrapping.
+/// Bounds the reported metric, not allocator demand. 64-bit arithmetic keeps
+/// the added terms from wrapping.
 static PeakProjection projectedFunctionPeak(
     ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
     const ttg::intel::RegisterPressureAnalysis &analysis, uint64_t prePeak,
@@ -706,10 +688,8 @@ static PeakProjection projectedFunctionPeak(
   Value src = cvtOp.getSrc();
   uint64_t srcBytes = analysis.pressureContribution(src);
   for (Operation *op : corridor) {
-    // The result is newly live at every corridor op: above its old position
-    // because its live range now starts earlier, after its last use because
-    // the back edge keeps it live through the body. A result yielded out of
-    // the loop is a different value, so nothing after the loop needs pricing.
+    // The result is newly live at every corridor op (see `collectCorridor`); a
+    // result yielded out of the loop is a different value.
     auto point = analysis.pressureAt(op, src, queryCache);
     uint64_t priced = point.pressure + dstBytes;
     // Only subtract what the analysis actually counted here, and only where the
@@ -734,12 +714,9 @@ static PeakProjection projectedFunctionPeak(
     }
   }
 
-  // If the last body use maps to a region-holding op, the ops after the
-  // nested use inside it also see the result newly live, but the corridor
-  // skipped that op. The tail walk covers only the ops after the nested use in
-  // its block, so it covers the whole tail only when that block is directly in
-  // the op and the use holds no region itself. Otherwise charge the op's
-  // whole-region peak and mark the result inexact.
+  // The corridor skipped a region-holding last use. Price the ops after the
+  // nested use and the op's other blocks; exact only one level down and when
+  // the use holds no region, else the op's whole-region peak, inexact.
   if (Operation *lastUse = lastBodyUser(cvtOp, forOp.getBody());
       lastUse && lastUse->getNumRegions() > 0) {
     Operation *nestedLast = realLastUse(cvtOp);
@@ -834,13 +811,9 @@ public:
     return PeakVerdict::Accept;
   }
 
-  /// Readies the gate for a *trial*: a change the caller is about to apply to
-  /// the IR and have measured by `endTrial`, rather than projected by `decide`.
-  /// Used for a joint hoist of several conversions, whose combined effect the
-  /// single-candidate projection cannot express. Brings the analysis up to date
-  /// so the ceiling is the peak of the IR the trial starts from. Returns false,
-  /// and the caller must not apply the trial, once the rebuild cap leaves no
-  /// room for the trial's own measurement.
+  /// Starts a measured trial (a joint hoist `decide` cannot project): refreshes
+  /// the analysis so the ceiling is the current peak. Returns false, and the
+  /// caller must not apply the trial, when no rebuild is left to measure it.
   bool beginTrial() {
     if (!refreshAnalysis() || rebuilds >= rebuildCap) {
       LDBG("Skipping joint hoist: whole-function peak analysis rebuild cap ("
@@ -851,12 +824,9 @@ public:
     return true;
   }
 
-  /// Measures the peak of the IR the caller has changed since `beginTrial`.
-  /// The measurement is exact, not a projection, so a refusal is always
-  /// `RejectExact`. On a refusal the caller must restore the IR exactly: the
-  /// gate's own analysis still describes the pre-trial IR and is kept. On
-  /// `Accept` the measured analysis becomes the current one, so an accepted
-  /// trial spends one rebuild.
+  /// Measures the IR changed since `beginTrial`. On refusal (always exact) the
+  /// caller must restore the IR exactly; on `Accept` the measured analysis
+  /// becomes current and one rebuild is spent.
   PeakVerdict endTrial() {
     ++rebuilds;
     ttg::intel::RegisterPressureAnalysis trial(func);
@@ -934,8 +904,7 @@ private:
     return true;
   }
 
-  /// Both caches describe the IR `analysis` was built on. Reset them whenever
-  /// `analysis` changes.
+  /// Both caches describe the IR `analysis` was built on.
   void resetPerGenerationCaches() {
     queryCache.emplace();
     regionPeakCache.clear();
@@ -969,35 +938,23 @@ private:
   bool dirty = false;
   unsigned rebuilds = 0;
   DenseMap<Value, SmallVector<Operation *>> userCache;
-  // Scoped to one `analysis` generation; see `resetPerGenerationCaches`.
   std::optional<ttg::intel::RegisterPressureAnalysis::QueryCache> queryCache;
   DenseMap<Operation *, uint64_t> regionPeakCache;
 };
 
-/// Decision state for one function, shared between the one-at-a-time phase
-/// (`hoistCvtDotOpsOutOfLoop`) and the shared-source phase
-/// (`reconsiderSharedSources`), and settled by `finalizeRefusals`.
-///
-/// A refusal is only *recorded* when made; `tt.no_licm` and the rejection
-/// statistics are applied once, when the function's last phase has run. That
-/// keeps every candidate counted exactly once however many times it is
-/// weighed: as hoisted if any phase takes it, else under the reason the
-/// one-at-a-time phase refused it for.
+/// Decision state for one function, shared by `hoistCvtDotOpsOutOfLoop` and
+/// `reconsiderSharedSources`. Refusals are only recorded; `finalizeRefusals`
+/// stamps and counts them once, so each candidate is counted once.
 struct FunctionHoistState {
-  /// Per loop: the accumulated effect of the hoists already taken on the
-  /// loop-level gate's projected live-in, in per-lane bytes (may be negative).
-  /// Keyed by loop so the shared-source phase continues each loop's figure
-  /// where the one-at-a-time phase left it.
+  /// Per loop: the loop-level gate's running delta from hoists already taken,
+  /// in per-lane bytes (may be negative).
   DenseMap<Operation *, int> netBytes;
   /// In the order the refusals were made.
   SmallVector<Refusal> refusals;
   /// Sources at least one of whose conversions has been hoisted.
   llvm::SmallPtrSet<Value, 8> hoistedSources;
-  /// Every conversion the one-at-a-time phase hoisted, with the loop it left,
-  /// so a refusal recorded after it can still be matched against it (see
-  /// `chargeMergeIntoPriorHoist`). `hoistedSources` is too coarse for that:
-  /// a merge needs the same result type too, and a block-argument source's
-  /// dominance depends on which loop the conversion left.
+  /// Every one-at-a-time hoist and its loop, for `chargeMergeIntoPriorHoist`.
+  /// A merge needs the same type and, for a block-argument source, the loop.
   SmallVector<std::pair<ttg::ConvertLayoutOp, scf::ForOp>> hoisted;
 };
 
@@ -1009,12 +966,10 @@ static int liveInThreshold(unsigned grfBudget) {
   return static_cast<int>(grfBudget * 4 / 5);
 }
 
-/// Charges the loop of each twin in \p twinIdxs for its merge into the hoist
-/// out of \p forOp (see Twin merges): the twin's `hoistDeltaBytes`, once per
-/// loop, since several twins in one loop merge into one result. Twins already
-/// `mergeCharged` are skipped. Without this charge, a merge whose result is
-/// larger than the source leaves the loop's figure below its real live-in,
-/// and a later shared-source group passes on that figure.
+/// Charges the loop of each twin in \p twinIdxs, once per loop, the twin's
+/// `hoistDeltaBytes` for merging into the hoist out of \p forOp (see Twin
+/// merges), skipping twins already `mergeCharged`. Without it a fatter merge
+/// leaves the loop's figure below its real live-in.
 static void
 chargeMergedTwins(ArrayRef<unsigned> twinIdxs, scf::ForOp forOp,
                   const ttg::intel::RegisterPressureAnalysis &analysis,
@@ -1041,10 +996,8 @@ chargeMergedTwins(ArrayRef<unsigned> twinIdxs, scf::ForOp forOp,
   }
 }
 
-/// Charges the loop of the refusal just recorded if it merges into a
-/// conversion hoisted earlier, which `collectMergingTwins` could not see at
-/// that time. Only one-at-a-time hoists are matched: the shared-source phase
-/// records no refusals.
+/// Charges the loop of the refusal just recorded if it merges into an earlier
+/// one-at-a-time hoist (the shared-source phase records no refusals).
 static void
 chargeMergeIntoPriorHoist(const ttg::intel::RegisterPressureAnalysis &analysis,
                           FunctionHoistState &state) {
@@ -1056,8 +1009,6 @@ chargeMergeIntoPriorHoist(const ttg::intel::RegisterPressureAnalysis &analysis,
         !mergesIntoHoist(hoistedCvt, refusedCvt.getOperation(), hoistedForOp))
       continue;
     chargeMergedTwins(ArrayRef<unsigned>(idx), hoistedForOp, analysis, state);
-    // For a hoist out of the refusal's own loop, `chargeMergedTwins` only
-    // flags the refusal, so there is no charge to report.
     Operation *refusedLoop = state.refusals[idx].forOp.getOperation();
     if (refusedLoop != hoistedForOp.getOperation())
       LDBG("Refused conversion merges into an earlier-decided loop's hoist: "
@@ -1104,14 +1055,11 @@ static void hoistCvtDotOpsOutOfLoop(
   unsigned liveInBytes = analysis.liveInPressure(forOp.getBody());
   int &netBytes = state.netBytes[forOp.getOperation()];
 
-  // Only hoist if the projected live-in pressure stays within 80% of the GRF
-  // budget.
   int threshold = liveInThreshold(grfBudget);
 
-  // Whether the merge a twin credit relies on keeps the twin's loop within
-  // this loop-level gate, at that loop's current figure plus the merge's
-  // delta. The peak gate is not rerun for the twin's loop. The twin's delta is
-  // asked without this predicate, so the check cannot recurse.
+  // Whether the merge a twin credit relies on keeps the twin's loop within the
+  // loop-level gate. The twin's delta is asked without this predicate, so this
+  // cannot recurse.
   auto mergeFits = [&](const Refusal &twin) {
     scf::ForOp twinForOp = twin.forOp;
     Operation *twinLoop = twinForOp.getOperation();
@@ -1192,9 +1140,8 @@ static void hoistCvtDotOpsOutOfLoop(
          << liveInBytes << " + alreadyHoisted=" << netBytes
          << " + thisHoist=" << bestDelta << " = " << projectedBytes
          << " B/lane budget=" << grfBudget << " B/lane");
-    // Every refusal that merges into this hoist, not only those its credit
-    // relied on. `mergesIntoHoist` does not depend on `cvtOp`'s position, so
-    // this can run before the move.
+    // All refusals that merge into this hoist, not only those the credit used.
+    // Position-independent, so it can run before the move.
     SmallVector<unsigned> mergingTwins;
     collectMergingTwins(cvtOp, forOp, state.refusals, mergingTwins);
     // Hoist the conversion out of the loop, to the program point the projection
@@ -1210,18 +1157,11 @@ static void hoistCvtDotOpsOutOfLoop(
   }
 }
 
-/// Second phase: retry, as one move, the refused conversions of each source
-/// shared by two or more refusals, or by a refusal and a hoist. Priced one at
-/// a time, each conversion sees the others keep the source live, so none earns
-/// the credit. Moved together, the source dies right after them.
-///
-/// A group is applied and measured: it must pass the loop-level gate once per
-/// loop it leaves and the peak gate on the moved IR, or it is restored
-/// exactly. Subsets are not tried. Groups are tried once each, in
-/// first-refusal order; a group that passes the loop-level gate spends one
-/// unit of `peak-rebuild-cap` on its measurement.
-/// A group of only `mergeCharged` refusals is tried too: its move changes the
-/// IR later trials are measured on.
+/// Second phase: retries, as one move, the refusals of each source shared by
+/// two or more refusals or by a refusal and a hoist (priced alone, each sees
+/// the others keep the source live). A group must pass the loop-level gate per
+/// loop and the measured peak gate, or it is restored exactly. A group of only
+/// `mergeCharged` refusals is tried too: its move changes later measurements.
 static void
 reconsiderSharedSources(FunctionHoistState &state,
                         const ttg::intel::RegisterPressureAnalysis &analysis,
@@ -1251,15 +1191,12 @@ reconsiderSharedSources(FunctionHoistState &state,
         cvtOp->moveBefore(next);
     };
 
-    // The loop-level gate, per loop the group leaves, on the moved IR. With the
-    // whole group moved, `hoistRetiresSource` gives the same answer for every
-    // member of one loop, so the first one stands for the loop and the source
-    // is credited once per loop.
+    // The loop-level gate per loop the group leaves: with the group moved, the
+    // first member stands for its loop, crediting the source once per loop.
     llvm::MapVector<Operation *, int> deltas;
     llvm::MapVector<Operation *, Refusal *> firstInLoop;
     for (Refusal *refusal : group) {
-      // Already charged by the hoist it merges into. Other members in the
-      // same loop are still priced.
+      // Already charged by the hoist it merges into.
       if (refusal->mergeCharged)
         continue;
       Operation *loop = refusal->forOp.getOperation();
@@ -1377,9 +1314,7 @@ class TritonIntelGPUHoistLayoutConversionsPass
     uint64_t threshold = liveInThreshold(grfBudget);
     std::optional<FunctionPeakGate> peakGate;
     FunctionOpInterface gatedFunc;
-    // Scoped to `gatedFunc` like `peakGate`: a function's refusals are settled
-    // (jointly reconsidered, then stamped and counted) before the next
-    // function's loops are decided.
+    // Scoped to `gatedFunc`, like `peakGate`.
     FunctionHoistState state;
     auto settleFunction = [&]() {
       if (!peakGate)
