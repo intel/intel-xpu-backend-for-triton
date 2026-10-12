@@ -10,6 +10,10 @@ from triton._internal_testing import run_in_process
 
 pytestmark = pytest.mark.usefixtures("process_pool")
 
+# XPU device-side asserts abort the process (issue #2755). On Windows, abort() ends in
+# __fastfail, so the process exits with STATUS_STACK_BUFFER_OVERRUN instead of SIGABRT.
+XPU_ABORT_EXIT_CODE = 0xC0000409 if sys.platform == "win32" else -signal.SIGABRT
+
 
 def _run_expect_zero_device_assert(device):
     triton.knobs.refresh_knobs()
@@ -34,8 +38,7 @@ def _run_expect_zero_device_assert(device):
 
 def test_expect_zero_device_assert(device):
     if device == 'xpu':
-        # XPU device-side asserts abort the process via SIGABRT, not a RuntimeError (issue #2755).
-        with pytest.raises(RuntimeError, match=str(-signal.SIGABRT)):
+        with pytest.raises(RuntimeError, match=f"code {XPU_ABORT_EXIT_CODE} "):
             run_in_process(_run_expect_zero_device_assert, (device, ), env={"TRITON_DEBUG": "1"})
         return
 
@@ -69,8 +72,9 @@ def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
 
     if should_fail:
         if device == 'xpu':
-            assert result.returncode == -6, (f"Expected SIGABRT but got exit code {result.returncode}. "
-                                             f"stdout: {result.stdout}, stderr: {result.stderr}")
+            assert result.returncode == XPU_ABORT_EXIT_CODE, (
+                f"Expected abort exit code {XPU_ABORT_EXIT_CODE} but got {result.returncode}. "
+                f"stdout: {result.stdout}, stderr: {result.stderr}")
         else:
             assert result.returncode == 1, (f"Expected runtime error but got unexpected exit code {result.returncode}. "
                                             f"stdout: {result.stdout}, stderr: {result.stderr}")
@@ -157,9 +161,8 @@ def _assert_overflow_result(result, debug, should_overflow, dtype, op):
 def _check_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, op, device):
     args = (x, y, x_dtype, y_dtype, debug, op, device)
     if should_overflow and debug and device == 'xpu':
-        # XPU device-side asserts abort the child via SIGABRT, so it dies without
-        # returning a result (issue #2755).
-        with pytest.raises(RuntimeError, match=str(-signal.SIGABRT)):
+        # The aborted child dies without returning a result.
+        with pytest.raises(RuntimeError, match=f"code {XPU_ABORT_EXIT_CODE} "):
             run_in_process(_run_overflow, args)
         return
 
