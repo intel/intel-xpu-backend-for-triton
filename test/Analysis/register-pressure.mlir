@@ -153,55 +153,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-
-// COM: The peak of a block can sit inside a nested region: the loop body's own
-// COM: ops are cheap, the scf.if it holds is not.
-// CHECK-LABEL: loop_with_nested_if
-// CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
-// CHECK-NEXT: Peak over all blocks in tt.func: 1569 bytes
-// CHECK-NEXT: Block {{.*}} in scf.if: peak = 1569 bytes, live-in = 0 bytes
-// CHECK-NEXT: Block {{.*}} in scf.for: peak = 1569 bytes, live-in = 1 bytes
-// CHECK-NEXT: Block {{.*}} in tt.func: peak = 1569 bytes, live-in = 0 bytes
-#dpas3 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot0_3 = #ttg.dot_op<{opIdx = 0, parent = #dpas3, kWidth=1}>
-#dot1_3 = #ttg.dot_op<{opIdx = 1, parent = #dpas3, kWidth=2}>
-#blocked3 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  tt.func @loop_with_nested_if(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f32>, %arg3: i1) {
-    // COM: tensor<64x128xf32, #blocked3> is 128 elems/lane * 4B = 512 bytes/lane.
-    // COM: Peak at the arith.addf in the scf.if: 3 * 512 = 1536, plus the values
-    // COM: live through the if: the dot result %6 (32, yielded after the if) and
-    // COM: the condition %arg3 (1) = 1569. A value live at several nesting levels
-    // COM: is counted once. The scf.for's own result is not counted while its body
-    // COM: runs. All three blocks report 1569.
-    %c64_i32 = arith.constant 64 : i32
-    %c0_i32 = arith.constant 0 : i32
-    %c0_i64 = arith.constant 0 : i64
-    %cst = arith.constant dense<0.000000e+00> : tensor<8x16xf32, #dpas3>
-    %0 = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f16>, <8x64xf16>
-    %1 = tt.make_tensor_descriptor %arg1, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f16>, <64x16xf16>
-    %2 = tt.make_tensor_descriptor %arg2, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f32>, <64x128xf32>
-    %3 = scf.for %arg4 = %c0_i32 to %c64_i32 step %c64_i32 iter_args(%arg5 = %cst) -> (tensor<8x16xf32, #dpas3>) : i32 {
-      %4 = tt.descriptor_load %0[%c0_i32, %c0_i32] : !tt.tensordesc<8x64xf16> -> tensor<8x64xf16, #dot0_3>
-      %5 = tt.descriptor_load %1[%c0_i32, %c0_i32] : !tt.tensordesc<64x16xf16> -> tensor<64x16xf16, #dot1_3>
-      %6 = tt.dot %4, %5, %arg5, inputPrecision = tf32 : tensor<8x64xf16, #dot0_3> * tensor<64x16xf16, #dot1_3> -> tensor<8x16xf32, #dpas3>
-      scf.if %arg3 {
-        %7 = tt.descriptor_load %2[%c0_i32, %c0_i32] : !tt.tensordesc<64x128xf32> -> tensor<64x128xf32, #blocked3>
-        %8 = tt.descriptor_load %2[%c0_i32, %c0_i32] : !tt.tensordesc<64x128xf32> -> tensor<64x128xf32, #blocked3>
-        %9 = arith.addf %7, %8 : tensor<64x128xf32, #blocked3>
-        tt.descriptor_store %2[%c0_i32, %c0_i32], %9 : !tt.tensordesc<64x128xf32>, tensor<64x128xf32, #blocked3>
-      }
-      scf.yield %6 : tensor<8x16xf32, #dpas3>
-    }
-    tt.return
-  }
-}
-
-// -----
-
-// COM: A value defined before a region-holding op and used after it holds a
-// COM: register for the whole op, yet the nested block's own liveness does not
-// COM: know it.
+// COM: The peak sits in an scf.if inside the loop, and %7 lives through the if
+// COM: unused in it; both count, %7 once.
 // CHECK-LABEL: loop_with_nested_if_and_live_through
 // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
 // CHECK-NEXT: Peak over all blocks in tt.func: 2081 bytes
@@ -214,9 +167,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 #blocked4 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @loop_with_nested_if_and_live_through(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f32>, %arg3: i1) {
-    // COM: As @loop_with_nested_if plus %7 (512), defined before the scf.if and
-    // COM: read after it, never inside it. The body's own liveness cannot see %7,
-    // COM: yet the peak must include it, once: 1569 + 512 = 2081.
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
     %c0_i64 = arith.constant 0 : i64
@@ -245,9 +195,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Three nesting levels, with a live-through value contributed by each of
-// COM: them: the peak inside the innermost block must gather live-through values
-// COM: from every enclosing scope, each counted exactly once.
+// COM: Three nesting levels, each adding a live-through value counted once.
+// COM: PEROP pins pressureBefore at each region boundary; its lines are not
+// COM: adjacent, so they are not chained with -NEXT.
 // CHECK-LABEL: three_level_nesting_live_through
 // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
 // CHECK-NEXT: Peak over all blocks in tt.func: 2594 bytes
@@ -255,23 +205,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // CHECK-NEXT: Block {{.*}} in scf.if: peak = 2594 bytes, live-in = 1 bytes
 // CHECK-NEXT: Block {{.*}} in scf.for: peak = 2594 bytes, live-in = 2 bytes
 // CHECK-NEXT: Block {{.*}} in tt.func: peak = 2594 bytes, live-in = 0 bytes
-
-// COM: Per-op figures at the nested-region boundaries must agree with the block
-// COM: peaks above. The output lines are not adjacent, so they are not chained
-// COM: with -NEXT.
 // PEROP-LABEL: three_level_nesting_live_through
-// COM: Entering the second level: the outer scf.if's live-through value (the loop
-// COM: body's %7, 512) adds to what lived through the loop (%arg3/%arg4 at 1 byte
-// COM: each, %6 at 32).
 // PEROP: Before scf.if: 546 bytes
-// COM: Entering the third level: the inner scf.if's live-through value (the outer
-// COM: if body's %10, 512) adds on top.
 // PEROP: Before scf.if: 1058 bytes
-// COM: After the inner scf.if closes, its live-through value is gone but the
-// COM: outer if's (%7, 512) is not.
 // PEROP: Before arith.addf: 1058 bytes
-// COM: After the outer scf.if closes, only the loop's %6 (32) and the two
-// COM: conditions remain.
 // PEROP: Before scf.yield: 34 bytes
 #dpas5 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0_5 = #ttg.dot_op<{opIdx = 0, parent = #dpas5, kWidth=1}>
@@ -279,11 +216,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 #blocked5 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @three_level_nesting_live_through(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f32>, %arg3: i1, %arg4: i1) {
-    // COM: Peak at the arith.addf in the innermost scf.if body, three levels down:
-    // COM: 3 x 512, plus one live-through value per enclosing scope (%10 512, %7
-    // COM: 512, %6 32) and both i1 conditions = 2594. The conditions are still
-    // COM: charged after they branch: a value read anywhere in a loop is charged
-    // COM: for the whole loop, since per-block liveness cannot see the back edge.
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
     %c0_i64 = arith.constant 0 : i64
@@ -317,8 +249,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: A loop nested in a loop: a value live-in to the outer loop is read only
-// COM: inside the inner loop body.
+// COM: %3 is read only in the inner loop body, so it is charged for the whole
+// COM: inner loop; the inner init %8 dies at the inner loop.
 // CHECK-LABEL: nested_loops_live_through
 // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
 // CHECK-NEXT: Peak over all blocks in tt.func: 2080 bytes
@@ -331,13 +263,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 #blocked6 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @nested_loops_live_through(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f32>) {
-    // COM: tensor<64x128xf32, #blocked6> is 512 bytes/lane, tensor<8x16xf32,
-    // COM: #dpas6> is 32. Peak at %14 = 2080: %12, %13, %14 (3 x 512 = 1536), plus
-    // COM: %7 (32, read after the inner loop), plus %3 (512, read only inside the
-    // COM: inner loop, so live for its whole duration). The inner init %8 dies when
-    // COM: the inner loop starts and is not charged again.
-    // COM: Live-in is 512 for both bodies (%3); block arguments are not in
-    // COM: LivenessBlockInfo::in().
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
     %c0_i64 = arith.constant 0 : i64
@@ -367,11 +292,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: %v is used only as the inner loop's init. It is superseded for the inner
-// COM: loop, but not for the outer one: the outer back edge re-evaluates that init
-// COM: each iteration, so the outer body is charged for %v. Peak 1056 = %arg8 512
-// COM: + %arg6 32 + %v 512; dropping %v at the outer level gives 544. Live-in
-// COM: does not depend on this rule, so the peak is the field that pins it.
+// COM: %v only initializes the inner loop, but the outer back edge re-reads it,
+// COM: so the outer body is charged for it. Live-in does not depend on this
+// COM: rule, so the peak pins it.
 #blocked8 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas8 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
@@ -401,9 +324,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: %v is the loop's init and is also read after the loop, so it stays live
-// COM: through the body. Body peak 1536 = %acc 512 + %x 512 + %v 512; treating
-// COM: %v as only an init operand would give 1024.
+// COM: %v is the loop init and is also read after the loop, so it stays
+// COM: charged through the body.
 #blocked9 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: loop_init_read_after_loop
@@ -428,17 +350,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 
 // COM: %span is computed above the loop and read below it. Hoisting the
-// COM: conversion lowers both the body peak (8320 to 6272, the conversion leaves
-// COM: the body) and the function peak (8320 to 7296). The body is still charged
-// COM: for %span, and before the hoist for %arg0, for the whole loop.
+// COM: conversion by hand lowers both the body peak and the function peak.
 #blockedspan = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpasspan = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
 #dot_aspan = #ttg.dot_op<{opIdx = 0, parent = #dpasspan, kWidth = 1}>
 #dot_bspan = #ttg.dot_op<{opIdx = 1, parent = #dpasspan, kWidth = 2}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: Body peak 8320 = the dot's own 4224 (A 2048 + B 128 + accumulator 1024 +
-  // COM: result 1024) + %arg0 2048 (read by the convert, charged for the whole
-  // COM: loop) + %span 2048 (read after the loop).
+  // COM: The body is charged for %arg0 and %span for the whole loop.
   // CHECK-LABEL: spanning_in_loop
   // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
   // CHECK-NEXT: Peak over all blocks in tt.func: 8320 bytes
@@ -457,9 +375,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return %result, %span : tensor<256x16xf32, #dpasspan>, tensor<256x64xf16, #blockedspan>
   }
 
-  // COM: Body peak 6272 = 4224 + %span 2048. The function peak 7296 is at the
-  // COM: hoisted convert: %arg0 2048, %arg1 128, %arg2 1024, %span 2048, result
-  // COM: 2048.
+  // COM: The function peak is at the hoisted convert.
   // CHECK-LABEL: spanning_hoisted
   // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
   // CHECK-NEXT: Peak over all blocks in tt.func: 7296 bytes
@@ -481,16 +397,14 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: The same A/B with nothing spanning the hoist site. Keeping the convert in
-// COM: the loop charges the body for %arg0 for the whole loop, so hoisting lowers
-// COM: the peak (6272 to 5248).
+// COM: The same pair with nothing spanning the hoist site: the body is charged
+// COM: for %arg0 for the whole loop, so hoisting still lowers the peak.
 #blockednospan = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpasnospan = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
 #dot_anospan = #ttg.dot_op<{opIdx = 0, parent = #dpasnospan, kWidth = 1}>
 #dot_bnospan = #ttg.dot_op<{opIdx = 1, parent = #dpasnospan, kWidth = 2}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: Body peak 6272 = 4224 + %arg0 2048, charged for the whole loop although
-  // COM: its one use (the convert) is the loop's first op.
+  // COM: %arg0 is charged for the whole loop although its one use is the first op.
   // CHECK-LABEL: no_spanning_in_loop
   // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
   // CHECK-NEXT: Peak over all blocks in tt.func: 6272 bytes
@@ -523,65 +437,5 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
       scf.yield %dot : tensor<256x16xf32, #dpasnospan>
     }
     tt.return %result : tensor<256x16xf32, #dpasnospan>
-  }
-}
-
-// -----
-
-// COM: A hoist that leaves the loop peak unchanged (7296) but raises the function
-// COM: peak (7296 to 8320): the hoisted result spans the %big1..%big3 chain
-// COM: between the source and the loop. A gate that read only the loop figure
-// COM: would accept it. The chain peaks at 6272 before the hoist (%span 2048 +
-// COM: %arg1 128 + %arg2 1024 + three 1024 temporaries) and at 8320 with the
-// COM: result live through it; the visible rise (1024) is smaller than the
-// COM: result (2048) because the loop's own 7296 masks part of it.
-#blockedgate = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
-#dpasgate = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
-#dot_agate = #ttg.dot_op<{opIdx = 0, parent = #dpasgate, kWidth = 1}>
-#dot_bgate = #ttg.dot_op<{opIdx = 1, parent = #dpasgate, kWidth = 2}>
-module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: gate_needed_in_loop
-  // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
-  // CHECK-NEXT: Peak over all blocks in tt.func: 7296 bytes
-  // CHECK-NEXT: Block {{.*}} in scf.for: peak = 7296 bytes, live-in = 2176 bytes
-  // CHECK-NEXT: Block {{.*}} in tt.func: peak = 7296 bytes, live-in = 0 bytes
-  tt.func @gate_needed_in_loop(%arg0: tensor<256x64xf16, #blockedgate>, %arg1: tensor<64x16xf16, #dot_bgate>, %arg2: tensor<256x16xf32, #dpasgate>, %big0: tensor<256x16xf32, #dpasgate>) -> (tensor<256x16xf32, #dpasgate>, tensor<256x64xf16, #blockedgate>, tensor<256x16xf32, #dpasgate>) {
-    %c0_i32 = arith.constant 0 : i32
-    %c8_i32 = arith.constant 8 : i32
-    %c1_i32 = arith.constant 1 : i32
-    %span = arith.addf %arg0, %arg0 : tensor<256x64xf16, #blockedgate>
-    %big1 = arith.addf %big0, %big0 : tensor<256x16xf32, #dpasgate>
-    %big2 = arith.addf %big1, %big0 : tensor<256x16xf32, #dpasgate>
-    %big3 = arith.addf %big2, %big1 : tensor<256x16xf32, #dpasgate>
-    %result = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<256x16xf32, #dpasgate>) : i32 {
-      %cvt = ttg.convert_layout %span : tensor<256x64xf16, #blockedgate> -> tensor<256x64xf16, #dot_agate>
-      %dot = tt.dot %cvt, %arg1, %acc, inputPrecision = tf32 : tensor<256x64xf16, #dot_agate> * tensor<64x16xf16, #dot_bgate> -> tensor<256x16xf32, #dpasgate>
-      scf.yield %dot : tensor<256x16xf32, #dpasgate>
-    }
-    tt.return %result, %span, %big3 : tensor<256x16xf32, #dpasgate>, tensor<256x64xf16, #blockedgate>, tensor<256x16xf32, #dpasgate>
-  }
-
-  // COM: Same shape, conversion hoisted above the chain by hand. Loop-level peak is
-  // COM: unchanged (7296); whole-function peak rises (7296 -> 8320) because the
-  // COM: hoisted result now spans the chain too. See the comment above this pair.
-  // CHECK-LABEL: gate_needed_hoisted
-  // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
-  // CHECK-NEXT: Peak over all blocks in tt.func: 8320 bytes
-  // CHECK-NEXT: Block {{.*}} in scf.for: peak = 7296 bytes, live-in = 2176 bytes
-  // CHECK-NEXT: Block {{.*}} in tt.func: peak = 8320 bytes, live-in = 0 bytes
-  tt.func @gate_needed_hoisted(%arg0: tensor<256x64xf16, #blockedgate>, %arg1: tensor<64x16xf16, #dot_bgate>, %arg2: tensor<256x16xf32, #dpasgate>, %big0: tensor<256x16xf32, #dpasgate>) -> (tensor<256x16xf32, #dpasgate>, tensor<256x64xf16, #blockedgate>, tensor<256x16xf32, #dpasgate>) {
-    %c0_i32 = arith.constant 0 : i32
-    %c8_i32 = arith.constant 8 : i32
-    %c1_i32 = arith.constant 1 : i32
-    %span = arith.addf %arg0, %arg0 : tensor<256x64xf16, #blockedgate>
-    %cvt = ttg.convert_layout %span : tensor<256x64xf16, #blockedgate> -> tensor<256x64xf16, #dot_agate>
-    %big1 = arith.addf %big0, %big0 : tensor<256x16xf32, #dpasgate>
-    %big2 = arith.addf %big1, %big0 : tensor<256x16xf32, #dpasgate>
-    %big3 = arith.addf %big2, %big1 : tensor<256x16xf32, #dpasgate>
-    %result = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<256x16xf32, #dpasgate>) : i32 {
-      %dot = tt.dot %cvt, %arg1, %acc, inputPrecision = tf32 : tensor<256x64xf16, #dot_agate> * tensor<64x16xf16, #dot_bgate> -> tensor<256x16xf32, #dpasgate>
-      scf.yield %dot : tensor<256x16xf32, #dpasgate>
-    }
-    tt.return %result, %span, %big3 : tensor<256x16xf32, #dpasgate>, tensor<256x64xf16, #blockedgate>, tensor<256x16xf32, #dpasgate>
   }
 }

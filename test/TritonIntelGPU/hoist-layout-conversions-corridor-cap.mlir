@@ -3,14 +3,8 @@
 // RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=1" 2>&1 | FileCheck %s --check-prefix=STATS1
 // RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=3" 2>&1 | FileCheck %s --check-prefix=STATS3
 
-// COM: The corridor cap bounds how many operations the peak projection prices;
-// COM: past it every unwalked point is charged prePeak + dstBytes. Two free
-// COM: hoists (a 256 B source retired for a 64 B result) are decided last to
-// COM: first. The second loop's corridor is 3 operations, the first loop's is 4
-// COM: (it also holds the moved conversion).
-// COM:   cap=1: both are charged prePeak + 64 = 992 > 928 and refused.
-// COM:   cap=3: the second loop's corridor is priced (928, accepted at the 928
-// COM:          ceiling) and only the first loop's is charged.
+// COM: cap=1 charges both corridors conservatively and refuses both; cap=3
+// COM: prices the second loop's corridor and accepts it.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -25,8 +19,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %s1 = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked>
     %s2 = arith.addf %arg1, %arg1 : tensor<128x16xf16, #blocked>
 
-    // COM: cap=1: neither conversion moves, and both are stamped tt.no_licm so
-    // COM: that LICM does not undo the refusal.
+    // COM: cap=1: neither conversion moves; both are stamped tt.no_licm.
     // CAP1: arith.addf
     // CAP1-NEXT: arith.addf
     // CAP1-NEXT: scf.for
@@ -34,8 +27,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CAP1: scf.for
     // CAP1-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
 
-    // COM: cap=3: the second loop's conversion moves up beside %s2, the first
-    // COM: loop's stays put.
+    // COM: cap=3: only the second loop's conversion moves up.
     // CAP3: arith.addf
     // CAP3-NEXT: arith.addf
     // CAP3-NEXT: ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
@@ -57,7 +49,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   }
 }
 
-// COM: Both refusals are counted as *fallback* rejections rather than exact ones:
-// COM: the projection that produced them never walked the corridor.
+// COM: An unwalked corridor counts as a fallback rejection, not an exact one.
 // STATS1: [HoistLayoutConversions] considered=2 hoisted=0 rejected_pressure=0 rejected_function_peak_exact=0 rejected_function_peak_fallback=2 skipped_other=0
 // STATS3: [HoistLayoutConversions] considered=2 hoisted=1 rejected_pressure=0 rejected_function_peak_exact=0 rejected_function_peak_fallback=1 skipped_other=0

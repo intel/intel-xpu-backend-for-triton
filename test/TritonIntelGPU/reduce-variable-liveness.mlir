@@ -765,12 +765,8 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// COM: The sink decision depends on pressure inside a nested region. The loop's
-// COM: own ops peak at 257 B/lane, under the 1024 B/lane budget, but its scf.if
-// COM: body holds two 512 B/lane loads and their sum, 1536. If peakPressure stops
-// COM: descending into nested regions the loop reads 257 and the load is no
-// COM: longer sunk. Dropping only the ancestor union is not caught here: the
-// COM: scf.if body alone is already over budget.
+// COM: The loop's own ops are under budget but its scf.if body is over; the load
+// COM: is sunk only if peakPressure descends into the if.
 // CHECK-LABEL: tt.func @loop_pressure_hidden_in_nested_if
 #dpas9 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0_9 = #ttg.dot_op<{opIdx = 0, parent = #dpas9, kWidth=1}>
