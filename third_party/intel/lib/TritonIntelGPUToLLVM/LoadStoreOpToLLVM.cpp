@@ -190,10 +190,10 @@ struct LoadStoreConversionBase {
         .getMaskAlignment(mask);
   }
 
-  /// Returns true if `v` is proven uniform (the same value in every lane)
+  /// Returns true if `v` is proven broadcast (the same value in every lane)
   /// by `AxisInfo`, i.e. its constancy covers the full shape in every
-  /// dimension. Scalars are trivially uniform.
-  bool isUniform(Value v) const {
+  /// dimension. Scalars are trivially broadcast.
+  bool isBroadcast(Value v) const {
     auto ty = dyn_cast<RankedTensorType>(v.getType());
     if (!ty)
       return true;
@@ -209,8 +209,8 @@ struct LoadStoreConversionBase {
     return true;
   }
 
-  bool hasUniformAddrDivergentMask(Value ptr, Value mask) const {
-    return mask && isUniform(ptr) && !isUniform(mask);
+  bool hasBroadcastAddrNonBroadcastMask(Value ptr, Value mask) const {
+    return mask && isBroadcast(ptr) && !isBroadcast(mask);
   }
 
   /// Compute vectorization factor for descriptor load/store gather fallback.
@@ -1771,13 +1771,13 @@ struct PrefetchOpConversion
     if (!memoryRowMajor)
       return failure();
 
-    // Collect operands that `AxisInfo` proves are uniform, descending
+    // Collect operands that `AxisInfo` proves are broadcast, descending
     // through `arith.andi` chains (as produced by `tt::getPredMask`).
-    // Non-uniform leaves are dropped — safe for a prefetch hint.
-    SmallVector<Value> uniformOps;
+    // Non-broadcast leaves are dropped — safe for a prefetch hint.
+    SmallVector<Value> broadcastOps;
     std::function<void(Value)> collect = [&](Value v) {
-      if (isUniform(v)) {
-        uniformOps.push_back(v);
+      if (isBroadcast(v)) {
+        broadcastOps.push_back(v);
         return;
       }
       if (auto andOp = v.getDefiningOp<arith::AndIOp>()) {
@@ -1789,14 +1789,14 @@ struct PrefetchOpConversion
     Value scalarPred;
     if (Value mask = op.getMask()) {
       collect(mask);
-      if (uniformOps.empty())
+      if (broadcastOps.empty())
         return failure();
 
-      // Reduce each uniform operand to a scalar `i1` (element 0 of the
+      // Reduce each broadcast operand to a scalar `i1` (element 0 of the
       // packed LLVM representation — all lanes hold the same value by
-      // definition of uniformity) and AND them together.
+      // definition of broadcast constancy) and AND them together.
       auto tb = TritonLLVMOpBuilder(op.getLoc(), rewriter);
-      for (Value v : uniformOps) {
+      for (Value v : broadcastOps) {
         Value remapped = rewriter.getRemappedValue(v);
         if (!remapped)
           return failure();
@@ -2205,7 +2205,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                                          getNonTemporalFlag(op))};
       };
 
-      bool avoidPredicatedInstructions = hasUniformAddrDivergentMask(ptr, mask);
+      bool avoidPredicatedInstructions =
+          hasBroadcastAddrNonBroadcastMask(ptr, mask);
 
       Value ret;
       if (!pred)
@@ -3827,7 +3828,7 @@ struct StoreOpConversion
     };
 
     bool avoidPredicatedInstructions =
-        hasUniformAddrDivergentMask(ptr, op.getMask());
+        hasBroadcastAddrNonBroadcastMask(ptr, op.getMask());
 
     // Dispatches a (possibly predicated) store of `value` to `addr`: an
     // unconditional store if `pred` is null, a `TritonGEN::PredicatedStoreOp`
