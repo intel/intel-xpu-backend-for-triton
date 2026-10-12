@@ -38,7 +38,7 @@ def test_i1_add_reduce(M, num_warps, clusters, device):
     rows = [
         [1] + [0] * (M - 1),
         [1] + [0] * (M - 2) + [1],
-        [1, 0] * (M // 2),
+        [1, 1] + [0] * (M - 3) + [1],
         [1, 1, 0, 1, 0, 0, 1, 0] * (M // 8),
     ]
     x = torch.tensor(rows, dtype=torch.int32, device=device)
