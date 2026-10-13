@@ -13,6 +13,30 @@ def pytest_addoption(parser):
     parser.addoption("--device", action="store", default="cuda")
 
 
+# Intel-only: TEST_UNSKIP=true turns pytest.skip() into a no-op (see scripts/test-triton.sh --unskip).
+_SAVED_SKIP = pytest.StashKey[object]()
+
+
+def _unskip(reason=None, allow_module_level=False):  # pylint: disable=unused-argument
+    pass
+
+
+# Callers catch `pytest.skip.Exception`, so the replacement has to expose it too.
+_unskip.Exception = pytest.skip.Exception  # type: ignore[attr-defined]
+
+
+def pytest_configure(config):
+    if os.getenv("TEST_UNSKIP") == "true":
+        config.stash[_SAVED_SKIP] = pytest.skip
+        pytest.skip = _unskip
+
+
+def pytest_unconfigure(config):
+    saved = config.stash.get(_SAVED_SKIP, None)
+    if saved is not None:
+        pytest.skip = saved
+
+
 @pytest.fixture
 def device(request):
     return request.config.getoption("--device")
