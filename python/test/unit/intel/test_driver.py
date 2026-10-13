@@ -256,7 +256,7 @@ def test_wait_on_sycl_queue_error(device):
         driver.active.utils.wait_on_sycl_queue("invalid_queue_pointer")
 
 
-def test_has_opencl_extension_error(device):
+def test_has_spirv_extension_error(device):
     device_idx = torch.xpu.current_device()
     device_id = extension_utils.get_device_id(device_idx)
 
@@ -277,18 +277,18 @@ def test_has_opencl_extension_error(device):
         assert extensions["has_bfloat16_conversion"] is True
 
     # Test individual extension checking
-    result = extension_utils.has_device_extension(device_id, "cl_intel_subgroup_2d_block_io")
+    result = extension_utils.has_device_extension(device_id, "SPV_INTEL_2d_block_io")
     assert isinstance(result, bool)
     if device_id == 3034:
         # PVC 1100
         assert result is True  # This extension should be supported
 
     # Test checking for a non-existent/wrong extension name
-    result_wrong = extension_utils.has_device_extension(device_id, "cl_intel_nonexistent_extension")
+    result_wrong = extension_utils.has_device_extension(device_id, "SPV_INTEL_nonexistent_extension")
     assert isinstance(result_wrong, bool)
     assert result_wrong is False  # This extension should not be supported
 
-    assert extension_utils.has_device_extension(9999, "cl_intel_subgroup_2d_block_io") is None
+    assert extension_utils.has_device_extension(9999, "SPV_INTEL_2d_block_io") is None
 
 
 @pytest.mark.parametrize("grf_mode, expect_retry", [("default", True),  # Should auto-retry with large GRF and succeed
