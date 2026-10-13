@@ -220,8 +220,9 @@ install_build_dependencies
 rm -f "$KERNEL_DIR"/dist/*.whl
 
 echo "**** Building the sgl-kernel-xpu wheel (slow: AOT SYCL kernels). ****"
+echo "**** nproc: $(nproc), CMAKE_BUILD_PARALLEL_LEVEL in the environment: ${CMAKE_BUILD_PARALLEL_LEVEL-unset}, $(awk '/^MemAvailable:/ {printf "%.0f", $2 / 1048576}' /proc/meminfo) GiB available ****"
 DPCPP_SYCL_TARGET="$SYCL_TARGET" \
-  CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}" \
+  CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$(($(nproc) / 2))}" \
   python -m build --wheel --no-isolation "$KERNEL_DIR"
 
 printf '%s %s\n' "$(git -C "$KERNEL_DIR" rev-parse HEAD)" "$SYCL_TARGET" > "$COMMIT_STAMP"
