@@ -50,6 +50,32 @@ def test_auto_grf(device, monkeypatch, capfd):
     assert retried.group(1) == selected.group(1)
 
 
+def test_packed_metadata_reflects_auto_grf_retry(device, monkeypatch, capfd):
+    """`packed_metadata` must track the GRF mode `load_binary` actually settled on.
+
+    `__getitem__` launches with `packed_metadata`, and `serialize_args` (the
+    TritonKernelRunner repro dump) reads `build_flags` off that same object, not off
+    `metadata`. If the two fall out of sync after a JIT auto-GRF retry (issue
+    #5529), the dumped repro replays the pre-retry, un-escalated flags and can
+    build a different binary than the one Triton actually ran.
+    """
+    monkeypatch.setenv("TRITON_DEBUG", "1")
+    BLOCK = 1024 * 32 if is_xpu_cri() else 1024 * 8
+    z_tri = torch.empty(BLOCK, dtype=torch.int32, device=device)
+
+    @triton.jit
+    def _kernel(z, BLOCK: tl.constexpr):
+        off = tl.arange(0, BLOCK)
+        a = tl.load(z + off)
+        result = tl.sum(a, axis=0, keep_dims=True)
+        tl.store(z + off, a + result)
+
+    k = _kernel[(1, )](z_tri, BLOCK=BLOCK, num_warps=2)
+
+    assert "retrying with large GRF mode" in capfd.readouterr().out
+    assert k.packed_metadata.build_flags == k.metadata.build_flags
+
+
 @pytest.mark.parametrize("warp_size", [16, 32])
 def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
     """`n_spills` is dword-equivalents per lane, as on CUDA/HIP (issue #7896).
