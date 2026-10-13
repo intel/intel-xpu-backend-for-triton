@@ -392,3 +392,25 @@ index 487cffa670..c68d218287 100644
  
  
  # Resolve once at module load. Uses amdsmi (no CUDA init) so Ray workers
+diff --git a/vllm/v1/watermarking/gumbel.py b/vllm/v1/watermarking/gumbel.py
+index 655267d1e4..10330522ee 100644
+--- a/vllm/v1/watermarking/gumbel.py
++++ b/vllm/v1/watermarking/gumbel.py
+@@ -60,7 +60,7 @@ class GumbelWatermarker(Watermarker):
+         logits: torch.Tensor,
+         contexts: torch.Tensor,
+     ) -> WatermarkSample:
+-        if type(self.prf) is PhiloxPRF and logits.device.type == "cuda":
++        if type(self.prf) is PhiloxPRF and logits.device.type in ("cuda", "xpu"):
+             from vllm.v1.worker.gpu.sample.watermark import philox_gumbel_sample
+ 
+             return WatermarkSample(
+@@ -79,7 +79,7 @@ class GumbelWatermarker(Watermarker):
+         skip_mask: torch.Tensor,
+         random_sampler: RandomSampler,
+     ) -> WatermarkSample | None:
+-        if type(self.prf) is not PhiloxPRF or logits.device.type != "cuda":
++        if type(self.prf) is not PhiloxPRF or logits.device.type not in ("cuda", "xpu"):
+             return None
+ 
+         from vllm.v1.worker.gpu.sample.watermark import philox_gumbel_sample
