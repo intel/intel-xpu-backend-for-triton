@@ -16,6 +16,7 @@ def Gluon_Dialect : Dialect {
     "mlir::gpu::GPUDialect",
   ];
   let useDefaultAttributePrinterParser = 1;
+  let useStrictPropertiesInAssemblyFormat = 0;
 }
 
 #endif

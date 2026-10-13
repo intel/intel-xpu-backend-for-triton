@@ -199,8 +199,8 @@ Value TargetInfo::loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
         Value loaded = LLVM::LoadOp::create(
             rewriter, loc, valueTy, ptr, alignment, /*isVolatile=*/false,
             /*isNonTemporal=*/false, /*isInvariant=*/false,
-            /*isInvariantGroup=*/false, LLVM::AtomicOrdering::monotonic,
-            getAtomicSyncScope(scope));
+            /*isInvariantGroup=*/false, /*isNoundef=*/false,
+            LLVM::AtomicOrdering::monotonic, getAtomicSyncScope(scope));
         return SmallVector<Value>{loaded};
       });
   return results.front();
@@ -726,6 +726,7 @@ void TargetInfo::assertTrap(RewriterBase &rewriter, Location loc) const {
       "s_trap 2", /*constraints=*/"",
       /*has_side_effects=*/true, /*is_align_stack=*/false,
       LLVM::TailCallKind::None,
+      /*convergent=*/false,
       LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
       /*operand_attrs=*/ArrayAttr::get(ctx, {}));
 }

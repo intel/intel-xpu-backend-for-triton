@@ -76,7 +76,7 @@ makeContextSource(const std::string &contextSourceName) {
 void throwIfSessionNotInitialized(
     const std::map<size_t, std::unique_ptr<Session>> &sessions,
     size_t sessionId) {
-  if (!sessions.contains(sessionId)) {
+  if (!sessions.count(sessionId)) {
     throw makeOutOfRange("Session has not been initialized: " +
                          std::to_string(sessionId));
   }

@@ -680,7 +680,7 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
   if (mmaType == TensorCoreType::NOT_APPLICABLE ||
-      (isTuring && !mmaInstrPtxTuring.contains(mmaType)))
+      (isTuring && !mmaInstrPtxTuring.count(mmaType)))
     return op.emitError(
         "unsupported MMA instruction for the given operand/result types");
 

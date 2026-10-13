@@ -4100,7 +4100,7 @@ struct AtomicCASOpConversion
         b.inttoptr(casPtr.getType(), b.sub(intPtr, lowPtrBits).getResult());
 
     auto firstValInt = b.load(i32_ty, alignedPtr, 4, false, false, false, false,
-                              LLVM::AtomicOrdering::acquire);
+                              false, LLVM::AtomicOrdering::acquire);
 
     Block *bodyBlock =
         rewriter.splitBlock(headerBlock, rewriter.getInsertionPoint());
@@ -4369,7 +4369,7 @@ struct AtomicRMWOpConversion
     auto alignPtr =
         b.inttoptr(rmwPtr.getType(), b.sub(intPtr, lowPtrBits).getResult());
     auto firstValInt = b.load(i32_ty, alignPtr, 4, false, false, false, false,
-                              LLVM::AtomicOrdering::acquire);
+                              false, LLVM::AtomicOrdering::acquire);
 
     // Create a loop body block. It has a single parameter which holds the
     // latest loaded i32 value.
