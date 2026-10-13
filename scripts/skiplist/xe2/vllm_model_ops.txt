@@ -1,0 +1,2 @@
+# CUDA/HIP rotary-embedding dispatch test, CUDA/ROCm only by design
+tests/kernels/core/test_apply_rotary_emb.py::test_rotary_embedding_dispatch

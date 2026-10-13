@@ -1222,6 +1222,7 @@ run_vllm_spec_decode_tests() {
       tests/v1/spec_decode/test_max_len.py \
       tests/v1/spec_decode/test_speculators_eagle3.py \
       tests/v1/spec_decode/test_synthetic_rejection_sampler_utils.py \
+      tests/v1/spec_decode/test_rejection_sampler_utils.py \
       tests/v1/worker/test_gpu_rejection_sampler_i64.py \
       tests/v1/worker/test_gpu_rejection_sampler_chunking.py \
       tests/v1/spec_decode/test_acceptance_estimator.py \
@@ -1550,7 +1551,7 @@ run_vllm_model_ops_tests() {
 
   enter_vllm_test_env
   # Model-specific Triton ops (Inkling norm/sconv, BailingMoe mrope, Dots3
-  # fused embed+norm, Qwen3-VL ViT bilinear pos-embed, fused q/kv rmsnorm)
+  # fused embed+norm, Qwen3-VL ViT bilinear pos-embed, fused q/kv rmsnorm, packed q/k rope)
   TRITON_TEST_SUITE=vllm_model_ops \
     run_pytest_command -vvv \
       tests/models/inkling/test_mtp_input_fusion.py \
@@ -1559,7 +1560,8 @@ run_vllm_model_ops_tests() {
       tests/model_executor/test_bailing_mrope.py \
       tests/kernels/core/test_fused_embed_norm.py \
       tests/kernels/core/test_vit_bilinear_pos_embed.py \
-      tests/kernels/core/test_fused_q_kv_rmsnorm.py
+      tests/kernels/core/test_fused_q_kv_rmsnorm.py \
+      tests/kernels/core/test_apply_rotary_emb.py
 }
 
 

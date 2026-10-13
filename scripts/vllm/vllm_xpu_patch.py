@@ -248,7 +248,9 @@ _CUDA_TO_XPU_RUNTIME = {
     "Stream": "Stream",
     "_sleep": "_sleep",
     "current_stream": "current_stream",
+    "get_rng_state": "get_rng_state",
     "graph": "graph",
+    "set_rng_state": "set_rng_state",
     "stream": "stream",
     "synchronize": "synchronize",
 }
@@ -413,6 +415,7 @@ def main() -> None:
         for path in (
             "tests/distributed/test_dcp_a2a.py",
             "tests/kernels/attention/test_flashmla_sparse.py",
+            "tests/kernels/core/test_apply_rotary_emb.py",
             "tests/kernels/core/test_fused_embed_norm.py",
             "tests/kernels/core/test_fused_q_kv_rmsnorm.py",
             "tests/kernels/mamba/test_mamba_ssm.py",
