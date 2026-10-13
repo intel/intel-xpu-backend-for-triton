@@ -23,10 +23,10 @@
 using namespace mlir;
 using namespace mlir::triton::gpu;
 
-using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::LLVM::AMD::getVectorSize;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
+using ::mlir::triton::AMD::TargetInfo;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using triton::amdgpu::ISAFamily;
 
@@ -2215,7 +2215,6 @@ struct AtomicCASOpConversion
 
 bool supportsGlobalAtomicF16PackedAndDpp(ISAFamily isaFamily) {
   switch (isaFamily) {
-  case ISAFamily::CDNA1:
   case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:
   case ISAFamily::CDNA4:
@@ -2370,9 +2369,9 @@ struct AtomicRMWOpConversion
         // llvm.atomic_rmw, and we set the ordering for each to aql_rel (the
         // default if no sem value is explicitly set in the DSL level
         // tl.atomic_add. The llvm backend will insert extra buffer invalidates
-        // and L2 write backs causing a perforance degration. To avoid this we
-        // set the ordering to release for the first, acquire for the last, and
-        // relaxed for anything in between so that only a single set of
+        // and L2 write backs causing a performance degradation. To avoid this
+        // we set the ordering to release for the first, acquire for the last,
+        // and relaxed for anything in between so that only a single set of
         // buffer_inv and buffer_wbl2 instructions are inserted by the backend
         // for any "cluster" of atomic ops.
         if ((vec > 1 || elemsPerThread > 1) &&

@@ -2155,7 +2155,7 @@ def tensor_device_tdm_multi_cta_load_and_store_kernel(a_ptr, b_ptr, M, N,  #
 def test_runtime_tensor_load_and_store_multi_cta(M, N, BLOCK_M, BLOCK_N, NUM_WARPS, CGALayout, USE_TDM_LOAD,
                                                  USE_TDM_STORE):
     torch.manual_seed(42)
-    # Overallocate to catch out of bounds writes, the padding of our input is random and the pading of the output is 0
+    # Overallocate to catch out of bounds writes, the padding of our input is random and the padding of the output is 0
     # to catch out of bounds writes.
     overallocation_factor = 4
     a = torch.randint(0x0, 0xFFFF, (M * overallocation_factor, N), dtype=torch.uint16)
@@ -2415,7 +2415,7 @@ def test_compile_tensor_descriptor_prefetch_nd(dtype, ndim, INNER_BLOCK, SPECULA
             "PREFETCH_SPECULATIVE": "constexpr",
         }
         constexprs = {
-            # For tuples we need to specifiy the parameter index
+            # For tuples we need to specify the parameter index
             **{(2, i): STRIDES[i]
                for i in range(ndim)},
             **{(3, i): BLOCK_SHAPE[i]
@@ -3955,6 +3955,43 @@ def test_compile_cluster_barrier_wait():
     amdgcn = k.asm["amdgcn"]
     # Check that the ROCDL barrier wait instruction is present in the assembly
     assert "s_barrier_wait -3" in amdgcn
+
+
+@gluon.jit(noinline=True)
+def ws_noinline_barrier_helper(smem, layout: ttgl.constexpr):
+    smem.store(ttgl.arange(0, 128, layout))
+    smem.store(smem.load(layout) + 1)
+
+
+@gluon.jit
+def ws_noinline_barrier_worker(smem):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    ws_noinline_barrier_helper(smem, layout)
+
+
+@gluon.jit
+def ws_noinline_barrier_default():
+    pass
+
+
+@gluon.jit
+def ws_noinline_barrier_kernel():
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [2, 128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+    # Two worker partitions use different barriers while calling the same helper. This keeps its barrier handle variable instead of allowing it to fold into a constant
+    ttgl.warp_specialize([
+        (ws_noinline_barrier_default, ()),
+        (ws_noinline_barrier_worker, (smem.index(0), )),
+        (ws_noinline_barrier_worker, (smem.index(1), )),
+    ], [4, 4])
+
+
+def test_compile_warp_specialize_noinline_barrier():
+    k = triton.compile(src=gluon._runtime.GluonASTSource(ws_noinline_barrier_kernel, {}, {}),
+                       target=GPUTarget("hip", 'gfx1250', 32))
+    assert re.search(r"call .*@\S+_ws\(.*ptr addrspace\(3\) @nbar", k.asm["llir"])
+    amdgcn = k.asm["amdgcn"]
+    assert "s_barrier_join m0" in amdgcn
+    assert "s_barrier_signal m0" in amdgcn
 
 
 @gluon.jit

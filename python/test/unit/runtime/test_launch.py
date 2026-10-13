@@ -96,7 +96,7 @@ def test_max_occupancy_launch(max_occupancy, num_ctas, device, monkeypatch, fres
     monkeypatch.setattr(launcher, "launch", launch)
     compiled[(16, 1, 1)](out)
     graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):
+    with triton.testing.cuda_graph_without_gc(graph):
         compiled[(16, 1, 1)](out)
     graph.replay()
     graph.replay()
@@ -345,7 +345,7 @@ def test_interpreter_implicit_cvt_bool() -> None:
 @pytest.mark.xfail(not is_hip(), reason="requires HIP", run=False)
 def test_wgp_cu_mode_launch_argument():
     arch = triton.runtime.driver.active.get_current_target().arch
-    if not arch.startswith(("gfx10", "gfx11", "gfx120")):
+    if not arch.startswith(("gfx11", "gfx120")):
         pytest.skip("target has no WGP/CU mode distinction")
 
     @triton.jit

@@ -159,9 +159,23 @@ def get_matmul_batched_autotune_configs() -> List[triton.Config]:
     return configs
 
 
+def is_xpu_cri() -> bool:
+    return DEVICE == 'xpu' and triton.runtime.driver.active.get_current_target().arch.get('arch') == 'cri'
+
+
+def get_cri_matmul_batched_autotune_configs() -> List[triton.Config]:
+    if not is_xpu_cri():
+        return []
+    return [
+        triton.Config(
+            {'BLOCK_SIZE_M': m, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '512'},
+            num_stages=2, num_warps=32) for m in [256, 64]
+    ]
+
+
 # pylint: disable=unused-argument
 @triton.autotune(
-    configs=get_matmul_batched_autotune_configs(),
+    configs=get_matmul_batched_autotune_configs() + get_cri_matmul_batched_autotune_configs(),
     key=['M', 'N', 'K'],
     restore_value=['c_ptr'],
 )

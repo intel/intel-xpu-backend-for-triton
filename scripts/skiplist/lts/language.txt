@@ -13,3 +13,8 @@ python/test/unit/language/test_core.py::test_enable_fp_fusion[True-False-True]
 python/test/unit/language/test_core.py::test_enable_fp_fusion[True-True-True]
 python/test/unit/language/test_core.py::test_force_disable_fp_fusion[True-False]
 python/test/unit/language/test_core.py::test_force_disable_fp_fusion[True-True]
+
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/8393
+python/test/unit/language/test_core.py::test_cast_bf16_rounding[float64-None]
+python/test/unit/language/test_core.py::test_cast_bf16_rounding[int64-None]
+python/test/unit/language/test_core.py::test_cast_bf16_rounding[uint64-None]

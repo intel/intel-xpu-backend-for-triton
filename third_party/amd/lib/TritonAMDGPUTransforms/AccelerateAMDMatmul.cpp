@@ -37,8 +37,6 @@ constexpr char AttrDecomposedDotScaledSource[] =
 
 int getMfmaVersion(ISAFamily isaFamily) {
   switch (isaFamily) {
-  case ISAFamily::CDNA1:
-    return 1;
   case ISAFamily::CDNA2:
     return 2;
   case ISAFamily::CDNA3:
@@ -759,7 +757,7 @@ public:
       kWidth = packedKWidth;
 
     // For FA fwd kernel with f16 elementTy, we limit the 2nd dot to have
-    // kWidth = 4 so that the coversion from #mma (result of 1st dot)
+    // kWidth = 4 so that the conversion from #mma (result of 1st dot)
     // to #dotOp (operand 0 of 2nd dot) is a no-op.
     // TODO (lixun): relax the condition for 8-bit elementTy.
     if (is16BitElemTy && isDotChainTail) {
@@ -1579,7 +1577,7 @@ public:
     auto kWidth = kBase;
     if (wmmaVersion == 3) {
       const bool isF32 = operandTypes[0].isF32();
-      // kBase always consits of several groups of 8 elments except F32 case
+      // kBase always consists of several groups of 8 elements except F32 case
       kWidth = isF32 ? 2 : 8;
     }
     assert(kWidth != 0);
@@ -1820,7 +1818,6 @@ struct TritonAMDGPUAccelerateMatmulPass
       [[fallthrough]];
     case ISAFamily::CDNA3:
     case ISAFamily::CDNA2:
-    case ISAFamily::CDNA1:
       mfmaPatterns.add<::DecomposeAMDScaledBlocked>(context, targetFeatures,
                                                     /*benefit=*/3);
       mfmaPatterns.add<::BlockedToMFMA>(context, getMfmaVersion(isaFamily),
