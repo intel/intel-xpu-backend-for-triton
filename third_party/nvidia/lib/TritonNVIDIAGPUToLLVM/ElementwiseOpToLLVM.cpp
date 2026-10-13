@@ -18,6 +18,10 @@ namespace mlir::triton {
 namespace gpu {
 namespace {
 
+void setApproxDivFastMath(LLVM::FDivOp op) {
+  op.setFastmathFlags(LLVM::FastmathFlags::afn);
+}
+
 /* ----- FP8E5M2 ------ */
 // This data-type is the standard FP8E5M2 format
 
@@ -906,9 +910,7 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   POPULATE_OP(arith::MulFOp, LLVM::FMulOp);
   POPULATE_OP(triton::PreciseDivFOp, LLVM::FDivOp);
   POPULATE_OP(triton::PreciseSqrtOp, LLVM::SqrtOp);
-  POPULATE_OP(triton::ApproxDivFOp, LLVM::FDivOp, [](LLVM::FDivOp op) {
-    op.setFastmathFlags(LLVM::FastmathFlags::afn);
-  });
+  POPULATE_OP(triton::ApproxDivFOp, LLVM::FDivOp, setApproxDivFastMath);
 
   POPULATE_OP(arith::ExtFOp, LLVM::FPExtOp);
   POPULATE_OP(arith::TruncFOp, LLVM::FPTruncOp);

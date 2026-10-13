@@ -11,6 +11,8 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
+void setAbsIntMinPoisonFalse(LLVM::AbsOp op) { op.setIsIntMinPoison(false); }
+
 struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
   using ConvertOpToLLVMPattern<AddPtrOp>::ConvertOpToLLVMPattern;
 
@@ -703,8 +705,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
   POPULATE_UNARY_OP(arith::NegFOp, LLVM::FNegOp)
-  POPULATE_UNARY_OP(math::AbsIOp, LLVM::AbsOp,
-                    [](LLVM::AbsOp op) { op.setIsIntMinPoison(false); })
+  POPULATE_UNARY_OP(math::AbsIOp, LLVM::AbsOp, setAbsIntMinPoisonFalse)
   POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
   POPULATE_UNARY_OP(math::CeilOp, math::CeilOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)

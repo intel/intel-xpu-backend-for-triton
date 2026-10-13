@@ -17,6 +17,8 @@ namespace gpu {
 
 Type getElementType(Value value);
 
+template <typename DestOp> inline void defaultElementwiseCustomize(DestOp) {}
+
 class MultipleOperandsRange
     : public iterator_range<SmallVector<SmallVector<Value>>::iterator> {
   using ContainerT = SmallVector<SmallVector<Value>>;
@@ -151,7 +153,8 @@ protected:
 };
 
 // Trivial case where we map elementwise to an existing LLVM operator
-template <typename SourceOp, typename DestOp, auto Customize = [](DestOp) {}>
+template <typename SourceOp, typename DestOp,
+          void (*Customize)(DestOp) = &defaultElementwiseCustomize<DestOp>>
 struct ElementwiseOpConversion
     : public ElementwiseOpConversionBase<
           SourceOp, ElementwiseOpConversion<SourceOp, DestOp, Customize>> {
