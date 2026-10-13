@@ -74,7 +74,6 @@ cmake-build-*
 cuobjdump
 nvdisasm
 ptxas
-ptxas-blackwell
 
 # Third-party include
 third_party/nvidia/backend/include
@@ -116,6 +115,7 @@ AGENTS.override.md
 # Third-party repos cloned for testing/benchmarking (root-level only)
 /vllm/
 /vllm-xpu-kernels/
+/vllm-omni/
 /pytorch/
 /sglang/
 /Liger-Kernel/

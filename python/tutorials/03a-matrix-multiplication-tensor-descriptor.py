@@ -94,10 +94,6 @@ import triton
 import triton.language as tl
 
 
-def is_xpu_cri():
-    return triton.runtime.driver.active.get_current_target().arch['arch'] == "cri"
-
-
 @triton.autotune(
     configs=[
         triton.Config(
@@ -107,12 +103,8 @@ def is_xpu_cri():
         triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
                       num_stages=s, num_warps=w) for s in [2, 3, 4] for (m, w) in ([('256', 32), ('128', 64)])
     ] + [
-        triton.Config(
-            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
-            num_stages=s, num_warps=32) for s in [2]
-    ] + [
-        triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': m},
-                      num_stages=s, num_warps=w) for s in [2, 3] for (m, w) in ([('256', 32), ('128', 64)])
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
+                      num_stages=s, num_warps=32) for s in [2] for m in ['256', '128']
     ],
     key=['M', 'N', 'K'],
 )
@@ -335,7 +327,7 @@ INT8_TYPES = [(torch.int8, torch.int32, torch.int32)]
 FP8_TYPES = [(torch.float8_e4m3fn, torch.float32, torch.float16)]
 
 torch.manual_seed(0)
-matmul_size = 128 if is_xpu_cri() else 512
+matmul_size = 512
 test_types = FP16_TYPES + FP32_TYPES + INT8_TYPES + FP8_TYPES
 for dtype, accum_dtype, res_dtype in test_types:
     for shape in [(matmul_size, matmul_size), (4, matmul_size, matmul_size)]:

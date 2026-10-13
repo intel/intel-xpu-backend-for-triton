@@ -5,7 +5,7 @@ import torch
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip, is_hip_gfx1250, is_xpu, is_xpu_cri
+from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip, is_hip_gfx1250, is_xpu
 
 
 def check_capabilities():
@@ -225,8 +225,6 @@ def test_pipeline_matmul(scale, device):
     if scale and not (is_cuda() or is_hip_cdna() or is_xpu()):
         pytest.skip("NYI: scale_dot just implemented in CUDA/HIP/XPU")
     M, N, K = 512, 512, 128
-    if is_xpu_cri():
-        M, N = 128, 128
     BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
     NUM_STAGES = 4 if is_cuda() else 2
 

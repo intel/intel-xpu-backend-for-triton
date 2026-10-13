@@ -114,7 +114,6 @@ jobs:
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
       runner_label: b580
-      skip_benchmarks: '["flex-attention-causal-batch16"]'
 
   # ---- SGLang benchmarks ----
 

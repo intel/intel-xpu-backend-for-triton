@@ -33,7 +33,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func public @dot_emulation() -> tensor<16x16xf32, #blocked> {
     // CHECK: scf.for
     // CHECK-NOT: tt.dot
-    // CHECK: ttg.convert_layout
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.return
     %cst = arith.constant 1.000000e+00 : f16
     %zero = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #blocked>
     %a = tt.splat %cst : f16 -> tensor<16x16xf16, #dot_operand_a>
@@ -155,6 +156,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func public @dot_i8_decomposition() -> tensor<32x32xf32, #blocked> {
     // CHECK: scf.for
     // CHECK-COUNT-8: tti.dot_i8
+    // CHECK-NOT: tti.dot_i8
+    %one = arith.constant 1.000000e+00 : f16
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %a = tt.splat %one : f16 -> tensor<32x32xf16, #dot_operand_a>
+    %b = tt.splat %one : f16 -> tensor<32x32xf16, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<32x32xf16, #dot_operand_a> * tensor<32x32xf16, #dot_operand_b> -> tensor<32x32xf32, #blocked>
+    tt.return %out : tensor<32x32xf32, #blocked>
+  }
+}
+
+// -----
+
+// The "triton.jit" lowering path (as opposed to Gluon) sets ttg.target to
+// the bare backend name, e.g. "xpu", not "xpu:<arch>". The i8-decomposition
+// gate must still recognize this spelling and skip emitting the
+// nvidia_mma-based decomposition for it.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @dot_i8_decomposition_xpu_bare_target
+  tt.func public @dot_i8_decomposition_xpu_bare_target() -> tensor<32x32xf32, #blocked> {
     // CHECK-NOT: tti.dot_i8
     %one = arith.constant 1.000000e+00 : f16
     %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
@@ -336,7 +359,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NOT: ttg.dot_scaled
     // CHECK-NOT: tt.dot
-    // CHECK: ttg.convert_layout
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.return
      %cst = arith.constant 1.000000e+00 : f16
      %zero = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #blocked>
      %a = tt.splat %cst : f16 -> tensor<16x16xf16, #dot_A>
@@ -588,6 +612,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %rem = arith.remf %a, %b : tensor<4xf32>
     %out = arith.addf %div, %rem : tensor<4xf32>
     tt.return %out : tensor<4xf32>
+  }
+}
+
+// -----
+
+module {
+  // CHECK-LABEL: @approx_div
+  tt.func public @approx_div(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+    // CHECK: tti.experimental_fpsan_embed
+    // CHECK: arith.muli
+    // CHECK: tti.experimental_fpsan_unembed
+    // CHECK-NOT: tt.approx_divf
+    // CHECK: tt.return
+    %result = tt.approx_divf %a, %b : tensor<4xf32>
+    tt.return %result : tensor<4xf32>
   }
 }
 

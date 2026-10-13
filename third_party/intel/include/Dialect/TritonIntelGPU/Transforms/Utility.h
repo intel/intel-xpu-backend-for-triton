@@ -26,8 +26,9 @@ namespace mlir::triton::gpu::intel {
 // dynamic cast result.
 RankedTensorType getRankedTensorType(Type type);
 
-// Check if given value is divisible by the divisor.
-bool isDivisible(Value value, unsigned divisor);
+// Check if given value is provably divisible by the divisor. Returns false for
+// a non-positive divisor.
+bool isDivisible(Value value, int64_t divisor);
 
 // Infers the encoding of the source of op given the result encoding.
 Attribute inferSrcEncoding(Operation *op, Attribute encoding);

@@ -25,7 +25,7 @@ from triton_kernels.tensor import (
     wrap_torch_tensor,
 )
 from triton_kernels.testing import assert_equal
-from triton._internal_testing import is_cuda, is_xpu_cri
+from triton._internal_testing import is_cuda
 from triton_kernels.tensor_details.layout import (
     BlackwellActMXScaleLayout,
     BlackwellMX4ValueShuffledLayout,
@@ -36,6 +36,7 @@ from triton_kernels.tensor_details.layout import (
     HopperMXScaleLayout,
     HopperMXValueLayout,
     StridedLayout,
+    TiledLayout,
 )
 
 _FP4_VALUE_LAYOUTS = [
@@ -713,15 +714,14 @@ def test_remap_ragged_tensor_metadata(n_slices, device):
     slice_map = torch.randperm(n_slices, device=device, dtype=torch.int32)
     # discard random slices
     slice_map[torch.randint(0, len(slice_map), (5, ))] = -1
-    ref_dev = 'cpu' if is_xpu_cri() else device
     tri_metadata = make_ragged_tensor_metadata(slice_sizes, n_total_rows)
-    ref_metadata = make_ragged_tensor_metadata_torch(slice_sizes.to(device=ref_dev), n_total_rows)
+    ref_metadata = make_ragged_tensor_metadata_torch(slice_sizes, n_total_rows)
     tri_metadata = remap_ragged_tensor_metadata(tri_metadata, slice_map)
-    ref_metadata = remap_ragged_tensor_metadata_torch(ref_metadata, slice_map.to(device=ref_dev))
-    assert_equal(tri_metadata.slice_sizes.to(device=ref_dev), ref_metadata.slice_sizes)
-    assert_equal(tri_metadata.slice_offs.to(device=ref_dev), ref_metadata.slice_offs)
-    assert_equal(tri_metadata.block_offs_data.to(device=ref_dev), ref_metadata.block_offs_data)
-    assert_equal(tri_metadata.block_schedule_data.to(device=ref_dev), ref_metadata.block_schedule_data)
+    ref_metadata = remap_ragged_tensor_metadata_torch(ref_metadata, slice_map)
+    assert_equal(tri_metadata.slice_sizes, ref_metadata.slice_sizes)
+    assert_equal(tri_metadata.slice_offs, ref_metadata.slice_offs)
+    assert_equal(tri_metadata.block_offs_data, ref_metadata.block_offs_data)
+    assert_equal(tri_metadata.block_schedule_data, ref_metadata.block_schedule_data)
 
 
 @pytest.mark.parametrize("n_rows", [0, 7, 256, 17111])
@@ -773,3 +773,23 @@ def test_keyed_add_large_key_no_int_overflow(device):
     # Compare in int64 (CUDA has no uint32 `arange`); values are well within int64.
     expected = (key << 16) | torch.arange(1, BLOCK + 1, dtype=torch.int64, device=device)
     assert torch.equal(out.to(torch.int64), expected)
+
+
+@pytest.mark.parametrize("shape", [(256, 384), (2, 256, 384)])
+@pytest.mark.parametrize("major_dim", [-1, -2])
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.bfloat16])
+@pytest.mark.parametrize("with_out", [False, True])
+def test_tiled_layout_roundtrip(shape, major_dim, dtype, with_out):
+    values = (torch.arange(math.prod(shape)) % 251).to(dtype).reshape(shape)
+    source = wrap_torch_tensor(values)
+    layout = TiledLayout(major_dim)
+    tiled = convert_layout(source, layout)
+    assert convert_layout(tiled, layout) is tiled
+    if with_out:
+        out = wrap_torch_tensor(torch.empty_like(tiled.data), layout=layout)
+        assert convert_layout(source, layout, out=out) is out
+        torch.testing.assert_close(out.data, tiled.data, rtol=0, atol=0)
+        tiled = out
+    restored = convert_layout(tiled, StridedLayout(-1))
+    torch.testing.assert_close(restored.data, values, rtol=0, atol=0)
+    assert tiled.data.numel() == source.data.numel()
