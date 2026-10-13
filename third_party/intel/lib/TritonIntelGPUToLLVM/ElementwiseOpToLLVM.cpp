@@ -1730,6 +1730,44 @@ struct ElementwiseOpConversion
   }
 };
 
+// Converts the integer or f64 `v` to f32 with round-to-odd (toward zero, then
+// the lowest bit set if inexact), so that the f32 -> bf16 rounding that follows
+// is the only one.
+static Value convertToFp32RoundToOdd(Location loc,
+                                     ConversionPatternRewriter &rewriter,
+                                     Value v, bool isSigned = false) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Type ty = v.getType();
+  if (ty.getIntOrFloatBitWidth() <= 24) // Exact in f32.
+    return isSigned ? Value(LLVM::SIToFPOp::create(rewriter, loc, f32_ty, v))
+                    : Value(LLVM::UIToFPOp::create(rewriter, loc, f32_ty, v));
+
+  MLIRContext *ctx = rewriter.getContext();
+  auto towardZero =
+      LLVM::RoundingModeAttr::get(ctx, LLVM::RoundingMode::TowardZero);
+  auto except = arith::getLLVMDefaultFPExceptionBehavior(*ctx);
+  Value truncated, inexact;
+  if (ty.isF64()) {
+    truncated = LLVM::ConstrainedFPTruncIntr::create(rewriter, loc, f32_ty, v,
+                                                     towardZero, except);
+    Value back = b.fpext(ty, truncated);
+    inexact = LLVM::FCmpOp::create(rewriter, loc, i1_ty,
+                                   LLVM::FCmpPredicate::one, back, v);
+  } else if (isSigned) {
+    truncated = LLVM::ConstrainedSIToFP::create(rewriter, loc, f32_ty, v,
+                                                towardZero, except);
+    Value back = LLVM::FPToSIOp::create(rewriter, loc, ty, truncated);
+    inexact = b.icmp_ne(back, v);
+  } else {
+    truncated = LLVM::ConstrainedUIToFP::create(rewriter, loc, f32_ty, v,
+                                                towardZero, except);
+    Value back = LLVM::FPToUIOp::create(rewriter, loc, ty, truncated);
+    inexact = b.icmp_ne(back, v);
+  }
+  Value bits = b.bitcast(truncated, i32_ty);
+  return b.bitcast(b.or_(bits, b.zext(i32_ty, inexact)), f32_ty);
+}
+
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion>;
@@ -1748,13 +1786,32 @@ struct SIToFPOpConversion
       return {
           intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
     } else if (outElemTy.isBF16()) {
-      auto value =
-          LLVM::SIToFPOp::create(rewriter, loc, f32_ty, operands[0][0]);
+      Value value = convertToFp32RoundToOdd(loc, rewriter, operands[0][0],
+                                            /*isSigned=*/true);
       return {
           intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
     }
 
     return {LLVM::SIToFPOp::create(rewriter, loc, elemTy, operands[0][0])};
+  }
+};
+
+struct UIToFPOpConversion
+    : ElementwiseOpConversionBase<arith::UIToFPOp, UIToFPOpConversion> {
+  using Base = ElementwiseOpConversionBase<arith::UIToFPOp, UIToFPOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(arith::UIToFPOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // Left to the common lowering.
+    if (!getElementType(op.getOut()).isBF16())
+      return {};
+
+    Value value = convertToFp32RoundToOdd(loc, rewriter, operands[0][0]);
+    return {intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
   }
 };
 
@@ -1827,10 +1884,13 @@ struct TruncFOpConversion
     auto outElemTy = getElementType(op.getOut());
     if (outElemTy.isBF16()) {
       auto inElemTy = getElementType(op.getIn());
-      assert(inElemTy.isF32() && "unsupported conversion");
+      assert((inElemTy.isF32() || inElemTy.isF64()) &&
+             "unsupported conversion");
+      Value in = operands[0][0];
+      if (inElemTy.isF64())
+        in = convertToFp32RoundToOdd(loc, rewriter, in);
       return {// Trunc uses the default rounding mode: RTNE
-              intel::convertFp32ToBf16(loc, rewriter, operands[0][0],
-                                       RoundingMode::RTNE)};
+              intel::convertFp32ToBf16(loc, rewriter, in, RoundingMode::RTNE)};
     }
     return {LLVM::FPTruncOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
@@ -2275,6 +2335,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<UIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FpToFpOpFromDwordsConversion>(typeConverter,
                                              benefit.getBenefit() + 1);
