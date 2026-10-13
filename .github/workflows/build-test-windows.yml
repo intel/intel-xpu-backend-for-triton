@@ -25,7 +25,7 @@ permissions: read-all
 
 env:
   PYTHONIOENCODING: utf-8
-  PYTHON_VERSION: "3.10"
+  PYTHON_VERSION: "3.11"
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list }}
   TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list }} --reports-dir reports --run-all ${{ inputs.ignore_errors && '--ignore-errors' || '' }}
@@ -42,14 +42,21 @@ jobs:
     timeout-minutes: 240
     outputs:
       wheel: ${{ steps.build-wheel.outputs.status }}
+      artifact-label: ${{ steps.artifact-label.outputs.name }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Compute artifact label
+        id: artifact-label
+        uses: ./.github/actions/sanitize-artifact-name
+        with:
+          name: ${{ inputs.runner_label }}
+
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Clean up old workspaces
         shell: bash
@@ -82,7 +89,7 @@ jobs:
       - name: Upload Triton wheels
         uses: actions/upload-artifact@v7
         with:
-          name: triton-${{ env.PYTHON_VERSION }}-${{ inputs.runner_label }}
+          name: triton-${{ env.PYTHON_VERSION }}-${{ steps.artifact-label.outputs.name }}
           path: ${{ env.NEW_WORKSPACE }}\dist\*.whl
           if-no-files-found: error
 
@@ -90,7 +97,7 @@ jobs:
       - name: Upload instrumentation library
         uses: actions/upload-artifact@v7
         with:
-          name: instrumentation-${{ env.PYTHON_VERSION }}-${{ inputs.runner_label }}
+          name: instrumentation-${{ env.PYTHON_VERSION }}-${{ steps.artifact-label.outputs.name }}
           path: ${{ env.NEW_WORKSPACE }}\build\lib*\triton\instrumentation\*GPUInstrumentationTestLib*.dll
           if-no-files-found: error
 
@@ -137,7 +144,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Clean up old workspaces
         shell: bash
@@ -213,7 +220,7 @@ jobs:
       - name: Download Triton wheels
         uses: actions/download-artifact@v8
         with:
-          name: triton-${{ env.PYTHON_VERSION }}-${{ inputs.runner_label }}
+          name: triton-${{ env.PYTHON_VERSION }}-${{ needs.build.outputs.artifact-label }}
           path: ${{ env.NEW_WORKSPACE }}\dist
 
       # The uploaded artifact is rooted at `build` (upload-artifact roots at the last non-glob
@@ -224,7 +231,7 @@ jobs:
       - name: Download instrumentation library
         uses: actions/download-artifact@v8
         with:
-          name: instrumentation-${{ env.PYTHON_VERSION }}-${{ inputs.runner_label }}
+          name: instrumentation-${{ env.PYTHON_VERSION }}-${{ needs.build.outputs.artifact-label }}
           path: ${{ env.NEW_WORKSPACE }}\build
 
       - name: Install Triton

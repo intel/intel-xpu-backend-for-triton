@@ -17,6 +17,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Pass/Pass.h"
@@ -1322,6 +1323,163 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
   });
 }
 
+static llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
+collectCandidateMakeTensorDescOps(Operation *op) {
+  llvm::SmallSetVector<triton::MakeTensorDescOp, 4> candidateMakeTensorDescOps;
+  llvm::SmallSetVector<triton::MakeTensorDescOp, 4> unhandledMakeTensorDescOps;
+  SmallVector<llvm::SmallSetVector<triton::MakeTensorDescOp, 4>> descGroups;
+  op->walk([&](Operation *op) {
+    TypeSwitch<Operation *>(op)
+        .Case<triton::DescriptorLoadOp>([&](triton::DescriptorLoadOp op) {
+          triton::intel::DescriptorDefinitions defs =
+              triton::intel::findDescriptorDefinitions(op.getDesc());
+          // Candidates that disagree on `padding` leave the descriptor-native
+          // path with no compile-time fill value (#8102): the load would
+          // silently get PAD_ZERO even on the branch that asked for PAD_NAN.
+          // The pointer expansion carries padding as a runtime i1 and selects
+          // the fill per branch, so route those descriptors to it. An empty
+          // trace is NOT divergence -- it is already a non-candidate via
+          // allSatisfy, so it must not be evicted here.
+          bool divergentPadding = !defs.empty() && !defs.consistentPadding();
+          for (triton::MakeTensorDescOp d : defs) {
+            candidateMakeTensorDescOps.insert(d);
+            if (divergentPadding)
+              unhandledMakeTensorDescOps.insert(d);
+          }
+        })
+        .Case<triton::DescriptorStoreOp>([&](triton::DescriptorStoreOp op) {
+          // Stores carry no padding, so there is nothing to diverge on.
+          for (triton::MakeTensorDescOp d :
+               triton::intel::findDescriptorDefinitions(op.getDesc()))
+            candidateMakeTensorDescOps.insert(d);
+        })
+        .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
+              triton::DescriptorReduceOp>([&](auto op) {
+          for (triton::MakeTensorDescOp d :
+               triton::intel::findDescriptorDefinitions(op.getDesc()))
+            unhandledMakeTensorDescOps.insert(d);
+        })
+        .Case<triton::CallOp, triton::ReturnOp>([&](auto op) {
+          // A descriptor in a function signature is unconditionally illegal
+          // (see the `FuncOp` legality below), so a descriptor crossing a
+          // call boundary always expands and the maker has to follow. Only
+          // operands need this: a call *result* already traces to nothing.
+          for (Value v : op->getOperands())
+            if (isa<triton::TensorDescType>(v.getType()))
+              for (triton::MakeTensorDescOp d :
+                   triton::intel::findDescriptorDefinitions(v))
+                unhandledMakeTensorDescOps.insert(d);
+        })
+        .Default([](auto) {});
+
+    // Legality is decided per op over all of its descriptor-typed operands
+    // and results, so their producers form one group that must be converted
+    // together. A region op additionally converts as a unit with its region
+    // terminators, so what they pass back joins the group.
+    llvm::SmallSetVector<triton::MakeTensorDescOp, 4> group;
+    bool hasUntraceable = false;
+    auto addDefs = [&](Value v) {
+      if (!isa<triton::TensorDescType>(v.getType()))
+        return;
+      triton::intel::DescriptorDefinitions defs =
+          triton::intel::findDescriptorDefinitions(v);
+      if (defs.empty()) {
+        hasUntraceable = true;
+        return;
+      }
+      for (triton::MakeTensorDescOp d : defs)
+        group.insert(d);
+    };
+    for (Value operand : op->getOperands())
+      addDefs(operand);
+    for (Value result : op->getResults())
+      addDefs(result);
+    // The op's own results collapse to an empty trace as soon as one incoming
+    // edge is untraceable, which hides the makers on the other edges: they are
+    // then seen only at their own terminator, stay native, and leave that
+    // terminator at the pre-expansion arity. Reach the edges directly (#8256).
+    if (isa<RegionBranchOpInterface>(op))
+      for (Region &region : op->getRegions())
+        for (Block &block : region)
+          for (Value v : block.getTerminator()->getOperands())
+            addDefs(v);
+    // An untraceable descriptor contributes no producer, so the closure below
+    // has nothing to spread from -- yet it already makes this op illegal
+    // (`tracesToCandidates` is false for an empty trace), leaving the op
+    // converted around producers that stay unconverted. Mirror the predicate:
+    // evict the group outright (#8170).
+    if (hasUntraceable)
+      unhandledMakeTensorDescOps.insert(group.begin(), group.end());
+    if (group.size() > 1)
+      descGroups.push_back(std::move(group));
+    return WalkResult::advance();
+  });
+
+  // With `buildMaterializations = false` legality cannot be mixed within a
+  // group: one producer leaving the descriptor path (evicted, or never a
+  // candidate) drags every traced producer that shares an op -- or that op's
+  // region terminators -- with it. Close the evicted set over the groups.
+  auto isEvicted = [&](triton::MakeTensorDescOp d) {
+    return unhandledMakeTensorDescOps.contains(d) ||
+           !candidateMakeTensorDescOps.contains(d);
+  };
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (const llvm::SmallSetVector<triton::MakeTensorDescOp, 4> &group :
+         descGroups) {
+      if (!llvm::any_of(group, isEvicted))
+        continue;
+      for (triton::MakeTensorDescOp d : group)
+        changed |= unhandledMakeTensorDescOps.insert(d);
+    }
+  }
+  for (triton::MakeTensorDescOp maker : unhandledMakeTensorDescOps)
+    candidateMakeTensorDescOps.remove(maker);
+  return candidateMakeTensorDescOps;
+}
+
+static bool splitDirectDescriptorUses(
+    Operation *op,
+    const llvm::SmallSetVector<triton::MakeTensorDescOp, 4> &candidates) {
+  SmallVector<std::pair<triton::MakeTensorDescOp, SmallVector<OpOperand *>>>
+      splits;
+  // Snapshot original makers and operand uses before inserting any clones.
+  op->walk([&](triton::MakeTensorDescOp maker) {
+    if (candidates.contains(maker))
+      return;
+
+    SmallVector<OpOperand *> directUses;
+    bool hasOtherUses = false;
+    for (OpOperand &use : maker.getResult().getUses()) {
+      bool isDirectUse =
+          TypeSwitch<Operation *, bool>(use.getOwner())
+              .Case<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(
+                  [&](auto access) { return &use == &access.getDescMutable(); })
+              .Default([](Operation *) { return false; });
+      if (isDirectUse)
+        directUses.push_back(&use);
+      else
+        hasOtherUses = true;
+    }
+    if (!directUses.empty() && hasOtherUses)
+      splits.emplace_back(maker, std::move(directUses));
+  });
+
+  IRRewriter rewriter(op->getContext());
+  for (auto &[maker, directUses] : splits) {
+    // A clone feeding only direct accesses is a candidate with one
+    // maker/padding, no untraceable sibling or structural multi-producer group.
+    // The original retains all fallback connections.
+    rewriter.setInsertionPointAfter(maker);
+    auto nativeMaker = cast<triton::MakeTensorDescOp>(rewriter.clone(*maker));
+    for (OpOperand *use : directUses)
+      rewriter.modifyOpInPlace(use->getOwner(),
+                               [&] { use->set(nativeMaker.getResult()); });
+  }
+  return !splits.empty();
+}
+
 /**
  * @brief This implements the pass for converting triton tensor descriptor
  * loads/stores into indexed loads/stores.
@@ -1383,98 +1541,12 @@ class TritonRewriteTensorDescriptorToPointerPass
       (void)applyPatternsGreedily(op, std::move(patterns));
     }
 
+    // Split after the greedy pre-rewrites: they replace gathers/scatters with
+    // new direct descriptor loads/stores, which the split must see.
     llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
-        candidateMakeTensorDescOps;
-    llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
-        unhandledMakeTensorDescOps;
-    SmallVector<llvm::SmallSetVector<triton::MakeTensorDescOp, 4>> descGroups;
-    op->walk([&](Operation *op) {
-      TypeSwitch<Operation *>(op)
-          .Case<triton::DescriptorLoadOp>([&](triton::DescriptorLoadOp op) {
-            triton::intel::DescriptorDefinitions defs =
-                triton::intel::findDescriptorDefinitions(op.getDesc());
-            // Candidates that disagree on `padding` leave the descriptor-native
-            // path with no compile-time fill value (#8102): the load would
-            // silently get PAD_ZERO even on the branch that asked for PAD_NAN.
-            // The pointer expansion carries padding as a runtime i1 and selects
-            // the fill per branch, so route those descriptors to it. An empty
-            // trace is NOT divergence -- it is already a non-candidate via
-            // allSatisfy, so it must not be evicted here.
-            bool divergentPadding = !defs.empty() && !defs.consistentPadding();
-            for (triton::MakeTensorDescOp d : defs) {
-              candidateMakeTensorDescOps.insert(d);
-              if (divergentPadding)
-                unhandledMakeTensorDescOps.insert(d);
-            }
-          })
-          .Case<triton::DescriptorStoreOp>([&](triton::DescriptorStoreOp op) {
-            // Stores carry no padding, so there is nothing to diverge on.
-            for (triton::MakeTensorDescOp d :
-                 triton::intel::findDescriptorDefinitions(op.getDesc()))
-              candidateMakeTensorDescOps.insert(d);
-          })
-          .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
-                triton::DescriptorReduceOp>([&](auto op) {
-            for (auto d :
-                 triton::intel::findDescriptorDefinitions(op.getDesc()))
-              unhandledMakeTensorDescOps.insert(d);
-          })
-          .Default([](auto) {});
-
-      // Legality is decided per op over all of its descriptor-typed operands
-      // and results, so their producers form one group that must be converted
-      // together.
-      llvm::SmallSetVector<triton::MakeTensorDescOp, 4> group;
-      bool hasUntraceable = false;
-      auto addDefs = [&](Value v) {
-        if (!isa<triton::TensorDescType>(v.getType()))
-          return;
-        triton::intel::DescriptorDefinitions defs =
-            triton::intel::findDescriptorDefinitions(v);
-        if (defs.empty()) {
-          hasUntraceable = true;
-          return;
-        }
-        for (triton::MakeTensorDescOp d : defs)
-          group.insert(d);
-      };
-      for (Value operand : op->getOperands())
-        addDefs(operand);
-      for (Value result : op->getResults())
-        addDefs(result);
-      // An untraceable descriptor contributes no producer, so the closure below
-      // has nothing to spread from -- yet it already makes this op illegal
-      // (`tracesToCandidates` is false for an empty trace), leaving the op
-      // converted around producers that stay unconverted. Mirror the predicate:
-      // evict the group outright (#8170).
-      if (hasUntraceable)
-        unhandledMakeTensorDescOps.insert(group.begin(), group.end());
-      if (group.size() > 1)
-        descGroups.push_back(std::move(group));
-      return WalkResult::advance();
-    });
-
-    // With `buildMaterializations = false` legality cannot be mixed within a
-    // group: one producer leaving the descriptor path (evicted, or never a
-    // candidate) drags every traced producer that shares an op with it. Close
-    // the evicted set over the groups.
-    auto isEvicted = [&](triton::MakeTensorDescOp d) {
-      return unhandledMakeTensorDescOps.contains(d) ||
-             !candidateMakeTensorDescOps.contains(d);
-    };
-    bool changed = true;
-    while (changed) {
-      changed = false;
-      for (const llvm::SmallSetVector<triton::MakeTensorDescOp, 4> &group :
-           descGroups) {
-        if (!llvm::any_of(group, isEvicted))
-          continue;
-        for (triton::MakeTensorDescOp d : group)
-          changed |= unhandledMakeTensorDescOps.insert(d);
-      }
-    }
-    for (auto op : unhandledMakeTensorDescOps)
-      candidateMakeTensorDescOps.remove(op);
+        candidateMakeTensorDescOps = collectCandidateMakeTensorDescOps(op);
+    if (splitDirectDescriptorUses(op, candidateMakeTensorDescOps))
+      candidateMakeTensorDescOps = collectCandidateMakeTensorDescOps(op);
 
     mlir::ConversionTarget target(getContext());
     target.addDynamicallyLegalDialect<mlir::arith::ArithDialect,
@@ -1521,6 +1593,8 @@ class TritonRewriteTensorDescriptorToPointerPass
               })
               .Default([&](auto *op) { return allDescValuesAreCandidate(op); });
         });
+    // Unconditional: a signature descriptor expands whether or not its maker
+    // is a candidate, which is why `tt.call` / `tt.return` operands evict.
     target.addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) {
       return !hasATensorDescriptorType(funcOp.getFunctionType().getInputs()) &&
              !hasATensorDescriptorType(funcOp.getFunctionType().getResults());

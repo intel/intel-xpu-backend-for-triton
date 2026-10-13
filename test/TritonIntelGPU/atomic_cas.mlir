@@ -280,3 +280,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return %0 : bf16
   }
 }
+
+// -----
+
+// Test acq_rel atomic CAS with the result broadcast through shared memory.
+// Membar assumes the lowering emits a barrier before release/acq_rel atomics,
+// so the barrier must precede the shared memory store of the CAS result.
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+  // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_acq_rel_multi_warp
+  tt.func @test_atomic_cas_acq_rel_multi_warp(%ptr: !tt.ptr<i32>, %cmp: i32, %val: i32) -> i32 {
+    // CHECK: llvm.call spir_funccc @_Z7barrierj
+    // CHECK: llvm.cmpxchg %arg0, %{{.*}}, %{{.*}} acq_rel monotonic : !llvm.ptr<1>, i32
+    // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
+    // CHECK: llvm.call spir_funccc @_Z7barrierj
+    // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
+    %0 = tt.atomic_cas acq_rel, gpu, %ptr, %cmp, %val : (!tt.ptr<i32>, i32, i32) -> i32
+    tt.return %0 : i32
+  }
+}
