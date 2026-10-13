@@ -6,7 +6,7 @@ A plain vector-add kernel compiled with `generate_native_code=True`, which
 routes through the AOT `make_zebin`/`ocloc` path (`metadata["binary_ext"] =
 "zebin"`) instead of JIT SPIR-V. Used to check that the TritonKernelRunner repro
 dump correctly records the binary as native (`is_native_binary=True`,
-`spv_name` ending in `.zebin`) and that TritonKernelRunner can load and run it via
+`binary_name` ending in `.zebin`) and that TritonKernelRunner can load and run it via
 `ZE_MODULE_FORMAT_NATIVE`.
 """
 

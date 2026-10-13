@@ -620,7 +620,7 @@ def serialize_args(args, constants, signature, dir_path):
         # `_IL_SPIRV`) to load it with.
         is_native_binary = bool(getattr(arg, "generate_native_code", False))
         binary_ext = "zebin" if is_native_binary else "spv"
-        args_dict['spv_name'] = f"{arg.name}.{binary_ext}"
+        args_dict['binary_name'] = f"{arg.name}.{binary_ext}"
         args_dict['is_native_binary'] = is_native_binary
         args_dict['build_flags'] = arg.build_flags
 

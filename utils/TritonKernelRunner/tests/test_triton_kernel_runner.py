@@ -62,7 +62,7 @@ def test_args_json_gen():
                 args_path = os.path.join(root, "args_data.json")
                 with open(args_path) as args_file:
                     args_data = json.load(args_file)
-                if args_data.get("spv_name") == "add_kernel.spv":
+                if args_data.get("binary_name") == "add_kernel.spv":
                     dump_dir = root
                     break
 
@@ -121,7 +121,7 @@ def test_dumped_build_flags_reflect_auto_grf_retry():
                 args_path = os.path.join(root, "args_data.json")
                 with open(args_path) as args_file:
                     args_data = json.load(args_file)
-                if args_data.get("spv_name") == "auto_grf_kernel.spv":
+                if args_data.get("binary_name") == "auto_grf_kernel.spv":
                     dump_dir = root
                     break
 
@@ -177,7 +177,7 @@ def test_native_binary_dump_and_execution():
                 args_path = os.path.join(root, "args_data.json")
                 with open(args_path) as args_file:
                     args_data = json.load(args_file)
-                if args_data.get("spv_name") == "native_binary_kernel.zebin":
+                if args_data.get("binary_name") == "native_binary_kernel.zebin":
                     dump_dir = root
                     break
 
@@ -234,7 +234,7 @@ def test_native_binary_dump_reflects_auto_grf_retry():
                 args_path = os.path.join(root, "args_data.json")
                 with open(args_path) as args_file:
                     args_data = json.load(args_file)
-                if args_data.get("spv_name") == "native_binary_auto_grf_kernel.zebin":
+                if args_data.get("binary_name") == "native_binary_auto_grf_kernel.zebin":
                     dump_dir = root
                     break
 

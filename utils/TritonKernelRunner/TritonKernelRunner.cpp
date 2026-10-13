@@ -41,7 +41,7 @@ void write_tensor(const std::string &filename, torch::Tensor &tensor) {
   outs.write(output_bytes.data(), output_bytes.size());
 }
 
-auto read_spirv(const std::string &filename) {
+auto read_binary(const std::string &filename) {
   return read_file_as_bytes(filename);
 }
 
@@ -63,7 +63,7 @@ struct KernelArguments {
   int shared_memory;
   std::string kernel_name;
   std::string build_flags;
-  std::string spv_name;
+  std::string binary_name;
   bool is_native_binary;
   ordered_json jsonData;
   std::vector<char *> dev_buffers;
@@ -100,8 +100,8 @@ struct KernelArguments {
     threads_per_warp = jsonData.at("threads_per_warp");
     kernel_name = jsonData.at("kernel_name");
     build_flags = jsonData.at("build_flags");
-    spv_name =
-        spirv_dump_dir + "/" + jsonData.at("spv_name").get<std::string>();
+    binary_name =
+        spirv_dump_dir + "/" + jsonData.at("binary_name").get<std::string>();
     // Absent in dumps predating native-binary support; those are always
     // SPIR-V, so default to that rather than requiring the key.
     is_native_binary = jsonData.value("is_native_binary", false);
@@ -491,12 +491,12 @@ int main(int argc, char **argv) {
                                   cliopts.spirv_dump_dir);
 
     // read kernel binary (SPIR-V, or native zebin for an AOT kernel)
-    auto spirv = read_spirv(tritonArgDict.spv_name);
-    std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
+    auto binary = read_binary(tritonArgDict.binary_name);
+    std::cout << "Read " << binary.size() << " byte kernel." << std::endl;
 
     auto [kernel_bundle, kernel, n_regs, n_spills] =
         loadBinary(tritonArgDict.kernel_name, tritonArgDict.build_flags,
-                   reinterpret_cast<uint8_t *>(spirv.data()), spirv.size(), 0,
+                   reinterpret_cast<uint8_t *>(binary.data()), binary.size(), 0,
                    !tritonArgDict.is_native_binary);
 
     // TODO: missing number of registers
