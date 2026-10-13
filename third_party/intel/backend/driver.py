@@ -612,12 +612,6 @@ def serialize_args(args, constants, signature, dir_path):
         args_dict['threads_per_warp'] = arg.threads_per_warp
         args_dict['shared_memory'] = arg.shared
         args_dict['kernel_name'] = arg.name
-        # `generate_native_code` selects the cached binary's actual extension
-        # (`"zebin"` from `make_zebin`, else the default `"spv"`) -- see
-        # `CompiledKernel.__init__`'s `binary_ext` lookup. TritonKernelRunner needs
-        # both the right file to read and `is_native_binary` to know which
-        # Level Zero module format (`ZE_MODULE_FORMAT_NATIVE` vs
-        # `_IL_SPIRV`) to load it with.
         is_native_binary = bool(getattr(arg, "generate_native_code", False))
         binary_ext = "zebin" if is_native_binary else "spv"
         args_dict['binary_name'] = f"{arg.name}.{binary_ext}"
