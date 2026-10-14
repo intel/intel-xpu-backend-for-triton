@@ -613,7 +613,8 @@ SymbolicBoundsProver::normalizeImpl(Value v, QueryContext ctx,
   MemoKey key{v.getAsOpaquePointer(),
               ctx.loop ? ctx.loop.getOperation() : nullptr, placement};
   auto it = memo.find(key);
-  if (it != memo.end()) {
+  if (it != memo.end() &&
+      (!it->second.exhausted || depth >= it->second.depth)) {
     const MemoEntry &e = it->second;
     // A hit must reproduce everything the computation would have contributed,
     // not just the form: obligations the caller has to discharge, the budget
@@ -639,7 +640,8 @@ SymbolicBoundsProver::normalizeImpl(Value v, QueryContext ctx,
   e.obligations.assign(obligations.begin() + mark, obligations.end());
   e.exhausted = exhausted;
   e.height = deepest - depth;
-  memo.try_emplace(key, std::move(e));
+  e.depth = depth;
+  memo.insert_or_assign(key, std::move(e));
 
   exhausted = savedExhausted || exhausted;
   deepest = std::max(savedDeepest, deepest);

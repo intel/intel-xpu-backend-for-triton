@@ -306,12 +306,16 @@ private:
   /// `height` is the deepest recursion below the value. A hit re-appends the
   /// obligations and re-sets the flag, and a hit at depth `d` is exhausted
   /// when `d + height > kMaxDepth`: a subtree normalized near the root must
-  /// not bypass the depth cap when it is reused below a deep chain.
+  /// not bypass the depth cap when it is reused below a deep chain. An
+  /// exhausted entry is reused only at `depth` or deeper, where it would be
+  /// exhausted again; reached from higher up, the subtree may fit under the
+  /// cap, so it is normalized again.
   struct MemoEntry {
     AffineForm af;
     SmallVector<Obligation, 4> obligations;
     bool exhausted = false;
     unsigned height = 0;
+    unsigned depth = 0;
   };
   std::map<MemoKey, MemoEntry> memo;
   /// The deepest `depth` reached since the enclosing memo miss began, which is

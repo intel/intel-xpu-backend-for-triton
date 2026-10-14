@@ -205,6 +205,27 @@ TEST_F(SymbolicBoundsTest, MemoHitRespectsDepthBudget) {
   EXPECT_EQ(verdict(get("deep")), "Unknown"); // memo hit on v10 at depth 10
 }
 
+TEST_F(SymbolicBoundsTest, MemoDoesNotReuseACutOffResultHigherUp) {
+  // The same chain queried deep first. `deep` reaches v10 at depth 10, where
+  // its subtree is cut off by the cap; `near` reaches v10 at depth 0, where it
+  // fits, and must not reuse the cut-off result. `%c1` is first reached past
+  // the cap too, so an unrelated query on it must still decide.
+  std::string ir = "tt.func @f(%a: i8) {\n  %c1 = arith.constant 1 : i32\n"
+                   "  %v0 = arith.extsi %a : i8 to i32\n";
+  for (int i = 1; i <= 20; ++i)
+    ir += "  %v" + std::to_string(i) + " = arith.addi %v" +
+          std::to_string(i - 1) + ", %c1 : i32\n";
+  ir += "  %near = arith.cmpi slt, %v10, %v0 : i32 loc(\"near\")\n"
+        "  %deep = arith.cmpi slt, %v20, %v0 : i32 loc(\"deep\")\n"
+        "  %w = arith.addi %v0, %c1 : i32\n"
+        "  %other = arith.cmpi slt, %w, %v0 : i32 loc(\"other\")\n  "
+        "tt.return\n}\n";
+  parse(ir);
+  EXPECT_EQ(verdict(get("deep")), "Unknown");
+  EXPECT_EQ(verdict(get("near")), "Refuted");
+  EXPECT_EQ(verdict(get("other")), "Refuted"); // v0 + 1 < v0 never holds
+}
+
 TEST_F(SymbolicBoundsTest, NormalizationRules) {
   // One case per remaining normalization rule.
   parse(R"(
