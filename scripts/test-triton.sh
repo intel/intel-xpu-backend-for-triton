@@ -1240,8 +1240,6 @@ run_vllm_mrv2_tests() {
   # test_hybrid_chunked_prefill.py is end-to-end (loads a model) and is the only
   # test reaching the MRv2 rope/mrope position and spec-decode bookkeeping kernels.
   # It runs its engine in-process and leaves device memory allocated, so keep it last.
-  # test_mamba_hybrid_model_state.py imports Qwen3.5, which needs torchvision (installed
-  # for this job).
   VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_mrv2 \
     run_pytest_command -vvv \
       tests/v1/worker/test_gpu_model_runner.py \
@@ -1259,7 +1257,6 @@ run_vllm_mrv2_tests() {
       tests/v1/worker/test_kv_block_zeroer.py \
       tests/v1/worker/test_prompt_embeds_state.py \
       tests/v1/test_outputs.py \
-      tests/v1/worker/test_mamba_hybrid_model_state.py \
       tests/models/language/pooling/test_classification.py::test_bert_model_runner_v2 \
       tests/entrypoints/openai/chat_completion/test_logprob_token_ids.py \
       tests/watermarking/test_watermarking.py \
@@ -1370,7 +1367,8 @@ run_vllm_mamba_tests() {
       tests/kernels/mamba/test_mamba_mixer2.py \
       tests/kernels/mamba/test_ssu_dispatch.py \
       tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py \
-      tests/v1/worker/test_mamba_utils.py
+      tests/v1/worker/test_mamba_utils.py \
+      tests/v1/worker/test_mamba_hybrid_model_state.py
 }
 
 
