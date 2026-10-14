@@ -442,7 +442,7 @@ def get_benchmark(
         if transpose_b:
             torch_b = torch.transpose(torch_b, -2, -1)
 
-        # bf16 x bf16 -> fp32 is a fused oneDNN path, but torch.matmul has no out_dtype, so use mm/bmm.
+        # bf16 x bf16 -> fp32 natively in oneDNN; torch.matmul has no out_dtype, so use mm/bmm.
         torch_mm = torch.bmm if torch_a.dim() == 3 else torch.mm
 
         if provider == 'onednn':
@@ -466,7 +466,6 @@ def get_benchmark(
                 transpose_a=transpose_a,
                 transpose_b=transpose_b,
             )
-            # `out_dtype` keeps the fp32 accumulator; `matmul(...).to(fp32)` would round it to bf16 first.
             torch_fn = lambda: torch_mm(torch_a, torch_b, out_dtype=torch.float32)
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
             _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
