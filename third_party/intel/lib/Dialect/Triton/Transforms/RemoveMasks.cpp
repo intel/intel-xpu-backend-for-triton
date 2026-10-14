@@ -271,8 +271,9 @@ private:
     return MaskClassification::Unknown;
   }
 
-  // Check whether a value is the loop induction variable or a loop iter_arg
-  // that is equivalent to the IV (same init as lower bound, same step).
+  // Check whether a value is the loop induction variable or one of the loop's
+  // iter_args that is equivalent to the IV (init == lower bound, yield == self
+  // + step).
   std::optional<ConstantIntRanges> getIVEquivalentRange(scf::ForOp &forOp,
                                                         Value val) const {
     std::optional<ConstantIntRanges> ivRange =
@@ -283,9 +284,12 @@ private:
     if (val == forOp.getSingleInductionVar())
       return ivRange;
 
-    // Check if val resolved (via getFinalValue) to the loop's lower bound
-    // constant, meaning it was an iter_arg with that init. Verify there
-    // exists an iter_arg with init == lb and yield == self + step.
+    // `getFinalValue` stops at an iter_arg the loop updates, so `val` is the
+    // argument itself; validate that argument's own init and update.
+    auto iterArg = dyn_cast<BlockArgument>(val);
+    if (!iterArg || !llvm::is_contained(forOp.getRegionIterArgs(), iterArg))
+      return std::nullopt;
+
     OpFoldResult lbOFR = *forOp.getSingleLowerBound();
     OpFoldResult stepOFR = *forOp.getSingleStep();
 
@@ -319,33 +323,25 @@ private:
       return false;
     };
 
-    if (!matchesInt(val, *lbConst))
+    if (!matchesInt(forOp.getTiedLoopInit(iterArg)->get(), *lbConst))
       return std::nullopt;
 
-    // Verify there exists an iter_arg with init == lb, yield == self + step.
-    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-    for (unsigned i = 0, e = forOp.getNumRegionIterArgs(); i < e; ++i) {
-      Value initArg = forOp.getInitArgs()[i];
-      if (!matchesInt(initArg, *lbConst))
-        continue;
+    auto yieldAdd = forOp.getTiedLoopYieldedValue(iterArg)
+                        ->get()
+                        .getDefiningOp<arith::AddIOp>();
+    if (!yieldAdd)
+      return std::nullopt;
 
-      Value yieldVal = yieldOp.getOperand(i);
-      auto yieldAdd = yieldVal.getDefiningOp<arith::AddIOp>();
-      if (!yieldAdd)
-        continue;
+    bool lhsIsIterArg = (yieldAdd.getLhs() == iterArg);
+    bool rhsIsIterArg = (yieldAdd.getRhs() == iterArg);
+    if (!lhsIsIterArg && !rhsIsIterArg)
+      return std::nullopt;
 
-      BlockArgument iterArg = forOp.getRegionIterArg(i);
-      bool lhsIsIterArg = (yieldAdd.getLhs() == iterArg);
-      bool rhsIsIterArg = (yieldAdd.getRhs() == iterArg);
-      if (!lhsIsIterArg && !rhsIsIterArg)
-        continue;
+    Value stepOperand = lhsIsIterArg ? yieldAdd.getRhs() : yieldAdd.getLhs();
+    if (!matchesInt(stepOperand, *stepConst))
+      return std::nullopt;
 
-      Value stepOperand = lhsIsIterArg ? yieldAdd.getRhs() : yieldAdd.getLhs();
-      if (matchesInt(stepOperand, *stepConst))
-        return ivRange;
-    }
-
-    return std::nullopt;
+    return ivRange;
   }
 
   // Classify a single `arith.cmpi` mask against the loop IV range.

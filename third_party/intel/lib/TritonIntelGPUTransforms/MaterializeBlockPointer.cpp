@@ -71,16 +71,16 @@ static bool isDescriptorAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo,
 // Check a descriptor's load/store-time index in the stride-one dimension.
 // Unlike isDescriptorAligned (base pointer / pitch), an unknown divisibility
 // must refuse here: make_tensor_descriptor makes no alignment promise about the
-// indices, so there is no contract to fall back on. ttgi::isDivisible alone is
-// unsound because tt::intel::getFinalValue resolves an scf.for iteration
-// argument to its init operand and never sees the yielded update, so an index
-// initialized to zero and advanced by an odd step is proved from the zero and
-// an odd offsetX reaches the 2D block message (issue #7990). Requiring the
-// dataflow analysis - which trusts tt.divisibility hints - to agree closes that
-// hole; being a conjunction it can only refuse more, never admit an index that
-// is rejected today. ttgi::isDivisible is kept rather than replaced because it
-// also refuses a nested-loop induction variable that the analysis would admit,
-// so dropping it would widen the gate; it is not kept for soundness.
+// indices, so there is no contract to fall back on. ttgi::isDivisible alone was
+// once unsound because tt::intel::getFinalValue resolved an scf.for iteration
+// argument to its init operand without looking at the yielded update, so an
+// index initialized to zero and advanced by an odd step was proved from the
+// zero and an odd offsetX reached the 2D block message (issue #7990).
+// getFinalValue now stops at such an argument, and the dataflow analysis -
+// which trusts tt.divisibility hints - must still agree; being a conjunction it
+// can only refuse more. ttgi::isDivisible is kept rather than replaced because
+// it also refuses a nested-loop induction variable that the analysis would
+// admit, so dropping it would widen the gate; it is not kept for soundness.
 static bool
 isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
                          unsigned divisor) {
@@ -1062,11 +1062,6 @@ private:
 
     // Analyze the shape of the stride one dimension to ensure it satisfies HW
     // constraints.
-    // NOTE: this still proves the extent through getFinalValue and so carries
-    // the same init-only hole as the index check below did, for a descriptor
-    // rebuilt in a loop with a loop-carried extent, and only at element widths
-    // under 32 bits where the divisor exceeds 1. No in-tree kernel writes that
-    // shape, so it is left out of scope here rather than widened into this fix.
     Value baseWidth = tt::intel::getFinalValue((*shape)[strideOneDimVal]);
     unsigned divisor = llvm::divideCeil(32u, elementWidth);
     if (!ttgi::isDivisible(baseWidth, divisor)) {
