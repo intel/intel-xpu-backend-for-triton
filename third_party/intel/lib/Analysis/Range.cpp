@@ -242,8 +242,14 @@ void IntegerRangeAnalysis::setToEntryState(
   IntegerValueRange range = IntegerValueRange::getMaxRange(anchor);
   Block *entryBlock = &funcOp->getBody().front();
 
+  // The entry state holds at every use, so an assume constrains it only if it
+  // is certain to execute once the value exists: from just after the defining
+  // op for an op result, else from the start of the function.
+  Operation *from = &entryBlock->front();
+  if (Operation *def = anchor.getDefiningOp(); def && def->getNextNode())
+    from = def->getNextNode();
   if (std::optional<ConstantIntRanges> assumedRange =
-          getAssumedRange(anchor, &entryBlock->front(), assumptions, domInfo))
+          getAssumedRange(anchor, from, assumptions, domInfo))
     range = *assumedRange;
 
   if (!lattice->getValue().isUninitialized() && !range.isUninitialized()) {

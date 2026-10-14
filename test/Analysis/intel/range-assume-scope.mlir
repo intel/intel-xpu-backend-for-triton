@@ -5,7 +5,9 @@
 // COM: the applicability helper must reject, plus a control that must keep
 // COM: working. `%use` is an identity add, so its range is exactly the range
 // COM: the analysis holds for `%n`: the full range means the fact did not
-// COM: reach the use, `[64, ...]` means it did.
+// COM: reach the use, `[64, ...]` means it did. The last sections pin the
+// COM: range of a value the analysis does not model, which holds for every
+// COM: use, so the assume must be certain to execute once the value exists.
 
 // COM: The comparison is hoisted above the scf.if; the assume stays inside.
 // CHECK-LABEL: tt.func @assume_scoped_to_branch
@@ -132,6 +134,106 @@ module {
     // expected-remark@+1 {{unsigned : [64, 2147483647] signed : [64, 2147483647]}}
     %use = arith.addi %n, %c0 : i32
     %cmp = arith.cmpi sge, %n, %c64 : i32
+    llvm.intr.assume %cmp : i1
+    tt.return
+  }
+}
+
+// -----
+
+// COM: tt.assert aborts when its condition is false.
+// CHECK-LABEL: tt.func @assert_blocks_backward_assume
+module {
+  tt.func @assert_blocks_backward_assume(%n: i32, %ok: i1) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %use = arith.addi %n, %c0 : i32
+    tt.assert %ok, "must hold" : i1
+    %cmp = arith.cmpi sge, %n, %c64 : i32
+    llvm.intr.assume %cmp : i1
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A call may not return.
+// CHECK-LABEL: tt.func @call_blocks_backward_assume
+module {
+  tt.func private @callee() {
+    tt.return
+  }
+  tt.func @call_blocks_backward_assume(%n: i32) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %use = arith.addi %n, %c0 : i32
+    tt.call @callee() : () -> ()
+    %cmp = arith.cmpi sge, %n, %c64 : i32
+    llvm.intr.assume %cmp : i1
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A loop before `%v` is defined has finished whenever `%v` exists, so it
+// COM: does not stop the assume from applying to `%v`.
+// CHECK-LABEL: tt.func @loop_before_definition_does_not_block
+module {
+  tt.func @loop_before_definition_does_not_block(%p: !tt.ptr<i32>, %ub: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c64 = arith.constant 64 : i32
+    scf.for %i = %c0 to %ub step %c1 : i32 {
+      scf.yield
+    }
+    // expected-remark@+1 {{unsigned : [64, 2147483647] signed : [64, 2147483647]}}
+    %v = tt.load %p : !tt.ptr<i32>
+    %cmp = arith.cmpi sge, %v, %c64 : i32
+    llvm.intr.assume %cmp : i1
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A loop between `%v` and the assume, which uses `%v` and may not
+// COM: terminate, still stops the assume from applying.
+// CHECK-LABEL: tt.func @loop_after_definition_blocks
+module {
+  tt.func @loop_after_definition_blocks(%p: !tt.ptr<i32>, %q: !tt.ptr<i32>, %ub: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c64 = arith.constant 64 : i32
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %v = tt.load %p : !tt.ptr<i32>
+    scf.for %i = %c0 to %ub step %c1 : i32 {
+      tt.store %q, %v : !tt.ptr<i32>
+      scf.yield
+    }
+    %cmp = arith.cmpi sge, %v, %c64 : i32
+    llvm.intr.assume %cmp : i1
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The region of a tt.reduce has run by the time its result exists.
+// CHECK-LABEL: tt.func @reduce_result_takes_assume
+module {
+  tt.func @reduce_result_takes_assume() {
+    %c64 = arith.constant 64 : i32
+    %x = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32>
+    // expected-remark@+1 {{unsigned : [64, 2147483647] signed : [64, 2147483647]}}
+    %r = "tt.reduce"(%x) <{axis = 0 : i32}> ({
+    ^bb0(%a: i32, %b: i32):
+      %s = arith.maxsi %a, %b : i32
+      tt.reduce.return %s : i32
+    }) : (tensor<4xi32>) -> i32
+    %cmp = arith.cmpi sge, %r, %c64 : i32
     llvm.intr.assume %cmp : i1
     tt.return
   }
