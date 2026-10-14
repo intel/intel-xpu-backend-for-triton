@@ -199,7 +199,7 @@ def TritonIntelGPUHoistLayoutConversions
 
   let options = [
     Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
-           "GRF mode (default, 128, 256, or auto)">,
+           "GRF mode ('default', 'auto', '128', '256' or '512')">,
     Option<"corridorOpCap", "corridor-op-cap", "unsigned", /*default*/"512",
            "Maximum number of operations between a hoist's insertion point and "
            "the conversion's old position that the whole-function peak "
@@ -470,6 +470,9 @@ def TritonIntelGPUReduceVariableLiveness
   let options = [
     Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
            "GRF mode ('default', 'auto', '128', '256' or '512')">,
+    Option<"disableInLoopSink", "disable-in-loop-sink", "bool",
+           /*default*/"false",
+           "Leave dot operand loads already inside a loop in place">,
   ];
 }
 

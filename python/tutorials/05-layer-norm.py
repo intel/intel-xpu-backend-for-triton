@@ -49,10 +49,6 @@ def is_xpu():
     return triton.runtime.driver.active.get_current_target().backend == "xpu"
 
 
-def is_xpu_cri():
-    return triton.runtime.driver.active.get_current_target().arch['arch'] == "cri"
-
-
 @triton.jit
 def _layer_norm_fwd_fused(
     X,  # pointer to the input
@@ -255,14 +251,12 @@ class LayerNorm(torch.autograd.Function):
         if N > BLOCK_SIZE:
             raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
         # heuristics for number of warps
-        num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
-        if is_xpu():
-            num_warps = 32
+        num_warps = min(max(BLOCK_SIZE // 256, 1), 32 if is_xpu() else 8)
         # enqueue kernel
         _layer_norm_fwd_fused[(M, )](  #
             x_arg, y, weight, bias, mean, rstd,  #
             x_arg.stride(0), N, eps,  #
-            BLOCK_SIZE=BLOCK_SIZE, num_warps=num_warps, num_ctas=1, grf_mode='256')
+            BLOCK_SIZE=BLOCK_SIZE, num_warps=num_warps, num_ctas=1, grf_mode='128')
         ctx.save_for_backward(x, weight, bias, mean, rstd)
         ctx.BLOCK_SIZE = BLOCK_SIZE
         ctx.num_warps = num_warps
@@ -294,13 +288,13 @@ class LayerNorm(torch.autograd.Function):
             x_arg.stride(0), N,  #
             BLOCK_SIZE_N=ctx.BLOCK_SIZE,  #
             GROUP_SIZE_M=GROUP_SIZE_M,  #
-            num_warps=ctx.num_warps, grf_mode='256')
+            num_warps=ctx.num_warps, grf_mode='128')
         grid = lambda meta: (triton.cdiv(N, meta['BLOCK_SIZE_N']), )
         # accumulate partial sums in separate kernel
         _layer_norm_bwd_dwdb[grid](
             _dw, _db, dw, db, min(GROUP_SIZE_M, M), N,  #
             BLOCK_SIZE_M=32,  #
-            BLOCK_SIZE_N=128, num_warps=ctx.num_warps, num_ctas=1, grf_mode='256')
+            BLOCK_SIZE_N=128, num_warps=ctx.num_warps, num_ctas=1, grf_mode='128')
         return dx, None, dw, db, None
 
 
@@ -384,7 +378,7 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device=DE
 
 # For XPU device the reference result is always computed using fp32/fp64,
 # so we don't try to compare result for fp16.
-N = 32 if is_xpu_cri() else 8192
+N = 8192
 test_layer_norm(1151, N, torch.float32)
 bench_layer_norm.run(print_data=True)
 

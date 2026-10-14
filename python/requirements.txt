@@ -1,6 +1,6 @@
 setuptools>=70.2.0
 build
 cmake>=3.20,<4.0
-ninja<1.13.0
+ninja>=1.11.1,!=1.13.0
 nanobind==2.10.2
 lit

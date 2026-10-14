@@ -2207,14 +2207,7 @@ def test_ws_join_publishes_to_async_peer(FENCE_LOCATION, device, monkeypatch):
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
                    run=False)
-@pytest.mark.parametrize("FENCE", [False, True], ids=["missing", "present"])
-def test_ws_join_publishes_proxy_generation(FENCE, device, run_wrapper, monkeypatch):
-    if not FENCE and run_wrapper:
-        result = run_in_process(test_ws_join_publishes_proxy_generation, (FENCE, device, False, monkeypatch))
-        assert_expected_cuda_failure(result.exc)
-        assert "Async shared-memory access is missing fence_async_shared" in result.driver_stderr_output
-        return
-
+def test_ws_join_read_read_no_proxy_fence(device, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
@@ -2230,18 +2223,18 @@ def test_ws_join_publishes_proxy_generation(FENCE, device, run_wrapper, monkeypa
         ttgl.store(sink + offsets_m * XBLOCK + offsets_n, smem.load(layout))
 
     @gluon.jit
-    def kernel(output_desc, sink, FENCE: ttgl.constexpr):
+    def kernel(output_desc, sink):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, XBLOCK], [32, 1], [4, 1], [0, 1])
         shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 16, rank=2)
         initial = ttgl.full([XBLOCK, XBLOCK], 42, ttgl.float16, layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], shared_layout, initial)
+        # Fence the initialization write before either reader accesses smem.
         hopper.fence_async_shared()
         ttgl.warp_specialize([
             (default_partition, ()),
             (reader, (smem, sink, layout)),
         ], [4], [32])
-        if FENCE:
-            hopper.fence_async_shared()
+        # TMA store reads smem. A preceding generic read needs no intervening fence.
         tma.async_store(output_desc, [0, 0], smem)
         tma.store_wait(0)
 
@@ -2249,8 +2242,9 @@ def test_ws_join_publishes_proxy_generation(FENCE, device, run_wrapper, monkeypa
     sink = torch.empty_like(output)
     shared_layout = ttgl.NVMMASharedLayout(128, 16, rank=2)
     output_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(output, [XBLOCK.value, XBLOCK.value], shared_layout)
-    kernel[(1, )](output_desc, sink, FENCE=FENCE, num_warps=4)
+    kernel[(1, )](output_desc, sink, num_warps=4)
     torch.testing.assert_close(output, torch.full_like(output, 42))
+    torch.testing.assert_close(sink, output)
 
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
@@ -4208,10 +4202,16 @@ def test_payload_reuse_requires_barrier_invalidation(ACCESS, INVALIDATE, device,
             ampere.async_copy.async_load(smem, source + offsets)
             ampere.async_copy.commit_group()
             ampere.async_copy.wait_group(0)
+        elif ACCESS == "convert-layout":
+            dst_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0]))
+            dst_offsets = ttgl.arange(0, XBLOCK, layout=dst_layout)
+            values = ttgl.load(source + offsets)
+            ttgl.store(output + dst_offsets, ttgl.convert_layout(values, dst_layout))
         else:
             values = ttgl.full([XBLOCK], 7, ttgl.int32, layout)
             smem = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK], smem_layout, values)
-        ttgl.store(output + offsets, smem.load(layout))
+        if ACCESS != "convert-layout":
+            ttgl.store(output + offsets, smem.load(layout))
 
     source = torch.arange(XBLOCK.value, device=device, dtype=torch.int32)
     output = torch.empty_like(source)

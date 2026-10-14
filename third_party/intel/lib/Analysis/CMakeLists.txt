@@ -20,4 +20,5 @@ add_triton_library(TritonIntelAnalysis
 
     LINK_LIBS PUBLIC
     TritonIR
+    TritonIntelGPUIR
 )

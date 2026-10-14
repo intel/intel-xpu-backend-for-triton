@@ -36,4 +36,9 @@ struct ExpandSubByteVectorBitcastPass
   static StringRef name() { return "ExpandSubByteVectorBitcastPass"; }
 };
 
+struct LegalizeI1VectorMemoryPass : PassInfoMixin<LegalizeI1VectorMemoryPass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static StringRef name() { return "LegalizeI1VectorMemoryPass"; }
+};
+
 } // namespace llvm

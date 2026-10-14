@@ -1,6 +1,15 @@
 ---
 description: 'Testing conventions: MLIR lit tests, Python pytest, C++ gtest, skip lists, test runner scripts, CI configuration'
-applyTo: '**/test/**/*.mlir, **/test/**/*.py, **/unittest/**/*.cpp, **/scripts/test-triton.sh, **/scripts/pytest-utils.sh, **/scripts/skiplist/**/*.txt, **/conftest.py, **/_internal_testing.py, **/CMakeLists.txt'
+paths:
+  - "**/test/**/*.mlir"
+  - "**/test/**/*.py"
+  - "**/unittest/**/*.cpp"
+  - "**/scripts/test-triton.sh"
+  - "**/scripts/pytest-utils.sh"
+  - "**/scripts/skiplist/**/*.txt"
+  - "**/conftest.py"
+  - "**/_internal_testing.py"
+  - "**/CMakeLists.txt"
 ---
 
 # Testing Conventions
@@ -110,7 +119,7 @@ For testing multiple code paths in one file:
 make test-lit
 
 # Via build directory
-cd build/cmake.linux-x86_64-cpython-3.10 && lit -v test/
+cd build/cmake.linux-x86_64-cpython-3.11 && lit -v test/
 
 # Specific directory
 lit test/TritonIntelGPU/
@@ -233,7 +242,7 @@ For tests needing IR construction, add `OpBuilder`/`Block` members. For shared c
 make test-cpp
 
 # Via CTest
-cd build/cmake.linux-x86_64-cpython-3.10 && ctest .
+cd build/cmake.linux-x86_64-cpython-3.11 && ctest .
 
 # Run specific test binary
 build/.../unittest/TestDPASLinearLayout

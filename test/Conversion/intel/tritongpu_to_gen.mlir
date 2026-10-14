@@ -1642,7 +1642,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z32__spirv_GroupNonUniformLogicalOriib
+    // CHECK: @_Z33__spirv_GroupNonUniformLogicalXoriib
     %10 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i1, %arg5: i1):
       %48 = arith.addi %arg4, %arg5 : i1
@@ -1656,7 +1656,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       tt.reduce.return %48 : i1
     }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
 
-    // CHECK: @_Z32__spirv_GroupNonUniformLogicalOriib
+    // CHECK: @_Z33__spirv_GroupNonUniformLogicalAndiib
     %12 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i1, %arg5: i1):
       %48 = arith.maxsi %arg4, %arg5 : i1
@@ -1670,7 +1670,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       tt.reduce.return %48 : i1
     }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
 
-    // CHECK: @_Z33__spirv_GroupNonUniformLogicalAndiib
+    // CHECK: @_Z32__spirv_GroupNonUniformLogicalOriib
     %14 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i1, %arg5: i1):
       %48 = arith.minsi %arg4, %arg5 : i1
@@ -2067,6 +2067,67 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_bfloat16_conversion} {
+  tt.func @bf16_to_f16_rtne(%arg0: tensor<256xbf16, #blocked>) {
+    // CHECK-LABEL: @bf16_to_f16_rtne
+    // CHECK: llvm.bitcast %{{.*}} : bf16 to i16
+    // CHECK-NEXT: llvm.call spir_funccc @_Z27__spirv_ConvertBF16ToFINTELs(%{{.*}}) {{.*}} : (i16) -> f32
+    // CHECK-NEXT: llvm.intr.experimental.constrained.fptrunc %{{.*}} tonearest ignore : f32 to f16
+    %a = tt.fp_to_fp %arg0, rounding = rtne : tensor<256xbf16, #blocked> -> tensor<256xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @bf16_to_f16_rtz_no_bf16_conversion(%arg0: tensor<256xbf16, #blocked>) {
+    // CHECK-LABEL: @bf16_to_f16_rtz_no_bf16_conversion
+    // CHECK-NOT: llvm.fpext
+    // CHECK: llvm.bitcast %{{.*}} : bf16 to i16
+    // CHECK-NEXT: llvm.zext %{{.*}} : i16 to i32
+    // CHECK: llvm.shl
+    // CHECK-NEXT: llvm.bitcast %{{.*}} : i32 to f32
+    // CHECK-NEXT: llvm.intr.experimental.constrained.fptrunc %{{.*}} towardzero ignore : f32 to f16
+    %a = tt.fp_to_fp %arg0, rounding = rtz : tensor<256xbf16, #blocked> -> tensor<256xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_bfloat16_conversion} {
+  tt.func @f16_to_bf16_rtne(%arg0: tensor<256xf16, #blocked>) {
+    // CHECK-LABEL: @f16_to_bf16_rtne
+    // CHECK: llvm.fpext %{{.*}} : f16 to f32
+    // CHECK-NEXT: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf(%{{.*}}) {{.*}} : (f32) -> i16
+    // CHECK-NEXT: llvm.bitcast %{{.*}} : i16 to bf16
+    %a = tt.fp_to_fp %arg0, rounding = rtne : tensor<256xf16, #blocked> -> tensor<256xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @f16_to_bf16_rtz_no_bf16_conversion(%arg0: tensor<256xf16, #blocked>) {
+    // CHECK-LABEL: @f16_to_bf16_rtz_no_bf16_conversion
+    // CHECK: llvm.fpext %{{.*}} : f16 to f32
+    // CHECK: llvm.bitcast %{{.*}} : f32 to i32
+    // CHECK: llvm.lshr
+    // CHECK-NEXT: llvm.trunc %{{.*}} : i32 to i16
+    // CHECK-NEXT: llvm.bitcast %{{.*}} : i16 to bf16
+    %a = tt.fp_to_fp %arg0, rounding = rtz : tensor<256xf16, #blocked> -> tensor<256xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @fp8_const(%arg0: tensor<1024xi1, #blocked>, %arg1: tensor<1024xf8E4M3FNUZ, #blocked>) {
@@ -2075,6 +2136,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: llvm.mlir.constant(0.000000e+00 : f8E4M3FNUZ) : i8
     %cst = arith.constant dense<0.000000e+00> : tensor<1024xf8E4M3FNUZ, #blocked>
     %a = arith.select %arg0, %arg1, %cst : tensor<1024xi1, #blocked>, tensor<1024xf8E4M3FNUZ, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_bfloat16_conversion} {
+  // CHECK-LABEL: @clampf_bf16_no_bf16_arithmetic
+  tt.func @clampf_bf16_no_bf16_arithmetic(%x: tensor<128xbf16, #blocked>, %lo: tensor<128xbf16, #blocked>, %hi: tensor<128xbf16, #blocked>) {
+    // CHECK-NOT: llvm.intr.maxnum{{.*}}bf16
+    // CHECK: [[MAX:%.*]] = llvm.intr.maxnum(%{{.*}}, %{{.*}}) : (f32, f32) -> f32
+    // CHECK: [[MIN:%.*]] = llvm.intr.minnum([[MAX]], %{{.*}}) : (f32, f32) -> f32
+    // CHECK: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf([[MIN]])
+    %0 = tt.clampf %x, %lo, %hi, propagateNan = none : tensor<128xbf16, #blocked>
+    // CHECK: [[MAX:%.*]] = llvm.intr.maxnum(%{{.*}}, %{{.*}}) : (f32, f32) -> f32
+    // CHECK: [[MIN:%.*]] = llvm.intr.minnum([[MAX]], %{{.*}}) : (f32, f32) -> f32
+    // CHECK: [[ISNAN:%.*]] = llvm.fcmp "une"
+    // CHECK: [[RES:%.*]] = llvm.select [[ISNAN]], %{{.*}}, [[MIN]] : i1, f32
+    // CHECK: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf([[RES]])
+    %1 = tt.clampf %x, %lo, %hi, propagateNan = all : tensor<128xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_bfloat16_arithmetic} {
+  // CHECK-LABEL: @clampf_bf16_bf16_arithmetic
+  tt.func @clampf_bf16_bf16_arithmetic(%x: tensor<128xbf16, #blocked>, %lo: tensor<128xbf16, #blocked>, %hi: tensor<128xbf16, #blocked>) {
+    // CHECK: [[MAX:%.*]] = llvm.intr.maxnum(%{{.*}}, %{{.*}}) : (bf16, bf16) -> bf16
+    // CHECK: llvm.intr.minnum([[MAX]], %{{.*}}) : (bf16, bf16) -> bf16
+    %0 = tt.clampf %x, %lo, %hi, propagateNan = none : tensor<128xbf16, #blocked>
     tt.return
   }
 }

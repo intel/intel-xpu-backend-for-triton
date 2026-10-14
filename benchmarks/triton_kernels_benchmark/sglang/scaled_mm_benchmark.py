@@ -10,7 +10,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 
-from sglang.kernels.ops.quantization.fp8_kernel import triton_scaled_mm
+from sglang.kernels.ops.gemm.fp8_kernel import triton_scaled_mm
 
 
 def is_weak_contiguous(x: torch.Tensor):

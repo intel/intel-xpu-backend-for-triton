@@ -74,8 +74,8 @@ public:
           numEls *= vecTy.getNumElements();
         }
         auto baseName = elemTy == f16_ty
-                            ? "__builtin_spirv_ConvertE2M1ToFP16INTEL"
-                            : "__builtin_spirv_ConvertE2M1ToBF16INTEL";
+                            ? "__builtin_spirv_ConvertE2M1ToFP16EXT"
+                            : "__builtin_spirv_ConvertE2M1ToBF16EXT";
         auto i4Ty = rw.builder->getI4Type();
         v = rw.bitcast(v, VectorType::get({numEls}, i4Ty));
         return convertWithFunctionCall(rw, v, baseName, i4Ty, elemTy);

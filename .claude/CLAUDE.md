@@ -9,6 +9,30 @@ Intel XPU Backend for Triton — out-of-tree Intel GPU backend for the Triton co
 
 > **IMPORTANT**: Before build/debug/dependency/project-structure work, read `.claude/reference/build-and-debug-reference.md`.
 
+## Do not guess — read the reference first
+
+Four files under `.claude/reference/` hold the authoritative tables. Before answering a question or
+writing code in these areas, read the matching file; never guess values, names, or signatures:
+
+- `hardware-reference.md` — Xe architecture and generation specs, GRF sizes and modes, per-arch
+  subgroup sizes, target arch strings, device-capability→module-attribute mappings, DPAS hardware
+  constants and engine types, cache sizes.
+- `operations-reference.md` — TritonGEN op semantics: memory-space constants, DPAS/BDPAS precision
+  and element-type rules, verifier constraints, register alignment, scale types, 2D block I/O
+  parameters and tile limits, sub-group and predicated I/O, format conversion, enum values.
+- `build-and-debug-reference.md` — encoding attribute parameters (DpasEncodingAttr,
+  Subgroup2DBlockEncodingAttr, DotOperandEncodingAttr), opsPerChannel, type-packing rules,
+  cache-control decoration mappings.
+- `passes-and-testing-reference.md` — pass inventory, CLI flags and prefixes, TableGen locations,
+  namespace aliases, pattern base-class signatures, utility APIs, pass-to-capability gating
+  attributes, test directory layout, lit env vars, FileCheck directives, test module attributes,
+  `is_xpu_*` architecture detection, numerical tolerances, pytest fixtures, and test-runner and
+  Makefile targets.
+
+The detail behind each topic lives in the path-scoped rules under `.claude/rules/`, which load only
+when the `Read` tool opens a matching file — not via `Bash` (`cat`/`sed`/`grep`), `Grep`, or
+`Write`. `Read` a file before changing it through `Bash`.
+
 ## Architecture
 
 Intel-specific code lives in `third_party/intel/` and is symlinked into the Python module tree:

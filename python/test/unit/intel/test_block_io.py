@@ -122,6 +122,8 @@ layouts = [
 @pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
 @pytest.mark.parametrize("layout", layouts)
 @pytest.mark.parametrize("transpose", [True, False])
+@pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
+                   reason="Block loads not supported on this architecture")
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
 def test_block_io(M, N, dtype_str, layout, transpose, device, tmp_path: pathlib.Path):
     assert os.environ["TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"] == "1"
@@ -218,6 +220,8 @@ def test_block_io(M, N, dtype_str, layout, transpose, device, tmp_path: pathlib.
 @pytest.mark.parametrize("shape", [[64, 64, 32], [128, 128, 16], [4, 64, 64, 32]])
 @pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
 @pytest.mark.parametrize("block_io", ["row_major", "column_major"])
+@pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
+                   reason="Block loads not supported on this architecture")
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
 def test_block_io_nd(shape, dtype_str, block_io, device, tmp_path: pathlib.Path):
     rank = len(shape)
@@ -334,11 +338,10 @@ def expected_oob_tile(src, pad_value):
 
 
 @pytest.mark.parametrize("padding", ["zero", "nan"])
+@pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
+                   reason="Block loads not supported on this architecture")
 @pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
 def test_block_io_nd_out_of_bounds(padding, device, tmp_path: pathlib.Path):
-    if not triton.runtime.driver.active.get_current_target().arch['has_2d_block_io']:
-        pytest.skip("Target has no 2D block IO support, so the block load path is never taken")
-
     ty, torch_dtype = "f16", torch.float16
     rank = len(OOB_TILE_SHAPE)
     layout = BlockedLayout([1, 1, 1], [1, 2, 16], [8, 4, 1], [2, 1, 0])

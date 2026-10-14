@@ -23,6 +23,7 @@ add_triton_library(TritonIntelGPUToLLVM
     MemoryOpToLLVM.cpp
     PrintOpToLLVM.cpp
     ReduceOpToLLVM.cpp
+    ScanOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     SPIRVTargetInfo.cpp
     TargetInfo.cpp

@@ -171,7 +171,7 @@ def benchmark(M, N, K, provider):
     b = torch.rand((K, N), device=DEVICE, dtype=torch.bfloat16)
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(a, b))
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.mm(a, b, out_dtype=torch.float32))
     elif provider == 'triton':
         c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)

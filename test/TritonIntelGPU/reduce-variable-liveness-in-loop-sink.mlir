@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=disable-in-loop-sink=true | FileCheck %s --check-prefix=NOSINK
 
 // COM: A dot operand that is *already loaded inside* the loop body, but consumed by
 // COM: a dot much later in that same body, keeps its whole per-lane footprint live
@@ -11,6 +12,9 @@
 // COM: Every peak quoted below is what
 // COM: `triton-opt <this file> -split-input-file --test-register-pressure` reports
 // COM: for the `scf.for` body block, not a hand-derived figure.
+// COM:
+// COM: With disable-in-loop-sink=true (NOSINK) no load moves, not even those that
+// COM: pass every check below.
 
 // COM: Peak 1472 B/lane, above the 1024 B/lane budget, and the candidate's own live
 // COM: range covers that peak: the load of the second dot's B operand sinks from the
@@ -22,14 +26,18 @@
 module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @sink_late_used_operand(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     // CHECK-LABEL: tt.func @sink_late_used_operand
+    // NOSINK-LABEL: tt.func @sink_late_used_operand
     %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas>
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
     %c0_i64 = arith.constant 0 : i64
     // CHECK: %[[DESC_A:.*]] = tt.make_tensor_descriptor %arg0
+    // NOSINK: %[[DESC_A:.*]] = tt.make_tensor_descriptor %arg0
     %desc_a = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <bf16>, <64x64xbf16>
     %desc_b = tt.make_tensor_descriptor %arg1, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <bf16>, <64x64xbf16>
     %desc_c = tt.make_tensor_descriptor %arg2, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f32>, <64x64xf32>
+    // NOSINK:      scf.for
+    // NOSINK-NEXT: tt.descriptor_load %[[DESC_A]]
     // CHECK: scf.for
     // COM: The candidate must no longer be the first load in the body...
     // CHECK-NOT: tt.descriptor_load %[[DESC_A]]
@@ -115,14 +123,18 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.thr
 module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @sink_past_shared_memory_write(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     // CHECK-LABEL: tt.func @sink_past_shared_memory_write
+    // NOSINK-LABEL: tt.func @sink_past_shared_memory_write
     %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas2>
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
     %c0_i64 = arith.constant 0 : i64
     // CHECK: %[[DESC_A:.*]] = tt.make_tensor_descriptor %arg0
+    // NOSINK: %[[DESC_A:.*]] = tt.make_tensor_descriptor %arg0
     %desc_a = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <bf16>, <64x64xbf16>
     %desc_b = tt.make_tensor_descriptor %arg1, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <bf16>, <64x64xbf16>
     %desc_c = tt.make_tensor_descriptor %arg2, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f32>, <64x64xf32>
+    // NOSINK:      scf.for
+    // NOSINK-NEXT: tt.descriptor_load %[[DESC_A]]
     // CHECK:     scf.for
     // CHECK-NOT: tt.descriptor_load %[[DESC_A]]
     // CHECK:     ttg.local_alloc

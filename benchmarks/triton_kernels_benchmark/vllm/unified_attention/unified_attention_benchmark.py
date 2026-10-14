@@ -15,9 +15,11 @@ from itertools import product
 from typing import Optional
 
 import torch
+import triton
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark.benchmark_testing import BENCHMARKING_CONFIG
+from triton_kernels_benchmark.benchmark_testing import BENCHMARKING_CONFIG, DEVICE
+from triton_kernels_benchmark.vllm import import_xpu_only
 
 # This supports both current upstream and pinned version
 try:
@@ -28,7 +30,9 @@ except ImportError as e:
     raise ImportError(
         "Could not import unified_attention from vLLM. Please ensure vLLM is installed and accessible.") from e
 from vllm.platforms import current_platform
-from vllm_xpu_kernels.flash_attn_interface import flash_attn_varlen_func as sycl_tla_attention
+
+# SYCL-TLA attention ships with vllm-xpu-kernels, so it is only available on XPU.
+sycl_tla_attention = import_xpu_only('vllm_xpu_kernels.flash_attn_interface.flash_attn_varlen_func')
 
 float8_info = torch.finfo(current_platform.fp8_dtype())
 
@@ -278,7 +282,7 @@ def get_unified_attention_benchmark(
         # Skip triton providers if interpreter is used because if fails
         del supported_providers['triton']
 
-    if not is_fp8:
+    if DEVICE == 'xpu' and not is_fp8:
         supported_providers['sycl-tla'] = 'sycl-tla'
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -308,7 +312,7 @@ def get_unified_attention_benchmark(
         n_warmup = 100
         quantiles = [0.5, 0.0, 1.0]
 
-        torch.set_default_device("xpu")
+        torch.set_default_device(DEVICE)
 
         num_seqs = len(seq_lens)
         query_lens = [x[0] for x in seq_lens]
@@ -371,6 +375,20 @@ def get_unified_attention_benchmark(
                 k_descale = torch.rand(scale_shape, dtype=torch.float32)
                 v_descale = torch.rand(scale_shape, dtype=torch.float32)
 
+            # Set the 3D kernel specific arguments to allow the kernel wrapper
+            # to optionally select the 3D kernel based on its analysis.
+            seq_threshold_3D = 32
+            num_par_softmax_segments = 16
+            softmax_segm_output = torch.empty(seq_threshold_3D,
+                                              maybe_quantized_query.shape[1], num_par_softmax_segments,
+                                              triton.next_power_of_2(head_size), dtype=torch.float32,
+                                              device=maybe_quantized_query.device)
+            softmax_segm_max = torch.empty(seq_threshold_3D, maybe_quantized_query.shape[1], num_par_softmax_segments,
+                                           dtype=torch.float32, device=maybe_quantized_query.device)
+            softmax_segm_expsum = torch.empty(seq_threshold_3D, maybe_quantized_query.shape[1],
+                                              num_par_softmax_segments, dtype=torch.float32,
+                                              device=maybe_quantized_query.device)
+
             def triton_fn():
                 unified_attention(
                     q=maybe_quantized_query,
@@ -389,6 +407,11 @@ def get_unified_attention_benchmark(
                     q_descale=q_descale,
                     k_descale=k_descale,
                     v_descale=v_descale,
+                    seq_threshold_3D=seq_threshold_3D,
+                    num_par_softmax_segments=num_par_softmax_segments,
+                    softmax_segm_output=softmax_segm_output,
+                    softmax_segm_max=softmax_segm_max,
+                    softmax_segm_expsum=softmax_segm_expsum,
                     use_td=is_td_patched,
                 )
                 return output
