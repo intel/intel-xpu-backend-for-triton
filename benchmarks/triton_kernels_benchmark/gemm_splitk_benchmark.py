@@ -35,8 +35,7 @@ def get_autotune_configs() -> List[triton.Config]:
 @triton.autotune(
     configs=get_autotune_configs(),
     key=['M', 'N', 'K'],
-    # With SPLIT_K > 1 the write-back is an `atomic_add`, so every launch needs C zeroed rather than
-    # holding whatever the previous config left.
+    # With SPLIT_K > 1 the write-back is an `atomic_add`, so every launch needs C zeroed.
     reset_to_zero=['C'],
 )
 @triton.jit

@@ -121,9 +121,8 @@ BLOCK_SIZES = get_autotune_configs()[0].kwargs
 @triton.autotune(
     configs=get_autotune_configs(),
     key=['M', 'N', 'K'],
-    # `mac_loop` accumulates into c with `atomic_add`, so every launch needs c zeroed rather than
-    # holding whatever the previous config left. `first_wave` runs before `full_tiles`, so zeroing
-    # the whole buffer here is safe.
+    # `mac_loop` accumulates into c with `atomic_add`, so every launch needs c zeroed.
+    # `first_wave` runs before `full_tiles`, so zeroing the whole buffer here is safe.
     reset_to_zero=['c_ptr'],
 )
 @triton.jit
