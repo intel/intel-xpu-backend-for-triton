@@ -627,6 +627,18 @@ def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl
         z = gl.minimum(x, y)
     elif OP == "max":
         z = gl.maximum(x, y)
+    elif OP == "eq":
+        z = x == y
+    elif OP == "ne":
+        z = x != y
+    elif OP == "lt":
+        z = x < y
+    elif OP == "le":
+        z = x <= y
+    elif OP == "gt":
+        z = x > y
+    elif OP == "ge":
+        z = x >= y
     elif OP == "truediv":
         z = x / y
     elif OP == "fdiv":
@@ -809,6 +821,52 @@ def test_binops_payload_semantics(device, op, expected_fn, fresh_knobs):
     out_np = out.cpu().numpy().astype(np.int32, copy=False)
     exp_np = expected_fn(x.cpu().numpy().astype(np.int32, copy=False), y.cpu().numpy().astype(np.int32, copy=False))
     _assert_payload_equal(out_np, exp_np)
+
+
+@pytest.mark.parametrize(
+    "op,expected_fn",
+    [
+        ("eq", np.equal),
+        ("ne", np.not_equal),
+        ("lt", np.less),
+        ("le", np.less_equal),
+        ("gt", np.greater),
+        ("ge", np.greater_equal),
+    ],
+)
+def test_cmpf_payload_semantics(device, op, expected_fn, fresh_knobs):
+    _require_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+
+    g = torch.Generator(device=device)
+    g.manual_seed(0)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    # Include equal pairs, which are unlikely with random inputs.
+    y[::2] = x[::2]
+
+    # Equal NaNs, opposite signed zeros, and finite values with reversed payload order.
+    x_bits = np.array([0x7FA12345, 0x80000000, 0x3F000000, 0xBF000000], dtype=np.uint32).view(np.int32)
+    y_bits = np.array([0x7FA12345, 0x00000000, 0x3F800000, 0xBF800000], dtype=np.uint32).view(np.int32)
+    x[:len(x_bits)] = torch.from_numpy(x_bits).to(device=device)
+    y[:len(y_bits)] = torch.from_numpy(y_bits).to(device=device)
+    out = torch.empty((n_elements, ), dtype=torch.bool, device=device)
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    yw = triton.TensorWrapper(y, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _binop_kernel[grid](xw, yw, out, n_elements, OP=op, BLOCK=BLOCK, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    out_np = out.cpu().numpy()
+    x_payload = _u32_to_i32(_mix_f32_bits_to_payload_u32(x.cpu().numpy()))
+    y_payload = _u32_to_i32(_mix_f32_bits_to_payload_u32(y.cpu().numpy()))
+    exp_np = expected_fn(x_payload, y_payload)
+    np.testing.assert_array_equal(out_np, exp_np)
 
 
 @pytest.mark.parametrize("propagate_nan", [False, True], ids=["none", "all"])
@@ -1059,6 +1117,36 @@ def test_unary_math_identity(device, op, fresh_knobs):
     else:
         exp_bits = _expected_unary_tag_i32(x_bits, op)
     _assert_payload_equal(out, exp_bits)
+
+
+def test_absf_payload_semantics(device, fresh_knobs):
+    _require_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+    rs = np.random.RandomState(0)
+    x_bits = rs.randint(-(2**31), 2**31 - 1, n_elements, dtype=np.int32)
+    # Zero, a subnormal, one, infinity, and signaling/quiet NaNs.
+    edges = np.array([0, 1, 0x3F800000, 0x7F800000, 0x7F800001, 0x7FC00001], dtype=np.uint32)
+    # Set the sign bit to add negative versions. The int32 view preserves the bits.
+    x_bits[:2 * len(edges)] = np.concatenate([edges, edges | np.uint32(0x80000000)]).view(np.int32)
+    x = torch.tensor(x_bits, dtype=torch.int32, device=device)
+    out = torch.empty_like(x)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _unary_math_kernel[grid](
+        triton.TensorWrapper(x, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        n_elements,
+        OP="abs",
+        BLOCK=BLOCK,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+
+    # Clear only the sign bit, including for NaNs and negative zero.
+    _assert_payload_equal(out, x_bits & np.int32(0x7FFFFFFF))
 
 
 def test_exp2_payload_f64(device, fresh_knobs):
