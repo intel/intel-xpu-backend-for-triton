@@ -332,7 +332,9 @@ def benchmark(B, M, N, K, dtype, provider):
         d = rand((B, M, N), res_dtype)
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(a, b) + d)
+        # bf16 x bf16 -> fp32 natively in oneDNN; torch.matmul has no out_dtype, so use mm/bmm.
+        mm = torch.bmm if a.dim() == 3 else torch.mm
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: mm(a, b, out_dtype=res_dtype) + d)
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:

@@ -443,7 +443,9 @@ def get_benchmark(
             torch_b = torch.transpose(torch_b, -2, -1)
 
         if provider == 'onednn':
-            _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b))
+            # bf16 x bf16 -> fp32 natively in oneDNN; torch.matmul has no out_dtype, so use mm/bmm.
+            mm = torch.bmm if torch_a.dim() == 3 else torch.mm
+            _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: mm(torch_a, torch_b, out_dtype=torch.float32))
 
         elif provider == 'triton':
             if len(a.shape) != len(b.shape):
