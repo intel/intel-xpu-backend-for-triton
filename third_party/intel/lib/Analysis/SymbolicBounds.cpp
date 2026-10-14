@@ -2,19 +2,20 @@
 //
 // The prover declared in SymbolicBounds.h: the symbol order, overflow-checked
 // affine-form arithmetic, normalization, bounding over a loop's iteration
-// space, obligation discharge and guard materialization.
+// space, assume facts, the candidate search and guard materialization.
 //
 //===----------------------------------------------------------------------===//
 
 #include "intel/include/Analysis/SymbolicBounds.h"
 #include "intel/include/Analysis/Range.h"
-#include "mlir/IR/Dominance.h"
+#include "intel/include/Utils/Utility.h"
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include <numeric>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -31,16 +32,34 @@ bool Symbol::operator<(const Symbol &o) const {
     return kind_ < o.kind_;
   if (order_ != o.order_)
     return order_ < o.order_;
+  if (divisor_ != o.divisor_)
+    return divisor_ < o.divisor_;
   return placement_ < o.placement_;
 }
 
 /// The prover reasons in int64_t. An integer type wider than 64 bits cannot be
-/// represented there, so it is unsupported: the prover answers Unknown for it
-/// and reads no range of it. `index` counts as 64 bits.
+/// represented there, so it is unsupported: the prover answers Unknown for it,
+/// reads no range of it and builds no fact from it. `index` counts as 64 bits.
 static bool isSupportedWidth(Type t) {
   if (auto intTy = dyn_cast<IntegerType>(getElementTypeOrSelf(t)))
     return intTy.getWidth() <= 64;
   return true;
+}
+
+/// The loop's step when it is a constant that fits int64_t. A loop over an
+/// unsupported induction variable has none: the prover does not reason about
+/// it, which also keeps its wide bounds out of any comparison.
+static std::optional<int64_t> constantStep(scf::ForOp loop) {
+  if (!isSupportedWidth(loop.getInductionVar().getType()))
+    return std::nullopt;
+  if (std::optional<APInt> step = loop.getConstantStep())
+    return step->trySExtValue();
+  return std::nullopt;
+}
+
+/// The query context one level out, for normalizing a loop's own bounds.
+static QueryContext parentContext(scf::ForOp loop) {
+  return {loop.getOperation(), loop->getParentOfType<scf::ForOp>()};
 }
 
 //===----------------------------------------------------------------------===//
@@ -163,9 +182,16 @@ static std::string symbolName(const Symbol &s) {
 
 static std::string renderSymbol(const Symbol &s) {
   std::string name = symbolName(s);
-  if (s.kind() == SymbolKind::Opaque)
+  switch (s.kind()) {
+  case SymbolKind::Opaque:
     return "opaque(" + name + ")";
-  return name;
+  case SymbolKind::Quotient:
+    return "(" + name + " div " + std::to_string(s.divisor()) + ")";
+  case SymbolKind::TripCount:
+    return "tripcount(" + name + ")";
+  default:
+    return name;
+  }
 }
 
 std::string toString(const AffineForm &af) {
@@ -207,7 +233,8 @@ static bool symbolicPartWithin2Pow63(const AffineForm &e) {
   if (e.numTerms() != 1)
     return false;
   auto &[sym, k] = e.terms().front();
-  if ((k != 1 && k != -1) || !sym.value())
+  if ((k != 1 && k != -1) || !sym.value() ||
+      sym.kind() == SymbolKind::TripCount)
     return false;
   Type t = getElementTypeOrSelf(sym.value());
   if (auto intTy = dyn_cast<IntegerType>(t))
@@ -216,26 +243,61 @@ static bool symbolicPartWithin2Pow63(const AffineForm &e) {
 }
 
 /// Normalizes a condition so its subject is as simple as the goal allows: the
-/// constant term folds into the bound, and a single-symbol condition is
-/// divided by |k| with the bound rounded inward, swapping AtLeast/AtMost when
-/// k < 0. Written `-N >= 1` the checked negation of
+/// constant term folds into the bound, and a single-symbol ordered condition
+/// is divided by |k| with the bound rounded inward, swapping AtLeast/AtMost
+/// when k < 0. Written `-N >= 1` the checked negation of
 /// INT64_MIN overflows and rejects a launch the condition admits; written
 /// `N <= -1` it does not.
+///
+/// `DivisibleBy` is not divided that way: with g = gcd(k, c), `k*s + c0`
+/// divisible by `c` is satisfiable exactly when g divides c0, and is
+/// expressible as `DivisibleBy(s, c/g)` only when the residue is zero, i.e.
+/// when (c/g) divides (c0/g). A nonzero residue is a congruence BoundGoal
+/// cannot state, so the condition is left alone for the caller to decline.
 bool normalizeCondition(BoundCondition &cond) {
   if (cond.expr.overflowed())
     return false;
 
-  // Fold the constant into the bound, keeping the rendering of a bare
-  // `s >= 0` unchanged.
+  if (cond.goal == BoundGoal::DivisibleBy) {
+    if (cond.c <= 0)
+      return false; // not a divisor `materialize` can test
+    if (cond.expr.numTerms() != 1)
+      return cond.expr.constant() == 0; // nothing to normalize
+    auto &[sym, k] = cond.expr.terms().front();
+    int64_t c0 = cond.expr.constant();
+    uint64_t magK =
+        k < 0 ? 0 - static_cast<uint64_t>(k) : static_cast<uint64_t>(k);
+    int64_t g =
+        static_cast<int64_t>(std::gcd(magK, static_cast<uint64_t>(cond.c)));
+    if (g == 0 || c0 % g != 0)
+      return false; // unsatisfiable
+    int64_t divisor = cond.c / g;
+    if (divisor != 0 && (c0 / g) % divisor != 0)
+      return false; // nonzero residue: not expressible as DivisibleBy
+    cond.expr = AffineForm::symbol(sym);
+    cond.c = divisor;
+    return true;
+  }
+
+  // Ordered goals: fold the constant into the bound, keeping the rendering of
+  // a bare `s >= 0` unchanged.
   int64_t c0 = cond.expr.constant();
-  int64_t bound = cond.goal == BoundGoal::NonNegative ? 0 : cond.c;
+  int64_t bound;
+  switch (cond.goal) {
+  case BoundGoal::NonNegative:
+    bound = 0;
+    break;
+  default:
+    bound = cond.c;
+    break;
+  }
   bool atMost = cond.goal == BoundGoal::AtMost;
   if (c0 != 0) {
     int64_t folded;
     if (llvm::SubOverflow(bound, c0, folded)) {
       // Folding would need a bound beyond i64. A symbolic part within 2^63
       // cannot pass it, so `(x - 1) <= INT64_MAX` is vacuous; a compound one
-      // such as `a - b` can.
+      // such as `ub - lb` can.
       bool vacuous =
           (atMost ? c0 < 0 : c0 > 0) && symbolicPartWithin2Pow63(cond.expr);
       if (!vacuous)
@@ -415,6 +477,7 @@ Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
   OpBuilder::InsertionGuard insertionGuard(builder);
   builder.setInsertionPoint(before);
   Location loc = before->getLoc();
+  Type i64 = builder.getI64Type();
   DominanceInfo domInfo(before->getParentOp());
   Value result;
 
@@ -428,6 +491,8 @@ Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
                           return !v || isSupportedWidth(v.getType());
                         }) &&
            "condition subject wider than 64 bits");
+    assert((cond.goal != BoundGoal::DivisibleBy || cond.c > 0) &&
+           "DivisibleBy needs a positive divisor");
     bool checked = !guardFitsPlainI64(cond.expr);
     GuardBuilder gb(builder, loc, checked);
 
@@ -439,7 +504,13 @@ Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
              "condition subject must be a scalar");
       assert(domInfo.properlyDominates(v, before) &&
              "condition subject must dominate the guard");
-      sum = gb.add(sum, gb.mul(gb.extend(v), k));
+      Value term = gb.extend(v);
+      // A quotient's runtime value is the division itself, which equals the
+      // narrow quotient because the divisor is positive.
+      if (sym.kind() == SymbolKind::Quotient)
+        term = arith::DivSIOp::create(builder, loc, term,
+                                      gb.constant(sym.divisor()));
+      sum = gb.add(sum, gb.mul(term, k));
     }
 
     Value cmp;
@@ -456,6 +527,15 @@ Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
       cmp = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sle, sum,
                                   gb.constant(cond.c));
       break;
+    case BoundGoal::DivisibleBy: {
+      // remsi against a positive divisor is a valid divisibility test for
+      // negative values too, and cannot overflow.
+      Value rem =
+          arith::RemSIOp::create(builder, loc, sum, gb.constant(cond.c));
+      cmp = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq, rem,
+                                  gb.constant(0));
+      break;
+    }
     }
     Value guard = gb.finish(cmp);
     result =
@@ -470,6 +550,8 @@ std::string toString(const BoundCondition &c) {
   switch (c.goal) {
   case BoundGoal::NonNegative:
     return expr + " >= 0";
+  case BoundGoal::DivisibleBy:
+    return expr + " divisible by " + std::to_string(c.c);
   case BoundGoal::AtLeast:
     return expr + " >= " + std::to_string(c.c);
   case BoundGoal::AtMost:
@@ -514,12 +596,15 @@ static Operation *numberingScope(Operation *root) {
 }
 
 SymbolicBoundsProver::SymbolicBoundsProver(const DataFlowSolver &solver,
+                                           DominanceInfo &domInfo,
                                            Operation *root)
-    : solver(solver), scope(numberingScope(root)) {
+    : solver(solver), domInfo(domInfo), root(root),
+      scope(numberingScope(root)) {
   // Number every value in pre-order, from 1, so the symbol sort is total over
   // distinct values and reproducible across processes: a block's arguments as
   // the walk enters it, then each operation's results in result order. 0 is
   // reserved as "unassigned", which AffineForm::symbol asserts against.
+  buildFactIndex();
   unsigned next = 1;
   scope->walk<WalkOrder::PreOrder>([&](Operation *op) {
     for (Region &region : op->getRegions())
@@ -530,9 +615,21 @@ SymbolicBoundsProver::SymbolicBoundsProver(const DataFlowSolver &solver,
       valueOrder.try_emplace(result, next++);
   });
   nextOrder = next;
+
+  Operation *top = root;
+  while (Operation *parent = top->getParentOp())
+    top = parent;
+  bool hasCall = false;
+  top->walk([&](CallOpInterface) {
+    hasCall = true;
+    return WalkResult::interrupt();
+  });
+  if (hasCall)
+    interproceduralScope = top;
 }
 
 Symbol SymbolicBoundsProver::symbolFor(SymbolKind kind, Value v,
+                                       int64_t divisor,
                                        AxisPlacement placement) const {
   // A value outside the numbering - outside `scope`, or created after
   // construction - takes the next unused order the first time it is seen and
@@ -541,13 +638,13 @@ Symbol SymbolicBoundsProver::symbolFor(SymbolKind kind, Value v,
   auto [it, inserted] = valueOrder.try_emplace(v, nextOrder);
   if (inserted)
     ++nextOrder;
-  return Symbol(kind, v, std::move(placement), it->second);
+  return Symbol(kind, v, divisor, std::move(placement), it->second);
 }
 
 AffineForm SymbolicBoundsProver::opaque(Value v,
                                         AxisPlacement placement) const {
   return AffineForm::symbol(
-      symbolFor(SymbolKind::Opaque, v, std::move(placement)));
+      symbolFor(SymbolKind::Opaque, v, 0, std::move(placement)));
 }
 
 void SymbolicBoundsProver::recordWrap(
@@ -598,11 +695,66 @@ AxisPlacement SymbolicBoundsProver::identityPlacement(Value v) {
   return identity;
 }
 
-AffineForm SymbolicBoundsProver::leafForBlockArg(BlockArgument arg,
-                                                 AxisPlacement placement) {
+AffineForm
+SymbolicBoundsProver::leafForBlockArg(BlockArgument arg, QueryContext ctx,
+                                      SmallVectorImpl<Obligation> &obligations,
+                                      AxisPlacement placement) {
   Operation *owner = arg.getOwner()->getParentOp();
   if (isa_and_nonnull<tt::FuncOp>(owner))
-    return AffineForm::symbol(symbolFor(SymbolKind::KernelArg, arg, placement));
+    return AffineForm::symbol(
+        symbolFor(SymbolKind::KernelArg, arg, 0, placement));
+
+  if (ctx.loop && owner == ctx.loop.getOperation()) {
+    // The induction variable itself.
+    if (std::optional<Value> iv = ctx.loop.getSingleInductionVar();
+        iv && *iv == arg)
+      return AffineForm::symbol(
+          symbolFor(SymbolKind::LoopIV, arg, 0, placement));
+
+    // An iter_arg equal to the IV up to an offset: init `lb + c`, yield
+    // `arg + step`. Any other iter_arg is opaque.
+    std::optional<int64_t> step = constantStep(ctx.loop);
+    unsigned numIVs = ctx.loop.getNumInductionVars();
+    if (step && arg.getArgNumber() >= numIVs) {
+      unsigned idx = arg.getArgNumber() - numIVs;
+      Value init = ctx.loop.getInitArgs()[idx];
+      Value yielded = cast<scf::YieldOp>(ctx.loop.getBody()->getTerminator())
+                          .getOperand(idx);
+      bool yieldIsStep = false;
+      if (auto add = yielded.getDefiningOp<arith::AddIOp>()) {
+        std::optional<int64_t> k = getFoldedConstant(add.getRhs());
+        Value other = add.getLhs();
+        if (!k) {
+          k = getFoldedConstant(add.getLhs());
+          other = add.getRhs();
+        }
+        yieldIsStep = k && *k == *step && other == arg;
+      }
+      if (yieldIsStep) {
+        QueryContext outer = parentContext(ctx.loop);
+        SmallVector<Obligation, 4> initObls;
+        AffineForm initAF = normalizeImpl(init, outer, initObls, {}, 0);
+        AffineForm lb =
+            normalizeImpl(ctx.loop.getLowerBound(), outer, initObls, {}, 0);
+        AffineForm off = initAF.sub(lb);
+        if (!off.overflowed() && off.isConstant()) {
+          AffineForm res =
+              AffineForm::symbol(symbolFor(SymbolKind::LoopIV,
+                                           *ctx.loop.getSingleInductionVar()))
+                  .add(AffineForm::constant(off.constant()));
+          // The yield's addi is never traversed and the scf.for contract
+          // covers only the IV, so `IV + c` carries its own wrap obligation:
+          // for i8 lb=120 ub=124 step=1 an iter_arg started at lb + 5
+          // wraps to -128 while the IV exit value 124 is representable.
+          unsigned width = bitWidth(arg.getType());
+          obligations.push_back(
+              {Obligation::Wrap, ctx.loop.getOperation(), res, width});
+          llvm::append_range(obligations, initObls);
+          return res;
+        }
+      }
+    }
+  }
   return opaque(arg, placement);
 }
 
@@ -668,7 +820,7 @@ AffineForm SymbolicBoundsProver::normalizeUncached(
 
   Operation *def = v.getDefiningOp();
   if (!def)
-    return leafForBlockArg(cast<BlockArgument>(v), placement);
+    return leafForBlockArg(cast<BlockArgument>(v), ctx, obligations, placement);
 
   // Obligations of an expression the prover stops looking through are dropped.
   size_t mark = obligations.size();
@@ -728,9 +880,77 @@ AffineForm SymbolicBoundsProver::normalizeUncached(
         obligations.push_back({Obligation::NonNegative, def, in, 0});
         return in;
       })
+      .Case<arith::DivSIOp>([&](auto op) {
+        std::optional<int64_t> c = getFoldedConstant(op.getRhs());
+        if (!c || *c <= 0)
+          return giveUp(); // non-positive or non-constant divisor
+        Value dividend = op.getLhs();
+        Symbol q = symbolFor(SymbolKind::Quotient, dividend, *c, placement);
+        // The cdiv shape `(X + c - 1) / c` has sharper facts, stated about X.
+        QuotientInfo info;
+        SmallVector<Obligation, 4> divObls;
+        Value factSubject = dividend;
+        if (auto add = dividend.getDefiningOp<arith::AddIOp>()) {
+          std::optional<int64_t> k = getFoldedConstant(add.getRhs());
+          Value other = add.getLhs();
+          if (!k) {
+            k = getFoldedConstant(add.getLhs());
+            other = add.getRhs();
+          }
+          if (k && *k == *c - 1) {
+            info.isCdiv = true;
+            factSubject = other;
+          }
+        }
+        // Normalized into a scratch vector: the dividend's arithmetic is an
+        // obligation only for a proof that actually uses these facts. Placed
+        // like q, or the dividends of q[:, None] and q[None, :] would cancel.
+        info.dividend =
+            normalizeImpl(factSubject, ctx, divObls, placement, depth + 1);
+        if (info.dividend.overflowed())
+          return giveUp();
+        info.dividendObligations.assign(divObls.begin(), divObls.end());
+        if (info.isCdiv) {
+          // The `X + c - 1` addition is not traversed - the facts are stated
+          // about X - so its wrap obligation would otherwise be lost, yet
+          // using those facts depends on it.
+          AffineForm num = info.dividend.add(AffineForm::constant(*c - 1));
+          if (num.overflowed())
+            return giveUp();
+          info.dividendObligations.push_back({Obligation::Wrap,
+                                              dividend.getDefiningOp(), num,
+                                              bitWidth(dividend.getType())});
+        }
+        quotientInfo[{q, varyingLoopKey(dividend)}] = std::move(info);
+        return AffineForm::symbol(q);
+      })
+      .Case<arith::RemSIOp>([&](auto op) {
+        std::optional<int64_t> c = getFoldedConstant(op.getRhs());
+        if (!c || *c <= 0)
+          return giveUp();
+        // X % c == X - c * (X / c), sharing the quotient symbol of the
+        // matching division so that X == c*q + r holds by construction. No
+        // divsi need exist: the symbol's identity and facts use X and c only.
+        Value dividend = op.getLhs();
+        // Placed like q: unplaced, x[:, None] and x[None, :] would cancel.
+        AffineForm x =
+            normalizeImpl(dividend, ctx, obligations, placement, depth + 1);
+        if (x.overflowed())
+          return giveUp();
+        Symbol q = symbolFor(SymbolKind::Quotient, dividend, *c, placement);
+        if (!quotientInfo.count({q, varyingLoopKey(dividend)})) {
+          QuotientInfo info;
+          info.dividend = x;
+          quotientInfo[{q, varyingLoopKey(dividend)}] = std::move(info);
+        }
+        AffineForm res = x.sub(AffineForm::symbol(q).scale(*c));
+        if (res.overflowed())
+          return giveUp();
+        return res;
+      })
       .Case<tt::MakeRangeOp>([&](auto op) {
         return AffineForm::symbol(
-            symbolFor(SymbolKind::Lane, op.getResult(), placement));
+            symbolFor(SymbolKind::Lane, op.getResult(), 0, placement));
       })
       .Case<tt::SplatOp>([&](auto op) {
         // A scalar has the same value in every element, so the placement of
@@ -761,11 +981,11 @@ AffineForm SymbolicBoundsProver::normalizeUncached(
       })
       .Case<tt::GetProgramIdOp>([&](auto op) {
         return AffineForm::symbol(
-            symbolFor(SymbolKind::ProgramId, op.getResult(), placement));
+            symbolFor(SymbolKind::ProgramId, op.getResult(), 0, placement));
       })
       .Case<tt::GetNumProgramsOp>([&](auto op) {
         return AffineForm::symbol(
-            symbolFor(SymbolKind::NumPrograms, op.getResult(), placement));
+            symbolFor(SymbolKind::NumPrograms, op.getResult(), 0, placement));
       })
       // tt.reshape, tt.trans, tt.join and tt.split permute or merge elements;
       // axis tracking through them is not supported.
@@ -780,7 +1000,9 @@ AffineForm SymbolicBoundsProver::normalizeUncached(
 /// to the range analysis, and a symbol with no inferable range is unbounded,
 /// which makes the query `Unknown`.
 std::optional<std::pair<int64_t, int64_t>>
-SymbolicBoundsProver::symbolConstantBounds(const Symbol &sym) const {
+SymbolicBoundsProver::symbolConstantBounds(
+    const Symbol &sym, QueryContext ctx,
+    SmallVectorImpl<Operation *> *assumes) const {
   if (sym.kind() == SymbolKind::Lane) {
     auto rangeOp = cast<tt::MakeRangeOp>(sym.value().getDefiningOp());
     // Signed attribute getters: the generated getStart()/getEnd() return
@@ -790,18 +1012,28 @@ SymbolicBoundsProver::symbolConstantBounds(const Symbol &sym) const {
     int64_t end = rangeOp.getEndAttr().getInt();
     return std::make_pair(start, end - 1);
   }
-  return rangeOf(sym.value());
+  std::optional<std::pair<int64_t, int64_t>> r =
+      rangeOf(sym.value(), ctx, assumes);
+  if (!r)
+    return std::nullopt;
+  // A quotient's value is its dividend. Truncating division by a positive
+  // constant is monotone, so dividing both ends is exact.
+  if (sym.kind() == SymbolKind::Quotient)
+    return std::make_pair(r->first / sym.divisor(), r->second / sym.divisor());
+  return r;
 }
 
 /// Bounds `e` by replacing every symbol with its constant bounds, taking the
 /// low or high end per the sign of the coefficient.
-std::optional<std::pair<int64_t, int64_t>>
-SymbolicBoundsProver::boundConstant(const AffineForm &e) const {
+std::optional<std::pair<int64_t, int64_t>> SymbolicBoundsProver::boundConstant(
+    const AffineForm &e, QueryContext ctx,
+    SmallVectorImpl<Operation *> *assumes) const {
   if (e.overflowed())
     return std::nullopt;
   int64_t lo = e.constant(), hi = e.constant();
   for (auto &[sym, k] : e.terms()) {
-    std::optional<std::pair<int64_t, int64_t>> b = symbolConstantBounds(sym);
+    std::optional<std::pair<int64_t, int64_t>> b =
+        symbolConstantBounds(sym, ctx, assumes);
     if (!b)
       return std::nullopt;
     int64_t t1, t2, l, h;
@@ -820,9 +1052,11 @@ SymbolicBoundsProver::boundConstant(const AffineForm &e) const {
 //===----------------------------------------------------------------------===//
 
 SymbolicBoundsProver::Bounds
-SymbolicBoundsProver::symbolBounds(const Symbol &sym, QueryContext ctx) {
+SymbolicBoundsProver::symbolBounds(const Symbol &sym, QueryContext ctx,
+                                   const CandidateSet &cs) {
   Bounds out;
-  if (sym.kind() == SymbolKind::Lane) {
+  switch (sym.kind()) {
+  case SymbolKind::Lane: {
     auto rangeOp = cast<tt::MakeRangeOp>(sym.value().getDefiningOp());
     // Signed attribute getters: getStart()/getEnd() return uint32_t although
     // the attributes are signed, so [-4, 0) would bound as positive.
@@ -833,13 +1067,57 @@ SymbolicBoundsProver::symbolBounds(const Symbol &sym, QueryContext ctx) {
     out.isVarying = true;
     return out;
   }
+  case SymbolKind::LoopIV: {
+    if (!ctx.loop || sym.value() != *ctx.loop.getSingleInductionVar()) {
+      // An IV of some other loop: bounded from constants if at all.
+      break;
+    }
+    std::optional<int64_t> step = constantStep(ctx.loop);
+    if (!step || *step <= 0) {
+      // Only a constant positive step is supported.
+      out.isVarying = true;
+      out.finite = false;
+      return out;
+    }
+    QueryContext outer = parentContext(ctx.loop);
+    SmallVector<Obligation, 4> boundObls;
+    AffineForm lb =
+        normalizeImpl(ctx.loop.getLowerBound(), outer, boundObls, {}, 0);
+    AffineForm ub =
+        normalizeImpl(ctx.loop.getUpperBound(), outer, boundObls, {}, 0);
+    out.lo = lb;
+    out.hi = cs.exactLoopEnd ? ub.sub(AffineForm::constant(*step))
+                             : ub.sub(AffineForm::constant(1));
+    out.isVarying = true;
+    out.finite = !lb.overflowed() && !ub.overflowed();
+    // The obligations of the bounds' own arithmetic travel with the result:
+    // a signed i8 `ub = n - 1` is 127 for n = -128, not the mathematical -129.
+    llvm::append_range(out.factObligations, boundObls);
+    if (ctx.loop.getUnsignedCmp()) {
+      // The scf.for contract reads the bounds as unsigned; treating them as
+      // signed needs all three preconditions.
+      unsigned width = bitWidth(ctx.loop.getLowerBound().getType());
+      int64_t intMax = APInt::getSignedMaxValue(width).getSExtValue();
+      out.preconditions.push_back(
+          {lb, BoundGoal::NonNegative, 0, ConditionKind::Precondition});
+      out.preconditions.push_back(
+          {ub, BoundGoal::NonNegative, 0, ConditionKind::Precondition});
+      out.preconditions.push_back({ub, BoundGoal::AtMost, intMax - *step + 1,
+                                   ConditionKind::Precondition});
+    }
+    return out;
+  }
+  default:
+    break;
+  }
   // Loop-invariant symbols stay symbolic; a symbol defined
   // inside the loop is bounded from its constant range, or is unbounded.
   if (ctx.loop && sym.value() &&
       ctx.loop->isAncestor(sym.value().getParentBlock()->getParentOp())) {
     out.isVarying = true;
-    if (std::optional<std::pair<int64_t, int64_t>> b =
-            symbolConstantBounds(sym)) {
+    std::optional<std::pair<int64_t, int64_t>> b =
+        symbolConstantBounds(sym, ctx, &out.assumes);
+    if (b) {
       out.lo = AffineForm::constant(b->first);
       out.hi = AffineForm::constant(b->second);
     } else {
@@ -849,13 +1127,17 @@ SymbolicBoundsProver::symbolBounds(const Symbol &sym, QueryContext ctx) {
   return out;
 }
 
-SymbolicBoundsProver::Bounds SymbolicBoundsProver::bound(const AffineForm &e,
-                                                         QueryContext ctx) {
+SymbolicBoundsProver::Bounds
+SymbolicBoundsProver::bound(const AffineForm &e, QueryContext ctx,
+                            const CandidateSet &cs) {
   Bounds out{AffineForm::constant(e.constant()),
              AffineForm::constant(e.constant())};
   for (auto &[sym, k] : e.terms()) {
-    Bounds sb = symbolBounds(sym, ctx); // loop-varying only
+    Bounds sb = symbolBounds(sym, ctx, cs); // loop-varying only
     out.finite &= sb.finite;
+    llvm::append_range(out.preconditions, sb.preconditions);
+    llvm::append_range(out.factObligations, sb.factObligations);
+    llvm::append_range(out.assumes, sb.assumes);
     if (!sb.isVarying) { // keep loop-invariant symbols symbolic
       out.lo = out.lo.add(AffineForm::symbol(sym).scale(k));
       out.hi = out.hi.add(AffineForm::symbol(sym).scale(k));
@@ -871,67 +1153,480 @@ SymbolicBoundsProver::Bounds SymbolicBoundsProver::bound(const AffineForm &e,
   return out;
 }
 
+/// Replaces every quotient term whose coefficient is a multiple of its
+/// divisor with the lower bound the quotient facts give, so the dividend can
+/// cancel against other occurrences of itself - which is how the tutorial-03
+/// K loop's `K - 64*q(K+63, 64)` collapses to a constant. Returns nullopt when
+/// a quotient term cannot be substituted this way; the caller then decides from
+/// constant ranges alone. Appends the facts' preconditions and the dividend's
+/// wrap obligations to `cs`, since using a fact inherits them. `maximize`
+/// substitutes the upper bound instead, which an upper wrap guard needs.
+std::optional<AffineForm>
+SymbolicBoundsProver::substituteQuotients(const AffineForm &e, QueryContext ctx,
+                                          CandidateSet &cs, bool maximize) {
+  AffineForm out = AffineForm::constant(e.constant());
+  bool substituted = false;
+  for (auto &[sym, k] : e.terms()) {
+    if (sym.kind() != SymbolKind::Quotient) {
+      out = out.add(AffineForm::symbol(sym).scale(k));
+      continue;
+    }
+    int64_t c = sym.divisor();
+    if (c <= 0 || k % c != 0) {
+      // Not a multiple of the divisor: the term stays symbolic.
+      out = out.add(AffineForm::symbol(sym).scale(k));
+      continue;
+    }
+    const QuotientInfo *info = findQuotientInfo(sym, ctx);
+    if (!info)
+      return std::nullopt;
+
+    int64_t m = k / c; // k*q == m*(c*q)
+    bool exact = llvm::is_contained(cs.exactCdiv, sym);
+    // The end of c*q that minimizes m*(c*q) - the low end when m > 0 - or
+    // with `maximize` the end that maximizes it.
+    bool highEnd = (m < 0) != maximize;
+    AffineForm bound;
+    if (exact) {
+      // The exact-cdiv candidate: the division is exact, so c*q == X.
+      bound = info->dividend;
+    } else if (info->isCdiv) {
+      // (X + c - 1) / c gives X <= c*q <= X + c - 1.
+      bound = highEnd ? info->dividend.add(AffineForm::constant(c - 1))
+                      : info->dividend;
+    } else {
+      // X - (c - 1) <= c*q <= X.
+      bound = highEnd ? info->dividend
+                      : info->dividend.sub(AffineForm::constant(c - 1));
+    }
+    AffineForm term = bound.scale(m);
+    if (term.overflowed())
+      return std::nullopt;
+    out = out.add(term);
+    substituted = true;
+
+    // The division facts hold only for a non-negative dividend, and using
+    // them inherits the numerator's wrap obligations.
+    BoundCondition nonNeg{info->dividend, BoundGoal::NonNegative, 0,
+                          ConditionKind::Precondition};
+    if (!llvm::is_contained(cs.extra, nonNeg))
+      cs.extra.push_back(nonNeg);
+    for (const Obligation &o : info->dividendObligations)
+      if (!llvm::is_contained(cs.factObligations, o))
+        cs.factObligations.push_back(o);
+  }
+  if (out.overflowed())
+    return std::nullopt;
+  return substituted ? std::optional<AffineForm>(out) : std::nullopt;
+}
+
+const SymbolicBoundsProver::QuotientInfo *
+SymbolicBoundsProver::findQuotientInfo(const Symbol &sym,
+                                       QueryContext ctx) const {
+  // Keyed by (symbol, the loop in which the dividend varies), so the entry is
+  // the same whether the quotient is reached from a loop bound - normalized in
+  // the parent context - or from the residual inside the loop.
+  auto it = quotientInfo.find({sym, varyingLoopKey(sym.value())});
+  return it != quotientInfo.end() ? &it->second : nullptr;
+}
+
+Operation *SymbolicBoundsProver::varyingLoopKey(Value v) {
+  if (!v)
+    return nullptr;
+  Operation *anchor = v.getDefiningOp();
+  if (!anchor)
+    anchor = cast<BlockArgument>(v).getOwner()->getParentOp();
+  if (!anchor)
+    return nullptr;
+  if (auto self = dyn_cast<scf::ForOp>(anchor))
+    return self.getOperation();
+  if (auto loop = anchor->getParentOfType<scf::ForOp>())
+    return loop.getOperation();
+  return nullptr;
+}
+
 bool SymbolicBoundsProver::termSignOk(const Symbol &sym, int64_t k,
-                                      QueryContext ctx) {
-  std::optional<std::pair<int64_t, int64_t>> b = sym.kind() == SymbolKind::Lane
-                                                     ? symbolConstantBounds(sym)
-                                                     : rangeOf(sym.value());
+                                      QueryContext ctx, CandidateSet &cs) {
+  // An applicable assume fact is checked first, and recorded as provenance.
+  if (sym.value() && sym.kind() != SymbolKind::Quotient &&
+      sym.kind() != SymbolKind::TripCount) {
+    for (const Fact &f : factsFor(sym.value())) {
+      if (!ctx.at ||
+          !assumeApplies(cast<LLVM::AssumeOp>(f.assume), ctx.at, domInfo))
+        continue;
+      bool good = k > 0 ? (f.goal == BoundGoal::NonNegative ||
+                           (f.goal == BoundGoal::AtLeast && f.c >= 0))
+                        : (f.goal == BoundGoal::AtMost && f.c <= 0);
+      if (good) {
+        if (!llvm::is_contained(cs.assumes, f.assume))
+          cs.assumes.push_back(f.assume);
+        return true;
+      }
+    }
+  }
+  std::optional<std::pair<int64_t, int64_t>> b =
+      sym.kind() == SymbolKind::Lane ? symbolConstantBounds(sym, ctx, nullptr)
+                                     : rangeOf(sym.value(), ctx, &cs.assumes);
   if (!b)
     return false;
   return k > 0 ? b->first >= 0 : b->second <= 0;
 }
 
 bool SymbolicBoundsProver::decideResidual(const AffineForm &lo, int64_t g,
-                                          QueryContext ctx) {
+                                          QueryContext ctx, CandidateSet &cs) {
   if (lo.overflowed())
     return false;
   if (lo.isConstant())
     return lo.constant() >= g;
+  // Quotient facts first: substituting `c*q` by its bound on the dividend is
+  // what lets the dividend cancel against its other occurrences.
+  if (std::optional<AffineForm> sub =
+          substituteQuotients(lo, ctx, cs, /*maximize=*/false))
+    if (decideResidual(*sub, g, ctx, cs))
+      return true;
   // A term whose sign is safe cannot make the residual smaller, so it is
   // dropped at zero and the constant term alone is compared against `g`.
   for (auto &[sym, k] : lo.terms())
-    if (!termSignOk(sym, k, ctx))
+    if (!termSignOk(sym, k, ctx, cs))
       return false;
   return lo.constant() >= g;
 }
 
-/// The constant range of `v` from the range analysis.
+std::optional<int64_t>
+SymbolicBoundsProver::residualConstant(const AffineForm &d, QueryContext ctx,
+                                       CandidateSet &cs) {
+  Bounds b = bound(d, ctx, cs);
+  if (!b.finite || b.exhausted)
+    return std::nullopt;
+  if (std::optional<std::pair<int64_t, int64_t>> cb =
+          boundConstant(b.lo, ctx, &cs.assumes))
+    return cb->first;
+  return std::nullopt;
+}
+
+void SymbolicBoundsProver::mergePreconditions(CandidateSet &cs,
+                                              const Bounds &b) const {
+  for (const BoundCondition &c : b.preconditions)
+    if (!llvm::is_contained(cs.extra, c))
+      cs.extra.push_back(c);
+  for (const Obligation &o : b.factObligations)
+    if (!llvm::is_contained(cs.factObligations, o))
+      cs.factObligations.push_back(o);
+  for (Operation *a : b.assumes)
+    if (!llvm::is_contained(cs.assumes, a))
+      cs.assumes.push_back(a);
+  cs.exhausted |= b.exhausted;
+}
+
+//===----------------------------------------------------------------------===//
+// Assume facts
+//===----------------------------------------------------------------------===//
+
+void SymbolicBoundsProver::buildFactIndex() {
+  // Indexed by the SUBJECT the fact is about, not by the comparison's
+  // immediate operands: `assume((n % 64) == 0)` is a fact about `n`, and
+  // IntegerRangeAnalysis::collectAssumptions would file it under the
+  // remainder value, invisible to a query about `n`.
+  root->walk([&](LLVM::AssumeOp assume) {
+    auto cmp = assume.getCond().getDefiningOp<arith::CmpIOp>();
+    if (!cmp)
+      return;
+    // A fact about a value wider than 64 bits cannot be stated in int64_t. This
+    // runs for every assume under the root when the prover is constructed, so
+    // it must decline before any constant is read.
+    if (!isSupportedWidth(cmp.getLhs().getType()))
+      return;
+    Value lhs = cmp.getLhs(), rhs = cmp.getRhs();
+    arith::CmpIPredicate pred = cmp.getPredicate();
+
+    // `remsi X, c == 0` -> DivisibleBy(X, c).
+    if (pred == arith::CmpIPredicate::eq) {
+      for (auto [a, b] : {std::pair{lhs, rhs}, std::pair{rhs, lhs}}) {
+        std::optional<int64_t> zero = getFoldedConstant(b);
+        auto rem = a.getDefiningOp<arith::RemSIOp>();
+        if (zero && *zero == 0 && rem)
+          if (std::optional<int64_t> c = getFoldedConstant(rem.getRhs()))
+            if (*c > 0)
+              factIndex[rem.getLhs()].push_back(
+                  {BoundGoal::DivisibleBy, *c, assume.getOperation()});
+      }
+      return; // no other eq form yields a Goal
+    }
+
+    // `X pred const`, either operand order.
+    Value subject = lhs;
+    std::optional<int64_t> k = getFoldedConstant(rhs);
+    if (!k) {
+      subject = rhs;
+      k = getFoldedConstant(lhs);
+      if (!k)
+        return;
+      // Swapping the operands mirrors the predicate.
+      pred = arith::invertPredicate(pred) == pred ? pred : pred;
+      switch (cmp.getPredicate()) {
+      case arith::CmpIPredicate::slt:
+        pred = arith::CmpIPredicate::sgt;
+        break;
+      case arith::CmpIPredicate::sle:
+        pred = arith::CmpIPredicate::sge;
+        break;
+      case arith::CmpIPredicate::sgt:
+        pred = arith::CmpIPredicate::slt;
+        break;
+      case arith::CmpIPredicate::sge:
+        pred = arith::CmpIPredicate::sle;
+        break;
+      case arith::CmpIPredicate::ult:
+        pred = arith::CmpIPredicate::ugt;
+        break;
+      case arith::CmpIPredicate::ule:
+        pred = arith::CmpIPredicate::uge;
+        break;
+      case arith::CmpIPredicate::ugt:
+        pred = arith::CmpIPredicate::ult;
+        break;
+      case arith::CmpIPredicate::uge:
+        pred = arith::CmpIPredicate::ule;
+        break;
+      default:
+        return;
+      }
+    }
+    unsigned w = bitWidth(subject.getType());
+    int64_t intMax = APInt::getSignedMaxValue(w).getSExtValue();
+    Operation *op = assume.getOperation();
+    auto add = [&](BoundGoal g, int64_t c) {
+      factIndex[subject].push_back({g, c, op});
+    };
+    // Strict bounds are translated to non-strict at the subject's width; a
+    // strict bound at the extreme is unsatisfiable and yields no fact.
+    switch (pred) {
+    case arith::CmpIPredicate::sge:
+      add(BoundGoal::AtLeast, *k);
+      if (*k >= 0)
+        add(BoundGoal::NonNegative, 0);
+      break;
+    case arith::CmpIPredicate::sgt:
+      if (*k == intMax)
+        break; // x > INT_MAX is unsatisfiable
+      add(BoundGoal::AtLeast, *k + 1);
+      if (*k + 1 >= 0)
+        add(BoundGoal::NonNegative, 0);
+      break;
+    case arith::CmpIPredicate::sle:
+      add(BoundGoal::AtMost, *k);
+      break;
+    case arith::CmpIPredicate::slt:
+      if (*k == APInt::getSignedMinValue(w).getSExtValue())
+        break; // x < INT_MIN is unsatisfiable
+      add(BoundGoal::AtMost, *k - 1);
+      break;
+    case arith::CmpIPredicate::ult:
+    case arith::CmpIPredicate::ule: {
+      // An unsigned UPPER bound within the signed range puts x in [0, c), so
+      // it gives both non-negativity and a signed upper bound.
+      if (*k < 0 || *k > intMax)
+        break; // the constant itself is outside [0, INT_MAX]: no signed fact
+      int64_t bound = pred == arith::CmpIPredicate::ult ? *k - 1 : *k;
+      add(BoundGoal::NonNegative, 0);
+      if (bound >= 0)
+        add(BoundGoal::AtMost, bound);
+      break;
+    }
+    default:
+      // uge/ugt give no signed fact: an unsigned lower bound admits negative
+      // signed values (`assume(x uge 128)` on i8 means x < 0).
+      break;
+    }
+  });
+}
+
+ArrayRef<SymbolicBoundsProver::Fact>
+SymbolicBoundsProver::factsFor(Value v) const {
+  auto it = factIndex.find(v);
+  return it != factIndex.end() ? ArrayRef<Fact>(it->second) : ArrayRef<Fact>();
+}
+
+Operation *SymbolicBoundsProver::assumedBy(const BoundCondition &cond,
+                                           QueryContext ctx) const {
+  // Only a bare single symbol: `1*s + 0`.
+  if (cond.expr.numTerms() != 1 || cond.expr.constant() != 0)
+    return nullptr;
+  auto &[sym, k] = cond.expr.terms().front();
+  if (k != 1 || !sym.value())
+    return nullptr;
+  // The index is keyed by Value, and a Quotient symbol stores its DIVIDEND,
+  // so a key match is not a subject match: a fact about X must never satisfy
+  // a condition on q(X, c). No assume names a derived value.
+  if (sym.kind() == SymbolKind::Quotient || sym.kind() == SymbolKind::TripCount)
+    return nullptr;
+  for (const Fact &f : factsFor(sym.value())) {
+    if (!ctx.at ||
+        !assumeApplies(cast<LLVM::AssumeOp>(f.assume), ctx.at, domInfo))
+      continue;
+    bool implies = false;
+    switch (cond.goal) {
+    case BoundGoal::DivisibleBy:
+      implies =
+          f.goal == BoundGoal::DivisibleBy && cond.c != 0 && f.c % cond.c == 0;
+      break;
+    case BoundGoal::AtLeast:
+      implies = f.goal == BoundGoal::AtLeast && f.c >= cond.c;
+      break;
+    case BoundGoal::AtMost:
+      implies = f.goal == BoundGoal::AtMost && f.c <= cond.c;
+      break;
+    case BoundGoal::NonNegative:
+      implies = f.goal == BoundGoal::NonNegative ||
+                (f.goal == BoundGoal::AtLeast && f.c >= 0);
+      break;
+    }
+    if (implies)
+      return f.assume;
+  }
+  return nullptr;
+}
+
+/// The function that owns `v`: the one whose assumes can have narrowed its
+/// range. Null for a value in no function.
+static Operation *owningFunction(Value v) {
+  Operation *op = v.getDefiningOp();
+  if (!op)
+    if (Block *block = v.getParentBlock())
+      op = block->getParentOp();
+  if (!op)
+    return nullptr;
+  if (isa<tt::FuncOp>(op))
+    return op;
+  if (auto func = op->getParentOfType<tt::FuncOp>())
+    return func.getOperation();
+  return nullptr;
+}
+
 std::optional<std::pair<int64_t, int64_t>>
-SymbolicBoundsProver::rangeOf(Value v) const {
+SymbolicBoundsProver::rangeOf(Value v, QueryContext ctx,
+                              SmallVectorImpl<Operation *> *assumes) const {
   if (!isSupportedWidth(v.getType()))
     return std::nullopt;
   std::optional<ConstantIntRanges> r = collectRange(solver, v);
   if (!r)
     return std::nullopt;
-  return std::make_pair(r->smin().getSExtValue(), r->smax().getSExtValue());
+  int64_t lo = r->smin().getSExtValue(), hi = r->smax().getSExtValue();
+  if (!assumes)
+    return std::make_pair(lo, hi);
+  // A leaf range can come from assumes this index does not model (eq, uge,
+  // ...) and from assumes on values UPSTREAM of the leaf, since ranges
+  // propagate forward while the lattice keeps no provenance. So when the range
+  // is narrower than the type, record every assume that can have reached it:
+  // a coarse over-approximation, never an omission. The lattice belongs to the
+  // value, so those are the assumes of the function that owns `v` whatever the
+  // query point is - or of every function, when there is a call and ranges
+  // cross them.
+  unsigned w = bitWidth(v.getType());
+  bool narrowed = lo > APInt::getSignedMinValue(w).getSExtValue() ||
+                  hi < APInt::getSignedMaxValue(w).getSExtValue();
+  if (narrowed) {
+    Operation *where =
+        interproceduralScope ? interproceduralScope : owningFunction(v);
+    if (!where && ctx.at)
+      if (auto func = ctx.at->getParentOfType<tt::FuncOp>())
+        where = func.getOperation();
+    if (!where)
+      where = root;
+    where->walk([&](LLVM::AssumeOp a) {
+      if (!llvm::is_contained(*assumes, a.getOperation()))
+        assumes->push_back(a.getOperation());
+    });
+  }
+  return std::make_pair(lo, hi);
+}
+
+CandidateResult SymbolicBoundsProver::addCandidate(CandidateSet &cs,
+                                                   BoundCondition cond,
+                                                   QueryContext ctx) {
+  // Every condition subject must be a scalar that dominates the loop, so the
+  // guard can be placed before it. Checked here and again in finalize,
+  // because an obligation guard can reach the verdict with no candidate.
+  for (auto &[sym, k] : cond.expr.terms()) {
+    if (!sym.value() || sym.kind() == SymbolKind::TripCount)
+      return CandidateResult::Declined;
+    if (isa<ShapedType>(sym.value().getType()))
+      return CandidateResult::Declined;
+  }
+  if (Operation *assume = assumedBy(cond, ctx)) {
+    // Established outright: no runtime condition, but record the provenance.
+    if (!llvm::is_contained(cs.assumes, assume))
+      cs.assumes.push_back(assume);
+    return CandidateResult::Accepted;
+  }
+  if (!normalizeCondition(cond))
+    return CandidateResult::Declined;
+  if (llvm::is_contained(cs.facts, cond))
+    return CandidateResult::Accepted;
+  if (cs.facts.size() >= kMaxFactConditions)
+    return CandidateResult::Exhausted;
+  cond.kind = ConditionKind::Fact;
+  cs.facts.push_back(std::move(cond));
+  return CandidateResult::Accepted;
 }
 
 //===----------------------------------------------------------------------===//
 // Obligation discharge and guard materialization
 //===----------------------------------------------------------------------===//
 
+/// True when `op` is `iv + c` with 0 <= c <= step for the IV of `ctx.loop`.
+/// The scf.for contract makes `lb + n*step` representable, so such an addition
+/// cannot wrap, which discharges its obligation at tier 1 for free.
+bool SymbolicBoundsProver::isLoopIvPlusSmallConstant(arith::AddIOp add,
+                                                     QueryContext ctx,
+                                                     const CandidateSet &cs) {
+  if (!ctx.loop)
+    return false;
+  std::optional<int64_t> step = constantStep(ctx.loop);
+  std::optional<Value> iv = ctx.loop.getSingleInductionVar();
+  if (!step || !iv)
+    return false;
+  // An unsigned loop only gets the signed rules under its three
+  // preconditions, which symbolBounds has already emitted.
+  Value lhs = add.getLhs(), rhs = add.getRhs();
+  std::optional<int64_t> c = getFoldedConstant(rhs);
+  Value other = lhs;
+  if (!c) {
+    c = getFoldedConstant(lhs);
+    other = rhs;
+  }
+  return c && *c >= 0 && *c <= *step && other == *iv;
+}
+
 bool SymbolicBoundsProver::dischargeTier1(const Obligation &o, QueryContext ctx,
-                                          bool &unknown) {
-  Bounds b = bound(o.expr, ctx);
+                                          CandidateSet &cs) {
+  Bounds b = bound(o.expr, ctx, cs);
+  mergePreconditions(cs, b);
   if (b.exhausted) {
     // Overflowed endpoints are not bounds: the obligation can be neither
     // discharged nor guarded, so the query ends Unknown.
-    unknown = true;
+    cs.exhausted = true;
     return false;
   }
   if (!b.finite)
     return false;
 
   if (o.kind == Obligation::NonNegative)
-    return decideResidual(b.lo, 0, ctx);
+    return decideResidual(b.lo, 0, ctx, cs);
+
+  if (auto add = dyn_cast_or_null<arith::AddIOp>(o.op))
+    if (isLoopIvPlusSmallConstant(add, ctx, cs))
+      return true;
 
   // Tier 1 derives bounds from the OPERANDS, never from the range analysis's
   // range for the result: inferAdd intersects the unsigned and signed ranges,
   // so for i8 x in [100, 110] the result range of x + 100 is the narrow
   // [-56, -46] - a correct description of the wrapped value and useless as a
   // no-wrap proof.
-  std::optional<std::pair<int64_t, int64_t>> lo = boundConstant(b.lo);
-  std::optional<std::pair<int64_t, int64_t>> hi = boundConstant(b.hi);
+  std::optional<std::pair<int64_t, int64_t>> lo =
+      boundConstant(b.lo, ctx, &cs.assumes);
+  std::optional<std::pair<int64_t, int64_t>> hi =
+      boundConstant(b.hi, ctx, &cs.assumes);
   if (!lo || !hi)
     return false;
   int64_t width = o.width ? o.width : 64;
@@ -944,45 +1639,57 @@ bool SymbolicBoundsProver::dischargeTier1(const Obligation &o, QueryContext ctx,
 /// The guards that close an open wrap obligation: the result must fit its
 /// width at both ends.
 void SymbolicBoundsProver::guardsForObligation(
-    const Obligation &o, QueryContext ctx, SmallVectorImpl<BoundCondition> &out,
-    bool &unknown) {
-  Bounds b = bound(o.expr, ctx);
+    const Obligation &o, QueryContext ctx, CandidateSet &cs,
+    SmallVectorImpl<BoundCondition> &out) {
+  Bounds b = bound(o.expr, ctx, cs);
   if (!b.finite || b.exhausted) {
     // lo/hi are not bounds (a non-finite symbol is left at zero in them), so
     // no guard closes the obligation: the query ends Unknown.
-    unknown = true;
+    cs.exhausted = true;
     return;
   }
+  // Substitute quotient terms first, so a dividend cancels against its other
+  // occurrences: the tutorial-03 K loop's `64*q(K+63,64) - 64` collapses to
+  // `K - 1` rather than becoming a guard on an opaque division.
+  AffineForm lo = b.lo, hi = b.hi;
+  if (std::optional<AffineForm> s =
+          substituteQuotients(lo, ctx, cs, /*maximize=*/false))
+    lo = *s;
+  if (std::optional<AffineForm> s =
+          substituteQuotients(hi, ctx, cs, /*maximize=*/true))
+    hi = *s;
 
   auto push = [&](AffineForm e, BoundGoal goal, int64_t c) {
-    BoundCondition cond{std::move(e), goal, c};
+    BoundCondition cond{std::move(e), goal, c, ConditionKind::Guard};
     if (!normalizeCondition(cond)) {
       // Not expressible: leave the obligation open, which finalize reads as
       // a verdict of Unknown rather than a silently dropped guard.
-      unknown = true;
+      cs.exhausted = true;
       return;
     }
     out.push_back(std::move(cond));
   };
 
   if (o.kind == Obligation::NonNegative) {
-    push(b.lo, BoundGoal::NonNegative, 0);
+    push(lo, BoundGoal::NonNegative, 0);
     return;
   }
   int64_t width = o.width ? o.width : 64;
   if (width > 64) {
-    unknown = true; // no int64_t guard can state this type's limits
+    cs.exhausted = true; // no int64_t guard can state this type's limits
     return;
   }
-  push(b.hi, BoundGoal::AtMost, APInt::getSignedMaxValue(width).getSExtValue());
-  push(b.lo, BoundGoal::AtLeast,
-       APInt::getSignedMinValue(width).getSExtValue());
+  push(hi, BoundGoal::AtMost, APInt::getSignedMaxValue(width).getSExtValue());
+  push(lo, BoundGoal::AtLeast, APInt::getSignedMinValue(width).getSExtValue());
 }
 
 /// True when the symbols' constant ranges alone already imply `cond`, so it
 /// would be a guard that is true on every launch.
-bool SymbolicBoundsProver::impliedByRanges(const BoundCondition &cond) const {
-  std::optional<std::pair<int64_t, int64_t>> b = boundConstant(cond.expr);
+bool SymbolicBoundsProver::impliedByRanges(
+    const BoundCondition &cond, QueryContext ctx,
+    SmallVectorImpl<Operation *> *assumes) const {
+  std::optional<std::pair<int64_t, int64_t>> b =
+      boundConstant(cond.expr, ctx, assumes);
   if (!b)
     return false;
   switch (cond.goal) {
@@ -992,73 +1699,115 @@ bool SymbolicBoundsProver::impliedByRanges(const BoundCondition &cond) const {
     return b->first >= cond.c;
   case BoundGoal::AtMost:
     return b->second <= cond.c;
+  case BoundGoal::DivisibleBy:
+    // Divisibility does not follow from a range unless the range pins one
+    // value, which boundConstant reports as lo == hi.
+    return cond.c != 0 && b->first == b->second && b->first % cond.c == 0;
   }
   return false;
 }
 
 BoundProof SymbolicBoundsProver::finalize(BoundProof::Verdict onD,
+                                          CandidateSet cs,
                                           ArrayRef<Obligation> obligations,
                                           QueryContext ctx) {
-  // Close every obligation at tier 1, else as a runtime guard.
+  // Close every obligation - the query's own and those inherited from
+  // the dividends of quotient facts - at tier 1, else as a runtime guard. A
+  // worklist, because closing one obligation can add another.
   SmallVector<BoundCondition, 4> guards;
+  SmallVector<Obligation, 8> work(obligations.begin(), obligations.end());
   SmallVector<Obligation, 8> seen;
-  bool unknown = false;
-  for (const Obligation &o : obligations) {
+  for (unsigned i = 0; i < work.size(); ++i) {
+    Obligation o = work[i];
     if (llvm::is_contained(seen, o))
       continue;
     seen.push_back(o);
-    if (dischargeTier1(o, ctx, unknown))
+    if (dischargeTier1(o, ctx, cs))
       continue;
-    if (unknown)
+    if (cs.exhausted)
       return {};
-    guardsForObligation(o, ctx, guards, unknown);
+    guardsForObligation(o, ctx, cs, guards);
+    if (guards.size() > kMaxGuards)
+      return {};
+    // Using a quotient fact pulls in its dividend's obligations.
+    for (const Obligation &extra : cs.factObligations)
+      if (!llvm::is_contained(work, extra))
+        work.push_back(extra);
+  }
+  // Index-based: closing one of these can append more (a quotient fact pulls
+  // in its dividend's obligations), so the container may grow under us.
+  for (unsigned i = 0; i < cs.factObligations.size(); ++i) {
+    Obligation extra = cs.factObligations[i];
+    if (llvm::is_contained(seen, extra))
+      continue;
+    seen.push_back(extra);
+    if (dischargeTier1(extra, ctx, cs))
+      continue;
+    if (cs.exhausted)
+      return {};
+    guardsForObligation(extra, ctx, cs, guards);
     if (guards.size() > kMaxGuards)
       return {};
   }
-  if (unknown)
+  if (cs.exhausted)
     return {};
 
   BoundProof proof;
-  // A guard is dropped when unconditional range evidence implies it.
-  auto emit = [&](const BoundCondition &c) {
-    if (c.expr.isConstant()) {
+  // Facts, then preconditions, then guards, pruned by `emit` below: a
+  // condition is dropped when unconditional range evidence implies it.
+  auto emit = [&](const BoundCondition &c, ConditionKind kind) {
+    BoundCondition out = c;
+    out.kind = kind;
+    if (out.expr.isConstant()) {
       // A condition over no symbol is decided now: dropped when true, and it
       // makes the verdict Unknown when false.
       bool holds = false;
-      switch (c.goal) {
+      switch (out.goal) {
       case BoundGoal::NonNegative:
-        holds = c.expr.constant() >= 0;
+        holds = out.expr.constant() >= 0;
         break;
       case BoundGoal::AtLeast:
-        holds = c.expr.constant() >= c.c;
+        holds = out.expr.constant() >= out.c;
         break;
       case BoundGoal::AtMost:
-        holds = c.expr.constant() <= c.c;
+        holds = out.expr.constant() <= out.c;
+        break;
+      case BoundGoal::DivisibleBy:
+        holds = out.c != 0 && out.expr.constant() % out.c == 0;
         break;
       }
+      if (!holds)
+        proof.verdict = BoundProof::Unknown;
       return holds;
     }
-    if (impliedByRanges(c))
+    if (impliedByRanges(out, ctx, &cs.assumes))
       return true;
-    if (!llvm::is_contained(proof.conditions, c))
-      proof.conditions.push_back(c);
+    if (!llvm::is_contained(proof.conditions, out))
+      proof.conditions.push_back(out);
     return true;
   };
 
   bool feasible = true;
+  for (const BoundCondition &c : cs.facts)
+    feasible &= emit(c, ConditionKind::Fact);
+  for (const BoundCondition &c : cs.extra)
+    feasible &= emit(c, ConditionKind::Precondition);
   for (const BoundCondition &c : guards)
-    feasible &= emit(c);
+    feasible &= emit(c, ConditionKind::Guard);
   if (!feasible)
     return {};
 
   // Every emitted condition must have a scalar subject that dominates the
-  // loop, or no guard can be placed - as when extui and extsi of one tensor
-  // cancel in d.
+  // loop, or no guard can be placed. Candidate formation checks this, but an
+  // obligation guard can reach here with no candidate at all - as when extui
+  // and extsi of one tensor cancel in d.
   for (const BoundCondition &c : proof.conditions)
     for (auto &[sym, k] : c.expr.terms())
-      if (!sym.value() || isa<ShapedType>(sym.value().getType()))
+      if (!sym.value() || isa<ShapedType>(sym.value().getType()) ||
+          sym.kind() == SymbolKind::TripCount)
         return {};
 
+  proof.factsUsed.assign(cs.assumes.begin(), cs.assumes.end());
   if (onD == BoundProof::Refuted) {
     // Refuted is only ever unconditional.
     if (!proof.conditions.empty())
@@ -1134,14 +1883,125 @@ BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
     break;
   }
 
-  Bounds b = bound(d, ctx);
-  if (!b.finite || b.exhausted)
-    return {};
-  if (decideResidual(b.lo, g, ctx))
-    return finalize(BoundProof::Satisfied, obligations, ctx);
-  // Only a constant hi refutes.
-  if (b.hi.isConstant() && b.hi.constant() < g)
-    return finalize(BoundProof::Refuted, obligations, ctx);
+  CandidateSet base;
+
+  // The direct decision, on a trial copy so a failed attempt leaks no
+  // evidence into the candidate search.
+  {
+    CandidateSet direct = base;
+    Bounds b = bound(d, ctx, direct);
+    mergePreconditions(direct, b);
+    if (b.finite && !b.exhausted && decideResidual(b.lo, g, ctx, direct))
+      return finalize(BoundProof::Satisfied, std::move(direct), obligations,
+                      ctx);
+  }
+  {
+    // Refutation bounds d too, and bounding an unsigned-loop IV yields the
+    // loop-contract preconditions; dropping them would refute `iv < 120` in an
+    // unsigned i8 loop 120 to 132 (bit pattern) step 4, whose IV 128 reads as
+    // -128. Only a constant hi refutes.
+    CandidateSet ref = base;
+    Bounds b = bound(d, ctx, ref);
+    mergePreconditions(ref, b);
+    if (b.finite && !b.exhausted && b.hi.isConstant() && b.hi.constant() < g)
+      return finalize(BoundProof::Refuted, std::move(ref), obligations, ctx);
+  }
+
+  // The candidate search. Two kinds, tried once each in this order:
+  //   ExactLoopEnd       the loop span is a multiple of the step;
+  //   ExactCdiv          a quotient's dividend is a multiple of its divisor.
+  // Candidates are re-discovered on the residual after every commit, and a
+  // candidate is kept in `acc` when it strictly improves lo(d) even if it
+  // does not finish the proof. The first kind that finishes decides the query.
+  CandidateSet acc = base;
+  std::optional<int64_t> best = residualConstant(d, ctx, acc);
+  enum CandidateKind { ExactLoopEnd, ExactCdiv };
+  for (CandidateKind kind : {ExactLoopEnd, ExactCdiv}) {
+    // Discover on the bounded residual, never on d: in the tutorial-03 K loop
+    // the quotient only appears once hi(k) = q - 1 has been substituted.
+    SmallVector<BoundCondition, 2> candidates;
+    CandidateSet probe = acc;
+    Bounds pb = bound(d, ctx, probe);
+    if (!pb.finite || pb.exhausted)
+      break;
+
+    bool wantExactLoopEnd = false;
+    SmallVector<Symbol, 2> wantExactCdiv;
+    if (kind == ExactLoopEnd) {
+      if (!ctx.loop || !constantStep(ctx.loop))
+        continue;
+      QueryContext outer = parentContext(ctx.loop);
+      SmallVector<Obligation, 4> boundObls;
+      AffineForm lb =
+          normalizeImpl(ctx.loop.getLowerBound(), outer, boundObls, {}, 0);
+      AffineForm ub =
+          normalizeImpl(ctx.loop.getUpperBound(), outer, boundObls, {}, 0);
+      AffineForm span = ub.sub(lb);
+      if (span.overflowed())
+        continue;
+      wantExactLoopEnd = true;
+      candidates.push_back({span, BoundGoal::DivisibleBy,
+                            *constantStep(ctx.loop), ConditionKind::Fact});
+    } else { // ExactCdiv
+      for (auto &[sym, k] : pb.lo.terms()) {
+        if (sym.kind() != SymbolKind::Quotient)
+          continue;
+        const QuotientInfo *info = findQuotientInfo(sym, ctx);
+        if (!info)
+          continue;
+        wantExactCdiv.push_back(sym);
+        candidates.push_back({info->dividend, BoundGoal::DivisibleBy,
+                              sym.divisor(), ConditionKind::Fact});
+      }
+      if (candidates.empty())
+        continue;
+    }
+
+    CandidateSet trial = acc;
+    trial.exactLoopEnd |= wantExactLoopEnd;
+    llvm::append_range(trial.exactCdiv, wantExactCdiv);
+    Bounds b = bound(d, ctx, trial);
+    mergePreconditions(trial, b);
+    if (!b.finite || b.exhausted)
+      continue;
+
+    if (decideResidual(b.lo, g, ctx, trial)) {
+      bool declined = false;
+      for (const BoundCondition &cond : candidates) {
+        CandidateResult res = addCandidate(trial, cond, ctx);
+        // Exhausted/Declined both just mean this kind's own candidate list
+        // doesn't work; that does not abort the whole query, since a later
+        // kind may still finish.
+        if (res == CandidateResult::Exhausted ||
+            res == CandidateResult::Declined) {
+          trial = acc; // not expressible: discard and try the next kind
+          declined = true;
+          break;
+        }
+      }
+      // Always finalize once the residual decides: a candidate established by
+      // a dominating assume adds no runtime condition, so the condition set
+      // can legitimately be empty - finalize is what turns that into
+      // Satisfied rather than ConditionallySatisfied.
+      if (!declined) {
+        BoundProof proof = finalize(BoundProof::ConditionallySatisfied, trial,
+                                    obligations, ctx);
+        if (proof.verdict != BoundProof::Unknown)
+          return proof;
+        continue; // do not fold this trial into acc
+      }
+    }
+    // Keep a candidate that strictly improves lo(d) without finishing. Its
+    // conditions go with it: a later kind finishes from `acc`.
+    std::optional<int64_t> lo = residualConstant(d, ctx, trial);
+    if (lo && (!best || *lo > *best) &&
+        llvm::all_of(candidates, [&](const BoundCondition &cond) {
+          return addCandidate(trial, cond, ctx) == CandidateResult::Accepted;
+        })) {
+      acc = std::move(trial);
+      best = lo;
+    }
+  }
   return {};
 }
 
