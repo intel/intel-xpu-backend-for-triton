@@ -51,6 +51,19 @@ def get_matmul_autotune_configs() -> List[triton.Config]:
         triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': m},
                       num_stages=s, num_warps=w) for s in [2, 3] for (m, w) in ([('256', 32), ('128', 64)])
     ]
+
+    # 2 new configs from analytical-model picks that beat the autotune-best, improves 2/37 shapes.
+    configs += [
+        # B1_M8_N1024_K4096 2.26x
+        triton.Config(
+            {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 1, 'grf_mode': '128'},
+            num_stages=2, num_warps=4),
+        # B1_M1_N1024_K4096 2.17x
+        triton.Config(
+            {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 256, 'GROUP_SIZE_M': 1, 'grf_mode': '256'},
+            num_stages=2, num_warps=4),
+    ]
+
     return configs
 
 
@@ -430,7 +443,9 @@ def get_benchmark(
             torch_b = torch.transpose(torch_b, -2, -1)
 
         if provider == 'onednn':
-            _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b))
+            # bf16 x bf16 -> fp32 natively in oneDNN; torch.matmul has no out_dtype, so use mm/bmm.
+            mm = torch.bmm if torch_a.dim() == 3 else torch.mm
+            _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: mm(torch_a, torch_b, out_dtype=torch.float32))
 
         elif provider == 'triton':
             if len(a.shape) != len(b.shape):

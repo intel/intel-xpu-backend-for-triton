@@ -86,7 +86,7 @@ capture stream device-agnostic via `get_device_module()` and adds
 
 | Kernels | Source |
 |---|---|
-| `fused_moe_lora` | `kernels/ops/moe/fused_moe_lora_kernel.py` |
+| `fused_moe_lora` | `kernels/ops/lora/moe/fused_moe_lora_kernel.py` |
 
 `--sglang-mamba`. causal conv1d is shared with GDN and KDA, so this suite covers
 those paths too:
