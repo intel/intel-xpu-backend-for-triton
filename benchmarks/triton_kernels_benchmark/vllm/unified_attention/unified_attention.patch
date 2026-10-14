@@ -538,15 +538,16 @@ index b0231dd..e875d33 100644
          )
 diff --git a/vllm/v1/attention/ops/triton_unified_attention_config.py b/vllm/v1/attention/ops/triton_unified_attention_config.py
 new file mode 100644
-index 0000000..207606e
+index 0000000..c769be5
 --- /dev/null
 +++ b/vllm/v1/attention/ops/triton_unified_attention_config.py
-@@ -0,0 +1,525 @@
+@@ -0,0 +1,531 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +
 +"""Load device-specific offline attention configs without runtime benchmarking."""
 +
++import hashlib
 +import json
 +import logging
 +import os
@@ -906,13 +907,18 @@ index 0000000..207606e
 +        static_key.v_dtype,
 +        static_key.out_dtype,
 +    )
-+    dtype = "-".join(dtypes)
++    dtype = hashlib.sha256(
++        json.dumps(dtypes, separators=(",", ":")).encode("utf-8")
++    ).hexdigest()[:8]
++    layouts = {"contiguous": "c", "interleaved": "i"}
++    q_layout = layouts.get(static_key.q_layout, static_key.q_layout)
++    kv_layout = layouts.get(static_key.kv_layout, static_key.kv_layout)
 +    return (
-+        f"H={static_key.head_size},GQA={static_key.num_queries_per_kv}"
-+        f",B={static_key.block_size},device_name={device},dtype={dtype}"
-+        f",td={int(static_key.use_td)},kv_quant={static_key.kv_quant_mode}"
-+        f",softcap={int(static_key.use_softcap)},window={static_key.sliding_window}"
-+        f",q_layout={static_key.q_layout},kv_layout={static_key.kv_layout}.json"
++        f"H={static_key.head_size},G={static_key.num_queries_per_kv}"
++        f",B={static_key.block_size},dev={device},dt={dtype}"
++        f",td={int(static_key.use_td)},kq={static_key.kv_quant_mode}"
++        f",sc={int(static_key.use_softcap)},w={static_key.sliding_window}"
++        f",ql={q_layout},kl={kv_layout}.json"
 +    )
 +
 +
@@ -994,7 +1000,7 @@ index 0000000..207606e
 +@cache
 +def _has_device_profiles(index: int, folder: str | None) -> bool:
 +    device_name = _device_identity(index)["device_name"].replace(" ", "_")
-+    marker = f",device_name={device_name},dtype="
++    marker = f",dev={device_name},dt="
 +    directories = [Path(folder), _BUNDLED_DIR] if folder else [_BUNDLED_DIR]
 +    for directory in directories:
 +        try:
