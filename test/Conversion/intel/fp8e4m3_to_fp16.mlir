@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm --canonicalize | FileCheck %s
 
-// COM: Software fp8e4m3(OCP e4m3fn) -> fp16 upcast (oneDNN 6-op sequence: ashr, and, bitcast,
+// COM: Software fp8e4m3(OCP e4m3fn) -> fp16 upcast (oneDNN-derived: sext, shl, and, bitcast,
 // COM: fmul x3, fadd). Module lacks ttig.support_f8_conversion, so the gate selects the
 // COM: software path instead of the SPIR-V builtin (see fp8_convert.mlir for the gated path).
 // COM: This pins the exact op sequence, in particular the trailing fmul+fadd pair, so a future
@@ -16,14 +16,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-DAG: llvm.mlir.constant(6.942750e-03 : f16) : f16
     // CHECK-DAG: llvm.mlir.constant(0.000000e+00 : f16) : f16
     // CHECK-DAG: llvm.mlir.constant(-16385 : i16) : i16
-    // CHECK-DAG: llvm.mlir.constant(1 : i16) : i16
-    // CHECK: llvm.ashr {{.*}} : vector<2xi16>
-    // CHECK: llvm.and {{.*}} : vector<2xi16>
-    // CHECK: llvm.bitcast {{.*}} : vector<2xi16> to vector<2xf16>
-    // CHECK: llvm.fmul {{.*}} : vector<2xf16>
-    // CHECK: llvm.fmul {{.*}} : vector<2xf16>
-    // CHECK: llvm.fmul {{.*}} : vector<2xf16>
-    // CHECK: llvm.fadd {{.*}} : vector<2xf16>
+    // CHECK-DAG: llvm.mlir.constant(7 : i16) : i16
+    // CHECK-NOT: vector<4xi8>
+    // CHECK: llvm.sext {{.*}} : i8 to i16
+    // CHECK: llvm.shl {{.*}} : i16
+    // CHECK: llvm.and {{.*}} : i16
+    // CHECK: llvm.bitcast {{.*}} : i16 to f16
+    // CHECK: llvm.fmul {{.*}} : f16
+    // CHECK: llvm.fmul {{.*}} : f16
+    // CHECK: llvm.fmul {{.*}} : f16
+    // CHECK: llvm.fadd {{.*}} : f16
+    // CHECK-NOT: vector<4xi8>
     // CHECK-NOT: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE4M3ToFP16INTEL
     tt.return %dst : tensor<16xf16, #blocked>
   }
@@ -53,8 +56,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: llvm.select
     // CHECK: llvm.select
     // COM: The oneDNN sequence must not be used here.
-    // CHECK-NOT: llvm.ashr {{.*}} : vector<2xi16>
-    // CHECK-NOT: llvm.fadd {{.*}} : vector<2xf16>
+    // CHECK-NOT: llvm.sext {{.*}} : i8 to i16
+    // CHECK-NOT: llvm.fadd {{.*}} : f16
     // CHECK-NOT: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE4M3ToFP16INTEL
     tt.return %dst : tensor<16xf16, #blocked>
   }
