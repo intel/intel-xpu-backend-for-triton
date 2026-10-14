@@ -20,3 +20,9 @@ tests/v1/worker/test_gpu_model_runner.py::test_update_states_pp_async_multi_requ
 tests/v1/worker/test_gpu_model_runner.py::test_update_config
 tests/v1/worker/test_gpu_model_runner.py::test_load_model_weights_inplace
 tests/v1/worker/test_gpu_model_runner.py::test_reload_weights_before_load_model
+
+# Watermarking unit tests out of sync with vLLM APIs at the current pin: https://github.com/intel/intel-xpu-backend-for-triton/issues/8362
+tests/watermarking/test_watermarking.py::test_draft_sampler_uses_draft_key_and_advances_context
+tests/watermarking/test_watermarking.py::test_dspark_reduced_vocab_draft_sampler_applies_watermarking
+tests/watermarking/test_watermarking.py::test_dspark_target_only_watermarking_leaves_drafts_unwatermarked
+tests/watermarking/test_watermarking.py::test_gpu_sampler_warns_when_watermarking_is_enabled_for_greedy
