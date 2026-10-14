@@ -134,7 +134,7 @@ def TritonIntelGPUHoistLayoutConversions
     The live-in set cannot show what a hoist costs *outside* the loop: moving a
     conversion up creates a point where source and result are both live. This
     gate bounds a single hoist's post-hoist peak without mutating IR, as the
-    maximum of the current peak (a hoist can move it but not remove it), the
+    maximum of the current peak (kept even where the hoist would lower it), the
     *corridor* and the *new program point*, where both are live. The corridor is
     every operation the hoisted result newly spans: from the insertion point
     through the loop, the loop-body operations above the conversion, and the
@@ -157,11 +157,12 @@ def TritonIntelGPUHoistLayoutConversions
     Where a term cannot be established (a corridor spanning two blocks or longer
     than `corridor-op-cap`, or an insertion point at the end of its block) the
     projection charges the arriving result on top of the current peak, and in the
-    whole-region fallback above on top of that region's peak. Either refuses
-    unless the result costs nothing at all: an unread conversion is charged zero
-    bytes and still fits. Reaching `peak-rebuild-cap` refuses outright: each
-    accepted hoist invalidates the analysis, and a projection against a stale
-    peak bounds nothing. Conservative refusals are counted apart from measured
+    whole-region fallback above on top of that region's peak. Either is still
+    accepted when that charge fits under the ceiling, as it can below the
+    threshold; an unread conversion is charged zero bytes and always fits.
+    Reaching `peak-rebuild-cap` refuses outright: each accepted hoist
+    invalidates the analysis, and a projection against a stale peak bounds
+    nothing. Conservative refusals are counted apart from measured
     ones (`rejected_function_peak_fallback` versus
     `rejected_function_peak_exact`).
 
