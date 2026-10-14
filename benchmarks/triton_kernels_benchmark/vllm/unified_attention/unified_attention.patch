@@ -73,7 +73,7 @@ index 7804b01..0ac1271 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index b0231dd..e875d33 100644
+index 4d73e49..423e7d1 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -11,7 +11,6 @@ from typing import Any
@@ -447,7 +447,7 @@ index b0231dd..e875d33 100644
      )
  
      # The kernel signature is the same for 2D and 3D — only the launch
-@@ -1092,6 +1110,67 @@ def unified_attention(
+@@ -1092,6 +1110,72 @@ def unified_attention(
      if launch_num_stages is not None:
          launch_kwargs["num_stages"] = launch_num_stages
  
@@ -512,10 +512,15 @@ index b0231dd..e875d33 100644
 +        if use_3d:
 +            grid += (num_segments,)
 +
++    assert tile_size <= block_size, "TILE_SIZE must be <= block_size"
++    assert block_size % tile_size == 0, (
++        "block_size must be multiple of TILE_SIZE"
++    )
++
      kernel_unified_attention[grid](
          output_ptr=out,
          segm_output_ptr=segm_output_ptr,
-@@ -1168,6 +1247,7 @@ def unified_attention(
+@@ -1168,6 +1252,7 @@ def unified_attention(
          USE_TD=use_td,
          USE_TD_QO=use_td_qo,
          MM_PREFIX_CLAMP_SW=mm_prefix_clamp_sliding_window,
@@ -523,7 +528,7 @@ index b0231dd..e875d33 100644
          **launch_kwargs,
      )
  
-@@ -1184,11 +1264,10 @@ def unified_attention(
+@@ -1184,11 +1269,10 @@ def unified_attention(
              output_stride_0=out.stride(0),
              output_stride_1=out.stride(1),
              block_table_stride=block_table.stride(0),
