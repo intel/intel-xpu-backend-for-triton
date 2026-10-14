@@ -2205,6 +2205,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                                          getNonTemporalFlag(op))};
       };
 
+      // FIXME: this is a workaround for IGC bug. For details see
+      // https://github.com/intel/intel-xpu-backend-for-triton/issues/8374.
       bool avoidPredicatedInstructions =
           hasBroadcastAddrNonBroadcastMask(ptr, mask);
 
