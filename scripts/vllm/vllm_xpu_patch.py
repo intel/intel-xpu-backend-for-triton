@@ -207,40 +207,6 @@ def _find_cuda_patterns(source: str) -> list[dict]:
     return patterns
 
 
-def _is_platform_cuda_check(node: ast.AST) -> bool:
-    """Match current_platform.is_cuda() and current_platform.is_cuda_alike() calls."""
-    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            and node.func.attr in ("is_cuda", "is_cuda_alike") and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "current_platform")
-
-
-def _is_pytest_call(node: ast.AST, name: str) -> bool:
-    """Match pytest.<name>(...) and pytest.mark.<name>(...) calls."""
-    return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == name
-
-
-def _find_cuda_guard_patterns(source: str) -> list[dict]:
-    """Find current_platform CUDA checks that gate a skip: skipif conditions and `if ...: pytest.skip()`."""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return []
-
-    guards: list[ast.expr] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and _is_pytest_call(node, "skipif"):
-            guards.extend(node.args)
-        elif isinstance(node, ast.If) and any(
-                _is_pytest_call(call, "skip") for stmt in node.body for call in ast.walk(stmt)):
-            guards.append(node.test)
-
-    return [{
-        "type": "cuda_only_skip_guard",
-        "line": node.lineno,
-        "col": node.col_offset,
-    } for guard in guards for node in ast.walk(guard) if isinstance(node, ast.Call) and _is_platform_cuda_check(node)]
-
-
 # torch.cuda runtime APIs with a torch.xpu equivalent
 _CUDA_TO_XPU_RUNTIME = {
     "CUDAGraph": "XPUGraph",
@@ -348,14 +314,6 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             # Replace the .is_cuda property with .is_xpu, but not .is_cuda()/.is_cuda_alike() platform calls
             lines[line_idx] = re.sub(r"\.is_cuda(?![\w(]|\s*\()", ".is_xpu", line)
 
-        elif ptype == "cuda_only_skip_guard" and "current_platform.is_xpu()" not in line:
-            # Let XPU through a CUDA-only skip: is_cuda() -> (is_cuda() or is_xpu())
-            lines[line_idx] = re.sub(
-                r"current_platform\.(is_cuda(?:_alike)?)\(\)",
-                r"(current_platform.\1() or current_platform.is_xpu())",
-                line,
-            )
-
         elif ptype == "cuda_runtime_api":
             # Replace torch.cuda.<API> with its torch.xpu equivalent
             lines[line_idx] = re.sub(r"torch\.cuda\.(\w+)\b", _to_xpu_runtime, line)
@@ -363,12 +321,12 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def patch_file(filepath: Path, enable_on_xpu: bool = False) -> bool:
+def patch_file(filepath: Path, map_cuda_runtime: bool = False) -> bool:
     """Patch a single file. Returns True if changes were made."""
     source = filepath.read_text()
     patterns = _find_cuda_patterns(source)
-    if enable_on_xpu:
-        patterns += _find_cuda_guard_patterns(source) + _find_cuda_runtime_patterns(source)
+    if map_cuda_runtime:
+        patterns += _find_cuda_runtime_patterns(source)
     if not patterns:
         return False
 
@@ -407,10 +365,10 @@ def main() -> None:
         vllm_root / "vllm" / "model_executor" / "layers",
     ]
 
-    # Test files whose CUDA-only skips guard Triton kernels that also run on XPU. These get the
-    # CUDA->XPU replacements above, their skip guards relaxed to admit XPU, and torch.cuda
-    # runtime APIs (streams, events, graphs) mapped to torch.xpu.
-    cuda_guard_files = {
+    # Test files whose CUDA-only tests vllm-fix.patch enables on XPU (per test, by relaxing their
+    # skip guards). These get the CUDA->XPU replacements above, also outside patch_dirs, and
+    # torch.cuda runtime APIs (streams, events, graphs, RNG state) mapped to torch.xpu.
+    xpu_test_files = {
         vllm_root / path
         for path in (
             "tests/distributed/test_dcp_a2a.py",
@@ -447,14 +405,14 @@ def main() -> None:
         for py_file in sorted(patch_dir.rglob("*.py")):
             print(f"Scanning {py_file.relative_to(vllm_root)}...")
             scanned.add(py_file)
-            if patch_file(py_file, enable_on_xpu=py_file in cuda_guard_files):
+            if patch_file(py_file, map_cuda_runtime=py_file in xpu_test_files):
                 total_patched += 1
 
-    for py_file in sorted(cuda_guard_files - scanned):
+    for py_file in sorted(xpu_test_files - scanned):
         if not py_file.is_file():
             continue
         print(f"Scanning {py_file.relative_to(vllm_root)}...")
-        if patch_file(py_file, enable_on_xpu=True):
+        if patch_file(py_file, map_cuda_runtime=True):
             total_patched += 1
 
     print(f"\nPatched {total_patched} file(s)")
