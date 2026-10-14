@@ -54,7 +54,7 @@ def suffix():
             num_stages=2, num_warps=32),
     ],
     key=['M', 'N', 'K'],
-    restore_value=['c_ptr'],
+    reset_to_zero=['c_ptr'],
 )
 @triton.jit
 def matmul_kernel_with_tensor_descriptors(
@@ -126,7 +126,7 @@ def matmul_kernel_with_tensor_descriptors(
             num_stages=2, num_warps=4),
     ],
     key=['M', 'N', 'K'],
-    restore_value=['c_ptr'],
+    reset_to_zero=['c_ptr'],
 )
 @triton.jit
 def matmul_kernel_with_tensor_descriptors_batched(
