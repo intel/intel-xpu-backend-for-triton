@@ -352,11 +352,10 @@ def benchmark(B, M, N, K, dtype, provider):
             # and the sum came back rounded to bf16. addmm/baddbmm keep the fp32 accumulator.
             addmm = torch.baddbmm if a.dim() == 3 else torch.addmm
             torch_fn = lambda: addmm(d, a, b, out_dtype=res_dtype)
-        rtol = 1e-3
         if dtype.is_floating_point or [B, M, N, K] in [[1, 1024, 1024, 1024], [1, 2048, 2048, 2048],
                                                        [1, 512, 8192, 32768], [4, 32768, 4096, 128]]:
             # torch int8 matmul on GPU is not supported. only check a few int8 shapes to reduce runtime
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
