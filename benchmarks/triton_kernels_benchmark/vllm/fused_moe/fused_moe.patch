@@ -28,8 +28,7 @@ index be4930052..32744d307 100644
                      else:
                          accumulator = tl.dot(a, b, acc=accumulator)
                  else:
--                    accumulator += tl.dot(a, b)
-+                    accumulator = tl.dot(a, b, accumulator)
+                     accumulator += tl.dot(a, b)
          else:
 -            accumulator += tl.dot(a, b)
 +            accumulator = tl.dot(a, b, accumulator)
