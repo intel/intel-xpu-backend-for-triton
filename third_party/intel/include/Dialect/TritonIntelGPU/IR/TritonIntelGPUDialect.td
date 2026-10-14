@@ -38,8 +38,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_sigmoid";
     }
 
-    /// Get the name of the attribute used to indicate whether subgroup 2D block
-    /// operations (e.g., 2D block read/write) are available.
+    /// Whether the target supports workgroup split barriers.
+    static constexpr llvm::StringRef getSupportSplitWorkGroupBarrierAttrName() {
+      return "ttig.support_split_work_group_barrier";
+    }
+
+    /// Whether the target supports subgroup 2D block operations.
     static constexpr llvm::StringRef getSupport2DBlockIOAttrName() {
       return "ttig.support_2d_block_io";
     }

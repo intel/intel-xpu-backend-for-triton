@@ -26,6 +26,10 @@ struct TritonAnnotateModule
     mod->setAttr(ttgi::TritonIntelGPUDialect::getMinSGSizeAttrName(),
                  builder.getI32IntegerAttr(minSGSize));
 
+    if (supportSplitWorkGroupBarrier)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::
+                       getSupportSplitWorkGroupBarrierAttrName(),
+                   builder.getUnitAttr());
     if (support2DBlockIO)
       mod->setAttr(ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName(),
                    builder.getUnitAttr());

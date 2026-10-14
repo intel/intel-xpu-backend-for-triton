@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3" | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3 max-prologue-prefetch-iterations=1" | FileCheck %s --check-prefix=ABLATE
 // COM: Behavior-preservation cross-check: when upstream `tritongpu-assign-latencies` and
 // COM: `tritongpu-schedule-loops` annotate the IR before Intel's pipeline pass and the
 // COM: opt-in env var is on, every CHECK line in this file must still match. This proves
@@ -146,6 +147,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   tt.func public @matmul_kernel_descriptor(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i64, %arg7: i64) {
+    // ABLATE-LABEL: tt.func public @matmul_kernel_descriptor
     // CHECK-LABEL:   tt.func public @matmul_kernel_descriptor
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
     %c64_i32 = arith.constant 64 : i32
@@ -157,6 +159,13 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     %descB = tt.make_tensor_descriptor %arg1, [%arg5, %arg4], [%arg7, %c1_i64] : <f16>, <64x256xf16>
 
     // COM: 3-stage pipeline: 2 prefetching stages before the loop, 1 inside.
+    // ABLATE-COUNT-2: ttig.descriptor_prefetch
+    // ABLATE-NOT: ttig.descriptor_prefetch
+    // ABLATE: scf.for {{.*}} iter_args({{.*}}) -> (tensor<128x256xf32, {{.*}}>, i32, i32)
+    // ABLATE: ttig.descriptor_prefetch
+    // ABLATE: ttig.descriptor_prefetch
+    // ABLATE-NOT: ttig.descriptor_prefetch
+    // ABLATE: tt.dot
     // CHECK:      ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<128x64xf16>
     // CHECK:      ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<64x256xf16>
     // CHECK:      ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<128x64xf16>

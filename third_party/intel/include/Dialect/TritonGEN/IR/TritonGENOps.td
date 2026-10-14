@@ -63,7 +63,12 @@ def TritonGEN_SplitBarrierArriveOp : TritonGEN_Op<"split_barrier_arrive"> {
     The scope of these barrier is only Workgroup and the Subgroups are the
     objects which barriers control.
     The barrier implicitly perform the acq-rel memory semantic.
+
+    `workgroup_candidate` marks a pair inserted in uniform workgroup control
+    flow. Lowering may use the unnamed workgroup barrier if the handle has a
+    single wait and no intervening operation can introduce synchronization.
   }];
+  let arguments = (ins OptionalAttr<UnitAttr>:$workgroup_candidate);
   let results = (outs LLVM_PointerInAddressSpace<3>:$bData);
   let assemblyFormat = "attr-dict";
 }

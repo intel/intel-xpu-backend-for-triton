@@ -51,6 +51,8 @@ class XPUOptions:
     sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
     dynamic_shared_memory: bool = knobs.intel.dynamic_shared_memory
     use_barrier: bool = False
+    # Experimental Figure-1 Stage-5 control. -1 preserves normal pipelining.
+    max_prologue_prefetch_iterations: int = -1
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -195,6 +197,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
         dev_prop['has_16bit_atomics'] = tgt_prop.get('has_16bit_atomics', False)
         dev_prop['has_2d_block_io'] = tgt_prop.get('has_2d_block_io', False)
+        dev_prop['has_split_work_group_barrier'] = tgt_prop.get('has_split_work_group_barrier', False)
         is_lts = self.is_lts(tgt_prop.get('driver_version'))
         dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', not is_lts)
         dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', False)
@@ -325,6 +328,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_16bit_atomics = properties["has_16bit_atomics"]
         module_opts.support_sigmoid = properties["has_sigmoid"]
         module_opts.support_2d_block_io = properties["has_2d_block_io"]
+        module_opts.support_split_work_group_barrier = properties.get("has_split_work_group_barrier", False)
         module_opts.support_bfloat16_arithmetic = properties["has_bfloat16_arithmetic"]
         module_opts.support_bfloat16_conversion = properties["has_bfloat16_conversion"]
         module_opts.support_predicated_io = properties["has_predicated_io"]
@@ -420,7 +424,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if os.environ.get("TRITON_INTEL_ANNOTATE_LATENCIES", "0") == "1":
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier,
+                                          opt.max_prologue_prefetch_iterations)
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)

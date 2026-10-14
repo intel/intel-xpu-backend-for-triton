@@ -139,6 +139,10 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
            "number of pipeline stages">,
     Option<"useBarrier", "use-barrier", "bool", /*default*/"false",
            "generate barriers">,
+    Option<"maxProloguePrefetchIterations",
+           "max-prologue-prefetch-iterations", "int32_t", /*default*/"-1",
+           "experimental ablation: retain at most this many prologue copies "
+           "of each generated prefetch; -1 preserves normal behavior">,
   ];
 }
 

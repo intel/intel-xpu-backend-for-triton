@@ -1146,3 +1146,62 @@ def test_silu_sigmoid_optimization(device, monkeypatch):
         assert "__spirv_FSigmoidINTEL" not in llir, f"Not expected __spirv_FSigmoidINTEL in llir output, got:\n{llir}"
 
     torch.testing.assert_close(y_gpu.cpu(), torch.nn.functional.silu(x_cpu), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+def test_workgroup_split_barrier_global_memory(device, tmp_path):
+    if not triton.runtime.driver.active.get_current_target().arch.get('has_split_work_group_barrier', False):
+        pytest.skip("Workgroup split barriers are required")
+    ir = """
+    #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+    module attributes {ttg.target = "xpu", "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
+                       ttig.support_split_work_group_barrier} {
+      tt.func public @exchange(%scratch: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
+        %c0 = arith.constant 0 : i32
+        %c1 = arith.constant 1 : i32
+        %c64 = arith.constant 64 : i32
+        %c32 = arith.constant 32 : i32
+        %mask = arith.constant dense<63> : tensor<64xi32, #blocked>
+        %pid = tt.get_program_id x : i32
+        %base = arith.muli %pid, %c64 : i32
+        %base_vec = tt.splat %base : i32 -> tensor<64xi32, #blocked>
+        %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32, #blocked>
+        %index = arith.addi %base_vec, %lane : tensor<64xi32, #blocked>
+        %reverse = arith.xori %lane, %mask : tensor<64xi32, #blocked>
+        %reverse_index = arith.addi %base_vec, %reverse : tensor<64xi32, #blocked>
+        %scratch_vec = tt.splat %scratch : !tt.ptr<i32> -> tensor<64x!tt.ptr<i32>, #blocked>
+        %write_ptr = tt.addptr %scratch_vec, %index : tensor<64x!tt.ptr<i32>, #blocked>, tensor<64xi32, #blocked>
+        %read_ptr = tt.addptr %scratch_vec, %reverse_index : tensor<64x!tt.ptr<i32>, #blocked>, tensor<64xi32, #blocked>
+        %out_vec = tt.splat %out : !tt.ptr<i32> -> tensor<64x!tt.ptr<i32>, #blocked>
+        %out_base = arith.muli %base, %c32 : i32
+        scf.for %iteration = %c0 to %c32 step %c1 : i32 {
+          %iteration_vec = tt.splat %iteration : i32 -> tensor<64xi32, #blocked>
+          %value = arith.addi %index, %iteration_vec : tensor<64xi32, #blocked>
+          tt.store %write_ptr, %value : tensor<64x!tt.ptr<i32>, #blocked>
+          %barrier = triton_gen.split_barrier_arrive {workgroup_candidate}
+          triton_gen.split_barrier_wait %barrier
+          %read = tt.load %read_ptr : tensor<64x!tt.ptr<i32>, #blocked>
+          %iteration_offset = arith.muli %iteration, %c64 : i32
+          %offset = arith.addi %out_base, %iteration_offset : i32
+          %offset_vec = tt.splat %offset : i32 -> tensor<64xi32, #blocked>
+          %out_index = arith.addi %offset_vec, %lane : tensor<64xi32, #blocked>
+          %out_ptr = tt.addptr %out_vec, %out_index : tensor<64x!tt.ptr<i32>, #blocked>, tensor<64xi32, #blocked>
+          tt.store %out_ptr, %read : tensor<64x!tt.ptr<i32>, #blocked>
+          triton_gen.barrier {mem_fence = Global}
+        }
+        tt.return
+      }
+    }
+    """
+    path = tmp_path / 'workgroup_split_barrier.ttgir'
+    path.write_text(ir)
+    kernel = triton.compile(str(path))
+    scratch = torch.empty((64, 64), dtype=torch.int32, device=device)
+    output = torch.empty((64, 32, 64), dtype=torch.int32, device=device)
+    kernel[(64, 1, 1)](scratch, output)
+    groups = torch.arange(64, device=device, dtype=torch.int32)[:, None, None] * 64
+    iterations = torch.arange(32, device=device, dtype=torch.int32)[None, :, None]
+    reversed_lanes = torch.arange(63, -1, -1, device=device, dtype=torch.int32)[None, None, :]
+    torch.testing.assert_close(output, groups + iterations + reversed_lanes, atol=0, rtol=0)
+    assert '__spirv_ControlBarrierArriveINTEL' in kernel.asm['llir']
+    assert 'intel_manageable_barrier' not in kernel.asm['llir']

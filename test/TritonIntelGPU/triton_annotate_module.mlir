@@ -1,3 +1,5 @@
+// RUN: triton-opt %s --split-input-file -triton-annotate-module="support-split-work-group-barrier=true" | FileCheck %s --check-prefix=SPLIT
+// SPLIT: ttig.support_split_work_group_barrier
 // RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-2d-block-io=true support-dpas=true support-block-scale-dpas=false threads-per-warp=32' | FileCheck %s --check-prefix=CHECK-NO-BDPAS
 // RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-2d-block-io=true support-dpas=true support-block-scale-dpas=true threads-per-warp=32' | FileCheck %s --check-prefix=CHECK-BDPAS
 
