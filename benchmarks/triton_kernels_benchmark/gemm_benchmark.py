@@ -442,10 +442,11 @@ def get_benchmark(
         if transpose_b:
             torch_b = torch.transpose(torch_b, -2, -1)
 
+        # bf16 x bf16 -> fp32 is a fused oneDNN path, but torch.matmul has no out_dtype, so use mm/bmm.
+        torch_mm = torch.bmm if torch_a.dim() == 3 else torch.mm
+
         if provider == 'onednn':
-            # bf16 x bf16 -> fp32 natively in oneDNN; torch.matmul has no out_dtype, so use mm/bmm.
-            mm = torch.bmm if torch_a.dim() == 3 else torch.mm
-            _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: mm(torch_a, torch_b, out_dtype=torch.float32))
+            _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch_mm(torch_a, torch_b, out_dtype=torch.float32))
 
         elif provider == 'triton':
             if len(a.shape) != len(b.shape):
@@ -465,9 +466,9 @@ def get_benchmark(
                 transpose_a=transpose_a,
                 transpose_b=transpose_b,
             )
-            torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
-            rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+            # `out_dtype` keeps the fp32 accumulator; `matmul(...).to(fp32)` would round it to bf16 first.
+            torch_fn = lambda: torch_mm(torch_a, torch_b, out_dtype=torch.float32)
+            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
             _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
 
         elif provider == 'sycl-tla':
@@ -483,10 +484,9 @@ def get_benchmark(
                 return c
 
             sycl_tla_fn = sycl_tla_invoker
-            torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
+            torch_fn = lambda: torch_mm(torch_a, torch_b, out_dtype=torch.float32)
 
-            rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-            benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='sycl-tla to torch')
+            benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='sycl-tla to torch')
             _, min_ms, max_ms, mean_ms, cv = do_bench(sycl_tla_fn)
 
         else:
