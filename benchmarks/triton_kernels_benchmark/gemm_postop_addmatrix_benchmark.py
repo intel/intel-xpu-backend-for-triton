@@ -348,8 +348,6 @@ def benchmark(B, M, N, K, dtype, provider):
             torch_fn = lambda: torch.matmul(a.to(device='cpu', dtype=res_dtype), b.to(device='cpu', dtype=res_dtype)
                                             ).to(device=DEVICE, dtype=res_dtype).add_(d)
         else:
-            # `matmul(a, b).add_(d)` added fp32 `d` in place into a bf16 temp, so both the product
-            # and the sum came back rounded to bf16. addmm/baddbmm keep the fp32 accumulator.
             addmm = torch.baddbmm if a.dim() == 3 else torch.addmm
             torch_fn = lambda: addmm(d, a, b, out_dtype=res_dtype)
         if dtype.is_floating_point or [B, M, N, K] in [[1, 1024, 1024, 1024], [1, 2048, 2048, 2048],
