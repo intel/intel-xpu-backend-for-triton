@@ -32,3 +32,6 @@ tests/watermarking/test_watermarking.py::test_draft_sampler_uses_draft_key_and_a
 tests/watermarking/test_watermarking.py::test_dspark_reduced_vocab_draft_sampler_applies_watermarking
 tests/watermarking/test_watermarking.py::test_dspark_target_only_watermarking_leaves_drafts_unwatermarked
 tests/watermarking/test_watermarking.py::test_gpu_sampler_warns_when_watermarking_is_enabled_for_greedy
+
+# Hybrid chunked-prefill e2e test times out waiting for device memory left by earlier in-process engines: https://github.com/intel/intel-xpu-backend-for-triton/issues/8406
+tests/v1/e2e/test_hybrid_chunked_prefill.py::test_qwen_mtp_mamba_prefix_cache_hit_is_bounded
