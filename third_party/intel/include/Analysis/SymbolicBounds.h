@@ -494,9 +494,10 @@ bool normalizeCondition(BoundCondition &cond);
 
 /// Builds the i64 guard for `conds` immediately before `before`.
 /// Asserts that every symbol is a scalar (rank-0) SSA value that properly
-/// dominates `before`; the prover never produces a `LoopIV`, `Lane` or
-/// tensor-valued subject. "The guard cannot wrap" is a checked guarantee, not
-/// an assumption: a form that passes the static fit check uses plain i64
+/// dominates `before`; the prover never produces a `Lane` or tensor-valued
+/// subject, and a `LoopIV` subject only for the induction variable of a loop
+/// enclosing the queried one. "The guard cannot wrap" is a checked guarantee,
+/// not an assumption: a form that passes the static fit check uses plain i64
 /// arithmetic, and one that does not is paired with overflow predicates that
 /// make the guard false rather than wrong. Every symbol must be at most 64 bits
 /// wide, and a `DivisibleBy` divisor must be positive (both asserted): there is

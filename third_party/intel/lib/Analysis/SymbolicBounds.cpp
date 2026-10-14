@@ -1279,11 +1279,15 @@ bool SymbolicBoundsProver::decideResidual(const AffineForm &lo, int64_t g,
   if (lo.isConstant())
     return lo.constant() >= g;
   // Quotient facts first: substituting `c*q` by its bound on the dividend is
-  // what lets the dividend cancel against its other occurrences.
+  // what lets the dividend cancel against its other occurrences. On a trial
+  // copy, so a substitution that does not decide leaves no condition behind.
+  CandidateSet trial = cs;
   if (std::optional<AffineForm> sub =
-          substituteQuotients(lo, ctx, cs, /*maximize=*/false))
-    if (decideResidual(*sub, g, ctx, cs))
+          substituteQuotients(lo, ctx, trial, /*maximize=*/false))
+    if (decideResidual(*sub, g, ctx, trial)) {
+      cs = std::move(trial);
       return true;
+    }
   // A term whose sign is safe cannot make the residual smaller, so it is
   // dropped at zero and the constant term alone is compared against `g`.
   for (auto &[sym, k] : lo.terms())

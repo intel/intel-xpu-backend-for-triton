@@ -473,6 +473,31 @@ TEST_F(SymbolicBoundsTest, RemainderBounds) {
   EXPECT_EQ(verdict(get("ge")), "Conditional{arg0 >= 0}");
 }
 
+TEST_F(SymbolicBoundsTest, FailedQuotientSubstitutionLeavesNoCondition) {
+  // K is in [-63, 100], so q = (K + 63) / 64 is in [0, 2] and 64*q >= 0 holds
+  // from q's own sign. Substituting 64*q by its bound K first fails, since K
+  // may be negative; the K >= 0 precondition of that failed attempt must not
+  // end up in the proof.
+  parse(R"(
+    tt.func @f(%K: i32) {
+      %c0 = arith.constant 0 : i32
+      %c63 = arith.constant 63 : i32
+      %c64 = arith.constant 64 : i32
+      %cm63 = arith.constant -63 : i32
+      %c100 = arith.constant 100 : i32
+      %ge = arith.cmpi sge, %K, %cm63 : i32
+      llvm.intr.assume %ge : i1
+      %le = arith.cmpi sle, %K, %c100 : i32
+      llvm.intr.assume %le : i1
+      %num = arith.addi %K, %c63 : i32
+      %q = arith.divsi %num, %c64 : i32
+      %t = arith.muli %q, %c64 : i32
+      %cmp = arith.cmpi sge, %t, %c0 : i32 loc("cmp")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Satisfied");
+}
+
 TEST_F(SymbolicBoundsTest, VaryingQuotientBounds) {
   // X is loop-varying with range [100, 101]; q = X / 64 is 1, so q < 50 holds.
   // Bounding q by its stored dividend's range would refute it.
