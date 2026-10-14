@@ -1,0 +1,38 @@
+{
+  "device_name": "Intel(R) Arc(TM) B580 Graphics",
+  "entries": [
+    {
+      "config": {
+        "block_m": 16,
+        "grf_mode": "256",
+        "num_stages": 2,
+        "num_warps": 2,
+        "tile_size": 16
+      },
+      "key": {
+        "is_3d": true,
+        "kv_len_bucket": 2,
+        "num_segments": 16,
+        "num_seqs": 3,
+        "q_len_bucket": 0,
+        "query_work": 12
+      }
+    }
+  ],
+  "static_key": {
+    "block_size": 16,
+    "head_size": 128,
+    "k_dtype": "bfloat16",
+    "kv_layout": "contiguous",
+    "kv_quant_mode": 0,
+    "num_queries_per_kv": 1,
+    "out_dtype": "bfloat16",
+    "q_dtype": "bfloat16",
+    "q_layout": "contiguous",
+    "sliding_window": 0,
+    "use_softcap": false,
+    "use_td": true,
+    "v_dtype": "bfloat16"
+  },
+  "triton_version": "3.8.0"
+}
