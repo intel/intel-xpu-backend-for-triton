@@ -317,7 +317,7 @@ index 0e4af0a0c1..8bf42b3d68 100644
  @pytest.mark.parametrize("num_bits", [2, 4, 8])
  @pytest.mark.parametrize("group_size", [0, 256])  # 0 -> channel
 diff --git a/tests/kernels/test_compressor_kv_cache.py b/tests/kernels/test_compressor_kv_cache.py
-index 020dd607b6..c0794563da 100644
+index 020dd607b6..ed574065cd 100644
 --- a/tests/kernels/test_compressor_kv_cache.py
 +++ b/tests/kernels/test_compressor_kv_cache.py
 @@ -158,7 +158,7 @@ def test_dspark_context_kv_matches_query_insert(
@@ -365,6 +365,15 @@ index 020dd607b6..c0794563da 100644
  def test_v41_compressor_metadata_maps_tokens_to_their_ring():
      """The ring group's generic slot mapping is disabled (all PAD), so the
      builder must map every real token to ``ring_block * capacity + pos %
+@@ -758,7 +758,7 @@ def test_v41_compressor_metadata_maps_tokens_to_their_ring():
+     assert metadata.token_to_req_indices.tolist() == [0, 0, 0, 1, 1, 2, 2]
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda(), reason="CUDA stream coverage")
++@pytest.mark.skipif(not (current_platform.is_cuda() or current_platform.is_xpu()), reason="CUDA stream coverage")
+ @pytest.mark.parametrize(
+     "use_aux,use_graph", [(False, False), (True, False), (True, True)]
+ )
 @@ -1667,7 +1667,7 @@ def _reference_kv_compress_norm_rope(
              True,
              marks=pytest.mark.skipif(

@@ -33,3 +33,7 @@ tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels::test_pack_unpack_combin
 tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels::test_pack_unpack_combine_matches_reference[False-True-float16]
 tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels::test_pack_unpack_combine_matches_reference[True-True-bfloat16]
 tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels::test_pack_unpack_combine_matches_reference[True-True-float16]
+
+# maybe_execute_in_parallel uses torch.cuda.stream: https://github.com/intel/intel-xpu-backend-for-triton/issues/8354
+tests/kernels/test_compressor_kv_cache.py::test_v41_attention_joins_cache_writes_before_consumption[True-False]
+tests/kernels/test_compressor_kv_cache.py::test_v41_attention_joins_cache_writes_before_consumption[True-True]
