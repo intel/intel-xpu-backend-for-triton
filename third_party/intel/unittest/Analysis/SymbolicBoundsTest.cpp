@@ -1597,6 +1597,24 @@ TEST_F(SymbolicBoundsTest, I128NormalizeIsOpaque) {
   EXPECT_EQ(norm(arg(0)), "opaque(arg0)");
 }
 
+TEST_F(SymbolicBoundsTest, WideAndiIsNotAConjunction) {
+  parse(R"(
+    tt.func @f() {
+      %one = arith.constant 1 : i8
+      %two = arith.constant 2 : i8
+      %m = arith.andi %one, %two : i8 loc("m")
+      %t = arith.constant true
+      %b = arith.andi %t, %t : i1 loc("b")
+      tt.return
+    })");
+  // Both operands are nonzero, but 1 & 2 is 0.
+  Value m = get("m");
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(m, at(m))), "Unknown");
+  // The i1 conjunction still decides.
+  Value b = get("b");
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(b, at(b))), "Satisfied");
+}
+
 TEST_F(SymbolicBoundsTest, I128MaskIsUnknown) {
   parse(R"(
     tt.func @f(%a: i128) {

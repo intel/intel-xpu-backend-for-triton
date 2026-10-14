@@ -2480,7 +2480,10 @@ SymbolicBoundsProver::proveTrueNode(Value v, QueryContext ctx, unsigned depth) {
   // `a && b`. One `Refuted` side refutes the conjunction outright, and
   // does so unconditionally, so it needs nothing from the other side - which
   // is why this precedes the Unknown check.
-  if (auto andOp = dyn_cast<arith::AndIOp>(def)) {
+  // A conjunction only on i1: on a wider type `andi 1, 2` is 0 although both
+  // operands are nonzero, so such an `andi` is Unknown.
+  auto andOp = dyn_cast<arith::AndIOp>(def);
+  if (andOp && getElementTypeOrSelf(andOp.getType()).isInteger(1)) {
     MaskResult a = proveTrueImpl(andOp.getLhs(), ctx, depth + 1);
     MaskResult b = proveTrueImpl(andOp.getRhs(), ctx, depth + 1);
     // However the verdict comes out, this node is as tall as its taller
