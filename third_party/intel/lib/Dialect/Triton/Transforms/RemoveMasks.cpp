@@ -23,7 +23,6 @@
 
 #define DEBUG_TYPE "triton-intel-remove-masks"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
-#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 // The census trace sits on its own debug type so a corpus run can
 // enable it alone: `-debug-only=triton-intel-remove-masks` also turns on this
@@ -752,8 +751,8 @@ public:
   }
 
   // Assuming the mask is equivalent to the form: `END < N-i*END`, returns a
-  // structure containing `N` and `END`. Public so the versioning trace (Task
-  // 11) can render the guard text without re-parsing the mask.
+  // structure containing `N` and `END`. Public so the versioning trace can
+  // render the guard text without re-parsing the mask.
   MaskInfo getMaskInfo(scf::ForOp &forOp, Value mask) const {
     assert(isValidMask(forOp, mask, /*op=*/nullptr) &&
            "Expecting a valid mask");
@@ -1051,7 +1050,7 @@ public:
 
   // Structural pre-filter only, deliberately without proving anything: the
   // collector calls this loads-first and then selects, not in program order,
-  // and the Global Constraints require proofs in program order.
+  // and the driver takes proofs in program order.
   bool isValidMask(scf::ForOp &forOp, Value mask,
                    Operation *op) const override {
     // Mirror the look-through set of `proveTrue` and require it to bottom out
@@ -1082,25 +1081,20 @@ public:
 
   std::string getName() const override { return "SymbolicMaskValidator"; }
 
-  // Cached per operation. Operations sharing a mask are still queried
-  // separately: each query carries its own program point.
+  // Operations sharing a mask are queried separately: each query carries its
+  // own program point.
   tt::intel::BoundProof proofFor(Operation *op) const {
-    auto it = proofs.find(op);
-    if (it != proofs.end())
-      return it->second;
     Value mask = censusMask(op);
     tt::intel::BoundProof proof;
     if (mask)
       proof = prover.proveTrue(mask, {op, op->getParentOfType<scf::ForOp>()});
     CDBG("verdict: id=" << censusId(op)
                         << " proof=" << tt::intel::toString(proof));
-    proofs.try_emplace(op, proof);
     return proof;
   }
 
 private:
   tt::intel::SymbolicBoundsProver &prover;
-  mutable DenseMap<Operation *, tt::intel::BoundProof> proofs;
 };
 
 // What the analysis phase decided for one loop, consumed by the mutation

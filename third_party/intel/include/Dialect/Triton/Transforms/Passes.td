@@ -32,6 +32,9 @@ def TritonIntelRemoveMasks
     If the masked operation is in a loop, the pass attempts to find a loop
     invariant condition equivalent to the mask condition, and then use it to
     version the loop.
+    With TRITON_INTEL_SYMBOLIC_MASKS=1, the symbolic bounds prover decides the
+    masks instead, with no fallback to the pattern-based validators; the
+    versioning condition is then sufficient for the mask, not equivalent to it.
   }];
 
   let dependentDialects = [
