@@ -482,8 +482,8 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   Type elemType = srcTy.getElementType();
   unsigned bitsPerElement =
       std::max<int>(8, getIntOrFloatOrPtrBitWidth(elemType));
-  if (packedRegisterSize * bitsPerElement >= 256)
-    return false;
+  // if (packedRegisterSize * bitsPerElement >= 256)
+  //   return false;
 
   // Check the register base mapped to the lane base to complement the shuffled
   // elements out from lane base.
