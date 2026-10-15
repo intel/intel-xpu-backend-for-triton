@@ -162,7 +162,7 @@ index 4d73e49e91..f2cec6e879 100644
  
 +ATTENTION_AUTOTUNE_CONFIGS = [
 +    triton.Config({"BLOCK_M": m, "HEADS_PER_PROGRAM": h, **({"grf_mode": g} if g != "default" else {})}, num_warps=w, num_stages=s)
-+    for h in (0, 1, 8)
++    for h in (0, 1, 2, 4, 8)
 +    for m in (16, 32, 64, 128)
 +    for w in (2, 4, 8, 16)
 +    for s in (1, 2, 3)
