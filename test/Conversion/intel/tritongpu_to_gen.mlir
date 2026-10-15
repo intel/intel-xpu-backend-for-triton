@@ -16,6 +16,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.support_predicated_io"} {
   // CHECK-LABEL: basic_load
+  // COM: `other` is a function argument, so a predicated load takes a zero
+  // COM: default and applies `other` with a select (IGC bug, #8121).
   tt.func @basic_load(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
     // CHECK:      [[ARG0_0:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<1>, ptr<1>)>
     // CHECK-NEXT: [[ARG0_1:%.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<1>, ptr<1>)>
@@ -27,7 +29,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf32>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
     // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST1]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+    // PREDICATED:      [[Z1:%.*]] = llvm.mlir.zero : i32
+    // PREDICATED-NEXT: [[RAW1:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST1]], [[ARG1_0]], [[Z1]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+    // PREDICATED-NEXT: [[V1:%.*]] = llvm.select [[ARG1_0]], [[RAW1]], [[BCAST0]] : i1, i32
     // NO-PREDICATED:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i32)
     // NO-PREDICATED-NEXT: ^bb1:
     // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
@@ -36,7 +40,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // CHECK-NEXT:   [[EE1:%.*]] = llvm.bitcast [[V1]] : i32 to f32
     // CHECK:        [[BCAST2:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
     // CHECK:        [[BCAST3:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST3]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+    // PREDICATED:      [[Z2:%.*]] = llvm.mlir.zero : i32
+    // PREDICATED-NEXT: [[RAW2:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST3]], [[ARG1_1]], [[Z2]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+    // PREDICATED-NEXT: [[V2:%.*]] = llvm.select [[ARG1_1]], [[RAW2]], [[BCAST2]] : i1, i32
     // NO-PREDICATED:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i32)
     // NO-PREDICATED-NEXT: ^bb3:
     // NO-PREDICATED-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
@@ -56,6 +62,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
 #blocked0 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.support_predicated_io"} {
   // CHECK-LABEL: vectorized_load
+  // COM: `other` is a function argument, so a predicated load takes a zero
+  // COM: default and applies `other` with a select (IGC bug, #8121).
   tt.func @vectorized_load(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
     // CHECK:      [[ARG0_0:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<1>, ptr<1>)>
     // CHECK-NEXT: [[ARG0_1:%.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<1>, ptr<1>)>
@@ -67,7 +75,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf32>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
     // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST1]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+    // PREDICATED:      [[Z1:%.*]] = llvm.mlir.zero : i32
+    // PREDICATED-NEXT: [[RAW1:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST1]], [[ARG1_0]], [[Z1]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+    // PREDICATED-NEXT: [[V1:%.*]] = llvm.select [[ARG1_0]], [[RAW1]], [[BCAST0]] : i1, i32
     // NO-PREDICATED:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i32)
     // NO-PREDICATED-NEXT: ^bb1:
     // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
@@ -76,7 +86,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // CHECK-NEXT:   [[EE1:%.*]] = llvm.bitcast [[V1]] : i32 to f32
     // CHECK:        [[BCAST2:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
     // CHECK:        [[BCAST3:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST3]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+    // PREDICATED:      [[Z2:%.*]] = llvm.mlir.zero : i32
+    // PREDICATED-NEXT: [[RAW2:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST3]], [[ARG1_1]], [[Z2]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+    // PREDICATED-NEXT: [[V2:%.*]] = llvm.select [[ARG1_1]], [[RAW2]], [[BCAST2]] : i1, i32
     // NO-PREDICATED:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i32)
     // NO-PREDICATED-NEXT: ^bb3:
     // NO-PREDICATED-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
@@ -96,6 +108,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.support_predicated_io"} {
   // CHECK-LABEL: vectorized_load_f16
+  // COM: `other` is a function argument, so a predicated load takes a zero
+  // COM: default and applies `other` with a select (IGC bug, #8121).
   tt.func @vectorized_load_f16(%a_ptr_init: tensor<256x!tt.ptr<f16>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf16, #blocked0>) {
     // CHECK:      [[ARG0_0:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>)>
     // CHECK:      [[ARG0_1:%.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>)>
@@ -119,7 +133,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf16>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast [[IE1]] : vector<1xf16> to i16
     // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST1]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED:      [[Z1:%.*]] = llvm.mlir.zero : i16
+    // PREDICATED-NEXT: [[RAW1:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST1]], [[ARG1_0]], [[Z1]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED-NEXT: [[V1:%.*]] = llvm.select [[ARG1_0]], [[RAW1]], [[BCAST0]] : i1, i16
     // NO-PREDICATED:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i16)
     // NO-PREDICATED-NEXT: ^bb1:
     // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
@@ -128,7 +144,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE1:%.*]] = llvm.bitcast [[V1]] : i16 to f16
     // CHECK:        [[BCAST2:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST3:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST3]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED:      [[Z2:%.*]] = llvm.mlir.zero : i16
+    // PREDICATED-NEXT: [[RAW2:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST3]], [[ARG1_1]], [[Z2]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED-NEXT: [[V2:%.*]] = llvm.select [[ARG1_1]], [[RAW2]], [[BCAST2]] : i1, i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb3:
@@ -138,7 +156,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE2:%.*]] = llvm.bitcast [[V2]] : i16 to f16
     // CHECK:        [[BCAST4:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST5:%.*]] = llvm.bitcast [[ARG0_2]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[V3:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST5]], [[ARG1_2]], [[BCAST4]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED:      [[Z3:%.*]] = llvm.mlir.zero : i16
+    // PREDICATED-NEXT: [[RAW3:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST5]], [[ARG1_2]], [[Z3]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED-NEXT: [[V3:%.*]] = llvm.select [[ARG1_2]], [[RAW3]], [[BCAST4]] : i1, i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_2]], ^bb5, ^bb6([[BCAST4]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb5:
@@ -148,7 +168,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE3:%.*]] = llvm.bitcast [[V3]] : i16 to f16
     // CHECK:        [[BCAST5:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST6:%.*]] = llvm.bitcast [[ARG0_3]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[V4:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST6]], [[ARG1_3]], [[BCAST5]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED:      [[Z4:%.*]] = llvm.mlir.zero : i16
+    // PREDICATED-NEXT: [[RAW4:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST6]], [[ARG1_3]], [[Z4]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED-NEXT: [[V4:%.*]] = llvm.select [[ARG1_3]], [[RAW4]], [[BCAST5]] : i1, i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_3]], ^bb7, ^bb8([[BCAST5]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb7:
@@ -158,7 +180,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE4:%.*]] = llvm.bitcast [[V4]] : i16 to f16
     // CHECK:        [[BCAST7:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST8:%.*]] = llvm.bitcast [[ARG0_4]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[V5:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST8]], [[ARG1_4]], [[BCAST7]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED:      [[Z5:%.*]] = llvm.mlir.zero : i16
+    // PREDICATED-NEXT: [[RAW5:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST8]], [[ARG1_4]], [[Z5]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED-NEXT: [[V5:%.*]] = llvm.select [[ARG1_4]], [[RAW5]], [[BCAST7]] : i1, i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_4]], ^bb9, ^bb10([[BCAST7]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb9:
@@ -168,7 +192,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE5:%.*]] = llvm.bitcast [[V5]] : i16 to f16
     // CHECK:        [[BCAST8:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST9:%.*]] = llvm.bitcast [[ARG0_5]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[V6:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST9]], [[ARG1_5]], [[BCAST8]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED:      [[Z6:%.*]] = llvm.mlir.zero : i16
+    // PREDICATED-NEXT: [[RAW6:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST9]], [[ARG1_5]], [[Z6]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED-NEXT: [[V6:%.*]] = llvm.select [[ARG1_5]], [[RAW6]], [[BCAST8]] : i1, i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_5]], ^bb11, ^bb12([[BCAST8]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb11:
@@ -178,7 +204,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE6:%.*]] = llvm.bitcast [[V6]] : i16 to f16
     // CHECK:        [[BCAST10:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST11:%.*]] = llvm.bitcast [[ARG0_6]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[V7:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST11]], [[ARG1_6]], [[BCAST10]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED:      [[Z7:%.*]] = llvm.mlir.zero : i16
+    // PREDICATED-NEXT: [[RAW7:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST11]], [[ARG1_6]], [[Z7]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED-NEXT: [[V7:%.*]] = llvm.select [[ARG1_6]], [[RAW7]], [[BCAST10]] : i1, i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_6]], ^bb13, ^bb14([[BCAST10]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb13:
@@ -188,7 +216,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT:   [[EE7:%.*]] = llvm.bitcast [[V7]] : i16 to f16
     // CHECK:        [[BCAST12:%.*]] = llvm.bitcast {{.*}} : vector<1xf16> to i16
     // CHECK:        [[BCAST13:%.*]] = llvm.bitcast [[ARG0_7]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // PREDICATED: [[V8:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST13]], [[ARG1_7]], [[BCAST12]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED:      [[Z8:%.*]] = llvm.mlir.zero : i16
+    // PREDICATED-NEXT: [[RAW8:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST13]], [[ARG1_7]], [[Z8]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // PREDICATED-NEXT: [[V8:%.*]] = llvm.select [[ARG1_7]], [[RAW8]], [[BCAST12]] : i1, i16
     // NO-PREDICATED:        llvm.cond_br [[ARG1_7]], ^bb15, ^bb16([[BCAST12]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb15:

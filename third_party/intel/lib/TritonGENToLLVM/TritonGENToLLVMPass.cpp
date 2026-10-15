@@ -30,6 +30,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Target/LLVMIR/TypeToLLVM.h"
 
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -1279,6 +1280,50 @@ struct TritonSubGroupBlockWriteLowering
   }
 };
 
+/// Returns true if `value` is a compile-time constant. The Triton load
+/// lowerings assemble a predicated load's default value as an
+/// undef / insertvalue / extractvalue / insertelement / bitcast chain, so even
+/// a constant `other` tensor or a descriptor load's padding is never a bare
+/// constant by the time it gets here: look through that chain rather than at
+/// the root value.
+///
+/// Aggregates are handled conservatively: an extractvalue is constant only if
+/// every element of the aggregate it reads from is, rather than tracking which
+/// insertvalue wrote the requested position. Erring towards `false` only costs
+/// an extra select.
+static bool isConstantDefaultValue(Value value) {
+  SmallVector<Value> worklist{value};
+  SmallPtrSet<Operation *, 16> visited;
+  while (!worklist.empty()) {
+    Operation *defOp = worklist.pop_back_val().getDefiningOp();
+    if (!defOp)
+      return false;
+    if (!visited.insert(defOp).second)
+      continue;
+    // Also covers llvm.mlir.undef / poison / zero, which are ConstantLike.
+    if (defOp->hasTrait<OpTrait::ConstantLike>())
+      continue;
+    if (auto insertElem = dyn_cast<LLVM::InsertElementOp>(defOp)) {
+      worklist.append({insertElem.getVector(), insertElem.getValue()});
+      continue;
+    }
+    if (auto insertVal = dyn_cast<LLVM::InsertValueOp>(defOp)) {
+      worklist.append({insertVal.getContainer(), insertVal.getValue()});
+      continue;
+    }
+    if (auto extractVal = dyn_cast<LLVM::ExtractValueOp>(defOp)) {
+      worklist.push_back(extractVal.getContainer());
+      continue;
+    }
+    if (auto bitcast = dyn_cast<LLVM::BitcastOp>(defOp)) {
+      worklist.push_back(bitcast.getArg());
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 struct TritonPredicatedLoadOpLowering
     : public ConvertOpToLLVMPattern<TritonGEN::PredicatedLoadOp> {
   using ConvertOpToLLVMPattern<
@@ -1292,12 +1337,25 @@ struct TritonPredicatedLoadOpLowering
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type resType = op.getRes().getType();
 
+    // FIXME: this is a workaround for IGC bug. For details see
+    // https://github.com/intel/intel-xpu-backend-for-triton/issues/8121.
+    //
+    // IGC selects a predicated load's result into the register holding its
+    // default value, so predicated loads that share one non-constant default
+    // all write that register and every consumer reads the last load's data.
+    // A constant default is rematerialized per load and is unaffected. For
+    // any other default, load with a zero default and apply the real one with
+    // a select on the same predicate, so that no runtime value is ever a
+    // predicated-load operand.
+    Value defaultValue = op.getDefaultValue();
+    bool selectDefault = !isConstantDefaultValue(defaultValue);
+
     // Create a call to the SPIR-V builtin for predicated load.
     SmallVector<Type> argTypes{ptr_ty(ctx, 1), int_ty(1), resType};
     std::string fnName = "__spirv_PredicatedLoadINTEL";
     fnName = intel::mangle(fnName, argTypes);
     SmallVector<Value> args{op.getPtr(), op.getPredicate(),
-                            op.getDefaultValue()};
+                            selectDefault ? b.null(resType) : defaultValue};
 
     // A predicated load only reads memory reachable through its pointer
     // argument. Declare that explicitly: defaulting to `memory(readwrite)`
@@ -1323,7 +1381,10 @@ struct TritonPredicatedLoadOpLowering
                       *optCacheControls);
     }
 
-    rewriter.replaceOp(op, callOp);
+    Value result = callOp.getResult();
+    if (selectDefault)
+      result = b.select(op.getPredicate(), result, defaultValue);
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
