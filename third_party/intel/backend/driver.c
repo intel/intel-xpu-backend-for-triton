@@ -859,11 +859,11 @@ static void PyKernelArg_dealloc(PyKernelArgObject *self) {
 // Constructor
 static int PyKernelArg_init(PyKernelArgObject *self, PyObject *args,
                             PyObject *kwds) {
-  static char *kwlist[] = {"nested_tuple", "type", NULL};
+  static const char *kwlist[] = {"nested_tuple", "type", NULL};
   PyObject *tup = NULL;
   int type_val = 0;
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|i", kwlist, &tup,
-                                   &type_val)) {
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwds, "O|i", const_cast<char **>(kwlist), &tup, &type_val)) {
     return -1;
   }
   Py_XINCREF(tup);

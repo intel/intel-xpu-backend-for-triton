@@ -10,6 +10,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
@@ -690,6 +691,21 @@ calculateDPASRepetitions(ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx,
   }
 
   llvm_unreachable("unexpected opIdx");
+}
+
+bool mayWriteMemory(Operation *op, bool ignoreSharedMemory) {
+  std::optional<SmallVector<MemoryEffects::EffectInstance>> effects =
+      getEffectsRecursively(op);
+  if (!effects)
+    return true;
+  return llvm::any_of(*effects, [&](const MemoryEffects::EffectInstance &e) {
+    if (!isa<MemoryEffects::Write>(e.getEffect()))
+      return false;
+    SideEffects::Resource *resource = e.getResource();
+    if (ignoreSharedMemory && isa<SharedMemory>(resource))
+      return false;
+    return !isa<L2Cache>(resource);
+  });
 }
 
 } // namespace mlir::triton::gpu::intel

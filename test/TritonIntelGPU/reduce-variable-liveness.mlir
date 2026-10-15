@@ -765,6 +765,45 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
+// COM: The loop's own ops are under budget but its scf.if body is over; the load
+// COM: is sunk only if peakPressure descends into the if.
+// CHECK-LABEL: tt.func @loop_pressure_hidden_in_nested_if
+#dpas9 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0_9 = #ttg.dot_op<{opIdx = 0, parent = #dpas9, kWidth=1}>
+#dot1_9 = #ttg.dot_op<{opIdx = 1, parent = #dpas9, kWidth=2}>
+#blocked9 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @loop_pressure_hidden_in_nested_if(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i1) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<8x16xf32, #dpas9>
+    %c64_i32 = arith.constant 64 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i64 = arith.constant 0 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f16>, <8x64xf16>
+    %1 = tt.make_tensor_descriptor %arg1, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f16>, <64x16xf16>
+    %2 = tt.make_tensor_descriptor %arg2, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f32>, <64x128xf32>
+    // CHECK:      ttig.descriptor_prefetch %{{.*}}[%c0_i32, %c0_i32] {{.*}} : !tt.tensordesc<8x64xf16>
+    // CHECK-NOT:  tt.descriptor_load {{.*}} : !tt.tensordesc<8x64xf16>
+    %3 = tt.descriptor_load %0[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<8x64xf16> -> tensor<8x64xf16, #dot0_9>
+    %4 = scf.for %arg4 = %c0_i32 to %c64_i32 step %c64_i32 iter_args(%arg5 = %cst) -> (tensor<8x16xf32, #dpas9>) : i32 {
+      // CHECK:  scf.for
+      // COM: The sunk copy of %3.
+      // CHECK:  tt.descriptor_load {{.*}} : !tt.tensordesc<8x64xf16>
+      %5 = tt.descriptor_load %1[%c0_i32, %c0_i32] : !tt.tensordesc<64x16xf16> -> tensor<64x16xf16, #dot1_9>
+      %6 = tt.dot %3, %5, %arg5, inputPrecision = tf32 : tensor<8x64xf16, #dot0_9> * tensor<64x16xf16, #dot1_9> -> tensor<8x16xf32, #dpas9>
+      scf.if %arg3 {
+        %7 = tt.descriptor_load %2[%c0_i32, %c0_i32] : !tt.tensordesc<64x128xf32> -> tensor<64x128xf32, #blocked9>
+        %8 = tt.descriptor_load %2[%c0_i32, %c0_i32] : !tt.tensordesc<64x128xf32> -> tensor<64x128xf32, #blocked9>
+        %9 = arith.addf %7, %8 : tensor<64x128xf32, #blocked9>
+        tt.descriptor_store %2[%c0_i32, %c0_i32], %9 : !tt.tensordesc<64x128xf32>, tensor<64x128xf32, #blocked9>
+      }
+      scf.yield %6 : tensor<8x16xf32, #dpas9>
+    }
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Peak 1472 B/lane, above the 1024 B/lane budget, with both kinds of candidate:
 // COM: %late is loaded in the loop (the in-loop sink moves it down to its dot), %a
 // COM: before it (`moveOperand` prefetches it there and reloads it in the loop).

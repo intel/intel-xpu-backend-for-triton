@@ -2583,6 +2583,50 @@ def test_tensor_atomic_use_result(dtype_str, size, op, device):
     assert (out == 5).all()
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["int32", "int64", "float32", "float64"])
+@pytest.mark.parametrize("use_result", [True, False])
+def test_tensor_atomic_xchg(dtype_str, use_result, device):
+    check_type_supported(dtype_str, device)
+
+    @triton.jit
+    def kernel(X, Z, Old, SIZE: tl.constexpr, USE_RESULT: tl.constexpr):
+        offs = tl.arange(0, SIZE)
+        old = tl.atomic_xchg(Z + offs, tl.load(X + offs), sem="acq_rel")
+        if USE_RESULT:
+            tl.store(Old + offs, old)
+
+    size = 256
+    dtype = getattr(torch, dtype_str)
+    nbits = dtype.itemsize * 8
+    bits_torch = getattr(torch, f"int{nbits}")
+    # Exchange random bit patterns and compare bits: a swap must not convert
+    # values, so -0.0, infinities, NaN payloads and denormals have to survive.
+    rs = RandomState(17)
+    x_bits, z_bits = rs.randint(0, np.iinfo(f"uint{nbits}").max, size=(2, size), dtype=f"uint{nbits}")
+    # -0.0, +inf, -inf, a quiet NaN with a payload, a signaling NaN and the smallest denormal.
+    specials = {
+        "float32": [0x80000000, 0x7F800000, 0xFF800000, 0x7FC01234, 0x7F800001, 0x1],
+        "float64":
+        [0x8000000000000000, 0x7FF0000000000000, 0xFFF0000000000000, 0x7FF8000000001234, 0x7FF0000000000001, 0x1],
+    }.get(dtype_str, [])
+    x_bits[:len(specials)] = specials
+    z_bits[len(specials):2 * len(specials)] = specials
+    x = torch.from_numpy(x_bits.view(f"int{nbits}")).to(device).view(dtype)
+    z = torch.from_numpy(z_bits.view(f"int{nbits}")).to(device).view(dtype)
+    z_ref = z.clone()
+    old = torch.zeros_like(z)
+    h = kernel[(1, )](x, z, old, size, use_result)
+    assert torch.equal(z.view(bits_torch), x.view(bits_torch))
+    if use_result:
+        assert torch.equal(old.view(bits_torch), z_ref.view(bits_torch))
+
+    # Make sure AMD takes the buffer atomic path, where the backend cannot select f64 swaps.
+    if ((is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4m() or is_hip_rdna4() or is_hip_gfx1250())
+            and triton.knobs.amd.use_buffer_ops and triton.knobs.amd.use_buffer_atomics):
+        assert "buffer_atomic_swap" in h.asm["amdgcn"]
+
+
 # ---------------
 # test cast
 # ---------------
@@ -4181,36 +4225,38 @@ def _sum_combine(a, b):
 
 
 @pytest.mark.interpreter
-def test_generic_reduction(device):
+@pytest.mark.parametrize("shape, axis, keep_dims", [((512, ), 0, False), ((4, 8), None, False),
+                                                    ((2, 4, 8), None, True)])
+def test_generic_reduction(device, shape, axis, keep_dims):
 
     @triton.jit
-    def var_mean_kernel(X, out_mean, out_var, out_sum0, out_sum1, BLOCK: tl.constexpr):
+    def var_mean_kernel(X, out_mean, out_var, out_sum0, out_sum1, BLOCK: tl.constexpr, SHAPE: tl.constexpr,
+                        AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr):
         xindex = tl.arange(0, BLOCK)
-        x = tl.load(X + xindex)
+        x = tl.reshape(tl.load(X + xindex), SHAPE)
         mean = x
         m2 = tl.zeros_like(x)
         weight = tl.full(x.shape, 1, x.dtype)
         # Test return a tuple and a single value
-        sum0, = tl.reduce((x, ), 0, _sum_combine)
-        sum1 = tl.reduce(x, 0, _sum_combine)
+        sum0, = tl.reduce((x, ), AXIS, _sum_combine, keep_dims=KEEP_DIMS)
+        sum1 = tl.reduce(x, AXIS, _sum_combine, keep_dims=KEEP_DIMS)
         # Test multiple values in a tuple
-        (mean, m2, weight) = tl.reduce((mean, m2, weight), 0, _welford_combine)
-        tl.store(out_mean, mean)
-        tl.store(out_var, m2 / weight)
-        tl.store(out_sum0, sum0)
-        tl.store(out_sum1, sum1)
+        (mean, m2, weight) = tl.reduce((mean, m2, weight), AXIS, _welford_combine, keep_dims=KEEP_DIMS)
+        tl.store(out_mean, tl.reshape(mean, ()))
+        tl.store(out_var, tl.reshape(m2 / weight, ()))
+        tl.store(out_sum0, tl.reshape(sum0, ()))
+        tl.store(out_sum1, tl.reshape(sum1, ()))
 
-    SIZE = 512
-    x = torch.rand(SIZE, device=device)
-    out_mean = torch.empty((), device=device)
-    out_var = torch.empty((), device=device)
-    sum0 = torch.empty((), device=device)
-    sum1 = torch.empty((), device=device)
+    x = torch.rand(shape, device=device)
+    expect_var, expect_mean = torch.var_mean(x, dim=axis, correction=0, keepdim=keep_dims)
+    sum_ref = torch.sum(x, dim=axis, keepdim=keep_dims)
+    out_mean = torch.empty_like(expect_mean)
+    out_var = torch.empty_like(expect_var)
+    sum0 = torch.empty_like(sum_ref)
+    sum1 = torch.empty_like(sum_ref)
 
-    var_mean_kernel[(1, )](x, out_mean, out_var, sum0, sum1, BLOCK=SIZE)
-
-    expect_var, expect_mean = torch.var_mean(x, dim=0, correction=0)
-    sum_ref = torch.sum(x)
+    var_mean_kernel[(1, )](x, out_mean, out_var, sum0, sum1, BLOCK=x.numel(), SHAPE=shape, AXIS=axis,
+                           KEEP_DIMS=keep_dims)
     torch.testing.assert_close(out_mean, expect_mean)
     torch.testing.assert_close(out_var, expect_var)
     torch.testing.assert_close(sum0, sum_ref)
@@ -5570,7 +5616,7 @@ def test_dot_without_load(dtype_str, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("start", [0, 1, 7, 16])
+@pytest.mark.parametrize("start", [-128, -64, -16, 0, 1, 7, 16])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_arange(start, num_ctas, device):
     BLOCK = 128

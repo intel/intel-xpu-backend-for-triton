@@ -166,7 +166,7 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
 | `--sglang-mamba` | 940 passed, 16 skipped upstream | 19s |
 | `--sglang-gdn` | 30 passed, 1 skipped upstream | 9s |
 | `--sglang-kda` | 1 passed, 14 skipped upstream | 10s |
-| `--sglang-spec` | 1 skipped, skip-listed | 11s |
+| `--sglang-spec` | 1 passed, 22 subtests | 38s |
 | `--sglang-e2e` | not measured locally - needs model weights and a server launch | - |
 
 ## Known gaps
@@ -218,8 +218,7 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
   `sglang-test-fix.patch` moves the GDN path, XPU overrides included, to tensor
   descriptors; the remaining uses, e.g. in `kda.py`, are not reached by the
   suites here.
-- **CUDA-only tests.** `test_dspark_kernel_parity.py` calls `torch.cuda` and is
-  skip-listed. Three of four `test_kda_kernels.py` classes skip themselves.
+- **CUDA-only tests.** Three of four `test_kda_kernels.py` classes skip themselves.
 - **e2e is smoke only.** `--sglang-e2e` asserts throughput, not numerics, so a
   subtly wrong position id or token-pool write still passes. No SGLang test
   checks those two kernels against a reference.
