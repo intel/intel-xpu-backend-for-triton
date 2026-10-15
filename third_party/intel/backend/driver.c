@@ -12,6 +12,7 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -519,6 +520,71 @@ struct BuildFlags {
   }
 };
 
+// GRF mode a binary fixes on its own, independently of `BuildFlags`: off LTS,
+// compiler.py requests an explicit `grf_mode` through the kernel's
+// SPV_INTEL_maximum_registers execution mode instead of an IGC build flag.
+struct BinaryGRFMode {
+  bool isFixed = false; // The binary chooses its GRF mode; do not retry.
+  int32_t nRegs = 0;    // Register count, 0 when not known (e.g. AutoINTEL).
+};
+
+// Scans the SPIR-V module for a MaximumRegistersINTEL (6461),
+// MaximumRegistersIdINTEL (6462) or NamedMaximumRegistersINTEL (6463)
+// execution mode.
+static BinaryGRFMode getSpirvGRFMode(const uint8_t *binary, size_t size) {
+  constexpr uint32_t spirvMagic = 0x07230203;
+  constexpr uint32_t opExecutionMode = 16, opFunction = 54,
+                     opExecutionModeId = 331;
+  constexpr uint32_t maxRegisters = 6461, maxRegistersId = 6462,
+                     namedMaxRegisters = 6463;
+  constexpr size_t headerWords = 5;
+
+  const size_t numWords = size / sizeof(uint32_t);
+  auto word = [&](size_t i) {
+    uint32_t w;
+    std::memcpy(&w, binary + i * sizeof(uint32_t), sizeof(w));
+    return w;
+  };
+  if (numWords < headerWords || word(0) != spirvMagic)
+    return {};
+
+  for (size_t i = headerWords; i < numWords;) {
+    const uint32_t opcode = word(i) & 0xffff, wordCount = word(i) >> 16;
+    if (wordCount == 0 || i + wordCount > numWords)
+      break;
+    // Execution modes all precede the first function definition.
+    if (opcode == opFunction)
+      break;
+    if ((opcode == opExecutionMode || opcode == opExecutionModeId) &&
+        wordCount >= 3) {
+      const uint32_t mode = word(i + 2);
+      if (mode == maxRegisters && wordCount >= 4)
+        return {true, static_cast<int32_t>(word(i + 3))};
+      if (mode == maxRegistersId || mode == namedMaxRegisters)
+        return {true, 0};
+    }
+    i += wordCount;
+  }
+  return {};
+}
+
+// Reads `grf_count` from the zebin's `.ze_info` YAML, which IGC always emits
+// for a compiled kernel.
+static BinaryGRFMode getZebinGRFMode(const uint8_t *binary, size_t size) {
+  const std::string_view zebin(reinterpret_cast<const char *>(binary), size);
+  constexpr std::string_view key = "grf_count:";
+  const size_t pos = zebin.find(key);
+  if (pos == std::string_view::npos)
+    return {};
+  size_t i = pos + key.size();
+  while (i < zebin.size() && zebin[i] == ' ')
+    ++i;
+  int32_t nRegs = 0;
+  for (; i < zebin.size() && zebin[i] >= '0' && zebin[i] <= '9'; ++i)
+    nRegs = nRegs * 10 + (zebin[i] - '0');
+  return {true, nRegs};
+}
+
 sycl::context get_default_context(const sycl::device &sycl_device) {
   const auto &platform = sycl_device.get_platform();
 #if defined(_WIN32)
@@ -608,7 +674,11 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
       compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                               l0_context, build_flags(), is_spv);
   bool firstBuildFailed = PyErr_Occurred();
-  const bool canRetryWithLargeGRF = is_spv && !build_flags.hasGRFSizeFlag();
+  const BinaryGRFMode binaryGRFMode =
+      is_spv ? getSpirvGRFMode(binary_ptr, binary_size)
+             : getZebinGRFMode(binary_ptr, binary_size);
+  const bool canRetryWithLargeGRF =
+      is_spv && !build_flags.hasGRFSizeFlag() && !binaryGRFMode.isFixed;
   if (firstBuildFailed && !canRetryWithLargeGRF) {
     return NULL;
   }
@@ -751,7 +821,8 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
               << kernel_name << "\"" << std::endl;
   }
 
-  auto n_regs = build_flags.n_regs();
+  auto n_regs =
+      binaryGRFMode.nRegs > 0 ? binaryGRFMode.nRegs : build_flags.n_regs();
 
   auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
       sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
