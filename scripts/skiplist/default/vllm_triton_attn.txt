@@ -5,20 +5,6 @@ tests/kernels/test_fused_inv_rope_fp8_quant.py::test_with_real_deepseek_v4_rope[
 
 # DeepSeek-V4 compressor/indexer cache tests produce wrong results on XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/8353
 tests/kernels/test_compressor_kv_cache.py::test_indexer_gather_accepts_upper_bound_output
-tests/kernels/test_compressor_kv_cache.py::test_v41_fused_save_compress_and_insert[decode-False-1]
-tests/kernels/test_compressor_kv_cache.py::test_v41_fused_save_compress_and_insert[decode-True-1]
-tests/kernels/test_compressor_kv_cache.py::test_v41_fused_save_compress_and_insert[empty-False-1]
-tests/kernels/test_compressor_kv_cache.py::test_v41_fused_save_compress_and_insert[empty-True-1]
-tests/kernels/test_compressor_kv_cache.py::test_v41_fused_save_compress_and_insert[packed_boundary-False-1]
-tests/kernels/test_compressor_kv_cache.py::test_v41_fused_save_compress_and_insert[packed_boundary-True-1]
-tests/kernels/test_compressor_kv_cache.py::test_v41_fused_save_compress_and_insert[prefill-False-1]
-tests/kernels/test_compressor_kv_cache.py::test_v41_fused_save_compress_and_insert[prefill-True-1]
-tests/kernels/test_compressor_kv_cache.py::test_v41_fused_save_compress_and_insert[wrap_threshold-False-1]
-tests/kernels/test_compressor_kv_cache.py::test_v41_fused_save_compress_and_insert[wrap_threshold-True-1]
-
-# maybe_execute_in_parallel uses torch.cuda.stream: https://github.com/intel/intel-xpu-backend-for-triton/issues/8354
-tests/kernels/test_compressor_kv_cache.py::test_v41_attention_joins_cache_writes_before_consumption[True-False]
-tests/kernels/test_compressor_kv_cache.py::test_v41_attention_joins_cache_writes_before_consumption[True-True]
 
 # CI HF token has no access to gated google/embeddinggemma-300m: https://github.com/intel/intel-xpu-backend-for-triton/issues/8355
 tests/v1/attention/test_attention_backends.py::test_sliding_window_encoder_backend_correctness[1-google/embeddinggemma-300m-medium_encoder_prefill]

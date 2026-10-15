@@ -321,12 +321,41 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _skip_guard_spans(source: str) -> list[tuple[int, int, int, int]]:
+    """(start line, start col, end line, end col) of every skip guard: skipif conditions and the
+    tests of `if ...: pytest.skip()`. Which CUDA-only tests run on XPU is decided per test in
+    vllm-fix.patch, so the CUDA->XPU rewrites here must not change skip guards."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    def is_pytest_call(node: ast.AST, name: str) -> bool:
+        return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == name
+
+    guards: list[ast.expr] = []
+    for node in ast.walk(tree):
+        if is_pytest_call(node, "skipif") and isinstance(node, ast.Call):
+            guards.extend(node.args[:1])
+        elif isinstance(node, ast.If) and any(
+                is_pytest_call(call, "skip") for stmt in node.body for call in ast.walk(stmt)):
+            guards.append(node.test)
+    return [(g.lineno, g.col_offset, g.end_lineno or g.lineno, g.end_col_offset or 0) for g in guards]
+
+
+def _in_spans(pattern: dict, spans: list[tuple[int, int, int, int]]) -> bool:
+    pos = (pattern["line"], pattern["col"])
+    return any((sl, sc) <= pos < (el, ec) for sl, sc, el, ec in spans)
+
+
 def patch_file(filepath: Path, map_cuda_runtime: bool = False) -> bool:
     """Patch a single file. Returns True if changes were made."""
     source = filepath.read_text()
     patterns = _find_cuda_patterns(source)
     if map_cuda_runtime:
         patterns += _find_cuda_runtime_patterns(source)
+    spans = _skip_guard_spans(source)
+    patterns = [p for p in patterns if not _in_spans(p, spans)]
     if not patterns:
         return False
 
