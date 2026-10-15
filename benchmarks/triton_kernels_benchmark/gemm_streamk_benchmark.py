@@ -121,7 +121,9 @@ BLOCK_SIZES = get_autotune_configs()[0].kwargs
 @triton.autotune(
     configs=get_autotune_configs(),
     key=['M', 'N', 'K'],
-    restore_value=['c_ptr'],
+    # `mac_loop` accumulates into c with `atomic_add`, so every launch needs c zeroed.
+    # `first_wave` runs before `full_tiles`, so zeroing the whole buffer here is safe.
+    reset_to_zero=['c_ptr'],
 )
 @triton.jit
 def first_wave(
@@ -154,6 +156,9 @@ def first_wave(
 @triton.autotune(
     configs=get_autotune_configs(),
     key=['M', 'N', 'K'],
+    # This kernel stores only the blocking tiles, and it runs after `first_wave` has accumulated the
+    # stream-K tiles into the same buffer, so c has to be saved and restored around each config to
+    # keep those tiles intact.
     restore_value=['c_ptr'],
 )
 @triton.jit
