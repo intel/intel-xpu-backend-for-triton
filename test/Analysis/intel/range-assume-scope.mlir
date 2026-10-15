@@ -72,7 +72,8 @@ module {
 // -----
 
 // COM: tt.atomic_poll without a timeout polls until the expected value
-// COM: appears, so it may spin forever.
+// COM: appears, so it may spin forever. A timeout does not help: it is a
+// COM: runtime value and may be unbounded.
 // CHECK-LABEL: tt.func @no_timeout_poll_blocks_backward_assume
 module {
   tt.func @no_timeout_poll_blocks_backward_assume(%n: i32, %p: !tt.ptr<i32>) {
@@ -444,6 +445,96 @@ module {
     ^bb0(%a: i32):
       tt.map_elementwise.return %a : i32
     }) : (tensor<4xi32>) -> tensor<4xi32>
+    %cmp = arith.cmpi sge, %n, %c64 : i32
+    llvm.intr.assume %cmp : i1
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Same with a timeout.
+// CHECK-LABEL: tt.func @timeout_poll_blocks_backward_assume
+module {
+  tt.func @timeout_poll_blocks_backward_assume(%n: i32, %p: !tt.ptr<i32>, %t: i64) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %use = arith.addi %n, %c0 : i32
+    %ok = tt.atomic_poll acquire, gpu, %p, %c0 timeout %t : !tt.ptr<i32>, i32 -> i1
+    %cmp = arith.cmpi sge, %n, %c64 : i32
+    llvm.intr.assume %cmp : i1
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A loop in a tt.reduce combiner blocks the tt.reduce.
+// CHECK-LABEL: tt.func @loop_in_reduce_blocks
+module {
+  tt.func @loop_in_reduce_blocks(%n: i32, %flag: i1) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %use = arith.addi %n, %c0 : i32
+    %x = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32>
+    %r = "tt.reduce"(%x) <{axis = 0 : i32}> ({
+    ^bb0(%a: i32, %b: i32):
+      scf.while () : () -> () {
+        scf.condition(%flag)
+      } do {
+        scf.yield
+      }
+      %s = arith.maxsi %a, %b : i32
+      tt.reduce.return %s : i32
+    }) : (tensor<4xi32>) -> i32
+    %cmp = arith.cmpi sge, %n, %c64 : i32
+    llvm.intr.assume %cmp : i1
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A loop in a tt.scan combiner blocks the tt.scan.
+// CHECK-LABEL: tt.func @loop_in_scan_blocks
+module {
+  tt.func @loop_in_scan_blocks(%n: i32, %flag: i1) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %use = arith.addi %n, %c0 : i32
+    %x = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32>
+    %r = "tt.scan"(%x) <{axis = 0 : i32, reverse = false}> ({
+    ^bb0(%a: i32, %b: i32):
+      scf.while () : () -> () {
+        scf.condition(%flag)
+      } do {
+        scf.yield
+      }
+      %s = arith.addi %a, %b : i32
+      tt.scan.return %s : i32
+    }) : (tensor<4xi32>) -> tensor<4xi32>
+    %cmp = arith.cmpi sge, %n, %c64 : i32
+    llvm.intr.assume %cmp : i1
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A use inside an scf.if that always finishes takes a later assume.
+// CHECK-LABEL: tt.func @use_inside_scf_if_takes_later_assume
+module {
+  tt.func @use_inside_scf_if_takes_later_assume(%n: i32, %flag: i1, %q: !tt.ptr<i32>) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    scf.if %flag {
+      // expected-remark@+1 {{unsigned : [64, 2147483647] signed : [64, 2147483647]}}
+      %use = arith.addi %n, %c0 : i32
+      tt.store %q, %use : !tt.ptr<i32>
+    }
     %cmp = arith.cmpi sge, %n, %c64 : i32
     llvm.intr.assume %cmp : i1
     tt.return

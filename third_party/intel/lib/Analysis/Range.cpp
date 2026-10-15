@@ -107,10 +107,10 @@ static bool transfersExecution(Operation *op) {
   // May abort or may not return.
   if (isa<tt::AssertOp>(op) || isa<CallOpInterface>(op))
     return false;
-  // Regionless and not CallOpInterface, yet a no-timeout poll spins until
-  // the expected value appears, and an impure external call or inline asm
-  // may never return.
-  if (auto poll = dyn_cast<tt::AtomicPollOp>(op); poll && !poll.getTimeout())
+  // Regionless and not CallOpInterface, yet a poll may spin until the
+  // expected value appears (its timeout is a runtime value and may be
+  // unbounded), and an impure external call or inline asm may never return.
+  if (isa<tt::AtomicPollOp>(op))
     return false;
   if (auto ext = dyn_cast<tt::ExternElementwiseOp>(op); ext && !ext.getPure())
     return false;
