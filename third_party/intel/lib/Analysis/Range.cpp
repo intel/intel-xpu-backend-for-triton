@@ -244,10 +244,11 @@ void IntegerRangeAnalysis::setToEntryState(
 
   // The entry state holds at every use, so an assume constrains it only if it
   // is certain to execute once the value exists: from just after the defining
-  // op for an op result, else from the start of the function.
+  // op for an op result (from the op itself if it is last in its block, which
+  // verified IR does not produce), else from the start of the function.
   Operation *from = &entryBlock->front();
-  if (Operation *def = anchor.getDefiningOp(); def && def->getNextNode())
-    from = def->getNextNode();
+  if (Operation *def = anchor.getDefiningOp())
+    from = def->getNextNode() ? def->getNextNode() : def;
   if (std::optional<ConstantIntRanges> assumedRange =
           getAssumedRange(anchor, from, assumptions, domInfo))
     range = *assumedRange;
@@ -283,8 +284,6 @@ LogicalResult IntegerRangeAnalysis::visitOperation(
     Operation *op,
     ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
     ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices) {
-  Block *block = op->getBlock();
-
   // Figure out the implied range of result and source operands.
   opResultAssumption.clear();
   for (OpResult result : op->getResults()) {
@@ -466,12 +465,9 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
     // TODO: I think this is bit conservative, the better way is:
     //  final_range = (old_range ∪ incomingRange) ∩ assume_range
     auto iter = opResultAssumption.find(resultVal);
-    if (iter != opResultAssumption.end()) {
-      const ConstantIntRanges &range = iter->second;
-      if (std::optional<ConstantIntRanges> assumedRange =
-              getAssumedRange(resultVal, op, assumptions, domInfo))
-        newRange = IntegerValueRange(newRange.getValue().intersection(range));
-    }
+    if (iter != opResultAssumption.end())
+      newRange =
+          IntegerValueRange(newRange.getValue().intersection(iter->second));
 
     // Update the range. Note that we are using `join` operation which means
     // `union`. Transfer function must be monotone! The resolver would otherwise
