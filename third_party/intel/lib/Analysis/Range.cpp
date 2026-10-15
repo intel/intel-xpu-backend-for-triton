@@ -102,6 +102,35 @@ static void inferResultRange(arith::BitcastOp op,
   setResultRange(op.getResult(), argRanges[0]);
 }
 
+// Whether `op` is certain to finish and pass control to the next op.
+static bool transfersExecution(Operation *op) {
+  // May abort or may not return.
+  if (isa<tt::AssertOp>(op) || isa<CallOpInterface>(op))
+    return false;
+  // Regionless and not CallOpInterface, yet a no-timeout poll spins until
+  // the expected value appears, and an impure external call or inline asm
+  // may never return.
+  if (auto poll = dyn_cast<tt::AtomicPollOp>(op); poll && !poll.getTimeout())
+    return false;
+  if (auto ext = dyn_cast<tt::ExternElementwiseOp>(op); ext && !ext.getPure())
+    return false;
+  if (auto asmOp = dyn_cast<tt::ElementwiseInlineAsmOp>(op);
+      asmOp && !asmOp.getPure())
+    return false;
+  if (op->getNumRegions() == 0)
+    return true;
+  // These run single-block regions a bounded number of times, so they finish
+  // if their nested ops do. Loops are not modelled, and `tt.map_elementwise`
+  // regions may hold CFG cycles.
+  if (!isa<scf::IfOp, tt::ReduceOp, tt::ScanOp>(op))
+    return false;
+  for (Region &region : op->getRegions())
+    for (Operation &nested : region.getOps())
+      if (!transfersExecution(&nested))
+        return false;
+  return true;
+}
+
 bool assumeApplies(LLVM::AssumeOp assume, Operation *useOp,
                    const DominanceInfo &domInfo) {
   // Forward case: the assume runs before useOp on every path to useOp.
@@ -116,23 +145,9 @@ bool assumeApplies(LLVM::AssumeOp assume, Operation *useOp,
   Operation *anc = ab->findAncestorOpInBlock(*useOp);
   if (!anc || !anc->isBeforeInBlock(assume.getOperation()))
     return false;
-  for (Operation *op = anc; op != assume.getOperation();
-       op = op->getNextNode()) {
-    // May not terminate, may abort, or may not return.
-    if (op->getNumRegions() || isa<tt::AssertOp>(op) ||
-        isa<CallOpInterface>(op))
+  for (Operation *op = anc; op != assume.getOperation(); op = op->getNextNode())
+    if (!transfersExecution(op))
       return false;
-    // Regionless and not CallOpInterface, yet a no-timeout poll spins until
-    // the expected value appears, and an impure external call or inline asm
-    // may never return.
-    if (auto poll = dyn_cast<tt::AtomicPollOp>(op); poll && !poll.getTimeout())
-      return false;
-    if (auto ext = dyn_cast<tt::ExternElementwiseOp>(op); ext && !ext.getPure())
-      return false;
-    if (auto asmOp = dyn_cast<tt::ElementwiseInlineAsmOp>(op);
-        asmOp && !asmOp.getPure())
-      return false;
-  }
   return true;
 }
 
