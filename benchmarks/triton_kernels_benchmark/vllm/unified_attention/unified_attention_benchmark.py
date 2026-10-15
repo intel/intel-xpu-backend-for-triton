@@ -420,7 +420,7 @@ def get_unified_attention_benchmark(
             if qdtype is not None:
                 atol, rtol = 3 / 8 + 1e-6, 1.5e-1
             benchmark_suite.assert_close(triton_fn, lambda: expected_output, atol=atol, rtol=rtol,
-                                         err_msg='triton to torch')
+                                         err_msg=f'{provider} to torch')
             del expected_output
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
@@ -452,7 +452,7 @@ def get_unified_attention_benchmark(
                 )
 
             benchmark_suite.assert_close(sycl_tla_fn, lambda: expected_output, atol=2.5e-2, rtol=1e-2,
-                                         err_msg='sycl-tla to torch')
+                                         err_msg=f'{provider} to torch')
             del expected_output
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
