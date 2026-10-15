@@ -19,9 +19,10 @@ mode, and `w` is the sliding-window size (0 disables it). `ql` and `kl` describe
 and KV storage: `c` means contiguous, `i` means interleaved, and `qkv` means a
 packed QKV query layout.
 
-Within each file, entries match the 2D/3D path, segment count, maximum Q/KV-length
-buckets, and sequence count. Runtime selects the nearest recorded query-work point
-(total query tokens × query heads), choosing the smaller point on a tie.
+Within each file, entries match the 2D/3D path, segment count, and maximum
+Q/KV-length buckets. Runtime selects the nearest recorded sequence count, then the
+nearest query-work point (total query tokens × query heads) at that sequence count.
+Both selections use absolute distance and choose the smaller value on a tie.
 Each entry selects `block_m`, `tile_size`, `num_warps`, `num_stages`, `grf_mode`,
 and `heads_per_program`. A `null` config selects the heuristic fallback; missing
 profiles or unmatched dynamic regimes also use the fallback.
