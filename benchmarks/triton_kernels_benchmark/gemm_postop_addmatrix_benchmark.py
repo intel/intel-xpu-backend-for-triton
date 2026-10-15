@@ -334,9 +334,10 @@ def benchmark(B, M, N, K, dtype, provider):
         d = rand((B, M, N), res_dtype)
 
     if provider == 'onednn':
-        # bf16 x bf16 -> fp32 natively in oneDNN; torch.matmul has no out_dtype, so use mm/bmm.
-        mm = torch.bmm if a.dim() == 3 else torch.mm
-        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: mm(a, b, out_dtype=res_dtype) + d)
+        # bf16 x bf16 -> fp32 natively in oneDNN. addmm/baddbmm take d as the GEMM's C term, so the add
+        # is part of the same op, matching what the Triton kernel fuses into its epilogue.
+        addmm = torch.baddbmm if a.dim() == 3 else torch.addmm
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: addmm(d, a, b, out_dtype=res_dtype))
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
