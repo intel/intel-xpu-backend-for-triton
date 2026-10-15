@@ -11,7 +11,7 @@ public:
   XpuRuntime() : Runtime(DeviceType::XPU) {}
   ~XpuRuntime() = default;
 
-  // Set by Session::makeProfiler for the xpupti backend.
+  // Set by Session::makeProfiler for any XPU session.
   void setSyclQueue(void *syclQueue) { syclQueue_ = syclQueue; }
   void *getSyclQueue() const { return syclQueue_; }
 

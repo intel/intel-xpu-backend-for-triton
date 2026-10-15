@@ -68,13 +68,20 @@ extern "C" PROTON_UTILS_EXPORT void synchronizeDevice(void *syclQueue) {
   queue->wait_and_throw();
 }
 
-// Returns the Level-Zero native device handle as a stable map key for
-// MetricBuffer's per-device buffer cache.
+// Returns this device's ordinal among visible GPU devices, as a stable map
+// key for MetricBuffer's per-device buffer cache. Also used directly as
+// `proton::CycleMetric`'s `DeviceId` value (see `InstrumentationProfiler`),
+// which -- like the other backends' `getDevice()` -- must be a small,
+// bounded index, not an opaque pointer.
 extern "C" PROTON_UTILS_EXPORT void *getDeviceKey(void *syclQueue) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
-  auto native = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-      queue->get_device());
-  return reinterpret_cast<void *>(native);
+  sycl::device dev = queue->get_device();
+  auto devices = sycl::device::get_devices(sycl::info::device_type::gpu);
+  for (size_t i = 0; i < devices.size(); ++i) {
+    if (devices[i] == dev)
+      return reinterpret_cast<void *>(static_cast<uintptr_t>(i));
+  }
+  return reinterpret_cast<void *>(static_cast<uintptr_t>(0));
 }
 
 // FIXME: Should it be in DeviceInfo class?

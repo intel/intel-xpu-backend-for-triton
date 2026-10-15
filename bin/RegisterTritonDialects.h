@@ -17,6 +17,7 @@
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/Passes.h"
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h"
+#include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/ProtonIntelGPUToLLVM/Passes.h"
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h"
 #include "proton/Dialect/include/Conversion/ProtonToProtonGPU/Passes.h"
 #include "proton/Dialect/include/Dialect/Proton/IR/Dialect.h"
@@ -192,6 +193,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::proton::registerConvertProtonToProtonGPU();
   mlir::triton::proton::gpu::registerConvertProtonNvidiaGPUToLLVM();
   mlir::triton::proton::gpu::registerConvertProtonAMDGPUToLLVM();
+  mlir::triton::proton::gpu::registerConvertProtonIntelGPUToLLVM();
   mlir::triton::proton::gpu::registerAllocateProtonSharedMemoryPass();
   mlir::triton::proton::gpu::registerScheduleBufferStorePass();
   mlir::triton::proton::gpu::registerAddSchedBarriersPass();
