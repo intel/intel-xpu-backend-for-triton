@@ -22,6 +22,7 @@
 
 #include "llvm/Support/MathExtras.h"
 
+#include <Analysis/Utility.h>
 #include <optional>
 
 using namespace mlir;
@@ -291,6 +292,11 @@ static bool isFreeConvert(Operation *op) {
   auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op);
   if (!convertOp)
     return false;
+
+  if (ttgi::cvtIsSubGroupReinterpret(convertOp.getSrc().getType(),
+                                     convertOp.getType())) {
+    return true;
+  }
   return cvtReordersRegisters(convertOp.getSrc().getType(),
                               convertOp.getType());
 }
