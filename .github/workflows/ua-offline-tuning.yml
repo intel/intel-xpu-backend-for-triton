@@ -53,18 +53,20 @@ jobs:
       - uses: ./.github/actions/setup-pytorch
       - uses: ./.github/actions/setup-triton
       - uses: ./.github/actions/install-vllm
+      - name: Install benchmark import dependencies
+        run: pip install 'pandas<3.0' scipy psutil tabulate matplotlib
+      - name: Apply offline UA patch
+        run: |
+          git -C vllm apply --check "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
+          git -C vllm apply "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
       - name: Record environment and inputs
         run: |
           mkdir -p reports/configs
           ./scripts/capture-hw-details.sh > reports/environment.txt
           python -m pip freeze > reports/packages.txt
           git rev-parse HEAD > reports/checkout.txt
+          export PYTHONPATH="$PWD/benchmarks:$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
           python scripts/vllm/ua_tuning/shard.py --part ${{ matrix.part }} --output reports/manifests
-          cp scripts/vllm/ua_tuning/inputs/parts.json reports/
-      - name: Apply offline UA patch
-        run: |
-          git -C vllm apply --check "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
-          git -C vllm apply "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
       - name: Tune BF16 inputs for this part
         run: |
           export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"

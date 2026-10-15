@@ -31,7 +31,6 @@ def _benchmark_fixture(device):
         "triton": triton,
         "DEVICE": device,
         "BENCHMARKING_CONFIG": {"verify": False},
-        "BENCHMARK_SKIPLIST": set(),
         "is_td_patched": True,
         "unified_attention": _capture,
         "benchmark_suite": SimpleNamespace(assert_close=lambda fn, *args, **kwargs: fn()),

@@ -8,12 +8,13 @@ an environment with the matching XPU PyTorch and Triton builds.
 Run from the repository root:
 
 ```bash
-export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$PWD/benchmarks:$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
+python scripts/vllm/ua_tuning/shard.py --output reports/manifests
 python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
-  --manifest scripts/vllm/ua_tuning/inputs/bf16.json \
+  --manifest reports/manifests/bfloat16.json \
   --save-dir reports/configs --measurements reports/bf16-measurements.json
 python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
-  --manifest scripts/vllm/ua_tuning/inputs/fp8.json \
+  --manifest reports/manifests/float8_e4m3fn.json \
   --save-dir reports/configs --measurements reports/fp8-measurements.json
 ```
 
@@ -29,9 +30,16 @@ tuning and saves progress records; automatic resume is not implemented.
   applies `tuner-ci.patch`, then loads that copy. The repository copy is unchanged.
 - `timing.py` provides the optional cache-cleared graph timer. `--clear-cache`
   evicts 256 MB before each replay and excludes eviction from attention timing.
-- `inputs/` contains the BF16 and FP8 manifests used by the completed CI tuning
-  run. They are saved workload lists, not automatically regenerated from the
-  benchmark's current configuration list.
+- `shard.py` imports the benchmark's `ATTENTION_CONFIGS_BF16` and
+  `ATTENTION_CONFIGS_FP8` lists and converts them to tuning workloads. It sets
+  `FP8=0` and `DEBUG_BENCH=0` before importing so neither list is truncated or
+  restricted by the caller's benchmark shortcuts. The benchmark's normal dtype
+  and device-memory filters still apply. Importing requires a supported GPU,
+  vLLM and the benchmark dependencies (`pandas<3.0`, scipy, psutil, tabulate,
+  matplotlib).
+
+Generated workload snapshots and their partition assignments are saved in
+`reports/manifests/`. Pass a saved manifest to `tune_ci.py` to replay those inputs.
 
 Input allocation and timing are passed explicitly to the patched tuner. Candidate
 search, confirmation, winner selection and profile export run in that copy.
@@ -46,8 +54,8 @@ Refresh `tuner-ci.patch` against the base tuner when its implementation changes.
 
 ## Branch and workflow
 
-`ua-offline-tuning-ci` extends `ua-offline-tuning` with these helpers, CI
-profile loading and the temporary SYCL benchmark skip. `tuner-ci.patch` adds
+`ua-offline-tuning-ci` extends `ua-offline-tuning` with these helpers and CI
+profile loading. `tuner-ci.patch` adds
 measurement checkpoints, finalist confirmation and allocator/timer hooks for CI.
 The shared tuner, kernel patch and profile JSONs are inherited unchanged from
 the base branch.
@@ -59,8 +67,10 @@ logs. It does not run the experimental timing diagnostic or publish configs.
 
 The workflow defaults to both parts, scheduled sequentially as separate jobs;
 each job can use a different B580 runner. Select `1` or `2` to run only one part.
-`shard.py` reads `inputs/parts.json` and keeps each profile file within one part.
-The commands above tune the complete manifests without splitting them.
+`shard.py --part 1` or `--part 2` selects one part. A stable hash of each profile
+key determines its part, keeping each profile file within one part even when
+runners filter out different workloads. Part sizes can differ. The commands
+above select all inputs without splitting them.
 
 GitHub requires a dispatch workflow to exist on the default branch before it
 can be launched through the normal manual-dispatch interface.
