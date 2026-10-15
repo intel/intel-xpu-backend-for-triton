@@ -336,8 +336,13 @@ LogicalResult getConvertBackwardSlice(
     if (!enableForLoopSupport && currentValue.getDefiningOp<scf::ForOp>())
       return failure();
 
-    if (failed(updateLayout(currentValue, encoding)))
+    // llvm::outs() << "check currentValue:" << currentValue << "with new
+    // encoding:" << encoding  <<"\n";
+    if (failed(updateLayout(currentValue, encoding))) {
+      // llvm::outs() << "check currentValue:" << currentValue << "failed with a
+      // diff encoding:" << layout[currentValue]  <<"\n";
       return failure();
+    }
 
     // If the value already has the desired encoding, we can stop here without
     // adding it to the slice.
