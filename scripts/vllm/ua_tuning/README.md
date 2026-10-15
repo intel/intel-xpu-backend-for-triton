@@ -21,13 +21,11 @@ python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
 Omit `--tune` to benchmark existing profiles. `--measurements` applies only to
 tuning and saves progress records; automatic resume is not implemented.
 
-- `tune_ci.py` reuses the CI benchmark's input construction, including its fixed
-  seed, contiguous tensors, FP8 scales and scratch buffers. Each workload must
-  include `num_blocks`.
-- `manifest.py` parses custom workloads and calls the patched tuner. Running it
-  directly uses synthetic initialization rather than the exact CI fixture.
-- `patched_tuner.py` copies the base tuner into a temporary directory, checks and
-  applies `tuner-ci.patch`, then loads that copy. The repository copy is unchanged.
+- `tune_ci.py` validates workload manifests and reuses the CI benchmark's input
+  construction, including its fixed seed, contiguous tensors, FP8 scales and
+  scratch buffers. Each workload must include `num_blocks`. It copies the base
+  tuner into a temporary directory, checks and applies `tuner-ci.patch`, then
+  loads that copy. The repository copy stays upstreamable and unchanged.
 - `timing.py` provides the optional cache-cleared graph timer. `--clear-cache`
   evicts 256 MB before each replay and excludes eviction from attention timing.
 - `shard.py` imports the benchmark's `ATTENTION_CONFIGS_BF16` and
@@ -47,7 +45,7 @@ search, confirmation, winner selection and profile export run in that copy.
 Check patch compatibility without importing PyTorch or vLLM:
 
 ```bash
-python scripts/vllm/ua_tuning/patched_tuner.py
+python scripts/vllm/ua_tuning/tune_ci.py --check-patch
 ```
 
 Refresh `tuner-ci.patch` against the base tuner when its implementation changes.

@@ -47,7 +47,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check CI tuner patch
-        run: python scripts/vllm/ua_tuning/patched_tuner.py
+        run: python scripts/vllm/ua_tuning/tune_ci.py --check-patch
       - name: Install build dependencies
         run: pip install cmake
       - uses: ./.github/actions/setup-pytorch
