@@ -609,6 +609,10 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
 }
 
 Attribute inferDstEncoding(Operation *op, Attribute encoding) {
+  if (isa<triton::ScanOp>(op)) {
+    if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
+      return {};
+  }
   if (isa<triton::gpu::CastFpOpInterface>(op))
     return {};
 
