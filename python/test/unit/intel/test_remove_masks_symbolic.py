@@ -12,8 +12,9 @@ surfaces as a NaN.
 Both modes are run for every shape and both must match an eager reference
 exactly, so a case fails whether a dropped mask reads out of bounds or the
 guard changes the computed value. The shapes whose K is not a multiple of
-BLOCK_K (770, 1000) fail the guard at runtime and must execute the masked copy;
-they are what pins "the mask is kept where it is not redundant".
+BLOCK_K (770, 800, 1000) fail the guard at runtime and must execute the masked
+copy; they are what pins "the mask is kept where it is not redundant". 800 is a
+multiple of 16 but not of 64, so a guard of `K % 16 == 0` would fail it.
 
 Running this from a git worktree: `python/conftest.py` drops every
 `<tree>/python` entry from `sys.path` and re-appends it last, so an editable
@@ -98,7 +99,7 @@ _REM_GUARD = re.compile(r"arith\.rem[su]i")
 
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
-@pytest.mark.parametrize("K", [0, 64, 768, 770, 1000])
+@pytest.mark.parametrize("K", [0, 64, 768, 770, 800, 1000])
 @pytest.mark.parametrize("symbolic", ["0", "1"])
 def test_masked_k_sum_no_oob(K, symbolic, monkeypatch, device):
     # The switch is cache-invalidating (Tools/Sys/GetEnv.h), so it is part of the
