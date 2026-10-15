@@ -4889,7 +4889,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       if (matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
         Type elemTy = constAttr.getElementType();
         auto handleSplatValue = [&](auto splatVal) {
-          if (!splatVal.isZero()) {
+          if (!splatVal.isZero() || splatVal.isNegative()) {
             otherElems = SmallVector<Value>(
                 cfg.numElems,
                 LLVM::ConstantOp::create(rewriter, loc, elemTy, splatVal));
