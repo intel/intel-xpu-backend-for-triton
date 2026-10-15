@@ -6,7 +6,15 @@
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
+#if defined(__has_include)
+#if __has_include("mlir/Conversion/ArithCommon/CeilFloorDivExpansion.h")
+#include "mlir/Conversion/ArithCommon/CeilFloorDivExpansion.h"
+#else
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
+#endif
+#else
+#include "mlir/Dialect/Arith/Transforms/Passes.h"
+#endif
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
