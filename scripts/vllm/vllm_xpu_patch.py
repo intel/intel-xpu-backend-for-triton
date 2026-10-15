@@ -304,54 +304,26 @@ def main() -> None:
         vllm_root / "tests" / "v1" / "sample",
         vllm_root / "tests" / "v1" / "spec_decode",
         vllm_root / "tests" / "v1" / "worker",
+        vllm_root / "tests" / "distributed",
+        vllm_root / "tests" / "model_executor",
+        vllm_root / "tests" / "models" / "inkling",
+        vllm_root / "tests" / "v1" / "attention",
+        vllm_root / "tests" / "watermarking",
         # Source directories
         vllm_root / "vllm" / "v1" / "worker",
         vllm_root / "vllm" / "model_executor" / "layers",
     ]
 
-    # Test files that need more than patch_dirs gives them: files outside patch_dirs that still get
-    # the CUDA->XPU replacements above, and files whose torch.cuda runtime APIs (streams, events,
-    # graphs, RNG state) are mapped to torch.xpu. Which tests run on XPU is decided in vllm-fix.patch.
-    xpu_test_files = {
-        vllm_root / path
-        for path in (
-            "tests/distributed/test_dcp_a2a.py",
-            "tests/kernels/attention/test_flashmla_sparse.py",
-            "tests/kernels/core/test_fused_q_kv_rmsnorm.py",
-            "tests/kernels/quantization/test_nvfp4_emulation.py",
-            "tests/kernels/test_compressor_kv_cache.py",
-            "tests/model_executor/test_bailing_mrope.py",
-            "tests/models/inkling/test_mtp_input_fusion.py",
-            "tests/models/inkling/test_qkvr_prep.py",
-            "tests/models/inkling/test_sconv_metadata.py",
-            "tests/v1/attention/test_dcp_a2a_pack_mask.py",
-            "tests/v1/attention/test_deepseek_v4_swa_visible.py",
-            "tests/v1/attention/test_indexer_dcp_localize.py",
-            "tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py",
-            "tests/v1/worker/test_gpu_rejection_sampler_chunking.py",
-            "tests/v1/worker/test_kv_block_zeroer.py",
-            "tests/watermarking/test_watermarking.py",
-        )
-    }
-
     total_patched = 0
-    scanned = set()
     for patch_dir in patch_dirs:
         if not patch_dir.is_dir():
             continue
         # Use rglob to recursively scan subdirectories
         for py_file in sorted(patch_dir.rglob("*.py")):
             print(f"Scanning {py_file.relative_to(vllm_root)}...")
-            scanned.add(py_file)
-            if patch_file(py_file, map_cuda_runtime=py_file in xpu_test_files):
+            # torch.cuda runtime APIs (streams, events, graphs, RNG state) are mapped in tests only
+            if patch_file(py_file, map_cuda_runtime=py_file.is_relative_to(vllm_root / "tests")):
                 total_patched += 1
-
-    for py_file in sorted(xpu_test_files - scanned):
-        if not py_file.is_file():
-            continue
-        print(f"Scanning {py_file.relative_to(vllm_root)}...")
-        if patch_file(py_file, map_cuda_runtime=True):
-            total_patched += 1
 
     print(f"\nPatched {total_patched} file(s)")
 
