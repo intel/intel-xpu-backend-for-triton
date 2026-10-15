@@ -543,10 +543,10 @@ index 4d73e49..423e7d1 100644
          )
 diff --git a/vllm/v1/attention/ops/triton_unified_attention_config.py b/vllm/v1/attention/ops/triton_unified_attention_config.py
 new file mode 100644
-index 0000000..c769be5
+index 0000000..73852ea
 --- /dev/null
 +++ b/vllm/v1/attention/ops/triton_unified_attention_config.py
-@@ -0,0 +1,531 @@
+@@ -0,0 +1,535 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +
@@ -629,7 +629,6 @@ index 0000000..c769be5
 +            self.num_segments,
 +            self.q_len_bucket,
 +            self.kv_len_bucket,
-+            self.num_seqs,
 +        )
 +
 +
@@ -950,16 +949,19 @@ index 0000000..c769be5
 +        key = AttentionKey(**asdict(static_key), **asdict(dynamic))
 +        if config is not None and not validate_config(config, key, "xpu"):
 +            raise ValueError("invalid attention config")
-+        anchors = tables.setdefault(dynamic.regime(), {})
++        anchors = tables.setdefault(dynamic.regime(), {}).setdefault(dynamic.num_seqs, {})
 +        if dynamic.query_work in anchors:
 +            raise ValueError("duplicate query-work point")
 +        anchors[dynamic.query_work] = config
 +    return {
-+        regime: (
-+            tuple(sorted(anchors)),
-+            tuple(anchors[work] for work in sorted(anchors)),
-+        )
-+        for regime, anchors in tables.items()
++        regime: {
++            num_seqs: (
++                tuple(sorted(anchors)),
++                tuple(anchors[work] for work in sorted(anchors)),
++            )
++            for num_seqs, anchors in sequence_groups.items()
++        }
++        for regime, sequence_groups in tables.items()
 +    }
 +
 +
@@ -992,7 +994,9 @@ index 0000000..c769be5
 +        table = tables.get(key.regime())
 +        if table is None:
 +            continue
-+        anchors, configs = table
++        # TODO: Evaluate joint seq-count/query-work selection.
++        num_seqs = min(table, key=lambda n: (abs(n - key.num_seqs), n))
++        anchors, configs = table[num_seqs]
 +        pos = bisect_left(anchors, key.query_work)
 +        candidates = (max(0, pos - 1), min(pos, len(anchors) - 1))
 +        pos = min(
