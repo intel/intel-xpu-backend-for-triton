@@ -858,7 +858,7 @@ index 0000000..c769be5
 +        type(config.num_stages) is not int or config.num_stages not in (1, 2, 3, 4)
 +    ):
 +        return False
-+    if config.grf_mode not in (None, "128", "256", "512", "auto", "default"):
++    if config.grf_mode is not None and type(config.grf_mode) is not str:
 +        return False
 +    if backend != "xpu" and config.grf_mode not in (None, "default"):
 +        return False
