@@ -394,20 +394,16 @@ def main() -> None:
         vllm_root / "vllm" / "model_executor" / "layers",
     ]
 
-    # Test files whose CUDA-only tests vllm-fix.patch enables on XPU (per test, by relaxing their
-    # skip guards). These get the CUDA->XPU replacements above, also outside patch_dirs, and
-    # torch.cuda runtime APIs (streams, events, graphs, RNG state) mapped to torch.xpu.
+    # Test files that need more than patch_dirs gives them: files outside patch_dirs that still get
+    # the CUDA->XPU replacements above, and files whose torch.cuda runtime APIs (streams, events,
+    # graphs, RNG state) are mapped to torch.xpu. Which tests run on XPU is decided in vllm-fix.patch.
     xpu_test_files = {
         vllm_root / path
         for path in (
             "tests/distributed/test_dcp_a2a.py",
             "tests/kernels/attention/test_flashmla_sparse.py",
-            "tests/kernels/core/test_apply_rotary_emb.py",
-            "tests/kernels/core/test_fused_embed_norm.py",
             "tests/kernels/core/test_fused_q_kv_rmsnorm.py",
-            "tests/kernels/mamba/test_mamba_ssm.py",
             "tests/kernels/quantization/test_nvfp4_emulation.py",
-            "tests/kernels/quantization/test_quantized_embedding.py",
             "tests/kernels/test_compressor_kv_cache.py",
             "tests/model_executor/test_bailing_mrope.py",
             "tests/models/inkling/test_mtp_input_fusion.py",
@@ -418,9 +414,7 @@ def main() -> None:
             "tests/v1/attention/test_indexer_dcp_localize.py",
             "tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py",
             "tests/v1/worker/test_gpu_rejection_sampler_chunking.py",
-            "tests/v1/worker/test_gpu_rejection_sampler_i64.py",
             "tests/v1/worker/test_kv_block_zeroer.py",
-            "tests/v1/worker/test_mamba_hybrid_model_state.py",
             "tests/watermarking/test_watermarking.py",
         )
     }
