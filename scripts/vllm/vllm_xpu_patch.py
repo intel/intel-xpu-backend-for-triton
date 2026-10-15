@@ -110,19 +110,6 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                     "col": node.args[0].col_offset,
                 })
 
-        # torch.cuda.is_available() calls
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            func = node.func
-            is_cuda_available = (func.attr == "is_available" and isinstance(func.value, ast.Attribute)
-                                 and func.value.attr == "cuda" and isinstance(func.value.value, ast.Name)
-                                 and func.value.value.id == "torch")
-            if is_cuda_available:
-                patterns.append({
-                    "type": "cuda_is_available",
-                    "line": node.lineno,
-                    "col": node.col_offset,
-                })
-
         # torch.cuda.manual_seed_all() calls
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "manual_seed_all"
                 and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "cuda"):
@@ -138,17 +125,6 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                 and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id == "torch"):
             patterns.append({
                 "type": "cuda_stream",
-                "line": node.lineno,
-                "col": node.col_offset,
-            })
-
-        # torch.cuda.get_device_capability() calls
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "get_device_capability" and isinstance(node.func.value, ast.Attribute)
-                and node.func.value.attr == "cuda" and isinstance(node.func.value.value, ast.Name)
-                and node.func.value.value.id == "torch"):
-            patterns.append({
-                "type": "cuda_get_device_capability",
                 "line": node.lineno,
                 "col": node.col_offset,
             })
@@ -172,18 +148,6 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                     "line": node.value.lineno,
                     "col": node.value.col_offset,
                     "var_name": target.id,
-                })
-
-        # current_platform.get_device_capability() < tuple comparisons
-        if isinstance(node, ast.Compare):
-            if (isinstance(node.left, ast.Call) and isinstance(node.left.func, ast.Attribute)
-                    and node.left.func.attr == "get_device_capability" and isinstance(node.left.func.value, ast.Name)
-                    and node.left.func.value.id == "current_platform"):
-                # Found: current_platform.get_device_capability() < something
-                patterns.append({
-                    "type": "device_capability_compare",
-                    "line": node.lineno,
-                    "col": node.col_offset,
                 })
 
         # .cuda() method calls on tensors (e.g., tensor.cuda())
@@ -270,10 +234,6 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             # Replace device = "cuda" with device = "xpu"
             lines[line_idx] = line.replace('"cuda"', '"xpu"', 1)
 
-        elif ptype == "cuda_is_available":
-            # Replace torch.cuda.is_available() with torch.xpu.is_available()
-            lines[line_idx] = line.replace("torch.cuda.is_available()", "torch.xpu.is_available()")
-
         elif ptype == "cuda_manual_seed":
             # Replace torch.cuda.manual_seed_all(...) with torch.manual_seed(...)
             lines[line_idx] = re.sub(
@@ -286,25 +246,9 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             # Replace torch.cuda.Stream() with torch.xpu.Stream()
             lines[line_idx] = line.replace("torch.cuda.Stream()", "torch.xpu.Stream()")
 
-        elif ptype == "cuda_get_device_capability":
-            # Replace torch.cuda.get_device_capability() with torch.xpu.get_device_capability()
-            lines[line_idx] = line.replace("torch.cuda.get_device_capability()", "torch.xpu.get_device_capability()")
-
         elif ptype == "cuda_mem_get_info":
             # Replace torch.cuda.mem_get_info() with torch.xpu.mem_get_info()
             lines[line_idx] = line.replace("torch.cuda.mem_get_info()", "torch.xpu.mem_get_info()")
-
-        elif ptype == "device_capability_compare":
-            # Handle: if current_platform.get_device_capability() < (X, Y):
-            # Strategy: wrap the call in a helper that returns a safe value
-            # Replace with: if (cap := current_platform.get_device_capability()) is not None and cap
-
-            # Use walrus operator to assign and check in one line
-            lines[line_idx] = re.sub(
-                r"if\s+current_platform\.get_device_capability\(\)\s*(<|>|<=|>=|==|!=)",
-                r"if (cap := current_platform.get_device_capability()) is not None and cap \1",
-                line,
-            )
 
         elif ptype == "tensor_cuda_method":
             # Replace .cuda() with .xpu()
@@ -321,41 +265,12 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _skip_guard_spans(source: str) -> list[tuple[int, int, int, int]]:
-    """(start line, start col, end line, end col) of every skip guard: skipif conditions and the
-    tests of `if ...: pytest.skip()`. Which CUDA-only tests run on XPU is decided per test in
-    vllm-fix.patch, so the CUDA->XPU rewrites here must not change skip guards."""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return []
-
-    def is_pytest_call(node: ast.AST, name: str) -> bool:
-        return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == name
-
-    guards: list[ast.expr] = []
-    for node in ast.walk(tree):
-        if is_pytest_call(node, "skipif") and isinstance(node, ast.Call):
-            guards.extend(node.args[:1])
-        elif isinstance(node, ast.If) and any(
-                is_pytest_call(call, "skip") for stmt in node.body for call in ast.walk(stmt)):
-            guards.append(node.test)
-    return [(g.lineno, g.col_offset, g.end_lineno or g.lineno, g.end_col_offset or 0) for g in guards]
-
-
-def _in_spans(pattern: dict, spans: list[tuple[int, int, int, int]]) -> bool:
-    pos = (pattern["line"], pattern["col"])
-    return any((sl, sc) <= pos < (el, ec) for sl, sc, el, ec in spans)
-
-
 def patch_file(filepath: Path, map_cuda_runtime: bool = False) -> bool:
     """Patch a single file. Returns True if changes were made."""
     source = filepath.read_text()
     patterns = _find_cuda_patterns(source)
     if map_cuda_runtime:
         patterns += _find_cuda_runtime_patterns(source)
-    spans = _skip_guard_spans(source)
-    patterns = [p for p in patterns if not _in_spans(p, spans)]
     if not patterns:
         return False
 
