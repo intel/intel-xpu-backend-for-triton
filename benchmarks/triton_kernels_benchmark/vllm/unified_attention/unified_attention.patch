@@ -832,7 +832,7 @@ index 0000000..c769be5
 +        return False
 +    if config.heads_per_program != "MAX" and (
 +        type(config.heads_per_program) is not int
-+        or config.heads_per_program not in (1, 2, 4, 8)
++        or config.heads_per_program <= 0
 +    ):
 +        return False
 +    heads = config.get_heads_per_program(key.num_queries_per_kv)
@@ -847,7 +847,7 @@ index 0000000..c769be5
 +        or not _power_of_two(key.head_size)
 +    ):
 +        return False
-+    if config.block_m // heads <= 0:
++    if config.block_m % heads:
 +        return False
 +    if config.num_warps is not None and (
 +        type(config.num_warps) is not int
@@ -858,9 +858,9 @@ index 0000000..c769be5
 +        type(config.num_stages) is not int or config.num_stages not in (1, 2, 3, 4)
 +    ):
 +        return False
-+    if config.grf_mode not in (None, "default", "256"):
++    if config.grf_mode not in (None, "128", "256", "512", "auto", "default"):
 +        return False
-+    if backend != "xpu" and config.grf_mode == "256":
++    if backend != "xpu" and config.grf_mode not in (None, "default"):
 +        return False
 +    if key.block_size < config.tile_size or key.block_size % config.tile_size:
 +        return False
