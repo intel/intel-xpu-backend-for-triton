@@ -335,8 +335,13 @@ LogicalResult getConvertBackwardSlice(
     if (!enableForLoopSupport && currentValue.getDefiningOp<scf::ForOp>())
       return failure();
 
-    if (failed(updateLayout(currentValue, encoding)))
+    // llvm::outs() << "check currentValue:" << currentValue << "with new
+    // encoding:" << encoding  <<"\n";
+    if (failed(updateLayout(currentValue, encoding))) {
+      // llvm::outs() << "check currentValue:" << currentValue << "failed with a
+      // diff encoding:" << layout[currentValue]  <<"\n";
       return failure();
+    }
 
     // If the value already has the desired encoding, we can stop here without
     // adding it to the slice.
@@ -406,8 +411,12 @@ LogicalResult getConvertBackwardSlice(
         enqueue(definingOp->getOpOperand(0), encoding);
         continue;
       }
-      if (canUseResultEncoding(definingOp, encoding))
+      if (canUseResultEncoding(definingOp, encoding)) {
+        // llvm::outs() << "stop back ward propergate on convertlayout:" <<
+        // *definingOp << "\n";
         continue;
+      }
+
       if (stopPropagation && stopPropagation(definingOp))
         continue;
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
