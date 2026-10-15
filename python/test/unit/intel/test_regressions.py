@@ -2154,3 +2154,49 @@ def test_issue_8374(device):
         zeroed = ((got == 0) & (ref != 0)).sum().item()
         message = f"XBLOCK={xblock:4d}: maxdiff={md:8.4g}  true-lanes-returning-other={zeroed}  {'BAD' if md > 1e-3 else 'OK'}"
         assert not md > 1e-3, message
+
+
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_issue_8121(num_warps, device):
+    # The row ids are loaded with a non-constant `other`. Triton vectorizes that
+    # load into several predicated loads sharing one default value, and IGC used
+    # to select all of their results into the default value's register: ids 0..7
+    # came back holding ids 8..15, so rows 0..7 were never stored.
+
+    @triton.jit
+    def scatter_rows(x_ptr, a_ptr, b_ptr, out_ptr, ids_ptr, num_valid, ids_bound, N, K, stride_ak,
+                     BLOCK_M: tl.constexpr, BLOCK_R: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+        offs = tl.arange(0, BLOCK_M)
+        ids = tl.load(ids_ptr + offs, mask=offs < ids_bound, other=num_valid)
+        valid = ids < num_valid
+        offs_r = tl.arange(0, BLOCK_R)
+        offs_k = tl.arange(0, BLOCK_K)
+        x_ptrs = x_ptr + ids[:, None] * K + offs_k[None, :]
+        # A runtime stride here (rather than a compile-time one) is needed to hit the miscompile.
+        a_ptrs = a_ptr + offs_k[:, None] * stride_ak + offs_r[None, :]
+        acc = tl.zeros((BLOCK_M, BLOCK_R), dtype=tl.float32)
+        for _ in range(0, K, BLOCK_K):
+            acc += tl.dot(tl.load(x_ptrs, mask=valid[:, None], other=0.0), tl.load(a_ptrs))
+            x_ptrs += BLOCK_K
+            a_ptrs += BLOCK_K * stride_ak
+        acc = acc.to(tl.float16)
+        # So is using the ids inside a loop, after they were loaded outside it.
+        for n_start in range(0, N, BLOCK_N):
+            offs_n = n_start + tl.arange(0, BLOCK_N)
+            b = tl.load(b_ptr + offs_r[:, None] * N + offs_n[None, :])
+            tl.store(out_ptr + ids[:, None] * N + offs_n[None, :],
+                     tl.dot(acc, b).to(tl.float16), mask=valid[:, None] & (offs_n[None, :] < N))
+
+    M, R, N, K = 16, 16, 128, 128
+    torch.manual_seed(0)
+    x = torch.rand((M, K), dtype=torch.float16, device=device)
+    a = torch.rand((K, R), dtype=torch.float16, device=device)
+    b = torch.rand((R, N), dtype=torch.float16, device=device)
+    ids = torch.arange(M, dtype=torch.int32, device=device)
+    out = torch.full((M, N), float("nan"), dtype=torch.float16, device=device)
+    scatter_rows[(1, )](x, a, b, out, ids, M, M, N, K, a.stride(0), BLOCK_M=M, BLOCK_R=R, BLOCK_N=N, BLOCK_K=K,
+                        num_warps=num_warps)
+    lost = [row for row in range(M) if torch.isnan(out[row]).all()]
+    assert not lost, f"rows never stored: {lost}"
+    ref = ((x.float() @ a.float()).half().float() @ b.float()).half()
+    torch.testing.assert_close(out, ref, rtol=1e-2, atol=1e-1)

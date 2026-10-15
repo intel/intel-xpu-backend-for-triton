@@ -162,21 +162,126 @@ llvm.func @triton_gen.sub_group_block_write(%ptr: !llvm.ptr<1>, %val : i32) {
 
 // -----
 
+// COM: A non-constant default is never passed to the builtin: the load takes a
+// COM: zero default and the real one is applied with a select on the same
+// COM: predicate. IGC selects a predicated load's result into the register
+// COM: holding its default, so loads sharing one non-constant default clobber
+// COM: each other (#8121).
 // CHECK: llvm.func spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(!llvm.ptr<1>, i1, i32) -> i32 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
-llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %predicate : i1, %default_value : i32) {
-  // CHECK:     llvm.func @triton_gen.predicated_load(%arg0: !llvm.ptr<1>, %arg1: i1, %arg2: i32) {
-  // CHECK:       %0 = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(%arg0, %arg1, %arg2) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %predicate : i1, %default_value : i32) -> i32 {
+  // CHECK:     llvm.func @triton_gen.predicated_load(%arg0: !llvm.ptr<1>, %arg1: i1, %arg2: i32) -> i32 {
+  // CHECK:       [[ZERO:%.*]] = llvm.mlir.zero : i32
+  // CHECK-NEXT:  [[LOAD:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(%arg0, %arg1, [[ZERO]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+  // CHECK-NEXT:  [[SEL:%.*]] = llvm.select %arg1, [[LOAD]], %arg2 : i1, i32
+  // CHECK-NEXT:  llvm.return [[SEL]] : i32
   %0 = triton_gen.predicated_load %ptr, %predicate, %default_value {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
-  llvm.return
+  llvm.return %0 : i32
 }
 
 // -----
 
-llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %predicate : i1, %default_value : i32) {
-  // CHECK:     llvm.func @triton_gen.predicated_load(%arg0: !llvm.ptr<1>, %arg1: i1, %arg2: i32) {
-  // CHECK:       %0 = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi({{.*}}) {{{.*}}, triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<1, Uncached, 0>>, {{.*}}} : (!llvm.ptr<1>, i1, i32) -> i32
+// COM: The cache control decoration stays on the load when a select is added.
+llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %predicate : i1, %default_value : i32) -> i32 {
+  // CHECK:     llvm.func @triton_gen.predicated_load(%arg0: !llvm.ptr<1>, %arg1: i1, %arg2: i32) -> i32 {
+  // CHECK:       [[ZERO:%.*]] = llvm.mlir.zero : i32
+  // CHECK-NEXT:  [[LOAD:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(%arg0, %arg1, [[ZERO]]) {{{.*}}, triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<1, Uncached, 0>>, {{.*}}} : (!llvm.ptr<1>, i1, i32) -> i32
+  // CHECK-NEXT:  [[SEL:%.*]] = llvm.select %arg1, [[LOAD]], %arg2 : i1, i32
+  // CHECK-NEXT:  llvm.return [[SEL]] : i32
   %0 = triton_gen.predicated_load %ptr, %predicate, %default_value {cache_control = L1UC_L3UC} : (!llvm.ptr<1>, i1, i32) -> i32
-  llvm.return
+  llvm.return %0 : i32
+}
+
+// -----
+
+// COM: The #8121 shape itself: two loads sharing one non-constant default. Each
+// COM: gets its own zero default and its own select.
+llvm.func @predicated_load_shared_runtime_default(%ptr0 : !llvm.ptr<1>, %ptr1 : !llvm.ptr<1>, %predicate : i1, %default_value : vector<4xi32>) -> vector<4xi32> {
+  // CHECK-LABEL: llvm.func @predicated_load_shared_runtime_default(
+  // CHECK-SAME:      %arg0: !llvm.ptr<1>, %arg1: !llvm.ptr<1>, %arg2: i1, %arg3: vector<4xi32>)
+  // CHECK:         [[ZERO0:%.*]] = llvm.mlir.zero : vector<4xi32>
+  // CHECK-NEXT:    [[LOAD0:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbDv4_i(%arg0, %arg2, [[ZERO0]]) {{.*}} : (!llvm.ptr<1>, i1, vector<4xi32>) -> vector<4xi32>
+  // CHECK-NEXT:    [[SEL0:%.*]] = llvm.select %arg2, [[LOAD0]], %arg3 : i1, vector<4xi32>
+  // CHECK-NEXT:    [[ZERO1:%.*]] = llvm.mlir.zero : vector<4xi32>
+  // CHECK-NEXT:    [[LOAD1:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbDv4_i(%arg1, %arg2, [[ZERO1]]) {{.*}} : (!llvm.ptr<1>, i1, vector<4xi32>) -> vector<4xi32>
+  // CHECK-NEXT:    [[SEL1:%.*]] = llvm.select %arg2, [[LOAD1]], %arg3 : i1, vector<4xi32>
+  // CHECK-NEXT:    [[SUM:%.*]] = llvm.add [[SEL0]], [[SEL1]] : vector<4xi32>
+  // CHECK-NEXT:    llvm.return [[SUM]] : vector<4xi32>
+  %0 = triton_gen.predicated_load %ptr0, %predicate, %default_value {cache_control = Default} : (!llvm.ptr<1>, i1, vector<4xi32>) -> vector<4xi32>
+  %1 = triton_gen.predicated_load %ptr1, %predicate, %default_value {cache_control = Default} : (!llvm.ptr<1>, i1, vector<4xi32>) -> vector<4xi32>
+  %2 = llvm.add %0, %1 : vector<4xi32>
+  llvm.return %2 : vector<4xi32>
+}
+
+// -----
+
+// COM: A constant default is passed straight through, with no select.
+llvm.func @predicated_load_constant_default(%ptr : !llvm.ptr<1>, %predicate : i1) -> i32 {
+  // CHECK-LABEL: llvm.func @predicated_load_constant_default(
+  // CHECK:         [[C7:%.*]] = llvm.mlir.constant(7 : i32) : i32
+  // CHECK-NEXT:    [[LOAD:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(%arg0, %arg1, [[C7]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+  // CHECK-NEXT:    llvm.return [[LOAD]] : i32
+  %c7 = llvm.mlir.constant(7 : i32) : i32
+  %0 = triton_gen.predicated_load %ptr, %predicate, %c7 {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
+  llvm.return %0 : i32
+}
+
+// -----
+
+// COM: The default reaches this lowering as an undef/insertelement/bitcast chain
+// COM: (how the tt.load lowering packs `other` into a word), so a constant one
+// COM: must be recognized through that chain.
+llvm.func @predicated_load_constant_default_insertelement(%ptr : !llvm.ptr<1>, %predicate : i1) -> i32 {
+  // CHECK-LABEL: llvm.func @predicated_load_constant_default_insertelement(
+  // CHECK:         [[WORD:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
+  // CHECK-NEXT:    [[LOAD:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(%arg0, %arg1, [[WORD]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+  // CHECK-NEXT:    llvm.return [[LOAD]] : i32
+  %c = llvm.mlir.constant(1.000000e+00 : f32) : f32
+  %u = llvm.mlir.undef : vector<1xf32>
+  %i = llvm.mlir.constant(0 : i64) : i64
+  %v = llvm.insertelement %c, %u[%i : i64] : vector<1xf32>
+  %word = llvm.bitcast %v : vector<1xf32> to i32
+  %0 = triton_gen.predicated_load %ptr, %predicate, %word {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
+  llvm.return %0 : i32
+}
+
+// -----
+
+// COM: A constant `other` tensor is first repacked through its unpacked-struct
+// COM: form, adding an insertvalue/extractvalue hop to the chain.
+llvm.func @predicated_load_constant_default_aggregate(%ptr : !llvm.ptr<1>, %predicate : i1) -> i32 {
+  // CHECK-LABEL: llvm.func @predicated_load_constant_default_aggregate(
+  // CHECK:         [[WORD:%.*]] = llvm.bitcast {{.*}} : f32 to i32
+  // CHECK-NEXT:    [[LOAD:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(%arg0, %arg1, [[WORD]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+  // CHECK-NEXT:    llvm.return [[LOAD]] : i32
+  %c = llvm.mlir.constant(0.000000e+00 : f32) : f32
+  %s0 = llvm.mlir.undef : !llvm.struct<(f32, f32)>
+  %s1 = llvm.insertvalue %c, %s0[0] : !llvm.struct<(f32, f32)>
+  %s2 = llvm.insertvalue %c, %s1[1] : !llvm.struct<(f32, f32)>
+  %e = llvm.extractvalue %s2[1] : !llvm.struct<(f32, f32)>
+  %word = llvm.bitcast %e : f32 to i32
+  %0 = triton_gen.predicated_load %ptr, %predicate, %word {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
+  llvm.return %0 : i32
+}
+
+// -----
+
+// COM: A runtime value inserted below a constant one in the chain must still be
+// COM: found: the element read here is the runtime one.
+llvm.func @predicated_load_partly_runtime_default(%ptr : !llvm.ptr<1>, %predicate : i1, %runtime : f32) -> i32 {
+  // CHECK-LABEL: llvm.func @predicated_load_partly_runtime_default(
+  // CHECK:         [[WORD:%.*]] = llvm.bitcast {{.*}} : f32 to i32
+  // CHECK-NEXT:    [[ZERO:%.*]] = llvm.mlir.zero : i32
+  // CHECK-NEXT:    [[LOAD:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(%arg0, %arg1, [[ZERO]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+  // CHECK-NEXT:    [[SEL:%.*]] = llvm.select %arg1, [[LOAD]], [[WORD]] : i1, i32
+  // CHECK-NEXT:    llvm.return [[SEL]] : i32
+  %c = llvm.mlir.constant(0.000000e+00 : f32) : f32
+  %s0 = llvm.mlir.undef : !llvm.struct<(f32, f32)>
+  %s1 = llvm.insertvalue %runtime, %s0[0] : !llvm.struct<(f32, f32)>
+  %s2 = llvm.insertvalue %c, %s1[1] : !llvm.struct<(f32, f32)>
+  %e = llvm.extractvalue %s2[0] : !llvm.struct<(f32, f32)>
+  %word = llvm.bitcast %e : f32 to i32
+  %0 = triton_gen.predicated_load %ptr, %predicate, %word {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
+  llvm.return %0 : i32
 }
 
 // -----
