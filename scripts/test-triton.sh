@@ -1490,15 +1490,15 @@ run_vllm_tdesc_tests() {
   done
 
   if [ "$exit_status" -eq 0 ]; then
+    # Quantized fused_moe launches ignore VLLM_TRITON_USE_TD and take the pointer
+    # path, so quantized-only tests (test_block_fp8.py, test_block_int8.py,
+    # test_int8_kernel.py, test_triton_moe_ptpc_fp8.py) would only add autotuning
+    # time here; they are covered by --vllm-moe and --vllm-quant.
     VLLM_TRITON_USE_TD=1 TRITON_TEST_SUITE=vllm_tdesc \
       run_pytest_command -vvv \
         tests/kernels/moe/test_batched_moe.py \
-        tests/kernels/moe/test_block_fp8.py \
-        tests/kernels/moe/test_block_int8.py \
         tests/kernels/moe/test_moe.py \
         tests/kernels/moe/test_moe_layer.py \
-        tests/kernels/moe/test_triton_moe_ptpc_fp8.py \
-        tests/kernels/quantization/test_int8_kernel.py \
         tests/kernels/attention/test_triton_unified_attention.py \
         || exit_status=$?
   fi

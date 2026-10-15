@@ -78,7 +78,10 @@ def mac_loop(
                                        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    off_k = remain_iters * BLOCK_SIZE_K
+    # Walk the segment mirrored inside its tile. When each program has at least one tile of iterations, its first
+    # segment then starts at k = 0, so programs on tiles that share A rows or B columns read the same k-panels at about
+    # the same time, as in oneDNN's reduced-cache stream-K.
+    off_k = (iters_per_tile - remain_iters - (end_iter - start_iter)) * BLOCK_SIZE_K
     for _ in range(start_iter, end_iter):
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
@@ -118,7 +121,9 @@ BLOCK_SIZES = get_autotune_configs()[0].kwargs
 @triton.autotune(
     configs=get_autotune_configs(),
     key=['M', 'N', 'K'],
-    restore_value=['c_ptr'],
+    # `mac_loop` accumulates into c with `atomic_add`, so every launch needs c zeroed.
+    # `first_wave` runs before `full_tiles`, so zeroing the whole buffer here is safe.
+    reset_to_zero=['c_ptr'],
 )
 @triton.jit
 def first_wave(
@@ -151,6 +156,9 @@ def first_wave(
 @triton.autotune(
     configs=get_autotune_configs(),
     key=['M', 'N', 'K'],
+    # This kernel stores only the blocking tiles, and it runs after `first_wave` has accumulated the
+    # stream-K tiles into the same buffer, so c has to be saved and restored around each config to
+    # keep those tiles intact.
     restore_value=['c_ptr'],
 )
 @triton.jit
@@ -280,20 +288,20 @@ def benchmark(M, N, K, provider):
     b = torch.rand((K, N), device=DEVICE, dtype=torch.bfloat16)
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(a, b))
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.mm(a, b, out_dtype=torch.float32))
     elif provider == 'triton':
         c = torch.zeros((M, N), device=a.device, dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
-        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-2, err_msg='triton to torch')
+        torch_fn = lambda: torch.mm(a, b, out_dtype=torch.float32)
+        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     elif provider == 'sycl-tla':
         # NOTE: SYCL-TLA doesn't have a stream-k matmul op
         c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
         func = getattr(sycl_tla_kernel, 'gemm')
         sycl_tla_fn = lambda: (func(a, b, c, M, N, K, 1), c)[1]
-        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-        benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=1e-2, err_msg='sycl-tla to torch')
+        torch_fn = lambda: torch.mm(a, b, out_dtype=torch.float32)
+        benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='sycl-tla to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(sycl_tla_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
