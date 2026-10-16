@@ -333,6 +333,11 @@ def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-blo
   let description = [{
     This pass annotates load operations using a block pointer with information required to exploit 2D
     block HW instructions during lowering (e.g. whether the memory access pattern is row or column major).
+
+    With `enable-descriptor-relayout`, a row-major descriptor load in a function without a dot, whose
+    blocked layout does not lower to 2D block reads, gets a layout that does. The load is marked
+    `ttig.block_io_anchor` and converted back to its old layout, so RemoveLayoutConversions carries the
+    new layout to its users.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",

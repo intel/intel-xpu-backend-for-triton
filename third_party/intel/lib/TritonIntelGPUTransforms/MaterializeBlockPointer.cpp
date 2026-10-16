@@ -137,6 +137,24 @@ public:
     mod.walk([&](tt::DescriptorStoreOp op) {
       visit(op, axisInfoAnalysis, context);
     });
+
+    // The relayout needs the ttig.block_io tags set above.
+    if (!enableDescriptorRelayout) {
+      LDBG("enable-descriptor-relayout is off; skip the descriptor relayout");
+      return;
+    }
+    mod.walk([&](tt::FuncOp func) {
+      bool funcHasDot = false;
+      SmallVector<tt::DescriptorLoadOp> loads;
+      func.walk([&](Operation *op) {
+        if (isa<tt::DotOp, tt::DotScaledOp>(op))
+          funcHasDot = true;
+        else if (auto load = dyn_cast<tt::DescriptorLoadOp>(op))
+          loads.push_back(load);
+      });
+      for (tt::DescriptorLoadOp load : loads)
+        relayoutDescriptorLoadForBlockIO(load, funcHasDot);
+    });
   }
 
 private:
@@ -1088,6 +1106,157 @@ private:
     LDBG("offset: " << offset);
 
     return true;
+  }
+
+  struct DescLoadUses {
+    bool understood = true;
+    SmallVector<unsigned, 2> reduceAxes;
+  };
+
+  /// Follow the users of \p op through layout converts, tt.fp_to_fp and
+  /// elementwise ops. A tt.reduce records its axis and ends its path, as does a
+  /// tt.store or tt.descriptor_store. Any other user is not understood and ends
+  /// the walk: RemoveLayoutConversions can rematerialize even an anchored load
+  /// into a shape op's layout (isExpensiveLoadRematCandidate).
+  static DescLoadUses analyzeDescLoadUses(tt::DescriptorLoadOp op) {
+    DescLoadUses uses;
+    SmallVector<Value> worklist{op.getResult()};
+    SmallPtrSet<Operation *, 8> visited;
+    while (!worklist.empty()) {
+      Value value = worklist.pop_back_val();
+      for (Operation *user : value.getUsers()) {
+        if (auto reduce = dyn_cast<tt::ReduceOp>(user)) {
+          uses.reduceAxes.push_back(reduce.getAxis());
+          continue;
+        }
+        if (isa<tt::StoreOp, tt::DescriptorStoreOp>(user))
+          continue;
+        if (!isa<ttg::ConvertLayoutOp, tt::FpToFpOp>(user) &&
+            !user->hasTrait<OpTrait::Elementwise>()) {
+          uses.understood = false;
+          return uses;
+        }
+        if (visited.insert(user).second)
+          llvm::append_range(worklist, user->getResults());
+      }
+    }
+    return uses;
+  }
+
+  /// Issue #8458: give the row-major descriptor load \p op, whose blocked
+  /// layout does not lower to 2D block reads, a layout that does. The result is
+  /// converted back to the old type, and ttig.block_io_anchor makes
+  /// RemoveLayoutConversions carry the new layout to the users. The caller
+  /// checks the option. A function with a dot (\p funcHasDot) is excluded
+  /// whole, as a conservative policy.
+  void relayoutDescriptorLoadForBlockIO(tt::DescriptorLoadOp op,
+                                        bool funcHasDot) const {
+    LDBG("Considering descriptor load for relayout: " << *op);
+
+    if (isBlockIOForAllLayoutsExplicitlyDisabled()) {
+      LDBG("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 disables non-DPAS 2D "
+           "block loads; skip relayout");
+      return;
+    }
+
+    auto blockIOAttr = op->getAttrOfType<StringAttr>(
+        ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+    if (!blockIOAttr ||
+        blockIOAttr.getValue() !=
+            ttgi::stringifyBlockIOMode(ttgi::BlockIOMode::RowMajor)) {
+      LDBG("Not tagged ttig.block_io = row_major; skip relayout");
+      return;
+    }
+
+    RankedTensorType currentTy = op.getType();
+    if (currentTy.getRank() != 2) {
+      LDBG("Rank " << currentTy.getRank() << " is not 2; skip relayout");
+      return;
+    }
+
+    auto currentEnc =
+        dyn_cast<ttg::BlockedEncodingAttr>(currentTy.getEncoding());
+    if (!currentEnc) {
+      LDBG("Result encoding is not blocked; skip relayout");
+      return;
+    }
+
+    unsigned elemSizeInBits = currentTy.getElementTypeBitWidth();
+    bool oneMatrixPerLoadForBT =
+        op->hasAttr(ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
+    if (ttgi::validate2DBlockLoadTile(
+            currentEnc.toLinearLayout(currentTy.getShape()),
+            /*memContiguousDim=*/1, elemSizeInBits, currentTy,
+            oneMatrixPerLoadForBT)) {
+      LDBG("Current layout already lowers to 2D block reads; skip relayout");
+      return;
+    }
+
+    if (funcHasDot) {
+      LDBG("Function has a tt.dot or tt.dot_scaled; skip relayout");
+      return;
+    }
+
+    DescLoadUses uses = analyzeDescLoadUses(op);
+    if (!uses.understood) {
+      LDBG("A transitive user is not understood; skip relayout");
+      return;
+    }
+
+    if (!llvm::all_equal(uses.reduceAxes)) {
+      LDBG("Reduces along more than one axis; skip relayout");
+      return;
+    }
+    std::optional<unsigned> reducedDim;
+    if (!uses.reduceAxes.empty())
+      reducedDim = uses.reduceAxes.front();
+
+    // isExpensiveLoadOrStore does not anchor a smaller load, so
+    // RemoveLayoutConversions would undo the relayout.
+    unsigned numWarps = ttg::lookupNumWarps(op);
+    unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
+    if (currentTy.getNumElements() < int64_t(numWarps) * threadsPerWarp) {
+      LDBG(currentTy.getNumElements()
+           << " elements < " << numWarps * threadsPerWarp
+           << " threads; skip relayout");
+      return;
+    }
+
+    std::optional<ttg::BlockedEncodingAttr> candidateEnc =
+        ttgi::pickBlockIOLoadEncoding(currentTy, numWarps, threadsPerWarp,
+                                      reducedDim);
+    if (!candidateEnc) {
+      LDBG("No 2D block layout for " << currentTy << "; skip relayout");
+      return;
+    }
+    RankedTensorType candidateTy = currentTy.cloneWithEncoding(*candidateEnc);
+
+    if (!ttgi::isDescriptorLoadLowerableTo2DBlock(op, candidateTy)) {
+      LDBG("Candidate " << candidateTy
+                        << " does not lower to a 2D block load; skip relayout");
+      return;
+    }
+
+    unsigned currentCost = ttgi::estimateLoadHWCost(currentTy, op);
+    unsigned candidateCost = ttgi::estimateLoadHWCost(candidateTy, op);
+    if (candidateCost >= currentCost) {
+      LDBG("Candidate cost " << candidateCost << " >= current cost "
+                             << currentCost << "; skip relayout");
+      return;
+    }
+
+    // Retype in place, so the load keeps all of its attributes.
+    op.getResult().setType(candidateTy);
+    op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAnchorAttrName(),
+                UnitAttr::get(op.getContext()));
+    OpBuilder builder(op.getContext());
+    builder.setInsertionPointAfter(op);
+    auto cvt = ttg::ConvertLayoutOp::create(builder, op.getLoc(), currentTy,
+                                            op.getResult());
+    op.getResult().replaceAllUsesExcept(cvt.getResult(), cvt);
+    LDBG("Relaid out (cost " << currentCost << " -> " << candidateCost
+                             << "): " << *op);
   }
 };
 
