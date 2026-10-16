@@ -110,6 +110,18 @@ def _perf_rate(work: float, ms: float) -> float:
     return work / (ms * 1e-3)
 
 
+def _assert_tensor_list_close(actual, expected, *, atol, rtol, err_msg):
+    if not isinstance(actual, (list, tuple)) or not isinstance(expected, (list, tuple)):
+        raise TypeError(
+            f"{err_msg}: expected list/tuple outputs, got {type(actual).__name__} and {type(expected).__name__}")
+    if len(actual) != len(expected):
+        raise AssertionError(f"{err_msg}: output length mismatch: {len(actual)} != {len(expected)}")
+    for i, (a, b) in enumerate(zip(actual, expected)):
+        if not isinstance(a, torch.Tensor) or not isinstance(b, torch.Tensor):
+            raise TypeError(f"{err_msg}: element {i} is not a tensor: {type(a).__name__} vs {type(b).__name__}")
+        torch.testing.assert_close(a, b, atol=atol, rtol=rtol, msg=f"{err_msg} output[{i}]")
+
+
 def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     kernel_path: Optional[str] = None,
@@ -147,8 +159,10 @@ def get_benchmark(
             ref_out0, ref_out1 = _make_outputs()
             triton_fn = lambda: _run_triton(kernel, in0, triton_out0, triton_out1)
             torch_fn = lambda: _run_reference(in0, ref_out0, ref_out1)
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-3, rtol=1e-3, err_msg=KERNEL_NAME)
-            _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
+            triton_raw = triton_fn()
+            ref_raw = torch_fn()
+            _assert_tensor_list_close(triton_raw, ref_raw, atol=1e-3, rtol=1e-3, err_msg=KERNEL_NAME)
+            _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: _run_triton(kernel, in0, triton_out0, triton_out1))
         elif provider == "torch":
             ref_out0, ref_out1 = _make_outputs()
             torch_fn = lambda: _run_reference(in0, ref_out0, ref_out1)
