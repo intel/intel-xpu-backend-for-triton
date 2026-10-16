@@ -3,12 +3,10 @@
 
 import math
 import statistics
-from contextlib import contextmanager
 
 import torch
 
 
-@contextmanager
 def cold_graph_timer(fn, device, warmup_ms, rep_ms):
     """Evict before each replay; time only the single-call attention graph."""
     backend = getattr(torch, device.type)
@@ -51,10 +49,7 @@ def cold_graph_timer(fn, device, warmup_ms, rep_ms):
         batch(warmups)
         repeats = max(1, min(256, math.ceil(rep_ms / per_call_ms)))
 
-        def elapsed():
-            return batch(repeats)[0]
-
-        yield attention, elapsed
+        return batch(repeats)[0]
     finally:
         attention.reset()
         eviction.reset()

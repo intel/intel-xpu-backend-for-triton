@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 DTYPES = ('bfloat16', 'float8_e4m3fn')
+PARTS = ('1', '2', '3', '4')
 
 
 def benchmark_workloads():
@@ -21,22 +22,15 @@ def benchmark_workloads():
             q_heads, kv_heads, head_size, _, seq_lens, window, softcap, num_blocks, block_size = config
             cases.append({
                 'id': f'{dtype}-{index:04d}',
-                'batch': len(seq_lens),
-                'block_size': block_size,
-                'dtype': dtype,
-                'head_size': head_size,
-                'kv_heads': kv_heads,
-                'kv_layout': 'contiguous',
-                'kv_lens': [kv for _, kv in seq_lens],
-                'num_blocks': num_blocks,
-                'num_segments': 16,
-                'out_dtype': 'bfloat16',
                 'q_heads': q_heads,
-                'q_layout': 'contiguous',
-                'query_lens': [q for q, _ in seq_lens],
-                'seq_threshold_3d': 32,
-                'sliding_window': window or 0,
-                'softcap': softcap or 0.0,
+                'k_heads': kv_heads,
+                'head_size': head_size,
+                'qdtype': None if dtype == 'bfloat16' else dtype,
+                'seq_lens': seq_lens,
+                'sliding_window': window,
+                'soft_cap': softcap,
+                'num_blocks': num_blocks,
+                'block_size': block_size,
             })
         manifests[dtype] = cases
     return manifests
@@ -44,26 +38,36 @@ def benchmark_workloads():
 
 def profile_group(case):
     # CI uses TD and unquantized/native-FP8 caches for every input.
-    return (case['block_size'], case['head_size'], case['q_heads'] // case['kv_heads'], case['dtype'],
-            case['out_dtype'], bool(case['softcap']), case['sliding_window'])
+    dtype = case['qdtype'] or 'bfloat16'
+    return (case['block_size'], case['head_size'], case['q_heads'] // case['k_heads'], dtype, 'bfloat16',
+            bool(case['soft_cap']), case['sliding_window'] or 0)
 
 
 def partition(manifests):
-    result = {part: {dtype: [] for dtype in DTYPES} for part in ('1', '2')}
+    result = {part: {dtype: [] for dtype in DTYPES} for part in PARTS}
     for dtype in DTYPES:
         for case in manifests[dtype]:
             # Ownership must stay fixed when runners filter out different workloads.
             digest = hashlib.sha256(json.dumps(profile_group(case)).encode()).hexdigest()
-            part = str(1 + int(digest[:8], 16) % 2)
+            part = PARTS[int(digest[:8], 16) % len(PARTS)]
             result[part][dtype].append(case)
     return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--part', choices=('1', '2'), help='Omit to select all benchmark inputs')
+    parser.add_argument('--device', default='xpu:0', help='XPU used for benchmark memory filtering')
+    parser.add_argument('--part', choices=PARTS, help='Omit to select all benchmark inputs')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+
+    import torch  # pylint: disable=import-outside-toplevel
+
+    device = torch.device(args.device)
+    if device.type != 'xpu':
+        parser.error('CI tuning workloads target XPU')
+    # The benchmark filters workloads using the current device at import time.
+    torch.xpu.set_device(device)
     manifests = benchmark_workloads()
     parts = partition(manifests)
     selected = parts[args.part] if args.part else manifests

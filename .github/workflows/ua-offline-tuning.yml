@@ -1,40 +1,46 @@
 name: UA offline tuning with cold graph replay
-run-name: UA CI-input tuning on B580 (${{ github.ref_name }})
+run-name: UA CI-input tuning (${{ github.ref_name }})
 
 on:
   workflow_dispatch:
     inputs:
-      allow_parallel:
-        description: Allow this run alongside other tuning runs on a separate runner
-        type: boolean
-        default: false
+      runner_label:
+        description: Intel XPU runner label
+        type: string
+        required: true
+        default: b580
+      device:
+        description: PyTorch XPU device on the selected runner
+        type: string
+        default: xpu:0
       part:
-        description: Tuning part to run (both runs sequentially)
+        description: Tuning part to run (all runs four parts sequentially)
         type: choice
-        default: both
-        options: [both, '1', '2']
+        default: all
+        options: [all, '1', '2', '3', '4']
 
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  group: ${{ inputs.allow_parallel && format('ua-ci-offline-tune-{0}', github.run_id) || 'ua-ci-offline-tune' }}
+  group: ua-ci-offline-tune
   cancel-in-progress: false
 
 env:
   GH_TOKEN: ${{ github.token }}
   TRITON_CACHE_DIR: ${{ github.workspace }}/.ua-tuning-cache-${{ github.run_id }}
+  UA_TUNING_DEVICE: ${{ inputs.device || 'xpu:0' }}
 
 jobs:
   tune:
-    name: Tune part ${{ matrix.part }} of 2
+    name: Tune part ${{ matrix.part }} of 4
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix:
-        part: ${{ fromJSON(inputs.part == 'both' && '[1,2]' || format('[{0}]', inputs.part)) }}
-    runs-on: [linux, b580]
+        part: ${{ fromJSON(inputs.part == 'all' && '[1,2,3,4]' || format('[{0}]', inputs.part)) }}
+    runs-on: ${{ fromJSON(startsWith(inputs.runner_label, 'max') && format('["linux", "rolling", "{0}"]', inputs.runner_label) || format('["linux", "{0}"]', inputs.runner_label || 'b580')) }}
     timeout-minutes: 1440
     defaults:
       run:
@@ -51,6 +57,8 @@ jobs:
       - name: Install build dependencies
         run: pip install cmake
       - uses: ./.github/actions/setup-pytorch
+        with:
+          lts: ${{ inputs.runner_label == 'lts' }}
       - uses: ./.github/actions/setup-triton
       - uses: ./.github/actions/install-vllm
       - name: Install benchmark import dependencies
@@ -66,11 +74,13 @@ jobs:
           python -m pip freeze > reports/packages.txt
           git rev-parse HEAD > reports/checkout.txt
           export PYTHONPATH="$PWD/benchmarks:$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
-          python scripts/vllm/ua_tuning/shard.py --part ${{ matrix.part }} --output reports/manifests
+          python scripts/vllm/ua_tuning/shard.py --device "$UA_TUNING_DEVICE" \
+            --part ${{ matrix.part }} --output reports/manifests
       - name: Tune BF16 inputs for this part
         run: |
           export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
           python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
+            --device "$UA_TUNING_DEVICE" \
             --manifest reports/manifests/bfloat16.json \
             --save-dir reports/configs --measurements reports/bf16-measurements.json \
             --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/bf16-tuning.log
@@ -85,6 +95,7 @@ jobs:
         run: |
           export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
           python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
+            --device "$UA_TUNING_DEVICE" \
             --manifest reports/manifests/float8_e4m3fn.json \
             --save-dir reports/configs --measurements reports/fp8-measurements.json \
             --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/fp8-tuning.log

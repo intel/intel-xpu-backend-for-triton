@@ -42,66 +42,42 @@ def load_tuner():
     return tuner
 
 
-# pylint: disable-next=too-many-branches
 def normalize_workloads(raw):
-    if not isinstance(raw, list) or not raw:
-        raise ValueError("Manifest must be a nonempty JSON list")
+    """Validate the benchmark's arguments, plus an optional workload id."""
+    if not isinstance(raw, list):
+        raise ValueError("Manifest must be a JSON list")
+    fields = {
+        "q_heads", "k_heads", "head_size", "qdtype", "seq_lens", "sliding_window", "soft_cap", "num_blocks",
+        "block_size"
+    }
     cases, ids = [], set()
     for index, source in enumerate(raw):
+        if not isinstance(source, dict) or not fields <= source.keys() or source.keys() - fields - {"id"}:
+            raise ValueError(f"Workload {index} must contain benchmark arguments: {sorted(fields)}")
         case = dict(source)
         case_id = case.setdefault("id", f"case-{index:04d}")
         if not isinstance(case_id, str) or case_id in ids:
             raise ValueError("Every workload needs a unique string id")
         ids.add(case_id)
-        case.setdefault("q_layout", "contiguous")
-        if case["q_layout"] not in ("contiguous", "qkv"):
-            raise ValueError("q_layout must be contiguous or qkv")
-        case.setdefault("kv_layout", "contiguous")
-        if case["kv_layout"] not in ("contiguous", "interleaved"):
-            raise ValueError("kv_layout must be contiguous or interleaved")
-        case.setdefault("dtype", "bfloat16")
-        case["dtype"] = {"bf16": "bfloat16", "fp16": "float16", "fp8":
-                         "float8_e4m3fn"}.get(case["dtype"], case["dtype"])
-        if case["dtype"] not in ("bfloat16", "float16", "float8_e4m3fn"):
-            raise ValueError("Supported query/K/V dtypes: bfloat16, float16, float8_e4m3fn")
-        case.setdefault("out_dtype", "bfloat16" if case["dtype"].startswith("float8") else case["dtype"])
-        if case["out_dtype"] not in ("bfloat16", "float16"):
-            raise ValueError("Output dtype must be bfloat16 or float16")
-        for name, default in (
-            ("batch", 1),
-            ("block_size", 32),
-            ("head_size", 128),
-            ("q_heads", 32),
-            ("kv_heads", 8),
-            ("num_segments", 16),
-            ("seq_threshold_3d", 32),
-        ):
-            case.setdefault(name, default)
-            minimum = 0 if name == "seq_threshold_3d" else 1
-            if type(case[name]) is not int or case[name] < minimum:
-                raise ValueError(f"{case_id}: {name} must be an integer >= {minimum}")
-        if case["q_heads"] % case["kv_heads"]:
-            raise ValueError("q_heads must be divisible by kv_heads")
-        for plural, scalar in (("query_lens", "query_len"), ("kv_lens", "kv_len")):
-            if plural not in case:
-                if scalar not in case:
-                    raise ValueError(f"{case_id}: provide {plural} or {scalar}")
-                case[plural] = [case[scalar]] * case["batch"]
-            if len(case[plural]) != case["batch"] or any(
-                    type(length) is not int or length <= 0 for length in case[plural]):
-                raise ValueError(f"{case_id}: invalid {plural}")
-        if any(q > k for q, k in zip(case["query_lens"], case["kv_lens"])):
-            raise ValueError("Every query length must be <= its KV length")
-        case.setdefault("sliding_window", 0)
-        case.setdefault("softcap", 0.0)
-        if type(case["sliding_window"]) is not int or case["sliding_window"] < 0:
-            raise ValueError("sliding_window must be a nonnegative integer")
-        if not isinstance(case["softcap"], (int, float)) or not math.isfinite(case["softcap"]) or case["softcap"] < 0:
-            raise ValueError("softcap must be finite and nonnegative")
-        if case["block_size"] % 16:
-            raise ValueError("The initial TD workloads require block_size divisible by 16")
-        if case["dtype"].startswith("float8_") and case["block_size"] % 32:
-            raise ValueError("Native FP8 + TD requires block_size divisible by 32; pointer fallback is disabled")
+        for name in ("q_heads", "k_heads", "head_size", "num_blocks", "block_size"):
+            if type(case[name]) is not int or case[name] <= 0:
+                raise ValueError(f"{case_id}: {name} must be a positive integer")
+        if case["q_heads"] % case["k_heads"]:
+            raise ValueError("q_heads must be divisible by k_heads")
+        if case["qdtype"] not in (None, "float8_e4m3fn"):
+            raise ValueError("CI fixtures require qdtype=null (BF16) or float8_e4m3fn")
+        if case["block_size"] % (32 if case["qdtype"] else 16):
+            raise ValueError("TD block_size must be divisible by 16 (32 for FP8)")
+        pairs = case["seq_lens"]
+        if not isinstance(pairs, list) or not pairs or any(not isinstance(pair, (list, tuple)) or len(pair) != 2 or any(
+                type(length) is not int for length in pair) or not 0 < pair[0] <= pair[1] for pair in pairs):
+            raise ValueError(f"{case_id}: seq_lens must contain positive [Q, KV] pairs with Q <= KV")
+        window = case["sliding_window"]
+        if window is not None and (type(window) is not int or window <= 0):
+            raise ValueError("sliding_window must be null or a positive integer")
+        cap = case["soft_cap"]
+        if cap is not None and (type(cap) not in (int, float) or not math.isfinite(cap) or cap < 0):
+            raise ValueError("soft_cap must be null or finite and nonnegative")
         cases.append(case)
     return cases
 
@@ -142,30 +118,11 @@ def allocate_ci(case, device, seed):
     import torch
 
     del seed  # The fixture sets its own seed, independently of tuning order.
-    expected = {
-        "q_layout": "contiguous",
-        "kv_layout": "contiguous",
-        "out_dtype": "bfloat16",
-        "seq_threshold_3d": 32,
-        "num_segments": 16,
-    }
-    for name, value in expected.items():
-        if case[name] != value:
-            raise ValueError(f"CI fixtures require {name}={value!r}")
-    if case["dtype"] not in ("bfloat16", "float8_e4m3fn"):
-        raise ValueError("CI fixtures support BF16 and FP8 inputs")
-    if case.get("softmax_scale", case["head_size"]**-0.5) != case["head_size"]**-0.5:
-        raise ValueError("CI fixtures require softmax_scale=head_size**-0.5")
-    if "num_blocks" not in case or case["num_blocks"] <= 0:
-        raise ValueError("CI fixtures require a positive num_blocks")
+    kwargs = {name: value for name, value in case.items() if name != "id"}
+    kwargs["qdtype"] = getattr(torch, kwargs["qdtype"]) if kwargs["qdtype"] else None
     previous_device = torch.get_default_device()
     try:
-        _benchmark_fixture(str(device))(q_heads=case["q_heads"], k_heads=case["kv_heads"], head_size=case["head_size"],
-                                        qdtype=torch.float8_e4m3fn if case["dtype"] == "float8_e4m3fn" else None,
-                                        seq_lens=list(zip(case["query_lens"],
-                                                          case["kv_lens"])), sliding_window=case["sliding_window"]
-                                        or None, soft_cap=case["softcap"] or None, num_blocks=case["num_blocks"],
-                                        block_size=case["block_size"], provider="triton-td")
+        _benchmark_fixture(str(device))(**kwargs, provider="triton-td")
     except _CapturedAttention as result:
         return result.args[0]
     finally:
@@ -174,29 +131,52 @@ def allocate_ci(case, device, seed):
 
 
 def main(argv=None):
-    patch_parser = argparse.ArgumentParser(add_help=False)
-    patch_parser.add_argument("--check-patch", action="store_true")
-    patch_args, remaining = patch_parser.parse_known_args(sys.argv[1:] if argv is None else argv)
-    if patch_args.check_patch:
-        if remaining:
-            patch_parser.error("--check-patch cannot be combined with tuning options")
+    argv = sys.argv[1:] if argv is None else argv
+    parser = argparse.ArgumentParser(description=__doc__)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--check-patch", action="store_true",
+                        help="Check tuner patch compatibility without importing PyTorch or vLLM")
+    inputs.add_argument("--manifest")
+    parser.add_argument("--tune", action="store_true", help="Search candidates and export winners")
+    parser.add_argument("--save-dir", default=str(BENCHMARK_DIR / "configs"))
+    parser.add_argument("--measurements", help="Optional detailed tuning checkpoint JSON")
+    parser.add_argument("--device", default="xpu:0")
+    parser.add_argument("--rounds", type=int, default=3)
+    parser.add_argument("--confirmation-rounds", type=int, default=5)
+    parser.add_argument("--finalists", type=int, default=3)
+    parser.add_argument("--warmup-ms", type=float, default=10)
+    parser.add_argument("--rep-ms", type=float, default=50)
+    parser.add_argument("--seed", type=int, default=1729)
+    parser.add_argument("--tolerance", type=float, default=0.01,
+                        help="Worst-regret tie tolerance before geometric-mean tie-breaking")
+    parser.add_argument("--clear-cache", action="store_true",
+                        help="Evict 256 MB before each graph replay, excluding eviction from timing")
+    args = parser.parse_args(argv)
+    if args.check_patch:
+        if len(argv) != 1:
+            parser.error("--check-patch cannot be combined with tuning options")
         with prepared_tuner():
             print("UA CI tuner patch applies cleanly")
         return
-
-    from timing import cold_graph_timer
+    for name in ("rounds", "warmup_ms", "rep_ms", "confirmation_rounds", "finalists"):
+        if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
+            option = name.replace("_", "-")
+            parser.error(f"--{option} must be finite and positive")
+    if not math.isfinite(args.tolerance) or args.tolerance < 0:
+        parser.error("--tolerance must be finite and nonnegative")
+    if args.measurements and not args.tune:
+        parser.error("--measurements requires --tune")
+    workloads = normalize_workloads(json.loads(Path(args.manifest).read_text(encoding="utf-8")))
+    if not workloads:
+        print("No inputs for this part; skipping tuning or benchmarking")
+        return
 
     tuner = load_tuner()
-    parser = tuner.create_parser(description=__doc__)
-    parser.add_argument("--check-patch", action="store_true",
-                        help="Check tuner patch compatibility without importing PyTorch or vLLM")
-    parser.add_argument("--manifest", required=True)
-    parser.add_argument("--clear-cache", action="store_true",
-                        help="Evict 256 MB before each graph replay, excluding eviction from timing")
-    parser.set_defaults(seed=1729, save_dir=str(BENCHMARK_DIR / "configs"))
-    args = parser.parse_args(argv)
-    workloads = normalize_workloads(json.loads(Path(args.manifest).read_text(encoding="utf-8")))
-    timer = cold_graph_timer if args.clear_cache else tuner.graph_timer
+    timer = tuner.benchmark_callable
+    if args.clear_cache:
+        from timing import cold_graph_timer
+
+        timer = cold_graph_timer
     scope = "attention_sequence_cold_graph_device" if args.clear_cache else "attention_sequence_graph_device"
     tuner.main(args, workloads, allocate=allocate_ci, timer=timer, timing_scope=scope)
 
