@@ -48,10 +48,19 @@ TRITON_KERNEL_RUNNER_ENABLE_EVENTLESS_SUBMIT=0 cmake -DCMAKE_BUILD_TYPE=RelWithD
 ### Generate Data
 
 In order to utilize this utility, Triton application must be run with the following environment variable enabled.
-Input dumps are written into the kernel cache directory for each compiled kernel.
+Set the variable to a specific Triton kernel name to dump only that kernel's inputs,
+or set it to `all` to dump every compiled kernel. The legacy truthy values such as `1`
+are still accepted and behave like `all`.
 
 ```
-export TRITON_XPU_ENABLE_DUMP_KERNEL_ARGS=1
+export TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS=<kernel_name|all>
+```
+
+Examples:
+
+```
+export TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS=triton_per_fused_slice_stack_sum_199
+export TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS=all
 ```
 
 Optional cache location override:
