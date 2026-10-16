@@ -614,7 +614,13 @@ protected:
     StrideInfo::DimVectorT stride;
     stride.reserve(lhs.size());
     for (unsigned d = 0, rank = lhs.size(); d < rank; ++d) {
-      if (lhs[d] > 0 && rhsConst.has_value() && rhsConst.value() > 0 &&
+      // NOTE: DivSIOp is excluded because truncation toward zero breaks the
+      // stride pattern when the input window crosses zero:
+      //   divsi([-2,-1,0,1], 2) = [-1,0,0,0] (not evenly strided)
+      // Without range analysis we cannot prove inputs are non-negative for
+      // DivSIOp, so conservatively report unknown stride.
+      if (!std::is_same_v<OpTy, arith::DivSIOp> && lhs[d] > 0 &&
+          rhsConst.has_value() && rhsConst.value() > 0 &&
           lhs[d] % rhsConst.value() == 0)
         stride.push_back(lhs[d] / rhsConst.value());
       else if (lhs[d] == 0 && rhsConst.has_value() && rhsConst.value() != 0)
@@ -642,10 +648,18 @@ protected:
       if (lhs[d] == 0 && (*rhs)[d] == 0) {
         // Both sides are uniform/constant — result is uniform.
         stride.push_back(0);
-      } else if (lhs[d] > 0 && rhsConst.has_value() && rhsConst.value() > 0) {
+      } else if (!std::is_same_v<OpTy, arith::RemSIOp> && lhs[d] > 0 &&
+                 rhsConst.has_value() && rhsConst.value() > 0) {
         // Stride preserved when range span doesn't cross a modulus boundary.
         // Effective period is gcd(divisibility, modulus) when AxisInfo is
         // available; falls back to modulus otherwise.
+        //
+        // NOTE: RemSIOp is excluded because this only holds when the input
+        // window starts at a non-negative value. For negative starts at
+        // multiples of M, truncation-toward-zero creates a discontinuity
+        // between x=kM and x=kM+1 (k<0), breaking stride. Without range
+        // analysis we cannot prove inputs are non-negative for RemSIOp, so
+        // conservatively report unknown stride.
         auto resTy = dyn_cast<RankedTensorType>(op.getType());
         if (resTy) {
           int64_t dimSize = resTy.getDimSize(d);
