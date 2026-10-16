@@ -104,6 +104,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.block_io_stride";
     }
 
+    /// Get the name of the attribute used to indicate that a load relaid out
+    /// for 2D block IO is a layout anchor for RemoveLayoutConversions.
+    static constexpr llvm::StringRef getBlockIOAnchorAttrName() {
+      return "ttig.block_io_anchor";
+    }
+
     /// Get the name of the attribute used to specify the target architecture. This
     /// attribute matches architecture in a target triple used for the resulting LLVM
     /// IR module.
