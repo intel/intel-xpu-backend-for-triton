@@ -188,7 +188,9 @@ std::string reducedDimName(std::optional<unsigned> reducedDim) {
 }
 
 // Only rank-2 loads are picked. At 1 warp x 16 lanes, the first two dims
-// (2x16) pass every geometry check, so only the rank check rejects it.
+// (2x16) pass every geometry check, so only the rank check rejects it. At the
+// neighbours' 4 warps x 32 lanes, the replication guard would reject 2x16 too
+// (see PickRejectsTooSmall) and mask the rank check, hence 1 warp x 16 lanes.
 TEST_F(BlockIOUtilsTest, PickRejectsRank3) {
   auto type = makeCoalescedType({2, 16, 256}, Float32Type::get(&ctx),
                                 /*numWarps=*/1, /*threadsPerWarp=*/16);

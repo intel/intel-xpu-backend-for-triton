@@ -1,10 +1,11 @@
 """End-to-end tests for the opt-in descriptor-load block-IO relayout (issue #8458).
 
 With TRITON_INTEL_DESCRIPTOR_BLOCK_IO_RELAYOUT=1, MaterializeBlockPointer gives a row-major
-`tt.descriptor_load` that feeds no dot a layout LowerTo2DBlockLoad accepts, and marks it
-`ttig.block_io_anchor` so RemoveLayoutConversions keeps that layout. The load then lowers to 2D block
-reads instead of gathers. A load whose tile reaches a store is left alone: the store keeps its own
-layout, so the new one would cost an SLM convert.
+`tt.descriptor_load` a layout LowerTo2DBlockLoad accepts, and marks it `ttig.block_io_anchor` so
+RemoveLayoutConversions keeps that layout. The load then lowers to 2D block reads instead of gathers.
+The gate is function-wide: only loads in a function with no `tt.dot` or `tt.dot_scaled` are relaid
+out, not merely loads that feed no dot. A load whose tile reaches a store is left alone: the store
+keeps its own layout, so the new one would cost an SLM convert.
 
 `JITFunction.run` keys its in-memory cache on specialization and options, not on the environment, so
 every test wraps a plain module-level function in a fresh `triton.jit` object and compiles it into its
@@ -46,6 +47,13 @@ LAUNCHES = [
     pytest.param({}, id="default"),
     pytest.param(dict(num_warps=1, warp_size=16, grf_mode="256"), id="tuned"),
 ]
+
+
+@pytest.fixture(autouse=True)
+def triton_block_io(monkeypatch):
+    # TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 (e.g. on the CRI simulator) disables the relayout.
+    monkeypatch.setenv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS", "1")
+    yield
 
 
 def _set_compile_env(monkeypatch, tmp_path, knob):
@@ -139,8 +147,9 @@ def test_relayout_correctness(nseg, D, launch, device, monkeypatch, tmp_path):
     x[:, :, nseg:, :] = float("nan")
     m = torch.randn(T, H, S, generator=generator).to(device)
     out = torch.empty(T, H, D, device=device, dtype=torch.bfloat16)
-    kernel[(T, H)](out, x, m, nseg, H, D=D, DP=DP, S=S, **launch)
+    k = kernel[(T, H)](out, x, m, nseg, H, D=D, DP=DP, S=S, **launch)
 
+    assert ANCHOR in k.asm["ttgir"], f"no {ANCHOR} in the TTGIR, the descriptor load was not relaid out"
     # float64 reference on the CPU: not every XPU supports fp64.
     x64 = x.cpu().to(torch.float64)
     m64 = m.cpu().to(torch.float64)[..., :nseg]

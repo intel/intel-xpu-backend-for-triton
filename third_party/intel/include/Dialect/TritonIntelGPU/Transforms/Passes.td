@@ -328,16 +328,20 @@ def TritonIntelGPUReduceDataDuplication: Pass<"tritonintelgpu-reduce-data-duplic
 }
 
 def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-block-pointer", "mlir::ModuleOp"> {
-  let summary = "annotate load operations with information required to exploit 2D block HW instructions";
+  let summary = "annotate load operations with information required to exploit 2D block HW instructions, "
+                "and optionally re-encode descriptor loads to use them";
 
   let description = [{
     This pass annotates load operations using a block pointer with information required to exploit 2D
     block HW instructions during lowering (e.g. whether the memory access pattern is row or column major).
 
-    With `enable-descriptor-relayout`, a row-major descriptor load in a function without a dot, whose
-    blocked layout does not lower to 2D block reads, gets a layout that does. The load is marked
-    `ttig.block_io_anchor` and converted back to its old layout, so RemoveLayoutConversions carries the
-    new layout to its users.
+    With `enable-descriptor-relayout`, the pass may also re-encode a rank-2, row-major descriptor load
+    whose blocked layout does not lower to 2D block reads, in a function without `tt.dot` or
+    `tt.dot_scaled`. It does so only when the load's users are layout converts, elementwise ops or
+    reductions along a single axis (not stores), the 2D block load lowering accepts the new layout, and the
+    new layout needs fewer HW messages. The load is marked `ttig.block_io_anchor` and converted back to its
+    old layout, so RemoveLayoutConversions carries the new layout to its users.
+    `TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0` disables the re-encoding.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
@@ -348,8 +352,8 @@ def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-blo
   let options = [
     Option<"enableDescriptorRelayout", "enable-descriptor-relayout",
            "bool", /*default=*/"false",
-           "Relayout row-major descriptor loads in functions without a dot "
-           "so they lower to 2D block reads">
+           "Allow re-encoding eligible rank-2 row-major descriptor loads in "
+           "functions without a dot so they lower to 2D block reads">
   ];
 }
 

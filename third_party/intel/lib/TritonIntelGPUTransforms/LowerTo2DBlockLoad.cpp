@@ -35,20 +35,11 @@ namespace mlir::triton::gpu::intel {
 namespace {
 
 /// Check whether a load is eligible for 2D block IO lowering.
-template <typename OpTy,
-          std::enable_if_t<
-              llvm::is_one_of<OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value,
-              bool> = true>
-static bool isBlockIOEligible(OpTy op) {
-  RankedTensorType tensorTy;
-  if constexpr (std::is_same_v<OpTy, tt::LoadOp>) {
-    tensorTy =
-        dyn_cast<RankedTensorType>(tt::getPointeeType(op.getPtr().getType()));
-    if (!tensorTy)
-      return false;
-  } else {
-    tensorTy = cast<RankedTensorType>(op.getType());
-  }
+static bool isBlockIOEligible(tt::LoadOp op) {
+  auto tensorTy =
+      dyn_cast<RankedTensorType>(tt::getPointeeType(op.getPtr().getType()));
+  if (!tensorTy)
+    return false;
 
   return ttgi::isBlockIOEligible(op, tensorTy);
 }

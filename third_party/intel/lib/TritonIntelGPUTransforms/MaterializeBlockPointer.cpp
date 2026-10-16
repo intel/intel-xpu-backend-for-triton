@@ -152,8 +152,14 @@ public:
         else if (auto load = dyn_cast<tt::DescriptorLoadOp>(op))
           loads.push_back(load);
       });
+      // A function with a dot is excluded whole, as a conservative policy.
+      if (funcHasDot) {
+        LDBG("Function " << func.getName()
+                         << " has a tt.dot or tt.dot_scaled; skip relayout");
+        return;
+      }
       for (tt::DescriptorLoadOp load : loads)
-        relayoutDescriptorLoadForBlockIO(load, funcHasDot);
+        relayoutDescriptorLoadForBlockIO(load);
     });
   }
 
@@ -1147,10 +1153,8 @@ private:
   /// layout does not lower to 2D block reads, a layout that does. The result is
   /// converted back to the old type, and ttig.block_io_anchor makes
   /// RemoveLayoutConversions carry the new layout to the users. The caller
-  /// checks the option. A function with a dot (\p funcHasDot) is excluded
-  /// whole, as a conservative policy.
-  void relayoutDescriptorLoadForBlockIO(tt::DescriptorLoadOp op,
-                                        bool funcHasDot) const {
+  /// checks the option and skips every function with a dot.
+  void relayoutDescriptorLoadForBlockIO(tt::DescriptorLoadOp op) const {
     LDBG("Considering descriptor load for relayout: " << *op);
 
     if (isBlockIOForAllLayoutsExplicitlyDisabled()) {
@@ -1189,11 +1193,6 @@ private:
             /*memContiguousDim=*/1, elemSizeInBits, currentTy,
             oneMatrixPerLoadForBT)) {
       LDBG("Current layout already lowers to 2D block reads; skip relayout");
-      return;
-    }
-
-    if (funcHasDot) {
-      LDBG("Function has a tt.dot or tt.dot_scaled; skip relayout");
       return;
     }
 

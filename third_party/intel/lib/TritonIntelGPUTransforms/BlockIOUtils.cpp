@@ -942,10 +942,13 @@ bool isDescriptorLoadLowerableTo2DBlock(triton::DescriptorLoadOp op,
       op->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
 
   unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
-  Attribute encoding = tensorTy.getEncoding();
-  LinearLayout llEncoding =
-      cast<triton::gpu::DistributedEncodingTrait>(encoding).toLinearLayout(
-          tensorTy.getShape());
+  auto encoding = dyn_cast_if_present<triton::gpu::DistributedEncodingTrait>(
+      tensorTy.getEncoding());
+  if (!encoding) {
+    LDBG("Not a distributed encoding: " << tensorTy);
+    return false;
+  }
+  LinearLayout llEncoding = encoding.toLinearLayout(tensorTy.getShape());
   if (!validate2DBlockLoadTile(llEncoding, contiguousDim, elemSizeInBits,
                                tensorTy, oneMatrixPerLoadForBT)) {
     LDBG("Tile validation failed for descriptor load: " << *op);

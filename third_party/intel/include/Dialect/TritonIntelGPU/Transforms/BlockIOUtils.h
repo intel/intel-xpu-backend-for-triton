@@ -112,10 +112,12 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
                               BlockIOTileSizeInfo &sizeInfoOut);
 
 /// Return a blocked layout under which a row-major rank-2 load of \p type
-/// passes validate2DBlockLoadTile, or std::nullopt. Lanes span at most 64
-/// bytes of a row. Warps split the columns first, or the rows when
-/// \p reducedDim is 1, to keep a reduction along \p reducedDim within a warp.
-/// The CGA layout comes from \p type's encoding, which must be set.
+/// passes validate2DBlockLoadTile, or std::nullopt. \p numWarps and
+/// \p threadsPerWarp must be > 0. Lanes span at most 64 bytes of a row. Warps
+/// preferably split the dim that is not \p reducedDim (the columns when there
+/// is no reduction), to keep a reduction within a warp; warps left over split
+/// the other dim. The CGA layout comes from \p type's encoding, which must be
+/// set.
 std::optional<triton::gpu::BlockedEncodingAttr>
 pickBlockIOLoadEncoding(RankedTensorType type, unsigned numWarps,
                         unsigned threadsPerWarp,
@@ -144,9 +146,10 @@ bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
 /// candidate other than op.getType(): isBlockIOEligible, traceable descriptor
 /// definitions with consistent padding, validate2DBlockLoadTile (honoring
 /// ttig.one_matrix_per_load), no batch dim in the tile, and each foldable
-/// width/height/pitch within its 24-bit field. Emits no diagnostics. Omits the
-/// layout-independent 16-byte pitch check, which the pass reports as an error,
-/// so true means "eligible", not "safe to emit" for hand-tagged IR.
+/// width/height/pitch within its 24-bit field. Returns false if \p tensorTy has
+/// no distributed encoding. Emits no diagnostics. Omits the layout-independent
+/// 16-byte pitch check, which the pass reports as an error, so true means
+/// "eligible", not "safe to emit" for hand-tagged IR.
 bool isDescriptorLoadLowerableTo2DBlock(triton::DescriptorLoadOp op,
                                         RankedTensorType tensorTy);
 

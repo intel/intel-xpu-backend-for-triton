@@ -1,8 +1,9 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-remove-layout-conversions | FileCheck %s
 
 // COM: Issue #8458. A `ttig.block_io` load is cheap, so it is not a layout anchor.
-// COM: `ttig.block_io_anchor` makes a descriptor load relaid out to `#bio` for 2D block IO
-// COM: one, so `#bio` propagates to its consumers instead of being converted back.
+// COM: `ttig.block_io_anchor` marks a descriptor load that was relaid out to `#bio` for
+// COM: 2D block IO as a layout anchor, so `#bio` propagates to its consumers instead of
+// COM: being converted back.
 
 // COM: Without the anchor (today), the 2D block IO cost check keeps the load in `#bio`, but
 // COM: the convert back to `#blocked` survives, and the mulf and reduce stay in `#blocked`.
@@ -22,6 +23,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %seg = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %0 = tt.splat %w_ptr : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked}>>
     %1 = tt.addptr %0, %seg : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    // COM: The row weight is a cheap pointer load on purpose: it keeps RLC conflict resolution out of the test.
     %w = tt.load %1 : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked}>>
     %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <16x256xf32>
     // CHECK: %[[LOAD:.*]] = tt.descriptor_load {{.*}} -> tensor<16x256xf32, #[[$BIO]]>
