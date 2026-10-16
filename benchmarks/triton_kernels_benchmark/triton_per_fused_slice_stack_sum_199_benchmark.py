@@ -1,10 +1,10 @@
 """
 Benchmark wrapper for the standalone Triton kernel
-`triton_per_fused_slice_stack_sum_199` extracted from Inductor output.
+`triton_per_fused_slice_stack_sum_173` extracted from Inductor output.
 
 By default this benchmark loads the standalone kernel dump at
-`disassembles/inductor_test_log/dj/cdj5uagdheodgsfmhzobsy7wijo7a727kemelysvi43mu6kgckqa.py`.
-Set `TRITON_PER_FUSED_SLICE_STACK_SUM_199_PATH` to benchmark a different
+`disassembles/inductor_test_log/i3/ci3hxbi7nuaayw4ykwksqniypadphxcn6256jw6rb2ygb2kmkxfj.py`.
+Set `TRITON_PER_FUSED_SLICE_STACK_SUM_173_PATH` to benchmark a different
 extracted kernel file.
 """
 
@@ -27,12 +27,12 @@ elif torch.cuda.is_available():
 else:
     raise RuntimeError("No supported GPU device found.")
 
-KERNEL_NAME = "triton_per_fused_slice_stack_sum_199"
-KERNEL_PATH_ENV_VAR = "TRITON_PER_FUSED_SLICE_STACK_SUM_199_PATH"
+KERNEL_NAME = "triton_per_fused_slice_stack_sum_173"
+KERNEL_PATH_ENV_VAR = "TRITON_PER_FUSED_SLICE_STACK_SUM_173_PATH"
 
 X1 = 256
 X0 = 128
-R0_NUMEL = 32
+R0_NUMEL = 64
 XNUMEL = X1 * X0
 
 INPUT_SHAPE = (X1, R0_NUMEL, X0 + 1)
@@ -45,7 +45,7 @@ OUT1_STRIDES = (896, 1)
 
 def _get_default_kernel_path() -> Path:
     repo_root = Path(__file__).resolve().parents[2]
-    return repo_root / "disassembles" / "inductor_test_log" / "dj" / "cdj5uagdheodgsfmhzobsy7wijo7a727kemelysvi43mu6kgckqa.py"
+    return repo_root / "disassembles" / "inductor_test_log" / "i3" / "ci3hxbi7nuaayw4ykwksqniypadphxcn6256jw6rb2ygb2kmkxfj.py"
 
 
 def _resolve_kernel_path(kernel_path: Optional[str]) -> Path:
@@ -83,29 +83,25 @@ def _make_inputs() -> torch.Tensor:
     return in0
 
 
-def _make_outputs() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _make_outputs() -> tuple[torch.Tensor, torch.Tensor]:
     out0 = torch.empty_strided(OUT0_SHAPE, OUT0_STRIDES, device=DEVICE, dtype=torch.float16)
     out1 = torch.empty_strided(OUT1_SHAPE, OUT1_STRIDES, device=DEVICE, dtype=torch.float16)
-    out2 = torch.empty_strided(OUT1_SHAPE, OUT1_STRIDES, device=DEVICE, dtype=torch.float16)
-    return out0, out1, out2
+    return out0, out1
 
 
-def _run_reference(in0: torch.Tensor, out0: torch.Tensor, out1: torch.Tensor,
-                   out2: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _run_reference(in0: torch.Tensor, out0: torch.Tensor, out1: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     sliced = in0[:, :, :X0]
     out0.copy_(sliced)
     reduced = sliced.float().sum(dim=1)
     out1.copy_(reduced)
-    out2.copy_(reduced)
-    return out0, out1, out2
+    return out0, out1
 
 
-def _run_triton(kernel, in0: torch.Tensor, out0: torch.Tensor, out1: torch.Tensor,
-                out2: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _run_triton(kernel, in0: torch.Tensor, out0: torch.Tensor, out1: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     if DEVICE != "xpu":
         raise RuntimeError(f"{KERNEL_NAME} was extracted for XPU and cannot run on '{DEVICE}'.")
-    kernel.run(in0, out0, out1, out2, XNUMEL, R0_NUMEL, stream=_get_xpu_raw_stream())
-    return out0, out1, out2
+    kernel.run(in0, out0, out1, XNUMEL, R0_NUMEL, stream=_get_xpu_raw_stream())
+    return out0, out1
 
 
 def _perf_rate(work: float, ms: float) -> float:
@@ -135,7 +131,7 @@ def get_benchmark(
             line_names=list(providers.values()),
             styles=[("green", "-"), ("blue", "--")],
             ylabel=["GB/s", "TFlops"],
-            plot_name="triton-per-fused-slice-stack-sum-199",
+            plot_name="triton-per-fused-slice-stack-sum-173",
             args={},
         ))
     def benchmark(xnumel, r0_numel, provider):
@@ -147,20 +143,20 @@ def get_benchmark(
             if resolved_kernel_path is None:
                 raise RuntimeError(f"{KERNEL_NAME} requires a standalone kernel path.")
             kernel = _load_kernel(str(resolved_kernel_path))
-            triton_out0, triton_out1, triton_out2 = _make_outputs()
-            ref_out0, ref_out1, ref_out2 = _make_outputs()
-            triton_fn = lambda: _run_triton(kernel, in0, triton_out0, triton_out1, triton_out2)
-            torch_fn = lambda: _run_reference(in0, ref_out0, ref_out1, ref_out2)
+            triton_out0, triton_out1 = _make_outputs()
+            ref_out0, ref_out1 = _make_outputs()
+            triton_fn = lambda: _run_triton(kernel, in0, triton_out0, triton_out1)
+            torch_fn = lambda: _run_reference(in0, ref_out0, ref_out1)
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-3, rtol=1e-3, err_msg=KERNEL_NAME)
             _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
         elif provider == "torch":
-            ref_out0, ref_out1, ref_out2 = _make_outputs()
-            torch_fn = lambda: _run_reference(in0, ref_out0, ref_out1, ref_out2)
+            ref_out0, ref_out1 = _make_outputs()
+            torch_fn = lambda: _run_reference(in0, ref_out0, ref_out1)
             _, min_ms, max_ms, mean_ms, cv = do_bench(torch_fn)
         else:
             raise NotImplementedError(f"Unsupported provider {provider}")
 
-        total_bytes = XNUMEL * (R0_NUMEL * 2 + R0_NUMEL * 2 + 2 + 2)
+        total_bytes = XNUMEL * (R0_NUMEL * (X0 + 1) + R0_NUMEL * X0 + X0) * 2
         total_flops = XNUMEL * (R0_NUMEL - 1)
         gbps = lambda ms: _perf_rate(total_bytes * 1e-9, ms)
         tflops = lambda ms: _perf_rate(total_flops * 1e-12, ms)
