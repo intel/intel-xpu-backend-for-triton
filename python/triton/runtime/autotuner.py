@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import builtins
 import time
 import inspect
@@ -14,6 +15,19 @@ from .errors import OutOfResources, PTXASError, AutotunerError
 from .driver import driver
 from .cache import get_cache_manager, triton_key
 from triton._C.libtriton import get_cache_invalidating_env_vars
+
+_warmup_dispatcher = None
+
+
+def _get_warmup_dispatcher(workers: int):
+    global _warmup_dispatcher
+    if _warmup_dispatcher is None:
+        from .._compile_warmup_pool import ProcessPoolWarmupDispatcher
+
+        _warmup_dispatcher = ProcessPoolWarmupDispatcher(max_workers=workers, trace_directory=None,
+                                                         phase="autotune-warmup")
+        atexit.register(_warmup_dispatcher.finish)
+    return _warmup_dispatcher
 
 
 class Autotuner(KernelInterface):
@@ -187,6 +201,33 @@ class Autotuner(KernelInterface):
                 print(f"Autotuning failed with {e}")
             return [float("inf"), float("inf"), float("inf")]
 
+    def _parallel_warmup(self, args, kwargs, configs):
+        """Pre-compile `configs` across a process pool so the serial benchmarking
+        loop below hits a warm disk cache instead of compiling each config in turn."""
+        workers = knobs.autotuning.warmup_workers
+        if workers <= 0:
+            return
+        dispatcher = _get_warmup_dispatcher(workers)
+        grid = kwargs["grid"]
+
+        # `warmup` is stripped too: `KernelInterface.warmup()` (invoked for us
+        # below) sets its own `warmup=True`, which would otherwise collide
+        # with the `warmup=False` already in `kwargs` from a normal launch.
+        rest = {k: v for k, v in kwargs.items() if k not in ("grid", "warmup")}
+
+        # `_warmup_kernel` (invoked by `dispatch`) resets `kernel.nargs` to None
+        # in its `finally` once it's done; `run()` still needs `self.nargs`
+        # populated for the rest of its own lifecycle, so restore it after.
+        saved_nargs = self.nargs
+
+        pending_before = len(dispatcher._pending)
+        try:
+            dispatcher.dispatch(*args, kernel=self, grid=grid, test=None, **rest)
+        finally:
+            self.nargs = saved_nargs
+        for future in dispatcher._pending[pending_before:]:
+            future.result()
+
     def check_disk_cache(self, tuning_key, configs, bench_fn):
         # We can't serialize prehooks, so just give up and run the benchmarks.
         if not tuning_key or any(cfg.pre_hook for cfg in configs):
@@ -252,6 +293,7 @@ class Autotuner(KernelInterface):
 
                     def benchmark():
                         bench_start = time.time()
+                        self._parallel_warmup(args, kwargs, pruned_configs)
                         timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
                         bench_end = time.time()
                         self.bench_time = bench_end - bench_start
@@ -447,6 +489,14 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     If the environment variable :code:`TRITON_PRINT_AUTOTUNING` is set to
     :code:`"1"`, Triton will print a message to stdout after autotuning each
     kernel, including the time spent autotuning and the best configuration.
+
+    If the environment variable :code:`TRITON_AUTOTUNE_WARMUP_WORKERS` is set
+    to a positive integer, Triton compiles all of a kernel's pruned configs in
+    a shared process pool of that many workers before benchmarking them, so
+    IR generation for different configs happens in parallel instead of
+    serially. The pool is created once and reused across every autotuned
+    kernel/shape for the life of the process. Benchmarking (timing each
+    config on the GPU) still runs serially afterward.
 
     :param configs: a list of :code:`triton.Config` objects
     :type configs: list[triton.Config]
