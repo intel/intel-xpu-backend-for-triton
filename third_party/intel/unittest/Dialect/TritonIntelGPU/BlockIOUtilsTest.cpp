@@ -187,13 +187,14 @@ std::string reducedDimName(std::optional<unsigned> reducedDim) {
   return reducedDim ? std::to_string(*reducedDim) : "none";
 }
 
-// Only rank-2 loads are picked.
+// Only rank-2 loads are picked. At 1 warp x 16 lanes, the first two dims
+// (2x16) pass every geometry check, so only the rank check rejects it.
 TEST_F(BlockIOUtilsTest, PickRejectsRank3) {
   auto type = makeCoalescedType({2, 16, 256}, Float32Type::get(&ctx),
-                                /*numWarps=*/4, /*threadsPerWarp=*/32);
+                                /*numWarps=*/1, /*threadsPerWarp=*/16);
   for (std::optional<unsigned> reducedDim : kReducedDims)
-    EXPECT_FALSE(pickBlockIOLoadEncoding(type, /*numWarps=*/4,
-                                         /*threadsPerWarp=*/32, reducedDim)
+    EXPECT_FALSE(pickBlockIOLoadEncoding(type, /*numWarps=*/1,
+                                         /*threadsPerWarp=*/16, reducedDim)
                      .has_value())
         << "reducedDim=" << reducedDimName(reducedDim);
 }
