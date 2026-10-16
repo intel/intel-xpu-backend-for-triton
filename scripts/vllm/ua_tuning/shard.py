@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 
+import torch
+
 DTYPES = ('bfloat16', 'float8_e4m3fn')
 PARTS = ('1', '2', '3', '4')
 
@@ -54,13 +56,11 @@ def partition(manifests):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--device', default='xpu:0', help='XPU used for benchmark memory filtering')
-    parser.add_argument('--part', choices=PARTS, help='Omit to select all benchmark inputs')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--device', default='xpu:0')
+    parser.add_argument('--part', choices=PARTS)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-
-    import torch  # pylint: disable=import-outside-toplevel
 
     device = torch.device(args.device)
     torch.xpu.set_device(device)

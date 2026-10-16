@@ -1,11 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tune or benchmark CI fixtures with --manifest inputs.json [--tune --clear-cache]."""
+"""Tune or benchmark CI workload inputs with --manifest inputs.json [--tune --clear-cache]."""
 
-# Exact integer checks reject bools; deferred GPU imports allow standalone patch checks.
-# pylint: disable=unidiomatic-typecheck,import-outside-toplevel
+# pylint: disable=import-outside-toplevel
 
 import argparse
-import ast
 import importlib.util
 import json
 import math
@@ -14,9 +12,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
-from functools import cache
 from pathlib import Path
-from types import SimpleNamespace
 
 BENCHMARK_DIR = Path(__file__).resolve().parents[3] / "benchmarks/triton_kernels_benchmark/vllm/unified_attention"
 PATCH = Path(__file__).with_name("tuner-ci.patch")
@@ -41,92 +37,59 @@ def load_tuner():
     return tuner
 
 
-def normalize_workloads(raw):
-    """Validate the benchmark's arguments, plus an optional workload id."""
-    if not isinstance(raw, list):
-        raise ValueError("Manifest must be a JSON list")
-    fields = {
-        "q_heads", "k_heads", "head_size", "qdtype", "seq_lens", "sliding_window", "soft_cap", "num_blocks",
-        "block_size"
-    }
-    cases, ids = [], set()
-    for index, source in enumerate(raw):
-        if not isinstance(source, dict) or not fields <= source.keys() or source.keys() - fields - {"id"}:
-            raise ValueError(f"Workload {index} must contain benchmark arguments: {sorted(fields)}")
-        case = dict(source)
-        case_id = case.setdefault("id", f"case-{index:04d}")
-        if not isinstance(case_id, str) or case_id in ids:
-            raise ValueError("Every workload needs a unique string id")
-        ids.add(case_id)
-        for name in ("q_heads", "k_heads", "head_size", "num_blocks", "block_size"):
-            if type(case[name]) is not int or case[name] <= 0:
-                raise ValueError(f"{case_id}: {name} must be a positive integer")
-        if case["q_heads"] % case["k_heads"]:
-            raise ValueError("q_heads must be divisible by k_heads")
-        if case["qdtype"] not in (None, "float8_e4m3fn"):
-            raise ValueError("CI fixtures require qdtype=null (BF16) or float8_e4m3fn")
-        if case["block_size"] % (32 if case["qdtype"] else 16):
-            raise ValueError("TD block_size must be divisible by 16 (32 for FP8)")
-        pairs = case["seq_lens"]
-        if not isinstance(pairs, list) or not pairs or any(not isinstance(pair, (list, tuple)) or len(pair) != 2 or any(
-                type(length) is not int for length in pair) or not 0 < pair[0] <= pair[1] for pair in pairs):
-            raise ValueError(f"{case_id}: seq_lens must contain positive [Q, KV] pairs with Q <= KV")
-        window = case["sliding_window"]
-        if window is not None and (type(window) is not int or window <= 0):
-            raise ValueError("sliding_window must be null or a positive integer")
-        cap = case["soft_cap"]
-        if cap is not None and (type(cap) not in (int, float) or not math.isfinite(cap) or cap < 0):
-            raise ValueError("soft_cap must be null or finite and nonnegative")
-        cases.append(case)
-    return cases
-
-
-class _CapturedAttention(Exception):
-    """Stop the CI fixture before attention executes."""
-
-
-def _capture(**kwargs):
-    raise _CapturedAttention(kwargs)
-
-
-@cache
-def _benchmark_fixture(device):
-    import torch
-    import triton
-
-    # Extract the fixture without importing CI's provider and reporting setup.
-    path = BENCHMARK_DIR / "unified_attention_benchmark.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    node = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "benchmark")
-    node.decorator_list = []
-    namespace = {
-        "torch": torch,
-        "triton": triton,
-        "DEVICE": device,
-        "BENCHMARKING_CONFIG": {"verify": False},
-        "is_td_patched": True,
-        "unified_attention": _capture,
-        "benchmark_suite": SimpleNamespace(assert_close=lambda fn, *args, **kwargs: fn()),
-    }
-    exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), namespace)  # pylint: disable=exec-used
-    return namespace["benchmark"]
-
-
 def allocate_ci(case, device, seed):
-    """Use CI's fixed seed, tensor layouts, scales and scratch-buffer sizes."""
+    """Create Q/K/V tensors, sequence metadata, and output/scratch buffers matching the CI benchmark."""
     import torch
 
-    del seed  # The fixture sets its own seed, independently of tuning order.
-    kwargs = {name: value for name, value in case.items() if name != "id"}
-    kwargs["qdtype"] = getattr(torch, kwargs["qdtype"]) if kwargs["qdtype"] else None
-    previous_device = torch.get_default_device()
-    try:
-        _benchmark_fixture(str(device))(**kwargs, provider="triton-td")
-    except _CapturedAttention as result:
-        return result.args[0]
-    finally:
-        torch.set_default_device(previous_device)
-    raise RuntimeError("CI fixture did not reach the attention call")
+    del seed
+    # Match the benchmark's random inputs independently of tuning order.
+    torch.manual_seed(20)
+    query_lens = [q for q, _ in case["seq_lens"]]
+    kv_lens = [kv for _, kv in case["seq_lens"]]
+    assert case["q_heads"] % case["k_heads"] == 0
+    q = torch.randn(sum(query_lens), case["q_heads"], case["head_size"], dtype=torch.bfloat16, device=device)
+    k = torch.randn(case["num_blocks"], case["block_size"], case["k_heads"], case["head_size"], dtype=torch.bfloat16,
+                    device=device)
+    v = torch.randn_like(k)
+    block_tables = torch.randint(0, case["num_blocks"],
+                                 (len(query_lens), (max(kv_lens) + case["block_size"] - 1) // case["block_size"]),
+                                 dtype=torch.int32, device=device)
+    inputs = {
+        "q": q,
+        "k": k,
+        "v": v,
+        "cu_seqlens_q": torch.tensor([0] + query_lens, dtype=torch.int32,
+                                     device=device).cumsum(dim=0, dtype=torch.int32),
+        "seqused_k": torch.tensor(kv_lens, dtype=torch.int32, device=device),
+        "out": torch.empty_like(q),
+        "block_table": block_tables,
+        "max_seqlen_q": max(query_lens),
+        "max_seqlen_k": max(kv_lens),
+        "softmax_scale": case["head_size"]**-0.5,
+        "causal": True,
+        "window_size": (case["sliding_window"] - 1, 0) if case["sliding_window"] is not None else (-1, -1),
+        "softcap": case["soft_cap"] if case["soft_cap"] is not None else 0,
+        "q_descale": None,
+        "k_descale": None,
+        "v_descale": None,
+        "seq_threshold_3D": 32,
+        "num_par_softmax_segments": 16,
+        "use_td": True,
+    }
+    if case["qdtype"] is not None:
+        dtype = getattr(torch, case["qdtype"])
+        for name in ("q", "k", "v"):
+            inputs[name] = inputs[name].to(dtype)
+        for name in ("k_descale", "v_descale"):
+            inputs[name] = torch.rand((len(query_lens), case["k_heads"]), dtype=torch.float32, device=device)
+    shape = (32, case["q_heads"], 16)
+    inputs.update(
+        softmax_segm_output=torch.empty((*shape, 1 << (case["head_size"] - 1).bit_length()), dtype=torch.float32,
+                                        device=device),
+        softmax_segm_max=torch.empty(shape, dtype=torch.float32, device=device),
+        softmax_segm_expsum=torch.empty(shape, dtype=torch.float32, device=device),
+    )
+    return inputs
 
 
 def main(argv=None):
@@ -165,8 +128,8 @@ def main(argv=None):
         parser.error("--tolerance must be finite and nonnegative")
     if args.measurements and not args.tune:
         parser.error("--measurements requires --tune")
-    workloads = normalize_workloads(json.loads(Path(args.manifest).read_text(encoding="utf-8")))
-    if not workloads:
+    workloads = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    if workloads == []:
         print("No inputs for this part; skipping tuning or benchmarking")
         return
 
