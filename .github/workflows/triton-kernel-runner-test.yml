@@ -1,4 +1,4 @@
-name: Test SPIRVRunner
+name: Test TritonKernelRunner
 
 on:
   workflow_dispatch:
@@ -41,24 +41,24 @@ jobs:
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
 
-      - name: Build SPIRVRunner
+      - name: Build TritonKernelRunner
         run: |
           source /opt/intel/oneapi/setvars.sh
           set -x
           export LLVM_DIR="$HOME/.triton/llvm/llvm-ubuntu-x64"
           export CMAKE_PREFIX_PATH="$(python scripts/torch_cmake.py)"
-          cd utils/SPIRVRunner
+          cd utils/TritonKernelRunner
           mkdir build
           cd build
           cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
           make -j
 
-      - name: Test SPIRVRunner
+      - name: Test TritonKernelRunner
         run: |
           source /opt/intel/oneapi/setvars.sh
           set -x
           pip install pytest
-          export SPIRV_RUNNER_PATH="$GITHUB_WORKSPACE/utils/SPIRVRunner/build/SPIRVRunner"
-          export SPIRV_RUNNER_TESTS="$GITHUB_WORKSPACE/utils/SPIRVRunner/tests"
-          cd utils/SPIRVRunner
-          pytest tests/test_spirv_runner.py
+          export TRITON_KERNEL_RUNNER_PATH="$GITHUB_WORKSPACE/utils/TritonKernelRunner/build/TritonKernelRunner"
+          export TRITON_KERNEL_RUNNER_TESTS="$GITHUB_WORKSPACE/utils/TritonKernelRunner/tests"
+          cd utils/TritonKernelRunner
+          pytest tests/test_triton_kernel_runner.py

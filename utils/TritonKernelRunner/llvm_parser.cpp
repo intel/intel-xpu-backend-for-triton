@@ -22,7 +22,7 @@ command_line_parser::options command_line_parser::parse() {
   llvm::cl::opt<std::string> spirv_dump_dir(
       "d", llvm::cl::desc("<Specify SPIRV dump directory path>"));
 
-  llvm::cl::ParseCommandLineOptions(argc, argv, "SPIRVRunner\n");
+  llvm::cl::ParseCommandLineOptions(argc, argv, "TritonKernelRunner\n");
 
   opts.output_tensors.assign(output_tensors.begin(), output_tensors.end());
   opts.get_kernel_time = enable_profiling;
