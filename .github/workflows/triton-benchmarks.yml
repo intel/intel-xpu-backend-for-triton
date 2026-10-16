@@ -132,6 +132,10 @@ jobs:
         run: |
           pip install cmake
 
+      - name: Install Python dependencies for TRITON_AUTOTUNE_WARMUP_WORKERS mode
+        run: |
+          pip install cloudpickle
+
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
