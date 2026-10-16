@@ -1,5 +1,5 @@
 diff --git a/tune_unified_attention.py b/tune_unified_attention.py
-index 0db1c43..9afe432 100644
+index 0db1c43..85df86d 100644
 --- a/tune_unified_attention.py
 +++ b/tune_unified_attention.py
 @@ -47,6 +47,7 @@ import statistics
@@ -19,88 +19,36 @@ index 0db1c43..9afe432 100644
  
  
  def model_windows(config, override):
-@@ -187,23 +188,31 @@ def model_workloads(args):
-     return cases
- 
- 
--def successful(option):
--    return option.get("status") == "ok" and bool(option.get("samples_ms"))
-+def successful(option, field="samples_ms"):
-+    return option.get("status") == "ok" and bool(option.get(field))
- 
- 
--def key_statistics(cases):
-+def key_statistics(cases, field="samples_ms"):
+@@ -195,8 +196,8 @@ def key_statistics(cases):
      """Score configs measured successfully for every workload sharing a key."""
      # Map config IDs to successful measurements for each workload.
--    rows = [{option["id"]: option for option in case["options"] if successful(option)} for case in cases]
+     rows = [{option["id"]: option for option in case["options"] if successful(option)} for case in cases]
 -    if not rows or any(not row for row in rows):
 -        return []
-+    rows = [{option["id"]: option for option in case["options"] if successful(option, field)} for case in cases]
 +    if not rows or any("fallback" not in row for row in rows):
 +        return None
      # Keep config IDs measured successfully for every workload.
      common = set.intersection(*(set(row) for row in rows))
--    best = [min(statistics.median(option["samples_ms"]) for option in row.values()) for row in rows]
-+    # Keep the best time from the initial search, even if that config is not measured again during confirmation.
-+    best = [
-+        min(
-+            statistics.median(option[phase])
-+            for option in case["options"]
-+            for phase in (field, "samples_ms")
-+            if successful(option, phase))
-+        for case in cases
-+    ]
-     results = []
-     # Score each shared config using the median timings across rounds.
-     for identifier in sorted(common):
--        times = [statistics.median(row[identifier]["samples_ms"]) for row in rows]
-+        times = [statistics.median(row[identifier][field]) for row in rows]
-         # Divide each latency by that workload's best measured median.
-         ratios = [latency / minimum for latency, minimum in zip(times, best)]
-         results.append({
-@@ -215,13 +224,13 @@ def key_statistics(cases):
+     best = [min(statistics.median(option["samples_ms"]) for option in row.values()) for row in rows]
+@@ -215,13 +216,13 @@ def key_statistics(cases):
      return results
  
  
 -def choose_key(cases):
-+def choose_key(cases, *, tolerance=0.01, field="confirmation_ms"):
++def choose_key(cases, *, tolerance=SELECTION_TOLERANCE):
      """Minimize worst slowdown, then the geometric mean ratio within the tolerance."""
--    stats = key_statistics(cases)
+     stats = key_statistics(cases)
 -    if not stats:
 -        raise ValueError(f"No successful config shared by workloads {[case['id'] for case in cases]}")
-+    stats = key_statistics(cases, field)
 +    if stats is None:
-+        raise ValueError(f"Missing or failed {field} fallback measurement for {[case['id'] for case in cases]}")
++        raise ValueError(f"Missing or failed fallback measurement for {[case['id'] for case in cases]}")
      optimum = min(item["max_regret"] for item in stats)
 -    tied = [item for item in stats if item["max_regret"] <= optimum + SELECTION_TOLERANCE]
 +    tied = [item for item in stats if item["max_regret"] <= optimum + tolerance]
      return min(tied, key=lambda item: (item["geomean_ratio"], item["id"]))
  
  
-@@ -234,11 +243,29 @@ def grouped_cases(cases):
-     return grouped
- 
- 
-+def finalists(cases, count=3):
-+    stats = key_statistics(cases)
-+    if stats is None:
-+        return ["fallback"]
-+    ranked = sorted(
-+        (item for item in stats if item["id"] != "fallback"),
-+        key=lambda item: (item["max_regret"], item["geomean_ratio"], item["id"]),
-+    )
-+    selected = ["fallback"] + [item["id"] for item in ranked[:count]]
-+    initial = choose_key(cases, field="samples_ms")
-+    selected.append(initial["id"])
-+    for case in cases:
-+        measured = [option for option in case["options"] if successful(option)]
-+        if measured:
-+            selected.append(min(measured, key=lambda option: statistics.median(option["samples_ms"]))["id"])
-+    return list(dict.fromkeys(selected))
-+
-+
- def save_configs(winners, identity, output):
+@@ -238,7 +239,7 @@ def save_configs(winners, identity, output):
      """Write winning configs to one JSON file per device and static key."""
      partitions = defaultdict(list)
      for key, winner in winners.items():
@@ -109,7 +57,7 @@ index 0db1c43..9afe432 100644
          partitions[key.static_key()].append((key.dynamic_key(), config))
      profiles = {}
      for static, entries in partitions.items():
-@@ -311,18 +338,20 @@ def synchronize(device):
+@@ -311,18 +312,20 @@ def synchronize(device):
  
  def prepare_option(option, inputs, device):
      """Run a candidate once to trigger compilation and record resource limit failures."""
@@ -132,7 +80,7 @@ index 0db1c43..9afe432 100644
      """Return the callable's average latency in milliseconds using graph replay."""
      backend = getattr(torch, device.type)
      started = time.perf_counter_ns()
-@@ -331,8 +360,8 @@ def benchmark_callable(fn, device):
+@@ -331,8 +334,8 @@ def benchmark_callable(fn, device):
      eager_ms = max((time.perf_counter_ns() - started) / 1e6, 1e-6)
      slow = eager_ms >= 25
      if slow:
@@ -143,7 +91,7 @@ index 0db1c43..9afe432 100644
      else:
          for _ in range(4):
              fn()
-@@ -348,6 +377,9 @@ def benchmark_callable(fn, device):
+@@ -348,6 +351,9 @@ def benchmark_callable(fn, device):
              graph.replay()
          backend.synchronize(device)
          start, end = backend.Event(enable_timing=True), backend.Event(enable_timing=True)
@@ -153,7 +101,7 @@ index 0db1c43..9afe432 100644
  
          def batch(repeats):
              backend.synchronize(device)
-@@ -361,81 +393,107 @@ def benchmark_callable(fn, device):
+@@ -361,81 +367,92 @@ def benchmark_callable(fn, device):
                  raise RuntimeError(f"Invalid graph latency {event_ms}")
              return event_ms
  
@@ -174,16 +122,15 @@ index 0db1c43..9afe432 100644
  
  
 -def time_options(options, inputs, device, seed):
-+def time_options(options, inputs, device, seed, *, rounds=NUM_ROUNDS, field="samples_ms", timer=benchmark_callable):
++def time_options(options, inputs, device, seed, *, rounds=NUM_ROUNDS, timer=benchmark_callable):
      """Benchmark candidates in shuffled rounds, storing timings and resource failures."""
      generator = random.Random(seed)
 -    for _ in range(NUM_ROUNDS):
-+    phase = "Search" if field == "samples_ms" else "Confirmation"
 +    for round_index in range(rounds):
          order = [option for option in options if option["status"] in ("pending", "ok")]
          generator.shuffle(order)
 -        for option in order:
-+        print(f"{phase} round {round_index + 1}/{rounds}: {len(order)} candidates", flush=True)
++        print(f"Search round {round_index + 1}/{rounds}: {len(order)} candidates", flush=True)
 +        for option_index, option in enumerate(order):
              if option["status"] == "pending":
                  prepare_option(option, inputs, device)
@@ -194,21 +141,20 @@ index 0db1c43..9afe432 100644
              try:
                  with runtime.override_config(config):
 -                    value = benchmark_callable(lambda: unified_attention(**inputs), device)
--                option["samples_ms"].append(value)
 +                    value = timer(lambda: unified_attention(**inputs), device)
-+                option.setdefault(field, []).append(value)
+                 option["samples_ms"].append(value)
              except triton.runtime.autotuner.OutOfResources as error:
                  option.update(status="resource_error", error=f"{type(error).__name__}: {error}")
 +                print(f"Skipping {option['id']}: {option['error']}", flush=True)
                  synchronize(device)
 +            if (option_index + 1) % 32 == 0:
-+                print(f"{phase} round {round_index + 1}/{rounds}: {option_index + 1}/{len(order)} processed", flush=True)
++                print(f"Search round {round_index + 1}/{rounds}: {option_index + 1}/{len(order)} processed", flush=True)
  
  
  @torch.inference_mode()
 -def tune(args, workloads, device):
--    """Measure candidate configs and export one winner per workload key."""
 +def tune(args, workloads, device, *, allocate=allocate_case, timer=benchmark_callable):
+     """Measure candidate configs and export one winner per workload key."""
      identity = runtime.get_profile_identity(device)
 -    rows, winners = [], {}
 -    # Measure candidates separately for each workload.
@@ -221,7 +167,7 @@ index 0db1c43..9afe432 100644
 +        print(f"Workload {index + 1}/{len(workloads)}: {case['id']} {canonical(case)}", flush=True)
 +        inputs = allocate(case, device, args.seed + index)
 +        fallback = {"id": "fallback", "config": None, "status": "pending", "samples_ms": []}
-+        row = {"id": case["id"], "workload": case, "key": None, "options": [fallback]}
++        row = {"id": case["id"], "key": None, "options": [fallback]}
          rows.append(row)
 -        # Prune invalid configs for this key.
 +        prepare_option(fallback, inputs, device)
@@ -250,31 +196,15 @@ index 0db1c43..9afe432 100644
          print(f"Measured {index + 1}/{len(workloads)}: {case['id']}", flush=True)
          del inputs
 -    # Select one config for all workloads sharing a key.
--    for key, cases in grouped_cases(rows).items():
++    winners = {}
+     for key, cases in grouped_cases(rows).items():
 -        winners[key] = choose_key(cases)["config"]
 -        print(f"Selected winner for {[case['id'] for case in cases]}: {config_id(winners[key])}", flush=True)
-+    groups = grouped_cases(rows)
-+    for group_index, cases in enumerate(groups.values()):
-+        selected = finalists(cases, args.finalists)
-+        for row in cases:
-+            index = next(i for i, case in enumerate(workloads) if case["id"] == row["id"])
-+            print(f"Confirming {row['id']}: {len(selected)} finalists", flush=True)
-+            inputs = allocate(row["workload"], device, args.seed + index)
-+            options = [option for option in row["options"] if option["id"] in selected]
-+            for option in options:
-+                prepare_option(option, inputs, device)
-+            time_options(options, inputs, device, args.seed + 10000 + index, rounds=args.confirmation_rounds,
-+                         field="confirmation_ms", timer=timer)
-+            del inputs
-+        print(f"Confirmed key {group_index + 1}/{len(groups)}", flush=True)
-+
-+    winners = {}
-+    for key, cases in groups.items():
 +        winner = choose_key(cases, tolerance=args.tolerance)
 +        winners[key] = winner["config"]
 +        for case in cases:
 +            option = next(option for option in case["options"] if option["id"] == winner["id"])
-+            print(f"{case['id']}: {statistics.median(option['confirmation_ms']) * 1000:.3f} us", flush=True)
++            print(f"{case['id']}: {statistics.median(option['samples_ms']) * 1000:.3f} us", flush=True)
 +        print(f"Winner for {[case['id'] for case in cases]}: {config_id(winners[key])}", flush=True)
      return save_configs(winners, identity, args.save_dir)
  
@@ -296,14 +226,14 @@ index 0db1c43..9afe432 100644
          print(f"{case['id']}: {statistics.median(samples) * 1000:.3f} us", flush=True)
          del inputs
  
-@@ -505,20 +563,27 @@ def parse_args(argv=None):
+@@ -505,20 +522,27 @@ def parse_args(argv=None):
      return args
  
  
 -def main(args: argparse.Namespace):
 +def main(args: argparse.Namespace, workloads=None, *, allocate=allocate_case, timer=benchmark_callable):
 +    args = argparse.Namespace(**{
-+        "rounds": NUM_ROUNDS, "confirmation_rounds": 5, "finalists": 3,
++        "rounds": NUM_ROUNDS,
 +        "warmup_ms": WARMUP_MS, "rep_ms": REP_MS, "tolerance": SELECTION_TOLERANCE,
 +        **vars(args),
 +    })

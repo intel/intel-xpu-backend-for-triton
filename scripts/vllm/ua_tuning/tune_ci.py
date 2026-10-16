@@ -106,8 +106,6 @@ def main(argv=None):
     parser.add_argument("--save-dir", default=str(BENCHMARK_DIR / "configs"))
     parser.add_argument("--device", default="xpu:0")
     parser.add_argument("--rounds", type=int, default=3)
-    parser.add_argument("--confirmation-rounds", type=int, default=5)
-    parser.add_argument("--finalists", type=int, default=3)
     parser.add_argument("--warmup-ms", type=float, default=10)
     parser.add_argument("--rep-ms", type=float, default=50)
     parser.add_argument("--seed", type=int, default=1729)
@@ -122,7 +120,7 @@ def main(argv=None):
         with prepared_tuner():
             print("UA CI tuner patch applies cleanly")
         return
-    for name in ("rounds", "warmup_ms", "rep_ms", "confirmation_rounds", "finalists"):
+    for name in ("rounds", "warmup_ms", "rep_ms"):
         if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
             option = name.replace("_", "-")
             parser.error(f"--{option} must be finite and positive")
