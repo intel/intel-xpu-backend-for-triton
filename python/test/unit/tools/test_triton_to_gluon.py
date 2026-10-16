@@ -14,7 +14,7 @@ from triton._internal_testing import (
     is_hopper_or_newer,
     is_cuda,
     is_hip_cdna4,
-    is_hip_gfx1250,
+    is_hip_cdna5,
     is_hip_cdna3_or_newer,
     is_hip_rdna,
 )
@@ -105,8 +105,8 @@ def matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.c
 
 
 def test_triton_to_gluon_dot_minimal(tmp_path):
-    if not (is_hopper_or_newer() or is_hip_cdna3_or_newer() or is_hip_gfx1250()):
-        pytest.xfail("Requires Hopper, Blackwell, CDNA3+, or gfx1250")
+    if not (is_hopper_or_newer() or is_hip_cdna3_or_newer() or is_hip_cdna5()):
+        pytest.xfail("Requires Hopper, Blackwell, CDNA3+, or CDNA5")
     kernel = convert_kernel(matmul_tile_kernel, "matmul_tile_kernel", tmp_path)
     M, N, K = 128, 128, 128
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
@@ -242,8 +242,8 @@ def test_triton_to_gluon_dot_scaled(
     SCALE_FACTOR,
     tmp_path,
 ):
-    if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_gfx1250()):
-        pytest.skip("Requires Hopper, Blackwell, CDNA4, or gfx1250")
+    if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_cdna5()):
+        pytest.skip("Requires Hopper, Blackwell, CDNA4, or CDNA5")
     torch.manual_seed(0)
 
     kernel = convert_kernel(dot_scaled_tile_kernel, "dot_scaled_tile_kernel", tmp_path)
@@ -281,8 +281,8 @@ def test_triton_to_gluon_dot_scaled(
 @pytest.mark.parametrize("scale_factor", [32] if is_cuda() else [16, 32])
 @pytest.mark.parametrize("scale_storage", ["uint8", "int8", "float"])
 def test_triton_to_gluon_dot_scaled_minimum_scale(rhs_scale, normal_type, scale_factor, scale_storage, tmp_path):
-    if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_gfx1250()):
-        pytest.xfail("Requires Hopper, Blackwell, CDNA4, or gfx1250")
+    if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_cdna5()):
+        pytest.xfail("Requires Hopper, Blackwell, CDNA4, or CDNA5")
     float_scale = scale_storage == "float"
     if float_scale and not is_cuda():
         pytest.xfail("Floating-point scale controls require CUDA")
@@ -423,8 +423,8 @@ def matmul_kernel(  #
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES", [(128, 128, 64, 1)])
 @pytest.mark.parametrize("NUM_WARPS", [4])
 def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, NUM_WARPS, tmp_path):
-    if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_gfx1250()):
-        pytest.xfail("Requires Hopper, Blackwell, CDNA4, or gfx1250")
+    if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_cdna5()):
+        pytest.xfail("Requires Hopper, Blackwell, CDNA4, or CDNA5")
     device = "cuda"
     M, N, K = 1024, 512, 256
     torch.manual_seed(42)
@@ -486,7 +486,7 @@ def descriptor_store_kernel(desc, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, 
 def _skip_unless_descriptor_target():
     if is_cuda() and not is_hopper_or_newer():
         pytest.skip("Requires Hopper+")
-    elif not is_cuda() and not is_hip_gfx1250():
+    elif not is_cuda() and not is_hip_cdna5():
         # FIXME: #6751 add tensor descriptor support for Gluon on XPU
         pytest.skip("Requires descriptor support")
 
@@ -780,8 +780,8 @@ def gather_scatter_roundtrip_kernel(out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y
 
 # TODO: parametrize over _descriptor_targets once NVIDIA gather/scatter translation is supported.
 # The translator currently routes gather/scatter to AMD-specific helpers for AMD targets only.
-@pytest.mark.xfail(not (is_hip_gfx1250() or is_blackwell()),
-                   reason="Requires descriptor gather/scatter support (gfx1250 or Blackwell)", run=False)
+@pytest.mark.xfail(not (is_hip_cdna5() or is_blackwell()),
+                   reason="Requires descriptor gather/scatter support (CDNA5 or Blackwell)", run=False)
 def test_gather_scatter_roundtrip(tmp_path):
     kernel = convert_kernel(gather_scatter_roundtrip_kernel, "gather_scatter_roundtrip_kernel", tmp_path)
 

@@ -11,17 +11,17 @@
 
 namespace mlir::triton::intel {
 
-/// Determines the range of integer variables.
-/// This pass is based on MLIR's dataflow framework and extends upstream's
-/// IntegerRangeAnalysis to better support Triton-specific constructs.
-/// An assume constrains an SSA value at `useOp` iff it is certain to execute
-/// whenever `useOp` does. Forward case: the assume properly
+/// An assume constrains an SSA value at `useOp` only if it is certain to
+/// execute whenever `useOp` does. Forward case: the assume properly
 /// dominates `useOp`. Backward case: the assume comes later in the same block
 /// and nothing between the op enclosing `useOp` and the assume can abort, spin
 /// or fail to return.
 bool assumeApplies(LLVM::AssumeOp assume, Operation *useOp,
                    const DominanceInfo &domInfo);
 
+/// Determines the range of integer variables.
+/// This pass is based on MLIR's dataflow framework and extends upstream's
+/// IntegerRangeAnalysis to better support Triton-specific constructs.
 class IntegerRangeAnalysis : public dataflow::IntegerRangeAnalysis {
 public:
   using Base = dataflow::IntegerRangeAnalysis;
