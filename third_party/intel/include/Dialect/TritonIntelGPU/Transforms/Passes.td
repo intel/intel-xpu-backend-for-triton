@@ -339,6 +339,13 @@ def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-blo
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
+
+  let options = [
+    Option<"enableDescriptorRelayout", "enable-descriptor-relayout",
+           "bool", /*default=*/"false",
+           "Relayout row-major descriptor loads in functions without a dot "
+           "so they lower to 2D block reads">
+  ];
 }
 
 def TritonIntelGPUWidenLoadStoreEncoding : Pass<"tritonintelgpu-widen-load-store-encoding", "mlir::ModuleOp"> {
