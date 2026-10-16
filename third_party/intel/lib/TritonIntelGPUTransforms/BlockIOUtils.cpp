@@ -834,6 +834,54 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
   return true;
 }
 
+std::optional<triton::gpu::BlockedEncodingAttr>
+pickBlockIOLoadEncoding(RankedTensorType type, unsigned numWarps,
+                        unsigned threadsPerWarp,
+                        std::optional<unsigned> reducedDim) {
+  // Check isIntOrFloat before taking the bit width, which asserts on !tt.ptr.
+  Type elemTy = type.getElementType();
+  if (type.getRank() != 2 || !elemTy.isIntOrFloat())
+    return std::nullopt;
+  unsigned bits = elemTy.getIntOrFloatBitWidth();
+  if (bits < 8 || bits > 64 || bits % 8 != 0)
+    return std::nullopt;
+
+  // Lanes fill up to one 64-byte row of the contiguous dim, then stack rows.
+  ArrayRef<int64_t> shape = type.getShape();
+  unsigned cols =
+      std::min<int64_t>({threadsPerWarp, 64 / (bits / 8), shape[1]});
+  if (threadsPerWarp % cols != 0)
+    return std::nullopt;
+  unsigned rows = threadsPerWarp / cols;
+  if (shape[0] % rows != 0)
+    return std::nullopt;
+
+  // Warps split the columns first, which gives taller per-warp tiles, unless
+  // the reduction runs along them.
+  int64_t groups[] = {shape[0] / rows, shape[1] / cols};
+  unsigned wd = (reducedDim == 1u) ? 0 : 1;
+  SmallVector<unsigned, 2> warpsPerCTA(2);
+  warpsPerCTA[wd] = std::min<int64_t>(numWarps, groups[wd]);
+  if (numWarps % warpsPerCTA[wd] != 0)
+    return std::nullopt;
+  warpsPerCTA[1 - wd] = numWarps / warpsPerCTA[wd];
+  // More warps than lane tiles along the other dim would replicate data.
+  if (warpsPerCTA[1 - wd] > groups[1 - wd])
+    return std::nullopt;
+
+  auto enc = triton::gpu::BlockedEncodingAttr::get(
+      type.getContext(), /*sizePerThread=*/{1, 1},
+      /*threadsPerWarp=*/{rows, cols}, warpsPerCTA, /*order=*/{1, 0},
+      triton::gpu::getCGALayout(type.getEncoding()));
+  if (!validate2DBlockLoadTile(enc.toLinearLayout(shape),
+                               /*memContiguousDim=*/1, bits,
+                               type.cloneWithEncoding(enc))) {
+    LDBG("Tile validation failed for picked layout " << enc << " of " << type);
+    return std::nullopt;
+  }
+  return enc;
+}
+
 bool isMemoryRowMajor(Operation *op) {
   auto blockIOAttr = op->getAttrOfType<StringAttr>(
       TritonIntelGPUDialect::getBlockIOAttrName());

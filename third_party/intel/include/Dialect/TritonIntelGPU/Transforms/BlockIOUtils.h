@@ -111,6 +111,16 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
                               AxisInfo *maskAxisInfo,
                               BlockIOTileSizeInfo &sizeInfoOut);
 
+/// Return a blocked layout under which a row-major rank-2 load of \p type
+/// passes validate2DBlockLoadTile, or std::nullopt. Lanes span at most 64
+/// bytes of a row. Warps split the columns first, or the rows when
+/// \p reducedDim is 1, to keep a reduction along \p reducedDim within a warp.
+/// The CGA layout comes from \p type's encoding, which must be set.
+std::optional<triton::gpu::BlockedEncodingAttr>
+pickBlockIOLoadEncoding(RankedTensorType type, unsigned numWarps,
+                        unsigned threadsPerWarp,
+                        std::optional<unsigned> reducedDim);
+
 /// Determine whether memory layout is row-major from the block_io attribute.
 bool isMemoryRowMajor(Operation *op);
 
