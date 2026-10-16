@@ -169,3 +169,22 @@ add_triton_ut(
     MLIRParser
     MLIRSCFDialect
 )
+
+add_triton_ut(
+  NAME SymbolicBounds
+  SRCS SymbolicBoundsTest.cpp
+  LIBS
+    TritonAnalysis
+    TritonGPUIR
+    TritonGPUTransforms
+    TritonIR
+    TritonIntelAnalysis
+    TritonIntelGPUIR
+    TritonIntelGPUTransforms
+    TritonNvidiaGPUIR
+    TritonNvidiaGPUTransforms
+    MLIRArithDialect
+    MLIRFuncDialect
+    MLIRParser
+    MLIRSCFDialect
+)
