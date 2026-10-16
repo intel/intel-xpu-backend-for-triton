@@ -152,6 +152,15 @@ Value getFinalValue(Value value) {
       auto initArgs = forOp.getInitArgs();
       assert(initArgIdx >= 0 && initArgIdx < initArgs.size() &&
              "Unexpected 'initArgIdx' value");
+
+      // The init operand describes this argument on the first iteration. It
+      // describes every iteration only if the loop yields the argument
+      // unchanged; otherwise resolving to it would equate a value that changes
+      // across the loop with where it started (#7990, #8060). Stop at the
+      // argument and let a caller that can reason about the update do so.
+      auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+      if (yieldOp.getOperand(initArgIdx) != blockArg)
+        return value;
       return getFinalValue(initArgs[initArgIdx]);
     }
 

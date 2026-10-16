@@ -91,13 +91,31 @@ bool isDivisible(Value value, int64_t divisor) {
              divisibilityAttr.getValue().getZExtValue() % divisor == 0;
     }
     if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      // An iteration argument advanced by a loop-invariant amount,
+      // `x = init; x += c`, holds `init + i * c` on iteration i, so it is
+      // divisible on every iteration if both `init` and `c` are. `c` must be
+      // defined outside the loop, which keeps it independent of `x` and the
+      // recursion finite.
+      if (blockArg != forOp.getInductionVar()) {
+        auto addOp = forOp.getTiedLoopYieldedValue(blockArg)
+                         ->get()
+                         .getDefiningOp<arith::AddIOp>();
+        if (!addOp)
+          return false;
+        Value step;
+        if (addOp.getLhs() == blockArg)
+          step = addOp.getRhs();
+        else if (addOp.getRhs() == blockArg)
+          step = addOp.getLhs();
+        if (!step || !forOp.isDefinedOutsideOfLoop(step))
+          return false;
+        return isDivisible(forOp.getTiedLoopInit(blockArg)->get(), divisor) &&
+               isDivisible(step, divisor);
+      }
       // Nested loops aren't currently handled.
       if (forOp->template getParentOfType<scf::ForOp>())
         return false;
       if (!forOp.getSingleInductionVar())
-        return false;
-      // Check only if the block arg is the loop-var.
-      if (blockArg != forOp.getInductionVar())
         return false;
       return isDivisible(forOp.getLowerBound(), divisor) &&
              isDivisible(forOp.getStep(), divisor);

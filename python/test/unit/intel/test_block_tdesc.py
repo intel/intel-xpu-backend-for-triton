@@ -181,8 +181,8 @@ def test_tdesc_rank_reducing_load_store(M, N, dtype_str, device, tmp_path: pathl
 # ------------------------------------------------------------------------------------------------
 # Regression test for issue #7990: https://github.com/intel/intel-xpu-backend-for-triton/issues/7990
 #
-# The stride-one descriptor index was proved through `tt::intel::getFinalValue`, which resolves an
-# `scf.for` iteration argument to its *init* operand and never inspects the yielded update. So
+# The stride-one descriptor index was proved through `tt::intel::getFinalValue`, which resolved an
+# `scf.for` iteration argument to its *init* operand and never inspected the yielded update. So
 # `off = 0; ...; off += STEP` was proved aligned from its initial `0` for any `STEP`, and with an odd
 # `STEP` every other iteration issued a 2D block load at an odd X, which the message cannot express
 # for 16-bit elements: on BMG that silently returned 3776 of 4096 output elements wrong.
