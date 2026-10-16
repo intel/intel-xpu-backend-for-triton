@@ -102,5 +102,3 @@ python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batc
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batched_gemm_3d_tma
 # test_tensor_atomic_add_access_patterns
 python/test/unit/language/test_core.py::test_tensor_atomic_add_access_patterns[shape128-random_no_duplication-3-1-float32]
-# No fp64 on this device, and test_cast_bf16_rounding does not check for it
-python/test/unit/language/test_core.py::test_cast_bf16_rounding[float64-None]

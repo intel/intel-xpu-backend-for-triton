@@ -83,5 +83,3 @@ python/test/unit/language/test_core.py::test_strided_store[float64]
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_store
 python/test/unit/language/test_tensor_descriptor.py::test_make_tensor_descriptor_matmul
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_rank_reducing_matmul
-# No fp64 on this device, and test_cast_bf16_rounding does not check for it
-python/test/unit/language/test_core.py::test_cast_bf16_rounding[float64-None]

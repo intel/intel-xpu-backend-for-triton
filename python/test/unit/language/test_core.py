@@ -2750,6 +2750,7 @@ def test_cast_bf16_rounding(dtype_x, rounding, device):
         if dtype_x in ["int64", "uint64"] and (is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] < 9)):
             pytest.skip("64-bit integer to bf16 conversions round through fp32 on this target")
         check_type_supported("bfloat16", device)
+        check_type_supported(dtype_x, device)
 
     @triton.jit
     def kernel(X, Z, SIZE: tl.constexpr, ROUNDING: tl.constexpr):
