@@ -27,8 +27,7 @@ def prepared_tuner():
     with tempfile.TemporaryDirectory(prefix="ua-ci-tuner-") as folder:
         target = Path(folder) / "tune_unified_attention.py"
         shutil.copyfile(BENCHMARK_DIR / target.name, target)
-        for options in (("--check", ), ()):
-            subprocess.run(["git", "apply", *options, str(PATCH)], cwd=folder, check=True)
+        subprocess.run(["git", "apply", str(PATCH)], cwd=folder, check=True)
         yield target
 
 

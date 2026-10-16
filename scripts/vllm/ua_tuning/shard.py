@@ -10,7 +10,7 @@ PARTS = ('1', '2', '3', '4')
 
 
 def benchmark_workloads():
-    # Generate both complete lists regardless of the caller's benchmark shortcuts.
+    # Generate complete BF16 and FP8 workload lists regardless of the caller's benchmark shortcuts.
     os.environ['FP8'] = '0'
     os.environ['DEBUG_BENCH'] = '0'
     from triton_kernels_benchmark.vllm.unified_attention import unified_attention_benchmark as benchmark  # pylint: disable=import-outside-toplevel
