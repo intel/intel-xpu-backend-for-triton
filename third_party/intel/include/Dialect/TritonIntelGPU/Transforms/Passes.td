@@ -474,12 +474,15 @@ def TritonIntelGPUReduceVariableLiveness
     hardware thread's GRF size divided by "ttg.threads-per-warp", because the
     analysis weighs each live tensor by its per-work-item element count.
 
-    The decision is per loop, not per load: once a loop is over budget every
-    eligible load in it is sunk. Sinking trades one extra (prefetched, and so
-    normally cache-resident) 2D block load per iteration for a shorter live
-    range, which is only worth doing when the loop would otherwise spill. The
-    pass does not model spill cost against reload cost, and does not take the
-    loop trip count into account.
+    For loads defined outside the loop the decision is per loop: once the loop
+    is over budget every eligible one is sunk. Sinking trades one extra
+    (prefetched, and so normally cache-resident) 2D block load per iteration for
+    a shorter live range, which is only worth doing when the loop would
+    otherwise spill. The pass does not model spill cost against reload cost, and
+    does not take the loop trip count into account.
+
+    A dot operand load inside the loop is sunk to its first use only if the
+    pressure between the two, nested regions included, reaches the budget.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
