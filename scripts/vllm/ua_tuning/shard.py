@@ -10,7 +10,7 @@ PARTS = ('1', '2', '3', '4')
 
 
 def benchmark_workloads():
-    # Generate complete BF16 and FP8 workload lists regardless of the caller's benchmark shortcuts.
+    # Generate complete BF16 and FP8 workload lists.
     os.environ['FP8'] = '0'
     os.environ['DEBUG_BENCH'] = '0'
     from triton_kernels_benchmark.vllm.unified_attention import unified_attention_benchmark as benchmark  # pylint: disable=import-outside-toplevel
@@ -37,7 +37,6 @@ def benchmark_workloads():
 
 
 def profile_group(case):
-    # CI uses TD and unquantized/native-FP8 caches for every input.
     dtype = case['qdtype'] or 'bfloat16'
     return (case['block_size'], case['head_size'], case['q_heads'] // case['k_heads'], dtype, 'bfloat16',
             bool(case['soft_cap']), case['sliding_window'] or 0)
@@ -47,7 +46,7 @@ def partition(manifests):
     result = {part: {dtype: [] for dtype in DTYPES} for part in PARTS}
     for dtype in DTYPES:
         for case in manifests[dtype]:
-            # Ownership must stay fixed when runners filter out different workloads.
+            # The same profile group always produces the same digest, so its workloads stay together in the same part
             digest = hashlib.sha256(json.dumps(profile_group(case)).encode()).hexdigest()
             part = PARTS[int(digest[:8], 16) % len(PARTS)]
             result[part][dtype].append(case)
@@ -64,9 +63,6 @@ def main():
     import torch  # pylint: disable=import-outside-toplevel
 
     device = torch.device(args.device)
-    if device.type != 'xpu':
-        parser.error('CI tuning workloads target XPU')
-    # The benchmark filters workloads using the current device at import time.
     torch.xpu.set_device(device)
     manifests = benchmark_workloads()
     parts = partition(manifests)
