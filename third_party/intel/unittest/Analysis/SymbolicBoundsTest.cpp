@@ -800,6 +800,112 @@ TEST_F(SymbolicBoundsTest, QuotientFactIsNotDividendFact) {
   EXPECT_NE(verdict(get("mask")), "Satisfied");
 }
 
+//===----------------------------------------------------------------------===//
+// Residual candidates: term sign, quotient threshold, residual guard
+//===----------------------------------------------------------------------===//
+
+TEST_F(SymbolicBoundsTest, ResidualSignGuardsProductValue) {
+  parse(R"(
+    tt.func @f(%a: i32, %b: i32) {
+      %c0 = arith.constant 0 : i32
+      %p = arith.muli %a, %b : i32 loc("p")
+      %cmp = arith.cmpi sge, %p, %c0 : i32 loc("cmp")
+      tt.return
+    })");
+  // p is Opaque (product of symbols). The guard is on p's own wrapped runtime
+  // value, never on the factors: a = 65536, b = 32768 satisfy a >= 0 and b >= 0
+  // while the i32 product is INT32_MIN.
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{opaque(p) >= 0}");
+}
+
+TEST_F(SymbolicBoundsTest, ResidualStrictlyPositive) {
+  // The goal d >= 1 on an Opaque product needs p > 0, not p >= 0.
+  parse(R"(
+    tt.func @f(%a: i32, %b: i32) {
+      %c0 = arith.constant 0 : i32
+      %p = arith.muli %a, %b : i32 loc("p")
+      %cmp = arith.cmpi sgt, %p, %c0 : i32 loc("cmp")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{opaque(p) > 0}");
+}
+
+TEST_F(SymbolicBoundsTest, QuotientThresholdPositive) {
+  // q >= 2 translates to K >= 65 for the cdiv shape. It also exercises the
+  // pruning dependency, since the retained K >= 65 may only drop a term-sign
+  // `q >= 0` while the K + 63 wrap guard is retained.
+  parse(R"(
+    tt.func @f(%K: i32) {
+      %c2 = arith.constant 2 : i32
+      %c63 = arith.constant 63 : i32
+      %c64 = arith.constant 64 : i32
+      %num = arith.addi %K, %c63 : i32
+      %q = arith.divsi %num, %c64 : i32
+      %cmp = arith.cmpi sge, %q, %c2 : i32 loc("cmp")
+      tt.return
+    })");
+  // `arg0 >= 0` is the division facts' precondition, but the retained fact
+  // `arg0 >= 65` implies it outright, so closed-evidence pruning drops it; the
+  // numerator wrap guard stays, since nothing implies it.
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 >= 65; arg0 <= 2147483584}");
+}
+
+TEST_F(SymbolicBoundsTest, QuotientThresholdUpperMirror) {
+  // k < 0: 3 - q >= 1 needs q <= 2, i.e. (cdiv) K <= 128. The K + 63 wrap
+  // guard is implied by K <= 128 and dropped; NonNegative(K) stays.
+  parse(R"(
+    tt.func @f(%K: i32) {
+      %c3 = arith.constant 3 : i32
+      %c63 = arith.constant 63 : i32
+      %c64 = arith.constant 64 : i32
+      %num = arith.addi %K, %c63 : i32
+      %q = arith.divsi %num, %c64 : i32
+      %cmp = arith.cmpi slt, %q, %c3 : i32 loc("cmp")
+      tt.return
+    })");
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 <= 128; arg0 >= 0}");
+}
+
+TEST_F(SymbolicBoundsTest, MultiSymbolResidualGuard) {
+  // d = hi - lo - 7 has two symbols, so no single-symbol candidate applies;
+  // the residual guard covers the whole residual.
+  parse(R"(
+    tt.func @f(%lo: i32, %hi: i32) {
+      %c0 = arith.constant 0 : i32
+      %c8 = arith.constant 8 : i32
+      %lane = tt.make_range {start = 0 : i32, end = 8 : i32} : tensor<8xi32>
+      %d = arith.subi %hi, %lo : i32
+      %ds = tt.splat %d : i32 -> tensor<8xi32>
+      %mask = arith.cmpi slt, %lane, %ds : tensor<8xi32> loc("mask")
+      tt.return
+    })");
+  // lo(d) = (hi - lo) - 7; the residual guard is AtLeast(hi - lo, 8). The
+  // subi's wrap obligation must also be closed: lo = INT32_MIN, hi = 0
+  // satisfies the mathematical hi - lo >= 8 while the narrow subtraction wraps
+  // negative and the mask is false, so the upper representability guard is
+  // not optional. Pin the conditions in full rather than by prefix.
+  EXPECT_EQ(verdict(get("mask")),
+            "Conditional{-arg0 + arg1 >= 8; -arg0 + arg1 <= 2147483647}");
+}
+
+TEST_F(SymbolicBoundsTest, CandidateProofStillClosesObligations) {
+  parse(R"(
+    tt.func @f(%x: i32) {
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      %y = arith.addi %x, %c1 : i32 loc("y")
+      %cmp = arith.cmpi sge, %y, %c0 : i32 loc("cmp")
+      tt.return
+    })");
+  // The term-sign candidate is the weaker x >= 0; the search also tries the
+  // residual guard, whose exact AtLeast(y, 0) folds to the correct, wider
+  // x >= -1 (y = x + 1 >= 0 admits x = -1, which x >= 0 wrongly excluded) and
+  // wins by the width metric. finalize must still close the wrap obligation
+  // on y with x <= INT32_MAX - 1 either way, otherwise x = INT32_MAX would
+  // pass.
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 >= -1; arg0 <= 2147483646}");
+}
+
 TEST_F(SymbolicBoundsTest, MaterializeInsertsBeforeTheAnchor) {
   parse(R"(
     tt.func @f(%ptr: !tt.ptr<f32>, %n: i32) {
@@ -884,7 +990,7 @@ TEST_F(SymbolicBoundsTest, LoopRootedProverKeepsDistinctArgumentsDistinct) {
     })";
   parse(ir);
   std::string moduleRooted = verdict(get("cmp"));
-  EXPECT_EQ(moduleRooted, "Unknown");
+  EXPECT_EQ(moduleRooted, "Conditional{arg0 - arg1 >= 0}");
 
   // A prover rooted at the loop numbers only what is under the loop; the two
   // function arguments are outside it. They used to tie in the sort order, so
@@ -930,6 +1036,311 @@ TEST_F(SymbolicBoundsTest, ValuesCreatedAfterConstructionGetDistinctOrders) {
       tt::intel::AffineForm::symbol(opaque(v1))
           .sub(tt::intel::AffineForm::symbol(opaque(v2)));
   EXPECT_EQ(diff.numTerms(), 2u);
+}
+
+TEST_F(SymbolicBoundsTest, MaskEvaluationsCountEachNodeOfASmallMask) {
+  parse(R"(
+    tt.func @f(%a: i32, %b: i32) {
+      %c0 = arith.constant 0 : i32
+      %x = arith.cmpi sge, %a, %c0 : i32
+      %y = arith.cmpi sge, %b, %c0 : i32
+      %m = arith.andi %x, %y : i1 loc("m")
+      tt.return
+    })");
+  EXPECT_EQ(prover->numMaskEvaluations(), 0u);
+  Value m = get("m");
+  prover->proveTrue(m, at(m));
+  // The conjunction and its two comparison operands.
+  EXPECT_EQ(prover->numMaskEvaluations(), 3u);
+}
+
+//===----------------------------------------------------------------------===//
+// proveTrue's walk over a mask expression: memo, depth cap, visit budget.
+//===----------------------------------------------------------------------===//
+
+using MaskProver = tt::intel::SymbolicBoundsProver;
+
+/// IR text for a diamond ladder: every level feeds its input to two
+/// conjunctions and joins them, so an unmemoized walk doubles per level, and
+/// every route from the top down crosses two conjunctions per level. Needs a
+/// `%x : i32` in scope. The top is `%<p>m<levels>`, named `topLoc` if given.
+static std::string ladderOps(const std::string &p, unsigned levels,
+                             const std::string &topLoc = "") {
+  std::string s = "  %" + p + "z = arith.constant 0 : i32\n";
+  s += "  %" + p + "m0 = arith.cmpi sge, %x, %" + p + "z : i32\n";
+  for (unsigned k = 0; k < levels; ++k) {
+    std::string i = std::to_string(k), n = std::to_string(k + 1);
+    s += "  %" + p + "kc" + i + " = arith.constant " + n + " : i32\n";
+    s += "  %" + p + "kd" + i + " = arith.constant -" + n + " : i32\n";
+    s += "  %" + p + "c" + i + " = arith.cmpi sle, %x, %" + p + "kc" + i +
+         " : i32\n";
+    s += "  %" + p + "d" + i + " = arith.cmpi sge, %x, %" + p + "kd" + i +
+         " : i32\n";
+    s += "  %" + p + "p" + i + " = arith.andi %" + p + "m" + i + ", %" + p +
+         "c" + i + " : i1\n";
+    s += "  %" + p + "q" + i + " = arith.andi %" + p + "m" + i + ", %" + p +
+         "d" + i + " : i1\n";
+    s += "  %" + p + "m" + n + " = arith.andi %" + p + "p" + i + ", %" + p +
+         "q" + i + " : i1";
+    if (k + 1 == levels && !topLoc.empty())
+      s += " loc(\"" + topLoc + "\")";
+    s += "\n";
+  }
+  return s;
+}
+
+/// IR text for a chain of `n` conjunctions over constant true, bottom
+/// `%<p>0`, top `%<p><n>`, named `topLoc` if given. Needs `%t` in scope. Every
+/// node is distinct, so a memo does not shorten it.
+static std::string chainOps(const std::string &p, unsigned n,
+                            const std::string &topLoc = "") {
+  std::string s = "  %" + p + "0 = arith.constant true\n";
+  for (unsigned k = 1; k <= n; ++k) {
+    s += "  %" + p + std::to_string(k) + " = arith.andi %" + p +
+         std::to_string(k - 1) + ", %t : i1";
+    if (k == n && !topLoc.empty())
+      s += " loc(\"" + topLoc + "\")";
+    s += "\n";
+  }
+  return s;
+}
+
+static std::string funcOf(const std::string &args, const std::string &ops) {
+  return "tt.func @f(" + args + ") {\n" + ops + "  tt.return\n}\n";
+}
+
+/// A comparison of constants that is false, so `proveTrue` refutes it.
+static const char *kRefutedOps = "  %five = arith.constant 5 : i32\n"
+                                 "  %three = arith.constant 3 : i32\n"
+                                 "  %r = arith.cmpi slt, %five, %three : i32\n";
+
+TEST_F(SymbolicBoundsTest, MaskMemoMakesASharedLadderLinear) {
+  // Two conjunctions per level, so the depth stays well under kMaxMaskDepth
+  // and only the memo can help.
+  constexpr unsigned levels = 12;
+  parse(funcOf("%x: i32", ladderOps("", levels, "top")));
+  Value top = get("top");
+  prover->proveTrue(top, at(top));
+  // Per level two comparisons and three conjunctions, plus the first
+  // comparison: each node evaluated once.
+  EXPECT_LE(prover->numMaskEvaluations(), 5 * levels + 1);
+}
+
+TEST_F(SymbolicBoundsTest, MaskDepthCapTurnsALongChainUnknown) {
+  auto verdictOfChain = [&](unsigned n) {
+    parse(funcOf("", "  %t = arith.constant true\n" + chainOps("c", n, "top")));
+    Value top = get("top");
+    return tt::intel::toString(prover->proveTrue(top, at(top)));
+  };
+  EXPECT_EQ(verdictOfChain(MaskProver::kMaxMaskDepth), "Satisfied");
+  EXPECT_EQ(verdictOfChain(MaskProver::kMaxMaskDepth + 1), "Unknown");
+}
+
+// A subtree of height 40 reached near the top is within the cap; reached below
+// a 40-deep chain it is not. Both uses share the subtree.
+//
+// The tests built on this rely on 41 <= kMaxMaskDepth < 80. The shallow root
+// adds one edge above the subtree, so its deepest node sits at depth 41 (at a
+// cap of 40 even the shallow query would be cut); the deep chain puts the
+// subtree's bottom at depth 80.
+static std::string sharedSubtreeIR() {
+  return funcOf(
+      "", "  %t = arith.constant true\n" + chainOps("s", 40) +
+              "  %shallow = arith.andi %s40, %t : i1 loc(\"shallow\")\n"
+              "  %e1 = arith.andi %s40, %t : i1\n" +
+              [] {
+                std::string d;
+                for (unsigned k = 2; k <= 40; ++k)
+                  d += "  %e" + std::to_string(k) + " = arith.andi %e" +
+                       std::to_string(k - 1) + ", %t : i1" +
+                       (k == 40 ? " loc(\"deep\")" : "") + "\n";
+                return d;
+              }());
+}
+
+TEST_F(SymbolicBoundsTest, MaskReuseShallowThenDeep) {
+  parse(sharedSubtreeIR());
+  Value shallow = get("shallow"), deep = get("deep");
+  // One context for both queries, so the subtree is looked up under the same
+  // key. With each value's own defining op as the point, the memo key differs
+  // between the queries and nothing is ever reused.
+  tt::intel::QueryContext shared{&func().getBody().front().front(), nullptr};
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(shallow, shared)),
+            "Satisfied");
+  unsigned afterShallow = prover->numMaskEvaluations();
+  // The cached subtree is within the cap where it was computed; reached from
+  // here it is not, and the cap must still apply.
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(deep, shared)), "Unknown");
+  // The subtree is found in the memo and rejected for its height, so only the
+  // deep chain's own 40 conjunctions are evaluated. Recomputing the subtree
+  // instead (a key that no longer matches) would cost 66. The verdict above
+  // catches a cap bypass; this count catches a lookup that never hits.
+  EXPECT_EQ(prover->numMaskEvaluations() - afterShallow, 40u);
+}
+
+TEST_F(SymbolicBoundsTest, MaskReuseDeepThenShallow) {
+  parse(sharedSubtreeIR());
+  Value shallow = get("shallow"), deep = get("deep");
+  // One context for both queries, so the subtree is looked up under the same
+  // key. With each value's own defining op as the point, the memo key differs
+  // between the queries and nothing is ever reused.
+  tt::intel::QueryContext shared{&func().getBody().front().front(), nullptr};
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(deep, shared)), "Unknown");
+  // The deep failure was a truncation, not an answer about the subtree, so it
+  // must not make the shallow query fail.
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(shallow, shared)),
+            "Satisfied");
+}
+
+TEST_F(SymbolicBoundsTest, MaskDepthTruncationStillLetsARefutedSiblingRefute) {
+  // Preservation: a truncated operand is Unknown, and a refuted operand wins.
+  parse(funcOf("", "  %t = arith.constant true\n" + std::string(kRefutedOps) +
+                       chainOps("c", MaskProver::kMaxMaskDepth + 5) +
+                       "  %rt = arith.andi %r, %c" +
+                       std::to_string(MaskProver::kMaxMaskDepth + 5) +
+                       " : i1 loc(\"rt\")\n"
+                       "  %tr = arith.andi %c" +
+                       std::to_string(MaskProver::kMaxMaskDepth + 5) +
+                       ", %r : i1 loc(\"tr\")\n"));
+  for (const char *name : {"rt", "tr"}) {
+    Value v = get(name);
+    unsigned before = prover->numMaskEvaluations();
+    EXPECT_EQ(tt::intel::toString(prover->proveTrue(v, at(v))), "Refuted")
+        << name;
+    unsigned first = prover->numMaskEvaluations() - before;
+    // The result depended on a truncated branch, so it was not cached as a
+    // complete answer: asking again evaluates again.
+    prover->proveTrue(v, at(v));
+    EXPECT_GT(prover->numMaskEvaluations() - before, first) << name;
+  }
+}
+
+TEST_F(SymbolicBoundsTest, MaskVisitBudgetBoundsAnOverCapSharedLadder) {
+  // 40 levels put every route 80 conjunctions deep, past the cap, so nothing
+  // above the comparisons is ever complete enough to cache and the walk would
+  // double per level. Only the visit budget stops it.
+  parse(funcOf("%x: i32", ladderOps("", 40, "top")));
+  Value top = get("top");
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(top, at(top))), "Unknown");
+  EXPECT_LE(prover->numMaskEvaluations(), MaskProver::kMaxMaskVisits);
+}
+
+TEST_F(SymbolicBoundsTest, MaskBudgetExhaustionOverridesARefutedSibling) {
+  // Budget exhaustion is query-wide: a refutation found before or after it
+  // does not rescue the answer. Depth truncation, by contrast, is local.
+  parse(
+      funcOf("%x: i32", std::string(kRefutedOps) + ladderOps("", 40) +
+                            "  %rt = arith.andi %r, %m40 : i1 loc(\"rt\")\n"
+                            "  %tr = arith.andi %m40, %r : i1 loc(\"tr\")\n"));
+  for (const char *name : {"rt", "tr"}) {
+    Value v = get(name);
+    EXPECT_EQ(tt::intel::toString(prover->proveTrue(v, at(v))), "Unknown")
+        << name;
+  }
+}
+
+TEST_F(SymbolicBoundsTest, MaskEntriesCachedBeforeExhaustionAreReused) {
+  parse(funcOf("%x: i32",
+               "  %t = arith.constant true\n" + chainOps("s", 10) +
+                   "  %small = arith.andi %s10, %t : i1 loc(\"small\")\n" +
+                   ladderOps("", 40, "big")));
+  Value small = get("small"), big = get("big");
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(small, at(small))),
+            "Satisfied");
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(big, at(big))), "Unknown");
+  unsigned before = prover->numMaskEvaluations();
+  // The complete answer computed before the budget ran out is still valid and
+  // is served from the memo without evaluating anything.
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(small, at(small))),
+            "Satisfied");
+  EXPECT_EQ(prover->numMaskEvaluations(), before);
+}
+
+TEST_F(SymbolicBoundsTest, MaskMemoKeepsPointsAndLoopsApart) {
+  // Preservation: a cached answer must not leak between query points or loop
+  // contexts. For each pair, the answer on a shared prover equals the answer
+  // on a fresh one, in either order.
+  auto check = [&](const char *ir, auto makeContexts) {
+    auto fresh = [&](unsigned which) {
+      parse(ir);
+      auto [v, a, b] = makeContexts();
+      return tt::intel::toString(prover->proveTrue(v, which == 0 ? a : b));
+    };
+    std::string wantA = fresh(0), wantB = fresh(1);
+    ASSERT_NE(wantA, wantB) << "the two contexts must disagree";
+    for (bool aFirst : {true, false}) {
+      parse(ir);
+      auto [v, a, b] = makeContexts();
+      std::string gotA, gotB;
+      if (aFirst) {
+        gotA = tt::intel::toString(prover->proveTrue(v, a));
+        gotB = tt::intel::toString(prover->proveTrue(v, b));
+      } else {
+        gotB = tt::intel::toString(prover->proveTrue(v, b));
+        gotA = tt::intel::toString(prover->proveTrue(v, a));
+      }
+      EXPECT_EQ(gotA, wantA) << (aFirst ? "A then B" : "B then A");
+      EXPECT_EQ(gotB, wantB) << (aFirst ? "A then B" : "B then A");
+    }
+  };
+
+  // Two program points: an assume that holds at the later one only, because a
+  // region-bearing op between the earlier point and the assume stops it from
+  // applying backward.
+  check(R"(
+    tt.func @f(%n: i32, %flag: i1) {
+      %c0 = arith.constant 0 : i32
+      %m = arith.cmpi sge, %n, %c0 : i32 loc("m")
+      %early = arith.constant 1 : i32 loc("early")
+      scf.if %flag {
+      }
+      %ge = arith.cmpi sge, %n, %c0 : i32
+      llvm.intr.assume %ge : i1
+      %late = arith.constant 2 : i32 loc("late")
+      tt.return
+    })",
+        [&] {
+          auto opOf = [&](const char *n) { return get(n).getDefiningOp(); };
+          return std::make_tuple(
+              get("m"), tt::intel::QueryContext{opOf("early"), nullptr},
+              tt::intel::QueryContext{opOf("late"), nullptr});
+        });
+
+  // Two loop contexts for one value: inside its loop, and with no loop.
+  check(R"(
+    tt.func @f(%ptr: !tt.ptr<f32>, %n: i32) {
+      %c0 = arith.constant 0 : i32
+      %c64 = arith.constant 64 : i32
+      %r = arith.remsi %n, %c64 : i32
+      %cmp = arith.cmpi eq, %r, %c0 : i32
+      llvm.intr.assume %cmp : i1
+      %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+      %ns = tt.splat %n : i32 -> tensor<64xi32>
+      scf.for %i = %c0 to %n step %c64 : i32 {
+        %is = tt.splat %i : i32 -> tensor<64xi32>
+        %idx = arith.addi %is, %lane : tensor<64xi32>
+        %mask = arith.cmpi slt, %idx, %ns : tensor<64xi32> loc("mask")
+        scf.yield
+      }
+      tt.return
+    })",
+        [&] {
+          Value mask = get("mask");
+          tt::intel::QueryContext inLoop = at(mask);
+          tt::intel::QueryContext noLoop{inLoop.at, nullptr};
+          return std::make_tuple(mask, inLoop, noLoop);
+        });
+}
+
+TEST_F(SymbolicBoundsTest, MaskQueriesRecoverAfterTruncation) {
+  // Preservation: a query cut short by the depth cap leaves the prover able to
+  // decide an ordinary one.
+  parse(funcOf("", "  %t = arith.constant true\n" +
+                       chainOps("c", MaskProver::kMaxMaskDepth + 5, "long") +
+                       "  %ok = arith.andi %t, %t : i1 loc(\"ok\")\n"));
+  Value longMask = get("long"), ok = get("ok");
+  prover->proveTrue(longMask, at(longMask));
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(ok, at(ok))), "Satisfied");
 }
 
 //===----------------------------------------------------------------------===//
@@ -989,6 +1400,22 @@ TEST_F(SymbolicBoundsTest, FactsUsedRecordsAssumesBehindAWrapDischarge) {
   EXPECT_EQ(verdict(get("cmp")), "Conditional{arg0 <= 126}");
 }
 
+TEST_F(SymbolicBoundsTest, FactsUsedRecordsAssumesBehindAPrunedCondition) {
+  parse(R"(
+    tt.func @f(%n: i32) {
+      %c40 = arith.constant 40 : i32
+      %c50 = arith.constant 50 : i32
+      %le = arith.cmpi sle, %n, %c40 : i32
+      llvm.intr.assume %le : i1
+      %cmp = arith.cmpi slt, %n, %c50 : i32 loc("cmp")
+      tt.return
+    })");
+  tt::intel::BoundProof p = proof(get("cmp"));
+  // n <= 40 makes the runtime condition n <= 49 redundant, so it is pruned.
+  EXPECT_EQ(tt::intel::toString(p), "Satisfied");
+  EXPECT_TRUE(usesAll(p, assumesOf(module.get())));
+}
+
 // A loop-varying value that normalization leaves opaque and whose own range
 // inherits a function argument's assume-narrowed range. (A loaded value does
 // not do: it gets its entry state, and its assumes narrow only its uses.)
@@ -1023,6 +1450,18 @@ TEST_F(SymbolicBoundsTest, FactsUsedRecordsAssumesBehindAVaryingRange) {
   EXPECT_EQ(tt::intel::toString(lt), "Satisfied");
   EXPECT_TRUE(usesAll(gt, assumes));
   EXPECT_TRUE(usesAll(lt, assumes));
+}
+
+TEST_F(SymbolicBoundsTest, FactsUsedSurvivesAConjunctionThatRefutes) {
+  parse(kVaryingRangeIR);
+  SmallVector<Operation *> assumes = assumesOf(module.get());
+  // The refuted operand in either position.
+  for (const char *name : {"gt_and_t", "t_and_gt"}) {
+    Value v = get(name);
+    tt::intel::BoundProof p = prover->proveTrue(v, at(v));
+    EXPECT_EQ(tt::intel::toString(p), "Refuted") << name;
+    EXPECT_TRUE(usesAll(p, assumes)) << name;
+  }
 }
 
 // The wrap discharge of `a + 1 > a` that only holds because of the assumes on
@@ -1190,6 +1629,35 @@ TEST_F(SymbolicBoundsTest, I128NormalizeIsOpaque) {
   EXPECT_EQ(norm(arg(0)), "opaque(arg0)");
 }
 
+TEST_F(SymbolicBoundsTest, WideAndiIsNotAConjunction) {
+  parse(R"(
+    tt.func @f() {
+      %one = arith.constant 1 : i8
+      %two = arith.constant 2 : i8
+      %m = arith.andi %one, %two : i8 loc("m")
+      %t = arith.constant true
+      %b = arith.andi %t, %t : i1 loc("b")
+      tt.return
+    })");
+  // Both operands are nonzero, but 1 & 2 is 0.
+  Value m = get("m");
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(m, at(m))), "Unknown");
+  // The i1 conjunction still decides.
+  Value b = get("b");
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(b, at(b))), "Satisfied");
+}
+
+TEST_F(SymbolicBoundsTest, I128MaskIsUnknown) {
+  parse(R"(
+    tt.func @f(%a: i128) {
+      %zero = arith.constant 0 : i128
+      %mask = arith.cmpi sge, %a, %zero : i128 loc("mask")
+      tt.return
+    })");
+  Value mask = get("mask");
+  EXPECT_EQ(tt::intel::toString(prover->proveTrue(mask, at(mask))), "Unknown");
+}
+
 TEST_F(SymbolicBoundsTest, I128AssumeDoesNotBreakConstruction) {
   // The fact index is built over every assume in the module when the prover is
   // constructed, whatever is queried, so a wide one must not abort it.
@@ -1210,7 +1678,7 @@ TEST_F(SymbolicBoundsTest, I128AssumeDoesNotBreakConstruction) {
       tt.return
     })");
   EXPECT_EQ(withAssume, verdict(get("cmp")));
-  EXPECT_EQ(withAssume, "Unknown");
+  EXPECT_EQ(withAssume, "Conditional{arg1 >= 0}");
 }
 
 /// The normalized form of the (single) iter_arg of the (single) loop, in the
@@ -1283,8 +1751,8 @@ TEST_F(SymbolicBoundsTest, I128LoopWithUnrepresentableStepIsUnknown) {
 
 TEST_F(SymbolicBoundsTest, SixtyFourBitInductionVariableLoopStillRewrites) {
   // The same loop over a 64-bit induction variable is inside the domain: the
-  // iter_arg is rewritten as `IV + c`. This pins that the wide-loop gate does
-  // not also block ordinary 64-bit loops.
+  // iter_arg is rewritten as `IV + c` and the comparison is decided. This pins
+  // that the wide-loop gate does not also block ordinary 64-bit loops.
   parse(R"(
     tt.func @f(%n: i32, %m: i32) {
       %c0 = arith.constant 0 : i64
@@ -1300,6 +1768,7 @@ TEST_F(SymbolicBoundsTest, SixtyFourBitInductionVariableLoopStillRewrites) {
       }
       tt.return
     })");
+  EXPECT_EQ(verdict(get("cmp")), "Conditional{-arg0 + arg1 >= 1}");
   EXPECT_EQ(normalizedIterArg(*prover, module.get(), get("cmp")), "blockarg");
 }
 
@@ -1312,14 +1781,12 @@ TEST_F(SymbolicBoundsTest, WidthPolicyKeepsSixtyFourBitsAndIndexDecided) {
       %hi = arith.constant 9223372036854775807 : i64
       %lo = arith.constant 9223372036854775806 : i64
       %cmp64 = arith.cmpi slt, %lo, %hi : i64 loc("cmp64")
-      %one = arith.constant 1 : index
-      %i1 = arith.addi %i, %one : index
-      %cmpIdx = arith.cmpi slt, %i, %i1 : index loc("cmpIdx")
+      %z = arith.constant 0 : index
+      %cmpIdx = arith.cmpi sge, %i, %z : index loc("cmpIdx")
       tt.return
     })");
   EXPECT_EQ(verdict(get("cmp64")), "Satisfied");
-  // i < i + 1 holds wherever the index addition does not wrap.
-  EXPECT_EQ(verdict(get("cmpIdx")), "Conditional{arg0 <= 9223372036854775806}");
+  EXPECT_EQ(verdict(get("cmpIdx")), "Conditional{arg0 >= 0}");
 }
 
 } // namespace
