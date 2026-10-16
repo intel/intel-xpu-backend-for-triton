@@ -45,7 +45,7 @@ def benchmark_workloads():
 def profile_group(case):
     # CI uses TD and unquantized/native-FP8 caches for every input.
     return (case['block_size'], case['head_size'], case['q_heads'] // case['kv_heads'], case['dtype'],
-            case['out_dtype'], case['q_layout'], case['kv_layout'], bool(case['softcap']), case['sliding_window'])
+            case['out_dtype'], bool(case['softcap']), case['sliding_window'])
 
 
 def partition(manifests):

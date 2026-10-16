@@ -3,11 +3,11 @@
   "entries": [
     {
       "config": {
-        "block_m": 64,
-        "grf_mode": "default",
-        "heads_per_program": 1,
+        "block_m": 128,
+        "grf_mode": "256",
+        "heads_per_program": "MAX",
         "num_stages": 2,
-        "num_warps": 8,
+        "num_warps": 16,
         "tile_size": 16
       },
       "key": {
@@ -16,7 +16,7 @@
         "num_segments": 1,
         "num_seqs": 1,
         "q_len_bucket": 3,
-        "query_work": 114688
+        "query_work": 262144
       }
     },
     {
@@ -34,7 +34,7 @@
         "num_segments": 16,
         "num_seqs": 8,
         "q_len_bucket": 0,
-        "query_work": 224
+        "query_work": 512
       }
     },
     {
@@ -52,7 +52,7 @@
         "num_segments": 16,
         "num_seqs": 4,
         "q_len_bucket": 0,
-        "query_work": 112
+        "query_work": 256
       }
     }
   ],
@@ -60,12 +60,10 @@
     "block_size": 16,
     "head_size": 128,
     "k_dtype": "bfloat16",
-    "kv_layout": "contiguous",
     "kv_quant_mode": 0,
-    "num_queries_per_kv": 7,
+    "num_queries_per_kv": 16,
     "out_dtype": "bfloat16",
     "q_dtype": "bfloat16",
-    "q_layout": "contiguous",
     "sliding_window": 0,
     "use_softcap": false,
     "use_td": true,

@@ -38,6 +38,7 @@ tuning and saves progress records; automatic resume is not implemented.
 
 Generated workload snapshots and their partition assignments are saved in
 `reports/manifests/`. Pass a saved manifest to `tune_ci.py` to replay those inputs.
+Q/KV layout fields describe allocation; they are not profile or sharding keys.
 
 Input allocation and timing are passed explicitly to the patched tuner. Candidate
 search, confirmation, winner selection and profile export run in that copy.

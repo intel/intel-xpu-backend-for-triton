@@ -73,7 +73,7 @@ index 7804b01..0ac1271 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index b0231dd..e875d33 100644
+index 4d73e49..94d54df 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -11,7 +11,6 @@ from typing import Any
@@ -84,7 +84,7 @@ index b0231dd..e875d33 100644
  from vllm.logger import init_logger
  from vllm.platforms import current_platform
  from vllm.triton_utils import tl, triton
-@@ -28,10 +27,16 @@ from vllm.v1.attention.ops.triton_attention_helpers import (
+@@ -28,10 +27,17 @@ from vllm.v1.attention.ops.triton_attention_helpers import (
      softmax_step,
      store_segm_reduce_scalars,
  )
@@ -93,6 +93,7 @@ index b0231dd..e875d33 100644
 +    make_attention_key,
 +    needs_config_key,
 +    resolve_config,
++    supports_profile_layout,
 +    use_3d_attention,
 +)
  from vllm.v1.kv_cache_interface import KVQuantMode
@@ -102,7 +103,7 @@ index b0231dd..e875d33 100644
  float8_info = torch.finfo(current_platform.fp8_dtype())
  
  
-@@ -72,8 +77,8 @@ def _load_q_td(
+@@ -72,8 +78,8 @@ def _load_q_td(
      query_stride_1: tl.int64,
      cur_batch_in_all_start_index,
      q_block_local_idx,
@@ -113,7 +114,7 @@ index b0231dd..e875d33 100644
      BLOCK_Q: tl.constexpr,
      BLOCK_M: tl.constexpr,
      HEAD_SIZE: tl.constexpr,
-@@ -83,26 +88,26 @@ def _load_q_td(
+@@ -83,26 +89,26 @@ def _load_q_td(
  
      Caller guarantees (via the wrapper's ``use_td_qo`` gate):
        * ``HEAD_SIZE == HEAD_SIZE_PADDED`` (head_size is a power of 2),
@@ -146,7 +147,7 @@ index b0231dd..e875d33 100644
      )
      return q_desc.load([0, 0]).reshape(BLOCK_M, HEAD_SIZE_PADDED)
  
-@@ -149,30 +154,43 @@ def _store_output_td(
+@@ -149,30 +155,43 @@ def _store_output_td(
      q_block_local_len,
      stride_token: tl.int64,
      stride_head: tl.int64,
@@ -203,7 +204,7 @@ index b0231dd..e875d33 100644
  
  
  @triton.jit
-@@ -289,21 +307,24 @@ def kernel_unified_attention(
+@@ -289,21 +308,24 @@ def kernel_unified_attention(
      # instead of letting them override it. Default False preserves the
      # original (causal AND SW) OR mm_prefix behavior for all other models.
      MM_PREFIX_CLAMP_SW: tl.constexpr = False,
@@ -235,7 +236,7 @@ index b0231dd..e875d33 100644
      segm_idx = tl.program_id(2) if IS_3D else 0
  
      (
-@@ -335,10 +356,10 @@ def kernel_unified_attention(
+@@ -335,10 +357,10 @@ def kernel_unified_attention(
      offs_m = tl.arange(0, BLOCK_M)
      offs_d = tl.arange(0, HEAD_SIZE_PADDED)
      offs_t = tl.arange(0, TILE_SIZE)
@@ -248,7 +249,7 @@ index b0231dd..e875d33 100644
      query_offset = (
          query_offset_0[:, None] * query_stride_0
          + query_offset_1[:, None] * query_stride_1
-@@ -358,8 +379,8 @@ def kernel_unified_attention(
+@@ -358,8 +380,8 @@ def kernel_unified_attention(
              query_stride_1,
              cur_batch_in_all_start_index,
              q_block_local_idx,
@@ -259,7 +260,7 @@ index b0231dd..e875d33 100644
              BLOCK_Q,
              BLOCK_M,
              HEAD_SIZE,
-@@ -406,7 +427,7 @@ def kernel_unified_attention(
+@@ -406,7 +428,7 @@ def kernel_unified_attention(
          TILE_SIZE,
          BLOCK_M,
          BLOCK_Q,
@@ -268,7 +269,7 @@ index b0231dd..e875d33 100644
          SLIDING_WINDOW,
          USE_MM_PREFIX,
          IS_3D,
-@@ -539,12 +560,12 @@ def kernel_unified_attention(
+@@ -539,12 +561,12 @@ def kernel_unified_attention(
  
          # S : (BLOCK_M, TILE_SIZE)
          S = tl.zeros(shape=(BLOCK_M, TILE_SIZE), dtype=tl.float32)
@@ -285,7 +286,7 @@ index b0231dd..e875d33 100644
  
          if USE_SOFTCAP:
              S = apply_softcap(S, softcap)
-@@ -566,27 +587,14 @@ def kernel_unified_attention(
+@@ -566,27 +588,14 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -317,7 +318,7 @@ index b0231dd..e875d33 100644
  
      # ---- Epilogue ---------------------------------------------------------
      if IS_3D:
-@@ -604,7 +612,7 @@ def kernel_unified_attention(
+@@ -604,7 +613,7 @@ def kernel_unified_attention(
                      tl.int64
                  )
                  * (num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED)
@@ -326,7 +327,7 @@ index b0231dd..e875d33 100644
                  * (NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED)
                  + segm_idx * HEAD_SIZE_PADDED
              )
-@@ -614,7 +622,7 @@ def kernel_unified_attention(
+@@ -614,7 +623,7 @@ def kernel_unified_attention(
                  q_block_local_len,
                  num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED,
                  NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED,
@@ -335,7 +336,7 @@ index b0231dd..e875d33 100644
                  BLOCK_Q,
                  HEAD_SIZE,
                  HEAD_SIZE_PADDED,
-@@ -660,7 +668,7 @@ def kernel_unified_attention(
+@@ -660,7 +669,7 @@ def kernel_unified_attention(
                  output_ptr
                  + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q)
                  * output_stride_0
@@ -344,7 +345,7 @@ index b0231dd..e875d33 100644
              )
              _store_output_td(
                  output_base,
-@@ -668,10 +676,11 @@ def kernel_unified_attention(
+@@ -668,10 +677,11 @@ def kernel_unified_attention(
                  q_block_local_len,
                  output_stride_0,
                  output_stride_1,
@@ -357,7 +358,7 @@ index b0231dd..e875d33 100644
              )
          else:
              output_offset = (
-@@ -704,7 +713,6 @@ def reduce_segments(
+@@ -704,7 +714,6 @@ def reduce_segments(
      HEAD_SIZE: tl.constexpr,  # int, must be power of 2
      HEAD_SIZE_PADDED: tl.constexpr,  # int, must be power of 2
      query_start_len_ptr,  # [num_seqs+1]
@@ -365,7 +366,7 @@ index b0231dd..e875d33 100644
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,  # int
      USE_FP8: tl.constexpr,  # bool
      FP8_MIN: tl.constexpr = float8_info.min,
-@@ -714,7 +722,7 @@ def reduce_segments(
+@@ -714,7 +723,7 @@ def reduce_segments(
      query_head_idx = tl.program_id(1)
  
      seq_idx = find_seq_idx(
@@ -374,7 +375,7 @@ index b0231dd..e875d33 100644
      )
  
      # sequence len for this particular sequence
-@@ -934,9 +942,8 @@ def unified_attention(
+@@ -934,9 +943,8 @@ def unified_attention(
      num_queries_per_kv = num_query_heads // num_kv_heads
      head_size = q.shape[2]
  
@@ -386,7 +387,7 @@ index b0231dd..e875d33 100644
      BLOCK_Q = BLOCK_M // num_queries_per_kv
  
      # Tuned launch parameters; ``None`` lets Triton pick its defaults.
-@@ -980,12 +987,21 @@ def unified_attention(
+@@ -980,12 +988,21 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -414,7 +415,7 @@ index b0231dd..e875d33 100644
  
      # Wider KV tile for the tuned large-head path (see above). Only the 2D
      # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
-@@ -1039,19 +1055,21 @@ def unified_attention(
+@@ -1039,19 +1056,21 @@ def unified_attention(
          )
  
      # Launch the 2D kernel if
@@ -447,7 +448,7 @@ index b0231dd..e875d33 100644
      )
  
      # The kernel signature is the same for 2D and 3D — only the launch
-@@ -1092,6 +1110,67 @@ def unified_attention(
+@@ -1092,6 +1111,71 @@ def unified_attention(
      if launch_num_stages is not None:
          launch_kwargs["num_stages"] = launch_num_stages
  
@@ -477,8 +478,7 @@ index b0231dd..e875d33 100644
 +            use_causal
 +            and not use_per_seq_causal
 +            and kv_quant_mode == KVQuantMode.NONE
-+            and key.q_layout != "unsupported"
-+            and key.kv_layout != "unsupported"
++            and supports_profile_layout(q, k, v)
 +            and out.is_contiguous()
 +            and not use_alibi_slopes
 +            and not use_alibi_sqrt
@@ -512,10 +512,15 @@ index b0231dd..e875d33 100644
 +        if use_3d:
 +            grid += (num_segments,)
 +
++    assert tile_size <= block_size, "TILE_SIZE must be <= block_size"
++    assert block_size % tile_size == 0, (
++        "block_size must be multiple of TILE_SIZE"
++    )
++
      kernel_unified_attention[grid](
          output_ptr=out,
          segm_output_ptr=segm_output_ptr,
-@@ -1168,6 +1247,7 @@ def unified_attention(
+@@ -1168,6 +1252,7 @@ def unified_attention(
          USE_TD=use_td,
          USE_TD_QO=use_td_qo,
          MM_PREFIX_CLAMP_SW=mm_prefix_clamp_sliding_window,
@@ -523,7 +528,7 @@ index b0231dd..e875d33 100644
          **launch_kwargs,
      )
  
-@@ -1184,11 +1264,10 @@ def unified_attention(
+@@ -1184,11 +1269,10 @@ def unified_attention(
              output_stride_0=out.stride(0),
              output_stride_1=out.stride(1),
              block_table_stride=block_table.stride(0),
@@ -538,10 +543,10 @@ index b0231dd..e875d33 100644
          )
 diff --git a/vllm/v1/attention/ops/triton_unified_attention_config.py b/vllm/v1/attention/ops/triton_unified_attention_config.py
 new file mode 100644
-index 0000000..c769be5
+index 0000000..c1af94b
 --- /dev/null
 +++ b/vllm/v1/attention/ops/triton_unified_attention_config.py
-@@ -0,0 +1,531 @@
+@@ -0,0 +1,521 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +
@@ -605,8 +610,6 @@ index 0000000..c769be5
 +    k_dtype: str
 +    v_dtype: str
 +    out_dtype: str
-+    q_layout: str
-+    kv_layout: str
 +
 +
 +@dataclass(frozen=True)
@@ -624,7 +627,6 @@ index 0000000..c769be5
 +            self.num_segments,
 +            self.q_len_bucket,
 +            self.kv_len_bucket,
-+            self.num_seqs,
 +        )
 +
 +
@@ -666,8 +668,6 @@ index 0000000..c769be5
 +    num_segments,
 +    num_seqs,
 +    query_work,
-+    q_layout="contiguous",
-+    kv_layout="contiguous",
 +) -> AttentionKey:
 +    return AttentionKey(
 +        block_size=block_size,
@@ -692,8 +692,6 @@ index 0000000..c769be5
 +        num_segments=num_segments,
 +        num_seqs=num_seqs,
 +        query_work=query_work,
-+        q_layout=q_layout,
-+        kv_layout=kv_layout,
 +    )
 +
 +
@@ -721,6 +719,22 @@ index 0000000..c769be5
 +        or is_batch_invariant
 +        # Keep short-window attention on the optimized 2D path.
 +        or (is_xpu and 0 < sliding_window <= 1024)
++    )
++
++
++def supports_profile_layout(q, k, v) -> bool:
++    num_query_heads, head_size = q.shape[1:]
++    num_kv_heads = k.shape[2]
++    qkv_stride = ((num_query_heads + 2 * num_kv_heads) * head_size, head_size, 1)
++    interleaved_stride = (
++        v.shape[1] * num_kv_heads * 2 * head_size,
++        num_kv_heads * 2 * head_size,
++        2 * head_size,
++        1,
++    )
++    return (q.is_contiguous() or q.stride() == qkv_stride) and (
++        (k.is_contiguous() and v.is_contiguous())
++        or k.stride() == v.stride() == interleaved_stride
 +    )
 +
 +
@@ -766,24 +780,6 @@ index 0000000..c769be5
 +            sliding_window=sliding_window_val,
 +        )
 +
-+    q_layout = "contiguous" if q.is_contiguous() else "unsupported"
-+    if (
-+        q.stride(0) == (num_query_heads + 2 * num_kv_heads) * head_size
-+        and q.stride(1) == head_size
-+        and q.stride(2) == 1
-+    ):
-+        q_layout = "qkv"
-+    kv_layout = (
-+        "contiguous" if k.is_contiguous() and v.is_contiguous() else "unsupported"
-+    )
-+    interleaved_stride = (
-+        block_size * num_kv_heads * 2 * head_size,
-+        num_kv_heads * 2 * head_size,
-+        2 * head_size,
-+        1,
-+    )
-+    if k.stride() == v.stride() == interleaved_stride:
-+        kv_layout = "interleaved"
 +    return make_key(
 +        block_size=block_size,
 +        head_size=head_size,
@@ -802,8 +798,6 @@ index 0000000..c769be5
 +        num_segments=num_par_softmax_segments if is_3d else 1,
 +        num_seqs=num_seqs,
 +        query_work=q.shape[0] * q.shape[1],
-+        q_layout=q_layout,
-+        kv_layout=kv_layout,
 +    )
 +
 +
@@ -827,7 +821,7 @@ index 0000000..c769be5
 +        return False
 +    if config.heads_per_program != "MAX" and (
 +        type(config.heads_per_program) is not int
-+        or config.heads_per_program not in (1, 2, 4, 8)
++        or config.heads_per_program <= 0
 +    ):
 +        return False
 +    heads = config.get_heads_per_program(key.num_queries_per_kv)
@@ -842,7 +836,7 @@ index 0000000..c769be5
 +        or not _power_of_two(key.head_size)
 +    ):
 +        return False
-+    if config.block_m // heads <= 0:
++    if config.block_m % heads:
 +        return False
 +    if config.num_warps is not None and (
 +        type(config.num_warps) is not int
@@ -853,9 +847,9 @@ index 0000000..c769be5
 +        type(config.num_stages) is not int or config.num_stages not in (1, 2, 3, 4)
 +    ):
 +        return False
-+    if config.grf_mode not in (None, "default", "256"):
++    if config.grf_mode is not None and type(config.grf_mode) is not str:
 +        return False
-+    if backend != "xpu" and config.grf_mode == "256":
++    if backend != "xpu" and config.grf_mode not in (None, "default"):
 +        return False
 +    if key.block_size < config.tile_size or key.block_size % config.tile_size:
 +        return False
@@ -910,15 +904,11 @@ index 0000000..c769be5
 +    dtype = hashlib.sha256(
 +        json.dumps(dtypes, separators=(",", ":")).encode("utf-8")
 +    ).hexdigest()[:8]
-+    layouts = {"contiguous": "c", "interleaved": "i"}
-+    q_layout = layouts.get(static_key.q_layout, static_key.q_layout)
-+    kv_layout = layouts.get(static_key.kv_layout, static_key.kv_layout)
 +    return (
 +        f"H={static_key.head_size},G={static_key.num_queries_per_kv}"
 +        f",B={static_key.block_size},dev={device},dt={dtype}"
 +        f",td={int(static_key.use_td)},kq={static_key.kv_quant_mode}"
-+        f",sc={int(static_key.use_softcap)},w={static_key.sliding_window}"
-+        f",ql={q_layout},kl={kv_layout}.json"
++        f",sc={int(static_key.use_softcap)},w={static_key.sliding_window}.json"
 +    )
 +
 +
@@ -945,16 +935,19 @@ index 0000000..c769be5
 +        key = AttentionKey(**asdict(static_key), **asdict(dynamic))
 +        if config is not None and not validate_config(config, key, "xpu"):
 +            raise ValueError("invalid attention config")
-+        anchors = tables.setdefault(dynamic.regime(), {})
++        anchors = tables.setdefault(dynamic.regime(), {}).setdefault(dynamic.num_seqs, {})
 +        if dynamic.query_work in anchors:
 +            raise ValueError("duplicate query-work point")
 +        anchors[dynamic.query_work] = config
 +    return {
-+        regime: (
-+            tuple(sorted(anchors)),
-+            tuple(anchors[work] for work in sorted(anchors)),
-+        )
-+        for regime, anchors in tables.items()
++        regime: {
++            num_seqs: (
++                tuple(sorted(anchors)),
++                tuple(anchors[work] for work in sorted(anchors)),
++            )
++            for num_seqs, anchors in sequence_groups.items()
++        }
++        for regime, sequence_groups in tables.items()
 +    }
 +
 +
@@ -987,7 +980,9 @@ index 0000000..c769be5
 +        table = tables.get(key.regime())
 +        if table is None:
 +            continue
-+        anchors, configs = table
++        # TODO: Evaluate joint seq-count/query-work selection.
++        num_seqs = min(table, key=lambda n: (abs(n - key.num_seqs), n))
++        anchors, configs = table[num_seqs]
 +        pos = bisect_left(anchors, key.query_work)
 +        candidates = (max(0, pos - 1), min(pos, len(anchors) - 1))
 +        pos = min(

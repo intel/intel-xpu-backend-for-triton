@@ -1,5 +1,5 @@
 diff --git a/tune_unified_attention.py b/tune_unified_attention.py
-index 74246a8ede..2e38ddea46 100644
+index 0db1c43bca..0a653c4201 100644
 --- a/tune_unified_attention.py
 +++ b/tune_unified_attention.py
 @@ -44,8 +44,10 @@ import math
@@ -21,7 +21,7 @@ index 74246a8ede..2e38ddea46 100644
 -WARMUP_MS = 10
 -REP_MS = 50
 -SELECTION_TOLERANCE = 0.01
-+FORMAT_VERSION = 3
++FORMAT_VERSION = 4
  
  
  def canonical(value):
@@ -48,9 +48,9 @@ index 74246a8ede..2e38ddea46 100644
  def candidate_configs(key):
 -    """Generate candidate configs before legality pruning."""
      # MAX preserves the model's full GQA group, including non-power-of-two ratios.
-     heads = ["MAX"] + [h for h in (1, 8) if h < key.num_queries_per_kv and key.num_queries_per_kv % h == 0]
-     return [{"block_m": m, "tile_size": t, "num_warps": w, "num_stages": s, "grf_mode": g, "heads_per_program": h}
-@@ -82,7 +97,7 @@ def candidate_configs(key):
+     heads = ["MAX"] + [
+         h
+@@ -86,7 +101,7 @@ def candidate_configs(key):
  
  
  def config_id(config):
@@ -59,7 +59,7 @@ index 74246a8ede..2e38ddea46 100644
  
  
  def model_windows(config, override):
-@@ -183,24 +198,28 @@ def model_workloads(args):
+@@ -187,24 +202,28 @@ def model_workloads(args):
      return cases
  
  
@@ -101,7 +101,7 @@ index 74246a8ede..2e38ddea46 100644
          ratios = [latency / minimum for latency, minimum in zip(times, best)]
          results.append({
              "id": identifier,
-@@ -211,18 +230,16 @@ def key_statistics(cases):
+@@ -215,18 +234,16 @@ def key_statistics(cases):
      return results
  
  
@@ -125,7 +125,7 @@ index 74246a8ede..2e38ddea46 100644
      grouped = defaultdict(list)
      for case in cases:
          if case.get("key") is not None:
-@@ -230,11 +247,31 @@ def grouped_cases(cases):
+@@ -234,11 +251,31 @@ def grouped_cases(cases):
      return grouped
  
  
@@ -161,7 +161,7 @@ index 74246a8ede..2e38ddea46 100644
          partitions[key.static_key()].append((key.dynamic_key(), config))
      profiles = {}
      for static, entries in partitions.items():
-@@ -306,20 +343,21 @@ def synchronize(device):
+@@ -310,20 +347,21 @@ def synchronize(device):
  
  
  def prepare_option(option, inputs, device):
@@ -187,7 +187,7 @@ index 74246a8ede..2e38ddea46 100644
      backend = getattr(torch, device.type)
      started = time.perf_counter_ns()
      fn()
-@@ -327,8 +365,8 @@ def benchmark_callable(fn, device):
+@@ -331,8 +369,8 @@ def benchmark_callable(fn, device):
      eager_ms = max((time.perf_counter_ns() - started) / 1e6, 1e-6)
      slow = eager_ms >= 25
      if slow:
@@ -198,7 +198,7 @@ index 74246a8ede..2e38ddea46 100644
      else:
          for _ in range(4):
              fn()
-@@ -344,6 +382,9 @@ def benchmark_callable(fn, device):
+@@ -348,6 +386,9 @@ def benchmark_callable(fn, device):
              graph.replay()
          backend.synchronize(device)
          start, end = backend.Event(enable_timing=True), backend.Event(enable_timing=True)
@@ -208,7 +208,7 @@ index 74246a8ede..2e38ddea46 100644
  
          def batch(repeats):
              backend.synchronize(device)
-@@ -357,85 +398,162 @@ def benchmark_callable(fn, device):
+@@ -361,85 +402,162 @@ def benchmark_callable(fn, device):
                  raise RuntimeError(f"Invalid graph latency {event_ms}")
              return event_ms
  
@@ -422,7 +422,7 @@ index 74246a8ede..2e38ddea46 100644
  def load_sequence_batches(path):
      """Load and validate batches of [Q, KV] sequence lengths from JSON."""
      batches = json.loads(path.read_text(encoding="utf-8"))
-@@ -455,12 +573,7 @@ def load_sequence_batches(path):
+@@ -459,12 +577,7 @@ def load_sequence_batches(path):
  
  def parse_args(argv=None):
      """Parse command line arguments."""
@@ -436,7 +436,7 @@ index 74246a8ede..2e38ddea46 100644
      parser.add_argument("--model", type=str, default="mistralai/Mixtral-8x7B-Instruct-v0.1",
                          help="Hugging Face model ID or local config directory; weights are not loaded")
      parser.add_argument("--tp-size", "-tp", "--tensor-parallel-size", type=int, default=2)
-@@ -501,20 +614,29 @@ def parse_args(argv=None):
+@@ -505,20 +618,29 @@ def parse_args(argv=None):
      return args
  
  
