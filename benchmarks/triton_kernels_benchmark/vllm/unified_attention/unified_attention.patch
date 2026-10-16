@@ -72,7 +72,7 @@ index f2399b7423..930eccc825 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index d914e574f2..74cd49fc95 100644
+index d914e574f2..63cb07e638 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -407,7 +407,7 @@ index d914e574f2..74cd49fc95 100644
                  BLOCK_Q,
                  HEAD_SIZE,
                  HEAD_SIZE_PADDED,
-+                FLATTEN=heads_per_program != num_queries_per_kv,
++                FLATTEN=heads_per_program == 1,
              )
          else:
              output_offset = (
