@@ -129,6 +129,17 @@ bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
   return isBlockIOEligible(loadOp.getOperation(), tensorTy);
 }
 
+/// Return true if LowerTo2DBlockLoad's checks for rewriting \p op to
+/// ttig.2d_block_load pass with result type \p tensorTy, which may be a
+/// candidate other than op.getType(): isBlockIOEligible, traceable descriptor
+/// definitions with consistent padding, validate2DBlockLoadTile (honoring
+/// ttig.one_matrix_per_load), no batch dim in the tile, and each foldable
+/// width/height/pitch within its 24-bit field. Emits no diagnostics. Omits the
+/// layout-independent 16-byte pitch check, which the pass reports as an error,
+/// so true means "eligible", not "safe to emit" for hand-tagged IR.
+bool isDescriptorLoadLowerableTo2DBlock(triton::DescriptorLoadOp op,
+                                        RankedTensorType tensorTy);
+
 /// Estimate the hardware message count for a load with the given type and
 /// encoding. Higher values indicate more HW cost. Used for cost modeling in
 /// RemoveLayoutConversions. Returns a comparable scalar (not cycle-accurate).

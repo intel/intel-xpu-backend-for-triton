@@ -132,10 +132,10 @@ public:
 private:
   /// Convert a tt.descriptor_load to ttig.2d_block_load.
   void convertDescriptorLoadOp(tt::DescriptorLoadOp op) {
-    if (!isBlockIOEligible(op))
+    auto tensorTy = cast<RankedTensorType>(op.getType());
+    if (!ttgi::isDescriptorLoadLowerableTo2DBlock(op, tensorTy))
       return;
 
-    auto tensorTy = cast<RankedTensorType>(op.getType());
     unsigned rank = tensorTy.getRank();
     unsigned elemSizeInBits = tensorTy.getElementTypeBitWidth();
 
@@ -143,102 +143,20 @@ private:
     Value desc = op.getDesc();
     tt::intel::DescriptorDefinitions defs =
         tt::intel::findDescriptorDefinitions(desc);
-    if (defs.empty()) {
-      LDBG("Could not find MakeTensorDescOp for: " << *op);
-      return;
-    }
-
     std::optional<tt::PaddingOption> padding = defs.consistentPadding();
-    if (!padding) {
-      LDBG("Inconsistent padding across descriptor candidates for: " << *op);
-      return;
-    }
+    assert(padding && "isDescriptorLoadLowerableTo2DBlock checks padding");
 
     auto descType = cast<tt::TensorDescType>(desc.getType());
     unsigned descRank = descType.getBlockType().getRank();
     assert(descRank >= rank && "descriptor rank must be >= result tensor rank");
 
     bool memoryRowMajor = ttgi::isMemoryRowMajor(op);
-
-    // Validate that tile computation will succeed during LLVM lowering.
     bool oneMatrixPerLoadForBT =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
 
-    unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
-    Attribute encoding = tensorTy.getEncoding();
-    LinearLayout llEncoding =
-        cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
-            tensorTy.getShape());
-    if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
-                                       elemSizeInBits, tensorTy,
-                                       oneMatrixPerLoadForBT)) {
-      LDBG("Tile validation failed for descriptor load: " << *op);
-      return;
-    }
-
-    // For descriptor loads, the 2D block I/O tile must use only the inner 2
-    // dims. Reject if rowDim or colDim falls in a batch dimension.
-    if (rank > 2) {
-      auto sizeInfo = ttgi::getBlockIOLoadTileSize(
-          llEncoding, contiguousDim, elemSizeInBits,
-          /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
-      int innerDimStart = static_cast<int>(rank - 2);
-      if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart) {
-        LDBG("Batch dim in tile for descriptor load: " << *op);
-        return;
-      }
-    }
-
-    // The 2D block message encodes base_width (bytes), base_height (rows) and
-    // base_pitch (bytes) as value-1 in 24-bit fields, so each must be in
-    // [1, 2^24]. Where the target needs 64-byte base alignment, the lowering
-    // adds the base's misalignment (base & 63) to base_width, so base_width
-    // must leave 63 bytes of room. This is the last point a descriptor load
-    // can fall back: Subgroup2DBlockLoadOpConversion does not re-validate.
-    // Bail if ANY candidate MakeTensorDescOp has a compile-time-foldable field
-    // outside that range. Check before emitting any IR: the ttig.extract_desc
-    // values built below do not fold, so read the defining MakeTensorDescOp(s).
-    //
-    // Not checked here:
-    //  - Non-foldable (runtime) values are trusted to be in range.
-    //  - Alignment (base 4B, width multiple of 4B):
-    //    in the normal pipeline MaterializeBlockPointer checks it before it
-    //    tags the load (runtime values rely on the tt.make_tensor_descriptor
-    //    16-byte contract); hand-tagged IR is not re-checked here.
-    //  - The HW 64-byte minimum for width/pitch is deliberately not enforced;
-    //    it would move narrow descriptors off 2D block I/O.
-    //  - pitch >= width (a TritonGEN verifier rule) is not a range check and
-    //    is not enforced here either.
-    constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
-    int64_t maxBaseWidth = ttgi::needs2DBlockIOAlignmentCompensation(op)
-                               ? kMax2DBlockField - 63
-                               : kMax2DBlockField;
+    // A misaligned pitch is an error whatever the layout, so this check is not
+    // part of isDescriptorLoadLowerableTo2DBlock.
     int64_t elemBytesConst = elemSizeInBits / 8;
-    auto isOutOfRange = [&](unsigned operandIdx, int64_t scale,
-                            int64_t maxValue, StringRef field) {
-      return llvm::any_of(defs, [&](tt::MakeTensorDescOp d) {
-        std::optional<int64_t> folded =
-            tt::intel::getFoldedConstantValue(d->getOperand(operandIdx));
-        if (!folded)
-          return false;
-        int64_t value;
-        if (!llvm::MulOverflow(*folded, scale, value) && value >= 1 &&
-            value <= maxValue)
-          return false;
-        LDBG("Invalid " << field << " (" << *folded << " x " << scale
-                        << ") for descriptor load: " << *op);
-        return true;
-      });
-    };
-    // MakeTensorDescOp operands: base, shape[descRank], strides[descRank].
-    if (isOutOfRange(/*inner shape*/ 1 + (descRank - 1), elemBytesConst,
-                     maxBaseWidth, "base_width") ||
-        isOutOfRange(/*outer shape*/ 1 + (descRank - 2), /*scale=*/1,
-                     kMax2DBlockField, "base_height") ||
-        isOutOfRange(/*pitch stride*/ 1 + descRank + (descRank - 2),
-                     elemBytesConst, kMax2DBlockField, "base_pitch"))
-      return;
-
     for (tt::MakeTensorDescOp d : defs) {
       std::optional<int64_t> stride = tt::intel::getFoldedConstantValue(
           d->getOperand(/*pitch stride*/ 1 + descRank + (descRank - 2)));
