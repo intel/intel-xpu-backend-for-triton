@@ -44,14 +44,20 @@ def test_args_json_gen():
     """Test generation of serialized arguments in JSON format."""
     try:
         print("Running SPIRVRunner to generate serialized args/Tensor data from Triton ...")
-        with tempfile.TemporaryDirectory(prefix="spirv_runner_cache_") as cache_root:
-            target_dir = os.path.join(SPIRV_RUNNER_TESTS, "add_kernel")
-            for selector in ("add_kernel", "all"):
+        target_dir = os.path.join(SPIRV_RUNNER_TESTS, "add_kernel")
+        for selector in ("add_kernel", "all"):
+            with tempfile.TemporaryDirectory(prefix="spirv_runner_cache_") as cache_root:
                 env = os.environ.copy()
                 env["TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS"] = selector
                 env["TRITON_CACHE_DIR"] = cache_root
-                result = subprocess.run(["python3", "01-vector-add.py"], capture_output=True, text=True, cwd=target_dir,
-                                        env=env)
+                result = subprocess.run(
+                    ["python3", "01-vector-add.py"],
+                    capture_output=True,
+                    text=True,
+                    cwd=target_dir,
+                    env=env,
+                    check=True,
+                )
                 print("SPIRVRunner stderr:", result.stderr)
 
                 dump_dir = None
