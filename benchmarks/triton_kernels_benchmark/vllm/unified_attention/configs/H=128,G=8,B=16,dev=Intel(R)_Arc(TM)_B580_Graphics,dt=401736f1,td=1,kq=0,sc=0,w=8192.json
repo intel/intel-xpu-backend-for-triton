@@ -3,11 +3,11 @@
   "entries": [
     {
       "config": {
-        "block_m": 64,
-        "grf_mode": "256",
+        "block_m": 128,
+        "grf_mode": "default",
         "heads_per_program": 1,
-        "num_stages": 2,
-        "num_warps": 8,
+        "num_stages": 3,
+        "num_warps": 16,
         "tile_size": 16
       },
       "key": {
@@ -60,13 +60,11 @@
     "block_size": 16,
     "head_size": 128,
     "k_dtype": "bfloat16",
-    "kv_layout": "contiguous",
     "kv_quant_mode": 0,
     "num_queries_per_kv": 8,
     "out_dtype": "bfloat16",
     "q_dtype": "bfloat16",
-    "q_layout": "contiguous",
-    "sliding_window": 0,
+    "sliding_window": 8192,
     "use_softcap": false,
     "use_td": true,
     "v_dtype": "bfloat16"

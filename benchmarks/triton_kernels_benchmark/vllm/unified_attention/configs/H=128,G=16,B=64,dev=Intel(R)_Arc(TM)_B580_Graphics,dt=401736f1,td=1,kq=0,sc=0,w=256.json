@@ -3,11 +3,11 @@
   "entries": [
     {
       "config": {
-        "block_m": 128,
+        "block_m": 16,
         "grf_mode": "256",
         "heads_per_program": "MAX",
-        "num_stages": 1,
-        "num_warps": 8,
+        "num_stages": 2,
+        "num_warps": 2,
         "tile_size": 32
       },
       "key": {
@@ -26,12 +26,12 @@
         "heads_per_program": "MAX",
         "num_stages": 2,
         "num_warps": 8,
-        "tile_size": 64
+        "tile_size": 16
       },
       "key": {
-        "is_3d": true,
+        "is_3d": false,
         "kv_len_bucket": 3,
-        "num_segments": 16,
+        "num_segments": 1,
         "num_seqs": 8,
         "q_len_bucket": 0,
         "query_work": 512
@@ -47,9 +47,9 @@
         "tile_size": 64
       },
       "key": {
-        "is_3d": true,
+        "is_3d": false,
         "kv_len_bucket": 4,
-        "num_segments": 16,
+        "num_segments": 1,
         "num_seqs": 4,
         "q_len_bucket": 0,
         "query_work": 256
@@ -57,11 +57,11 @@
     },
     {
       "config": {
-        "block_m": 128,
+        "block_m": 16,
         "grf_mode": "default",
         "heads_per_program": "MAX",
         "num_stages": 2,
-        "num_warps": 8,
+        "num_warps": 2,
         "tile_size": 32
       },
       "key": {
@@ -76,11 +76,11 @@
     {
       "config": {
         "block_m": 16,
-        "grf_mode": "default",
+        "grf_mode": "256",
         "heads_per_program": "MAX",
         "num_stages": 2,
-        "num_warps": 8,
-        "tile_size": 64
+        "num_warps": 2,
+        "tile_size": 16
       },
       "key": {
         "is_3d": false,
@@ -95,17 +95,15 @@
   "static_key": {
     "block_size": 64,
     "head_size": 128,
-    "k_dtype": "float8_e4m3fn",
-    "kv_layout": "contiguous",
+    "k_dtype": "bfloat16",
     "kv_quant_mode": 0,
-    "num_queries_per_kv": 8,
+    "num_queries_per_kv": 16,
     "out_dtype": "bfloat16",
-    "q_dtype": "float8_e4m3fn",
-    "q_layout": "contiguous",
-    "sliding_window": 8192,
+    "q_dtype": "bfloat16",
+    "sliding_window": 256,
     "use_softcap": false,
     "use_td": true,
-    "v_dtype": "float8_e4m3fn"
+    "v_dtype": "bfloat16"
   },
   "triton_version": "3.9.0"
 }
