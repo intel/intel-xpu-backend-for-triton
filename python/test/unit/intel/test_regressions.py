@@ -4,6 +4,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
+from triton.language.extra import libdevice
 from triton.runtime.errors import OutOfResources
 
 
@@ -2154,3 +2155,24 @@ def test_issue_8374(device):
         zeroed = ((got == 0) & (ref != 0)).sum().item()
         message = f"XBLOCK={xblock:4d}: maxdiff={md:8.4g}  true-lanes-returning-other={zeroed}  {'BAD' if md > 1e-3 else 'OK'}"
         assert not md > 1e-3, message
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("fn", ["isinf", "isnan", "signbit"])
+def test_fp_predicates_half_precision(device, fn, dtype):
+
+    @triton.jit
+    def kernel(in_ptr, out_ptr, fn: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        x = tl.load(in_ptr + offsets)
+        tl.store(out_ptr + offsets, getattr(libdevice, fn)(x).to(tl.int1))
+
+    x = torch.tensor(
+        [1.0, -1.0, 0.0, -0.0, float("inf"), -float("inf"),
+         float("nan"), -float("nan")], device=device, dtype=dtype)
+    ref = getattr(torch, fn)(x)
+    out = torch.empty_like(x, dtype=torch.bool)
+
+    kernel[(1, )](x, out, fn=fn, BLOCK=x.numel())
+
+    assert torch.equal(out.cpu(), ref.cpu())
