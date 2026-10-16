@@ -659,6 +659,10 @@ def serialize_args(args, constants, signature, dir_path):
         json.dump(args_dict, json_file, indent=4)
 
 
+def should_dump_spirv_kernel_args(kernel_name):
+    return knobs.intel.should_dump_spirv_kernel_args(kernel_name)
+
+
 class XPULauncher(object):
 
     def __init__(self, src, metadata):
@@ -761,6 +765,8 @@ class XPULauncher(object):
                 print(
                     f"Triton kernel dump info: kernel_name={kernel_metadata.name}, cache_dir={self.cache_dir}, dump_dir={self.dump_dir}"
                 )
+            if self.serialize_kernel_args is not None and self.serialize_kernel_args != kernel_metadata.name:
+                return
             serialize_args((gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                             launch_exit_hook, *args), self.constants, self.signature, self.dump_dir)
 
