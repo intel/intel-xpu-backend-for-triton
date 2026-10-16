@@ -30,7 +30,7 @@ tt.func public @div_and_rem_share_one_assert(%arg0: i32) -> (tensor<1x64xi32>, t
 // CHECK:         %[[IDX:.*]] = arith.addi
 // CHECK:         %[[ZERO:.*]] = arith.constant 0 : i32
 // CHECK:         %[[COND:.*]] = arith.cmpi sge, %[[ARG0]], %[[ZERO]] : i32
-// CHECK:         tt.assert %[[COND]]
+// CHECK:         tt.assert %[[COND]], "{{.*}}TRITON_INTEL_SPECULATE_SIGNED_DIV_REM=0{{.*}}"
 // CHECK-NOT:     tt.assert
 // CHECK:         %[[REM:.*]] = arith.remui %[[IDX]], %[[CST]] : tensor<1x64xi32>
 // CHECK:         %[[DIV:.*]] = arith.divui %[[IDX]], %[[CST]] : tensor<1x64xi32>
@@ -132,7 +132,7 @@ tt.func public @loop_carried_dividend(%ub: i32, %ptr: !tt.ptr<i32>) -> tensor<1x
 // CHECK:           %[[AND:.*]] = arith.andi %[[FLAG]], %[[COND]] : tensor<1x64xi1>
 // CHECK:           scf.yield %{{.*}}, %{{.*}}, %[[AND]]
 // CHECK:         }
-// CHECK:         tt.assert %[[RES]]#2
+// CHECK:         tt.assert %[[RES]]#2, "{{.*}}TRITON_INTEL_SPECULATE_SIGNED_DIV_REM=0{{.*}}"
 }
 
 // -----
