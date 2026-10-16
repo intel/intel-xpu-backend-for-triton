@@ -80,13 +80,13 @@ jobs:
           python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
             --device "$UA_TUNING_DEVICE" \
             --manifest reports/manifests/bfloat16.json \
-            --save-dir reports/configs --measurements reports/bf16-measurements.json \
+            --save-dir reports/configs \
             --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/bf16-tuning.log
-      - name: Save BF16 profiles and measurements
+      - name: Save BF16 configs and logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ua-cold-graph-part-${{ matrix.part }}-bf16-checkpoint
+          name: ua-cold-graph-part-${{ matrix.part }}-bf16
           path: reports
           if-no-files-found: warn
       - name: Tune FP8 inputs for this part
@@ -95,9 +95,9 @@ jobs:
           python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
             --device "$UA_TUNING_DEVICE" \
             --manifest reports/manifests/float8_e4m3fn.json \
-            --save-dir reports/configs --measurements reports/fp8-measurements.json \
+            --save-dir reports/configs \
             --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/fp8-tuning.log
-      - name: Upload generated JSONs and measurements
+      - name: Upload configs and logs
         if: always()
         uses: actions/upload-artifact@v7
         with:

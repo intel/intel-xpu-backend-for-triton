@@ -1,4 +1,4 @@
-"""Read live benchmark inputs and optionally split them without splitting profiles."""
+"""Build BF16 and FP8 workload lists, keeping each config file's workloads in one part."""
 import argparse
 import hashlib
 import json
@@ -12,7 +12,7 @@ PARTS = ('1', '2', '3', '4')
 
 
 def benchmark_workloads():
-    # Generate complete BF16 and FP8 workload lists.
+    # Include all BF16 and FP8 benchmark inputs by disabling benchmark shortcuts.
     os.environ['FP8'] = '0'
     os.environ['DEBUG_BENCH'] = '0'
     from triton_kernels_benchmark.vllm.unified_attention import unified_attention_benchmark as benchmark  # pylint: disable=import-outside-toplevel
@@ -48,7 +48,7 @@ def partition(manifests):
     result = {part: {dtype: [] for dtype in DTYPES} for part in PARTS}
     for dtype in DTYPES:
         for case in manifests[dtype]:
-            # The same profile group always produces the same digest, so its workloads stay together in the same part
+            # Assign all workloads for a config file to the same part, even if other inputs are filtered out.
             digest = hashlib.sha256(json.dumps(profile_group(case)).encode()).hexdigest()
             part = PARTS[int(digest[:8], 16) % len(PARTS)]
             result[part][dtype].append(case)

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Cache-cleared graph timing for comparison with CI benchmarks."""
+"""Measure attention time with cached data evicted before each GPU graph replay."""
 
 import math
 import statistics
@@ -8,7 +8,7 @@ import torch
 
 
 def cold_graph_timer(fn, device, warmup_ms, rep_ms):
-    """Evict before each replay; time only the single-call attention graph."""
+    """Evict cached data before each replay and time only the attention operation."""
     backend = getattr(torch, device.type)
     cache = torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int32, device=device)
     attention, eviction = backend.XPUGraph(), backend.XPUGraph()
@@ -25,7 +25,7 @@ def cold_graph_timer(fn, device, warmup_ms, rep_ms):
         backend.synchronize(device)
 
         def batch(repeats):
-            # Fresh events avoid re-recording profiling tags across replay batches.
+            # Use new timing events for each replay instead of re-recording events from earlier batches.
             pairs = [(backend.Event(enable_timing=True), backend.Event(enable_timing=True)) for _ in range(repeats)]
             boundary_start, boundary_end = backend.Event(enable_timing=True), backend.Event(enable_timing=True)
             boundary_start.record()
@@ -40,7 +40,7 @@ def cold_graph_timer(fn, device, warmup_ms, rep_ms):
             total_ms = boundary_start.elapsed_time(boundary_end)
             if not all(math.isfinite(value) and value > 0 for value in samples + [total_ms]):
                 raise RuntimeError("Invalid cold graph timing")
-            # Bound work using total time, including eviction, but exclude it from the result.
+            # Include cache eviction when budgeting repetitions; report only the median attention time.
             return statistics.median(samples), total_ms
 
         _, estimate = batch(3)

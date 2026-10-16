@@ -1,12 +1,8 @@
 diff --git a/tune_unified_attention.py b/tune_unified_attention.py
-index 0db1c43..9d3dce6 100644
+index 0db1c43..9afe432 100644
 --- a/tune_unified_attention.py
 +++ b/tune_unified_attention.py
-@@ -44,9 +44,11 @@ import math
- import os
- import random
- import statistics
-+import tempfile
+@@ -47,6 +47,7 @@ import statistics
  import time
  from collections import defaultdict
  from dataclasses import asdict
@@ -14,38 +10,7 @@ index 0db1c43..9d3dce6 100644
  from itertools import product
  from pathlib import Path
  
-@@ -62,12 +64,30 @@ NUM_ROUNDS = 3
- WARMUP_MS = 10
- REP_MS = 50
- SELECTION_TOLERANCE = 0.01
-+FORMAT_VERSION = 4
- 
- 
- def canonical(value):
-     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
- 
- 
-+def atomic_json(path, value):
-+    path = Path(path)
-+    path.parent.mkdir(parents=True, exist_ok=True)
-+    temporary = None
-+    try:
-+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as stream:
-+            temporary = stream.name
-+            json.dump(value, stream, indent=2, sort_keys=True, allow_nan=False)
-+            stream.write("\n")
-+            stream.flush()
-+            os.fsync(stream.fileno())
-+        os.replace(temporary, path)
-+    finally:
-+        if temporary and os.path.exists(temporary):
-+            os.unlink(temporary)
-+
-+
- def candidate_configs(key):
-     """Generate candidate configs before legality pruning."""
-     # MAX preserves the model's full GQA group, including non-power-of-two ratios.
-@@ -86,7 +106,7 @@ def candidate_configs(key):
+@@ -86,7 +87,7 @@ def candidate_configs(key):
  
  
  def config_id(config):
@@ -54,7 +19,7 @@ index 0db1c43..9d3dce6 100644
  
  
  def model_windows(config, override):
-@@ -187,23 +207,31 @@ def model_workloads(args):
+@@ -187,23 +188,31 @@ def model_workloads(args):
      return cases
  
  
@@ -77,7 +42,7 @@ index 0db1c43..9d3dce6 100644
      # Keep config IDs measured successfully for every workload.
      common = set.intersection(*(set(row) for row in rows))
 -    best = [min(statistics.median(option["samples_ms"]) for option in row.values()) for row in rows]
-+    # Keep initial sweep references even when they are not finalists.
++    # Keep the best time from the initial search, even if that config is not measured again during confirmation.
 +    best = [
 +        min(
 +            statistics.median(option[phase])
@@ -94,7 +59,7 @@ index 0db1c43..9d3dce6 100644
          # Divide each latency by that workload's best measured median.
          ratios = [latency / minimum for latency, minimum in zip(times, best)]
          results.append({
-@@ -215,13 +243,13 @@ def key_statistics(cases):
+@@ -215,13 +224,13 @@ def key_statistics(cases):
      return results
  
  
@@ -113,7 +78,7 @@ index 0db1c43..9d3dce6 100644
      return min(tied, key=lambda item: (item["geomean_ratio"], item["id"]))
  
  
-@@ -234,11 +262,29 @@ def grouped_cases(cases):
+@@ -234,11 +243,29 @@ def grouped_cases(cases):
      return grouped
  
  
@@ -144,7 +109,7 @@ index 0db1c43..9d3dce6 100644
          partitions[key.static_key()].append((key.dynamic_key(), config))
      profiles = {}
      for static, entries in partitions.items():
-@@ -311,18 +357,19 @@ def synchronize(device):
+@@ -311,18 +338,20 @@ def synchronize(device):
  
  def prepare_option(option, inputs, device):
      """Run a candidate once to trigger compilation and record resource limit failures."""
@@ -158,6 +123,7 @@ index 0db1c43..9d3dce6 100644
          option["status"] = "ok"
      except triton.runtime.autotuner.OutOfResources as error:
          option.update(status="resource_error", error=f"{type(error).__name__}: {error}")
++        print(f"Skipping {option['id']}: {option['error']}", flush=True)
          synchronize(device)
  
  
@@ -166,7 +132,7 @@ index 0db1c43..9d3dce6 100644
      """Return the callable's average latency in milliseconds using graph replay."""
      backend = getattr(torch, device.type)
      started = time.perf_counter_ns()
-@@ -331,8 +378,8 @@ def benchmark_callable(fn, device):
+@@ -331,8 +360,8 @@ def benchmark_callable(fn, device):
      eager_ms = max((time.perf_counter_ns() - started) / 1e6, 1e-6)
      slow = eager_ms >= 25
      if slow:
@@ -177,7 +143,7 @@ index 0db1c43..9d3dce6 100644
      else:
          for _ in range(4):
              fn()
-@@ -348,6 +395,9 @@ def benchmark_callable(fn, device):
+@@ -348,6 +377,9 @@ def benchmark_callable(fn, device):
              graph.replay()
          backend.synchronize(device)
          start, end = backend.Event(enable_timing=True), backend.Event(enable_timing=True)
@@ -187,7 +153,7 @@ index 0db1c43..9d3dce6 100644
  
          def batch(repeats):
              backend.synchronize(device)
-@@ -361,19 +411,24 @@ def benchmark_callable(fn, device):
+@@ -361,81 +393,107 @@ def benchmark_callable(fn, device):
                  raise RuntimeError(f"Invalid graph latency {event_ms}")
              return event_ms
  
@@ -212,11 +178,14 @@ index 0db1c43..9d3dce6 100644
      """Benchmark candidates in shuffled rounds, storing timings and resource failures."""
      generator = random.Random(seed)
 -    for _ in range(NUM_ROUNDS):
-+    for _ in range(rounds):
++    phase = "Search" if field == "samples_ms" else "Confirmation"
++    for round_index in range(rounds):
          order = [option for option in options if option["status"] in ("pending", "ok")]
          generator.shuffle(order)
-         for option in order:
-@@ -381,61 +436,93 @@ def time_options(options, inputs, device, seed):
+-        for option in order:
++        print(f"{phase} round {round_index + 1}/{rounds}: {len(order)} candidates", flush=True)
++        for option_index, option in enumerate(order):
+             if option["status"] == "pending":
                  prepare_option(option, inputs, device)
                  if option["status"] != "ok":
                      continue
@@ -230,29 +199,42 @@ index 0db1c43..9d3dce6 100644
 +                option.setdefault(field, []).append(value)
              except triton.runtime.autotuner.OutOfResources as error:
                  option.update(status="resource_error", error=f"{type(error).__name__}: {error}")
++                print(f"Skipping {option['id']}: {option['error']}", flush=True)
                  synchronize(device)
++            if (option_index + 1) % 32 == 0:
++                print(f"{phase} round {round_index + 1}/{rounds}: {option_index + 1}/{len(order)} processed", flush=True)
  
  
  @torch.inference_mode()
 -def tune(args, workloads, device):
 -    """Measure candidate configs and export one winner per workload key."""
-+def tune(args, workloads, device, *, allocate=allocate_case, timer=benchmark_callable,
-+         timing_scope="attention_sequence_graph_device"):
++def tune(args, workloads, device, *, allocate=allocate_case, timer=benchmark_callable):
      identity = runtime.get_profile_identity(device)
 -    rows, winners = [], {}
 -    # Measure candidates separately for each workload.
--    for index, case in enumerate(workloads):
++    rows = []
+     for index, case in enumerate(workloads):
 -        # Allocate attention inputs for this workload.
 -        inputs = allocate_case(case, device, args.seed + index)
 -        key = runtime.make_attention_key(**inputs)
 -        row = {"id": case["id"], "key": asdict(key), "options": []}
--        rows.append(row)
++        print(f"Workload {index + 1}/{len(workloads)}: {case['id']} {canonical(case)}", flush=True)
++        inputs = allocate(case, device, args.seed + index)
++        fallback = {"id": "fallback", "config": None, "status": "pending", "samples_ms": []}
++        row = {"id": case["id"], "workload": case, "key": None, "options": [fallback]}
+         rows.append(row)
 -        # Prune invalid configs for this key.
--        configs = (config for config in candidate_configs(key)
--                   if runtime.validate_config(runtime.AttentionConfig(**config), key, device.type))
++        prepare_option(fallback, inputs, device)
++        if fallback["status"] != "ok":
++            raise RuntimeError(f"Fallback failed for {case['id']}: {fallback.get('error')}")
++        row["key"] = fallback["key"]
++        key = runtime.AttentionKey(**row["key"])  # pylint: disable=not-a-mapping
+         configs = (config for config in candidate_configs(key)
+                    if runtime.validate_config(runtime.AttentionConfig(**config), key, device.type))
 -        for config in configs:
--            option = {"id": config_id(config), "config": config, "status": "pending", "samples_ms": []}
--            row["options"].append(option)
++        for config_index, config in enumerate(configs):
+             option = {"id": config_id(config), "config": config, "status": "pending", "samples_ms": []}
+             row["options"].append(option)
 -        # Time the remaining candidates, resource-limit failures are skipped.
 -        time_options(
 -            row["options"],
@@ -260,77 +242,43 @@ index 0db1c43..9d3dce6 100644
 -            device,
 -            args.seed + index,
 -        )
--        print(f"Measured {index + 1}/{len(workloads)}: {case['id']}", flush=True)
--        del inputs
++            prepare_option(option, inputs, device)
++            if config_index % 32 == 31:
++                print(f"Prepared {config_index + 1} candidates for {case['id']}", flush=True)
++        print(f"Prepared {len(row['options']) - 1} candidates for {case['id']}", flush=True)
++        time_options(row["options"], inputs, device, args.seed + index, rounds=args.rounds, timer=timer)
+         print(f"Measured {index + 1}/{len(workloads)}: {case['id']}", flush=True)
+         del inputs
 -    # Select one config for all workloads sharing a key.
 -    for key, cases in grouped_cases(rows).items():
 -        winners[key] = choose_key(cases)["config"]
 -        print(f"Selected winner for {[case['id'] for case in cases]}: {config_id(winners[key])}", flush=True)
-+    data = {
-+        "format_version": FORMAT_VERSION,
-+        "complete": False,
-+        "identity": identity,
-+        "manifest": workloads,
-+        "settings": {name: str(value) if isinstance(value, Path) else value for name, value in vars(args).items()},
-+        "cases": [],
-+        "timing_scope": timing_scope,
-+        "started_at": time.time(),
-+    }
-+    checkpoint(args.measurements, data)
-+    try:
-+        for index, case in enumerate(workloads):
-+            inputs = allocate(case, device, args.seed + index)
-+            fallback = {"id": "fallback", "config": None, "status": "pending", "samples_ms": []}
-+            row = {"id": case["id"], "workload": case, "key": None, "options": [fallback]}
-+            data["cases"].append(row)
-+            prepare_option(fallback, inputs, device)
-+            if fallback["status"] != "ok":
-+                raise RuntimeError(f"Fallback failed for {case['id']}: {fallback.get('error')}")
-+            row["key"] = fallback["key"]
-+            key = runtime.AttentionKey(**row["key"])  # pylint: disable=not-a-mapping
-+            configs = (config for config in candidate_configs(key)
-+                       if runtime.validate_config(runtime.AttentionConfig(**config), key, device.type))
-+            for config_index, config in enumerate(configs):
-+                option = {"id": config_id(config), "config": config, "status": "pending", "samples_ms": []}
-+                row["options"].append(option)
++    groups = grouped_cases(rows)
++    for group_index, cases in enumerate(groups.values()):
++        selected = finalists(cases, args.finalists)
++        for row in cases:
++            index = next(i for i, case in enumerate(workloads) if case["id"] == row["id"])
++            print(f"Confirming {row['id']}: {len(selected)} finalists", flush=True)
++            inputs = allocate(row["workload"], device, args.seed + index)
++            options = [option for option in row["options"] if option["id"] in selected]
++            for option in options:
 +                prepare_option(option, inputs, device)
-+                if config_index % 32 == 31:
-+                    checkpoint(args.measurements, data)
-+                    print(f"Prepared {config_index + 1} candidates for {case['id']}", flush=True)
-+            time_options(row["options"], inputs, device, args.seed + index, rounds=args.rounds, timer=timer)
-+            checkpoint(args.measurements, data)
-+            print(f"Measured {index + 1}/{len(workloads)}: {case['id']}", flush=True)
++            time_options(options, inputs, device, args.seed + 10000 + index, rounds=args.confirmation_rounds,
++                         field="confirmation_ms", timer=timer)
 +            del inputs
-+        for group_index, cases in enumerate(grouped_cases(data["cases"]).values()):
-+            selected = finalists(cases, args.finalists)
-+            for row in cases:
-+                index = next(i for i, case in enumerate(workloads) if case["id"] == row["id"])
-+                inputs = allocate(row["workload"], device, args.seed + index)
-+                options = [option for option in row["options"] if option["id"] in selected]
-+                for option in options:
-+                    prepare_option(option, inputs, device)
-+                time_options(options, inputs, device, args.seed + 10000 + index, rounds=args.confirmation_rounds,
-+                             field="confirmation_ms", timer=timer)
-+                del inputs
-+            checkpoint(args.measurements, data)
-+            print(f"Confirmed key {group_index + 1}", flush=True)
-+        data["complete"] = True
-+    finally:
-+        data["finished_at"] = time.time()
-+        checkpoint(args.measurements, data)
++        print(f"Confirmed key {group_index + 1}/{len(groups)}", flush=True)
 +
 +    winners = {}
-+    for key, cases in grouped_cases(data["cases"]).items():
-+        winners[key] = choose_key(cases, tolerance=args.tolerance)["config"]
++    for key, cases in groups.items():
++        winner = choose_key(cases, tolerance=args.tolerance)
++        winners[key] = winner["config"]
++        for case in cases:
++            option = next(option for option in case["options"] if option["id"] == winner["id"])
++            print(f"{case['id']}: {statistics.median(option['confirmation_ms']) * 1000:.3f} us", flush=True)
 +        print(f"Winner for {[case['id'] for case in cases]}: {config_id(winners[key])}", flush=True)
      return save_configs(winners, identity, args.save_dir)
  
  
-+def checkpoint(path, data):
-+    if path:
-+        atomic_json(path, data)
-+
-+
  @torch.inference_mode()
 -def benchmark(args, workloads, device):
 +def benchmark(args, workloads, device, *, allocate=allocate_case, timer=benchmark_callable):
@@ -348,17 +296,16 @@ index 0db1c43..9d3dce6 100644
          print(f"{case['id']}: {statistics.median(samples) * 1000:.3f} us", flush=True)
          del inputs
  
-@@ -505,20 +592,28 @@ def parse_args(argv=None):
+@@ -505,20 +563,27 @@ def parse_args(argv=None):
      return args
  
  
 -def main(args: argparse.Namespace):
-+def main(args: argparse.Namespace, workloads=None, *, allocate=allocate_case, timer=benchmark_callable,
-+         timing_scope="attention_sequence_graph_device"):
++def main(args: argparse.Namespace, workloads=None, *, allocate=allocate_case, timer=benchmark_callable):
 +    args = argparse.Namespace(**{
 +        "rounds": NUM_ROUNDS, "confirmation_rounds": 5, "finalists": 3,
 +        "warmup_ms": WARMUP_MS, "rep_ms": REP_MS, "tolerance": SELECTION_TOLERANCE,
-+        "measurements": None, **vars(args),
++        **vars(args),
 +    })
      print(args)
 -    workloads = model_workloads(args)
@@ -373,7 +320,7 @@ index 0db1c43..9d3dce6 100644
      started = time.perf_counter()
      if args.tune:
 -        result = tune(args, workloads, device)
-+        result = tune(args, workloads, device, allocate=allocate, timer=timer, timing_scope=timing_scope)
++        result = tune(args, workloads, device, allocate=allocate, timer=timer)
          print(f"Exported {result['accepted_keys']} keys to {args.save_dir}")
      else:
 -        benchmark(args, workloads, device)
