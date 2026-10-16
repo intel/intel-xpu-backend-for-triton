@@ -3,7 +3,8 @@
 With TRITON_INTEL_DESCRIPTOR_BLOCK_IO_RELAYOUT=1, MaterializeBlockPointer gives a row-major
 `tt.descriptor_load` that feeds no dot a layout LowerTo2DBlockLoad accepts, and marks it
 `ttig.block_io_anchor` so RemoveLayoutConversions keeps that layout. The load then lowers to 2D block
-reads instead of gathers.
+reads instead of gathers. A load whose tile reaches a store is left alone: the store keeps its own
+layout, so the new one would cost an SLM convert.
 
 `JITFunction.run` keys its in-memory cache on specialization and options, not on the environment, so
 every test wraps a plain module-level function in a fresh `triton.jit` object and compiles it into its
@@ -81,6 +82,13 @@ def _copy_padded_kernel_fn(out_ptr, x_ptr, nseg, D: tl.constexpr, DP: tl.constex
     tl.store(out_ptr + rows[:, None] * DP + cols[None, :], desc.load([0, 0]))
 
 
+def _reduce_padded_kernel_fn(out_ptr, x_ptr, nseg, D: tl.constexpr, DP: tl.constexpr, S: tl.constexpr):
+    """Sum the whole [S, DP] descriptor tile over its rows and store all DP sums with no mask, so its padding
+    is observable."""
+    desc = tl.make_tensor_descriptor(x_ptr, shape=(nseg, D), strides=(DP, 1), block_shape=(S, DP))
+    tl.store(out_ptr + tl.arange(0, DP), tl.sum(desc.load([0, 0]), axis=0))
+
+
 def _loop_accumulate_kernel_fn(out_ptr, x_ptr, M, N: tl.constexpr, BLOCK_M: tl.constexpr):
     """Sum an [M, N] fp32 tensor over its rows, one [BLOCK_M, N] descriptor load per loop iteration."""
     desc = tl.make_tensor_descriptor(x_ptr, shape=(M, N), strides=(N, 1), block_shape=(BLOCK_M, N))
@@ -144,24 +152,46 @@ def test_relayout_correctness(nseg, D, launch, device, monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("D", [96, 128], ids=lambda d: f"D{d}")
 @pytest.mark.parametrize("nseg", [1, 15, 16], ids=lambda n: f"nseg{n}")
-def test_relayout_copy_padded(nseg, D, device, monkeypatch, tmp_path):
+def test_relayout_reduce_padded(nseg, D, device, monkeypatch, tmp_path):
+    _set_compile_env(monkeypatch, tmp_path, knob=True)
+    kernel = triton.jit(_reduce_padded_kernel_fn)
+    S = 16
+    DP = triton.next_power_of_2(D)
+    generator = torch.Generator().manual_seed(17)
+    # NaN outside the descriptor's [nseg, D] shape: any padding read from memory turns its sum into NaN.
+    x = torch.full((S, DP), float("nan"), device=device)
+    x[:nseg, :D] = torch.randn(nseg, D, generator=generator).to(device)
+    # NaN in the output as well, so the zero check proves the kernel wrote the padded columns.
+    out = torch.full((DP, ), float("nan"), device=device)
+    k = kernel[(1, )](out, x, nseg, D=D, DP=DP, S=S)
+
+    ref = x[:nseg, :D].cpu().to(torch.float64).sum(0).to(torch.float32).to(device)
+    torch.testing.assert_close(out[:D], ref, atol=1e-4, rtol=1e-4)
+    assert (out[D:] == 0).all()
+    # The padding checked above must come from the 2D block read.
+    assert ANCHOR in k.asm["ttgir"], f"no {ANCHOR} in the TTGIR, the descriptor load was not relaid out"
+    assert _count_2d_block_loads(k.asm["llir"]) > 0, "the descriptor load did not lower to 2D block reads"
+
+
+@pytest.mark.parametrize("D", [96, 128], ids=lambda d: f"D{d}")
+@pytest.mark.parametrize("nseg", [1, 15, 16], ids=lambda n: f"nseg{n}")
+def test_relayout_skips_store_ending_copy(nseg, D, device, monkeypatch, tmp_path):
+    # The tile reaches a store, which keeps its own layout, so a relaid-out tile would pay an SLM convert.
     _set_compile_env(monkeypatch, tmp_path, knob=True)
     kernel = triton.jit(_copy_padded_kernel_fn)
     S = 16
     DP = triton.next_power_of_2(D)
     generator = torch.Generator().manual_seed(17)
-    # NaN outside the descriptor's [nseg, D] shape: any padding read from memory shows up as NaN.
     x = torch.full((S, DP), float("nan"), device=device)
     x[:nseg, :D] = torch.randn(nseg, D, generator=generator).to(device)
-    # NaN in the output as well, so the zero checks prove the kernel wrote the padding.
     out = torch.full((S, DP), float("nan"), device=device)
     k = kernel[(1, )](out, x, nseg, D=D, DP=DP, S=S)
 
+    assert ANCHOR not in k.asm["ttgir"], f"knob on: {ANCHOR} in the TTGIR of a copy that ends in a store"
+    block_loads = _count_2d_block_loads(k.asm["llir"])
+    assert block_loads == 0, f"knob on: {block_loads} 2D block load(s) in a copy that ends in a store"
     assert torch.equal(out[:nseg, :D], x[:nseg, :D])
     assert (out[nseg:, :] == 0).all() and (out[:, D:] == 0).all()
-    # The padding checked above must come from the 2D block read.
-    assert ANCHOR in k.asm["ttgir"], f"no {ANCHOR} in the TTGIR, the descriptor load was not relaid out"
-    assert _count_2d_block_loads(k.asm["llir"]) > 0, "the descriptor load did not lower to 2D block reads"
 
 
 def test_relayout_loop_accumulate(device, monkeypatch, tmp_path):
@@ -176,6 +206,6 @@ def test_relayout_loop_accumulate(device, monkeypatch, tmp_path):
     ttgir = k.asm["ttgir"]
     assert "scf.for" in ttgir, "the row-block loop is gone, so the load is no longer in a loop"
     ref = x.cpu().to(torch.float64).sum(0).to(torch.float32).to(device)
-    torch.testing.assert_close(out, ref, atol=4e-2, rtol=1.6e-2)
+    torch.testing.assert_close(out, ref, atol=1e-4, rtol=1e-4)
     assert ANCHOR in ttgir, f"no {ANCHOR} in the TTGIR, the descriptor load in the loop was not relaid out"
     assert _count_2d_block_loads(k.asm["llir"]) > 0, "the descriptor load in the loop did not lower to 2D block reads"

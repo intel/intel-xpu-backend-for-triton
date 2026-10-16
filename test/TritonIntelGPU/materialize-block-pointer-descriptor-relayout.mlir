@@ -215,6 +215,60 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// COM: A load whose tile reaches a tt.store is not relaid out: the store keeps its
+// COM: own layout, so RLC would leave an SLM convert in front of it.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-DAG: #[[$BLOCKED_PTR_STORE:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+  // CHECK-LABEL: tt.func public @ptr_store_unchanged(
+  // RLC-LABEL: tt.func public @ptr_store_unchanged(
+  tt.func public @ptr_store_unchanged(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<16x256x!tt.ptr<f32>, #blocked>, %nseg: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <16x256xf32>
+    // CHECK: %[[LOAD:.*]] = tt.descriptor_load
+    // CHECK-NOT: ttig.block_io_anchor
+    // CHECK-SAME: !tt.tensordesc<16x256xf32>
+    // CHECK-SAME: -> tensor<16x256xf32, #[[$BLOCKED_PTR_STORE]]>
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.store %{{.*}}, %[[LOAD]]
+    %x = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
+    tt.store %out_ptrs, %x : tensor<16x256x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The same for a tt.descriptor_store.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-DAG: #[[$BLOCKED_DESC_STORE:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+  // CHECK-LABEL: tt.func public @desc_store_unchanged(
+  // RLC-LABEL: tt.func public @desc_store_unchanged(
+  tt.func public @desc_store_unchanged(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %y_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %nseg: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <16x256xf32>
+    %out_desc = tt.make_tensor_descriptor %y_ptr, [%nseg, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <16x256xf32>
+    // CHECK: %[[LOAD:.*]] = tt.descriptor_load
+    // CHECK-NOT: ttig.block_io_anchor
+    // CHECK-SAME: !tt.tensordesc<16x256xf32>
+    // CHECK-SAME: -> tensor<16x256xf32, #[[$BLOCKED_DESC_STORE]]>
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.descriptor_store %{{.*}}[%{{.*}}, %{{.*}}], %[[LOAD]]
+    %x = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
+    tt.descriptor_store %out_desc[%c0_i32, %c0_i32], %x : !tt.tensordesc<16x256xf32>, tensor<16x256xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: The load's layout already lowers to 2D block reads.
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>

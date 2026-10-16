@@ -1114,10 +1114,12 @@ private:
   };
 
   /// Follow the users of \p op through layout converts, tt.fp_to_fp and
-  /// elementwise ops. A tt.reduce records its axis and ends its path, as does a
-  /// tt.store or tt.descriptor_store. Any other user is not understood and ends
-  /// the walk: RemoveLayoutConversions can rematerialize even an anchored load
-  /// into a shape op's layout (isExpensiveLoadRematCandidate).
+  /// elementwise ops. A tt.reduce records its axis and ends its path. Any other
+  /// user is not understood and ends the walk: RemoveLayoutConversions can
+  /// rematerialize even an anchored load into a shape op's layout
+  /// (isExpensiveLoadRematCandidate). That includes a tt.store or
+  /// tt.descriptor_store: a store keeps its own layout, so RLC leaves an SLM
+  /// convert in front of it.
   static DescLoadUses analyzeDescLoadUses(tt::DescriptorLoadOp op) {
     DescLoadUses uses;
     SmallVector<Value> worklist{op.getResult()};
@@ -1129,8 +1131,6 @@ private:
           uses.reduceAxes.push_back(reduce.getAxis());
           continue;
         }
-        if (isa<tt::StoreOp, tt::DescriptorStoreOp>(user))
-          continue;
         if (!isa<ttg::ConvertLayoutOp, tt::FpToFpOp>(user) &&
             !user->hasTrait<OpTrait::Elementwise>()) {
           uses.understood = false;
