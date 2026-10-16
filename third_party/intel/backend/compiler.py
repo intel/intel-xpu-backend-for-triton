@@ -37,7 +37,7 @@ class XPUOptions:
     cluster_dims: tuple = (1, 1, 1)
     warp_size: int = 32
     optimize_epilogue: bool = False
-    enable_fp_fusion: bool = True
+    enable_fp_fusion: bool = False
     launch_cooperative_grid: bool = False
     reduce_variable_liveness: bool = True
     in_loop_sink: bool = True
