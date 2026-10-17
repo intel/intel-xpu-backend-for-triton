@@ -1,32 +1,8 @@
 diff --git a/tune_unified_attention.py b/tune_unified_attention.py
-index 0db1c43..ce9f842 100644
+index 0db1c43..a9f52da 100644
 --- a/tune_unified_attention.py
 +++ b/tune_unified_attention.py
-@@ -47,6 +47,7 @@ import statistics
- import time
- from collections import defaultdict
- from dataclasses import asdict
-+from functools import partial
- from itertools import product
- from pathlib import Path
- 
-@@ -215,13 +216,13 @@ def key_statistics(cases):
-     return results
- 
- 
--def choose_key(cases):
-+def choose_key(cases, *, tolerance=SELECTION_TOLERANCE):
-     """Minimize worst slowdown, then the geometric mean ratio within the tolerance."""
-     stats = key_statistics(cases)
-     if not stats:
-         raise ValueError(f"No successful config shared by workloads {[case['id'] for case in cases]}")
-     optimum = min(item["max_regret"] for item in stats)
--    tied = [item for item in stats if item["max_regret"] <= optimum + SELECTION_TOLERANCE]
-+    tied = [item for item in stats if item["max_regret"] <= optimum + tolerance]
-     return min(tied, key=lambda item: (item["geomean_ratio"], item["id"]))
- 
- 
-@@ -319,10 +320,11 @@ def prepare_option(option, inputs, device):
+@@ -319,6 +319,7 @@ def prepare_option(option, inputs, device):
          option["status"] = "ok"
      except triton.runtime.autotuner.OutOfResources as error:
          option.update(status="resource_error", error=f"{type(error).__name__}: {error}")
@@ -34,23 +10,7 @@ index 0db1c43..ce9f842 100644
          synchronize(device)
  
  
--def benchmark_callable(fn, device):
-+def benchmark_callable(fn, device, warmup_ms=WARMUP_MS, rep_ms=REP_MS):
-     """Return the callable's average latency in milliseconds using graph replay."""
-     backend = getattr(torch, device.type)
-     started = time.perf_counter_ns()
-@@ -331,8 +333,8 @@ def benchmark_callable(fn, device):
-     eager_ms = max((time.perf_counter_ns() - started) / 1e6, 1e-6)
-     slow = eager_ms >= 25
-     if slow:
--        calls = max(1, min(10, int(REP_MS / eager_ms)))
--        warmup_replays = max(1, min(10000, math.ceil(WARMUP_MS / (calls * eager_ms))))
-+        calls = max(1, min(10, int(rep_ms / eager_ms)))
-+        warmup_replays = max(1, min(10000, math.ceil(warmup_ms / (calls * eager_ms))))
-     else:
-         for _ in range(4):
-             fn()
-@@ -348,6 +350,9 @@ def benchmark_callable(fn, device):
+@@ -348,6 +349,9 @@ def benchmark_callable(fn, device):
              graph.replay()
          backend.synchronize(device)
          start, end = backend.Event(enable_timing=True), backend.Event(enable_timing=True)
@@ -60,23 +20,7 @@ index 0db1c43..ce9f842 100644
  
          def batch(repeats):
              backend.synchronize(device)
-@@ -361,22 +366,28 @@ def benchmark_callable(fn, device):
-                 raise RuntimeError(f"Invalid graph latency {event_ms}")
-             return event_ms
- 
--        probe = 1 if slow else max(1, min(20, math.ceil(REP_MS / (calls * eager_ms))))
-+        probe = 1 if slow else max(1, min(20, math.ceil(rep_ms / (calls * eager_ms))))
-         estimate = batch(probe) / probe
--        repeats = max(1, min(10000, math.ceil(REP_MS / estimate)))
-+        if not slow:
-+            warmup_replays = max(1, min(10000, math.ceil(warmup_ms / estimate)))
-+            for _ in range(warmup_replays):
-+                graph.replay()
-+            backend.synchronize(device)
-+        repeats = max(1, min(10000, math.ceil(rep_ms / estimate)))
- 
-         return batch(repeats) / (repeats * calls)
-     finally:
+@@ -370,13 +374,14 @@ def benchmark_callable(fn, device):
          graph.reset()
  
  
@@ -94,7 +38,7 @@ index 0db1c43..ce9f842 100644
              if option["status"] == "pending":
                  prepare_option(option, inputs, device)
                  if option["status"] != "ok":
-@@ -384,58 +395,58 @@ def time_options(options, inputs, device, seed):
+@@ -384,58 +389,57 @@ def time_options(options, inputs, device, seed):
              config = runtime.AttentionConfig(**option["config"])
              try:
                  with runtime.override_config(config):
@@ -114,9 +58,8 @@ index 0db1c43..ce9f842 100644
 +def tune(args, workloads, device, *, allocate=allocate_case, timer=benchmark_callable):
      """Measure candidate configs and export one winner per workload key."""
      identity = runtime.get_profile_identity(device)
--    rows, winners = [], {}
+     rows, winners = [], {}
 -    # Measure candidates separately for each workload.
-+    rows = []
      for index, case in enumerate(workloads):
 -        # Allocate attention inputs for this workload.
 -        inputs = allocate_case(case, device, args.seed + index)
@@ -147,11 +90,10 @@ index 0db1c43..ce9f842 100644
          print(f"Measured {index + 1}/{len(workloads)}: {case['id']}", flush=True)
          del inputs
 -    # Select one config for all workloads sharing a key.
-+    winners = {}
      for key, cases in grouped_cases(rows).items():
 -        winners[key] = choose_key(cases)["config"]
 -        print(f"Selected winner for {[case['id'] for case in cases]}: {config_id(winners[key])}", flush=True)
-+        winner = choose_key(cases, tolerance=args.tolerance)
++        winner = choose_key(cases)
 +        winners[key] = winner["config"]
 +        for case in cases:
 +            option = next(option for option in case["options"] if option["id"] == winner["id"])
@@ -177,7 +119,7 @@ index 0db1c43..ce9f842 100644
          print(f"{case['id']}: {statistics.median(samples) * 1000:.3f} us", flush=True)
          del inputs
  
-@@ -505,20 +516,27 @@ def parse_args(argv=None):
+@@ -505,9 +509,14 @@ def parse_args(argv=None):
      return args
  
  
@@ -185,7 +127,6 @@ index 0db1c43..ce9f842 100644
 +def main(args: argparse.Namespace, workloads=None, *, allocate=allocate_case, timer=benchmark_callable):
 +    args = argparse.Namespace(**{
 +        "rounds": NUM_ROUNDS,
-+        "warmup_ms": WARMUP_MS, "rep_ms": REP_MS, "tolerance": SELECTION_TOLERANCE,
 +        **vars(args),
 +    })
      print(args)
@@ -195,8 +136,7 @@ index 0db1c43..ce9f842 100644
      device = torch.device(args.device)
      if device.type != "xpu":
          raise ValueError("XPU is currently the only supported device")
-     torch.xpu.set_device(device)
-+    timer = partial(timer, warmup_ms=args.warmup_ms, rep_ms=args.rep_ms)
+@@ -515,10 +524,10 @@ def main(args: argparse.Namespace):
      print(f"{'Tuning' if args.tune else 'Benchmarking'} {len(workloads)} workloads")
      started = time.perf_counter()
      if args.tune:

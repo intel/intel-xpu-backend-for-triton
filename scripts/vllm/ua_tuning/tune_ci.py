@@ -6,12 +6,12 @@
 import argparse
 import importlib.util
 import json
-import math
 import shutil
 import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 
 BENCHMARK_DIR = Path(__file__).resolve().parents[3] / "benchmarks/triton_kernels_benchmark/vllm/unified_attention"
@@ -106,11 +106,7 @@ def main(argv=None):
     parser.add_argument("--save-dir", default=str(BENCHMARK_DIR / "configs"))
     parser.add_argument("--device", default="xpu:0")
     parser.add_argument("--rounds", type=int, default=3)
-    parser.add_argument("--warmup-ms", type=float, default=10)
-    parser.add_argument("--rep-ms", type=float, default=50)
     parser.add_argument("--seed", type=int, default=1729)
-    parser.add_argument("--tolerance", type=float, default=0.01,
-                        help="Worst-regret tie tolerance before geometric-mean tie-breaking")
     parser.add_argument("--clear-cache", action="store_true",
                         help="Evict 256 MB before each graph replay, excluding eviction from timing")
     args = parser.parse_args(argv)
@@ -120,12 +116,8 @@ def main(argv=None):
         with prepared_tuner():
             print("UA CI tuner patch applies cleanly")
         return
-    for name in ("rounds", "warmup_ms", "rep_ms"):
-        if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
-            option = name.replace("_", "-")
-            parser.error(f"--{option} must be finite and positive")
-    if not math.isfinite(args.tolerance) or args.tolerance < 0:
-        parser.error("--tolerance must be finite and nonnegative")
+    if args.rounds <= 0:
+        parser.error("--rounds must be positive")
     workloads = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     if workloads == []:
         print("No inputs for this part; skipping tuning or benchmarking")
@@ -136,7 +128,7 @@ def main(argv=None):
     if args.clear_cache:
         from timing import cold_graph_timer
 
-        timer = cold_graph_timer
+        timer = partial(cold_graph_timer, warmup_ms=tuner.WARMUP_MS, rep_ms=tuner.REP_MS)
     tuner.main(args, workloads, allocate=allocate_ci, timer=timer)
 
 

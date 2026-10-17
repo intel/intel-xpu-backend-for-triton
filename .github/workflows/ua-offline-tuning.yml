@@ -80,8 +80,7 @@ jobs:
           python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
             --device "$UA_TUNING_DEVICE" \
             --manifest reports/manifests/bfloat16.json \
-            --save-dir reports/configs \
-            --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/bf16-tuning.log
+            --save-dir reports/configs 2>&1 | tee reports/bf16-tuning.log
       - name: Save BF16 configs and logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -95,8 +94,7 @@ jobs:
           python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
             --device "$UA_TUNING_DEVICE" \
             --manifest reports/manifests/float8_e4m3fn.json \
-            --save-dir reports/configs \
-            --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/fp8-tuning.log
+            --save-dir reports/configs 2>&1 | tee reports/fp8-tuning.log
       - name: Upload configs and logs
         if: always()
         uses: actions/upload-artifact@v7
