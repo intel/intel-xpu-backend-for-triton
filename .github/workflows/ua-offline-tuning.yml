@@ -2,6 +2,8 @@ name: UA offline tuning with cold graph replay
 run-name: UA CI-input tuning (${{ github.ref_name }})
 
 on:
+  push:
+    branches: [ua-offline-tuning-ci-validation-e4fd5cfaad]
   workflow_dispatch:
     inputs:
       runner_label:
@@ -39,7 +41,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        part: ${{ fromJSON(inputs.part == 'all' && '[1,2,3,4]' || format('[{0}]', inputs.part)) }}
+        part: ${{ fromJSON(github.event_name == 'push' && '[4]' || (inputs.part == 'all' && '[1,2,3,4]' || format('[{0}]', inputs.part))) }}
     runs-on: ${{ fromJSON(startsWith(inputs.runner_label, 'max') && format('["linux", "rolling", "{0}"]', inputs.runner_label) || format('["linux", "{0}"]', inputs.runner_label || 'b580')) }}
     timeout-minutes: 1440
     defaults:
