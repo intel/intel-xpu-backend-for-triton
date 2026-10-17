@@ -1,0 +1,104 @@
+name: UA offline tuning with cold graph replay
+run-name: UA CI-input tuning (${{ github.ref_name }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Intel XPU runner label
+        type: string
+        required: true
+        default: b580
+      device:
+        description: PyTorch XPU device on the selected runner
+        type: string
+        default: xpu:0
+      part:
+        description: Tuning part to run (all runs four parts sequentially)
+        type: choice
+        default: all
+        options: [all, '1', '2', '3', '4']
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ua-ci-offline-tune
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  TRITON_CACHE_DIR: ${{ github.workspace }}/.ua-tuning-cache-${{ github.run_id }}
+  UA_TUNING_DEVICE: ${{ inputs.device || 'xpu:0' }}
+
+jobs:
+  tune:
+    name: Tune part ${{ matrix.part }} of 4
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        part: ${{ fromJSON(inputs.part == 'all' && '[1,2,3,4]' || format('[{0}]', inputs.part)) }}
+    runs-on: ${{ fromJSON(startsWith(inputs.runner_label, 'max') && format('["linux", "rolling", "{0}"]', inputs.runner_label) || format('["linux", "{0}"]', inputs.runner_label || 'b580')) }}
+    timeout-minutes: 1440
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: '3.12'
+      - name: Install build dependencies
+        run: pip install cmake
+      - uses: ./.github/actions/setup-pytorch
+        with:
+          lts: ${{ inputs.runner_label == 'lts' }}
+      - uses: ./.github/actions/setup-triton
+      - uses: ./.github/actions/install-vllm
+      - name: Install benchmark import dependencies
+        run: pip install 'pandas<3.0' scipy psutil tabulate matplotlib
+      - name: Apply offline UA patch
+        run: |
+          git -C vllm apply --check "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
+          git -C vllm apply "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
+      - name: Record environment and inputs
+        run: |
+          mkdir -p reports/configs
+          ./scripts/capture-hw-details.sh > reports/environment.txt
+          python -m pip freeze > reports/packages.txt
+          git rev-parse HEAD > reports/checkout.txt
+          export PYTHONPATH="$PWD/benchmarks:$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
+          python scripts/vllm/ua_tuning/shard.py --device "$UA_TUNING_DEVICE" \
+            --part ${{ matrix.part }} --output reports/manifests
+      - name: Tune BF16 inputs for this part
+        run: |
+          export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
+          python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
+            --device "$UA_TUNING_DEVICE" \
+            --manifest reports/manifests/bfloat16.json \
+            --save-dir reports/configs 2>&1 | tee reports/bf16-tuning.log
+      - name: Save BF16 configs and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ua-cold-graph-part-${{ matrix.part }}-bf16
+          path: reports
+          if-no-files-found: warn
+      - name: Tune FP8 inputs for this part
+        run: |
+          export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
+          python scripts/vllm/ua_tuning/tune_ci.py --tune --clear-cache \
+            --device "$UA_TUNING_DEVICE" \
+            --manifest reports/manifests/float8_e4m3fn.json \
+            --save-dir reports/configs 2>&1 | tee reports/fp8-tuning.log
+      - name: Upload configs and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ua-cold-graph-part-${{ matrix.part }}-profiles
+          path: reports
+          if-no-files-found: warn

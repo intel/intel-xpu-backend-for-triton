@@ -1,0 +1,151 @@
+diff --git a/tune_unified_attention.py b/tune_unified_attention.py
+index 0db1c43..a9f52da 100644
+--- a/tune_unified_attention.py
++++ b/tune_unified_attention.py
+@@ -319,6 +319,7 @@ def prepare_option(option, inputs, device):
+         option["status"] = "ok"
+     except triton.runtime.autotuner.OutOfResources as error:
+         option.update(status="resource_error", error=f"{type(error).__name__}: {error}")
++        print(f"Skipping {option['id']}: {option['error']}", flush=True)
+         synchronize(device)
+ 
+ 
+@@ -348,6 +349,9 @@ def benchmark_callable(fn, device):
+             graph.replay()
+         backend.synchronize(device)
+         start, end = backend.Event(enable_timing=True), backend.Event(enable_timing=True)
++        start.record()
++        end.record()
++        backend.synchronize(device)
+ 
+         def batch(repeats):
+             backend.synchronize(device)
+@@ -370,13 +374,14 @@ def benchmark_callable(fn, device):
+         graph.reset()
+ 
+ 
+-def time_options(options, inputs, device, seed):
++def time_options(options, inputs, device, seed, *, rounds=NUM_ROUNDS, timer=benchmark_callable):
+     """Benchmark candidates in shuffled rounds, storing timings and resource failures."""
+     generator = random.Random(seed)
+-    for _ in range(NUM_ROUNDS):
++    for round_index in range(rounds):
+         order = [option for option in options if option["status"] in ("pending", "ok")]
+         generator.shuffle(order)
+-        for option in order:
++        print(f"Search round {round_index + 1}/{rounds}: {len(order)} candidates", flush=True)
++        for option_index, option in enumerate(order):
+             if option["status"] == "pending":
+                 prepare_option(option, inputs, device)
+                 if option["status"] != "ok":
+@@ -384,58 +389,57 @@ def time_options(options, inputs, device, seed):
+             config = runtime.AttentionConfig(**option["config"])
+             try:
+                 with runtime.override_config(config):
+-                    value = benchmark_callable(lambda: unified_attention(**inputs), device)
++                    value = timer(lambda: unified_attention(**inputs), device)
+                 option["samples_ms"].append(value)
+             except triton.runtime.autotuner.OutOfResources as error:
+                 option.update(status="resource_error", error=f"{type(error).__name__}: {error}")
++                print(f"Skipping {option['id']}: {option['error']}", flush=True)
+                 synchronize(device)
++            if (option_index + 1) % 32 == 0:
++                print(f"Search round {round_index + 1}/{rounds}: {option_index + 1}/{len(order)} processed", flush=True)
+ 
+ 
+ @torch.inference_mode()
+-def tune(args, workloads, device):
++def tune(args, workloads, device, *, allocate=allocate_case, timer=benchmark_callable):
+     """Measure candidate configs and export one winner per workload key."""
+     identity = runtime.get_profile_identity(device)
+     rows, winners = [], {}
+-    # Measure candidates separately for each workload.
+     for index, case in enumerate(workloads):
+-        # Allocate attention inputs for this workload.
+-        inputs = allocate_case(case, device, args.seed + index)
++        print(f"Workload {index + 1}/{len(workloads)}: {case['id']} {canonical(case)}", flush=True)
++        inputs = allocate(case, device, args.seed + index)
+         key = runtime.make_attention_key(**inputs)
+         row = {"id": case["id"], "key": asdict(key), "options": []}
+         rows.append(row)
+-        # Prune invalid configs for this key.
+         configs = (config for config in candidate_configs(key)
+                    if runtime.validate_config(runtime.AttentionConfig(**config), key, device.type))
+-        for config in configs:
++        for config_index, config in enumerate(configs):
+             option = {"id": config_id(config), "config": config, "status": "pending", "samples_ms": []}
+             row["options"].append(option)
+-        # Time the remaining candidates, resource-limit failures are skipped.
+-        time_options(
+-            row["options"],
+-            inputs,
+-            device,
+-            args.seed + index,
+-        )
++            prepare_option(option, inputs, device)
++            if config_index % 32 == 31:
++                print(f"Prepared {config_index + 1} candidates for {case['id']}", flush=True)
++        print(f"Prepared {len(row['options'])} candidates for {case['id']}", flush=True)
++        time_options(row["options"], inputs, device, args.seed + index, rounds=args.rounds, timer=timer)
+         print(f"Measured {index + 1}/{len(workloads)}: {case['id']}", flush=True)
+         del inputs
+-    # Select one config for all workloads sharing a key.
+     for key, cases in grouped_cases(rows).items():
+-        winners[key] = choose_key(cases)["config"]
+-        print(f"Selected winner for {[case['id'] for case in cases]}: {config_id(winners[key])}", flush=True)
++        winner = choose_key(cases)
++        winners[key] = winner["config"]
++        for case in cases:
++            option = next(option for option in case["options"] if option["id"] == winner["id"])
++            print(f"{case['id']}: {statistics.median(option['samples_ms']) * 1000:.3f} us", flush=True)
++        print(f"Winner for {[case['id'] for case in cases]}: {config_id(winners[key])}", flush=True)
+     return save_configs(winners, identity, args.save_dir)
+ 
+ 
+ @torch.inference_mode()
+-def benchmark(args, workloads, device):
++def benchmark(args, workloads, device, *, allocate=allocate_case, timer=benchmark_callable):
+     """Measure each workload using a saved config or the runtime fallback."""
+     os.environ["VLLM_TUNED_CONFIG_FOLDER"] = str(Path(args.save_dir).resolve())
+     runtime.clear_profile_cache()
+     for index, case in enumerate(workloads):
+-        # Allocate attention inputs for this workload.
+-        inputs = allocate_case(case, device, args.seed + index)
+-        samples = [
+-            benchmark_callable(lambda inputs=inputs: unified_attention(**inputs), device) for _ in range(NUM_ROUNDS)
+-        ]
++        inputs = allocate(case, device, args.seed + index)
++        samples = [timer(lambda inputs=inputs: unified_attention(**inputs), device) for _ in range(args.rounds)]
+         print(f"{case['id']}: {statistics.median(samples) * 1000:.3f} us", flush=True)
+         del inputs
+ 
+@@ -505,9 +509,14 @@ def parse_args(argv=None):
+     return args
+ 
+ 
+-def main(args: argparse.Namespace):
++def main(args: argparse.Namespace, workloads=None, *, allocate=allocate_case, timer=benchmark_callable):
++    args = argparse.Namespace(**{
++        "rounds": NUM_ROUNDS,
++        **vars(args),
++    })
+     print(args)
+-    workloads = model_workloads(args)
++    if workloads is None:
++        workloads = model_workloads(args)
+     device = torch.device(args.device)
+     if device.type != "xpu":
+         raise ValueError("XPU is currently the only supported device")
+@@ -515,10 +524,10 @@ def main(args: argparse.Namespace):
+     print(f"{'Tuning' if args.tune else 'Benchmarking'} {len(workloads)} workloads")
+     started = time.perf_counter()
+     if args.tune:
+-        result = tune(args, workloads, device)
++        result = tune(args, workloads, device, allocate=allocate, timer=timer)
+         print(f"Exported {result['accepted_keys']} keys to {args.save_dir}")
+     else:
+-        benchmark(args, workloads, device)
++        benchmark(args, workloads, device, allocate=allocate, timer=timer)
+     print(f"Finished in {time.perf_counter() - started:.1f} seconds")
+ 
+ 
