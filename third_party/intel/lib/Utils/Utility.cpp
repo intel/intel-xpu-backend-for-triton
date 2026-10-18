@@ -158,8 +158,7 @@ Value getFinalValue(Value value) {
       // unchanged; otherwise resolving to it would equate a value that changes
       // across the loop with where it started (#7990, #8060). Stop at the
       // argument and let a caller that can reason about the update do so.
-      auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-      if (yieldOp.getOperand(initArgIdx) != blockArg)
+      if (forOp.getTiedLoopYieldedValue(blockArg)->get() != blockArg)
         return value;
       return getFinalValue(initArgs[initArgIdx]);
     }
@@ -205,6 +204,19 @@ Value getFinalValue(Value value) {
     return getFinalValue(extOp.getIn());
 
   return value;
+}
+
+Value getIterArgIncrement(scf::ForOp forOp, BlockArgument iterArg) {
+  auto addOp = forOp.getTiedLoopYieldedValue(iterArg)
+                   ->get()
+                   .getDefiningOp<arith::AddIOp>();
+  if (!addOp)
+    return {};
+  if (addOp.getLhs() == iterArg)
+    return addOp.getRhs();
+  if (addOp.getRhs() == iterArg)
+    return addOp.getLhs();
+  return {};
 }
 
 void eraseOperations(SmallPtrSetImpl<Operation *> &operations) {

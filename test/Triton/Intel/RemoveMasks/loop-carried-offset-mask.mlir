@@ -150,6 +150,55 @@ module {
 // -----
 
 module {
+  // COM: `%k` advances by the loop step but starts at 4064, not at the lower
+  // COM: bound, so it is `%iv + 4064` and not IV-equivalent. The mask holds on
+  // COM: the first iteration only: `%k` is then 4096, 4128, 4160 and every lane
+  // COM: is false. Judged by the induction variable's range it would look
+  // COM: always-true and be removed.
+  tt.func public @iter_arg_init_not_lower_bound_mask(
+      %src: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+      %dst: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32xf16>
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c4064_i32 = arith.constant 4064 : i32
+    %cst_ub = arith.constant dense<4096> : tensor<32xi32>
+
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+    %src_splat = tt.splat %src : !tt.ptr<f16> -> tensor<32x!tt.ptr<f16>>
+    %res = scf.for %iv = %c0_i32 to %c128_i32 step %c32_i32
+        iter_args(%k = %c4064_i32) -> (i32) : i32 {
+      %k_splat = tt.splat %k : i32 -> tensor<32xi32>
+      %idx = arith.addi %k_splat, %range : tensor<32xi32>
+      %mask = arith.cmpi slt, %idx, %cst_ub : tensor<32xi32>
+
+      %src_ptr = tt.addptr %src_splat, %idx : tensor<32x!tt.ptr<f16>>, tensor<32xi32>
+      %loaded = tt.load %src_ptr, %mask, %cst : tensor<32x!tt.ptr<f16>>
+
+      %dst_iv = tt.addptr %dst, %iv : !tt.ptr<f16>, i32
+      %dst_splat = tt.splat %dst_iv : !tt.ptr<f16> -> tensor<32x!tt.ptr<f16>>
+      %dst_ptr = tt.addptr %dst_splat, %range : tensor<32x!tt.ptr<f16>>, tensor<32xi32>
+      tt.store %dst_ptr, %loaded : tensor<32x!tt.ptr<f16>>
+
+      %next_k = arith.addi %k, %c32_i32 : i32
+      scf.yield %next_k : i32
+    }
+    tt.return
+  }
+
+  // CHECK-LABEL: @iter_arg_init_not_lower_bound_mask
+  // CHECK: scf.for
+  // CHECK:   %[[MASK:.*]] = arith.cmpi slt
+  // CHECK-NOT: tt.load
+  // CHECK:   %[[LOAD:.*]] = tt.load {{.*}}, %[[MASK]], %cst : tensor<32x!tt.ptr<f16>>
+  // CHECK:   tt.store {{.*}}, %[[LOAD]] :
+  // CHECK: }
+}
+
+// -----
+
+module {
   // COM: The mask itself is the loop-carried value: `%mask0` holds for the
   // COM: first iteration and the loop recomputes it from the advanced offsets.
   // COM: Resolving `%mask` to `%mask0` made it look loop invariant, so it was
@@ -199,9 +248,9 @@ module {
   // COM: The mask is in the canonical form `END-1 < N-i*END` that
   // COM: `CanonicalMaskValidator` versions the loop on, but its `N` is the
   // COM: iteration argument `%m`, which the loop decrements. Resolving `%m` to
-  // COM: its init `%n` matched the loop upper bound's `(%n+31)/32` numerator,
-  // COM: so the mask looked implied by `(%n+31)%32 == 0 && %n > 32` and the
-  // COM: "then" loop dropped it. The real bound is `%n-2*i*32`: for `%n` = 64
+  // COM: its init `%n` matched the `%n` in the upper bound `(%n+31)/32`, so
+  // COM: the mask looked implied by `%n % 32 == 0 && %n > 32` and the "then"
+  // COM: loop dropped it. The real bound is `%n-2*i*32`: for `%n` = 64
   // COM: the condition holds, yet the second iteration's mask is false for
   // COM: every lane, which must suppress that load rather than return `%src`
   // COM: data in place of `other`.

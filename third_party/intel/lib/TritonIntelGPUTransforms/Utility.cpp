@@ -15,6 +15,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "intel/include/Utils/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -96,16 +97,7 @@ bool isDivisible(Value value, int64_t divisor) {
       // defined outside the loop, which keeps it independent of `x` and the
       // recursion finite.
       if (blockArg != forOp.getInductionVar()) {
-        auto addOp = forOp.getTiedLoopYieldedValue(blockArg)
-                         ->get()
-                         .getDefiningOp<arith::AddIOp>();
-        if (!addOp)
-          return false;
-        Value step;
-        if (addOp.getLhs() == blockArg)
-          step = addOp.getRhs();
-        else if (addOp.getRhs() == blockArg)
-          step = addOp.getLhs();
+        Value step = tt::intel::getIterArgIncrement(forOp, blockArg);
         if (!step || !forOp.isDefinedOutsideOfLoop(step))
           return false;
         return isDivisible(forOp.getTiedLoopInit(blockArg)->get(), divisor) &&

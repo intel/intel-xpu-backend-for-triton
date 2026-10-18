@@ -326,19 +326,8 @@ private:
     if (!matchesInt(forOp.getTiedLoopInit(iterArg)->get(), *lbConst))
       return std::nullopt;
 
-    auto yieldAdd = forOp.getTiedLoopYieldedValue(iterArg)
-                        ->get()
-                        .getDefiningOp<arith::AddIOp>();
-    if (!yieldAdd)
-      return std::nullopt;
-
-    bool lhsIsIterArg = (yieldAdd.getLhs() == iterArg);
-    bool rhsIsIterArg = (yieldAdd.getRhs() == iterArg);
-    if (!lhsIsIterArg && !rhsIsIterArg)
-      return std::nullopt;
-
-    Value stepOperand = lhsIsIterArg ? yieldAdd.getRhs() : yieldAdd.getLhs();
-    if (!matchesInt(stepOperand, *stepConst))
+    Value stepOperand = tt::intel::getIterArgIncrement(forOp, iterArg);
+    if (!stepOperand || !matchesInt(stepOperand, *stepConst))
       return std::nullopt;
 
     return ivRange;

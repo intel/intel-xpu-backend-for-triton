@@ -13,6 +13,9 @@
 namespace mlir {
 class FunctionOpInterface;
 class LoopLikeOpInterface;
+namespace scf {
+class ForOp;
+} // namespace scf
 } // namespace mlir
 
 namespace mlir::triton::intel {
@@ -44,6 +47,12 @@ bool isConstant(Value val, int64_t expected);
 // Resolving those too made `off = 0; off += 3` answer "0", which is issue #7990
 // for a divisibility proof and issue #8060 for a bounds mask.
 Value getFinalValue(Value value);
+
+// If `forOp` updates its iteration argument `iterArg` by adding a value to it,
+// i.e. yields `arith.addi(iterArg, x)` with the operands in either order,
+// return `x`; otherwise return a null value. `x` may be defined inside the
+// loop: a caller that needs it to be loop invariant must check that itself.
+Value getIterArgIncrement(scf::ForOp forOp, BlockArgument iterArg);
 
 // Erase the operations in \p operations.
 void eraseOperations(SmallPtrSetImpl<Operation *> &operations);
