@@ -846,3 +846,112 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COM: The range %late's sink would remove, [%late, %d), peaks in the scf.if's
+// COM: else branch, which yields its sum (a store would block the sink). Every
+// COM: top-level point is under the 1024 B/lane budget, the branch is over: sink.
+#dpas10 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
+#dot0_10 = #ttg.dot_op<{opIdx = 0, parent = #dpas10, kWidth = 1}>
+#dot1_10 = #ttg.dot_op<{opIdx = 1, parent = #dpas10, kWidth = 2}>
+#blocked10 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @in_loop_sink_sees_region_peak_in_range(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i1) {
+    // CHECK-LABEL:   tt.func @in_loop_sink_sees_region_peak_in_range
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas10>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked10}>>
+    %c64_i32 = arith.constant 64 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i64 = arith.constant 0 : i64
+    // CHECK:      %[[DESC_A:.*]] = tt.make_tensor_descriptor %arg0
+    // CHECK:      %[[DESC_B:.*]] = tt.make_tensor_descriptor %arg1
+    %desc_a = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <bf16>, <64x64xbf16>
+    %desc_b = tt.make_tensor_descriptor %arg1, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <bf16>, <64x64xbf16>
+    %desc_c = tt.make_tensor_descriptor %arg2, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f32>, <64x128xf32>
+    %desc_d = tt.make_tensor_descriptor %arg2, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f32>, <64x64xf32>
+    %desc_s = tt.make_tensor_descriptor %arg2, [%c0_i32], [%c0_i64] : <f32>, <64xf32>
+    // CHECK:      scf.for
+    // NOSINK-NEXT: tt.descriptor_load %[[DESC_B]]
+    // CHECK-NEXT: scf.if
+    // CHECK:      tt.descriptor_load %[[DESC_A]]
+    // SINK-NEXT:  tt.descriptor_load %[[DESC_B]]
+    // CHECK-NEXT: tt.dot
+    %r:2 = scf.for %iv = %c0_i32 to %c64_i32 step %c64_i32 iter_args(%acc = %cst, %sacc = %cst_0) -> (tensor<64x64xf32, #dpas10>, tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked10}>>) : i32 {
+      %late = tt.descriptor_load %desc_b[%c0_i32, %iv] {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xbf16> -> tensor<64x64xbf16, #dot1_10>
+      %s = scf.if %arg3 -> (tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked10}>>) {
+        scf.yield %sacc : tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked10}>>
+      } else {
+        %x = tt.descriptor_load %desc_c[%iv, %c0_i32] : !tt.tensordesc<64x128xf32> -> tensor<64x128xf32, #blocked10>
+        %y = tt.descriptor_load %desc_c[%c0_i32, %iv] : !tt.tensordesc<64x128xf32> -> tensor<64x128xf32, #blocked10>
+        %z = arith.addf %x, %y : tensor<64x128xf32, #blocked10>
+        %sum = "tt.reduce"(%z) <{axis = 1 : i32}> ({
+        ^bb0(%lhs: f32, %rhs: f32):
+          %add = arith.addf %lhs, %rhs : f32
+          tt.reduce.return %add : f32
+        }) : (tensor<64x128xf32, #blocked10>) -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked10}>>
+        scf.yield %sum : tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked10}>>
+      }
+      %a = tt.descriptor_load %desc_a[%iv, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xbf16> -> tensor<64x64xbf16, #dot0_10>
+      %d = tt.dot %a, %late, %acc, inputPrecision = tf32 : tensor<64x64xbf16, #dot0_10> * tensor<64x64xbf16, #dot1_10> -> tensor<64x64xf32, #dpas10>
+      scf.yield %d, %s : tensor<64x64xf32, #dpas10>, tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked10}>>
+    }
+    tt.descriptor_store %desc_d[%c0_i32, %c0_i32], %r#0 : !tt.tensordesc<64x64xf32>, tensor<64x64xf32, #dpas10>
+    tt.descriptor_store %desc_s[%c0_i32], %r#1 : !tt.tensordesc<64xf32>, tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked10}>>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The same hot scf.if, now %late's first use: the sink stops before it, so
+// COM: its peak is outside the range and %late stays. The addi keeps the
+// COM: range non-empty (a load right before its first use is skipped); %s#1
+// COM: keeps the in-if use alive through RVL's dead-op cleanup.
+#dpas11 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
+#dot0_11 = #ttg.dot_op<{opIdx = 0, parent = #dpas11, kWidth = 1}>
+#dot1_11 = #ttg.dot_op<{opIdx = 1, parent = #dpas11, kWidth = 2}>
+#blocked11 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @in_loop_sink_ignores_region_peak_past_first_use(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i1) {
+    // CHECK-LABEL:   tt.func @in_loop_sink_ignores_region_peak_past_first_use
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas11>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked11}>>
+    %c64_i32 = arith.constant 64 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i64 = arith.constant 0 : i64
+    %desc_a = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <bf16>, <64x64xbf16>
+    %desc_b = tt.make_tensor_descriptor %arg1, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <bf16>, <64x64xbf16>
+    %desc_c = tt.make_tensor_descriptor %arg2, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f32>, <64x128xf32>
+    %desc_d = tt.make_tensor_descriptor %arg2, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f32>, <64x64xf32>
+    %desc_s = tt.make_tensor_descriptor %arg2, [%c0_i32], [%c0_i64] : <f32>, <64xf32>
+    // CHECK:      scf.for
+    // CHECK-NEXT: tt.descriptor_load
+    // CHECK-NEXT: arith.addi
+    // CHECK-NEXT: scf.if
+    %r:2 = scf.for %iv = %c0_i32 to %c64_i32 step %c64_i32 iter_args(%acc = %cst, %sacc = %cst_0) -> (tensor<64x64xf32, #dpas11>, tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked11}>>) : i32 {
+      %late = tt.descriptor_load %desc_b[%c0_i32, %iv] {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xbf16> -> tensor<64x64xbf16, #dot1_11>
+      %next = arith.addi %iv, %c64_i32 : i32
+      %s:2 = scf.if %arg3 -> (tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked11}>>, tensor<64x64xbf16, #dot1_11>) {
+        %x = tt.descriptor_load %desc_c[%iv, %c0_i32] : !tt.tensordesc<64x128xf32> -> tensor<64x128xf32, #blocked11>
+        %y = tt.descriptor_load %desc_c[%c0_i32, %iv] : !tt.tensordesc<64x128xf32> -> tensor<64x128xf32, #blocked11>
+        %z = arith.addf %x, %y : tensor<64x128xf32, #blocked11>
+        %sum = "tt.reduce"(%z) <{axis = 1 : i32}> ({
+        ^bb0(%lhs: f32, %rhs: f32):
+          %add = arith.addf %lhs, %rhs : f32
+          tt.reduce.return %add : f32
+        }) : (tensor<64x128xf32, #blocked11>) -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked11}>>
+        %u = arith.negf %late : tensor<64x64xbf16, #dot1_11>
+        scf.yield %sum, %u : tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked11}>>, tensor<64x64xbf16, #dot1_11>
+      } else {
+        scf.yield %sacc, %late : tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked11}>>, tensor<64x64xbf16, #dot1_11>
+      }
+      %a = tt.descriptor_load %desc_a[%next, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xbf16> -> tensor<64x64xbf16, #dot0_11>
+      %d = tt.dot %a, %s#1, %acc, inputPrecision = tf32 : tensor<64x64xbf16, #dot0_11> * tensor<64x64xbf16, #dot1_11> -> tensor<64x64xf32, #dpas11>
+      scf.yield %d, %s#0 : tensor<64x64xf32, #dpas11>, tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked11}>>
+    }
+    tt.descriptor_store %desc_d[%c0_i32, %c0_i32], %r#0 : !tt.tensordesc<64x64xf32>, tensor<64x64xf32, #dpas11>
+    tt.descriptor_store %desc_s[%c0_i32], %r#1 : !tt.tensordesc<64xf32>, tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked11}>>
+    tt.return
+  }
+}
