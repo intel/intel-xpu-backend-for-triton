@@ -86,7 +86,7 @@ capture stream device-agnostic via `get_device_module()` and adds
 
 | Kernels | Source |
 |---|---|
-| `fused_moe_lora` | `kernels/ops/moe/fused_moe_lora_kernel.py` |
+| `fused_moe_lora` | `kernels/ops/lora/moe/fused_moe_lora_kernel.py` |
 
 `--sglang-mamba`. causal conv1d is shared with GDN and KDA, so this suite covers
 those paths too:
@@ -160,13 +160,13 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
 
 | Suite | Result | Time |
 |---|---|---|
-| `--sglang-attention` | 21 passed, 3 skipped (2 upstream, 1 skip-listed) | 24s |
+| `--sglang-attention` | 22 passed, 2 skipped upstream | 550s |
 | `--sglang-quant` | 5 passed | 14s |
 | `--sglang-moe` | 110 passed | 46s |
 | `--sglang-mamba` | 940 passed, 16 skipped upstream | 19s |
 | `--sglang-gdn` | 30 passed, 1 skipped upstream | 9s |
 | `--sglang-kda` | 1 passed, 14 skipped upstream | 10s |
-| `--sglang-spec` | 1 skipped, skip-listed | 11s |
+| `--sglang-spec` | 1 passed, 22 subtests | 38s |
 | `--sglang-e2e` | not measured locally - needs model weights and a server launch | - |
 
 ## Known gaps
@@ -218,8 +218,7 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
   `sglang-test-fix.patch` moves the GDN path, XPU overrides included, to tensor
   descriptors; the remaining uses, e.g. in `kda.py`, are not reached by the
   suites here.
-- **CUDA-only tests.** `test_dspark_kernel_parity.py` calls `torch.cuda` and is
-  skip-listed. Three of four `test_kda_kernels.py` classes skip themselves.
+- **CUDA-only tests.** Three of four `test_kda_kernels.py` classes skip themselves.
 - **e2e is smoke only.** `--sglang-e2e` asserts throughput, not numerics, so a
   subtly wrong position id or token-pool write still passes. No SGLang test
   checks those two kernels against a reference.
@@ -233,8 +232,6 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
   `lightning_attention.py`, `dsa_attention.py`, `dsv4_attention.py`). Enable one
   family at a time; `gdn/` and `kda/` stay blocked on `tl.make_block_ptr`
   regardless (see above).
-- **Sliding window OOM.** `test_extend_attention_sliding_window` runs the kernel
-  fine, but its torch reference needs more than 48 GB. Unskip when it is chunked.
 - **BMG.** `scripts/skiplist/xe2/` is a copy of `default/`; nothing measured on
   B580 yet. `--skip-list` replaces the directory instead of merging, so the
   entries have to be duplicated.

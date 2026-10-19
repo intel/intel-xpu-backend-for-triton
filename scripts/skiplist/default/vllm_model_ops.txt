@@ -1,0 +1,2 @@
+# CUDA/HIP rotary-embedding dispatch test, CUDA/ROCm only by design: https://github.com/intel/intel-xpu-backend-for-triton/issues/8403
+tests/kernels/core/test_apply_rotary_emb.py::test_rotary_embedding_dispatch

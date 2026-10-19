@@ -35,7 +35,8 @@ def get_autotune_configs() -> List[triton.Config]:
 @triton.autotune(
     configs=get_autotune_configs(),
     key=['M', 'N', 'K'],
-    restore_value=['C'],
+    # With SPLIT_K > 1 the write-back is an `atomic_add`, so every launch needs C zeroed.
+    reset_to_zero=['C'],
 )
 @triton.jit
 def _kernel(A, B, C,  #
@@ -171,13 +172,12 @@ def benchmark(M, N, K, provider):
     b = torch.rand((K, N), device=DEVICE, dtype=torch.bfloat16)
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(a, b))
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.mm(a, b, out_dtype=torch.float32))
     elif provider == 'triton':
         c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
-        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        torch_fn = lambda: torch.mm(a, b, out_dtype=torch.float32)
+        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     elif provider == 'sycl-tla':
         c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
@@ -188,9 +188,8 @@ def benchmark(M, N, K, provider):
             sycl_tla_kernel.gemm_splitk(a, b, c, M, N, K, split_k)
             return c
 
-        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='sycl-tla to torch')
+        torch_fn = lambda: torch.mm(a, b, out_dtype=torch.float32)
+        benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='sycl-tla to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(sycl_tla_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

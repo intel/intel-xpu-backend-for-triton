@@ -566,7 +566,7 @@ class runtime_knobs(base_knobs):
 
 class language_knobs(base_knobs):
     fp32_default: env_opt_str = env_opt_str("TRITON_F32_DEFAULT")
-    default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", False)
+    default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", True)
     force_disable_fp_fusion: env_bool = env_bool("TRITON_FORCE_DISABLE_FP_FUSION")
 
     def fp_fusion_enabled(self, requested: Optional[bool]) -> bool:
@@ -579,6 +579,7 @@ class nvidia_knobs(base_knobs):
     ptxas: env_nvidia_tool = env_nvidia_tool("ptxas")
 
     dump_nvptx: env_bool = env_bool("NVPTX_ENABLE_DUMP")
+    use_slp_vectorizer: env_bool = env_bool("TRITON_USE_SLP_VECTORIZER", False)
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")
     ptxas_options: env_opt_str = env_opt_str("PTXAS_OPTIONS")
     mock_ptx_version: env_opt_str = env_opt_str("TRITON_MOCK_PTX_VERSION")
@@ -642,8 +643,6 @@ class amd_knobs(base_knobs):
     use_async_copy: env_opt_bool = env_opt_bool("TRITON_HIP_USE_ASYNC_COPY")
     use_coexec_scheduler: env_opt_bool = env_opt_bool("TRITON_HIP_USE_COEXEC_SCHEDULER")
     use_expert_scheduling: env_opt_bool = env_opt_bool("TRITON_HIP_USE_EXPERT_SCHEDULING")
-
-    scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
 
     # Path to dump MIR files for debugging/analysis
     dump_mir: env_opt_str = env_opt_str("TRITON_DUMP_MIR")

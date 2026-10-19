@@ -232,3 +232,13 @@ tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-6-222]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-33]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-222]
+
+# Zero-expert MoE test copies w13 weights between layers with different XPU layouts: https://github.com/intel/intel-xpu-backend-for-triton/issues/8356
+tests/kernels/moe/test_zero_expert_moe.py::test_zero_expert_moe_output_decomposition[1]
+tests/kernels/moe/test_zero_expert_moe.py::test_zero_expert_moe_output_decomposition[32]
+
+# Gemma4 routing bf16/fp16 ties at the top-k boundary select a different expert: https://github.com/intel/intel-xpu-backend-for-triton/issues/8357
+tests/kernels/moe/test_gemma4router.py::test_gemma4_routing_kernel_triton[dtype0-8-128-2048]
+tests/kernels/moe/test_gemma4router.py::test_gemma4_routing_kernel_triton[dtype0-8-128-250000]
+tests/kernels/moe/test_gemma4router.py::test_gemma4_routing_kernel_triton[dtype1-8-128-2048]
+tests/kernels/moe/test_gemma4router.py::test_gemma4_routing_kernel_triton[dtype1-8-128-250000]
