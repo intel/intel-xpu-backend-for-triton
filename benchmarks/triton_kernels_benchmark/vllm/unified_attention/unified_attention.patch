@@ -1,16 +1,8 @@
 diff --git a/tests/kernels/attention/test_triton_unified_attention.py b/tests/kernels/attention/test_triton_unified_attention.py
-index b50e97b52b..d028d439e8 100644
+index b50e97b52b..24d2948407 100644
 --- a/tests/kernels/attention/test_triton_unified_attention.py
 +++ b/tests/kernels/attention/test_triton_unified_attention.py
-@@ -15,6 +15,7 @@ from vllm.v1.attention.ops import triton_unified_attention as attention
- from vllm.v1.attention.ops.triton_attention_helpers import (
-     apply_softcap,
-     compute_tile_loop_bounds,
-+    find_seq_idx,
-     softmax_step,
- )
- from vllm.v1.attention.ops.triton_unified_attention import (
-@@ -282,7 +283,9 @@ def test_speculative_splitk_matches_reference(
+@@ -282,7 +282,9 @@ def test_speculative_splitk_matches_reference(
          q_dtype=q_dtype,
          seq_threshold_3D=32,
      )
@@ -21,68 +13,7 @@ index b50e97b52b..d028d439e8 100644
 
 
  def test_speculative_splitk_bf16_query_fp8_kv(monkeypatch):
-@@ -298,6 +301,60 @@ def test_speculative_splitk_bf16_query_fp8_kv(monkeypatch):
-     assert len(reduce_grids) == 1
-
-
-+@triton.jit
-+def _find_sequence_indices(
-+    starts_ptr,
-+    targets_ptr,
-+    output_ptr,
-+    num_seqs,
-+    USE_Q_BLOCK_MODE: tl.constexpr,
-+    BLOCK_Q: tl.constexpr,
-+):
-+    index = tl.program_id(0)
-+    target = tl.load(targets_ptr + index)
-+    sequence = find_seq_idx(
-+        starts_ptr, target, num_seqs, USE_Q_BLOCK_MODE, BLOCK_Q
-+    )
-+    tl.store(output_ptr + index, sequence)
-+
-+
-+@pytest.mark.parametrize("num_seqs", [1, 4, 15, 16, 17, 33])
-+@pytest.mark.parametrize(
-+    "use_q_block_mode,block_q", [(True, 8), (True, 32), (False, -1)]
-+)
-+def test_find_seq_idx_small_batch_and_binary_fallback(
-+    num_seqs: int, use_q_block_mode: bool, block_q: int
-+) -> None:
-+    lengths = torch.tensor(
-+        [1 + (index * 37) % 173 for index in range(num_seqs)],
-+        dtype=torch.int32,
-+        device="cpu",
-+    )
-+    starts = torch.cat(
-+        (torch.zeros(1, dtype=torch.int32, device="cpu"), lengths.cumsum(0))
-+    )
-+    starts = starts.to(torch.int32)
-+    boundaries = starts[:-1]
-+    if use_q_block_mode:
-+        boundaries = boundaries // block_q + torch.arange(num_seqs, device="cpu")
-+        upper = int(starts[-1]) // block_q + num_seqs
-+    else:
-+        upper = int(starts[-1])
-+    targets = torch.unique(torch.cat((boundaries - 1, boundaries, boundaries + 1)))
-+    targets = targets[(targets >= 0) & (targets < upper)].to(torch.int32)
-+    expected = torch.searchsorted(boundaries, targets, right=True).to(torch.int32) - 1
-+    actual = torch.empty(targets.numel(), dtype=torch.int32, device=DEVICE_TYPE)
-+    _find_sequence_indices[(targets.numel(),)](
-+        starts.to(DEVICE_TYPE),
-+        targets.to(DEVICE_TYPE),
-+        actual,
-+        num_seqs,
-+        USE_Q_BLOCK_MODE=use_q_block_mode,
-+        BLOCK_Q=block_q,
-+    )
-+    torch.testing.assert_close(actual.cpu(), expected, rtol=0, atol=0)
-+
-+
- @triton.jit
- def _compute_clamped_mm_tile_bounds(
-     output_ptr,
-@@ -771,6 +828,7 @@ def test_triton_unified_attn(
+@@ -771,6 +773,7 @@ def test_triton_unified_attn(
          softmax_segm_max=softmax_segm_max,
          softmax_segm_expsum=softmax_segm_expsum,
          kv_quant_mode=kv_quant_mode,
@@ -90,45 +21,7 @@ index b50e97b52b..d028d439e8 100644
      )
 
      ref_output = ref_paged_attn(
-@@ -793,6 +851,37 @@ def test_triton_unified_attn(
-     )
-
-
-+@pytest.mark.parametrize(
-+    "seq_lens,seq_threshold_3D",
-+    [
-+        ([(128, 384), (65, 257)], 0),
-+        ([(129, 513), (7, 143)], 0),
-+        ([(1, 257)] * 16, 32),
-+        ([(1, 257)] * 17, 32),
-+    ],
-+)
-+@pytest.mark.parametrize("num_heads", [(4, 2), (5, 1)])
-+@pytest.mark.parametrize("sliding_window", [None, 64])
-+def test_triton_unified_attn_causal_regions_and_partial_tiles(
-+    seq_lens: list[tuple[int, int]],
-+    seq_threshold_3D: int,
-+    num_heads: tuple[int, int],
-+    sliding_window: int | None,
-+) -> None:
-+    test_triton_unified_attn(
-+        seq_lens=seq_lens,
-+        num_heads=num_heads,
-+        head_size=128,
-+        sliding_window=sliding_window,
-+        dtype=torch.bfloat16,
-+        block_size=64,
-+        soft_cap=None,
-+        num_blocks=64,
-+        q_dtype=None,
-+        seq_threshold_3D=seq_threshold_3D,
-+    )
-+
-+
- @pytest.mark.parametrize(
-     "seq_lens", [[(1, 1328), (5, 18), (129, 463)], [(1, 523), (1, 37), (1, 2011)]]
- )
-@@ -894,6 +983,7 @@ def test_triton_unified_attn_bf16_query_fp8_kv(
+@@ -894,6 +897,7 @@ def test_triton_unified_attn_bf16_query_fp8_kv(
          softmax_segm_max=softmax_segm_max,
          softmax_segm_expsum=softmax_segm_expsum,
          kv_quant_mode=KVQuantMode.FP8_PER_TENSOR,
@@ -136,7 +29,7 @@ index b50e97b52b..d028d439e8 100644
      )
 
      ref_output = ref_paged_attn(
-@@ -1013,6 +1103,7 @@ def test_triton_unified_attn_fp16_input_fp8_output(
+@@ -1013,6 +1017,7 @@ def test_triton_unified_attn_fp16_input_fp8_output(
          softmax_segm_output=softmax_segm_output,
          softmax_segm_max=softmax_segm_max,
          softmax_segm_expsum=softmax_segm_expsum,
