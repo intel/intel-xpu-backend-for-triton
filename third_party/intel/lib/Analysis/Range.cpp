@@ -370,6 +370,10 @@ IntegerRangeAnalysis::collectAssumptions(Operation *top, bool filterConstants) {
     if (!defOp)
       return; // e.g. an assume on a block argument: nothing to anchor on
     for (auto operand : defOp->getOperands()) {
+      // Wider than 64 bits is unknown: getConstantIntValue and
+      // tt::getBoundFromCmpOp narrow to int64_t.
+      if (ConstantIntRanges::getStorageBitwidth(operand.getType()) > 64)
+        continue;
       if (filterConstants && getConstantIntValue(operand))
         continue;
       // Store the assume, not its comparison: applicability is decided by
@@ -388,6 +392,9 @@ IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) const {
     return std::nullopt;
 
   const unsigned width = ConstantIntRanges::getStorageBitwidth(iv->getType());
+  // The trip count is computed in int64_t: wider than 64 bits is unknown.
+  if (width > 64)
+    return std::nullopt;
 
   auto getLoopRangeInfo = [&](std::optional<OpFoldResult> loopBound,
                               Block *block, bool getUpper,
@@ -837,6 +844,9 @@ collectLoopIVRange(scf::ForOp forOp, const DataFlowSolver &solver) {
   // Temporary workaround implementation.
   std::optional<Value> iv = forOp.getSingleInductionVar();
   if (!iv)
+    return std::nullopt;
+  // The bounds are narrowed to int64_t below: wider than 64 bits is unknown.
+  if (ConstantIntRanges::getStorageBitwidth(iv->getType()) > 64)
     return std::nullopt;
 
   auto getRange =
