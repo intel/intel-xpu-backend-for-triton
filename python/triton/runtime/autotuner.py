@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import builtins
+import copy
 import time
 import inspect
 import hashlib
@@ -203,30 +204,39 @@ class Autotuner(KernelInterface):
 
     def _parallel_warmup(self, args, kwargs, configs):
         """Pre-compile `configs` across a process pool so the serial benchmarking
-        loop below hits a warm disk cache instead of compiling each config in turn."""
+        loop below hits a warm disk cache instead of compiling each config in turn.
+
+        Not thread-safe: `dispatch()` temporarily overrides the process-global
+        `knobs.runtime.jit_cache_hook` to capture compilation instead of running it.
+        A kernel launched from another thread while that override is active will
+        silently skip compilation/launch. Safe as long as no other thread launches
+        a Triton kernel concurrently with autotuning."""
         workers = knobs.autotuning.warmup_workers
         if workers <= 0:
             return
         dispatcher = _get_warmup_dispatcher(workers)
         grid = kwargs["grid"]
 
-        # `warmup` is stripped too: `KernelInterface.warmup()` (invoked for us
-        # below) sets its own `warmup=True`, which would otherwise collide
-        # with the `warmup=False` already in `kwargs` from a normal launch.
+        # `ProcessPoolWarmupDispatcher` handles `warmup` on it's own
         rest = {k: v for k, v in kwargs.items() if k not in ("grid", "warmup")}
 
-        # `_warmup_kernel` (invoked by `dispatch`) resets `kernel.nargs` to None
-        # in its `finally` once it's done; `run()` still needs `self.nargs`
-        # populated for the rest of its own lifecycle, so restore it after.
-        saved_nargs = self.nargs
+        kernel = copy.copy(self)
+        # There is no point in redoing it in subprocesses.
+        kernel.prune_configs = lambda kwargs: configs
+
+        from .._compile_warmup_pool import _UnsupportedPreloadError
 
         pending_before = len(dispatcher._pending)
-        try:
-            dispatcher.dispatch(*args, kernel=self, grid=grid, test=None, **rest)
-        finally:
-            self.nargs = saved_nargs
-        for future in dispatcher._pending[pending_before:]:
-            future.result()
+        dispatcher.dispatch(*args, kernel=kernel, grid=grid, test=None, **rest)
+
+        # FIXME: it's not good to touch internal fields - update dispatcher API.
+        pending = dispatcher._pending[pending_before:]
+        del dispatcher._pending[pending_before:]
+        for future in pending:
+            try:
+                future.result()
+            except _UnsupportedPreloadError:
+                pass
 
     def check_disk_cache(self, tuning_key, configs, bench_fn):
         # We can't serialize prehooks, so just give up and run the benchmarks.
@@ -496,7 +506,8 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     IR generation for different configs happens in parallel instead of
     serially. The pool is created once and reused across every autotuned
     kernel/shape for the life of the process. Benchmarking (timing each
-    config on the GPU) still runs serially afterward.
+    config on the GPU) still runs serially afterward. This mode requires the
+    :code:`cloudpickle` package to be installed (:code:`pip install cloudpickle`).
 
     :param configs: a list of :code:`triton.Config` objects
     :type configs: list[triton.Config]
