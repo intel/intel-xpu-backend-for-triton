@@ -215,6 +215,14 @@ public:
   }
 };
 
+// Marks every floating-point operation in the module as contractable.
+void allowFPOpFusion(llvm::Module &module) {
+  for (llvm::Function &function : module)
+    for (llvm::Instruction &instruction : llvm::instructions(function))
+      if (llvm::isa<llvm::FPMathOperator>(&instruction))
+        instruction.setHasAllowContract(true);
+}
+
 std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
                     bool enable_fp_fusion, const std::string &features) {
@@ -224,7 +232,7 @@ createTargetMachine(llvm::Module *module, std::string proc,
   llvm::TargetOptions opt;
   bool disableLLVMOpt = mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (enable_fp_fusion)
-    opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+    allowFPOpFusion(*module);
   opt.TrapUnreachable = true;
   opt.MCOptions.AsmVerbose = true;
   opt.MCOptions.PreserveAsmComments = true;
