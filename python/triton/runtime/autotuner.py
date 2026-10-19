@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import atexit
 import builtins
 import copy
 import time
@@ -27,7 +26,6 @@ def _get_warmup_dispatcher(workers: int):
 
         _warmup_dispatcher = ProcessPoolWarmupDispatcher(max_workers=workers, trace_directory=None,
                                                          phase="autotune-warmup")
-        atexit.register(_warmup_dispatcher.finish)
     return _warmup_dispatcher
 
 
