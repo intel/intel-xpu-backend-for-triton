@@ -47,7 +47,7 @@ struct TestSymbolicBoundsPass
     if (failed(solver->initializeAndRun(mod)))
       return signalPassFailure();
 
-    SymbolicBoundsProver prover(*solver, mod);
+    SymbolicBoundsProver prover(*solver, getAnalysis<DominanceInfo>(), mod);
 
     // Pre-order, so the remarks appear in program order: the prover's
     // condition insertion order - and so the rendered condition order - is
