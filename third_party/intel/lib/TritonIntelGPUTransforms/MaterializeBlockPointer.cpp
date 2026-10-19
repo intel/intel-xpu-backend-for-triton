@@ -6,6 +6,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/Value.h"
@@ -94,6 +95,47 @@ isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
     return false;
   }
   return ttgi::isDivisible(tt::intel::getFinalValue(v), divisor);
+}
+
+// True if the descriptor index \p v is provably non-negative: a constant >= 0,
+// tt.get_program_id, arith.extui, arith.extsi of a proven value, arith.addi or
+// arith.muli of two, arith.shli of one by an in-range constant, or the
+// induction variable of a signed scf.for with a proven lower bound and step.
+// As in tt::intel::proveSign, the arithmetic is assumed not to overflow.
+// proveSign itself is not used: it trusts the integer range analysis, whose
+// loop-carried ranges can be too narrow. An iteration argument is refused: its
+// init says nothing about the values yielded into it.
+static bool isProvablyNonNegative(Value v, unsigned depth = 0) {
+  // A backstop against pathological IR, not a tuning knob.
+  if (depth > 16)
+    return false;
+
+  APInt cst;
+  if (matchPattern(v, m_ConstantInt(&cst)))
+    return !cst.isNegative();
+
+  if (auto arg = dyn_cast<BlockArgument>(v)) {
+    auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp());
+    return forOp && arg == forOp.getInductionVar() && !forOp.getUnsignedCmp() &&
+           isProvablyNonNegative(forOp.getLowerBound(), depth + 1) &&
+           isProvablyNonNegative(forOp.getStep(), depth + 1);
+  }
+
+  Operation *def = v.getDefiningOp();
+  if (isa<tt::GetProgramIdOp, arith::ExtUIOp>(def))
+    return true;
+  if (auto extOp = dyn_cast<arith::ExtSIOp>(def))
+    return isProvablyNonNegative(extOp.getIn(), depth + 1);
+  if (isa<arith::AddIOp, arith::MulIOp>(def))
+    return isProvablyNonNegative(def->getOperand(0), depth + 1) &&
+           isProvablyNonNegative(def->getOperand(1), depth + 1);
+  if (auto shlOp = dyn_cast<arith::ShLIOp>(def)) {
+    APInt amount;
+    return matchPattern(shlOp.getRhs(), m_ConstantInt(&amount)) &&
+           amount.ult(amount.getBitWidth()) &&
+           isProvablyNonNegative(shlOp.getLhs(), depth + 1);
+  }
+  return false;
 }
 
 struct TritonIntelGPUMaterializeBlockPointerPass
@@ -1116,11 +1158,11 @@ private:
 
   struct DescLoadUses {
     bool understood = true;
-    SmallVector<unsigned, 2> reduceAxes;
+    SmallVector<tt::ReduceOp, 2> reduces;
   };
 
   /// Follow the users of \p op through layout converts, tt.fp_to_fp and
-  /// elementwise ops. A tt.reduce records its axis and ends its path. Any other
+  /// elementwise ops. A tt.reduce is recorded and ends its path. Any other
   /// user is not understood and ends the walk: RemoveLayoutConversions can
   /// rematerialize even an anchored load into a shape op's layout
   /// (isExpensiveLoadRematCandidate). That includes a tt.store or
@@ -1134,7 +1176,7 @@ private:
       Value value = worklist.pop_back_val();
       for (Operation *user : value.getUsers()) {
         if (auto reduce = dyn_cast<tt::ReduceOp>(user)) {
-          uses.reduceAxes.push_back(reduce.getAxis());
+          uses.reduces.push_back(reduce);
           continue;
         }
         if (!isa<ttg::ConvertLayoutOp, tt::FpToFpOp>(user) &&
@@ -1147,6 +1189,87 @@ private:
       }
     }
     return uses;
+  }
+
+  /// True if a value computed from the results of \p reduces, or inside their
+  /// combine regions, may have a float element type narrower than 32 bits or
+  /// an i8/i16 one. The walk follows layout converts, elementwise ops
+  /// (tt.fp_to_fp included), tt.expand_dims, tt.broadcast, tt.splat, further
+  /// reductions, and values carried by scf.for and scf.if. A store ends a path
+  /// and must not store a narrow value. Any other user is not understood and
+  /// makes the answer true.
+  static bool mayNarrowReduceResults(ArrayRef<tt::ReduceOp> reduces) {
+    auto isNarrow = [](Value v) {
+      Type elemTy = getElementTypeOrSelf(v.getType());
+      if (auto floatTy = dyn_cast<FloatType>(elemTy))
+        return floatTy.getWidth() < 32;
+      return elemTy.isInteger(8) || elemTy.isInteger(16);
+    };
+    SmallVector<Value> worklist;
+    // Queue a reduction's results. Return true if its combine region computes
+    // a narrow value, which the result types would not show.
+    auto visitReduce = [&](tt::ReduceOp reduce) {
+      llvm::append_range(worklist, reduce.getResults());
+      return reduce.getCombineOp()
+          .walk([&](Operation *op) {
+            return llvm::any_of(op->getResults(), isNarrow)
+                       ? WalkResult::interrupt()
+                       : WalkResult::advance();
+          })
+          .wasInterrupted();
+    };
+    for (tt::ReduceOp reduce : reduces)
+      if (visitReduce(reduce))
+        return true;
+
+    DenseSet<Value> visited;
+    while (!worklist.empty()) {
+      Value value = worklist.pop_back_val();
+      if (!visited.insert(value).second)
+        continue;
+      if (isNarrow(value))
+        return true;
+      for (OpOperand &use : value.getUses()) {
+        Operation *user = use.getOwner();
+        if (auto yield = dyn_cast<scf::YieldOp>(user)) {
+          // The value reaches the parent's result and, in a loop, the next
+          // iteration's iter_arg.
+          Operation *parent = yield->getParentOp();
+          unsigned idx = use.getOperandNumber();
+          if (auto forOp = dyn_cast<scf::ForOp>(parent))
+            worklist.push_back(forOp.getRegionIterArgs()[idx]);
+          else if (!isa<scf::IfOp>(parent))
+            return true;
+          worklist.push_back(parent->getResult(idx));
+          continue;
+        }
+        if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+          // Only an init value is carried; a bound or the step is not followed.
+          BlockArgument iterArg = forOp.getTiedLoopRegionIterArg(&use);
+          if (!iterArg)
+            return true;
+          worklist.push_back(iterArg);
+          worklist.push_back(forOp.getTiedLoopResult(&use));
+          continue;
+        }
+        if (auto reduce = dyn_cast<tt::ReduceOp>(user)) {
+          if (visitReduce(reduce))
+            return true;
+          continue;
+        }
+        if (isa<tt::StoreOp, tt::DescriptorStoreOp>(user)) {
+          if (llvm::any_of(user->getOperands(), isNarrow))
+            return true;
+          continue;
+        }
+        if (!isa<ttg::ConvertLayoutOp, tt::ExpandDimsOp, tt::BroadcastOp,
+                 tt::SplatOp>(user) &&
+            !user->hasTrait<OpTrait::Elementwise>())
+          return true;
+        llvm::append_range(worklist, user->getResults());
+      }
+    }
+    return false;
   }
 
   /// Issue #8458: give the row-major descriptor load \p op, whose blocked
@@ -1178,6 +1301,15 @@ private:
       return;
     }
 
+    // Issue #8479: when the base is not 64-byte aligned, the 2D block read's
+    // base-alignment compensation moves the surface start left of the base, so
+    // a negative column offset reads memory instead of zeros. Only the column
+    // index (the stride-one dimension, last) matters: a negative row is fine.
+    if (!isProvablyNonNegative(op.getIndices().back())) {
+      LDBG("Column index is not provably non-negative (#8479); skip relayout");
+      return;
+    }
+
     auto currentEnc =
         dyn_cast<ttg::BlockedEncodingAttr>(currentTy.getEncoding());
     if (!currentEnc) {
@@ -1202,13 +1334,15 @@ private:
       return;
     }
 
-    if (!llvm::all_equal(uses.reduceAxes)) {
+    auto reduceAxes = llvm::map_range(
+        uses.reduces, [](tt::ReduceOp reduce) { return reduce.getAxis(); });
+    if (!llvm::all_equal(reduceAxes)) {
       LDBG("Reduces along more than one axis; skip relayout");
       return;
     }
     std::optional<unsigned> reducedDim;
-    if (!uses.reduceAxes.empty())
-      reducedDim = uses.reduceAxes.front();
+    if (!uses.reduces.empty())
+      reducedDim = uses.reduces.front().getAxis();
 
     // isExpensiveLoadOrStore does not anchor a smaller load, so
     // RemoveLayoutConversions would undo the relayout.
@@ -1219,6 +1353,18 @@ private:
       LDBG(currentTy.getNumElements()
            << " elements < " << numWarps * threadsPerWarp
            << " threads; skip relayout");
+      return;
+    }
+
+    // IGC fptrunc vectorizer miscompile; 16-lane sub-narrow outputs. With 16
+    // lanes, IGC merges the scalar fptrunc of uniform sub-group reduce results
+    // into a vector fptrunc that writes registers out of bounds (wrong values
+    // or a lost device), and int8 results come out wrong for a reason not yet
+    // known. Both predate the relayout, which exposes them on more kernels.
+    // 32 lanes, and 32-bit results at 16 lanes, were clean in fuzzing.
+    if (threadsPerWarp == 16 && mayNarrowReduceResults(uses.reduces)) {
+      LDBG("16 lanes and a reduction result that may be narrowed below 32 "
+           "bits; skip relayout");
       return;
     }
 
