@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import builtins
 import copy
 import time
@@ -26,6 +27,8 @@ def _get_warmup_dispatcher(workers: int):
 
         _warmup_dispatcher = ProcessPoolWarmupDispatcher(max_workers=workers, trace_directory=None,
                                                          phase="autotune-warmup")
+        # To print TRITON_CI_WARMUP_POOL diagnostic messages
+        atexit.register(_warmup_dispatcher.finish)
     return _warmup_dispatcher
 
 
@@ -224,17 +227,16 @@ class Autotuner(KernelInterface):
 
         from .._compile_warmup_pool import _UnsupportedPreloadError
 
+        # FIXME: it's not good to touch internal fields - update dispatcher API.
         pending_before = len(dispatcher._pending)
         dispatcher.dispatch(*args, kernel=kernel, grid=grid, test=None, **rest)
-
-        # FIXME: it's not good to touch internal fields - update dispatcher API.
-        pending = dispatcher._pending[pending_before:]
-        del dispatcher._pending[pending_before:]
-        for future in pending:
+        for future in dispatcher._pending[pending_before:]:
             try:
                 future.result()
             except _UnsupportedPreloadError:
-                pass
+                # Mark the future so `finish()`'s later drain (at process exit)
+                # doesn't raise this same, already-handled failure a second time.
+                dispatcher.tolerate_failure(future)
 
     def check_disk_cache(self, tuning_key, configs, bench_fn):
         # We can't serialize prehooks, so just give up and run the benchmarks.
