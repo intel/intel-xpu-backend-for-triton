@@ -689,12 +689,15 @@ void mlir::triton::populateClampFOpToLLVMPattern(
                                    benefit);
 }
 
+static void setIntMinNotPoison(LLVM::AbsOp op) {
+  op.setIsIntMinPoison(false);
+}
+
 void mlir::triton::populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP, ...)                                 \
-  patterns.add<                                                                \
-      ElementwiseOpConversion<SRC_OP, DST_OP __VA_OPT__(, ) __VA_ARGS__>>(     \
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP, ##__VA_ARGS__>>(        \
       typeConverter, axisInfoAnalysis, benefit);
 
   POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
@@ -703,8 +706,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
   POPULATE_UNARY_OP(arith::NegFOp, LLVM::FNegOp)
-  POPULATE_UNARY_OP(math::AbsIOp, LLVM::AbsOp,
-                    [](LLVM::AbsOp op) { op.setIsIntMinPoison(false); })
+  POPULATE_UNARY_OP(math::AbsIOp, LLVM::AbsOp, setIntMinNotPoison)
   POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
   POPULATE_UNARY_OP(math::CeilOp, math::CeilOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)

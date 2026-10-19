@@ -150,8 +150,11 @@ protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
 };
 
+template <typename DestOp> void noopCustomize(DestOp) {}
+
 // Trivial case where we map elementwise to an existing LLVM operator
-template <typename SourceOp, typename DestOp, auto Customize = [](DestOp) {}>
+template <typename SourceOp, typename DestOp,
+          void (*Customize)(DestOp) = noopCustomize<DestOp>>
 struct ElementwiseOpConversion
     : public ElementwiseOpConversionBase<
           SourceOp, ElementwiseOpConversion<SourceOp, DestOp, Customize>> {

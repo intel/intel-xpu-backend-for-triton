@@ -1,11 +1,25 @@
 #include "Data/Metric.h"
 #include "Utility/Errors.h"
 
-#include <bit>
+#include <cstring>
 #include <stdexcept>
 #include <type_traits>
 
 namespace proton {
+namespace {
+
+template <class To, class From>
+typename std::enable_if_t<sizeof(To) == sizeof(From) &&
+                              std::is_trivially_copyable_v<From> &&
+                              std::is_trivially_copyable_v<To>,
+                          To>
+bit_cast(const From &src) noexcept {
+  To dst;
+  std::memcpy(&dst, &src, sizeof(To));
+  return dst;
+}
+
+} // namespace
 
 std::map<uint64_t, MetricBuffer::MetricDescriptor>
     MetricBuffer::metricDescriptors;
@@ -101,22 +115,22 @@ collectTensorMetrics(Runtime *runtime,
                                    stream);
     runtime->synchronizeStream(stream);
     if (tensorMetric.typeIndex == variant_index_v<double, MetricValueType>) {
-      tensorMetricsHost[name] = std::bit_cast<double>(metricVector[0]);
+      tensorMetricsHost[name] = bit_cast<double>(metricVector[0]);
     } else if (tensorMetric.typeIndex ==
                variant_index_v<int64_t, MetricValueType>) {
-      tensorMetricsHost[name] = std::bit_cast<int64_t>(metricVector[0]);
+      tensorMetricsHost[name] = bit_cast<int64_t>(metricVector[0]);
     } else if (tensorMetric.typeIndex ==
                variant_index_v<std::vector<double>, MetricValueType>) {
       std::vector<double> values(tensorMetric.size);
       for (size_t i = 0; i < tensorMetric.size; ++i) {
-        values[i] = std::bit_cast<double>(metricVector[i]);
+        values[i] = bit_cast<double>(metricVector[i]);
       }
       tensorMetricsHost[name] = std::move(values);
     } else if (tensorMetric.typeIndex ==
                variant_index_v<std::vector<int64_t>, MetricValueType>) {
       std::vector<int64_t> values(tensorMetric.size);
       for (size_t i = 0; i < tensorMetric.size; ++i) {
-        values[i] = std::bit_cast<int64_t>(metricVector[i]);
+        values[i] = bit_cast<int64_t>(metricVector[i]);
       }
       tensorMetricsHost[name] = std::move(values);
     } else {
@@ -166,7 +180,7 @@ void MetricBuffer::queue(uint64_t seqId, MetricValueType scalarMetric,
         } else {
           static_assert(sizeof(T) == sizeof(uint64_t),
                         "MetricValueType alternative must be 8 bytes");
-          return std::bit_cast<uint64_t>(value);
+          return bit_cast<uint64_t>(value);
         }
       },
       scalarMetric);
@@ -204,7 +218,7 @@ void MetricBuffer::synchronize(DeviceBuffer &buffer) {
 MetricBuffer::DeviceBuffer &MetricBuffer::getOrCreateBuffer() {
   std::lock_guard<std::mutex> lock(bufferMutex);
   auto device = runtime->getDevice();
-  if (!deviceBuffers.contains(device)) {
+  if (!deviceBuffers.count(device)) {
     deviceBuffers[device] = DeviceBuffer{};
     auto &buffer = deviceBuffers.at(device);
     if (mappedHostBuffer) {

@@ -67,7 +67,7 @@ public:
 
   bool contains(const Key &key) const {
     std::shared_lock<std::shared_mutex> lock(mutex);
-    return map.contains(key);
+    return map.count(key) > 0;
   }
 
   bool erase(const Key &key) {
