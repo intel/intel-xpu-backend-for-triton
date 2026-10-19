@@ -190,6 +190,29 @@ struct LoadStoreConversionBase {
         .getMaskAlignment(mask);
   }
 
+  /// Returns true if `v` is proven broadcast (the same value in every lane)
+  /// by `AxisInfo`, i.e. its constancy covers the full shape in every
+  /// dimension. Scalars are trivially broadcast.
+  bool isBroadcast(Value v) const {
+    auto ty = dyn_cast<RankedTensorType>(v.getType());
+    if (!ty)
+      return true;
+    AxisInfo *info =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(v);
+    if (!info)
+      return false;
+    ArrayRef<int64_t> shape = ty.getShape();
+    for (unsigned d = 0, e = ty.getRank(); d < e; ++d)
+      if (info->getConstancy(d) < static_cast<unsigned>(shape[d]))
+        return false;
+    return true;
+  }
+
+  bool hasBroadcastAddrNonBroadcastMask(Value ptr, Value mask) const {
+    return mask && isBroadcast(ptr) && !isBroadcast(mask);
+  }
+
   /// Compute vectorization factor for descriptor load/store gather fallback.
   /// Queries the descriptor's address-level AxisInfo (analogous to how
   /// getVectorSize queries the pointer operand's AxisInfo for LoadOp).
@@ -1748,32 +1771,13 @@ struct PrefetchOpConversion
     if (!memoryRowMajor)
       return failure();
 
-    // A tensor value is "uniform" if `AxisInfo` proves its constancy covers
-    // the full shape in every dimension (same semantics as the regular path
-    // at line 1729–1736). Scalars are trivially uniform.
-    auto isUniform = [&](Value v) {
-      auto ty = dyn_cast<RankedTensorType>(v.getType());
-      if (!ty)
-        return true;
-      AxisInfo *info =
-          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-              .getAxisInfo(v);
-      if (!info)
-        return false;
-      ArrayRef<int64_t> shape = ty.getShape();
-      for (unsigned d = 0, e = ty.getRank(); d < e; ++d)
-        if (info->getConstancy(d) < static_cast<unsigned>(shape[d]))
-          return false;
-      return true;
-    };
-
-    // Collect operands that `AxisInfo` proves are uniform, descending
+    // Collect operands that `AxisInfo` proves are broadcast, descending
     // through `arith.andi` chains (as produced by `tt::getPredMask`).
-    // Non-uniform leaves are dropped — safe for a prefetch hint.
-    SmallVector<Value> uniformOps;
+    // Non-broadcast leaves are dropped — safe for a prefetch hint.
+    SmallVector<Value> broadcastOps;
     std::function<void(Value)> collect = [&](Value v) {
-      if (isUniform(v)) {
-        uniformOps.push_back(v);
+      if (isBroadcast(v)) {
+        broadcastOps.push_back(v);
         return;
       }
       if (auto andOp = v.getDefiningOp<arith::AndIOp>()) {
@@ -1785,14 +1789,14 @@ struct PrefetchOpConversion
     Value scalarPred;
     if (Value mask = op.getMask()) {
       collect(mask);
-      if (uniformOps.empty())
+      if (broadcastOps.empty())
         return failure();
 
-      // Reduce each uniform operand to a scalar `i1` (element 0 of the
+      // Reduce each broadcast operand to a scalar `i1` (element 0 of the
       // packed LLVM representation — all lanes hold the same value by
-      // definition of uniformity) and AND them together.
+      // definition of broadcast constancy) and AND them together.
       auto tb = TritonLLVMOpBuilder(op.getLoc(), rewriter);
-      for (Value v : uniformOps) {
+      for (Value v : broadcastOps) {
         Value remapped = rewriter.getRemappedValue(v);
         if (!remapped)
           return failure();
@@ -2201,10 +2205,16 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                                          getNonTemporalFlag(op))};
       };
 
+      // FIXME: this is a workaround for IGC bug. For details see
+      // https://github.com/intel/intel-xpu-backend-for-triton/issues/8374.
+      bool avoidPredicatedInstructions =
+          hasBroadcastAddrNonBroadcastMask(ptr, mask);
+
       Value ret;
       if (!pred)
         ret = createLoadWithAttrs()[0];
-      else if (canUsePredicatedInstructions(op)) {
+      else if (canUsePredicatedInstructions(op) &&
+               !avoidPredicatedInstructions) {
         auto cacheModifier = tritonToIntelCacheModifier(op);
         ret = TritonGEN::PredicatedLoadOp::create(
             rewriter, loc, retTy, addrElem, pred, other_, cacheModifier);
@@ -4879,7 +4889,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       if (matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
         Type elemTy = constAttr.getElementType();
         auto handleSplatValue = [&](auto splatVal) {
-          if (!splatVal.isZero()) {
+          if (!splatVal.isZero() || splatVal.isNegative()) {
             otherElems = SmallVector<Value>(
                 cfg.numElems,
                 LLVM::ConstantOp::create(rewriter, loc, elemTy, splatVal));

@@ -1,5 +1,4 @@
 #include "mlir/Interfaces/FunctionInterfaces.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/SmallVector.h"
@@ -7,6 +6,7 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
@@ -26,40 +26,6 @@ namespace {
 // NOTE: mirrors the file-local helper in
 // lib/Dialect/TritonGPU/Transforms/ReorderInstructions.cpp; kept local to
 // avoid an upstream-divergence edit.
-// DIVERGENCE: upstream returns false when the effects are unknown
-// (`getEffectsRecursively` == nullopt). Here we return true so that an op with
-// unknown effects is treated as a write. That is the conservative (safe)
-// direction for both uses of this helper: as a candidate purity test (unknown
-// effects -> not a candidate, do not sink) and inside crossWriteSideEffectingOp
-// (unknown intervening op -> assume it may write, do not sink across it).
-//
-// Writes to the `L2Cache` resource are NOT treated as memory writes: cache-fill
-// prefetches (`ttig.prefetch`, `ttig.descriptor_prefetch`) declare
-// `MemWrite<L2Cache>` only to keep CSE/DCE from removing them; they do not
-// mutate observable memory and so cannot alias a sunk load. This mirrors the
-// exclusion in AnnotateCacheControl, and is essential because the software
-// pipeliner emits prefetches between the bias loads and the loop in the
-// motivating SwiGLU kernel (issue #7250).
-static bool hasWriteSideEffect(Operation *op) {
-  std::optional<SmallVector<MemoryEffects::EffectInstance>> effects =
-      getEffectsRecursively(op);
-  if (!effects)
-    return true; // conservative: unknown effects -> assume a write
-  return llvm::any_of(*effects, [](MemoryEffects::EffectInstance effect) {
-    if (isa<MemoryEffects::Read, MemoryEffects::Allocate, MemoryEffects::Free>(
-            effect.getEffect()))
-      return false;
-    // A write to the L2 cache (a prefetch) does not mutate observable memory.
-    if (effect.getResource()->getResourceID() ==
-        triton::gpu::intel::L2Cache::getResourceID())
-      return false;
-    return true;
-  });
-}
-
-// NOTE: mirrors the file-local helper in
-// lib/Dialect/TritonGPU/Transforms/ReorderInstructions.cpp; kept local to
-// avoid an upstream-divergence edit.
 // Return true if there is a write side effect on any path between start and
 // end ops. This assumes start dominates end.
 static bool crossWriteSideEffectingOp(Operation *start, Operation *end) {
@@ -69,7 +35,7 @@ static bool crossWriteSideEffectingOp(Operation *start, Operation *end) {
     return true;
   Operation *nextOp = start->getNextNode();
   while (nextOp) {
-    if (hasWriteSideEffect(nextOp))
+    if (triton::gpu::intel::mayWriteMemory(nextOp))
       return true;
     if (nextOp == ancestor)
       return false;
@@ -183,7 +149,7 @@ private:
 
         // Must be pure (read-only or effect-free) to be moved. This excludes
         // volatile loads and stores automatically.
-        if (hasWriteSideEffect(&siblingOp))
+        if (triton::gpu::intel::mayWriteMemory(&siblingOp))
           continue;
 
         Operation *sinkPoint = getSinkPoint(&siblingOp, regionOp);

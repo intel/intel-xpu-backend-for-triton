@@ -55,7 +55,7 @@ def is_hip_cdna4():
 
 
 @constexpr_function
-def is_hip_gfx1250():
+def is_hip_cdna5():
     target = current_target()
     return target is not None and target.backend == "hip" and target.arch.startswith("gfx1250")
 

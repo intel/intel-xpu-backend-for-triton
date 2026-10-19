@@ -102,6 +102,35 @@ static void inferResultRange(arith::BitcastOp op,
   setResultRange(op.getResult(), argRanges[0]);
 }
 
+// Whether `op` is certain to finish and pass control to the next op.
+static bool transfersExecution(Operation *op) {
+  // May abort or may not return.
+  if (isa<tt::AssertOp>(op) || isa<CallOpInterface>(op))
+    return false;
+  // Regionless and not CallOpInterface, yet a poll may spin until the
+  // expected value appears (its timeout is a runtime value and may be
+  // unbounded), and an impure external call or inline asm may never return.
+  if (isa<tt::AtomicPollOp>(op))
+    return false;
+  if (auto ext = dyn_cast<tt::ExternElementwiseOp>(op); ext && !ext.getPure())
+    return false;
+  if (auto asmOp = dyn_cast<tt::ElementwiseInlineAsmOp>(op);
+      asmOp && !asmOp.getPure())
+    return false;
+  if (op->getNumRegions() == 0)
+    return true;
+  // These run single-block regions a bounded number of times, so they finish
+  // if their nested ops do. Loops are not modelled, and `tt.map_elementwise`
+  // regions may hold CFG cycles.
+  if (!isa<scf::IfOp, tt::ReduceOp, tt::ScanOp>(op))
+    return false;
+  for (Region &region : op->getRegions())
+    for (Operation &nested : region.getOps())
+      if (!transfersExecution(&nested))
+        return false;
+  return true;
+}
+
 bool assumeApplies(LLVM::AssumeOp assume, Operation *useOp,
                    const DominanceInfo &domInfo) {
   // Forward case: the assume runs before useOp on every path to useOp.
@@ -116,23 +145,9 @@ bool assumeApplies(LLVM::AssumeOp assume, Operation *useOp,
   Operation *anc = ab->findAncestorOpInBlock(*useOp);
   if (!anc || !anc->isBeforeInBlock(assume.getOperation()))
     return false;
-  for (Operation *op = anc; op != assume.getOperation();
-       op = op->getNextNode()) {
-    // May not terminate, may abort, or may not return.
-    if (op->getNumRegions() || isa<tt::AssertOp>(op) ||
-        isa<CallOpInterface>(op))
+  for (Operation *op = anc; op != assume.getOperation(); op = op->getNextNode())
+    if (!transfersExecution(op))
       return false;
-    // Regionless and not CallOpInterface, yet a no-timeout poll spins until
-    // the expected value appears, and an impure external call or inline asm
-    // may never return.
-    if (auto poll = dyn_cast<tt::AtomicPollOp>(op); poll && !poll.getTimeout())
-      return false;
-    if (auto ext = dyn_cast<tt::ExternElementwiseOp>(op); ext && !ext.getPure())
-      return false;
-    if (auto asmOp = dyn_cast<tt::ElementwiseInlineAsmOp>(op);
-        asmOp && !asmOp.getPure())
-      return false;
-  }
   return true;
 }
 
@@ -244,10 +259,11 @@ void IntegerRangeAnalysis::setToEntryState(
 
   // The entry state holds at every use, so an assume constrains it only if it
   // is certain to execute once the value exists: from just after the defining
-  // op for an op result, else from the start of the function.
+  // op for an op result (from the op itself if it is last in its block, which
+  // verified IR does not produce), else from the start of the function.
   Operation *from = &entryBlock->front();
-  if (Operation *def = anchor.getDefiningOp(); def && def->getNextNode())
-    from = def->getNextNode();
+  if (Operation *def = anchor.getDefiningOp())
+    from = def->getNextNode() ? def->getNextNode() : def;
   if (std::optional<ConstantIntRanges> assumedRange =
           getAssumedRange(anchor, from, assumptions, domInfo))
     range = *assumedRange;
@@ -283,8 +299,6 @@ LogicalResult IntegerRangeAnalysis::visitOperation(
     Operation *op,
     ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
     ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices) {
-  Block *block = op->getBlock();
-
   // Figure out the implied range of result and source operands.
   opResultAssumption.clear();
   for (OpResult result : op->getResults()) {
@@ -466,12 +480,9 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
     // TODO: I think this is bit conservative, the better way is:
     //  final_range = (old_range ∪ incomingRange) ∩ assume_range
     auto iter = opResultAssumption.find(resultVal);
-    if (iter != opResultAssumption.end()) {
-      const ConstantIntRanges &range = iter->second;
-      if (std::optional<ConstantIntRanges> assumedRange =
-              getAssumedRange(resultVal, op, assumptions, domInfo))
-        newRange = IntegerValueRange(newRange.getValue().intersection(range));
-    }
+    if (iter != opResultAssumption.end())
+      newRange =
+          IntegerValueRange(newRange.getValue().intersection(iter->second));
 
     // Update the range. Note that we are using `join` operation which means
     // `union`. Transfer function must be monotone! The resolver would otherwise
