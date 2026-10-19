@@ -2,6 +2,8 @@ name: UA offline tuning with cold graph replay
 run-name: UA CI-input tuning (${{ github.ref_name }})
 
 on:
+  schedule:
+    - cron: '0 22 * * 5'
   workflow_dispatch:
     inputs:
       runner_label:
@@ -18,6 +20,10 @@ on:
         type: choice
         default: all
         options: [all, '1', '2', '3', '4']
+      create_pr:
+        description: Propose config updates after all parts run on the default branch
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,7 +45,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        part: ${{ fromJSON(inputs.part == 'all' && '[1,2,3,4]' || format('[{0}]', inputs.part)) }}
+        part: ${{ fromJSON((inputs.part || 'all') == 'all' && '[1,2,3,4]' || format('[{0}]', inputs.part)) }}
     runs-on: ${{ fromJSON(startsWith(inputs.runner_label, 'max') && format('["linux", "rolling", "{0}"]', inputs.runner_label) || format('["linux", "{0}"]', inputs.runner_label || 'b580')) }}
     timeout-minutes: 1440
     defaults:
@@ -102,3 +108,68 @@ jobs:
           name: ua-cold-graph-part-${{ matrix.part }}-profiles
           path: reports
           if-no-files-found: warn
+
+  propose-configs:
+    name: Propose updated tuning configs
+    needs: tune
+    if: >-
+      ${{ success() && (github.event_name == 'schedule' ||
+          (inputs.create_pr && inputs.part == 'all' && github.ref_name == github.event.repository.default_branch)) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_BRANCH: ${{ github.event.repository.default_branch }}
+      RUNNER_LABEL: ${{ inputs.runner_label || 'b580' }}
+      CONFIG_DIR: benchmarks/triton_kernels_benchmark/vllm/unified_attention/configs
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ua-cold-graph-part-*-profiles
+          path: ${{ runner.temp }}/ua-tuning-artifacts
+      - name: Collect changed tuning winners
+        id: collect
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          python scripts/vllm/ua_tuning/collect.py \
+            --artifacts "$RUNNER_TEMP/ua-tuning-artifacts" --configs "$CONFIG_DIR" \
+            --report "$RUNNER_TEMP/ua-tuning-pr.md" --run-url "$RUN_URL" --source-sha "$SOURCE_SHA"
+          cat "$RUNNER_TEMP/ua-tuning-pr.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Create or update config PR
+        if: steps.collect.outputs.changed == 'true'
+        run: |
+          runner=$(printf '%s' "$RUNNER_LABEL" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-')
+          branch="bot/ua-offline-tuning-$runner"
+          previous=$(git ls-remote --heads origin "refs/heads/$branch" | cut -f1)
+          git switch -c "$branch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$CONFIG_DIR"
+          git commit -m "Update unified attention configs for $runner"
+          git push --force-with-lease="refs/heads/$branch:$previous" origin "HEAD:refs/heads/$branch"
+          number=$(gh pr list --repo "$GITHUB_REPOSITORY" --base "$BASE_BRANCH" --head "$branch" \
+            --state open --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --repo "$GITHUB_REPOSITORY" \
+              --title "Update unified attention configs for $runner" --body-file "$RUNNER_TEMP/ua-tuning-pr.md"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --base "$BASE_BRANCH" --head "$branch" \
+              --title "Update unified attention configs for $runner" --body-file "$RUNNER_TEMP/ua-tuning-pr.md"
+          fi
