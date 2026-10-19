@@ -895,45 +895,44 @@ tt.func public @no_else_hoistable_op(%c: i1, %p: !tt.ptr<f32>, %x: f32) {
 
 // -----
 
-// Negative: a condition from ttg.warp_id differs between warps, so a reduction
-// that consumes the first if's result must not be copied into the branches.
-// CHECK-LABEL: @warp_id_condition
+// Conservative rejection: a condition that depends on a load is not on the
+// pass's uniform whitelist (constants, program ids, kernel arguments), so a
+// reduction that consumes the first if's result is not copied into the branches.
+// CHECK-LABEL: @load_condition
 //       CHECK: scf.if
 //       CHECK: "tt.reduce"
 //       CHECK: scf.if
-// CANON-LABEL: @warp_id_condition
+// CANON-LABEL: @load_condition
 //       CANON: scf.if
 //       CANON: "tt.reduce"
 //       CANON: scf.if
-#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  tt.func public @warp_id_condition(%p: !tt.ptr<f32>, %a: tensor<64xf32, #blocked1d>) {
-    %w = "ttg.warp_id"() : () -> i32
-    %z = arith.constant 0 : i32
-    %c = arith.cmpi eq, %w, %z : i32
-    %0 = scf.if %c -> (tensor<64xf32, #blocked1d>) {
-      scf.yield %a : tensor<64xf32, #blocked1d>
-    } else {
-      %n = arith.negf %a : tensor<64xf32, #blocked1d>
-      scf.yield %n : tensor<64xf32, #blocked1d>
-    }
-    %s = "tt.reduce"(%0) <{axis = 0 : i32}> ({
-    ^bb0(%l: f32, %r: f32):
-      %x = arith.addf %l, %r : f32
-      tt.reduce.return %x : f32
-    }) : (tensor<64xf32, #blocked1d>) -> f32
-    scf.if %c {
-      tt.store %p, %s : !tt.ptr<f32>
-    } else {
-      tt.store %p, %s : !tt.ptr<f32>
-    }
-    tt.return
+tt.func public @load_condition(%flag: !tt.ptr<i32>, %p: !tt.ptr<f32>, %a: tensor<64xf32>) {
+  %z = arith.constant 0 : i32
+  %v = tt.load %flag : !tt.ptr<i32>
+  %c = arith.cmpi eq, %v, %z : i32
+  %0 = scf.if %c -> (tensor<64xf32>) {
+    scf.yield %a : tensor<64xf32>
+  } else {
+    %n = arith.negf %a : tensor<64xf32>
+    scf.yield %n : tensor<64xf32>
   }
+  %s = "tt.reduce"(%0) <{axis = 0 : i32}> ({
+  ^bb0(%l: f32, %r: f32):
+    %x = arith.addf %l, %r : f32
+    tt.reduce.return %x : f32
+  }) : (tensor<64xf32>) -> f32
+  scf.if %c {
+    tt.store %p, %s : !tt.ptr<f32>
+  } else {
+    tt.store %p, %s : !tt.ptr<f32>
+  }
+  tt.return
 }
 
 // -----
 
-// Negative: pure inline assembly is effect-free but may still be lane-dependent.
+// Conservative rejection: opaque pure inline assembly is effect-free but not on
+// the uniform whitelist. The tied constraint makes it an identity on its input.
 // CHECK-LABEL: @inline_asm_condition
 //       CHECK: scf.if
 //       CHECK: "tt.reduce"
@@ -944,7 +943,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 //       CANON: scf.if
 tt.func public @inline_asm_condition(%p: !tt.ptr<f32>, %a: tensor<64xf32>) {
   %z = arith.constant 0 : i32
-  %v = tt.elementwise_inline_asm "" {constraints = "=r,r", packed_element = 1 : i32, pure = true} %z : i32 -> i32
+  %v = tt.elementwise_inline_asm "" {constraints = "=r,0", packed_element = 1 : i32, pure = true} %z : i32 -> i32
   %c = arith.cmpi eq, %v, %z : i32
   %0 = scf.if %c -> (tensor<64xf32>) {
     scf.yield %a : tensor<64xf32>
@@ -1043,7 +1042,7 @@ tt.func private @private_helper_condition(%c: i1, %p: !tt.ptr<f32>, %a: tensor<6
 //       CANON:   scf.for
 //   CANON-NOT: scf.if
 //       CANON: tt.return
-tt.func public @inductor_softmax_online(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %xnumel: i32, %rnumel: i32) {
+tt.func public @inductor_softmax_online(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %mask: tensor<1x128xi1>, %xnumel: i32, %rnumel: i32) {
   %c0 = arith.constant 0 : i32
   %step = arith.constant 128 : i32
   %c128 = arith.constant 128 : i64
@@ -1052,10 +1051,6 @@ tt.func public @inductor_softmax_online(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %
   %zero = arith.constant dense<0.000000e+00> : tensor<1x128xf32>
   %ninf = arith.constant dense<0xFF800000> : tensor<1x128xf32>
   %pid = tt.get_program_id x : i32
-  %r = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-  %rb = tt.expand_dims %r {axis = 0 : i32} : tensor<128xi32> -> tensor<1x128xi32>
-  %rlim = tt.splat %rnumel : i32 -> tensor<1x128xi32>
-  %inp = tt.splat %in : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
   %rn = arith.extsi %rnumel : i32 to i64
   %rem = arith.remsi %rn, %c128 : i64
   %divisible = arith.cmpi eq, %rem, %c0l : i64
@@ -1064,26 +1059,19 @@ tt.func public @inductor_softmax_online(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %
   %rows = arith.subi %xn, %pid64 : i64
   %hasrow = arith.cmpi sge, %rows, %c1l : i64
   %g = arith.andi %divisible, %hasrow : i1
+  %inp = tt.splat %in : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
   %maxacc = scf.if %g -> (tensor<1x128xf32>) {
     %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %ninf) -> (tensor<1x128xf32>) : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
       %n = arith.maximumf %a, %x : tensor<1x128xf32>
       scf.yield %n : tensor<1x128xf32>
     }
     scf.yield %acc : tensor<1x128xf32>
   } else {
     %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %ninf) -> (tensor<1x128xf32>) : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %m = arith.cmpi slt, %idx, %rlim : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p, %m, %zero : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp, %mask, %ninf : tensor<1x128x!tt.ptr<f32>>
       %n = arith.maximumf %a, %x : tensor<1x128xf32>
-      %s = arith.select %m, %n, %a : tensor<1x128xi1>, tensor<1x128xf32>
-      scf.yield %s : tensor<1x128xf32>
+      scf.yield %n : tensor<1x128xf32>
     }
     scf.yield %acc : tensor<1x128xf32>
   }
@@ -1099,10 +1087,7 @@ tt.func public @inductor_softmax_online(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %
   %mxb = tt.broadcast %mx2 : tensor<1x1xf32> -> tensor<1x128xf32>
   %sumacc = scf.if %g -> (tensor<1x128xf32>) {
     %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero) -> (tensor<1x128xf32>) : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
       %d = arith.subf %x, %mxb : tensor<1x128xf32>
       %e = tt.extern_elementwise %d {libname = "", libpath = "", pure = true, symbol = "__imf_expf"} : (tensor<1x128xf32>) -> tensor<1x128xf32>
       %n = arith.addf %a, %e : tensor<1x128xf32>
@@ -1111,16 +1096,11 @@ tt.func public @inductor_softmax_online(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %
     scf.yield %acc : tensor<1x128xf32>
   } else {
     %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero) -> (tensor<1x128xf32>) : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %m = arith.cmpi slt, %idx, %rlim : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p, %m, %zero : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp, %mask, %zero : tensor<1x128x!tt.ptr<f32>>
       %d = arith.subf %x, %mxb : tensor<1x128xf32>
       %e = tt.extern_elementwise %d {libname = "", libpath = "", pure = true, symbol = "__imf_expf"} : (tensor<1x128xf32>) -> tensor<1x128xf32>
       %n = arith.addf %a, %e : tensor<1x128xf32>
-      %s = arith.select %m, %n, %a : tensor<1x128xi1>, tensor<1x128xf32>
-      scf.yield %s : tensor<1x128xf32>
+      scf.yield %n : tensor<1x128xf32>
     }
     scf.yield %acc : tensor<1x128xf32>
   }
@@ -1134,28 +1114,19 @@ tt.func public @inductor_softmax_online(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %
   %outp = tt.splat %out : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
   scf.if %g {
     scf.for %off = %c0 to %rnumel step %step : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
       %d = arith.subf %x, %mxb : tensor<1x128xf32>
       %e = tt.extern_elementwise %d {libname = "", libpath = "", pure = true, symbol = "__imf_expf"} : (tensor<1x128xf32>) -> tensor<1x128xf32>
       %q = arith.divf %e, %smb : tensor<1x128xf32>
-      %dst = tt.addptr %outp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      tt.store %dst, %q : tensor<1x128x!tt.ptr<f32>>
+      tt.store %outp, %q : tensor<1x128x!tt.ptr<f32>>
     }
   } else {
     scf.for %off = %c0 to %rnumel step %step : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %m = arith.cmpi slt, %idx, %rlim : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p, %m, %zero : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp, %mask, %zero : tensor<1x128x!tt.ptr<f32>>
       %d = arith.subf %x, %mxb : tensor<1x128xf32>
       %e = tt.extern_elementwise %d {libname = "", libpath = "", pure = true, symbol = "__imf_expf"} : (tensor<1x128xf32>) -> tensor<1x128xf32>
       %q = arith.divf %e, %smb : tensor<1x128xf32>
-      %dst = tt.addptr %outp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      tt.store %dst, %q, %m : tensor<1x128x!tt.ptr<f32>>
+      tt.store %outp, %q, %mask : tensor<1x128x!tt.ptr<f32>>
     }
   }
   tt.return
@@ -1163,8 +1134,8 @@ tt.func public @inductor_softmax_online(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %
 
 // -----
 
-// Inductor's Welford layer_norm forward: a 3-result if feeds a 3-operand
-// reduction, and the gap also holds two masked stores and an rsqrt. The two
+// Shaped like Inductor's Welford layer_norm forward (simplified loop bodies, the
+// real combiner): a 3-result if feeds a 3-operand reduction, and the gap also holds two masked stores and an rsqrt. The two
 // broadcasts are used independently by the next if's loop, so each branch must
 // yield its own pair, in order, next to the original three results.
 // CHECK-LABEL: @inductor_welford_layer_norm
@@ -1198,22 +1169,16 @@ tt.func public @inductor_softmax_online(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %
 //       CANON:   "tt.reduce"
 //   CANON-NOT: scf.if
 //       CANON: tt.return
-tt.func public @inductor_welford_layer_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %mean_ptr: !tt.ptr<f32>, %rstd_ptr: !tt.ptr<f32>, %xnumel: i32, %rnumel: i32) {
+tt.func public @inductor_welford_layer_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %mean_ptr: !tt.ptr<f32>, %rstd_ptr: !tt.ptr<f32>, %mask: tensor<1x128xi1>, %xnumel: i32, %rnumel: i32) {
   %c0 = arith.constant 0 : i32
   %step = arith.constant 128 : i32
   %c128 = arith.constant 128 : i64
   %c0l = arith.constant 0 : i64
   %c1l = arith.constant 1 : i64
-  %f0 = arith.constant 0.000000e+00 : f32
   %zero = arith.constant dense<0.000000e+00> : tensor<1x128xf32>
+  %f0 = arith.constant 0.000000e+00 : f32
   %one = arith.constant dense<1.000000e+00> : tensor<1x128xf32>
   %pid = tt.get_program_id x : i32
-  %xmask = arith.cmpi slt, %pid, %xnumel : i32
-  %r = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-  %rb = tt.expand_dims %r {axis = 0 : i32} : tensor<128xi32> -> tensor<1x128xi32>
-  %rlim = tt.splat %rnumel : i32 -> tensor<1x128xi32>
-  %inp = tt.splat %in : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
-  %outp = tt.splat %out : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
   %rn = arith.extsi %rnumel : i32 to i64
   %rem = arith.remsi %rn, %c128 : i64
   %divisible = arith.cmpi eq, %rem, %c0l : i64
@@ -1222,12 +1187,12 @@ tt.func public @inductor_welford_layer_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32
   %rows = arith.subi %xn, %pid64 : i64
   %hasrow = arith.cmpi sge, %rows, %c1l : i64
   %g = arith.andi %divisible, %hasrow : i1
+  %xmask = arith.cmpi slt, %pid, %xnumel : i32
+  %inp = tt.splat %in : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
+  %outp = tt.splat %out : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
   %st:3 = scf.if %g -> (tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>) {
     %acc:3 = scf.for %off = %c0 to %rnumel step %step iter_args(%mu = %zero, %m2 = %zero, %w = %zero) -> (tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>) : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
       %mu1 = arith.addf %mu, %x : tensor<1x128xf32>
       %xx = arith.mulf %x, %x : tensor<1x128xf32>
       %m21 = arith.addf %m2, %xx : tensor<1x128xf32>
@@ -1237,19 +1202,12 @@ tt.func public @inductor_welford_layer_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32
     scf.yield %acc#0, %acc#1, %acc#2 : tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>
   } else {
     %acc:3 = scf.for %off = %c0 to %rnumel step %step iter_args(%mu = %zero, %m2 = %zero, %w = %zero) -> (tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>) : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %m = arith.cmpi slt, %idx, %rlim : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p, %m, %zero : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp, %mask, %zero : tensor<1x128x!tt.ptr<f32>>
       %mu1 = arith.addf %mu, %x : tensor<1x128xf32>
       %xx = arith.mulf %x, %x : tensor<1x128xf32>
       %m21 = arith.addf %m2, %xx : tensor<1x128xf32>
       %w1 = arith.addf %w, %one : tensor<1x128xf32>
-      %mu2 = arith.select %m, %mu1, %mu : tensor<1x128xi1>, tensor<1x128xf32>
-      %m22 = arith.select %m, %m21, %m2 : tensor<1x128xi1>, tensor<1x128xf32>
-      %w2 = arith.select %m, %w1, %w : tensor<1x128xi1>, tensor<1x128xf32>
-      scf.yield %mu2, %m22, %w2 : tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>
+      scf.yield %mu1, %m21, %w1 : tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>
     }
     scf.yield %acc#0, %acc#1, %acc#2 : tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>
   }
@@ -1286,26 +1244,17 @@ tt.func public @inductor_welford_layer_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32
   %rstdb = tt.broadcast %rstd : tensor<1x1xf32> -> tensor<1x128xf32>
   scf.if %g {
     scf.for %off = %c0 to %rnumel step %step : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
       %c = arith.subf %x, %meanb : tensor<1x128xf32>
       %y = arith.mulf %c, %rstdb : tensor<1x128xf32>
-      %dst = tt.addptr %outp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      tt.store %dst, %y : tensor<1x128x!tt.ptr<f32>>
+      tt.store %outp, %y : tensor<1x128x!tt.ptr<f32>>
     }
   } else {
     scf.for %off = %c0 to %rnumel step %step : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %m = arith.cmpi slt, %idx, %rlim : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p, %m, %zero : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp, %mask, %zero : tensor<1x128x!tt.ptr<f32>>
       %c = arith.subf %x, %meanb : tensor<1x128xf32>
       %y = arith.mulf %c, %rstdb : tensor<1x128xf32>
-      %dst = tt.addptr %outp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      tt.store %dst, %y, %m : tensor<1x128x!tt.ptr<f32>>
+      tt.store %outp, %y, %mask : tensor<1x128x!tt.ptr<f32>>
     }
   }
   tt.return
@@ -1358,7 +1307,7 @@ tt.func public @inductor_welford_layer_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32
 //          AT: "tt.reduce"
 //      AT-NOT: scf.if
 //          AT: tt.return
-tt.func public @inductor_rms_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %rstd: !tt.ptr<f32>, %xnumel: i32, %rnumel: i32) {
+tt.func public @inductor_rms_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %rstd: !tt.ptr<f32>, %mask: tensor<1x128xi1>, %xnumel: i32, %rnumel: i32) {
   %c0 = arith.constant 0 : i32
   %step = arith.constant 128 : i32
   %c128 = arith.constant 128 : i64
@@ -1366,12 +1315,6 @@ tt.func public @inductor_rms_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %rstd: 
   %c1l = arith.constant 1 : i64
   %zero = arith.constant dense<0.000000e+00> : tensor<1x128xf32>
   %pid = tt.get_program_id x : i32
-  %xmask = arith.cmpi slt, %pid, %xnumel : i32
-  %r = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-  %rb = tt.expand_dims %r {axis = 0 : i32} : tensor<128xi32> -> tensor<1x128xi32>
-  %rlim = tt.splat %rnumel : i32 -> tensor<1x128xi32>
-  %inp = tt.splat %in : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
-  %outp = tt.splat %out : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
   %rn = arith.extsi %rnumel : i32 to i64
   %rem = arith.remsi %rn, %c128 : i64
   %divisible = arith.cmpi eq, %rem, %c0l : i64
@@ -1380,12 +1323,12 @@ tt.func public @inductor_rms_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %rstd: 
   %rows = arith.subi %xn, %pid64 : i64
   %hasrow = arith.cmpi sge, %rows, %c1l : i64
   %g = arith.andi %divisible, %hasrow : i1
+  %xmask = arith.cmpi slt, %pid, %xnumel : i32
+  %inp = tt.splat %in : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
+  %outp = tt.splat %out : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
   %sumsq = scf.if %g -> (tensor<1x128xf32>) {
     %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero) -> (tensor<1x128xf32>) : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
       %sq = arith.mulf %x, %x : tensor<1x128xf32>
       %n = arith.addf %a, %sq : tensor<1x128xf32>
       scf.yield %n : tensor<1x128xf32>
@@ -1393,15 +1336,10 @@ tt.func public @inductor_rms_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %rstd: 
     scf.yield %acc : tensor<1x128xf32>
   } else {
     %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero) -> (tensor<1x128xf32>) : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %m = arith.cmpi slt, %idx, %rlim : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p, %m, %zero : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp, %mask, %zero : tensor<1x128x!tt.ptr<f32>>
       %sq = arith.mulf %x, %x : tensor<1x128xf32>
       %n = arith.addf %a, %sq : tensor<1x128xf32>
-      %s = arith.select %m, %n, %a : tensor<1x128xi1>, tensor<1x128xf32>
-      scf.yield %s : tensor<1x128xf32>
+      scf.yield %n : tensor<1x128xf32>
     }
     scf.yield %acc : tensor<1x128xf32>
   }
@@ -1421,24 +1359,15 @@ tt.func public @inductor_rms_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %rstd: 
   %rsb = tt.broadcast %rs : tensor<1x1xf32> -> tensor<1x128xf32>
   scf.if %g {
     scf.for %off = %c0 to %rnumel step %step : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
       %y = arith.mulf %x, %rsb : tensor<1x128xf32>
-      %q = tt.addptr %outp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      tt.store %q, %y : tensor<1x128x!tt.ptr<f32>>
+      tt.store %outp, %y : tensor<1x128x!tt.ptr<f32>>
     }
   } else {
     scf.for %off = %c0 to %rnumel step %step : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %m = arith.cmpi slt, %idx, %rlim : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p, %m, %zero : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp, %mask, %zero : tensor<1x128x!tt.ptr<f32>>
       %y = arith.mulf %x, %rsb : tensor<1x128xf32>
-      %q = tt.addptr %outp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      tt.store %q, %y, %m : tensor<1x128x!tt.ptr<f32>>
+      tt.store %outp, %y, %mask : tensor<1x128x!tt.ptr<f32>>
     }
   }
   tt.return
@@ -1453,39 +1382,28 @@ tt.func public @inductor_rms_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %rstd: 
 //       CHECK: "tt.reduce"(%[[IF]])
 //   CHECK-NOT: scf.if
 //       CHECK: tt.return
-tt.func public @inductor_single_versioned_loop(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %xnumel: i32, %rnumel: i32) {
+tt.func public @inductor_single_versioned_loop(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %mask: tensor<1x128xi1>, %rnumel: i32) {
   %c0 = arith.constant 0 : i32
   %step = arith.constant 128 : i32
   %c128 = arith.constant 128 : i64
   %c0l = arith.constant 0 : i64
   %zero = arith.constant dense<0.000000e+00> : tensor<1x128xf32>
-  %r = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-  %rb = tt.expand_dims %r {axis = 0 : i32} : tensor<128xi32> -> tensor<1x128xi32>
-  %rlim = tt.splat %rnumel : i32 -> tensor<1x128xi32>
   %inp = tt.splat %in : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
   %rn = arith.extsi %rnumel : i32 to i64
   %rem = arith.remsi %rn, %c128 : i64
   %g = arith.cmpi eq, %rem, %c0l : i64
   %acc0 = scf.if %g -> (tensor<1x128xf32>) {
     %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero) -> (tensor<1x128xf32>) : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
       %n = arith.addf %a, %x : tensor<1x128xf32>
       scf.yield %n : tensor<1x128xf32>
     }
     scf.yield %acc : tensor<1x128xf32>
   } else {
     %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero) -> (tensor<1x128xf32>) : i32 {
-      %o = tt.splat %off : i32 -> tensor<1x128xi32>
-      %idx = arith.addi %o, %rb : tensor<1x128xi32>
-      %m = arith.cmpi slt, %idx, %rlim : tensor<1x128xi32>
-      %p = tt.addptr %inp, %idx : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
-      %x = tt.load %p, %m, %zero : tensor<1x128x!tt.ptr<f32>>
+      %x = tt.load %inp, %mask, %zero : tensor<1x128x!tt.ptr<f32>>
       %n = arith.addf %a, %x : tensor<1x128xf32>
-      %s = arith.select %m, %n, %a : tensor<1x128xi1>, tensor<1x128xf32>
-      scf.yield %s : tensor<1x128xf32>
+      scf.yield %n : tensor<1x128xf32>
     }
     scf.yield %acc : tensor<1x128xf32>
   }

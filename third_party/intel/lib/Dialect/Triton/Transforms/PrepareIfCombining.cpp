@@ -11,10 +11,11 @@
 // After this pass, %2 is moved before %1, making %1 and %3 adjacent so that
 // they can be combined by the canonicalizer.
 //
-// Conditions computed by identical expressions count as the same condition.
-// Ops that cannot move above the first if (they use its results or touch
-// memory) are copied into both of its branches instead, if the condition is
-// uniform across the program.
+// Conditions computed by identical side-effect-free expressions (compared up to
+// a fixed depth) count as the same condition. Ops that cannot move above the
+// first if (they use its results or touch memory) are copied into both of its
+// branches instead, if the condition is uniform across the program. An op that
+// would be copied is refused if it contains an scf.if.
 //===----------------------------------------------------------------------===//
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"

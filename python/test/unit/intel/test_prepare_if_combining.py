@@ -13,6 +13,9 @@ import torch
 
 import triton
 import triton.language as tl
+from triton._internal_testing import is_xpu
+
+pytestmark = pytest.mark.skipif(not is_xpu(), reason="PrepareIfCombining and RemoveMasks are Intel XPU passes")
 
 
 @triton.jit
