@@ -1284,16 +1284,15 @@ TEST_F(SymbolicBoundsTest, MaskMemoKeepsPointsAndLoopsApart) {
     }
   };
 
-  // Two program points: an assume that holds at the later one only, because a
-  // region-bearing op between the earlier point and the assume stops it from
+  // Two program points: an assume that holds at the later one only, because an
+  // op that may abort between the earlier point and the assume stops it from
   // applying backward.
   check(R"(
     tt.func @f(%n: i32, %flag: i1) {
       %c0 = arith.constant 0 : i32
       %m = arith.cmpi sge, %n, %c0 : i32 loc("m")
       %early = arith.constant 1 : i32 loc("early")
-      scf.if %flag {
-      }
+      tt.assert %flag, "must hold" : i1
       %ge = arith.cmpi sge, %n, %c0 : i32
       llvm.intr.assume %ge : i1
       %late = arith.constant 2 : i32 loc("late")
