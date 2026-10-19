@@ -2478,21 +2478,22 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
     OpOperand &thenRes = thenYield.getResultsMutable()[resIdx];
     OpOperand &elseRes = elseYield.getResultsMutable()[resIdx];
 
-    SetVector<Value> thenSlice, elseSlice;
-    DenseMap<Value, Attribute> thenLayout, elseLayout;
+    // Extend copies of the current slice along each edge, so that a layout
+    // already required elsewhere in the slice (or by the other edge) is seen as
+    // a conflict instead of being dropped when the results are merged.
+    auto newSlice = slice;
+    auto newLayout = layout;
 
     LogicalResult thenResult = getRematerializableSlice(
-        thenRes, rootLayout, thenSlice, thenLayout, isIfOp);
+        thenRes, rootLayout, newSlice, newLayout, isIfOp);
     LogicalResult elseResult = getRematerializableSlice(
-        elseRes, rootLayout, elseSlice, elseLayout, isIfOp);
+        elseRes, rootLayout, newSlice, newLayout, isIfOp);
 
     // If propagation across both edges of this conditional succeeded, then we
     // don't need to hoist across it. Merge into the current slice.
     if (succeeded(thenResult) && succeeded(elseResult)) {
-      slice.insert(thenSlice.begin(), thenSlice.end());
-      slice.insert(elseSlice.begin(), elseSlice.end());
-      layout.insert(thenLayout.begin(), thenLayout.end());
-      layout.insert(elseLayout.begin(), elseLayout.end());
+      slice = std::move(newSlice);
+      layout = std::move(newLayout);
       continue;
     }
 
@@ -2511,17 +2512,15 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
       continue;
     }
 
+    slice = std::move(newSlice);
+    layout = std::move(newLayout);
     // The layout conversion can be rematerialized along one edge but not the
     // other. We can hoist the conversion into the other branch. Push this
     // into the subslice list for analysis.
     if (succeeded(thenResult)) {
       hoistAbove.emplace_back(v, &elseRes);
-      slice.insert(thenSlice.begin(), thenSlice.end());
-      layout.insert(thenLayout.begin(), thenLayout.end());
     } else {
       hoistAbove.emplace_back(v, &thenRes);
-      slice.insert(elseSlice.begin(), elseSlice.end());
-      layout.insert(elseLayout.begin(), elseLayout.end());
     }
   }
 
