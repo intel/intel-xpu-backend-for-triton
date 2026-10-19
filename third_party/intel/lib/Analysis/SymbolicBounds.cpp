@@ -930,7 +930,10 @@ AffineForm SymbolicBoundsProver::normalizeUncached(
                                               dividend.getDefiningOp(), num,
                                               bitWidth(dividend.getType())});
         }
-        quotientInfo[{q, varyingLoopKey(dividend)}] = std::move(info);
+        // A dividend cut off by the depth cap is opaque, and the entry would
+        // outlive this query: a later, shallower one would then use it.
+        if (!exhausted)
+          quotientInfo[{q, varyingLoopKey(dividend)}] = std::move(info);
         return AffineForm::symbol(q);
       })
       .Case<arith::RemSIOp>([&](auto op) {
@@ -947,7 +950,8 @@ AffineForm SymbolicBoundsProver::normalizeUncached(
         if (x.overflowed())
           return giveUp();
         Symbol q = symbolFor(SymbolKind::Quotient, dividend, *c, placement);
-        if (!quotientInfo.count({q, varyingLoopKey(dividend)})) {
+        // Not stored when cut off by the depth cap, as for divsi.
+        if (!exhausted && !quotientInfo.count({q, varyingLoopKey(dividend)})) {
           QuotientInfo info;
           info.dividend = x;
           quotientInfo[{q, varyingLoopKey(dividend)}] = std::move(info);

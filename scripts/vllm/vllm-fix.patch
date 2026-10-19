@@ -1,5 +1,5 @@
 diff --git a/tests/kernels/attention/test_cascade_flash_attn.py b/tests/kernels/attention/test_cascade_flash_attn.py
-index 80c5c853de..e6ef4c1833 100755
+index 36c0c51de4..1499de2c03 100755
 --- a/tests/kernels/attention/test_cascade_flash_attn.py
 +++ b/tests/kernels/attention/test_cascade_flash_attn.py
 @@ -21,6 +21,8 @@ except ImportError:
@@ -11,6 +11,30 @@ index 80c5c853de..e6ef4c1833 100755
  
  NUM_HEADS = [(4, 4), (8, 2), (16, 2)]
  HEAD_SIZES = [128, 192, 256]
+diff --git a/tests/kernels/attention/test_triton_unified_attention_diffkv.py b/tests/kernels/attention/test_triton_unified_attention_diffkv.py
+index 213d896c03..b0faea196e 100644
+--- a/tests/kernels/attention/test_triton_unified_attention_diffkv.py
++++ b/tests/kernels/attention/test_triton_unified_attention_diffkv.py
+@@ -94,8 +94,8 @@ def test_triton_unified_attn_diffkv_vs_reference(
+ ) -> None:
+     head_size_qk, head_size_v = head_sizes
+ 
+-    # Keep the FA3/FA4 comparison on NVIDIA; ROCm uses the PyTorch oracle.
+-    if not current_platform.is_rocm():
++    # Keep the FA3/FA4 comparison on NVIDIA; ROCm and XPU use the PyTorch oracle.
++    if current_platform.is_cuda():
+         fa_version = get_flash_attn_version(
+             head_size=head_size_qk, head_size_v=head_size_v
+         )
+@@ -137,7 +137,7 @@ def test_triton_unified_attn_diffkv_vs_reference(
+         0, NUM_BLOCKS, (num_seqs, max_num_blocks_per_seq), dtype=torch.int32
+     )
+ 
+-    if current_platform.is_rocm():
++    if not current_platform.is_cuda():
+         # FP32 also keeps the helper's in-place scaling off the kernel input.
+         ref_out = ref_paged_attn(
+             query.float(),
 diff --git a/tests/kernels/core/test_fused_rms_norm_gated.py b/tests/kernels/core/test_fused_rms_norm_gated.py
 index 86b8e79656..e51b6328e8 100644
 --- a/tests/kernels/core/test_fused_rms_norm_gated.py
@@ -69,6 +93,20 @@ index 973e7885c6..e474275f57 100644
      ):
          mixer_single_gpu = Mixer2RMSNormGated(
              full_hidden_size=hidden_size,
+diff --git a/tests/kernels/mamba/test_mamba_ssm.py b/tests/kernels/mamba/test_mamba_ssm.py
+index c24f4c0f87..94b0f396fe 100644
+--- a/tests/kernels/mamba/test_mamba_ssm.py
++++ b/tests/kernels/mamba/test_mamba_ssm.py
+@@ -137,6 +137,9 @@ def selective_scan_opcheck_fn(
+     """If return_last_state is True, returns (out, last_state)
+     last_state has shape (batch, dim, dstate).
+     """
++    # XPU runs selective scan in Triton; there is no _C.selective_scan_fwd to opcheck.
++    if current_platform.is_xpu():
++        return
+     if u.stride(-1) != 1:
+         u = u.contiguous()
+     if delta.stride(-1) != 1:
 diff --git a/tests/kernels/mamba/utils.py b/tests/kernels/mamba/utils.py
 index c7cf473427..02f245de36 100644
 --- a/tests/kernels/mamba/utils.py
@@ -88,9 +126,10 @@ index c7cf473427..02f245de36 100644
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
 diff --git a/tests/kernels/moe/test_block_fp8.py b/tests/kernels/moe/test_block_fp8.py
+index 68f6b3b0b3..297ad492c7 100644
 --- a/tests/kernels/moe/test_block_fp8.py
 +++ b/tests/kernels/moe/test_block_fp8.py
-@@ -226,7 +226,11 @@
+@@ -239,7 +239,11 @@ def test_w8a8_block_fp8_fused_moe(
      # while fused_experts/the reference round SiLU to bf16 first. On large K/N this
      # ~1-ULP gap pushes m_out past the base tol, so validate m_out against an
      # fp32-SiLU reference — keeping the tight base tolerance, no widened override.
@@ -176,11 +215,72 @@ index 8d6deac4f0..776722a6e8 100644
  def test_batched_fused_marlin_moe(
      m: int,
      n: int,
+diff --git a/tests/quantization/test_per_token_kv_cache.py b/tests/quantization/test_per_token_kv_cache.py
+index 4d61932..b024d1b 100644
+--- a/tests/quantization/test_per_token_kv_cache.py
++++ b/tests/quantization/test_per_token_kv_cache.py
+@@ -567,9 +567,10 @@ def test_triton_unified_attention_per_token_head_scale(
+     value_cache_bf16 = torch.randn_like(key_cache_bf16)
+ 
+     if is_int4:
+-        # Asymmetric quantization reference (matches the Triton kernel).
+-        kf = key_cache_bf16.float()
+-        vf = value_cache_bf16.float()
++        # The INT4 cache lives in the RHT domain: rotate K/V before the
++        # asymmetric quantization, like reshape_and_cache_int4 does.
++        kf = single_rht(key_cache_bf16.float()).to(torch.bfloat16).float()
++        vf = single_rht(value_cache_bf16.float()).to(torch.bfloat16).float()
+         k_min = kf.amin(dim=-1)
+         k_max = kf.amax(dim=-1)
+         v_min = vf.amin(dim=-1)
+@@ -586,11 +587,22 @@ def test_triton_unified_attention_per_token_head_scale(
+             (vf / v_scale_cache[..., None] + v_zp[..., None]).round().clamp(0, 15)
+         )
+ 
+-        # Dequantized reference: x_hat = (q - zp) * scale
+-        key_cache_deq = (key_cache_q_full - k_zp[..., None]) * k_scale_cache[..., None]
+-        value_cache_deq = (value_cache_q_full - v_zp[..., None]) * v_scale_cache[
+-            ..., None
+-        ]
++        # Dequantized reference: x_hat = (q - zp) * scale, then IRHT/d back
++        # to the original domain the reference attention runs in.
++        key_cache_deq = (
++            single_rht(
++                (key_cache_q_full - k_zp[..., None]) * k_scale_cache[..., None],
++                inverse=True,
++            )
++            / head_size
++        )
++        value_cache_deq = (
++            single_rht(
++                (value_cache_q_full - v_zp[..., None]) * v_scale_cache[..., None],
++                inverse=True,
++            )
++            / head_size
++        )
+ 
+         # Pack two uint4 values into one byte
+         def _pack_int4(data_float):
+@@ -714,12 +726,5 @@ def test_triton_unified_attention_per_token_head_scale(
+         softmax_segm_expsum=softmax_segm_expsum,
+     )
+ 
+-    # Coarser quantization → wider tolerance.
+-    if is_int4:
+-        # Hopper's attention reduction order can move a few BF16 elements by
+-        # just over 1.0 after INT4 quantization.
+-        atol = 1.1 if current_platform.is_device_capability_family(90) else 0.5
+-        rtol = 0.5
+-    else:
+-        atol, rtol = 5e-2, 5e-2
+-    torch.testing.assert_close(output_q, output_ref, atol=atol, rtol=rtol)
++    # Both runs see the same dequantized KV, so INT4 needs no wider tolerance.
++    torch.testing.assert_close(output_q, output_ref, atol=5e-2, rtol=5e-2)
 diff --git a/tests/utils.py b/tests/utils.py
-index 399a741df0..421e7b2251 100644
+index dd6bf4ae96..1d4ca80bb3 100644
 --- a/tests/utils.py
 +++ b/tests/utils.py
-@@ -1975,7 +1975,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
+@@ -1942,7 +1942,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
  
              repo_root = str(VLLM_PATH.resolve())
              env = os.environ.copy()
@@ -194,8 +294,26 @@ index 399a741df0..421e7b2251 100644
              env[_SPAWN_CHILD_ENV] = "1"
  
              result = subprocess.run(
+diff --git a/tests/v1/sample/test_sampler.py b/tests/v1/sample/test_sampler.py
+index c23fe6c0ce..89d37c2d34 100644
+--- a/tests/v1/sample/test_sampler.py
++++ b/tests/v1/sample/test_sampler.py
+@@ -25,6 +25,13 @@ DEVICES = [
+ MAX_NUM_PROMPT_TOKENS = 64
+ 
+ 
++@pytest.fixture(autouse=True)
++def _restore_default_device():
++    # Tests below call torch.set_default_device(); don't leak it into later test files.
++    yield
++    torch.set_default_device(None)
++
++
+ def _create_fake_logits(batch_size: int, vocab_size: int) -> torch.Tensor:
+     fake_logits = torch.full((batch_size, vocab_size), 1e-2, dtype=torch.float)
+     return fake_logits
 diff --git a/tests/v1/spec_decode/test_speculators_eagle3.py b/tests/v1/spec_decode/test_speculators_eagle3.py
-index 9a252cfff..617083516 100644
+index 66736cce87..25c2496e28 100644
 --- a/tests/v1/spec_decode/test_speculators_eagle3.py
 +++ b/tests/v1/spec_decode/test_speculators_eagle3.py
 @@ -3,11 +3,13 @@
@@ -212,6 +330,19 @@ index 9a252cfff..617083516 100644
  @pytest.mark.parametrize(
      "model_path",
      [
+diff --git a/tests/watermarking/test_watermarking.py b/tests/watermarking/test_watermarking.py
+index 4de6022e34..82fdfe658a 100644
+--- a/tests/watermarking/test_watermarking.py
++++ b/tests/watermarking/test_watermarking.py
+@@ -719,7 +719,7 @@ def test_repeated_context_mask(context_width: int):
+ @pytest.mark.parametrize("context_width", [1, 3, 4, 16, 17])
+ def test_repeated_context_mask_accelerator_parity(context_width: int):
+     cpu_inputs = _repeated_context_inputs(context_width)
+-    accelerator_inputs = list(_repeated_context_inputs(context_width, "cuda"))
++    accelerator_inputs = list(_repeated_context_inputs(context_width, current_platform.device_type))
+     contexts = accelerator_inputs[-1]
+     storage = torch.empty(
+         contexts.shape[0], contexts.shape[1] * 2, dtype=contexts.dtype, device="cuda"
 diff --git a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
 index 18bf142491..c47cbf80ff 100644
 --- a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
@@ -249,11 +380,32 @@ index 18bf142491..c47cbf80ff 100644
  
      logger.info("Warming up MiniMax M3 MSA kernels.")
  
+diff --git a/vllm/models/inkling/nvidia/ops/norm.py b/vllm/models/inkling/nvidia/ops/norm.py
+index d34c1c3259..6ed27c6fb2 100644
+--- a/vllm/models/inkling/nvidia/ops/norm.py
++++ b/vllm/models/inkling/nvidia/ops/norm.py
+@@ -7,6 +7,7 @@ from functools import lru_cache
+ import torch
+ 
+ from vllm.triton_utils import tl, triton
++from vllm.utils.platform_utils import num_compute_units
+ 
+ _MAX_FUSED_SIZE = 65536
+ 
+@@ -28,7 +29,7 @@ def _largest_power_of_2(n: int) -> int:
+ 
+ @lru_cache(maxsize=128)
+ def _get_grid_size_for_mem_bw_kernel(device: torch.device, factor: int = 8) -> int:
+-    num_sms = torch.cuda.get_device_properties(device).multi_processor_count
++    num_sms = num_compute_units(device.index or 0)
+     return _largest_power_of_2(num_sms) * factor
+ 
+ 
 diff --git a/vllm/models/kimi_k3/amd/ops/third_party/kda/chunk_intra.py b/vllm/models/kimi_k3/amd/ops/third_party/kda/chunk_intra.py
-index 8b9aa86f9e..07b4a38893 100644
+index 0c600f3ba3..bc13318d83 100644
 --- a/vllm/models/kimi_k3/amd/ops/third_party/kda/chunk_intra.py
 +++ b/vllm/models/kimi_k3/amd/ops/third_party/kda/chunk_intra.py
-@@ -451,7 +451,7 @@ def chunk_kda_fwd_kernel_inter_solve_fused(
+@@ -349,7 +349,7 @@ def chunk_kda_fwd_kernel_inter_solve_fused(
          for num_warps in [1, 2, 4, 8]
          for num_stages in [2, 3, 4]
      ],
@@ -289,10 +441,10 @@ index 8b9aa86f9e..07b4a38893 100644
  @triton.jit(do_not_specialize=["B", "T"])
  def chunk_kda_fwd_kernel_intra_sub_chunk(
 diff --git a/vllm/platforms/rocm.py b/vllm/platforms/rocm.py
-index 9089d025e0..ee5aaf7cc8 100644
+index 487cffa670..c68d218287 100644
 --- a/vllm/platforms/rocm.py
 +++ b/vllm/platforms/rocm.py
-@@ -196,7 +196,7 @@ def _get_gcn_arch() -> str:
+@@ -201,7 +201,7 @@ def _get_gcn_arch() -> str:
      except Exception as e:
          logger.debug("Failed to get GCN arch via amdsmi: %s", e)
      # Ultimate fallback: use torch.cuda (will initialize CUDA)
@@ -301,3 +453,25 @@ index 9089d025e0..ee5aaf7cc8 100644
  
  
  # Resolve once at module load. Uses amdsmi (no CUDA init) so Ray workers
+diff --git a/vllm/v1/watermarking/gumbel.py b/vllm/v1/watermarking/gumbel.py
+index 655267d1e4..10330522ee 100644
+--- a/vllm/v1/watermarking/gumbel.py
++++ b/vllm/v1/watermarking/gumbel.py
+@@ -60,7 +60,7 @@ class GumbelWatermarker(Watermarker):
+         logits: torch.Tensor,
+         contexts: torch.Tensor,
+     ) -> WatermarkSample:
+-        if type(self.prf) is PhiloxPRF and logits.device.type == "cuda":
++        if type(self.prf) is PhiloxPRF and logits.device.type in ("cuda", "xpu"):
+             from vllm.v1.worker.gpu.sample.watermark import philox_gumbel_sample
+ 
+             return WatermarkSample(
+@@ -79,7 +79,7 @@ class GumbelWatermarker(Watermarker):
+         skip_mask: torch.Tensor,
+         random_sampler: RandomSampler,
+     ) -> WatermarkSample | None:
+-        if type(self.prf) is not PhiloxPRF or logits.device.type != "cuda":
++        if type(self.prf) is not PhiloxPRF or logits.device.type not in ("cuda", "xpu"):
+             return None
+ 
+         from vllm.v1.worker.gpu.sample.watermark import philox_gumbel_sample

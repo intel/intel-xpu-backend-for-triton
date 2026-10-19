@@ -9,9 +9,14 @@
 // isDivisible also looks through arith.subi, arith.minsi, arith.maxsi and
 // arith.select, requiring every value that can reach the result to be
 // divisible.
+//
+// An scf.for iteration argument advanced by a loop-invariant amount,
+// `x = init; x += c`, is divisible when both `init` and `c` are, in a nested
+// loop too (#8060).
 
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
@@ -26,6 +31,7 @@ class IsDivisibleTest : public ::testing::Test {
 public:
   void SetUp() override {
     ctx.getOrLoadDialect<arith::ArithDialect>();
+    ctx.getOrLoadDialect<scf::SCFDialect>();
     module = ModuleOp::create(UnknownLoc::get(&ctx));
     builder.setInsertionPointToStart(module->getBody());
   }
@@ -44,6 +50,22 @@ public:
                                               /*width=*/1);
     return arith::SelectOp::create(builder, UnknownLoc::get(&ctx), cond,
                                    trueValue, falseValue);
+  }
+
+  // The iteration argument `%x` of
+  //   scf.for %iv = 0 to 128 step 32 iter_args(%x = init) {
+  //     scf.yield %x + inc
+  //   }
+  BlockArgument iterArgAdvancedBy(Value init, Value inc) {
+    auto forOp = scf::ForOp::create(builder, UnknownLoc::get(&ctx),
+                                    constant(0, 32), constant(128, 32),
+                                    constant(32, 32), ValueRange{init});
+    BlockArgument x = forOp.getRegionIterArgs()[0];
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(forOp.getBody());
+    scf::YieldOp::create(builder, UnknownLoc::get(&ctx),
+                         binary<arith::AddIOp>(x, inc));
+    return x;
   }
 
 protected:
@@ -100,6 +122,29 @@ TEST_F(IsDivisibleTest, SelectRequiresBothValues) {
   // The condition is not consulted, even though it is the constant `true`.
   EXPECT_FALSE(isDivisible(select(constant(48, 32), constant(1, 32)), 16));
   EXPECT_FALSE(isDivisible(select(constant(1, 32), constant(48, 32)), 16));
+}
+
+TEST_F(IsDivisibleTest, LoopCarriedAddRequiresInitAndIncrement) {
+  EXPECT_TRUE(
+      isDivisible(iterArgAdvancedBy(constant(32, 32), constant(16, 32)), 16));
+  // The first iteration sees `init` itself, whatever the increment (#7990).
+  EXPECT_FALSE(
+      isDivisible(iterArgAdvancedBy(constant(1, 32), constant(16, 32)), 16));
+  EXPECT_FALSE(
+      isDivisible(iterArgAdvancedBy(constant(32, 32), constant(1, 32)), 16));
+}
+
+TEST_F(IsDivisibleTest, LoopCarriedAddInNestedLoop) {
+  // A K loop in a persistent or stream-K tile loop. The nested-loop refusal
+  // applies to the inner induction variable, not to its iteration arguments.
+  auto outer =
+      scf::ForOp::create(builder, UnknownLoc::get(&ctx), constant(0, 32),
+                         constant(128, 32), constant(64, 32));
+  builder.setInsertionPointToStart(outer.getBody());
+  BlockArgument x = iterArgAdvancedBy(constant(0, 32), constant(32, 32));
+  EXPECT_TRUE(isDivisible(x, 16));
+  auto inner = cast<scf::ForOp>(x.getOwner()->getParentOp());
+  EXPECT_FALSE(isDivisible(inner.getInductionVar(), 16));
 }
 
 } // namespace

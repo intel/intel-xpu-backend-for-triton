@@ -305,6 +305,38 @@ TEST_F(SymbolicBoundsTest, MemoDoesNotReuseACutOffResultHigherUp) {
   EXPECT_EQ(verdict(get("other")), "Refuted"); // v0 + 1 < v0 never holds
 }
 
+TEST_F(SymbolicBoundsTest, QuotientFactsDoNotKeepACutOffDividend) {
+  // `deepr` reaches x % 4 at depth 16, so x is cut off by the cap; `nearr`
+  // reaches it at depth 0 and must not use the cut-off dividend. `deepq` does
+  // the same through y / 4, whose quotient `nearq` shares.
+  std::string ir = "tt.func @f(%a: i32) {\n  %c1 = arith.constant 1 : i32\n"
+                   "  %c2 = arith.constant 2 : i32\n"
+                   "  %c4 = arith.constant 4 : i32\n"
+                   "  %x = arith.addi %a, %c1 : i32\n"
+                   "  %r = arith.remsi %x, %c4 : i32\n"
+                   "  %y = arith.addi %a, %c2 : i32\n"
+                   "  %q = arith.divsi %y, %c4 : i32\n"
+                   "  %s = arith.remsi %y, %c4 : i32\n"
+                   "  %u0 = arith.addi %r, %c1 : i32\n"
+                   "  %v0 = arith.addi %q, %c1 : i32\n";
+  for (int i = 1; i < 16; ++i)
+    for (const char *p : {"u", "v"})
+      ir += "  %" + std::string(p) + std::to_string(i) + " = arith.addi %" + p +
+            std::to_string(i - 1) + ", %c1 : i32\n";
+  ir += "  %deepr = arith.cmpi slt, %u15, %a : i32 loc(\"deepr\")\n"
+        "  %nearr = arith.cmpi slt, %r, %c4 : i32 loc(\"nearr\")\n"
+        "  %deepq = arith.cmpi slt, %v15, %a : i32 loc(\"deepq\")\n"
+        "  %nearq = arith.cmpi slt, %s, %c4 : i32 loc(\"nearq\")\n"
+        "  tt.return\n}\n";
+  parse(ir);
+  EXPECT_EQ(verdict(get("deepr")), "Unknown");
+  EXPECT_EQ(verdict(get("nearr")),
+            "Conditional{arg0 + 1 >= 0; arg0 <= 2147483646}");
+  EXPECT_EQ(verdict(get("deepq")), "Unknown");
+  EXPECT_EQ(verdict(get("nearq")),
+            "Conditional{arg0 + 2 >= 0; arg0 <= 2147483645}");
+}
+
 TEST_F(SymbolicBoundsTest, NormalizationRules) {
   // One case per remaining normalization rule.
   parse(R"(
@@ -1252,16 +1284,15 @@ TEST_F(SymbolicBoundsTest, MaskMemoKeepsPointsAndLoopsApart) {
     }
   };
 
-  // Two program points: an assume that holds at the later one only, because a
-  // region-bearing op between the earlier point and the assume stops it from
+  // Two program points: an assume that holds at the later one only, because an
+  // op that may abort between the earlier point and the assume stops it from
   // applying backward.
   check(R"(
     tt.func @f(%n: i32, %flag: i1) {
       %c0 = arith.constant 0 : i32
       %m = arith.cmpi sge, %n, %c0 : i32 loc("m")
       %early = arith.constant 1 : i32 loc("early")
-      scf.if %flag {
-      }
+      tt.assert %flag, "must hold" : i1
       %ge = arith.cmpi sge, %n, %c0 : i32
       llvm.intr.assume %ge : i1
       %late = arith.constant 2 : i32 loc("late")

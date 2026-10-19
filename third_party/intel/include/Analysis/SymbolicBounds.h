@@ -269,12 +269,13 @@ public:
   AffineForm normalize(Value v, QueryContext ctx,
                        SmallVectorImpl<Obligation> &obligations);
 
-  /// Decides whether the i1 (or i1 tensor) `v` is true in every element at
+  /// Decides whether `v` is nonzero (for i1, true) in every element at
   /// `ctx`. Looks through `tt.splat`, `tt.expand_dims`, `tt.broadcast` and
   /// `arith.ext*` only, and deliberately NOT through `getFinalValue`, which
   /// substitutes an iter_arg's init value without inspecting the yield: a
   /// loop-carried mask initialized `true` and yielding `false` would read as
-  /// always true. Any block argument is therefore `Unknown`.
+  /// always true. Any block argument is therefore `Unknown`. `arith.andi` is a
+  /// conjunction only on i1.
   ///
   /// The walk over the mask is bounded: it goes at most `kMaxMaskDepth` deep
   /// and evaluates at most `kMaxMaskVisits` nodes per query. A branch cut off
