@@ -1415,6 +1415,7 @@ run_vllm_tdesc_tests() {
     # path, so quantized-only tests (test_block_fp8.py, test_block_int8.py,
     # test_int8_kernel.py, test_triton_moe_ptpc_fp8.py) would only add autotuning
     # time here; they are covered by --vllm-moe and --vllm-quant.
+    VLLM_TUNED_CONFIG_FOLDER="${VLLM_TUNED_CONFIG_FOLDER:-$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/configs}" \
     VLLM_TRITON_USE_TD=1 TRITON_TEST_SUITE=vllm_tdesc \
       run_pytest_command -vvv \
         tests/kernels/moe/test_batched_moe.py \
