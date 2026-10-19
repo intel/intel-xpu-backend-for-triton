@@ -114,7 +114,8 @@ jobs:
     needs: tune
     if: >-
       ${{ success() && (github.event_name == 'schedule' ||
-          (inputs.create_pr && inputs.part == 'all' && github.ref_name == github.event.repository.default_branch)) }}
+          (inputs.create_pr && inputs.part == 'all' && (github.ref_name == github.event.repository.default_branch ||
+           github.ref_name == 'ua-offline-tuning-weekly-validation-8b28ead50f'))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -126,14 +127,14 @@ jobs:
       pull-requests: write
     env:
       GH_TOKEN: ${{ github.token }}
-      BASE_BRANCH: ${{ github.event.repository.default_branch }}
+      BASE_BRANCH: ua-offline-tuning-weekly
       RUNNER_LABEL: ${{ inputs.runner_label || 'b580' }}
       CONFIG_DIR: benchmarks/triton_kernels_benchmark/vllm/unified_attention/configs
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ env.BASE_BRANCH }}
           fetch-depth: 0
           token: ${{ github.token }}
       - uses: actions/setup-python@v7
@@ -156,7 +157,7 @@ jobs:
         if: steps.collect.outputs.changed == 'true'
         run: |
           runner=$(printf '%s' "$RUNNER_LABEL" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-')
-          branch="bot/ua-offline-tuning-$runner"
+          branch="bot/ua-offline-tuning-validation-$runner"
           previous=$(git ls-remote --heads origin "refs/heads/$branch" | cut -f1)
           git switch -c "$branch"
           git config user.name 'github-actions[bot]'
@@ -168,8 +169,8 @@ jobs:
             --state open --json number --jq '.[0].number // empty')
           if [ -n "$number" ]; then
             gh pr edit "$number" --repo "$GITHUB_REPOSITORY" \
-              --title "Update unified attention configs for $runner" --body-file "$RUNNER_TEMP/ua-tuning-pr.md"
+              --title "Validate weekly unified attention config updates for $runner" --body-file "$RUNNER_TEMP/ua-tuning-pr.md"
           else
-            gh pr create --repo "$GITHUB_REPOSITORY" --base "$BASE_BRANCH" --head "$branch" \
-              --title "Update unified attention configs for $runner" --body-file "$RUNNER_TEMP/ua-tuning-pr.md"
+            gh pr create --draft --repo "$GITHUB_REPOSITORY" --base "$BASE_BRANCH" --head "$branch" \
+              --title "Validate weekly unified attention config updates for $runner" --body-file "$RUNNER_TEMP/ua-tuning-pr.md"
           fi
