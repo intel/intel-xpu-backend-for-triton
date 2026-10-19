@@ -499,9 +499,10 @@ private:
   bool analyzeSmallTensorOfst;
 };
 
-template <typename SourceOp>
-  requires llvm::is_one_of<SourceOp, triton::LoadOp,
-                           triton::gpu::AsyncCopyGlobalToLocalOp>::value
+template <typename SourceOp,
+          typename = std::enable_if_t<llvm::is_one_of<
+              SourceOp, triton::LoadOp,
+              triton::gpu::AsyncCopyGlobalToLocalOp>::value>>
 struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   using OpRewritePattern<SourceOp>::OpRewritePattern;
 

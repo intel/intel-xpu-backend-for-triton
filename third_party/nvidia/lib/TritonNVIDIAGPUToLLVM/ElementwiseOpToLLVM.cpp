@@ -18,6 +18,10 @@ namespace mlir::triton {
 namespace gpu {
 namespace {
 
+void setApproxDivFastMath(LLVM::FDivOp op) {
+  op.setFastmathFlags(LLVM::FastmathFlags::afn);
+}
+
 /* ----- FP8E5M2 ------ */
 // This data-type is the standard FP8E5M2 format
 
@@ -334,8 +338,10 @@ struct FpToFpOpConversion
           "unsupported rounding mode for f32->" + dstName +
           " conversion: " + stringifyRoundingMode(rounding) + "\n");
     }
+    Value pzo = LLVM::createConstantI1(loc, rewriter, false);
     auto name = ("llvm.nvvm.f2" + dstName + "." + suffix).str();
-    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, dstTy, {v})
+    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, dstTy,
+                                           {v, pzo})
         .getResult(0);
   }
 
@@ -869,8 +875,7 @@ struct MulhiUIOpConversion
                                    Location loc) const {
     unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
     assert(bitWidth == 32 || bitWidth == 64);
-    StringRef intrinsic =
-        bitWidth == 32 ? "llvm.nvvm.mulhi.ui" : "llvm.nvvm.mulhi.ull";
+    StringRef intrinsic = "llvm.umulh";
     // A widened multiply/shift relies on LLVM recognizing explicit extensions.
     // InstCombine can replace those extensions with masks, losing mul.hi.
     return {LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, elemTy,
@@ -905,9 +910,7 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   POPULATE_OP(arith::MulFOp, LLVM::FMulOp);
   POPULATE_OP(triton::PreciseDivFOp, LLVM::FDivOp);
   POPULATE_OP(triton::PreciseSqrtOp, LLVM::SqrtOp);
-  POPULATE_OP(triton::ApproxDivFOp, LLVM::FDivOp, [](LLVM::FDivOp op) {
-    op.setFastmathFlags(LLVM::FastmathFlags::afn);
-  });
+  POPULATE_OP(triton::ApproxDivFOp, LLVM::FDivOp, setApproxDivFastMath);
 
   POPULATE_OP(arith::ExtFOp, LLVM::FPExtOp);
   POPULATE_OP(arith::TruncFOp, LLVM::FPTruncOp);

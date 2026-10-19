@@ -11,6 +11,8 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
+void setAbsIntMinPoisonFalse(LLVM::AbsOp op) { op.setIsIntMinPoison(false); }
+
 struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
   using ConvertOpToLLVMPattern<AddPtrOp>::ConvertOpToLLVMPattern;
 
@@ -277,7 +279,8 @@ struct ElementwiseInlineAsmOpConversion
                            /*asm_string=*/op.getAsmString(),
                            /*constraints=*/op.getConstraints(),
                            /*has_side_effects=*/!op.getPure(),
-                           /*is_align_stack=*/false, LLVM::TailCallKind::None,
+                           /*is_align_stack=*/false,
+                           LLVM::TailCallKind::None, /*convergent=*/false,
                            /*asm_dialect=*/
                            LLVM::AsmDialectAttr::get(rewriter.getContext(),
                                                      LLVM::AsmDialect::AD_ATT),
@@ -426,6 +429,7 @@ struct InlineAsmOpConversion
     auto call = LLVM::InlineAsmOp::create(
         rewriter, loc, returnType, operands, op.getAsmString(),
         op.getConstraints(), !op.getPure(), false, LLVM::TailCallKind::None,
+        /*convergent=*/false,
         LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT), ArrayAttr());
 
     SmallVector<Value> elements;
@@ -701,8 +705,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
   POPULATE_UNARY_OP(arith::NegFOp, LLVM::FNegOp)
-  POPULATE_UNARY_OP(math::AbsIOp, LLVM::AbsOp,
-                    [](LLVM::AbsOp op) { op.setIsIntMinPoison(false); })
+  POPULATE_UNARY_OP(math::AbsIOp, LLVM::AbsOp, setAbsIntMinPoisonFalse)
   POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
   POPULATE_UNARY_OP(math::CeilOp, math::CeilOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
