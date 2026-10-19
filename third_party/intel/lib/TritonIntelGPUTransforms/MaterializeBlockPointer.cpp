@@ -101,10 +101,13 @@ isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
 // tt.get_program_id, arith.extui, arith.extsi of a proven value, arith.addi or
 // arith.muli of two, arith.shli of one by an in-range constant, or the
 // induction variable of a signed scf.for with a proven lower bound and step.
-// As in tt::intel::proveSign, the arithmetic is assumed not to overflow.
-// proveSign itself is not used: it trusts the integer range analysis, whose
-// loop-carried ranges can be too narrow. An iteration argument is refused: its
-// init says nothing about the values yielded into it.
+// addi, muli and shli are trusted at 32 bits or more only, and are assumed not
+// to overflow there, as tt::intel::proveSign assumes: an i32 wrap needs a
+// product beyond any i32 extent, such as pid * 2147483647. Below 32 bits a
+// wrap is easy (255 * 257 is -1 as an i16). proveSign itself is not used: it
+// trusts the integer range analysis, whose loop-carried ranges can be too
+// narrow. An iteration argument is refused: its init says nothing about the
+// values yielded into it.
 static bool isProvablyNonNegative(Value v, unsigned depth = 0) {
   // A backstop against pathological IR, not a tuning knob.
   if (depth > 16)
@@ -126,6 +129,9 @@ static bool isProvablyNonNegative(Value v, unsigned depth = 0) {
     return true;
   if (auto extOp = dyn_cast<arith::ExtSIOp>(def))
     return isProvablyNonNegative(extOp.getIn(), depth + 1);
+  auto intTy = dyn_cast<IntegerType>(v.getType());
+  if (!intTy || intTy.getWidth() < 32)
+    return false;
   if (isa<arith::AddIOp, arith::MulIOp>(def))
     return isProvablyNonNegative(def->getOperand(0), depth + 1) &&
            isProvablyNonNegative(def->getOperand(1), depth + 1);
@@ -185,14 +191,18 @@ public:
       LDBG("enable-descriptor-relayout is off; skip the descriptor relayout");
       return;
     }
+    unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     mod.walk([&](tt::FuncOp func) {
       bool funcHasDot = false;
       SmallVector<tt::DescriptorLoadOp> loads;
+      SmallVector<tt::ReduceOp> reduces;
       func.walk([&](Operation *op) {
         if (isa<tt::DotOp, tt::DotScaledOp>(op))
           funcHasDot = true;
         else if (auto load = dyn_cast<tt::DescriptorLoadOp>(op))
           loads.push_back(load);
+        else if (auto reduce = dyn_cast<tt::ReduceOp>(op))
+          reduces.push_back(reduce);
       });
       // A function with a dot is excluded whole, as a conservative policy.
       if (funcHasDot) {
@@ -200,6 +210,8 @@ public:
                          << " has a tt.dot or tt.dot_scaled; skip relayout");
         return;
       }
+      if (!satisfiesRelayoutGates(func, loads, reduces, threadsPerWarp))
+        return;
       for (tt::DescriptorLoadOp load : loads)
         relayoutDescriptorLoadForBlockIO(load);
     });
@@ -1191,44 +1203,40 @@ private:
     return uses;
   }
 
-  /// True if a value computed from the results of \p reduces, or inside their
-  /// combine regions, may have a float element type narrower than 32 bits or
-  /// an i8/i16 one. The walk follows layout converts, elementwise ops
+  /// True if every value computed from the results of \p root, or inside the
+  /// combine region of \p root or of a later reduction, has an f32 or i32
+  /// element type. The walk follows layout converts, elementwise ops
   /// (tt.fp_to_fp included), tt.expand_dims, tt.broadcast, tt.splat, further
-  /// reductions, and values carried by scf.for and scf.if. A store ends a path
-  /// and must not store a narrow value. Any other user is not understood and
-  /// makes the answer true.
-  static bool mayNarrowReduceResults(ArrayRef<tt::ReduceOp> reduces) {
-    auto isNarrow = [](Value v) {
+  /// reductions, and values carried by scf.for and scf.if. A store ends a
+  /// path. Any other user is not understood and makes the answer false.
+  static bool isReduceConeF32OrI32(tt::ReduceOp root) {
+    auto isF32OrI32 = [](Value v) {
       Type elemTy = getElementTypeOrSelf(v.getType());
-      if (auto floatTy = dyn_cast<FloatType>(elemTy))
-        return floatTy.getWidth() < 32;
-      return elemTy.isInteger(8) || elemTy.isInteger(16);
+      return elemTy.isF32() || elemTy.isInteger(32);
     };
     SmallVector<Value> worklist;
-    // Queue a reduction's results. Return true if its combine region computes
-    // a narrow value, which the result types would not show.
+    // Queue a reduction's results. Return false if its combine region computes
+    // another type, which the result types would not show.
     auto visitReduce = [&](tt::ReduceOp reduce) {
       llvm::append_range(worklist, reduce.getResults());
-      return reduce.getCombineOp()
-          .walk([&](Operation *op) {
-            return llvm::any_of(op->getResults(), isNarrow)
-                       ? WalkResult::interrupt()
-                       : WalkResult::advance();
-          })
-          .wasInterrupted();
+      return !reduce.getCombineOp()
+                  .walk([&](Operation *op) {
+                    return llvm::all_of(op->getResults(), isF32OrI32)
+                               ? WalkResult::advance()
+                               : WalkResult::interrupt();
+                  })
+                  .wasInterrupted();
     };
-    for (tt::ReduceOp reduce : reduces)
-      if (visitReduce(reduce))
-        return true;
+    if (!visitReduce(root))
+      return false;
 
     DenseSet<Value> visited;
     while (!worklist.empty()) {
       Value value = worklist.pop_back_val();
       if (!visited.insert(value).second)
         continue;
-      if (isNarrow(value))
-        return true;
+      if (!isF32OrI32(value))
+        return false;
       for (OpOperand &use : value.getUses()) {
         Operation *user = use.getOwner();
         if (auto yield = dyn_cast<scf::YieldOp>(user)) {
@@ -1239,7 +1247,7 @@ private:
           if (auto forOp = dyn_cast<scf::ForOp>(parent))
             worklist.push_back(forOp.getRegionIterArgs()[idx]);
           else if (!isa<scf::IfOp>(parent))
-            return true;
+            return false;
           worklist.push_back(parent->getResult(idx));
           continue;
         }
@@ -1247,36 +1255,96 @@ private:
           // Only an init value is carried; a bound or the step is not followed.
           BlockArgument iterArg = forOp.getTiedLoopRegionIterArg(&use);
           if (!iterArg)
-            return true;
+            return false;
           worklist.push_back(iterArg);
           worklist.push_back(forOp.getTiedLoopResult(&use));
           continue;
         }
         if (auto reduce = dyn_cast<tt::ReduceOp>(user)) {
-          if (visitReduce(reduce))
-            return true;
+          if (!visitReduce(reduce))
+            return false;
           continue;
         }
-        if (isa<tt::StoreOp, tt::DescriptorStoreOp>(user)) {
-          if (llvm::any_of(user->getOperands(), isNarrow))
-            return true;
+        // A store ends the path: the operand it takes from the cone was
+        // checked when it was popped.
+        if (isa<tt::StoreOp, tt::DescriptorStoreOp>(user))
           continue;
-        }
         if (!isa<ttg::ConvertLayoutOp, tt::ExpandDimsOp, tt::BroadcastOp,
                  tt::SplatOp>(user) &&
             !user->hasTrait<OpTrait::Elementwise>())
-          return true;
+          return false;
         llvm::append_range(worklist, user->getResults());
       }
     }
-    return false;
+    return true;
+  }
+
+  /// The relayout's correctness gates, checked over all of \p func: like the
+  /// dot rule, they relay out every eligible load of the function or none.
+  /// Checking each load alone is not enough. A refused load keeps
+  /// ttig.block_io without an anchor, so RemoveLayoutConversions can move it,
+  /// with the ops behind it, into an anchored sibling's layout, and
+  /// LowerTo2DBlockLoad then makes it a 2D read after all. Pointer tt.loads
+  /// tagged for 2D reads are not considered.
+  static bool satisfiesRelayoutGates(tt::FuncOp func,
+                                     ArrayRef<tt::DescriptorLoadOp> loads,
+                                     ArrayRef<tt::ReduceOp> reduces,
+                                     unsigned threadsPerWarp) {
+    for (tt::DescriptorLoadOp load : loads) {
+      if (!load->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
+        continue;
+      // G1, issue #8479: when the base is not 64-byte aligned, the 2D block
+      // read's base-alignment compensation moves the surface start left of the
+      // base, so a negative column offset reads memory instead of zeros. Only
+      // the column index (the stride-one dimension, last) matters: a negative
+      // row is fine.
+      if (load.getIndices().size() < 2 ||
+          !isProvablyNonNegative(load.getIndices().back())) {
+        LDBG("G1 (#8479): column index of "
+             << *load << " is not provably non-negative; skip relayout of "
+             << func.getName());
+        return false;
+      }
+      // G3: once relaid out, a NaN-padded descriptor one element wide read 0.0
+      // instead of NaN at 16 lanes, for a reason not yet known. So at any lane
+      // count only zero padding, which an absent attribute also means, is
+      // allowed.
+      auto padding = load->getAttrOfType<tt::PaddingOptionAttr>(
+          ttgi::TritonIntelGPUDialect::getDescPaddingAttrName());
+      if (padding && padding.getValue() != tt::PaddingOption::PAD_ZERO) {
+        LDBG("G3: " << *load << " is not zero padded; skip relayout of "
+                    << func.getName());
+        return false;
+      }
+    }
+
+    // G2: IGC fptrunc vectorizer miscompile; 16-lane sub-narrow outputs. With
+    // 16 lanes, IGC merges the scalar fptrunc of uniform sub-group reduce
+    // results into a vector fptrunc that writes registers out of bounds (wrong
+    // values or a lost device), and int8 results come out wrong for a reason
+    // not yet known. So only f32 and i32 values, which fuzzing found clean, may
+    // follow a reduction. Every reduction is checked, not only those of the
+    // descriptor loads: RemoveLayoutConversions can move any of them into the
+    // new layout.
+    if (threadsPerWarp != 16)
+      return true;
+    for (tt::ReduceOp reduce : reduces) {
+      if (!isReduceConeF32OrI32(reduce)) {
+        LDBG("G2: 16 lanes and a value from "
+             << *reduce << " is not f32 or i32; skip relayout of "
+             << func.getName());
+        return false;
+      }
+    }
+    return true;
   }
 
   /// Issue #8458: give the row-major descriptor load \p op, whose blocked
   /// layout does not lower to 2D block reads, a layout that does. The result is
   /// converted back to the old type, and ttig.block_io_anchor makes
   /// RemoveLayoutConversions carry the new layout to the users. The caller
-  /// checks the option and skips every function with a dot.
+  /// checks the option, and skips every function with a dot or that fails
+  /// satisfiesRelayoutGates.
   void relayoutDescriptorLoadForBlockIO(tt::DescriptorLoadOp op) const {
     LDBG("Considering descriptor load for relayout: " << *op);
 
@@ -1298,15 +1366,6 @@ private:
     RankedTensorType currentTy = op.getType();
     if (currentTy.getRank() != 2) {
       LDBG("Rank " << currentTy.getRank() << " is not 2; skip relayout");
-      return;
-    }
-
-    // Issue #8479: when the base is not 64-byte aligned, the 2D block read's
-    // base-alignment compensation moves the surface start left of the base, so
-    // a negative column offset reads memory instead of zeros. Only the column
-    // index (the stride-one dimension, last) matters: a negative row is fine.
-    if (!isProvablyNonNegative(op.getIndices().back())) {
-      LDBG("Column index is not provably non-negative (#8479); skip relayout");
       return;
     }
 
@@ -1353,18 +1412,6 @@ private:
       LDBG(currentTy.getNumElements()
            << " elements < " << numWarps * threadsPerWarp
            << " threads; skip relayout");
-      return;
-    }
-
-    // IGC fptrunc vectorizer miscompile; 16-lane sub-narrow outputs. With 16
-    // lanes, IGC merges the scalar fptrunc of uniform sub-group reduce results
-    // into a vector fptrunc that writes registers out of bounds (wrong values
-    // or a lost device), and int8 results come out wrong for a reason not yet
-    // known. Both predate the relayout, which exposes them on more kernels.
-    // 32 lanes, and 32-bit results at 16 lanes, were clean in fuzzing.
-    if (threadsPerWarp == 16 && mayNarrowReduceResults(uses.reduces)) {
-      LDBG("16 lanes and a reduction result that may be narrowed below 32 "
-           "bits; skip relayout");
       return;
     }
 
