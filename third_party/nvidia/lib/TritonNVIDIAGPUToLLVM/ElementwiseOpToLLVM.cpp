@@ -334,8 +334,10 @@ struct FpToFpOpConversion
           "unsupported rounding mode for f32->" + dstName +
           " conversion: " + stringifyRoundingMode(rounding) + "\n");
     }
+    Value pzo = LLVM::createConstantI1(loc, rewriter, false);
     auto name = ("llvm.nvvm.f2" + dstName + "." + suffix).str();
-    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, dstTy, {v})
+    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, dstTy,
+                                           {v, pzo})
         .getResult(0);
   }
 
