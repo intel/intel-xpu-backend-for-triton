@@ -125,7 +125,7 @@ jobs:
       actions: read
       pull-requests: write
     env:
-      GH_TOKEN: ${{ secrets.BOT_TOKEN || github.token }}
+      GH_TOKEN: ${{ github.token }}
       BASE_BRANCH: ${{ github.event.repository.default_branch }}
       RUNNER_LABEL: ${{ inputs.runner_label || 'b580' }}
       CONFIG_DIR: benchmarks/triton_kernels_benchmark/vllm/unified_attention/configs
@@ -135,7 +135,7 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
-          token: ${{ secrets.BOT_TOKEN || github.token }}
+          token: ${{ github.token }}
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
