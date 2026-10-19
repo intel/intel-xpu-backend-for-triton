@@ -44,32 +44,41 @@ def test_args_json_gen():
     """Test generation of serialized arguments in JSON format."""
     try:
         print("Running SPIRVRunner to generate serialized args/Tensor data from Triton ...")
-        with tempfile.TemporaryDirectory(prefix="spirv_runner_cache_") as cache_root:
-            target_dir = os.path.join(SPIRV_RUNNER_TESTS, "add_kernel")
-            env = os.environ.copy()
-            env["TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS"] = "1"
-            env["TRITON_CACHE_DIR"] = cache_root
-            result = subprocess.run(["python3", "01-vector-add.py"], capture_output=True, text=True, cwd=target_dir,
-                                    env=env)
-            print("SPIRVRunner stderr:", result.stderr)
+        target_dir = os.path.join(SPIRV_RUNNER_TESTS, "add_kernel")
+        for selector in ("add_kernel", "all"):
+            with tempfile.TemporaryDirectory(prefix="spirv_runner_cache_") as cache_root:
+                env = os.environ.copy()
+                env["TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS"] = selector
+                env["TRITON_CACHE_DIR"] = cache_root
+                result = subprocess.run(
+                    ["python3", "01-vector-add.py"],
+                    capture_output=True,
+                    text=True,
+                    cwd=target_dir,
+                    env=env,
+                    check=True,
+                )
+                print("SPIRVRunner stderr:", result.stderr)
 
-            dump_dir = None
-            for root, _, files in os.walk(cache_root):
-                if "args_data.json" not in files:
-                    continue
-                args_path = os.path.join(root, "args_data.json")
-                with open(args_path) as args_file:
-                    args_data = json.load(args_file)
-                if args_data.get("spv_name") == "add_kernel.spv":
-                    dump_dir = root
-                    break
+                dump_dir = None
+                for root, _, files in os.walk(cache_root):
+                    if "args_data.json" not in files:
+                        continue
+                    args_path = os.path.join(root, "args_data.json")
+                    with open(args_path) as args_file:
+                        args_data = json.load(args_file)
+                    if args_data.get("spv_name") == "add_kernel.spv":
+                        dump_dir = root
+                        break
 
-            assert dump_dir is not None, f"args_data.json for add_kernel.spv not found under cache root: {cache_root}"
-            result = subprocess.run([SPIRV_RUNNER_PATH, "-d", dump_dir, "-o", "tensor_2"], capture_output=True,
-                                    text=True, check=True)
-            print("SPIRVRunner stderr:", result.stderr)
-            assert any(name.startswith("cpp_outs_") and name.endswith(".pt") for name in os.listdir(dump_dir)), \
-                f"No SPIRVRunner output tensor file found in dump dir: {dump_dir}"
+                assert dump_dir is not None, (
+                    f"args_data.json for add_kernel.spv not found under cache root: {cache_root} with selector={selector}"
+                )
+                result = subprocess.run([SPIRV_RUNNER_PATH, "-d", dump_dir, "-o", "tensor_2"], capture_output=True,
+                                        text=True, check=True)
+                print("SPIRVRunner stderr:", result.stderr)
+                assert any(name.startswith("cpp_outs_") and name.endswith(".pt") for name in os.listdir(dump_dir)), \
+                    f"No SPIRVRunner output tensor file found in dump dir: {dump_dir}"
     except subprocess.CalledProcessError as e:
         print("Unexpected error executing SPIRVRunner:", e)
         if e.stdout:

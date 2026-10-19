@@ -608,9 +608,23 @@ class intel_knobs(base_knobs):
     enable_sub_32_dpas: env_bool = env_bool("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32", False)
     fast_math: _env_fast_math = _env_fast_math()
 
-    enable_dump_spirv_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS", False)
+    enable_dump_spirv_kernel_args: env_opt_str = env_opt_str("TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS")
     dump_spirv_kernel_args_dir: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS_DIR")
     print_dump_spirv_kernel_args_info: env_bool = env_bool("TRITON_XPU_PRINT_DUMP_SPIRV_KERNEL_ARGS_INFO", False)
+
+    def should_dump_spirv_kernel_args(self, kernel_name: str) -> bool:
+        selector = self.enable_dump_spirv_kernel_args
+        if selector is None:
+            return False
+
+        selector = selector.strip()
+        if not selector:
+            return False
+
+        if selector.lower() in {"1", "true", "yes", "on", "all"}:
+            return True
+
+        return selector == kernel_name
 
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
 
