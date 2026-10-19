@@ -324,7 +324,8 @@ class SpirvUtils:
         try:
             return self.shared_library.load_binary(args)
         except Exception as e:
-            from triton.runtime.errors import IntelGPUError, OutOfResources
+            from triton.backends.intel.errors import IntelGPUError
+            from triton.runtime.errors import OutOfResources
             if isinstance(e, OutOfResources):
                 raise
             if str(e).startswith("ZE_"):
