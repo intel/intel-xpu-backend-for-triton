@@ -801,7 +801,7 @@ void init_triton_llvm(py::module_ &m) {
         if (!pluginFile.empty()) {
           // TODO: Add some logging here that we inserted a pass into the LLVM
           // pass pipeline
-          auto passPlugin = llvm::PassPlugin::Load(pluginFile);
+          auto passPlugin = llvm::PassPlugin::load(pluginFile);
           if (!passPlugin) {
             llvm::Error Err = passPlugin.takeError();
             std::string ErrMsg =
