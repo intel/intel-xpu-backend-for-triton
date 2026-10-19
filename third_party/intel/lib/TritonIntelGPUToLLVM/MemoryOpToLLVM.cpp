@@ -66,7 +66,8 @@ static Value loadWord(RewriterBase &rewriter, Location loc, Value alignedPtr,
   return LLVM::LoadOp::create(
       rewriter, loc, i32_ty, alignedPtr, /*alignment=*/4,
       /*isVolatile=*/false, /*isNonTemporal=*/false, /*isInvariant=*/false,
-      /*isInvariantGroup=*/false, LLVM::AtomicOrdering::monotonic, syncScope);
+      /*isInvariantGroup=*/false, /*isNoundef=*/false,
+      LLVM::AtomicOrdering::monotonic, syncScope);
 }
 
 // Load the containing word and extract the addressed sub-word.
