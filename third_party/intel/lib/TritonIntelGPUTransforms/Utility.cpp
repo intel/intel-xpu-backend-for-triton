@@ -16,6 +16,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "intel/include/Utils/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -91,13 +92,22 @@ bool isDivisible(Value value, int64_t divisor) {
              divisibilityAttr.getValue().getZExtValue() % divisor == 0;
     }
     if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      // An iteration argument advanced by a loop-invariant amount,
+      // `x = init; x += c`, holds `init + i * c` on iteration i, so it is
+      // divisible on every iteration if both `init` and `c` are. `c` must be
+      // defined outside the loop, which keeps it independent of `x` and the
+      // recursion finite.
+      if (blockArg != forOp.getInductionVar()) {
+        Value step = tt::intel::getIterArgIncrement(forOp, blockArg);
+        if (!step || !forOp.isDefinedOutsideOfLoop(step))
+          return false;
+        return isDivisible(forOp.getTiedLoopInit(blockArg)->get(), divisor) &&
+               isDivisible(step, divisor);
+      }
       // Nested loops aren't currently handled.
       if (forOp->template getParentOfType<scf::ForOp>())
         return false;
       if (!forOp.getSingleInductionVar())
-        return false;
-      // Check only if the block arg is the loop-var.
-      if (blockArg != forOp.getInductionVar())
         return false;
       return isDivisible(forOp.getLowerBound(), divisor) &&
              isDivisible(forOp.getStep(), divisor);
