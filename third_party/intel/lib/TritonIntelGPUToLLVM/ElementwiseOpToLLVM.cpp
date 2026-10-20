@@ -1351,6 +1351,22 @@ static int64_t getDotOperandK(Operation *op) {
   return ty.getShape()[ty.getRank() - (enc.getOpIdx() == 0 ? 1 : 2)];
 }
 
+// Whether `op`'s operand is a dot B operand that each of several warps holds in
+// full, i.e. all warps are along M.
+static bool isDotBInEveryWarp(Operation *op) {
+  auto ty = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto enc =
+      ty ? dyn_cast<triton::gpu::DotOperandEncodingAttr>(ty.getEncoding())
+         : nullptr;
+  auto dpas =
+      enc ? dyn_cast<triton::gpu::intel::DpasEncodingAttr>(enc.getParent())
+          : nullptr;
+  if (!dpas || enc.getOpIdx() != 1)
+    return false;
+  ArrayRef<unsigned> warps = dpas.getWarpsPerCTA();
+  return warps.back() == 1 && warps[warps.size() - 2] > 1;
+}
+
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<FpToFpOp, FpToFpOpConversion> {
@@ -1512,7 +1528,8 @@ struct FpToFpOpConversion
 
     // Software fp8e4m3 -> fp16 needs more choices than the two a
     // ConverterSelector holds: the integer-domain sequence on LTS drivers (see
-    // Fp8E4M3Nv_to_Fp16Int for why) and pairs for dot operands with K < 64.
+    // Fp8E4M3Nv_to_Fp16Int for why) and pairs for dot operands with K < 64 and
+    // for a B operand that every warp converts in full.
     //
     // FIXME: drop the LTS branch and Fp8E4M3Nv_to_Fp16Int once the float
     // sequence (which changed since the LoopSink blowup was measured; it now
@@ -1527,7 +1544,8 @@ struct FpToFpOpConversion
         static Converter c{Fp8E4M3Nv_to_Fp16Int, 2};
         return c;
       }
-      if (int64_t k = getDotOperandK(op); k && k < 64) {
+      if (int64_t k = getDotOperandK(op);
+          (k && k < 64) || isDotBInEveryWarp(op)) {
         static Converter c{Fp8E4M3Nv_to_Fp16Pairs, 2};
         return c;
       }
@@ -1683,7 +1701,8 @@ struct FpToFpOpFromDwordsConversion : public ConvertOpToLLVMPattern<FpToFpOp> {
                   ConversionPatternRewriter &rewriter) const override {
     if (!isa<Float8E4M3FNType>(getElementTypeOrSelf(op.getSrc().getType())) ||
         !getElementTypeOrSelf(op.getType()).isF16() ||
-        HasAttr<SUPPORT_F8_CONV>(op) || HasAttr<IS_LTS>(op))
+        HasAttr<SUPPORT_F8_CONV>(op) || HasAttr<IS_LTS>(op) ||
+        isDotBInEveryWarp(op))
       return failure();
     std::optional<SmallVector<std::pair<Value, int64_t>>> bytes =
         getBytesOfI32Vectors(adaptor.getSrc());

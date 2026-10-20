@@ -153,10 +153,10 @@ def test_fp8e4m3fn_to_fp16_all_bytes(device):
 
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
-@pytest.mark.parametrize("op_idx", [0, 1])
+@pytest.mark.parametrize("op_idx, num_warps", [(0, 1), (1, 1), (1, 4)])
 @pytest.mark.parametrize("k", [32, 64])
 @pytest.mark.parametrize("block_io", ["row_major", "column_major"])
-def test_fp8e4m3fn_to_fp16_dot_operand(op_idx, k, block_io, device, tmp_path):
+def test_fp8e4m3fn_to_fp16_dot_operand(op_idx, num_warps, k, block_io, device, tmp_path):
     """Exhaustive FP8E4M3FN -> FP16 conversion in dot operand layouts loaded by 2D block loads."""
     shape = (1024 // k, k) if op_idx == 0 else (k, 1024 // k)
     src_shape = shape[::-1] if block_io == "column_major" else shape
@@ -166,9 +166,9 @@ def test_fp8e4m3fn_to_fp16_dot_operand(op_idx, k, block_io, device, tmp_path):
     support_block_io = triton.runtime.driver.active.get_current_target().arch['has_2d_block_io']
 
     ir = f"""
-    #dpas = #ttig.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}}>
+    #dpas = #ttig.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [{num_warps}, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}}>
     #dot = #ttg.dot_op<{{opIdx = {op_idx}, parent = #dpas, kWidth = {2 if op_idx == 1 else 1}}}>
-    module attributes {{{"ttig.support_2d_block_io, " if support_block_io else ""}"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
+    module attributes {{{"ttig.support_2d_block_io, " if support_block_io else ""}"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {num_warps} : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
       tt.func public @fp8_to_fp16(%src: !tt.ptr<f8E4M3FN> {{tt.divisibility = 16 : i32}}, %dst: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
         %c0_i32 = arith.constant 0 : i32
         %c1_i64 = arith.constant 1 : i64
