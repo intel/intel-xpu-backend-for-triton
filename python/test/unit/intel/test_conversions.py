@@ -69,3 +69,24 @@ def test_convert_int_to_bf16_rounding(src_dtype, device):
     dst = torch.empty_like(src, dtype=torch.bfloat16)
     type_convert[(1, )](src, dst, None, src.numel())
     torch.testing.assert_close(dst, torch.tensor(expected, dtype=torch.bfloat16, device=device), rtol=0, atol=0)
+
+
+def test_convert_fp64_to_bf16_overflow(device):
+    if not triton.runtime.driver.active.get_current_target().arch["has_fp64"]:
+        pytest.xfail("float64 not supported on current xpu hardware")
+    # Finite values that overflow f32 still round to bf16 inf; inf and NaN stay as they are.
+    f32_max = torch.finfo(torch.float32).max
+    bf16_tie = (2 - 2**-8) * 2.0**127  # halfway between the bf16 max and inf
+    inf, nan = float("inf"), float("nan")
+    values = [
+        f32_max, f32_max * (1 + 2**-30), 2.0**128,
+        torch.finfo(torch.float64).max, inf, bf16_tie, bf16_tie * (1 - 2**-50), nan
+    ]
+    expected = [inf, inf, inf, inf, inf, inf, torch.finfo(torch.bfloat16).max, nan]
+    values += [-value for value in values]
+    expected += [-value for value in expected]
+    src = torch.tensor(values, dtype=torch.float64, device=device)
+    dst = torch.empty_like(src, dtype=torch.bfloat16)
+    type_convert[(1, )](src, dst, None, src.numel())
+    torch.testing.assert_close(dst, torch.tensor(expected, dtype=torch.bfloat16, device=device), rtol=0, atol=0,
+                               equal_nan=True)
