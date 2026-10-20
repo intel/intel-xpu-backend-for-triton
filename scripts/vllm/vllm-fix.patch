@@ -1150,6 +1150,48 @@ index 3379e385a0..235a19c141 100644
  )
  def test_draft_watermarker_cuda_graph_reads_current_prompt_lens():
      draft_watermarker = DraftWatermarker(
+diff --git a/vllm/model_executor/determinism/batch_invariant.py b/vllm/model_executor/determinism/batch_invariant.py
+index 589452c751..b0c4cba8ae 100644
+--- a/vllm/model_executor/determinism/batch_invariant.py
++++ b/vllm/model_executor/determinism/batch_invariant.py
+@@ -1356,24 +1356,25 @@ def enable_batch_invariant_mode():
+     # Native mean can change reduction order with the row count on XPU too.
+     _batch_invariant_LIB.impl("aten::mean.dim", mean_batch_invariant, key)
+ 
+-    # Softmax, log_softmax, and bmm are already batch-invariant on XPU
+-    # (oneDNN backend produces bitwise-identical results regardless of batch
+-    # context). Only register these overrides on CUDA where they are needed.
++    # Softmax and log_softmax are already batch-invariant on XPU (oneDNN
++    # backend produces bitwise-identical results regardless of batch context).
++    # Only register these overrides on CUDA where they are needed.
+     if not current_platform.is_xpu():
+         _batch_invariant_LIB.impl(
+             "aten::_log_softmax", _log_softmax_batch_invariant, key
+         )
+         _batch_invariant_LIB.impl("aten::softmax", softmax_batch_invariant, key)
+         _batch_invariant_LIB.impl("aten::_softmax", softmax_batch_invariant, key)
+-        # torch 2.12+ registers a built-in Triton bmm kernel for CUDA
+-        # (torch._native.ops.bmm_outer_product), so we need allow_override
+-        # to replace it at the dispatcher level.
+-        _batch_invariant_LIB.impl(
+-            "aten::bmm", bmm_batch_invariant, key, allow_override=True
+-        )
+-        _batch_invariant_LIB.impl(
+-            "aten::bmm.out", bmm_out_batch_invariant, key, allow_override=True
+-        )
++    # oneDNN bmm on XPU can change the reduction order with the row count.
++    # torch 2.12+ registers a built-in Triton bmm kernel for CUDA
++    # (torch._native.ops.bmm_outer_product), so we need allow_override
++    # to replace it at the dispatcher level.
++    _batch_invariant_LIB.impl(
++        "aten::bmm", bmm_batch_invariant, key, allow_override=True
++    )
++    _batch_invariant_LIB.impl(
++        "aten::bmm.out", bmm_out_batch_invariant, key, allow_override=True
++    )
+ 
+     reduced_precision_val = (
+         (False, False) if is_torch_equal_or_newer("2.10.0") else False
 diff --git a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
 index 2c8996a933..cc4b047c14 100644
 --- a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
