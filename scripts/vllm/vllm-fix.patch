@@ -689,6 +689,34 @@ index 62c8bc32bf..04c31427d1 100644
  def test_indexer_builder_deepseek_v4_compressed_slot_mapping_uses_num_states():
      """Regression test: DeepseekV4 compression path must compute slot_mapping from
      compressed positions, not reuse the uncompressed common metadata mapping.
+diff --git a/tests/v1/attention/test_mla_backends.py b/tests/v1/attention/test_mla_backends.py
+index 5a14123304..60e66b6d59 100644
+--- a/tests/v1/attention/test_mla_backends.py
++++ b/tests/v1/attention/test_mla_backends.py
+@@ -51,7 +51,7 @@ from vllm.v1.attention.backends.mla.prefill.selector import (
+ from vllm.v1.attention.backends.mla.prefill.trtllm_ragged import (
+     is_cute_dsl_mla_prefill_supported,
+ )
+-from vllm.v1.attention.backends.registry import AttentionBackendEnum
++from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
+ from vllm.v1.attention.ops.flashmla import is_flashmla_dense_supported
+ from vllm.v1.kv_cache_interface import (
+     KVQuantMode,
+@@ -296,6 +296,14 @@ if not torch.cuda.is_available() or torch.cuda.get_device_properties(0).major <
+ if not flash_attn_supports_mla():
+     BACKENDS_TO_TEST.remove(AttentionBackendEnum.FLASH_ATTN_MLA)
+ 
++# On XPU, FLASH_ATTN_MLA is served by XPUFlashAttnMLABackend (see
++# XPUPlatform.get_attn_backend_cls), so test that class, not the CUDA one.
++if current_platform.is_xpu() and AttentionBackendEnum.FLASH_ATTN_MLA in BACKENDS_TO_TEST:
++    register_backend(
++        AttentionBackendEnum.FLASH_ATTN_MLA,
++        "vllm.v1.attention.backends.mla.flashattn_mla.XPUFlashAttnMLABackend",
++    )
++
+ # Remove FLASHMLA from the list if not supported
+ if not is_flashmla_dense_supported()[0]:
+     BACKENDS_TO_TEST.remove(AttentionBackendEnum.FLASHMLA)
 diff --git a/tests/v1/sample/test_logprobs.py b/tests/v1/sample/test_logprobs.py
 index a9b73f0ca2..e08a9a21ac 100644
 --- a/tests/v1/sample/test_logprobs.py
