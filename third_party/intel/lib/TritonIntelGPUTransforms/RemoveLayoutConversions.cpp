@@ -2478,9 +2478,6 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
     OpOperand &thenRes = thenYield.getResultsMutable()[resIdx];
     OpOperand &elseRes = elseYield.getResultsMutable()[resIdx];
 
-    // Extend copies of the current slice along each edge, so that a layout
-    // already required elsewhere in the slice (or by the other edge) is seen as
-    // a conflict instead of being dropped when the results are merged.
     auto newSlice = slice;
     auto newLayout = layout;
 

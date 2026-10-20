@@ -3517,14 +3517,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COM: https://github.com/intel/intel-xpu-backend-for-triton/issues/8324
-// COM: hoistConvertIntoConditionals analyzed each scf.if branch from empty maps and merged them into
-// COM: the enclosing slice with insert(), which neither overwrites nor reports a clash, so a
-// COM: requirement that conflicted with the enclosing slice or the other branch was silently dropped
-// COM: (invalid IR, or a missed hoist). Branches are now analyzed against a copy of the enclosing maps
-// COM: and a conflict fails the branch: the convert goes into that branch, or after the conditional
-// COM: when it is not directly in a loop. Port of upstream triton-lang/triton#9083.
-
 // CHECK-DAG: #[[$SRC:blocked[0-9]*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
 // CHECK-DAG: #[[$OUT:blocked[0-9]*]] = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
 #src = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
@@ -3535,6 +3527,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   // COM: must keep %s in #src; before the fix it was left with a mismatched source layout. The second
   // COM: scf.if yields a function argument, an edge that cannot be rematerialized, which is what
   // COM: makes the pass rewrite the slice.
+
   // CHECK-LABEL: @enclosing(
   // CHECK: scf.if
   // CHECK-NOT: } else {
@@ -3570,6 +3563,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
   // COM: A conflict between the two arms of one scf.if. The arms are analyzed then-first, so it is
   // COM: the else arm that receives the convert.
+
   // CHECK-LABEL: @cross_arms(
   // CHECK: %[[IF:.*]] = scf.if
   // CHECK-NOT: ttg.convert_layout
@@ -3599,6 +3593,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
   // COM: The same conflict in an scf.if outside any loop, which only ends the slice (its convert goes
   // COM: after the scf.if), next to an accepted hoist into an scf.if inside the loop (%arg2 is %y).
+
   // CHECK-LABEL: @terminal(
   // CHECK: %[[O:.*]] = scf.if
   // CHECK-NOT: ttg.convert_layout
