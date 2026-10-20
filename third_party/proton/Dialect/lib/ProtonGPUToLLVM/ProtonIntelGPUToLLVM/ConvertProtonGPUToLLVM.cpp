@@ -60,23 +60,10 @@ struct ConvertProtonIntelGPUToLLVM
         typeConverter, patterns, protonTargetInfo, 1);
     mlir::triton::proton::gpu::Intel::populateProtonGPUOpIntelPatterns(
         typeConverter, patterns, protonTargetInfo, 1);
-
-    // `populateProtonGPUOpPatterns` fabricates fresh `gpu.block_id` /
-    // `gpu.grid_dim` ops (see `getLinearId()`) when lowering
-    // `proton_gpu.init`. By this point in the Intel pipeline the main
-    // `add_to_llvmir`/`add_gen_to_llvm` passes have already run, so nothing
-    // downstream will lower these -- pull in the same upstream MLIR
-    // conversion the main Intel pipeline uses for `tt.get_program_id`
-    // (`PipelineManager::populateConversionPatterns`) so the fixpoint-driven
-    // partial conversion below also cascades through them: it lowers
-    // `gpu.block_id`/`gpu.grid_dim`/etc. straight to calls to the SPIR-V
-    // OpenCL builtins (`get_group_id`, ...), no TritonGEN hop needed.
-    mlir::populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);
-
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
-
     auto convTarget = ProtonLLVMConversionTarget(*context);
     ConversionConfig config;
     config.allowPatternRollback = false;
@@ -84,9 +71,6 @@ struct ConvertProtonIntelGPUToLLVM
                                       config)))
       return signalPassFailure();
 
-    // The various type conversions above (segment/memdesc/pointer) can leave
-    // behind unrealized_conversion_cast pairs that LLVM translation can't
-    // handle; fold them away.
     OpPassManager pm;
     pm.addPass(createReconcileUnrealizedCastsPass());
     if (failed(runPipeline(pm, mod)))

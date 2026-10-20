@@ -171,9 +171,6 @@ void XpuRuntime::processHostBuffer(
     uint8_t *hostBuffer, size_t hostBufferSize, uint8_t *deviceBuffer,
     size_t deviceBufferSize, void *stream,
     std::function<void(uint8_t *, size_t)> callback) {
-  // Mirrors CudaRuntime/HipRuntime::processHostBuffer: copy the device
-  // buffer back in host-buffer-sized chunks, synchronizing before each
-  // callback since we only copy once the kernel has finished.
   int64_t chunkSize = std::min(hostBufferSize, deviceBufferSize);
   int64_t sizeLeftOnDevice = deviceBufferSize;
   while (chunkSize > 0) {
