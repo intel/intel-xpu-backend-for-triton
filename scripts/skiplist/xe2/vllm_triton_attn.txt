@@ -220,7 +220,7 @@ tests/v1/attention/test_mla_backends.py::test_backend_correctness[glm-MLAPrefill
 tests/v1/attention/test_mla_backends.py::test_chunked_context_backend_correctness[False-trtllm-gen-auto-deepseek-MLAPrefillBackendEnum.FLASH_ATTN]
 tests/v1/attention/test_mla_backends.py::test_chunked_context_backend_correctness[False-trtllm-gen-auto-glm-MLAPrefillBackendEnum.FLASH_ATTN]
 
-# indexer_k_quant_and_cache does not support the mxfp8 scale format on XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/8486
+# test_indexer_quant_cache_roundtrip runs the CUDA SM100-only mxfp8 cases on XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/8486
 tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-16-17]
 tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-16-1]
 tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-16-4]
