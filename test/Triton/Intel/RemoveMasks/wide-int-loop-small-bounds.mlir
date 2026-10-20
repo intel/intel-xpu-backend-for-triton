@@ -1,13 +1,8 @@
 // RUN: triton-opt %s -triton-intel-remove-masks | FileCheck %s
 
-// COM: Policy (#8368): collectLoopIVRange returns no range for an IV wider than
-// COM: 64 bits, even when its bounds are small, so RemoveMasks keeps the mask.
-// COM: `tt.splat` rejects i128, so the IV reaches the mask through
-// COM: `arith.index_cast` (peeled by `getFinalValue`).
 // COM: Control: with an i64 IV the mask is provably true (IV in [0, 480], lanes
 // COM: 0..31, bound 1000), so it is dropped: the load feeding the addf is
 // COM: unmasked.
-// CHECK-LABEL: @i64_iv_mask_dropped
 tt.func public @i64_iv_mask_dropped(%arg0: !tt.ptr<f32>) -> tensor<32xf32> {
   %cst = arith.constant dense<0.000000e+00> : tensor<32xf32>
   %c0 = arith.constant 0 : i64
@@ -30,14 +25,19 @@ tt.func public @i64_iv_mask_dropped(%arg0: !tt.ptr<f32>) -> tensor<32xf32> {
   }
   tt.return %r : tensor<32xf32>
 }
+// CHECK-LABEL: @i64_iv_mask_dropped
 // CHECK:         scf.for
 // CHECK:           %[[PTRS:.*]] = tt.addptr
 // CHECK-NEXT:      %[[LOAD:.*]] = tt.load %[[PTRS]] : tensor<32x!tt.ptr<f32>>
 // CHECK:           arith.addf %{{.*}}, %[[LOAD]]
 
-// COM: Same IR with an i128 IV and bounds: collectLoopIVRange gives no range
-// COM: whatever the bounds, so the mask stays.
-// CHECK-LABEL: @i128_iv_mask_kept
+// -----
+
+// COM: Policy (#8368): collectLoopIVRange returns no range for an IV wider than
+// COM: 64 bits, even when its bounds are small, so RemoveMasks keeps the mask.
+// COM: Same IR as the control with an i128 IV. `tt.splat` rejects i128, so the
+// COM: IV reaches the mask through `arith.index_cast` (peeled by
+// COM: `getFinalValue`).
 tt.func public @i128_iv_mask_kept(%arg0: !tt.ptr<f32>) -> tensor<32xf32> {
   %cst = arith.constant dense<0.000000e+00> : tensor<32xf32>
   %c0 = arith.constant 0 : i128
@@ -60,14 +60,16 @@ tt.func public @i128_iv_mask_kept(%arg0: !tt.ptr<f32>) -> tensor<32xf32> {
   }
   tt.return %r : tensor<32xf32>
 }
+// CHECK-LABEL: @i128_iv_mask_kept
 // CHECK:         scf.for
 // CHECK:           %[[MASK:.*]] = arith.cmpi slt
 // CHECK-NEXT:      %[[PTRS:.*]] = tt.addptr
 // CHECK-NEXT:      %[[LOAD:.*]] = tt.load %[[PTRS]], %[[MASK]] : tensor<32x!tt.ptr<f32>>
 // CHECK-NEXT:      arith.addf %{{.*}}, %[[LOAD]]
 
+// -----
+
 // COM: i65 is the smallest wide type: no range either, so the mask stays.
-// CHECK-LABEL: @i65_iv_mask_kept
 tt.func public @i65_iv_mask_kept(%arg0: !tt.ptr<f32>) -> tensor<32xf32> {
   %cst = arith.constant dense<0.000000e+00> : tensor<32xf32>
   %c0 = arith.constant 0 : i65
@@ -90,6 +92,7 @@ tt.func public @i65_iv_mask_kept(%arg0: !tt.ptr<f32>) -> tensor<32xf32> {
   }
   tt.return %r : tensor<32xf32>
 }
+// CHECK-LABEL: @i65_iv_mask_kept
 // CHECK:         scf.for
 // CHECK:           %[[MASK:.*]] = arith.cmpi slt
 // CHECK-NEXT:      %[[PTRS:.*]] = tt.addptr

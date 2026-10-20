@@ -2,14 +2,9 @@
 
 // COM: Abort regression (#8368): a loop over a type wider than 64 bits whose
 // COM: bounds do not fit in int64_t must not reach `APInt::getSExtValue` in
-// COM: `collectLoopIVRange`. scf.for's own verifier narrows a constant lower
-// COM: bound to int64_t (getStaticTripCount) and aborts if it does not fit, so
-// COM: the bounds are computed (1 << 65, 1 << 64). ub < lb keeps the solver's
-// COM: trip-count query from narrowing, which isolates `collectLoopIVRange`.
-// COM: The mask is a real `arith.cmpi`, as in wide-int-loop-small-bounds.mlir,
-// COM: so the call is reached whatever the order of the checks in
-// COM: `classifyCmp`. The IV has no int64_t range, so the mask is kept.
-// CHECK-LABEL: @i128_zero_trip_mask_kept
+// COM: `collectLoopIVRange`. The bounds are computed (1 << 65, 1 << 64) because
+// COM: scf.for's own verifier aborts on a constant bound that does not fit in
+// COM: int64_t. The IV has no int64_t range, so the mask is kept.
 tt.func public @i128_zero_trip_mask_kept(%arg0: !tt.ptr<f32>) -> tensor<32xf32> {
   %cst = arith.constant dense<0.000000e+00> : tensor<32xf32>
   %one = arith.constant 1 : i128
@@ -34,6 +29,7 @@ tt.func public @i128_zero_trip_mask_kept(%arg0: !tt.ptr<f32>) -> tensor<32xf32> 
   }
   tt.return %r : tensor<32xf32>
 }
+// CHECK-LABEL: @i128_zero_trip_mask_kept
 // CHECK:         scf.for
 // CHECK:           %[[MASK:.*]] = arith.cmpi slt
 // CHECK-NEXT:      %[[PTRS:.*]] = tt.addptr
