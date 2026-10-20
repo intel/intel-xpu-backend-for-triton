@@ -72,7 +72,7 @@ index f2399b7423..930eccc825 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index d914e574f2..c5265fda4d 100644
+index d914e574f2..3c9eb8a9dc 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -176,7 +176,7 @@ index d914e574f2..c5265fda4d 100644
  
          if USE_SOFTCAP:
              S = apply_softcap(S, softcap)
-@@ -568,35 +627,23 @@ def kernel_unified_attention(
+@@ -568,25 +627,12 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -205,24 +205,7 @@ index d914e574f2..c5265fda4d 100644
          else:
              # Keep softmax weights representable when the P @ V dot uses FP8
              # tensor cores. Undo the power-of-two scale after the dot.
--            if V.dtype == tl.float8e4nv:
--                p_scale = 256.0
--            elif V.dtype.is_fp8():
--                p_scale = 128.0
-+            if V.dtype.is_fp8():
-+                if V.dtype == tl.float8e4nv:
-+                    p_scale = 256.0
-+                else:
-+                    p_scale = 128.0
-+                acc += tl.dot((P * p_scale).to(V.dtype), V) / p_scale
-             else:
--                p_scale = 1.0
--            acc += tl.dot((P * p_scale).to(V.dtype), V) / p_scale
-+                acc = tl.dot(P.to(V.dtype), V, acc)
- 
-     # ---- Epilogue ---------------------------------------------------------
-     if IS_3D:
-@@ -728,7 +775,7 @@ def reduce_segments(
+@@ -728,7 +774,7 @@ def reduce_segments(
          return
  
      seq_idx = find_seq_idx(
@@ -231,7 +214,7 @@ index d914e574f2..c5265fda4d 100644
      )
  
      # sequence len for this particular sequence
-@@ -955,11 +1002,6 @@ def unified_attention(
+@@ -955,11 +1001,6 @@ def unified_attention(
      num_queries_per_kv = num_query_heads // num_kv_heads
      head_size = q.shape[2]
  
@@ -243,7 +226,7 @@ index d914e574f2..c5265fda4d 100644
      # Tuned launch parameters; ``None`` lets Triton pick its defaults.
      launch_num_warps: int | None = None
      launch_num_stages: int | None = None
-@@ -975,21 +1017,17 @@ def unified_attention(
+@@ -975,21 +1016,17 @@ def unified_attention(
          and current_platform.is_device_capability_family(100)
      )
      if tuned_large_head:
@@ -273,7 +256,7 @@ index d914e574f2..c5265fda4d 100644
  
      sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
  
-@@ -1001,12 +1039,16 @@ def unified_attention(
+@@ -1001,12 +1038,16 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -296,7 +279,7 @@ index d914e574f2..c5265fda4d 100644
  
      # Wider KV tile for the tuned large-head path (see above). Only the 2D
      # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
-@@ -1083,8 +1125,10 @@ def unified_attention(
+@@ -1083,8 +1124,10 @@ def unified_attention(
                  or tuned_large_head
              )
          )
@@ -308,7 +291,7 @@ index d914e574f2..c5265fda4d 100644
      )
      if use_3d and softmax_segm_max.shape[0] < q.shape[0]:
          logger.debug_once("Split-K scratch rows < query tokens; using 2D.")
-@@ -1114,12 +1158,28 @@ def unified_attention(
+@@ -1114,12 +1157,28 @@ def unified_attention(
      segm_expsum_ptr = softmax_segm_expsum if use_3d else None
      num_segments = num_par_softmax_segments if use_3d else 1
  
@@ -340,7 +323,7 @@ index d914e574f2..c5265fda4d 100644
          tile_size = TILE_SIZE_DECODE
  
      launch_kwargs: dict[str, int] = {}
-@@ -1191,9 +1251,7 @@ def unified_attention(
+@@ -1191,9 +1250,7 @@ def unified_attention(
          stride_vs_slot=vs_slot,
          stride_vs_head=vs_head,
          query_start_len_ptr=cu_seqlens_q,
@@ -350,7 +333,7 @@ index d914e574f2..c5265fda4d 100644
          NUM_SEGMENTS_PER_SEQ=num_segments,
          USE_FP8=output_scale is not None,
          IS_3D=use_3d,
-@@ -1224,7 +1282,7 @@ def unified_attention(
+@@ -1224,7 +1281,7 @@ def unified_attention(
              HEAD_SIZE=head_size,
              HEAD_SIZE_PADDED=head_size_padded,
              query_start_len_ptr=cu_seqlens_q,
