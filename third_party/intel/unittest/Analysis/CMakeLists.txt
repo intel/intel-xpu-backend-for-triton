@@ -207,9 +207,3 @@ add_triton_ut(
     MLIRParser
     MLIRSCFDialect
 )
-
-# GCC reports a false positive -Wfree-nonheap-object in the inlined APInt
-# destructor of llvm/ADT/APInt.h.
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-  target_compile_options(SymbolicBoundsOracle PRIVATE -Wno-free-nonheap-object)
-endif()
