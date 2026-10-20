@@ -15,6 +15,87 @@ import triton.language as tl
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY
 
+SUPPORTED_INPUT_DTYPES = ["bf16", "mxfp8", "mxfp4"]
+
+
+def _pack_mxfp8_block(x: torch.Tensor, block_size: int = 32):
+    x_f = x.to(torch.float32)
+    block = x_f.reshape(*x_f.shape[:-1], -1, block_size)
+    scale = block.abs().amax(dim=-1, keepdim=True).clamp_min(1e-6)
+    q = (block / scale).round().clamp(-448.0, 448.0)
+    q = q.to(torch.float8_e4m3fn)
+    return q.reshape_as(x_f), scale.squeeze(-1)
+
+
+def _pack_mxfp4_block(x: torch.Tensor, block_size: int = 32):
+    x_f = x.to(torch.float32)
+    block = x_f.reshape(*x_f.shape[:-1], -1, block_size)
+    scale = block.abs().amax(dim=-1, keepdim=True).clamp_min(1e-6)
+    q = (block / scale).round().clamp(-6.0, 6.0)
+    if hasattr(torch, "float4_e2m1fn_x2"):
+        packed = q.to(torch.float32)
+        return packed.view(torch.float4_e2m1fn_x2), scale.squeeze(-1)
+    return q, scale.squeeze(-1)
+
+
+def _dequantize_matrix(x: torch.Tensor, dtype: str) -> torch.Tensor:
+    if dtype == "bf16":
+        return x.to(torch.bfloat16)
+    if dtype == "mxfp8":
+        if x.dtype == torch.float8_e4m3fn:
+            return x.to(torch.float32)
+        return x.to(torch.float32)
+    if dtype == "mxfp4":
+        if hasattr(torch, "float4_e2m1fn_x2") and x.dtype == torch.float4_e2m1fn_x2:
+            return x.to(torch.float32)
+        return x.to(torch.float32)
+    raise ValueError(f"Unsupported dtype: {dtype}")
+
+
+def _make_input_matrix(B, M, K, N, dtype):
+    if dtype == "bf16":
+        a = torch.rand((M, K), device=DEVICE, dtype=torch.bfloat16)
+        b = torch.rand((K, N), device=DEVICE, dtype=torch.bfloat16)
+    elif dtype == "mxfp8":
+        if not hasattr(torch, "float8_e4m3fn"):
+            raise RuntimeError("torch.float8_e4m3fn is not available on this PyTorch build")
+        a = torch.rand((M, K), device=DEVICE, dtype=torch.float32)
+        b = torch.rand((K, N), device=DEVICE, dtype=torch.float32)
+        a, _ = _pack_mxfp8_block(a)
+        b, _ = _pack_mxfp8_block(b)
+        a = a.to(torch.float8_e4m3fn)
+        b = b.to(torch.float8_e4m3fn)
+    elif dtype == "mxfp4":
+        a = torch.rand((M, K), device=DEVICE, dtype=torch.float32)
+        b = torch.rand((K, N), device=DEVICE, dtype=torch.float32)
+        a, _ = _pack_mxfp4_block(a)
+        b, _ = _pack_mxfp4_block(b)
+        if hasattr(torch, "float4_e2m1fn_x2"):
+            a = a.view(torch.float4_e2m1fn_x2)
+            b = b.view(torch.float4_e2m1fn_x2)
+    else:
+        raise ValueError(f"Unsupported dtype: {dtype}")
+
+    if B > 1:
+        a = a.unsqueeze(0).expand(B, M, K)
+        b = b.unsqueeze(0).expand(B, K, N)
+    return a, b
+
+
+def _make_reference_matrix(B, M, K, N, dtype):
+    a, b = _make_input_matrix(B, M, K, N, dtype)
+    a_ref = _dequantize_matrix(a, dtype)
+    b_ref = _dequantize_matrix(b, dtype)
+    return a_ref.to(torch.float32), b_ref.to(torch.float32)
+
+
+def _make_input_matrix_for_benchmark(B, M, K, N, dtype):
+    a, b = _make_input_matrix(B, M, K, N, dtype)
+    a_work = _dequantize_matrix(a, dtype)
+    b_work = _dequantize_matrix(b, dtype)
+    return a_work.to(torch.bfloat16), b_work.to(torch.bfloat16)
+
+
 kAlpha = tl.constexpr(math.sqrt(2.0 / math.pi))
 
 
@@ -255,29 +336,26 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         x_names=['B', 'M', 'K', 'N'],
         # different possible values for `x_name`
         x_vals=X_VALS,
-        line_arg='provider',
+        line_arg='dtype',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton'],
+        line_vals=SUPPORTED_INPUT_DTYPES,
         # label name for the lines
-        line_names=['Triton'],
+        line_names=[dt.upper() for dt in SUPPORTED_INPUT_DTYPES],
         # line styles
-        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--'), ('orange', '-'), ('orange', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
         plot_name='matmul-performance-postop-gelu',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(B, M, N, K, provider):
+def benchmark(B, M, N, K, dtype, provider):
     # Some configs increase performance with warmup as a step function, but some slowly decrease with saturation.
     # Performance is best at 200-400ms range, but we want stable, not just best
     do_bench = benchmark_suite.get_do_bench(n_warmup=1000, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
-    if B == 1:
-        a = torch.rand((M, K), device=DEVICE, dtype=torch.bfloat16)
-        b = torch.rand((K, N), device=DEVICE, dtype=torch.bfloat16)
-    else:
-        a = torch.rand((B, M, K), device=DEVICE, dtype=torch.bfloat16)
-        b = torch.rand((B, K, N), device=DEVICE, dtype=torch.bfloat16)
+
+    a, b = _make_input_matrix(B, M, K, N, dtype)
+    a_ref, b_ref = _make_reference_matrix(B, M, K, N, dtype)
 
     if provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
@@ -286,9 +364,16 @@ def benchmark(B, M, N, K, provider):
         else:
             assert len(a.shape) == 2, 'Expecting shape of length 2'
             c = torch.empty((M, N), device=DEVICE, dtype=torch.float32)
-        triton_fn = lambda: matmul(a, b, c)
+
+        a_work = _dequantize_matrix(a, dtype)
+        b_work = _dequantize_matrix(b, dtype)
+        a_work = a_work.to(torch.bfloat16)
+        b_work = b_work.to(torch.bfloat16)
+
+        triton_fn = lambda: matmul(a_work, b_work, c)
         torch_mm = torch.bmm if a.dim() == 3 else torch.mm
-        torch_fn = lambda: torch.nn.functional.gelu(torch_mm(a, b, out_dtype=torch.float32))
+        torch_fn = lambda: torch.nn.functional.gelu(torch_mm(a_ref, b_ref, out_dtype=torch.float32))
+        rtol = 1e-2 if a_work.dtype == torch.bfloat16 else 1e-3
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
