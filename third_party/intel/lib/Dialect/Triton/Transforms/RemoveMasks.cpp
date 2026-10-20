@@ -24,12 +24,12 @@
 #define DEBUG_TYPE "triton-intel-remove-masks"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 
-// The census trace sits on its own debug type so a corpus run can
-// enable it alone: `-debug-only=triton-intel-remove-masks` also turns on this
-// pass's after-versioning module dumps, which are two orders of magnitude more
-// output than the census itself. The printed prefix stays the pass's, so the
-// corpus tooling greps a single pattern either way. Helpers used only under
-// CDBG are [[maybe_unused]]: they are dead when debug output is compiled out.
+// The census trace sits on its own debug type so it can be enabled alone:
+// `-debug-only=triton-intel-remove-masks` also turns on this pass's
+// after-versioning module dumps, which are two orders of magnitude more output
+// than the census itself. The printed prefix stays the pass's, so one grep
+// pattern matches either way. Helpers used only under CDBG are
+// [[maybe_unused]]: they are dead when debug output is compiled out.
 #define CENSUS_DEBUG_TYPE "triton-intel-remove-masks-census"
 #define CDBG(X) DEBUG_WITH_TYPE(CENSUS_DEBUG_TYPE, DBGS() << X << "\n")
 

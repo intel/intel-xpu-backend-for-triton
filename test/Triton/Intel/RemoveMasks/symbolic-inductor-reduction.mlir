@@ -438,6 +438,42 @@ tt.func @shared_condition(%ptr: !tt.ptr<f32>, %qtr: !tt.ptr<f32>, %rnumel: i32) 
 
 // -----
 
+// COM: One bound reaches the loop as a guard (the first load's wrap check on
+// COM: `n + 1`) and as a precondition (the unsigned loop's bound). The stronger
+// COM: kind wins, so the bound is emitted with the preconditions, ahead of
+// COM: `n >= 0`, rather than last as a guard.
+
+// CHECK-LABEL: tt.func @shared_condition_kinds
+tt.func @shared_condition_kinds(%ptr: !tt.ptr<f32>, %qtr: !tt.ptr<f32>, %n: i32) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+  %np1 = arith.addi %n, %c1 : i32
+  %nps = tt.splat %np1 : i32 -> tensor<64xi32>
+  %ns = tt.splat %n : i32 -> tensor<64xi32>
+  %ps = tt.splat %ptr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
+  %qs = tt.splat %qtr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
+  // SYM:      arith.cmpi sge, %{{.*}}, %c63_i64 : i64
+  // SYM:      arith.cmpi sle, %{{.*}}, %c2147483646_i64 : i64
+  // SYM:      arith.cmpi sge, %{{.*}}, %c0_i64 : i64
+  // SYM:      scf.if
+  scf.for unsigned %i = %c0 to %n step %c2 : i32 {
+    %mask1 = arith.cmpi slt, %lane, %nps : tensor<64xi32>
+    %p = tt.addptr %ps, %lane : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
+    %v = tt.load %p, %mask1 : tensor<64x!tt.ptr<f32>>
+    %is = tt.splat %i : i32 -> tensor<64xi32>
+    %mask2 = arith.cmpi slt, %is, %ns : tensor<64xi32>
+    %q = tt.addptr %qs, %lane : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
+    %w = tt.load %q, %mask2 : tensor<64x!tt.ptr<f32>>
+    %s = arith.addf %v, %w : tensor<64xf32>
+    tt.store %q, %s : tensor<64x!tt.ptr<f32>>
+  }
+  tt.return
+}
+
+// -----
+
 // COM: Two outermost loops, the second bounded by the first loop's result. The
 // COM: second guard is built before the first loop is versioned, and must end
 // COM: up reading the first scf.if's result.
