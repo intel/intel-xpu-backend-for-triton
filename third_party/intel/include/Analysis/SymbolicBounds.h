@@ -261,7 +261,9 @@ public:
   /// Valid for contract-valid executions only: the bounds and the exit value
   /// are read with the loop's own signedness, and `lb + trips * step` is
   /// representable, where `trips` is the actual trip count, not `n`.
-  /// `Unknown` for `n < 1` and for a non-constant or non-positive step.
+  /// `Unknown` for `n < 1`, for a step that is not a positive constant, for an
+  /// IV wider than 64 bits, when the threshold, the bounds or `ub - lb`
+  /// overflow, and when the budget runs out.
   BoundProof tripCountAtLeast(scf::ForOp loop, int64_t n);
 
   /// Normalizes `v` at `ctx` and appends the wrap obligations of every
