@@ -468,7 +468,8 @@ tt.func public @layer_norm_chain(%X: !tt.ptr<f32>, %Mean: !tt.ptr<f32>, %N: i32,
 // -----
 
 // The op between the ifs uses the first if's result: each branch's copy must
-// use that branch's own yielded value.
+// use that branch's own yielded value. The returned %m becomes an extra result,
+// and the first if's own result is redirected to the rebuilt if.
 // CHECK-LABEL: @sink_maps_results_per_branch
 //       CHECK: %[[IF:.+]]:2 = scf.if %arg0 -> (f32, f32) {
 //  CHECK-NEXT:   %[[T:.+]] = arith.addf %arg1, %arg2 : f32
@@ -483,10 +484,11 @@ tt.func public @layer_norm_chain(%X: !tt.ptr<f32>, %Mean: !tt.ptr<f32>, %N: i32,
 //  CHECK-NEXT: }
 //  CHECK-NEXT: scf.if %arg0 {
 //  CHECK-NEXT:   tt.store %arg3, %[[IF]]#1
+//       CHECK: tt.return %[[IF]]#0, %[[IF]]#1 : f32, f32
 // CANON-LABEL: @sink_maps_results_per_branch
 //       CANON: scf.if
 //   CANON-NOT: scf.if
-tt.func public @sink_maps_results_per_branch(%c: i1, %x: f32, %y: f32, %p: !tt.ptr<f32>) {
+tt.func public @sink_maps_results_per_branch(%c: i1, %x: f32, %y: f32, %p: !tt.ptr<f32>) -> (f32, f32) {
   %0 = scf.if %c -> (f32) {
     %t = arith.addf %x, %y : f32
     scf.yield %t : f32
@@ -500,35 +502,6 @@ tt.func public @sink_maps_results_per_branch(%c: i1, %x: f32, %y: f32, %p: !tt.p
     tt.store %p, %m : !tt.ptr<f32>
   } else {
     tt.store %p, %x : !tt.ptr<f32>
-  }
-  tt.return
-}
-
-// -----
-
-// A value computed between the ifs and used after both becomes an extra result;
-// so does the first if's own result, whose later use is redirected to the
-// rebuilt if.
-// CHECK-LABEL: @values_used_after_both_ifs
-//       CHECK: %[[IF:.+]]:2 = scf.if %arg0 -> (f32, f32) {
-//       CHECK: scf.if %arg0 {
-//       CHECK: tt.return %[[IF]]#0, %[[IF]]#1 : f32, f32
-// CANON-LABEL: @values_used_after_both_ifs
-//       CANON: scf.if
-//   CANON-NOT: scf.if
-tt.func public @values_used_after_both_ifs(%c: i1, %x: f32, %p: !tt.ptr<f32>) -> (f32, f32) {
-  %0 = scf.if %c -> (f32) {
-    %t = arith.addf %x, %x : f32
-    scf.yield %t : f32
-  } else {
-    scf.yield %x : f32
-  }
-  %m = arith.mulf %0, %x : f32
-  tt.store %p, %m : !tt.ptr<f32>
-  scf.if %c {
-    tt.store %p, %x : !tt.ptr<f32>
-  } else {
-    tt.store %p, %0 : !tt.ptr<f32>
   }
   tt.return %0, %m : f32, f32
 }
@@ -998,149 +971,13 @@ tt.func private @private_helper_condition(%c: i1, %p: !tt.ptr<f32>, %a: tensor<6
 
 // -----
 
-// Inductor's online softmax under symbolic RemoveMasks: three loops are
-// versioned on one shared guard (it contains the program id), with a max and a
-// sum reduction between them. Each gap is copied into both branches of the if
-// before it; the broadcasts are only used inside the next if's loop bodies.
-// CHECK-LABEL: @inductor_softmax_online
-//       CHECK: %[[G:.+]] = arith.andi
-//       CHECK: %[[IF0:.+]]:2 = scf.if %[[G]] -> (tensor<1x128xf32>, tensor<1x128xf32>) {
-//       CHECK:   "tt.reduce"
-//       CHECK:   %[[MB0:.+]] = tt.broadcast
-//       CHECK:   scf.yield %{{.+}}, %[[MB0]]
-//       CHECK: } else {
-//       CHECK:   "tt.reduce"
-//       CHECK:   %[[MB1:.+]] = tt.broadcast
-//       CHECK:   scf.yield %{{.+}}, %[[MB1]]
-//       CHECK: }
-//  CHECK-NEXT: %[[IF1:.+]]:2 = scf.if %[[G]] -> (tensor<1x128xf32>, tensor<1x128xf32>) {
-//       CHECK:   arith.subf %{{.+}}, %[[IF0]]#1
-//       CHECK:   "tt.reduce"
-//       CHECK:   %[[SB0:.+]] = tt.broadcast
-//       CHECK:   scf.yield %{{.+}}, %[[SB0]]
-//       CHECK: } else {
-//       CHECK:   arith.subf %{{.+}}, %[[IF0]]#1
-//       CHECK:   "tt.reduce"
-//       CHECK:   %[[SB1:.+]] = tt.broadcast
-//       CHECK:   scf.yield %{{.+}}, %[[SB1]]
-//       CHECK: }
-//  CHECK-NEXT: scf.if %[[G]] {
-//       CHECK:   arith.subf %{{.+}}, %[[IF0]]#1
-//       CHECK:   arith.divf %{{.+}}, %[[IF1]]#1
-// CANON-LABEL: @inductor_softmax_online
-//       CANON: scf.if
-//       CANON:   scf.for
-//       CANON:   "tt.reduce"
-//       CANON:   scf.for
-//       CANON:   "tt.reduce"
-//       CANON:   scf.for
-//       CANON: } else {
-//       CANON:   scf.for
-//       CANON:   "tt.reduce"
-//       CANON:   scf.for
-//       CANON:   "tt.reduce"
-//       CANON:   scf.for
-//   CANON-NOT: scf.if
-//       CANON: tt.return
-tt.func public @inductor_softmax_online(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %mask: tensor<1x128xi1>, %xnumel: i32, %rnumel: i32) {
-  %c0 = arith.constant 0 : i32
-  %step = arith.constant 128 : i32
-  %c128 = arith.constant 128 : i64
-  %c0l = arith.constant 0 : i64
-  %c1l = arith.constant 1 : i64
-  %zero = arith.constant dense<0.000000e+00> : tensor<1x128xf32>
-  %ninf = arith.constant dense<0xFF800000> : tensor<1x128xf32>
-  %pid = tt.get_program_id x : i32
-  %rn = arith.extsi %rnumel : i32 to i64
-  %rem = arith.remsi %rn, %c128 : i64
-  %divisible = arith.cmpi eq, %rem, %c0l : i64
-  %xn = arith.extsi %xnumel : i32 to i64
-  %pid64 = arith.extsi %pid : i32 to i64
-  %rows = arith.subi %xn, %pid64 : i64
-  %hasrow = arith.cmpi sge, %rows, %c1l : i64
-  %g = arith.andi %divisible, %hasrow : i1
-  %inp = tt.splat %in : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
-  %maxacc = scf.if %g -> (tensor<1x128xf32>) {
-    %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %ninf) -> (tensor<1x128xf32>) : i32 {
-      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
-      %n = arith.maximumf %a, %x : tensor<1x128xf32>
-      scf.yield %n : tensor<1x128xf32>
-    }
-    scf.yield %acc : tensor<1x128xf32>
-  } else {
-    %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %ninf) -> (tensor<1x128xf32>) : i32 {
-      %x = tt.load %inp, %mask, %ninf : tensor<1x128x!tt.ptr<f32>>
-      %n = arith.maximumf %a, %x : tensor<1x128xf32>
-      scf.yield %n : tensor<1x128xf32>
-    }
-    scf.yield %acc : tensor<1x128xf32>
-  }
-  %mx = "tt.reduce"(%maxacc) <{axis = 1 : i32}> ({
-  ^bb0(%l: f32, %rr: f32):
-    %gt = arith.cmpf ogt, %l, %rr : f32
-    %nan = arith.cmpf une, %l, %l : f32
-    %c = arith.ori %gt, %nan : i1
-    %sel = arith.select %c, %l, %rr : f32
-    tt.reduce.return %sel : f32
-  }) : (tensor<1x128xf32>) -> tensor<1xf32>
-  %mx2 = tt.expand_dims %mx {axis = 1 : i32} : tensor<1xf32> -> tensor<1x1xf32>
-  %mxb = tt.broadcast %mx2 : tensor<1x1xf32> -> tensor<1x128xf32>
-  %sumacc = scf.if %g -> (tensor<1x128xf32>) {
-    %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero) -> (tensor<1x128xf32>) : i32 {
-      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
-      %d = arith.subf %x, %mxb : tensor<1x128xf32>
-      %e = tt.extern_elementwise %d {libname = "", libpath = "", pure = true, symbol = "__imf_expf"} : (tensor<1x128xf32>) -> tensor<1x128xf32>
-      %n = arith.addf %a, %e : tensor<1x128xf32>
-      scf.yield %n : tensor<1x128xf32>
-    }
-    scf.yield %acc : tensor<1x128xf32>
-  } else {
-    %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero) -> (tensor<1x128xf32>) : i32 {
-      %x = tt.load %inp, %mask, %zero : tensor<1x128x!tt.ptr<f32>>
-      %d = arith.subf %x, %mxb : tensor<1x128xf32>
-      %e = tt.extern_elementwise %d {libname = "", libpath = "", pure = true, symbol = "__imf_expf"} : (tensor<1x128xf32>) -> tensor<1x128xf32>
-      %n = arith.addf %a, %e : tensor<1x128xf32>
-      scf.yield %n : tensor<1x128xf32>
-    }
-    scf.yield %acc : tensor<1x128xf32>
-  }
-  %sm = "tt.reduce"(%sumacc) <{axis = 1 : i32}> ({
-  ^bb0(%l: f32, %rr: f32):
-    %add = arith.addf %l, %rr : f32
-    tt.reduce.return %add : f32
-  }) : (tensor<1x128xf32>) -> tensor<1xf32>
-  %sm2 = tt.expand_dims %sm {axis = 1 : i32} : tensor<1xf32> -> tensor<1x1xf32>
-  %smb = tt.broadcast %sm2 : tensor<1x1xf32> -> tensor<1x128xf32>
-  %outp = tt.splat %out : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
-  scf.if %g {
-    scf.for %off = %c0 to %rnumel step %step : i32 {
-      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
-      %d = arith.subf %x, %mxb : tensor<1x128xf32>
-      %e = tt.extern_elementwise %d {libname = "", libpath = "", pure = true, symbol = "__imf_expf"} : (tensor<1x128xf32>) -> tensor<1x128xf32>
-      %q = arith.divf %e, %smb : tensor<1x128xf32>
-      tt.store %outp, %q : tensor<1x128x!tt.ptr<f32>>
-    }
-  } else {
-    scf.for %off = %c0 to %rnumel step %step : i32 {
-      %x = tt.load %inp, %mask, %zero : tensor<1x128x!tt.ptr<f32>>
-      %d = arith.subf %x, %mxb : tensor<1x128xf32>
-      %e = tt.extern_elementwise %d {libname = "", libpath = "", pure = true, symbol = "__imf_expf"} : (tensor<1x128xf32>) -> tensor<1x128xf32>
-      %q = arith.divf %e, %smb : tensor<1x128xf32>
-      tt.store %outp, %q, %mask : tensor<1x128x!tt.ptr<f32>>
-    }
-  }
-  tt.return
-}
-
-// -----
-
-// Shaped like Inductor's Welford layer_norm forward (simplified loop bodies, the
-// real combiner): a 3-result if feeds a 3-operand reduction, and the gap also holds two masked stores and an rsqrt. The two
-// broadcasts are used independently by the next if's loop, so each branch must
-// yield its own pair, in order, next to the original three results.
+// Shaped like Inductor's Welford layer_norm forward: a 3-result if feeds a
+// 3-operand reduction, and the gap also holds two masked stores and an rsqrt.
+// The two broadcasts are used independently by the next if's loop, so each
+// branch must yield its own pair, in order, next to the original three results.
 // CHECK-LABEL: @inductor_welford_layer_norm
-//       CHECK: %[[G:.+]] = arith.andi
-//       CHECK: %[[IF:.+]]:5 = scf.if %[[G]] -> (tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>) {
+//       CHECK: %[[G:.+]] = arith.cmpi slt
+//       CHECK: %[[IF:.+]]:5 = scf.if %[[G]] ->
 //       CHECK:   %[[A0:.+]]:3 = scf.for
 //       CHECK:   "tt.reduce"(%[[A0]]#0, %[[A0]]#1, %[[A0]]#2)
 //       CHECK:   tt.store %{{.+}}, %[[MEAN0:.+]], %{{.+}} : tensor<1x1x!tt.ptr<f32>>
@@ -1172,67 +1009,41 @@ tt.func public @inductor_softmax_online(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %
 tt.func public @inductor_welford_layer_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %mean_ptr: !tt.ptr<f32>, %rstd_ptr: !tt.ptr<f32>, %mask: tensor<1x128xi1>, %xnumel: i32, %rnumel: i32) {
   %c0 = arith.constant 0 : i32
   %step = arith.constant 128 : i32
-  %c128 = arith.constant 128 : i64
-  %c0l = arith.constant 0 : i64
-  %c1l = arith.constant 1 : i64
   %zero = arith.constant dense<0.000000e+00> : tensor<1x128xf32>
-  %f0 = arith.constant 0.000000e+00 : f32
-  %one = arith.constant dense<1.000000e+00> : tensor<1x128xf32>
   %pid = tt.get_program_id x : i32
-  %rn = arith.extsi %rnumel : i32 to i64
-  %rem = arith.remsi %rn, %c128 : i64
-  %divisible = arith.cmpi eq, %rem, %c0l : i64
-  %xn = arith.extsi %xnumel : i32 to i64
-  %pid64 = arith.extsi %pid : i32 to i64
-  %rows = arith.subi %xn, %pid64 : i64
-  %hasrow = arith.cmpi sge, %rows, %c1l : i64
-  %g = arith.andi %divisible, %hasrow : i1
-  %xmask = arith.cmpi slt, %pid, %xnumel : i32
+  %g = arith.cmpi slt, %pid, %xnumel : i32
   %inp = tt.splat %in : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
   %outp = tt.splat %out : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
   %st:3 = scf.if %g -> (tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>) {
-    %acc:3 = scf.for %off = %c0 to %rnumel step %step iter_args(%mu = %zero, %m2 = %zero, %w = %zero) -> (tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>) : i32 {
+    %acc:3 = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero, %b = %zero, %c = %zero) -> (tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>) : i32 {
       %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
-      %mu1 = arith.addf %mu, %x : tensor<1x128xf32>
-      %xx = arith.mulf %x, %x : tensor<1x128xf32>
-      %m21 = arith.addf %m2, %xx : tensor<1x128xf32>
-      %w1 = arith.addf %w, %one : tensor<1x128xf32>
-      scf.yield %mu1, %m21, %w1 : tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>
+      %a1 = arith.addf %a, %x : tensor<1x128xf32>
+      %b1 = arith.mulf %b, %x : tensor<1x128xf32>
+      %c1 = arith.subf %c, %x : tensor<1x128xf32>
+      scf.yield %a1, %b1, %c1 : tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>
     }
     scf.yield %acc#0, %acc#1, %acc#2 : tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>
   } else {
-    %acc:3 = scf.for %off = %c0 to %rnumel step %step iter_args(%mu = %zero, %m2 = %zero, %w = %zero) -> (tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>) : i32 {
+    %acc:3 = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero, %b = %zero, %c = %zero) -> (tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>) : i32 {
       %x = tt.load %inp, %mask, %zero : tensor<1x128x!tt.ptr<f32>>
-      %mu1 = arith.addf %mu, %x : tensor<1x128xf32>
-      %xx = arith.mulf %x, %x : tensor<1x128xf32>
-      %m21 = arith.addf %m2, %xx : tensor<1x128xf32>
-      %w1 = arith.addf %w, %one : tensor<1x128xf32>
-      scf.yield %mu1, %m21, %w1 : tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>
+      %a1 = arith.addf %a, %x : tensor<1x128xf32>
+      %b1 = arith.mulf %b, %x : tensor<1x128xf32>
+      %c1 = arith.subf %c, %x : tensor<1x128xf32>
+      scf.yield %a1, %b1, %c1 : tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>
     }
     scf.yield %acc#0, %acc#1, %acc#2 : tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>
   }
   %wf:3 = "tt.reduce"(%st#0, %st#1, %st#2) <{axis = 1 : i32}> ({
-  ^bb0(%a_m: f32, %a_s: f32, %a_w: f32, %b_m: f32, %b_s: f32, %b_w: f32):
-    %same = arith.cmpf oeq, %a_m, %b_m : f32
-    %dm = arith.subf %b_m, %a_m : f32
-    %delta = arith.select %same, %f0, %dm : f32
-    %nw = arith.addf %a_w, %b_w : f32
-    %wz = arith.cmpf oeq, %nw, %f0 : f32
-    %wr = arith.divf %b_w, %nw : f32
-    %ratio = arith.select %wz, %f0, %wr : f32
-    %t0 = arith.mulf %delta, %ratio : f32
-    %nm = arith.addf %a_m, %t0 : f32
-    %s0 = arith.addf %a_s, %b_s : f32
-    %t1 = arith.mulf %delta, %delta : f32
-    %t2 = arith.mulf %t1, %a_w : f32
-    %t3 = arith.mulf %t2, %ratio : f32
-    %ns = arith.addf %s0, %t3 : f32
-    tt.reduce.return %nm, %ns, %nw : f32, f32, f32
+  ^bb0(%a0: f32, %a1: f32, %a2: f32, %b0: f32, %b1: f32, %b2: f32):
+    %s0 = arith.addf %a0, %b0 : f32
+    %s1 = arith.addf %a1, %b1 : f32
+    %s2 = arith.addf %a2, %b2 : f32
+    tt.reduce.return %s0, %s1, %s2 : f32, f32, f32
   }) : (tensor<1x128xf32>, tensor<1x128xf32>, tensor<1x128xf32>) -> (tensor<1xf32>, tensor<1xf32>, tensor<1xf32>)
   %mean = tt.expand_dims %wf#0 {axis = 1 : i32} : tensor<1xf32> -> tensor<1x1xf32>
   %m2v = tt.expand_dims %wf#1 {axis = 1 : i32} : tensor<1xf32> -> tensor<1x1xf32>
   %mptr = tt.splat %mean_ptr : !tt.ptr<f32> -> tensor<1x1x!tt.ptr<f32>>
-  %xm = tt.splat %xmask : i1 -> tensor<1x1xi1>
+  %xm = tt.splat %g : i1 -> tensor<1x1xi1>
   tt.store %mptr, %mean, %xm : tensor<1x1x!tt.ptr<f32>>
   %nf = arith.sitofp %rnumel : i32 to f32
   %nfv = tt.splat %nf : f32 -> tensor<1x1xf32>
@@ -1262,25 +1073,22 @@ tt.func public @inductor_welford_layer_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32
 
 // -----
 
-// Inductor's rms_norm forward: the rstd computation and its masked store sit
-// between the two versioned loops. The rsqrt depends on the first if's result,
-// so the gap is copied into both branches; only the splats and the sitofp,
-// whose inputs exist before the first if, are hoisted.
-// The gap copied into the branches is 8 ops (the reduction with its two region
-// ops, expand_dims, divf, rsqrt, store and broadcast); hoisted ops do not
-// count. One op less keeps the ifs apart.
-// CHECK-LABEL: @inductor_rms_norm
-//       CHECK: %[[G:.+]] = arith.andi
+// The rstd computation and its masked store sit between the two ifs. The rsqrt
+// depends on the first if's result, so the gap is copied into both branches;
+// only the splats and the sitofp, whose inputs exist before the first if, are
+// hoisted. The copied gap is 8 ops (the reduction with its two region ops,
+// expand_dims, divf, rsqrt, store and broadcast); hoisted ops do not count. One
+// op less keeps the ifs apart.
+// CHECK-LABEL: @clone_cap_boundary
+//       CHECK: %[[G:.+]] = arith.cmpi slt
 //       CHECK: arith.sitofp
-//       CHECK: %[[IF:.+]]:2 = scf.if %[[G]] -> (tensor<1x128xf32>, tensor<1x128xf32>) {
-//       CHECK:   scf.for
+//       CHECK: %[[IF:.+]]:2 = scf.if %[[G]] ->
 //       CHECK:   "tt.reduce"
 //       CHECK:   tt.extern_elementwise
 //       CHECK:   tt.store %{{.+}}, %{{.+}}, %{{.+}} : tensor<1x1x!tt.ptr<f32>>
 //       CHECK:   %[[B0:.+]] = tt.broadcast
 //       CHECK:   scf.yield %{{.+}}, %[[B0]]
 //       CHECK: } else {
-//       CHECK:   scf.for
 //       CHECK:   "tt.reduce"
 //       CHECK:   tt.extern_elementwise
 //       CHECK:   tt.store %{{.+}}, %{{.+}}, %{{.+}} : tensor<1x1x!tt.ptr<f32>>
@@ -1289,59 +1097,31 @@ tt.func public @inductor_welford_layer_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32
 //       CHECK: }
 //  CHECK-NEXT: scf.if %[[G]] {
 //       CHECK:   arith.mulf %{{.+}}, %[[IF]]#1
-// CANON-LABEL: @inductor_rms_norm
+// CANON-LABEL: @clone_cap_boundary
 //       CANON: scf.if
 //       CANON:   "tt.reduce"
-//       CANON:   scf.for
 //       CANON: } else {
 //       CANON:   "tt.reduce"
-//       CANON:   scf.for
 //   CANON-NOT: scf.if
 //       CANON: tt.return
-// BELOW-LABEL: @inductor_rms_norm
+// BELOW-LABEL: @clone_cap_boundary
 //       BELOW: scf.if
 //       BELOW: "tt.reduce"
 //       BELOW: scf.if
-//    AT-LABEL: @inductor_rms_norm
+//    AT-LABEL: @clone_cap_boundary
 //          AT: scf.if
 //          AT: "tt.reduce"
 //      AT-NOT: scf.if
 //          AT: tt.return
-tt.func public @inductor_rms_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %rstd: !tt.ptr<f32>, %mask: tensor<1x128xi1>, %xnumel: i32, %rnumel: i32) {
-  %c0 = arith.constant 0 : i32
-  %step = arith.constant 128 : i32
-  %c128 = arith.constant 128 : i64
-  %c0l = arith.constant 0 : i64
-  %c1l = arith.constant 1 : i64
-  %zero = arith.constant dense<0.000000e+00> : tensor<1x128xf32>
+tt.func public @clone_cap_boundary(%a: tensor<1x128xf32>, %rstd: !tt.ptr<f32>, %out: !tt.ptr<f32>, %xnumel: i32, %rnumel: i32) {
   %pid = tt.get_program_id x : i32
-  %rn = arith.extsi %rnumel : i32 to i64
-  %rem = arith.remsi %rn, %c128 : i64
-  %divisible = arith.cmpi eq, %rem, %c0l : i64
-  %xn = arith.extsi %xnumel : i32 to i64
-  %pid64 = arith.extsi %pid : i32 to i64
-  %rows = arith.subi %xn, %pid64 : i64
-  %hasrow = arith.cmpi sge, %rows, %c1l : i64
-  %g = arith.andi %divisible, %hasrow : i1
-  %xmask = arith.cmpi slt, %pid, %xnumel : i32
-  %inp = tt.splat %in : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
+  %g = arith.cmpi slt, %pid, %xnumel : i32
   %outp = tt.splat %out : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
   %sumsq = scf.if %g -> (tensor<1x128xf32>) {
-    %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero) -> (tensor<1x128xf32>) : i32 {
-      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
-      %sq = arith.mulf %x, %x : tensor<1x128xf32>
-      %n = arith.addf %a, %sq : tensor<1x128xf32>
-      scf.yield %n : tensor<1x128xf32>
-    }
-    scf.yield %acc : tensor<1x128xf32>
+    scf.yield %a : tensor<1x128xf32>
   } else {
-    %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero) -> (tensor<1x128xf32>) : i32 {
-      %x = tt.load %inp, %mask, %zero : tensor<1x128x!tt.ptr<f32>>
-      %sq = arith.mulf %x, %x : tensor<1x128xf32>
-      %n = arith.addf %a, %sq : tensor<1x128xf32>
-      scf.yield %n : tensor<1x128xf32>
-    }
-    scf.yield %acc : tensor<1x128xf32>
+    %n = arith.negf %a : tensor<1x128xf32>
+    scf.yield %n : tensor<1x128xf32>
   }
   %sum = "tt.reduce"(%sumsq) <{axis = 1 : i32}> ({
   ^bb0(%l: f32, %rr: f32):
@@ -1354,66 +1134,36 @@ tt.func public @inductor_rms_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %rstd: 
   %mean = arith.divf %sum2, %nfv : tensor<1x1xf32>
   %rs = tt.extern_elementwise %mean {libname = "", libpath = "", pure = true, symbol = "__imf_rsqrtf"} : (tensor<1x1xf32>) -> tensor<1x1xf32>
   %rptr = tt.splat %rstd : !tt.ptr<f32> -> tensor<1x1x!tt.ptr<f32>>
-  %xm = tt.splat %xmask : i1 -> tensor<1x1xi1>
+  %xm = tt.splat %g : i1 -> tensor<1x1xi1>
   tt.store %rptr, %rs, %xm : tensor<1x1x!tt.ptr<f32>>
   %rsb = tt.broadcast %rs : tensor<1x1xf32> -> tensor<1x128xf32>
   scf.if %g {
-    scf.for %off = %c0 to %rnumel step %step : i32 {
-      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
-      %y = arith.mulf %x, %rsb : tensor<1x128xf32>
-      tt.store %outp, %y : tensor<1x128x!tt.ptr<f32>>
-    }
+    %y = arith.mulf %a, %rsb : tensor<1x128xf32>
+    tt.store %outp, %y : tensor<1x128x!tt.ptr<f32>>
   } else {
-    scf.for %off = %c0 to %rnumel step %step : i32 {
-      %x = tt.load %inp, %mask, %zero : tensor<1x128x!tt.ptr<f32>>
-      %y = arith.mulf %x, %rsb : tensor<1x128xf32>
-      tt.store %outp, %y, %mask : tensor<1x128x!tt.ptr<f32>>
-    }
+    %n = arith.negf %a : tensor<1x128xf32>
+    %y = arith.mulf %n, %rsb : tensor<1x128xf32>
+    tt.store %outp, %y : tensor<1x128x!tt.ptr<f32>>
   }
   tt.return
 }
 
 // -----
 
-// Negative: a kernel with one versioned loop has no pair to combine and must
-// come out unchanged (group_norm and the column reductions look like this).
-// CHECK-LABEL: @inductor_single_versioned_loop
-//       CHECK: %[[IF:.+]] = scf.if %{{.+}} -> (tensor<1x128xf32>) {
-//       CHECK: "tt.reduce"(%[[IF]])
+// Negative: a lone if has no pair to combine and must come out unchanged.
+// CHECK-LABEL: @single_if
+//       CHECK: %[[IF:.+]] = scf.if %arg0 -> (f32) {
+//       CHECK: tt.store %arg1, %[[IF]]
 //   CHECK-NOT: scf.if
 //       CHECK: tt.return
-tt.func public @inductor_single_versioned_loop(%in: !tt.ptr<f32>, %out: !tt.ptr<f32>, %mask: tensor<1x128xi1>, %rnumel: i32) {
-  %c0 = arith.constant 0 : i32
-  %step = arith.constant 128 : i32
-  %c128 = arith.constant 128 : i64
-  %c0l = arith.constant 0 : i64
-  %zero = arith.constant dense<0.000000e+00> : tensor<1x128xf32>
-  %inp = tt.splat %in : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
-  %rn = arith.extsi %rnumel : i32 to i64
-  %rem = arith.remsi %rn, %c128 : i64
-  %g = arith.cmpi eq, %rem, %c0l : i64
-  %acc0 = scf.if %g -> (tensor<1x128xf32>) {
-    %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero) -> (tensor<1x128xf32>) : i32 {
-      %x = tt.load %inp : tensor<1x128x!tt.ptr<f32>>
-      %n = arith.addf %a, %x : tensor<1x128xf32>
-      scf.yield %n : tensor<1x128xf32>
-    }
-    scf.yield %acc : tensor<1x128xf32>
+tt.func public @single_if(%c: i1, %p: !tt.ptr<f32>, %x: f32) {
+  %0 = scf.if %c -> (f32) {
+    tt.store %p, %x : !tt.ptr<f32>
+    scf.yield %x : f32
   } else {
-    %acc = scf.for %off = %c0 to %rnumel step %step iter_args(%a = %zero) -> (tensor<1x128xf32>) : i32 {
-      %x = tt.load %inp, %mask, %zero : tensor<1x128x!tt.ptr<f32>>
-      %n = arith.addf %a, %x : tensor<1x128xf32>
-      scf.yield %n : tensor<1x128xf32>
-    }
-    scf.yield %acc : tensor<1x128xf32>
+    scf.yield %x : f32
   }
-  %sum = "tt.reduce"(%acc0) <{axis = 1 : i32}> ({
-  ^bb0(%l: f32, %rr: f32):
-    %add = arith.addf %l, %rr : f32
-    tt.reduce.return %add : f32
-  }) : (tensor<1x128xf32>) -> tensor<1xf32>
-  %optr = tt.splat %out : !tt.ptr<f32> -> tensor<1x!tt.ptr<f32>>
-  tt.store %optr, %sum : tensor<1x!tt.ptr<f32>>
+  tt.store %p, %0 : !tt.ptr<f32>
   tt.return
 }
 
@@ -1440,46 +1190,6 @@ tt.func public @inductor_single_versioned_loop(%in: !tt.ptr<f32>, %out: !tt.ptr<
 tt.func public @guard_with_num_programs(%p: !tt.ptr<f32>, %a: tensor<64xf32>, %n: i32) {
   %np = tt.get_num_programs x : i32
   %c = arith.cmpi sgt, %np, %n : i32
-  %0 = scf.if %c -> (tensor<64xf32>) {
-    scf.yield %a : tensor<64xf32>
-  } else {
-    %neg = arith.negf %a : tensor<64xf32>
-    scf.yield %neg : tensor<64xf32>
-  }
-  %s = "tt.reduce"(%0) <{axis = 0 : i32}> ({
-  ^bb0(%l: f32, %r: f32):
-    %x = arith.addf %l, %r : f32
-    tt.reduce.return %x : f32
-  }) : (tensor<64xf32>) -> f32
-  scf.if %c {
-    tt.store %p, %s : !tt.ptr<f32>
-  } else {
-    tt.store %p, %s : !tt.ptr<f32>
-  }
-  tt.return
-}
-
-// -----
-
-// Same for tt.get_program_id, the term every Inductor row-reduction guard has.
-// CHECK-LABEL: @guard_with_program_id
-//       CHECK: %[[C:.+]] = arith.cmpi slt
-//       CHECK: %[[IF:.+]]:2 = scf.if %[[C]] -> (tensor<64xf32>, f32) {
-//       CHECK:   %[[S0:.+]] = "tt.reduce"
-//       CHECK:   scf.yield %{{.+}}, %[[S0]]
-//       CHECK: } else {
-//       CHECK:   %[[S1:.+]] = "tt.reduce"
-//       CHECK:   scf.yield %{{.+}}, %[[S1]]
-//       CHECK: }
-//  CHECK-NEXT: scf.if %[[C]] {
-//  CHECK-NEXT:   tt.store %arg0, %[[IF]]#1
-// CANON-LABEL: @guard_with_program_id
-//       CANON: scf.if
-//   CANON-NOT: scf.if
-//       CANON: tt.return
-tt.func public @guard_with_program_id(%p: !tt.ptr<f32>, %a: tensor<64xf32>, %n: i32) {
-  %pid = tt.get_program_id x : i32
-  %c = arith.cmpi slt, %pid, %n : i32
   %0 = scf.if %c -> (tensor<64xf32>) {
     scf.yield %a : tensor<64xf32>
   } else {

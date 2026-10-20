@@ -11,11 +11,9 @@
 // After this pass, %2 is moved before %1, making %1 and %3 adjacent so that
 // they can be combined by the canonicalizer.
 //
-// Conditions computed by identical side-effect-free expressions (compared up to
-// a fixed depth) count as the same condition. Ops that cannot move above the
-// first if (they use its results or touch memory) are copied into both of its
-// branches instead, if the condition is uniform across the program. An op that
-// would be copied is refused if it contains an scf.if.
+// Ops that cannot move above the first if (they use its results or touch
+// memory) are copied into both of its branches instead. See Passes.td for the
+// conditions.
 //===----------------------------------------------------------------------===//
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -127,10 +125,9 @@ static Operation *getRunHead(scf::IfOp ifOp) {
 }
 
 /// Copies `ops` to the end of both branches of `ifOp` and erases them. Values
-/// in `escaping` (used after `ops`) become extra results; returns the if that
-/// replaces `ifOp`.
-static scf::IfOp sinkInto(scf::IfOp ifOp, ArrayRef<Operation *> ops,
-                          ArrayRef<Value> escaping) {
+/// in `escaping` (used after `ops`) become extra results of a rebuilt `ifOp`.
+static void sinkInto(scf::IfOp ifOp, ArrayRef<Operation *> ops,
+                     ArrayRef<Value> escaping) {
   OpBuilder builder(ifOp);
   for (Region *region : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
     auto yield = cast<scf::YieldOp>(region->front().getTerminator());
@@ -143,14 +140,13 @@ static scf::IfOp sinkInto(scf::IfOp ifOp, ArrayRef<Operation *> ops,
       yield.getResultsMutable().append(mapping.lookup(value));
   }
 
-  scf::IfOp result = ifOp;
   if (!escaping.empty()) {
     // Same steps as replaceIfOpWithNewSignature (TritonGPU transforms).
     SmallVector<Type> types(ifOp.getResultTypes());
     for (Value value : escaping)
       types.push_back(value.getType());
     builder.setInsertionPoint(ifOp);
-    result =
+    auto result =
         scf::IfOp::create(builder, ifOp.getLoc(), types, ifOp.getCondition());
     result->setAttrs(ifOp->getAttrs());
     result.getThenRegion().takeBody(ifOp.getThenRegion());
@@ -163,17 +159,15 @@ static scf::IfOp sinkInto(scf::IfOp ifOp, ArrayRef<Operation *> ops,
   }
   for (Operation *op : llvm::reverse(ops))
     op->erase();
-  return result;
 }
 
 /// Makes `currentIf` and `nextIf` adjacent if they test the same condition.
-/// Changes nothing unless that succeeds. Returns `currentIf` or the if that
-/// replaced it.
-static scf::IfOp handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
-                              tt::FuncOp funcOp, unsigned maxClonedOps) {
+/// Changes nothing unless that succeeds. `currentIf` may be replaced.
+static void handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
+                         tt::FuncOp funcOp, unsigned maxClonedOps) {
   Value cond = currentIf.getCondition();
   if (!sameCondition(cond, nextIf.getCondition()))
-    return currentIf;
+    return;
 
   SmallVector<Operation *> between;
   for (Operation *op = currentIf->getNextNode(); op != nextIf.getOperation();
@@ -182,15 +176,15 @@ static scf::IfOp handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
 
   // Ops that only compute nextIf's duplicate condition die once it uses
   // `cond`.
-  DenseSet<Operation *> dying;
+  DenseSet<Operation *> deadGuardOps;
   if (nextIf.getCondition() != cond) {
     for (Operation *op : llvm::reverse(between)) {
       if (op->getNumRegions() || !isMemoryEffectFree(op) || op->use_empty())
         continue;
       if (llvm::all_of(op->getUsers(), [&](Operation *user) {
-            return user == nextIf.getOperation() || dying.contains(user);
+            return user == nextIf.getOperation() || deadGuardOps.contains(user);
           }))
-        dying.insert(op);
+        deadGuardOps.insert(op);
     }
   }
 
@@ -200,7 +194,7 @@ static scf::IfOp handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
   DenseSet<Operation *> hoisted;
   SmallVector<Operation *> toHoist, toSink;
   for (Operation *op : between) {
-    if (dying.contains(op))
+    if (deadGuardOps.contains(op))
       continue;
     SetVector<Value> used(op->operand_begin(), op->operand_end());
     getUsedValuesDefinedAbove(op->getRegions(), used);
@@ -220,7 +214,7 @@ static scf::IfOp handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
   SmallVector<Value> escaping;
   if (!toSink.empty()) {
     if (currentIf.getElseRegion().empty() || !isUniformCondition(cond, funcOp))
-      return currentIf;
+      return;
     DenseSet<Operation *> sinking(toSink.begin(), toSink.end());
     unsigned numOps = 0;
     for (Operation *op : toSink) {
@@ -230,33 +224,33 @@ static scf::IfOp handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
         hasNestedIf |= isa<scf::IfOp>(inner);
       });
       if (hasNestedIf)
-        return currentIf;
+        return;
       for (Value value : op->getResults()) {
-        bool usedLater = llvm::any_of(value.getUsers(), [&](Operation *user) {
-          return !sinking.contains(
-              op->getBlock()->findAncestorOpInBlock(*user));
-        });
-        if (!usedLater)
+        bool usedOutsideSink =
+            llvm::any_of(value.getUsers(), [&](Operation *user) {
+              return !sinking.contains(
+                  op->getBlock()->findAncestorOpInBlock(*user));
+            });
+        if (!usedOutsideSink)
           continue;
         if (!isEscapableType(value.getType()))
-          return currentIf;
+          return;
         escaping.push_back(value);
       }
     }
     if (numOps > maxClonedOps)
-      return currentIf;
+      return;
   }
 
   if (nextIf.getCondition() != cond)
     nextIf.getConditionMutable().assign(cond);
   for (Operation *op : llvm::reverse(between))
-    if (dying.contains(op))
+    if (deadGuardOps.contains(op))
       op->erase();
   for (Operation *op : toHoist)
     op->moveBefore(head);
-  if (toSink.empty())
-    return currentIf;
-  return sinkInto(currentIf, toSink, escaping);
+  if (!toSink.empty())
+    sinkInto(currentIf, toSink, escaping);
 }
 
 struct PrepareIfCombiningPass
@@ -271,7 +265,7 @@ struct PrepareIfCombiningPass
         [&](scf::IfOp ifOp) { ifsByBlock[ifOp->getBlock()].push_back(ifOp); });
     for (auto &[block, ifOps] : ifsByBlock)
       for (size_t i = 0; i + 1 < ifOps.size(); ++i)
-        ifOps[i] = handleIfPair(ifOps[i], ifOps[i + 1], funcOp, maxClonedOps);
+        handleIfPair(ifOps[i], ifOps[i + 1], funcOp, maxClonedOps);
   }
 };
 
