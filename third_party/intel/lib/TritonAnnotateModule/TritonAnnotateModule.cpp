@@ -1,6 +1,7 @@
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonAnnotateModule/Passes.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "triton/Tools/Sys/GetEnv.h"
 
 namespace mlir::triton::gpu::intel {
@@ -14,6 +15,53 @@ namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
+
+static bool isDotOp(Operation *op) {
+  return isa<tt::DotOp, tt::DotScaledOp>(op);
+}
+
+static bool hasChainedDot(Operation *dotOp) {
+  if (!isDotOp(dotOp))
+    return false;
+
+  auto filter = [dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+
+  auto [operandA, operandB] =
+      llvm::TypeSwitch<Operation *, std::pair<Value, Value>>(dotOp)
+          .Case<tt::DotOp, tt::DotScaledOp>(
+              [](auto op) { return std::make_pair(op.getA(), op.getB()); })
+          .Default([](Operation *) { return std::pair<Value, Value>{}; });
+
+  auto hasChainedOperand = [&](Value operand) {
+    if (!operand)
+      return false;
+
+    SetVector<Operation *> slice;
+    if (failed(getBackwardSlice(operand, &slice, {filter})))
+      return false;
+
+    for (Operation *op : slice) {
+      if (op != dotOp && isDotOp(op))
+        return true;
+    }
+    return false;
+  };
+
+  return hasChainedOperand(operandA) || hasChainedOperand(operandB);
+}
+
+static bool hasChainedDot(FunctionOpInterface funcOp) {
+  bool foundChainedDot = false;
+  funcOp.walk([&](Operation *op) {
+    if (foundChainedDot || !isDotOp(op))
+      return;
+    if (hasChainedDot(op))
+      foundChainedDot = true;
+  });
+  return foundChainedDot;
+}
 
 struct TritonAnnotateModule
     : ttgi::impl::TritonAnnotateModuleBase<TritonAnnotateModule> {
@@ -132,6 +180,9 @@ private:
         constexpr unsigned supportedThreadsPerWarp = 16u;
         if (minSGSize != supportedThreadsPerWarp)
           return WalkResult::interrupt();
+
+        if (!hasChainedDot(funcOp))
+          return WalkResult::advance();
 
         if (ttgi::DPASAnalysisFactory::canUseDPAS(funcOp, dpasAnalysis) ==
             ttgi::DPASAnalysisResult::Maybe) {
