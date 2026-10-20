@@ -12,7 +12,7 @@
 
 #include "llvm/ADT/TypeSwitch.h"
 
-#include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
+#include "mlir/Conversion/ArithAttrToLLVM/AttrToLLVMConverter.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 

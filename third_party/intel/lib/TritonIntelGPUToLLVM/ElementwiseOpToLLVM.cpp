@@ -1,7 +1,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "Utils/LLVMIntr.h"
-#include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
+#include "mlir/Conversion/ArithAttrToLLVM/AttrToLLVMConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "third_party/intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
