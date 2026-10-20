@@ -1342,6 +1342,29 @@ static const TripOracleCase kTripCases[] = {
     tt.return
   })",
      {{1, V::ConditionallySatisfied}}},
+    // 0 + 2 * 64 is 128: out of range signed, valid unsigned. ub needs no cap
+    // of its own, so neither the verdicts nor the guard may depend on one.
+    {"unsigned_step_near_int_max",
+     R"(
+  tt.func @f() {
+    %c0 = arith.constant 0 : i8
+    %c64 = arith.constant 64 : i8
+    %c65 = arith.constant 65 : i8
+    scf.for unsigned %i = %c0 to %c65 step %c64 : i8 {
+    } loc("L")
+    tt.return
+  })",
+     {{1, V::Satisfied}, {2, V::Satisfied}, {3, V::Refuted}}},
+    {"unsigned_dynamic_big_step",
+     R"(
+  tt.func @f(%N: i8) {
+    %c0 = arith.constant 0 : i8
+    %c64 = arith.constant 64 : i8
+    scf.for unsigned %i = %c0 to %N step %c64 : i8 {
+    } loc("L")
+    tt.return
+  })",
+     {{2, V::ConditionallySatisfied}}},
     // The guard is necessary: x = 127 wraps x + 1 to -128, an empty loop.
     {"raw_plus_one",
      R"(

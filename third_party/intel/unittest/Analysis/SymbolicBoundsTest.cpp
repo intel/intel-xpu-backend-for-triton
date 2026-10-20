@@ -2005,7 +2005,7 @@ TEST_F(SymbolicBoundsTest, TripCountAtLeast) {
       scf.for %i = %c0 to %c64 step %c1 : i32 {
       } loc("L"))",
        {{INT64_MAX, "Refuted"}}},
-      // Unsigned loops read their bounds as unsigned; the three loop-contract
+      // Unsigned loops read their bounds as unsigned; the two non-negativity
       // preconditions survive when nothing else discharges them.
       {"UnsignedDynamic",
        "%N: i32",
@@ -2032,8 +2032,7 @@ TEST_F(SymbolicBoundsTest, TripCountAtLeast) {
       %ub = arith.addi %M, %c64 : i32
       scf.for unsigned %i = %M to %ub step %c1 : i32 {
       } loc("L"))",
-       {{2, "Conditional{arg0 >= 0; arg0 + 64 >= 0; arg0 + 64 <= 2147483647; "
-            "arg0 <= 2147483583}"}}},
+       {{2, "Conditional{arg0 >= 0; arg0 + 64 >= 0; arg0 <= 2147483583}"}}},
       {"UnsignedRefutationNeedingPreconditionsIsUnknown",
        "%M: i32",
        R"(
@@ -2055,8 +2054,27 @@ TEST_F(SymbolicBoundsTest, TripCountAtLeast) {
       %ub = arith.addi %N, %c64 : i32
       scf.for unsigned %i = %c0 to %ub step %c1 : i32 {
       } loc("L"))",
-       {{2, "Conditional{arg0 >= -62; arg0 + 64 >= 0; arg0 + 64 <= "
-            "2147483647; arg0 <= 2147483583}"}}},
+       {{2, "Conditional{arg0 >= -62; arg0 + 64 >= 0; arg0 <= 2147483583}"}}},
+      // Non-negative bounds put the exit value below ub + step, which fits the
+      // unsigned type, so ub needs no cap of its own: 0 + 2 * 64 is 128, valid
+      // for an unsigned i8 loop.
+      {"UnsignedNarrowStepNearIntMax",
+       "",
+       R"(
+      %n0 = arith.constant 0 : i8
+      %n64 = arith.constant 64 : i8
+      %n65 = arith.constant 65 : i8
+      scf.for unsigned %i = %n0 to %n65 step %n64 : i8 {
+      } loc("L"))",
+       {{1, "Satisfied"}, {2, "Satisfied"}, {3, "Refuted"}}},
+      {"UnsignedNarrowDynamicBigStep",
+       "%N: i8",
+       R"(
+      %n0 = arith.constant 0 : i8
+      %n64 = arith.constant 64 : i8
+      scf.for unsigned %i = %n0 to %N step %n64 : i8 {
+      } loc("L"))",
+       {{2, "Conditional{arg0 >= 65}"}}},
       // The contract is about the actual trip count: 0 + 1 * 64 fits in i8
       // but 0 + 2 * 64 does not, and the n = 2 query is still answered.
       {"NarrowConstContractValid",

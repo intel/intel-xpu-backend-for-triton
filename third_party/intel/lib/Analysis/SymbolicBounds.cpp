@@ -1065,14 +1065,23 @@ std::optional<std::pair<int64_t, int64_t>> SymbolicBoundsProver::boundConstant(
 //===----------------------------------------------------------------------===//
 
 /// The scf.for contract reads an unsigned loop's bounds as unsigned; treating
-/// them as signed needs all three preconditions.
+/// them as signed needs both to be non-negative. That is all a trip count
+/// needs: the exit value is below `ub + step`, at most 2^width - 2, so it
+/// always fits.
+static void unsignedBoundPreconditions(const AffineForm &lb,
+                                       const AffineForm &ub,
+                                       SmallVectorImpl<BoundCondition> &out) {
+  out.push_back({lb, BoundGoal::NonNegative, 0, ConditionKind::Precondition});
+  out.push_back({ub, BoundGoal::NonNegative, 0, ConditionKind::Precondition});
+}
+
+/// Bounding the IV itself also takes `ub <= intMax - step + 1`.
 static void unsignedLoopPreconditions(scf::ForOp loop, const AffineForm &lb,
                                       const AffineForm &ub, int64_t step,
                                       SmallVectorImpl<BoundCondition> &out) {
   unsigned width = bitWidth(loop.getLowerBound().getType());
   int64_t intMax = APInt::getSignedMaxValue(width).getSExtValue();
-  out.push_back({lb, BoundGoal::NonNegative, 0, ConditionKind::Precondition});
-  out.push_back({ub, BoundGoal::NonNegative, 0, ConditionKind::Precondition});
+  unsignedBoundPreconditions(lb, ub, out);
   out.push_back(
       {ub, BoundGoal::AtMost, intMax - step + 1, ConditionKind::Precondition});
 }
@@ -2408,7 +2417,7 @@ BoundProof SymbolicBoundsProver::tripCountAtLeast(scf::ForOp loop, int64_t n) {
 
   CandidateSet base;
   if (loop.getUnsignedCmp())
-    unsignedLoopPreconditions(loop, lb, ub, *step, base.extra);
+    unsignedBoundPreconditions(lb, ub, base.extra);
   return proveDifferenceAtLeast(std::move(d), g, std::move(base), obligations,
                                 ctx);
 }
