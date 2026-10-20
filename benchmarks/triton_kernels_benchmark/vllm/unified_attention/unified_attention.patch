@@ -1,8 +1,19 @@
 diff --git a/tests/kernels/attention/test_triton_unified_attention.py b/tests/kernels/attention/test_triton_unified_attention.py
-index b50e97b52b..2e7dc26d34 100644
+index b50e97b52b..24d2948407 100644
 --- a/tests/kernels/attention/test_triton_unified_attention.py
 +++ b/tests/kernels/attention/test_triton_unified_attention.py
-@@ -771,6 +771,7 @@ def test_triton_unified_attn(
+@@ -282,7 +282,9 @@ def test_speculative_splitk_matches_reference(
+         q_dtype=q_dtype,
+         seq_threshold_3D=32,
+     )
+-    assert len(reduce_grids) == 1
++    # The tdesc patch launches the 2D kernel for sliding windows <= 1024.
++    uses_2d = sliding_window is not None and sliding_window <= 1024
++    assert len(reduce_grids) == (0 if uses_2d else 1)
+ 
+ 
+ def test_speculative_splitk_bf16_query_fp8_kv(monkeypatch):
+@@ -771,6 +773,7 @@ def test_triton_unified_attn(
          softmax_segm_max=softmax_segm_max,
          softmax_segm_expsum=softmax_segm_expsum,
          kv_quant_mode=kv_quant_mode,
@@ -10,7 +21,7 @@ index b50e97b52b..2e7dc26d34 100644
      )
  
      ref_output = ref_paged_attn(
-@@ -894,6 +895,7 @@ def test_triton_unified_attn_bf16_query_fp8_kv(
+@@ -894,6 +897,7 @@ def test_triton_unified_attn_bf16_query_fp8_kv(
          softmax_segm_max=softmax_segm_max,
          softmax_segm_expsum=softmax_segm_expsum,
          kv_quant_mode=KVQuantMode.FP8_PER_TENSOR,
@@ -18,7 +29,7 @@ index b50e97b52b..2e7dc26d34 100644
      )
  
      ref_output = ref_paged_attn(
-@@ -1013,6 +1015,7 @@ def test_triton_unified_attn_fp16_input_fp8_output(
+@@ -1013,6 +1017,7 @@ def test_triton_unified_attn_fp16_input_fp8_output(
          softmax_segm_output=softmax_segm_output,
          softmax_segm_max=softmax_segm_max,
          softmax_segm_expsum=softmax_segm_expsum,
