@@ -39,10 +39,9 @@ module {
 
 // -----
 
-// COM: A loop whose trip count the prover can pin exactly: `0 to 64 step 64`
-// COM: runs once, so "at least 1" holds and "at least 2" is refuted. A kernel
-// COM: argument as the upper bound is never refuted, even under an
-// COM: upper-bound assume: only a constant high end of `ub - lb` refutes.
+// COM: `0 to 64 step 64` runs once: "at least 1" holds, "at least 2" is
+// COM: refuted. A kernel-argument bound is never refuted, even under an
+// COM: upper-bound assume.
 
 // CHECK-LABEL: tt.func @single_trip_loop
 module {

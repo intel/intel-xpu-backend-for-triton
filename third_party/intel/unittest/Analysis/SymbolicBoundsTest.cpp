@@ -1814,8 +1814,9 @@ TEST_F(SymbolicBoundsTest, WidthPolicyKeepsSixtyFourBitsAndIndexDecided) {
 //===----------------------------------------------------------------------===//
 
 // Refuted fires when the high end of ub - lb over the enclosing loop is a
-// constant below (n - 1) * step + 1, so an upper-bound assume on a kernel
-// argument never refutes and a constant outer bound alone does not either.
+// constant below (n - 1) * step + 1. So an upper-bound assume on a kernel
+// argument never refutes, and a constant outer bound refutes only if small
+// enough.
 struct TripCase {
   const char *name;
   const char *args;
@@ -1843,12 +1844,18 @@ static std::string tripFunc(const TripCase &c) {
 
 TEST_F(SymbolicBoundsTest, TripCountAtLeast) {
   const std::vector<TripCase> cases = {
+      // n < 1 is Unknown, and so is INT64_MAX: (n - 1) * 64 overflows int64_t
+      // (with step 1 it does not, see HugeThresholdStepOne).
       {"ConstSingleTrip",
        "",
        R"(
       scf.for %i = %c0 to %c64 step %c64 : i32 {
       } loc("L"))",
-       {{1, "Satisfied"}, {2, "Refuted"}}},
+       {{1, "Satisfied"},
+        {2, "Refuted"},
+        {0, "Unknown"},
+        {-1, "Unknown"},
+        {INT64_MAX, "Unknown"}}},
       {"EmptyReversedBounds",
        "",
        R"(
@@ -1972,19 +1979,16 @@ TEST_F(SymbolicBoundsTest, TripCountAtLeast) {
       scf.for %i = %c5 to %c0 step %cm1 : i32 {
       } loc("L"))",
        {{1, "Unknown"}, {2, "Unknown"}}},
-      {"NonPositiveRequestIsUnknown",
+      // (n - 1) * step is exactly INT64_MAX, so only the `+ 1` overflows.
+      {"ThresholdAddOverflowIsUnknown",
        "",
        R"(
-      scf.for %i = %c0 to %c64 step %c64 : i32 {
+      %lo = arith.constant 0 : i64
+      %hi = arith.constant 64 : i64
+      %seven = arith.constant 7 : i64
+      scf.for %i = %lo to %hi step %seven : i64 {
       } loc("L"))",
-       {{0, "Unknown"}, {-1, "Unknown"}}},
-      // (n - 1) * step overflows int64_t; with step 1 it does not.
-      {"ThresholdOverflowIsUnknown",
-       "",
-       R"(
-      scf.for %i = %c0 to %c64 step %c64 : i32 {
-      } loc("L"))",
-       {{INT64_MAX, "Unknown"}}},
+       {{1317624576693539402, "Unknown"}}},
       // The span of an i64 loop from INT64_MIN to INT64_MAX does not fit.
       {"BoundDifferenceOverflowIsUnknown",
        "",

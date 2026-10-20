@@ -2382,8 +2382,8 @@ BoundProof SymbolicBoundsProver::proveDifferenceAtLeast(
 }
 
 BoundProof SymbolicBoundsProver::tripCountAtLeast(scf::ForOp loop, int64_t n) {
-  // Only a constant positive step: a dynamic or non-positive one has no closed
-  // trip-count formula, and constantStep also rejects unsupported widths.
+  // The threshold is affine only for a constant positive step; constantStep
+  // also rejects unsupported widths.
   std::optional<int64_t> step = constantStep(loop);
   if (n < 1 || !step || *step <= 0)
     return {};

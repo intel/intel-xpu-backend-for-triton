@@ -211,7 +211,6 @@ public:
     env.clear();
     masks.clear();
     mask = maskName;
-    targetLoop = nullptr;
 
     tt::FuncOp f;
     m.walk([&](tt::FuncOp op) { f = op; });
@@ -233,7 +232,6 @@ public:
     env.clear();
     masks.clear();
     mask = StringRef();
-    targetLoop = nullptr;
 
     if (!guard) {
       ADD_FAILURE() << "oracle: no guard to evaluate";
@@ -258,30 +256,18 @@ public:
   }
 
   /// Executes one launch like `run`, and returns the trip count of every
-  /// invocation of `target`, an scf.for, in execution order. A loop entered
-  /// but empty still records a zero, so an enclosing loop that never runs is
-  /// told apart from a nested loop that runs zero times. nullopt for a launch
-  /// the contract excludes, as for `run`.
+  /// invocation of `target`, an scf.for, in execution order. An entered but
+  /// empty loop records a zero; one never entered records nothing. nullopt for
+  /// a launch the contract excludes.
   std::optional<std::vector<uint64_t>>
   runTripCounts(ModuleOp m, ArrayRef<int64_t> argValues, scf::ForOp target) {
-    env.clear();
-    masks.clear();
-    mask = StringRef();
     trips.clear();
     targetLoop = target.getOperation();
-
-    tt::FuncOp f;
-    m.walk([&](tt::FuncOp op) { f = op; });
-    if (!f) {
-      ADD_FAILURE() << "oracle: no tt.func to run";
-      return std::nullopt;
-    }
-    std::optional<std::vector<uint64_t>> result;
-    if (bindArgs(f, argValues) == Status::Ok &&
-        execBlock(f.getBody().front()) == Status::Ok)
-      result = trips;
+    bool ok = run(m, argValues, StringRef()).has_value();
     targetLoop = nullptr;
-    return result;
+    if (!ok)
+      return std::nullopt;
+    return trips;
   }
 
 private:
@@ -1278,23 +1264,23 @@ INSTANTIATE_TEST_SUITE_P(ResidualCandidates, SymbolicBoundsOracleTest,
 //===----------------------------------------------------------------------===//
 //
 // `tripCountAtLeast` is checked against the trip count of every invocation of
-// the queried loop, including a nested loop entered many times and one that
-// runs zero times. Satisfied must hold in every invocation of every valid
-// launch, Refuted must fail in every one, and a Conditional guard - evaluated
-// over the kernel arguments only, so a fixture whose guard needs an enclosing
-// IV fails loudly - must imply it. Nested fixtures use i4 arguments: the
-// enumeration is Cartesian and each launch interprets every iteration.
+// the queried loop, nested ones included. Satisfied must hold in every
+// invocation of every valid launch, Refuted must fail in every one, and a
+// Conditional guard - evaluated over the kernel arguments only, so a fixture
+// whose guard needs an enclosing IV fails loudly - must imply it. Nested
+// fixtures use i4 arguments: the enumeration is Cartesian and each launch
+// interprets every iteration.
 
 struct TripOracleCase {
   const char *name;
   std::string ir;
-  int64_t n;
-  std::vector<V> allowed;
-  bool vacuous = false; // waive the "some guard-true invocation ran" check
+  std::vector<std::pair<int64_t, V>> expect; // n -> verdict
 };
 
 static const TripOracleCase kTripCases[] = {
-    {"const_single_trip_n1",
+    // Refuted for n = 2 although 0 + 2 * 64 does not fit i8: only the actual
+    // trip count has to.
+    {"const_single_trip",
      R"(
   tt.func @f() {
     %c0 = arith.constant 0 : i8
@@ -1303,22 +1289,8 @@ static const TripOracleCase kTripCases[] = {
     } loc("L")
     tt.return
   })",
-     1,
-     {V::Satisfied}},
-    // 0 + 1 * 64 fits in i8 but 0 + 2 * 64 does not: the contract is about the
-    // actual trip count, so the n = 2 query is still answered.
-    {"const_single_trip_n2",
-     R"(
-  tt.func @f() {
-    %c0 = arith.constant 0 : i8
-    %c64 = arith.constant 64 : i8
-    scf.for %i = %c0 to %c64 step %c64 : i8 {
-    } loc("L")
-    tt.return
-  })",
-     2,
-     {V::Refuted}},
-    {"empty_loop_n1",
+     {{1, V::Satisfied}, {2, V::Refuted}}},
+    {"empty_loop",
      R"(
   tt.func @f() {
     %c5 = arith.constant 5 : i8
@@ -1328,9 +1300,8 @@ static const TripOracleCase kTripCases[] = {
     } loc("L")
     tt.return
   })",
-     1,
-     {V::Refuted}},
-    {"dynamic_step_one_n2",
+     {{1, V::Refuted}}},
+    {"dynamic_step_one",
      R"(
   tt.func @f(%N: i8) {
     %c0 = arith.constant 0 : i8
@@ -1339,11 +1310,10 @@ static const TripOracleCase kTripCases[] = {
     } loc("L")
     tt.return
   })",
-     2,
-     {V::ConditionallySatisfied}},
+     {{2, V::ConditionallySatisfied}}},
     // Step 32: with step 64 every launch that satisfies the guard would leave
     // the contract (0 + 2 * 64 does not fit i8) and be skipped.
-    {"dynamic_step_32_n2",
+    {"dynamic_step_32",
      R"(
   tt.func @f(%N: i8) {
     %c0 = arith.constant 0 : i8
@@ -1352,9 +1322,8 @@ static const TripOracleCase kTripCases[] = {
     } loc("L")
     tt.return
   })",
-     2,
-     {V::ConditionallySatisfied}},
-    {"unsigned_dynamic_n2",
+     {{2, V::ConditionallySatisfied}}},
+    {"unsigned_dynamic",
      R"(
   tt.func @f(%N: i8) {
     %c0 = arith.constant 0 : i8
@@ -1363,9 +1332,8 @@ static const TripOracleCase kTripCases[] = {
     } loc("L")
     tt.return
   })",
-     2,
-     {V::ConditionallySatisfied}},
-    {"unsigned_two_args_n1",
+     {{2, V::ConditionallySatisfied}}},
+    {"unsigned_two_args",
      R"(
   tt.func @f(%M: i4, %N: i4) {
     %c1 = arith.constant 1 : i4
@@ -1373,10 +1341,9 @@ static const TripOracleCase kTripCases[] = {
     } loc("L")
     tt.return
   })",
-     1,
-     {V::ConditionallySatisfied}},
+     {{1, V::ConditionallySatisfied}}},
     // The guard is necessary: x = 127 wraps x + 1 to -128, an empty loop.
-    {"raw_plus_one_n1",
+    {"raw_plus_one",
      R"(
   tt.func @f(%x: i8) {
     %c1 = arith.constant 1 : i8
@@ -1385,9 +1352,8 @@ static const TripOracleCase kTripCases[] = {
     } loc("L")
     tt.return
   })",
-     1,
-     {V::ConditionallySatisfied}},
-    {"masked_plus_one_n1",
+     {{1, V::ConditionallySatisfied}}},
+    {"masked_plus_one",
      R"(
   tt.func @f(%a: i8) {
     %c1 = arith.constant 1 : i8
@@ -1398,22 +1364,8 @@ static const TripOracleCase kTripCases[] = {
     } loc("L")
     tt.return
   })",
-     1,
-     {V::Satisfied}},
-    {"masked_plus_one_n2",
-     R"(
-  tt.func @f(%a: i8) {
-    %c1 = arith.constant 1 : i8
-    %c63 = arith.constant 63 : i8
-    %x = arith.andi %a, %c63 : i8
-    %xp1 = arith.addi %x, %c1 : i8
-    scf.for %j = %x to %xp1 step %c1 : i8 {
-    } loc("L")
-    tt.return
-  })",
-     2,
-     {V::Refuted}},
-    {"upper_bound_minus_one_n1",
+     {{1, V::Satisfied}, {2, V::Refuted}}},
+    {"upper_bound_minus_one",
      R"(
   tt.func @f(%N: i8) {
     %c0 = arith.constant 0 : i8
@@ -1423,10 +1375,9 @@ static const TripOracleCase kTripCases[] = {
     } loc("L")
     tt.return
   })",
-     1,
-     {V::ConditionallySatisfied}},
+     {{1, V::ConditionallySatisfied}}},
     // Inner 0..i under outer 0..2 is entered twice, with trip counts 0 and 1.
-    {"nested_const_outer_n2",
+    {"nested_const_outer",
      R"(
   tt.func @f() {
     %c0 = arith.constant 0 : i8
@@ -1438,11 +1389,10 @@ static const TripOracleCase kTripCases[] = {
     }
     tt.return
   })",
-     2,
-     {V::Refuted}},
+     {{2, V::Refuted}}},
     // Inner 0..i under outer 0..3 can reach two trips: n = 2 is not refuted
     // (an Unknown verdict is pinned, not executed), n = 3 is.
-    {"nested_boundary_outer_n2",
+    {"nested_boundary_outer",
      R"(
   tt.func @f() {
     %c0 = arith.constant 0 : i8
@@ -1454,24 +1404,9 @@ static const TripOracleCase kTripCases[] = {
     }
     tt.return
   })",
-     2,
-     {V::Unknown}},
-    {"nested_boundary_outer_n3",
-     R"(
-  tt.func @f() {
-    %c0 = arith.constant 0 : i8
-    %c1 = arith.constant 1 : i8
-    %c3 = arith.constant 3 : i8
-    scf.for %i = %c0 to %c3 step %c1 : i8 {
-      scf.for %j = %c0 to %i step %c1 : i8 {
-      } loc("L")
-    }
-    tt.return
-  })",
-     3,
-     {V::Refuted}},
+     {{2, V::Unknown}, {3, V::Refuted}}},
     // Entered once per outer iteration; each invocation runs exactly once.
-    {"inner_iv_plus_one_n1",
+    {"inner_iv_plus_one",
      R"(
   tt.func @f(%N: i4) {
     %c0 = arith.constant 0 : i4
@@ -1483,23 +1418,8 @@ static const TripOracleCase kTripCases[] = {
     }
     tt.return
   })",
-     1,
-     {V::Satisfied}},
-    {"inner_iv_plus_one_n2",
-     R"(
-  tt.func @f(%N: i4) {
-    %c0 = arith.constant 0 : i4
-    %c1 = arith.constant 1 : i4
-    scf.for %i = %c0 to %N step %c1 : i4 {
-      %ip1 = arith.addi %i, %c1 : i4
-      scf.for %j = %i to %ip1 step %c1 : i4 {
-      } loc("L")
-    }
-    tt.return
-  })",
-     2,
-     {V::Refuted}},
-    {"third_level_n2",
+     {{1, V::Satisfied}, {2, V::Refuted}}},
+    {"third_level",
      R"(
   tt.func @f(%N: i4) {
     %c0 = arith.constant 0 : i4
@@ -1513,9 +1433,8 @@ static const TripOracleCase kTripCases[] = {
     }
     tt.return
   })",
-     2,
-     {V::Refuted}},
-    {"unsigned_outer_n2",
+     {{2, V::Refuted}}},
+    {"unsigned_outer",
      R"(
   tt.func @f() {
     %c0 = arith.constant 0 : i8
@@ -1527,11 +1446,10 @@ static const TripOracleCase kTripCases[] = {
     }
     tt.return
   })",
-     2,
-     {V::Refuted}},
+     {{2, V::Refuted}}},
     // An assume just before the nested loop applies to that loop; the guard-
     // free Satisfied must hold in every launch the assume allows.
-    {"assume_before_nested_n2",
+    {"assume_before_nested",
      R"(
   tt.func @f(%N: i4, %K: i4) {
     %c0 = arith.constant 0 : i4
@@ -1545,8 +1463,7 @@ static const TripOracleCase kTripCases[] = {
     }
     tt.return
   })",
-     2,
-     {V::Satisfied}},
+     {{2, V::Satisfied}}},
 };
 
 class TripCountOracleTest
@@ -1558,52 +1475,52 @@ TEST_P(TripCountOracleTest, VerdictMatchesExhaustiveExecution) {
   const TripOracleCase &c = GetParam();
   parse(c.ir);
   scf::ForOp loop = forNamed("L");
-  BoundProof p = prover->tripCountAtLeast(loop, c.n);
-  EXPECT_TRUE(llvm::is_contained(c.allowed, p.verdict))
-      << c.name << ": " << toString(p);
-  if (p.verdict == BoundProof::Unknown)
-    return;
-  Value guard = p.verdict == BoundProof::ConditionallySatisfied
-                    ? materializeBeforeLoop(p, loop)
-                    : Value();
-  unsigned valid = 0, invocations = 0, guardedInvocations = 0;
-  for (auto args : allArgumentValues(*module)) {
-    auto trips = oracle.runTripCounts(module.get(), args, loop);
-    if (!trips)
-      continue; // UB, assume-violating, or outside the scf.for contract
-    ++valid;
-    invocations += trips->size();
-    bool guardTrue = guard && oracle.evalGuard(guard, args);
-    if (guardTrue)
-      guardedInvocations += trips->size();
-    for (uint64_t t : *trips) {
-      switch (p.verdict) {
-      case BoundProof::Satisfied:
-        EXPECT_GE(t, static_cast<uint64_t>(c.n)) << c.name << args;
-        break;
-      case BoundProof::Refuted:
-        EXPECT_LT(t, static_cast<uint64_t>(c.n)) << c.name << args;
-        break;
-      case BoundProof::ConditionallySatisfied:
-        if (guardTrue)
-          EXPECT_GE(t, static_cast<uint64_t>(c.n)) << c.name << args;
-        break;
-      case BoundProof::Unknown:
-        break;
+  for (auto [n, expected] : c.expect) {
+    std::string tag = std::string(c.name) + "_n" + std::to_string(n);
+    BoundProof p = prover->tripCountAtLeast(loop, n);
+    EXPECT_EQ(p.verdict, expected) << tag << ": " << toString(p);
+    if (p.verdict == BoundProof::Unknown)
+      continue;
+    Value guard = p.verdict == BoundProof::ConditionallySatisfied
+                      ? materializeBeforeLoop(p, loop)
+                      : Value();
+    unsigned valid = 0, invocations = 0, guardedInvocations = 0;
+    for (auto args : allArgumentValues(*module)) {
+      auto trips = oracle.runTripCounts(module.get(), args, loop);
+      if (!trips)
+        continue; // UB, assume-violating, or outside the scf.for contract
+      ++valid;
+      invocations += trips->size();
+      bool guardTrue = guard && oracle.evalGuard(guard, args);
+      if (guardTrue)
+        guardedInvocations += trips->size();
+      for (uint64_t t : *trips) {
+        switch (p.verdict) {
+        case BoundProof::Satisfied:
+          EXPECT_GE(t, static_cast<uint64_t>(n)) << tag << args;
+          break;
+        case BoundProof::Refuted:
+          EXPECT_LT(t, static_cast<uint64_t>(n)) << tag << args;
+          break;
+        case BoundProof::ConditionallySatisfied:
+          if (guardTrue)
+            EXPECT_GE(t, static_cast<uint64_t>(n)) << tag << args;
+          break;
+        case BoundProof::Unknown:
+          break;
+        }
       }
     }
+    EXPECT_GT(valid, 0u) << tag;
+    // An "every invocation" claim over no invocation proves nothing.
+    EXPECT_GT(invocations, 0u) << tag << ": the queried loop was never entered";
+    if (guard)
+      EXPECT_GT(guardedInvocations, 0u)
+          << tag << ": no invocation ever ran under a true guard";
+    RecordProperty(tag + "_valid", valid);
+    RecordProperty(tag + "_invocations", invocations);
+    RecordProperty(tag + "_guarded_invocations", guardedInvocations);
   }
-  EXPECT_GT(valid, 0u) << c.name;
-  // An "every invocation" claim over no invocation proves nothing.
-  EXPECT_GT(invocations, 0u)
-      << c.name << ": the queried loop was never entered";
-  if (guard && !c.vacuous)
-    EXPECT_GT(guardedInvocations, 0u)
-        << c.name << ": no invocation ever ran under a true guard";
-  RecordProperty(std::string(c.name) + "_valid", valid);
-  RecordProperty(std::string(c.name) + "_invocations", invocations);
-  RecordProperty(std::string(c.name) + "_guarded_invocations",
-                 guardedInvocations);
 }
 
 static std::string
