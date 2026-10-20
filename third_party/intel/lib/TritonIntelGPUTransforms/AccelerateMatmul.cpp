@@ -706,6 +706,25 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
       });
 }
 
+// Replaces \p dotOp, which has a bf16 accumulator, with a dot that accumulates
+// in fp32 followed by a single RTNE rounding of the result to bf16.
+static tt::DotOp accumulateInF32(tt::DotOp dotOp) {
+  OpBuilder builder(dotOp);
+  Location loc = dotOp.getLoc();
+  RankedTensorType DType = dotOp.getD().getType();
+  RankedTensorType f32Type = DType.clone(builder.getF32Type());
+  auto acc = tt::FpToFpOp::create(builder, loc, f32Type, dotOp.getC());
+  auto f32Dot = tt::DotOp::create(builder, loc, f32Type, dotOp.getA(),
+                                  dotOp.getB(), acc, dotOp.getInputPrecision(),
+                                  dotOp.getMaxNumImpreciseAcc());
+  auto result = tt::FpToFpOp::create(
+      builder, loc, DType, f32Dot.getD(),
+      tt::RoundingModeAttr::get(builder.getContext(), tt::RoundingMode::RTNE));
+  dotOp.replaceAllUsesWith(result.getResult());
+  dotOp.erase();
+  return f32Dot;
+}
+
 // promote operands of dot op if the existing combination is not natively
 // supported.
 static void decomposeMixedModeDotOp(ModuleOp mod) {
@@ -730,9 +749,19 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     } else {
       // FMA case.
       Type DElType = D.getType().getElementType();
+      if (DElType.isBF16()) {
+        // FMA rounds the accumulator after every multiply-add, and IGC lowers
+        // a bf16 multiply-add to a `mad` with a bf16 destination, which rounds
+        // toward zero. Accumulate in fp32 and round the result once instead,
+        // as bf16 DPAS does per instruction. This covers bf16 and fp8 dots
+        // that cannot use DPAS (e.g. fp8 without fp8 DPAS, or mixed fp8).
+        dotOp = accumulateInF32(dotOp);
+        DElType = builder.getF32Type();
+      }
       if (AElType == DElType)
         return;
       promoteType = DElType;
+      builder.setInsertionPoint(dotOp);
     }
 
     Location loc = dotOp.getLoc();
