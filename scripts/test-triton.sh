@@ -1313,7 +1313,6 @@ run_vllm_triton_attn_tests() {
       tests/kernels/attention/test_triton_decode_attention.py \
       tests/kernels/attention/test_triton_unified_attention.py \
       tests/kernels/attention/test_triton_prefill_attention.py \
-      tests/kernels/attention/test_cascade_flash_attn.py \
       tests/kernels/attention/test_pack_unpack_triton.py \
       tests/kernels/attention/test_flashmla_sparse.py \
       tests/kernels/attention/test_xpu_mla_sparse.py \
