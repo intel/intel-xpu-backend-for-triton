@@ -35,6 +35,45 @@ index 213d896c03..b0faea196e 100644
          # FP32 also keeps the helper's in-place scaling off the kernel input.
          ref_out = ref_paged_attn(
              query.float(),
+diff --git a/tests/kernels/core/test_apply_rotary_emb.py b/tests/kernels/core/test_apply_rotary_emb.py
+index ddb717f394..27ed1222f3 100644
+--- a/tests/kernels/core/test_apply_rotary_emb.py
++++ b/tests/kernels/core/test_apply_rotary_emb.py
+@@ -227,7 +227,7 @@ def test_apply_rotary_emb_xpu_matches_native(
+         torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda_alike(), reason="CUDA/ROCm only test.")
++@pytest.mark.skipif(not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="CUDA/ROCm only test.")
+ @pytest.mark.parametrize("num_tokens", [257, 2304])
+ @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+ def test_packed_qk_rope_correctness(
+diff --git a/tests/kernels/core/test_fused_embed_norm.py b/tests/kernels/core/test_fused_embed_norm.py
+index 9da43dba83..f0dbf48229 100644
+--- a/tests/kernels/core/test_fused_embed_norm.py
++++ b/tests/kernels/core/test_fused_embed_norm.py
+@@ -25,7 +25,7 @@ DTYPE = torch.bfloat16
+ VOCAB, HIDDEN, NUM_TOKENS, EPS = 8192, 4096, 129, 1e-6
+ 
+ requires_cuda = pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(),
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()),
+     reason="fused embed/norm Triton kernels require a CUDA/ROCm device",
+ )
+ 
+diff --git a/tests/kernels/core/test_fused_q_kv_rmsnorm.py b/tests/kernels/core/test_fused_q_kv_rmsnorm.py
+index 485a35348e..a8d20b16cc 100644
+--- a/tests/kernels/core/test_fused_q_kv_rmsnorm.py
++++ b/tests/kernels/core/test_fused_q_kv_rmsnorm.py
+@@ -19,7 +19,7 @@ from vllm.models.common.ops.fused_qk_rmsnorm import (
+ from vllm.platforms import current_platform
+ 
+ pytestmark = pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(),
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()),
+     reason="fused_q_kv_rmsnorm requires a CUDA/ROCm device",
+ )
+ 
 diff --git a/tests/kernels/core/test_fused_rms_norm_gated.py b/tests/kernels/core/test_fused_rms_norm_gated.py
 index 86b8e79656..e51b6328e8 100644
 --- a/tests/kernels/core/test_fused_rms_norm_gated.py
@@ -94,9 +133,18 @@ index 973e7885c6..e474275f57 100644
          mixer_single_gpu = Mixer2RMSNormGated(
              full_hidden_size=hidden_size,
 diff --git a/tests/kernels/mamba/test_mamba_ssm.py b/tests/kernels/mamba/test_mamba_ssm.py
-index c24f4c0f87..94b0f396fe 100644
+index c24f4c0f87..60e8584cd7 100644
 --- a/tests/kernels/mamba/test_mamba_ssm.py
 +++ b/tests/kernels/mamba/test_mamba_ssm.py
+@@ -32,7 +32,7 @@ pytestmark = pytest.mark.skipif(
+ # so tests exercising it must be skipped on XPU. selective_state_update is
+ # pure Triton and runs on both CUDA-alike and XPU.
+ skip_unless_cuda_alike = pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(),
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()),
+     reason="selective_scan_fn uses CUDA-only custom op",
+ )
+ 
 @@ -137,6 +137,9 @@ def selective_scan_opcheck_fn(
      """If return_last_state is True, returns (out, last_state)
      last_state has shape (batch, dim, dstate).
@@ -107,6 +155,55 @@ index c24f4c0f87..94b0f396fe 100644
      if u.stride(-1) != 1:
          u = u.contiguous()
      if delta.stride(-1) != 1:
+diff --git a/tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py b/tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py
+index 588ce52dbe..c95f1a1f28 100644
+--- a/tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py
++++ b/tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py
+@@ -290,7 +290,7 @@ _REAL_GEOMETRIES = [
+ ]
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Need CUDA device")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="Need CUDA device")
+ @pytest.mark.parametrize("precision", _PRECISIONS)
+ @pytest.mark.parametrize("max_cache_len", [1, 4, 16])
+ @pytest.mark.parametrize("geometry", _SMALL_GEOMETRIES)
+@@ -319,7 +319,7 @@ def test_replayssm_standard_decode_matches_reference(
+     )
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Need CUDA device")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="Need CUDA device")
+ @pytest.mark.parametrize("precision", _PRECISIONS)
+ @pytest.mark.parametrize("geometry", _REAL_GEOMETRIES)
+ def test_replayssm_standard_decode_real_geometry(
+@@ -347,7 +347,7 @@ def test_replayssm_standard_decode_real_geometry(
+     )
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Need CUDA device")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="Need CUDA device")
+ @pytest.mark.parametrize(
+     "precision",
+     [
+@@ -379,7 +379,7 @@ def test_replayssm_standard_decode_desync_write_pos(
+     )
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Need CUDA device")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="Need CUDA device")
+ @pytest.mark.parametrize("precision", _PRECISIONS)
+ @pytest.mark.parametrize("with_padding", [False, True])
+ def test_replayssm_standard_decode_with_batch_indices(
+@@ -524,7 +524,7 @@ _TP_GEOMETRIES = [
+ ]
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Need CUDA device")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="Need CUDA device")
+ @pytest.mark.parametrize("precision", _PRECISIONS)
+ @pytest.mark.parametrize("geometry", _TP_GEOMETRIES)
+ @pytest.mark.parametrize("tp", [2])
 diff --git a/tests/kernels/mamba/utils.py b/tests/kernels/mamba/utils.py
 index c7cf473427..02f245de36 100644
 --- a/tests/kernels/mamba/utils.py
@@ -126,9 +223,18 @@ index c7cf473427..02f245de36 100644
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
 diff --git a/tests/kernels/moe/test_block_fp8.py b/tests/kernels/moe/test_block_fp8.py
-index 68f6b3b0b3..297ad492c7 100644
+index 68f6b3b0b3..dd8e7f0aec 100644
 --- a/tests/kernels/moe/test_block_fp8.py
 +++ b/tests/kernels/moe/test_block_fp8.py
+@@ -44,7 +44,7 @@ from vllm.utils.import_utils import has_deep_gemm
+ 
+ dg_available = has_deep_gemm()
+ 
+-if current_platform.get_device_capability() < (9, 0):
++if (not current_platform.is_xpu() and current_platform.get_device_capability() < (9, 0)):
+     pytest.skip("FP8 Triton requires CUDA 9.0 or higher", allow_module_level=True)
+ if current_platform.is_fp8_fnuz():
+     pytest.skip(
 @@ -239,7 +239,11 @@ def test_w8a8_block_fp8_fused_moe(
      # while fused_experts/the reference round SiLU to bf16 first. On large K/N this
      # ~1-ULP gap pushes m_out past the base tol, so validate m_out against an
@@ -142,6 +248,19 @@ index 68f6b3b0b3..297ad492c7 100644
          with set_current_vllm_config(vllm_config):
              ref_out_m = torch_w8a8_block_fp8_moe(
                  a,
+diff --git a/tests/kernels/moe/test_block_int8.py b/tests/kernels/moe/test_block_int8.py
+index 5e853834bb..b2e4b4b49c 100644
+--- a/tests/kernels/moe/test_block_int8.py
++++ b/tests/kernels/moe/test_block_int8.py
+@@ -17,7 +17,7 @@ from vllm.model_executor.layers.quantization.utils.int8_utils import (
+ )
+ from vllm.platforms import current_platform
+ 
+-if current_platform.get_device_capability() < (7, 0):
++if (not current_platform.is_xpu() and current_platform.get_device_capability() < (7, 0)):
+     pytest.skip("INT8 Triton requires CUDA 7.0 or higher", allow_module_level=True)
+ 
+ vllm_config = VllmConfig()
 diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
 index 8d6deac4f0..776722a6e8 100644
 --- a/tests/kernels/moe/test_moe.py
@@ -215,8 +334,134 @@ index 8d6deac4f0..776722a6e8 100644
  def test_batched_fused_marlin_moe(
      m: int,
      n: int,
+diff --git a/tests/kernels/moe/test_triton_moe_no_act_mul.py b/tests/kernels/moe/test_triton_moe_no_act_mul.py
+index 1171061a6f..c0ede28d5d 100644
+--- a/tests/kernels/moe/test_triton_moe_no_act_mul.py
++++ b/tests/kernels/moe/test_triton_moe_no_act_mul.py
+@@ -60,7 +60,7 @@ def test_apply_moe_activation_supported_contract():
+     assert supported == set(MoEActivation) - {MoEActivation.RELU2}
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda(), reason="Requires CUDA")
++@pytest.mark.skipif(not (current_platform.is_cuda() or current_platform.is_xpu()), reason="Requires CUDA")
+ @pytest.mark.parametrize(
+     "activation",
+     [
+diff --git a/tests/kernels/moe/test_triton_moe_ptpc_fp8.py b/tests/kernels/moe/test_triton_moe_ptpc_fp8.py
+index 8b10ff75e6..2585c026b5 100644
+--- a/tests/kernels/moe/test_triton_moe_ptpc_fp8.py
++++ b/tests/kernels/moe/test_triton_moe_ptpc_fp8.py
+@@ -14,7 +14,7 @@ from vllm.model_executor.layers.activation import SiluAndMul
+ from vllm.model_executor.layers.fused_moe.config import fp8_w8a8_moe_quant_config
+ from vllm.platforms import current_platform
+ 
+-if current_platform.get_device_capability() < (9, 0):
++if (not current_platform.is_xpu() and current_platform.get_device_capability() < (9, 0)):
+     pytest.skip("FP8 Triton requires CUDA 9.0 or higher", allow_module_level=True)
+ 
+ vllm_config = VllmConfig()
+diff --git a/tests/kernels/quantization/test_nvfp4_emulation.py b/tests/kernels/quantization/test_nvfp4_emulation.py
+index 3a136484ac..9e554fa0d6 100644
+--- a/tests/kernels/quantization/test_nvfp4_emulation.py
++++ b/tests/kernels/quantization/test_nvfp4_emulation.py
+@@ -636,7 +636,7 @@ def _load_nvfp4_moe_weights(
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(),
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()),
+     reason="Triton NVFP4 kernel requires CUDA.",
+ )
+ @pytest.mark.parametrize("num_tokens", [1, 2, 4, 1024])
+diff --git a/tests/kernels/quantization/test_quantized_embedding.py b/tests/kernels/quantization/test_quantized_embedding.py
+index 0e4af0a0c1..8bf42b3d68 100644
+--- a/tests/kernels/quantization/test_quantized_embedding.py
++++ b/tests/kernels/quantization/test_quantized_embedding.py
+@@ -32,7 +32,7 @@ def _dequant_gather_torch(
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda(), reason="Triton dequant kernel requires CUDA"
++    not (current_platform.is_cuda() or current_platform.is_xpu()), reason="Triton dequant kernel requires CUDA"
+ )
+ @pytest.mark.parametrize("num_bits", [2, 4, 8])
+ @pytest.mark.parametrize("group_size", [0, 256])  # 0 -> channel
+diff --git a/tests/kernels/test_compressor_kv_cache.py b/tests/kernels/test_compressor_kv_cache.py
+index 020dd607b6..b25db506cb 100644
+--- a/tests/kernels/test_compressor_kv_cache.py
++++ b/tests/kernels/test_compressor_kv_cache.py
+@@ -707,7 +707,7 @@ def test_v41_rope_insert_plain_row(compress_ratio: int, store_fp8: bool):
+         )
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda(), reason="Triton kernel")
++@pytest.mark.skipif(not (current_platform.is_cuda() or current_platform.is_xpu()), reason="Triton kernel")
+ def test_v41_compressor_metadata_maps_tokens_to_their_ring():
+     """The ring group's generic slot mapping is disabled (all PAD), so the
+     builder must map every real token to ``ring_block * capacity + pos %
+diff --git a/tests/model_executor/test_bailing_mrope.py b/tests/model_executor/test_bailing_mrope.py
+index e44a683495..4531b02c93 100644
+--- a/tests/model_executor/test_bailing_mrope.py
++++ b/tests/model_executor/test_bailing_mrope.py
+@@ -94,7 +94,7 @@ def test_bailing_factory_rejects_unsupported_scaling():
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(),
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()),
+     reason="Skipping CUDA/ROCm-only test.",
+ )
+ @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+diff --git a/tests/models/inkling/test_mtp_input_fusion.py b/tests/models/inkling/test_mtp_input_fusion.py
+index 7ab33dd45a..01a76c5e32 100644
+--- a/tests/models/inkling/test_mtp_input_fusion.py
++++ b/tests/models/inkling/test_mtp_input_fusion.py
+@@ -14,7 +14,7 @@ import torch
+ 
+ from vllm.platforms import current_platform
+ 
+-if not current_platform.is_cuda():
++if not (current_platform.is_cuda() or current_platform.is_xpu()):
+     pytest.skip("requires CUDA", allow_module_level=True)
+ 
+ from vllm.models.inkling.nvidia.ops.norm import (
+diff --git a/tests/models/inkling/test_qkvr_prep.py b/tests/models/inkling/test_qkvr_prep.py
+index 1e0bf49bb6..5eee7ef8cd 100644
+--- a/tests/models/inkling/test_qkvr_prep.py
++++ b/tests/models/inkling/test_qkvr_prep.py
+@@ -223,7 +223,7 @@ def test_qkvr_prep_negative_slots_skip_cache_writes(tokens):
+     torch.testing.assert_close(args[13], value_cache, rtol=0, atol=0)
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ @torch.inference_mode()
+ def test_fused_sconv_negative_slots_skip_cache_writes():
+     args = list(_make_inputs(is_local=True, tokens=9))
+diff --git a/tests/models/inkling/test_sconv_metadata.py b/tests/models/inkling/test_sconv_metadata.py
+index 70a091d382..81b69932bd 100644
+--- a/tests/models/inkling/test_sconv_metadata.py
++++ b/tests/models/inkling/test_sconv_metadata.py
+@@ -36,7 +36,7 @@ def _ref(query_start_loc: torch.Tensor, num_reqs: int, num_tokens: int):
+     return seq_idx.to(torch.int32), cu_seqlens[seq_idx].to(torch.int32)
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ @pytest.mark.parametrize("query_lens,extra_pad", CASES)
+ def test_sconv_seq_metadata_matches_searchsorted(query_lens, extra_pad):
+     device = "cuda"
+@@ -66,7 +66,7 @@ def test_sconv_seq_metadata_matches_searchsorted(query_lens, extra_pad):
+     assert torch.count_nonzero(query_start[num_actual_tokens:]) == 0
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ def test_sconv_metadata_reuses_padded_static_buffers():
+     device = torch.device("cuda")
+     builder = object.__new__(InklingSconvMetadataBuilder)
 diff --git a/tests/quantization/test_per_token_kv_cache.py b/tests/quantization/test_per_token_kv_cache.py
-index 4d61932..b024d1b 100644
+index 4d61932118..b024d1b454 100644
 --- a/tests/quantization/test_per_token_kv_cache.py
 +++ b/tests/quantization/test_per_token_kv_cache.py
 @@ -567,9 +567,10 @@ def test_triton_unified_attention_per_token_head_scale(
@@ -294,6 +539,206 @@ index dd6bf4ae96..1d4ca80bb3 100644
              env[_SPAWN_CHILD_ENV] = "1"
  
              result = subprocess.run(
+diff --git a/tests/v1/attention/test_dcp_a2a_pack_mask.py b/tests/v1/attention/test_dcp_a2a_pack_mask.py
+index cff1228baf..c10cfb0324 100644
+--- a/tests/v1/attention/test_dcp_a2a_pack_mask.py
++++ b/tests/v1/attention/test_dcp_a2a_pack_mask.py
+@@ -14,7 +14,7 @@ from vllm.v1.attention.ops.dcp import (
+ )
+ 
+ requires_accelerator = pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(),
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()),
+     reason="needs a CUDA or ROCm device for the Triton pack kernel",
+ )
+ 
+diff --git a/tests/v1/attention/test_deepseek_v4_swa_visible.py b/tests/v1/attention/test_deepseek_v4_swa_visible.py
+index 7a74ce8c81..2bc41bbe25 100644
+--- a/tests/v1/attention/test_deepseek_v4_swa_visible.py
++++ b/tests/v1/attention/test_deepseek_v4_swa_visible.py
+@@ -218,7 +218,7 @@ CASES: list[_Case] = [
+ ]
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ @pytest.mark.parametrize("case", CASES)
+ def test_swa_indices_kernel_with_image_spans(case):
+     rows, lens = ref_swa_slot_rows(
+@@ -237,7 +237,7 @@ def test_swa_indices_kernel_with_image_spans(case):
+     assert indices.cpu().tolist() == rows
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ @pytest.mark.parametrize("case", CASES)
+ def test_swa_indices_kernel_without_image_unchanged(case):
+     """HAS_IMAGE=False must reproduce the plain causal sliding window."""
+@@ -397,7 +397,7 @@ COMBINE_CASES = [
+ ]
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ @pytest.mark.parametrize("cfg", COMBINE_CASES)
+ def test_combine_topk_swa_with_image_spans(cfg):
+     case = CASES[0]
+@@ -438,7 +438,7 @@ def test_v41_combine_topk_swa_stops_at_replay_start(cfg):
+     assert indices.cpu().tolist() == rows
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ @pytest.mark.parametrize("cfg", COMBINE_CASES)
+ def test_combine_topk_swa_without_image_unchanged(cfg):
+     """left_visible=None must reproduce the plain causal combined indices."""
+@@ -595,7 +595,7 @@ def build_metadata(
+     )
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ def test_builder_in_image_visibility():
+     seq_lens = [30, 12]
+     query_lens = [30, 12]
+@@ -620,7 +620,7 @@ def test_builder_in_image_visibility():
+     assert md.prefill_swa_indices[:, 0].cpu().tolist() == rows
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ def test_builder_no_image_spans_fast_path():
+     """Vision model, image-free batch: no visibility tensors, plain window."""
+     seq_lens = [30, 12]
+@@ -638,7 +638,7 @@ def test_builder_no_image_spans_fast_path():
+     assert md.prefill_swa_indices[:, 0].cpu().tolist() == rows
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ def test_builder_text_model_unchanged():
+     """Text-only model: buffers stay window-sized and spans are ignored."""
+     seq_lens = [30, 12]
+@@ -657,7 +657,7 @@ def test_builder_text_model_unchanged():
+     assert md.prefill_swa_indices[:, 0].cpu().tolist() == rows
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ @pytest.mark.parametrize("compress_ratio", [0, 1, 2])
+ @pytest.mark.parametrize("query_len", [100, 4000])
+ def test_v41_image_prefill_uses_causal_swa(compress_ratio, query_len):
+@@ -717,7 +717,7 @@ def test_v41_image_prefill_uses_causal_swa(compress_ratio, query_len):
+ # SWA bounded replay: every prefill index path clamps the window at replay_start.
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ def test_builder_replay_start_bounds_prefill_window_and_gather():
+     """Paged-direct prefill indices stop at replay_start and the FlashMLA
+     gather only covers the context the request may see."""
+@@ -754,7 +754,7 @@ def test_builder_replay_start_bounds_prefill_window_and_gather():
+     ]
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ def test_builder_replaying_group_builds_without_replay_start():
+     """Graph captures build without model-specific kwargs: a replaying group's
+     metadata then bounds nothing."""
+diff --git a/tests/v1/attention/test_indexer_dcp_localize.py b/tests/v1/attention/test_indexer_dcp_localize.py
+index b099159bc7..2785e20fd0 100644
+--- a/tests/v1/attention/test_indexer_dcp_localize.py
++++ b/tests/v1/attention/test_indexer_dcp_localize.py
+@@ -584,7 +584,7 @@ def test_cutedsl_dcp_candidate_pack_and_select_matches_reference(
+         assert set(actual[row].cpu().tolist()) == set(expected[row].cpu().tolist())
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda(), reason="This test requires CUDA")
++@pytest.mark.skipif(not (current_platform.is_cuda() or current_platform.is_xpu()), reason="This test requires CUDA")
+ def test_sparse_prefill_dcp_metadata_localizes_causal_bounds():
+     device = torch.device("cuda")
+     seq_len = 8
+@@ -659,7 +659,7 @@ def test_sparse_prefill_dcp_metadata_localizes_causal_bounds():
+     )
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda(), reason="This test requires CUDA")
++@pytest.mark.skipif(not (current_platform.is_cuda() or current_platform.is_xpu()), reason="This test requires CUDA")
+ @pytest.mark.parametrize("block_stride_rows", [None, 12])
+ def test_dcp_filter_compacts_valid_slots_for_sparse_kernel(
+     block_stride_rows: int | None,
+@@ -697,7 +697,7 @@ def test_dcp_filter_compacts_valid_slots_for_sparse_kernel(
+     )
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda(), reason="This test requires CUDA")
++@pytest.mark.skipif(not (current_platform.is_cuda() or current_platform.is_xpu()), reason="This test requires CUDA")
+ @pytest.mark.parametrize("interleave", [1, 2])
+ @pytest.mark.parametrize("dcp_rank", [0, 1])
+ # Include padded single-tile compaction and the multi-tile atomic fallback.
+@@ -762,7 +762,7 @@ def test_dcp_filter_compaction_matches_reference(
+         assert set(out[r, :n].cpu().tolist()) == set(expected.cpu().tolist())
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda(), reason="This test requires CUDA")
++@pytest.mark.skipif(not (current_platform.is_cuda() or current_platform.is_xpu()), reason="This test requires CUDA")
+ @pytest.mark.parametrize("interleave", [1, 2, 4])
+ def test_dcp_global_topk_physical_attention_matches_non_dcp(interleave: int):
+     torch.manual_seed(2)
+@@ -835,7 +835,7 @@ def test_dcp_global_topk_physical_attention_matches_non_dcp(interleave: int):
+     torch.testing.assert_close(dcp_lse, ref_lse, atol=1e-5, rtol=1e-5)
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda(), reason="This test requires CUDA")
++@pytest.mark.skipif(not (current_platform.is_cuda() or current_platform.is_xpu()), reason="This test requires CUDA")
+ @pytest.mark.parametrize("is_lse_base_on_e", [True, False])
+ def test_correct_attn_out_zeroes_empty_nan_partial(is_lse_base_on_e: bool):
+     out = torch.full((1, 1, 4), float("nan"), device="cuda")
+diff --git a/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py b/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py
+index 8acfc0a334..f1a07ea33f 100644
+--- a/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py
++++ b/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py
+@@ -167,7 +167,7 @@ def test_indexer_draft_decode_metadata_update_is_capture_safe():
+     torch.testing.assert_close(metadata.slot_mapping, expected_slot_mapping)
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ @pytest.mark.parametrize(
+     "query_lens", [[1], [0, 257, 1, 0, 3], [6] * 64, [2, 6, 4, 0], [0, 0, 0]]
+ )
+@@ -321,7 +321,7 @@ def test_compressed_slot_mapping_warmup_includes_index_kpool():
+     assert {(key.compress_ratio, key.block_size) for key in keys} == {(32, 2)}
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ def test_compressed_slot_mapping_inherits_padded_token_slots():
+     """A token whose own slot is padded (SWA bounded replay) closes no
+     compressed state either."""
+@@ -436,7 +436,7 @@ def test_zero_token_pcp_rank_participates_in_compressed_mapping_gather(monkeypat
+     torch.testing.assert_close(metadata.slot_mapping, gathered_slot_mapping)
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ def test_indexer_builder_deepseek_v4_compressed_slot_mapping_uses_num_states():
+     """Regression test: DeepseekV4 compression path must compute slot_mapping from
+     compressed positions, not reuse the uncompressed common metadata mapping.
+diff --git a/tests/v1/sample/test_logprobs.py b/tests/v1/sample/test_logprobs.py
+index 317ac10d41..5d38598042 100644
+--- a/tests/v1/sample/test_logprobs.py
++++ b/tests/v1/sample/test_logprobs.py
+@@ -1575,7 +1575,7 @@ def test_token_logprobs_large_batch_int64_row_offset():
+     illegal memory access. Run over a batch where batch_size * vocab_size > 2**31
+     and check the highest-offset row matches a reference log-softmax.
+     """
+-    if not current_platform.is_cuda():
++    if not (current_platform.is_cuda() or current_platform.is_xpu()):
+         pytest.skip("int32 row-offset overflow is a CUDA kernel issue")
+     from vllm.v1.worker.gpu.sample.logprob import compute_token_logprobs
+ 
 diff --git a/tests/v1/sample/test_sampler.py b/tests/v1/sample/test_sampler.py
 index c23fe6c0ce..89d37c2d34 100644
 --- a/tests/v1/sample/test_sampler.py
@@ -312,6 +757,45 @@ index c23fe6c0ce..89d37c2d34 100644
  def _create_fake_logits(batch_size: int, vocab_size: int) -> torch.Tensor:
      fake_logits = torch.full((batch_size, vocab_size), 1e-2, dtype=torch.float)
      return fake_logits
+diff --git a/tests/v1/spec_decode/test_acceptance_estimator.py b/tests/v1/spec_decode/test_acceptance_estimator.py
+index a1f3da0940..ab1cc6c3af 100644
+--- a/tests/v1/spec_decode/test_acceptance_estimator.py
++++ b/tests/v1/spec_decode/test_acceptance_estimator.py
+@@ -17,7 +17,7 @@ from vllm.v1.worker.gpu.spec_decode.acceptance_estimator import (
+ )
+ 
+ pytest.importorskip("triton")
+-if not torch.cuda.is_available():
++if not (torch.cuda.is_available() or torch.xpu.is_available()):
+     pytest.skip("CUDA required for acceptance estimator tests", allow_module_level=True)
+ 
+ MAX_NUM_REQS = 16
+diff --git a/tests/v1/spec_decode/test_dflash_prepare_inputs.py b/tests/v1/spec_decode/test_dflash_prepare_inputs.py
+index 1d004c3667..e50b18ffba 100644
+--- a/tests/v1/spec_decode/test_dflash_prepare_inputs.py
++++ b/tests/v1/spec_decode/test_dflash_prepare_inputs.py
+@@ -14,7 +14,7 @@ from vllm.v1.worker.gpu.spec_decode.dflash.speculator import (
+ )
+ 
+ pytestmark = pytest.mark.skipif(
+-    not torch.cuda.is_available(), reason="requires a CUDA device"
++    not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires a CUDA device"
+ )
+ 
+ 
+diff --git a/tests/v1/spec_decode/test_rejection_sampler_utils.py b/tests/v1/spec_decode/test_rejection_sampler_utils.py
+index f635a66a46..062a28032c 100644
+--- a/tests/v1/spec_decode/test_rejection_sampler_utils.py
++++ b/tests/v1/spec_decode/test_rejection_sampler_utils.py
+@@ -23,7 +23,7 @@ VOCAB_SIZE = 4096
+ 
+ # Skip if no CUDA - Triton kernel requires GPU
+ pytest.importorskip("triton")
+-if not torch.cuda.is_available():
++if not (torch.cuda.is_available() or torch.xpu.is_available()):
+     pytest.skip("CUDA required for rejection sampler tests", allow_module_level=True)
+ 
+ 
 diff --git a/tests/v1/spec_decode/test_speculators_eagle3.py b/tests/v1/spec_decode/test_speculators_eagle3.py
 index 66736cce87..25c2496e28 100644
 --- a/tests/v1/spec_decode/test_speculators_eagle3.py
@@ -330,11 +814,290 @@ index 66736cce87..25c2496e28 100644
  @pytest.mark.parametrize(
      "model_path",
      [
+diff --git a/tests/v1/worker/test_gpu_bad_words.py b/tests/v1/worker/test_gpu_bad_words.py
+index 3cce549536..f0fafb9b61 100644
+--- a/tests/v1/worker/test_gpu_bad_words.py
++++ b/tests/v1/worker/test_gpu_bad_words.py
+@@ -6,7 +6,7 @@ import pytest
+ import torch
+ 
+ pytest.importorskip("triton")
+-if not torch.cuda.is_available():
++if not (torch.cuda.is_available() or torch.xpu.is_available()):
+     pytest.skip(
+         "CUDA required for Model Runner V2 bad words tests",
+         allow_module_level=True,
+diff --git a/tests/v1/worker/test_gpu_batch_shard.py b/tests/v1/worker/test_gpu_batch_shard.py
+index 60cf6479a7..c23b0e0f41 100644
+--- a/tests/v1/worker/test_gpu_batch_shard.py
++++ b/tests/v1/worker/test_gpu_batch_shard.py
+@@ -27,7 +27,7 @@ DEVICE = "cuda"
+ # The owner-sorted layout is expanded by a Triton kernel, so the routing math
+ # can only be exercised on device.
+ requires_cuda = pytest.mark.skipif(
+-    not torch.cuda.is_available(), reason="requires CUDA"
++    not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA"
+ )
+ 
+ 
+@@ -372,7 +372,7 @@ def test_gather_src_indices_round_trip(tp_size: int):
+     assert restored.tolist() == list(range(batch.num_reqs))
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ @pytest.mark.parametrize("tp_size", [2, 4])
+ def test_gather_sampler_output_kernels(tp_size: int):
+     """The fused pack/unpack kernels round-trip per-rank sampler results
+@@ -468,7 +468,7 @@ def test_gather_sampler_output_kernels(tp_size: int):
+         assert torch.equal(out.num_rejected.cpu(), expected_rejected.to(torch.int32))
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
+ def test_gather_sampler_output_logprobs_and_nans():
+     """num_nans is reduced per request and gathered; LogprobsTensors are
+     packed into fixed per-request blocks, width-aligned across ranks (pad
+diff --git a/tests/v1/worker/test_gpu_gumbel_sample.py b/tests/v1/worker/test_gpu_gumbel_sample.py
+index a4b3d71698..bcdbd74a12 100644
+--- a/tests/v1/worker/test_gpu_gumbel_sample.py
++++ b/tests/v1/worker/test_gpu_gumbel_sample.py
+@@ -18,7 +18,7 @@ import pytest
+ import torch
+ 
+ pytest.importorskip("triton")
+-if not torch.cuda.is_available():
++if not (torch.cuda.is_available() or torch.xpu.is_available()):
+     pytest.skip("CUDA required for Gumbel sampler tests", allow_module_level=True)
+ 
+ from vllm.triton_utils import tl, triton
+diff --git a/tests/v1/worker/test_gpu_input_batch_v2.py b/tests/v1/worker/test_gpu_input_batch_v2.py
+index 920277cb81..fbfcb65550 100644
+--- a/tests/v1/worker/test_gpu_input_batch_v2.py
++++ b/tests/v1/worker/test_gpu_input_batch_v2.py
+@@ -130,7 +130,7 @@ def test_prepare_dcp_local_seq_lens_uses_shared_buffer(monkeypatch):
+     assert batch.dcp_local_seq_lens.tolist() == [1, 2, 0, 0]
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="triton kernel needs CUDA")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="triton kernel needs CUDA")
+ @pytest.mark.parametrize("dcp_size", [2, 4])
+ @pytest.mark.parametrize("cp_interleave", [1, 16])
+ def test_prepare_dcp_local_seq_lens_matches_reference(
+diff --git a/tests/v1/worker/test_gpu_logits_processors.py b/tests/v1/worker/test_gpu_logits_processors.py
+index f0e5bd43a5..a58bf22402 100644
+--- a/tests/v1/worker/test_gpu_logits_processors.py
++++ b/tests/v1/worker/test_gpu_logits_processors.py
+@@ -9,7 +9,7 @@ import pytest
+ import torch
+ 
+ pytest.importorskip("triton")
+-if not torch.cuda.is_available():
++if not (torch.cuda.is_available() or torch.xpu.is_available()):
+     pytest.skip(
+         "CUDA required for Model Runner V2 logits processor tests",
+         allow_module_level=True,
+diff --git a/tests/v1/worker/test_gpu_rejection_sampler_chunking.py b/tests/v1/worker/test_gpu_rejection_sampler_chunking.py
+index a6f6731884..d93490e908 100644
+--- a/tests/v1/worker/test_gpu_rejection_sampler_chunking.py
++++ b/tests/v1/worker/test_gpu_rejection_sampler_chunking.py
+@@ -67,7 +67,7 @@ def test_iter_request_chunks_preserves_request_boundaries():
+     ]
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda(), reason="Requires CUDA")
++@pytest.mark.skipif(not (current_platform.is_cuda() or current_platform.is_xpu()), reason="Requires CUDA")
+ @pytest.mark.parametrize("logprobs_mode", get_args(LogprobsMode))
+ def test_chunked_scores_match_full_batch(logprobs_mode: str):
+     device = torch.device("cuda")
+@@ -140,7 +140,7 @@ def test_chunked_scores_match_full_batch(logprobs_mode: str):
+     assert sampling_mask_tensors is None
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda(), reason="Requires CUDA")
++@pytest.mark.skipif(not (current_platform.is_cuda() or current_platform.is_xpu()), reason="Requires CUDA")
+ def test_replay_on_off_preserves_rejection_sampling_and_rng(monkeypatch):
+     device = torch.device("cuda")
+     num_reqs = 3
+diff --git a/tests/v1/worker/test_gpu_rejection_sampler_i64.py b/tests/v1/worker/test_gpu_rejection_sampler_i64.py
+index 769444ed64..ab88ea2264 100644
+--- a/tests/v1/worker/test_gpu_rejection_sampler_i64.py
++++ b/tests/v1/worker/test_gpu_rejection_sampler_i64.py
+@@ -95,7 +95,7 @@ def _run(
+     return sampled[roi_req].clone(), num_sampled[roi_req].clone()
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda(), reason="Requires CUDA")
++@pytest.mark.skipif(not (current_platform.is_cuda() or current_platform.is_xpu()), reason="Requires CUDA")
+ @pytest.mark.parametrize(
+     # Overflow triggers when roi_req * LOGITS_PER_REQ * VOCAB_SIZE (target
+     # logits) or req_state_idx * NUM_SPECULATIVE_STEPS * VOCAB_SIZE (draft
+diff --git a/tests/v1/worker/test_gpu_thinking_budget.py b/tests/v1/worker/test_gpu_thinking_budget.py
+index 2456027335..fdba442190 100644
+--- a/tests/v1/worker/test_gpu_thinking_budget.py
++++ b/tests/v1/worker/test_gpu_thinking_budget.py
+@@ -8,7 +8,7 @@ import pytest
+ import torch
+ 
+ pytest.importorskip("triton")
+-if not torch.cuda.is_available():
++if not (torch.cuda.is_available() or torch.xpu.is_available()):
+     pytest.skip(
+         "CUDA required for Model Runner V2 thinking budget tests",
+         allow_module_level=True,
+diff --git a/tests/v1/worker/test_gpu_trace_replay.py b/tests/v1/worker/test_gpu_trace_replay.py
+index 9d418101fc..9bd6044f2e 100644
+--- a/tests/v1/worker/test_gpu_trace_replay.py
++++ b/tests/v1/worker/test_gpu_trace_replay.py
+@@ -15,7 +15,7 @@ import pytest
+ import torch
+ 
+ pytest.importorskip("triton")
+-if not torch.cuda.is_available():
++if not (torch.cuda.is_available() or torch.xpu.is_available()):
+     pytest.skip("CUDA required for trace-replay tests", allow_module_level=True)
+ 
+ from vllm.sampling_params import SamplingParams
+diff --git a/tests/v1/worker/test_kv_block_zeroer.py b/tests/v1/worker/test_kv_block_zeroer.py
+index 64a81771dd..734acffb4f 100644
+--- a/tests/v1/worker/test_kv_block_zeroer.py
++++ b/tests/v1/worker/test_kv_block_zeroer.py
+@@ -22,7 +22,7 @@ from vllm.v1.worker.utils import (
+ )
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="CUDA required")
+ @pytest.mark.parametrize(
+     "spec",
+     [
+@@ -65,7 +65,7 @@ def test_attention_blocks_are_zeroed(spec):
+     assert torch.equal(storage, expected)
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="CUDA required")
+ def test_layers_in_one_group_may_use_different_kernel_pages_per_block():
+     """Derive kernel pages per block from each layer's allocation."""
+     device = torch.device("cuda")
+@@ -115,7 +115,7 @@ def test_layers_in_one_group_may_use_different_kernel_pages_per_block():
+     assert torch.equal(narrow_backing, expected_narrow)
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="CUDA required")
+ def test_block_ids_are_not_overwritten_while_copy_is_in_flight():
+     device = torch.device("cuda")
+     num_blocks = 4
+@@ -151,7 +151,7 @@ def test_block_ids_are_not_overwritten_while_copy_is_in_flight():
+     assert torch.all(storage[3] == 1)
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="CUDA required")
+ def test_non_uniform_page_sizes():
+     """Two segments with different page sizes (e.g. MLA + DSA indexer)."""
+     device = torch.device("cuda")
+@@ -195,7 +195,7 @@ def test_non_uniform_page_sizes():
+         assert torch.all(storage[3] == 1)
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="CUDA required")
+ def test_packed_segment_zeros_only_its_last_block_page():
+     """A packed KV segment steps by block stride but clears only its page."""
+     device = torch.device("cuda")
+@@ -287,7 +287,7 @@ def test_large_dsv4_launch_geometry(monkeypatch):
+     assert captured_grids == [(n_blocks, n_segs, max_chunks)]
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="CUDA required")
+ def test_warmup_compiles_for_all_block_counts():
+     """After warmup, no launch should trigger a first-request JIT compile.
+ 
+@@ -353,7 +353,7 @@ def test_warmup_respects_available_block_count():
+     assert torch.all(storage == 1)
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="CUDA required")
+ @pytest.mark.parametrize("layout", list(KVCacheLayout))
+ def test_zeroes_exactly_one_block_per_layer(layout: KVCacheLayout):
+     """The zeroer must zero every byte of the target block in every layer and nothing
+diff --git a/tests/v1/worker/test_mamba_hybrid_model_state.py b/tests/v1/worker/test_mamba_hybrid_model_state.py
+index dba5444150..d1d5bbc554 100644
+--- a/tests/v1/worker/test_mamba_hybrid_model_state.py
++++ b/tests/v1/worker/test_mamba_hybrid_model_state.py
+@@ -140,7 +140,7 @@ def test_padded_prompt_tail_builds_as_spec_decode(
+     assert meta.num_prefill_tokens == k + 1
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda(), reason="Requires CUDA")
++@pytest.mark.skipif(not (current_platform.is_cuda() or current_platform.is_xpu()), reason="Requires CUDA")
+ @pytest.mark.parametrize(("num_sampled", "expected_value"), [(0, 1), (3, 3)])
+ def test_postprocess_state_scalar_with_int32_mapping(
+     num_sampled: int, expected_value: int
+@@ -188,7 +188,7 @@ def test_recoverssm_commits_accepted_window_after_v2_sampling() -> None:
+     metadata.commit_recoverssm_state.assert_called_once_with(num_sampled)
+ 
+ 
+-@pytest.mark.skipif(not current_platform.is_cuda(), reason="Requires CUDA")
++@pytest.mark.skipif(not (current_platform.is_cuda() or current_platform.is_xpu()), reason="Requires CUDA")
+ def test_recoverssm_align_tracks_mixed_batch_state_and_neutralizes_copy_bias() -> None:
+     state = object.__new__(MambaHybridModelState)
+     state._align_mode = True
+diff --git a/tests/v1/worker/test_mamba_utils.py b/tests/v1/worker/test_mamba_utils.py
+index 50faf0fb8b..5b4f96cde7 100644
+--- a/tests/v1/worker/test_mamba_utils.py
++++ b/tests/v1/worker/test_mamba_utils.py
+@@ -826,7 +826,7 @@ def _run_gpu_postprocess(
+     torch.accelerator.synchronize()
+ 
+ 
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
++@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="CUDA required")
+ class TestPostprocessMambaFusedKernel:
+     """Tests for postprocess_mamba_fused_kernel comparing GPU vs CPU paths."""
+ 
 diff --git a/tests/watermarking/test_watermarking.py b/tests/watermarking/test_watermarking.py
-index 4de6022e34..82fdfe658a 100644
+index 4de6022e34..60269780fa 100644
 --- a/tests/watermarking/test_watermarking.py
 +++ b/tests/watermarking/test_watermarking.py
-@@ -719,7 +719,7 @@ def test_repeated_context_mask(context_width: int):
+@@ -583,7 +583,7 @@ def test_gpu_sampler_wires_request_history_scope():
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(), reason="requires a CUDA-like accelerator"
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="requires a CUDA-like accelerator"
+ )
+ @pytest.mark.parametrize("max_history", [5, 6])
+ @pytest.mark.parametrize("include_prompt", [False, True])
+@@ -611,7 +611,7 @@ def test_repeated_context_mask_max_history_accelerator_parity(
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(), reason="requires a CUDA-like accelerator"
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="requires a CUDA-like accelerator"
+ )
+ def test_repeated_context_mask_partial_context_accelerator_parity():
+     inputs = (
+@@ -652,7 +652,7 @@ def _unaligned_max_history_inputs() -> tuple[torch.Tensor, ...]:
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(), reason="requires a CUDA-like accelerator"
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="requires a CUDA-like accelerator"
+ )
+ @pytest.mark.parametrize(
+     "max_history,expected", [(1200 - 680, True), (1200 - 680 - 1, False)]
+@@ -714,12 +714,12 @@ def test_repeated_context_mask(context_width: int):
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(), reason="requires a CUDA-like accelerator"
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="requires a CUDA-like accelerator"
+ )
  @pytest.mark.parametrize("context_width", [1, 3, 4, 16, 17])
  def test_repeated_context_mask_accelerator_parity(context_width: int):
      cpu_inputs = _repeated_context_inputs(context_width)
@@ -343,6 +1106,87 @@ index 4de6022e34..82fdfe658a 100644
      contexts = accelerator_inputs[-1]
      storage = torch.empty(
          contexts.shape[0], contexts.shape[1] * 2, dtype=contexts.dtype, device="cuda"
+@@ -734,7 +734,7 @@ def test_repeated_context_mask_accelerator_parity(context_width: int):
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(), reason="requires a CUDA-like accelerator"
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="requires a CUDA-like accelerator"
+ )
+ def test_repeated_context_mask_scans_multiple_blocks():
+     context = [1, 2, 3, 4]
+@@ -761,7 +761,7 @@ def test_repeated_context_mask_scans_multiple_blocks():
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(), reason="requires a CUDA-like accelerator"
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="requires a CUDA-like accelerator"
+ )
+ def test_repeated_context_mask_last_request_at_capacity():
+     max_model_len = 1024
+@@ -782,7 +782,7 @@ def test_repeated_context_mask_last_request_at_capacity():
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(), reason="requires a CUDA-like accelerator"
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="requires a CUDA-like accelerator"
+ )
+ def test_gpu_sampler_uses_fused_gumbel_for_repeated_contexts():
+     device = torch.device("cuda")
+@@ -964,7 +964,7 @@ def test_gpu_sampler_all_scope_skips_only_partial_speculative_contexts():
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(), reason="requires a CUDA-like accelerator"
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="requires a CUDA-like accelerator"
+ )
+ @pytest.mark.parametrize("max_history,expected_last", [(None, True), (3, False)])
+ def test_speculative_context_repetition_accelerator_parity(
+@@ -1007,7 +1007,7 @@ def test_speculative_context_repetition_accelerator_parity(
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(), reason="requires a CUDA-like accelerator"
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="requires a CUDA-like accelerator"
+ )
+ @pytest.mark.parametrize("steps_layout", ["per_row", "broadcast"])
+ @pytest.mark.parametrize("req_indices_layout", ["contiguous", "column_view"])
+@@ -1111,7 +1111,7 @@ def test_gpu_sampler_builds_chunked_multi_request_speculative_contexts():
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(), reason="requires a CUDA-like accelerator"
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="requires a CUDA-like accelerator"
+ )
+ def test_draft_context_deduplication_broadcasts_the_draft_step():
+     """The draft step is one 0-d tensor broadcast over the batch.
+@@ -1313,7 +1313,7 @@ def test_draft_sampler_uses_ordinary_samples_for_repeated_contexts(monkeypatch):
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(), reason="requires a CUDA-like accelerator"
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="requires a CUDA-like accelerator"
+ )
+ def test_draft_context_deduplication_reads_strided_request_indices():
+     """DSpark samples a step at a time, so req_indices is an `idx_map[:, i]` column."""
+@@ -1406,7 +1406,7 @@ def test_draft_sampler_deduplicates_against_committed_history(monkeypatch):
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(), reason="requires a CUDA-like accelerator"
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="requires a CUDA-like accelerator"
+ )
+ @pytest.mark.parametrize("idx_mapping_layout", ["contiguous", "column_view"])
+ def test_draft_watermarker_deduplicates_across_a_block_on_cuda(
+@@ -1501,7 +1501,7 @@ def test_draft_watermarker_deduplicates_across_a_block_on_cuda(
+ 
+ 
+ @pytest.mark.skipif(
+-    not current_platform.is_cuda_alike(), reason="requires a CUDA-like accelerator"
++    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="requires a CUDA-like accelerator"
+ )
+ def test_draft_watermarker_cuda_graph_reads_current_prompt_lens():
+     draft_watermarker = DraftWatermarker(
 diff --git a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
 index 18bf142491..c47cbf80ff 100644
 --- a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
