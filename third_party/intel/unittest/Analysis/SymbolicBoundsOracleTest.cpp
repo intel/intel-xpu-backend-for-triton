@@ -453,7 +453,7 @@ private:
     Val out;
     out.shape = shapeOf(op.getResult().getType());
     for (unsigned i = 0, e = a.elems.size(); i != e; ++i)
-      out.elems.push_back(APInt(1, applyCmp(pred, a.elems[i], b.elems[i])));
+      out.elems.emplace_back(1, applyCmp(pred, a.elems[i], b.elems[i]));
 
     // The comparison under test: record this execution's elements.
     auto nameLoc = dyn_cast<NameLoc>(op->getLoc());
