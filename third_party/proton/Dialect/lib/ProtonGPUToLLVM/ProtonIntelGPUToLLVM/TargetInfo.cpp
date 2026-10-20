@@ -11,9 +11,6 @@ namespace mlir::triton::proton::gpu::Intel {
 
 Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
                         bool isClock64) const {
-  // Read the raw hardware cycle counter (not converted to nanoseconds): this
-  // is the hot path used by `proton_gpu.read_counter`, so avoid the
-  // division `globalTime()` does to turn ticks into ns.
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   bool isLTS = mod->hasAttr(
       triton::gpu::intel::TritonIntelGPUDialect::getIsLTSAttrName());
@@ -42,18 +39,11 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
 
 Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
                              Location loc) const {
-  // Reuse the core backend's cycle-counter-to-nanoseconds conversion (keyed
-  // off the `ttig.core_clock_rate_khz` / `ttig.is_lts` module attributes)
-  // instead of duplicating it here.
   return getTritonTargetInfo().getGlobalTimer(rewriter, loc);
 }
 
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
                               Location loc) const {
-  // `intel_get_hw_thread_id` is an IGC/OpenCL built-in returning the hardware
-  // thread id a work-item executes on -- the Intel GPU analog of NVVM's
-  // %smid / AMD's HW_ID.CU_ID, used to attribute profiled samples to a
-  // physical execution unit.
   // `mangle()` doesn't special-case an empty parameter list: Itanium mangling
   // still requires a trailing `v` ("void") for a zero-argument function.
   std::string funcName =
@@ -61,8 +51,6 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
   auto callOp = mlir::triton::gpu::intel::createDeviceFunctionCall(
       rewriter, funcName, /*retType=*/i32_ty, /*argTypes=*/{}, /*args=*/{},
       /*paramAttrs=*/{}, mlir::triton::gpu::intel::noUnwindWillReturnAttrs);
-  // `createDeviceFunctionCall` always stamps `UnknownLoc`; reattach the real
-  // location so e.g. line-info-sensitive tooling can still find this call.
   callOp->setLoc(loc);
   return callOp.getResult();
 }

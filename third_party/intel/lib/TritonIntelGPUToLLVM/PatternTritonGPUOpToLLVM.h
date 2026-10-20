@@ -1,7 +1,7 @@
 #ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
 #define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
 
-#include "TargetInfo.h"
+#include "intel/include/TritonIntelGPUToLLVM/TargetInfo.h"
 #include "TritonGPUToLLVMBase.h"
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"

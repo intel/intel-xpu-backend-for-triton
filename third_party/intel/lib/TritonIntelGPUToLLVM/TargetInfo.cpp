@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "TargetInfo.h"
+#include "intel/include/TritonIntelGPUToLLVM/TargetInfo.h"
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "SPIRVTargetInfo.h"
 #include "Utility.h"

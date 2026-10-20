@@ -9,7 +9,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_SPIRVTARGETINFO_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_SPIRVTARGETINFO_H
 
-#include "TargetInfo.h"
+#include "intel/include/TritonIntelGPUToLLVM/TargetInfo.h"
 
 namespace mlir::triton::intel {
 class SPIRVTargetInfo : public TargetInfo {

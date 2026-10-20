@@ -2,7 +2,7 @@
 #define PROTONGPU_TO_LLVM_TARGETINFO_INTEL_H
 
 #include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
-#include "third_party/intel/lib/TritonIntelGPUToLLVM/TargetInfo.h" // TODO: move intel TargetInfo.h to include/
+#include "intel/include/TritonIntelGPUToLLVM/TargetInfo.h"
 
 namespace mlir::triton::proton::gpu::Intel {
 class TargetInfo : public mlir::triton::proton::gpu::TargetInfoBase {

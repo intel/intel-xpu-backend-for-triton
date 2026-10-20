@@ -137,11 +137,6 @@ InstrumentationProfiler::getParserConfig(uint64_t functionId,
 
   config->device = Device();
   config->device.type = runtime->getDeviceType();
-  // `Device::id` has no in-class initializer, so this must be set explicitly
-  // or it's left uninitialized; Hatchet dumping treats it as a small device
-  // ordinal (see `getDevice(type, index)`), not `runtime->getDevice()`'s
-  // opaque native handle, so default to the current/only visible device.
-  config->device.id = 0;
 
   return config;
 }

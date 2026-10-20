@@ -145,7 +145,8 @@ void *XpuRuntime::getDevice() {
 void *XpuRuntime::getPriorityStream() {
   // Unlike CUDA/HIP, SYCL has no separate priority-queue concept here, and
   // queues are owned by the Triton driver (see `destroyStream`); reuse the
-  // main queue so callers that need *a* valid stream (e.g.
+  // one queue XpuRuntime tracks (see `syclQueue_` in XpuRuntime.h -- single
+  // GPU only) so callers that need *a* valid stream (e.g.
   // `processHostBuffer`) don't get a null one.
   return requireSyclQueue();
 }

@@ -649,11 +649,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.convert.add_index_to_llvmir(pm)
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         # Instrumentation point here so we can override IRs above (e.g., ttir and ttgir).
-        # Must run before `add_allocate_global_scratch_memory`: hooks registered at this
-        # point (e.g. Proton's instrumentation mode) create their own
-        # `ttg.global_scratch_alloc` ops, which only get a
-        # `ttg.global_scratch_memory_offset` if they exist before that pass runs
-        # (matches the nvidia/amd backends' ordering).
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         pm.run(mod, 'make_llir.allocate_memory')
