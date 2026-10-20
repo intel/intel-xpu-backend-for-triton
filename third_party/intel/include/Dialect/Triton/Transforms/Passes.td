@@ -219,8 +219,7 @@ def TritonIntelGPUPrepareIfCombining
   }];
   let options = [
     Option<"maxClonedOps", "max-cloned-ops", "unsigned", /*default*/"32",
-           "maximum number of operations, counting nested ones, copied into the "
-           "branches of the first scf.if for one pair of ifs">,
+           "maximum source operations cloned per if pair, including nested ones">,
   ];
   let dependentDialects = ["mlir::scf::SCFDialect"];
 }

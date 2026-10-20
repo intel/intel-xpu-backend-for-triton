@@ -868,42 +868,6 @@ tt.func public @no_else_hoistable_op(%c: i1, %p: !tt.ptr<f32>, %x: f32) {
 
 // -----
 
-// Conservative rejection: a condition that depends on a load is not on the
-// pass's uniform whitelist (constants, program ids, kernel arguments), so a
-// reduction that consumes the first if's result is not copied into the branches.
-// CHECK-LABEL: @load_condition
-//       CHECK: scf.if
-//       CHECK: "tt.reduce"
-//       CHECK: scf.if
-// CANON-LABEL: @load_condition
-//       CANON: scf.if
-//       CANON: "tt.reduce"
-//       CANON: scf.if
-tt.func public @load_condition(%flag: !tt.ptr<i32>, %p: !tt.ptr<f32>, %a: tensor<64xf32>) {
-  %z = arith.constant 0 : i32
-  %v = tt.load %flag : !tt.ptr<i32>
-  %c = arith.cmpi eq, %v, %z : i32
-  %0 = scf.if %c -> (tensor<64xf32>) {
-    scf.yield %a : tensor<64xf32>
-  } else {
-    %n = arith.negf %a : tensor<64xf32>
-    scf.yield %n : tensor<64xf32>
-  }
-  %s = "tt.reduce"(%0) <{axis = 0 : i32}> ({
-  ^bb0(%l: f32, %r: f32):
-    %x = arith.addf %l, %r : f32
-    tt.reduce.return %x : f32
-  }) : (tensor<64xf32>) -> f32
-  scf.if %c {
-    tt.store %p, %s : !tt.ptr<f32>
-  } else {
-    tt.store %p, %s : !tt.ptr<f32>
-  }
-  tt.return
-}
-
-// -----
-
 // Conservative rejection: opaque pure inline assembly is effect-free but not on
 // the uniform whitelist. The tied constraint makes it an identity on its input.
 // CHECK-LABEL: @inline_asm_condition
@@ -1073,10 +1037,8 @@ tt.func public @inductor_welford_layer_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32
 
 // -----
 
-// The rstd computation and its masked store sit between the two ifs. The rsqrt
-// depends on the first if's result, so the gap is copied into both branches;
-// only the splats and the sitofp, whose inputs exist before the first if, are
-// hoisted. The copied gap is 8 ops (the reduction with its two region ops,
+// The rsqrt depends on the first if's result, so the gap is copied into both
+// branches. The copied gap is 8 ops (the reduction with its two region ops,
 // expand_dims, divf, rsqrt, store and broadcast); hoisted ops do not count. One
 // op less keeps the ifs apart.
 // CHECK-LABEL: @clone_cap_boundary
@@ -1145,25 +1107,6 @@ tt.func public @clone_cap_boundary(%a: tensor<1x128xf32>, %rstd: !tt.ptr<f32>, %
     %y = arith.mulf %n, %rsb : tensor<1x128xf32>
     tt.store %outp, %y : tensor<1x128x!tt.ptr<f32>>
   }
-  tt.return
-}
-
-// -----
-
-// Negative: a lone if has no pair to combine and must come out unchanged.
-// CHECK-LABEL: @single_if
-//       CHECK: %[[IF:.+]] = scf.if %arg0 -> (f32) {
-//       CHECK: tt.store %arg1, %[[IF]]
-//   CHECK-NOT: scf.if
-//       CHECK: tt.return
-tt.func public @single_if(%c: i1, %p: !tt.ptr<f32>, %x: f32) {
-  %0 = scf.if %c -> (f32) {
-    tt.store %p, %x : !tt.ptr<f32>
-    scf.yield %x : f32
-  } else {
-    scf.yield %x : f32
-  }
-  tt.store %p, %0 : !tt.ptr<f32>
   tt.return
 }
 

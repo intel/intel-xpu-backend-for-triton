@@ -1,12 +1,9 @@
 """PrepareIfCombining merges loops that RemoveMasks versions with the same guard when a
 reduction and a store sit between them (#8404).
 
-The looped softmax / layer_norm / rms_norm kernels below mirror the loop and gap structure
-Inductor emits for reductions over a large dimension. Legacy RemoveMasks only versions loops
-whose masked `tt.load` matches the canonical form `offs < K - k * BLOCK` with a `tl.cdiv(K,
-BLOCK)` trip count, so they are written that way; every loop re-reads its input with such a
-load, since a store-only loop is not versioned. The guard is `K % BLOCK == 0 && K > BLOCK`
-and does not depend on the program id."""
+The looped kernels mirror the loop and gap structure Inductor emits for large reductions. Their masked
+loads use the canonical `offs < K - k * BLOCK` form with a `tl.cdiv(K, BLOCK)` trip count, and every loop
+re-reads its input, since RemoveMasks does not version a store-only loop."""
 
 import pytest
 import torch

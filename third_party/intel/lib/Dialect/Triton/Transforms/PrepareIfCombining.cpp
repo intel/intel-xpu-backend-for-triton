@@ -11,9 +11,8 @@
 // After this pass, %2 is moved before %1, making %1 and %3 adjacent so that
 // they can be combined by the canonicalizer.
 //
-// Ops that cannot move above the first if (they use its results or touch
-// memory) are copied into both of its branches instead. See Passes.td for the
-// conditions.
+// Eligible ops that cannot move above the first if are copied into both of its
+// branches; see Passes.td.
 //===----------------------------------------------------------------------===//
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
