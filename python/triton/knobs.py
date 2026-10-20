@@ -455,6 +455,7 @@ class autotuning_knobs(base_knobs):
     cache: env_bool = env_bool("TRITON_CACHE_AUTOTUNING")
     print: env_bool = env_bool("TRITON_PRINT_AUTOTUNING")
     listener: Union[AutotuneListener, None] = None
+    warmup_workers: env_int = env_int("TRITON_AUTOTUNE_WARMUP_WORKERS", 0)
 
 
 class LaunchHook(Protocol):
