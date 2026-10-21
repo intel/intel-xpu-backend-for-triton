@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -406,6 +407,42 @@ static int spillsToPyInt(int64_t slots) {
                           : static_cast<int>(slots);
 }
 
+// GRF count IGC actually compiled `kernel_name` with, read from the
+// `execution_env.grf_count` of the module's zebin `.ze_info`. The build flags
+// cannot tell under `-cl-intel-enable-auto-large-GRF-mode`, where IGC picks
+// the size itself. Returns `fallback` when the binary has no such entry.
+static int32_t compiledGRFCount(ze_module_handle_t module,
+                                const std::string &kernel_name,
+                                int32_t fallback) {
+  size_t size = 0;
+  if (zeModuleGetNativeBinary(module, &size, nullptr) != ZE_RESULT_SUCCESS ||
+      size == 0)
+    return fallback;
+  std::string binary(size, '\0');
+  if (zeModuleGetNativeBinary(module, &size,
+                              reinterpret_cast<uint8_t *>(binary.data())) !=
+      ZE_RESULT_SUCCESS)
+    return fallback;
+  // .ze_info is YAML: `- name: <kernel>` followed by its `grf_count: <n>`.
+  size_t pos = 0;
+  while ((pos = binary.find("name:", pos)) != std::string::npos) {
+    pos += std::strlen("name:");
+    size_t start = binary.find_first_not_of(' ', pos);
+    if (start == std::string::npos)
+      break;
+    size_t end = binary.find_first_of("\r\n", start);
+    if (binary.compare(start, end - start, kernel_name) != 0)
+      continue;
+    size_t grf = binary.find("grf_count:", end);
+    size_t next = binary.find("name:", end);
+    if (grf == std::string::npos || (next != std::string::npos && next < grf))
+      return fallback;
+    return static_cast<int32_t>(std::strtol(
+        binary.c_str() + grf + std::strlen("grf_count:"), nullptr, 10));
+  }
+  return fallback;
+}
+
 template <typename L0_DEVICE, typename L0_CONTEXT>
 std::tuple<ze_module_handle_t, ze_kernel_handle_t, Spills>
 compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
@@ -751,7 +788,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
               << kernel_name << "\"" << std::endl;
   }
 
-  auto n_regs = build_flags.n_regs();
+  auto n_regs = compiledGRFCount(l0_module, kernel_name, build_flags.n_regs());
 
   auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
       sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
