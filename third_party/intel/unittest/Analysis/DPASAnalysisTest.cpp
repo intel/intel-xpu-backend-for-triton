@@ -153,6 +153,68 @@ TEST_F(DPASAnalysisTest, DotOp_BF16_BF16_BF16) {
   EXPECT_EQ(dpasType, DPASEngineTypeXe2::BF16_BF16_BF16_BF16);
 }
 
+// Without fp8 DPAS, fp8 operands with a bf16 accumulator are extended to
+// fp16 and accumulate in fp32, mixed fp8 formats too.
+TEST_F(DPASAnalysisTest, DotOp_FP8_FP8_BF16) {
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp = createDotOp(*module, Float8E5M2Type::get(&ctx),
+                           Float8E5M2Type::get(&ctx), builder->getBF16Type());
+
+  auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe2::FP32_FP32_FP16_FP16);
+}
+
+TEST_F(DPASAnalysisTest, DotOp_MixedFP8_BF16) {
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp = createDotOp(*module, Float8E4M3FNType::get(&ctx),
+                           Float8E5M2Type::get(&ctx), builder->getBF16Type());
+
+  auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe2::FP32_FP32_FP16_FP16);
+}
+
+// Without fp8 DPAS, mixed fp8 formats with an fp32 accumulator are extended
+// to fp16 like same-format fp8.
+TEST_F(DPASAnalysisTest, DotOp_MixedFP8_FP32) {
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp = createDotOp(*module, Float8E4M3FNType::get(&ctx),
+                           Float8E5M2Type::get(&ctx), builder->getF32Type());
+
+  auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe2::FP32_FP32_FP16_FP16);
+}
+
+// Mixed fp8 formats with an fp16 accumulator have no DPAS form.
+TEST_F(DPASAnalysisTest, DotOp_MixedFP8_FP16) {
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp = createDotOp(*module, Float8E4M3FNType::get(&ctx),
+                           Float8E5M2Type::get(&ctx), builder->getF16Type());
+
+  auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe2::NOT_APPLICABLE);
+}
+
+// With fp8 DPAS, mixed fp8 formats keep the FMA path.
+TEST_F(DPASAnalysisTest, DotOp_Xe3P_MixedFP8_BF16) {
+  OwningOpRef<ModuleOp> module =
+      createModule(/*supportDPAS=*/true, /*supportFp8=*/true);
+  auto dotOp = createDotOp(*module, Float8E4M3FNType::get(&ctx),
+                           Float8E5M2Type::get(&ctx), builder->getBF16Type());
+
+  auto dpasType = DPASAnalysisV2::getDPASType(dotOp);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe3P::NOT_APPLICABLE);
+}
+
+TEST_F(DPASAnalysisTest, DotOp_Xe3P_MixedFP8_FP32) {
+  OwningOpRef<ModuleOp> module =
+      createModule(/*supportDPAS=*/true, /*supportFp8=*/true);
+  auto dotOp = createDotOp(*module, Float8E4M3FNType::get(&ctx),
+                           Float8E5M2Type::get(&ctx), builder->getF32Type());
+
+  auto dpasType = DPASAnalysisV2::getDPASType(dotOp);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe3P::NOT_APPLICABLE);
+}
+
 TEST_F(DPASAnalysisTest, DotOp_BF16_BF16_FP32) {
   OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
   auto dotOp = createDotOp(*module, builder->getBF16Type(),
