@@ -1,3 +1,17 @@
+diff --git a/tests/entrypoints/openai/chat_completion/test_logprob_token_ids.py b/tests/entrypoints/openai/chat_completion/test_logprob_token_ids.py
+index 1eea6db48a..53751568b6 100644
+--- a/tests/entrypoints/openai/chat_completion/test_logprob_token_ids.py
++++ b/tests/entrypoints/openai/chat_completion/test_logprob_token_ids.py
+@@ -31,6 +31,9 @@ def server():
+         "--max-num-seqs",
+         "8",
+         "--enforce-eager",
++        # Leave headroom for memory held by earlier tests on 24 GB GPUs.
++        "--gpu-memory-utilization",
++        "0.8",
+     ]
+     with RemoteOpenAIServer(MODEL_NAME, args) as remote_server:
+         yield remote_server
 diff --git a/tests/kernels/attention/test_triton_unified_attention_diffkv.py b/tests/kernels/attention/test_triton_unified_attention_diffkv.py
 index 0addd7ccd3..e05a703901 100644
 --- a/tests/kernels/attention/test_triton_unified_attention_diffkv.py
@@ -67,7 +81,7 @@ index 86b8e79656..e51b6328e8 100644
  )
  from vllm.utils.torch_utils import set_random_seed
 diff --git a/tests/kernels/mamba/test_mamba_mixer2.py b/tests/kernels/mamba/test_mamba_mixer2.py
-index db2274c3c9..f213fc8dea 100644
+index db2274c3c9..5e3abab8a6 100644
 --- a/tests/kernels/mamba/test_mamba_mixer2.py
 +++ b/tests/kernels/mamba/test_mamba_mixer2.py
 @@ -12,6 +12,7 @@ from vllm.distributed.parallel_state import (
@@ -87,14 +101,6 @@ index db2274c3c9..f213fc8dea 100644
      with ensure_current_vllm_config():
          initialize_model_parallel(tensor_model_parallel_size=world_size)
  
-@@ -117,6 +118,7 @@ def mixer2_gated_norm_tensor_parallel(
-             "get_tensor_model_parallel_rank",
-             return_value=0,
-         ),
-+        ensure_current_vllm_config(),
-     ):
-         mixer_single_gpu = Mixer2RMSNormGated(
-             full_hidden_size=hidden_size,
 diff --git a/tests/kernels/mamba/test_mamba_ssm.py b/tests/kernels/mamba/test_mamba_ssm.py
 index c24f4c0f87..60e8584cd7 100644
 --- a/tests/kernels/mamba/test_mamba_ssm.py
@@ -805,6 +811,44 @@ index 66736cce87..25c2496e28 100644
  @pytest.mark.parametrize(
      "model_path",
      [
+diff --git a/tests/v1/test_outputs.py b/tests/v1/test_outputs.py
+index 471cac6f95..0a52b692e0 100644
+--- a/tests/v1/test_outputs.py
++++ b/tests/v1/test_outputs.py
+@@ -55,7 +55,9 @@ def test_logprobs_tensors_tolists_with_tensor_boundaries():
+         cu_num_generated_tokens_tensor=torch.tensor([0, 2, 3], dtype=torch.int32),
+     )
+ 
+-    lists = tensors.to_cpu_nonblocking().tolists()
++    cpu_tensors = tensors.to_cpu_nonblocking()
++    torch.accelerator.synchronize()
++    lists = cpu_tensors.tolists()
+ 
+     assert lists.cu_num_generated_tokens == [0, 2, 3]
+     sliced = lists.slice_request(1, 1)
+@@ -124,7 +126,9 @@ def test_sampling_mask_tensors_match_finite_support(max_num_kept):
+     )
+ 
+     assert tensors.token_ids.shape[1] == min(max_num_kept, MAX_COMPACT_SUPPORT)
+-    assert tensors.to_cpu_nonblocking().tolists().to_nested_list() == expected
++    cpu_tensors = tensors.to_cpu_nonblocking()
++    torch.accelerator.synchronize()
++    assert cpu_tensors.tolists().to_nested_list() == expected
+ 
+ 
+ def test_sampling_mask_matches_processed_top_k_top_p_support():
+@@ -190,7 +194,10 @@ def test_sampling_mask_tensors_multirow_request_layout():
+         max_num_kept=2,
+         rows_per_request=rows_per_request,
+     )
+-    result = tensors.to_cpu_nonblocking().tolists(counts)
++    cpu_tensors = tensors.to_cpu_nonblocking()
++    # The copies are asynchronous; wait for them as the model runner does.
++    torch.accelerator.synchronize()
++    result = cpu_tensors.tolists(counts)
+ 
+     assert tensors.token_ids.shape == (16, 2)
+     assert tensors.rows_per_request == rows_per_request
 diff --git a/tests/v1/worker/test_gpu_bad_words.py b/tests/v1/worker/test_gpu_bad_words.py
 index 3cce549536..f0fafb9b61 100644
 --- a/tests/v1/worker/test_gpu_bad_words.py
