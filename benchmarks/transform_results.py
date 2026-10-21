@@ -6,6 +6,8 @@ from datetime import datetime
 
 import pandas as pd
 
+import triton_benchmarks_pins
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Parse MoE benchmark CSV')
@@ -92,6 +94,9 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols, extra_para
 
     for name, val in host_info.items():
         df_results[name] = val
+    autotune_pins = triton_benchmarks_pins.report_value()
+    if autotune_pins is not None:
+        df_results['autotune_pins'] = autotune_pins
 
     print(f'DataFrame shape: {df_results.shape}')
 

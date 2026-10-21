@@ -13,6 +13,7 @@ import socket
 
 import pandas as pd
 
+import triton_benchmarks_pins
 from triton_kernels_benchmark.benchmark_testing import (
     BenchmarkConfig,
     BenchmarkConfigRunResult,
@@ -88,19 +89,20 @@ class BenchmarkConfigs(MarkArgs):
             if self.collect_only:
                 continue
             _json_print(f"Running {config.key}")
-            run_result = config.run(self)
-            # Pretty print run results table
-            pd.set_option("display.float_format", "{:.2f}".format)  # pylint: disable=consider-using-f-string
-            run_summaries_df_list = (run_result.run_summary_detailed_df_list
-                                     if self.detailed_output else run_result.run_summary_df_list)
-            _json_print(f"Total number of runs: {len(run_summaries_df_list)}")
-            for idx, summary_df in enumerate(run_summaries_df_list):
-                _json_print(f"Run: {idx}")
-                _json_print(summary_df)
-            _json_print(f"Run time: {round(run_result.run_time, 3)} seconds.")
-            run_results.append(run_result)
-            if self.reports:
-                run_result.build_report(reports_folder=self.reports, tag=self.tag)
+            with triton_benchmarks_pins.benchmark(config.key):
+                run_result = config.run(self)
+                # Pretty print run results table
+                pd.set_option("display.float_format", "{:.2f}".format)  # pylint: disable=consider-using-f-string
+                run_summaries_df_list = (run_result.run_summary_detailed_df_list
+                                         if self.detailed_output else run_result.run_summary_df_list)
+                _json_print(f"Total number of runs: {len(run_summaries_df_list)}")
+                for idx, summary_df in enumerate(run_summaries_df_list):
+                    _json_print(f"Run: {idx}")
+                    _json_print(summary_df)
+                _json_print(f"Run time: {round(run_result.run_time, 3)} seconds.")
+                run_results.append(run_result)
+                if self.reports:
+                    run_result.build_report(reports_folder=self.reports, tag=self.tag)
         if self.collect_only:
             return
         if self.junit_report and self.reports:
@@ -108,6 +110,7 @@ class BenchmarkConfigs(MarkArgs):
                 junit_rep_file.write(_junit_report(run_results))
         end_t = time.perf_counter()
         _json_print(f"Total run time including overhead: {round(end_t-start_t, 3)} seconds.")
+        triton_benchmarks_pins.raise_for_misses()
 
     @classmethod
     def _get_all_configs(cls) -> Dict[str, BenchmarkConfig]:
