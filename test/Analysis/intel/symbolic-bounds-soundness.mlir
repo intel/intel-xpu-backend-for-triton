@@ -43,6 +43,31 @@ module {
 
 // -----
 
+// COM: iv + lane < n + m over 0 to n step 4, n and m sign-extended from i8:
+// COM: at n = 5, m = 0 the iv = 4 iteration has lanes 5..7 false.
+// CHECK-LABEL: tt.func @improving_candidate_condition
+module {
+  tt.func @improving_candidate_condition(%n8: i8, %m8: i8) {
+    %c0 = arith.constant 0 : i32
+    %c4 = arith.constant 4 : i32
+    %n = arith.extsi %n8 : i8 to i32
+    %m = arith.extsi %m8 : i8 to i32
+    %nm = arith.addi %n, %m : i32
+    %nms = tt.splat %nm : i32 -> tensor<4xi32>
+    %lane = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32>
+    scf.for %iv = %c0 to %n step %c4 : i32 {
+      %ivs = tt.splat %iv : i32 -> tensor<4xi32>
+      %idx = arith.addi %ivs, %lane : tensor<4xi32>
+      // expected-remark@+1 {{verdict: Conditional{arg0 divisible by 4; arg1 >= 0}}}
+      %cmp = arith.cmpi slt, %idx, %nms : tensor<4xi32>
+      scf.yield
+    }
+    tt.return
+  }
+}
+
+// -----
+
 // COM: i8 4*(x/4) + 4 > x: at x = 124 the sum is 128, which wraps to -128.
 // CHECK-LABEL: tt.func @quotient_upper_guard
 module {
