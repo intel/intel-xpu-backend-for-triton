@@ -135,9 +135,9 @@ jobs:
         run: |
           pip install cloudpickle
 
-      - name: Set TRITON_AUTOTUNE_WARMUP_WORKERS to available processes
+      - name: Set TRITON_AUTOTUNE_WARMUP_WORKERS to 80% of available cores
         run: |
-          echo "TRITON_AUTOTUNE_WARMUP_WORKERS=$(nproc)" | tee -a $GITHUB_ENV
+          echo "TRITON_AUTOTUNE_WARMUP_WORKERS=$(( $(nproc) * 80 / 100 ))" | tee -a $GITHUB_ENV
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
