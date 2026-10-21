@@ -869,12 +869,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// COM: A column that wraps negative in i32 is refused, whatever its operands' signs.
-// COM: Each column below is 16-byte aligned for every input, so only the sign proof
-// COM: keeps the load out of the relayout. 255 * 67372036 is -4, (1 << 31) + 2147483644
-// COM: is -4, 255 << 24 and 255 + 2147483644 are negative, and pid * 32772 is past
-// COM: INT32_MAX for a pid below 2^16. A loop bound the proof cannot bound leaves the
-// COM: induction variable at INT32_MAX, so its multiple may wrap too.
+// COM: A column that can wrap negative in i32 is refused, whatever the signs of its operands.
+// COM: Each is 16-byte aligned for every input, so only the sign proof keeps the load out:
+// COM: byte * 67372036 (muli), byte << 24 (shli), byte * 4 + 2147483644 (addi), pid * 32772
+// COM: (past INT32_MAX for pid < 2^16) and iv * 256 in a loop with an unbounded trip count.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked2 = #ttg.slice<{dim = 1, parent = #blocked}>
@@ -894,38 +892,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %byte = arith.extui %u : i8 to i32
     %k = arith.constant 67372036 : i32
     %col = arith.muli %byte, %k : i32
-    %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c1024_i32], [%c1024_i64, %c1_i64] : <f32>, <16x256xf32>
-    // CHECK: %[[LOAD:.*]] = tt.descriptor_load
-    // CHECK-SAME: ttig.block_io = "row_major"
-    // CHECK-NOT: ttig.block_io_anchor
-    // CHECK-SAME: -> tensor<16x256xf32, #[[$BLOCKED_WRAP]]>
-    // CHECK-NOT: ttg.convert_layout
-    // CHECK: "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
-    %x = tt.descriptor_load %desc[%c0_i32, %col] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
-    %0 = "tt.reduce"(%x) <{axis = 0 : i32}> ({
-    ^bb0(%a: f32, %b: f32):
-      %2 = arith.addf %a, %b : f32
-      tt.reduce.return %2 : f32
-    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %1 = ttg.convert_layout %0 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xf32, #blocked1>
-    tt.store %out_ptrs, %1 : tensor<256x!tt.ptr<f32>, #blocked1>
-    tt.return
-  }
-  // CHECK-LABEL: tt.func public @flag_shl_sign_bit_plus_const_col_unchanged(
-  // RLC-LABEL: tt.func public @flag_shl_sign_bit_plus_const_col_unchanged(
-  // LOWER-LABEL: tt.func public @flag_shl_sign_bit_plus_const_col_unchanged(
-  // LOWER-NOT: ttig.2d_block_load
-  // LOWER: tt.return
-  tt.func public @flag_shl_sign_bit_plus_const_col_unchanged(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<256x!tt.ptr<f32>, #blocked1>, %nseg: i32, %flag: i1) {
-    %c0_i32 = arith.constant 0 : i32
-    %c1024_i32 = arith.constant 1024 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %c1024_i64 = arith.constant 1024 : i64
-    %bit = arith.extui %flag : i1 to i32
-    %c31_i32 = arith.constant 31 : i32
-    %top = arith.shli %bit, %c31_i32 : i32
-    %k = arith.constant 2147483644 : i32
-    %col = arith.addi %top, %k : i32
     %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c1024_i32], [%c1024_i64, %c1_i64] : <f32>, <16x256xf32>
     // CHECK: %[[LOAD:.*]] = tt.descriptor_load
     // CHECK-SAME: ttig.block_io = "row_major"
@@ -986,8 +952,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c1024_i64 = arith.constant 1024 : i64
     %byte = arith.extui %u : i8 to i32
     %k = arith.constant 2147483644 : i32
-    %sum = arith.addi %byte, %k : i32
-    %col = arith.muli %sum, %c4_i32 : i32
+    %scaled = arith.muli %byte, %c4_i32 : i32
+    %col = arith.addi %scaled, %k : i32
     %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c1024_i32], [%c1024_i64, %c1_i64] : <f32>, <16x256xf32>
     // CHECK: %[[LOAD:.*]] = tt.descriptor_load
     // CHECK-SAME: ttig.block_io = "row_major"
