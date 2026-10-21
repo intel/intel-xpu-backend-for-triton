@@ -458,44 +458,38 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 // Note: when handled by software, this format
 // has more than a single NaN values.
 
-// Fp8E4M3 -> Fp16, oneDNN-derived:
+// Fp8E4M3 -> Fp16:
 //
 //   shl(sext i8 -> i16, 7)  reposition exp+mantissa; the sign extension also
 //                           places the sign in bit 15, the fp16 sign position
 //   and  i16, 0xBFFF        clear bit 14, which the extension duplicated
-//   fmul 36864.0            rebias, part 1
-//   fmul 0.0069427490234375 rebias, part 2
-//   fadd(h, fmul(h, 0.0))   Inf -> NaN; oneDNN's `mad y, y, y, 0:hf`
+//   fmul 256.0              rebias: 2^8 = 2^(15 - 7), the fp16 / fp8 exponent
+//                           bias difference
+//   fcmp ogt |h|, 448.0     reserved bytes only: 480.0 is the one magnitude
+//   select NaN              above the largest finite value
 //
-// Do NOT collapse the two rebias multiplies into a single x256: the overflow
-// in the first one IS the NaN detector. Byte 0x7E (largest finite) gives
-// 1.75 * 36864 = 64512, still under the 65504 fp16 max, while the reserved
-// byte 0x7F gives 1.875 * 36864 = 69120 -> Inf. The trailing `h + h*0.0`
-// turns that into NaN via IEEE `Inf * 0 = NaN`, and is an exact identity for
-// every finite input.
+// The multiply by an exact power of two re-biases the normal and the
+// subnormal paths at once and is exact for every input, so, unlike a
+// split-multiply rebias, it does not depend on round-to-nearest-even. It maps
+// the reserved bytes 0x7F/0xFF, the only encodings that are not finite
+// numbers, to +-480.0; one compare of the magnitude (fabs is a source
+// modifier) and one select turn them into the quiet NaN 0x7E00, with the sign
+// DISCARDED.
 //
-// Rounding: 36 of the 256 bytes depend on round-to-nearest-EVEN, where the
-// old implementation was exact by construction. The exact product of the
-// second multiply is T * (1 - 2^-12) for the wanted result T = y * 256; when
-// T is a power of two that is precisely the midpoint below T, and only RNE's
-// even-significand tie-break recovers it. Affects 0x01/0x02/0x04 and
-// 0x08,0x10,...,0x78, both signs. This is why the exhaustive 256-byte
-// hardware tests are a correctness gate rather than a nicety.
+// The cost of this sequence matters: a dot operand is upcast in its dot
+// layout, where every warp upcasts its own copy of the slices it needs (the
+// warps along N for A, the warps along M for B), so each lane upcasts several
+// times its even share of the tile. fp8 GEMMs that load their operands
+// straight into the dot layout with tensor descriptors pay for each op that
+// many times; the previous sequence (x 36864.0 overflowing the reserved bytes
+// to Inf, x 0.0069427490234375, then `h + h * 0.0` for Inf -> NaN) made them
+// much slower than with pointer loads, see
+// https://github.com/intel/intel-xpu-backend-for-triton/issues/8311.
 //
-// Invariant: `ninf` must never reach the second rebias multiply. With it,
-// LLVM may assume the value is finite, fold `h*0.0` to 0.0 and `h + 0.0` to
-// `h`, silently deleting the Inf -> NaN step. set_fast_math() in
-// third_party/intel/triton_xpu.cc sets only `contract` outside fast-math
-// mode, which is what keeps this safe; test/Conversion/intel/
-// fp8e4m3_to_fp16.mlir pins the fadd so its loss is caught.
-//
-// NaN behavior change (deliberate): reserved bytes 0x7F/0xFF now decode to
-// the hardware default quiet NaN with the sign DISCARDED (0xFE00 on BMG),
-// where before they were sign-preserved 0x7E00/0xFE00. Under
-// TRITON_INTEL_FAST_MATH=1, `reassoc` folds the two multiplies (to exactly
-// x256, so finite values stay bit-exact) and drops the fixup, so those bytes
-// decode to finite +-480.0 instead of NaN -- accepted; fast math waives NaN
-// semantics.
+// Under TRITON_INTEL_FAST_MATH=1 the compare and the select carry fast-math
+// flags (including nnan), which license LLVM to drop them or to treat a NaN
+// result as poison: what the reserved bytes decode to is then unspecified
+// (+-480.0 is one possible outcome). Fast math waives NaN semantics.
 //
 // This file has a history of IGC flush-to-zero bugs that are sensitive to the
 // integer domain (see Fp8E5M2_to_Bf16, which needs i32, and
@@ -508,16 +502,17 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 // instruction anyway, and the <4 x i8> to <2 x i16> bitcast of the pairs costs
 // a mov per element.
 //
-// Not used on LTS drivers, where it triggers an IGC compile-time blowup; see
-// Fp8E4M3Nv_to_Fp16Int below and the dispatch in getConverter().
+// Not used on LTS drivers, where the previous float sequence triggered an IGC
+// compile-time blowup; see Fp8E4M3Nv_to_Fp16Int below and the dispatch in
+// getConverter().
 static Value rebiasFp8E4M3ToFp16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  Value aligned) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value h = b.bitcast(aligned, f16_ty);
-  h = b.fmul(h, b.f16_val(36864.0f));
-  h = b.fmul(h, b.f16_val(0.0069427490234375f));
-  return b.fadd(h, b.fmul(h, b.f16_val(0.0f)));
+  Value h = b.fmul(b.bitcast(aligned, f16_ty), b.f16_val(256.0f));
+  Value mag = LLVM::FAbsOp::create(rewriter, loc, f16_ty, h);
+  Value isReserved = b.fcmp_ogt(mag, b.f16_val(448.0f));
+  return b.select(isReserved, b.bitcast(b.i16_val(0x7E00), f16_ty), h);
 }
 
 static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
@@ -575,10 +570,13 @@ Fp8E4M3Nv_to_Fp16Pairs(Location loc, ConversionPatternRewriter &rewriter,
   Value shifted = b.ashr(i16x2VecTy, lanes, splatI16(1));
   Value aligned = b.and_(i16x2VecTy, shifted, splatI16(0xBFFF));
 
-  Value h = b.bitcast(aligned, fp16x2VecTy);
-  h = b.fmul(h, splatF16(36864.0f));
-  h = b.fmul(h, splatF16(0.0069427490234375f));
-  h = b.fadd(h, b.fmul(h, splatF16(0.0f)));
+  Value h = b.fmul(b.bitcast(aligned, fp16x2VecTy), splatF16(256.0f));
+  Value mag = LLVM::FAbsOp::create(rewriter, loc, fp16x2VecTy, h);
+  Value isReserved =
+      LLVM::FCmpOp::create(rewriter, loc, vec_ty(i1_ty, 2),
+                           LLVM::FCmpPredicate::ogt, mag, splatF16(448.0f));
+  Value qnan = b.bitcast(splatI16(0x7E00), fp16x2VecTy);
+  h = b.select(isReserved, qnan, h);
 
   return {b.extract_element(f16_ty, h, b.i32_val(0)),
           b.extract_element(f16_ty, h, b.i32_val(1))};
@@ -599,16 +597,17 @@ static Value Fp8E4M3Nv_to_Fp16FromHighByte(Location loc,
 
 // Fp8E4M3 -> Fp16 (packed), integer domain. Used only on LTS drivers.
 //
-// Slower at runtime than Fp8E4M3Nv_to_Fp16 above (~1.7x on fp8 GEMMs), but it
-// is what LTS can compile in reasonable time.
-// The LTS IGC (2.11) runs a LoopSink pass whose cost model treats the other
-// sequence -- short, straight-line, unpredicated float arithmetic -- as free
-// to rematerialize, and clones it ~6x inside the already-unrolled loop body.
-// On a 128x128 fp8 GEMM tile that is 22s of ocloc time and 1882 spill slots
-// against 4.7s and 840. The `icmp`/`select` pair below is what makes this
-// version ineligible or unprofitable to sink, so it is left alone. Newer IGC
-// does not mispredict this, hence the gate rather than a blanket switch.
-// See https://github.com/intel/intel-xpu-backend-for-triton/issues/8046.
+// Slower at runtime than Fp8E4M3Nv_to_Fp16 above, but it is what LTS can
+// compile in reasonable time.
+// The LTS IGC (2.11) runs a LoopSink pass whose cost model treated the
+// previous float sequence -- short, straight-line, unpredicated float
+// arithmetic -- as free to rematerialize, and cloned it ~6x inside the
+// already-unrolled loop body. On a 128x128 fp8 GEMM tile that was 22s of ocloc
+// time and 1882 spill slots against 4.7s and 840. The `icmp`/`select` pair
+// below is what makes this version ineligible or unprofitable to sink, so it is
+// left alone. Newer IGC does not mispredict this, hence the gate rather than a
+// blanket switch. See
+// https://github.com/intel/intel-xpu-backend-for-triton/issues/8046.
 //
 // A single multiplication by 256.0 (= 2^8) re-biases BOTH the normal and the
 // subnormal paths in one shot, so no predicate is needed for the rebias:
@@ -624,12 +623,12 @@ static Value Fp8E4M3Nv_to_Fp16FromHighByte(Location loc,
 //     with significand mmm * 128, i.e. mmm * 2^(-17). Multiplying by 2^8
 //     yields mmm * 2^(-9), exactly the fp8 subnormal value.
 // Being an exact power of two, the multiply is exact for every input, so
-// unlike the oneDNN sequence this converter does not depend on RNE.
+// unlike a split-multiply rebias this converter does not depend on RNE.
 //
-// NaN: reserved bytes 0x7F/0xFF decode to fp16 0x7E00 with the sign
-// preserved, matching the AMD and NVIDIA software converters. This differs
-// from Fp8E4M3Nv_to_Fp16, which yields the hardware default quiet NaN with
-// the sign discarded -- both are NaN, and the payload is unspecified.
+// NaN: reserved bytes 0x7F/0xFF decode to fp16 0x7E00/0xFE00, preserving the
+// sign, matching the AMD and NVIDIA software converters. This differs from
+// Fp8E4M3Nv_to_Fp16, which yields 0x7E00 for both -- both are NaN, and the
+// payload is unspecified.
 static SmallVector<Value>
 Fp8E4M3Nv_to_Fp16Int(Location loc, ConversionPatternRewriter &rewriter,
                      const SmallVector<Value> &v) {
@@ -1515,11 +1514,13 @@ struct FpToFpOpConversion
     // ConverterSelector holds: the integer-domain sequence on LTS drivers (see
     // Fp8E4M3Nv_to_Fp16Int for why) and pairs for dot operands with K < 64.
     //
-    // FIXME: drop the LTS branch and Fp8E4M3Nv_to_Fp16Int once the LTS
-    // driver line picks up an IGC that no longer mispredicts the oneDNN
-    // sequence -- the rolling driver (1.17.39395+13) already does not -- so
-    // every target gets the faster sequence (~1.7x at runtime on fp8 GEMMs).
-    // Worth re-checking whenever the LTS driver pin is bumped.
+    // FIXME: drop the LTS branch and Fp8E4M3Nv_to_Fp16Int once the float
+    // sequence (which changed since the LoopSink blowup was measured; it now
+    // has an fcmp/select) is checked to compile in reasonable time on the LTS
+    // IGC, or the LTS driver line picks up an IGC that no longer mispredicts
+    // it -- the rolling driver (1.17.39395+13) already does not -- so every
+    // target gets the faster sequence. Worth re-checking whenever the LTS
+    // driver pin is bumped.
     if (srcTy.getTypeID() == F8E4M3TyID && dstTy.getTypeID() == F16TyID &&
         !HasAttr<SUPPORT_F8_CONV>(op)) {
       if (HasAttr<IS_LTS>(op)) {
