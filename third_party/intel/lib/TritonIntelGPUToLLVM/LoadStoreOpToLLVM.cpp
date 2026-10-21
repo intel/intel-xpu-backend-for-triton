@@ -3485,8 +3485,9 @@ struct DescriptorStoreOpToBlockIOConversion
       auto newOp = TritonGEN::Matrix2DBlockStoreOp::create(
           rewriter, loc, addrElem, adjustedBaseWidth, adjustedBaseHeight, pitch,
           // offsetX was in terms of original elements. The 2D block IO requires
-          // offsetX to be in terms of packed elements.
-          b.udiv(offsetX, b.i32_val(numPackedVals)), offsetY,
+          // offsetX to be in terms of packed elements. Signed: offsetX may be
+          // negative, and an unsigned quotient would be out of bounds.
+          b.sdiv(offsetX, b.i32_val(numPackedVals)), offsetY,
           packedElemSizeInBits, tileWidth, tileHeight,
           /*v_blocks, only 1 supported*/ 1, storeVal);
 
@@ -4529,7 +4530,7 @@ static LogicalResult lowerBlockLoad2D(
         /*base_width*/ addr.adjustedBaseWidth,
         /*base_height*/ addr.adjustedBaseHeight,
         /*base_pitch*/ pitch,
-        /*x*/ b.udiv(addr.offsetX, b.i32_val(cfg.numPackedVals)),
+        /*x*/ b.sdiv(addr.offsetX, b.i32_val(cfg.numPackedVals)),
         /*y*/ offsetY,
         /*elem_size_in_bits*/ cfg.packedElemSizeInBits,
         /*tile_width*/ cfg.tileWidth,
