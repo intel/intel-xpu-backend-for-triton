@@ -280,6 +280,8 @@ def compile(src, target=None, options=None, _env_vars=None):
     always_compile = knobs.compilation.always_compile
     if not always_compile and metadata_path is not None:
         # cache hit!
+        if knobs.compilation.print_cache_hits:
+            print(f"Triton compilation cache HIT for {file_name} (hash={hash[:12]})")
         res = CompiledKernel(src, metadata_group, hash)
         if compilation_listener:
             compilation_listener(
@@ -290,6 +292,9 @@ def compile(src, target=None, options=None, _env_vars=None):
                 cache_hit=True,
             )
         return res
+
+    if knobs.compilation.print_cache_hits:
+        miss_start = time.monotonic()
 
     # initialize metadata
     metadata = {
@@ -369,6 +374,10 @@ def compile(src, target=None, options=None, _env_vars=None):
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
+
+    if knobs.compilation.print_cache_hits:
+        print(f"Triton compilation cache MISS for {file_name} (hash={hash[:12]}), "
+              f"compiled in {time.monotonic() - miss_start:.2f}s")
 
     # notify any listener
     if compilation_listener:
