@@ -98,21 +98,15 @@ isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
   return ttgi::isDivisible(tt::intel::getFinalValue(v), divisor);
 }
 
-// The grid dimension (programs per axis) that isProvablyNonNegative assumes
-// when it takes a bound on tt.get_program_id. The launcher rejects a larger
-// grid for a kernel that relied on it (#8491).
+// Programs per axis assumed when a proof needs a bound on tt.get_program_id;
+// the launcher rejects a larger grid for a kernel that relied on it (#8491).
 static constexpr int64_t kAssumedMaxGridDim = 1 << 16;
 
-// An upper bound U with 0 <= \p v <= U (signed, at v's width), or nullopt if
-// v is not proven non-negative. A constant >= 0; tt.get_program_id, at most
-// \p maxProgramId; arith.extui, at most its source type's maximum; arith.extsi
-// of a bounded value; arith.addi, arith.muli and arith.shli by an in-range
-// constant, at 32 bits or more, only if the same operation on the bounds does
-// not wrap; the induction variable of a signed scf.for with a bounded lower
-// bound and step, below its upper bound. An iteration argument is refused: its
-// init says nothing about the values yielded into it. tt::intel::proveSign is
-// not used: it trusts the integer range analysis, whose loop-carried ranges
-// can be too narrow.
+// An upper bound U with 0 <= \p v <= U (signed, at v's width), or nullopt if v
+// is not proven non-negative. add, mul and shl (at 32 bits or more) give a
+// bound only if the same operation on the bounds does not wrap. An iteration
+// argument is refused: its init says nothing about the yielded values.
+// tt::intel::proveSign is not used: its loop-carried ranges can be too narrow.
 static std::optional<APInt>
 getNonNegativeUpperBound(Value v, uint64_t maxProgramId, unsigned depth = 0) {
   // A backstop against pathological IR, not a tuning knob.
@@ -179,8 +173,7 @@ getNonNegativeUpperBound(Value v, uint64_t maxProgramId, unsigned depth = 0) {
 }
 
 // True if the descriptor index \p v is provably non-negative. Sets
-// \p assumesGridLimit if that needs the grid to stay within kAssumedMaxGridDim:
-// a program id is otherwise bounded only by INT32_MAX, and pid * 256 wraps.
+// \p assumesGridLimit if that needs a grid within kAssumedMaxGridDim.
 static bool isProvablyNonNegative(Value v, bool &assumesGridLimit) {
   if (getNonNegativeUpperBound(v, std::numeric_limits<int32_t>::max()))
     return true;
@@ -1343,8 +1336,8 @@ private:
   /// ttig.block_io without an anchor, so RemoveLayoutConversions can move it,
   /// with the ops behind it, into an anchored sibling's layout, and
   /// LowerTo2DBlockLoad then makes it a 2D read after all. Pointer tt.loads
-  /// tagged for 2D reads are not considered. \p assumesGridLimit is set when a
-  /// column proof needs the grid to stay within kAssumedMaxGridDim.
+  /// tagged for 2D reads are not considered. \p assumesGridLimit is set if a
+  /// column proof needs kAssumedMaxGridDim.
   static bool satisfiesRelayoutGates(tt::FuncOp func,
                                      ArrayRef<tt::DescriptorLoadOp> loads,
                                      ArrayRef<tt::ReduceOp> reduces,

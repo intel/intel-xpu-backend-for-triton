@@ -9,9 +9,8 @@ keeps its own layout, so the new one would cost an SLM convert.
 
 The correctness gates of MaterializeBlockPointer.cpp are function-wide as well: a function is relaid
 out only if every descriptor load in it has a provably non-negative column index (G1, #8479) and zero
-padding (G3) and, with 16 lanes, every value computed from a reduction is f32 or i32 (G2). G1 bounds each
-operand of an add, multiply or shift, so a column that can wrap negative in i32 is refused. It assumes a grid of at
-most 2^16 programs per axis, and the launcher rejects a larger grid for a kernel that relied on that.
+padding (G3) and, with 16 lanes, every value computed from a reduction is f32 or i32 (G2). G1 refuses a column
+that can wrap negative in i32. It assumes at most 2^16 programs per axis; the launcher rejects a larger grid.
 
 `JITFunction.run` keys its in-memory cache on specialization and options, not on the environment, so
 every test wraps a plain module-level function in a fresh `triton.jit` object and compiles it into its
@@ -379,10 +378,9 @@ def test_relayout_stencil_negative_tap(device, monkeypatch, tmp_path):
                          ids=["mul", "shl-add"])
 @pytest.mark.parametrize("b", [255, 0], ids=["wraps", "no-wrap"])
 def test_relayout_column_wraps_negative(kernel_fn, b, device, monkeypatch, tmp_path):
-    # G1 proves a column non-negative from its operands' bounds, not their signs: a zero-extended byte times
-    # 67372036 or (flag << 31) + 2147483644 is non-negative for every operand but wraps to -4 in i32 for byte 255 or a
-    # set flag, a 16-byte aligned column that reads memory left of a misaligned base (#8479). The proof is static, so
-    # the load is refused for b = 0 as well; the result is exact for both.
+    # byte * 67372036 and (flag << 31) + 2147483644 are 16-byte aligned and wrap to -4 in i32 for byte 255 or a set
+    # flag, a column that reads memory left of a misaligned base (#8479). G1 refuses both statically, so b = 0 is a
+    # gather too; the result is exact for both.
     _set_compile_env(monkeypatch, tmp_path, knob=True)
     BR, BC, PITCH = 16, 64, 96
     x, vals = _misaligned_tensor(BR, BC, PITCH, device)
@@ -402,9 +400,8 @@ MAX_GRID = 1 << 16  # programs per axis that G1 assumes for a column derived fro
 
 @pytest.mark.parametrize("knob", [True, False], ids=["on", "off"])
 def test_relayout_grid_limit(knob, device, monkeypatch, tmp_path):
-    # G1 proves program_id * BC non-negative only for a grid of at most 2^16 programs per axis; a larger one could
-    # wrap the column negative (#8479). The kernel records that in its metadata and the launcher rejects a larger
-    # grid. With the knob off nothing was assumed, and any grid launches.
+    # G1 proves program_id * BC non-negative only for a grid of at most 2^16 programs per axis (#8479). The kernel
+    # records that in its metadata and the launcher rejects a larger grid; with the knob off nothing was assumed.
     BR, BC, GRID = 16, 64, 2
     NCOLS, PITCH = GRID * BC, GRID * BC + 32
     x, vals = _misaligned_tensor(BR, NCOLS, PITCH, device)
