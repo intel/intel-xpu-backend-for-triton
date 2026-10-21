@@ -14,10 +14,10 @@
 // absence of overflow silently.
 //
 // Coefficients, bounds and constants are `int64_t`, so integers wider than 64
-// bits are outside the domain: `prove` answers `Unknown`, `normalize` returns
-// an opaque symbol, no range is read and no assume is turned into a fact for
-// such a value, and `materialize` requires every condition subject to be at
-// most 64 bits wide. `index` counts as 64 bits.
+// bits are outside the domain: `prove` and `proveTrue` answer `Unknown`,
+// `normalize` returns an opaque symbol, no range is read and no assume is
+// turned into a fact for such a value, and `materialize` requires every
+// condition subject to be at most 64 bits wide. `index` counts as 64 bits.
 //
 //===----------------------------------------------------------------------===//
 
@@ -34,6 +34,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <tuple>
 
 namespace mlir::triton::intel {
 
@@ -138,7 +139,13 @@ private:
   SmallVector<std::pair<Symbol, int64_t>, 4> terms_;
 };
 
-enum class BoundGoal { NonNegative, DivisibleBy, AtLeast, AtMost };
+enum class BoundGoal {
+  NonNegative,
+  StrictlyPositive,
+  DivisibleBy,
+  AtLeast,
+  AtMost
+};
 
 /// Budgets are per kind, and the kind also fixes the order conditions
 /// render and materialize in: facts, then preconditions, then guards.
@@ -262,10 +269,39 @@ public:
   AffineForm normalize(Value v, QueryContext ctx,
                        SmallVectorImpl<Obligation> &obligations);
 
+  /// Decides whether `v` is nonzero (for i1, true) in every element at
+  /// `ctx`. Looks through `tt.splat`, `tt.expand_dims`, `tt.broadcast` and
+  /// `arith.ext*` only, and deliberately NOT through `getFinalValue`, which
+  /// substitutes an iter_arg's init value without inspecting the yield: a
+  /// loop-carried mask initialized `true` and yielding `false` would read as
+  /// always true. Any block argument is therefore `Unknown`. `arith.andi` is a
+  /// conjunction only on i1.
+  ///
+  /// The walk over the mask is bounded: it goes at most `kMaxMaskDepth` deep
+  /// and evaluates at most `kMaxMaskVisits` nodes per query. A branch cut off
+  /// by the depth is `Unknown` and a refuted operand still refutes the
+  /// conjunction; running out of visits makes the whole query `Unknown`, even
+  /// if an operand was already refuted. Complete answers are memoized per
+  /// (value, point, loop), which is valid while the IR, the solver and the
+  /// dominance info are unchanged.
+  BoundProof proveTrue(Value v, QueryContext ctx);
+
+  /// Diagnostic, for tests: how many mask nodes `proveTrue` has evaluated over
+  /// this prover's lifetime.
+  unsigned numMaskEvaluations() const { return maskEvaluations; }
+
   static constexpr unsigned kMaxDepth = 16;
   static constexpr unsigned kMaxTerms = 16;
   static constexpr unsigned kMaxFactConditions = 4;
   static constexpr unsigned kMaxGuards = 8;
+  /// Bounds on `proveTrue`'s walk over the mask expression itself, as opposed
+  /// to the comparisons it hands to `prove`. The depth is for stack safety, so
+  /// it is far above `kMaxDepth`: reusing that would turn a mask with more than
+  /// 16 nested conjuncts from decided to `Unknown`. The visits bound how many
+  /// mask nodes one query evaluates; the work inside each comparison's `prove`
+  /// is not counted against it.
+  static constexpr unsigned kMaxMaskDepth = 64;
+  static constexpr unsigned kMaxMaskVisits = 1024;
 
 private:
   /// The result of bounding an affine form over a loop's iteration space.
@@ -301,6 +337,18 @@ private:
     SmallVector<Obligation, 4> factObligations;
     /// A bound overflowed while closing an obligation: the verdict is Unknown.
     bool exhausted = false;
+    /// Term-sign and quotient-threshold candidates: trial hypotheses this
+    /// attempt is testing on a residual term, consulted by `decideResidual`
+    /// ahead of the general fact/range check. `signFloor` is `sym >= bound`
+    /// (used when the term's own coefficient in the residual is positive);
+    /// `signCeil` is `sym <= bound` (negative coefficient). The term-sign
+    /// candidate populates these with 0 (`NonNegative`/`AtMost(_,0)`) or 1/-1
+    /// (`StrictlyPositive`/`AtMost(_,-1)`); the quotient-threshold candidate
+    /// with the quotient threshold translated from the dividend condition it
+    /// emits, so the bound the dividend condition justifies is also usable
+    /// internally, without being emitted twice.
+    SmallVector<std::pair<Symbol, int64_t>, 2> signFloor;
+    SmallVector<std::pair<Symbol, int64_t>, 2> signCeil;
   };
 
   /// The facts of one quotient symbol.
@@ -335,8 +383,10 @@ private:
   /// Is the residual `lo` at least `g`?
   bool decideResidual(const AffineForm &lo, int64_t g, QueryContext ctx,
                       CandidateSet &cs);
-  /// A residual term's sign check: an applicable assume, or the symbol's own
-  /// constant range. Records provenance into `cs` on success.
+  /// The fact/range half of a residual term's sign check: an applicable
+  /// assume, or the symbol's own constant range. Excludes `cs.signFloor` /
+  /// `signCeil`, which `decideResidual` checks first; records provenance
+  /// into `cs` on success.
   bool termSignOk(const Symbol &sym, int64_t k, QueryContext ctx,
                   CandidateSet &cs);
   /// The constant `decideResidual` compares against `g`, when there is one.
@@ -482,6 +532,43 @@ private:
   /// what makes `height` computable without threading a return value through
   /// every recursive case.
   unsigned deepest = 0;
+  /// Mask nodes `proveTrue` has evaluated; see `numMaskEvaluations`.
+  unsigned maskEvaluations = 0;
+
+  /// One mask node's answer, with what `proveTrue` needs to cache it safely.
+  struct MaskResult {
+    BoundProof proof;
+    /// Mask nodes between this one and the deepest below it; 0 for a leaf.
+    unsigned height = 0;
+    /// A bound cut the walk short somewhere below, so `proof` may be weaker
+    /// than this node deserves. Such an answer is never cached as complete.
+    bool truncated = false;
+  };
+  /// Keyed by point and loop as well as value: they decide which assumes apply
+  /// and what the loop bounds are.
+  struct MaskMemoKey {
+    const void *value;
+    Operation *at;
+    Operation *loop;
+    bool operator<(const MaskMemoKey &o) const {
+      return std::tie(value, at, loop) < std::tie(o.value, o.at, o.loop);
+    }
+  };
+  /// A complete answer and the height of the mask below it: it is reused only
+  /// where that subtree still fits under `kMaxMaskDepth`.
+  struct MaskMemoEntry {
+    BoundProof proof;
+    unsigned height;
+  };
+  /// Memo, bounds and counters around `proveTrueNode`.
+  MaskResult proveTrueImpl(Value v, QueryContext ctx, unsigned depth);
+  /// One mask node, recursing through `proveTrueImpl`.
+  MaskResult proveTrueNode(Value v, QueryContext ctx, unsigned depth);
+  std::map<MaskMemoKey, MaskMemoEntry> maskMemo;
+  /// Per query: nodes evaluated so far, and whether that ran past
+  /// `kMaxMaskVisits`.
+  unsigned maskVisits = 0;
+  bool maskBudgetExhausted = false;
 };
 
 /// Normalizes a condition in place: folds the constant into the bound,

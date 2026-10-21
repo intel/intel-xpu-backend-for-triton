@@ -1,6 +1,14 @@
 from triton.language import core
 
 
+def _promote_half_to_fp32(arg0, _semantic):
+    """Promote fp16/bf16 to fp32, the device library has no half precision symbol for these."""
+    arg0 = _semantic.to_tensor(arg0)
+    if arg0.dtype in (core.float16, core.bfloat16):
+        arg0 = _semantic.cast(arg0, core.float32)
+    return arg0
+
+
 @core.extern
 def clz(arg0, _semantic=None):
     return core.extern_elementwise(
@@ -977,6 +985,7 @@ def nearbyint(arg0, _semantic=None):
 
 @core.extern
 def isnan(arg0, _semantic=None):
+    arg0 = _promote_half_to_fp32(arg0, _semantic)
     return core.extern_elementwise(
         "", "", [
             arg0,
@@ -988,6 +997,7 @@ def isnan(arg0, _semantic=None):
 
 @core.extern
 def signbit(arg0, _semantic=None):
+    arg0 = _promote_half_to_fp32(arg0, _semantic)
     return core.extern_elementwise(
         "", "", [
             arg0,
@@ -1016,6 +1026,7 @@ def finitef(arg0, _semantic=None):
 
 @core.extern
 def isinf(arg0, _semantic=None):
+    arg0 = _promote_half_to_fp32(arg0, _semantic)
     return core.extern_elementwise(
         "", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_isinff", core.dtype("int32")),
