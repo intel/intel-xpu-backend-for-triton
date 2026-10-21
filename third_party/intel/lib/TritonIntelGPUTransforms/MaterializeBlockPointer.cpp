@@ -16,6 +16,7 @@
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
+#include <limits>
 #include <optional>
 
 #define DEBUG_TYPE "tritonintelgpu-materialize-block-pointer"
@@ -97,51 +98,96 @@ isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
   return ttgi::isDivisible(tt::intel::getFinalValue(v), divisor);
 }
 
-// True if the descriptor index \p v is provably non-negative: a constant >= 0,
-// tt.get_program_id, arith.extui, arith.extsi of a proven value, arith.addi or
-// arith.muli of two, arith.shli of one by an in-range constant, or the
-// induction variable of a signed scf.for with a proven lower bound and step.
-// addi, muli and shli are trusted at 32 bits or more only, and are assumed not
-// to overflow there, as tt::intel::proveSign assumes: an i32 wrap needs a
-// product beyond any i32 extent, such as pid * 2147483647. Below 32 bits a
-// wrap is easy (255 * 257 is -1 as an i16). proveSign itself is not used: it
-// trusts the integer range analysis, whose loop-carried ranges can be too
-// narrow. An iteration argument is refused: its init says nothing about the
-// values yielded into it.
-static bool isProvablyNonNegative(Value v, unsigned depth = 0) {
+// The grid dimension (programs per axis) that isProvablyNonNegative assumes
+// when it takes a bound on tt.get_program_id. The launcher rejects a larger
+// grid for a kernel that relied on it (#8491).
+static constexpr int64_t kAssumedMaxGridDim = 1 << 16;
+
+// An upper bound U with 0 <= \p v <= U (signed, at v's width), or nullopt if
+// v is not proven non-negative. A constant >= 0; tt.get_program_id, at most
+// \p maxProgramId; arith.extui, at most its source type's maximum; arith.extsi
+// of a bounded value; arith.addi, arith.muli and arith.shli by an in-range
+// constant, at 32 bits or more, only if the same operation on the bounds does
+// not wrap; the induction variable of a signed scf.for with a bounded lower
+// bound and step, below its upper bound. An iteration argument is refused: its
+// init says nothing about the values yielded into it. tt::intel::proveSign is
+// not used: it trusts the integer range analysis, whose loop-carried ranges
+// can be too narrow.
+static std::optional<APInt>
+getNonNegativeUpperBound(Value v, uint64_t maxProgramId, unsigned depth = 0) {
   // A backstop against pathological IR, not a tuning knob.
   if (depth > 16)
-    return false;
+    return std::nullopt;
+  auto intTy = dyn_cast<IntegerType>(v.getType());
+  if (!intTy)
+    return std::nullopt;
+  unsigned width = intTy.getWidth();
+  auto boundOf = [&](Value operand) {
+    return getNonNegativeUpperBound(operand, maxProgramId, depth + 1);
+  };
 
   APInt cst;
   if (matchPattern(v, m_ConstantInt(&cst)))
-    return !cst.isNegative();
+    return cst.isNegative() ? std::nullopt : std::optional<APInt>(cst);
 
   if (auto arg = dyn_cast<BlockArgument>(v)) {
     auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp());
-    return forOp && arg == forOp.getInductionVar() && !forOp.getUnsignedCmp() &&
-           isProvablyNonNegative(forOp.getLowerBound(), depth + 1) &&
-           isProvablyNonNegative(forOp.getStep(), depth + 1);
+    if (!forOp || arg != forOp.getInductionVar() || forOp.getUnsignedCmp() ||
+        !boundOf(forOp.getLowerBound()) || !boundOf(forOp.getStep()))
+      return std::nullopt;
+    if (std::optional<APInt> upper = boundOf(forOp.getUpperBound()))
+      return upper;
+    return APInt::getSignedMaxValue(width);
   }
 
   Operation *def = v.getDefiningOp();
-  if (isa<tt::GetProgramIdOp, arith::ExtUIOp>(def))
-    return true;
-  if (auto extOp = dyn_cast<arith::ExtSIOp>(def))
-    return isProvablyNonNegative(extOp.getIn(), depth + 1);
-  auto intTy = dyn_cast<IntegerType>(v.getType());
-  if (!intTy || intTy.getWidth() < 32)
-    return false;
-  if (isa<arith::AddIOp, arith::MulIOp>(def))
-    return isProvablyNonNegative(def->getOperand(0), depth + 1) &&
-           isProvablyNonNegative(def->getOperand(1), depth + 1);
-  if (auto shlOp = dyn_cast<arith::ShLIOp>(def)) {
-    APInt amount;
-    return matchPattern(shlOp.getRhs(), m_ConstantInt(&amount)) &&
-           amount.ult(amount.getBitWidth()) &&
-           isProvablyNonNegative(shlOp.getLhs(), depth + 1);
+  if (isa<tt::GetProgramIdOp>(def))
+    return APInt(width, maxProgramId);
+  if (auto extUI = dyn_cast<arith::ExtUIOp>(def))
+    return APInt::getMaxValue(extUI.getIn().getType().getIntOrFloatBitWidth())
+        .zext(width);
+  if (auto extSI = dyn_cast<arith::ExtSIOp>(def)) {
+    std::optional<APInt> in = boundOf(extSI.getIn());
+    return in ? std::optional<APInt>(in->zext(width)) : std::nullopt;
   }
-  return false;
+  if (width < 32)
+    return std::nullopt;
+
+  bool overflow = false;
+  APInt bound;
+  if (isa<arith::AddIOp, arith::MulIOp>(def)) {
+    std::optional<APInt> lhs = boundOf(def->getOperand(0));
+    std::optional<APInt> rhs = boundOf(def->getOperand(1));
+    if (!lhs || !rhs)
+      return std::nullopt;
+    bound = isa<arith::AddIOp>(def) ? lhs->uadd_ov(*rhs, overflow)
+                                    : lhs->umul_ov(*rhs, overflow);
+  } else if (auto shlOp = dyn_cast<arith::ShLIOp>(def)) {
+    APInt amount;
+    std::optional<APInt> lhs = boundOf(shlOp.getLhs());
+    if (!lhs || !matchPattern(shlOp.getRhs(), m_ConstantInt(&amount)) ||
+        !amount.ult(width))
+      return std::nullopt;
+    bound = lhs->ushl_ov(amount, overflow);
+  } else {
+    return std::nullopt;
+  }
+  // A bound with the sign bit set is a value that may wrap negative.
+  if (overflow || bound.isNegative())
+    return std::nullopt;
+  return bound;
+}
+
+// True if the descriptor index \p v is provably non-negative. Sets
+// \p assumesGridLimit if that needs the grid to stay within kAssumedMaxGridDim:
+// a program id is otherwise bounded only by INT32_MAX, and pid * 256 wraps.
+static bool isProvablyNonNegative(Value v, bool &assumesGridLimit) {
+  if (getNonNegativeUpperBound(v, std::numeric_limits<int32_t>::max()))
+    return true;
+  if (!getNonNegativeUpperBound(v, kAssumedMaxGridDim - 1))
+    return false;
+  assumesGridLimit = true;
+  return true;
 }
 
 struct TritonIntelGPUMaterializeBlockPointerPass
@@ -210,10 +256,22 @@ public:
                          << " has a tt.dot or tt.dot_scaled; skip relayout");
         return;
       }
-      if (!satisfiesRelayoutGates(func, loads, reduces, threadsPerWarp))
+      bool assumesGridLimit = false;
+      if (!satisfiesRelayoutGates(func, loads, reduces, threadsPerWarp,
+                                  assumesGridLimit))
         return;
       for (tt::DescriptorLoadOp load : loads)
         relayoutDescriptorLoadForBlockIO(load);
+      // Tell the launcher, if a relaid-out load rests on the grid limit.
+      if (assumesGridLimit &&
+          llvm::any_of(loads, [](tt::DescriptorLoadOp load) {
+            return load->hasAttr(
+                ttgi::TritonIntelGPUDialect::getBlockIOAnchorAttrName());
+          }))
+        mod->setAttr(
+            ttgi::TritonIntelGPUDialect::getAssumedMaxGridDimAttrName(),
+            IntegerAttr::get(IntegerType::get(context, 32),
+                             kAssumedMaxGridDim));
     });
   }
 
@@ -1285,11 +1343,13 @@ private:
   /// ttig.block_io without an anchor, so RemoveLayoutConversions can move it,
   /// with the ops behind it, into an anchored sibling's layout, and
   /// LowerTo2DBlockLoad then makes it a 2D read after all. Pointer tt.loads
-  /// tagged for 2D reads are not considered.
+  /// tagged for 2D reads are not considered. \p assumesGridLimit is set when a
+  /// column proof needs the grid to stay within kAssumedMaxGridDim.
   static bool satisfiesRelayoutGates(tt::FuncOp func,
                                      ArrayRef<tt::DescriptorLoadOp> loads,
                                      ArrayRef<tt::ReduceOp> reduces,
-                                     unsigned threadsPerWarp) {
+                                     unsigned threadsPerWarp,
+                                     bool &assumesGridLimit) {
     for (tt::DescriptorLoadOp load : loads) {
       if (!load->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
         continue;
@@ -1299,7 +1359,7 @@ private:
       // the column index (the stride-one dimension, last) matters: a negative
       // row is fine.
       if (load.getIndices().size() < 2 ||
-          !isProvablyNonNegative(load.getIndices().back())) {
+          !isProvablyNonNegative(load.getIndices().back(), assumesGridLimit)) {
         LDBG("G1 (#8479): column index of "
              << *load << " is not provably non-negative; skip relayout of "
              << func.getName());

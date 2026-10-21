@@ -728,6 +728,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment") or 1
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
+        # Set by the descriptor-load relayout when it assumes a bound on the grid; the launcher enforces it.
+        metadata["max_grid_dim"] = src.get_int_attr("ttig.assumed_max_grid_dim") or 0
 
         # Add Triton and LLVM versions to the dumped IR.
         if knobs.compilation.dump_ir:

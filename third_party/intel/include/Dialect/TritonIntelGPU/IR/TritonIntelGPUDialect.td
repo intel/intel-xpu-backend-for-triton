@@ -110,6 +110,13 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.block_io_anchor";
     }
 
+    /// Get the name of the module attribute that records the largest grid
+    /// dimension (programs per axis) a descriptor-load relayout assumed. The
+    /// launcher rejects a larger grid.
+    static constexpr llvm::StringRef getAssumedMaxGridDimAttrName() {
+      return "ttig.assumed_max_grid_dim";
+    }
+
     /// Get the name of the attribute used to specify the target architecture. This
     /// attribute matches architecture in a target triple used for the resulting LLVM
     /// IR module.

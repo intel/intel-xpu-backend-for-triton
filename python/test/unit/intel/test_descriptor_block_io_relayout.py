@@ -9,7 +9,9 @@ keeps its own layout, so the new one would cost an SLM convert.
 
 The correctness gates of MaterializeBlockPointer.cpp are function-wide as well: a function is relaid
 out only if every descriptor load in it has a provably non-negative column index (G1, #8479) and zero
-padding (G3) and, with 16 lanes, every value computed from a reduction is f32 or i32 (G2).
+padding (G3) and, with 16 lanes, every value computed from a reduction is f32 or i32 (G2). G1 bounds each
+operand of an add, multiply or shift, so a column that can wrap negative in i32 is refused. It assumes a grid of at
+most 2^16 programs per axis, and the launcher rejects a larger grid for a kernel that relied on that.
 
 `JITFunction.run` keys its in-memory cache on specialization and options, not on the environment, so
 every test wraps a plain module-level function in a fresh `triton.jit` object and compiles it into its
@@ -162,6 +164,31 @@ def _stencil_kernel_fn(out_ptr, x_ptr, NCOLS, PITCH, BR: tl.constexpr, BC: tl.co
     desc = tl.make_tensor_descriptor(x_ptr, shape=(BR, NCOLS), strides=(PITCH, 1), block_shape=(BR, BC))
     taps = desc.load([0, col - 1]) + desc.load([0, col]) + desc.load([0, col + 1])
     tl.store(out_ptr + col + tl.arange(0, BC), tl.sum(taps, axis=0))
+
+
+def _pid_column_sum_kernel_fn(out_ptr, x_ptr, NCOLS, PITCH, BR: tl.constexpr, BC: tl.constexpr):
+    """Sum the [BR, BC] fp32 descriptor tile at column program_id * BC over its rows. A program past the tensor
+    reads padding and stores nothing."""
+    col = tl.program_id(0) * BC
+    cols = col + tl.arange(0, BC)
+    desc = tl.make_tensor_descriptor(x_ptr, shape=(BR, NCOLS), strides=(PITCH, 1), block_shape=(BR, BC))
+    tl.store(out_ptr + cols, tl.sum(desc.load([0, col]), axis=0), mask=cols < NCOLS)
+
+
+def _wrapped_mul_column_sum_kernel_fn(out_ptr, x_ptr, b_ptr, NCOLS, PITCH, BR: tl.constexpr, BC: tl.constexpr):
+    """_column_sum_kernel_fn at column byte * 67372036, for the byte at b_ptr: 16-byte aligned, and -4 in i32 for
+    255."""
+    col = tl.load(b_ptr).to(tl.uint8).to(tl.int32) * 67372036
+    desc = tl.make_tensor_descriptor(x_ptr, shape=(BR, NCOLS), strides=(PITCH, 1), block_shape=(BR, BC))
+    tl.store(out_ptr + tl.arange(0, BC), tl.sum(desc.load([0, col]), axis=0))
+
+
+def _wrapped_shl_column_sum_kernel_fn(out_ptr, x_ptr, b_ptr, NCOLS, PITCH, BR: tl.constexpr, BC: tl.constexpr):
+    """_column_sum_kernel_fn at column (flag << 31) + 2147483644, for the flag at b_ptr: 16-byte aligned, and -4
+    in i32 when it is set."""
+    col = (tl.load(b_ptr).to(tl.int1).to(tl.int32) << 31) + 2147483644
+    desc = tl.make_tensor_descriptor(x_ptr, shape=(BR, NCOLS), strides=(PITCH, 1), block_shape=(BR, BC))
+    tl.store(out_ptr + tl.arange(0, BC), tl.sum(desc.load([0, col]), axis=0))
 
 
 def _row_sum_kernel_fn(out_ptr, x_ptr, R: tl.constexpr, C: tl.constexpr, ACC: tl.constexpr):
@@ -346,6 +373,72 @@ def test_relayout_stencil_negative_tap(device, monkeypatch, tmp_path):
         assert ANCHOR not in k.asm["ttgir"], f"knob {state}: {ANCHOR} in the TTGIR"
         block_loads = _count_2d_block_loads(k.asm["llir"])
         assert block_loads == 0, f"knob {state}: {block_loads} 2D block load(s), a stencil tap became a 2D read"
+
+
+@pytest.mark.parametrize("kernel_fn", [_wrapped_mul_column_sum_kernel_fn, _wrapped_shl_column_sum_kernel_fn],
+                         ids=["mul", "shl-add"])
+@pytest.mark.parametrize("b", [255, 0], ids=["wraps", "no-wrap"])
+def test_relayout_column_wraps_negative(kernel_fn, b, device, monkeypatch, tmp_path):
+    # G1 proves a column non-negative from its operands' bounds, not their signs: a zero-extended byte times
+    # 67372036 or (flag << 31) + 2147483644 is non-negative for every operand but wraps to -4 in i32 for byte 255 or a
+    # set flag, a 16-byte aligned column that reads memory left of a misaligned base (#8479). The proof is static, so
+    # the load is refused for b = 0 as well; the result is exact for both.
+    _set_compile_env(monkeypatch, tmp_path, knob=True)
+    BR, BC, PITCH = 16, 64, 96
+    x, vals = _misaligned_tensor(BR, BC, PITCH, device)
+    b_dev = torch.tensor([b], dtype=torch.uint8, device=device)
+    out = torch.full((BC, ), float("nan"), device=device)
+    k = triton.jit(kernel_fn)[(1, )](out, x, b_dev, BC, PITCH, BR=BR, BC=BC)
+
+    col = -4 if b else (0 if kernel_fn is _wrapped_mul_column_sum_kernel_fn else 2147483644)
+    torch.testing.assert_close(out.cpu(), _tile_column_sums(vals, col, BC), rtol=0, atol=0)
+    assert ANCHOR not in k.asm["ttgir"], f"{ANCHOR} in the TTGIR of a column that wraps negative"
+    block_loads = _count_2d_block_loads(k.asm["llir"])
+    assert block_loads == 0, f"{block_loads} 2D block load(s) at a column that wraps negative, expected a gather"
+
+
+MAX_GRID = 1 << 16  # programs per axis that G1 assumes for a column derived from program_id
+
+
+@pytest.mark.parametrize("knob", [True, False], ids=["on", "off"])
+def test_relayout_grid_limit(knob, device, monkeypatch, tmp_path):
+    # G1 proves program_id * BC non-negative only for a grid of at most 2^16 programs per axis; a larger one could
+    # wrap the column negative (#8479). The kernel records that in its metadata and the launcher rejects a larger
+    # grid. With the knob off nothing was assumed, and any grid launches.
+    BR, BC, GRID = 16, 64, 2
+    NCOLS, PITCH = GRID * BC, GRID * BC + 32
+    x, vals = _misaligned_tensor(BR, NCOLS, PITCH, device)
+    _set_compile_env(monkeypatch, tmp_path, knob)
+    kernel = triton.jit(_pid_column_sum_kernel_fn)
+    out = torch.full((NCOLS, ), float("nan"), device=device)
+    k = kernel[(GRID, )](out, x, NCOLS, PITCH, BR=BR, BC=BC)
+
+    torch.testing.assert_close(out.cpu(), vals.sum(0), rtol=0, atol=0)
+    assert (ANCHOR in k.asm["ttgir"]) == knob, f"{ANCHOR} in the TTGIR: {ANCHOR in k.asm['ttgir']}, knob {knob}"
+    assert k.metadata.max_grid_dim == (MAX_GRID if knob else 0)
+    # The limit applies to each axis, and a grid of exactly 2^16 programs is allowed.
+    for grid in [(MAX_GRID, ), (1, MAX_GRID), (1, 1, MAX_GRID)]:
+        kernel[grid](out, x, NCOLS, PITCH, BR=BR, BC=BC)
+    for grid in [(MAX_GRID + 1, ), (1, MAX_GRID + 1), (1, 1, MAX_GRID + 1)]:
+        if knob:
+            with pytest.raises(RuntimeError, match=f"exceeds {MAX_GRID} programs per axis"):
+                kernel[grid](out, x, NCOLS, PITCH, BR=BR, BC=BC)
+        else:
+            kernel[grid](out, x, NCOLS, PITCH, BR=BR, BC=BC)
+    torch.testing.assert_close(out.cpu(), vals.sum(0), rtol=0, atol=0)
+
+
+def test_relayout_grid_limit_not_assumed(device, monkeypatch, tmp_path):
+    # A constant column needs no bound on the grid, so a kernel relaid out for it records no limit.
+    _set_compile_env(monkeypatch, tmp_path, knob=True)
+    BR, BC, PITCH = 16, 64, 96
+    x, vals = _misaligned_tensor(BR, BC, PITCH, device)
+    out = torch.full((BC, ), float("nan"), device=device)
+    k = triton.jit(_column_sum_kernel_fn)[(MAX_GRID + 1, )](out, x, BC, PITCH, C0=0, BR=BR, BC=BC)
+
+    torch.testing.assert_close(out.cpu(), vals.sum(0), rtol=0, atol=0)
+    assert ANCHOR in k.asm["ttgir"], f"no {ANCHOR} in the TTGIR, the descriptor load was not relaid out"
+    assert k.metadata.max_grid_dim == 0
 
 
 L1X16 = dict(num_warps=1, warp_size=16)
