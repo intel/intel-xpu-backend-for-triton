@@ -4674,6 +4674,10 @@ struct Subgroup2DBlockLoadOpConversion
     // MaterializeBlockPointer guarantees.
     std::optional<int64_t> colConst =
         triton::intel::getFoldedConstantValue(baseOffsetX);
+    // The NaN mask is built from the logical coordinates, not the compensated
+    // ones.
+    const Value logicalOffsetX = baseOffsetX;
+    const Value logicalBaseWidth = baseWidth;
     if (needs2DBlockIOAlignmentCompensation(op) &&
         (!colConst || *colConst != 0)) {
       constexpr int64_t ALIGNMENT_MASK = 0x3f;
@@ -4732,11 +4736,17 @@ struct Subgroup2DBlockLoadOpConversion
     if (op.getPadNan()) {
       SmallVector<Value> resultOffsets(rank, b.i32_val(0));
       SmallVector<Value> resultShapes(rank);
+      // Surface space: the width bounds the contiguous dimension and the height
+      // the other inner one, which swap relative to the tile for transposed
+      // loads.
+      unsigned surfaceColDim = contiguousDim;
+      unsigned surfaceRowDim =
+          (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
       for (unsigned i = 0; i < rank; ++i) {
-        if (static_cast<int>(i) == cfg.rowDim)
+        if (i == surfaceRowDim)
           resultShapes[i] = baseHeight;
-        else if (static_cast<int>(i) == cfg.colDim)
-          resultShapes[i] = b.udiv(baseWidth, elemBytes);
+        else if (i == surfaceColDim)
+          resultShapes[i] = b.udiv(logicalBaseWidth, elemBytes);
         else {
           // Batch dimension: bound it by the descriptor's declared extent at
           // the descriptor's index. The tile extent at index 0 would mark every
@@ -4745,10 +4755,7 @@ struct Subgroup2DBlockLoadOpConversion
           resultOffsets[i] = batchOffsets[i + rankDelta];
         }
       }
-      unsigned surfaceColDim = contiguousDim;
-      unsigned surfaceRowDim =
-          (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
-      resultOffsets[surfaceColDim] = baseOffsetX;
+      resultOffsets[surfaceColDim] = logicalOffsetX;
       resultOffsets[surfaceRowDim] = baseOffsetY;
       nanMaskElems =
           buildNaNMasks(loc, resultOffsets, resultShapes, tensorType, rewriter);

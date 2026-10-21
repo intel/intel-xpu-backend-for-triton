@@ -32,3 +32,29 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: The NaN mask is built in surface space from the logical (pre-compensation)
+// COM: coordinates: the width bounds the contiguous dimension (dim 0 for a
+// COM: column-major load) and the height the other.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @nan_mask_logical_surface_coordinates(
+  // CHECK-SAME: {{.*}}, [[X:%[a-z0-9]+]]: i32, [[Y:%[a-z0-9]+]]: i32
+  tt.func public @nan_mask_logical_surface_coordinates(%arg0: !tt.ptr<f16>, %x: i32, %y: i32) {
+    %w = arith.constant 128 : i32
+    %h = arith.constant 48 : i32
+    %p = arith.constant 256 : i32
+    // CHECK-DAG: %[[W:.*]] = llvm.mlir.constant(128 : i32) : i32
+    // CHECK-DAG: %[[H:.*]] = llvm.mlir.constant(48 : i32) : i32
+    // CHECK: %[[WELEMS:.*]] = llvm.udiv %[[W]], {{.*}} : i32
+    // CHECK: llvm.add {{.*}}, [[X]] : i32
+    // CHECK-NEXT: llvm.trunc %[[WELEMS]] : i32 to i32
+    // CHECK: llvm.add {{.*}}, [[Y]] : i32
+    // CHECK-NEXT: llvm.trunc %[[H]] : i32 to i32
+    %0 = ttig.2d_block_load %arg0, %w, %h, %p[%x, %y] {column_major, pad_nan} : !tt.ptr<f16> -> tensor<64x32xf16, #dot1>
+    tt.return
+  }
+}

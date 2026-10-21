@@ -367,3 +367,27 @@ def test_tdesc_negative_col_packed_aligned_base(dtype_str, which, trans, device,
     out, expected, kernel = _run_neg_col(dtype_str, which, trans, mis=0, col=-4, device=device)
     assert _count_2d_calls(kernel.asm["llir"], "Load") > 0, "the load must stay on 2D block I/O"
     torch.testing.assert_close(out, expected, rtol=0, atol=0, equal_nan=True)
+
+
+# `padding_option="nan"` masks the out-of-bounds elements after the load. On a misaligned base the early compensation
+# shifts the column offset and width, so the mask must be built from the logical (pre-compensation) values.
+@pytest.mark.parametrize("which", [0, 1])
+@pytest.mark.parametrize("col", [-8, -16])
+@pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_tdesc_nan_padding_negative_col_misaligned_base(which, col, device, with_allocator):
+    out, expected, _ = _run_neg_col("float16", which, trans=0, mis=32, col=col, device=device, pad="nan")
+    torch.testing.assert_close(out, expected, rtol=0, atol=0, equal_nan=True)
+
+
+# A transposed (column-major) load pairs the descriptor's width with the tile's row dimension. With a non-square tile,
+# pairing it with the wrong one marks valid elements out of bounds and leaves out-of-bounds ones unpadded.
+@pytest.mark.parametrize("which", [0, 1])
+@pytest.mark.parametrize("r0", [0, 16])
+@pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_tdesc_nan_padding_transposed_non_square(which, r0, device, with_allocator):
+    out, expected, kernel = _run_neg_col("float16", which, trans=1, mis=0, col=0, device=device, pad="nan", rw=32,
+                                         cl=64, r0=r0)
+    assert _count_2d_calls(kernel.asm["llir"], "Load") > 0, "the load must stay on 2D block I/O"
+    torch.testing.assert_close(out, expected, rtol=0, atol=0, equal_nan=True)
