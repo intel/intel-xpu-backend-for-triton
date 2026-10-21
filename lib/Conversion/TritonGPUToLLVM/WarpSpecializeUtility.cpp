@@ -368,10 +368,9 @@ static void disableLICM(LLVM::BrOp latchBr) {
   Builder b(latchBr.getContext());
   MLIRContext *ctx = b.getContext();
   auto licmMD = LLVM::LoopLICMAttr::get(ctx, b.getBoolAttr(true), {});
-  auto loopMD =
-      LLVM::LoopAnnotationAttr::get(b.getContext(), {}, {}, {}, {}, {}, licmMD,
-                                    {}, {}, {}, {}, {}, {}, {}, {}, {});
-  latchBr.setLoopAnnotationAttr(loopMD);
+  // TODO (akhilgoe): Drop this fallback in the next update. Keeping this now to
+  // avoid breaking current and future builds with different LLVM versions.
+  latchBr.setLoopAnnotationAttr(LLVM::createLICMLoopAnnotation(ctx, licmMD));
 }
 
 //===----------------------------------------------------------------------===//

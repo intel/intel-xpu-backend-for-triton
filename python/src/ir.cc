@@ -956,11 +956,11 @@ void init_triton_ir(py::module_ &m) {
                  LLVM::LoopLICMAttr::get(self.getBuilder().getContext(),
                                          self.getBuilder().getBoolAttr(true),
                                          self.getBuilder().getBoolAttr(true));
-             mlir::LLVM::LoopAnnotationAttr la =
-                 mlir::LLVM::LoopAnnotationAttr::get(
-                     self.getBuilder().getContext(), {}, {}, {}, {}, {},
-                     licmAttr, {}, {}, {}, {}, {}, {}, {}, {}, {});
-             return la;
+             // TODO (akhilgoe): Drop this fallback in the next update. Keeping
+             // this now to avoid breaking current and future builds with
+             // different LLVM versions.
+             return mlir::LLVM::createLICMLoopAnnotation(
+                 self.getBuilder().getContext(), licmAttr);
            })
       // Use arith.ConstantOp to create constants
       // Constants

@@ -46,6 +46,23 @@ LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
 LLVM::CallIntrinsicOp
 createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
                           TypeRange types, ValueRange args);
+
+namespace detail {
+template <typename AttrT>
+using LoopAnnotationIdT = decltype(std::declval<AttrT>().getId());
+} // namespace detail
+
+// TODO (akhilgoe): Drop this fallback in the next update. Keeping this now to
+// avoid breaking current and future builds with different LLVM versions.
+template <typename AttrT = LoopAnnotationAttr>
+AttrT createLICMLoopAnnotation(MLIRContext *ctx, LoopLICMAttr licm) {
+  if constexpr (llvm::is_detected<detail::LoopAnnotationIdT, AttrT>::value)
+    return AttrT::get(ctx, /*id=*/{}, {}, {}, {}, {}, {}, licm, {}, {}, {}, {},
+                      {}, {}, {}, {}, {});
+  else
+    return AttrT::get(ctx, {}, {}, {}, {}, {}, licm, {}, {}, {}, {}, {}, {}, {},
+                      {}, {});
+}
 } // namespace mlir::LLVM
 
 namespace mlir::triton {
