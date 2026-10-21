@@ -110,19 +110,6 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                     "col": node.args[0].col_offset,
                 })
 
-        # torch.cuda.is_available() calls
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            func = node.func
-            is_cuda_available = (func.attr == "is_available" and isinstance(func.value, ast.Attribute)
-                                 and func.value.attr == "cuda" and isinstance(func.value.value, ast.Name)
-                                 and func.value.value.id == "torch")
-            if is_cuda_available:
-                patterns.append({
-                    "type": "cuda_is_available",
-                    "line": node.lineno,
-                    "col": node.col_offset,
-                })
-
         # torch.cuda.manual_seed_all() calls
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "manual_seed_all"
                 and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "cuda"):
@@ -138,17 +125,6 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                 and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id == "torch"):
             patterns.append({
                 "type": "cuda_stream",
-                "line": node.lineno,
-                "col": node.col_offset,
-            })
-
-        # torch.cuda.get_device_capability() calls
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "get_device_capability" and isinstance(node.func.value, ast.Attribute)
-                and node.func.value.attr == "cuda" and isinstance(node.func.value.value, ast.Name)
-                and node.func.value.value.id == "torch"):
-            patterns.append({
-                "type": "cuda_get_device_capability",
                 "line": node.lineno,
                 "col": node.col_offset,
             })
@@ -174,18 +150,6 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                     "var_name": target.id,
                 })
 
-        # current_platform.get_device_capability() < tuple comparisons
-        if isinstance(node, ast.Compare):
-            if (isinstance(node.left, ast.Call) and isinstance(node.left.func, ast.Attribute)
-                    and node.left.func.attr == "get_device_capability" and isinstance(node.left.func.value, ast.Name)
-                    and node.left.func.value.id == "current_platform"):
-                # Found: current_platform.get_device_capability() < something
-                patterns.append({
-                    "type": "device_capability_compare",
-                    "line": node.lineno,
-                    "col": node.col_offset,
-                })
-
         # .cuda() method calls on tensors (e.g., tensor.cuda())
         if isinstance(node, ast.Call):
             func = node.func
@@ -205,40 +169,6 @@ def _find_cuda_patterns(source: str) -> list[dict]:
             })
 
     return patterns
-
-
-def _is_platform_cuda_check(node: ast.AST) -> bool:
-    """Match current_platform.is_cuda() and current_platform.is_cuda_alike() calls."""
-    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            and node.func.attr in ("is_cuda", "is_cuda_alike") and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "current_platform")
-
-
-def _is_pytest_call(node: ast.AST, name: str) -> bool:
-    """Match pytest.<name>(...) and pytest.mark.<name>(...) calls."""
-    return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == name
-
-
-def _find_cuda_guard_patterns(source: str) -> list[dict]:
-    """Find current_platform CUDA checks that gate a skip: skipif conditions and `if ...: pytest.skip()`."""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return []
-
-    guards: list[ast.expr] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and _is_pytest_call(node, "skipif"):
-            guards.extend(node.args)
-        elif isinstance(node, ast.If) and any(
-                _is_pytest_call(call, "skip") for stmt in node.body for call in ast.walk(stmt)):
-            guards.append(node.test)
-
-    return [{
-        "type": "cuda_only_skip_guard",
-        "line": node.lineno,
-        "col": node.col_offset,
-    } for guard in guards for node in ast.walk(guard) if isinstance(node, ast.Call) and _is_platform_cuda_check(node)]
 
 
 # torch.cuda runtime APIs with a torch.xpu equivalent
@@ -304,10 +234,6 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             # Replace device = "cuda" with device = "xpu"
             lines[line_idx] = line.replace('"cuda"', '"xpu"', 1)
 
-        elif ptype == "cuda_is_available":
-            # Replace torch.cuda.is_available() with torch.xpu.is_available()
-            lines[line_idx] = line.replace("torch.cuda.is_available()", "torch.xpu.is_available()")
-
         elif ptype == "cuda_manual_seed":
             # Replace torch.cuda.manual_seed_all(...) with torch.manual_seed(...)
             lines[line_idx] = re.sub(
@@ -320,25 +246,9 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             # Replace torch.cuda.Stream() with torch.xpu.Stream()
             lines[line_idx] = line.replace("torch.cuda.Stream()", "torch.xpu.Stream()")
 
-        elif ptype == "cuda_get_device_capability":
-            # Replace torch.cuda.get_device_capability() with torch.xpu.get_device_capability()
-            lines[line_idx] = line.replace("torch.cuda.get_device_capability()", "torch.xpu.get_device_capability()")
-
         elif ptype == "cuda_mem_get_info":
             # Replace torch.cuda.mem_get_info() with torch.xpu.mem_get_info()
             lines[line_idx] = line.replace("torch.cuda.mem_get_info()", "torch.xpu.mem_get_info()")
-
-        elif ptype == "device_capability_compare":
-            # Handle: if current_platform.get_device_capability() < (X, Y):
-            # Strategy: wrap the call in a helper that returns a safe value
-            # Replace with: if (cap := current_platform.get_device_capability()) is not None and cap
-
-            # Use walrus operator to assign and check in one line
-            lines[line_idx] = re.sub(
-                r"if\s+current_platform\.get_device_capability\(\)\s*(<|>|<=|>=|==|!=)",
-                r"if (cap := current_platform.get_device_capability()) is not None and cap \1",
-                line,
-            )
 
         elif ptype == "tensor_cuda_method":
             # Replace .cuda() with .xpu()
@@ -348,14 +258,6 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             # Replace the .is_cuda property with .is_xpu, but not .is_cuda()/.is_cuda_alike() platform calls
             lines[line_idx] = re.sub(r"\.is_cuda(?![\w(]|\s*\()", ".is_xpu", line)
 
-        elif ptype == "cuda_only_skip_guard" and "current_platform.is_xpu()" not in line:
-            # Let XPU through a CUDA-only skip: is_cuda() -> (is_cuda() or is_xpu())
-            lines[line_idx] = re.sub(
-                r"current_platform\.(is_cuda(?:_alike)?)\(\)",
-                r"(current_platform.\1() or current_platform.is_xpu())",
-                line,
-            )
-
         elif ptype == "cuda_runtime_api":
             # Replace torch.cuda.<API> with its torch.xpu equivalent
             lines[line_idx] = re.sub(r"torch\.cuda\.(\w+)\b", _to_xpu_runtime, line)
@@ -363,12 +265,12 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def patch_file(filepath: Path, enable_on_xpu: bool = False) -> bool:
+def patch_file(filepath: Path, map_cuda_runtime: bool = False) -> bool:
     """Patch a single file. Returns True if changes were made."""
     source = filepath.read_text()
     patterns = _find_cuda_patterns(source)
-    if enable_on_xpu:
-        patterns += _find_cuda_guard_patterns(source) + _find_cuda_runtime_patterns(source)
+    if map_cuda_runtime:
+        patterns += _find_cuda_runtime_patterns(source)
     if not patterns:
         return False
 
@@ -402,60 +304,26 @@ def main() -> None:
         vllm_root / "tests" / "v1" / "sample",
         vllm_root / "tests" / "v1" / "spec_decode",
         vllm_root / "tests" / "v1" / "worker",
+        vllm_root / "tests" / "distributed",
+        vllm_root / "tests" / "model_executor",
+        vllm_root / "tests" / "models" / "inkling",
+        vllm_root / "tests" / "v1" / "attention",
+        vllm_root / "tests" / "watermarking",
         # Source directories
         vllm_root / "vllm" / "v1" / "worker",
         vllm_root / "vllm" / "model_executor" / "layers",
     ]
 
-    # Test files whose CUDA-only skips guard Triton kernels that also run on XPU. These get the
-    # CUDA->XPU replacements above, their skip guards relaxed to admit XPU, and torch.cuda
-    # runtime APIs (streams, events, graphs) mapped to torch.xpu.
-    cuda_guard_files = {
-        vllm_root / path
-        for path in (
-            "tests/distributed/test_dcp_a2a.py",
-            "tests/kernels/attention/test_flashmla_sparse.py",
-            "tests/kernels/core/test_apply_rotary_emb.py",
-            "tests/kernels/core/test_fused_embed_norm.py",
-            "tests/kernels/core/test_fused_q_kv_rmsnorm.py",
-            "tests/kernels/mamba/test_mamba_ssm.py",
-            "tests/kernels/quantization/test_nvfp4_emulation.py",
-            "tests/kernels/quantization/test_quantized_embedding.py",
-            "tests/kernels/test_compressor_kv_cache.py",
-            "tests/model_executor/test_bailing_mrope.py",
-            "tests/models/inkling/test_mtp_input_fusion.py",
-            "tests/models/inkling/test_qkvr_prep.py",
-            "tests/models/inkling/test_sconv_metadata.py",
-            "tests/v1/attention/test_dcp_a2a_pack_mask.py",
-            "tests/v1/attention/test_deepseek_v4_swa_visible.py",
-            "tests/v1/attention/test_indexer_dcp_localize.py",
-            "tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py",
-            "tests/v1/worker/test_gpu_rejection_sampler_chunking.py",
-            "tests/v1/worker/test_gpu_rejection_sampler_i64.py",
-            "tests/v1/worker/test_kv_block_zeroer.py",
-            "tests/v1/worker/test_mamba_hybrid_model_state.py",
-            "tests/watermarking/test_watermarking.py",
-        )
-    }
-
     total_patched = 0
-    scanned = set()
     for patch_dir in patch_dirs:
         if not patch_dir.is_dir():
             continue
         # Use rglob to recursively scan subdirectories
         for py_file in sorted(patch_dir.rglob("*.py")):
             print(f"Scanning {py_file.relative_to(vllm_root)}...")
-            scanned.add(py_file)
-            if patch_file(py_file, enable_on_xpu=py_file in cuda_guard_files):
+            # torch.cuda runtime APIs (streams, events, graphs, RNG state) are mapped in tests only
+            if patch_file(py_file, map_cuda_runtime=py_file.is_relative_to(vllm_root / "tests")):
                 total_patched += 1
-
-    for py_file in sorted(cuda_guard_files - scanned):
-        if not py_file.is_file():
-            continue
-        print(f"Scanning {py_file.relative_to(vllm_root)}...")
-        if patch_file(py_file, enable_on_xpu=True):
-            total_patched += 1
 
     print(f"\nPatched {total_patched} file(s)")
 
