@@ -274,16 +274,42 @@ unsigned XeVISAInstr::getGRFSizeInBytes(XeArch arch) {
 }
 
 std::string simdReduceAsm(std::string binOp, unsigned warpSize,
-                          unsigned numLaneToReduce, unsigned accSize,
-                          Type elemTy, XeArch arch) {
+                          unsigned numLaneToReduce, unsigned interleave,
+                          unsigned accSize, Type elemTy, XeArch arch) {
+
+  assert(interleave > 0 && "interleave must be > 0");
+  assert((interleave & (interleave - 1)) == 0 &&
+         "interleave must be a power of two");
+  assert((numLaneToReduce & (numLaneToReduce - 1)) == 0 &&
+         "numLaneToReduce must be a power of two");
 
   // TODO: implement more variants.
   assert(arch != Xe ||
          warpSize == 16 && "only suppor warpSize=16 for on Xe arch fow now");
   unsigned numElem = accSize * warpSize;
   unsigned tempResultSize = numElem / 2;
-  unsigned reducePart = warpSize / numLaneToReduce;
-  unsigned numResult = accSize * reducePart;
+
+  // Interleaved reductions can be viewed as reducing a virtual contiguous
+  // group after removing the per-lane stride. In other words,
+  // numLaneToReduce is the number of contiguous logica lanes reduced together.
+  // The logica lanes is partitioned into clusters of size (warpSize /
+  // interleave) / numLaneToReduce to do all reduce. Lanes are first interleaved
+  // into groups, and then the reduction happens within each group across
+  // numLaneToReduce lanes.
+  //
+  // The current lowering assumes the reduction stays within a single
+  // interleaved group after factoring out the lane stride.
+  assert(numLaneToReduce <= warpSize / interleave &&
+         "numLaneToReduce must fit within one interleaved group");
+  assert((numLaneToReduce % interleave) == 0 &&
+         "numLaneToReduce must be aligned to the interleave pattern");
+
+  unsigned logicalReduceWidth = std::max(1u, warpSize / interleave);
+  unsigned numLogicalResults = logicalReduceWidth / numLaneToReduce;
+  unsigned pairDistance =
+      std::max(1u, logicalReduceWidth / ((1 << numLogicalResults)));
+  unsigned numResultPerInput = interleave * numLogicalResults;
+  unsigned numResult = accSize * numResultPerInput;
 
   auto typeSyntax = XeVISAInstr::getTypeName(elemTy);
   if (!typeSyntax)
@@ -304,9 +330,13 @@ std::string simdReduceAsm(std::string binOp, unsigned warpSize,
       R"({0} (M1_NM, {1}) {2}({3}, {4})<1>  {5}({6}, {7})<{11};{12},1> {8}({9}, {10})<{11};{12},1>
   )";
 
-  for (unsigned n = numElem, rowStride = numLaneToReduce,
-                colNum = numLaneToReduce / 2;
-       n > numResult; n >>= 1, rowStride >>= 1, colNum >>= 1) {
+  for (unsigned n = numElem, logicalRowStride = numLaneToReduce,
+                logicalColNum = pairDistance;
+       n > numResult;
+       n >>= 1, logicalRowStride = std::max(1u, logicalRowStride >> 1),
+                logicalColNum = std::max(1u, logicalColNum >> 1)) {
+    unsigned physicalRowStride = logicalRowStride * interleave;
+    unsigned physicalColNum = logicalColNum * interleave;
     unsigned elemPerRow = std::min(n, warpSize);
     unsigned rowNum = n / elemPerRow;
     unsigned reduceNum = (rowNum + 1) / 2;
@@ -316,7 +346,7 @@ std::string simdReduceAsm(std::string binOp, unsigned warpSize,
       unsigned dstOffsetM = dstOffset / grfElemsPerRow;
       unsigned dstOffsetN = dstOffset % grfElemsPerRow;
       unsigned srcAOffset = r * 2 * elemPerRow;
-      unsigned srcBOffset = srcAOffset + colNum;
+      unsigned srcBOffset = srcAOffset + physicalColNum;
       unsigned srcAOffM = srcAOffset / grfElemsPerRow;
       unsigned srcAOffN = srcAOffset % grfElemsPerRow;
       unsigned srcBOffM = srcBOffset / grfElemsPerRow;
@@ -324,12 +354,14 @@ std::string simdReduceAsm(std::string binOp, unsigned warpSize,
       std::string simdOps =
           llvm::formatv(
               reduceBinOp.data(), binOp, std::min(n / 2, warpSize),
-              /*dst*/ colNum == 1 ? "$0" : "temp_result", dstOffsetM,
+              /*dst*/ logicalColNum == 1 ? "$0" : "temp_result", dstOffsetM,
               dstOffsetN,
-              /*srcA*/ colNum == numLaneToReduce / 2 ? "$1" : "temp_result",
+              /*srcA*/ logicalColNum == numLaneToReduce / 2 ? "$1"
+                                                            : "temp_result",
               srcAOffM, srcAOffN,
-              /*srcB*/ colNum == numLaneToReduce / 2 ? "$1" : "temp_result",
-              srcBOffM, srcBOffN, rowStride, colNum)
+              /*srcB*/ logicalColNum == numLaneToReduce / 2 ? "$1"
+                                                            : "temp_result",
+              srcBOffM, srcBOffN, physicalRowStride, physicalColNum)
               .str();
       simdAsm += simdOps;
     }

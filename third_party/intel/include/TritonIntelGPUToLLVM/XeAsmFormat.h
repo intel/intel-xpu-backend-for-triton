@@ -331,8 +331,8 @@ struct XeVISAInstr : public XeInstrBase<XeVISAInstr> {
 };
 
 std::string simdReduceAsm(std::string binOp, unsigned warpSize,
-                          unsigned numLaneToReduce, unsigned accSize,
-                          Type elemTy, XeArch arch);
+                          unsigned numLaneToReduce, unsigned interleave,
+                          unsigned accSize, Type elemTy, XeArch arch);
 
 } // namespace triton
 } // namespace mlir
