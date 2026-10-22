@@ -2044,8 +2044,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.support_bfloat16_conversion"} {
   tt.func @int32_to_bf16(%arg0: tensor<256xi32, #blocked>) {
     // CHECK-LABEL: @int32_to_bf16
-    // CHECK: llvm.sitofp %{{.*}} : i32 to f32
-    // CHECK-NEXT: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf(%{{.*}}) {{.*}} : (f32) -> i16
+    // CHECK: %[[RTZ:.*]] = llvm.intr.experimental.constrained.sitofp %[[IN:.*]] towardzero ignore : i32 to f32
+    // CHECK: %[[BACK:.*]] = llvm.fptosi %[[RTZ]] : f32 to i32
+    // CHECK: %[[INEXACT:.*]] = llvm.icmp "ne" %[[BACK]], %[[IN]] : i32
+    // CHECK: %[[STICKY:.*]] = llvm.zext %[[INEXACT]] : i1 to i32
+    // CHECK: llvm.or %{{.*}}, %[[STICKY]] : i32
+    // CHECK: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf(%{{.*}}) {{.*}} : (f32) -> i16
     // CHECK-NEXT: llvm.bitcast %{{.*}} : i16 to bf16
     %a = arith.sitofp %arg0 : tensor<256xi32, #blocked> to tensor<256xbf16, #blocked>
     tt.return
