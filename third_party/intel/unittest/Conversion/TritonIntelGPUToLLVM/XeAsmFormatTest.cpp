@@ -80,18 +80,40 @@ TEST_F(XeAsmFormatTest, MultiLineXe) {
 
 TEST_F(XeAsmFormatTest, XeSIMDReduce) {
   auto assemble = mlir::triton::simdReduceAsm(
-      "add", 16, 16, 16, Float16Type::get(&ctx), XeArch::Xe);
+      "add", 16, 16, 1, 16, Float16Type::get(&ctx), XeArch::Xe);
   llvm::outs() << "johnlu:" << assemble;
-  assemble = mlir::triton::simdReduceAsm("max", 16, 16, 16,
+  assemble = mlir::triton::simdReduceAsm("max", 16, 16, 1, 16,
                                          Float32Type::get(&ctx), XeArch::Xe);
   llvm::outs() << "johnlu:" << assemble;
-  assemble = mlir::triton::simdReduceAsm("add", 32, 32, 32,
+  assemble = mlir::triton::simdReduceAsm("add", 32, 32, 1, 32,
                                          Float32Type::get(&ctx), XeArch::Xe2);
   llvm::outs() << "johnlu:" << assemble;
-  assemble = mlir::triton::simdReduceAsm("max", 32, 32, 32,
+  assemble = mlir::triton::simdReduceAsm("max", 32, 32, 1, 32,
                                          Float32Type::get(&ctx), XeArch::Xe2);
   llvm::outs() << "johnlu:" << assemble;
-  // mlir::triton::simdReduceAsm("max", 16, 16, IntegerType::get(&ctx, 32));
+  ;
+  assemble = mlir::triton::simdReduceAsm("max", 32, 32, 1, 1,
+                                         Float32Type::get(&ctx), XeArch::Xe2);
+  llvm::outs() << "wave all:" << assemble;
+
+  auto assembleInterleaved = mlir::triton::simdReduceAsm(
+      "add", 16, 8, 2, 1, Float32Type::get(&ctx), XeArch::Xe);
+  llvm::outs() << "assembleInterleaved:" << assembleInterleaved << "\n";
+  EXPECT_FALSE(assembleInterleaved.empty());
+  auto assembleInterleaved2 = mlir::triton::simdReduceAsm(
+      "max", 32, 8, 2, 1, Float32Type::get(&ctx), XeArch::Xe2);
+  llvm::outs() << "assembleInterleaved:" << assembleInterleaved2 << "\n";
+  auto assembleInterleaved3 = mlir::triton::simdReduceAsm(
+      "max", 32, 8, 4, 8, Float32Type::get(&ctx), XeArch::Xe2);
+  llvm::outs() << "assembleInterleaved:" << assembleInterleaved3 << "\n";
+
+  auto assembleInterleaved4 = mlir::triton::simdReduceAsm(
+      "max", 32, 4, 4, 8, Float32Type::get(&ctx), XeArch::Xe2);
+  llvm::outs() << "assembleInterleaved:" << assembleInterleaved4 << "\n";
+
+  auto assembleInterleaved5 = mlir::triton::simdReduceAsm(
+      "max", 32, 4, 1, 8, Float32Type::get(&ctx), XeArch::Xe2);
+  llvm::outs() << "assembleInterleaved:" << assembleInterleaved4 << "\n";
 }
 
 } // namespace triton
