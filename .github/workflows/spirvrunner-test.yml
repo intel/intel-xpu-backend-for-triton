@@ -1,7 +1,5 @@
 name: Test SPIRVRunner
 
-# On pull requests and pushes, SPIRVRunner is tested by the `spirvrunner` suite of build-test-reusable.yml,
-# which reuses the Triton wheel built there. This workflow builds Triton itself, for manual runs.
 on:
   workflow_dispatch:
 

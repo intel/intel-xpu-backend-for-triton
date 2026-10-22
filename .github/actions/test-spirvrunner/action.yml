@@ -1,5 +1,3 @@
-# Builds SPIRVRunner (utils/SPIRVRunner) and runs its tests.
-# Requires PyTorch and Triton to be installed: test_args_json_gen generates its inputs with Triton.
 name: test-spirvrunner
 description: Build SPIRVRunner and run its tests
 runs:
@@ -10,7 +8,6 @@ runs:
       run: |
         pip install "$(grep -E '^cmake' python/requirements.txt)"
 
-    # Same key as "Load llvm from Triton cache" in .github/actions/setup-triton.
     - name: Prepare LLVM cache key
       shell: bash
       run: |
@@ -28,7 +25,6 @@ runs:
         path: $HOME/.triton/llvm
         key: triton-llvm-${{ env.TRITON_LLVM_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
 
-    # Downloads LLVM into ~/.triton/llvm (no-op on cache hit) and creates the llvm-ubuntu-x64 symlink.
     - name: Download LLVM
       shell: bash
       run: |
