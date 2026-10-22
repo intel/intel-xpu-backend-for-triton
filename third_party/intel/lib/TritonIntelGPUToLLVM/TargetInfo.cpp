@@ -39,11 +39,13 @@ namespace mlir::triton::intel {
 
 struct XeSIMDReduceInstr : public XeVISAInstr {
 
-  XeSIMDReduceInstr(XeBuilder *builder, std::string binOp, unsigned warpSize,
-                    unsigned numLaneToReduce, unsigned accSize, Type elemTy,
+  XeSIMDReduceInstr(XeBuilder *builder, const std::string &binOp,
+                    unsigned warpSize, unsigned numLaneToReduce,
+                    unsigned interleave, unsigned accSize, Type elemTy,
                     XeArch arch)
       : XeVISAInstr(builder, simdReduceAsm(binOp, warpSize, numLaneToReduce,
-                                           accSize, elemTy, arch)) {};
+                                           interleave, accSize, elemTy, arch)) {
+        };
 };
 
 bool TargetInfo::supportMaximumMinimum() const { return false; }
@@ -301,34 +303,21 @@ bool TargetInfo::warpBatchReduce(RewriterBase &rewriter, Location loc,
   // No horizontal reduce required.
   if (numLaneToReduce == 1)
     return false;
-  // Horizontal reduce with interleave stride not supported.
-  if (interleave > 1)
-    return false;
+  // Interleaved reductions are handled by the Xe SIMD helper below; do not
+  // reject them before that path is reached.
   // Check if it is a simple reduce operation supported by
   // TritonGEN::SubGroupReduceOp.
   if (op.getNumOperands() != 1 || op.getNumResults() != 1)
     return false;
-  Region &combineOp = op.getCombineOp();
-  if (combineOp.getBlocks().size() > 1)
-    return false;
-  Block &block = *combineOp.begin();
-  Operation *yield = block.getTerminator();
-  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
-  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
-      reduceOp->getNumResults() != 1)
-    return false;
-  if (reduceOp->getOperand(0) != block.getArgument(0) ||
-      reduceOp->getOperand(1) != block.getArgument(1))
+  FailureOr<Operation *> reduceOp =
+      gpu::intel::matchSingleBinaryCombine(op.getCombineOp());
+  if (failed(reduceOp))
     return false;
 
   auto mod = op->getParentOfType<ModuleOp>();
   unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
-  // TODO: support clustered reduce.
-  // if (numLaneToReduce != warpSize)
-  //   return false;
-
-  if (!isSupportedWarpReduceOp(reduceOp, numLaneToReduce, warpSize))
+  if (!isSupportedWarpReduceOp(*reduceOp, numLaneToReduce, warpSize))
     return false;
 
   unsigned minSGSize =
@@ -336,7 +325,7 @@ bool TargetInfo::warpBatchReduce(RewriterBase &rewriter, Location loc,
              gpu::intel::TritonIntelGPUDialect::getMinSGSizeAttrName())
           .getInt();
 
-  if (isa<arith::AddFOp, arith::MaxNumFOp>(reduceOp)) {
+  if (isa<arith::AddFOp, arith::MaxNumFOp>(*reduceOp)) {
     // So we have to align the number of simd reduce results to the warp size.
     unsigned accSize = acc.front().size();
     if (accSize == 1)
@@ -374,7 +363,7 @@ bool TargetInfo::warpBatchReduce(RewriterBase &rewriter, Location loc,
     std::string batchedHorizontalReduce;
     auto waveOps = WaveOps::UNDEF;
     // TODO: support all possible reduction modes
-    TypeSwitch<Operation *>(reduceOp)
+    TypeSwitch<Operation *>(*reduceOp)
         .Case<arith::AddFOp>([&](auto) {
           batchedHorizontalReduce = "add";
           waveOps = WaveOps::FSUM;
@@ -391,7 +380,13 @@ bool TargetInfo::warpBatchReduce(RewriterBase &rewriter, Location loc,
                                                                       reduceTy);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto laneId = getLaneId(rewriter, loc);
-    auto reducePartial = b.udiv(laneId, b.i32_val(numLaneToReduce));
+    Value resualtLaneId =
+        b.udiv(laneId, b.i32_val(numLaneToReduce * interleave));
+    if (interleave > 1) {
+      auto interLeaveLaneId = b.urem(laneId, b.i32_val(interleave));
+      resualtLaneId = b.mul(resualtLaneId, b.i32_val(interleave));
+      resualtLaneId = b.add(resualtLaneId, interLeaveLaneId);
+    }
     llvm::transform(
         splitInBatches(inputAccs, accSize), std::begin(resultAccs),
         [&](ArrayRef<Value> inputs) {
@@ -405,7 +400,7 @@ bool TargetInfo::warpBatchReduce(RewriterBase &rewriter, Location loc,
                 return b.insert_element(reduceTy, acc, src, b.i32_val(index));
               });
           SmallVector<Value> ret(accSize);
-          if (warpSize == numLaneToReduce) {
+          if (warpSize == numLaneToReduce && interleave == 1) {
             Value result =
                 waveAll(rewriter, loc,
                         {batchedReduceVal, b.i8_val((unsigned)waveOps),
@@ -417,8 +412,8 @@ bool TargetInfo::warpBatchReduce(RewriterBase &rewriter, Location loc,
           } else {
             XeBuilder xeBuilder;
             XeSIMDReduceInstr &bReduceOp = *xeBuilder.create<XeSIMDReduceInstr>(
-                batchedHorizontalReduce, warpSize, numLaneToReduce, accSize,
-                elemType, minSGSize == 8 ? Xe : Xe2);
+                batchedHorizontalReduce, warpSize, numLaneToReduce, interleave,
+                accSize, elemType, minSGSize == 8 ? Xe : Xe2);
             // The VISA inline asm doesn't support uniform result type. "=rw.u"
             //    auto res = vISABuilder.newOperand("=rw.u");
             XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
@@ -431,7 +426,7 @@ bool TargetInfo::warpBatchReduce(RewriterBase &rewriter, Location loc,
               if (numResultPerRow > 1) {
                 ret[j] = LLVM::intel::shuffleIdx(
                     loc, rewriter, result,
-                    b.add(b.i32_val(j * numResultPerRow), reducePartial));
+                    b.add(b.i32_val(j * numResultPerRow), resualtLaneId));
               } else {
                 ret[j] = LLVM::intel::shuffleIdx(loc, rewriter, result, j);
               }
