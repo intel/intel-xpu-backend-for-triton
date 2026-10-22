@@ -13,10 +13,7 @@ import os
 import triton
 import triton.language as tl
 
-import time
-start = time.time()
 from triton_kernels_benchmark import gemm_benchmark
-print(f"import time: {time.time()-start}")
 
 
 def get_cri_matmul_autotune_configs() -> List[triton.Config]:
