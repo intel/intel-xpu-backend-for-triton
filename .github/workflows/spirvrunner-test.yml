@@ -1,14 +1,9 @@
 name: Test SPIRVRunner
 
+# On pull requests and pushes, SPIRVRunner is tested by the `spirvrunner` suite of build-test-reusable.yml,
+# which reuses the Triton wheel built there. This workflow builds Triton itself, for manual runs.
 on:
   workflow_dispatch:
-
-  pull_request:
-    branches:
-      - main
-  push:
-    branches:
-      - main
 
 concurrency:
   group: ${{ github.workflow }}-${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.run_id || github.event.pull_request.number }}
@@ -38,59 +33,8 @@ jobs:
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
 
-      # SPIRVRunner needs only LLVM and PyTorch, not a Triton build.
-      - name: Install CMake
-        run: |
-          pip install "$(grep -E '^cmake' python/requirements.txt)"
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
 
-      # Same key as "Load llvm from Triton cache" in .github/actions/setup-triton.
-      - name: Prepare LLVM cache key
-        run: |
-          LLVM_HASH="$(sha256sum cmake/llvm-info.json | cut -d\  -f1)"
-          TRITON_LLVM_CACHE_KEY=$(echo $LLVM_HASH ${{ hashFiles('setup.py') }} | sha256sum - | cut -d\  -f1)
-          echo "TRITON_LLVM_CACHE_KEY=$TRITON_LLVM_CACHE_KEY" | tee -a $GITHUB_ENV
-
-      - name: Load LLVM from Triton cache
-        id: triton-cache-llvm
-        uses: ./.github/actions/load
-        env:
-          # Keep in sync with CACHE_NUMBER in .github/actions/setup-triton
-          CACHE_NUMBER: 1
-        with:
-          path: $HOME/.triton/llvm
-          key: triton-llvm-${{ env.TRITON_LLVM_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
-
-      # Downloads LLVM into ~/.triton/llvm (no-op on cache hit) and creates the llvm-ubuntu-x64 symlink.
-      - name: Download LLVM
-        run: |
-          python python/build_helpers.py write_thirdparty_cmake_vars --triton-cache-path $HOME/.triton --packages llvm --output $RUNNER_TEMP/llvm.cmake
-          cat $RUNNER_TEMP/llvm.cmake
-
-      - name: Save LLVM to Triton cache
-        if: steps.triton-cache-llvm.outputs.status == 'miss'
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.triton-cache-llvm.outputs.path }}
-          dest: ${{ steps.triton-cache-llvm.outputs.dest }}
-
-      - name: Build SPIRVRunner
-        run: |
-          source /opt/intel/oneapi/setvars.sh
-          set -x
-          export LLVM_DIR="$HOME/.triton/llvm/llvm-ubuntu-x64"
-          export CMAKE_PREFIX_PATH="$(python scripts/torch_cmake.py)"
-          cd utils/SPIRVRunner
-          mkdir build
-          cd build
-          cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
-          make -j
-
-      - name: Test SPIRVRunner
-        run: |
-          source /opt/intel/oneapi/setvars.sh
-          set -x
-          pip install pytest
-          export SPIRV_RUNNER_PATH="$GITHUB_WORKSPACE/utils/SPIRVRunner/build/SPIRVRunner"
-          export SPIRV_RUNNER_TESTS="$GITHUB_WORKSPACE/utils/SPIRVRunner/tests"
-          cd utils/SPIRVRunner
-          pytest tests/test_spirv_runner.py
+      - name: Build and test SPIRVRunner
+        uses: ./.github/actions/test-spirvrunner
