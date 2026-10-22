@@ -135,6 +135,10 @@ jobs:
         run: |
           pip install cloudpickle
 
+      - name: Set warmup worker count to 80% of available cores
+        run: |
+          echo "WARMUP_WORKERS=$(( $(nproc) * 80 / 100 ))" | tee -a $GITHUB_ENV
+
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
@@ -164,18 +168,14 @@ jobs:
           # runs land in different cache entries and the warmup has no effect.
           echo "TKB_DIR=$(python -c 'import os, triton_kernels_benchmark as m; print(os.path.dirname(m.__file__))')" >> $GITHUB_ENV
 
-      - name: Warm Triton compile cache for Softmax benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'softmax')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'softmax') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/fused_softmax.py
-
       - name: Run Triton Softmax kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'softmax')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'softmax') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/fused_softmax.py; then
+            echo "::warning::Triton compile-cache warmup failed for fused_softmax.py; falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run softmax --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
       - name: Run Triton Softmax kernel benchmark with Proton
@@ -184,260 +184,216 @@ jobs:
           source ./scripts/capture-hw-details.sh
           BENCHMARKING_METHOD=PROTON_PROFILER triton-benchmarks run softmax
 
-      - name: Warm Triton compile cache for GEMM benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_benchmark.py
-
       - name: Run Triton GEMM kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for gemm_benchmark.py; falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run gemm --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for GEMM (tensor of pointer) benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-tensor-of-ptr')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-tensor-of-ptr') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_tensor_of_ptr_benchmark.py
 
       - name: Run Triton GEMM kernel benchmark - with tensor of pointer
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-tensor-of-ptr')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-tensor-of-ptr') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_tensor_of_ptr_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for gemm_tensor_of_ptr_benchmark.py; falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run gemm-tensor-of-ptr --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for GEMM (A@B^t) benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_bt')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_bt') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          TRANSPOSE_B=1 python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_benchmark.py
 
       - name: Run Triton GEMM (A@B^t) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_bt')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_bt') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! TRANSPOSE_B=1 TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for gemm_benchmark.py (TRANSPOSE_B=1); falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run gemm_bt --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for GEMM (A^t@B) benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_at')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_at') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          TRANSPOSE_A=1 python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_benchmark.py
 
       - name: Run Triton GEMM (A^t@B) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_at')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_at') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! TRANSPOSE_A=1 TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for gemm_benchmark.py (TRANSPOSE_A=1); falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run gemm_at --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for GEMM (stream-k) benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-streamk')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-streamk') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_streamk_benchmark.py
 
       - name: Run Triton GEMM (stream-k) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-streamk')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-streamk') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_streamk_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for gemm_streamk_benchmark.py; falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run gemm-streamk --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for GEMM (split-k) benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-splitk')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-splitk') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_splitk_benchmark.py
 
       - name: Run Triton GEMM (split-k) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-splitk')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-splitk') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_splitk_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for gemm_splitk_benchmark.py; falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run gemm-splitk --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for GEMM + PreOp (exp) benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-preop-exp')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-preop-exp') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_preop_exp_benchmark.py
 
       - name: Run Triton GEMM + PreOp (exp) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-preop-exp')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-preop-exp') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_preop_exp_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for gemm_preop_exp_benchmark.py; falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run gemm-preop-exp --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for GEMM + PostOp (Gelu) benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-gelu')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-gelu') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_postop_gelu_benchmark.py
 
       - name: Run Triton GEMM + PostOp (Gelu) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-gelu')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-gelu') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_postop_gelu_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for gemm_postop_gelu_benchmark.py; falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run gemm-postop-gelu --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for GEMM + PostOp (add matrix) bfloat16 benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-addmatrix')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-addmatrix') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_postop_addmatrix_benchmark.py
 
       - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark bfloat16
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-addmatrix')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-addmatrix') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_postop_addmatrix_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for gemm_postop_addmatrix_benchmark.py; falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run gemm-postop-addmatrix --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for GEMM + PostOp (add matrix) int8 benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-addmatrix-int8')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-addmatrix-int8') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          INT8_ONLY=1 python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_postop_addmatrix_benchmark.py
 
       - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark int8
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-addmatrix-int8')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-addmatrix-int8') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! INT8_ONLY=1 TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/gemm_postop_addmatrix_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for gemm_postop_addmatrix_benchmark.py (INT8_ONLY=1); falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run gemm-postop-addmatrix-int8 --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for Fused GEMM SwiGLU benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'fused-gemm')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused-gemm') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/fused_gemm_benchmark.py
 
       - name: Run Triton Fused GEMM SwiGLU kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'fused-gemm')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused-gemm') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/fused_gemm_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for fused_gemm_benchmark.py; falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run fused-gemm --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
       - name: Run Torch Inductor grouped GEMM (2Dx3D) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-grouped')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-grouped') }}
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: ${{ env.WARMUP_WORKERS }}
         run: |
           source ./scripts/capture-hw-details.sh
           GROUPED_MM_TRITON_ONLY=1 TRITON_RELAX_PROFILING_CHECK=1 triton-benchmarks run gemm-grouped --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
       - name: Run Torch Inductor grouped GEMM (3Dx3D) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-grouped-batched')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-grouped-batched') }}
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: ${{ env.WARMUP_WORKERS }}
         run: |
           source ./scripts/capture-hw-details.sh
           GROUPED_MM_TRITON_ONLY=1 TRITON_RELAX_PROFILING_CHECK=1 triton-benchmarks run gemm-grouped-batched --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for FA fwd benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/flash_attention_benchmark.py
 
       - name: Run Triton FA fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/flash_attention_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for flash_attention_benchmark.py; falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run flash_attention --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for FA FP8 fwd benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_fp8')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_fp8') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          FP8=1 python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/flash_attention_benchmark.py
 
       - name: Run Triton FA FP8 fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_fp8')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_fp8') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! FP8=1 TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/flash_attention_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for flash_attention_benchmark.py (FP8=1); falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run flash_attention_fp8 --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for FA bwd benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_bwd')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_bwd') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          FA_KERNEL_MODE=bwd python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/flash_attention_benchmark.py
 
       - name: Run Triton FA bwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_bwd')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_bwd') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! FA_KERNEL_MODE=bwd TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/flash_attention_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for flash_attention_benchmark.py (FA_KERNEL_MODE=bwd); falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           triton-benchmarks run flash_attention_bwd --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Warm Triton compile cache for batched variable-length FA fwd benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'batched-flash-attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'batched-flash-attention') }}
-        continue-on-error: true
-        env:
-          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-        run: |
-          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/batched_flash_attention_benchmark.py
 
       - name: Run Triton batched variable-length FA fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'batched-flash-attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'batched-flash-attention') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          if ! TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py $TKB_DIR/batched_flash_attention_benchmark.py; then
+            echo "::warning::Triton compile-cache warmup failed for batched_flash_attention_benchmark.py; falling back to TRITON_AUTOTUNE_WARMUP_WORKERS during the real run"
+            export TRITON_AUTOTUNE_WARMUP_WORKERS=$WARMUP_WORKERS
+          fi
           TRITON_PRINT_AUTOTUNING=1 triton-benchmarks run batched-flash-attention --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
       - name: Run Triton FlexAttention Causal Mask fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex-attention-causal')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex-attention-causal') }}
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: ${{ env.WARMUP_WORKERS }}
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run flex-attention-causal --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
       - name: Run Triton FlexAttention (batch_size=4) Causal Mask fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex-attention-causal-batch4')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex-attention-causal-batch4') }}
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: ${{ env.WARMUP_WORKERS }}
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run flex-attention-causal-batch4 --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
       - name: Run Triton FlexAttention Causal Mask bwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex-attention-causal-bwd')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex-attention-causal-bwd') }}
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: ${{ env.WARMUP_WORKERS }}
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run flex-attention-causal-bwd --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
       - name: Run Triton FlexAttention Custom Masks fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex-attention-custom-masks')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex-attention-custom-masks') }}
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: ${{ env.WARMUP_WORKERS }}
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run flex-attention-custom-masks --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
       - name: Run Prefix Sums kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'prefix-sums')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'prefix-sums') }}
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: ${{ env.WARMUP_WORKERS }}
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run prefix-sums --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
       - name: Run micro benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'micro_benchmarks')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'micro_benchmarks') }}
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: ${{ env.WARMUP_WORKERS }}
         run: |
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
