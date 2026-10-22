@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -triton-licm | FileCheck %s
+// RUN: triton-opt %s -split-input-file -triton-intel-licm | FileCheck %s
 
 // COM: Case A: An op carrying the {tt.no_licm} unit attribute must NOT be hoisted
 // COM: out of the loop even when its operands are loop-invariant. The arith.addi

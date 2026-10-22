@@ -123,6 +123,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::intel::registerTritonIntelGPUPrepareIfCombining();
   mlir::triton::intel::registerTritonIntelReassociateDotScale();
   mlir::triton::intel::registerTritonIntelOptimizeLoadMasks();
+  mlir::triton::intel::registerTritonIntelLoopInvariantCodeMotion();
   mlir::triton::registerRelayoutTritonGPUPass();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
   mlir::triton::gpu::registerTritonGPUAllocateWarpGroups();
