@@ -75,9 +75,9 @@ env:
   # Number of shards for the suites listed in PARALLEL_SUITES
   NUM_SHARDS: 2
   # Suites that are split into NUM_SHARDS shards, each shard runs on its own runner
-  PARALLEL_SUITES: ""
+  PARALLEL_SUITES: "scaled_dot"
   # Suites that are run without sharding, one runner per suite
-  SEQUENTIAL_SUITES: "triton-kernels"
+  SEQUENTIAL_SUITES: "minicore language gluon triton-kernels rest"
 
 jobs:
   build:
@@ -345,23 +345,6 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
-      - name: Warm Triton Kernels compile cache
-        if: matrix.loop.suite == 'triton-kernels'
-        run: |
-          # Reuse the --skip-list dir already resolved into $TRITON_TEST_CMD, so warmup
-          # skips what the real run below will skip on this HW.
-          skiplist_dir="${TRITON_TEST_CMD#*--skip-list }"
-          skiplist_dir="${skiplist_dir%% *}"
-          skip_args=()
-          if [[ "$TEST_UNSKIP" != true && -f "$skiplist_dir/triton_kernels.txt" ]]; then
-            skip_args=(--skip-from-file="$skiplist_dir/triton_kernels.txt" --select-fail-on-missing)
-          fi
-
-          cd python/triton_kernels
-          pytest -p triton._compile_warmup -s --tb=short --import-mode=importlib --warmup-only \
-            --warmup-workers "$(( $(nproc) < ${WARMUP_MAX_PROCS:-16} ? $(nproc) : ${WARMUP_MAX_PROCS:-16} ))" \
-            --device xpu "${skip_args[@]}" tests -k 'not test_mxfp'
-
       - name: Run triton kernels tests
         if: matrix.loop.suite == 'triton-kernels'
         run: |
@@ -385,7 +368,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fp8_only
 
       - name: Run Flash Attention tutorials (HEAD_DIM=128, skip FP8)
-        if: matrix.loop.suite == 'tutorial-fa-128-nofwdfp8'
+        if: matrix.loop.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode skip_fp8
 
