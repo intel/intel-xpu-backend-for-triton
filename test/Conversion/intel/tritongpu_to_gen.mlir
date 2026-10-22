@@ -23,14 +23,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // CHECK-NEXT: [[ARG1_1:%.*]] = llvm.extractvalue %arg1[1] : !llvm.struct<(i1, i1)>
     // CHECK-NEXT: [[ARG2_0:%.*]] = llvm.extractvalue %arg2[0] : !llvm.struct<(f32, f32)>
     // CHECK:      [[VEC:%.*]] = llvm.mlir.undef : vector<1xf32>
-    // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : index) : i64
+    // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : i64) : i64
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf32>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
     // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
     // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST1]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i32)
     // NO-PREDICATED-NEXT: ^bb1:
-    // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] <alignment = 4> : !llvm.ptr<1> -> i32
     // NO-PREDICATED-NEXT:   llvm.br ^bb2([[LOAD1]] : i32)
     // NO-PREDICATED-NEXT: ^bb2([[V1:%.*]]: i32):
     // CHECK-NEXT:   [[EE1:%.*]] = llvm.bitcast [[V1]] : i32 to f32
@@ -39,7 +39,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST3]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i32)
     // NO-PREDICATED-NEXT: ^bb3:
-    // NO-PREDICATED-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] <alignment = 4> : !llvm.ptr<1> -> i32
     // NO-PREDICATED-NEXT:   llvm.br ^bb4([[LOAD2]] : i32)
     // NO-PREDICATED-NEXT: ^bb4([[V2:%.*]]: i32):
     // CHECK-NEXT:   [[EE2:%.*]] = llvm.bitcast [[V2]] : i32 to f32
@@ -63,14 +63,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // CHECK-NEXT: [[ARG1_1:%.*]] = llvm.extractvalue %arg1[1] : !llvm.struct<(i1, i1)>
     // CHECK-NEXT: [[ARG2_0:%.*]] = llvm.extractvalue %arg2[0] : !llvm.struct<(f32, f32)>
     // CHECK:      [[VEC:%.*]] = llvm.mlir.undef : vector<1xf32>
-    // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : index) : i64
+    // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : i64) : i64
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf32>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
     // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
     // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST1]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i32)
     // NO-PREDICATED-NEXT: ^bb1:
-    // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] <alignment = 4> : !llvm.ptr<1> -> i32
     // NO-PREDICATED-NEXT:   llvm.br ^bb2([[LOAD1]] : i32)
     // NO-PREDICATED-NEXT: ^bb2([[V1:%.*]]: i32):
     // CHECK-NEXT:   [[EE1:%.*]] = llvm.bitcast [[V1]] : i32 to f32
@@ -79,7 +79,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // PREDICATED: [[V2:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi([[BCAST3]], [[ARG1_1]], [[BCAST2]]) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i32)
     // NO-PREDICATED-NEXT: ^bb3:
-    // NO-PREDICATED-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] <alignment = 4> : !llvm.ptr<1> -> i32
     // NO-PREDICATED-NEXT:   llvm.br ^bb4([[LOAD2]] : i32)
     // NO-PREDICATED-NEXT: ^bb4([[V2:%.*]]: i32):
     // CHECK-NEXT:   [[EE2:%.*]] = llvm.bitcast [[V2]] : i32 to f32
@@ -115,14 +115,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // CHECK-NEXT: [[ARG1_7:%.*]] = llvm.extractvalue %arg1[7] : !llvm.struct<(i1, i1, i1, i1, i1, i1, i1, i1)>
     // CHECK-NEXT: [[ARG2_0:%.*]] = llvm.extractvalue %arg2[0] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
     // CHECK:      [[VEC:%.*]] = llvm.mlir.undef : vector<1xf16>
-    // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : index) : i64
+    // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : i64) : i64
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf16>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast [[IE1]] : vector<1xf16> to i16
     // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
     // PREDICATED: [[V1:%.*]] = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbs([[BCAST1]], [[ARG1_0]], [[BCAST0]]) {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
     // NO-PREDICATED:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i16)
     // NO-PREDICATED-NEXT: ^bb1:
-    // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   [[LOAD1:%.*]] = llvm.load [[BCAST1]] <alignment = 2> : !llvm.ptr<1> -> i16
     // NO-PREDICATED-NEXT:   llvm.br ^bb2([[LOAD1]] : i16)
     // NO-PREDICATED-NEXT: ^bb2([[V1:%.*]]: i16):
     // CHECK-NEXT:   [[EE1:%.*]] = llvm.bitcast [[V1]] : i16 to f16
@@ -132,7 +132,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // NO-PREDICATED:        llvm.cond_br [[ARG1_1]], ^bb3, ^bb4([[BCAST2]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb3:
-    // NO-PREDICATED-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   [[LOAD2:%.*]] = llvm.load [[BCAST3]] <alignment = 2> : !llvm.ptr<1> -> i16
     // NO-PREDICATED-NEXT:   llvm.br ^bb4([[LOAD2]] : i16)
     // NO-PREDICATED-NEXT: ^bb4([[V2:%.*]]: i16):
     // CHECK-NEXT:   [[EE2:%.*]] = llvm.bitcast [[V2]] : i16 to f16
@@ -142,7 +142,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // NO-PREDICATED:        llvm.cond_br [[ARG1_2]], ^bb5, ^bb6([[BCAST4]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb5:
-    // NO-PREDICATED-NEXT:   [[LOAD3:%.*]] = llvm.load [[BCAST5]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   [[LOAD3:%.*]] = llvm.load [[BCAST5]] <alignment = 2> : !llvm.ptr<1> -> i16
     // NO-PREDICATED-NEXT:   llvm.br ^bb6([[LOAD3]] : i16)
     // NO-PREDICATED-NEXT: ^bb6([[V3:%.*]]: i16):
     // CHECK-NEXT:   [[EE3:%.*]] = llvm.bitcast [[V3]] : i16 to f16
@@ -152,7 +152,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // NO-PREDICATED:        llvm.cond_br [[ARG1_3]], ^bb7, ^bb8([[BCAST5]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb7:
-    // NO-PREDICATED-NEXT:   [[LOAD4:%.*]] = llvm.load [[BCAST6]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   [[LOAD4:%.*]] = llvm.load [[BCAST6]] <alignment = 2> : !llvm.ptr<1> -> i16
     // NO-PREDICATED-NEXT:   llvm.br ^bb8([[LOAD4]] : i16)
     // NO-PREDICATED-NEXT: ^bb8([[V4:%.*]]: i16):
     // CHECK-NEXT:   [[EE4:%.*]] = llvm.bitcast [[V4]] : i16 to f16
@@ -162,7 +162,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // NO-PREDICATED:        llvm.cond_br [[ARG1_4]], ^bb9, ^bb10([[BCAST7]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb9:
-    // NO-PREDICATED-NEXT:   [[LOAD5:%.*]] = llvm.load [[BCAST8]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   [[LOAD5:%.*]] = llvm.load [[BCAST8]] <alignment = 2> : !llvm.ptr<1> -> i16
     // NO-PREDICATED-NEXT:   llvm.br ^bb10([[LOAD5]] : i16)
     // NO-PREDICATED-NEXT: ^bb10([[V5:%.*]]: i16):
     // CHECK-NEXT:   [[EE5:%.*]] = llvm.bitcast [[V5]] : i16 to f16
@@ -172,7 +172,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // NO-PREDICATED:        llvm.cond_br [[ARG1_5]], ^bb11, ^bb12([[BCAST8]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb11:
-    // NO-PREDICATED-NEXT:   [[LOAD6:%.*]] = llvm.load [[BCAST9]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   [[LOAD6:%.*]] = llvm.load [[BCAST9]] <alignment = 2> : !llvm.ptr<1> -> i16
     // NO-PREDICATED-NEXT:   llvm.br ^bb12([[LOAD6]] : i16)
     // NO-PREDICATED-NEXT: ^bb12([[V6:%.*]]: i16):
     // CHECK-NEXT:   [[EE6:%.*]] = llvm.bitcast [[V6]] : i16 to f16
@@ -182,7 +182,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // NO-PREDICATED:        llvm.cond_br [[ARG1_6]], ^bb13, ^bb14([[BCAST10]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb13:
-    // NO-PREDICATED-NEXT:   [[LOAD7:%.*]] = llvm.load [[BCAST11]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   [[LOAD7:%.*]] = llvm.load [[BCAST11]] <alignment = 2> : !llvm.ptr<1> -> i16
     // NO-PREDICATED-NEXT:   llvm.br ^bb14([[LOAD7]] : i16)
     // NO-PREDICATED-NEXT: ^bb14([[V7:%.*]]: i16):
     // CHECK-NEXT:   [[EE7:%.*]] = llvm.bitcast [[V7]] : i16 to f16
@@ -192,7 +192,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttig.su
     // NO-PREDICATED:        llvm.cond_br [[ARG1_7]], ^bb15, ^bb16([[BCAST12]] : i16)
 
     // NO-PREDICATED-NEXT: ^bb15:
-    // NO-PREDICATED-NEXT:   [[LOAD8:%.*]] = llvm.load [[BCAST13]] {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // NO-PREDICATED-NEXT:   [[LOAD8:%.*]] = llvm.load [[BCAST13]] <alignment = 2> : !llvm.ptr<1> -> i16
     // NO-PREDICATED-NEXT:   llvm.br ^bb16([[LOAD8]] : i16)
     // NO-PREDICATED-NEXT: ^bb16([[V8:%.*]]: i16):
     // CHECK-NEXT:   [[EE8:%.*]] = llvm.bitcast [[V8]] : i16 to f16
@@ -267,16 +267,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Load 4 elements from vector0
-    // CHECK: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
-    // CHECK: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
-    // CHECK: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
-    // CHECK: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
+    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
+    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
+    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
 
     // Load 4 elements from vector1
-    // CHECK: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
-    // CHECK: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
-    // CHECK: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
-    // CHECK: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
+    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
+    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
+    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
     %9 = tt.load %6 : tensor<256x!tt.ptr<f32>, #blocked0>
     %10 = tt.load %8 : tensor<256x!tt.ptr<f32>, #blocked0>
     %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
@@ -284,10 +284,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Store 4 elements to global
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 4> : i32, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 4> : i32, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 4> : i32, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 4> : i32, !llvm.ptr<1>
     tt.store %13, %11 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
@@ -311,10 +311,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Load 4 elements from A with single one vectorized load instruction
-    // CHECK: llvm.load %{{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 16> : !llvm.ptr<1> -> vector<4xi32>
 
     // Load 4 elements from B with single one vectorized load instruction
-    // CHECK: llvm.load %{{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 16> : !llvm.ptr<1> -> vector<4xi32>
 
     %9 = tt.load %6 : tensor<256x!tt.ptr<f32>, #blocked0>
     %10 = tt.load %8 : tensor<256x!tt.ptr<f32>, #blocked0>
@@ -323,7 +323,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Store 4 elements to global with single one vectorized store instruction
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 16> : vector<4xi32>, !llvm.ptr<1>
     tt.store %13, %11 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
@@ -350,7 +350,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttig.su
     %10 = arith.cmpi "slt", %4, %9 : tensor<64xi32, #blocked>
     // load op has a vector width = 1 due to the %mask's alignment
     // PREDICATED: llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi({{.*}}) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
-    // NO-PREDICATED: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
     %11 = tt.load %6, %10 : tensor<64x!tt.ptr<f32>, #blocked>
     %12 = tt.load %8, %10 : tensor<64x!tt.ptr<f32>, #blocked>
     %13 = arith.addf %11, %12 : tensor<64xf32, #blocked>
@@ -379,17 +379,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Load 8 elements from A with four vectorized load instruction
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
 
 
     // Load 8 elements from B with four vectorized load instruction
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
 
     %9 = tt.load %6 : tensor<256x!tt.ptr<f32>, #blocked0>
     %10 = tt.load %8 : tensor<256x!tt.ptr<f32>, #blocked0>
@@ -398,10 +398,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Store 8 elements to global with four vectorized store instruction
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 8 : i64} : vector<2xi32>, !llvm.ptr<1>
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 8 : i64} : vector<2xi32>, !llvm.ptr<1>
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 8 : i64} : vector<2xi32>, !llvm.ptr<1>
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 8 : i64} : vector<2xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 8> : vector<2xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 8> : vector<2xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 8> : vector<2xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 8> : vector<2xi32>, !llvm.ptr<1>
     tt.store %13, %11 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
@@ -425,16 +425,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Load 8 elements from A with four vectorized load instruction
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
 
     // Load 8 elements from B with four vectorized load instruction
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 8> : !llvm.ptr<1> -> vector<2xi32>
 
     %9 = tt.load %6 : tensor<256x!tt.ptr<f32>, #blocked0>
     %10 = tt.load %8 : tensor<256x!tt.ptr<f32>, #blocked0>
@@ -443,10 +443,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Store 8 elements to global with four vectorized store instruction
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 8 : i64} : vector<2xi32>, !llvm.ptr<1>
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 8 : i64} : vector<2xi32>, !llvm.ptr<1>
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 8 : i64} : vector<2xi32>, !llvm.ptr<1>
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 8 : i64} : vector<2xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 8> : vector<2xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 8> : vector<2xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 8> : vector<2xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 8> : vector<2xi32>, !llvm.ptr<1>
     tt.store %13, %11 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
@@ -470,12 +470,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Load 8 elements from A with two vectorized load instruction
-    // CHECK: llvm.load %{{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 16> : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 16> : !llvm.ptr<1> -> vector<4xi32>
 
     // Load 8 elements from B with two vectorized load instruction
-    // CHECK: llvm.load %{{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
-    // CHECK: llvm.load %{{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 16> : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK: llvm.load %{{.*}} <alignment = 16> : !llvm.ptr<1> -> vector<4xi32>
 
     %9 = tt.load %6 : tensor<256x!tt.ptr<f32>, #blocked0>
     %10 = tt.load %8 : tensor<256x!tt.ptr<f32>, #blocked0>
@@ -484,8 +484,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Store 8 elements to global with two vectorized store instruction
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
-    // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 16> : vector<4xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %{{.*}} <alignment = 16> : vector<4xi32>, !llvm.ptr<1>
     tt.store %13, %11 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
@@ -524,7 +524,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: basic_make_range
   tt.func @basic_make_range() {
-    // CHECK:      [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:      llvm.mlir.constant(0 : i32) : i32
+    // CHECK-NEXT: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.call spir_funccc @_Z12get_local_idj([[ZERO]]) {{.*}} : (i32) -> i64
     // CHECK:      [[RES:%.*]] = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>
     // CHECK-NEXT: [[RES1:%.*]] = llvm.insertvalue {{.*}}, [[RES]][0]
@@ -667,7 +668,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // PREDICATED: llvm.call spir_funccc @_Z28__spirv_PredicatedStoreINTELPU3AS1vib([[BCAST2]], [[BCAST1]], [[ARG2_0]]) {{.*}} : (!llvm.ptr<1>, i32, i1) -> ()
     // NO-PREDICATED: llvm.cond_br [[ARG2_0]], ^bb1, ^bb2
     // NO-PREDICATED-NEXT: ^bb1:
-    // NO-PREDICATED-NEXT:   llvm.store [[BCAST1]], [[BCAST2]] {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // NO-PREDICATED-NEXT:   llvm.store [[BCAST1]], [[BCAST2]] <alignment = 4> : i32, !llvm.ptr<1>
     // NO-PREDICATED-NEXT:   llvm.br ^bb2
     // NO-PREDICATED-NEXT: ^bb2:
     // CHECK:        [[VEC3:%.*]] = llvm.mlir.undef : vector<1xi32>
@@ -675,7 +676,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // PREDICATED: llvm.call spir_funccc @_Z28__spirv_PredicatedStoreINTELPU3AS1vib([[BCAST2]], {{.*}}, [[ARG2_1]]) {{.*}} : (!llvm.ptr<1>, i32, i1) -> ()
     // NO-PREDICATED:        llvm.cond_br [[ARG2_1]], ^bb3, ^bb4
     // NO-PREDICATED-NEXT: ^bb3:
-    // NO-PREDICATED-NEXT:   llvm.store {{.*}}, [[BCAST2]] {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // NO-PREDICATED-NEXT:   llvm.store {{.*}}, [[BCAST2]] <alignment = 4> : i32, !llvm.ptr<1>
     // NO-PREDICATED-NEXT:   llvm.br ^bb4
     // NO-PREDICATED-NEXT: ^bb4:
     tt.store %ptrs, %vals, %mask : tensor<256x!tt.ptr<f32>, #blocked0>
@@ -1327,10 +1328,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[BCAST_STORE_VEC:%.*]] = llvm.bitcast [[STORE_VEC]] : vector<1xf32> to i32
     // CHECK-NEXT: [[UNDEF1:%.*]] = llvm.mlir.undef : vector<1xi32>
     // CHECK-NEXT: [[BCAST:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT: llvm.store [[BCAST_STORE_VEC]], [[BCAST]] {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK-NEXT: llvm.store [[BCAST_STORE_VEC]], [[BCAST]] <alignment = 4> : i32, !llvm.ptr<1>
     // CHECK-NOT:  llvm.cond_br
     // CHECK:      [[BCAST1:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT: llvm.store {{.*}}, [[BCAST1]] {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK-NEXT: llvm.store {{.*}}, [[BCAST1]] <alignment = 4> : i32, !llvm.ptr<1>
 
     tt.store %arg0, %arg1 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
@@ -1347,7 +1348,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
     // PREDICATED: llvm.call spir_funccc @_Z28__spirv_PredicatedStoreINTELPU3AS1vib([[BCAST]], {{.*}}) {{.*}} : (!llvm.ptr<1>, i32, i1) -> ()
     // NO-PREDICATED:      llvm.cond_br {{.*}}, ^bb1, ^bb2
     // NO-PREDICATED-NEXT: ^bb1:
-    // NO-PREDICATED-NEXT:   llvm.store {{.*}}, [[BCAST]] {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // NO-PREDICATED-NEXT:   llvm.store {{.*}}, [[BCAST]] <alignment = 4> : i32, !llvm.ptr<1>
     tt.store %arg0, %arg1 : !tt.ptr<f32>
     tt.return
   }
@@ -2043,8 +2044,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.support_bfloat16_conversion"} {
   tt.func @int32_to_bf16(%arg0: tensor<256xi32, #blocked>) {
     // CHECK-LABEL: @int32_to_bf16
-    // CHECK: llvm.sitofp %{{.*}} : i32 to f32
-    // CHECK-NEXT: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf(%{{.*}}) {{.*}} : (f32) -> i16
+    // CHECK: %[[RTZ:.*]] = llvm.intr.experimental.constrained.sitofp %[[IN:.*]] towardzero ignore : i32 to f32
+    // CHECK: %[[BACK:.*]] = llvm.fptosi %[[RTZ]] : f32 to i32
+    // CHECK: %[[INEXACT:.*]] = llvm.icmp "ne" %[[BACK]], %[[IN]] : i32
+    // CHECK: %[[STICKY:.*]] = llvm.zext %[[INEXACT]] : i1 to i32
+    // CHECK: llvm.or %{{.*}}, %[[STICKY]] : i32
+    // CHECK: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf(%{{.*}}) {{.*}} : (f32) -> i16
     // CHECK-NEXT: llvm.bitcast %{{.*}} : i16 to bf16
     %a = arith.sitofp %arg0 : tensor<256xi32, #blocked> to tensor<256xbf16, #blocked>
     tt.return

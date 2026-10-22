@@ -1267,6 +1267,37 @@ def test_async_copy_mbarrier(copy_vec, cache_policy, device):
     assert ("L2::cache_hint" in ptx) == expect_policy
 
 
+@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper or newer", run=False)
+@pytest.mark.parametrize("num_ctas", [2, 4])
+@pytest.mark.parametrize("batch", [2, 4])
+@pytest.mark.parametrize("two_ctas, simultaneous", [(False, False), (True, False), (False, True)])
+def test_mbarrier_dynamic_index_gsan(fresh_knobs, num_ctas, two_ctas, batch, simultaneous):
+    from triton.experimental.gsan import create_mem_pool
+
+    @gluon.jit
+    def kernel(BATCH: ttgl.constexpr, TWO_CTAS: ttgl.constexpr, SIMULTANEOUS: ttgl.constexpr):
+        barriers = mbarrier.allocate_mbarrier(batch=BATCH, two_ctas=TWO_CTAS)
+        if SIMULTANEOUS:
+            for i in range(BATCH):
+                mbarrier.init(barriers.index(i), count=1)
+            for i in range(BATCH):
+                barrier = barriers.index(i)
+                mbarrier.arrive(barrier)
+                mbarrier.wait(barrier, phase=0)
+                mbarrier.invalidate(barrier)
+        else:
+            for repeat in range(2):
+                for i in range(BATCH):
+                    barrier = barriers.index(i)
+                    mbarrier.init(barrier, count=1)
+                    mbarrier.invalidate(barrier)
+
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    with torch.cuda.use_mem_pool(create_mem_pool()):
+        kernel[(1, )](batch, two_ctas, simultaneous, num_warps=1, num_ctas=num_ctas)
+        torch.cuda.synchronize()
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_warp_specialize_noinline_ids():
 
@@ -3797,11 +3828,12 @@ def test_tmem_copy_no_scales(M, N, BLOCK_N, num_warps, swizzle):
 
 
 @pytest.mark.parametrize("N, BLOCK_N", [(256, 64), (64, 8), (64, 4)])
+@pytest.mark.parametrize("pred", [False, True])
 @pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
-def test_tmem_copy_noncontiguous_subslice(N, BLOCK_N):
+def test_tmem_copy_noncontiguous_subslice(N, BLOCK_N, pred):
 
-    @gluon.jit
-    def kernel(inp, out, N: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
+    @gluon.jit(do_not_specialize=["pred"])
+    def kernel(inp, out, pred, N: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
         parent = allocate_tensor_memory(ttgl.int32, [256, N], TensorMemoryLayout([128, BLOCK_N], col_stride=1))
         parent_layout: ttgl.constexpr = parent.get_reg_layout()
         parent.store(ttgl.full([256, N], -7, dtype=ttgl.int32, layout=parent_layout))
@@ -3817,7 +3849,7 @@ def test_tmem_copy_noncontiguous_subslice(N, BLOCK_N):
 
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
-        tcgen05_copy(smem, view)
+        tcgen05_copy(smem, view, pred=pred)
         tcgen05_commit(bar)
         mbarrier.wait(bar, phase=0)
 
@@ -3827,9 +3859,9 @@ def test_tmem_copy_noncontiguous_subslice(N, BLOCK_N):
 
     inp = torch.arange(128 * N, dtype=torch.int32, device="cuda").reshape(128, N)
     out = torch.empty((256, N), dtype=torch.int32, device="cuda")
-    kernel[(1, )](inp, out, N, BLOCK_N, num_warps=4)
+    kernel[(1, )](inp, out, pred, N, BLOCK_N, num_warps=4)
     torch.testing.assert_close(out[:128], torch.full_like(out[:128], -7), atol=0, rtol=0)
-    torch.testing.assert_close(out[128:], inp, atol=0, rtol=0)
+    torch.testing.assert_close(out[128:], inp if pred else torch.full_like(inp, -7), atol=0, rtol=0)
 
 
 @gluon.jit
