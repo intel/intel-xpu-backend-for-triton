@@ -706,6 +706,40 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
       });
 }
 
+// Promotes \p operand like promoteOperand. When \p operand is an fp8 layout
+// conversion into the dot operand layout, the conversion's source is promoted
+// instead and converted again. A blocked dot operand layout replicates each
+// element across the threads that share its row (A) or column (B), so a cast
+// in that layout converts every element several times, while the source
+// layout converts it once. This pays off for fp8, whose conversion takes
+// several instructions; for other types (e.g. int8, fp16), the cast is cheap
+// and moving the wider replicated operand costs more registers than it saves.
+// The cast is placed right after the source and the new conversion at the
+// builder's insertion point (the dot), so the promoted operands, which are
+// wide and replicated, are live for as short as possible.
+static Value promoteOperandBeforeLayoutConversion(OpBuilder &builder,
+                                                  Location loc, Value operand,
+                                                  Type promotedType) {
+  Type elemType = getElementTypeOrSelf(operand);
+  bool isFP8 =
+      isa<FloatType>(elemType) && elemType.getIntOrFloatBitWidth() == 8;
+  auto cvtOp = operand.getDefiningOp<ttg::ConvertLayoutOp>();
+  if (!isFP8 || !cvtOp ||
+      isa<ttg::DotOperandEncodingAttr>(cvtOp.getSrc().getType().getEncoding()))
+    return promoteOperand(builder, loc, operand, promotedType);
+
+  Value promotedSrc;
+  {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointAfterValue(cvtOp.getSrc());
+    promotedSrc = promoteOperand(builder, loc, cvtOp.getSrc(), promotedType);
+  }
+  auto promotedTy = cast<RankedTensorType>(operand.getType())
+                        .cloneWith(std::nullopt, promotedType);
+  return ttg::ConvertLayoutOp::create(builder, cvtOp.getLoc(), promotedTy,
+                                      promotedSrc);
+}
+
 // Replaces \p dotOp, which has a bf16 accumulator, with a dot that accumulates
 // in fp32 followed by a single RTNE rounding of the result to bf16.
 static tt::DotOp accumulateInF32(tt::DotOp dotOp) {
@@ -765,10 +799,19 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     }
 
     Location loc = dotOp.getLoc();
-    Value promotedA = promoteOperand(builder, loc, dotOp.getA(), promoteType);
-    Value promotedB = promoteOperand(builder, loc, dotOp.getB(), promoteType);
-    dotOp.setOperand(0, promotedA);
-    dotOp.setOperand(1, promotedB);
+    auto promote =
+        dpasLayout ? promoteOperand : promoteOperandBeforeLayoutConversion;
+    Value oldA = dotOp.getA(), oldB = dotOp.getB();
+    dotOp.setOperand(0, promote(builder, loc, oldA, promoteType));
+    dotOp.setOperand(1, promote(builder, loc, oldB, promoteType));
+    // Drop layout conversions that the promotion left unused.
+    if (auto cvtOp = oldA.getDefiningOp<ttg::ConvertLayoutOp>();
+        cvtOp && cvtOp->use_empty())
+      cvtOp->erase();
+    if (oldB != oldA)
+      if (auto cvtOp = oldB.getDefiningOp<ttg::ConvertLayoutOp>();
+          cvtOp && cvtOp->use_empty())
+        cvtOp->erase();
   });
 }
 
