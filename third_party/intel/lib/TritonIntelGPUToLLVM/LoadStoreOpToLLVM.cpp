@@ -12,7 +12,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
-#include "TargetInfo.h"
+#include "intel/include/TritonIntelGPUToLLVM/TargetInfo.h"
 #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 

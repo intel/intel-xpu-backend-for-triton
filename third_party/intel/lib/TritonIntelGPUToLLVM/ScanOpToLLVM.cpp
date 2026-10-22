@@ -23,7 +23,7 @@
 #include "llvm/ADT/STLExtras.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
-#include "TargetInfo.h"
+#include "intel/include/TritonIntelGPUToLLVM/TargetInfo.h"
 
 using namespace mlir;
 using namespace mlir::triton;
