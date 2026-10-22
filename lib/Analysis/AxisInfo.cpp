@@ -1223,6 +1223,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   visitors.append<IntegerCastOpAxisInfoVisitor<arith::ExtSIOp>,
                   IntegerCastOpAxisInfoVisitor<arith::ExtUIOp>,
                   IntegerCastOpAxisInfoVisitor<arith::TruncIOp>,
+                  IdentityOpAxisInfoVisitor<triton::AnnotateOp>,
                   IdentityOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   BitcastOpAxisInfoVisitor,
                   IdentityOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
