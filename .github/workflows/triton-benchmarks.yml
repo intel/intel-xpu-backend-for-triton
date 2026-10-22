@@ -75,7 +75,6 @@ env:
   VERIFY: ${{ (github.event_name == 'pull_request' || github.event_name == 'schedule' || inputs.verify) && '1' || '0' }}
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   N_RUNS: ${{ inputs.n_runs || '1' }}
-  TRITON_AUTOTUNE_WARMUP_WORKERS: 8
 
 jobs:
   build:
@@ -156,6 +155,14 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           github-token: ${{ github.token }}
 
+      - name: Warm Triton compile cache for Softmax benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'softmax')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'softmax') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/fused_softmax.py
+
       - name: Run Triton Softmax kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'softmax')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'softmax') }}
         run: |
@@ -168,11 +175,27 @@ jobs:
           source ./scripts/capture-hw-details.sh
           BENCHMARKING_METHOD=PROTON_PROFILER triton-benchmarks run softmax
 
+      - name: Warm Triton compile cache for GEMM benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+
       - name: Run Triton GEMM kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm') }}
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run gemm --reports $REPORTS --n_runs $N_RUNS --tag $TAG
+
+      - name: Warm Triton compile cache for GEMM (tensor of pointer) benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-tensor-of-ptr')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-tensor-of-ptr') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/gemm_tensor_of_ptr_benchmark.py
 
       - name: Run Triton GEMM kernel benchmark - with tensor of pointer
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-tensor-of-ptr')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-tensor-of-ptr') }}
@@ -180,11 +203,27 @@ jobs:
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run gemm-tensor-of-ptr --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
+      - name: Warm Triton compile cache for GEMM (A@B^t) benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_bt')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_bt') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          TRANSPOSE_B=1 python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+
       - name: Run Triton GEMM (A@B^t) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_bt')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_bt') }}
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run gemm_bt --reports $REPORTS --n_runs $N_RUNS --tag $TAG
+
+      - name: Warm Triton compile cache for GEMM (A^t@B) benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_at')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_at') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          TRANSPOSE_A=1 python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 
       - name: Run Triton GEMM (A^t@B) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_at')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_at') }}
@@ -192,11 +231,27 @@ jobs:
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run gemm_at --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
+      - name: Warm Triton compile cache for GEMM (stream-k) benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-streamk')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-streamk') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/gemm_streamk_benchmark.py
+
       - name: Run Triton GEMM (stream-k) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-streamk')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-streamk') }}
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run gemm-streamk --reports $REPORTS --n_runs $N_RUNS --tag $TAG
+
+      - name: Warm Triton compile cache for GEMM (split-k) benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-splitk')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-splitk') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/gemm_splitk_benchmark.py
 
       - name: Run Triton GEMM (split-k) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-splitk')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-splitk') }}
@@ -204,11 +259,27 @@ jobs:
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run gemm-splitk --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
+      - name: Warm Triton compile cache for GEMM + PreOp (exp) benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-preop-exp')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-preop-exp') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/gemm_preop_exp_benchmark.py
+
       - name: Run Triton GEMM + PreOp (exp) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-preop-exp')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-preop-exp') }}
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run gemm-preop-exp --reports $REPORTS --n_runs $N_RUNS --tag $TAG
+
+      - name: Warm Triton compile cache for GEMM + PostOp (Gelu) benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-gelu')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-gelu') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/gemm_postop_gelu_benchmark.py
 
       - name: Run Triton GEMM + PostOp (Gelu) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-gelu')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-gelu') }}
@@ -216,17 +287,41 @@ jobs:
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run gemm-postop-gelu --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
+      - name: Warm Triton compile cache for GEMM + PostOp (add matrix) bfloat16 benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-addmatrix')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-addmatrix') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/gemm_postop_addmatrix_benchmark.py
+
       - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark bfloat16
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-addmatrix')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-addmatrix') }}
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run gemm-postop-addmatrix --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
+      - name: Warm Triton compile cache for GEMM + PostOp (add matrix) int8 benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-addmatrix-int8')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-addmatrix-int8') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          INT8_ONLY=1 python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/gemm_postop_addmatrix_benchmark.py
+
       - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark int8
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-addmatrix-int8')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-addmatrix-int8') }}
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run gemm-postop-addmatrix-int8 --reports $REPORTS --n_runs $N_RUNS --tag $TAG
+
+      - name: Warm Triton compile cache for Fused GEMM SwiGLU benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'fused-gemm')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused-gemm') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/fused_gemm_benchmark.py
 
       - name: Run Triton Fused GEMM SwiGLU kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'fused-gemm')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused-gemm') }}
@@ -246,11 +341,27 @@ jobs:
           source ./scripts/capture-hw-details.sh
           GROUPED_MM_TRITON_ONLY=1 TRITON_RELAX_PROFILING_CHECK=1 triton-benchmarks run gemm-grouped-batched --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
+      - name: Warm Triton compile cache for FA fwd benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
+
       - name: Run Triton FA fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention') }}
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run flash_attention --reports $REPORTS --n_runs $N_RUNS --tag $TAG
+
+      - name: Warm Triton compile cache for FA FP8 fwd benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_fp8')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_fp8') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          FP8=1 python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 
       - name: Run Triton FA FP8 fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_fp8')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_fp8') }}
@@ -258,11 +369,27 @@ jobs:
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run flash_attention_fp8 --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
+      - name: Warm Triton compile cache for FA bwd benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_bwd')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_bwd') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          FA_KERNEL_MODE=bwd python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
+
       - name: Run Triton FA bwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_bwd')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_bwd') }}
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run flash_attention_bwd --reports $REPORTS --n_runs $N_RUNS --tag $TAG
+
+      - name: Warm Triton compile cache for batched variable-length FA fwd benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'batched-flash-attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'batched-flash-attention') }}
+        continue-on-error: true
+        env:
+          TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+        run: |
+          python benchmarks/triton_kernels_benchmark/warmup_benchmark_cache.py benchmarks/triton_kernels_benchmark/batched_flash_attention_benchmark.py
 
       - name: Run Triton batched variable-length FA fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'batched-flash-attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'batched-flash-attention') }}
