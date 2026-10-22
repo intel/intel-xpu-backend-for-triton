@@ -20,6 +20,3 @@ tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logits]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logprobs]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-processed_logits]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-processed_logprobs]
-
-# Hybrid chunked-prefill e2e test times out waiting for device memory left by earlier in-process engines: https://github.com/intel/intel-xpu-backend-for-triton/issues/8406
-tests/v1/e2e/test_hybrid_chunked_prefill.py::test_qwen_mtp_mamba_prefix_cache_hit_is_bounded
