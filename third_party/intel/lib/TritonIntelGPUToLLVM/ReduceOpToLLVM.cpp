@@ -350,6 +350,9 @@ private:
         broadcastLaneIdMask |= 1u << bit;
       }
     }
+    llvm::outs() << "layout " << layout << "\n";
+    llvm::outs() << "reducewithInwarp " << reduceLaneIdMask << "\n";
+    llvm::outs() << "broadcastLaneIdMask " << broadcastLaneIdMask << "\n";
     if (reduceLaneIdMask == 0) {
       return {std::move(layout), std::move(accs)};
     }
