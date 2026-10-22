@@ -6,6 +6,7 @@ corresponding Triton GEMM kernels against the same logical shapes in PyTorch.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -19,13 +20,37 @@ from triton_kernels_benchmark.gemm_benchmark import (
     matmul_kernel_with_tensor_descriptors_batched,
 )
 
-_JSON_PATH = Path(__file__).resolve().parents[2] / "disassembles" / "fx_repros" / "unfused_gemm_shapes.json"
+# Resolve the benchmark data relative to the repo root by default, but allow
+# callers to override it via an environment variable when running from a copied
+# or otherwise non-standard checkout.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_JSON_PATH = REPO_ROOT / "disassembles" / "fx_repros" / "unfused_gemm_shapes.json"
+_JSON_PATH = Path(os.environ.get("TRITON_UNFUSED_GEMM_JSON", _DEFAULT_JSON_PATH))
+_DEFAULT_SHAPE_LIMIT = 10
+_SHAPE_LIMIT = int(os.environ.get("TRITON_UNFUSED_GEMM_SHAPE_LIMIT", _DEFAULT_SHAPE_LIMIT))
 
 
 def _load_entries():
     with _JSON_PATH.open("r", encoding="utf-8") as f:
         payload = json.load(f)
     return payload["unfused_gemms"]
+
+
+def _slowest_entries(entries, limit: int = _SHAPE_LIMIT):
+    ranked = sorted(
+        entries,
+        key=lambda entry: float(entry.get("ratio_triton_over_onednn", 0.0)),
+        reverse=True,
+    )
+    if limit <= 0:
+        return []
+    return ranked[:limit]
+
+
+# Use only the slowest entries so the benchmark stays focused on the worst
+# Triton regressions from the collected repro list.
+def _selected_entries():
+    return _slowest_entries(_load_entries(), _SHAPE_LIMIT)
 
 
 def _shape_key(entry) -> Tuple[int, int, int, int]:
@@ -39,7 +64,7 @@ def _shape_key(entry) -> Tuple[int, int, int, int]:
 
 
 def _lookup_entry(B: int, M: int, N: int, K: int):
-    for entry in _load_entries():
+    for entry in _selected_entries():
         if _shape_key(entry) == (B, M, N, K):
             return entry
     raise KeyError(f"No entry for B={B}, M={M}, N={N}, K={K}")
@@ -120,7 +145,7 @@ def get_benchmark(
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     x_vals = []
-    for entry in _load_entries():
+    for entry in _selected_entries():
         x_vals.append(_shape_key(entry))
 
     @benchmark_suite.perf_report(
