@@ -6,7 +6,8 @@ short bit-manipulation-plus-multiply sequence. Validates the conversion
 across all 256 possible fp8 byte values, including NaN propagation for the
 two reserved fp8e4m3 NaN encodings (0x7F, 0xFF).
 
-Converter algorithm:
+Converter algorithm (one element at a time; dot operands with K < 64 and a dot B
+operand held by every warp are converted in pairs, see below):
 1. Sign-extend each fp8 byte to i16 and shift it left by 7.
 2. Mask the shifted value with 0xBFFF.
 3. Multiply by 256.0 (2^8, the fp16/fp8 exponent bias difference). This is
@@ -18,6 +19,12 @@ Converter algorithm:
 The NaN is a constant, with the input sign discarded (the integer-domain
 converter used on LTS drivers keeps the sign). This test checks `isnan` for
 those two bytes rather than a specific bit pattern.
+
+The pair converter handles the two reserved bytes between steps 2 and 3, replacing
+step 4: adding 0x80 to the value of step 2 carries into bit 14 for 0x7F/0xFF
+only, and OR-ing that bit in makes the exponent all ones (a signed quiet NaN; the
+sign and payload of the product are unspecified). There is no compare or select
+in that path. The dot operand tests below cover it with K = 32.
 
 NOTE: under TRITON_INTEL_FAST_MATH=1, the emitted ops carry fast-math flags,
 which license LLVM to drop the compare/select of step 4 (or to treat a NaN
