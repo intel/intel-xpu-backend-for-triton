@@ -9,6 +9,7 @@ import ctypes
 import subprocess
 import sysconfig
 import tempfile
+import threading
 import warnings
 from pathlib import Path
 from functools import cached_property, lru_cache
@@ -271,6 +272,34 @@ class ArchParser:
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
+# The compile metadata of the kernels whose launcher was created on this thread and whose binary is not loaded yet.
+# Core's CompiledKernel creates the launcher from the metadata just before it calls load_binary(name, kernel, shared,
+# device), which lacks the build flags, the binary kind and the GRF mode the loader needs (see SpirvUtils.load_binary).
+_launcher_metadata = threading.local()
+
+
+def _load_binary_args(args):
+    """(name, kernel, shared, build_flags, is_spv, device, max_grf_mode) for the loader, from either form of the
+    call: that one (max_grf_mode optional), or core's (name, kernel, shared, device), completed from the metadata
+    the kernel's launcher recorded."""
+    pending = getattr(_launcher_metadata, "pending", None)
+    if pending is None:
+        pending = _launcher_metadata.pending = {}
+    if len(args) != 4:
+        pending.pop(args[0], None)
+        return args
+    name, kernel, shared, device = args
+    metadata = pending.pop(name, None)
+    if metadata is None:
+        raise RuntimeError(f"load_binary('{name}'): no compile metadata; the kernel's launcher was not created first")
+    max_grf_mode = getattr(metadata, "max_grf_mode", None)
+    # Metadata without max_grf_mode implies a "cri" target retries at 512 GRFs.
+    legacy_arch = getattr(metadata.target, "arch", None)
+    if max_grf_mode is None and isinstance(legacy_arch, dict) and legacy_arch.get("arch") == "cri":
+        max_grf_mode = "512"
+    return (name, kernel, shared, metadata.build_flags, not metadata.generate_native_code, device, max_grf_mode)
+
+
 class SpirvUtils:
 
     def __init__(self, cache_path: str):
@@ -316,6 +345,7 @@ class SpirvUtils:
         # IGC build log carries a PTSS marker, OutOfResources is raised
         # directly so triton.runtime.autotuner can skip the offending tile.
         # No per-launch overhead on the success path.
+        args = _load_binary_args(args)
         try:
             return self.shared_library.load_binary(args)
         except Exception as e:
@@ -719,6 +749,10 @@ def serialize_args(args, constants, signature, dir_path):
 class XPULauncher(object):
 
     def __init__(self, src, metadata):
+        pending = getattr(_launcher_metadata, "pending", None)
+        if pending is None:
+            pending = _launcher_metadata.pending = {}
+        pending[getattr(metadata, "name", None)] = metadata
         constants = src.constants if hasattr(src, "constants") else dict()
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
