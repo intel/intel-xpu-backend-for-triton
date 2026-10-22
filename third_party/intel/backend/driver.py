@@ -21,6 +21,7 @@ from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase, TensorDescABI, decompose_descriptor
 from triton.backends.driver import expand_signature, get_kernel_argument_layout, wrap_handle_tensordesc_impl
+from . import native
 
 # PTI's default collection mode is Local (mode 2), which with an event-less launcher hangs or
 # reports zero kernel times on the Level Zero v1 adapter (PVC); v2 (BMG and newer) is fine. Full
@@ -857,6 +858,8 @@ class XPUDriver(DriverBase):
 
     @staticmethod
     def is_active():
+        if native.error:  # the backend's C++ module could not be loaded (native.py)
+            return False
         try:
             import torch
             return torch.xpu.is_available()

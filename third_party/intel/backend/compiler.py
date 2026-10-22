@@ -1,5 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
-from triton._C.libtriton import ir, passes, llvm, intel
+from triton._C.libtriton import ir, passes, llvm
+from .native import intel
 from .driver import compile_module_from_src, is_lts
 from .track import track
 from .extension_utils import query_device_extensions
