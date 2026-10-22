@@ -804,7 +804,7 @@ class XPUDriver(DriverBase):
     @lru_cache
     def _construct_target(self, device):
         import torch
-        from triton.backends.intel.extension_utils import query_device_extensions
+        from .extension_utils import query_device_extensions
 
         dev_property = torch.xpu.get_device_capability(device)
 
@@ -832,8 +832,6 @@ class XPUDriver(DriverBase):
         return self._construct_target(device)
 
     def build_proton_help_lib(self):
-        from triton.backends.intel.driver import compile_module_from_src
-
         dirname = os.path.dirname(os.path.realpath(__file__))
         return compile_module_from_src(src=Path(dirname).joinpath("proton_utils.cpp").read_text(), name="proton_utils")
 
