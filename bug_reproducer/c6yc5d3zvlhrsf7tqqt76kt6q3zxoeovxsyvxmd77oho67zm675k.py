@@ -5,6 +5,7 @@ import triton.language as tl
 from torch._inductor.runtime import triton_helpers, triton_heuristics
 from torch._inductor.runtime.triton_helpers import libdevice, math as tl_math
 from torch._inductor.runtime.hints import AutotuneHint, ReductionHint, TileHint, DeviceProperties
+from torch._C import _xpu_getCurrentRawStream as get_raw_stream
 
 triton_helpers.set_driver_to_gpu()
 
@@ -71,10 +72,12 @@ def triton_per_fused_stack_sum_30(in_ptr0, out_ptr0, xnumel, r0_numel, XBLOCK: t
 def run_standalone():
     if hasattr(torch, "xpu") and torch.xpu.is_available():
         device = "xpu"
-        stream = torch.xpu.current_stream()
+        with torch.xpu._DeviceGuard(0):
+            torch.xpu.set_device(0)
+            stream = get_raw_stream(0)
     elif torch.cuda.is_available():
         device = "cuda"
-        stream = torch.cuda.current_stream()
+        stream = torch.cuda.current_stream().cuda_stream
     else:
         raise RuntimeError("No XPU/CUDA available")
 
@@ -84,13 +87,12 @@ def run_standalone():
     XBLOCK = 128
     grid = (triton.cdiv(x.shape[0], XBLOCK), )
 
-    # This is the important fix: pass the GPU stream explicitly
+    # Use the raw stream handle that the generated Triton launcher expects.
     triton_per_fused_stack_sum_30.run(
         x,
         out,
         x.shape[0],
         x.shape[1],
-        XBLOCK=XBLOCK,
         stream=stream,
     )
 
