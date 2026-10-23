@@ -1,8 +1,4 @@
-"""The Intel backend's errors.
-
-`install()` also exposes `IntelGPUError` as `triton.runtime.errors.IntelGPUError`, where PyTorch and the backend's
-launcher (driver.c) look it up.
-"""
+"""The Intel backend's errors."""
 from triton.errors import TritonError
 
 
@@ -14,8 +10,3 @@ class IntelGPUError(TritonError):
     particularly those related to Level Zero.
     """
     pass
-
-
-def install() -> None:
-    import triton.runtime.errors as core_errors  # not triton.runtime.errors.X: `triton` may still be importing
-    core_errors.IntelGPUError = IntelGPUError

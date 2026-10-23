@@ -44,9 +44,10 @@ static PyObject *getIntelGPUErrorClass() {
     return g_intel_gpu_error_class;
   }
 
-  PyObject *module = PyImport_ImportModule("triton.runtime.errors");
+  PyObject *module = PyImport_ImportModule("triton.backends.intel.errors");
   if (module == nullptr) {
-    PyErr_SetString(PyExc_ImportError, "cannot import triton.runtime.errors");
+    PyErr_SetString(PyExc_ImportError,
+                    "cannot import triton.backends.intel.errors");
     return NULL;
   }
 
@@ -54,8 +55,9 @@ static PyObject *getIntelGPUErrorClass() {
   Py_DECREF(module);
 
   if (g_intel_gpu_error_class == nullptr) {
-    PyErr_SetString(PyExc_AttributeError,
-                    "cannot find IntelGPUError in triton.runtime.errors");
+    PyErr_SetString(
+        PyExc_AttributeError,
+        "cannot find IntelGPUError in triton.backends.intel.errors");
     return NULL;
   }
 

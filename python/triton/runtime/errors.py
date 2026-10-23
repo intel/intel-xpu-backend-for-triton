@@ -44,3 +44,11 @@ class AutotunerError(TritonError):
     def __str__(self) -> str:
         error_message = self.error_message or ""
         return f"Autotuner error: {error_message}"
+
+
+def __getattr__(name):
+    # Deprecated alias, remove once PyTorch imports it from triton.backends.intel.errors.
+    if name == "IntelGPUError":
+        from triton.backends.intel.errors import IntelGPUError
+        return IntelGPUError
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

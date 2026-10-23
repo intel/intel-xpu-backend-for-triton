@@ -13,7 +13,8 @@ from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
 from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
 from triton.backends.intel.driver import find_sycl_icpx
-from triton.runtime.errors import IntelGPUError, OutOfResources
+from triton.backends.intel.errors import IntelGPUError
+from triton.runtime.errors import OutOfResources
 
 
 def test_auto_grf(device, monkeypatch, capfd):
