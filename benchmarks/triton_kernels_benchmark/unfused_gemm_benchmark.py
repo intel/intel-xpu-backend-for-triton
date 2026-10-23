@@ -81,7 +81,9 @@ def _compiled_triton_reference(op: str, a: torch.Tensor, b: torch.Tensor, bias: 
     import torch._inductor.config as cfg
 
     cfg.max_autotune_gemm = True
-    cfg.max_autotune_gemm_backends = "TRITON"
+    # Match the FX repro pattern: let Inductor autotune over both Triton and
+    # ATen GEMM implementations, not only the Triton backend.
+    cfg.max_autotune_gemm_backends = "TRITON,ATEN"
 
     if op == "mm":
         fn = lambda x, y: x @ y
