@@ -557,6 +557,22 @@ def test_addptr(dtype, order, device):
 
 
 @pytest.mark.interpreter
+def test_ptr_sub_unsigned_offset(device):
+
+    @triton.jit
+    def kernel(X, Y):
+        i = tl.arange(0, 64)
+        tl.store(Y + i, tl.load(X + 300 - i.to(tl.uint8)))
+
+    x = to_triton(np.arange(1024, dtype=np.float32), device=device)
+    y = to_triton(np.empty(64, dtype=np.float32), device=device)
+    kernel[(1, )](x, y)
+
+    expected = np.array([300., 299., 298., 297., 296.], dtype=np.float32)
+    np.testing.assert_array_equal(to_numpy(y)[:5], expected)
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y", [  #
     (dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes
 ] + [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes])
@@ -2410,6 +2426,37 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
     assert f"atom.global.{sem_str}" in h.asm["ptx"]
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["int32", "uint32", "int64", "uint64"])
+@pytest.mark.parametrize("mode", ["scalar", "tensor"])
+@pytest.mark.parametrize("compare", [0, -1])
+def test_atomic_cas_pointee_type(dtype_str, mode, compare, device):
+
+    @triton.jit
+    def kernel(X, Out, MODE: tl.constexpr, COMPARE: tl.constexpr):
+        if MODE == "scalar":
+            offsets = 0
+            cmp = COMPARE
+            val = 1
+        else:
+            offsets = tl.arange(0, 128)
+            cmp = tl.full((128, ), COMPARE, tl.int32)
+            val = tl.full((128, ), 1, tl.int32)
+        old = tl.atomic_cas(X + offsets, cmp, val)
+        tl.store(Out + 2 * offsets, old.to(tl.uint64))
+        tl.store(Out + 2 * offsets + 1, (old > 0).to(tl.uint64))
+
+    size = 1 if mode == "scalar" else 128
+    signed_dtype = torch.int32 if dtype_str.endswith("32") else torch.int64
+    x = torch.full((size, ), -1, dtype=signed_dtype, device=device).view(getattr(torch, dtype_str))
+    out = torch.empty((size, 2), dtype=torch.uint64, device=device)
+    kernel[(1, )](x, out, mode, compare)
+
+    expected_old = 2**32 - 1 if dtype_str == "uint32" else 2**64 - 1
+    expected = torch.tensor([expected_old, int(dtype_str.startswith("uint"))], dtype=torch.uint64, device=device)
+    torch.testing.assert_close(out, expected.expand(size, 2))
+
+
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                    reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)", run=False)
 @pytest.mark.xfail(is_sm12x(), reason="scalar multi-CTA atomic_cas is not supported on sm12x (consumer Blackwell)",
@@ -2750,6 +2797,7 @@ def test_cast_bf16_rounding(dtype_x, rounding, device):
         if dtype_x in ["int64", "uint64"] and (is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] < 9)):
             pytest.skip("64-bit integer to bf16 conversions round through fp32 on this target")
         check_type_supported("bfloat16", device)
+        check_type_supported(dtype_x, device)
 
     @triton.jit
     def kernel(X, Z, SIZE: tl.constexpr, ROUNDING: tl.constexpr):
@@ -2797,6 +2845,7 @@ def test_cast_bf16_rounding(dtype_x, rounding, device):
     z = torch.empty_like(x, dtype=torch.bfloat16)
     kernel[(1, )](x, z, SIZE=x.numel(), ROUNDING=rounding)
     torch.testing.assert_close(z, expected, rtol=0, atol=0, equal_nan=True)
+    assert torch.equal(torch.signbit(z[~torch.isnan(z)]), torch.signbit(expected[~torch.isnan(expected)]))
     if dtype_x == "float64":
         y = torch.empty_like(x)
         kernel[(1, )](z, y, SIZE=z.numel(), ROUNDING=None)
@@ -4631,7 +4680,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         pytest.xfail()
 
     @triton.jit
-    def kernel(X, stride_xm, stride_xk, Y, stride_yk, stride_yn, W, stride_wn, stride_wl, Z, stride_zm, stride_zn,
+    def kernel(X, stride_xm, stride_xk, Y, stride_yk, stride_yn, W, stride_wn, stride_wl, Z, stride_zm, stride_zn, Bias,
                BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, ADD_MATRIX: tl.constexpr,
                ADD_ROWS: tl.constexpr, ADD_COLS: tl.constexpr, INPUT_PRECISION: tl.constexpr, DO_SOFTMAX: tl.constexpr,
                CHAIN_DOT: tl.constexpr, COL_A: tl.constexpr, COL_B: tl.constexpr, out_dtype: tl.constexpr = tl.float32):
@@ -4647,12 +4696,13 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         y = tl.load(Ys)
         z = tl.dot(x, y, input_precision=INPUT_PRECISION, out_dtype=out_dtype)
         if ADD_MATRIX:
-            z += tl.load(Zs)
+            Bs = Bias + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
+            z += tl.load(Bs)
         if ADD_ROWS:
-            ZRs = Z + off_m * stride_zm
+            ZRs = Bias + off_m * stride_zm
             z += tl.load(ZRs)[:, None]
         if ADD_COLS:
-            ZCs = Z + off_n * stride_zn
+            ZCs = Bias + off_n * stride_zn
             z += tl.load(ZCs)[None, :]
         if DO_SOFTMAX:
             z_max = tl.max(z, 1)
@@ -4695,6 +4745,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     z_tri = to_triton(z, device=device)
     if epilogue == 'trans':
         z_tri = torch.as_strided(z_tri, (M, N), [1, M])
+    bias_tri = torch.clone(z_tri)
 
     if out_dtype == 'int8':
         out_dtype = tl.int8
@@ -4719,7 +4770,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             kern_kwargs['matrix_instr_nonkdim'] = mma_nonk_size
 
     pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
-                         w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), **kern_kwargs)
+                         w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), bias_tri,
+                         **kern_kwargs)
     if is_compile_warmup():
         return
 
@@ -5288,8 +5340,6 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
                     pytest.xfail("XPU: problem size too large for float64")
             if (BLOCK_M < 8 or BLOCK_N < 16):
                 pytest.xfail("XPU: small dots are not supported")
-        elif not is_interpreter() and (BLOCK_M < 16 or BLOCK_N < 16):
-            pytest.skip("small dots are supported only on HIP at the moment")
 
     shared_mem_accum = B * (BLOCK_M * K + K * BLOCK_N) * get_src_element_ty_size(in_dtype_str)
     if not is_interpreter() and triton.runtime.driver.active.utils.get_device_properties(
@@ -6765,6 +6815,50 @@ def test_for_iv(lo, hi, iv, device):
     out = to_triton(np.zeros((1, ), dtype=np.int64), device=device)
     kernel[(1, )](out, lo, hi, iv)
     assert out[0] == sum(range(lo, hi, iv))
+
+
+@pytest.mark.parametrize("use_tl_range", [False, True], ids=["range", "tl_range"])
+@pytest.mark.parametrize("lower, upper, step", [
+    pytest.param(("int32", 0), ("uint8", 127), ("int32", 1), id="uint8_upper_control"),
+    pytest.param(("int32", 0), ("uint8", 128), ("int32", 1), id="uint8_upper_boundary"),
+    pytest.param(("int32", 0), ("uint8", 255), ("int32", 1), id="uint8_upper"),
+    pytest.param(("int32", 0), ("uint16", 40000), ("int32", 1), id="uint16_upper"),
+    pytest.param(("int32", 0), ("bool", True), ("int32", 1), id="bool_upper"),
+    pytest.param(("uint8", 200), ("int32", 205), ("int32", 1), id="uint8_lower"),
+    pytest.param(("uint16", 40000), ("int32", 40005), ("int32", 1), id="uint16_lower"),
+    pytest.param(("bool", True), ("int32", 4), ("int32", 1), id="bool_lower"),
+    pytest.param(("uint8", 133), ("uint8", 138), ("int32", 1), id="uint8_both"),
+    pytest.param(("int32", 0), ("int32", 256), ("uint8", 128), id="uint8_step"),
+    pytest.param(("int32", 0), ("int32", 65536), ("uint16", 32768), id="uint16_step"),
+    pytest.param(("int32", 0), ("int32", 5), ("bool", True), id="bool_step"),
+    pytest.param(("int8", -5), ("int32", 5), ("int32", 1), id="signed_control"),
+    pytest.param(("uint32", 0), ("uint8", 200), ("int32", 1), id="unsigned_control"),
+])
+def test_for_loop_operand_signedness(lower, upper, step, use_tl_range, device):
+
+    @triton.jit
+    def kernel(Lower, Upper, Step, Out, USE_TL_RANGE: tl.constexpr):
+        lower = tl.load(Lower)
+        upper = tl.load(Upper)
+        step = tl.load(Step)
+        count = tl.full((), 0, tl.int64)
+        total = tl.full((), 0, tl.int64)
+        if USE_TL_RANGE:
+            for i in tl.range(lower, upper, step, num_stages=3):
+                count += 1
+                total += i.to(tl.int64)
+        else:
+            for i in range(lower, upper, step):
+                count += 1
+                total += i.to(tl.int64)
+        tl.store(Out, count)
+        tl.store(Out + 1, total)
+
+    operands = [to_triton(np.array([value], dtype=dtype), device=device) for dtype, value in (lower, upper, step)]
+    out = torch.empty(2, dtype=torch.int64, device=device)
+    kernel[(1, )](*operands, out, use_tl_range)
+    expected = range(lower[1], upper[1], step[1])
+    assert out.tolist() == [len(expected), sum(expected)]
 
 
 @pytest.mark.interpreter

@@ -455,6 +455,7 @@ class autotuning_knobs(base_knobs):
     cache: env_bool = env_bool("TRITON_CACHE_AUTOTUNING")
     print: env_bool = env_bool("TRITON_PRINT_AUTOTUNING")
     listener: Union[AutotuneListener, None] = None
+    warmup_workers: env_int = env_int("TRITON_AUTOTUNE_WARMUP_WORKERS", 0)
 
 
 class LaunchHook(Protocol):
@@ -629,6 +630,7 @@ class intel_knobs(base_knobs):
 
 class amd_knobs(base_knobs):
     codegen_path: env_opt_str = env_opt_str("TRITON_AMD_CODEGEN_PATH")
+    bitcode_path: env_opt_str = env_opt_str("TRITON_AMD_BITCODE_PATH")
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     # Note: This requires use_buffer_ops be true to have any effect
     use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)
