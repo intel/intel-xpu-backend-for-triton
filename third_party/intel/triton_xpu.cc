@@ -40,7 +40,8 @@
 namespace py = nanobind;
 
 namespace llvm {
-struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
+struct BreakStructPhiNodesPass
+    : OptionalPassInfoMixin<BreakStructPhiNodesPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
   static StringRef name() { return "BreakStructPhiNodesPass"; }
 };
@@ -155,7 +156,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
       .def_rw("sub_32_dpas",
               &gpu::intel::TritonAnnotateModuleOptions::sub32DPAS)
       .def_rw("block_io_base_alignment",
-              &gpu::intel::TritonAnnotateModuleOptions::blockIOBaseAlignment);
+              &gpu::intel::TritonAnnotateModuleOptions::blockIOBaseAlignment)
+      .def_rw("max_grf_mode",
+              &gpu::intel::TritonAnnotateModuleOptions::maxGRFMode);
   ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",
                             gpu::intel::createTritonAnnotateModule,
                             gpu::intel::TritonAnnotateModuleOptions);
@@ -171,9 +174,10 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
   ADD_PASS_WRAPPER_0("add_lower_to_2d_block_load",
                      gpu::intel::createTritonIntelGPULowerTo2DBlockLoad);
-  ADD_PASS_OPTION_WRAPPER_1(
+  ADD_PASS_OPTION_WRAPPER_2(
       "add_reduce_variable_liveness",
-      gpu::intel::createTritonIntelGPUReduceVariableLiveness, std::string);
+      gpu::intel::createTritonIntelGPUReduceVariableLiveness, std::string,
+      bool);
   ADD_PASS_WRAPPER_0("add_loop_distribute",
                      gpu::intel::createTritonIntelGPULoopDistribute);
   ADD_PASS_WRAPPER_0("add_code_sinking",
@@ -287,11 +291,11 @@ void init_triton_intel(py::module_ &m) {
         } else if (pyCb) {
           instrCbPtr = &passInstrCb;
           passInstrCb.registerBeforeNonSkippedPassCallback(
-              [&passStartTimes](llvm::StringRef id, llvm::Any) {
+              [&passStartTimes](llvm::StringRef id, llvm::IRUnitRef) {
                 passStartTimes[id] = std::chrono::high_resolution_clock::now();
               });
           passInstrCb.registerAfterPassCallback(
-              [&passStartTimes, &pyCb](llvm::StringRef id, llvm::Any,
+              [&passStartTimes, &pyCb](llvm::StringRef id, llvm::IRUnitRef,
                                        const llvm::PreservedAnalyses &) {
                 auto start = passStartTimes.find(id);
                 if (start != passStartTimes.end()) {
@@ -326,7 +330,7 @@ void init_triton_intel(py::module_ &m) {
         if (!pluginFile.empty()) {
           // TODO: Add some logging here that we inserted a pass into the LLVM
           // pass pipeline
-          auto passPlugin = llvm::PassPlugin::Load(pluginFile);
+          auto passPlugin = llvm::PassPlugin::load(pluginFile);
           if (!passPlugin) {
             llvm::Error Err = passPlugin.takeError();
             std::string ErrMsg =
@@ -360,14 +364,15 @@ void init_triton_intel(py::module_ &m) {
         // paths with undefined behavior as dead. This can result in
         // removal of the mask path and incorrect results from legal
         // Triton kernels due to masked elements being used in
-        // computation. Run a pass to guard masked-load phi nodes used
-        // as divisors with select(divisor == 0, 1, divisor) to prevent
-        // LLVM from exploiting the division-by-zero UB.
+        // computation. Run a pass that guards every integer div/rem
+        // whose divisor is not provably non-zero with
+        // select(freeze(divisor) == 0, 1, freeze(divisor)), whatever
+        // produced the divisor (a masked-load phi, a vector lane of one,
+        // a predicated load), so LLVM cannot exploit the division-by-zero
+        // UB here or in IGC's pipeline later.
         //
         // This must run before any optimization pass (especially
-        // SimplifyCFG) which can fold conditional blocks that share the
-        // same branch condition, eliminating the phi nodes this pass
-        // needs to match.
+        // SimplifyCFG), which exploits the UB before a guard exists.
         {
           llvm::FunctionPassManager fpm;
           fpm.addPass(GuardMaskedDivRemPass());

@@ -8,6 +8,9 @@ def TritonIntelGPU_Dialect : Dialect {
 
   let cppNamespace = "::mlir::triton::gpu::intel";
 
+  // Preserve the existing attr-dict syntax for inherent attributes.
+  let useStrictPropertiesInAssemblyFormat = 0;
+
   let description = [{
     Triton Intel GPU Dialect.
   }];
@@ -172,6 +175,19 @@ def TritonIntelGPU_Dialect : Dialect {
     /// from MakeTensorDescOp to descriptor load/store operations.
     static constexpr llvm::StringRef getDescPaddingAttrName() {
       return "ttig.desc_padding";
+    }
+
+    /// Get the name of the attribute holding the largest GRF mode ("128",
+    /// "256" or "512") the backend's automatic escalation paths target for
+    /// the device, i.e. the register-mode ceiling `ReduceVariableLiveness`'s
+    /// "default" and "auto" GRF budget resolution should assume. Mirrors the
+    /// same per-target policy compiler.py's `get_max_grf_mode()` computes
+    /// (only "cri" gets 512-register mode; every other target caps at
+    /// 256). Absent
+    /// when unknown (e.g. a hand-written test module, or a
+    /// `-triton-annotate-module` invocation that didn't set `max-grf-mode`).
+    static constexpr llvm::StringRef getMaxGRFModeAttrName() {
+      return "ttig.max_grf_mode";
     }
 
     /// Get the name of the attribute conveying the HW base-address alignment

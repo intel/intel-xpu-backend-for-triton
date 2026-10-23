@@ -15,11 +15,12 @@ from functools import cached_property, lru_cache
 
 from triton import knobs
 import triton
+from triton.runtime import _allocation
 from triton.runtime.build import _build, platform_key, _load_module_from_path
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import DriverBase, decompose_descriptor
-from triton.backends.driver import expand_signature, wrap_handle_tensordesc_impl
+from triton.backends.driver import DriverBase, TensorDescABI, decompose_descriptor
+from triton.backends.driver import expand_signature, get_kernel_argument_layout, wrap_handle_tensordesc_impl
 
 # PTI's default collection mode is Local (mode 2), which with an event-less launcher hangs or
 # reports zero kernel times on the Level Zero v1 adapter (PVC); v2 (BMG and newer) is fine. Full
@@ -311,10 +312,10 @@ class SpirvUtils:
         # we will need to rewrite the line in the general part of the code:
         # driver.active.utils.load_binary(
         #     self.name, self.kernel, self.metadata.shared,
-        #     self.metadata.build_flags, is_spv, device, deviceArch) ->
+        #     self.metadata.build_flags, is_spv, device, max_grf_mode) ->
         # driver.active.utils.load_binary(
         #     (self.name, self.kernel, self.metadata.shared,
-        #      self.metadata.build_flags, is_spv, device, deviceArch))
+        #      self.metadata.build_flags, is_spv, device, max_grf_mode))
         # PTSS-overflow detection happens at the C level (driver.c
         # tryRaisePTSSOutOfResources): when zeModuleCreate fails and the
         # IGC build log carries a PTSS marker, OutOfResources is raised
@@ -566,34 +567,13 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "double",
-        "bf16": "double",
-        "fp32": "double",
-        "f32": "double",
+        # Pass 16-bit floating-point scalars as raw bit patterns.
+        "fp16": "uint16_t",
+        "bf16": "uint16_t",
+        "fp32": "float",
+        "f32": "float",
         "fp64": "double",
     }[ty]
-
-
-def make_kernel_signature(signature):
-    """
-    Creates a kernel signature in C to be able to efficiently extract
-    arguments in the launcher.
-    """
-
-    def _flatten_signature(sig, output):
-        # Flatten tuples
-        if isinstance(sig, tuple):
-            for x in sig:
-                _flatten_signature(x, output)
-        else:
-            output.append(sig)
-
-    flat_signature = []
-    for sig in signature:
-        _flatten_signature(sig, flat_signature)
-    kernel_signature = [x for x in flat_signature if x != "constexpr"]
-
-    return triton.runtime.driver.active.utils.build_signature_metadata((kernel_signature, ))
 
 
 def annotate_arguments(signature):
@@ -686,11 +666,12 @@ class XPULauncher(object):
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
-        launcher = triton.runtime.driver.active.utils.launch
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta=None, descriptor_type="*i8")
+        utils = triton.runtime.driver.active.utils
+        expanded_signature = expand_signature(signature.values(), TensorDescABI.DECOMPOSED)
         self.arg_annotations = annotate_arguments(expanded_signature)
-        self.kernel_signature = make_kernel_signature(expanded_signature)
-        self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta=[])
+        self.kernel_signature = utils.build_signature_metadata(
+            ([ty for _, ty in get_kernel_argument_layout(signature.values(), TensorDescABI.DECOMPOSED)], ))
+        self.launch = wrap_handle_tensordesc(utils.launch, signature, tensordesc_meta=[])
 
         # Serialize KernelArguments for SPIR-V Runner
         self.serialize_kernel_args = knobs.intel.enable_dump_spirv_kernel_args
@@ -700,6 +681,10 @@ class XPULauncher(object):
         self.constants = constants
         self.signature = signature
         self.dump_launch_params = os.environ.get("TRITON_DUMP_LAUNCH_PARAMS") == "1"
+        self.global_scratch_size = metadata.global_scratch_size
+        self.global_scratch_align = metadata.global_scratch_align
+        self.profile_scratch_size = metadata.profile_scratch_size
+        self.profile_scratch_align = metadata.profile_scratch_align
 
     def _resolve_dump_dir(self, cache_dir):
         dump_dir_root = knobs.intel.dump_spirv_kernel_args_dir
@@ -749,6 +734,28 @@ class XPULauncher(object):
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
+        active_driver = triton.runtime.driver.active
+
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_fn = allocator.get()
+                return alloc_fn(grid_size * size, align, stream)
+            return None
+
+        def allocate_default_profile_scratch(size, align):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                return active_driver.allocate_default_profile_scratch(grid_size * size, align, stream)
+            return None
+
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        if _allocation.has_profile_allocator():
+            profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                               _allocation._profile_allocator)
+        else:
+            profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
+
         if self.serialize_kernel_args:
             if self.print_dump_spirv_kernel_args_info:
                 print(
@@ -764,7 +771,8 @@ class XPULauncher(object):
                                       launch_enter_hook, launch_exit_hook, *args), self.constants, self.signature)
 
         self.launch(gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
-                    launch_exit_hook, self.arg_annotations, self.kernel_signature, args)
+                    launch_exit_hook, global_scratch, profile_scratch, self.arg_annotations, self.kernel_signature,
+                    args)
 
 
 class XPUDriver(DriverBase):
@@ -833,6 +841,18 @@ class XPUDriver(DriverBase):
     def get_device_interface(self):
         import torch
         return torch.xpu
+
+    def allocate_default_profile_scratch(self, size: int, alignment: int, stream):
+        import torch
+        device = self.get_active_torch_device()
+        if not stream:
+            with torch.xpu.stream(torch.xpu.current_stream(device)):
+                return torch.zeros(size, dtype=torch.int8, device=device)
+        launch_stream = torch.xpu.get_stream_from_external(stream, device=device)
+        with torch.xpu.stream(launch_stream):
+            scratch = torch.zeros(size, dtype=torch.int8, device=device)
+        scratch.record_stream(launch_stream)
+        return scratch
 
     @staticmethod
     def is_active():

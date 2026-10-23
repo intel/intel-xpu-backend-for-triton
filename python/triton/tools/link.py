@@ -192,22 +192,12 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
     src += (f"TT_ResultTy {name}(TT_StreamTy stream, {gen_signature_with_full_args(metas[-1])}){{")
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        if is_xpu():
-            cond_fn = (  #
-                lambda val, hint: f"(reinterpret_cast<uintptr_t>({val}) % {hint} == 0)"  #
-                if val in ('A', 'B', 'C')  #
-                else f"({val} % {hint} == 0)"  #
-                if hint == 16  #
-                else f"({val} == {hint})"  #
-                if hint == 1  #
-                else None)
-        else:
-            cond_fn = (  #
-                lambda val, hint: f"((uintptr_t){val} % {hint} == 0)"  #
-                if hint == 16  #
-                else f"({val} == {hint})"  #
-                if hint == 1  #
-                else None)
+        cond_fn = (  #
+            lambda val, hint: f"((uintptr_t){val} % {hint} == 0)"  #
+            if hint == 16  #
+            else f"({val} == {hint})"  #
+            if hint == 1  #
+            else None)
         conds = " && ".join([  #
             cond_fn(val, hint)  #
             for val, hint in zip(meta.arg_names, meta.sizes)  #
@@ -242,7 +232,9 @@ def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
         src = f"EXPORT_FUNC TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
     else:
         src = f"TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
-    src += f"  assert (algo_id < (int)sizeof({meta.orig_kernel_name}_kernels));\n"
+    src += f"  int num_algos = (int)(sizeof({meta.orig_kernel_name}_kernels) / sizeof({meta.orig_kernel_name}_kernels[0]));\n"
+    src += "  if (algo_id < 0 || algo_id >= num_algos)\n"
+    src += "    return TT_ERROR_INVALID_VALUE;\n"
     if is_cuda():
         src += f"  return {meta.orig_kernel_name}_kernels[algo_id](stream, {', '.join(meta.arg_names)});\n"
     if is_xpu():
@@ -351,7 +343,6 @@ if __name__ == "__main__":
     with args.out.with_suffix(ext).open("w") as fp:
         out = backend_prelude
         out += "#include <stdint.h>\n"
-        out += "#include <assert.h>\n"
         out += "\n"
         out += "\n".join(defs)
         out += "\n"

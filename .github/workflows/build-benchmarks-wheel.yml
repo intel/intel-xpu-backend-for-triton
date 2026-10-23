@@ -50,7 +50,7 @@ jobs:
       - runner-0.0.22
     strategy:
       matrix:
-        python: ${{ fromJson(inputs.python-version && format('["{0}"]', inputs.python-version) || '["3.10","3.11","3.12","3.13","3.14"]') }}
+        python: ${{ fromJson(inputs.python-version && format('["{0}"]', inputs.python-version) || '["3.11","3.12","3.13","3.14"]') }}
       fail-fast: false
       max-parallel: 2
     timeout-minutes: 120
@@ -80,6 +80,9 @@ jobs:
 
       - name: Sign wheels with Sigstore (keyless)
         # SHA-pinned for supply-chain safety; comment tracks the human-readable version.
+        # Skipped for fork PRs: GitHub never grants id-token: write to pull_request
+        # runs from forked repos, so OIDC-based signing always fails there.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: sigstore/gh-action-sigstore-python@790bc6befb9d733738f18d8f895854b453640ec9 # v3.5.0
         with:
           inputs: benchmarks/dist/*.whl

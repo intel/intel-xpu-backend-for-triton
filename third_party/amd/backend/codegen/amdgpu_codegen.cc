@@ -1,3 +1,5 @@
+#include "LLVMABIGuard.h"
+
 #include "triton/Tools/LLVMOptions.h"
 
 #include "llvm/ADT/SmallString.h"
@@ -5,6 +7,7 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -115,6 +118,15 @@ void initializeTarget() {
   llvm::parallel::strategy = llvm::hardware_concurrency(1);
 }
 
+void enableFPContraction(llvm::Module &module) {
+  for (llvm::Function &function : module)
+    for (llvm::Instruction &instruction : llvm::instructions(function))
+      if (instruction.getOpcode() == llvm::Instruction::FAdd ||
+          instruction.getOpcode() == llvm::Instruction::FSub ||
+          instruction.getOpcode() == llvm::Instruction::FMul)
+        instruction.setHasAllowContract(true);
+}
+
 } // namespace
 
 extern "C" TRITON_AMD_EXPORT int
@@ -149,9 +161,13 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
   if (options->flags && options->flags[0]) {
     llvm::SmallVector<llvm::StringRef, 4> flags;
     llvm::StringRef(options->flags).split(flags, ',');
-    for (llvm::StringRef flag : flags)
-      if (!flag.empty())
-        settings.emplace_back(flag.str(), "true");
+    for (llvm::StringRef flag : flags) {
+      if (flag.empty())
+        continue;
+      auto [name, value] = flag.split('=');
+      settings.emplace_back(name.str(),
+                            name.size() == flag.size() ? "true" : value.str());
+    }
   }
 
   if (options->disabledPasses && options->disabledPasses[0]) {
@@ -175,6 +191,12 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
     return fail(message, error);
   }
 
+  // LLVM no longer supports globally enabling FP contraction through
+  // TargetOptions. Preserve enableFPFusion by expressing that permission on
+  // the operations consumed by the independently pinned code generator.
+  if (options->enableFPFusion)
+    enableFPContraction(*module);
+
   module->setTargetTriple(llvm::Triple(options->triple));
   std::string targetError;
   const llvm::Target *target = llvm::TargetRegistry::lookupTarget(
@@ -183,8 +205,6 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
     return fail(targetError, error);
 
   llvm::TargetOptions targetOptions;
-  if (options->enableFPFusion)
-    targetOptions.AllowFPOpFusion = llvm::FPOpFusion::Fast;
   targetOptions.TrapUnreachable = true;
   targetOptions.MCOptions.AsmVerbose = true;
   targetOptions.MCOptions.PreserveAsmComments = true;

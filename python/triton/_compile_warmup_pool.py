@@ -117,14 +117,25 @@ def _restore_dynamic_source(python_function, src):
             )
 
 
-def _make_dynamic_jit_callable(callable_type, args, src, starting_line_number):
+@dataclass(frozen=True)
+class _SourceLocation:
+    file_name: str
+    starting_line_number: int
+    def_file_line_number: int
+    def_file_col_number: int
+
+
+def _make_dynamic_jit_callable(callable_type, args, src, source_location: _SourceLocation):
     python_function = args[0]
     if isinstance(python_function, _CodeGenFunction):
         python_function = python_function.jit_function.fn
     _restore_dynamic_source(python_function, src)
     function = callable_type(*args)
     function._unsafe_update_src(src)
-    function.starting_line_number = starting_line_number
+    function.file_name = source_location.file_name
+    function.starting_line_number = source_location.starting_line_number
+    function.def_file_line_number = source_location.def_file_line_number
+    function.def_file_col_number = source_location.def_file_col_number
     return function
 
 
@@ -178,7 +189,9 @@ class _JITFunctionPickler(CloudPickler):
             obj._repr,
             obj.launch_metadata,
         )
-        return _make_dynamic_jit_callable, (type(obj), args, obj.src, obj.starting_line_number)
+        source_location = _SourceLocation(obj.file_name, obj.starting_line_number, obj.def_file_line_number,
+                                          obj.def_file_col_number)
+        return _make_dynamic_jit_callable, (type(obj), args, obj.src, source_location)
 
 
 def _jit_dumps(obj):
@@ -348,6 +361,7 @@ class ProcessPoolWarmupDispatcher:
         self.current_phase = phase
         self._capture_lock = threading.Lock()
         self._pending = []
+        self._tolerated_failures = set()
         self._first_submit = None
         self._attempted_tests = set()
         self._serialized_keys = set()
@@ -514,6 +528,11 @@ class ProcessPoolWarmupDispatcher:
                 ))
         return result
 
+    def tolerate_failure(self, future):
+        """Mark `future` as already handled by the caller, so `finish()` doesn't
+        re-raise its exception a second time when it drains `self._pending`."""
+        self._tolerated_failures.add(future)
+
     def finish(self):
         if self._connection is not None:
             self._connection.close()
@@ -523,6 +542,8 @@ class ProcessPoolWarmupDispatcher:
         submitted = len(self._pending)
         try:
             for future in self._pending:
+                if future in self._tolerated_failures:
+                    continue
                 worker_results.append(future.result())
         finally:
             self._executor.shutdown(wait=True)
@@ -552,6 +573,7 @@ class ProcessPoolWarmupDispatcher:
             }
             print(f"TRITON_CI_WARMUP_POOL {json.dumps(metrics, sort_keys=True)}", flush=True)
             self._pending.clear()
+            self._tolerated_failures.clear()
             self._attempted_tests.clear()
             self._serialized_keys.clear()
             self._serialized_functions.clear()

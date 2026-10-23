@@ -261,6 +261,22 @@ void XpuptiProfiler::XpuptiProfilerPimpl::callbackFn(
                                                scope.scopeId, 1, isMissingName,
                                                dataToEntry);
   } else if (callback_data->_phase == PTI_CB_PHASE_API_EXIT) {
+    // PTI reports the kernel name only on exit: re-enter the unnamed launch op
+    // under it, so the kernel's metric lands on the launch op itself.
+    const pti_gpu_op_details *op = callback_data->_operation_count > 0
+                                       ? callback_data->_operation_details
+                                       : nullptr;
+    if (op != nullptr && op->_operation_kind == PTI_GPU_OPERATION_KIND_KERNEL &&
+        op->_name != nullptr && *op->_name != '\0' &&
+        threadState.isApiExternOp &&
+        threadState.scopeStack.back().name.empty()) {
+      auto scopeId = threadState.scopeStack.back().scopeId;
+      threadState.exitOp();
+      threadState.enterOp(Scope(scopeId, op->_name));
+      threadState.profiler.correlation.correlate(
+          callback_data->_correlation_id, scopeId, 1, /*isMissingName=*/false,
+          threadState.dataToEntry);
+    }
     threadState.exitOp();
     threadState.profiler.correlation.submit(callback_data->_correlation_id);
   } else {

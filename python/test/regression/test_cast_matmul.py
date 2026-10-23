@@ -13,7 +13,7 @@ import torch
 import triton
 import triton.runtime as tr
 import triton.language as tl
-from triton._internal_testing import is_hip_cdna3, is_cuda, is_hip, is_xpu_cri
+from triton._internal_testing import is_hip_cdna3, is_cuda, is_hip
 
 pytestmark = pytest.mark.enable_warmup(min_capability=9)
 
@@ -85,7 +85,7 @@ def matmul_kernel(A, B, C, M, N, K,  #
                                                              for k in [16, 32, 64]  #
                                                              for m in [16, 64]  #
                                                              for n in [16, 64, 128]] + [(32, 32, 32)])
-                          for (M, K, N) in ([(64, 768, 128)] if is_xpu_cri() else [(768, 768, 1024)])  #
+                          for (M, K, N) in [(768, 768, 1024)]  #
                           for w in input_dtypes
                           for x in input_dtypes  #
                           for o in out_dtypes] + [(16, 8, 16, 8, 16, 16, "int8", "float32", "float32"),

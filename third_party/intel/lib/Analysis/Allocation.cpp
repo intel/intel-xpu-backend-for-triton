@@ -50,6 +50,15 @@ unsigned allocationAnalysisScratchSizeFn(Operation *op) {
         ReduceOpHelper helper(op);
         return ttgi::getScratchSizeInBytesOld(helper, op);
       })
+      .Case<HistogramOp>([](HistogramOp op) {
+        // The Intel lowering always counts in shared memory, including the
+        // small histograms upstream counts with warp ballots and no scratch.
+        RankedTensorType dstTy = op.getType();
+        int threadsPerWarp = gpu::TritonGPUDialect::getThreadsPerWarp(
+            op->getParentOfType<ModuleOp>());
+        return std::max<int>(dstTy.getNumElements(), threadsPerWarp) *
+               dstTy.getElementTypeBitWidth() / 8;
+      })
       .Default([](Operation *op) {
         return defaultAllocationAnalysisScratchSizeFn(op);
       });

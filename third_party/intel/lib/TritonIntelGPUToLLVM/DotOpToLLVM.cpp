@@ -4,6 +4,8 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::getShapePerCTA;
+using ::mlir::triton::gpu::isPermutationMatrixLayout;
+using ::mlir::triton::gpu::toLinearLayout;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace fma_details {
@@ -11,6 +13,10 @@ template <typename OpTy>
 LogicalResult convertDPAS(OpTy op, typename OpTy::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
+LogicalResult convertIntegerFMADot(triton::DotOp op,
+                                   triton::DotOp::Adaptor adaptor,
+                                   const LLVMTypeConverter *typeConverter,
+                                   ConversionPatternRewriter &rewriter);
 } // namespace fma_details
 
 namespace {
@@ -26,21 +32,33 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     Value A = op.getA();
     Value D = op.getResult();
 
+    auto DTensorTy = cast<RankedTensorType>(D.getType());
+    if (!isPermutationMatrixLayout(
+            toLinearLayout(DTensorTy.getShape(), DTensorTy.getEncoding())))
+      return rewriter.notifyMatchFailure(
+          op,
+          "DotOp result encoding must have a permutation-matrix linear layout");
+
     // Here we assume the DotOp's operands always comes from shared memory.
     auto AShapePerCTA = getShapePerCTA(A.getType());
     size_t reduceAxis = 1;
     unsigned K = AShapePerCTA[reduceAxis];
     bool isOuter = K == 1;
 
-    if (!isOuter && isa<DpasEncodingAttr>(
-                        cast<RankedTensorType>(D.getType()).getEncoding())) {
+    if (!isOuter && isa<DpasEncodingAttr>(DTensorTy.getEncoding())) {
       return fma_details::convertDPAS(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
 
-    if (isa<BlockedEncodingAttr>(
-            cast<RankedTensorType>(D.getType()).getEncoding()))
+    if (isa<BlockedEncodingAttr>(DTensorTy.getEncoding())) {
+      // Lower integer dots to dp4a rather than to a mul/add chain: IGC folds
+      // such a chain back into a dp4a and mis-pairs its two operands
+      // (intel/intel-xpu-backend-for-triton#7854).
+      if (isa<IntegerType>(DTensorTy.getElementType()))
+        return fma_details::convertIntegerFMADot(op, adaptor,
+                                                 getTypeConverter(), rewriter);
       return convertFMADot(op, adaptor, getTypeConverter(), rewriter);
+    }
 
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
