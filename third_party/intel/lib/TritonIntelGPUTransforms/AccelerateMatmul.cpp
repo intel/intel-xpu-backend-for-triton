@@ -411,6 +411,56 @@ public:
   }
 
 private:
+  /// True if B plus the accumulator of the dot do not fit in the large GRF.
+  static bool exceedsRegistersWhenDuplicated(
+      Operation *dotOp, ArrayRef<int64_t> shape,
+      const ttgi::DpasEncodingAttr::DPASCapability &dpasCap) {
+    Value operandB = getDotOperands(dotOp).second;
+    auto bType = dyn_cast<RankedTensorType>(operandB.getType());
+    auto cType = dyn_cast<RankedTensorType>(dotOp->getResult(0).getType());
+    if (!bType || !cType)
+      return false;
+    unsigned rank = shape.size();
+    int64_t m = shape[rank - 2], n = shape[rank - 1];
+    int64_t k = bType.getShape()[rank - 2];
+    int64_t bBytes = k * n * bType.getElementTypeBitWidth() / 8;
+    int64_t accBytes = m * n * cType.getElementTypeBitWidth() / 8;
+    // A GRF entry holds one 32-bit value per lane of the DPAS sub-group.
+    constexpr int64_t largeGRFEntries = 256;
+    int64_t largeGRFBytes = largeGRFEntries * dpasCap.executionSize * 4;
+    return bBytes + accBytes > largeGRFBytes;
+  }
+
+  /// Dots whose A operand is computed from this dot.
+  static SmallVector<Operation *> getConsumersAlongA(Operation *dotOp) {
+    auto filter = [&dotOp](Operation *op) {
+      return op->getParentRegion() == dotOp->getParentRegion();
+    };
+    SetVector<Operation *> forwardSlice;
+    getForwardSlice(dotOp, &forwardSlice, {filter});
+    SmallVector<Operation *> consumers;
+    for (Operation *op : forwardSlice)
+      if (isa<tt::DotOp, tt::DotScaledOp>(op) &&
+          getChainedDotOps(getDotOperands(op).first).contains(dotOp))
+        consumers.push_back(op);
+    return consumers;
+  }
+
+  /// Whether the warps should go along N instead of being duplicated along M.
+  /// A producer moves only together with an oversized consumer.
+  static bool shouldDistributeAlongN(
+      Operation *dotOp, ArrayRef<int64_t> shape,
+      const ttgi::DpasEncodingAttr::DPASCapability &dpasCap) {
+    if (!exceedsRegistersWhenDuplicated(dotOp, shape, dpasCap))
+      return false;
+    if (!getChainedDotOps(getDotOperands(dotOp).first).empty())
+      return true;
+    return llvm::any_of(getConsumersAlongA(dotOp), [&](Operation *consumer) {
+      auto type = cast<RankedTensorType>(consumer->getResult(0).getType());
+      return exceedsRegistersWhenDuplicated(consumer, type.getShape(), dpasCap);
+    });
+  }
+
   SmallVector<unsigned>
   getWarpsPerTile(Operation *dotOp,
                   const ttgi::DpasEncodingAttr::DPASCapability &dpasCap,
@@ -474,8 +524,14 @@ private:
       // per-iteration exchange -- measured 1.6x to 7.6x slower for N == 16,
       // M == 128, growing with the warp count. Trading the exchange against the
       // parallelism it costs needs a cost model rather than this guard.
+      //
+      // Duplicating along M only pays off while the copy fits in registers.
       if (chainedDotKind == ChainedDotKind::ChainedAlongA &&
           maxNumWarpsAlongM == 1) {
+        if (shouldDistributeAlongN(dotOp, shape, dpasCap)) {
+          ret[rank - 1] = assignBatchWarps(numWarps);
+          return ret;
+        }
         ret[rank - 2] = assignBatchWarps(numWarps);
         return ret;
       }
