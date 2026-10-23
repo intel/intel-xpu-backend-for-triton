@@ -54,6 +54,9 @@ class XPUOptions:
     sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
     dynamic_shared_memory: bool = knobs.intel.dynamic_shared_memory
     use_barrier: bool = False
+    # Dot prefetch: -2 keeps the existing policy, -1 disables, >=0 is iterations ahead.
+    prefetch_a_distance: int = -2
+    prefetch_b_distance: int = -2
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -71,6 +74,10 @@ class XPUOptions:
     max_grf_mode: str = "256"
 
     def __post_init__(self):
+        for name in ('prefetch_a_distance', 'prefetch_b_distance'):
+            distance = getattr(self, name)
+            if not isinstance(distance, int) or distance < -2 or distance >= self.num_stages:
+                raise ValueError(f"{name} must be -2 (default), -1 (disabled), or in [0, num_stages)")
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
@@ -552,7 +559,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if os.environ.get("TRITON_INTEL_ANNOTATE_LATENCIES", "0") == "1":
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier, opt.prefetch_a_distance,
+                                          opt.prefetch_b_distance)
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode, not opt.in_loop_sink)

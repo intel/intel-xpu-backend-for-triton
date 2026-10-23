@@ -40,7 +40,19 @@ def expand_matmul_autotune_configs(configs):
              'GROUP_SIZE_M': g, 'grf_mode': '256'}, num_stages=s, num_warps=32)
         for n in [128, 256] for s in [2, 3, 4] for g in [1, 2, 4, 8]
     ]
-    return list({tuple(sorted(config.all_kwargs().items())): config for config in configs}.values())
+    configs = list({tuple(sorted(config.all_kwargs().items())): config for config in configs}.values())
+    prefetch_configs = []
+    for config in configs:
+        if config.num_stages < 2:
+            continue
+        # Compare disabled, current-tile, and default lookahead for each dot operand.
+        for a_distance in [-1, 0, config.num_stages - 1]:
+            for b_distance in [-1, 0, config.num_stages - 1]:
+                if a_distance == b_distance == config.num_stages - 1:
+                    continue
+                kwargs = dict(config.kwargs, prefetch_a_distance=a_distance, prefetch_b_distance=b_distance)
+                prefetch_configs.append(triton.Config(kwargs, num_stages=config.num_stages, num_warps=config.num_warps))
+    return configs + prefetch_configs
 
 
 def get_matmul_autotune_configs() -> List[triton.Config]:

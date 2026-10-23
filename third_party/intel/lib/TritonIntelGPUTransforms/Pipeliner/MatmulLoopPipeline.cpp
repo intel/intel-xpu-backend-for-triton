@@ -40,6 +40,7 @@ struct PrefetchCandidate {
            "only tt::LoadOp and tt::DescriptorLoadOp can be prefetched");
   }
   Operation *op;
+  int distance = -2;
 
   /// Whether \p op has the block_io attribute and rank >= 2 result type,
   /// making it eligible for 2D block prefetching.
@@ -224,8 +225,8 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
 }
 
 /// Create a prefetch operation for the given load operation.
-static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp,
-                             bool useAnnotations) {
+static Operation *createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp,
+                                   bool useAnnotations) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
   ttgi::CachePolicy cachePolicy =
@@ -268,11 +269,13 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp,
     if (Attribute c = loadOp->getAttr(tt::kLoopClusterAttrName))
       prefetchOp->setAttr(tt::kLoopClusterAttrName, c);
   }
+  return prefetchOp;
 }
 
 /// Create a prefetch operation for the given load operation.
-static void createPrefetchOp(scf::ForOp &forOp, tt::DescriptorLoadOp loadOp,
-                             bool useAnnotations) {
+static Operation *createPrefetchOp(scf::ForOp &forOp,
+                                   tt::DescriptorLoadOp loadOp,
+                                   bool useAnnotations) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
   ttgi::CachePolicy cachePolicy =
@@ -303,17 +306,24 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::DescriptorLoadOp loadOp,
     if (Attribute c = loadOp->getAttr(tt::kLoopClusterAttrName))
       prefetchOp->setAttr(tt::kLoopClusterAttrName, c);
   }
+  return prefetchOp;
 }
 
 /// Create prefetch operations for the given load candidates.
 static void createPrefetchOps(scf::ForOp &forOp,
                               ArrayRef<PrefetchCandidate> candidates,
-                              bool useAnnotations) {
+                              bool useAnnotations, int numStages) {
   assert(!candidates.empty() && "Expecting at least one candidate");
   for (const PrefetchCandidate &candidate : candidates) {
     TypeSwitch<Operation *>(candidate.op)
         .Case<tt::LoadOp, tt::DescriptorLoadOp>([&](auto loadOp) {
-          createPrefetchOp(forOp, loadOp, useAnnotations);
+          Operation *prefetch = createPrefetchOp(forOp, loadOp, useAnnotations);
+          if (candidate.distance >= 0) {
+            auto stage =
+                IntegerAttr::get(IntegerType::get(forOp.getContext(), 32),
+                                 numStages - 1 - candidate.distance);
+            prefetch->setAttr(tt::kLoopStageAttrName, stage);
+          }
         })
         .Default([](Operation *op) {
           llvm_unreachable("Unsupported load operation type");
@@ -476,11 +486,23 @@ createSchedule(scf::ForOp forOp, int numStages) {
 }
 
 bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
+                                        int prefetchADistance,
+                                        int prefetchBDistance,
                                         mlir::scf::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
   SmallVector<PrefetchCandidate> candidates =
       collectPrefetchCandidates(forOp, numStages);
+  for (PrefetchCandidate &candidate : candidates) {
+    auto encoding =
+        allTransitiveUsesHaveDotEncoding(candidate.op->getResult(0));
+    if (encoding)
+      candidate.distance =
+          encoding.getOpIdx() == 0 ? prefetchADistance : prefetchBDistance;
+  }
+  llvm::erase_if(candidates, [](const PrefetchCandidate &candidate) {
+    return candidate.distance == -1;
+  });
   if (candidates.empty()) {
     LDBG("No loads to pipeline");
     return false;
@@ -518,7 +540,7 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
   LDBG("Pipeline path: " << (useAnnotations ? "annotation-driven" : "legacy"));
 
   // 2. Create the prefetching operations for the loads collected.
-  createPrefetchOps(forOp, candidates, useAnnotations);
+  createPrefetchOps(forOp, candidates, useAnnotations, numStages);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.

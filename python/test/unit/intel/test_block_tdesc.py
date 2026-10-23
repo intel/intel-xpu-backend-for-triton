@@ -294,3 +294,53 @@ def test_tdesc_loop_carried_index(step, device, with_allocator):
 
     assert torch.equal(c, ref), \
         f"step={step}: {num_wrong}/{M * N} elements wrong with {block_loads} 2D block load(s)"
+
+
+@triton.jit
+def _prefetch_distance_matmul(A, B, C, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+                              BATCHED: tl.constexpr):
+    pm = tl.program_id(0) * 64
+    pn = tl.program_id(1) * 64
+    batch = tl.program_id(2)
+    if BATCHED:
+        ad = tl.make_tensor_descriptor(A, [2, M, K], [M * K, K, 1], [1, 64, 32])
+        bd = tl.make_tensor_descriptor(B, [2, K, N], [K * N, N, 1], [1, 32, 64])
+    else:
+        ad = tl.make_tensor_descriptor(A, [M, K], [K, 1], [64, 32])
+        bd = tl.make_tensor_descriptor(B, [K, N], [N, 1], [32, 64])
+    acc = tl.full((64, 64), 0, tl.float32)
+    for k in range(tl.cdiv(K, 32)):
+        if BATCHED:
+            a = ad.load([batch, pm, k * 32]).reshape((64, 32))
+            b = bd.load([batch, k * 32, pn]).reshape((32, 64))
+        else:
+            a = ad.load([pm, k * 32])
+            b = bd.load([k * 32, pn])
+        acc = tl.dot(a, b, acc)
+    rows = pm + tl.arange(0, 64)
+    cols = pn + tl.arange(0, 64)
+    tl.store(C + batch * M * N + rows[:, None] * N + cols[None, :], acc,
+             (rows[:, None] < M) & (cols[None, :] < N))
+
+
+@pytest.mark.skipif(not is_xpu(), reason="Intel prefetch distance options")
+@pytest.mark.parametrize("num_stages", [2, 3])
+@pytest.mark.parametrize("K", [16, 48, 160])
+@pytest.mark.parametrize("batched", [False, True])
+@pytest.mark.parametrize("a_mode,b_mode", [(a, b) for a in [-1, 0, -2] for b in [-1, 0, -2]])
+def test_tdesc_prefetch_distance_partial_tiles(num_stages, K, batched, a_mode, b_mode, device):
+    M, N = 65, 80
+    prefix = (2,) if batched else ()
+    a = torch.randint(-2, 3, (*prefix, M, K), device=device).to(torch.bfloat16)
+    b = torch.randint(-2, 3, (*prefix, K, N), device=device).to(torch.bfloat16)
+    c = torch.empty((*prefix, M, N), device=device, dtype=torch.float32)
+    a_distance = num_stages - 1 if a_mode == -2 else a_mode
+    b_distance = num_stages - 1 if b_mode == -2 else b_mode
+    kernel = _prefetch_distance_matmul[(triton.cdiv(M, 64), triton.cdiv(N, 64), 2 if batched else 1)](
+        a, b, c, M, N, K, batched, num_warps=4, num_stages=num_stages,
+        prefetch_a_distance=a_distance, prefetch_b_distance=b_distance)
+    torch.testing.assert_close(c, a.float() @ b.float(), atol=0, rtol=0)
+    if a_mode == b_mode == -1:
+        assert 'ttig.descriptor_prefetch' not in kernel.asm['ttgir']
+    elif K == 160:
+        assert 'ttig.descriptor_prefetch' in kernel.asm['ttgir']

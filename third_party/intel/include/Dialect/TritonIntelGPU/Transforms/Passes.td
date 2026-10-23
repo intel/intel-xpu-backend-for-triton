@@ -258,6 +258,10 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
            "number of pipeline stages">,
     Option<"useBarrier", "use-barrier", "bool", /*default*/"false",
            "generate barriers">,
+    Option<"prefetchADistance", "prefetch-a-distance", "int32_t", /*default*/"-2",
+           "dot operand A prefetch distance: -2 default, -1 disabled, >=0 iterations ahead">,
+    Option<"prefetchBDistance", "prefetch-b-distance", "int32_t", /*default*/"-2",
+           "dot operand B prefetch distance: -2 default, -1 disabled, >=0 iterations ahead">,
   ];
 }
 

@@ -39,13 +39,14 @@ static bool preCondition(scf::ForOp forOp) {
   return true;
 }
 
-static void pipelineLoop(scf::ForOp forOp, int numStages, bool useBarrier) {
+static void pipelineLoop(scf::ForOp forOp, int numStages, bool useBarrier,
+                         int prefetchADistance, int prefetchBDistance) {
   mlir::scf::PipeliningOption options;
   if (!preCondition(forOp))
     return;
 
-  bool foundSchedule =
-      ttgi::preProcessLoopAndGetSchedule(forOp, numStages, options);
+  bool foundSchedule = ttgi::preProcessLoopAndGetSchedule(
+      forOp, numStages, prefetchADistance, prefetchBDistance, options);
   if (!foundSchedule)
     return;
 
@@ -83,6 +84,14 @@ struct IntelGPUPipelinePass
     if (!m->hasAttr(ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
       return;
 
+    if (prefetchADistance < -2 || prefetchBDistance < -2 ||
+        prefetchADistance >= numStages || prefetchBDistance >= numStages) {
+      m.emitError("prefetch distances must be -2 (default), -1 (disabled), or "
+                  "in [0, num-stages)");
+      signalPassFailure();
+      return;
+    }
+
     if (numStages <= 1)
       return;
 
@@ -90,7 +99,8 @@ struct IntelGPUPipelinePass
     getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
     for (scf::ForOp forOp : loops)
-      pipelineLoop(forOp, numStages, useBarrier);
+      pipelineLoop(forOp, numStages, useBarrier, prefetchADistance,
+                   prefetchBDistance);
   }
 };
 } // anonymous namespace

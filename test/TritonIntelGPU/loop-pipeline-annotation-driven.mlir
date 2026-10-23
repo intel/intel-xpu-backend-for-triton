@@ -1,3 +1,36 @@
+// RUN: triton-opt %s -tritonintelgpu-pipeline="num-stages=3 prefetch-a-distance=-1" | FileCheck %s --check-prefix=BONLY
+// RUN: triton-opt %s -tritonintelgpu-pipeline="num-stages=3 prefetch-a-distance=0 prefetch-b-distance=1" | FileCheck %s --check-prefix=A0B1
+// RUN: triton-opt %s -tritonintelgpu-pipeline="num-stages=3 prefetch-a-distance=-1 prefetch-b-distance=-1" | FileCheck %s --check-prefix=NONE
+// RUN: not triton-opt %s -tritonintelgpu-pipeline="num-stages=3 prefetch-a-distance=3" 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not triton-opt %s -tritonintelgpu-pipeline="num-stages=3 prefetch-b-distance=-3" 2>&1 | FileCheck %s --check-prefix=INVALID
+
+// INVALID: prefetch distances must be -2 (default), -1 (disabled), or in [0, num-stages)
+// BONLY-LABEL: tt.func public @gemm_pipeline_structural_equivalence
+// BONLY-COUNT-2: ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<1x64x256xf16>
+// BONLY-NOT: ttig.descriptor_prefetch
+// BONLY: scf.for
+// BONLY: ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<1x64x256xf16>
+// BONLY-NOT: ttig.descriptor_prefetch
+// BONLY: tt.dot
+// BONLY-NOT: ttig.descriptor_prefetch
+
+// A0B1-LABEL: tt.func public @gemm_pipeline_structural_equivalence
+// A0B1-NOT: ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<1x128x64xf16>
+// A0B1: ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<1x64x256xf16>
+// A0B1-NOT: ttig.descriptor_prefetch
+// A0B1: scf.for
+// A0B1-DAG: ttig.descriptor_prefetch {{.*}}loop.stage = 2 : i32{{.*}} : !tt.tensordesc<1x128x64xf16>
+// A0B1-DAG: ttig.descriptor_prefetch {{.*}}loop.stage = 1 : i32{{.*}} : !tt.tensordesc<1x64x256xf16>
+// A0B1: tt.dot
+// A0B1-NOT: ttig.descriptor_prefetch
+
+// NONE-LABEL: tt.func public @gemm_pipeline_structural_equivalence
+// NONE-NOT: ttig.descriptor_prefetch
+// NONE: scf.for
+// NONE-NOT: ttig.descriptor_prefetch
+// NONE: tt.dot
+// NONE-NOT: ttig.descriptor_prefetch
+
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline=num-stages=3 | FileCheck %s --check-prefix=DEFAULT
 // RUN: env TRITON_INTEL_ANNOTATE_LATENCIES=1 triton-opt %s -split-input-file -tritongpu-assign-latencies=num-stages=3 -tritongpu-schedule-loops -tritonintelgpu-pipeline=num-stages=3 | FileCheck %s --check-prefix=ANNOTATED
 

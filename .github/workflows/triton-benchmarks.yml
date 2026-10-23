@@ -143,6 +143,8 @@ jobs:
 
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
+        with:
+          command: DEBUG=1 pip install -v --no-build-isolation .
 
       - name: Create reports dir
         run: |
@@ -172,6 +174,15 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm') }}
         run: |
           source ./scripts/capture-hw-details.sh
+          make
+          gemm_build_dir=$(PYTHONPATH=./python python -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
+          (
+            cd "$gemm_build_dir"
+            ninja triton-opt
+            lit -v test/TritonIntelGPU/loop-pipeline.mlir test/TritonIntelGPU/loop-pipeline-annotation-driven.mlir test/TritonIntelGPU/loop-pipeline-elementwise.mlir
+          )
+          pip install pytest
+          pytest -s --tb=short --device=xpu python/test/unit/intel/test_block_tdesc.py::test_tdesc_prefetch_distance_partial_tiles
           triton-benchmarks run gemm --provider triton --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
       - name: Run Triton GEMM kernel benchmark - with tensor of pointer
