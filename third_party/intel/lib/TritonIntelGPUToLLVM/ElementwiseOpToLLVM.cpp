@@ -570,13 +570,25 @@ Fp8E4M3Nv_to_Fp16Pairs(Location loc, ConversionPatternRewriter &rewriter,
   Value shifted = b.ashr(i16x2VecTy, lanes, splatI16(1));
   Value aligned = b.and_(i16x2VecTy, shifted, splatI16(0xBFFF));
 
+  // NaN: the reserved bytes 0x7F/0xFF are the only ones whose exponent and
+  // mantissa bits (13..7 of `aligned`) are all ones, and adding 0x80 carries
+  // through them into bit 14. OR-ing that carry into `aligned` makes the
+  // exponent all ones with a nonzero mantissa, i.e. a signed quiet NaN before
+  // the multiply (the sign and payload of the product are unspecified).
+  // Nothing else carries, so every other byte is untouched.
+  //
+  // This is integer ops rather than the compare and select of
+  // rebiasFp8E4M3ToFp16: a dot B operand held by every warp is converted
+  // together with a lot of other live values, and with the compare the K loop
+  // of the unified attention decode kernels has more than 100 moves of the
+  // flag register to GRFs (5 without it) and runs slower; see
+  // https://github.com/intel/intel-xpu-backend-for-triton/issues/8478. The
+  // one-element-at-a-time path keeps the compare and select, as the GEMMs of
+  // #8311 take it.
+  Value carry = b.and_(i16x2VecTy, b.add(i16x2VecTy, aligned, splatI16(0x80)),
+                       splatI16(0x4000));
+  aligned = b.or_(i16x2VecTy, aligned, carry);
   Value h = b.fmul(b.bitcast(aligned, fp16x2VecTy), splatF16(256.0f));
-  Value mag = LLVM::FAbsOp::create(rewriter, loc, fp16x2VecTy, h);
-  Value isReserved =
-      LLVM::FCmpOp::create(rewriter, loc, vec_ty(i1_ty, 2),
-                           LLVM::FCmpPredicate::ogt, mag, splatF16(448.0f));
-  Value qnan = b.bitcast(splatI16(0x7E00), fp16x2VecTy);
-  h = b.select(isReserved, qnan, h);
 
   return {b.extract_element(f16_ty, h, b.i32_val(0)),
           b.extract_element(f16_ty, h, b.i32_val(1))};
@@ -1351,6 +1363,22 @@ static int64_t getDotOperandK(Operation *op) {
   return ty.getShape()[ty.getRank() - (enc.getOpIdx() == 0 ? 1 : 2)];
 }
 
+// Whether `op`'s operand is a dot B operand that each of several warps holds in
+// full, i.e. all warps are along M.
+static bool isDotBInEveryWarp(Operation *op) {
+  auto ty = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto enc =
+      ty ? dyn_cast<triton::gpu::DotOperandEncodingAttr>(ty.getEncoding())
+         : nullptr;
+  auto dpas =
+      enc ? dyn_cast<triton::gpu::intel::DpasEncodingAttr>(enc.getParent())
+          : nullptr;
+  if (!dpas || enc.getOpIdx() != 1)
+    return false;
+  ArrayRef<unsigned> warps = dpas.getWarpsPerCTA();
+  return warps.back() == 1 && warps[warps.size() - 2] > 1;
+}
+
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<FpToFpOp, FpToFpOpConversion> {
@@ -1512,7 +1540,8 @@ struct FpToFpOpConversion
 
     // Software fp8e4m3 -> fp16 needs more choices than the two a
     // ConverterSelector holds: the integer-domain sequence on LTS drivers (see
-    // Fp8E4M3Nv_to_Fp16Int for why) and pairs for dot operands with K < 64.
+    // Fp8E4M3Nv_to_Fp16Int for why) and pairs for dot operands with K < 64 and
+    // for a B operand that every warp converts in full.
     //
     // FIXME: drop the LTS branch and Fp8E4M3Nv_to_Fp16Int once the float
     // sequence (which changed since the LoopSink blowup was measured; it now
@@ -1527,7 +1556,8 @@ struct FpToFpOpConversion
         static Converter c{Fp8E4M3Nv_to_Fp16Int, 2};
         return c;
       }
-      if (int64_t k = getDotOperandK(op); k && k < 64) {
+      if (int64_t k = getDotOperandK(op);
+          (k && k < 64) || isDotBInEveryWarp(op)) {
         static Converter c{Fp8E4M3Nv_to_Fp16Pairs, 2};
         return c;
       }
@@ -1683,7 +1713,8 @@ struct FpToFpOpFromDwordsConversion : public ConvertOpToLLVMPattern<FpToFpOp> {
                   ConversionPatternRewriter &rewriter) const override {
     if (!isa<Float8E4M3FNType>(getElementTypeOrSelf(op.getSrc().getType())) ||
         !getElementTypeOrSelf(op.getType()).isF16() ||
-        HasAttr<SUPPORT_F8_CONV>(op) || HasAttr<IS_LTS>(op))
+        HasAttr<SUPPORT_F8_CONV>(op) || HasAttr<IS_LTS>(op) ||
+        isDotBInEveryWarp(op))
       return failure();
     std::optional<SmallVector<std::pair<Value, int64_t>>> bytes =
         getBytesOfI32Vectors(adaptor.getSrc());
@@ -1731,6 +1762,44 @@ struct ElementwiseOpConversion
   }
 };
 
+// Converts the integer or f64 `v` to f32 with round-to-odd (toward zero, then
+// the lowest bit set if inexact), so that the f32 -> bf16 rounding that follows
+// is the only one.
+static Value convertToFp32RoundToOdd(Location loc,
+                                     ConversionPatternRewriter &rewriter,
+                                     Value v, bool isSigned = false) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Type ty = v.getType();
+  if (ty.getIntOrFloatBitWidth() <= 24) // Exact in f32.
+    return isSigned ? Value(LLVM::SIToFPOp::create(rewriter, loc, f32_ty, v))
+                    : Value(LLVM::UIToFPOp::create(rewriter, loc, f32_ty, v));
+
+  MLIRContext *ctx = rewriter.getContext();
+  auto towardZero =
+      LLVM::RoundingModeAttr::get(ctx, LLVM::RoundingMode::TowardZero);
+  auto except = arith::getLLVMDefaultFPExceptionBehavior(*ctx);
+  Value truncated, inexact;
+  if (ty.isF64()) {
+    truncated = LLVM::ConstrainedFPTruncIntr::create(rewriter, loc, f32_ty, v,
+                                                     towardZero, except);
+    Value back = b.fpext(ty, truncated);
+    inexact = LLVM::FCmpOp::create(rewriter, loc, i1_ty,
+                                   LLVM::FCmpPredicate::one, back, v);
+  } else if (isSigned) {
+    truncated = LLVM::ConstrainedSIToFP::create(rewriter, loc, f32_ty, v,
+                                                towardZero, except);
+    Value back = LLVM::FPToSIOp::create(rewriter, loc, ty, truncated);
+    inexact = b.icmp_ne(back, v);
+  } else {
+    truncated = LLVM::ConstrainedUIToFP::create(rewriter, loc, f32_ty, v,
+                                                towardZero, except);
+    Value back = LLVM::FPToUIOp::create(rewriter, loc, ty, truncated);
+    inexact = b.icmp_ne(back, v);
+  }
+  Value bits = b.bitcast(truncated, i32_ty);
+  return b.bitcast(b.or_(bits, b.zext(i32_ty, inexact)), f32_ty);
+}
+
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion>;
@@ -1749,13 +1818,32 @@ struct SIToFPOpConversion
       return {
           intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
     } else if (outElemTy.isBF16()) {
-      auto value =
-          LLVM::SIToFPOp::create(rewriter, loc, f32_ty, operands[0][0]);
+      Value value = convertToFp32RoundToOdd(loc, rewriter, operands[0][0],
+                                            /*isSigned=*/true);
       return {
           intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
     }
 
     return {LLVM::SIToFPOp::create(rewriter, loc, elemTy, operands[0][0])};
+  }
+};
+
+struct UIToFPOpConversion
+    : ElementwiseOpConversionBase<arith::UIToFPOp, UIToFPOpConversion> {
+  using Base = ElementwiseOpConversionBase<arith::UIToFPOp, UIToFPOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(arith::UIToFPOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // Left to the common lowering.
+    if (!getElementType(op.getOut()).isBF16())
+      return {};
+
+    Value value = convertToFp32RoundToOdd(loc, rewriter, operands[0][0]);
+    return {intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
   }
 };
 
@@ -1828,10 +1916,13 @@ struct TruncFOpConversion
     auto outElemTy = getElementType(op.getOut());
     if (outElemTy.isBF16()) {
       auto inElemTy = getElementType(op.getIn());
-      assert(inElemTy.isF32() && "unsupported conversion");
+      assert((inElemTy.isF32() || inElemTy.isF64()) &&
+             "unsupported conversion");
+      Value in = operands[0][0];
+      if (inElemTy.isF64())
+        in = convertToFp32RoundToOdd(loc, rewriter, in);
       return {// Trunc uses the default rounding mode: RTNE
-              intel::convertFp32ToBf16(loc, rewriter, operands[0][0],
-                                       RoundingMode::RTNE)};
+              intel::convertFp32ToBf16(loc, rewriter, in, RoundingMode::RTNE)};
     }
     return {LLVM::FPTruncOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
@@ -2276,6 +2367,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<UIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FpToFpOpFromDwordsConversion>(typeConverter,
                                              benefit.getBenefit() + 1);

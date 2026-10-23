@@ -20,19 +20,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %14 = tt.load %6 {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : tensor<256x!tt.ptr<f32>, #blocked0>
     %16 = tt.load %6 {cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal>} : tensor<256x!tt.ptr<f32>, #blocked0>
     // COM: isVolatile
-    // CHECK-COUNT-2: llvm.load volatile {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK-COUNT-2: llvm.load volatile {{.*}} <alignment = 16> : !llvm.ptr<1> -> vector<4xi32>
     // COM: `ca` -> L1C_L3C, the hardware default, so no annotation.
-    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK-COUNT-2: llvm.load {{.*}} <alignment = 16> : !llvm.ptr<1> -> vector<4xi32>
     // COM: `cg` -> L1UC_L3C, and `cs` -> L1S_L3C, both keep L3 cached. Neither is
     // COM: expressible as `nontemporal`, a single bit that IGC turns into LSC
     // COM: `.uc.uc` and so bypasses L3 too (#7843). A plain load carries no
     // COM: annotation for them; see getNonTemporalFlag() for why the per-level
     // COM: decoration cannot be used here either.
-    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK-COUNT-2: llvm.load {{.*}} <alignment = 16> : !llvm.ptr<1> -> vector<4xi32>
     // COM: `cs`
-    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK-COUNT-2: llvm.load {{.*}} <alignment = 16> : !llvm.ptr<1> -> vector<4xi32>
     // COM: `cv` -> L1UC_L3UC, which `nontemporal` does express exactly.
-    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64, nontemporal} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK-COUNT-2: llvm.load {{.*}} <alignment = 16, nontemporal> : !llvm.ptr<1> -> vector<4xi32>
     tt.return
   }
 }
@@ -58,19 +58,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.store %6, %cst {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.store %6, %cst {cachePolicy = #tt.cache_policy<cache_modifier = wt, eviction_policy = evict_normal>} : tensor<256x!tt.ptr<f32>, #blocked0>
     // COM: no cache modifier
-    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK-COUNT-2: llvm.store {{.*}} <alignment = 16> : vector<4xi32>, !llvm.ptr<1>
     // COM: `cg` -> L1UC_L3WB, which asks for L3 write-back. `nontemporal` is a
     // COM: single bit that IGC turns into LSC `.uc.uc`, bypassing L3 too, so it
     // COM: cannot express `cg`; a plain store carries no annotation for it.
     // COM: See getNonTemporalFlag().
-    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK-COUNT-2: llvm.store {{.*}} <alignment = 16> : vector<4xi32>, !llvm.ptr<1>
     // COM: `wb` -> L1WB_L3WB; no annotation.
-    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK-COUNT-2: llvm.store {{.*}} <alignment = 16> : vector<4xi32>, !llvm.ptr<1>
     // COM: `cs` -> L1S_L3S, which keeps the line in L3, so `nontemporal` does
     // COM: not express it either. Unannotated, a documented approximation.
-    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK-COUNT-2: llvm.store {{.*}} <alignment = 16> : vector<4xi32>, !llvm.ptr<1>
     // COM: `wt` -> L1WT_L3WT; no annotation.
-    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK-COUNT-2: llvm.store {{.*}} <alignment = 16> : vector<4xi32>, !llvm.ptr<1>
     tt.return
   }
 }
@@ -210,7 +210,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
     %6 = tt.addptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
     %7 = tt.load %6 {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>} : tensor<256x!tt.ptr<f32>, #blocked0>
-    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK-COUNT-2: llvm.load {{.*}} <alignment = 16> : !llvm.ptr<1> -> vector<4xi32>
     // CHECK-NOT: nontemporal
     tt.return
   }
@@ -248,7 +248,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @descriptor_load_cg_scalar(%desc: !tt.tensordesc<256xf32>) {
     %c0_i32 = arith.constant 0 : i32
     %val = tt.descriptor_load %desc[%c0_i32] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
-    // CHECK-COUNT-8: llvm.load {{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // CHECK-COUNT-8: llvm.load {{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
     tt.return
   }
 }
@@ -261,7 +261,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @descriptor_load_cs_scalar(%desc: !tt.tensordesc<256xf32>) {
     %c0_i32 = arith.constant 0 : i32
     %val = tt.descriptor_load %desc[%c0_i32] {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
-    // CHECK-COUNT-8: llvm.load {{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // CHECK-COUNT-8: llvm.load {{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
     tt.return
   }
 }
@@ -274,7 +274,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @descriptor_load_cv_scalar(%desc: !tt.tensordesc<256xf32>) {
     %c0_i32 = arith.constant 0 : i32
     %val = tt.descriptor_load %desc[%c0_i32] {cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal>} : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
-    // CHECK-COUNT-8: llvm.load {{.*}} {alignment = 4 : i64, nontemporal} : !llvm.ptr<1> -> i32
+    // CHECK-COUNT-8: llvm.load {{.*}} <alignment = 4, nontemporal> : !llvm.ptr<1> -> i32
     tt.return
   }
 }

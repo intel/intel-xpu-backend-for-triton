@@ -2,14 +2,104 @@
 
 // COM: The prover's rules are unit-tested directly in
 // COM: unittest/Analysis/SymbolicBoundsTest.cpp. The sections here are the
-// COM: ones that need a whole module: the element-correspondence case that
-// COM: must never be refuted, and a TTGIR layout conversion, which a gtest
-// COM: string cannot carry.
+// COM: ones that need a whole module: two realistic loops end to end, the
+// COM: element-correspondence case that must never be refuted, and a TTGIR
+// COM: layout conversion, which a gtest string cannot carry.
 // COM:
 // COM: `-verify-diagnostics=only-expected` ignores unannotated remarks, so a
 // COM: comparison with no `expected-remark` above it asserts nothing; only the
-// COM: annotated ones are pinned. There is no `scf.for` remark: the prover
-// COM: has no trip-count API.
+// COM: annotated ones are pinned. Every `scf.for` also gets a `trip>=1` and a
+// COM: `trip>=2` remark, the verdicts of `tripCountAtLeast`.
+
+// COM: The inductor reduction shape: `r + lane < rnumel` over
+// COM: a loop `0 to rnumel step 64`. Unprovable as written - the last
+// COM: iteration's tail lanes are masked off - and provable exactly when the
+// COM: loop ends on an iteration boundary, the exact-loop-end condition on
+// COM: the loop's own upper bound.
+
+// CHECK-LABEL: tt.func @reduction_loop
+module {
+  tt.func @reduction_loop(%ptr: !tt.ptr<f32>, %rnumel: i32) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+    %ns = tt.splat %rnumel : i32 -> tensor<64xi32>
+    // expected-remark@+2 {{trip>=1: Conditional{arg1 > 0}}}
+    // expected-remark@+1 {{trip>=2: Conditional{arg1 >= 65}}}
+    scf.for %r = %c0 to %rnumel step %c64 : i32 {
+      %rs = tt.splat %r : i32 -> tensor<64xi32>
+      %idx = arith.addi %rs, %lane : tensor<64xi32>
+      // expected-remark@+1 {{verdict: Conditional{arg1 divisible by 64}}}
+      %mask = arith.cmpi slt, %idx, %ns : tensor<64xi32>
+      scf.yield
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// COM: `0 to 64 step 64` runs once: "at least 1" holds, "at least 2" is
+// COM: refuted. A kernel-argument bound is never refuted, even under an
+// COM: upper-bound assume.
+
+// CHECK-LABEL: tt.func @single_trip_loop
+module {
+  tt.func @single_trip_loop(%N: i32) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    // expected-remark@+2 {{trip>=1: Satisfied}}
+    // expected-remark@+1 {{trip>=2: Refuted}}
+    scf.for %i = %c0 to %c64 step %c64 : i32 {
+    }
+    %le = arith.cmpi sle, %N, %c64 : i32
+    llvm.intr.assume %le : i1
+    // expected-remark@+2 {{trip>=1: Conditional{arg0 > 0}}}
+    // expected-remark@+1 {{trip>=2: Conditional{arg0 >= 65}}}
+    scf.for %j = %c0 to %N step %c64 : i32 {
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The tutorial-03 K loop: `lane < K - 64*k` over a loop
+// COM: whose upper bound is `cdiv(K, 64)`. Three conditions, in the fixed
+// COM: order facts, preconditions, guards:
+// COM:   - `arg0 divisible by 64` is the exact-cdiv candidate;
+// COM:   - `arg0 >= 0` is the precondition of the division facts, which hold
+// COM:     only for a non-negative dividend. It does not change lo(d), and
+// COM:     dropping it would prove the mask for a negative K;
+// COM:   - `arg0 <= 2147483584` is the wrap guard on the cdiv numerator
+// COM:     `K + 63`, which is INT32_MAX for K near the top of i32 and makes
+// COM:     the quotient, and so the proof, wrong.
+// COM: The matching `K + 63 >= INT32_MIN` guard is omitted because K's own
+// COM: i32 range already implies it.
+
+// CHECK-LABEL: tt.func @cdiv_k_loop
+module {
+  tt.func @cdiv_k_loop(%K: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c63 = arith.constant 63 : i32
+    %c64 = arith.constant 64 : i32
+    %num = arith.addi %K, %c63 : i32
+    %q = arith.divsi %num, %c64 : i32
+    %lane = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+    scf.for %k = %c0 to %q step %c1 : i32 {
+      %k64 = arith.muli %k, %c64 : i32
+      %rem = arith.subi %K, %k64 : i32
+      %rs = tt.splat %rem : i32 -> tensor<64xi32>
+      // expected-remark@+1 {{verdict: Conditional{arg0 divisible by 64; arg0 >= 0; arg0 <= 2147483584}}}
+      %mask = arith.cmpi slt, %lane, %rs : tensor<64xi32>
+      scf.yield
+    }
+    tt.return
+  }
+}
+
+// -----
 
 // COM: One `make_range` reaching a comparison through two different
 // COM: `expand_dims` axes: `r[:, None] < r[None, :]`. The two occurrences are
