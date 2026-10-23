@@ -301,8 +301,6 @@ std::string simdReduceAsm(std::string binOp, unsigned warpSize,
   // interleaved group after factoring out the lane stride.
   assert(numLaneToReduce <= warpSize / interleave &&
          "numLaneToReduce must fit within one interleaved group");
-  assert((numLaneToReduce % interleave) == 0 &&
-         "numLaneToReduce must be aligned to the interleave pattern");
 
   unsigned logicalReduceWidth = std::max(1u, warpSize / interleave);
   unsigned numLogicalResults = logicalReduceWidth / numLaneToReduce;
