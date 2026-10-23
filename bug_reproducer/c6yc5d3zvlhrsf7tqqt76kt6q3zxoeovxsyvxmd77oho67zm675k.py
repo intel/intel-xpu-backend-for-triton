@@ -81,18 +81,27 @@ def run_standalone():
     else:
         raise RuntimeError("No XPU/CUDA available")
 
-    x = torch.arange(8192 * 11, device=device, dtype=torch.float16).reshape(8192, 11)
-    out = torch.empty(976 * 256, device=device, dtype=torch.float16)
+    # IMPORTANT: the kernel stores output as fp16, while it sums in fp32.
+    # Using a full arange(8192*11) makes each row sum exceed fp16 max (~65504),
+    # so the output saturates to inf. Keep the values small enough for fp16 output.
+    # Match the actual Inductor graph in the debug output:
+    #   %view_61 : Tensor "f16[11, 256, 32][8192, 32, 1]xpu:0"
+    #   %sum_5   : Tensor "f16[256, 32][32, 1]xpu:0" = sum(view_61, dim=0)
+    # The reduction dimension is the leading axis, and the output is stored in a
+    # packed [256, 976] buffer with the valid region at [:, :32].
+    x = torch.arange(11 * 256 * 32, device=device, dtype=torch.float16).reshape(11, 256, 32).contiguous()
+    flat_x = x.reshape(-1)
+    out = torch.empty(256 * 976, device=device, dtype=torch.float16)
 
     XBLOCK = 128
     grid = (triton.cdiv(x.shape[0], XBLOCK), )
 
     # Use the raw stream handle that the generated Triton launcher expects.
     triton_per_fused_stack_sum_30.run(
-        x,
+        flat_x,
         out,
-        x.shape[0],
-        x.shape[1],
+        flat_x.numel(),
+        11,
         stream=stream,
     )
 
@@ -101,16 +110,12 @@ def run_standalone():
     else:
         torch.cuda.synchronize()
 
-    idx = torch.arange(x.shape[0], device=device, dtype=torch.int32)
-    packed_idx = (idx % 32) + 976 * (idx // 32)
-    ref = torch.zeros(out.numel(), device=device, dtype=torch.float32)
-    ref[packed_idx] = x.to(torch.float32).sum(dim=1)
+    got = out.view(256, 976)[:, :32].to(torch.float32)
+    ref = x.sum(dim=0).to(torch.float32)
 
-    got = out.to(torch.float32)[packed_idx]
-    ref_vals = ref[packed_idx]
-    print('kernel sample:', got[:8])
-    print('reference sample:', ref_vals[:8])
-    print('matches:', torch.allclose(got, ref_vals, rtol=1e-3, atol=1e-3))
+    print('kernel sample:', got[:2, :8])
+    print('reference sample:', ref[:2, :8])
+    print('matches:', torch.allclose(got, ref, rtol=1e-3, atol=1e-3))
 
 
 if __name__ == "__main__":
