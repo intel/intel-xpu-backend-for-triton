@@ -3,13 +3,6 @@ name: Test SPIRVRunner
 on:
   workflow_dispatch:
 
-  pull_request:
-    branches:
-      - main
-  push:
-    branches:
-      - main
-
 concurrency:
   group: ${{ github.workflow }}-${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.run_id || github.event.pull_request.number }}
   cancel-in-progress: true
@@ -41,24 +34,5 @@ jobs:
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
 
-      - name: Build SPIRVRunner
-        run: |
-          source /opt/intel/oneapi/setvars.sh
-          set -x
-          export LLVM_DIR="$HOME/.triton/llvm/llvm-ubuntu-x64"
-          export CMAKE_PREFIX_PATH="$(python scripts/torch_cmake.py)"
-          cd utils/SPIRVRunner
-          mkdir build
-          cd build
-          cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
-          make -j
-
-      - name: Test SPIRVRunner
-        run: |
-          source /opt/intel/oneapi/setvars.sh
-          set -x
-          pip install pytest
-          export SPIRV_RUNNER_PATH="$GITHUB_WORKSPACE/utils/SPIRVRunner/build/SPIRVRunner"
-          export SPIRV_RUNNER_TESTS="$GITHUB_WORKSPACE/utils/SPIRVRunner/tests"
-          cd utils/SPIRVRunner
-          pytest tests/test_spirv_runner.py
+      - name: Build and test SPIRVRunner
+        uses: ./.github/actions/test-spirvrunner

@@ -169,6 +169,9 @@ jobs:
           for s in $SEQUENTIAL_SUITES; do
             matrix="$matrix, {\"suite\":\"$s\",\"shard_id\":-1}"
           done
+          if [[ "${{ inputs.driver_version }}" == "rolling" && "${{ inputs.runner_label }}" != "lts" ]]; then
+            matrix="$matrix, {\"suite\":\"spirvrunner\",\"shard_id\":-1}"
+          fi
           echo "matrix=[${matrix#,}]" | tee -a $GITHUB_OUTPUT
 
       - name: Install test dependencies
@@ -350,6 +353,10 @@ jobs:
         run: |
           export PYTEST_MAX_PROCESSES=4
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
+
+      - name: Run SPIRVRunner tests
+        if: matrix.loop.suite == 'spirvrunner'
+        uses: ./.github/actions/test-spirvrunner
 
       - name: Run Tutorials
         if: matrix.loop.suite == 'rest'
