@@ -49,19 +49,19 @@ createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
 
 namespace detail {
 template <typename AttrT>
-using LoopAnnotationIdT = decltype(std::declval<AttrT>().getId());
+using LoopAnnotationAlignT = decltype(std::declval<AttrT>().getAlign());
 } // namespace detail
 
 // TODO (akhilgoe): Drop this fallback in the next update. Keeping this now to
 // avoid breaking current and future builds with different LLVM versions.
 template <typename AttrT = LoopAnnotationAttr>
 AttrT createLICMLoopAnnotation(MLIRContext *ctx, LoopLICMAttr licm) {
-  if constexpr (llvm::is_detected<detail::LoopAnnotationIdT, AttrT>::value)
+  if constexpr (llvm::is_detected<detail::LoopAnnotationAlignT, AttrT>::value)
+    return AttrT::get(ctx, /*id=*/{}, {}, {}, {}, {}, {}, licm, {}, {}, {}, {},
+                      {}, {}, /*align=*/{}, {}, {}, {});
+  else
     return AttrT::get(ctx, /*id=*/{}, {}, {}, {}, {}, {}, licm, {}, {}, {}, {},
                       {}, {}, {}, {}, {});
-  else
-    return AttrT::get(ctx, {}, {}, {}, {}, {}, licm, {}, {}, {}, {}, {}, {}, {},
-                      {}, {});
 }
 } // namespace mlir::LLVM
 
