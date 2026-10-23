@@ -1,10 +1,10 @@
-# SPIRV Runner
+# Triton Kernel Runner
 
-A utility program for running Triton-generated SPIR-V kernels with identical inputs outside of Triton.
+A utility program for running Triton-generated kernel binaries (SPIR-V, or native/AOT zebin) with identical inputs outside of Triton.
 
 ## Building
 
-`SPIRVRunner` depends on Torch.
+`TritonKernelRunner` depends on Torch.
 
 If you build Triton with venv, you can easily find your torch library path by running the following command in the top level Triton directory:
 
@@ -22,13 +22,13 @@ for f in importlib.metadata.files('torch'):
     print(f.locate().resolve())
 ```
 
-`SPIRVRunner` depends on LLVM support library for argument parsing in order to use this run following in the top level Triton directory.
+`TritonKernelRunner` depends on LLVM support library for argument parsing in order to use this run following in the top level Triton directory.
 
 ```
 scripts/compile-triton.sh --llvm
 ```
 
-SPIR-V Runner build steps:
+TritonKernelRunner build steps:
 
 ```
 mkdir build
@@ -40,7 +40,7 @@ make -j
 Eventless kernel submission is enabled by default, but it requires a rolling (non-LTS) driver. If you are running on an LTS driver, disable it at configure time:
 
 ```
-SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT=0 cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+TRITON_KERNEL_RUNNER_ENABLE_EVENTLESS_SUBMIT=0 cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
 ```
 
 ## Configuration
@@ -51,7 +51,7 @@ In order to utilize this utility, Triton application must be run with the follow
 Input dumps are written into the kernel cache directory for each compiled kernel.
 
 ```
-export TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS=1
+export TRITON_XPU_ENABLE_DUMP_KERNEL_ARGS=1
 ```
 
 Optional cache location override:
@@ -63,20 +63,20 @@ export TRITON_CACHE_DIR=< Absolute path to Triton cache root >
 Optional dump directory override:
 
 ```
-export TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS_DIR=< Absolute path to SPIRV dump root >
+export TRITON_XPU_DUMP_KERNEL_ARGS_DIR=< Absolute path to dump root >
 ```
 
 Optional dump info printing:
 
 ```
-export TRITON_XPU_PRINT_DUMP_SPIRV_KERNEL_ARGS_INFO=1
+export TRITON_XPU_PRINT_DUMP_KERNEL_ARGS_INFO=1
 ```
 
 Following input data is generated in the kernel cache subdirectory (`<TRITON_CACHE_DIR>/<kernel_hash>/`),
 
-1. args_data.json - (Kernel Arguments / Grid Configuration)
+1. args_data.json - (Kernel Arguments / Grid Configuration, including `is_native_binary` and the actual binary filename)
 2. tensors  (Tensors used by the kernel (.pt))
-3. SPIR-V binary (.spv)
+3. kernel binary -- SPIR-V (.spv) by default, or native zebin (.zebin) for a kernel compiled with `generate_native_code=True`
 
 
 ## Running
@@ -84,13 +84,13 @@ Following input data is generated in the kernel cache subdirectory (`<TRITON_CAC
 Help:
 
 ```
-USAGE: SPIRVRunner [options]
+USAGE: TritonKernelRunner [options]
 
 General options:
 
   -o <string> - <Specify Output Tensor Name>
 
-  -d <string> - <Specify SPIRV dump directory path>
+  -d <string> - <Specify kernel dump directory path>
 
   -p          - Enable kernel time profiling
   -v <string> - <Specify Expected Output Tensor Names (Ex: -v expected_tensor1.pt,expected_tensor2.pt or skip)>
@@ -101,11 +101,11 @@ Note: `Output Tensor Name`  is essentially a chosen tensor that needs to be copi
 
 ### Demo (01-vector-add.py)
 
-`SPIRVRunner` is configured to run the `add_kernel.spv` SPIRV binary with inputs `tensor_0.pt` and `tensor_1.pt` and output `tensor_2.pt`. `add_kernel.spv` was generated from the `01-vector-add.py` tutorial.
+`TritonKernelRunner` is configured to run the `add_kernel.spv` SPIR-V binary with inputs `tensor_0.pt` and `tensor_1.pt` and output `tensor_2.pt`. `add_kernel.spv` was generated from the `01-vector-add.py` tutorial.
 
-SPIRVRunner Usage:
+TritonKernelRunner Usage:
 ```
-<abs path to SPIRVRunner executable> -d <TRITON_CACHE_DIR>/<kernel_hash> -o tensor_2 -p
+<abs path to TritonKernelRunner executable> -d <TRITON_CACHE_DIR>/<kernel_hash> -o tensor_2 -p
 
 Note: Prior to this run test framework to generate serialized args/tensor information
 ```
@@ -118,30 +118,30 @@ Read 3772 byte kernel.
 Loaded kernel with 0 registers and 0 register spills.
 Tensor output: [98432], Float (393728 bytes)
 Kernel execution time: 0.0096 ms
-Output Tensor Path: /abs/path/utils/SPIRVRunner/cpp_outs.pt
+Output Tensor Path: /abs/path/utils/TritonKernelRunner/cpp_outs.pt
 ```
 
 The GPU hardware, shape and data type of each Tensor (along with number of bytes), and kernel information are printed. The shape and data type of the output Tensor is currently printed, along with the the first cell in the output. Ensuring the value of the first cell is non-zero allows for a quick sanity check. The output Tensor is written to a file `cpp_outs.pt` which is a Tensor in PyTorch format. Typically, we will create a quick Python script to read the input Tensor, run the same computations in PyTorch, and then compare the PyTorch result with the loaded `cpp_outs.pt` Tensor using the PyTorch testing API.
 
 ### Test Framework
 
-In order to use the `SPIRVRunner` test framework set following environment varibles
+In order to use the `TritonKernelRunner` test framework set following environment varibles
 
 ```
-   export SPIRV_RUNNER_PATH=<abs path to SPIRV Runner executable>
-   export SPIRV_RUNNER_TESTS=<abs path to SPIRV Runner tests>
+   export TRITON_KERNEL_RUNNER_PATH=<abs path to TritonKernelRunner executable>
+   export TRITON_KERNEL_RUNNER_TESTS=<abs path to TritonKernelRunner tests>
 ```
 
 Run following command to execute,
 
 ```
-    python3 -m pytest tests/test_spirv_runner.py
+    python3 -m pytest tests/test_triton_kernel_runner.py
 ```
 
 Expected output as follows:
 
 ```
-(triton) intel-xpu-backend-for-triton/utils/SPIRVRunner$ python3 -m pytest tests/test_spirv_runner.py
+(triton) intel-xpu-backend-for-triton/utils/TritonKernelRunner$ python3 -m pytest tests/test_triton_kernel_runner.py
 ============================================================================ test session starts =============================================================================
 platform linux -- Python 3.9.18, pytest-8.3.4, pluggy-1.5.0
 rootdir: /data/kballeda/Kali/0122_ci_enable/intel-xpu-backend-for-triton
@@ -149,12 +149,12 @@ configfile: pyproject.toml
 plugins: xdist-3.6.1, forked-1.6.0
 collected 4 items
 
-tests/test_spirv_runner.py Test: utils/SPIRVRunner/tests/test_spirv_runner.py::test_argument_parsing, Status: PASS
+tests/test_triton_kernel_runner.py Test: utils/TritonKernelRunner/tests/test_triton_kernel_runner.py::test_argument_parsing, Status: PASS
 Progress: 1/1 tests passed (100.00%)
-.Test: utils/SPIRVRunner/tests/test_spirv_runner.py::test_invalid_argument, Status: PASS
+.Test: utils/TritonKernelRunner/tests/test_triton_kernel_runner.py::test_invalid_argument, Status: PASS
 Progress: 2/2 tests passed (100.00%)
-.Test: utils/SPIRVRunner/tests/test_spirv_runner.py::test_spirv_execution[intel-xpu-backend-for-triton/utils/SPIRVRunner/tests/add_kernel], Status: PASS
+.Test: utils/TritonKernelRunner/tests/test_triton_kernel_runner.py::test_spirv_execution[intel-xpu-backend-for-triton/utils/TritonKernelRunner/tests/add_kernel], Status: PASS
 Progress: 3/3 tests passed (100.00%)
-.Test: utils/SPIRVRunner/tests/test_spirv_runner.py::test_spirv_execution[/intel-xpu-backend-for-triton/utils/SPIRVRunner/tests/dot], Status: PASS
+.Test: utils/TritonKernelRunner/tests/test_triton_kernel_runner.py::test_spirv_execution[/intel-xpu-backend-for-triton/utils/TritonKernelRunner/tests/dot], Status: PASS
 Progress: 4/4 tests passed (100.00%)
 ```
