@@ -115,7 +115,14 @@ public:
 /// knows about; it can be refreshed for a newer LTS by extracting the extension
 /// names from the shipped compiler library, e.g.:
 ///   strings -a libigc.so.<version> | grep -oE 'SPV_[A-Za-z0-9_]+' | sort -u
-static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
+///
+/// Vectors beyond the core SPIR-V sizes are expressed with either
+/// `SPV_EXT_long_vector` (when \p allowLongVector) or the older
+/// `SPV_INTEL_vector_compute`. The former is not known to every compiler that
+/// can consume the module (e.g. an `ocloc` older than the installed driver), so
+/// it is a separate switch rather than being implied by \p isLTS.
+static llvm::SmallVector<SPIRV::ExtensionID>
+getAllowedExtensions(bool isLTS, bool allowLongVector) {
   llvm::SmallVector<SPIRV::ExtensionID> AllowedExtensions{
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float16_add,
@@ -138,7 +145,6 @@ static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
   if (!isLTS) {
     AllowedExtensions.append(
         {SPIRV::ExtensionID::SPV_EXT_float8,
-         SPIRV::ExtensionID::SPV_EXT_long_vector,
          SPIRV::ExtensionID::SPV_EXT_ocp_microscaling_types,
          SPIRV::ExtensionID::SPV_INTEL_16bit_atomics,
          SPIRV::ExtensionID::SPV_INTEL_bfloat16_arithmetic,
@@ -152,14 +158,16 @@ static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
          SPIRV::ExtensionID::
              SPV_INTEL_subgroup_scaled_matrix_multiply_accumulate,
          SPIRV::ExtensionID::SPV_KHR_bfloat16});
-  } else {
-    AllowedExtensions.push_back(SPIRV::ExtensionID::SPV_INTEL_vector_compute);
   }
+
+  AllowedExtensions.push_back(
+      allowLongVector ? SPIRV::ExtensionID::SPV_EXT_long_vector
+                      : SPIRV::ExtensionID::SPV_INTEL_vector_compute);
 
   return AllowedExtensions;
 }
 
-static SPIRV::TranslatorOpts getSPIRVOpts(bool isLTS) {
+static SPIRV::TranslatorOpts getSPIRVOpts(bool isLTS, bool allowLongVector) {
   SPIRV::TranslatorOpts SPIRVOpts{SPIRV::VersionNumber::SPIRV_1_4};
 
   SPIRVOpts.setMemToRegEnabled(true);
@@ -175,12 +183,13 @@ static SPIRV::TranslatorOpts getSPIRVOpts(bool isLTS) {
     SPIRVOpts.setAllowExtraDIExpressionsEnabled(true);
   }
 
-  for (SPIRV::ExtensionID Ext : getAllowedExtensions(isLTS))
+  for (SPIRV::ExtensionID Ext : getAllowedExtensions(isLTS, allowLongVector))
     SPIRVOpts.setAllowedToUseExtension(Ext, true);
   return SPIRVOpts;
 }
 
-std::string translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS) {
+std::string translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS,
+                                   bool allowLongVector) {
   llvm::SmallVector<char, 0> buffer;
 
   // verify and store llvm
@@ -200,7 +209,7 @@ std::string translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS) {
   std::ostream OS(&StreamBuf);
   std::string Err;
 
-  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOpts(isLTS);
+  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOpts(isLTS, allowLongVector);
 
 #if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
   int SpvTranslateMode = 0;
