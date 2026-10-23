@@ -1,7 +1,9 @@
 import importlib.metadata
+import mmap
 import os
 import json
 import re
+import struct
 import sys
 import hashlib
 import shutil
@@ -146,7 +148,75 @@ def find_sycl_dpclang(include_dir: list[str]) -> tuple[list[str], list[str]]:
     return include_dir, sycl_dirs
 
 
-def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
+_PROC_SELF_MAPS = "/proc/self/maps"
+
+
+def _loaded_libsycl() -> str | None:
+    """Returns the path of the SYCL runtime loaded into this process, if exactly one is."""
+    try:
+        with open(_PROC_SELF_MAPS) as maps:
+            lines = maps.read().splitlines()
+    except OSError:  # not Linux
+        return None
+    paths = set()
+    for line in lines:
+        # address, permissions, offset, device, inode and, for a mapped file, its path
+        fields = line.split(maxsplit=5)
+        if len(fields) == 6:
+            # The kernel marks a mapped file that was unlinked since, as `pip install -U` does.
+            path = fields[5].removesuffix(" (deleted)")
+            if re.fullmatch(r"libsycl\.so(\.\d+)*", os.path.basename(path)):
+                paths.add(path)
+    return paths.pop() if len(paths) == 1 else None
+
+
+def _soname(path: str) -> str | None:
+    """Returns the soname of the 64-bit little-endian ELF shared library at `path`, if it has one."""
+    try:
+        with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as elf:
+            if elf[:6] != b"\x7fELF\x02\x01":
+                return None
+            phoff, = struct.unpack_from("<Q", elf, 0x20)
+            phentsize, phnum = struct.unpack_from("<HH", elf, 0x36)
+            loads, dynamic = [], range(0)
+            for i in range(phnum):
+                p_type, _, p_offset, p_vaddr, _, p_filesz = struct.unpack_from("<IIQQQQ", elf, phoff + i * phentsize)
+                if p_type == 1:  # PT_LOAD
+                    loads.append((p_vaddr, p_offset, p_filesz))
+                elif p_type == 2:  # PT_DYNAMIC
+                    dynamic = range(p_offset, p_offset + p_filesz, 16)
+            tags = {}
+            for entry in dynamic:
+                tag, value = struct.unpack_from("<qQ", elf, entry)
+                if tag == 0:  # DT_NULL
+                    break
+                tags.setdefault(tag, value)
+            strtab, name = tags.get(5), tags.get(14)  # DT_STRTAB, DT_SONAME
+            if strtab is None or name is None:
+                return None
+            # DT_STRTAB is the address the string table is loaded at, so find it in the file.
+            for p_vaddr, p_offset, p_filesz in loads:
+                if p_vaddr <= strtab < p_vaddr + p_filesz:
+                    start = p_offset + strtab - p_vaddr + name
+                    end = elf.find(b"\0", start)
+                    return elf[start:end].decode() if end >= 0 else None
+    except (OSError, ValueError, struct.error):  # unreadable, empty or truncated
+        pass
+    return None
+
+
+def _links_runtime(lib_dir: str, runtime: str) -> bool:
+    """Whether `-lsycl` in `lib_dir` links the SYCL runtime at `runtime`, which helpers then use.
+
+    The directory holding the runtime may also hold another, which `libsycl.so` links instead. A helper
+    needs the soname of the `libsycl.so` it is linked against, and the loader reuses a loaded library
+    with that soname, so compare those. A wheel ships `libsycl.so` as a copy, so its path says nothing.
+    """
+    soname = _soname(os.path.join(lib_dir, "libsycl.so"))
+    return (soname is not None and os.path.realpath(lib_dir) == os.path.dirname(runtime) and soname == _soname(runtime))
+
+
+def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str], bool]:
     """
     Looks for the sycl library in known places.
 
@@ -154,25 +224,49 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
       include_dir: list of include directories to pass to compiler.
 
     Returns:
-      enriched include_dir and libsycl.so location.
+      enriched include_dir, libsycl.so location, and whether a SYCL compiler may build against it.
 
     Raises:
       AssertionError: if library was not found.
     """
 
+    base_include_dir = include_dir
     sycl_dirs = []
     csycl = knobs.intel.sycl_compiler
     if not csycl or csycl == "icpx":
         include_dir, sycl_dirs = find_sycl_icpx(include_dir)
     if len(sycl_dirs) == 0 and (not csycl or csycl.startswith("dpclang")):
         include_dir, sycl_dirs = find_sycl_dpclang(include_dir)
+
+    # The helpers are handed PyTorch's `sycl::queue`, so they must use the SYCL runtime PyTorch has
+    # already loaded. One found above may be another version, with another ABI, and crash on the
+    # first call on the queue. A SYCL compiler brings its own runtime, so it may not build them then.
+    # See https://github.com/intel/intel-xpu-backend-for-triton/issues/8200.
+    loaded = _loaded_libsycl()
+    if loaded and not any(_links_runtime(sycl_dir, loaded) for sycl_dir in sycl_dirs):
+        loaded_dir = os.path.dirname(loaded)
+        loaded_root = os.path.dirname(loaded_dir)
+        if _links_runtime(loaded_dir, loaded) and os.path.isfile(
+                os.path.join(loaded_root, "include", "sycl", "sycl.hpp")):
+            include_dir = base_include_dir + [
+                os.path.join(loaded_root, "include"),
+                os.path.join(loaded_root, "include", "sycl")
+            ]
+            return include_dir, [loaded_dir], False
+        if sycl_dirs:
+            warnings.warn(
+                f"Triton cannot build against the SYCL runtime loaded from {loaded}: that needs "
+                f"{os.path.join(loaded_dir, 'libsycl.so')} to link it and headers in {os.path.join(loaded_root, 'include')}. "
+                f"Triton builds against the SYCL in {', '.join(sycl_dirs)} instead, which crashes if their ABIs differ.",
+                stacklevel=2,
+            )
     if len(sycl_dirs) == 0:
         raise AssertionError("sycl headers not found, please install `icpx` compiler, "
                              "or provide `ONEAPI_ROOT` environment "
                              "or install `intel-sycl-rt>=2025.0.0` wheel"
                              "or instal `dpclang` compiler (experimental)")
 
-    return include_dir, sycl_dirs
+    return include_dir, sycl_dirs, True
 
 
 class CompilationHelper:
@@ -184,6 +278,7 @@ class CompilationHelper:
         self._library_dir = None
         self._include_dir = None
         self._libsycl_dir = None
+        self._use_sycl_compiler = None
         self.libraries = ['sycl', 'ze_loader']
 
     @property
@@ -198,7 +293,7 @@ class CompilationHelper:
         include_dir = [os.path.join(ze_root, "include")]
 
         library_dir = []
-        include_dir, self._libsycl_dir = find_sycl(include_dir)
+        include_dir, self._libsycl_dir, self._use_sycl_compiler = find_sycl(include_dir)
         if self._libsycl_dir:
             library_dir += self._libsycl_dir
         if os.name == "nt":
@@ -236,6 +331,11 @@ class CompilationHelper:
     def libsycl_dir(self) -> list[str]:
         self._compute_compilation_options_lazy
         return self._libsycl_dir
+
+    @cached_property
+    def use_sycl_compiler(self) -> bool:
+        self._compute_compilation_options_lazy
+        return self._use_sycl_compiler
 
 
 COMPILATION_HELPER = CompilationHelper()
@@ -414,6 +514,10 @@ def get_hasher_common(is_lts: bool = False):
     # share the same cache entry and load an incompatible .so.
     if COMPILATION_HELPER.libsycl_dir:
         hasher.update(str(COMPILATION_HELPER.libsycl_dir).encode("utf-8"))
+        # The directory stays when the runtime in it is upgraded in place (`pip install -U`), but the
+        # helper is linked against one soname, so it must be rebuilt then.
+        for sycl_dir in COMPILATION_HELPER.libsycl_dir:
+            hasher.update(str(_soname(os.path.join(sycl_dir, "libsycl.so"))).encode("utf-8"))
     if is_lts:
         hasher.update("is_lts=True".encode("utf-8"))
     return hasher
@@ -458,7 +562,8 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
                     extra_compiler_args += ["-DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
 
             so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
-                        COMPILATION_HELPER.libraries, ccflags=extra_compiler_args)
+                        COMPILATION_HELPER.libraries, ccflags=extra_compiler_args,
+                        use_sycl_compiler=COMPILATION_HELPER.use_sycl_compiler)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
 
