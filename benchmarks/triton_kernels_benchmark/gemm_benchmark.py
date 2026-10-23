@@ -321,8 +321,7 @@ def get_shapes(B, M, N, K, transpose_a, transpose_b):
     return a_shape, b_shape
 
 
-X_VALS = [  # Focused B60/B580 comparison: four added shapes and two controls.
-    [1, 8192, 4096, 16384],
+X_VALS = [  # Focused comparison: four added shapes and one control.
     [1, 8192, 6144, 12288],
     [1, 8192, 6656, 16384],
     [1, 8192, 8192, 8192],
