@@ -14,11 +14,6 @@ import torch
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.benchmark_testing import DEVICE
-from triton_kernels_benchmark.gemm_benchmark import (
-    matmul,
-    matmul_kernel_with_tensor_descriptors,
-    matmul_kernel_with_tensor_descriptors_batched,
-)
 
 # Resolve the benchmark data relative to the repo root by default, but allow
 # callers to override it via an environment variable when running from a copied
@@ -82,31 +77,26 @@ def _torch_reference(op: str, a: torch.Tensor, b: torch.Tensor, bias: Optional[t
     raise ValueError(f"Unsupported op: {op}")
 
 
-def _triton_reference(op: str, a: torch.Tensor, b: torch.Tensor, bias: Optional[torch.Tensor] = None):
-    if op in {"mm", "bmm"}:
-        out = torch.empty(
-            (a.shape[0], a.shape[1], b.shape[2]), device=a.device, dtype=torch.float32) if op == "bmm" else torch.empty(
-                (a.shape[0], b.shape[1]), device=a.device, dtype=torch.float32)
-        matmul(
-            a,
-            b,
-            out,
-            matmul_kernel=matmul_kernel_with_tensor_descriptors,
-            matmul_kernel_batched=matmul_kernel_with_tensor_descriptors_batched,
-        )
-        return out
+def _compiled_triton_reference(op: str, a: torch.Tensor, b: torch.Tensor, bias: Optional[torch.Tensor] = None):
+    import torch._inductor.config as cfg
+
+    cfg.max_autotune_gemm = True
+    cfg.max_autotune_gemm_backends = "TRITON"
+
+    if op == "mm":
+        fn = lambda x, y: x @ y
+        compiled = torch.compile(fn, backend="inductor", mode="max-autotune-no-cudagraphs")
+        return compiled(a, b)
+    if op == "bmm":
+        fn = lambda x, y: torch.bmm(x, y)
+        compiled = torch.compile(fn, backend="inductor", mode="max-autotune-no-cudagraphs")
+        return compiled(a, b)
     if op == "addmm":
         if bias is None:
             raise ValueError("bias is required for addmm")
-        out = torch.empty_like(bias, device=a.device, dtype=torch.float32)
-        matmul(
-            a,
-            b,
-            out,
-            matmul_kernel=matmul_kernel_with_tensor_descriptors,
-            matmul_kernel_batched=matmul_kernel_with_tensor_descriptors_batched,
-        )
-        return out + bias
+        fn = lambda x, y, z: torch.addmm(z, x, y)
+        compiled = torch.compile(fn, backend="inductor", mode="max-autotune-no-cudagraphs")
+        return compiled(a, b, bias)
     raise ValueError(f"Unsupported op: {op}")
 
 
@@ -186,7 +176,7 @@ def get_benchmark(
 
         elif provider == "triton":
             torch_fn = lambda: _torch_reference(op, a, b, bias)
-            triton_fn = lambda: _triton_reference(op, a, b, bias)
+            triton_fn = lambda: _compiled_triton_reference(op, a, b, bias)
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg=f"{op} to torch")
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.get_do_bench(
                 n_warmup=800,
