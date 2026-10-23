@@ -96,7 +96,21 @@ def run_standalone():
         stream=stream,
     )
 
-    print("ok")
+    if device == "xpu":
+        torch.xpu.synchronize()
+    else:
+        torch.cuda.synchronize()
+
+    idx = torch.arange(x.shape[0], device=device, dtype=torch.int32)
+    packed_idx = (idx % 32) + 976 * (idx // 32)
+    ref = torch.zeros(out.numel(), device=device, dtype=torch.float32)
+    ref[packed_idx] = x.to(torch.float32).sum(dim=1)
+
+    got = out.to(torch.float32)[packed_idx]
+    ref_vals = ref[packed_idx]
+    print('kernel sample:', got[:8])
+    print('reference sample:', ref_vals[:8])
+    print('matches:', torch.allclose(got, ref_vals, rtol=1e-3, atol=1e-3))
 
 
 if __name__ == "__main__":
