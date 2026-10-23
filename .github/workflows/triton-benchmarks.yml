@@ -172,7 +172,52 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm') }}
         run: |
           source ./scripts/capture-hw-details.sh
-          triton-benchmarks run gemm --reports $REPORTS --n_runs $N_RUNS --tag $TAG
+          python - <<'PY' > "$REPORTS/gemm-cases.tsv"
+          import contextlib
+          import sys
+
+          with contextlib.redirect_stdout(sys.stderr):
+              from triton_kernels_benchmark.benchmark_utils import BenchmarkConfigs
+              config, = BenchmarkConfigs.from_args(["describe", "gemm"]).configs
+              cases = [(str(shape), provider) for shape in config.selected_shapes
+                       for provider in config.selected_providers]
+          if not cases:
+              raise RuntimeError("No GEMM shape/provider pairs selected")
+          for shape, provider in cases:
+              print(shape, provider, sep="\t")
+          PY
+
+          summary="$REPORTS/gemm-status.md"
+          printf '| Shape (B-M-N-K) | Provider | Result |\n| --- | --- | --- |\n' > "$summary"
+          total=0
+          failed=0
+          declare -A failed_shapes=()
+          while IFS=$'\t' read -r shape provider; do
+            shape_id="${shape:1:-1}"
+            case_reports="$REPORTS/gemm/$shape_id/$provider"
+            mkdir -p "$case_reports"
+            echo "::group::GEMM $shape / $provider"
+            if triton-benchmarks run gemm --shape-pattern "$shape" --provider "$provider" \
+                --reports "$case_reports" --n_runs "$N_RUNS" --tag "$TAG" \
+                2>&1 | tee "$case_reports/benchmark.log"; then
+              result=PASS
+            else
+              result=FAIL
+              failed=$((failed + 1))
+              failed_shapes["$shape"]=1
+            fi
+            echo "::endgroup::"
+            total=$((total + 1))
+            printf '| `%s` | `%s` | %s |\n' "$shape" "$provider" "$result" >> "$summary"
+          done < "$REPORTS/gemm-cases.tsv"
+          printf '\nFailed %s of %s shape/provider pairs, affecting %s shapes.\n' \
+            "$failed" "$total" "${#failed_shapes[@]}" >> "$summary"
+          printf '\nPer-case logs and reports are under `gemm/` in the `benchmark-reports` artifact.\n' >> "$summary"
+          cat "$summary"
+          cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+          if (( failed > 0 )); then
+            exit 1
+          fi
 
       - name: Run Triton GEMM kernel benchmark - with tensor of pointer
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-tensor-of-ptr')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-tensor-of-ptr') }}
