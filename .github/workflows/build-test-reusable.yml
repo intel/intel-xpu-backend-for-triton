@@ -77,7 +77,7 @@ env:
   # Suites that are split into NUM_SHARDS shards, each shard runs on its own runner
   PARALLEL_SUITES: "scaled_dot"
   # Suites that are run without sharding, one runner per suite
-  SEQUENTIAL_SUITES: "minicore language gluon triton-kernels rest tutorial-fa-128-nofwdfp8"
+  SEQUENTIAL_SUITES: "minicore language gluon triton-kernels rest"
 
 jobs:
   build:
@@ -90,14 +90,22 @@ jobs:
     outputs:
       test-triton-command: ${{ steps.test-triton.outputs.command }}
       integration-tests-matrix: ${{ steps.test-triton.outputs.matrix }}
+      artifact-label: ${{ steps.artifact-label.outputs.name }}
     steps:
       - name: Print inputs
         run: |
           cat <<EOF
           ${{ toJSON(inputs) }}
           EOF
+
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Compute artifact label
+        id: artifact-label
+        uses: ./.github/actions/sanitize-artifact-name
+        with:
+          name: ${{ inputs.runner_label || inputs.driver_version }}
 
       - name: Load pip cache
         id: pip-cache
@@ -187,13 +195,13 @@ jobs:
       - name: Upload Triton wheels
         uses: actions/upload-artifact@v7
         with:
-          name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: triton-${{ inputs.python_version }}-${{ steps.artifact-label.outputs.name }}
           path: dist/*.whl
 
       - name: Upload test reports
         uses: actions/upload-artifact@v7
         with:
-          name: test-reports-build-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: test-reports-build-${{ inputs.python_version }}-${{ steps.artifact-label.outputs.name }}
           include-hidden-files: true
           path: reports
 
@@ -242,7 +250,7 @@ jobs:
       - name: Download Triton wheels
         uses: actions/download-artifact@v8
         with:
-          name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: triton-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}
 
       - name: Install Triton
         run: |
@@ -360,7 +368,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fp8_only
 
       - name: Run Flash Attention tutorials (HEAD_DIM=128, skip FP8)
-        if: matrix.loop.suite == 'tutorial-fa-128-nofwdfp8'
+        if: matrix.loop.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode skip_fp8
 
@@ -385,7 +393,7 @@ jobs:
       - name: Upload test reports
         uses: actions/upload-artifact@v7
         with:
-          name: test-reports-${{ matrix.loop.suite }}-${{ matrix.loop.shard_id || 0 }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: test-reports-${{ matrix.loop.suite }}-${{ matrix.loop.shard_id || 0 }}-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}
           include-hidden-files: true
           path: reports
 

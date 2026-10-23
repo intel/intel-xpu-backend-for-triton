@@ -10,10 +10,10 @@
 #blocked_8xf32 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // BW256-LABEL: global_load_v8_b32
-  // BW256: llvm.load {{.*}} {alignment = 32 : i64} : !llvm.ptr<1> -> vector<8xf32>
+  // BW256: ld.global.v8.b32
   // PRE_BW-LABEL: global_load_v8_b32
-  // PRE_BW-NOT: vector<8xf32>
-  // PRE_BW-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xf32>
+  // PRE_BW-NOT: ld.global.v8.b32
+  // PRE_BW: ld.global.v4.b32
   tt.func @global_load_v8_b32(%arg0: !tt.ptr<f32> {tt.divisibility = 32 : i32}) {
     %c256_i32 = arith.constant 256 : i32
     %0 = tt.get_program_id x : i32
@@ -34,10 +34,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #blocked_8xf32 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // BW256-LABEL: global_store_v8_b32
-  // BW256: llvm.store {{.*}} {alignment = 32 : i64} : vector<8xf32>, !llvm.ptr<1>
+  // BW256: st.global.v8.b32
   // PRE_BW-LABEL: global_store_v8_b32
-  // PRE_BW-NOT: vector<8xf32>
-  // PRE_BW-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xf32>, !llvm.ptr<1>
+  // PRE_BW-NOT: st.global.v8.b32
+  // PRE_BW: st.global.v4.b32
   tt.func @global_store_v8_b32(%arg0: !tt.ptr<f32> {tt.divisibility = 32 : i32}) {
     %c256_i32 = arith.constant 256 : i32
     %cst = arith.constant dense<1.0> : tensor<256xf32, #blocked_8xf32>
@@ -59,10 +59,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #blocked_4xf64 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // BW256-LABEL: global_load_v4_b64
-  // BW256: llvm.load {{.*}} {alignment = 32 : i64} : !llvm.ptr<1> -> vector<4xf64>
+  // BW256: ld.global.v4.b64
   // PRE_BW-LABEL: global_load_v4_b64
-  // PRE_BW-NOT: vector<4xf64>
-  // PRE_BW-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<2xf64>
+  // PRE_BW-NOT: ld.global.v4.b64
+  // PRE_BW: ld.global.v2.b64
   tt.func @global_load_v4_b64(%arg0: !tt.ptr<f64> {tt.divisibility = 32 : i32}) {
     %c128_i32 = arith.constant 128 : i32
     %0 = tt.get_program_id x : i32
@@ -100,16 +100,16 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
 #blocked_fp8 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // FP8-LABEL: @bf16_to_fp8e4
-  // PACKED: cvt.rn.satfinite.e4m3x2.bf16x2 $0, $1;", "=h,r"
-  // LEGACY: cvt.rn.satfinite.e4m3x2.f32
+  // PACKED: nvvm.convert.bf16x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xbf16> -> vector<2xi8>(f8E4M3FN)
+  // LEGACY: nvvm.convert.f32x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xi8>(f8E4M3FN)
   tt.func private @bf16_to_fp8e4(%in: tensor<64xbf16, #blocked_fp8>) -> tensor<64xf8E4M3FN, #blocked_fp8> {
     %out = tt.fp_to_fp %in, rounding = rtne : tensor<64xbf16, #blocked_fp8> -> tensor<64xf8E4M3FN, #blocked_fp8>
     tt.return %out : tensor<64xf8E4M3FN, #blocked_fp8>
   }
 
   // FP8-LABEL: @bf16_to_fp8e5
-  // PACKED: cvt.rn.satfinite.e5m2x2.bf16x2 $0, $1;", "=h,r"
-  // LEGACY: cvt.rn.satfinite.e5m2x2.f32
+  // PACKED: nvvm.convert.bf16x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xbf16> -> vector<2xi8>(f8E5M2)
+  // LEGACY: nvvm.convert.f32x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xi8>(f8E5M2)
   tt.func private @bf16_to_fp8e5(%in: tensor<64xbf16, #blocked_fp8>) -> tensor<64xf8E5M2, #blocked_fp8> {
     %out = tt.fp_to_fp %in, rounding = rtne : tensor<64xbf16, #blocked_fp8> -> tensor<64xf8E5M2, #blocked_fp8>
     tt.return %out : tensor<64xf8E5M2, #blocked_fp8>
@@ -120,6 +120,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // LEGACY: cvt.rn.f16x2.e4m3x2
   tt.func private @fp8e4_to_bf16(%in: tensor<64xf8E4M3FN, #blocked_fp8>) -> tensor<64xbf16, #blocked_fp8> {
     %out = tt.fp_to_fp %in : tensor<64xf8E4M3FN, #blocked_fp8> -> tensor<64xbf16, #blocked_fp8>
+    tt.return %out : tensor<64xbf16, #blocked_fp8>
+  }
+
+  // FP8-LABEL: @fp8e5_to_bf16
+  // PACKED: cvt.rn.bf16x2.e5m2x2 $0, $1;", "=r,h"
+  // LEGACY: cvt.rn.f16x2.e5m2x2 a, $1;
+  // LEGACY-SAME: cvt.bf16.f16 b0, a0;
+  // LEGACY-SAME: cvt.bf16.f16 b1, a1;
+  tt.func private @fp8e5_to_bf16(%in: tensor<64xf8E5M2, #blocked_fp8>) -> tensor<64xbf16, #blocked_fp8> {
+    %out = tt.fp_to_fp %in : tensor<64xf8E5M2, #blocked_fp8> -> tensor<64xbf16, #blocked_fp8>
     tt.return %out : tensor<64xbf16, #blocked_fp8>
   }
 }
@@ -146,15 +156,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
   // FP4-LABEL: @fp4_to_fp16
   // FP4-NOT: cvt.rn.bf16x2.e2m1x2
-  // FP16-NATIVE: .reg .b8 b<4>;
-  // FP16-NATIVE-SAME: mov.b32 {b0, b1, b2, b3}, $4;
-  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $0, b0;
-  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $1, b1;
-  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $2, b2;
-  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $3, b3;
-  // FP16-LEGACY-NOT: cvt.rn.f16x2.e2m1x2
+  // FP16-NATIVE-COUNT-4: nvvm.convert.f4x2.to.f16x2 {{.*}} : i8(f4E2M1FN) -> vector<2xf16>
+  // FP16-LEGACY-NOT: nvvm.convert.f4x2.to.f16x2
   // FP16-LEGACY: cvt.rn.f16x2.e4m3x2
-  // FP16-LEGACY-NOT: cvt.rn.f16x2.e2m1x2
+  // FP16-LEGACY-NOT: nvvm.convert.f4x2.to.f16x2
   // FP4-NOT: cvt.rn.bf16x2.e2m1x2
   tt.func private @fp4_to_fp16(%in: tensor<128xi8, #packed_fp4>) -> tensor<256xf16, #unpacked_fp4> {
     %out = ttg.fp4_to_fp %in {axis = 0 : i32} : tensor<128xi8, #packed_fp4> -> tensor<256xf16, #unpacked_fp4>

@@ -190,11 +190,35 @@ struct LoadStoreConversionBase {
         .getMaskAlignment(mask);
   }
 
+  /// Returns true if `v` is proven broadcast (the same value in every lane)
+  /// by `AxisInfo`, i.e. its constancy covers the full shape in every
+  /// dimension. Scalars are trivially broadcast.
+  bool isBroadcast(Value v) const {
+    auto ty = dyn_cast<RankedTensorType>(v.getType());
+    if (!ty)
+      return true;
+    AxisInfo *info =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(v);
+    if (!info)
+      return false;
+    ArrayRef<int64_t> shape = ty.getShape();
+    for (unsigned d = 0, e = ty.getRank(); d < e; ++d)
+      if (info->getConstancy(d) < static_cast<unsigned>(shape[d]))
+        return false;
+    return true;
+  }
+
+  bool hasBroadcastAddrNonBroadcastMask(Value ptr, Value mask) const {
+    return mask && isBroadcast(ptr) && !isBroadcast(mask);
+  }
+
   /// Compute vectorization factor for descriptor load/store gather fallback.
   /// Queries the descriptor's address-level AxisInfo (analogous to how
   /// getVectorSize queries the pointer operand's AxisInfo for LoadOp).
   unsigned getDescriptorVecSize(bool support256bLoadStore, Value desc,
-                                RankedTensorType resultType, Type valueElemTy,
+                                ValueRange indices, RankedTensorType resultType,
+                                Type valueElemTy,
                                 StringAttr blockIOAttr) const {
     unsigned rank = resultType.getRank();
     if (rank == 0)
@@ -244,7 +268,24 @@ struct LoadStoreConversionBase {
     unsigned vec =
         std::min({maxVec, threadContig, descContiguity, ptrAlignElems});
     assert(vec > 0 && "vec must be positive for Log2_32");
-    return std::max(1u, 1u << llvm::Log2_32(vec));
+    vec = std::max(1u, 1u << llvm::Log2_32(vec));
+
+    // The index shifts the base by index * elemBytes on the stride-one
+    // dimension, so a `vec`-element access is aligned only when the index is
+    // itself a multiple of `vec` (#7990). Other dimensions are already folded
+    // into descDivisibility by makeTensorDescAxisInfo; an unprovable index is
+    // assumed unaligned.
+    assert(descDim < indices.size() && "expected one index per descriptor dim");
+    AxisInfo *idxAxisInfo =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(indices[descDim]);
+    // A `tt.divisibility` hint is floored at 1 but never rounded, so a hint of
+    // 6 proves only a 2-element alignment: clamp to the greatest power-of-two
+    // divisor instead of rounding the min, which leaves both operands of the
+    // min powers of two. int64_t: a constant 0 index reports kMaxDivisor.
+    int64_t idxDiv = idxAxisInfo ? idxAxisInfo->getDivisibility(0) : 1;
+    int64_t idxAlign = idxDiv & -idxDiv;
+    return static_cast<unsigned>(std::min<int64_t>(vec, idxAlign));
   }
 
   std::tuple<SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
@@ -489,8 +530,7 @@ struct LoadStoreConversionBase {
   // set, fall back to the frontend-provided eviction policy hint (e.g.
   // inductor's `eviction_policy='evict_last'`) and route it to the closest
   // LSC cache mode:
-  //   EVICT_FIRST -> L1IAR_L3C  (invalidate-after-read: data is used once;
-  //                              free the L1 line immediately after delivery)
+  //   EVICT_FIRST -> DEFAULT    (ignored, see below)
   //   EVICT_LAST  -> L1C_L3C    (cache at all levels: keep the line warm for
   //                              anticipated reuse)
   //   NORMAL      -> DEFAULT    (let the hardware decide)
@@ -508,17 +548,15 @@ struct LoadStoreConversionBase {
      **/
     switch (cachePolicy.cacheModifier) {
     case CacheModifier::NONE:
-      // No explicit cache modifier: honor the eviction policy hint via the LSC
-      // cache-control decoration. EVICT_FIRST reads the line without retaining
-      // it in L1 (invalidate-after-read); EVICT_LAST keeps the line cached for
-      // anticipated reuse. This decoration does NOT bypass L1 for the load, so
-      // spatially-coalesced subgroup reads still share the line (see
-      // getNonTemporalFlag() for why EVICT_FIRST must not set nontemporal).
+      // No explicit cache modifier: EVICT_LAST keeps the line cached for
+      // anticipated reuse (no L1 bypass; see getNonTemporalFlag()). EVICT_FIRST
+      // is deliberately ignored: it marks the *value* as last-use, but its L1
+      // line is often re-read by other lanes or loop iterations. Both L1IAR_L3C
+      // and L1S_L3C were measured slower than DEFAULT on such loads (#8109).
       switch (cachePolicy.evictionPolicy) {
-      case EvictionPolicy::EVICT_FIRST:
-        return TritonGEN::LoadCacheControl::L1IAR_L3C;
       case EvictionPolicy::EVICT_LAST:
         return TritonGEN::LoadCacheControl::L1C_L3C;
+      case EvictionPolicy::EVICT_FIRST:
       case EvictionPolicy::NORMAL:
         break;
       }
@@ -639,10 +677,9 @@ struct LoadStoreConversionBase {
       // spatial reuse. These loads are typically coalesced across the subgroup
       // (adjacent lanes read adjacent elements of the same L1 line), so marking
       // them nontemporal bypasses L1 and defeats that intra-line sharing,
-      // roughly doubling memory traffic (regression #7520, mobilevit_s). The
-      // eviction hint is still honored via the LSC cache-control decoration
-      // (EVICT_FIRST -> L1IAR_L3C) set in tritonToIntelCacheModifier(), which
-      // reads the coalesced line once and then does not retain it.
+      // roughly doubling memory traffic (regression #7520, mobilevit_s).
+      // tritonToIntelCacheModifier() ignores EVICT_FIRST for the same reason
+      // (#8109).
     default:
       return false;
     }
@@ -1563,17 +1600,8 @@ struct PrefetchOpConversion
         isPrefetch256BSupported);
     if (!sizeInfo.isValid())
       return failure();
-    // Extract members to regular variables for C++17 compatibility
-    // (capturing structured bindings in lambdas requires C++20)
-    int tileHeight = sizeInfo.tileHeight;
-    int tileWidth = sizeInfo.tileWidth;
-    int numPackedVals = sizeInfo.numElemPerPackedVal;
-    int vBlocks = sizeInfo.vBlocks;
-    int rowDim = sizeInfo.rowDim;
-    int colDim = sizeInfo.colDim;
-    bool isTransposeRequired = sizeInfo.transpose;
-    std::optional<SetVector<unsigned>> regPackedBases =
-        std::move(sizeInfo.regPackedBases);
+    auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
+          isTransposeRequired, _, regPackedBases] = std::move(sizeInfo);
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
     Location loc = op.getLoc();
@@ -1743,32 +1771,13 @@ struct PrefetchOpConversion
     if (!memoryRowMajor)
       return failure();
 
-    // A tensor value is "uniform" if `AxisInfo` proves its constancy covers
-    // the full shape in every dimension (same semantics as the regular path
-    // at line 1729–1736). Scalars are trivially uniform.
-    auto isUniform = [&](Value v) {
-      auto ty = dyn_cast<RankedTensorType>(v.getType());
-      if (!ty)
-        return true;
-      AxisInfo *info =
-          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-              .getAxisInfo(v);
-      if (!info)
-        return false;
-      ArrayRef<int64_t> shape = ty.getShape();
-      for (unsigned d = 0, e = ty.getRank(); d < e; ++d)
-        if (info->getConstancy(d) < static_cast<unsigned>(shape[d]))
-          return false;
-      return true;
-    };
-
-    // Collect operands that `AxisInfo` proves are uniform, descending
+    // Collect operands that `AxisInfo` proves are broadcast, descending
     // through `arith.andi` chains (as produced by `tt::getPredMask`).
-    // Non-uniform leaves are dropped — safe for a prefetch hint.
-    SmallVector<Value> uniformOps;
+    // Non-broadcast leaves are dropped — safe for a prefetch hint.
+    SmallVector<Value> broadcastOps;
     std::function<void(Value)> collect = [&](Value v) {
-      if (isUniform(v)) {
-        uniformOps.push_back(v);
+      if (isBroadcast(v)) {
+        broadcastOps.push_back(v);
         return;
       }
       if (auto andOp = v.getDefiningOp<arith::AndIOp>()) {
@@ -1780,14 +1789,14 @@ struct PrefetchOpConversion
     Value scalarPred;
     if (Value mask = op.getMask()) {
       collect(mask);
-      if (uniformOps.empty())
+      if (broadcastOps.empty())
         return failure();
 
-      // Reduce each uniform operand to a scalar `i1` (element 0 of the
+      // Reduce each broadcast operand to a scalar `i1` (element 0 of the
       // packed LLVM representation — all lanes hold the same value by
-      // definition of uniformity) and AND them together.
+      // definition of broadcast constancy) and AND them together.
       auto tb = TritonLLVMOpBuilder(op.getLoc(), rewriter);
-      for (Value v : uniformOps) {
+      for (Value v : broadcastOps) {
         Value remapped = rewriter.getRemappedValue(v);
         if (!remapped)
           return failure();
@@ -2196,10 +2205,16 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                                          getNonTemporalFlag(op))};
       };
 
+      // FIXME: this is a workaround for IGC bug. For details see
+      // https://github.com/intel/intel-xpu-backend-for-triton/issues/8374.
+      bool avoidPredicatedInstructions =
+          hasBroadcastAddrNonBroadcastMask(ptr, mask);
+
       Value ret;
       if (!pred)
         ret = createLoadWithAttrs()[0];
-      else if (canUsePredicatedInstructions(op)) {
+      else if (canUsePredicatedInstructions(op) &&
+               !avoidPredicatedInstructions) {
         auto cacheModifier = tritonToIntelCacheModifier(op);
         ret = TritonGEN::PredicatedLoadOp::create(
             rewriter, loc, retTy, addrElem, pred, other_, cacheModifier);
@@ -2801,12 +2816,64 @@ struct DescriptorLoadOpConversion
     assertDescriptorInnerShapeCompatible(op, descTensorType.getShape(),
                                          resultType.getShape(), permuteDescDim);
 
-    // Get padding from the propagated attribute (set by
-    // MaterializeBlockPointer).
-    PaddingOption padding = PaddingOption::PAD_ZERO;
-    if (auto paddingAttr = op->getAttrOfType<triton::PaddingOptionAttr>(
-            TritonIntelGPUDialect::getDescPaddingAttrName()))
+    // Resolve the out-of-bounds fill value. Provenance is validated *before*
+    // the `ttig.desc_padding` attribute is trusted: the attribute is only
+    // stamped (by MaterializeBlockPointer) when every candidate descriptor
+    // agreed, so the defining ops are the stronger evidence of the two.
+    // Checking them first is safe because findDescriptorDefinitions is
+    // all-or-nothing -- any untraceable path yields an empty set -- so it can
+    // degrade a divergent set to empty but never fabricate a disagreement.
+    mlir::triton::intel::DescriptorDefinitions defs =
+        mlir::triton::intel::findDescriptorDefinitions(op.getDesc());
+    std::optional<PaddingOption> tracedPadding = defs.consistentPadding();
+    auto paddingAttr = op->getAttrOfType<triton::PaddingOptionAttr>(
+        TritonIntelGPUDialect::getDescPaddingAttrName());
+
+    // Traceable provenance whose candidates disagree: no single compile-time
+    // fill value exists, so the descriptor-native path cannot represent this
+    // load (part of issue #8102). The TTIR pointer expansion
+    // (RewriteTensorDescriptorToPointer) carries the padding mode as a runtime
+    // value and selects the fill per branch, and it evicts such descriptors
+    // from the descriptor-native path, so this is only reachable from
+    // hand-written TTGIR. Fail loudly rather than silently picking a mode.
+    if (!defs.empty() && !tracedPadding)
+      return op.emitError(
+          "descriptor padding is divergent: the operations defining this "
+          "descriptor disagree, so there is no single out-of-bounds fill "
+          "value; such a descriptor must be expanded to pointers by the "
+          "'triton-intel-rewrite-tensor-descriptor-to-pointer' pass, which "
+          "encodes the padding mode as a runtime value");
+
+    // The attribute is only stamped when provenance agreed, so a disagreement
+    // here means it is stale or hand-written. Neither value can be preferred
+    // over the other, and quietly keeping one would reintroduce the silent
+    // substitution this check exists to prevent.
+    if (paddingAttr && tracedPadding &&
+        paddingAttr.getValue() != *tracedPadding)
+      return op.emitError("'ttig.desc_padding' disagrees with the padding of "
+                          "the operations defining this descriptor");
+
+    if (!paddingAttr && tracedPadding)
+      return op.emitError(
+          "'ttig.desc_padding' is missing but the operations defining this "
+          "descriptor agree on a padding mode: the attribute is stamped by "
+          "the 'tritonintelgpu-materialize-block-pointer' pass whenever they "
+          "do, so add it to this operation (or run that pass) instead of "
+          "relying on the lowering to re-derive it");
+
+    PaddingOption padding;
+    if (paddingAttr) {
       padding = paddingAttr.getValue();
+    } else {
+      // Empty trace: some path reaches an untraceable value (e.g. an opaque
+      // function argument in hand-written TTGIR). The trace is all-or-nothing,
+      // so other paths may still reach a traceable producer whose padding is
+      // lost here. The LLVM descriptor struct carries no padding field, so
+      // fall back to PAD_ZERO -- the declared default of
+      // `tt.make_tensor_descriptor`. This is a compatibility fallback, not a
+      // derivation of the descriptor's padding.
+      padding = PaddingOption::PAD_ZERO;
+    }
 
     // Build the boundary-check dimension lists. Classify each dimension:
     //   - perElementDims: shape[i] or offset[i] is NOT divisible by
@@ -2820,16 +2887,16 @@ struct DescriptorLoadOpConversion
     //     is all-in or all-out, but NOT necessarily in-bounds — a fully
     //     out-of-bounds tile (offset >= shape) must be predicated to preserve
     //     zero-padding semantics.
+    // `defs` is the provenance already computed for the padding resolution
+    // above.
     ArrayRef<int64_t> blockShape = descTensorType.getShape();
-    mlir::triton::intel::DescriptorDefinitions defs =
-        mlir::triton::intel::findDescriptorDefinitions(op.getDesc());
     SmallVector<int32_t> perElementDims, blockLevelDims;
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];
-      if (defs.allSatisfy([&](MakeTensorDescOp d) {
+      if (bs > 0 && defs.allSatisfy([&](MakeTensorDescOp d) {
             return isDivisible(d.getShape()[i], bs);
           }) &&
-          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))) {
+          isDivisible(op.getIndices()[i], bs)) {
         blockLevelDims.push_back(i);
       } else {
         perElementDims.push_back(i);
@@ -2899,10 +2966,11 @@ struct DescriptorLoadOpConversion
 
     // Determine vectorization by querying the descriptor's address-level
     // AxisInfo, analogous to how LoadOp queries getVectorSize(ptr).
-    unsigned vec = getDescriptorVecSize(
-        hasSupport256bLoadStore(op), op.getDesc(), resultType, valueElemTy,
-        op->getAttrOfType<StringAttr>(
-            TritonIntelGPUDialect::getBlockIOAttrName()));
+    unsigned vec =
+        getDescriptorVecSize(hasSupport256bLoadStore(op), op.getDesc(),
+                             op.getIndices(), resultType, valueElemTy,
+                             op->getAttrOfType<StringAttr>(
+                                 TritonIntelGPUDialect::getBlockIOAttrName()));
 
     // vectorized iteration through all pointer elements
     const int valueElemNBits =
@@ -3066,10 +3134,10 @@ struct DescriptorStoreOpConversion
     SmallVector<int32_t> perElementDims, blockLevelDims;
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];
-      if (defs.allSatisfy([&](MakeTensorDescOp d) {
+      if (bs > 0 && defs.allSatisfy([&](MakeTensorDescOp d) {
             return isDivisible(d.getShape()[i], bs);
           }) &&
-          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))) {
+          isDivisible(op.getIndices()[i], bs)) {
         blockLevelDims.push_back(i);
       } else {
         perElementDims.push_back(i);
@@ -3098,9 +3166,10 @@ struct DescriptorStoreOpConversion
 
     // Determine vectorization by querying the descriptor's address-level
     // AxisInfo, analogous to how StoreOp queries getVectorSize(ptr).
-    unsigned vec = getDescriptorVecSize(hasSupport256bLoadStore(op),
-                                        op.getDesc(), valueTy, valueElemTy,
-                                        /*blockIOAttr=*/nullptr);
+    unsigned vec =
+        getDescriptorVecSize(hasSupport256bLoadStore(op), op.getDesc(),
+                             op.getIndices(), valueTy, valueElemTy,
+                             /*blockIOAttr=*/nullptr);
 
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
@@ -3892,13 +3961,6 @@ struct StoreOpConversion
   }
 };
 
-void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
-                   int numCTAs) {
-  assert(numCTAs == 1 && "Expecting numCTA to be 1");
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  b.barrier(triton::gpu::AddrSpace::Local);
-}
-
 struct AtomicCASOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
@@ -3918,12 +3980,14 @@ struct AtomicCASOpConversion
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    insertAtomicOrderingBarriers(op, op.getSem(),
+                                 !atomicResultHasOrderingBarrier(op), rewriter,
+                                 targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for AtomicCASOp");
-    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
     Value llPtr = adaptor.getPtr();
     Value llCmp = adaptor.getCmp();
@@ -4011,32 +4075,15 @@ struct AtomicCASOpConversion
         }
       }
 
-      ret = b.bitcast(ret, valueElemTy);
-
-      if (tensorTy) {
-        resultVals[i] = ret;
-      } else {
-        if (op.getResult().use_empty()) {
-          rewriter.eraseOp(op);
-          return success();
-        }
-        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                  op.getOperation());
-        atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
-        targetInfo.storeShared(rewriter, loc, atomPtr, ret, mask);
-        createBarrier(rewriter, loc, numCTAs);
-        Value ret = b.load(valueElemTy, atomPtr);
-        rewriter.replaceOp(op, {ret});
-      }
+      resultVals[i] = b.bitcast(ret, valueElemTy);
     }
 
-    if (tensorTy) {
+    if (tensorTy)
       resultVals =
           actionRemoveBroadcastedRegs(triton::gpu::toLinearLayout(tensorTy))
               .apply(resultVals);
-      finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, mask,
-                            targetInfo, getTypeConverter());
-    }
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, mask,
+                          targetInfo, getTypeConverter());
     return success();
   }
 
@@ -4128,12 +4175,14 @@ struct AtomicRMWOpConversion
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    insertAtomicOrderingBarriers(op, op.getSem(),
+                                 !atomicResultHasOrderingBarrier(op), rewriter,
+                                 targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for AtomicRMWOp");
-    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
     auto atomicRmwAttr = op.getAtomicRmwOp();
     MemSemantic memSem = op.getSem();
@@ -4266,35 +4315,18 @@ struct AtomicRMWOpConversion
       Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
       ret = b.bitcast(ret, retType);
 
-      if (tensorTy) {
-        for (int ii = 0; ii < vec; ++ii) {
-          resultVals[i + ii] =
-              vec == 1 ? ret
-                       : b.extract_element(valueElemTy, ret, b.i32_val(ii));
-        }
-      } else {
-        if (op.getResult().use_empty()) {
-          rewriter.eraseOp(op);
-          return success();
-        }
-        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                  op.getOperation());
-        atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
-        // Only threads with rmwMask = True store the result
-        targetInfo.storeShared(rewriter, loc, atomPtr, ret, rmwMask);
-        createBarrier(rewriter, loc, numCTAs);
-        Value loadVal = b.load(valueElemTy, atomPtr);
-        rewriter.replaceOp(op, {loadVal});
+      for (int ii = 0; ii < vec; ++ii) {
+        resultVals[i + ii] =
+            vec == 1 ? ret : b.extract_element(valueElemTy, ret, b.i32_val(ii));
       }
     }
 
-    if (tensorTy) {
+    if (tensorTy)
       resultVals =
           actionRemoveBroadcastedRegs(triton::gpu::toLinearLayout(tensorTy))
               .apply(resultVals);
-      finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b,
-                            threadPred, targetInfo, getTypeConverter());
-    }
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
+                          targetInfo, getTypeConverter());
     return success();
   }
 
@@ -4857,7 +4889,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       if (matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
         Type elemTy = constAttr.getElementType();
         auto handleSplatValue = [&](auto splatVal) {
-          if (!splatVal.isZero()) {
+          if (!splatVal.isZero() || splatVal.isNegative()) {
             otherElems = SmallVector<Value>(
                 cfg.numElems,
                 LLVM::ConstantOp::create(rewriter, loc, elemTy, splatVal));

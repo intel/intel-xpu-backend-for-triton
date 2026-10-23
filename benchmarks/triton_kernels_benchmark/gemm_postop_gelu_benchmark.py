@@ -286,9 +286,9 @@ def benchmark(B, M, N, K, provider):
             assert len(a.shape) == 2, 'Expecting shape of length 2'
             c = torch.empty((M, N), device=DEVICE, dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
-        torch_fn = lambda: torch.nn.functional.gelu(torch.matmul(a, b).to(torch.float32))
-        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        torch_mm = torch.bmm if a.dim() == 3 else torch.mm
+        torch_fn = lambda: torch.nn.functional.gelu(torch_mm(a, b, out_dtype=torch.float32))
+        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

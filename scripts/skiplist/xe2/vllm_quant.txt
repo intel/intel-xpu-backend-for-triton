@@ -1,8 +1,65 @@
-# Other
-tests/kernels/quantization/test_block_fp8.py::test_w8a8_block_fp8_cutlass_matmul
+# Quantization SYCL kernel does not handle the num_groups=0 case: https://github.com/intel/intel-xpu-backend-for-triton/issues/8162
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-False-False-False-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-False-False-False-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-False-False-False-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-False-False-True-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-False-False-True-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-False-False-True-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-False-True-False-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-False-True-False-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-False-True-False-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-False-True-True-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-False-True-True-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-False-True-True-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-True-False-False-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-True-False-False-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-True-False-False-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-True-False-True-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-True-False-True-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-True-False-True-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-True-True-False-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-True-True-False-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-True-True-False-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-True-True-True-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-True-True-True-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[64-True-True-True-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-False-False-False-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-False-False-False-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-False-False-False-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-False-False-True-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-False-False-True-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-False-False-True-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-False-True-False-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-False-True-False-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-False-True-False-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-False-True-True-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-False-True-True-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-False-True-True-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-False-False-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-False-False-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-False-False-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-False-True-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-False-True-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-False-True-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-True-False-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-True-False-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-True-False-dtype2-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-True-True-dtype0-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-True-True-dtype1-shape0]
+tests/kernels/quantization/test_per_token_group_quant.py::test_per_token_group_quant_fp8[128-True-True-True-dtype2-shape0]
+
+# fp8 per-tensor scale not bit-exact vs reference for bf16: https://github.com/intel/intel-xpu-backend-for-triton/issues/8342
+tests/kernels/quantization/test_fp8_quant.py::test_dynamic_per_tensor_fp8_quant_strided_input[0-dtype0-8]
+tests/kernels/quantization/test_fp8_quant.py::test_dynamic_per_tensor_fp8_quant_strided_input[0-dtype0-16]
+
+# These tests never run a Triton kernel on XPU, each one calls into vllm-xpu-kernels (SYCL)
+# through torch.ops._C, and some only call the PyTorch reference.
+# Move the tests to xfail(run=False) https://github.com/intel/intel-xpu-backend-for-triton/issues/8339
 tests/kernels/quantization/test_fp8_quant.py::test_dynamic_per_tensor_fp8_quant
 tests/kernels/quantization/test_fp8_quant.py::test_dynamic_per_token_fp8_quant
 tests/kernels/quantization/test_fp8_quant.py::test_fp8_quant_large
-tests/kernels/quantization/test_int8_kernel.py::test_w8a8_fp8_fused_moe
+tests/kernels/quantization/test_fp8_quant.py::test_static_fp8_quant_group_2d
+tests/kernels/quantization/test_fp8_quant.py::test_static_fp8_quant_1d_scale
 tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_functionality
-tests/kernels/quantization/test_block_fp8.py::test_per_token_group_quant_fp8
+tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_multidimensional
+tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_edge_cases

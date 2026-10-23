@@ -17,16 +17,17 @@ from typing import Optional
 
 import numpy as np
 import torch
-import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.benchmark_testing import DEVICE
+from triton_kernels_benchmark.vllm import import_xpu_only
 
 from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
 from vllm.model_executor.layers.fused_moe.fused_moe import invoke_fused_moe_triton_kernel, get_default_config
-from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm_xe2 as sycl_tla_grouped_gemm
 
-DEVICE = triton.runtime.driver.active.get_active_torch_device()
+# The SYCL-TLA grouped GEMM ships with vllm-xpu-kernels, so it is only available on XPU.
+sycl_tla_grouped_gemm = import_xpu_only('vllm_xpu_kernels.fused_moe_interface.cutlass_grouped_gemm_xe2')
 
 DEVICE_TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
 
@@ -275,8 +276,9 @@ def ref_grouped_gemm(input_A, input_B, topk_ids, topk):
 def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False, is_td_patched=False):
     supported_providers = {
         'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
-        'sycl-tla': 'sycl-tla',
     }
+    if DEVICE == 'xpu':
+        supported_providers['sycl-tla'] = 'sycl-tla'
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
     configs = MM_CONFIGS_FP8 if is_fp8 else MM_CONFIGS_BF16
@@ -296,6 +298,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
     def benchmark(num_tokens, output_hidden_size, hidden_size, num_experts, topk, dtype, has_bias, provider):
         seed = 7
         torch.manual_seed(seed)
+        shape = f'[{num_tokens}-{output_hidden_size}-{hidden_size}-{num_experts}-{topk}-{dtype}-{has_bias}]'
         random.seed(seed)
         np.random.seed(seed)
 
@@ -417,6 +420,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
                 output_ref,
                 rtol=6e-2 if use_fp8 else 2e-2,
                 atol=6e-2 if use_fp8 else 1e-2,
+                msg=lambda m: f'{provider} to torch {shape}\n{m}',
             )
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
@@ -442,7 +446,8 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
                 return output_sycl
 
             sycl_tla_fn()
-            torch.testing.assert_close(output_sycl, output_ref, rtol=2e-2, atol=1e-2)
+            torch.testing.assert_close(output_sycl, output_ref, rtol=2e-2, atol=1e-2,
+                                       msg=lambda m: f'{provider} to torch {shape}\n{m}')
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 sycl_tla_fn,

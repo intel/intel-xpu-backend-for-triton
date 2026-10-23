@@ -1,8 +1,10 @@
 import pathlib
 
 import pytest
+import torch
 import triton
 import triton.language as tl
+from triton.language.extra import libdevice
 from triton.runtime.errors import OutOfResources
 
 
@@ -2078,3 +2080,99 @@ def test_regression_7945_annotate_cache_control_enabled_on_every_os(fresh_knobs)
 def test_regression_7945_annotate_cache_control_env_override(fresh_knobs, monkeypatch, value, expected):
     monkeypatch.setenv("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", value)
     assert fresh_knobs.intel.disable_annotate_cache_control is expected
+
+
+def test_regression_8189_no_results(device):
+    """`x` is read only by the `while` condition, so canonicalization drops it
+    from the loop results while the do-block yield still carries it.
+    RemoveLayoutConversions used to map yield operand `i` to result `i`,
+    calling `getResult(0)` on a result-less `scf.while` (#8189).
+    """
+
+    @triton.jit
+    def kernel(ptr, out, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        x = tl.zeros([BLOCK], dtype=tl.int32)
+        while tl.min(x, axis=0) < 1:
+            x = tl.load(ptr + offs, volatile=True)
+        tl.store(out, 1)
+
+    src = torch.ones(1024, dtype=torch.int32, device=device)
+    out = torch.zeros(1, dtype=torch.int32, device=device)
+    compiled = kernel[(1, )](src, out, 1024, num_warps=4)
+    assert out.item() == 1
+    assert ": (tensor<1024xi32>) -> () {" in compiled.asm["ttir"], "no longer a result-less while"
+
+
+def test_regression_8189_shifted_results(device):
+    """Dropping `x` shifts the rank-2 `acc` to result 0, so the old mapping
+    put `x`'s rank-1 layout on it: a verifier error in any build type (#8189).
+    """
+
+    @triton.jit
+    def kernel(ptr, out, BLOCK: tl.constexpr, N: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        x = tl.zeros([BLOCK], dtype=tl.int32)
+        acc = tl.zeros([N, N], dtype=tl.int32)
+        while tl.min(x, axis=0) < 1:
+            x = tl.load(ptr + offs, volatile=True)
+            acc += 1
+        tl.store(out + tl.arange(0, N)[:, None] * N + tl.arange(0, N)[None, :], acc)
+
+    src = torch.ones(1024, dtype=torch.int32, device=device)
+    out = torch.zeros((32, 32), dtype=torch.int32, device=device)
+    compiled = kernel[(1, )](src, out, 1024, 32, num_warps=4)
+    assert torch.all(out == 1)
+    assert ": (tensor<1024xi32>, tensor<32x32xi32>) -> tensor<32x32xi32> {" in compiled.asm["ttir"], \
+        "while results no longer shifted"
+
+
+def test_issue_8374(device):
+
+    @triton.jit
+    def masked_broadcast_load(in_ptr, out_ptr, XBLOCK: tl.constexpr):
+        xindex = tl.program_id(0) * XBLOCK + tl.arange(0, XBLOCK)[:]
+        x0 = xindex % 128  # column within a 128-wide row
+        x1 = xindex // 128  # row
+        mask = x0 >= 16  # varies WITHIN a 32/64/128-lane block
+        # address depends only on the row -> uniform (broadcast) within the block
+        v = tl.load(in_ptr + (2 + 3 * x1), mask, other=0.0)
+        tl.store(out_ptr + xindex, v.to(tl.float32), None)
+
+    rows, cols = 1536, 128
+    src = torch.arange(rows * 3, dtype=torch.float32, device=device).reshape(rows, 3).to(torch.float16)
+    ref = torch.zeros(rows, cols, dtype=torch.float32)
+    ref[:, 16:] = src.float().cpu()[:, 2:3]  # every lane right of col 16 = src[row, 2]
+
+    for xblock in (32, 64, 128, 256, 512):
+        out = torch.empty(rows, cols, dtype=torch.float32, device=device)
+        grid = ((rows * cols + xblock - 1) // xblock, )
+        masked_broadcast_load[grid](src, out, XBLOCK=xblock, num_warps=4)
+        torch.xpu.synchronize()
+        got = out.cpu()
+        md = (ref - got).abs().max().item()
+        # wrong lanes contain exactly `other` (0.0)
+        zeroed = ((got == 0) & (ref != 0)).sum().item()
+        message = f"XBLOCK={xblock:4d}: maxdiff={md:8.4g}  true-lanes-returning-other={zeroed}  {'BAD' if md > 1e-3 else 'OK'}"
+        assert not md > 1e-3, message
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("fn", ["isinf", "isnan", "signbit"])
+def test_regression_8430_fp_predicates_half_precision(device, fn, dtype):
+
+    @triton.jit
+    def kernel(in_ptr, out_ptr, fn: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        x = tl.load(in_ptr + offsets)
+        tl.store(out_ptr + offsets, getattr(libdevice, fn)(x).to(tl.int1))
+
+    x = torch.tensor(
+        [1.0, -1.0, 0.0, -0.0, float("inf"), -float("inf"),
+         float("nan"), -float("nan")], device=device, dtype=dtype)
+    ref = getattr(torch, fn)(x)
+    out = torch.empty_like(x, dtype=torch.bool)
+
+    kernel[(1, )](x, out, fn=fn, BLOCK=x.numel())
+
+    assert torch.equal(out.cpu(), ref.cpu())

@@ -37,11 +37,11 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // PREDICATED-NEXT:    %[[V0:.*]] = triton_gen.predicated_load %[[PTR0]], %{{.*}}, %[[OTHER0]] {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED-NEXT: llvm.cond_br %{{.*}}, ^[[BB_LOAD:bb[0-9]+]], ^[[BB_MERGE:bb[0-9]+]](%[[OTHER0]] : i32)
     // NO-PREDICATED-NEXT: ^[[BB_LOAD]]:
-    // NO-PREDICATED-NEXT: %[[LOADED0:.*]] = llvm.load %[[PTR0]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED-NEXT: %[[LOADED0:.*]] = llvm.load %[[PTR0]] <alignment = 4> : !llvm.ptr<1> -> i32
     // NO-PREDICATED-NEXT: llvm.br ^[[BB_MERGE]](%[[LOADED0]] : i32)
     // NO-PREDICATED-NEXT: ^[[BB_MERGE]](%[[V0:.*]]: i32):
     // CHECK-NEXT:         llvm.bitcast %[[V0]] : i32 to f32
-    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %3 = tt.descriptor_load %0[%arg1, %arg2] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
   }
 }
@@ -68,11 +68,11 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // PREDICATED-NEXT:    %[[V0:.*]] = triton_gen.predicated_load %[[PTR0]], %{{.*}}, %[[OTHER0]] {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED-NEXT: llvm.cond_br %{{.*}}, ^[[BB_LOAD:bb[0-9]+]], ^[[BB_MERGE:bb[0-9]+]](%[[OTHER0]] : i32)
     // NO-PREDICATED-NEXT: ^[[BB_LOAD]]:
-    // NO-PREDICATED-NEXT: %[[LOADED0:.*]] = llvm.load %[[PTR0]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED-NEXT: %[[LOADED0:.*]] = llvm.load %[[PTR0]] <alignment = 4> : !llvm.ptr<1> -> i32
     // NO-PREDICATED-NEXT: llvm.br ^[[BB_MERGE]](%[[LOADED0]] : i32)
     // NO-PREDICATED-NEXT: ^[[BB_MERGE]](%[[V0:.*]]: i32):
     // CHECK-NEXT:         llvm.bitcast %[[V0]] : i32 to f32
-    %3 = tt.descriptor_load %0[%c4_i32, %c4_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %3 = tt.descriptor_load %0[%c4_i32, %c4_i32] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
   }
 }
@@ -97,10 +97,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:      %[[OTHER:.*]] = llvm.bitcast %{{.*}} : vector<1xf32> to i32
     // CHECK-NEXT: llvm.cond_br %{{.*}}, ^[[BB_LOAD:bb[0-9]+]], ^[[BB_MERGE:bb[0-9]+]](%[[OTHER]] : i32)
     // CHECK-NEXT: ^[[BB_LOAD]]:
-    // CHECK-NEXT: %[[LOADED:.*]] = llvm.load %[[PTR]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // CHECK-NEXT: %[[LOADED:.*]] = llvm.load %[[PTR]] <alignment = 4> : !llvm.ptr<1> -> i32
     // CHECK-NEXT: llvm.br ^[[BB_MERGE]](%[[LOADED]] : i32)
     // CHECK-NOT:  triton_gen.predicated_load
-    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %3 = tt.descriptor_load %0[%arg1, %arg2] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
   }
 }
@@ -129,19 +129,16 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 #blocked1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
-// Only the predicated arm forwards the eviction-policy hint to an LSC
-// cache-control decoration; the branch arm drops it silently. Defaulting
-// descriptor loads to predication therefore starts emitting L1IAR_L3C where
-// nothing was emitted before - a second, independent behavioural change that
-// must not regress unnoticed.
+// evict_first is ignored on both arms (#8109), so defaulting descriptor loads
+// to predication must not start emitting an LSC cache-control decoration.
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
   // CHECK-LABEL: llvm.func spir_kernelcc @desc_load_default_evict_first(
   tt.func @desc_load_default_evict_first(%desc: !tt.tensordesc<128xf32>) {
     %c0_i32 = arith.constant 0 : i32
-    // PREDICATED:        triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = L1IAR_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
-    // NO-PREDICATED-NOT: L1IAR_L3C
+    // PREDICATED:        triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
+    // NO-PREDICATED-NOT: cache_control
     // NO-PREDICATED:     llvm.cond_br
-    // NO-PREDICATED-NOT: L1IAR_L3C
+    // NO-PREDICATED-NOT: cache_control
     %val = tt.descriptor_load %desc[%c0_i32] {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>} : !tt.tensordesc<128xf32> -> tensor<128xf32, #blocked1>
     tt.return
   }

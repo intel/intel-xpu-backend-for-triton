@@ -9,6 +9,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 
 namespace mlir::triton::gpu::intel {
@@ -38,6 +39,14 @@ struct RegisterPressureOptions {
 /// convention), NOT the per-hardware-thread unit `getGRFBytesPerHardwareThread`
 /// returns. Use `getPerLaneGRFBudgetInBytes` to compare against a GRF budget.
 class RegisterPressureAnalysis {
+private:
+  /// `currentlyLiveValues()` per program point; MLIR does not cache it.
+  using LiveValuesCache = DenseMap<Operation *, Liveness::ValueSetT>;
+
+  /// Per region-holding ancestor: values live through it, plus its parent's
+  /// entry.
+  using AncestorLiveThroughCache = DenseMap<Operation *, Liveness::ValueSetT>;
+
 public:
   /// Construct the analysis for the given root operation.
   explicit RegisterPressureAnalysis(Operation *op,
@@ -45,29 +54,48 @@ public:
 
   /// Returns the per-thread register pressure in bytes at the given operation,
   /// accounting for all live values at that program point.
+  ///
+  /// For a nested op, also counts once each value live through an enclosing
+  /// region-holding op (used after it, or for a loop, read in it).
   unsigned pressureAt(Operation *op) const;
 
   /// Returns the peak per-thread register pressure in bytes within the given
-  /// block.
+  /// block, nested regions included.
   unsigned peakPressure(Block *block) const;
 
+  /// Liveness caches and per-block peaks shared by queries on unchanged IR.
+  /// Discard it before mutating the IR, and use it with one analysis only.
+  class QueryCache {
+  public:
+    QueryCache() = default;
+
+  private:
+    friend class RegisterPressureAnalysis;
+    /// Set on first use; asserts catch reuse with a second analysis.
+    const RegisterPressureAnalysis *owner = nullptr;
+    LiveValuesCache liveCache;
+    AncestorLiveThroughCache ancestorCache;
+    DenseMap<Block *, unsigned> blockPeakCache;
+  };
+
+  /// Same as `pressureAt(Operation *)`, reusing \p cache.
+  unsigned pressureAt(Operation *op, QueryCache &cache) const;
+
+  /// Same as `peakPressure(Block *)`, memoized in \p cache.
+  unsigned peakPressure(Block *block, QueryCache &cache) const;
+
   /// Returns the peak per-thread register pressure in bytes within the given
-  /// loop, considering all blocks in the loop body region.
+  /// loop, considering all blocks in the loop body region, nested regions
+  /// included.
   unsigned peakPressure(LoopLikeOpInterface loop) const;
 
   /// Returns the peak per-thread register pressure in bytes over *every* block
   /// nested in \p func: registers are allocated per kernel, so a per-kernel
   /// allocation must cover the maximum over all blocks, not any one block's.
-  ///
-  /// Shares its block walk with `print()` so the two cannot drift apart.
-  ///
-  /// Model limit inherited from `pressureAt`: that primitive consults only the
-  /// containing block's liveness info, so a value live *through* a nested
-  /// region but unused inside it is absent from that region's ops. The figure
-  /// therefore under-counts inside such a region even though the value does
-  /// occupy a register there. Callers must state a transform's guarantees
-  /// relative to this metric rather than to physical allocator demand.
   unsigned peakPressure(FunctionOpInterface func) const;
+
+  /// Same as `peakPressure(FunctionOpInterface)`, reusing \p cache.
+  unsigned peakPressure(FunctionOpInterface func, QueryCache &cache) const;
 
   /// Returns the per-thread register pressure in bytes immediately *above*
   /// \p op: the values live at \p op minus \p op's own results. This is the
@@ -95,13 +123,15 @@ public:
   };
 
   /// Returns the pressure at \p op together with whether \p value is live
-  /// there, from **one** `currentlyLiveValues(op)` build.
-  ///
-  /// That set is uncached and expensive to build (see `pressureAt`), and a
-  /// caller walking a run of operations while adjusting the pressure by a
-  /// nominated value needs both answers at every step; asking separately
-  /// doubles the dominant cost. A null \p value reports `false`.
+  /// there, from one live-set build. A null \p value reports `false`.
   PressureAtPoint pressureAt(Operation *op, Value value) const;
+
+  /// Same as `pressureAt(Operation *, Value)`, reusing \p cache.
+  PressureAtPoint pressureAt(Operation *op, Value value,
+                             QueryCache &cache) const;
+
+  /// `pressureAt(op, value, cache).valueLive`, without building the live set.
+  bool isLiveAt(Operation *op, Value value, QueryCache &cache) const;
 
   /// Returns the bytes \p value contributes to the figures this analysis
   /// reports: its per-thread size after filtering, or 0 when it is
@@ -159,13 +189,29 @@ public:
   enum class UnknownGRFSizeAssumption {
     /// Assume the smallest GRF size the device supports (128-register mode).
     Smallest,
-    /// Assume the largest GRF size the device supports.
+    /// Assume the largest GRF size the backend's automatic escalation will
+    /// ever select for this target. This per-target ceiling applies to both
+    /// `grf_mode='default'` and `grf_mode='auto'`.
     ///
-    /// FIXME(#8074): this is currently 512-register mode unconditionally,
-    /// but the backend only ever selects 512-register mode on "cri"; every
+    /// The ceiling is per-target: only "cri" reaches 512-register mode, every
     /// other target (including BMG and PVC) caps at 256-register mode (see
-    /// third_party/intel/backend/compiler.py's GRF retry logic). This should
-    /// be the true per-target largest size, not a hardcoded constant.
+    /// `get_max_grf_mode()` in third_party/intel/backend/compiler.py, the
+    /// single source of truth for this policy). That value is mirrored onto
+    /// the module as the `ttig.max_grf_mode` attribute (stamped by
+    /// TritonAnnotateModule) and read back here when resolving this case for
+    /// both `'default'` and `'auto'`.
+    /// Both additionally cap at `Smallest` once `num_warps > 32`: a larger
+    /// GRF mode reduces the maximum launchable work-group size, so the
+    /// kernel can never actually run at a larger mode no matter which
+    /// mechanism would have picked it; `ttig.max_grf_mode` never actually
+    /// takes effect there either way.
+    ///
+    /// If the attribute is absent (e.g. a hand-written test module that never
+    /// went through the Python compiler pipeline), the pre-existing default
+    /// applies: assume 512-register mode. ("Conservative" is avoided here
+    /// since 512, the *largest* budget, gives the *highest* sink threshold,
+    /// i.e. the *least* sinking: conservative about changing behaviour, not
+    /// about register consumption.)
     Largest,
   };
 
@@ -176,12 +222,14 @@ public:
   /// Explicit sizes ("128", "256", "512") map to the exact per-hardware-thread
   /// budget, ignoring `unknownAssumption`. For "default" and "auto", returns
   /// the smallest or largest GRF size per `unknownAssumption` (see its
-  /// documentation for which one a given caller needs).
+  /// documentation for which one a given caller needs, for how `Largest`
+  /// uses `mod`'s `ttig.max_grf_mode` attribute, and for the `num_warps > 32`
+  /// exception).
   static unsigned
-  getGRFBytesPerHardwareThread(StringRef grfMode,
+  getGRFBytesPerHardwareThread(StringRef grfMode, ModuleOp mod,
                                UnknownGRFSizeAssumption unknownAssumption);
 
-  /// Returns `getGRFBytesPerHardwareThread(grfMode, unknownAssumption) /
+  /// Returns `getGRFBytesPerHardwareThread(grfMode, mod, unknownAssumption) /
   /// threads-per-warp`: the per-lane figure to compare against this
   /// analysis's (per-lane) output. When the module's ttg.threads-per-warp
   /// attribute is absent, getThreadsPerWarp returns 32 as a default, so the
@@ -205,17 +253,32 @@ public:
   void print(raw_ostream &os) const;
 
 private:
+  void claimCache(QueryCache &cache) const;
+
+  /// Raw `currentlyLiveValues()` at \p point, memoized in \p cache.
+  const Liveness::ValueSetT &getRawLiveValuesAt(Operation *point,
+                                                LiveValuesCache &cache) const;
+
+  /// Live-through set of \p ancestor and its enclosing ops up to \p rootOp.
+  const Liveness::ValueSetT &
+  getLiveThroughAncestorSet(Operation *ancestor, LiveValuesCache &liveCache,
+                            AncestorLiveThroughCache &ancestorCache,
+                            Operation *rootOp) const;
+
+  /// Region-aware live set at \p op (block-local values plus the parent's
+  /// live-through set). `isLiveAt` must test membership in the same two sets.
+  Liveness::ValueSetT
+  computeLiveValues(Operation *op, LiveValuesCache &liveCache,
+                    AncestorLiveThroughCache &ancestorCache) const;
+
   /// Returns true if the defining op of \p value is rematerializable (cheap to
   /// regenerate on demand, such as constants or simple range ops).
   bool isRematerializable(Value value) const;
 
-  /// Returns the peak of `peakPressure(Block *)` over every block nested in
-  /// \p root, in the walk order `print()` reports them in. Shared by
-  /// `peakPressure(FunctionOpInterface)` and `print()`.
-  unsigned peakPressureOverNestedBlocks(Operation *root) const;
-
   LivenessAnalysis liveness;
   RegisterPressureOptions options;
+  /// Memoized `getPerThreadSizeInBytes` per type.
+  mutable DenseMap<Type, unsigned> typeSizeCache;
 };
 
 } // namespace mlir::triton::gpu::intel

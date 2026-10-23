@@ -100,6 +100,8 @@ public:
     return needed;
   }
 
+  bool needsPtxasMaskedStoreBarrierWorkaround() const override { return true; }
+
   Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                          Operation *op) const override {
     // mask = 0 means no CTA predication.
@@ -174,10 +176,12 @@ public:
       info->pred = expectOp.getPred();
       info->barriers.push_back(
           {expectOp.getBarrier(), nullptr,
-           /*count=*/1, MemEffectsOpInfo::BarrierTrackingMode::Frontier,
+           expectOp.getPerWarp() ? ttg::lookupNumWarps(expectOp) : 1,
+           MemEffectsOpInfo::BarrierTrackingMode::Frontier,
            /*txCount=*/static_cast<int>(expectOp.getSize())});
     }
     if (auto copyOp = dyn_cast<ttng::TMEMCopyOp>(op)) {
+      info->pred = copyOp.getPred();
       namedOperands = {{copyOp.getSrc(), "Src"}, {copyOp.getDst(), "Dst"}};
     }
     if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {

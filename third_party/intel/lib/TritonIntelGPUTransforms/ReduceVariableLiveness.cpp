@@ -1,5 +1,4 @@
 #include "mlir/IR/IRMapping.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/STLExtras.h"
@@ -16,8 +15,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-
-#include <optional>
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUREDUCEVARIABLELIVENESS
@@ -95,40 +92,16 @@ bool isLoadCandidate(tt::DescriptorLoadOp loadOp, Type expectedElementType,
   return true;
 }
 
-/// Return true if \p op may write to a resource that a global-memory 2D block
-/// load can alias, or if its effects are unknown.
-///
-/// A write to shared memory (`ttg.local_alloc`/`ttg.local_store`, which the SLM
-/// round trip of a `tt.trans` is lowered through) or to the L2 cache (a
-/// prefetch, which declares a write only to keep CSE/DCE from removing it)
-/// cannot change what a global load reads, so neither blocks moving such a load
-/// past it.
-bool mayWriteMemoryAliasingGlobalLoad(Operation *op) {
-  std::optional<SmallVector<MemoryEffects::EffectInstance>> effects =
-      getEffectsRecursively(op);
-  if (!effects)
-    return true; // conservative: unknown effects -> assume an aliasing write
-  return llvm::any_of(
-      *effects, [](const MemoryEffects::EffectInstance &effect) {
-        if (!isa<MemoryEffects::Write>(effect.getEffect()))
-          return false;
-        SideEffects::Resource *resource = effect.getResource();
-        if (isa<ttg::SharedMemory>(resource))
-          return false;
-        if (resource->getResourceID() == ttgi::L2Cache::getResourceID())
-          return false;
-        return true;
-      });
-}
-
 /// Return true if any operation strictly between \p start and \p end may write
 /// memory that a global load reads. \p start and \p end must be in the same
-/// block, with \p start before \p end.
+/// block, with \p start before \p end. Shared-memory writes (e.g. the SLM
+/// round trip of a `tt.trans`) cannot change what a global load reads, so they
+/// are skipped.
 bool crossesAliasingWrite(Operation *start, Operation *end) {
   assert(start->getBlock() == end->getBlock() && "expecting the same block");
   for (Operation *op = start->getNextNode(); op && op != end;
        op = op->getNextNode())
-    if (mayWriteMemoryAliasingGlobalLoad(op))
+    if (ttgi::mayWriteMemory(op, /*ignoreSharedMemory=*/true))
       return true;
   return false;
 }
@@ -199,10 +172,15 @@ bool sinkInLoopDotOperandLoads(
     if (crossesAliasingWrite(loadOp, firstUse))
       continue;
 
-    // Highest pressure over the live range this sink would remove.
+    // Highest pressure over the live range this sink would remove, nested
+    // regions included: the load stays live through them.
+    ttg::intel::RegisterPressureAnalysis::QueryCache queryCache;
     unsigned rangePressure = 0;
     for (Operation *op = loadOp; op && op != firstUse; op = op->getNextNode())
-      rangePressure = std::max(rangePressure, analysis.pressureAt(op));
+      op->walk([&](Operation *nested) {
+        rangePressure =
+            std::max(rangePressure, analysis.pressureAt(nested, queryCache));
+      });
     if (rangePressure < perLaneGRFBudget) {
       LDBG("Keeping in-loop dot operand load in place: its live range peaks at "
            << rangePressure << " B/lane, within the " << perLaneGRFBudget
@@ -251,11 +229,13 @@ void createPrefetchOp(tt::DescriptorLoadOp loadOp) {
 
 /// Investigate opportunities for the reducing register pressure by moving DotOp
 /// operands.
+/// Loads already inside the loop are left in place when \p disableInLoopSink is
+/// true.
 /// Returns `true` if at least one operand has been moved.
 bool optimizeDotOperands(scf::ForOp forOp,
                          SmallVector<PrefetchKey> &prefetchedTiles,
                          ttg::intel::RegisterPressureAnalysis &analysis,
-                         unsigned perLaneGRFBudget) {
+                         unsigned perLaneGRFBudget, bool disableInLoopSink) {
   Block *loop = forOp.getBody();
 
   // Returns the DescriptorLoadOp that produces the value v, walking back
@@ -442,6 +422,7 @@ bool optimizeDotOperands(scf::ForOp forOp,
   // `analysis` still describes the IR exactly: `moveOperand` inserts loads and
   // prefetches the analysis has no pressure information for.
   bool sunkInLoop =
+      !disableInLoopSink &&
       sinkInLoopDotOperandLoads(forOp, analysis, perLaneGRFBudget);
 
   for (Candidate &c : candidates)
@@ -481,7 +462,7 @@ public:
     // TODO: extend the pass to handle `while` loops.
     rootOperation->walk([&](scf::ForOp forOp) {
       if (optimizeDotOperands(forOp, prefetchedTiles, analysis,
-                              perLaneGRFBudget)) {
+                              perLaneGRFBudget, disableInLoopSink)) {
         // The register pressure analysis must be re-performed before the
         // processing of each "for loop" given that the liveness of variables
         // may have changed as a result of the code, and specifically `LoadOps`,

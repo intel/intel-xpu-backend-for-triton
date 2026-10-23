@@ -26,8 +26,9 @@ namespace mlir::triton::gpu::intel {
 // dynamic cast result.
 RankedTensorType getRankedTensorType(Type type);
 
-// Check if given value is divisible by the divisor.
-bool isDivisible(Value value, unsigned divisor);
+// Check if given value is provably divisible by the divisor. Returns false for
+// a non-positive divisor.
+bool isDivisible(Value value, int64_t divisor);
 
 // Infers the encoding of the source of op given the result encoding.
 Attribute inferSrcEncoding(Operation *op, Attribute encoding);
@@ -116,6 +117,12 @@ calculateDPASRepetitions(ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx,
                          ArrayRef<unsigned> repCluster, unsigned repeatCount,
                          unsigned systolicDepth, unsigned executionSize,
                          unsigned opsPerChannel);
+
+// Returns true if `op` or an op nested in it may write memory. Unknown effects
+// count as writes (TritonGPUReorderInstructions treats them as none). L2Cache
+// writes are ignored: prefetches declare them only to survive CSE/DCE. Shared
+// memory writes are ignored if `ignoreSharedMemory`.
+bool mayWriteMemory(Operation *op, bool ignoreSharedMemory = false);
 
 } // namespace mlir::triton::gpu::intel
 

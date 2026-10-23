@@ -47,6 +47,26 @@ std::unique_ptr<ConSanTargetHooks> createConSanHooks(llvm::StringRef key) {
 
 namespace {
 
+// Temporary workaround for PTXAS mis-analysis of divergent control-flow joins.
+void addPtxasMaskedStoreBarrierWorkaround(ModuleOp module) {
+  SmallVector<tt::StoreOp> maskedStores;
+  module.walk([&](tt::StoreOp store) {
+    if (store.getMask())
+      maskedStores.push_back(store);
+  });
+
+  for (tt::StoreOp store : maskedStores) {
+    OpBuilder builder(store);
+    builder.setInsertionPointAfter(store);
+    // In the NVIDIA conversion pipeline, ConSan runs after tensor-memory wait
+    // insertion. Restrict the declared ordering to the global writes this
+    // workaround follows; the operation still provides the CTA rendezvous
+    // needed to shape native control flow.
+    ttg::BarrierOp::create(builder, store.getLoc(),
+                           ttg::AddrSpace::GlobalWrite);
+  }
+}
+
 // OpBuilder listener tracking operations added to the builder to be wrapped
 // with a lock acquire/release pair.
 class CriticalSectionListener : public ImplicitLocOpBuilder::Listener {
@@ -352,7 +372,9 @@ Value createSingleBufferView(ImplicitLocOpBuilder &b, Value alloc,
   return ttg::MemDescIndexOp::create(b, b.getLoc(), viewType, alloc, index);
 }
 
-void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
+void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc,
+                          const ConSanTargetHooks &hooks,
+                          bool hasAsyncProxyFenceTracking) {
   auto allocType = cast<ttg::MemDescType>(alloc.getType());
   SmallVector<Value> leaves;
   unsigned storeRank = allocType.getRank();
@@ -399,7 +421,16 @@ void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
   }
   if (isTensorMemory)
     ttng::TMEMWaitOp::create(b, b.getLoc(), ttng::TMEMWaitKind::STORE);
-  ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
+  // Conservatively finish poisoning across all CTAs before first use, which
+  // may access a peer's allocation.
+  bool multipleCTAs = ttg::lookupNumCTAs(b) > 1;
+  if (multipleCTAs)
+    hooks.createInitClusterBarrier(b);
+  else
+    ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
+  // Order the acquired poison stores, including peers', before async accesses.
+  if (!isTensorMemory && hasAsyncProxyFenceTracking)
+    ttng::FenceAsyncSharedOp::create(b, /*bCluster=*/multipleCTAs);
 }
 
 bool canInitializeAllocation(Value alloc) {
@@ -823,6 +854,11 @@ public:
     if (failed(validateNonEntryFunctions()))
       return failure();
 
+    // Snapshot and modify the input program before ConSan creates helper
+    // functions, so sanitizer-internal masked stores are not affected.
+    if (hooks.needsPtxasMaskedStoreBarrierWorkaround())
+      addPtxasMaskedStoreBarrierWorkaround(module);
+
     tti::FunctionBuilder funcBuilder(module, auxData);
     if (failed(auxData.populateAndPassToWarpSpecialize(module, entryPoint,
                                                        funcBuilder, hooks)))
@@ -952,14 +988,9 @@ private:
       ImplicitLocOpBuilder b(op->getLoc(), op);
       b.setInsertionPointAfter(op);
       Value alloc = op->getResult(0);
-      if (canInitializeAllocation(alloc)) {
-        initializeAllocation(b, alloc);
-        auto allocType = cast<ttg::MemDescType>(alloc.getType());
-        bool isShared =
-            isa<ttg::SharedMemorySpaceAttr>(allocType.getMemorySpace());
-        if (isShared && auxData.hasAsyncProxyFenceTracking)
-          ttng::FenceAsyncSharedOp::create(b, /*bCluster=*/false);
-      }
+      if (canInitializeAllocation(alloc))
+        initializeAllocation(b, alloc, hooks,
+                             auxData.hasAsyncProxyFenceTracking);
     }
   }
 
@@ -1418,13 +1449,13 @@ private:
 
       if (memType == MemType::SHARED_MEM) {
         if (effect.sharedKind == ttg::SharedKind::Async) {
-          funcBuilder.createVerifyProxyAccessCall(b, bufferMask, baseThread,
-                                                  effect.operandName, pred, op,
-                                                  effectCTAs);
+          funcBuilder.createVerifyProxyAccessCall(
+              b, bufferMask, baseThread, effect.rw == RW::Write,
+              effect.operandName, pred, op, effectCTAs);
         } else {
-          funcBuilder.createSetProxyAccessCall(b, bufferMask, baseThread, pred,
-                                               op, readCTAs,
-                                               materialized.bufferIndex);
+          funcBuilder.createSetProxyAccessCall(
+              b, bufferMask, baseThread, effect.rw == RW::Write, pred, op,
+              readCTAs, materialized.bufferIndex);
         }
       }
       if (effect.rw == RW::Read) {

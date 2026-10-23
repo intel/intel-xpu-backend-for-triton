@@ -1,6 +1,15 @@
 ---
 description: 'Intel GPU layout encodings: DPAS, Warp, Subgroup2DBlock, DotOperand, shared memory — shape derivation, layout conversion, encoding selection by passes'
-applyTo: '**/Dialect/TritonIntelGPU/**/*.td, **/Dialect/TritonIntelGPU/**/*.cpp, **/Dialect/TritonIntelGPU/**/*.h, **/TritonIntelGPUTransforms/**/*.cpp, **/TritonIntelGPUTransforms/**/*.h, **/TritonIntelGPUToLLVM/**/*.cpp, **/Analysis/**/*.cpp, **/Analysis/**/*.h, **/Analysis/**/*.tpp'
+paths:
+  - "**/Dialect/TritonIntelGPU/**/*.td"
+  - "**/Dialect/TritonIntelGPU/**/*.cpp"
+  - "**/Dialect/TritonIntelGPU/**/*.h"
+  - "**/TritonIntelGPUTransforms/**/*.cpp"
+  - "**/TritonIntelGPUTransforms/**/*.h"
+  - "**/TritonIntelGPUToLLVM/**/*.cpp"
+  - "**/Analysis/**/*.cpp"
+  - "**/Analysis/**/*.h"
+  - "**/Analysis/**/*.tpp"
 ---
 
 # Intel GPU Layout Encodings

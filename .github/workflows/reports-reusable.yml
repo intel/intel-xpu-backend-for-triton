@@ -14,7 +14,7 @@ on:
       python_version:
         description: Python version
         type: string
-        default: "3.10"
+        default: "3.11"
       runner_label:
         description: Runner label
         type: string
@@ -71,12 +71,18 @@ jobs:
         run: |
           pip install ./scripts/triton_utils
 
+      - name: Compute artifact label
+        id: artifact-label
+        uses: ./.github/actions/sanitize-artifact-name
+        with:
+          name: ${{ inputs.runner_label || inputs.driver_version }}
+
       # Download artifacts from the current workflow run (when called from build-test-reusable)
       - name: Download test reports (artifacts)
         if: inputs.reports_dir == ''
         uses: actions/download-artifact@v8
         with:
-          pattern: ${{ inputs.artifact_pattern || format('test-reports-*-{0}-{1}', inputs.python_version, inputs.runner_label || inputs.driver_version) }}
+          pattern: ${{ inputs.artifact_pattern || format('test-reports-*-{0}-{1}', inputs.python_version, steps.artifact-label.outputs.name) }}
           path: reports
           merge-multiple: true
 
@@ -185,13 +191,13 @@ jobs:
       - name: Upload pass rate report
         uses: actions/upload-artifact@v7
         with:
-          name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: pass_rate-${{ inputs.python_version }}-${{ steps.artifact-label.outputs.name }}
           path: pass_rate*.json
 
       - name: Upload tutorials test report
         uses: actions/upload-artifact@v7
         with:
-          name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: test-reports-tutorials-${{ inputs.python_version }}-${{ steps.artifact-label.outputs.name }}
           include-hidden-files: true
           path: |
             reports/tutorials*.xml
@@ -200,7 +206,7 @@ jobs:
       - name: Upload tutorials performance report
         uses: actions/upload-artifact@v7
         with:
-          name: tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: tutorials-${{ inputs.python_version }}-${{ steps.artifact-label.outputs.name }}
           if-no-files-found: warn
           include-hidden-files: true
           path: |

@@ -171,7 +171,7 @@ def select_compiler():
 def _cxx_compile_cmd(cxx: str, src: list, include_dirs: list, only_compile: bool = True) -> list:
     if "cl.EXE" in cxx or "clang-cl" in cxx:
         command = [cxx] + src + ["/I" + include_dir for include_dir in include_dirs
-                                 ] + ["/Zc:__cplusplus", "/std:c++17", "/MD", "/nologo", "/O2", "/EHsc", "/wd4996"]
+                                 ] + ["/Zc:__cplusplus", "/std:c++20", "/MD", "/nologo", "/O2", "/EHsc", "/wd4996"]
         if only_compile:
             command += ["/c"]
     else:
@@ -410,18 +410,21 @@ int main(int argc, char ** argv) {{
     sycl::free(C, q);
 }}
 """
-    src = test_utils_src + test_src
     src_name = "test.c"
     if is_xpu():
         src_name = "test.cpp"
+    build_test_bin(dir, test_utils_src + test_src, src_name, exe)
+
+
+def build_test_bin(dir, src, src_name, exe):
     with open(os.path.join(dir, src_name), "w") as file:
         file.write(src)
 
     if is_xpu():
         cxx = select_compiler()
-        command = _cxx_cmd(cxx, ["test.cpp"], exe, COMPILATION_HELPER.include_dir, [dir], ["kernel"])
+        command = _cxx_cmd(cxx, [src_name], exe, COMPILATION_HELPER.include_dir, [dir], ["kernel"])
     else:
-        command = ["gcc", "test.c"]
+        command = ["gcc", src_name]
         for inc_dir in include_dirs:
             command.extend(["-I", inc_dir])
         for lib_dir in library_dirs():
@@ -534,6 +537,72 @@ def check_hasco_binary_str(tmp_dir: str, dtype: str):
         matches = pattern.findall(content)
         assert len(matches) == 1, "Expected one HSACO_NAME definition"
         assert int(matches[0]) > 16, "Expected valid HSACO object binary string"
+
+
+def test_linker_rejects_invalid_algo_id():
+    from triton.tools.link import (
+        KernelLinkerMeta,
+        make_func_pointers,
+        make_get_num_algos_def,
+        make_kernel_meta_const_dispatcher,
+    )
+
+    meta = KernelLinkerMeta(
+        orig_kernel_name="kernel",
+        arg_names=["x"],
+        arg_ctypes=["int"],
+        sizes=[None],
+        sig_hash="abcdef12",
+        triton_suffix="",
+        suffix="",
+        num_specs=0,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        c_path = os.path.join(tmp_dir, "test_linker_algo_id_bounds.c")
+        exe_path = os.path.join(tmp_dir, "test_linker_algo_id_bounds")
+        with open(c_path, "w") as fp:
+            fp.write(f"""
+#include <stdio.h>
+
+typedef void *TT_StreamTy;
+typedef int TT_ResultTy;
+
+#define EXPORT_FUNC
+#define TT_ERROR_INVALID_VALUE 777
+#define CHECK_EQ(actual, expected) \\
+  do {{ \\
+    TT_ResultTy got = (actual); \\
+    if (got != (expected)) {{ \\
+      fprintf(stderr, "%s:%d: got %d, expected %d\\n", __FILE__, __LINE__, got, (expected)); \\
+      return 1; \\
+    }} \\
+  }} while (0)
+
+TT_ResultTy kernel_algo0(TT_StreamTy stream, int x) {{
+  return x + 10;
+}}
+
+TT_ResultTy kernel_algo1(TT_StreamTy stream, int x) {{
+  return x + 20;
+}}
+
+{make_func_pointers(["kernel_algo0", "kernel_algo1"], meta)}
+{make_get_num_algos_def(meta)}
+{make_kernel_meta_const_dispatcher(meta)}
+
+int main(void) {{
+  CHECK_EQ(kernel_get_num_algos(), 2);
+  CHECK_EQ(kernel(0, 5, 0), 15);
+  CHECK_EQ(kernel(0, 5, 1), 25);
+  CHECK_EQ(kernel(0, 5, -1), TT_ERROR_INVALID_VALUE);
+  CHECK_EQ(kernel(0, 5, 2), TT_ERROR_INVALID_VALUE);
+  return 0;
+}}
+""")
+
+        subprocess.run(["gcc", "-std=c99", "-DNDEBUG", c_path, "-o", exe_path], check=True)
+        subprocess.run([exe_path], check=True)
 
 
 # Test edge case where the provided kernel signature has no specializations
@@ -780,3 +849,117 @@ def test_aot_target_parsing_with_explicit_target():
         target = triton.runtime.driver.active.get_current_target()
         compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code=False,
                                              target=target)
+
+
+scalar_float_kernel_src = """
+import triton
+import triton.language as tl
+
+@triton.jit
+def kernel(Out, alpha, BLOCK: tl.constexpr):
+    offs = tl.arange(0, BLOCK)
+    tl.store(Out + offs, alpha.to(tl.float32))
+"""
+
+# C has no portable fp16 or bf16 scalar type, so pass their bit patterns.
+SCALAR_FLOAT_VALUES = {
+    "fp16": "0x4000",
+    "bf16": "0x4000",
+    "fp32": "2.0f",
+    "fp64": "2.0",
+}
+
+
+def gen_scalar_float_test_bin(dir, block, alpha, exe="test_scalar_float"):
+    if is_cuda():
+        sync, memcpy_dtoh = "cuStreamSynchronize", "cuMemcpyDtoH"
+        prologue = """
+  CUdevice dev;
+  CUcontext ctx;
+  CUstream stream;
+  CUdeviceptr Out;
+  CHECK(cuInit(0));
+  CHECK(cuDeviceGet(&dev, 0));
+  CHECK(cuCtxCreate_v2(&ctx, 0, dev));
+  CHECK(cuMemAlloc(&Out, sizeof(hOut)));
+  CHECK(cuStreamCreate(&stream, 0));
+"""
+        epilogue = """
+  CHECK(cuStreamDestroy(stream));
+  CHECK(cuMemFree(Out));
+  CHECK(cuCtxDestroy(ctx));
+"""
+    elif is_xpu():
+        sync, memcpy_dtoh = "stream_sync", "memcpy_dtoh"
+        prologue = """
+  sycl::queue stream{sycl::gpu_selector_v};
+  void *Out = sycl::malloc_device(sizeof(hOut), stream);
+  auto stream_sync = [](sycl::queue &q) { q.wait(); return 0; };
+  auto memcpy_dtoh = [&](void *dst, void *src, size_t size) { stream.memcpy(dst, src, size).wait(); return 0; };
+"""
+        epilogue = """
+  sycl::free(Out, stream);
+"""
+    else:
+        sync, memcpy_dtoh = "hipStreamSynchronize", "hipMemcpyDtoH"
+        prologue = """
+  hipDevice_t dev;
+  hipStream_t stream;
+  hipDeviceptr_t Out;
+  CHECK(hipInit(0));
+  CHECK(hipDeviceGet(&dev, 0));
+  CHECK(hipSetDevice(dev));
+  CHECK(hipMalloc(&Out, sizeof(hOut)));
+  CHECK(hipStreamCreateWithFlags(&stream, 0));
+"""
+        epilogue = """
+  CHECK(hipStreamDestroy(stream));
+  CHECK(hipFree(Out));
+"""
+
+    test_src = f"""
+#define CHECK(expr) do {{ if ((expr) != 0) return 1; }} while (0)
+
+int main(void) {{
+  float hOut[{block}];
+{prologue}
+  load_scale();
+  CHECK(scale_default(stream, Out, {alpha}));
+  CHECK({sync}(stream));
+  CHECK({memcpy_dtoh}(hOut, Out, sizeof(hOut)));
+  int failed = 0;
+  for (int i = 0; i < {block}; ++i) failed |= hOut[i] != 2.0f;
+  unload_scale();
+{epilogue}
+  return failed;
+}}
+"""
+    build_test_bin(dir, test_utils_src + test_src, f"{exe}.cpp" if is_xpu() else f"{exe}.c", exe)
+
+
+@pytest.mark.parametrize("dtype, alpha", SCALAR_FLOAT_VALUES.items())
+def test_compile_link_scalar_float(dtype, alpha):
+    """Check that AOT scalar argument storage matches the kernel ABI."""
+    block = 16
+    exe = "test_scalar_float"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        kernel_path = write_triton_kernels(tmp_dir, scalar_float_kernel_src, kernel_utils_src)
+        _compile_kernel(
+            dir=tmp_dir,
+            signature=f"*fp32:16, {dtype}, {block}",
+            kernel_name="kernel",
+            out_name="scale",
+            out_path="scale",
+            num_warps=1,
+            grid="1, 1, 1",
+            generate_native_code=False,
+            kernel_path=kernel_path,
+        )
+        link_aot_kernels(tmp_dir)
+        gen_kernel_library(tmp_dir, "libkernel.so")
+        gen_scalar_float_test_bin(tmp_dir, block, alpha, exe=exe)
+
+        env = os.environ.copy()
+        env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
+        subprocess.run([f"./{exe}"], env=env, check=True, cwd=tmp_dir)

@@ -458,48 +458,38 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 // Note: when handled by software, this format
 // has more than a single NaN values.
 
-// Fp8E4M3 -> Fp16 (packed), oneDNN-derived. 6 arithmetic ops per 2 elements,
-// down from ~20 in the implementation this replaces, which spent 14 of them
-// on an integer NaN fixup. Runs entirely in the <2 x i16> / <2 x half>
-// domain:
+// Fp8E4M3 -> Fp16:
 //
-//   ashr <2 x i16>, 1       reposition exp+mantissa; arithmetic, so it also
-//                           smears the sign into bit 15, placing it in the
-//                           fp16 sign position for free
-//   and  <2 x i16>, 0xBFFF  clear bit 14, which the shift duplicated
-//   fmul 36864.0            rebias, part 1
-//   fmul 0.0069427490234375 rebias, part 2
-//   fadd(h, fmul(h, 0.0))   Inf -> NaN; oneDNN's `mad y, y, y, 0:hf`
+//   shl(sext i8 -> i16, 7)  reposition exp+mantissa; the sign extension also
+//                           places the sign in bit 15, the fp16 sign position
+//   and  i16, 0xBFFF        clear bit 14, which the extension duplicated
+//   fmul 256.0              rebias: 2^8 = 2^(15 - 7), the fp16 / fp8 exponent
+//                           bias difference
+//   fcmp ogt |h|, 448.0     reserved bytes only: 480.0 is the one magnitude
+//   select NaN              above the largest finite value
 //
-// Do NOT collapse the two rebias multiplies into a single x256: the overflow
-// in the first one IS the NaN detector. Byte 0x7E (largest finite) gives
-// 1.75 * 36864 = 64512, still under the 65504 fp16 max, while the reserved
-// byte 0x7F gives 1.875 * 36864 = 69120 -> Inf. The trailing `h + h*0.0`
-// turns that into NaN via IEEE `Inf * 0 = NaN`, and is an exact identity for
-// every finite input.
+// The multiply by an exact power of two re-biases the normal and the
+// subnormal paths at once and is exact for every input, so, unlike a
+// split-multiply rebias, it does not depend on round-to-nearest-even. It maps
+// the reserved bytes 0x7F/0xFF, the only encodings that are not finite
+// numbers, to +-480.0; one compare of the magnitude (fabs is a source
+// modifier) and one select turn them into the quiet NaN 0x7E00, with the sign
+// DISCARDED.
 //
-// Rounding: 36 of the 256 bytes depend on round-to-nearest-EVEN, where the
-// old implementation was exact by construction. The exact product of the
-// second multiply is T * (1 - 2^-12) for the wanted result T = y * 256; when
-// T is a power of two that is precisely the midpoint below T, and only RNE's
-// even-significand tie-break recovers it. Affects 0x01/0x02/0x04 and
-// 0x08,0x10,...,0x78, both signs. This is why the exhaustive 256-byte
-// hardware tests are a correctness gate rather than a nicety.
+// The cost of this sequence matters: a dot operand is upcast in its dot
+// layout, where every warp upcasts its own copy of the slices it needs (the
+// warps along N for A, the warps along M for B), so each lane upcasts several
+// times its even share of the tile. fp8 GEMMs that load their operands
+// straight into the dot layout with tensor descriptors pay for each op that
+// many times; the previous sequence (x 36864.0 overflowing the reserved bytes
+// to Inf, x 0.0069427490234375, then `h + h * 0.0` for Inf -> NaN) made them
+// much slower than with pointer loads, see
+// https://github.com/intel/intel-xpu-backend-for-triton/issues/8311.
 //
-// Invariant: `ninf` must never reach the second rebias multiply. With it,
-// LLVM may assume the value is finite, fold `h*0.0` to 0.0 and `h + 0.0` to
-// `h`, silently deleting the Inf -> NaN step. set_fast_math() in
-// third_party/intel/triton_xpu.cc sets only `contract` outside fast-math
-// mode, which is what keeps this safe; test/Conversion/intel/
-// fp8e4m3_to_fp16.mlir pins the fadd so its loss is caught.
-//
-// NaN behavior change (deliberate): reserved bytes 0x7F/0xFF now decode to
-// the hardware default quiet NaN with the sign DISCARDED (0xFE00 on BMG),
-// where before they were sign-preserved 0x7E00/0xFE00. Under
-// TRITON_INTEL_FAST_MATH=1, `reassoc` folds the two multiplies (to exactly
-// x256, so finite values stay bit-exact) and drops the fixup, so those bytes
-// decode to finite +-480.0 instead of NaN -- accepted; fast math waives NaN
-// semantics.
+// Under TRITON_INTEL_FAST_MATH=1 the compare and the select carry fast-math
+// flags (including nnan), which license LLVM to drop them or to treat a NaN
+// result as poison: what the reserved bytes decode to is then unspecified
+// (+-480.0 is one possible outcome). Fast math waives NaN semantics.
 //
 // This file has a history of IGC flush-to-zero bugs that are sensitive to the
 // integer domain (see Fp8E5M2_to_Bf16, which needs i32, and
@@ -508,11 +498,41 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 // `and 0x80008000` + `or`. That is 8 ops instead of 6 and was verified
 // bit-identical on all 256 bytes.
 //
-// Not used on LTS drivers, where it triggers an IGC compile-time blowup; see
-// Fp8E4M3Nv_to_Fp16Int below and the dispatch in getConversionFunc().
+// One element at a time: IGC runs each element of a vector op as its own
+// instruction anyway, and the <4 x i8> to <2 x i16> bitcast of the pairs costs
+// a mov per element.
+//
+// Not used on LTS drivers, where the previous float sequence triggered an IGC
+// compile-time blowup; see Fp8E4M3Nv_to_Fp16Int below and the dispatch in
+// getConverter().
+static Value rebiasFp8E4M3ToFp16(Location loc,
+                                 ConversionPatternRewriter &rewriter,
+                                 Value aligned) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value h = b.fmul(b.bitcast(aligned, f16_ty), b.f16_val(256.0f));
+  Value mag = LLVM::FAbsOp::create(rewriter, loc, f16_ty, h);
+  Value isReserved = b.fcmp_ogt(mag, b.f16_val(448.0f));
+  return b.select(isReserved, b.bitcast(b.i16_val(0x7E00), f16_ty), h);
+}
+
 static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  SmallVector<Value> ret;
+  for (Value fp8 : v) {
+    Value shifted = b.shl(i16_ty, b.sext(i16_ty, fp8), b.i16_val(7));
+    ret.push_back(rebiasFp8E4M3ToFp16(
+        loc, rewriter, b.and_(i16_ty, shifted, b.i16_val(0xBFFF))));
+  }
+  return ret;
+}
+
+// Fp8E4M3Nv_to_Fp16 in pairs, for dot operands with K < 64: the packing costs
+// movs, but it keeps register pressure down.
+static SmallVector<Value>
+Fp8E4M3Nv_to_Fp16Pairs(Location loc, ConversionPatternRewriter &rewriter,
+                       const SmallVector<Value> &v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   // Pack into byte positions 1 and 3, putting each fp8 byte in the high half
@@ -550,27 +570,56 @@ static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
   Value shifted = b.ashr(i16x2VecTy, lanes, splatI16(1));
   Value aligned = b.and_(i16x2VecTy, shifted, splatI16(0xBFFF));
 
-  Value h = b.bitcast(aligned, fp16x2VecTy);
-  h = b.fmul(h, splatF16(36864.0f));
-  h = b.fmul(h, splatF16(0.0069427490234375f));
-  h = b.fadd(h, b.fmul(h, splatF16(0.0f)));
+  // NaN: the reserved bytes 0x7F/0xFF are the only ones whose exponent and
+  // mantissa bits (13..7 of `aligned`) are all ones, and adding 0x80 carries
+  // through them into bit 14. OR-ing that carry into `aligned` makes the
+  // exponent all ones with a nonzero mantissa, i.e. a signed quiet NaN before
+  // the multiply (the sign and payload of the product are unspecified).
+  // Nothing else carries, so every other byte is untouched.
+  //
+  // This is integer ops rather than the compare and select of
+  // rebiasFp8E4M3ToFp16: a dot B operand held by every warp is converted
+  // together with a lot of other live values, and with the compare the K loop
+  // of the unified attention decode kernels has more than 100 moves of the
+  // flag register to GRFs (5 without it) and runs slower; see
+  // https://github.com/intel/intel-xpu-backend-for-triton/issues/8478. The
+  // one-element-at-a-time path keeps the compare and select, as the GEMMs of
+  // #8311 take it.
+  Value carry = b.and_(i16x2VecTy, b.add(i16x2VecTy, aligned, splatI16(0x80)),
+                       splatI16(0x4000));
+  aligned = b.or_(i16x2VecTy, aligned, carry);
+  Value h = b.fmul(b.bitcast(aligned, fp16x2VecTy), splatF16(256.0f));
 
   return {b.extract_element(f16_ty, h, b.i32_val(0)),
           b.extract_element(f16_ty, h, b.i32_val(1))};
 }
 
+// Fp8E4M3Nv_to_Fp16 for a single i16 lane that already holds the fp8 byte in
+// its high byte: `ashr` by 1 gives what sext and shl by 7 give for the bare
+// byte. The low byte may be anything: 0xBF80 also clears the bits `ashr` shifts
+// in from it.
+static Value Fp8E4M3Nv_to_Fp16FromHighByte(Location loc,
+                                           ConversionPatternRewriter &rewriter,
+                                           Value lane) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value shifted = b.ashr(i16_ty, lane, b.i16_val(1));
+  return rebiasFp8E4M3ToFp16(loc, rewriter,
+                             b.and_(i16_ty, shifted, b.i16_val(0xBF80)));
+}
+
 // Fp8E4M3 -> Fp16 (packed), integer domain. Used only on LTS drivers.
 //
-// 11 ops against the 6 of Fp8E4M3Nv_to_Fp16 above, and slower at runtime
-// (~1.7x on fp8 GEMMs), but it is what LTS can compile in reasonable time.
-// The LTS IGC (2.11) runs a LoopSink pass whose cost model treats the other
-// sequence -- short, straight-line, unpredicated float arithmetic -- as free
-// to rematerialize, and clones it ~6x inside the already-unrolled loop body.
-// On a 128x128 fp8 GEMM tile that is 22s of ocloc time and 1882 spill slots
-// against 4.7s and 840. The `icmp`/`select` pair below is what makes this
-// version ineligible or unprofitable to sink, so it is left alone. Newer IGC
-// does not mispredict this, hence the gate rather than a blanket switch.
-// See https://github.com/intel/intel-xpu-backend-for-triton/issues/8046.
+// Slower at runtime than Fp8E4M3Nv_to_Fp16 above, but it is what LTS can
+// compile in reasonable time.
+// The LTS IGC (2.11) runs a LoopSink pass whose cost model treated the
+// previous float sequence -- short, straight-line, unpredicated float
+// arithmetic -- as free to rematerialize, and cloned it ~6x inside the
+// already-unrolled loop body. On a 128x128 fp8 GEMM tile that was 22s of ocloc
+// time and 1882 spill slots against 4.7s and 840. The `icmp`/`select` pair
+// below is what makes this version ineligible or unprofitable to sink, so it is
+// left alone. Newer IGC does not mispredict this, hence the gate rather than a
+// blanket switch. See
+// https://github.com/intel/intel-xpu-backend-for-triton/issues/8046.
 //
 // A single multiplication by 256.0 (= 2^8) re-biases BOTH the normal and the
 // subnormal paths in one shot, so no predicate is needed for the rebias:
@@ -586,12 +635,12 @@ static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
 //     with significand mmm * 128, i.e. mmm * 2^(-17). Multiplying by 2^8
 //     yields mmm * 2^(-9), exactly the fp8 subnormal value.
 // Being an exact power of two, the multiply is exact for every input, so
-// unlike the oneDNN sequence this converter does not depend on RNE.
+// unlike a split-multiply rebias this converter does not depend on RNE.
 //
-// NaN: reserved bytes 0x7F/0xFF decode to fp16 0x7E00 with the sign
-// preserved, matching the AMD and NVIDIA software converters. This differs
-// from Fp8E4M3Nv_to_Fp16, which yields the hardware default quiet NaN with
-// the sign discarded -- both are NaN, and the payload is unspecified.
+// NaN: reserved bytes 0x7F/0xFF decode to fp16 0x7E00/0xFE00, preserving the
+// sign, matching the AMD and NVIDIA software converters. This differs from
+// Fp8E4M3Nv_to_Fp16, which yields 0x7E00 for both -- both are NaN, and the
+// payload is unspecified.
 static SmallVector<Value>
 Fp8E4M3Nv_to_Fp16Int(Location loc, ConversionPatternRewriter &rewriter,
                      const SmallVector<Value> &v) {
@@ -1109,13 +1158,28 @@ Bf16_to_Fp16WithRounding(Location loc, ConversionPatternRewriter &rewriter,
   SmallVector<Value> result;
   result.reserve(v.size());
   for (Value elem : v) {
-    Value fp32 = LLVM::FPExtOp::create(rewriter, loc, f32_ty, elem);
+    Value fp32 = intel::convertBf16ToFp32(loc, rewriter, elem);
     Value fp16 = LLVM::ConstrainedFPTruncIntr::create(
         rewriter, loc, f16_ty, fp32,
         LLVM::RoundingModeAttr::get(
             ctx, LLVM::intel::convertTritonRoundingModeToLLVM(Rounding)),
         arith::getLLVMDefaultFPExceptionBehavior(*ctx));
     result.push_back(fp16);
+  }
+  return result;
+}
+
+// For RTNE/RTZ callers. FP16 -> FP32 extension is always exact, so the
+// requested rounding only needs to apply on the FP32 -> BF16 narrowing step.
+template <RoundingMode Rounding>
+static SmallVector<Value>
+Fp16_to_Bf16WithRounding(Location loc, ConversionPatternRewriter &rewriter,
+                         const SmallVector<Value> &v) {
+  SmallVector<Value> result;
+  result.reserve(v.size());
+  for (Value elem : v) {
+    Value fp32 = LLVM::FPExtOp::create(rewriter, loc, f32_ty, elem);
+    result.push_back(intel::convertFp32ToBf16(loc, rewriter, fp32, Rounding));
   }
   return result;
 }
@@ -1288,6 +1352,33 @@ struct Converter {
   }
 };
 
+// Returns the K extent of `op`'s operand if it is a dot operand, 0 otherwise.
+static int64_t getDotOperandK(Operation *op) {
+  auto ty = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto enc =
+      ty ? dyn_cast<triton::gpu::DotOperandEncodingAttr>(ty.getEncoding())
+         : nullptr;
+  if (!enc)
+    return 0;
+  return ty.getShape()[ty.getRank() - (enc.getOpIdx() == 0 ? 1 : 2)];
+}
+
+// Whether `op`'s operand is a dot B operand that each of several warps holds in
+// full, i.e. all warps are along M.
+static bool isDotBInEveryWarp(Operation *op) {
+  auto ty = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto enc =
+      ty ? dyn_cast<triton::gpu::DotOperandEncodingAttr>(ty.getEncoding())
+         : nullptr;
+  auto dpas =
+      enc ? dyn_cast<triton::gpu::intel::DpasEncodingAttr>(enc.getParent())
+          : nullptr;
+  if (!dpas || enc.getOpIdx() != 1)
+    return false;
+  ArrayRef<unsigned> warps = dpas.getWarpsPerCTA();
+  return warps.back() == 1 && warps[warps.size() - 2] > 1;
+}
+
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<FpToFpOp, FpToFpOpConversion> {
@@ -1418,6 +1509,11 @@ struct FpToFpOpConversion
              {Bf16_to_Fp16WithRounding<RoundingMode::RTNE>, 2}},
             {{BF16TyID, F16TyID, RoundingMode::RTZ},
              {Bf16_to_Fp16WithRounding<RoundingMode::RTZ>, 2}},
+            // F16 -> BF16
+            {{F16TyID, BF16TyID, RoundingMode::RTNE},
+             {Fp16_to_Bf16WithRounding<RoundingMode::RTNE>, 2}},
+            {{F16TyID, BF16TyID, RoundingMode::RTZ},
+             {Fp16_to_Bf16WithRounding<RoundingMode::RTZ>, 2}},
             // F32 -> F8
             {{F32TyID, F8E4M3TyID, RoundingMode::RTNE},
              {Fp_to_Fp8_RTNE<Float32Type, Float8E4M3Type>, 1}},
@@ -1442,20 +1538,29 @@ struct FpToFpOpConversion
         srcTy.getTypeID(), dstTy.getTypeID(),
         roundingMode.value_or(undefRounding)};
 
-    // fp8e4m3 -> fp16 has three implementations rather than the two a
-    // ConverterSelector holds: the hardware builtin where available, and
-    // otherwise one of two software sequences chosen by driver. See
-    // Fp8E4M3Nv_to_Fp16Int for why LTS needs the integer-domain one.
+    // Software fp8e4m3 -> fp16 needs more choices than the two a
+    // ConverterSelector holds: the integer-domain sequence on LTS drivers (see
+    // Fp8E4M3Nv_to_Fp16Int for why) and pairs for dot operands with K < 64 and
+    // for a B operand that every warp converts in full.
     //
-    // FIXME: drop this early return and Fp8E4M3Nv_to_Fp16Int once the LTS
-    // driver line picks up an IGC that no longer mispredicts the oneDNN
-    // sequence -- the rolling driver (1.17.39395+13) already does not -- so
-    // every target gets the faster sequence (~1.7x at runtime on fp8 GEMMs).
-    // Worth re-checking whenever the LTS driver pin is bumped.
+    // FIXME: drop the LTS branch and Fp8E4M3Nv_to_Fp16Int once the float
+    // sequence (which changed since the LoopSink blowup was measured; it now
+    // has an fcmp/select) is checked to compile in reasonable time on the LTS
+    // IGC, or the LTS driver line picks up an IGC that no longer mispredicts
+    // it -- the rolling driver (1.17.39395+13) already does not -- so every
+    // target gets the faster sequence. Worth re-checking whenever the LTS
+    // driver pin is bumped.
     if (srcTy.getTypeID() == F8E4M3TyID && dstTy.getTypeID() == F16TyID &&
-        !HasAttr<SUPPORT_F8_CONV>(op) && HasAttr<IS_LTS>(op)) {
-      static Converter c{Fp8E4M3Nv_to_Fp16Int, 2};
-      return c;
+        !HasAttr<SUPPORT_F8_CONV>(op)) {
+      if (HasAttr<IS_LTS>(op)) {
+        static Converter c{Fp8E4M3Nv_to_Fp16Int, 2};
+        return c;
+      }
+      if (int64_t k = getDotOperandK(op);
+          (k && k < 64) || isDotBInEveryWarp(op)) {
+        static Converter c{Fp8E4M3Nv_to_Fp16Pairs, 2};
+        return c;
+      }
     }
 
     if (auto it = srcMap.find(key); it != srcMap.end()) {
@@ -1562,6 +1667,79 @@ struct FpToFpOpConversion
   }
 };
 
+// Returns (vec, idx) for each element of the struct `src` if every element is
+// byte idx of an <N x i32> `vec` bitcast to bytes.
+static std::optional<SmallVector<std::pair<Value, int64_t>>>
+getBytesOfI32Vectors(Value src) {
+  auto structTy = dyn_cast<LLVM::LLVMStructType>(src.getType());
+  if (!structTy)
+    return std::nullopt;
+  SmallVector<Value> elems(structTy.getBody().size());
+  for (auto insert = src.getDefiningOp<LLVM::InsertValueOp>(); insert;
+       insert = insert.getContainer().getDefiningOp<LLVM::InsertValueOp>()) {
+    if (insert.getPosition().size() != 1)
+      return std::nullopt;
+    Value &elem = elems[insert.getPosition()[0]];
+    if (!elem)
+      elem = insert.getValue();
+  }
+  SmallVector<std::pair<Value, int64_t>> bytes;
+  for (Value elem : elems) {
+    auto extract =
+        elem ? elem.getDefiningOp<LLVM::ExtractElementOp>() : nullptr;
+    if (!extract || !extract.getType().isInteger(8))
+      return std::nullopt;
+    auto bitcast = extract.getVector().getDefiningOp<LLVM::BitcastOp>();
+    APInt idx;
+    if (!bitcast || !matchPattern(extract.getPosition(), m_ConstantInt(&idx)))
+      return std::nullopt;
+    auto vecTy = dyn_cast<VectorType>(bitcast.getArg().getType());
+    if (!vecTy || !vecTy.getElementType().isInteger(32))
+      return std::nullopt;
+    bytes.emplace_back(bitcast.getArg(), idx.getSExtValue());
+  }
+  return bytes;
+}
+
+// fp8e4m3 -> fp16 of bytes that come packed in dwords, as 32-bit 2D block loads
+// return them. The block load lowering unpacks them with a bitcast that IGC
+// turns into a mov per byte; this reads each byte from its dword instead, as
+// the high byte of a 16-bit window.
+struct FpToFpOpFromDwordsConversion : public ConvertOpToLLVMPattern<FpToFpOp> {
+  using ConvertOpToLLVMPattern<FpToFpOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(FpToFpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!isa<Float8E4M3FNType>(getElementTypeOrSelf(op.getSrc().getType())) ||
+        !getElementTypeOrSelf(op.getType()).isF16() ||
+        HasAttr<SUPPORT_F8_CONV>(op) || HasAttr<IS_LTS>(op) ||
+        isDotBInEveryWarp(op))
+      return failure();
+    std::optional<SmallVector<std::pair<Value, int64_t>>> bytes =
+        getBytesOfI32Vectors(adaptor.getSrc());
+    if (!bytes)
+      return failure();
+
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    SmallVector<Value> results;
+    for (auto [vec, idx] : *bytes) {
+      Value dword = b.extract_element(i32_ty, vec, b.i32_val(idx / 4));
+      if (idx % 4 >= 2)
+        dword = b.lshr(i32_ty, dword, b.i32_val(16));
+      Value window = b.trunc(i16_ty, dword);
+      if (idx % 2 == 0)
+        window = b.shl(i16_ty, window, b.i16_val(8));
+      results.push_back(Fp8E4M3Nv_to_Fp16FromHighByte(loc, rewriter, window));
+    }
+    rewriter.replaceOp(op, packUniqueTensorElements(loc, getTypeConverter(),
+                                                    results, rewriter,
+                                                    op.getType()));
+    return success();
+  }
+};
+
 template <typename SourceOp, typename DestOp>
 struct ElementwiseOpConversion
     : ElementwiseOpConversionBase<SourceOp,
@@ -1584,6 +1762,44 @@ struct ElementwiseOpConversion
   }
 };
 
+// Converts the integer or f64 `v` to f32 with round-to-odd (toward zero, then
+// the lowest bit set if inexact), so that the f32 -> bf16 rounding that follows
+// is the only one.
+static Value convertToFp32RoundToOdd(Location loc,
+                                     ConversionPatternRewriter &rewriter,
+                                     Value v, bool isSigned = false) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Type ty = v.getType();
+  if (ty.getIntOrFloatBitWidth() <= 24) // Exact in f32.
+    return isSigned ? Value(LLVM::SIToFPOp::create(rewriter, loc, f32_ty, v))
+                    : Value(LLVM::UIToFPOp::create(rewriter, loc, f32_ty, v));
+
+  MLIRContext *ctx = rewriter.getContext();
+  auto towardZero =
+      LLVM::RoundingModeAttr::get(ctx, LLVM::RoundingMode::TowardZero);
+  auto except = arith::getLLVMDefaultFPExceptionBehavior(*ctx);
+  Value truncated, inexact;
+  if (ty.isF64()) {
+    truncated = LLVM::ConstrainedFPTruncIntr::create(rewriter, loc, f32_ty, v,
+                                                     towardZero, except);
+    Value back = b.fpext(ty, truncated);
+    inexact = LLVM::FCmpOp::create(rewriter, loc, i1_ty,
+                                   LLVM::FCmpPredicate::one, back, v);
+  } else if (isSigned) {
+    truncated = LLVM::ConstrainedSIToFP::create(rewriter, loc, f32_ty, v,
+                                                towardZero, except);
+    Value back = LLVM::FPToSIOp::create(rewriter, loc, ty, truncated);
+    inexact = b.icmp_ne(back, v);
+  } else {
+    truncated = LLVM::ConstrainedUIToFP::create(rewriter, loc, f32_ty, v,
+                                                towardZero, except);
+    Value back = LLVM::FPToUIOp::create(rewriter, loc, ty, truncated);
+    inexact = b.icmp_ne(back, v);
+  }
+  Value bits = b.bitcast(truncated, i32_ty);
+  return b.bitcast(b.or_(bits, b.zext(i32_ty, inexact)), f32_ty);
+}
+
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion>;
@@ -1602,13 +1818,32 @@ struct SIToFPOpConversion
       return {
           intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
     } else if (outElemTy.isBF16()) {
-      auto value =
-          LLVM::SIToFPOp::create(rewriter, loc, f32_ty, operands[0][0]);
+      Value value = convertToFp32RoundToOdd(loc, rewriter, operands[0][0],
+                                            /*isSigned=*/true);
       return {
           intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
     }
 
     return {LLVM::SIToFPOp::create(rewriter, loc, elemTy, operands[0][0])};
+  }
+};
+
+struct UIToFPOpConversion
+    : ElementwiseOpConversionBase<arith::UIToFPOp, UIToFPOpConversion> {
+  using Base = ElementwiseOpConversionBase<arith::UIToFPOp, UIToFPOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(arith::UIToFPOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // Left to the common lowering.
+    if (!getElementType(op.getOut()).isBF16())
+      return {};
+
+    Value value = convertToFp32RoundToOdd(loc, rewriter, operands[0][0]);
+    return {intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
   }
 };
 
@@ -1681,10 +1916,13 @@ struct TruncFOpConversion
     auto outElemTy = getElementType(op.getOut());
     if (outElemTy.isBF16()) {
       auto inElemTy = getElementType(op.getIn());
-      assert(inElemTy.isF32() && "unsupported conversion");
+      assert((inElemTy.isF32() || inElemTy.isF64()) &&
+             "unsupported conversion");
+      Value in = operands[0][0];
+      if (inElemTy.isF64())
+        in = convertToFp32RoundToOdd(loc, rewriter, in);
       return {// Trunc uses the default rounding mode: RTNE
-              intel::convertFp32ToBf16(loc, rewriter, operands[0][0],
-                                       RoundingMode::RTNE)};
+              intel::convertFp32ToBf16(loc, rewriter, in, RoundingMode::RTNE)};
     }
     return {LLVM::FPTruncOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
@@ -1810,6 +2048,46 @@ struct AbsFOpConversion
   }
 };
 
+// Without native bf16 arithmetic (LTS drivers), lower a bf16 `tt.clampf` in
+// f32. `tt.clampf` is not an arith op, so `arith-emulate-unsupported-floats`
+// does not widen it. The result is one of the inputs or NaN, so the f32
+// round-trip is exact. Other cases fall through to the upstream pattern.
+struct Bf16ClampFOpConversion
+    : ElementwiseOpConversionBase<ClampFOp, Bf16ClampFOpConversion> {
+  using Base = ElementwiseOpConversionBase<ClampFOp, Bf16ClampFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  LogicalResult
+  matchAndRewrite(ClampFOp op, Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!isa<BFloat16Type>(getElementTypeOrSelf(op.getType())) ||
+        mlir::LLVM::intel::hasModuleAttr(op, SUPPORT_BF16_ARITH()))
+      return failure();
+    return Base::matchAndRewrite(op, adaptor, rewriter);
+  }
+
+  SmallVector<Value> createDestOps(ClampFOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value x = intel::convertBf16ToFp32(loc, rewriter, operands[0][0]);
+    Value lo = intel::convertBf16ToFp32(loc, rewriter, operands[0][1]);
+    Value hi = intel::convertBf16ToFp32(loc, rewriter, operands[0][2]);
+    Value v = LLVM::MaxNumOp::create(rewriter, loc, f32_ty, x, lo);
+    Value res = LLVM::MinNumOp::create(rewriter, loc, v, hi);
+    if (op.getPropagateNan() == PropagateNan::ALL) {
+      // As in the upstream lowering, only `x` needs a NaN check.
+      Value isNan =
+          LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une, x, x);
+      res =
+          b.select(isNan, LLVM::createNaNConstant(loc, rewriter, f32_ty), res);
+    }
+    return {intel::convertFp32ToBf16(loc, rewriter, res, RoundingMode::RTNE)};
+  }
+};
+
 struct PreciseSqrtOpConversion
     : ElementwiseOpConversionBase<PreciseSqrtOp, PreciseSqrtOpConversion> {
   using Base =
@@ -1910,43 +2188,6 @@ struct PreciseDivFOpConversion
   }
 };
 
-// Following two patterns are copied from the common part to fix-up calling
-// convention for created function declaration.
-// TODO: propose changes in the common part to use CC provided by target.
-struct MulhiUIOpConversion
-    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
-  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-  explicit MulhiUIOpConversion(LLVMTypeConverter &typeConverter,
-                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               const TargetInfoBase &targetInfo,
-                               PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        targetInfo(targetInfo) {}
-
-  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-
-    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
-    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
-
-    auto funcName = targetInfo.getMulhiFuncName(resultElementTy);
-    Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
-    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
-    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
-    callOp.setCConv(funcOp.getCConv());
-    return {callOp.getResult()};
-  }
-
-protected:
-  const TargetInfoBase &targetInfo;
-};
-
 // Match a / (1 + exp(b)), setting expArg = b. Returns false if the RHS
 // doesn't have that shape. Does not inspect the sign of b — callers emit
 // fsigm(-b) so the folder handles any double-negation.
@@ -2028,6 +2269,34 @@ struct SigmoidConversion : public ConvertOpToLLVMPattern<arith::DivFOp> {
   }
 };
 
+// The LTS IGC miscompiles the i128 multiply upstream emits for 64-bit umulhi.
+struct MulhiUIOpConversion
+    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
+  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
+    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
+    StringRef funcName =
+        resultElementTy.isInteger(32) ? "__imf_umulhi" : "__imf_umul64hi";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
+    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
+    callOp.setCConv(funcOp.getCConv());
+    return {callOp.getResult()};
+  }
+};
+
+// Following pattern is copied from the common part to fix-up calling
+// convention for created function declaration.
+// TODO: propose changes in the common part to use CC provided by target.
 struct ExternElementwiseOpConversion
     : public ElementwiseOpConversionBase<ExternElementwiseOp,
                                          ExternElementwiseOpConversion> {
@@ -2067,20 +2336,23 @@ void populateElementwiseOpToLLVMPatterns(
                                         benefit);
   patterns.add<PreciseDivFOpConversion>(typeConverter, axisInfoAnalysis,
                                         benefit);
-  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
-                                    benefit);
+  if (axisInfoAnalysis.getModuleOp()->hasAttr(
+          gpu::intel::TritonIntelGPUDialect::getIsLTSAttrName()))
+    patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
 
   // Use lower benefit for common patterns to prioritize our versions.
   assert(benefit > 0);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
-      typeConverter, patterns, axisInfoAnalysis, targetInfo,
-      benefit.getBenefit() - 1);
+      typeConverter, patterns, axisInfoAnalysis, benefit.getBenefit() - 1);
 
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SigmoidConversion>(typeConverter, benefit.getBenefit() + 10);
   patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
+  // The default fp32 division is already approximate on Intel GPUs.
+  patterns.add<ElementwiseOpConversion<triton::ApproxDivFOp, LLVM::FDivOp>>(
       typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<arith::MulFOp, LLVM::FMulOp>>(
       typeConverter, axisInfoAnalysis, benefit);
@@ -2095,7 +2367,10 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<UIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FpToFpOpFromDwordsConversion>(typeConverter,
+                                             benefit.getBenefit() + 1);
 
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
@@ -2114,6 +2389,8 @@ void populateElementwiseOpToLLVMPatterns(
   mlir::triton::populateMinMaxFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis,
       /*hwNanPropagationSupported=*/false, benefitForPropNan);
+  patterns.add<Bf16ClampFOpConversion>(typeConverter, axisInfoAnalysis,
+                                       benefit.getBenefit() + 1);
   mlir::triton::populateClampFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
 }
