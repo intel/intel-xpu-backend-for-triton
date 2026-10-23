@@ -118,6 +118,27 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify required PVC LTS driver stack
+        if: ${{ inputs.runner_label == 'max1100-lts-dle' }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+          printf '| Driver component | Required | Actual |\n| --- | --- | --- |\n' >> "$GITHUB_STEP_SUMMARY"
+          mismatch=0
+          for expected in \
+              'LIBIGC1_VERSION=2.11.43-1146' \
+              'LEVEL_ZERO_VERSION=1.24.0.0-1146' \
+              'AGAMA_VERSION=1146'; do
+            variable="${expected%%=*}"
+            version="${expected#*=}"
+            actual="${!variable}"
+            printf '| `%s` | `%s` | `%s` |\n' "$variable" "$version" "$actual" >> "$GITHUB_STEP_SUMMARY"
+            if [[ "$actual" != "$version" ]]; then
+              echo "::error::$variable must be $version; runner reports $actual"
+              mismatch=1
+            fi
+          done
+          exit "$mismatch"
+
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
         uses: ./.github/actions/setup-pyenv-python
         with:
