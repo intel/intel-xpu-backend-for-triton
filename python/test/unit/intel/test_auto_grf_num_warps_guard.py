@@ -35,7 +35,7 @@ import triton.language as tl
 
 import triton.backends.intel.compiler as intel_compiler
 from triton.backends.intel.driver import is_lts
-from triton.runtime.errors import IntelGPUError
+from triton.backends.intel.errors import IntelGPUError
 
 pytestmark = pytest.mark.skipif(
     not (hasattr(torch, "xpu") and torch.xpu.is_available()),
