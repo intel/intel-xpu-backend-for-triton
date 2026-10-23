@@ -111,6 +111,18 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
                               AxisInfo *maskAxisInfo,
                               BlockIOTileSizeInfo &sizeInfoOut);
 
+/// Return a blocked layout under which a row-major rank-2 load of \p type
+/// passes validate2DBlockLoadTile, or std::nullopt. \p numWarps and
+/// \p threadsPerWarp must be > 0. Lanes span at most 64 bytes of a row. Warps
+/// preferably split the dim that is not \p reducedDim (the columns when there
+/// is no reduction), to keep a reduction within a warp; warps left over split
+/// the other dim. The CGA layout comes from \p type's encoding, which must be
+/// set.
+std::optional<triton::gpu::BlockedEncodingAttr>
+pickBlockIOLoadEncoding(RankedTensorType type, unsigned numWarps,
+                        unsigned threadsPerWarp,
+                        std::optional<unsigned> reducedDim);
+
 /// Determine whether memory layout is row-major from the block_io attribute.
 bool isMemoryRowMajor(Operation *op);
 
@@ -128,6 +140,18 @@ template <typename OpTy,
 bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
   return isBlockIOEligible(loadOp.getOperation(), tensorTy);
 }
+
+/// Return true if LowerTo2DBlockLoad's checks for rewriting \p op to
+/// ttig.2d_block_load pass with result type \p tensorTy, which may be a
+/// candidate other than op.getType(): isBlockIOEligible, traceable descriptor
+/// definitions with consistent padding, validate2DBlockLoadTile (honoring
+/// ttig.one_matrix_per_load), no batch dim in the tile, and each foldable
+/// width/height/pitch within its 24-bit field. Returns false if \p tensorTy has
+/// no distributed encoding. Emits no diagnostics. Omits the layout-independent
+/// 16-byte pitch check, which the pass reports as an error, so true means
+/// "eligible", not "safe to emit" for hand-tagged IR.
+bool isDescriptorLoadLowerableTo2DBlock(triton::DescriptorLoadOp op,
+                                        RankedTensorType tensorTy);
 
 /// Estimate the hardware message count for a load with the given type and
 /// encoding. Higher values indicate more HW cost. Used for cost modeling in

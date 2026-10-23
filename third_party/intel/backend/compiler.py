@@ -544,7 +544,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm)
-        intel.passes.ttgpuir.add_materialize_block_pointer(pm)
+        intel.passes.ttgpuir.add_materialize_block_pointer(pm, knobs.intel.descriptor_block_io_relayout)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_fold_fp_to_fp(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
@@ -728,6 +728,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment") or 1
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
+        # Set by the descriptor-load relayout when it assumes a bound on the grid; the launcher enforces it.
+        metadata["max_grid_dim"] = src.get_int_attr("ttig.assumed_max_grid_dim") or 0
 
         # Add Triton and LLVM versions to the dumped IR.
         if knobs.compilation.dump_ir:
