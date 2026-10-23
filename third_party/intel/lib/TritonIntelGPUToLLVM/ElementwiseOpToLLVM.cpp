@@ -570,13 +570,25 @@ Fp8E4M3Nv_to_Fp16Pairs(Location loc, ConversionPatternRewriter &rewriter,
   Value shifted = b.ashr(i16x2VecTy, lanes, splatI16(1));
   Value aligned = b.and_(i16x2VecTy, shifted, splatI16(0xBFFF));
 
+  // NaN: the reserved bytes 0x7F/0xFF are the only ones whose exponent and
+  // mantissa bits (13..7 of `aligned`) are all ones, and adding 0x80 carries
+  // through them into bit 14. OR-ing that carry into `aligned` makes the
+  // exponent all ones with a nonzero mantissa, i.e. a signed quiet NaN before
+  // the multiply (the sign and payload of the product are unspecified).
+  // Nothing else carries, so every other byte is untouched.
+  //
+  // This is integer ops rather than the compare and select of
+  // rebiasFp8E4M3ToFp16: a dot B operand held by every warp is converted
+  // together with a lot of other live values, and with the compare the K loop
+  // of the unified attention decode kernels has more than 100 moves of the
+  // flag register to GRFs (5 without it) and runs slower; see
+  // https://github.com/intel/intel-xpu-backend-for-triton/issues/8478. The
+  // one-element-at-a-time path keeps the compare and select, as the GEMMs of
+  // #8311 take it.
+  Value carry = b.and_(i16x2VecTy, b.add(i16x2VecTy, aligned, splatI16(0x80)),
+                       splatI16(0x4000));
+  aligned = b.or_(i16x2VecTy, aligned, carry);
   Value h = b.fmul(b.bitcast(aligned, fp16x2VecTy), splatF16(256.0f));
-  Value mag = LLVM::FAbsOp::create(rewriter, loc, fp16x2VecTy, h);
-  Value isReserved =
-      LLVM::FCmpOp::create(rewriter, loc, vec_ty(i1_ty, 2),
-                           LLVM::FCmpPredicate::ogt, mag, splatF16(448.0f));
-  Value qnan = b.bitcast(splatI16(0x7E00), fp16x2VecTy);
-  h = b.select(isReserved, qnan, h);
 
   return {b.extract_element(f16_ty, h, b.i32_val(0)),
           b.extract_element(f16_ty, h, b.i32_val(1))};
