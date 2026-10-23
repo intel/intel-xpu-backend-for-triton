@@ -7,9 +7,11 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 #include <numeric>
+#include <optional>
 
 namespace mlir::triton::gpu::intel {
 
@@ -115,10 +117,14 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
                    : std::numeric_limits<unsigned>::max();
   bool transpose = fastChangeDim != memContiguousDim;
 
-  // Walk thru the register bases in incremental order to get the register
-  // index for the packed value for block io.
-  // TODO: improve the register packing order to support swizzled linear
-  // layout.
+  // Register bases drive both the tile geometry and the ordered list of packed
+  // register indices (regPackBases) that downstream lowering turns into the
+  // register mapping. Rather than assuming the bases are listed in canonical
+  // (increasing-stride) order, the growth phases below consume them by geometry
+  // (dim + stride) via the index built next. This makes the tile
+  // order-independent for swizzled / permuted-but-equivalent linear layouts
+  // (issue #7806). Genuine multi-dim (XOR) register bases are not trivially
+  // packable; as before, they are left for the leftover pass.
   const BaseType &basesOfRegister = getBase("register");
   int numElemPerPackedVal = 1;
   constexpr unsigned MAX_BITS_NORMAL = 64;
@@ -137,25 +143,54 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
       transpose ? MAX_BITS_WIDTH_TRANSPOSE : MAX_BITS_WIDTH_NORMAL;
 
   SetVector<unsigned> regPackBases;
+
+  // Index of trivial (single-non-zero-dim) register bases: dim -> stride ->
+  // regBaseIter. Non-trivial bases are intentionally excluded (they cannot be
+  // packed into a dense tile and fall through to the leftover pass).
+  //
+  // Two bases share a (dim, stride) only when the layout holds the same
+  // element in more than one register. Keeping the first one is safe: both are
+  // the same vector, so the tile is the same whichever is consumed, and the
+  // other falls through to the leftover pass, where it becomes an extra message
+  // that loads the same elements again -- redundant, but correct. The previous
+  // list-order walk behaved the same way.
+  DenseMap<unsigned, DenseMap<unsigned, unsigned>> regBaseByDimStride;
+  for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
+       ++regBaseIter) {
+    const std::vector<int> &base = basesOfRegister[regBaseIter];
+    if (!validateBase(base))
+      continue;
+    unsigned baseDim = getFirstNonZeroDim(base);
+    regBaseByDimStride[baseDim].try_emplace(base[baseDim], regBaseIter);
+  }
+
+  // Look up an unconsumed trivial register base by geometry: the base along
+  // `dim` whose stride is exactly `stride`. Returns its regBaseIter, or
+  // nullopt if there is none or it was already consumed. Consuming bases by
+  // geometry (rather than by list position) is what makes the tile
+  // order-independent.
+  auto findRegBase = [&](unsigned dim,
+                         unsigned stride) -> std::optional<unsigned> {
+    auto dimIt = regBaseByDimStride.find(dim);
+    if (dimIt == regBaseByDimStride.end())
+      return std::nullopt;
+    auto strideIt = dimIt->second.find(stride);
+    if (strideIt == dimIt->second.end())
+      return std::nullopt;
+    if (regPackBases.contains(1 << strideIt->second))
+      return std::nullopt;
+    return strideIt->second;
+  };
+
   auto packRegister = [&](unsigned dim, unsigned maxPackNum) {
-    for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
-         ++regBaseIter) {
-      if (numElemPerPackedVal >= maxPackNum) {
-        // Reached the maximum number of elements per packed value.
-        break;
-      }
-      const std::vector<int> &base = basesOfRegister[regBaseIter];
-      if (!validateBase(base))
-        continue; // Skip as the register can not be trivial packed.
-      int baseDim = getFirstNonZeroDim(base);
-      if (dim == baseDim) {
-        if (tileShape[dim] != base[dim])
-          continue; // Skip the register not in dense tile.
-        // The value can be loaded as packed value.
-        tileShape[dim] <<= 1;
-        numElemPerPackedVal <<= 1;
-        regPackBases.insert(1 << regBaseIter);
-      }
+    while (numElemPerPackedVal < static_cast<int>(maxPackNum)) {
+      std::optional<unsigned> regBaseIter = findRegBase(dim, tileShape[dim]);
+      if (!regBaseIter)
+        break; // No (further) register can be trivially packed along `dim`.
+      // The value can be loaded as a packed value.
+      tileShape[dim] <<= 1;
+      numElemPerPackedVal <<= 1;
+      regPackBases.insert(1 << *regBaseIter);
     }
   };
 
@@ -270,23 +305,14 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   if (!oneMatrixPerLoadForBT && transpose &&
       tileShape[memContiguousDim] == numElemPerPackedVal) {
     // Increase the tile shape along the col dimension for transpose case.
-    for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
-         ++regBaseIter) {
-      if (regPackBases.contains(1 << regBaseIter))
-        continue; // Skip the register already packed.
-      const std::vector<int> &base = basesOfRegister[regBaseIter];
-      if (!validateBase(base))
-        continue; // Skip as the bases are not trivial.
-      int dim = getFirstNonZeroDim(base);
-      if (dim != fastChangeDim ||
-          tileShape[fastChangeDim] != base[fastChangeDim])
-        continue; // Skip the register not mapped to the row dim.
+    while (std::optional<unsigned> regBaseIter =
+               findRegBase(fastChangeDim, tileShape[fastChangeDim])) {
       if ((tileShape[fastChangeDim] << 1) > maxTileHeight)
         break; // The col dim is the height.
       if ((tileShape[fastChangeDim] << 1) > maskConstancyFastChangeDimLimit)
         break; // Should not exceed the mask constancy limit.
       tileShape[fastChangeDim] <<= 1;
-      regPackBases.insert(1 << regBaseIter);
+      regPackBases.insert(1 << *regBaseIter);
     }
   }
 
@@ -325,17 +351,30 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   // clang-format on
 
   // Increase the tile shape along the row dimension. (Increase the
-  // tileHeight.)
-  for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
-       ++regBaseIter) {
-    if (regPackBases.contains(1 << regBaseIter))
-      continue; // Skip the register already packed.
-    const std::vector<int> &base = basesOfRegister[regBaseIter];
-    if (!validateBase(base))
-      continue; // Skip as the bases are not trivial.
-    int dim = getFirstNonZeroDim(base);
-    if (rowDim < 0 && dim != fastChangeDim) {
-      rowDim = dim;
+  // tileHeight.) If rowDim is not yet known, discover it order-independently.
+  if (rowDim < 0) {
+    if (transpose) {
+      // A transposed tile walks its rows along the memory contiguous dim, and
+      // the check after the growth loop rejects any other row dim, so there is
+      // nothing to discover. Picking an inner dim here instead would only
+      // throw away a tile the transpose path can express.
+      rowDim = memContiguousDim;
+    } else {
+      // The row dim is the non-fastChange dim that owns an unconsumed
+      // unit-stride register base, i.e. the start of a row-growth doubling
+      // chain. Scan inner-to-outer (highest dim index first) so an outer/batch
+      // dim is only chosen when no inner dim qualifies. This matches the
+      // rowDim < 0 fallback below, which prefers the last dim.
+      for (int dim = static_cast<int>(rank) - 1; dim >= 0; --dim) {
+        if (dim == fastChangeDim)
+          continue;
+        if (findRegBase(dim, /*stride=*/1)) {
+          rowDim = dim;
+          break;
+        }
+      }
+    }
+    if (rowDim >= 0) {
       // The mask constancy has to be power of 2 for block IO.
       if (maskAxisInfo &&
           !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(rowDim)))
@@ -343,20 +382,23 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
       if (maskAxisInfo)
         maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
     }
-    if (dim != rowDim || tileShape[rowDim] != base[rowDim])
-      continue; // Skip the register not mapped to the row dim.
-    if (!transpose) {
-      if ((tileShape[rowDim] << 1) > maxTileHeight)
-        break; // If the tile height is limited, we stop here.
-    } else {
-      if (((tileShape[rowDim] << 1) * elemSizeInBits) > MAX_BITS_WIDTH)
-        break; // The row is the width.
+  }
+  if (rowDim >= 0) {
+    while (std::optional<unsigned> regBaseIter =
+               findRegBase(rowDim, tileShape[rowDim])) {
+      if (!transpose) {
+        if ((tileShape[rowDim] << 1) > maxTileHeight)
+          break; // If the tile height is limited, we stop here.
+      } else {
+        if (((tileShape[rowDim] << 1) * elemSizeInBits) > MAX_BITS_WIDTH)
+          break; // The row is the width.
+      }
+      // The size should not exceed the mask constancy limit.
+      if ((tileShape[rowDim] << 1) > maskConstancyRowDimLimit)
+        break;
+      tileShape[rowDim] <<= 1;
+      regPackBases.insert(1 << *regBaseIter);
     }
-    // The size should not exceed the mask constancy limit.
-    if ((tileShape[rowDim] << 1) > maskConstancyRowDimLimit)
-      break;
-    tileShape[rowDim] <<= 1;
-    regPackBases.insert(1 << regBaseIter);
   }
 
   if (transpose) {
@@ -384,21 +426,13 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   // For the transpose case, increase the vBlocks along row dim to increase the
   // size of the tile width for prefetch.
   unsigned vBlocksDim = transpose ? rowDim : fastChangeDim;
-  for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
-       ++regBaseIter) {
-    if (regPackBases.contains(1 << regBaseIter))
-      continue; // Skip the register already packed.
-    const std::vector<int> &base = basesOfRegister[regBaseIter];
-    if (!validateBase(base))
-      continue; // Skip as the bases are not trivial.
-    int dim = getFirstNonZeroDim(base);
-    if (dim != vBlocksDim || (tileShape[dim] * vBlocks) != base[dim])
-      continue;
+  while (std::optional<unsigned> regBaseIter =
+             findRegBase(vBlocksDim, tileShape[vBlocksDim] * vBlocks)) {
     if ((tileShape[vBlocksDim] * (vBlocks << 1)) >
         maskConstancyFastChangeDimLimit)
       break; // Should not exceed the mask constancy limit.
     vBlocks <<= 1;
-    regPackBases.insert(1 << regBaseIter);
+    regPackBases.insert(1 << *regBaseIter);
   }
   for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
        ++regBaseIter) {
