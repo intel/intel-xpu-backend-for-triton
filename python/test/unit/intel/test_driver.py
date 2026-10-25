@@ -1,6 +1,7 @@
 import io
 import re
 import shutil
+import sys
 
 import pytest
 import torch
@@ -282,6 +283,29 @@ def test_load_binary_error_kernel_error(device, tmp_path: pathlib.Path):
         _ = driver.active.utils.load_binary("invalid name", kernel.kernel, kernel.metadata.shared,
                                             kernel.metadata.build_flags, not kernel.metadata.generate_native_code,
                                             device)
+
+
+def test_load_binary_does_not_leak_kernel_capsule(device):
+
+    @triton.jit
+    def _kernel(x_ptr):
+        tl.store(x_ptr, 1)
+
+    x = torch.zeros(1, dtype=torch.int32, device=device)
+    kernel = _kernel[(1, )](x)
+
+    module = kernel.module
+    function = kernel.function
+
+    # An object held by exactly one name, so the comparison does not depend on
+    # whether `getrefcount` counts its own argument reference.
+    throwaway = object()
+    baseline = sys.getrefcount(throwaway)
+
+    assert sys.getrefcount(module) == baseline + 1, \
+        "kernel.module capsule has a reference beyond the attribute and this local -- it leaked"
+    assert sys.getrefcount(function) == baseline + 1, \
+        "kernel.function capsule has a reference beyond the attribute and this local -- it leaked"
 
 
 def test_wait_on_sycl_queue_error(device):

@@ -792,7 +792,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
                                         "kernel_bundle", freeKernelBundle);
   last_build_flag = build_flags;
-  return Py_BuildValue("(OOiii)", kernel_bundle_py, kernel_py, n_regs,
+  return Py_BuildValue("(NNiii)", kernel_bundle_py, kernel_py, n_regs,
                        spillsToPyInt(n_spills.slotsPerLane()), n_max_threads);
 }
 
