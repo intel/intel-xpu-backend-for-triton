@@ -1,3 +1,4 @@
+import io
 import re
 import shutil
 
@@ -8,6 +9,7 @@ import triton.language as tl
 
 import pathlib
 
+from elftools.elf.elffile import ELFFile
 from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
@@ -125,6 +127,38 @@ def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
     else:
         assert spill_bytes < logged_threshold, (f"accepted {spill_bytes} B/hardware-thread at or above the "
                                                 f"{logged_threshold} B rebuild threshold")
+
+
+def test_n_regs_reports_compiled_grf_count(device):
+    """`n_regs` is the GRF count IGC compiled with, not one inferred from the
+    build flags: under `grf_mode='auto'` IGC picks the size itself.
+
+    A 256x256 bf16 dot at 32 warps is placed at large GRF by IGC's auto
+    selection, so a flags-derived 128 would be wrong. The JIT build's `n_regs`
+    must match the `grf_count` in the zebin `ocloc` produces with the same flags.
+    """
+    BM, BN, BK = 256, 256, 32
+
+    @triton.jit
+    def _kernel(a, b, c, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
+        rm = tl.arange(0, BM)
+        rn = tl.arange(0, BN)
+        rk = tl.arange(0, BK)
+        x = tl.load(a + rm[:, None] * BK + rk[None, :])
+        y = tl.load(b + rk[:, None] * BN + rn[None, :])
+        tl.store(c + rm[:, None] * BN + rn[None, :], tl.dot(x, y))
+
+    a = torch.randn(BM, BK, dtype=torch.bfloat16, device=device)
+    b = torch.randn(BK, BN, dtype=torch.bfloat16, device=device)
+    c = torch.empty(BM, BN, dtype=torch.float32, device=device)
+
+    jit = _kernel[(1, )](a, b, c, BM, BN, BK, num_warps=32, grf_mode="auto")
+    native = _kernel[(1, )](a, b, c, BM, BN, BK, num_warps=32, grf_mode="auto", generate_native_code=True)
+
+    zeinfo = ELFFile(io.BytesIO(native.asm["zebin"])).get_section_by_name(".ze_info").data().decode()
+    grf_count = int(re.search(r"grf_count:\s*(\d+)", zeinfo).group(1))
+    assert native.n_regs == grf_count
+    assert jit.n_regs == grf_count
 
 
 def test_n_spills_zero_without_spills(device):
