@@ -41,6 +41,7 @@ class XPUOptions:
     launch_cooperative_grid: bool = False
     reduce_variable_liveness: bool = True
     in_loop_sink: bool = True
+    predict_large_grf: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4nv", "fp8e4b15")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -106,6 +107,12 @@ class XPUOptions:
 # Kept in sync with driver.c, except on the LTS driver line -- see
 # `accepts_default_grf`.
 REBUILD_SPILL_BYTES_PER_THREAD = 1024
+
+# `predicts_large_grf`'s cut-off on the largest dot's operand and result bytes per
+# hardware thread. On BMG it caught 69% of the dot kernels the retry rebuilds, with no
+# wrong "yes" on held-out models; a wrong "yes" runs a non-spilling kernel at large
+# GRF, measured up to 1.46x slower, so `TRITON_INTEL_PREDICT_LARGE_GRF` is off by default.
+LARGE_GRF_TILE_BYTES = 10240
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
@@ -342,6 +349,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
         if "in_loop_sink" not in args:
             args["in_loop_sink"] = knobs.intel.in_loop_sink
+        if "predict_large_grf" not in args:
+            args["predict_large_grf"] = knobs.intel.predict_large_grf
         return XPUOptions(**args)
 
     @staticmethod
@@ -594,7 +603,20 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
         pm.run(mod, 'make_ttgir')
+        if cls.predicts_large_grf(mod, opt):
+            metadata["grf_large_first"] = True
         return mod
+
+    @classmethod
+    def predicts_large_grf(cls, mod, opt):
+        """Whether `make_zebin` should try the large-GRF build before the default one.
+
+        Measured on BMG with the rolling driver for native Triton kernels (LNL builds the
+        same code); Gluon kernels never reach this from `make_ttgir`.
+        """
+        return (opt.predict_large_grf and opt.generate_native_code and not opt.is_lts
+                and getattr(cls, "device_arch", None) in ("bmg", "lnl") and not knobs.intel.disable_igc_opt
+                and intel.largest_dot_tile_bytes(mod) / opt.num_warps >= LARGE_GRF_TILE_BYTES)
 
     def gluon_to_ttgir(self, src, metadata, options):
         mod = src
@@ -807,6 +829,17 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                 retry_grf_mode_list = [""]
 
             base_build_flags = metadata["build_flags"]
+            if metadata.get("grf_large_first") and len(retry_grf_mode_list) > 1:
+                # Keep a successful large-GRF build; any failure runs the default-first loop below unchanged.
+                large_flags = f"{base_build_flags} {retry_grf_mode_list[-1]}".strip()
+                try:
+                    subprocess.check_output(ocloc_cmd[:-1] + [large_flags + shader_dump_opt], stderr=subprocess.STDOUT,
+                                            text=True)
+                    extract_spill_size_from_zebin(fbin)  # raises on a degenerate zebin
+                    metadata["build_flags"] = large_flags
+                    retry_grf_mode_list = []
+                except (subprocess.CalledProcessError, IntelGPUError):
+                    pass
             for grf_flag in retry_grf_mode_list:
                 metadata["build_flags"] = f"{base_build_flags} {grf_flag}".strip()
                 ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt

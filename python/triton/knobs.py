@@ -603,6 +603,9 @@ class intel_knobs(base_knobs):
     disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", False)
     enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
     in_loop_sink: env_bool = env_bool("TRITON_INTEL_IN_LOOP_SINK", True)
+    # Opt-in: native dot kernels predicted to need the large-GRF rebuild build it
+    # first (see `XPUBackend.predicts_large_grf`).
+    predict_large_grf: env_bool = env_bool("TRITON_INTEL_PREDICT_LARGE_GRF", False)
     disable_optimize_load_masks: env_bool = env_bool("TRITON_INTEL_DISABLE_OPTIMIZE_LOAD_MASKS", False)
     disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", True)
     enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)
