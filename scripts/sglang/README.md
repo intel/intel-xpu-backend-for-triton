@@ -163,8 +163,8 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
 | `--sglang-moe` | 110 passed | 46s |
 | `--sglang-mamba` | 940 passed, 16 skipped upstream | 19s |
 | `--sglang-gdn` | 30 passed, 1 skipped upstream | 9s |
-| `--sglang-kda` | 1 passed, 14 skipped upstream | 10s |
-| `--sglang-spec` | 1 passed, 22 subtests | 38s |
+| `--sglang-kda` | 1 passed, 19 skipped upstream | 18s |
+| `--sglang-spec` | 1 passed, 20 subtests | 35s |
 | `--sglang-e2e` | not measured locally - needs model weights and a server launch | - |
 
 ## Known gaps
