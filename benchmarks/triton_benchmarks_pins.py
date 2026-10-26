@@ -354,11 +354,13 @@ def benchmark(key: str) -> Iterator[None]:
         yield
     finally:
         if session.pins is not None:
+            source = f"{path}@{session.pins.version}" if path.exists() else "no pin file"
             print(
-                f"[autotune-pins] {key}: {session.hits - hits} pinned, {len(session.misses) - misses} missing "
-                f"({path}@{session.pins.version})", flush=True)
+                f"[autotune-pins] {key}: {session.hits - hits} pinned, {len(session.misses) - misses} missing ({source})",
+                file=sys.stderr, flush=True)
         else:
-            print(f"[autotune-pins] {key}: {session.recorded - recorded} recorded to {session.record_path}", flush=True)
+            print(f"[autotune-pins] {key}: {session.recorded - recorded} recorded to {session.record_path}",
+                  file=sys.stderr, flush=True)
         session.benchmark, session.pins, session.record_path = None, None, None
 
 
@@ -382,7 +384,9 @@ def report_value() -> Optional[str]:
     session = _session()
     if session is None or session.benchmark is None:
         return None
-    return f"pinned@{session.pins.version}" if session.pins is not None else "full"
+    if session.pins is None:
+        return "full"
+    return f"pinned@{session.pins.version}" if session.pins.triton or session.pins.inductor else "pinned"
 
 
 def raise_for_misses() -> None:

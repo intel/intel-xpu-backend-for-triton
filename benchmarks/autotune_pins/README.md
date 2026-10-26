@@ -16,8 +16,8 @@ Layout: `<device id>/<benchmark>.json`, e.g. `b580/flash_attention.json`. The de
   candidate, is autotuned so that the run still measures it, and then fails the run.
 - `auto`: `pinned` for benchmarks that have pins for the GPU, `record` for the others.
 
-When a mode is set, reports have an `autotune_pins` column: `pinned@<pin file version>` or `full`. A mode also turns
-off Inductor's caches, because a cached graph skips its autotuning.
+When a mode is set, reports have an `autotune_pins` column: `pinned@<pin file version>`, `pinned` for a benchmark with
+nothing to pin, or `full`. A mode also turns off Inductor's caches, because a cached graph skips its autotuning.
 
 ## Updating
 

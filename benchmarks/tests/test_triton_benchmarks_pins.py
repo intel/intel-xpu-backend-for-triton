@@ -161,14 +161,17 @@ def test_invalid_mode(monkeypatch):
         pins.report_value()
 
 
-def test_pinned_benchmark_without_pin_file(monkeypatch, tmp_path):
+def test_pinned_benchmark_without_pin_file(monkeypatch, tmp_path, capsys):
     pytest.importorskip("triton")
     monkeypatch.setenv("AUTOTUNE_PINS_MODE", "pinned")
     monkeypatch.setenv("AUTOTUNE_PINS_DIR", str(tmp_path))
     monkeypatch.setenv("AUTOTUNE_PINS_DEVICE", "test-gpu")
     with pins.benchmark("no-autotuning"):
-        assert pins.report_value().startswith("pinned@")
+        assert pins.report_value() == "pinned"  # no pin file version to point to
     pins.raise_for_misses()
+    out, err = capsys.readouterr()
+    assert "no-autotuning: 0 pinned, 0 missing (no pin file)" in err
+    assert not out  # stdout stays JSON with --json
 
 
 @pytest.fixture(name="triton_kernel")
