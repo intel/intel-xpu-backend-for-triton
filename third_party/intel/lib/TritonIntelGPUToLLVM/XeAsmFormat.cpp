@@ -388,17 +388,17 @@ std::string simdLaneShuffleAsm(unsigned warpSize, bool packOrUnpack,
 
   bool use2StepMove = packOrUnpack ? packSize > maxDstHorStride : false;
 
-  constexpr StringLiteral shuffleBuff = R"({
+  constexpr StringLiteral srcDecl = R"({
   .decl src v_type=G type={0} num_elts={1} alias=<$1, 0>
-  .decl dst v_type=G type={0} num_elts={1} alias=<$0, 0>
   )";
 
   std::string simdAsm =
-      llvm::formatv(shuffleBuff.data(), *typeSyntax, vecSize * warpSize).str();
+      llvm::formatv(srcDecl.data(), *typeSyntax, vecSize * warpSize).str();
 
   unsigned step2ElemSize;
   if (use2StepMove) {
     constexpr StringLiteral tmpDecl = R"(
+    .decl dst v_type=G type={2} num_elts={3} alias=<$0, 0>
     .decl _tmp0 v_type=G type={0} num_elts={1} align=GRF
     .decl _tmp1 v_type=G type={2} num_elts={3} alias=<_tmp0, 0>
     )";
@@ -425,6 +425,12 @@ std::string simdLaneShuffleAsm(unsigned warpSize, bool packOrUnpack,
                              aliasTypeSyntax,
                              vecSize * warpSize / (packSize / maxDstHorStride))
                    .str();
+  } else {
+    constexpr StringLiteral dstDecl = R"(
+    .decl dst v_type=G type={0} num_elts={1} alias=<$0, 0>
+    )";
+    simdAsm +=
+        llvm::formatv(dstDecl.data(), *typeSyntax, vecSize * warpSize).str();
   }
 
   auto emitMove = [&](std::string dstName, std::string srcName,
