@@ -334,6 +334,10 @@ std::string simdReduceAsm(std::string binOp, unsigned warpSize,
                           unsigned numLaneToReduce, unsigned interleave,
                           unsigned accSize, Type elemTy, XeArch arch);
 
+std::string simdLaneShuffleAsm(unsigned warpSize, bool packOrUnpack,
+                               unsigned packSize, unsigned vecSize, Type elemTy,
+                               XeArch arch);
+
 } // namespace triton
 } // namespace mlir
 

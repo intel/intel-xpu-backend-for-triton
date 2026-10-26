@@ -238,7 +238,7 @@ std::optional<std::string> XeVISAInstr::getTypeName(Type scalarTy) {
   TypeSwitch<Type>(scalarTy)
       .Case<Float32Type>([&](auto) { typeSyntax = "f"; })
       .Case<Float16Type>([&](auto) { typeSyntax = "hf"; })
-      .Case<IntegerType>([&](auto type) {
+      .Case<FloatType, IntegerType>([&](auto type) {
         unsigned bitWidth = type.getIntOrFloatBitWidth();
         switch (bitWidth) {
         case 8:
@@ -285,7 +285,7 @@ std::string simdReduceAsm(std::string binOp, unsigned warpSize,
 
   // TODO: implement more variants.
   assert(arch != Xe ||
-         warpSize == 16 && "only suppor warpSize=16 for on Xe arch fow now");
+         warpSize == 16 && "only support warpSize=16 for on Xe arch fow now");
   unsigned numElem = accSize * warpSize;
   unsigned tempResultSize = numElem / 2;
 
@@ -364,6 +364,100 @@ std::string simdReduceAsm(std::string binOp, unsigned warpSize,
       simdAsm += simdOps;
     }
   }
+  simdAsm += "}";
+  return simdAsm;
+}
+
+std::string simdLaneShuffleAsm(unsigned warpSize, bool packOrUnpack,
+                               unsigned packSize, unsigned vecSize, Type elemTy,
+                               XeArch arch) {
+  assert((warpSize & (warpSize - 1)) == 0 && "warpSize must be a power of two");
+  assert((packSize & (packSize - 1)) == 0 && "packSize must be a power of two");
+  assert((vecSize & (vecSize - 1)) == 0 && "vecSize must be a power of two");
+  assert(packSize <= vecSize && "packSize must be <= vecSize");
+  assert(arch != Xe && "Doesn't support Xe arch fow now");
+
+  auto typeSyntax = XeVISAInstr::getTypeName(elemTy);
+  if (!typeSyntax)
+    llvm_unreachable("Unsupported scalar type");
+
+  constexpr unsigned maxDstHorStride = 4;
+  assert(packSize <= maxDstHorStride * maxDstHorStride &&
+         "pack only support 2 step at most 16 pack size.");
+
+  bool use2StepMove = packOrUnpack ? packSize > maxDstHorStride : false;
+
+  constexpr StringLiteral shuffleBuff = R"({
+  .decl src v_type=G type={0} num_elts={1} alias=<$1, 0>
+  .decl dst v_type=G type={0} num_elts={1} alias=<$0, 0>
+  )";
+
+  std::string simdAsm =
+      llvm::formatv(shuffleBuff.data(), *typeSyntax, vecSize * warpSize).str();
+
+  unsigned step2ElemSize;
+  if (use2StepMove) {
+    constexpr StringLiteral tmpDecl = R"(
+    .decl _tmp0 v_type=G type={0} num_elts={1} align=GRF
+    .decl _tmp1 v_type=G type={2} num_elts={3} alias=<_tmp0, 0>
+    )";
+    unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
+    std::optional<std::string> aliasTypeSyntax;
+    step2ElemSize = bitWidth * (packSize / maxDstHorStride);
+    switch (step2ElemSize) {
+    case 8:
+      aliasTypeSyntax = "ub";
+      break;
+    case 16:
+      aliasTypeSyntax = "uw";
+      break;
+    case 32:
+      aliasTypeSyntax = "ud";
+      break;
+    case 64:
+      aliasTypeSyntax = "uq";
+      break;
+    }
+    if (!aliasTypeSyntax)
+      llvm_unreachable("Unsupported scalar type");
+    simdAsm += llvm::formatv(tmpDecl.data(), *typeSyntax, vecSize * warpSize,
+                             aliasTypeSyntax,
+                             vecSize * warpSize / (packSize / maxDstHorStride))
+                   .str();
+  }
+
+  auto emitMove = [&](std::string dstName, std::string srcName,
+                      unsigned elemSIze, unsigned packSize) {
+    unsigned grfSizeInBytes = XeVISAInstr::getGRFSizeInBytes(arch);
+    unsigned grfElemsPerRow = grfSizeInBytes / (elemSIze / 8);
+    for (unsigned i = 0; i < vecSize; i += packSize) {
+      unsigned srcOffset = i * warpSize;
+      unsigned dstOffset = i * warpSize;
+      for (unsigned j = 0; j < packSize; ++j) {
+        unsigned packSrcOffset = srcOffset + (packOrUnpack ? j * warpSize : j);
+        unsigned packDstOffset = dstOffset + (packOrUnpack ? j : j * warpSize);
+        unsigned srcOffsetM = packSrcOffset / grfElemsPerRow;
+        unsigned srcOffsetN = packSrcOffset % grfElemsPerRow;
+        unsigned dstOffsetM = packDstOffset / grfElemsPerRow;
+        unsigned dstOffsetN = packDstOffset % grfElemsPerRow;
+        simdAsm +=
+            llvm::formatv(
+                "mov (M1_NM, {0}) {1}({2}, {3})<{4}> {5}({6}, {7})<{8};1,0>\n",
+                warpSize, dstName, dstOffsetM, dstOffsetN,
+                packOrUnpack ? packSize : 1, srcName, srcOffsetM, srcOffsetN,
+                packOrUnpack ? 1 : packSize)
+                .str();
+      }
+    }
+  };
+
+  if (use2StepMove) {
+    emitMove("_tmp0", "src", elemTy.getIntOrFloatBitWidth(),
+             packSize / maxDstHorStride);
+    emitMove("dst", "_tmp1", step2ElemSize, maxDstHorStride);
+  } else
+    emitMove("dst", "src", elemTy.getIntOrFloatBitWidth(), packSize);
+
   simdAsm += "}";
   return simdAsm;
 }
