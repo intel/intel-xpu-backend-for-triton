@@ -29,3 +29,12 @@ AUTOTUNE_PINS_MODE=record AUTOTUNE_PINS_RECORDS=run1 triton-benchmarks run flash
 triton-benchmarks-pins update --records run1 --pins benchmarks/autotune_pins
 AUTOTUNE_PINS_MODE=pinned AUTOTUNE_PINS_DIR=benchmarks/autotune_pins triton-benchmarks run flash_attention
 ```
+
+## Looking up a report value
+
+`triton-benchmarks-pins show` prints the pin file behind an `autotune_pins` report value, found in the checkout or in
+its git history:
+
+```bash
+triton-benchmarks-pins show pinned@671e4e2eb45b --pins benchmarks/autotune_pins
+```

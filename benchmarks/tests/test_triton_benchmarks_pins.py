@@ -1,4 +1,7 @@
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -101,6 +104,41 @@ def test_update_tie_keeps_autotuner_choice(tmp_path):
     pins.update_pins([run], tmp_path / "pins", tmp_path / "pins", min_gain=0.03)
     assert pins.PinFile.load(pins.pin_path(tmp_path / "pins", "b580",
                                            "gemm")).triton[("mod.kernel", "k")] == {"BLOCK_M": 64}
+
+
+def _git(cwd, *args):
+    env = {
+        **os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.com", "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@example.com"
+    }
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, env=env)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_show(tmp_path, capsys):
+    pins_dir = tmp_path / "autotune_pins"
+    path = pins.pin_path(pins_dir, "b580", "gemm")
+    old = pins.PinFile("gemm", "b580", triton={("mod.kernel", "(1024, 1024)"): {"BLOCK_M": 64, "num_warps": 8}})
+    old.save(path)
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "Add gemm pins")
+    new = pins.PinFile("gemm", "b580", triton={("mod.kernel", "(1024, 1024)"): {"BLOCK_M": 128, "num_warps": 8}})
+    new.save(path)
+    _git(tmp_path, "commit", "-qam", "Move gemm pin")
+
+    pins.main(["show", f"pinned@{old.version}", "--pins", str(pins_dir)])
+    out = capsys.readouterr().out
+    assert "autotune_pins/b580/gemm.json, added in" in out and "Add gemm pins" in out
+    assert "working tree" not in out
+    assert "mod.kernel\n  (1024, 1024): BLOCK_M=64, num_warps=8\n" in out
+
+    pins.main(["show", new.version, "--pins", str(pins_dir)])
+    out = capsys.readouterr().out
+    assert "(working tree)" in out and "Move gemm pin" in out and "BLOCK_M=128" in out
+
+    with pytest.raises(SystemExit):
+        pins.main(["show", "000000000000", "--pins", str(pins_dir)])
 
 
 def test_inactive_without_mode():

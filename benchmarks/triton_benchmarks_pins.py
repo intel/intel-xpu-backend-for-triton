@@ -5,7 +5,8 @@ with the timings of all candidates. ``triton-benchmarks-pins update`` turns the 
 more full runs into pin files, one per GPU and benchmark. A pinned run (``AUTOTUNE_PINS_MODE=pinned``)
 gives every autotuner only its pinned config, so each autotune key compiles one config and benchmarks
 none. A key without a pin, or a pin that is no longer among the candidates, is autotuned so that the
-run still measures everything, and then fails the run.
+run still measures everything, and then fails the run. ``triton-benchmarks-pins show`` prints the pin
+file behind a ``pinned@<version>`` report value.
 
 Covered: ``triton.autotune`` kernels and Inductor's autotuning (``AlgorithmSelectorCache``, e.g. flex
 attention and grouped GEMM templates). Not covered: Inductor's runtime autotuning of its generated
@@ -29,6 +30,7 @@ import math
 import os
 import re
 import statistics
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -119,10 +121,13 @@ class PinFile:
 
     @classmethod
     def load(cls, path: Path) -> PinFile:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        return cls.from_json(json.loads(path.read_text(encoding="utf-8")), str(path))
+
+    @classmethod
+    def from_json(cls, data: Dict[str, Any], where: str) -> PinFile:
         version = data.get("format")
         if version != FORMAT_VERSION:
-            raise AutotunePinsError(f"{path}: unsupported pin file format {version!r}")
+            raise AutotunePinsError(f"{where}: unsupported pin file format {version!r}")
         triton = {(e["kernel"], e["key"]): e["config"] for e in data["triton"]}
         inductor = {(e["name"], e["point"], e["inputs"]): e["choice"] for e in data["inductor"]}
         return cls(benchmark=data["benchmark"], device=data["device"], triton=triton, inductor=inductor)
@@ -485,6 +490,80 @@ def _format_summary(summaries: List[UpdateSummary]) -> str:
     return "\n".join(lines + ([""] + changes if changes else [])) + "\n"
 
 
+# Looking up the pin file behind a report value.
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
+
+
+def _parse(text: str, where: str) -> Optional[PinFile]:
+    try:
+        return PinFile.from_json(json.loads(text), where)
+    except (ValueError, KeyError, TypeError, AttributeError, AutotunePinsError):
+        return None
+
+
+def find_pin_files(pins_dir: Path, version: str) -> List[Tuple[str, PinFile]]:
+    """(location, pin file) of every pin file with this version in ``pins_dir`` and its git history."""
+    found = []
+    for path in sorted(pins_dir.glob("*/*.json")):
+        pin_file = _parse(path.read_text(encoding="utf-8"), str(path))
+        if pin_file is not None and pin_file.version == version:
+            found.append((f"{path} (working tree)", pin_file))
+    try:
+        log = _git(pins_dir, "log", "--format=commit %H %as %s", "--raw", "--no-abbrev", "--no-renames", "--", ".")
+    except (OSError, subprocess.CalledProcessError):  # not in a git checkout
+        return found
+    commit, seen = "", set()
+    for line in log.splitlines():
+        if line.startswith("commit "):
+            sha, subject = line[len("commit "):].split(" ", 1)
+            commit = f"{sha[:12]} {subject}"
+        elif line.startswith(":") and line.endswith(".json"):
+            meta, path = line.split("\t", 1)
+            blob = meta.split()[3]
+            if blob in seen or not blob.strip("0"):  # all zeros: the file was deleted
+                continue
+            seen.add(blob)
+            pin_file = _parse(_git(pins_dir, "cat-file", "blob", blob), path)
+            if pin_file is not None and pin_file.version == version:
+                found.append((f"{path}, added in {commit}", pin_file))
+    return found
+
+
+def _natural(text: str) -> List[Any]:
+    return [int(part) if part.isdecimal() else part for part in re.split(r"(\d+)", text)]
+
+
+def _config_text(config: Dict[str, Any]) -> str:
+    return ", ".join(f"{k}={v}" for k, v in sorted(config.items()))
+
+
+def format_pin_file(pin_file: PinFile) -> str:
+    """One line per pin, grouped by kernel or Inductor template."""
+    entries = [(kernel, key, _config_text(config)) for (kernel, key), config in pin_file.triton.items()]
+    entries += [(name, point, choice) for (name, point, _inputs), choice in pin_file.inductor.items()]
+    lines: List[str] = []
+    previous = None
+    for name, key, value in sorted(entries, key=lambda e: (e[0], _natural(e[1]))):
+        if name != previous:
+            lines.append(name)
+            previous = name
+        lines.append(f"  {key}: {value}")
+    return "".join(f"{line}\n" for line in lines)
+
+
+def _show(pins_dir: Path, version: str) -> None:
+    found = find_pin_files(pins_dir, version)
+    if not found:
+        raise SystemExit(f"no pin file with version {version} in {pins_dir} or its git history")
+    print(f"pinned@{version}")
+    for location, _ in found:
+        print(f"  {location}")
+    print(format_pin_file(found[0][1]), end="")
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(prog="triton-benchmarks-pins", description=__doc__.split("\n\n", maxsplit=1)[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -496,7 +575,13 @@ def main(argv: Optional[List[str]] = None) -> None:
     update.add_argument("--min-gain", type=float, default=0.03,
                         help="minimum relative gain to move a pin to another config (default: 0.03)")
     update.add_argument("--summary", type=Path, help="also write the summary as markdown to this file")
+    show = commands.add_parser("show", help="print the pin file behind a pinned@<version> report value")
+    show.add_argument("version", help="pin file version, with or without the pinned@ prefix")
+    show.add_argument("--pins", type=Path, required=True, help="pin files root, searched with its git history")
     args = parser.parse_args(argv)
+    if args.command == "show":
+        _show(args.pins, args.version.removeprefix("pinned@"))
+        return
     summaries = update_pins(args.records, args.pins, args.output or args.pins, args.min_gain)
     text = _format_summary(summaries)
     print(text, end="")
