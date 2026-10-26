@@ -477,12 +477,12 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
       return false;
   }
 
-  // IGC doesn't support bitcast >= i256. Fallback to shared memory in this
+  // IGC doesn't support bitcast >= i128. Fallback to shared memory in this
   // case.
   Type elemType = srcTy.getElementType();
   unsigned bitsPerElement =
-      std::max<int>(8, getIntOrFloatOrPtrBitWidth(elemType));
-  if (packedRegisterSize * bitsPerElement >= 128)
+    std::max<int>(8, getIntOrFloatOrPtrBitWidth(elemType));
+  if ((packedRegisterSize * bitsPerElement >= 128) && packedRegisterSize > 4)
     return false;
 
   // Check the register base mapped to the lane base to complement the shuffled

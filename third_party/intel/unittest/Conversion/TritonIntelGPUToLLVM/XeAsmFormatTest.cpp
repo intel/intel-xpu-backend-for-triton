@@ -116,6 +116,18 @@ TEST_F(XeAsmFormatTest, XeSIMDReduce) {
   llvm::outs() << "assembleInterleaved:" << assembleInterleaved4 << "\n";
 }
 
+TEST_F(XeAsmFormatTest, SIMDReducePartialInterleavedGroups) {
+  auto assembly =
+      simdReduceAsm("add", 32, 4, 2, 4, Float32Type::get(&ctx), XeArch::Xe2);
+  EXPECT_NE(assembly.find("temp_result(0, 0)<1>  $1(0, 0)<8;4,1> "
+                          "$1(0, 4)<8;4,1>"),
+            std::string::npos);
+  EXPECT_NE(assembly.find("$0(0, 0)<1>  temp_result(0, 0)<4;2,1> "
+                          "temp_result(0, 2)<4;2,1>"),
+            std::string::npos);
+  EXPECT_EQ(assembly.find("$0(2, 0)"), std::string::npos);
+}
+
 } // namespace triton
 } // namespace mlir
 
