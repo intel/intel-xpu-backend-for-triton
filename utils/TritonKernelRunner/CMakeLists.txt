@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10 FATAL_ERROR)
-project(reproducer)
+project(TritonKernelRunner)
 set(CMAKE_CXX_COMPILER icpx)
 set(BUILD_SHARED_LIBS OFF)
 
@@ -39,7 +39,7 @@ set(COMPILE_FLAGS "-fsycl -Wall")
 set(LINK_FLAGS "-fsycl -lze_loader")
 
 set(SYCL_FUNCTIONS_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/intel/backend/include")
-set(TARGET_NAME SPIRVRunner)
+set(TARGET_NAME TritonKernelRunner)
 add_executable(${TARGET_NAME} ${TARGET_NAME}.cpp $<TARGET_OBJECTS:llvm_parser>)
 target_include_directories(${TARGET_NAME} PRIVATE
 	"${ONEAPI_ROOT}/compiler/latest/include" ${SYCL_FUNCTIONS_INCLUDE_DIR} ${JSON_INCLUDE_DIR})
@@ -47,11 +47,11 @@ target_include_directories(${TARGET_NAME} PRIVATE
 # Eventless kernel submission requires a rolling (non-LTS) driver. It's not
 # worth complicating this build with driver detection, so default to enabled
 # and let users on an LTS driver opt out via the environment.
-set(SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT "1")
-if(DEFINED ENV{SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT})
-  set(SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT "$ENV{SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT}")
+set(TRITON_KERNEL_RUNNER_ENABLE_EVENTLESS_SUBMIT "1")
+if(DEFINED ENV{TRITON_KERNEL_RUNNER_ENABLE_EVENTLESS_SUBMIT})
+  set(TRITON_KERNEL_RUNNER_ENABLE_EVENTLESS_SUBMIT "$ENV{TRITON_KERNEL_RUNNER_ENABLE_EVENTLESS_SUBMIT}")
 endif()
-if(NOT SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT STREQUAL "0")
+if(NOT TRITON_KERNEL_RUNNER_ENABLE_EVENTLESS_SUBMIT STREQUAL "0")
   target_compile_definitions(${TARGET_NAME} PRIVATE ENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT)
 endif()
 
