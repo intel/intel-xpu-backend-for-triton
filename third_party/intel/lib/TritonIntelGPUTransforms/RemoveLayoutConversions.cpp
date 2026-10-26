@@ -1052,6 +1052,10 @@ static bool isUnconstrainedShapeOp(Operation *op) {
 // expensive consumers are correctly rejected by the canBeRemat anchor, which
 // this helper should NOT bypass.
 bool isExpensiveLoadRematCandidate(Operation *op) {
+  // Cloning a volatile load would read it twice (the original stays).
+  if (hasEffect<MemoryEffects::Write>(op))
+    return false;
+
   // 1. Must be a Load or DescriptorLoad
   if (!isa<tt::LoadOp, tt::DescriptorLoadOp>(op))
     return false;
