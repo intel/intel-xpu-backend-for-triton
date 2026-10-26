@@ -7,6 +7,7 @@ import torch
 import pathlib
 
 import triton
+import triton.language as tl
 from triton._internal_testing import numpy_random, to_numpy
 
 MIN_GROUP_SIZE = torch.xpu.get_device_capability()['sub_group_sizes'][0]
@@ -148,3 +149,30 @@ def test_horizontal_simd_reduce(M, N, src_layout, dtype_str, reduce_op, device, 
 
     llir = kernel.asm['llir']
     assert re.search(r'call .* asm', llir), 'no inline visa in llir'  # inline visa is used
+
+
+@pytest.mark.parametrize("xblock, num_warps", [(1, 2), (8, 4), (32, 8)])
+def test_simd_reduce_slice_stack_sum(xblock, num_warps, device):
+
+    @triton.jit
+    def kernel(input_ptr, copy_ptr, sum_ptr, XBLOCK: tl.constexpr):
+        x = tl.program_id(0) * XBLOCK + tl.arange(0, XBLOCK)[:, None]
+        r = tl.arange(0, 64)[None, :]
+        column = x % 128
+        batch = x // 128
+        values = tl.load(input_ptr + column + 129 * r + 8256 * batch).to(tl.float32)
+        total = tl.sum(values, 1)[:, None]
+        tl.store(copy_ptr + column + 128 * r + 8192 * batch, values)
+        tl.store(sum_ptr + column + 896 * batch, total)
+
+    torch.manual_seed(17)
+    inputs = torch.randn((256, 64, 129), device=device, dtype=torch.float16)
+    copied = torch.empty((256, 64, 128), device=device, dtype=torch.float16)
+    sum_storage = torch.full((256, 896), -1, device=device, dtype=torch.float16)
+    summed = sum_storage[:, 768:]
+    compiled = kernel[(32768 // xblock, )](inputs, copied, summed, xblock, num_warps=num_warps)
+    torch.testing.assert_close(copied, inputs[:, :, :128], rtol=0, atol=0)
+    torch.testing.assert_close(summed, inputs[:, :, :128].float().sum(1).half(), rtol=1e-3, atol=1e-2)
+    torch.testing.assert_close(sum_storage[:, :768], torch.full_like(sum_storage[:, :768], -1), rtol=0, atol=0)
+    if xblock == 8:
+        assert re.search(r'call .* asm', compiled.asm['llir']), 'regression must exercise SIMD reduction assembly'
