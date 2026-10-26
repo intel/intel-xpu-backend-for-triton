@@ -726,9 +726,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         cls.optimize_llvm_mod(llvm_mod, options)
         intel.post_process_llir(llvm_mod)
-        # An explicit GRF mode is requested on the kernel itself (SPV_INTEL_maximum_registers); only LTS, whose
-        # translator does not enable that extension, keeps passing it as a build flag in `make_spv`.
-        if options.grf_mode in GRF_MODE_BUILD_FLAGS and not cls.is_lts(driver_version):
+        # An explicit GRF mode is requested on the kernel itself (SPV_INTEL_maximum_registers); LTS, whose
+        # translator does not enable that extension, and anything that opts out of it through
+        # `spv_maximum_registers` keep passing it as a build flag in `make_spv`.
+        if (options.grf_mode in GRF_MODE_BUILD_FLAGS and not cls.is_lts(driver_version)
+                and knobs.intel.spv_maximum_registers):
             intel.set_maximum_registers(llvm_mod, options.grf_mode)
 
         # Get some metadata
@@ -767,8 +769,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if options.grf_mode in ('256', '512') and options.num_warps > 32:
             raise RuntimeError(f"grf_mode = {options.grf_mode} cannot be used with num_warps > 32")
         if options.grf_mode in GRF_MODE_BUILD_FLAGS:
-            # Off LTS the mode is already carried by the SPIR-V execution mode set in `make_llir`.
-            if is_lts:
+            # Unless the mode is already carried by the SPIR-V execution mode set in `make_llir`,
+            # whose condition this must mirror.
+            if is_lts or not knobs.intel.spv_maximum_registers:
                 metadata["build_flags"] += f" {GRF_MODE_BUILD_FLAGS[options.grf_mode]}"
         elif options.grf_mode != 'default':
             raise RuntimeError(f"Unknown grf_mode: {options.grf_mode}")

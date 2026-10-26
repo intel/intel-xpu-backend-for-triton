@@ -50,6 +50,7 @@ INVALIDATING_KNOBS = {
     "dump_shader_info",
     "fast_math",
     "opt_reduction_locality",
+    "spv_maximum_registers",
 }
 
 # Same, for cache-affecting env vars the backend reads directly rather than

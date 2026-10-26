@@ -2,6 +2,7 @@ import pytest
 import triton
 import triton.language as tl
 
+from triton import knobs
 from triton._internal_testing import numpy_random, to_triton, is_xpu_cri
 from triton.backends.intel.compiler import (REBUILD_SPILL_BYTES_PER_THREAD, XPUBackend, accepts_default_grf,
                                             extract_spill_size_from_zebin)
@@ -107,8 +108,8 @@ def test_explicit_grf_mode_uses_maximum_registers(device, grf_mode, generate_nat
     x = to_triton(numpy_random(SIZE, dtype_str="int32"), device=device, dst_type="int32")
     k = kernel[(1, )](x, SIZE=SIZE, num_warps=4, grf_mode=grf_mode, generate_native_code=generate_native_code)
 
-    if XPUBackend.is_lts(k.metadata.target.arch.get("driver_version")):
-        # The LTS translator does not enable SPV_INTEL_maximum_registers.
+    if XPUBackend.is_lts(k.metadata.target.arch.get("driver_version")) or not knobs.intel.spv_maximum_registers:
+        # The LTS translator does not enable SPV_INTEL_maximum_registers, and the knob opts out of it.
         assert "!MaximumRegisters" not in k.asm["llir"]
         assert "GRF" in k.metadata.build_flags
         return

@@ -626,6 +626,11 @@ class intel_knobs(base_knobs):
     # with a `sycl::local_accessor`, instead of statically in the module. Legacy behavior,
     # kept as an escape hatch for driver issues with module scope work-group memory.
     dynamic_shared_memory: env_bool = env_bool("TRITON_INTEL_DYNAMIC_SHARED_MEMORY", False)
+    # Request an explicit `grf_mode` through the kernel's `SPV_INTEL_maximum_registers` execution
+    # mode instead of the `-cl-intel-*-GRF-*` IGC build flags. Temporary: IGC rejects the module
+    # outright before 2.41 and does not advertise the extension, so there is nothing to probe --
+    # turn this off on an older rolling driver. LTS keeps using the build flags regardless.
+    spv_maximum_registers: env_bool = env_bool("TRITON_INTEL_SPV_MAXIMUM_REGISTERS", True)
 
 
 class amd_knobs(base_knobs):
