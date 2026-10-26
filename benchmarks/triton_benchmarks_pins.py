@@ -32,6 +32,7 @@ import re
 import statistics
 import subprocess
 import sys
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -181,6 +182,7 @@ class _Session:  # pylint: disable=too-many-instance-attributes
 
 _SESSION: Optional[_Session] = None
 _INSTALLED = False
+_AUTOTUNERS: weakref.WeakSet[Any] = weakref.WeakSet()  # Triton autotuners seen while a benchmark ran
 
 
 def _session() -> Optional[_Session]:
@@ -223,23 +225,19 @@ def _install_triton() -> None:
     original_prune = autotuner.Autotuner.prune_configs
 
     def prune_configs(self, kwargs):
+        pruned = original_prune(self, kwargs)
         session = _running()
-        pins = session.pins if session is not None else None
-        if pins is None:
-            return original_prune(self, kwargs)
+        if session is None:
+            return pruned
+        _AUTOTUNERS.add(self)
+        if session.pins is None:
+            return pruned
         kernel, key = _function_name(self.base_fn), _triton_key(self, kwargs)
-        pinned = pins.triton.get((kernel, key))
-        if pinned is not None:
-            match = next((c for c in self.configs if triton_config_dict(c) == pinned), None)
-            if match is not None:
-                session.hits += 1
-                return [match]
-        pruned = original_prune(self, kwargs)  # early_config_prune may build configs that are not in self.configs
-        if pinned is not None:
-            match = next((c for c in pruned if triton_config_dict(c) == pinned), None)
-            if match is not None:
-                session.hits += 1
-                return [match]
+        pinned = session.pins.triton.get((kernel, key))
+        match = next((c for c in pruned if triton_config_dict(c) == pinned), None)
+        if match is not None:
+            session.hits += 1
+            return [match]
         if len(pruned) > 1:  # a single config left after pruning is not benchmarked, so it needs no pin
             problem = "no pin" if pinned is None else "pinned config is not among the configs"
             session.miss(f"{problem} for {kernel} {key}")
@@ -321,6 +319,17 @@ def _install() -> None:
         sys.meta_path.insert(0, _PostImportHook(name, _install_inductor))
 
 
+def _forget_cached_decisions() -> None:
+    """Cached autotuning decisions skip the hooks, so every benchmark starts without them."""
+    for tuner in _AUTOTUNERS:
+        tuner.cache.clear()
+    try:
+        from torch._inductor import config  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        return
+    config.force_disable_caches = True  # a cached Inductor graph skips its template autotuning
+
+
 @contextlib.contextmanager
 def benchmark(key: str) -> Iterator[None]:
     """Applies the pins of benchmark ``key``, or records its autotuning, while the block runs."""
@@ -329,6 +338,7 @@ def benchmark(key: str) -> Iterator[None]:
         yield
         return
     _install()
+    _forget_cached_decisions()
     path = pin_path(session.pins_dir, session.device, key)
     if session.mode == "pinned" or (session.mode == "auto" and path.exists()):
         # Benchmarks that never autotune have no pin file; any key they do autotune is reported missing.
@@ -425,7 +435,8 @@ def _choose(kind: str, pin_key: Tuple[str, ...], runs: List[Dict[str, Any]], pin
             values[cid] = value
             if time is not None:
                 times.setdefault(cid, []).append(time)
-    candidates = {_candidate(kind, value) for value, _ in runs[-1]["timings"]}
+    # A config that fails in the newest run is out, whatever its older timings.
+    candidates = {_candidate(kind, value) for value, time in runs[-1]["timings"] if time is not None}
     median = {cid: statistics.median(t) for cid, t in times.items() if cid in candidates}
     if not median:
         return None

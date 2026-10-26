@@ -106,6 +106,14 @@ def test_update_tie_keeps_autotuner_choice(tmp_path):
                                            "gemm")).triton[("mod.kernel", "k")] == {"BLOCK_M": 64}
 
 
+def test_update_skips_config_failing_in_newest_run(tmp_path):
+    older = _write_run(tmp_path / "run1", [_triton_record("k", {32: 0.5, 64: 1.0})])
+    newer = _write_run(tmp_path / "run2", [_triton_record("k", {32: None, 64: 1.0})])
+    pins.update_pins([older, newer], tmp_path / "pins", tmp_path / "pins", min_gain=0.03)
+    assert pins.PinFile.load(pins.pin_path(tmp_path / "pins", "b580",
+                                           "gemm")).triton[("mod.kernel", "k")] == {"BLOCK_M": 64}
+
+
 def _git(cwd, *args):
     env = {
         **os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.com", "GIT_COMMITTER_NAME": "test",
@@ -223,6 +231,17 @@ def test_triton_record_then_pin(monkeypatch, tmp_path, triton_kernel):
         pins.raise_for_misses()
 
 
+def test_benchmarks_sharing_a_kernel(monkeypatch, tmp_path, triton_kernel):
+    monkeypatch.setenv("AUTOTUNE_PINS_MODE", "record")
+    monkeypatch.setenv("AUTOTUNE_PINS_RECORDS", str(tmp_path))
+    monkeypatch.setenv("AUTOTUNE_PINS_DEVICE", "test-gpu")
+    _, run = triton_kernel()
+    for key in ("first", "second"):  # the second one must not reuse the decision of the first
+        with pins.benchmark(key):
+            run(4096)
+        assert len((tmp_path / f"{key}.jsonl").read_text().splitlines()) == 1
+
+
 def test_pruned_to_one_config_needs_no_pin(monkeypatch, tmp_path):
     triton = pytest.importorskip("triton")
     tl = pytest.importorskip("triton.language")
@@ -248,11 +267,55 @@ def test_pruned_to_one_config_needs_no_pin(monkeypatch, tmp_path):
     pins.raise_for_misses()
 
 
+def test_pin_rejected_by_pruning(monkeypatch, tmp_path):
+    triton = pytest.importorskip("triton")
+    tl = pytest.importorskip("triton.language")
+    torch = pytest.importorskip("torch")
+    if not torch.xpu.is_available():
+        pytest.skip("no XPU")
+    monkeypatch.setenv("AUTOTUNE_PINS_DIR", str(tmp_path / "pins"))
+    monkeypatch.setenv("AUTOTUNE_PINS_RECORDS", str(tmp_path / "records"))
+    monkeypatch.setenv("AUTOTUNE_PINS_DEVICE", "test-gpu")
+    rejected = []
+
+    def prune(configs, _nargs, **_kwargs):
+        return [c for c in configs if c.kwargs["BLOCK"] not in rejected]
+
+    @triton.autotune(configs=[triton.Config({"BLOCK": b}) for b in (64, 128, 256)], key=["n"],
+                     prune_configs_by={"early_config_prune": prune})
+    @triton.jit
+    def copy(x_ptr, y_ptr, n, BLOCK: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        tl.store(y_ptr + offsets, tl.load(x_ptr + offsets, mask=offsets < n), mask=offsets < n)
+
+    def run():
+        x = torch.ones(4096, device="xpu")
+        y = torch.empty_like(x)
+        copy[lambda meta: (triton.cdiv(4096, meta["BLOCK"]), )](x, y, 4096)
+        assert torch.all(y == 1)
+
+    monkeypatch.setenv("AUTOTUNE_PINS_MODE", "record")
+    with pins.benchmark("copy"):
+        run()
+    pins.update_pins([tmp_path / "records"], tmp_path / "pins", tmp_path / "pins", min_gain=0.03)
+
+    monkeypatch.setattr(pins, "_SESSION", None)
+    monkeypatch.setenv("AUTOTUNE_PINS_MODE", "pinned")
+    rejected.append(copy.best_config.kwargs["BLOCK"])  # the pruning now rejects the pinned config
+    with pins.benchmark("copy"):
+        run()
+    assert copy.best_config.kwargs["BLOCK"] not in rejected
+    with pytest.raises(pins.AutotunePinsError, match="pinned config is not among the configs"):
+        pins.raise_for_misses()
+
+
 def test_inductor_record_then_pin(monkeypatch, tmp_path):
     torch = pytest.importorskip("torch")
     if not torch.xpu.is_available():
         pytest.skip("no XPU")
     from torch._inductor import config as inductor_config  # pylint: disable=import-outside-toplevel
+    monkeypatch.setenv("TORCHINDUCTOR_CACHE_DIR", str(tmp_path / "inductor"))
+    monkeypatch.setattr(inductor_config, "force_disable_caches", False)
     monkeypatch.setenv("AUTOTUNE_PINS_DIR", str(tmp_path / "pins"))
     monkeypatch.setenv("AUTOTUNE_PINS_RECORDS", str(tmp_path / "records"))
     monkeypatch.setenv("AUTOTUNE_PINS_DEVICE", "test-gpu")
@@ -261,10 +324,11 @@ def test_inductor_record_then_pin(monkeypatch, tmp_path):
         torch._dynamo.reset()  # pylint: disable=protected-access
         a, b = (torch.randn(512, 512, device="xpu", dtype=torch.float16) for _ in range(2))
         matmul = torch.compile(lambda x, y: x @ y, options={"max_autotune": True})
-        no_caches = inductor_config.patch(force_disable_caches=True)  # pylint: disable=no-member
-        with no_caches, pins.benchmark_point({"M": 512}, "triton"):
+        with pins.benchmark_point({"M": 512}, "triton"):
             torch.testing.assert_close(matmul(a, b), a @ b, atol=1e-2, rtol=1e-2)
 
+    run()  # warms the graph cache, which would skip the autotuning below
+    monkeypatch.setattr(pins, "_SESSION", None)
     monkeypatch.setenv("AUTOTUNE_PINS_MODE", "record")
     with pins.benchmark("matmul"):
         run()
