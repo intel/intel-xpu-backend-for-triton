@@ -13,8 +13,8 @@ pytestmark = pytest.mark.usefixtures("process_pool")
 # XPU device-side asserts abort the process: SIGABRT on POSIX, STATUS_STACK_BUFFER_OVERRUN on Windows.
 XPU_ASSERT_EXIT_CODES = (0xC0000409, ) if sys.platform == "win32" else (-signal.SIGABRT, )
 XPU_ASSERT_EXIT_CODE_RE = "|".join(map(str, XPU_ASSERT_EXIT_CODES))
-# On Windows, two test_device_assert cases (reproducible on A770 and B580) exit with STATUS_BREAKPOINT
-# instead; the origin of that exit is not confirmed.
+# On Windows, some executed asserts (observed in two test_device_assert cases on A770 and B580)
+# terminate the process with STATUS_BREAKPOINT instead.
 XPU_DEVICE_ASSERT_EXIT_CODES = XPU_ASSERT_EXIT_CODES + ((0x80000003, ) if sys.platform == "win32" else ())
 
 
