@@ -613,7 +613,10 @@ def serialize_args(args, constants, signature, dir_path):
         args_dict['threads_per_warp'] = arg.threads_per_warp
         args_dict['shared_memory'] = arg.shared
         args_dict['kernel_name'] = arg.name
-        args_dict['spv_name'] = f"{arg.name}.spv"
+        is_native_binary = bool(getattr(arg, "generate_native_code", False))
+        binary_ext = "zebin" if is_native_binary else "spv"
+        args_dict['binary_name'] = f"{arg.name}.{binary_ext}"
+        args_dict['is_native_binary'] = is_native_binary
         args_dict['build_flags'] = arg.build_flags
 
     cnt = 0
@@ -673,11 +676,11 @@ class XPULauncher(object):
             ([ty for _, ty in get_kernel_argument_layout(signature.values(), TensorDescABI.DECOMPOSED)], ))
         self.launch = wrap_handle_tensordesc(utils.launch, signature, tensordesc_meta=[])
 
-        # Serialize KernelArguments for SPIR-V Runner
-        self.serialize_kernel_args = knobs.intel.enable_dump_spirv_kernel_args
+        # Serialize KernelArguments for TritonKernelRunner
+        self.serialize_kernel_args = knobs.intel.enable_dump_kernel_args
         self.cache_dir = metadata.cache_dir
         self.dump_dir = self._resolve_dump_dir(metadata.cache_dir)
-        self.print_dump_spirv_kernel_args_info = knobs.intel.print_dump_spirv_kernel_args_info
+        self.print_dump_kernel_args_info = knobs.intel.print_dump_kernel_args_info
         self.constants = constants
         self.signature = signature
         self.dump_launch_params = os.environ.get("TRITON_DUMP_LAUNCH_PARAMS") == "1"
@@ -687,7 +690,7 @@ class XPULauncher(object):
         self.profile_scratch_align = metadata.profile_scratch_align
 
     def _resolve_dump_dir(self, cache_dir):
-        dump_dir_root = knobs.intel.dump_spirv_kernel_args_dir
+        dump_dir_root = knobs.intel.dump_kernel_args_dir
         if not dump_dir_root:
             return cache_dir
         cache_dir_name = os.path.basename(os.path.normpath(cache_dir))
@@ -757,7 +760,7 @@ class XPULauncher(object):
             profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
 
         if self.serialize_kernel_args:
-            if self.print_dump_spirv_kernel_args_info:
+            if self.print_dump_kernel_args_info:
                 print(
                     f"Triton kernel dump info: kernel_name={kernel_metadata.name}, cache_dir={self.cache_dir}, dump_dir={self.dump_dir}"
                 )
