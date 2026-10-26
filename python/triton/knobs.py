@@ -455,6 +455,7 @@ class autotuning_knobs(base_knobs):
     cache: env_bool = env_bool("TRITON_CACHE_AUTOTUNING")
     print: env_bool = env_bool("TRITON_PRINT_AUTOTUNING")
     listener: Union[AutotuneListener, None] = None
+    warmup_workers: env_int = env_int("TRITON_AUTOTUNE_WARMUP_WORKERS", 0)
 
 
 class LaunchHook(Protocol):
@@ -579,6 +580,7 @@ class nvidia_knobs(base_knobs):
     ptxas: env_nvidia_tool = env_nvidia_tool("ptxas")
 
     dump_nvptx: env_bool = env_bool("NVPTX_ENABLE_DUMP")
+    use_slp_vectorizer: env_bool = env_bool("TRITON_USE_SLP_VECTORIZER", False)
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")
     ptxas_options: env_opt_str = env_opt_str("PTXAS_OPTIONS")
     mock_ptx_version: env_opt_str = env_opt_str("TRITON_MOCK_PTX_VERSION")
@@ -607,9 +609,9 @@ class intel_knobs(base_knobs):
     enable_sub_32_dpas: env_bool = env_bool("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32", False)
     fast_math: _env_fast_math = _env_fast_math()
 
-    enable_dump_spirv_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS", False)
-    dump_spirv_kernel_args_dir: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS_DIR")
-    print_dump_spirv_kernel_args_info: env_bool = env_bool("TRITON_XPU_PRINT_DUMP_SPIRV_KERNEL_ARGS_INFO", False)
+    enable_dump_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_KERNEL_ARGS", False)
+    dump_kernel_args_dir: env_opt_str = env_opt_str("TRITON_XPU_DUMP_KERNEL_ARGS_DIR")
+    print_dump_kernel_args_info: env_bool = env_bool("TRITON_XPU_PRINT_DUMP_KERNEL_ARGS_INFO", False)
 
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
 
@@ -628,6 +630,7 @@ class intel_knobs(base_knobs):
 
 class amd_knobs(base_knobs):
     codegen_path: env_opt_str = env_opt_str("TRITON_AMD_CODEGEN_PATH")
+    bitcode_path: env_opt_str = env_opt_str("TRITON_AMD_BITCODE_PATH")
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     # Note: This requires use_buffer_ops be true to have any effect
     use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)

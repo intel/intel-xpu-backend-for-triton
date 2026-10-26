@@ -77,7 +77,7 @@ env:
   # Suites that are split into NUM_SHARDS shards, each shard runs on its own runner
   PARALLEL_SUITES: "scaled_dot"
   # Suites that are run without sharding, one runner per suite
-  SEQUENTIAL_SUITES: "minicore language gluon triton-kernels rest tutorial-fa-128-nofwdfp8"
+  SEQUENTIAL_SUITES: "minicore language gluon triton-kernels rest"
 
 jobs:
   build:
@@ -368,7 +368,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fp8_only
 
       - name: Run Flash Attention tutorials (HEAD_DIM=128, skip FP8)
-        if: matrix.loop.suite == 'tutorial-fa-128-nofwdfp8'
+        if: matrix.loop.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode skip_fp8
 

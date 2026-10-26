@@ -243,6 +243,10 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
     streamk_full_tiles = streamk_iters // streamk_programs
     streamk_partial_tiles = streamk_iters % streamk_programs
 
+    # Tiles that `first_wave` splits across programs are accumulated with atomics, so they have to start from zero,
+    # and the timed iterations have to pay for that like any caller would.
+    c.zero_()
+
     first_wave[(streamk_programs, )](
         a, b, c,  #
         M, N, K,  #
@@ -266,7 +270,15 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
     benchmark_suite.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['M', 'K', 'N'],
-        x_vals=[[3072, 4096, 3072]],
+        x_vals=[
+            [3072, 4096, 3072],
+            # Shapes whose last wave of tiles is mostly empty, where stream-K beats the data-parallel kernel (#5255).
+            [512, 32768, 8192],
+            [512, 8192, 8192],
+            [8192, 16384, 1024],
+            [1024, 28672, 8192],
+            [1024, 16384, 8192],
+        ],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``

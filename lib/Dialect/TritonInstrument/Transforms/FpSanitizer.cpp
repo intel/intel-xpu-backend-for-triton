@@ -3,7 +3,6 @@
 #include "mlir/IR/Types.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
-#include "mlir/Transforms/WalkPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -1937,59 +1936,6 @@ struct ClampFOpPattern : public OpRewritePattern<tt::ClampFOp> {
   }
 };
 
-struct CmpFOpPattern : public OpRewritePattern<arith::CmpFOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(arith::CmpFOp op,
-                                PatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    arith::CmpIPredicate pred;
-    // Every carrier, including NaNs and signed zeros, represents an integer
-    // payload. All payloads are ordered, using the same signed order as
-    // min/max.
-    switch (op.getPredicate()) {
-    case arith::CmpFPredicate::AlwaysFalse:
-    case arith::CmpFPredicate::UNO:
-      rewriter.replaceOp(op,
-                         getIntConstantLike(rewriter, loc, op.getType(), 0));
-      return success();
-    case arith::CmpFPredicate::AlwaysTrue:
-    case arith::CmpFPredicate::ORD:
-      rewriter.replaceOp(op,
-                         getIntConstantLike(rewriter, loc, op.getType(), 1));
-      return success();
-    case arith::CmpFPredicate::OEQ:
-    case arith::CmpFPredicate::UEQ:
-      pred = arith::CmpIPredicate::eq;
-      break;
-    case arith::CmpFPredicate::ONE:
-    case arith::CmpFPredicate::UNE:
-      pred = arith::CmpIPredicate::ne;
-      break;
-    case arith::CmpFPredicate::OLT:
-    case arith::CmpFPredicate::ULT:
-      pred = arith::CmpIPredicate::slt;
-      break;
-    case arith::CmpFPredicate::OLE:
-    case arith::CmpFPredicate::ULE:
-      pred = arith::CmpIPredicate::sle;
-      break;
-    case arith::CmpFPredicate::OGT:
-    case arith::CmpFPredicate::UGT:
-      pred = arith::CmpIPredicate::sgt;
-      break;
-    case arith::CmpFPredicate::OGE:
-    case arith::CmpFPredicate::UGE:
-      pred = arith::CmpIPredicate::sge;
-      break;
-    }
-    Value lhs = embedToInt(rewriter, loc, op.getLhs());
-    Value rhs = embedToInt(rewriter, loc, op.getRhs());
-    rewriter.replaceOpWithNewOp<arith::CmpIOp>(op, pred, lhs, rhs);
-    return success();
-  }
-};
-
 struct NegFOpPattern : public OpRewritePattern<arith::NegFOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -2756,14 +2702,21 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
       // Make shared operands visible before the CTAs emulate the TMEM copy.
       ttng::ClusterBarrierOp::create(rewriter, loc);
     }
-    Value srcReg =
-        ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
-            .getResult();
-    if (!storeScratchStrided2D(rewriter, loc, info->ptr, srcReg, srcRegTy,
-                               /*stride0=*/1,
-                               info->tensorType.getShape().front(),
-                               /*ignoreCTA=*/true))
-      return emitFpSanCodegenError(op.getOperation());
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      if (Value pred = op.getPred(); pred && !matchPattern(pred, m_One())) {
+        auto ifOp = scf::IfOp::create(rewriter, loc, pred, false);
+        rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+      }
+      Value srcReg = ttg::LocalLoadOp::create(rewriter, loc, srcRegTy,
+                                              op.getSrc(), Value())
+                         .getResult();
+      if (!storeScratchStrided2D(rewriter, loc, info->ptr, srcReg, srcRegTy,
+                                 /*stride0=*/1,
+                                 info->tensorType.getShape().front(),
+                                 /*ignoreCTA=*/true))
+        return emitFpSanCodegenError(op.getOperation());
+    }
 
     createGlobalScratchBarrier(rewriter, loc,
                                scratch->usesSharedClusterState());
@@ -3455,11 +3408,6 @@ public:
                             BoolAttr::get(&getContext(), twoCTAs));
     getOperation()->setAttr(kHomomorphicCastsAttr,
                             BoolAttr::get(&getContext(), homomorphicCasts));
-
-    // Rewrite comparisons before constant folding to preserve NaN payloads.
-    RewritePatternSet comparisonPatterns(&getContext());
-    comparisonPatterns.add<CmpFOpPattern>(&getContext());
-    walkAndApplyPatterns(getOperation(), std::move(comparisonPatterns));
 
     // MMA emulation can redistribute accumulator elements across all CTAs.
     bool sharedClusterState = ttg::lookupNumCTAs(getOperation()) > 1;
