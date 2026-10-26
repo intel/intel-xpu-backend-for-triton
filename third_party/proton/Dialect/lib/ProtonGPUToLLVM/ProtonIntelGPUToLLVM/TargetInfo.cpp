@@ -44,13 +44,10 @@ Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
 
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
                               Location loc) const {
-  // `mangle()` doesn't special-case an empty parameter list: Itanium mangling
-  // still requires a trailing `v` ("void") for a zero-argument function.
-  std::string funcName =
-      mlir::triton::gpu::intel::mangle("intel_get_hw_thread_id", {}) + "v";
   auto callOp = mlir::triton::gpu::intel::createDeviceFunctionCall(
-      rewriter, funcName, /*retType=*/i32_ty, /*argTypes=*/{}, /*args=*/{},
-      /*paramAttrs=*/{}, mlir::triton::gpu::intel::noUnwindWillReturnAttrs);
+      rewriter, "__builtin_IB_hw_thread_id", /*retType=*/i32_ty,
+      /*argTypes=*/{}, /*args=*/{}, /*paramAttrs=*/{},
+      mlir::triton::gpu::intel::noUnwindWillReturnAttrs);
   callOp->setLoc(loc);
   return callOp.getResult();
 }
