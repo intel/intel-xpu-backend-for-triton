@@ -41,7 +41,7 @@ permissions: read-all
 
 jobs:
   compute-params:
-    runs-on: linux
+    runs-on: intel-ubuntu-24.04
     outputs:
       suite: ${{ steps.set_suite.outputs.suite }}
     steps:

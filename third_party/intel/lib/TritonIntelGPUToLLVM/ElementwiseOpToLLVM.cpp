@@ -570,13 +570,25 @@ Fp8E4M3Nv_to_Fp16Pairs(Location loc, ConversionPatternRewriter &rewriter,
   Value shifted = b.ashr(i16x2VecTy, lanes, splatI16(1));
   Value aligned = b.and_(i16x2VecTy, shifted, splatI16(0xBFFF));
 
+  // NaN: the reserved bytes 0x7F/0xFF are the only ones whose exponent and
+  // mantissa bits (13..7 of `aligned`) are all ones, and adding 0x80 carries
+  // through them into bit 14. OR-ing that carry into `aligned` makes the
+  // exponent all ones with a nonzero mantissa, i.e. a signed quiet NaN before
+  // the multiply (the sign and payload of the product are unspecified).
+  // Nothing else carries, so every other byte is untouched.
+  //
+  // This is integer ops rather than the compare and select of
+  // rebiasFp8E4M3ToFp16: a dot B operand held by every warp is converted
+  // together with a lot of other live values, and with the compare the K loop
+  // of the unified attention decode kernels has more than 100 moves of the
+  // flag register to GRFs (5 without it) and runs slower; see
+  // https://github.com/intel/intel-xpu-backend-for-triton/issues/8478. The
+  // one-element-at-a-time path keeps the compare and select, as the GEMMs of
+  // #8311 take it.
+  Value carry = b.and_(i16x2VecTy, b.add(i16x2VecTy, aligned, splatI16(0x80)),
+                       splatI16(0x4000));
+  aligned = b.or_(i16x2VecTy, aligned, carry);
   Value h = b.fmul(b.bitcast(aligned, fp16x2VecTy), splatF16(256.0f));
-  Value mag = LLVM::FAbsOp::create(rewriter, loc, fp16x2VecTy, h);
-  Value isReserved =
-      LLVM::FCmpOp::create(rewriter, loc, vec_ty(i1_ty, 2),
-                           LLVM::FCmpPredicate::ogt, mag, splatF16(448.0f));
-  Value qnan = b.bitcast(splatI16(0x7E00), fp16x2VecTy);
-  h = b.select(isReserved, qnan, h);
 
   return {b.extract_element(f16_ty, h, b.i32_val(0)),
           b.extract_element(f16_ty, h, b.i32_val(1))};
@@ -1351,6 +1363,22 @@ static int64_t getDotOperandK(Operation *op) {
   return ty.getShape()[ty.getRank() - (enc.getOpIdx() == 0 ? 1 : 2)];
 }
 
+// Whether `op`'s operand is a dot B operand that each of several warps holds in
+// full, i.e. all warps are along M.
+static bool isDotBInEveryWarp(Operation *op) {
+  auto ty = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+  auto enc =
+      ty ? dyn_cast<triton::gpu::DotOperandEncodingAttr>(ty.getEncoding())
+         : nullptr;
+  auto dpas =
+      enc ? dyn_cast<triton::gpu::intel::DpasEncodingAttr>(enc.getParent())
+          : nullptr;
+  if (!dpas || enc.getOpIdx() != 1)
+    return false;
+  ArrayRef<unsigned> warps = dpas.getWarpsPerCTA();
+  return warps.back() == 1 && warps[warps.size() - 2] > 1;
+}
+
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<FpToFpOp, FpToFpOpConversion> {
@@ -1512,7 +1540,8 @@ struct FpToFpOpConversion
 
     // Software fp8e4m3 -> fp16 needs more choices than the two a
     // ConverterSelector holds: the integer-domain sequence on LTS drivers (see
-    // Fp8E4M3Nv_to_Fp16Int for why) and pairs for dot operands with K < 64.
+    // Fp8E4M3Nv_to_Fp16Int for why) and pairs for dot operands with K < 64 and
+    // for a B operand that every warp converts in full.
     //
     // FIXME: drop the LTS branch and Fp8E4M3Nv_to_Fp16Int once the float
     // sequence (which changed since the LoopSink blowup was measured; it now
@@ -1527,7 +1556,8 @@ struct FpToFpOpConversion
         static Converter c{Fp8E4M3Nv_to_Fp16Int, 2};
         return c;
       }
-      if (int64_t k = getDotOperandK(op); k && k < 64) {
+      if (int64_t k = getDotOperandK(op);
+          (k && k < 64) || isDotBInEveryWarp(op)) {
         static Converter c{Fp8E4M3Nv_to_Fp16Pairs, 2};
         return c;
       }
@@ -1683,7 +1713,8 @@ struct FpToFpOpFromDwordsConversion : public ConvertOpToLLVMPattern<FpToFpOp> {
                   ConversionPatternRewriter &rewriter) const override {
     if (!isa<Float8E4M3FNType>(getElementTypeOrSelf(op.getSrc().getType())) ||
         !getElementTypeOrSelf(op.getType()).isF16() ||
-        HasAttr<SUPPORT_F8_CONV>(op) || HasAttr<IS_LTS>(op))
+        HasAttr<SUPPORT_F8_CONV>(op) || HasAttr<IS_LTS>(op) ||
+        isDotBInEveryWarp(op))
       return failure();
     std::optional<SmallVector<std::pair<Value, int64_t>>> bytes =
         getBytesOfI32Vectors(adaptor.getSrc());
