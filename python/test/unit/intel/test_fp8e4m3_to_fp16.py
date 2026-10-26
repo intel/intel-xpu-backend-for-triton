@@ -6,7 +6,8 @@ short bit-manipulation-plus-multiply sequence. Validates the conversion
 across all 256 possible fp8 byte values, including NaN propagation for the
 two reserved fp8e4m3 NaN encodings (0x7F, 0xFF).
 
-Converter algorithm:
+Converter algorithm (one element at a time; dot operands with K < 64 and a dot B
+operand held by every warp are converted in pairs, see below):
 1. Sign-extend each fp8 byte to i16 and shift it left by 7.
 2. Mask the shifted value with 0xBFFF.
 3. Multiply by 256.0 (2^8, the fp16/fp8 exponent bias difference). This is
@@ -18,6 +19,12 @@ Converter algorithm:
 The NaN is a constant, with the input sign discarded (the integer-domain
 converter used on LTS drivers keeps the sign). This test checks `isnan` for
 those two bytes rather than a specific bit pattern.
+
+The pair converter handles the two reserved bytes between steps 2 and 3, replacing
+step 4: adding 0x80 to the value of step 2 carries into bit 14 for 0x7F/0xFF
+only, and OR-ing that bit in makes the exponent all ones (a signed quiet NaN; the
+sign and payload of the product are unspecified). There is no compare or select
+in that path. The dot operand tests below cover it with K = 32.
 
 NOTE: under TRITON_INTEL_FAST_MATH=1, the emitted ops carry fast-math flags,
 which license LLVM to drop the compare/select of step 4 (or to treat a NaN
@@ -153,10 +160,10 @@ def test_fp8e4m3fn_to_fp16_all_bytes(device):
 
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
-@pytest.mark.parametrize("op_idx", [0, 1])
+@pytest.mark.parametrize("op_idx, num_warps", [(0, 1), (1, 1), (1, 4)])
 @pytest.mark.parametrize("k", [32, 64])
 @pytest.mark.parametrize("block_io", ["row_major", "column_major"])
-def test_fp8e4m3fn_to_fp16_dot_operand(op_idx, k, block_io, device, tmp_path):
+def test_fp8e4m3fn_to_fp16_dot_operand(op_idx, num_warps, k, block_io, device, tmp_path):
     """Exhaustive FP8E4M3FN -> FP16 conversion in dot operand layouts loaded by 2D block loads."""
     shape = (1024 // k, k) if op_idx == 0 else (k, 1024 // k)
     src_shape = shape[::-1] if block_io == "column_major" else shape
@@ -166,9 +173,9 @@ def test_fp8e4m3fn_to_fp16_dot_operand(op_idx, k, block_io, device, tmp_path):
     support_block_io = triton.runtime.driver.active.get_current_target().arch['has_2d_block_io']
 
     ir = f"""
-    #dpas = #ttig.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}}>
+    #dpas = #ttig.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [{num_warps}, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}}>
     #dot = #ttg.dot_op<{{opIdx = {op_idx}, parent = #dpas, kWidth = {2 if op_idx == 1 else 1}}}>
-    module attributes {{{"ttig.support_2d_block_io, " if support_block_io else ""}"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
+    module attributes {{{"ttig.support_2d_block_io, " if support_block_io else ""}"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {num_warps} : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
       tt.func public @fp8_to_fp16(%src: !tt.ptr<f8E4M3FN> {{tt.divisibility = 16 : i32}}, %dst: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
         %c0_i32 = arith.constant 0 : i32
         %c1_i64 = arith.constant 1 : i64
