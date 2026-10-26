@@ -1,3 +1,6 @@
+#include <TritonIntelGPUToLLVM/XeAsmFormat.h>
+#include <llvm/Support/FormatVariadic.h>
+
 #include "PatternTritonGPUOpToLLVM.h"
 
 #include "llvm/ADT/TypeSwitch.h"
@@ -582,6 +585,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                vecSize / packedRegisterSize);
     VectorType unpackedType = vec_ty(elementType, vecSize);
 
+    unsigned bitsPerElement =
+        isa<PointerType>(elementType)
+            ? kPtrBitWidth
+            : std::max<int>(8, elementType.getIntOrFloatBitWidth());
+
+    auto mod = rewriter.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
+    unsigned minSGSize =
+        mod->getAttrOfType<IntegerAttr>(
+               gpu::intel::TritonIntelGPUDialect::getMinSGSizeAttrName())
+            .getInt();
+
     int numElems = inVals.size();
     SmallVector<Value> result(numElems);
     for (size_t i = 0; i < numElems; i += vecSize) {
@@ -591,14 +605,42 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         slice.push_back(inVals[regId]);
       }
       Value vec = packLLVector(loc, slice, rewriter);
-      Value input = packOrUnpack ? vec : b.bitcast(vec, packedType);
-      Value shuffled =
-          TritonGEN::SubGroupBitcastShuffleOp::create(
-              rewriter, loc, packOrUnpack ? packedType : unpackedType, input)
-              ->getResult(0);
+      Value reinterVec;
+      if (packedRegisterSize * bitsPerElement >= 128) {
+        // Use inline VISA.
+        // The reinterpret-cast pack/unpack mode is the inverse of the
+        // bitcast-based lane shuffle we are lowering here.  For an incoming
+        // packed vector, we need to move the logical lanes in the opposite
+        // direction relative to the pack/unpack mapping.  In other words:
+        //   - packOrUnpack == true  : reinterpret pack path, lanes are grouped
+        //                           into wider packed registers
+        //   - packOrUnpack == false : reinterpret unpack path, lanes are split
+        //                           out of the packed register
+        // The inline Xe helper performs the bitcast shuffle on the unpacked
+        // lane order, so we invert the direction here to compensate for the
+        // inverse mapping used by the reinterpret-cast packing logic.
+        std::string simdAsm = simdLaneShuffleAsm(
+            threadsPerWarp, !packOrUnpack, packedRegisterSize, vecSize,
+            elementType, minSGSize == 8 ? Xe : Xe2);
 
-      Value reinterVec =
-          packOrUnpack ? b.bitcast(shuffled, unpackedType) : shuffled;
+        XeBuilder xeBuilder;
+        XeInstr &transNonUniform = *xeBuilder.create<XeInstr>(simdAsm);
+        XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+        XeBuilder::Operand *in = xeBuilder.newOperand(vec, "rw");
+        SmallVector<XeBuilder::Operand *> args{res, in};
+        transNonUniform(args, /*onlyAttachMLIRArgs=*/true);
+        reinterVec = xeBuilder.launch(rewriter, loc, unpackedType, false);
+      } else {
+        // Use reinterpret cast intrinsic.
+        Value input = packOrUnpack ? vec : b.bitcast(vec, packedType);
+        Value shuffled =
+            TritonGEN::SubGroupBitcastShuffleOp::create(
+                rewriter, loc, packOrUnpack ? packedType : unpackedType, input)
+                ->getResult(0);
+
+        reinterVec =
+            packOrUnpack ? b.bitcast(shuffled, unpackedType) : shuffled;
+      }
 
       SmallVector<Value> unpackedVec =
           unpackLLVector(loc, reinterVec, rewriter);
