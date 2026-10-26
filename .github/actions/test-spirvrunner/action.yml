@@ -6,7 +6,7 @@ runs:
     - name: Install CMake
       shell: bash
       run: |
-        pip install "$(grep -E '^cmake' python/requirements.txt)"
+        pip install cmake -c python/requirements.txt
 
     - name: Prepare LLVM cache key
       shell: bash
