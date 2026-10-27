@@ -389,18 +389,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 //       CANON: tt.store %arg1
 //  CANON-NEXT: tt.store %arg0
 //       CANON: tt.store
-// Over the cap nothing changes: every guard and every op between stays put.
+// Over the cap the ops between the ifs stay put; CSE still merges the guards.
 // CAP-LABEL: @layer_norm_chain
-//       CAP: %[[G1:.+]] = arith.cmpi
-//       CAP: scf.if %[[G1]]
+//       CAP: %[[G:.+]] = arith.cmpi
+//       CAP: scf.if %[[G]]
 //       CAP: "tt.reduce"
 //       CAP: arith.sitofp
-//       CAP: %[[G2:.+]] = arith.cmpi
-//       CAP: scf.if %[[G2]]
+//  CAP-NEXT: arith.divf
+//  CAP-NEXT: tt.splat
+//  CAP-NEXT: scf.if %[[G]]
 //       CAP: "tt.reduce"
 //       CAP: tt.store
-//       CAP: %[[G3:.+]] = arith.cmpi
-//       CAP: scf.if %[[G3]]
+//       CAP: scf.if %[[G]]
 tt.func public @layer_norm_chain(%X: !tt.ptr<f32>, %Mean: !tt.ptr<f32>, %N: i32, %a: tensor<128xf32>, %b: tensor<128xf32>) {
   %c0 = arith.constant 0 : i64
   %n = arith.extsi %N : i32 to i64
@@ -649,15 +649,14 @@ tt.func public @pure_loop_body_uses_first_result(%c: i1, %p: !tt.ptr<f32>, %x: f
 
 // -----
 
-// The second guard's remainder is also returned: it must survive, while the
-// now-dead compare that fed only the second if goes away.
+// The second guard's remainder is also returned: after CSE the return uses the
+// first remainder and both ifs test the first compare.
 // CHECK-LABEL: @guard_value_with_other_use
-//       CHECK: %[[G:.+]] = arith.cmpi eq
-//       CHECK: %[[R2:.+]] = arith.remsi
-//   CHECK-NOT: arith.cmpi
+//       CHECK: %[[R:.+]] = arith.remsi
+//  CHECK-NEXT: %[[G:.+]] = arith.cmpi eq, %[[R]]
 //       CHECK: scf.if %[[G]]
 //       CHECK: scf.if %[[G]]
-//       CHECK: tt.return %[[R2]] : i64
+//       CHECK: tt.return %[[R]] : i64
 // CANON-LABEL: @guard_value_with_other_use
 //       CANON: scf.if
 //   CANON-NOT: scf.if
@@ -768,6 +767,7 @@ tt.func public @guards_from_loads(%q: !tt.ptr<i32>, %p: !tt.ptr<f32>, %x: f32) {
 //       CANON: scf.if %arg0
 //       CANON: scf.for
 //       CANON: scf.if %arg0
+//  CANON-NEXT:   tt.store %arg2, %arg3
 tt.func public @nested_if_between(%c: i1, %d: i1, %p: !tt.ptr<f32>, %x: f32) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
@@ -1069,7 +1069,8 @@ tt.func public @inductor_welford_layer_norm(%in: !tt.ptr<f32>, %out: !tt.ptr<f32
 // BELOW-LABEL: @clone_cap_boundary
 //       BELOW: scf.if
 //       BELOW: "tt.reduce"
-//       BELOW: scf.if
+//       BELOW: tt.broadcast
+//  BELOW-NEXT: scf.if
 //    AT-LABEL: @clone_cap_boundary
 //          AT: scf.if
 //          AT: "tt.reduce"
@@ -1148,6 +1149,24 @@ tt.func public @guard_with_num_programs(%p: !tt.ptr<f32>, %a: tensor<64xf32>, %n
     tt.store %p, %s : !tt.ptr<f32>
   } else {
     tt.store %p, %s : !tt.ptr<f32>
+  }
+  tt.return
+}
+
+// -----
+
+// CSE erases the dead middle if, so the ifs must be collected after CSE.
+// CHECK-LABEL: @dead_if_between
+//   CHECK-NOT: arith.addf
+tt.func public @dead_if_between(%c: i1, %p: !tt.ptr<f32>, %x: f32) {
+  scf.if %c {
+    tt.store %p, %x : !tt.ptr<f32>
+  }
+  scf.if %c {
+    %t = arith.addf %x, %x : f32
+  }
+  scf.if %c {
+    tt.store %p, %x : !tt.ptr<f32>
   }
   tt.return
 }

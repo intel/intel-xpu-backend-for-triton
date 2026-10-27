@@ -16,9 +16,12 @@
 //===----------------------------------------------------------------------===//
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/CSE.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/DenseSet.h"
@@ -37,31 +40,6 @@ namespace mlir::triton::intel {
 } // namespace mlir::triton::intel
 
 namespace {
-
-constexpr unsigned kMaxConditionDepth = 8;
-
-/// True if `a` and `b` are the same value or are computed by identical
-/// side-effect-free expressions.
-static bool sameCondition(Value a, Value b, unsigned depth = 0) {
-  if (a == b)
-    return true;
-  auto resA = dyn_cast<OpResult>(a);
-  auto resB = dyn_cast<OpResult>(b);
-  if (!resA || !resB || resA.getResultNumber() != resB.getResultNumber() ||
-      depth == kMaxConditionDepth)
-    return false;
-  Operation *defA = resA.getOwner();
-  Operation *defB = resB.getOwner();
-  if (!isMemoryEffectFree(defA) || !isMemoryEffectFree(defB) ||
-      defA->getNumRegions() || defB->getNumRegions())
-    return false;
-  return OperationEquivalence::isEquivalentTo(
-      defA, defB,
-      [&](Value lhs, Value rhs) {
-        return success(sameCondition(lhs, rhs, depth + 1));
-      },
-      /*markEquivalent=*/nullptr, OperationEquivalence::IgnoreLocations);
-}
 
 /// True if `cond` has the same value in every thread of the program: it is
 /// built by arith/math ops from constants, program ids and arguments of the
@@ -165,7 +143,7 @@ static void sinkInto(scf::IfOp ifOp, ArrayRef<Operation *> ops,
 static void handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
                          tt::FuncOp funcOp, unsigned maxClonedOps) {
   Value cond = currentIf.getCondition();
-  if (!sameCondition(cond, nextIf.getCondition()))
+  if (cond != nextIf.getCondition())
     return;
 
   SmallVector<Operation *> between;
@@ -173,28 +151,12 @@ static void handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
        op = op->getNextNode())
     between.push_back(op);
 
-  // Ops that only compute nextIf's duplicate condition die once it uses
-  // `cond`.
-  DenseSet<Operation *> deadGuardOps;
-  if (nextIf.getCondition() != cond) {
-    for (Operation *op : llvm::reverse(between)) {
-      if (op->getNumRegions() || !isMemoryEffectFree(op) || op->use_empty())
-        continue;
-      if (llvm::all_of(op->getUsers(), [&](Operation *user) {
-            return user == nextIf.getOperation() || deadGuardOps.contains(user);
-          }))
-        deadGuardOps.insert(op);
-    }
-  }
-
   // Pure ops whose inputs, including those used inside their regions, exist
   // before the run head are hoisted; everything else is sunk into currentIf.
   Operation *head = getRunHead(currentIf);
   DenseSet<Operation *> hoisted;
   SmallVector<Operation *> toHoist, toSink;
   for (Operation *op : between) {
-    if (deadGuardOps.contains(op))
-      continue;
     SetVector<Value> used(op->operand_begin(), op->operand_end());
     getUsedValuesDefinedAbove(op->getRegions(), used);
     bool hoistable = isPure(op) && llvm::all_of(used, [&](Value value) {
@@ -243,11 +205,6 @@ static void handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
       return;
   }
 
-  if (nextIf.getCondition() != cond)
-    nextIf.getConditionMutable().assign(cond);
-  for (Operation *op : llvm::reverse(between))
-    if (deadGuardOps.contains(op))
-      op->erase();
   for (Operation *op : toHoist)
     op->moveBefore(head);
   if (!toSink.empty())
@@ -261,6 +218,12 @@ struct PrepareIfCombiningPass
 
   void runOnOperation() override {
     triton::FuncOp funcOp = getOperation();
+    // Unifies guards computed by identical expressions. Must run before the
+    // ifs are collected: CSE can erase duplicate or dead ifs.
+    IRRewriter rewriter(funcOp.getContext());
+    DominanceInfo domInfo(funcOp);
+    eliminateCommonSubExpressions(rewriter, domInfo, funcOp);
+
     llvm::MapVector<Block *, SmallVector<scf::IfOp>> ifsByBlock;
     funcOp.walk(
         [&](scf::IfOp ifOp) { ifsByBlock[ifOp->getBlock()].push_back(ifOp); });

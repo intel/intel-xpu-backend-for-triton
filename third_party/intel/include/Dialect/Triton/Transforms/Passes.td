@@ -211,8 +211,9 @@ def TritonIntelGPUPrepareIfCombining
   let summary = "Move ops between scf.if pairs to enable combining";
   let description = [{
     Moves operations from between scf.if pairs that share the same condition
-    (the same value, or identical side-effect-free expressions up to a fixed
-    depth), enabling canonicalization to combine them into a single scf.if.
+    (the pass first runs CSE on the whole function, so guards computed by
+    identical expressions are the same value), enabling canonicalization to
+    combine them into a single scf.if.
     Pure operations that do not depend on the first if are moved above it; the
     others are copied into both of its branches when the condition is uniform
     across the program. An operation containing an scf.if is never copied.
