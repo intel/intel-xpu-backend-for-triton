@@ -1,5 +1,6 @@
 import json
 import pathlib
+import re
 
 from typing import NamedTuple, Tuple, Optional
 
@@ -930,10 +931,23 @@ def test_globaltime(device, tmp_path: pathlib.Path):
     with temp_file.open() as f:
         data = json.load(f)
         trace_events = data["traceEvents"]
-        target = sorted(
-            [event for event in trace_events if "Core0 " in event["pid"]],
-            key=lambda x: x["ts"],
-        )
+        if is_xpu():
+            # On XPU, Core<N> is slice*kXeCoresPerSlice+dss (TargetInfo::processorId);
+            # which Xe-core index 0-2000 CTAs end up landing on is binning/scheduler
+            # dependent, so don't hardcode "Core0" -- pick whichever physical core
+            # actually accumulated the most events across all CTAs that shared it.
+            events_by_core = {}
+            for event in trace_events:
+                match = re.search(r"Core\d+", event["pid"])
+                if match:
+                    events_by_core.setdefault(match.group(), []).append(event)
+            assert events_by_core, "no per-core events found in trace"
+            target = sorted(max(events_by_core.values(), key=len), key=lambda x: x["ts"])
+        else:
+            target = sorted(
+                [event for event in trace_events if "Core0 " in event["pid"]],
+                key=lambda x: x["ts"],
+            )
         s = len(target)
         assert s > 1
         ts_diff = target[s - 1]["ts"] - target[0]["ts"]
