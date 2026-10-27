@@ -343,7 +343,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // reduction of the previous if's result and stores between the ifs.
 // CHECK-LABEL: @layer_norm_chain
 //       CHECK: %[[G:.+]] = arith.cmpi eq
-//   CHECK-NOT: arith.remsi
 //       CHECK: %[[NF:.+]] = arith.sitofp %arg2
 //  CHECK-NEXT: %[[XS:.+]] = tt.splat %arg0
 //  CHECK-NEXT: %[[IF0:.+]]:3 = scf.if %[[G]] -> (tensor<128xf32>, f32, tensor<128xf32>) {

@@ -15,6 +15,8 @@
 // branches; see Passes.td.
 //===----------------------------------------------------------------------===//
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
@@ -61,8 +63,9 @@ static bool isUniformCondition(Value cond, tt::FuncOp funcOp) {
     Operation *def = value.getDefiningOp();
     if (isa<tt::GetProgramIdOp, tt::GetNumProgramsOp>(def))
       continue;
-    StringRef dialect = def->getName().getDialectNamespace();
-    if ((dialect != "arith" && dialect != "math") || def->getNumRegions())
+    if (!isa_and_nonnull<arith::ArithDialect, math::MathDialect>(
+            def->getDialect()) ||
+        def->getNumRegions())
       return false;
     worklist.append(def->operand_begin(), def->operand_end());
   }
