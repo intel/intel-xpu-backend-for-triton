@@ -226,8 +226,6 @@ def test_hook_manager(tmp_path: pathlib.Path):
     assert len(HookManager.active_hooks) == 0
 
     # Heterogenous hooks
-    if is_xpu():
-        pytest.skip("Proton's instrumentation has no XPU lowering")
     HookManager.register(InstrumentationHook(""), 2)
     HookManager.register(LaunchHook(), 2)
     assert len(HookManager.active_hooks) == 2
