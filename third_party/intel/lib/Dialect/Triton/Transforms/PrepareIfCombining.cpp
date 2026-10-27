@@ -222,6 +222,8 @@ static void handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
         ++numOps;
         hasNestedIf |= isa<scf::IfOp>(inner);
       });
+      // Needed for memory safety: runOnOperation queues every if up front, and
+      // sinkInto erases `op`, which would free the nested ifs still queued.
       if (hasNestedIf)
         return;
       for (Value value : op->getResults()) {
