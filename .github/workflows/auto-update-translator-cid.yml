@@ -65,7 +65,7 @@ jobs:
         if: ${{ env.TARGET_PRID == null }}
         run: |
           pip install pytest pytest-xdist pytest-rerunfailures 'pytest-skip>=0.2.0' pytest-timeout expecttest
-          pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.2.0
+          pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@c7c4c74fb8342c3df9d2d7693cf0a426c7736ecd
 
       - name: Get commit ID from Triton's spirv-llvm-translator.conf
         if: ${{ env.TARGET_PRID == null }}
