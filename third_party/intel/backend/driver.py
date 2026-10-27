@@ -22,12 +22,6 @@ from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase, TensorDescABI, decompose_descriptor
 from triton.backends.driver import expand_signature, get_kernel_argument_layout, wrap_handle_tensordesc_impl
 
-# PTI's default collection mode is Local (mode 2), which with an event-less launcher hangs or
-# reports zero kernel times on the Level Zero v1 adapter (PVC); v2 (BMG and newer) is fine. Full
-# (mode 0) is the workaround. Set at import, because PTI reads this when a collection session starts,
-# and via setdefault so an explicit choice by the user still wins.
-os.environ.setdefault("PTI_COLLECTION_MODE", "0")
-
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
 # library has been updated as a result of updated dependencies.
@@ -405,7 +399,7 @@ def is_lts(ver) -> bool:
 
 
 @lru_cache
-def get_hasher_common(is_lts: bool = False):
+def get_hasher_common(eventless_submit: bool = True):
     hasher = hashlib.sha256((__CACHE_VERSION + platform_key()).encode("utf-8"))
     # Include libsycl_dir in the hash to prevent cache collisions across
     # environments with different oneAPI versions (e.g. 2025.3 vs 2026.0).
@@ -414,13 +408,13 @@ def get_hasher_common(is_lts: bool = False):
     # share the same cache entry and load an incompatible .so.
     if COMPILATION_HELPER.libsycl_dir:
         hasher.update(str(COMPILATION_HELPER.libsycl_dir).encode("utf-8"))
-    if is_lts:
-        hasher.update("is_lts=True".encode("utf-8"))
+    if eventless_submit:
+        hasher.update("eventless_submit=True".encode("utf-8"))
     return hasher
 
 
-def compile_module_from_src(src: str, name: str, is_lts: bool = False):
-    hasher = get_hasher_common(is_lts).copy()
+def compile_module_from_src(src: str, name: str, eventless_submit: bool = True):
+    hasher = get_hasher_common(eventless_submit).copy()
     hasher.update(src.encode("utf-8"))
     # `spirv_utils` is compiled with `-DTRITON_INTEL_INJECT_PYTORCH=1` when
     # `INJECT_PYTORCH=True` (see below), which wraps kernel launches in a
@@ -451,7 +445,7 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
                 else:
                     extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1", "-std=c++20"]
 
-            if name == "spirv_utils" and not is_lts:
+            if name == "spirv_utils" and eventless_submit:
                 if os.name == "nt":
                     extra_compiler_args += ["/DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
                 else:
@@ -502,9 +496,8 @@ class XPUUtils(object):
         dirname = os.path.dirname(os.path.realpath(__file__))
         # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
         # and can cause `Fatal Python error: Segmentation fault`
-        is_lts = self._is_lts()
         mod = compile_module_from_src(src=Path(os.path.join(dirname, "driver.c")).read_text(), name="spirv_utils",
-                                      is_lts=is_lts)
+                                      eventless_submit=self._use_eventless_submit())
         global PyKernelArg
         global ARG_CONSTEXPR
         global ARG_KERNEL
@@ -531,10 +524,12 @@ class XPUUtils(object):
         import torch
         return torch.xpu.current_stream().sycl_queue
 
-    def _is_lts(self):
+    def _use_eventless_submit(self):
         import torch
         properties = torch.xpu.get_device_capability(torch.xpu.current_device())
-        return is_lts(properties.get('driver_version'))
+        # Event-less submission only saves time on the Level Zero v2 adapter, whose platform name ends in "V2". On v1
+        # (PVC's default) it does not, and PTI's default collection mode then reports zero kernel times or hangs.
+        return not is_lts(properties.get('driver_version')) and properties.get('platform_name', '').endswith(' V2')
 
     def wait(self):
         self.wait_on_sycl_queue(self.get_sycl_queue())
