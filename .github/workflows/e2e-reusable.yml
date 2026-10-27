@@ -141,7 +141,9 @@ jobs:
           pip install pyyaml 'pandas<3.0' scipy psutil
 
       - name: Install transformers package
-        if: ${{ inputs.suite == 'huggingface' }}
+        # torchbench also runs huggingface models (hf_*), so it needs the same
+        # pytorch-pinned transformers version, or those models fail to run.
+        if: ${{ inputs.suite == 'huggingface' || inputs.suite == 'torchbench' }}
         run: |
           cd pytorch
           pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
@@ -187,7 +189,9 @@ jobs:
         if: ${{ inputs.suite == 'torchbench' }}
         run: |
           cd benchmark
-          sed -i 's/^ *pynvml.*//' requirements.txt
+          # torchbench pins its own transformers/timm; drop them so they don't
+          # clobber the pytorch-pinned versions installed above.
+          sed -i -E '/^[[:space:]]*(pynvml|transformers|timm)([[:space:]]*[<>=!~;[].*)?[[:space:]]*$/d' requirements.txt
           pip install -r requirements.txt
           # for dlrm
           pip install pyre-extensions
