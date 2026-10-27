@@ -408,8 +408,8 @@ def get_hasher_common(eventless_submit: bool = True):
     # share the same cache entry and load an incompatible .so.
     if COMPILATION_HELPER.libsycl_dir:
         hasher.update(str(COMPILATION_HELPER.libsycl_dir).encode("utf-8"))
-    if not eventless_submit:
-        hasher.update("eventless_submit=False".encode("utf-8"))
+    if eventless_submit:
+        hasher.update("eventless_submit=True".encode("utf-8"))
     return hasher
 
 
