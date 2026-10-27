@@ -44,12 +44,20 @@ Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
 
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
                               Location loc) const {
-  auto callOp = mlir::triton::gpu::intel::createDeviceFunctionCall(
-      rewriter, "__builtin_IB_hw_thread_id", /*retType=*/i32_ty,
-      /*argTypes=*/{}, /*args=*/{}, /*paramAttrs=*/{},
-      mlir::triton::gpu::intel::noUnwindWillReturnAttrs);
-  callOp->setLoc(loc);
-  return callOp.getResult();
+  constexpr unsigned kXeCoresPerSlice = 8;
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto call = [&](StringRef name) {
+    auto callOp = mlir::triton::gpu::intel::createDeviceFunctionCall(
+        rewriter, name, /*retType=*/i32_ty,
+        /*argTypes=*/{}, /*args=*/{}, /*paramAttrs=*/{},
+        mlir::triton::gpu::intel::noUnwindWillReturnAttrs);
+    callOp->setLoc(loc);
+    return callOp.getResult();
+  };
+  Value sliceId = call("__builtin_IB_slice_id");
+  Value dssId = call("__builtin_IB_dual_subslice_id");
+  return b.add(b.mul(sliceId, b.i32_val(kXeCoresPerSlice)), dssId);
 }
 
 int TargetInfo::getAddressSpace(Attribute addressSpace) const {
