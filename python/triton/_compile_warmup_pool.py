@@ -211,12 +211,24 @@ def _jit_dumps(obj):
             cloudpickle.unregister_pickle_by_value(module)
 
 
+def _strip_spawned_main_prefix(qualified_name):
+    # `multiprocessing`'s "spawn" start method reconstructs a pickled `__main__`-defined
+    # function by re-executing the main script in the worker under `__mp_main__` instead
+    # of `__main__`, to avoid re-triggering its own `if __name__ == "__main__":` guard.
+    # Same function, same file, different module name - strip either prefix before
+    # comparing so that doesn't look like a real mismatch.
+    for prefix in ("__main__.", "__mp_main__."):
+        if qualified_name.startswith(prefix):
+            return qualified_name[len(prefix):]
+    return qualified_name
+
+
 def _preload_with_compile_context(function, name, key, serialized_target, serialized_options, signature, constants,
                                   attrs):
     from triton.backends.compiler import GPUTarget
     from triton.compiler import ASTSource, compile
 
-    if name != function._fn_name:
+    if _strip_spawned_main_prefix(name) != _strip_spawned_main_prefix(function._fn_name):
         raise RuntimeError(f"Specialization data is for {name} but trying to preload for {function._fn_name}")
     target = GPUTarget(**serialized_target)
     if function.is_gluon():

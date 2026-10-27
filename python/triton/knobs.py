@@ -441,6 +441,7 @@ class compilation_knobs(base_knobs):
     # We cache the value here to avoid the expensive check on every run.
     instrumentation_mode: str = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
     fpsan_homomorphic_casts: env_bool = env_bool("TRITON_FPSAN_HOMOMORPHIC_CASTS")
+    print_cache_hits: env_bool = env_bool("TRITON_PRINT_CACHE_HITS")
     listener: Union[CompilationListener, None] = None
 
 
