@@ -410,6 +410,28 @@ void init_triton_intel(py::module_ &m) {
     return result.wasInterrupted();
   });
 
+  // Storage bytes of the A, B and result tensors of the largest tt.dot (by
+  // B*M*N*K, first on ties), or 0 without one.
+  m.def("largest_dot_tile_bytes", [](mlir::ModuleOp &mod) -> int64_t {
+    using namespace mlir;
+    int64_t bestWork = -1, bestBytes = 0;
+    auto bytes = [](Value v) {
+      auto ty = cast<RankedTensorType>(v.getType());
+      return ty.getNumElements() * ty.getElementTypeBitWidth() / 8;
+    };
+    mod.walk([&](mlir::triton::DotOp dot) {
+      ArrayRef<int64_t> shape = dot.getD().getType().getShape();
+      int64_t work = (shape.size() == 3 ? shape[0] : 1) *
+                     shape[shape.size() - 2] * shape.back() *
+                     dot.getA().getType().getShape().back();
+      if (work > bestWork) {
+        bestWork = work;
+        bestBytes = bytes(dot.getA()) + bytes(dot.getB()) + bytes(dot.getD());
+      }
+    });
+    return bestBytes;
+  });
+
   m.def("set_is_lts", [](mlir::ModuleOp &mod) {
     using namespace mlir::triton::gpu::intel;
     if (!mod->hasAttr(TritonIntelGPUDialect::getIsLTSAttrName())) {
