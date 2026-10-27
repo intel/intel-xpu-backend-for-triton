@@ -1,5 +1,5 @@
 diff --git a/tests/kernels/attention/test_triton_unified_attention.py b/tests/kernels/attention/test_triton_unified_attention.py
-index b50e97b52b..24d2948407 100644
+index b50e97b52b..8a4bbbbe4e 100644
 --- a/tests/kernels/attention/test_triton_unified_attention.py
 +++ b/tests/kernels/attention/test_triton_unified_attention.py
 @@ -282,7 +282,9 @@ def test_speculative_splitk_matches_reference(
@@ -37,6 +37,76 @@ index b50e97b52b..24d2948407 100644
      )
  
      ref_output = ref_paged_attn(
+@@ -1251,3 +1256,69 @@ def test_softcap_does_not_overflow_on_large_scores() -> None:
+     ref = soft_cap * torch.tanh(scores / soft_cap)
+     assert torch.isfinite(out).all(), out
+     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-3)
++
++
++@pytest.mark.parametrize(
++    "seq_lens",
++    [
++        [(1, 1), (15, 31), (17, 65), (33, 129)],
++        [(31, 96), (32, 96), (65, 257)],
++    ],
++)
++@pytest.mark.parametrize("num_heads", [(4, 4), (8, 2), (5, 1)])
++@pytest.mark.parametrize("tile_size", [16, 32])
++@torch.inference_mode()
++def test_triton_unified_attn_td_causal_regions_and_tails(
++    monkeypatch, seq_lens, num_heads, tile_size
++):
++    original_kernel = attention.kernel_unified_attention
++
++    class TileWidthKernel:
++        def __getitem__(self, grid):
++            def launch(*args, **kwargs):
++                kwargs["TILE_SIZE"] = tile_size
++                return original_kernel[grid](*args, **kwargs)
++
++            return launch
++
++    monkeypatch.setattr(attention, "kernel_unified_attention", TileWidthKernel())
++    test_triton_unified_attn(
++        seq_lens=seq_lens,
++        num_heads=num_heads,
++        head_size=128,
++        sliding_window=None,
++        dtype=torch.bfloat16,
++        block_size=64,
++        soft_cap=None,
++        num_blocks=64,
++        q_dtype=None,
++        seq_threshold_3D=0,
++    )
++
++
++@pytest.mark.parametrize(
++    "block_size,head_size,sliding_window,q_dtype,seq_threshold_3D",
++    [
++        (16, 128, None, None, 0),
++        (64, 96, None, None, 0),
++        (64, 128, 33, None, 0),
++        (64, 128, None, FP8_DTYPE, 0),
++        (64, 128, None, None, 8),
++    ],
++)
++@torch.inference_mode()
++def test_triton_unified_attn_td_specialization_fallbacks(
++    block_size, head_size, sliding_window, q_dtype, seq_threshold_3D
++):
++    test_triton_unified_attn(
++        seq_lens=[(1, 65), (1, 129)],
++        num_heads=(4, 4),
++        head_size=head_size,
++        sliding_window=sliding_window,
++        dtype=torch.bfloat16,
++        block_size=block_size,
++        soft_cap=None,
++        num_blocks=64,
++        q_dtype=q_dtype,
++        seq_threshold_3D=seq_threshold_3D,
++    )
 diff --git a/vllm/v1/attention/ops/triton_attention_helpers.py b/vllm/v1/attention/ops/triton_attention_helpers.py
 index f2399b7423..930eccc825 100644
 --- a/vllm/v1/attention/ops/triton_attention_helpers.py
@@ -72,7 +142,7 @@ index f2399b7423..930eccc825 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index d914e574f2..d97bd27b96 100644
+index d914e574f2..6e90f4b607 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -159,7 +229,7 @@ index d914e574f2..d97bd27b96 100644
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
          KV_QUANT_MODE <= 3
-@@ -541,12 +600,23 @@ def kernel_unified_attention(
+@@ -541,19 +600,60 @@ def kernel_unified_attention(
  
          # S : (BLOCK_M, TILE_SIZE)
          S = tl.zeros(shape=(BLOCK_M, TILE_SIZE), dtype=tl.float32)
@@ -188,7 +258,46 @@ index d914e574f2..d97bd27b96 100644
  
          if USE_SOFTCAP:
              S = apply_softcap(S, softcap)
-@@ -568,25 +638,12 @@ def kernel_unified_attention(
+ 
+-        S = tl.where(
+-            query_mask_1[:, None] & query_mask_0[:, None] & seq_mask, S, float("-inf")
++        OMIT_QUERY_ROW_MASK: tl.constexpr = (
++            USE_TD
++            and USE_TD_QO
++            and not IS_3D
++            and num_queries_per_kv == 1
++            and BLOCK_M == BLOCK_Q
++            and HEAD_SIZE == HEAD_SIZE_PADDED
++            and query_ptr.dtype.element_ty == tl.bfloat16
++            and key_cache_ptr.dtype.element_ty == tl.bfloat16
++            and value_cache_ptr.dtype.element_ty == tl.bfloat16
++            and KV_QUANT_MODE == 0
++            and not Q_IS_FP8
++            and not USE_FP8
++            and USE_CAUSAL
++            and not USE_PER_SEQ_CAUSAL
++            and not USE_SINKS
++            and not USE_ALIBI_SLOPES
++            and not USE_ALIBI_SQRT
++            and not USE_QQ_BIAS
++            and not USE_SOFTCAP
++            and SLIDING_WINDOW <= 0
++            and not USE_MM_PREFIX
++            and not MM_PREFIX_CLAMP_SW
++            and not USE_R_SWA
++            and CHUNK_LOOKBACK == -1
++            and CHUNK_SIZE == -1
+         )
++        if OMIT_QUERY_ROW_MASK:
++            S = tl.where(seq_mask, S, float("-inf"))
++        else:
++            S = tl.where(
++                query_mask_1[:, None] & query_mask_0[:, None] & seq_mask, S, float("-inf")
++            )
+ 
+         if USE_ALIBI_SLOPES:
+             S = apply_alibi_to_score(
+@@ -568,25 +668,12 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -217,7 +326,7 @@ index d914e574f2..d97bd27b96 100644
          else:
              # Keep softmax weights representable when the P @ V dot uses FP8
              # tensor cores. Undo the power-of-two scale after the dot.
-@@ -728,7 +785,7 @@ def reduce_segments(
+@@ -728,7 +815,7 @@ def reduce_segments(
          return
  
      seq_idx = find_seq_idx(
@@ -226,7 +335,7 @@ index d914e574f2..d97bd27b96 100644
      )
  
      # sequence len for this particular sequence
-@@ -980,17 +1037,6 @@ def unified_attention(
+@@ -980,17 +1067,6 @@ def unified_attention(
          launch_num_warps = 8
          launch_num_stages = 2
  
@@ -244,7 +353,7 @@ index d914e574f2..d97bd27b96 100644
      sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
  
      # Compute chunked block size from sliding window if needed.
-@@ -1001,12 +1047,16 @@ def unified_attention(
+@@ -1001,12 +1077,16 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -267,7 +376,7 @@ index d914e574f2..d97bd27b96 100644
  
      # Wider KV tile for the tuned large-head path (see above). Only the 2D
      # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
-@@ -1085,6 +1135,8 @@ def unified_attention(
+@@ -1085,6 +1165,8 @@ def unified_attention(
          )
          or num_seqs * triton.cdiv(max_seqlen_q, BLOCK_Q) > seq_threshold_3D
          or is_batch_invariant
@@ -276,7 +385,7 @@ index d914e574f2..d97bd27b96 100644
      )
      if use_3d and softmax_segm_max.shape[0] < q.shape[0]:
          logger.debug_once("Split-K scratch rows < query tokens; using 2D.")
-@@ -1114,12 +1166,28 @@ def unified_attention(
+@@ -1114,12 +1196,28 @@ def unified_attention(
      segm_expsum_ptr = softmax_segm_expsum if use_3d else None
      num_segments = num_par_softmax_segments if use_3d else 1
  
@@ -308,7 +417,7 @@ index d914e574f2..d97bd27b96 100644
          tile_size = TILE_SIZE_DECODE
  
      launch_kwargs: dict[str, int] = {}
-@@ -1191,9 +1259,7 @@ def unified_attention(
+@@ -1191,9 +1289,7 @@ def unified_attention(
          stride_vs_slot=vs_slot,
          stride_vs_head=vs_head,
          query_start_len_ptr=cu_seqlens_q,
