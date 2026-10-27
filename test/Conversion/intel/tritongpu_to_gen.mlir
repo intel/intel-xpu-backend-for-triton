@@ -1319,8 +1319,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[ARG1_0:%.*]] = llvm.extractvalue %arg1[0] : !llvm.struct<(f32, f32)>
     // CHECK-NEXT: [[ARG1_1:%.*]] = llvm.extractvalue %arg1[1] : !llvm.struct<(f32, f32)>
     // CHECK:      {{.*}} = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:      [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.call spir_funccc @_Z12get_local_idj([[ZERO]]) {{.*}} : (i32) -> i64
+    // CHECK-NOT:  llvm.call spir_funccc @_Z12get_local_idj
     // CHECK:      [[UNDEF:%.*]] = llvm.mlir.undef : vector<1xf32>
     // CHECK-NEXT: [[BCAST_STORE:%.*]] = llvm.bitcast [[ARG1_0]] : f32 to f32
     // CHECK-NEXT: [[ZERO1:%.*]] =  llvm.mlir.constant(0 : i32) : i32
