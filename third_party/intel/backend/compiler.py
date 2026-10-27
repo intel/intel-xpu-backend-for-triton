@@ -68,7 +68,7 @@ class XPUOptions:
     is_lts: bool = True
     # Whether the SPIR-V consumer understands `SPV_EXT_long_vector`; otherwise
     # `SPV_INTEL_vector_compute` is emitted. See `ocloc_accepts_long_vector`.
-    allow_long_vector: bool = False
+    allow_long_vector: bool = True
     # Largest GRF mode the backend's automatic escalation will ever select
     # for this target ("256" everywhere except "cri", which gets "512"); see
     # `get_max_grf_mode`, the single source of truth for this policy.
