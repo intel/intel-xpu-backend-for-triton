@@ -33,14 +33,32 @@ struct CircularStoreOpConversion
                            adaptor.getDynamicScopeId(), rewriter);
     uint32_t addrSpace = dataPack.addrSpace;
     if (addrSpace == TritonGEN::TritonGENMemorySpace::kCrossWorkgroup) {
-      // `dataPack.record` is a packed <2 x i32> (tag + clock word); bitcast
-      // to i64 so `storeRelaxed`'s `getIntOrFloatBitWidth()`-based alignment
-      // computation accepts it (vector types aren't "int or float").
       auto b = TritonLLVMOpBuilder(loc, rewriter);
-      Value record64 = b.bitcast(dataPack.record, i64_ty);
-      targetInfo.getTritonTargetInfo().storeRelaxed(rewriter, loc, dataPack.ptr,
-                                                    record64, dataPack.isWriter,
-                                                    MemSyncScope::GPU);
+      // numWarps == 1 (the only odd value it can take) leaves the first
+      // record 4-byte- but not 8-byte-aligned, so a single i64 store would
+      // claim an alignment it doesn't have. Split it like NVIDIA does.
+      auto mod = op->getParentOfType<ModuleOp>();
+      int numWarps = proton::gpu::getTotalNumWarps(mod);
+      if (numWarps == 1) {
+        auto unpackedVals = unpackLLVector(loc, dataPack.record, rewriter);
+        auto ptrTy = mlir::cast<LLVM::LLVMPointerType>(dataPack.ptr.getType());
+        Value ptr1 = b.gep(ptrTy, i32_ty, dataPack.ptr, b.i32_val(1));
+        targetInfo.getTritonTargetInfo().storeRelaxed(
+            rewriter, loc, dataPack.ptr, unpackedVals[0], dataPack.isWriter,
+            MemSyncScope::GPU);
+        targetInfo.getTritonTargetInfo().storeRelaxed(
+            rewriter, loc, ptr1, unpackedVals[1], dataPack.isWriter,
+            MemSyncScope::GPU);
+      } else {
+        // `dataPack.record` is a packed <2 x i32> (tag + clock word);
+        // bitcast to i64 so `storeRelaxed`'s `getIntOrFloatBitWidth()`-based
+        // alignment computation accepts it (vector types aren't "int or
+        // float").
+        Value record64 = b.bitcast(dataPack.record, i64_ty);
+        targetInfo.getTritonTargetInfo().storeRelaxed(
+            rewriter, loc, dataPack.ptr, record64, dataPack.isWriter,
+            MemSyncScope::GPU);
+      }
     } else if (addrSpace == TritonGEN::TritonGENMemorySpace::kWorkgroup) {
       targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, dataPack.ptr,
                                                     Value(), dataPack.record,
