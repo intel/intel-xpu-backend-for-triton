@@ -522,6 +522,12 @@ class CompiledKernel:
                 new_build_flags = driver.active.utils.get_last_selected_build_flags()
                 if new_build_flags != self.metadata.build_flags:
                     self.metadata = self.metadata._replace(build_flags=new_build_flags)
+                    # self.packed_metadata is what actually gets launched (see
+                    # __getitem__) and dumped for repro tooling (e.g.
+                    # TritonKernelRunner) -- keep it in sync so both reflect the
+                    # GRF mode load_binary actually settled on. `backend.pack_metadata`
+                    # is a no-op for XPU, so just rebind the reference.
+                    self.packed_metadata = self.metadata
         else:
             self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
                 self.name, self.kernel, shared, device)

@@ -406,6 +406,26 @@ static int spillsToPyInt(int64_t slots) {
                           : static_cast<int>(slots);
 }
 
+// GRF count IGC actually compiled the kernel with. The build flags cannot tell
+// under `-cl-intel-enable-auto-large-GRF-mode`, where IGC picks the size
+// itself. Mirrors `zex_kernel_register_file_size_exp_t` from compute-runtime's
+// `driver_experimental/zex_module.h`, which the Level Zero SDK does not ship. A
+// driver without the extension leaves the size 0, and `fallback` is returned.
+static int32_t compiledGRFCount(ze_kernel_handle_t kernel, int32_t fallback) {
+  struct {
+    ze_structure_type_t stype;
+    const void *pNext;
+    uint32_t registerFileSize;
+  } grf{static_cast<ze_structure_type_t>(0x00030012), nullptr, 0};
+  ze_kernel_properties_t props{};
+  props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
+  props.pNext = &grf;
+  if (zeKernelGetProperties(kernel, &props) != ZE_RESULT_SUCCESS ||
+      grf.registerFileSize == 0)
+    return fallback;
+  return static_cast<int32_t>(grf.registerFileSize);
+}
+
 template <typename L0_DEVICE, typename L0_CONTEXT>
 std::tuple<ze_module_handle_t, ze_kernel_handle_t, Spills>
 compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
@@ -751,7 +771,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
               << kernel_name << "\"" << std::endl;
   }
 
-  auto n_regs = build_flags.n_regs();
+  auto n_regs = compiledGRFCount(l0_kernel, build_flags.n_regs());
 
   auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
       sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
@@ -772,7 +792,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
                                         "kernel_bundle", freeKernelBundle);
   last_build_flag = build_flags;
-  return Py_BuildValue("(OOiii)", kernel_bundle_py, kernel_py, n_regs,
+  return Py_BuildValue("(NNiii)", kernel_bundle_py, kernel_py, n_regs,
                        spillsToPyInt(n_spills.slotsPerLane()), n_max_threads);
 }
 

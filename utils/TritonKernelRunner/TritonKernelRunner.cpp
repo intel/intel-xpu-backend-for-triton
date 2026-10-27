@@ -41,7 +41,7 @@ void write_tensor(const std::string &filename, torch::Tensor &tensor) {
   outs.write(output_bytes.data(), output_bytes.size());
 }
 
-auto read_spirv(const std::string &filename) {
+auto read_binary(const std::string &filename) {
   return read_file_as_bytes(filename);
 }
 
@@ -63,7 +63,8 @@ struct KernelArguments {
   int shared_memory;
   std::string kernel_name;
   std::string build_flags;
-  std::string spv_name;
+  std::string binary_name;
+  bool is_native_binary;
   ordered_json jsonData;
   std::vector<char *> dev_buffers;
   std::vector<TensorBuffer> host_outbuffers;
@@ -99,8 +100,11 @@ struct KernelArguments {
     threads_per_warp = jsonData.at("threads_per_warp");
     kernel_name = jsonData.at("kernel_name");
     build_flags = jsonData.at("build_flags");
-    spv_name =
-        spirv_dump_dir + "/" + jsonData.at("spv_name").get<std::string>();
+    binary_name =
+        spirv_dump_dir + "/" + jsonData.at("binary_name").get<std::string>();
+    // Absent in dumps predating native-binary support; those are always
+    // SPIR-V, so default to that rather than requiring the key.
+    is_native_binary = jsonData.value("is_native_binary", false);
     out_tensor_names = outtensornames;
   }
 };
@@ -154,8 +158,8 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 std::tuple<sycl::kernel_bundle<sycl::bundle_state::executable>, sycl::kernel,
            int32_t, int32_t>
 loadBinary(const std::string &kernel_name, const std::string &build_flags,
-           uint8_t *binary_ptr, const size_t binary_size,
-           const size_t deviceId) {
+           uint8_t *binary_ptr, const size_t binary_size, const size_t deviceId,
+           const bool is_spv) {
   int32_t n_regs = 0;
   int32_t n_spills = 0;
 
@@ -172,8 +176,9 @@ loadBinary(const std::string &kernel_name, const std::string &build_flags,
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   const auto l0_context =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
-  auto l0_module = checkSyclErrors(create_module(
-      l0_context, l0_device, binary_ptr, binary_size, build_flags.c_str()));
+  auto l0_module =
+      checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
+                                    binary_size, build_flags.c_str(), is_spv));
   auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
 
   ze_kernel_properties_t props;
@@ -485,13 +490,14 @@ int main(int argc, char **argv) {
     KernelArguments tritonArgDict(cliopts.output_tensors,
                                   cliopts.spirv_dump_dir);
 
-    // read spirv
-    auto spirv = read_spirv(tritonArgDict.spv_name);
-    std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
+    // read kernel binary (SPIR-V, or native zebin for an AOT kernel)
+    auto binary = read_binary(tritonArgDict.binary_name);
+    std::cout << "Read " << binary.size() << " byte kernel." << std::endl;
 
     auto [kernel_bundle, kernel, n_regs, n_spills] =
         loadBinary(tritonArgDict.kernel_name, tritonArgDict.build_flags,
-                   reinterpret_cast<uint8_t *>(spirv.data()), spirv.size(), 0);
+                   reinterpret_cast<uint8_t *>(binary.data()), binary.size(), 0,
+                   !tritonArgDict.is_native_binary);
 
     // TODO: missing number of registers
     std::cout << "Loaded kernel with " << n_regs << " registers and "
