@@ -94,6 +94,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT: llvm.icmp "sge"
+    // CHECK: llvm.sdiv
     // CHECK: triton_gen.2Dblockload
     // CHECK-NOT: llvm.select
     %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
@@ -156,6 +157,39 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x64xf16>
     // CHECK-NOT: triton_gen.2Dblockstore
     tt.descriptor_store %desc[%c0_i32, %arg5], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xf16>, tensor<64x64xf16, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @packed_store_redirect_shift
+  tt.func public @packed_store_redirect_shift(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg5: i32 {tt.divisibility = 32 : i32}) {
+    %cst = arith.constant dense<1.000000e+00> : tensor<64x64xf16, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x64xf16>
+    // CHECK-NOT: llvm.sdiv
+    // CHECK: triton_gen.2Dblockstore
+    // CHECK-NOT: llvm.sdiv
+    tt.descriptor_store %desc[%c0_i32, %arg5], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xf16>, tensor<64x64xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The packed x of a redirected access is a shift: a negative x is dropped,
+// COM: so rounding it differently from a signed division does not matter.
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @packed_load_redirect_shift
+  tt.func public @packed_load_redirect_shift(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32 {tt.divisibility = 64 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f8E4M3FN>, <16x64xf8E4M3FN>
+    // CHECK-NOT: llvm.sdiv
+    // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, {{.*}} transpose = true
+    // CHECK-NOT: llvm.sdiv
+    %load = tt.descriptor_load %desc[%c0_i32, %arg4] {ttig.block_io = "column_major"} : !tt.tensordesc<16x64xf8E4M3FN> -> tensor<64x16xf8E4M3FN, #dot1>
     tt.return
   }
 }

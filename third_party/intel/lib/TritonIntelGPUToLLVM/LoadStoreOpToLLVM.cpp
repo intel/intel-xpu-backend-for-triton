@@ -39,6 +39,16 @@ unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return index & ~freeVarMask;
 }
 
+/// The 2D block x coordinate, in packed elements, of element column \p offsetX.
+/// Signed, unless every negative \p offsetX is dropped (\p negXDropped): its
+/// quotient is then unused, and a shift is far cheaper for IGC.
+static Value packedOffsetX(TritonLLVMOpBuilder &b, Value offsetX,
+                           unsigned numPackedVals, bool negXDropped) {
+  if (negXDropped && llvm::isPowerOf2_32(numPackedVals))
+    return b.ashr(offsetX, b.i32_val(llvm::Log2_32(numPackedVals)));
+  return b.sdiv(offsetX, b.i32_val(numPackedVals));
+}
+
 /// Unpacked tensor descriptor fields: { shape[rank], stride[rank], base }.
 struct DescriptorFields {
   SmallVector<Value, 4> shapes;  // shapes[0..rank-1]
@@ -3528,9 +3538,8 @@ struct DescriptorStoreOpToBlockIOConversion
       auto newOp = TritonGEN::Matrix2DBlockStoreOp::create(
           rewriter, loc, addrElem, adjustedBaseWidth, adjustedBaseHeight, pitch,
           // offsetX was in terms of original elements. The 2D block IO requires
-          // offsetX to be in terms of packed elements. Signed: offsetX may be
-          // negative, and an unsigned quotient would be out of bounds.
-          b.sdiv(offsetX, b.i32_val(numPackedVals)), offsetY,
+          // offsetX to be in terms of packed elements.
+          packedOffsetX(b, offsetX, numPackedVals, redirectNegCol), offsetY,
           packedElemSizeInBits, tileWidth, tileHeight,
           /*v_blocks, only 1 supported*/ 1, storeVal);
 
@@ -4513,6 +4522,7 @@ struct SubTileAddress {
   Value adjustedBaseWidth;  // possibly widened base_width (bytes)
   Value adjustedBaseHeight; // base_height (used for HW OOB)
   Value pred;               // mask predicate, or null
+  bool negXDropped = false; // offsetX < 0 only where pred drops the sub-tile
 };
 
 /// Common lowering body for ttig.2d_block_load and ttig.2d_block_load_from_ptr.
@@ -4573,7 +4583,8 @@ static LogicalResult lowerBlockLoad2D(
         /*base_width*/ addr.adjustedBaseWidth,
         /*base_height*/ addr.adjustedBaseHeight,
         /*base_pitch*/ pitch,
-        /*x*/ b.sdiv(addr.offsetX, b.i32_val(cfg.numPackedVals)),
+        /*x*/
+        packedOffsetX(b, addr.offsetX, cfg.numPackedVals, addr.negXDropped),
         /*y*/ offsetY,
         /*elem_size_in_bits*/ cfg.packedElemSizeInBits,
         /*tile_width*/ cfg.tileWidth,
@@ -4863,7 +4874,8 @@ struct Subgroup2DBlockLoadOpConversion
                           inDescBounds(index, batchShapes[descDim]));
         }
       }
-      return {addrElem, offsetX, offsetY, baseWidth, baseHeight, pred};
+      return {addrElem,   offsetX, offsetY,       baseWidth,
+              baseHeight, pred,    redirectNegCol};
     };
 
     return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
