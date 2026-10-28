@@ -784,7 +784,7 @@ struct TritonMatrixDPASLowering
     SmallVector<Value> args{
         kDim, a, b, c,
         builder.i32_val(getMatrixMultiplyAccumulateOperandsVal(
-            cOrigTy.getElementType(), precisionA, precisionA))};
+            cOrigTy.getElementType(), precisionA, op.getPb()))};
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::NoModRef,
