@@ -100,13 +100,12 @@ def _dtype_size(dtype):
     return torch.tensor([], dtype=dtype).element_size()
 
 
-def is_enough_memory(x_val, safety_factor=0.80):
+def is_enough_memory(x_val, safety_factor=0.80, provider="triton"):
     """
-    Check whether all tensors created by the benchmark fit in GPU memory.
+    Estimate whether a provider fits within ``safety_factor`` of GPU memory.
 
-    Mirrors every allocation inside ``benchmark()`` and the expected peak memory
-    usage of ``ref_paged_attn()``. Returns *True* when the total fits within
-    ``safety_factor`` of the device's total memory.
+    PyTorch includes the reference's score tensors. Other providers include an
+    accuracy output when verification is enabled; kernel workspaces are not modeled.
     """
     q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size = x_val
     dtype = torch.bfloat16
@@ -136,7 +135,7 @@ def is_enough_memory(x_val, safety_factor=0.80):
 
     # quantised duplicates (when qdtype is set the originals are *kept*)
     q_quant_mem = 0
-    if qdtype is not None:
+    if provider.startswith("triton") and qdtype is not None:
         qd_bytes = _dtype_size(qdtype)
         # maybe_quantized_query, _key_cache, _value_cache
         q_quant_mem += total_query_tokens * q_heads * head_size * qd_bytes
@@ -144,7 +143,7 @@ def is_enough_memory(x_val, safety_factor=0.80):
         # k_descale, v_descale: (num_seqs, k_heads) float32
         q_quant_mem += 2 * num_seqs * k_heads * 4
 
-    triton_memory = (query_mem + kv_cache_mem + output_mem + cu_mem + kvl_mem + bt_mem + q_quant_mem)
+    provider_memory = (query_mem + kv_cache_mem + output_mem + cu_mem + kvl_mem + bt_mem + q_quant_mem)
 
     # --- peak memory usage in ref_paged_attn() ---
     ref_memory = 0
@@ -171,8 +170,8 @@ def is_enough_memory(x_val, safety_factor=0.80):
     ref_phase_memory = query_mem + kv_cache_mem + bt_mem + ref_memory
     # Double-counted: output and expected_output both live during assert_close.
     expected_output_mem = output_mem if BENCHMARKING_CONFIG["verify"] else 0
-    triton_phase_memory = triton_memory + expected_output_mem
-    total_memory = max(ref_phase_memory, triton_phase_memory)
+    provider_phase_memory = provider_memory + expected_output_mem
+    total_memory = ref_phase_memory if provider == "pytorch" else provider_phase_memory
 
     threshold = TOTAL_MEMORY_BYTES * safety_factor
     enough = total_memory < threshold
@@ -249,10 +248,7 @@ def _build_attention_configs(model_configs):
             if qdtype is not None and qdtype.itemsize < 2 and x_val[-1] < 32:
                 print("Skipping configuration due to incompatible q_dtype and block_size.")
                 continue
-            if is_enough_memory(x_val=x_val):
-                configs.append(x_val)
-            else:
-                print(f"Skipping configuration due to memory constraints: {x_val}")
+            configs.append(x_val)
     return configs
 
 
@@ -303,6 +299,11 @@ def get_unified_attention_benchmark(
                   provider):
         print("Config:", q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks,
               block_size, provider)
+        x_val = (q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size)
+        if not is_enough_memory(x_val, provider=provider):
+            print(f"Skipping {provider} due to estimated memory constraints: {x_val}")
+            return (float("nan"), ) * 3, (float("nan"), ) * 3, float("nan")
+        use_pytorch_reference = is_enough_memory(x_val, provider="pytorch")
         dtype = torch.bfloat16
         torch.manual_seed(20)
         n_warmup = 100
@@ -339,6 +340,26 @@ def get_unified_attention_benchmark(
                 soft_cap=soft_cap,
             )
 
+        if provider != 'pytorch':
+            cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(dim=0, dtype=torch.int32)
+            kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
+
+            def sycl_tla_fn():
+                return sycl_tla_attention(
+                    q=query,
+                    k=key_cache,
+                    v=value_cache,
+                    max_seqlen_q=max_query_len,
+                    cu_seqlens_q=cu_query_lens,
+                    max_seqlen_k=max_kv_len,
+                    seqused_k=kv_lens_tensor,
+                    softmax_scale=scale,
+                    causal=True,
+                    window_size=list(window_size),
+                    block_table=block_tables,
+                    softcap=soft_cap if soft_cap is not None else 0,
+                )
+
         if provider == 'pytorch':
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 torch_fn,
@@ -348,10 +369,12 @@ def get_unified_attention_benchmark(
             )
 
         elif provider.startswith('triton'):
-            expected_output = torch_fn() if BENCHMARKING_CONFIG["verify"] else None
-
-            cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(dim=0, dtype=torch.int32)
-            kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
+            reference_name = 'pytorch' if use_pytorch_reference else 'sycl-tla'
+            reference_fn = torch_fn if use_pytorch_reference else sycl_tla_fn
+            expected_output = None
+            if BENCHMARKING_CONFIG["verify"]:
+                print(f"Accuracy reference: {reference_name}")
+                expected_output = reference_fn()
             output = torch.empty_like(query)
 
             maybe_quantized_query = query
@@ -397,7 +420,7 @@ def get_unified_attention_benchmark(
             if qdtype is not None:
                 atol, rtol = 3 / 8 + 1e-6, 1.5e-1
             benchmark_suite.assert_close(triton_fn, lambda: expected_output, atol=atol, rtol=rtol,
-                                         err_msg='triton to torch')
+                                         err_msg=f'triton to {reference_name}')
             del expected_output
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
@@ -407,30 +430,14 @@ def get_unified_attention_benchmark(
                 quantiles=quantiles,
             )
         elif provider == 'sycl-tla':
-            expected_output = torch_fn() if BENCHMARKING_CONFIG["verify"] else None
-
-            cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(dim=0, dtype=torch.int32)
-            kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
-
-            def sycl_tla_fn():
-                return sycl_tla_attention(
-                    q=query,
-                    k=key_cache,
-                    v=value_cache,
-                    max_seqlen_q=max_query_len,
-                    cu_seqlens_q=cu_query_lens,
-                    max_seqlen_k=max_kv_len,
-                    seqused_k=kv_lens_tensor,
-                    softmax_scale=scale,
-                    causal=True,
-                    window_size=list(window_size),
-                    block_table=block_tables,
-                    softcap=soft_cap if soft_cap is not None else 0,
-                )
-
-            benchmark_suite.assert_close(sycl_tla_fn, lambda: expected_output, atol=2.5e-2, rtol=1e-2,
-                                         err_msg='sycl-tla to torch')
-            del expected_output
+            if BENCHMARKING_CONFIG["verify"]:
+                if use_pytorch_reference:
+                    expected_output = torch_fn()
+                    benchmark_suite.assert_close(sycl_tla_fn, lambda: expected_output, atol=2.5e-2, rtol=1e-2,
+                                                 err_msg='sycl-tla to torch')
+                    del expected_output
+                else:
+                    print("Skipping independent sycl-tla accuracy check: PyTorch reference exceeds memory budget")
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 sycl_tla_fn,
