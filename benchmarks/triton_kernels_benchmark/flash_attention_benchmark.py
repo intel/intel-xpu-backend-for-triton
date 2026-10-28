@@ -50,7 +50,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
             qk -= m_ij[:, None]
         else:
             m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
-            qk = tl.fma(qk, qk_scale, -m_ij[:, None])
+            qk = qk * qk_scale - m_ij[:, None]
         p = tl.math.exp2(qk)
         # -- compute correction factor
         alpha = tl.math.exp2(m_i - m_ij)
