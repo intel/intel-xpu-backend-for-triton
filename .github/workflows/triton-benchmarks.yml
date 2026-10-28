@@ -1,316 +1,63 @@
-name: Triton benchmarks
-run-name: ${{ inputs.run_name }}
+name: Issue 8258 no-A-prefetch sweep
+run-name: Issue 8258 - baseline versus no A prefetch - B580
 
 on:
   workflow_dispatch:
-    inputs:
-      runner_label:
-        description: Runner label, keep empty for default
-        type: string
-        default: ""
-      tag:
-        description: Tag for benchmark results
-        type: string
-        default: "test"
-      benchmarking_method:
-        description: The method used to obtain performance numbers
-        type: choice
-        options:
-          - ELAPSED_TIME
-          - UPSTREAM_PYTORCH_PROFILER
-          - PROTON_PROFILER
-        default: UPSTREAM_PYTORCH_PROFILER
-      verify:
-        description: Verify the benchmark results
-        type: boolean
-        default: true
-      run_name:
-        description: Run name
-        type: string
-        default: "Triton benchmarks"
-      n_runs:
-        description: Number of runs for each benchmark
-        type: number
-        default: 1
-      benchmarks:
-        description: JSON list of benchmark config keys to run. Leave empty to run all benchmarks.
-        type: string
-        default: ""
-      skip_benchmarks:
-        description: JSON list of benchmark config keys to skip
-        type: string
-        default: "[]"
-      env_vars:
-        description: Comma-separated KEY=VALUE pairs to export for benchmark steps
-        type: string
-        default: ""
 
-  # This workflow is also called from workflows triton-benchmarks-*.yml.
-  workflow_call:
-    inputs:
-      runner_label:
-        description: Runner label
-        type: string
-      skip_benchmarks:
-        description: JSON list of benchmark config keys to skip
-        type: string
-        default: "[]"
-      env_vars:
-        description: Comma-separated KEY=VALUE pairs to export for benchmark steps
-        type: string
-        default: ""
-
-# Cancels in-progress PR runs when the PR is updated. Manual runs are never cancelled.
-concurrency:
-  group: ${{ github.workflow }}-${{ inputs.runner_label }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'keep-going') && github.run_id || github.event.pull_request.number) || github.ref }}
-  cancel-in-progress: true
-
-permissions: read-all
-
-env:
-  PYTHON_VERSION: "3.12"
-  BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'UPSTREAM_PYTORCH_PROFILER' }}
-  # FIXME: When https://github.com/pytorch/pytorch/issues/189144 will be addressed
-  TORCHINDUCTOR_USE_EXPERIMENTAL_BENCHMARKER: '0'
-  VERIFY: ${{ (github.event_name == 'pull_request' || github.event_name == 'schedule' || inputs.verify) && '1' || '0' }}
-  TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
-  N_RUNS: ${{ inputs.n_runs || '1' }}
-  TRITON_AUTOTUNE_WARMUP_WORKERS: 8
-  # FIXME: Remove once CI has PTI 1.3 (expected in oneAPI 2026.3); older PTI hangs on PVC with PyTorch's event-less kernels
-  PTI_COLLECTION_MODE: ${{ startsWith(inputs.runner_label, 'max') && '0' || '' }}
+permissions:
+  contents: read
+  actions: read
 
 jobs:
-  build:
-    name: Triton benchmarks
-    runs-on:
-      - linux
-      - ${{ inputs.runner_label || 'b580' }}
-    timeout-minutes: 720
+  gemm:
+    runs-on: [linux, b580]
+    timeout-minutes: 180
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    env:
+      VERIFY: '1'
+      BENCHMARKING_METHOD: UPSTREAM_PYTORCH_PROFILER
+      TORCHINDUCTOR_USE_EXPERIMENTAL_BENCHMARKER: '0'
+      TRITON_PRINT_AUTOTUNING: '1'
+      MPLBACKEND: Agg
+      PYTHONUNBUFFERED: '1'
+      TRITON_XPU_GEN_NATIVE_CODE: '0'
+      TRITON_INTEL_ENABLE_IGC_SHADER_DUMP: '0'
     steps:
-      - name: Print inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
-
-      - name: Load additional environment variables
-        if: ${{ inputs.env_vars != '' }}
-        run: |
-          IFS=',' read -ra entries <<< "${{ inputs.env_vars }}"
-
-          for entry in "${entries[@]}"; do
-            # trim leading/trailing whitespace
-            entry="$(echo "$entry" | xargs)"
-
-            [[ -z "$entry" ]] && continue
-
-            if [[ "$entry" =~ ^[A-Z0-9_]+=.*$ ]]; then
-              echo "$entry" >> "$GITHUB_ENV"
-            else
-              echo "Invalid environment variable entry: $entry"
-              exit 1
-            fi
-          done
-
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        uses: ./.github/actions/setup-pyenv-python
+      - uses: ./.github/actions/setup-pyenv-python
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Identify Python version
-        run: |
-          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
-          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
-
-      - name: Install Python build dependencies
-        run: |
-          pip install cmake
-
-      - name: Install Python dependencies for TRITON_AUTOTUNE_WARMUP_WORKERS mode
-        run: |
-          pip install cloudpickle
-
-      - name: Setup PyTorch
-        uses: ./.github/actions/setup-pytorch
+          python-version: '3.12'
+      - name: Install build dependencies
+        run: pip install cmake cloudpickle
+      - uses: ./.github/actions/setup-pytorch
+      - uses: ./.github/actions/setup-triton
+      - uses: ./.github/actions/install-benchmarks
         with:
-          lts: ${{ inputs.runner_label == 'lts' }}
-
-      - name: Setup Triton
-        uses: ./.github/actions/setup-triton
-
-      - name: Create reports dir
-        run: |
-          mkdir reports
-          echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
-
-      - name: Install benchmarks
-        id: install
-        uses: ./.github/actions/install-benchmarks
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: '3.12'
           github-token: ${{ github.token }}
-
-      - name: Run Triton Softmax kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'softmax')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'softmax') }}
+      - name: CPU scope and transformation checks
         run: |
+          python scripts/issue_8258_no_a/check.py
+          python scripts/issue_8258_no_a/run.py --describe
+      - name: Record software and hardware
+        run: |
+          mkdir -p reports
           source ./scripts/capture-hw-details.sh
-          triton-benchmarks run softmax --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton Softmax kernel benchmark with Proton
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'softmax')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'softmax') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          BENCHMARKING_METHOD=PROTON_PROFILER triton-benchmarks run softmax
-
-      - name: Run Triton GEMM kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run gemm --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton GEMM kernel benchmark - with tensor of pointer
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-tensor-of-ptr')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-tensor-of-ptr') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run gemm-tensor-of-ptr --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton GEMM (A@B^t) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_bt')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_bt') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run gemm_bt --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton GEMM (A^t@B) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_at')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_at') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run gemm_at --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton GEMM (stream-k) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-streamk')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-streamk') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run gemm-streamk --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton GEMM (split-k) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-splitk')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-splitk') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run gemm-splitk --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton GEMM + PreOp (exp) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-preop-exp')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-preop-exp') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run gemm-preop-exp --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton GEMM + PostOp (Gelu) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-gelu')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-gelu') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run gemm-postop-gelu --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark bfloat16
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-addmatrix')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-addmatrix') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run gemm-postop-addmatrix --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark int8
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-postop-addmatrix-int8')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-postop-addmatrix-int8') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run gemm-postop-addmatrix-int8 --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton Fused GEMM SwiGLU kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'fused-gemm')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused-gemm') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run fused-gemm --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Torch Inductor grouped GEMM (2Dx3D) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-grouped')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-grouped') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          GROUPED_MM_TRITON_ONLY=1 TRITON_RELAX_PROFILING_CHECK=1 triton-benchmarks run gemm-grouped --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Torch Inductor grouped GEMM (3Dx3D) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-grouped-batched')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-grouped-batched') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          GROUPED_MM_TRITON_ONLY=1 TRITON_RELAX_PROFILING_CHECK=1 triton-benchmarks run gemm-grouped-batched --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton FA fwd kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run flash_attention --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton FA FP8 fwd kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_fp8')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_fp8') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run flash_attention_fp8 --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton FA bwd kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_bwd')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_bwd') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run flash_attention_bwd --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton batched variable-length FA fwd kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'batched-flash-attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'batched-flash-attention') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          TRITON_PRINT_AUTOTUNING=1 triton-benchmarks run batched-flash-attention --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton FlexAttention Causal Mask fwd kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex-attention-causal')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex-attention-causal') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run flex-attention-causal --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton FlexAttention (batch_size=4) Causal Mask fwd kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex-attention-causal-batch4')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex-attention-causal-batch4') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run flex-attention-causal-batch4 --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton FlexAttention Causal Mask bwd kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex-attention-causal-bwd')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex-attention-causal-bwd') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run flex-attention-causal-bwd --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton FlexAttention Custom Masks fwd kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex-attention-custom-masks')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex-attention-custom-masks') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run flex-attention-custom-masks --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Prefix Sums kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'prefix-sums')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'prefix-sums') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run prefix-sums --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run micro benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'micro_benchmarks')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'micro_benchmarks') }}
-        run: |
-          cd benchmarks/micro_benchmarks
-          python run_benchmarks.py --reports $REPORTS
-
-      - name: Upload benchmark reports
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v7
+          git rev-parse HEAD > reports/commit.txt
+          pip freeze > reports/packages.txt
+          dpkg-query -W > reports/system-packages.txt
+          ocloc --version > reports/ocloc.txt 2>&1
+      - name: Run only baseline versus no-A-prefetch manifest
+        env:
+          TRITON_CACHE_DIR: ${{ runner.temp }}/gemm-8258-no-a-${{ github.run_id }}
+        run: python scripts/issue_8258_no_a/run.py --reports reports
+      - name: Upload complete or partial evidence
+        if: always()
+        uses: actions/upload-artifact@v6
         with:
-          name: benchmark-reports
-          path: reports
+          name: gemm-8258-no-a-${{ github.run_id }}
+          path: reports/
