@@ -1,30 +1,27 @@
 diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batched_moe.py
-index 6b2783b0df..c4844ae937 100644
+index 6b2783b0df..85fd716f96 100644
 --- a/tests/kernels/moe/test_batched_moe.py
 +++ b/tests/kernels/moe/test_batched_moe.py
-@@ -476,13 +476,14 @@ def _run_td(A, B, num_expert_tokens, use_td: bool, swap: bool | None = None):
+@@ -476,11 +476,15 @@ def _run_td(A, B, num_expert_tokens, use_td: bool, swap: bool | None = None):
      max_tokens = A.shape[1]
      K = A.shape[2]
      N = B.shape[1]
 -    BM = BN = BK = 64
--    if swap is None:
--        swap = current_platform.is_xpu()
+     if swap is None:
+         swap = current_platform.is_xpu()
 -    num_tiles = triton.cdiv(max_tokens, BM) * triton.cdiv(N, BN)
 -    grid = (num_tiles, E) if swap else (E, num_tiles)
--    kernel = batched_triton_kernel_swapped if swap else batched_triton_kernel
--    kernel[grid](
 +
 +    def grid(meta):
-+        return (
-+            triton.cdiv(max_tokens, meta["BLOCK_M"]) * triton.cdiv(N, meta["BLOCK_N"]),
-+            E,
++        num_tiles = triton.cdiv(max_tokens, meta["BLOCK_M"]) * triton.cdiv(
++            N, meta["BLOCK_N"]
 +        )
++        return (num_tiles, E) if swap else (E, num_tiles)
 +
-+    batched_triton_kernel_swapped[grid](
+     kernel = batched_triton_kernel_swapped if swap else batched_triton_kernel
+     kernel[grid](
          A,
-         B,
-         out,
-@@ -514,9 +515,6 @@ def _run_td(A, B, num_expert_tokens, use_td: bool, swap: bool | None = None):
+@@ -514,9 +518,6 @@ def _run_td(A, B, num_expert_tokens, use_td: bool, swap: bool | None = None):
          False,
          False,
          False,
