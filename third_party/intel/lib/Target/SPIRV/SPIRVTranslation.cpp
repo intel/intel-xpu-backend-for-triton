@@ -120,9 +120,14 @@ public:
 /// `SPV_EXT_long_vector` (when \p allowLongVector) or the older
 /// `SPV_INTEL_vector_compute`. The former is not known to every compiler that
 /// can consume the module (e.g. an `ocloc` older than the installed driver), so
-/// it is a separate switch rather than being implied by \p isLTS.
+/// it is a separate switch rather than being implied by \p isLTS. Likewise,
+/// `SPV_INTEL_maximum_registers` is only added when \p allowMaximumRegisters,
+/// rather than being implied by \p isLTS -- whether the caller requested it
+/// at all (see `compiler.py`'s `options.allow_maximum_registers`) already
+/// accounts for a rolling driver or `ocloc` that doesn't understand it.
 static llvm::SmallVector<SPIRV::ExtensionID>
-getAllowedExtensions(bool isLTS, bool allowLongVector) {
+getAllowedExtensions(bool isLTS, bool allowLongVector,
+                     bool allowMaximumRegisters) {
   llvm::SmallVector<SPIRV::ExtensionID> AllowedExtensions{
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float16_add,
@@ -149,7 +154,6 @@ getAllowedExtensions(bool isLTS, bool allowLongVector) {
          SPIRV::ExtensionID::SPV_INTEL_16bit_atomics,
          SPIRV::ExtensionID::SPV_INTEL_bfloat16_arithmetic,
          SPIRV::ExtensionID::SPV_INTEL_fp_conversions,
-         SPIRV::ExtensionID::SPV_INTEL_maximum_registers,
          SPIRV::ExtensionID::SPV_INTEL_predicated_io,
          SPIRV::ExtensionID::SPV_INTEL_sigmoid,
          SPIRV::ExtensionID::
@@ -165,10 +169,15 @@ getAllowedExtensions(bool isLTS, bool allowLongVector) {
       allowLongVector ? SPIRV::ExtensionID::SPV_EXT_long_vector
                       : SPIRV::ExtensionID::SPV_INTEL_vector_compute);
 
+  if (allowMaximumRegisters)
+    AllowedExtensions.push_back(
+        SPIRV::ExtensionID::SPV_INTEL_maximum_registers);
+
   return AllowedExtensions;
 }
 
-static SPIRV::TranslatorOpts getSPIRVOpts(bool isLTS, bool allowLongVector) {
+static SPIRV::TranslatorOpts getSPIRVOpts(bool isLTS, bool allowLongVector,
+                                          bool allowMaximumRegisters) {
   SPIRV::TranslatorOpts SPIRVOpts{SPIRV::VersionNumber::SPIRV_1_4};
 
   SPIRVOpts.setMemToRegEnabled(true);
@@ -184,13 +193,15 @@ static SPIRV::TranslatorOpts getSPIRVOpts(bool isLTS, bool allowLongVector) {
     SPIRVOpts.setAllowExtraDIExpressionsEnabled(true);
   }
 
-  for (SPIRV::ExtensionID Ext : getAllowedExtensions(isLTS, allowLongVector))
+  for (SPIRV::ExtensionID Ext :
+       getAllowedExtensions(isLTS, allowLongVector, allowMaximumRegisters))
     SPIRVOpts.setAllowedToUseExtension(Ext, true);
   return SPIRVOpts;
 }
 
 std::string translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS,
-                                   bool allowLongVector) {
+                                   bool allowLongVector,
+                                   bool allowMaximumRegisters) {
   llvm::SmallVector<char, 0> buffer;
 
   // verify and store llvm
@@ -210,7 +221,8 @@ std::string translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS,
   std::ostream OS(&StreamBuf);
   std::string Err;
 
-  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOpts(isLTS, allowLongVector);
+  SPIRV::TranslatorOpts SPIRVOpts =
+      getSPIRVOpts(isLTS, allowLongVector, allowMaximumRegisters);
 
 #if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
   int SpvTranslateMode = 0;

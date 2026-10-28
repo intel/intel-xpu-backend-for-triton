@@ -18,6 +18,8 @@
 
 #include <Python.h>
 
+#include "sycl_functions.h"
+
 // Cached device lists separated by platform/backend and their Intel device IDs
 // OpenCL devices
 static std::vector<sycl::device> g_opencl_devices;
@@ -29,6 +31,79 @@ static std::vector<int> g_levelzero_device_ids;
 
 static bool g_devices_initialized = false;
 static bool has_opencl = false;
+
+// Raw Level Zero state for `probe_spirv_module()`, enumerated independently
+// of `g_levelzero_devices` above and *without* going through SYCL: plain
+// `zeInit`/`zeDriverGet`/`zeDeviceGet`, not `sycl::platform::get_platforms()`.
+// Probing a capability needs no SYCL device/context/queue, only a L0 device
+// and a L0 context to pass to `zeModuleCreate` (via `create_module()`,
+// itself pure L0), so it should not pay for SYCL's backend/plugin init, nor
+// be gated by `initializeDevicesIfNeeded()`'s requirement that OpenCL or
+// `ocloc` be present (that requirement exists only for `check_extension()`'s
+// query path).
+static std::vector<ze_device_handle_t> g_l0_probe_devices;
+static std::vector<ze_context_handle_t>
+    g_l0_probe_contexts; // one per device's driver
+static std::vector<int> g_l0_probe_device_ids;
+static bool g_l0_probe_devices_initialized = false;
+
+static void initializeLevelZeroDevicesForProbingIfNeeded() {
+  if (g_l0_probe_devices_initialized)
+    return;
+  g_l0_probe_devices_initialized = true;
+
+  // Matches the flag `driver.c`'s `init_devices()` and `proton_utils.cpp`
+  // already call `zeInit` with; a redundant call here (before or after
+  // either of those) is explicitly documented as safe -- see
+  // https://github.com/oneapi-src/level-zero/ -- `zeInit` is multi-call- and
+  // multi-library-safe, and only ever initializes each driver once per
+  // process.
+  if (zeInit(ZE_INIT_FLAG_GPU_ONLY) != ZE_RESULT_SUCCESS)
+    return;
+
+  uint32_t driverCount = 0;
+  if (zeDriverGet(&driverCount, nullptr) != ZE_RESULT_SUCCESS ||
+      driverCount == 0)
+    return;
+  std::vector<ze_driver_handle_t> drivers(driverCount);
+  if (zeDriverGet(&driverCount, drivers.data()) != ZE_RESULT_SUCCESS)
+    return;
+
+  for (ze_driver_handle_t driver : drivers) {
+    uint32_t deviceCount = 0;
+    if (zeDeviceGet(driver, &deviceCount, nullptr) != ZE_RESULT_SUCCESS ||
+        deviceCount == 0)
+      continue;
+    std::vector<ze_device_handle_t> devices(deviceCount);
+    if (zeDeviceGet(driver, &deviceCount, devices.data()) != ZE_RESULT_SUCCESS)
+      continue;
+
+    // One context per driver, shared by every device behind it; never
+    // destroyed, same process-lifetime convention as the device/context
+    // caches above and in driver.c.
+    ze_context_desc_t context_desc = {};
+    context_desc.stype = ZE_STRUCTURE_TYPE_CONTEXT_DESC;
+    ze_context_handle_t context = nullptr;
+    if (zeContextCreate(driver, &context_desc, &context) != ZE_RESULT_SUCCESS)
+      continue;
+
+    for (ze_device_handle_t device : devices) {
+      ze_device_properties_t props = {};
+      props.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
+      if (zeDeviceGetProperties(device, &props) != ZE_RESULT_SUCCESS)
+        continue;
+      if (props.type != ZE_DEVICE_TYPE_GPU)
+        continue;
+
+      g_l0_probe_devices.push_back(device);
+      g_l0_probe_contexts.push_back(context);
+      // Matches the device_id SYCL callers already have, from
+      // sycl::ext::intel::info::device::device_id -- the Level Zero PCI
+      // device ID surfaced directly here, with no SYCL layer in between.
+      g_l0_probe_device_ids.push_back(static_cast<int>(props.deviceId));
+    }
+  }
+}
 
 bool has_ocloc_in_path() {
   const char *path_env = std::getenv("PATH");
@@ -196,5 +271,41 @@ extern "C" EXPORT_FUNC PyObject *get_device_id(int device_idx) {
   } catch (const std::exception &e) {
     PyErr_SetString(PyExc_RuntimeError, e.what());
     return NULL;
+  }
+}
+
+// Ground-truth probe for a SPIR-V capability/extension: hands `spirv` (the
+// smallest module that only declares the capability under test) to the
+// driver's own JIT via `zeModuleCreate`, the same call every real kernel
+// goes through. Returns True/False once a matching Level Zero device is
+// found, None if it isn't (mirrors `check_extension()`'s convention).
+extern "C" EXPORT_FUNC PyObject *probe_spirv_module(int device_id,
+                                                    const unsigned char *spirv,
+                                                    size_t spirv_size) {
+  try {
+    initializeLevelZeroDevicesForProbingIfNeeded();
+
+    int device_idx = -1;
+    for (size_t i = 0; i < g_l0_probe_device_ids.size(); ++i) {
+      if (g_l0_probe_device_ids[i] == device_id) {
+        device_idx = static_cast<int>(i);
+        break;
+      }
+    }
+    if (device_idx == -1) {
+      Py_RETURN_NONE;
+    }
+
+    auto [module, error_no] = create_module(
+        g_l0_probe_contexts[device_idx], g_l0_probe_devices[device_idx],
+        const_cast<unsigned char *>(spirv), spirv_size, "");
+    if (error_no == ZE_RESULT_SUCCESS) {
+      zeModuleDestroy(module);
+      Py_RETURN_TRUE;
+    }
+    Py_RETURN_FALSE;
+
+  } catch (const std::exception &e) {
+    Py_RETURN_NONE;
   }
 }

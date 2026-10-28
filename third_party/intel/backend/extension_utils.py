@@ -7,9 +7,28 @@ a full PyTorch/SYCL runtime initialization.
 from triton.backends.intel.driver import compile_module_from_src
 
 import functools
+import multiprocessing
 import os
+import queue
 from pathlib import Path
 from triton import knobs
+
+# Driver rejection of an unsupported SPIR-V capability/extension does not
+# always surface as a clean `ZE_RESULT_ERROR_*` from `zeModuleCreate`: on a
+# real rolling driver, probing `SPV_INTEL_maximum_registers` (unsupported
+# there despite `is_lts` being false) instead aborts the whole process. The
+# probe therefore runs in its own `spawn`ed child -- not `fork`, which would
+# hand the child a copy of whatever Level Zero state this process already
+# initialized -- so an abort only costs that child.
+_PROBE_TIMEOUT_SECONDS = 60
+
+
+def _has_spirv_capability_worker(device_id: int, probe_spirv: bytes, result_queue: multiprocessing.Queue) -> None:
+    try:
+        extension_checker = _get_extension_checker()
+        result_queue.put(extension_checker.probe_spirv_module(device_id, probe_spirv))
+    except Exception:
+        result_queue.put(None)
 
 
 @functools.lru_cache(maxsize=1)
@@ -59,6 +78,48 @@ def has_device_extension(device_id: int, extension_name: str) -> bool:
     # This requires minimal SYCL initialization (no PyTorch dependency)
     extension_checker = _get_extension_checker()
     return extension_checker.check_extension(device_id, extension_name.encode())
+
+
+@functools.lru_cache(maxsize=None)
+def has_spirv_capability(device_id: int, probe_spirv: bytes) -> bool | None:
+    """
+    Ground-truth probe for a SPIR-V capability/extension, via the driver's own JIT.
+
+    `has_device_extension` answers "does the driver *advertise* this `cl_*`
+    extension name", which lags behind what the driver's compiler can actually
+    build on a rolling driver (a capability can land before it is advertised).
+    This instead feeds `probe_spirv` to `zeModuleCreate` -- the same call
+    `load_binary` makes for every real kernel -- and reports whether the
+    driver's JIT accepted it. `probe_spirv` should be the smallest SPIR-V
+    module that only declares the capability/extension under test, so a
+    rejection is unambiguous.
+
+    Args:
+        device_id: Device ID to query (from sycl::ext::intel::info::device::device_id)
+        probe_spirv: a minimal SPIR-V module declaring only the capability/extension to test.
+
+    Returns:
+        True/False if the driver's JIT accepted/rejected the probe module, or
+        None if the specific GPU instance (as a Level Zero device) is not found.
+        A crashed or hung probe process is reported as False, not None: an
+        abort is itself proof the capability is unsafe to request, and `None`
+        would fall back to the `is_lts` guess that the probe exists to check.
+    """
+    ctx = multiprocessing.get_context('spawn')
+    result_queue = ctx.Queue()
+    proc = ctx.Process(target=_has_spirv_capability_worker, args=(device_id, probe_spirv, result_queue))
+    proc.start()
+    proc.join(_PROBE_TIMEOUT_SECONDS)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join()
+        return False
+    if proc.exitcode != 0:
+        return False
+    try:
+        return result_queue.get_nowait()
+    except queue.Empty:
+        return False
 
 
 def query_device_extensions(device_id: int):

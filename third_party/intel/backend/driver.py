@@ -364,12 +364,17 @@ class ExtensionUtils:
         self.shared_library.check_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
         self.shared_library.get_device_id.restype = ctypes.py_object
         self.shared_library.get_device_id.argtypes = (ctypes.c_int, )
+        self.shared_library.probe_spirv_module.restype = ctypes.py_object
+        self.shared_library.probe_spirv_module.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_size_t)
 
     def check_extension(self, device_id: int, extension: bytes) -> bool:
         return self.shared_library.check_extension(device_id, extension)
 
     def get_device_id(self, device_idx: int) -> int:
         return self.shared_library.get_device_id(device_idx)
+
+    def probe_spirv_module(self, device_id: int, spirv: bytes) -> bool | None:
+        return self.shared_library.probe_spirv_module(device_id, spirv, len(spirv))
 
     if os.name != 'nt':
 

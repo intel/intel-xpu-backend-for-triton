@@ -107,13 +107,16 @@ def test_explicit_grf_mode_uses_maximum_registers(device, grf_mode, generate_nat
     x = to_triton(numpy_random(SIZE, dtype_str="int32"), device=device, dst_type="int32")
     k = kernel[(1, )](x, SIZE=SIZE, num_warps=4, grf_mode=grf_mode, generate_native_code=generate_native_code)
 
-    if XPUBackend.is_lts(k.metadata.target.arch.get("driver_version")):
-        # The LTS translator does not enable SPV_INTEL_maximum_registers.
+    if not k.metadata.allow_maximum_registers:
+        # Either an LTS translator (which never enables the extension) or a
+        # rolling driver whose JIT rejected the probe module (see
+        # has_spirv_capability in extension_utils.py) -- either way the
+        # kernel falls back to the IGC build flag instead.
         assert "!MaximumRegisters" not in k.asm["llir"]
         assert "GRF" in k.metadata.build_flags
         return
 
-    # Off LTS the GRF mode is requested by the kernel itself, not by an IGC build flag.
+    # The GRF mode is requested by the kernel itself, not by an IGC build flag.
     assert "!MaximumRegisters" in k.asm["llir"]
     assert "GRF" not in k.metadata.build_flags
     if grf_mode != "auto":
