@@ -32,7 +32,7 @@ index 6b2783b0df..85fd716f96 100644
      )
      return out
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-index 930f7d38b9..e90129b922 100644
+index 930f7d38b9..26201bc110 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 @@ -175,7 +175,7 @@ def moe_mmk(
@@ -184,22 +184,23 @@ index 930f7d38b9..e90129b922 100644
      # Blockwise quantization data
      group_n: tl.constexpr,
      group_k: tl.constexpr,
-@@ -607,9 +678,11 @@ def invoke_moe_batched_triton_kernel(
- 
+@@ -608,8 +679,13 @@ def invoke_moe_batched_triton_kernel(
      # Consecutive programs share an expert's weight tile, which is faster on XPU.
      swap_grid = current_platform.is_xpu()
--    num_experts = expert_num_tokens.size(0)
+     num_experts = expert_num_tokens.size(0)
 -    num_tiles = triton.cdiv(max_num_tokens, BLOCK_M) * triton.cdiv(B.size(1), BLOCK_N)
 -    grid = (num_tiles, num_experts) if swap_grid else (num_experts, num_tiles)
-+    grid = lambda meta: (
-+        triton.cdiv(max_num_tokens, meta["BLOCK_M"])
-+        * triton.cdiv(B.size(1), meta["BLOCK_N"]),
-+        expert_num_tokens.size(0),
-+    )
++
++    def grid(meta):
++        num_tiles = triton.cdiv(max_num_tokens, meta["BLOCK_M"]) * triton.cdiv(
++            B.size(1), meta["BLOCK_N"]
++        )
++        return (num_tiles, num_experts) if swap_grid else (num_experts, num_tiles)
++
  
      A_scale = normalize_batched_scales_shape(A_scale, expert_num_tokens.shape[0])
  
-@@ -698,10 +771,6 @@ def invoke_moe_batched_triton_kernel(
+@@ -698,10 +774,6 @@ def invoke_moe_batched_triton_kernel(
          use_fp8_w8a8,
          use_int8_w8a16,
          per_act_token_quant,
