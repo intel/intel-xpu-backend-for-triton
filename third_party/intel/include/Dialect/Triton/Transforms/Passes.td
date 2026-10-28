@@ -214,9 +214,18 @@ def TritonIntelGPUPrepareIfCombining
     : Pass<"triton-intel-prepare-if-combining", "mlir::triton::FuncOp"> {
   let summary = "Move ops between scf.if pairs to enable combining";
   let description = [{
-    Moves pure operations from between scf.if pairs that share the same
-    condition, enabling canonicalization to combine them into a single scf.if.
+    Moves operations from between scf.if pairs that share the same condition
+    (the pass first runs CSE on the whole function, so guards computed by
+    identical expressions are the same value), enabling canonicalization to
+    combine them into a single scf.if.
+    Pure operations that do not depend on the first if are moved above it; the
+    others are copied into both of its branches when the condition is uniform
+    across the program. An operation containing an scf.if is never copied.
   }];
+  let options = [
+    Option<"maxClonedOps", "max-cloned-ops", "unsigned", /*default*/"32",
+           "maximum source operations cloned per if pair, including nested ones">,
+  ];
   let dependentDialects = ["mlir::scf::SCFDialect"];
 }
 
