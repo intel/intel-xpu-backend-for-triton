@@ -316,8 +316,7 @@ private:
          assumption +
          " to prove the dividend non-negative, in order to optimize the memory "
          "access pattern. Restructure the kernel so the dividend is "
-         "non-negative, or set TRITON_INTEL_SPECULATE_SIGNED_DIV_REM=0 to "
-         "compile without this assumption (slower).")
+         "non-negative.")
             .str());
   }
 };
