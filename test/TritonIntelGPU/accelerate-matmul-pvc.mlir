@@ -698,8 +698,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 // -----
 
 // COM: Only the producer is too wide: both stay on M.
-// CHECK: #ttig.dpas<{{.*}}warpsPerCTA = [4, 1]{{.*}}>
-// CHECK-NOT: warpsPerCTA = [1, 4]
+// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{{.*}}warpsPerCTA = [4, 1]{{.*}}>
+// CHECK-NOT: #ttig.dpas
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32, "ttig.support_subgroup_matrix_multiply_accumulate"} {
@@ -710,12 +710,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     %arg2: tensor<32x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>>) -> tensor<1x64xf32, #blocked1> {
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<1x32xf32, #blocked>
     %cst_1 = arith.constant dense<0.000000e+00> : tensor<1x64xf32, #blocked1>
-    // CHECK: tt.dot {{.*}} -> tensor<1x32xf32, #mma{{[0-9]*}}>
+    // CHECK: tt.dot {{.*}} -> tensor<1x32xf32, #[[$DPAS]]>
     %d = tt.dot %arg0, %arg1, %cst_0 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
       tensor<1x256xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<256x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<1x32xf32, #blocked>
     %t = arith.truncf %d : tensor<1x32xf32, #blocked> to tensor<1x32xbf16, #blocked>
     %c = ttg.convert_layout %t : tensor<1x32xbf16, #blocked> -> tensor<1x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>>
-    // CHECK: tt.dot {{.*}} -> tensor<1x64xf32, #mma{{[0-9]*}}>
+    // CHECK: tt.dot {{.*}} -> tensor<1x64xf32, #[[$DPAS]]>
     %r = tt.dot %c, %arg2, %cst_1 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
       tensor<1x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>> * tensor<32x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>> -> tensor<1x64xf32, #blocked1>
     tt.return %r : tensor<1x64xf32, #blocked1>
