@@ -5,6 +5,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Verifier.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
@@ -371,19 +372,20 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
-    // Set up range analysis
-    DataFlowSolver solver;
+    // Set up range analysis. The solver needs DeadCodeAnalysis loaded, or every
+    // block is considered dead and no range is ever computed.
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     DominanceInfo domInfo(moduleOp);
-    solver.load<tt::intel::IntegerRangeAnalysis>(moduleOp, domInfo);
+    solver->load<tt::intel::IntegerRangeAnalysis>(moduleOp, domInfo);
 
-    if (failed(solver.initializeAndRun(moduleOp))) {
+    if (failed(solver->initializeAndRun(moduleOp))) {
       LLVM_DEBUG(llvm::dbgs()
                  << "Range analysis failed, proceeding without it\n");
       // Continue without range analysis - fall back to pattern matching only
       SignedArithmeticSimplifier simplifier(nullptr);
       simplifier.run(moduleOp);
     } else {
-      SignedArithmeticSimplifier simplifier(&solver);
+      SignedArithmeticSimplifier simplifier(solver.get());
       simplifier.run(moduleOp);
     }
 
