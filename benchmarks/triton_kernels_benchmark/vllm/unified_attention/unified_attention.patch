@@ -137,7 +137,7 @@ index d914e574f2..17f7635f02 100644
 +
 +    valid_configs = []
 +    for config in configs:
-+        if not all_args["IS_XPU"] and config.kwargs.get("grf_mode") == "256":
++        if not current_platform.is_xpu() and config.kwargs.get("grf_mode") == "256":
 +            continue
 +        block_q = derive_block_q(
 +            config.kwargs["BLOCK_M"], num_queries_per_kv
