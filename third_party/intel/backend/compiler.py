@@ -542,7 +542,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.passes.ttgpuir.add_canonicalize_pointers(pm, True)
             passes.common.add_canonicalizer(pm)
 
-        intel.passes.ttgpuir.add_accelerate_matmul(pm)
+        intel.passes.ttgpuir.add_accelerate_matmul(pm, opt.grf_mode)
         intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
