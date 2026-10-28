@@ -342,11 +342,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # the same bad value, with the worst combination (a permissive
         # 512-byte pressure budget paired with a 256-GRF hardware ceiling)
         # silently reproducing a register-pressure undercount.
-        # Validate here, once, so every downstream consumer agrees.
+        # Validate here, once, so every downstream consumer agrees, against
+        # `get_grf_modes` rather than a fixed list so an override cannot name a
+        # mode an explicit `grf_mode` request would reject as unknown.
         dev_prop['max_grf_mode'] = tgt_prop.get('max_grf_mode', get_max_grf_mode(tgt_prop))
-        if dev_prop['max_grf_mode'] not in ("128", "256", "512"):
-            raise AssertionError(
-                f"invalid max_grf_mode override {dev_prop['max_grf_mode']!r}: must be one of '128', '256', '512'")
+        if dev_prop['max_grf_mode'] not in (grf_modes := get_grf_modes(tgt_prop)):
+            raise AssertionError(f"invalid max_grf_mode override {dev_prop['max_grf_mode']!r}: must be one of "
+                                 f"{grf_modes} on {tgt_prop.get('arch')}")
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
