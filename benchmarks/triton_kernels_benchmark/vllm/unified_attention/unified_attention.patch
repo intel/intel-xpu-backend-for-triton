@@ -61,7 +61,7 @@ index 7804b01317..0ac1271db1 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 4d73e49e91..5508a4dcbd 100644
+index 4d73e49e91..d53c8abce4 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -157,14 +157,13 @@ index 4d73e49e91..5508a4dcbd 100644
  @triton.jit
  def kernel_unified_attention(
      # Output destination for the 2D path.  In 3D mode per-segment partials
-@@ -289,7 +364,14 @@ def kernel_unified_attention(
+@@ -289,7 +364,13 @@ def kernel_unified_attention(
      # instead of letting them override it. Default False preserves the
      # original (causal AND SW) OR mm_prefix behavior for all other models.
      MM_PREFIX_CLAMP_SW: tl.constexpr = False,
-+    IS_XPU: tl.constexpr = False,
-+    Q_LEN_BUCKET: tl.constexpr = 0,
-+    KV_LEN_BUCKET: tl.constexpr = 0,
-+    QUERY_WORK: tl.constexpr = 0,
++    Q_LEN_BUCKET: int = 0,
++    KV_LEN_BUCKET: int = 0,
++    QUERY_WORK: int = 0,
  ):
 +    tl.static_assert(BLOCK_SIZE % TILE_SIZE == 0, "BLOCK_SIZE must be multiple of TILE_SIZE")
 +    tl.static_assert(BLOCK_SIZE >= TILE_SIZE, "BLOCK_SIZE must be >= TILE_SIZE")
@@ -172,7 +171,7 @@ index 4d73e49e91..5508a4dcbd 100644
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
          KV_QUANT_MODE <= 3
-@@ -539,12 +621,12 @@ def kernel_unified_attention(
+@@ -539,12 +620,12 @@ def kernel_unified_attention(
  
          # S : (BLOCK_M, TILE_SIZE)
          S = tl.zeros(shape=(BLOCK_M, TILE_SIZE), dtype=tl.float32)
@@ -189,7 +188,7 @@ index 4d73e49e91..5508a4dcbd 100644
  
          if USE_SOFTCAP:
              S = apply_softcap(S, softcap)
-@@ -566,27 +648,14 @@ def kernel_unified_attention(
+@@ -566,27 +647,14 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -221,7 +220,7 @@ index 4d73e49e91..5508a4dcbd 100644
  
      # ---- Epilogue ---------------------------------------------------------
      if IS_3D:
-@@ -704,7 +773,6 @@ def reduce_segments(
+@@ -704,7 +772,6 @@ def reduce_segments(
      HEAD_SIZE: tl.constexpr,  # int, must be power of 2
      HEAD_SIZE_PADDED: tl.constexpr,  # int, must be power of 2
      query_start_len_ptr,  # [num_seqs+1]
@@ -229,7 +228,7 @@ index 4d73e49e91..5508a4dcbd 100644
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,  # int
      USE_FP8: tl.constexpr,  # bool
      FP8_MIN: tl.constexpr = float8_info.min,
-@@ -714,7 +782,7 @@ def reduce_segments(
+@@ -714,7 +781,7 @@ def reduce_segments(
      query_head_idx = tl.program_id(1)
  
      seq_idx = find_seq_idx(
@@ -238,7 +237,7 @@ index 4d73e49e91..5508a4dcbd 100644
      )
  
      # sequence len for this particular sequence
-@@ -934,15 +1002,6 @@ def unified_attention(
+@@ -934,15 +1001,6 @@ def unified_attention(
      num_queries_per_kv = num_query_heads // num_kv_heads
      head_size = q.shape[2]
  
@@ -254,7 +253,7 @@ index 4d73e49e91..5508a4dcbd 100644
      # head_size 256 with many query rows per sequence (e.g. diffusion-gemma
      # bidirectional canvas passes) is prefill-shaped, but the decode-oriented
      # defaults (BLOCK_Q=8, TILE=32, 4 warps) under-tile it. A wider KV tile +
-@@ -953,23 +1012,6 @@ def unified_attention(
+@@ -953,23 +1011,6 @@ def unified_attention(
          and num_queries_per_kv <= 16
          and current_platform.is_device_capability_family(100)
      )
@@ -278,7 +277,7 @@ index 4d73e49e91..5508a4dcbd 100644
      sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
  
      # Compute chunked block size from sliding window if needed.
-@@ -980,12 +1022,16 @@ def unified_attention(
+@@ -980,12 +1021,16 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -301,7 +300,7 @@ index 4d73e49e91..5508a4dcbd 100644
  
      # Wider KV tile for the tuned large-head path (see above). Only the 2D
      # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
-@@ -1052,6 +1098,8 @@ def unified_attention(
+@@ -1052,6 +1097,8 @@ def unified_attention(
          or max_seqlen_q > 1
          or num_seqs > seq_threshold_3D
          or is_batch_invariant
@@ -310,7 +309,7 @@ index 4d73e49e91..5508a4dcbd 100644
      )
  
      # The kernel signature is the same for 2D and 3D — only the launch
-@@ -1078,20 +1126,30 @@ def unified_attention(
+@@ -1078,20 +1125,30 @@ def unified_attention(
      segm_expsum_ptr = softmax_segm_expsum if use_3d else None
      num_segments = num_par_softmax_segments if use_3d else 1
  
@@ -350,7 +349,7 @@ index 4d73e49e91..5508a4dcbd 100644
      kernel_unified_attention[grid](
          output_ptr=out,
          segm_output_ptr=segm_output_ptr,
-@@ -1155,9 +1213,7 @@ def unified_attention(
+@@ -1155,9 +1212,7 @@ def unified_attention(
          stride_vs_slot=vs_slot,
          stride_vs_head=vs_head,
          query_start_len_ptr=cu_seqlens_q,
@@ -360,11 +359,10 @@ index 4d73e49e91..5508a4dcbd 100644
          NUM_SEGMENTS_PER_SEQ=num_segments,
          USE_FP8=output_scale is not None,
          IS_3D=use_3d,
-@@ -1167,8 +1223,11 @@ def unified_attention(
+@@ -1167,8 +1222,10 @@ def unified_attention(
          CHUNK_SIZE=chunk_size,
          USE_TD=use_td,
          USE_TD_QO=use_td_qo,
-+        IS_XPU=(q.device.type == "xpu"),
 +        Q_LEN_BUCKET=q_len_bucket(max_seqlen_q),
 +        KV_LEN_BUCKET=kv_len_bucket(max_seqlen_k),
 +        QUERY_WORK=q.shape[0] * num_query_heads,
@@ -373,7 +371,7 @@ index 4d73e49e91..5508a4dcbd 100644
      )
  
      if use_3d:
-@@ -1188,7 +1247,6 @@ def unified_attention(
+@@ -1188,7 +1245,6 @@ def unified_attention(
              HEAD_SIZE=head_size,
              HEAD_SIZE_PADDED=head_size_padded,
              query_start_len_ptr=cu_seqlens_q,
