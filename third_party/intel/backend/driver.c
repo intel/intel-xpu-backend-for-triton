@@ -12,7 +12,6 @@
 #include <iostream>
 #include <limits>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -540,9 +539,12 @@ struct BuildFlags {
   }
 };
 
-// GRF mode a binary fixes on its own, independently of `BuildFlags`: off LTS,
-// compiler.py requests an explicit `grf_mode` through the kernel's
-// SPV_INTEL_maximum_registers execution mode instead of an IGC build flag.
+// GRF mode a SPIR-V module fixes on its own, independently of `BuildFlags`:
+// off LTS, compiler.py requests an explicit `grf_mode` through the kernel's
+// SPV_INTEL_maximum_registers execution mode instead of an IGC build flag. This
+// has to be known before the build, to decide whether a large-GRF retry is
+// still ours to make; what IGC settled on afterwards comes from
+// `compiledGRFCount`.
 struct BinaryGRFMode {
   bool isFixed = false; // The binary chooses its GRF mode; do not retry.
   int32_t nRegs = 0;    // Register count, 0 when not known (e.g. AutoINTEL).
@@ -586,23 +588,6 @@ static BinaryGRFMode getSpirvGRFMode(const uint8_t *binary, size_t size) {
     i += wordCount;
   }
   return {};
-}
-
-// Reads `grf_count` from the zebin's `.ze_info` YAML, which IGC always emits
-// for a compiled kernel.
-static BinaryGRFMode getZebinGRFMode(const uint8_t *binary, size_t size) {
-  const std::string_view zebin(reinterpret_cast<const char *>(binary), size);
-  constexpr std::string_view key = "grf_count:";
-  const size_t pos = zebin.find(key);
-  if (pos == std::string_view::npos)
-    return {};
-  size_t i = pos + key.size();
-  while (i < zebin.size() && zebin[i] == ' ')
-    ++i;
-  int32_t nRegs = 0;
-  for (; i < zebin.size() && zebin[i] >= '0' && zebin[i] <= '9'; ++i)
-    nRegs = nRegs * 10 + (zebin[i] - '0');
-  return {true, nRegs};
 }
 
 sycl::context get_default_context(const sycl::device &sycl_device) {
@@ -694,9 +679,10 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
       compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                               l0_context, build_flags(), is_spv);
   bool firstBuildFailed = PyErr_Occurred();
+  // A zebin needs no equivalent probe: its GRF mode is already baked in, and
+  // `compiledGRFCount` reads it back below.
   const BinaryGRFMode binaryGRFMode =
-      is_spv ? getSpirvGRFMode(binary_ptr, binary_size)
-             : getZebinGRFMode(binary_ptr, binary_size);
+      is_spv ? getSpirvGRFMode(binary_ptr, binary_size) : BinaryGRFMode{};
   const bool canRetryWithLargeGRF =
       is_spv && !build_flags.hasGRFSizeFlag() && !binaryGRFMode.isFixed;
   if (firstBuildFailed && !canRetryWithLargeGRF) {
@@ -841,9 +827,10 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
               << kernel_name << "\"" << std::endl;
   }
 
-  // What IGC compiled with, else what the binary asked for, else the build
-  // flags. The middle step matters off LTS: the GRF mode rides in the SPIR-V
-  // there, so `build_flags.n_regs()` would report its no-flag default of 128
+  // What IGC compiled with, else what the SPIR-V asked for, else the build
+  // flags. The middle step only covers a driver that leaves
+  // `compiledGRFCount`'s query unanswered: off LTS the GRF mode rides in the
+  // SPIR-V, so `build_flags.n_regs()` would report its no-flag default of 128
   // for a kernel that really is 256- or 512-GRF.
   auto n_regs = compiledGRFCount(l0_kernel, binaryGRFMode.nRegs > 0
                                                 ? binaryGRFMode.nRegs
