@@ -3,6 +3,10 @@ name: vLLM benchmarks
 on:
   workflow_dispatch:
     inputs:
+      head_group_ablation:
+        description: Run the paired full-group versus expanded head-group experiment only
+        type: boolean
+        default: false
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -21,6 +25,10 @@ on:
         default: ""
   workflow_call:
     inputs:
+      head_group_ablation:
+        description: Run the paired full-group versus expanded head-group experiment only
+        type: boolean
+        default: false
       runner_label:
         description: Runner label
         type: string
@@ -109,6 +117,7 @@ jobs:
 
       - name: Install benchmarks
         id: install-benchmarks
+        if: ${{ !inputs.head_group_ablation }}
         uses: ./.github/actions/install-benchmarks
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -116,7 +125,7 @@ jobs:
 
       - name: Install vllm
         id: install-vllm
-        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() }}
+        if: ${{ (inputs.head_group_ablation || steps.install-benchmarks.outcome == 'success') && !cancelled() }}
         uses: ./.github/actions/install-vllm
         with:
           kernels-hash: ${{ inputs.kernels_hash }}
@@ -139,8 +148,19 @@ jobs:
           EOF
           ./scripts/capture-hw-details.sh | tee -a "$REPORTS/.env"
 
+      - name: Run paired head-group ablation
+        if: ${{ inputs.head_group_ablation && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        env:
+          TRITON_CACHE_DIR: ${{ runner.temp }}/ua-head-group-ablation-cache
+          TRITON_XPU_GEN_NATIVE_CODE: "1"
+        run: |
+          source ./scripts/capture-hw-details.sh
+          git -C vllm apply "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
+          export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
+          python -u scripts/vllm/head_group_ablation.py --output "$REPORTS/head-group-ablation" 2>&1 | tee "$REPORTS/head-group-ablation.log"
+
       - name: Run vllm unified attention bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: ${{ !inputs.head_group_ablation && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -148,7 +168,7 @@ jobs:
           bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
 
       - name: Run vllm unified attention fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: ${{ !inputs.head_group_ablation && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -156,7 +176,7 @@ jobs:
           FP8="1" bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
 
       - name: Run vllm batched moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: ${{ !inputs.head_group_ablation && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -165,7 +185,7 @@ jobs:
 
 
       - name: Run vllm batched moe fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: ${{ !inputs.head_group_ablation && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -173,7 +193,7 @@ jobs:
           FP8="1" bash run_benchmark.sh batched_moe --reports $REPORTS --tag $TAG
 
       - name: Run vllm fused moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: ${{ !inputs.head_group_ablation && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -181,7 +201,7 @@ jobs:
           bash run_benchmark.sh fused_moe --reports $REPORTS --tag $TAG
 
       - name: Upload benchmark reports
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ always() && steps.install.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: benchmark-reports

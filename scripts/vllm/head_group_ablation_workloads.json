@@ -1,0 +1,2276 @@
+{
+  "pr_commit": "4963bcbd582ce5e273763c68330760d9c1d36f63",
+  "source_sha256": "91f6653c7f752f9eaf225317bc552485e6e67290cc3a95a22fd24a98b72b4849",
+  "inventory_source": "https://github.com/intel/intel-xpu-backend-for-triton/actions/runs/38981714124",
+  "scope": "Exact 87 BF16 and 10 FP8 TD input cases from the PR CI artifact; independent tuning per case.",
+  "cases": [
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-041",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-042",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-043",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-044",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-053",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 1
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-054",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 1
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-000",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-001",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-002",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-011",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 1
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-012",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 1
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-015",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-016",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-025",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 1
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-028",
+      "precision": "BF16",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-029",
+      "precision": "BF16",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-038",
+      "precision": "BF16",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 1
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-057",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-058",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-059",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-068",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 1
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-069",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 1
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-072",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-073",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-074",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-083",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 1
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-084",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 1
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "fp8-000",
+      "precision": "FP8",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "fp8-003",
+      "precision": "FP8",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 1
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "fp8-005",
+      "precision": "FP8",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 0
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "fp8-008",
+      "precision": "FP8",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 1
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-055",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-056",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-013",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-014",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-026",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-027",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-039",
+      "precision": "BF16",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-040",
+      "precision": "BF16",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-070",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-071",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-085",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-086",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "fp8-004",
+      "precision": "FP8",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "fp8-009",
+      "precision": "FP8",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 2
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-045",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-046",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-047",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-048",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-049",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-050",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-051",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 28,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-052",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-003",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-004",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-005",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-006",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-007",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-008",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-009",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 32,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-010",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-017",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-018",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-019",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-020",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-021",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-022",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-023",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-024",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-030",
+      "precision": "BF16",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-031",
+      "precision": "BF16",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-032",
+      "precision": "BF16",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-033",
+      "precision": "BF16",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-034",
+      "precision": "BF16",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-035",
+      "precision": "BF16",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-036",
+      "precision": "BF16",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-037",
+      "precision": "BF16",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-060",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-061",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-062",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-063",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-064",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-065",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-066",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-067",
+      "precision": "BF16",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-075",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-076",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-077",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-078",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 16,
+      "id": "bf16-079",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 32768,
+      "block_size": 64,
+      "id": "bf16-080",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 16,
+      "id": "bf16-081",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 4,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "bf16-082",
+      "precision": "BF16",
+      "sliding_window": 256,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "fp8-001",
+      "precision": "FP8",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "fp8-002",
+      "precision": "FP8",
+      "sliding_window": null,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "fp8-006",
+      "precision": "FP8",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 3
+    },
+    {
+      "q_heads": 64,
+      "k_heads": 8,
+      "head_size": 128,
+      "num_blocks": 2048,
+      "block_size": 64,
+      "id": "fp8-007",
+      "precision": "FP8",
+      "sliding_window": 8192,
+      "soft_cap": null,
+      "sequence_pattern": 4
+    }
+  ],
+  "sequence_patterns": [
+    [
+      [
+        4096,
+        4096
+      ]
+    ],
+    [
+      [
+        2048,
+        2048
+      ],
+      [
+        2048,
+        2048
+      ],
+      [
+        2048,
+        2048
+      ],
+      [
+        2048,
+        2048
+      ]
+    ],
+    [
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        1,
+        256
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        768
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        192
+      ],
+      [
+        1,
+        384
+      ],
+      [
+        1,
+        1280
+      ],
+      [
+        1,
+        96
+      ],
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ],
+      [
+        256,
+        256
+      ],
+      [
+        256,
+        256
+      ],
+      [
+        256,
+        256
+      ],
+      [
+        256,
+        256
+      ],
+      [
+        256,
+        256
+      ],
+      [
+        256,
+        256
+      ],
+      [
+        256,
+        256
+      ],
+      [
+        256,
+        256
+      ]
+    ],
+    [
+      [
+        1,
+        1513
+      ],
+      [
+        1,
+        4100
+      ],
+      [
+        1,
+        530
+      ],
+      [
+        1,
+        123
+      ],
+      [
+        1,
+        4803
+      ],
+      [
+        1,
+        434
+      ],
+      [
+        1,
+        3015
+      ],
+      [
+        1,
+        34
+      ]
+    ],
+    [
+      [
+        1,
+        7168
+      ],
+      [
+        1,
+        8192
+      ],
+      [
+        1,
+        12288
+      ],
+      [
+        1,
+        16384
+      ]
+    ]
+  ]
+}
