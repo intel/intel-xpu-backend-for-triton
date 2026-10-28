@@ -372,8 +372,7 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
-    // Set up range analysis. The solver needs DeadCodeAnalysis loaded, or every
-    // block is considered dead and no range is ever computed.
+    // Set up range analysis
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     DominanceInfo domInfo(moduleOp);
     solver->load<tt::intel::IntegerRangeAnalysis>(moduleOp, domInfo);
