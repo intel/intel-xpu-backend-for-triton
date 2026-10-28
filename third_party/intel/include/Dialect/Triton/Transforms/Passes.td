@@ -65,6 +65,14 @@ def TritonIntelFuseReshape
         %A = tt.descriptor_load %desc[%x * %div + %y, %z]
                                 : !tt.tensordesc<512x64xf16> -> tensor<512x64xf16>
         dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
+
+    Before fusing, a reshape that drops the leading unit dimension of a 3-dim tensor is moved
+    up until it uses the tt.descriptor_load result directly, even without a dot user, in which
+    case Combine rank-reduces the load instead. It crosses single-use elementwise operations,
+    retyped in place, whose other tensor operands must be constants or splats, and tt.trans
+    operations that keep dimension 0 in place; those operands and the tt.trans operations are
+    rebuilt at rank 2. Inline asm, multi-result operations, and any operation or load carrying
+    tt.contiguity, tt.divisibility or tt.constancy block the move.
   }];
 
   let dependentDialects = [

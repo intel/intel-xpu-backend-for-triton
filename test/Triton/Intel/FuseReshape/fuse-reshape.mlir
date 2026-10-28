@@ -1616,3 +1616,333 @@ tt.func public @noFuseMergedDimFromSelect(%arg0: tensor<16x16xf32>, %arg1: !tt.p
 // CHECK-LABEL: noFuseMergedDimFromSelect
 // CHECK: tt.descriptor_load
 // CHECK: tt.reshape
+
+// -----
+
+// COM: The #8511 Q chain after LICM. Hoisting retypes the chain in place, so it
+// COM: stays outside the loop, and the shared rank-3 constant keeps its user.
+tt.func public @hoistReshapeOverElementwiseChain(%arg0: tensor<64x64xbf16>, %arg1: !tt.ptr<bf16>, %arg2: tensor<1x128x64xf32>, %arg3: tensor<128x64xf32>) -> tensor<1x128x64xf32> {
+  %cst = arith.constant dense<1.250000e-01> : tensor<1x128x64xf32>
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c8192_i64 = arith.constant 8192 : i64
+  %0 = tt.make_tensor_descriptor %arg1, [%c128_i32, %c128_i32, %c64_i32], [%c8192_i64, %c64_i64, %c1_i64] : <bf16>, <1x128x64xbf16>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x128x64xbf16> -> tensor<1x128x64xbf16>
+  %2 = arith.extf %1 : tensor<1x128x64xbf16> to tensor<1x128x64xf32>
+  %3 = arith.mulf %2, %cst : tensor<1x128x64xf32>
+  %4 = arith.truncf %3 : tensor<1x128x64xf32> to tensor<1x128x64xbf16>
+  %5 = tt.reshape %4 : tensor<1x128x64xbf16> -> tensor<128x64xbf16>
+  %6 = scf.for %arg4 = %c0_i32 to %c128_i32 step %c64_i32 iter_args(%arg5 = %arg3) -> (tensor<128x64xf32>) : i32 {
+    %8 = tt.dot %5, %arg0, %arg5 : tensor<128x64xbf16> * tensor<64x64xbf16> -> tensor<128x64xf32>
+    scf.yield %8 : tensor<128x64xf32>
+  }
+  %7 = arith.mulf %arg2, %cst : tensor<1x128x64xf32>
+  tt.return %7 : tensor<1x128x64xf32>
+}
+// CHECK-LABEL: hoistReshapeOverElementwiseChain
+// CHECK-DAG: [[CST3D:%.*]] = arith.constant dense<1.250000e-01> : tensor<1x128x64xf32>
+// CHECK-DAG: [[CST2D:%.*]] = arith.constant dense<1.250000e-01> : tensor<128x64xf32>
+// CHECK-DAG: [[DESC:%.*]] = tt.make_tensor_descriptor {{.*}} : <bf16>, <128x64xbf16>
+// CHECK-DAG: [[LOAD:%.*]] = tt.descriptor_load [[DESC]]{{.*}} -> tensor<128x64xbf16>
+// CHECK-DAG: [[EXT:%.*]] = arith.extf [[LOAD]] : tensor<128x64xbf16> to tensor<128x64xf32>
+// CHECK: [[MUL:%.*]] = arith.mulf [[EXT]], [[CST2D]] : tensor<128x64xf32>
+// CHECK: [[TRUNC:%.*]] = arith.truncf [[MUL]] : tensor<128x64xf32> to tensor<128x64xbf16>
+// CHECK-NOT: tt.reshape
+// CHECK: scf.for
+// CHECK: tt.dot [[TRUNC]], %arg0
+// CHECK: arith.mulf %arg2, [[CST3D]] : tensor<1x128x64xf32>
+
+// -----
+
+tt.func public @hoistReshapeOverSplatOperand(%arg0: tensor<64x64xbf16>, %arg1: !tt.ptr<bf16>, %arg2: bf16, %arg3: tensor<128x64xf32>, %arg4: tensor<1x128x64xbf16>) -> tensor<1x128x64xbf16> {
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c8192_i64 = arith.constant 8192 : i64
+  %0 = tt.make_tensor_descriptor %arg1, [%c128_i32, %c128_i32, %c64_i32], [%c8192_i64, %c64_i64, %c1_i64] : <bf16>, <1x128x64xbf16>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x128x64xbf16> -> tensor<1x128x64xbf16>
+  %2 = tt.splat %arg2 : bf16 -> tensor<1x128x64xbf16>
+  %3 = arith.mulf %1, %2 : tensor<1x128x64xbf16>
+  %4 = tt.reshape %3 : tensor<1x128x64xbf16> -> tensor<128x64xbf16>
+  %5 = tt.dot %4, %arg0, %arg3 : tensor<128x64xbf16> * tensor<64x64xbf16> -> tensor<128x64xf32>
+  %6 = arith.mulf %arg4, %2 : tensor<1x128x64xbf16>
+  tt.return %6 : tensor<1x128x64xbf16>
+}
+// CHECK-LABEL: hoistReshapeOverSplatOperand
+// CHECK: [[LOAD:%.*]] = tt.descriptor_load {{.*}} -> tensor<128x64xbf16>
+// CHECK-DAG: [[SPLAT:%.*]] = tt.splat %arg2 : bf16 -> tensor<128x64xbf16>
+// CHECK-DAG: [[SPLAT3D:%.*]] = tt.splat %arg2 : bf16 -> tensor<1x128x64xbf16>
+// CHECK: arith.mulf [[LOAD]], [[SPLAT]] : tensor<128x64xbf16>
+// CHECK: arith.mulf %arg4, [[SPLAT3D]] : tensor<1x128x64xbf16>
+
+// -----
+
+// COM: The #8511 K chain: a permute that keeps the unit dimension first.
+tt.func public @hoistReshapeOverTrans(%arg0: tensor<128x64xbf16>, %arg1: !tt.ptr<bf16>, %arg2: tensor<128x32xf32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c8192_i64 = arith.constant 8192 : i64
+  %0 = tt.make_tensor_descriptor %arg1, [%c128_i32, %c128_i32, %c64_i32], [%c8192_i64, %c64_i64, %c1_i64] : <bf16>, <1x32x64xbf16>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x32x64xbf16> -> tensor<1x32x64xbf16>
+  %2 = tt.trans %1 {order = array<i32: 0, 2, 1>} : tensor<1x32x64xbf16> -> tensor<1x64x32xbf16>
+  %3 = tt.reshape %2 : tensor<1x64x32xbf16> -> tensor<64x32xbf16>
+  %4 = tt.dot %arg0, %3, %arg2 : tensor<128x64xbf16> * tensor<64x32xbf16> -> tensor<128x32xf32>
+  tt.return
+}
+// CHECK-LABEL: hoistReshapeOverTrans
+// CHECK: tt.descriptor_load {{.*}} -> tensor<32x64xbf16>
+// CHECK: tt.trans {{.*}} {order = array<i32: 1, 0>} : tensor<32x64xbf16> -> tensor<64x32xbf16>
+
+// -----
+
+// COM: The op after a crossed tt.trans must take the rebuilt trans.
+tt.func public @hoistReshapeOverExtfAfterTrans(%arg0: !tt.tensordesc<1x32x64xbf16>, %arg1: tensor<128x64xf32>, %arg2: tensor<128x32xf32>) -> tensor<128x32xf32> {
+  %c0_i32 = arith.constant 0 : i32
+  %0 = tt.descriptor_load %arg0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x32x64xbf16> -> tensor<1x32x64xbf16>
+  %1 = tt.trans %0 {order = array<i32: 0, 2, 1>} : tensor<1x32x64xbf16> -> tensor<1x64x32xbf16>
+  %2 = arith.extf %1 : tensor<1x64x32xbf16> to tensor<1x64x32xf32>
+  %3 = tt.reshape %2 : tensor<1x64x32xf32> -> tensor<64x32xf32>
+  %4 = tt.dot %arg1, %3, %arg2 : tensor<128x64xf32> * tensor<64x32xf32> -> tensor<128x32xf32>
+  tt.return %4 : tensor<128x32xf32>
+}
+// CHECK-LABEL: hoistReshapeOverExtfAfterTrans
+// CHECK: arith.extf {{.*}} : tensor<64x32xbf16> to tensor<64x32xf32>
+
+// -----
+
+// COM: Hoisted without a dot user; Combine rank-reduces such loads later.
+tt.func public @hoistWithoutDot(%arg0: !tt.tensordesc<1x64x64xbf16>, %arg1: !tt.tensordesc<64x64xbf16>, %arg2: bf16) {
+  %c0_i32 = arith.constant 0 : i32
+  %0 = tt.descriptor_load %arg0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x64x64xbf16> -> tensor<1x64x64xbf16>
+  %1 = tt.splat %arg2 : bf16 -> tensor<1x64x64xbf16>
+  %2 = arith.mulf %0, %1 : tensor<1x64x64xbf16>
+  %3 = tt.reshape %2 : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+  tt.descriptor_store %arg1[%c0_i32, %c0_i32], %3 : !tt.tensordesc<64x64xbf16>, tensor<64x64xbf16>
+  tt.return
+}
+// CHECK-LABEL: hoistWithoutDot
+// CHECK: [[LOAD:%.*]] = tt.descriptor_load {{.*}} -> tensor<1x64x64xbf16>
+// CHECK-NEXT: tt.reshape [[LOAD]] : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+// CHECK-NOT: tt.splat %arg2 : bf16 -> tensor<1x64x64xbf16>
+
+// -----
+
+tt.func public @hoistReshapeOverScalarOperand(%arg0: !tt.tensordesc<1x64x64xbf16>, %arg1: bf16, %arg2: i1) -> tensor<64x64xbf16> {
+  %c0_i32 = arith.constant 0 : i32
+  %0 = tt.descriptor_load %arg0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x64x64xbf16> -> tensor<1x64x64xbf16>
+  %1 = tt.splat %arg1 : bf16 -> tensor<1x64x64xbf16>
+  %2 = arith.select %arg2, %0, %1 : tensor<1x64x64xbf16>
+  %3 = tt.reshape %2 : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+  tt.return %3 : tensor<64x64xbf16>
+}
+// CHECK-LABEL: hoistReshapeOverScalarOperand
+// CHECK: arith.select %arg2, {{.*}} : tensor<64x64xbf16>
+
+// -----
+
+tt.func public @noHoistNonConstantOperand(%arg0: tensor<64x64xbf16>, %arg1: !tt.ptr<bf16>, %arg2: tensor<64x64xf32>, %arg3: tensor<1x64x64xbf16>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c4096_i64 = arith.constant 4096 : i64
+  %0 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c64_i32, %c64_i32], [%c4096_i64, %c64_i64, %c1_i64] : <bf16>, <1x64x64xbf16>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x64x64xbf16> -> tensor<1x64x64xbf16>
+  %2 = arith.mulf %1, %arg3 : tensor<1x64x64xbf16>
+  %3 = tt.reshape %2 : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+  %4 = tt.dot %3, %arg0, %arg2 : tensor<64x64xbf16> * tensor<64x64xbf16> -> tensor<64x64xf32>
+  tt.return
+}
+// CHECK-LABEL: noHoistNonConstantOperand
+// CHECK: tt.descriptor_load {{.*}} -> tensor<1x64x64xbf16>
+// CHECK: [[X:%.*]] = arith.mulf
+// CHECK: tt.reshape [[X]] : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+
+// -----
+
+tt.func public @noHoistMultiUse(%arg0: tensor<64x64xbf16>, %arg1: !tt.ptr<bf16>, %arg2: tensor<64x64xf32>) -> tensor<1x64x64xbf16> {
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c4096_i64 = arith.constant 4096 : i64
+  %0 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c64_i32, %c64_i32], [%c4096_i64, %c64_i64, %c1_i64] : <bf16>, <1x64x64xbf16>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x64x64xbf16> -> tensor<1x64x64xbf16>
+  %2 = arith.negf %1 : tensor<1x64x64xbf16>
+  %3 = tt.reshape %2 : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+  %4 = tt.dot %3, %arg0, %arg2 : tensor<64x64xbf16> * tensor<64x64xbf16> -> tensor<64x64xf32>
+  tt.return %2 : tensor<1x64x64xbf16>
+}
+// CHECK-LABEL: noHoistMultiUse
+// CHECK: tt.descriptor_load {{.*}} -> tensor<1x64x64xbf16>
+// CHECK: [[X:%.*]] = arith.negf
+// CHECK: tt.reshape [[X]] : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+
+// -----
+
+// COM: The trans keeps a leading unit dim; only order[0] != 0 declines it.
+tt.func public @noHoistTransMovingUnitDim(%arg0: tensor<64x16xbf16>, %arg1: !tt.ptr<bf16>, %arg2: tensor<1x16xf32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c4096_i64 = arith.constant 4096 : i64
+  %0 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c64_i32, %c64_i32], [%c4096_i64, %c64_i64, %c1_i64] : <bf16>, <1x1x64xbf16>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x1x64xbf16> -> tensor<1x1x64xbf16>
+  %2 = tt.trans %1 {order = array<i32: 1, 0, 2>} : tensor<1x1x64xbf16> -> tensor<1x1x64xbf16>
+  %3 = tt.reshape %2 : tensor<1x1x64xbf16> -> tensor<1x64xbf16>
+  %4 = tt.dot %3, %arg0, %arg2 : tensor<1x64xbf16> * tensor<64x16xbf16> -> tensor<1x16xf32>
+  tt.return
+}
+// CHECK-LABEL: noHoistTransMovingUnitDim
+// CHECK: tt.descriptor_load {{.*}} -> tensor<1x1x64xbf16>
+// CHECK: [[X:%.*]] = tt.trans
+// CHECK: tt.reshape [[X]] : tensor<1x1x64xbf16> -> tensor<1x64xbf16>
+
+// -----
+
+tt.func public @noHoistAllowReorder(%arg0: tensor<64x64xbf16>, %arg1: !tt.ptr<bf16>, %arg2: tensor<64x64xf32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c4096_i64 = arith.constant 4096 : i64
+  %0 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c64_i32, %c64_i32], [%c4096_i64, %c64_i64, %c1_i64] : <bf16>, <1x64x64xbf16>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x64x64xbf16> -> tensor<1x64x64xbf16>
+  %2 = arith.negf %1 : tensor<1x64x64xbf16>
+  %3 = tt.reshape %2 allow_reorder : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+  %4 = tt.dot %3, %arg0, %arg2 : tensor<64x64xbf16> * tensor<64x64xbf16> -> tensor<64x64xf32>
+  tt.return
+}
+// CHECK-LABEL: noHoistAllowReorder
+// CHECK: tt.descriptor_load {{.*}} -> tensor<1x64x64xbf16>
+// CHECK: [[X:%.*]] = arith.negf
+// CHECK: tt.reshape [[X]] allow_reorder : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+
+// -----
+
+// COM: A plain tt.load is not a descriptor load.
+tt.func public @noHoistWithoutDescriptorLoad(%arg0: tensor<64x64xbf16>, %arg1: !tt.ptr<bf16>, %arg2: tensor<64x64xf32>) {
+  %0 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<1x64x64x!tt.ptr<bf16>>
+  %1 = tt.load %0 : tensor<1x64x64x!tt.ptr<bf16>>
+  %2 = arith.negf %1 : tensor<1x64x64xbf16>
+  %3 = tt.reshape %2 : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+  %4 = tt.dot %3, %arg0, %arg2 : tensor<64x64xbf16> * tensor<64x64xbf16> -> tensor<64x64xf32>
+  tt.return
+}
+// CHECK-LABEL: noHoistWithoutDescriptorLoad
+// CHECK: tt.load
+// CHECK: [[X:%.*]] = arith.negf
+// CHECK: tt.reshape [[X]] : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+
+// -----
+
+// COM: Pure and shape-preserving but not elementwise: a scan along dim 1.
+tt.func public @noHoistNonElementwise(%arg0: tensor<64x64xbf16>, %arg1: !tt.ptr<bf16>, %arg2: tensor<64x64xf32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c4096_i64 = arith.constant 4096 : i64
+  %0 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c64_i32, %c64_i32], [%c4096_i64, %c64_i64, %c1_i64] : <bf16>, <1x64x64xbf16>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x64x64xbf16> -> tensor<1x64x64xbf16>
+  %2 = "tt.scan"(%1) <{axis = 1 : i32, reverse = false}> ({
+  ^bb0(%arg3: bf16, %arg4: bf16):
+    %5 = arith.addf %arg3, %arg4 : bf16
+    tt.scan.return %5 : bf16
+  }) : (tensor<1x64x64xbf16>) -> tensor<1x64x64xbf16>
+  %3 = tt.reshape %2 : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+  %4 = tt.dot %3, %arg0, %arg2 : tensor<64x64xbf16> * tensor<64x64xbf16> -> tensor<64x64xf32>
+  tt.return
+}
+// CHECK-LABEL: noHoistNonElementwise
+// CHECK: tt.descriptor_load {{.*}} -> tensor<1x64x64xbf16>
+// CHECK: [[X:%.*]] = "tt.scan"
+// CHECK: tt.reshape [[X]] : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+
+// -----
+
+// COM: A 3-entry hint left on a rank-2 value would corrupt AxisInfo.
+tt.func public @noHoistRankIndexedHint(%arg0: tensor<64x64xbf16>, %arg1: !tt.ptr<bf16>, %arg2: tensor<64x64xf32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c4096_i64 = arith.constant 4096 : i64
+  %0 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c64_i32, %c64_i32], [%c4096_i64, %c64_i64, %c1_i64] : <bf16>, <1x64x64xbf16>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x64x64xbf16> -> tensor<1x64x64xbf16>
+  %2 = tt.annotate %1 {tt.contiguity = dense<[1, 1, 16]> : tensor<3xi32>} : tensor<1x64x64xbf16>
+  %3 = tt.reshape %2 : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+  %4 = tt.dot %3, %arg0, %arg2 : tensor<64x64xbf16> * tensor<64x64xbf16> -> tensor<64x64xf32>
+  tt.return
+}
+// CHECK-LABEL: noHoistRankIndexedHint
+// CHECK: tt.descriptor_load {{.*}} -> tensor<1x64x64xbf16>
+// CHECK: [[X:%.*]] = tt.annotate
+// CHECK: tt.reshape [[X]] : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+
+// -----
+
+// COM: The fusion copies the load's attributes onto its rank-2 replacement.
+tt.func public @noHoistHintedLoad(%arg0: tensor<64x64xbf16>, %arg1: !tt.ptr<bf16>, %arg2: tensor<64x64xf32>, %arg3: bf16) {
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c4096_i64 = arith.constant 4096 : i64
+  %0 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c64_i32, %c64_i32], [%c4096_i64, %c64_i64, %c1_i64] : <bf16>, <1x64x64xbf16>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] {tt.divisibility = dense<[1, 1, 16]> : tensor<3xi32>} : !tt.tensordesc<1x64x64xbf16> -> tensor<1x64x64xbf16>
+  %2 = tt.splat %arg3 : bf16 -> tensor<1x64x64xbf16>
+  %3 = arith.mulf %1, %2 : tensor<1x64x64xbf16>
+  %4 = tt.reshape %3 : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+  %5 = tt.dot %4, %arg0, %arg2 : tensor<64x64xbf16> * tensor<64x64xbf16> -> tensor<64x64xf32>
+  tt.return
+}
+// CHECK-LABEL: noHoistHintedLoad
+// CHECK: tt.descriptor_load {{.*}} -> tensor<1x64x64xbf16>
+// CHECK: [[X:%.*]] = arith.mulf
+// CHECK: tt.reshape [[X]] : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+
+// -----
+
+// COM: Inline asm receives elements grouped by thread, not in logical order.
+tt.func public @noHoistInlineAsm(%arg0: tensor<64x64xbf16>, %arg1: !tt.ptr<bf16>, %arg2: tensor<64x64xf32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c4096_i64 = arith.constant 4096 : i64
+  %0 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c64_i32, %c64_i32], [%c4096_i64, %c64_i64, %c1_i64] : <bf16>, <1x64x64xbf16>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x64x64xbf16> -> tensor<1x64x64xbf16>
+  %2 = tt.elementwise_inline_asm "mov.b16 $0, $1;" {constraints = "=h,h", packed_element = 1 : i32, pure = true} %1 : tensor<1x64x64xbf16> -> tensor<1x64x64xbf16>
+  %3 = tt.reshape %2 : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+  %4 = tt.dot %3, %arg0, %arg2 : tensor<64x64xbf16> * tensor<64x64xbf16> -> tensor<64x64xf32>
+  tt.return
+}
+// CHECK-LABEL: noHoistInlineAsm
+// CHECK: tt.descriptor_load {{.*}} -> tensor<1x64x64xbf16>
+// CHECK: [[X:%.*]] = tt.elementwise_inline_asm
+// CHECK: tt.reshape [[X]] : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
+
+// -----
+
+tt.func public @noHoistMultiResult(%arg0: !tt.tensordesc<1x64x64xi32>, %arg1: i32) -> tensor<64x64xi32> {
+  %c0_i32 = arith.constant 0 : i32
+  %0 = tt.descriptor_load %arg0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x64x64xi32> -> tensor<1x64x64xi32>
+  %1 = tt.splat %arg1 : i32 -> tensor<1x64x64xi32>
+  %low, %high = arith.mulsi_extended %0, %1 : tensor<1x64x64xi32>
+  %2 = tt.reshape %high : tensor<1x64x64xi32> -> tensor<64x64xi32>
+  tt.return %2 : tensor<64x64xi32>
+}
+// CHECK-LABEL: noHoistMultiResult
+// CHECK: tt.descriptor_load {{.*}} -> tensor<1x64x64xi32>
+// CHECK: {{%[a-z0-9_]+}}, [[X:%[a-z0-9_]+]] = arith.mulsi_extended
+// CHECK: tt.reshape [[X]] : tensor<1x64x64xi32> -> tensor<64x64xi32>
