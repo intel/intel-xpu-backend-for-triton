@@ -55,6 +55,11 @@ struct FoldTrueCmpIPass
     // stale lattice entries with mismatched bitwidths.
     SmallVector<std::pair<arith::CmpIOp, bool>> folds;
     mod.walk([&](arith::CmpIOp cmpOp) {
+      // The range analysis proves an assumed comparison from the assumption
+      // itself. Folding it would leave `llvm.intr.assume %true` and lose the
+      // fact for every later pass.
+      if (llvm::any_of(cmpOp->getUsers(), llvm::IsaPred<LLVM::AssumeOp>))
+        return;
       if (auto result = evaluateCmpI(*solver, cmpOp))
         folds.emplace_back(cmpOp, *result);
     });
