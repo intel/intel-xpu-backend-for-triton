@@ -724,6 +724,29 @@ def test_make_ragged_tensor_metadata(n_slices, device):
     assert_equal(meta.block_schedule_data, ref.block_schedule_data)
 
 
+@pytest.mark.parametrize("n_slices,capacity", [(1, 0), (1, 1), (1, 15), (1, 16), (1, 17), (1, 512), (1, 3072),
+                                               (1, 131072), (2, 512), (6, 3072)])
+def test_ragged_tensor_metadata_replay(n_slices, capacity, device):
+    sizes = torch.zeros(n_slices, device=device, dtype=torch.int32)
+    make_ragged_tensor_metadata(sizes, capacity)
+    device_module = torch.get_device_module(device)
+    graph = device_module.XPUGraph() if device == "xpu" else device_module.CUDAGraph()
+    with device_module.graph(graph):
+        actual = make_ragged_tensor_metadata(sizes, capacity)
+    fields = (actual.slice_offs, actual.block_offs_data, actual.block_schedule_data)
+    pointers = [field.data_ptr() for field in fields]
+    for active in (capacity, capacity // 2, 0):
+        sizes.copy_(
+            torch.tensor([active // n_slices + (i < active % n_slices) for i in range(n_slices)], device=device,
+                         dtype=torch.int32))
+        expected = make_ragged_tensor_metadata_torch(sizes, capacity)
+        graph.replay()
+        for result, reference in zip(fields,
+                                     (expected.slice_offs, expected.block_offs_data, expected.block_schedule_data)):
+            assert_equal(result, reference)
+        assert pointers == [field.data_ptr() for field in fields]
+
+
 @pytest.mark.parametrize("n_slices", [9, 32, 911, 1025])
 def test_remap_ragged_tensor_metadata(n_slices, device):
     max_slice_size = 200

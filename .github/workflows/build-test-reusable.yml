@@ -173,7 +173,7 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@c7c4c74fb8342c3df9d2d7693cf0a426c7736ecd
 
       # Unit tests require `build` directory.
       - name: Run unit tests
@@ -285,7 +285,7 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@c7c4c74fb8342c3df9d2d7693cf0a426c7736ecd
 
       - name: Set test-triton command line
         run: |

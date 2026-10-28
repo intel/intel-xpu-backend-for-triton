@@ -6,7 +6,7 @@
   "threads_per_warp": 16,
   "shared_memory": 32768,
   "kernel_name": "kernel",
-  "spv_name": "kernel.spv",
+  "binary_name": "kernel.spv",
   "build_flags": "",
   "argument_list": [
     {
