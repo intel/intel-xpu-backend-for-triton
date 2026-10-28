@@ -1,8 +1,8 @@
 diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batched_moe.py
-index 9be58e6337..0bf8191d12 100644
+index f0877f291e..617e41dbc4 100644
 --- a/tests/kernels/moe/test_batched_moe.py
 +++ b/tests/kernels/moe/test_batched_moe.py
-@@ -410,8 +410,13 @@ def _run_td(A, B, num_expert_tokens, use_td: bool):
+@@ -416,8 +416,13 @@ def _run_td(A, B, num_expert_tokens, use_td: bool):
      max_tokens = A.shape[1]
      K = A.shape[2]
      N = B.shape[1]
@@ -18,7 +18,7 @@ index 9be58e6337..0bf8191d12 100644
      batched_triton_kernel[grid](
          A,
          B,
-@@ -444,9 +449,6 @@ def _run_td(A, B, num_expert_tokens, use_td: bool):
+@@ -450,9 +455,6 @@ def _run_td(A, B, num_expert_tokens, use_td: bool):
          False,
          False,
          False,
@@ -29,7 +29,7 @@ index 9be58e6337..0bf8191d12 100644
      )
      return out
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-index b8cd58635e..1ce3200343 100644
+index 26297739b6..6ef5388a70 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 @@ -172,7 +172,7 @@ def moe_mmk(
@@ -197,9 +197,9 @@ index b8cd58635e..1ce3200343 100644
      num_pid_n = tl.cdiv(N, BLOCK_N)
      pid_m = pid_mn // num_pid_n
      pid_n = pid_mn % num_pid_n
-@@ -451,9 +521,10 @@ def invoke_moe_batched_triton_kernel(
-     BLOCK_N = config["BLOCK_SIZE_N"]
-     BLOCK_K = config["BLOCK_SIZE_K"]
+@@ -453,9 +523,10 @@ def invoke_moe_batched_triton_kernel(
+     if block_shape is not None:
+         BLOCK_K = min(BLOCK_K, min(block_shape[0], block_shape[1]))
  
 -    grid = (
 +    grid = lambda meta: (
@@ -210,7 +210,7 @@ index b8cd58635e..1ce3200343 100644
      )
  
      A_scale = normalize_batched_scales_shape(A_scale, expert_num_tokens.shape[0])
-@@ -542,10 +613,6 @@ def invoke_moe_batched_triton_kernel(
+@@ -544,10 +615,6 @@ def invoke_moe_batched_triton_kernel(
          use_fp8_w8a8,
          use_int8_w8a16,
          per_act_token_quant,

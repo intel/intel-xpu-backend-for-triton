@@ -3980,9 +3980,7 @@ struct AtomicCASOpConversion
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(),
-                                 !atomicResultHasOrderingBarrier(op), rewriter,
-                                 targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
@@ -4082,8 +4080,8 @@ struct AtomicCASOpConversion
       resultVals =
           actionRemoveBroadcastedRegs(triton::gpu::toLinearLayout(tensorTy))
               .apply(resultVals);
-    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, mask,
-                          targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, mask, targetInfo,
+                          getTypeConverter());
     return success();
   }
 
@@ -4175,9 +4173,7 @@ struct AtomicRMWOpConversion
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(),
-                                 !atomicResultHasOrderingBarrier(op), rewriter,
-                                 targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
@@ -4325,8 +4321,8 @@ struct AtomicRMWOpConversion
       resultVals =
           actionRemoveBroadcastedRegs(triton::gpu::toLinearLayout(tensorTy))
               .apply(resultVals);
-    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
-                          targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 
@@ -4889,7 +4885,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       if (matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
         Type elemTy = constAttr.getElementType();
         auto handleSplatValue = [&](auto splatVal) {
-          if (!splatVal.isZero()) {
+          if (!splatVal.isZero() || splatVal.isNegative()) {
             otherElems = SmallVector<Value>(
                 cfg.numElems,
                 LLVM::ConstantOp::create(rewriter, loc, elemTy, splatVal));
@@ -5071,8 +5067,8 @@ struct LocalAtomicScatterRMWOpConversion
       return success();
     }
 
-    finalizeAtomicResults(op, rewriter, results, info.llvmElemTy, b,
-                          info.threadPred, targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, results, info.threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 

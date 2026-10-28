@@ -22,12 +22,6 @@ from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase, TensorDescABI, decompose_descriptor
 from triton.backends.driver import expand_signature, get_kernel_argument_layout, wrap_handle_tensordesc_impl
 
-# PTI's default collection mode is Local (mode 2), which with an event-less launcher hangs or
-# reports zero kernel times on the Level Zero v1 adapter (PVC); v2 (BMG and newer) is fine. Full
-# (mode 0) is the workaround. Set at import, because PTI reads this when a collection session starts,
-# and via setdefault so an explicit choice by the user still wins.
-os.environ.setdefault("PTI_COLLECTION_MODE", "0")
-
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
 # library has been updated as a result of updated dependencies.
@@ -405,7 +399,7 @@ def is_lts(ver) -> bool:
 
 
 @lru_cache
-def get_hasher_common(is_lts: bool = False):
+def get_hasher_common(eventless_submit: bool = True):
     hasher = hashlib.sha256((__CACHE_VERSION + platform_key()).encode("utf-8"))
     # Include libsycl_dir in the hash to prevent cache collisions across
     # environments with different oneAPI versions (e.g. 2025.3 vs 2026.0).
@@ -414,13 +408,13 @@ def get_hasher_common(is_lts: bool = False):
     # share the same cache entry and load an incompatible .so.
     if COMPILATION_HELPER.libsycl_dir:
         hasher.update(str(COMPILATION_HELPER.libsycl_dir).encode("utf-8"))
-    if is_lts:
-        hasher.update("is_lts=True".encode("utf-8"))
+    if eventless_submit:
+        hasher.update("eventless_submit=True".encode("utf-8"))
     return hasher
 
 
-def compile_module_from_src(src: str, name: str, is_lts: bool = False):
-    hasher = get_hasher_common(is_lts).copy()
+def compile_module_from_src(src: str, name: str, eventless_submit: bool = True):
+    hasher = get_hasher_common(eventless_submit).copy()
     hasher.update(src.encode("utf-8"))
     # `spirv_utils` is compiled with `-DTRITON_INTEL_INJECT_PYTORCH=1` when
     # `INJECT_PYTORCH=True` (see below), which wraps kernel launches in a
@@ -451,7 +445,7 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
                 else:
                     extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1", "-std=c++20"]
 
-            if name == "spirv_utils" and not is_lts:
+            if name == "spirv_utils" and eventless_submit:
                 if os.name == "nt":
                     extra_compiler_args += ["/DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
                 else:
@@ -502,9 +496,8 @@ class XPUUtils(object):
         dirname = os.path.dirname(os.path.realpath(__file__))
         # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
         # and can cause `Fatal Python error: Segmentation fault`
-        is_lts = self._is_lts()
         mod = compile_module_from_src(src=Path(os.path.join(dirname, "driver.c")).read_text(), name="spirv_utils",
-                                      is_lts=is_lts)
+                                      eventless_submit=self._use_eventless_submit())
         global PyKernelArg
         global ARG_CONSTEXPR
         global ARG_KERNEL
@@ -531,10 +524,12 @@ class XPUUtils(object):
         import torch
         return torch.xpu.current_stream().sycl_queue
 
-    def _is_lts(self):
+    def _use_eventless_submit(self):
         import torch
         properties = torch.xpu.get_device_capability(torch.xpu.current_device())
-        return is_lts(properties.get('driver_version'))
+        # Event-less submission only saves time on the Level Zero v2 adapter, whose platform name ends in "V2". On v1
+        # (PVC's default) it does not, and PTI's default collection mode then reports zero kernel times or hangs.
+        return not is_lts(properties.get('driver_version')) and properties.get('platform_name', '').endswith(' V2')
 
     def wait(self):
         self.wait_on_sycl_queue(self.get_sycl_queue())
@@ -567,10 +562,11 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "double",
-        "bf16": "double",
-        "fp32": "double",
-        "f32": "double",
+        # Pass 16-bit floating-point scalars as raw bit patterns.
+        "fp16": "uint16_t",
+        "bf16": "uint16_t",
+        "fp32": "float",
+        "f32": "float",
         "fp64": "double",
     }[ty]
 
@@ -612,7 +608,10 @@ def serialize_args(args, constants, signature, dir_path):
         args_dict['threads_per_warp'] = arg.threads_per_warp
         args_dict['shared_memory'] = arg.shared
         args_dict['kernel_name'] = arg.name
-        args_dict['spv_name'] = f"{arg.name}.spv"
+        is_native_binary = bool(getattr(arg, "generate_native_code", False))
+        binary_ext = "zebin" if is_native_binary else "spv"
+        args_dict['binary_name'] = f"{arg.name}.{binary_ext}"
+        args_dict['is_native_binary'] = is_native_binary
         args_dict['build_flags'] = arg.build_flags
 
     cnt = 0
@@ -672,11 +671,11 @@ class XPULauncher(object):
             ([ty for _, ty in get_kernel_argument_layout(signature.values(), TensorDescABI.DECOMPOSED)], ))
         self.launch = wrap_handle_tensordesc(utils.launch, signature, tensordesc_meta=[])
 
-        # Serialize KernelArguments for SPIR-V Runner
-        self.serialize_kernel_args = knobs.intel.enable_dump_spirv_kernel_args
+        # Serialize KernelArguments for TritonKernelRunner
+        self.serialize_kernel_args = knobs.intel.enable_dump_kernel_args
         self.cache_dir = metadata.cache_dir
         self.dump_dir = self._resolve_dump_dir(metadata.cache_dir)
-        self.print_dump_spirv_kernel_args_info = knobs.intel.print_dump_spirv_kernel_args_info
+        self.print_dump_kernel_args_info = knobs.intel.print_dump_kernel_args_info
         self.constants = constants
         self.signature = signature
         self.dump_launch_params = os.environ.get("TRITON_DUMP_LAUNCH_PARAMS") == "1"
@@ -686,7 +685,7 @@ class XPULauncher(object):
         self.profile_scratch_align = metadata.profile_scratch_align
 
     def _resolve_dump_dir(self, cache_dir):
-        dump_dir_root = knobs.intel.dump_spirv_kernel_args_dir
+        dump_dir_root = knobs.intel.dump_kernel_args_dir
         if not dump_dir_root:
             return cache_dir
         cache_dir_name = os.path.basename(os.path.normpath(cache_dir))
@@ -756,7 +755,7 @@ class XPULauncher(object):
             profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
 
         if self.serialize_kernel_args:
-            if self.print_dump_spirv_kernel_args_info:
+            if self.print_dump_kernel_args_info:
                 print(
                     f"Triton kernel dump info: kernel_name={kernel_metadata.name}, cache_dir={self.cache_dir}, dump_dir={self.dump_dir}"
                 )

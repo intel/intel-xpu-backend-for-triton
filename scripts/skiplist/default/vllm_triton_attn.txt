@@ -1,0 +1,29 @@
+# _C::rotary_embedding in vllm-xpu-kernels lacks the rope_dim_offset/inverse arguments: https://github.com/intel/intel-xpu-backend-for-triton/issues/8351
+tests/kernels/test_fused_inv_rope_fp8_quant.py::test_with_real_deepseek_v4_rope[1]
+tests/kernels/test_fused_inv_rope_fp8_quant.py::test_with_real_deepseek_v4_rope[256]
+tests/kernels/test_fused_inv_rope_fp8_quant.py::test_with_real_deepseek_v4_rope[32]
+
+# DeepSeek-V4 compressor/indexer cache tests produce wrong results on XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/8353
+tests/kernels/test_compressor_kv_cache.py::test_indexer_gather_accepts_upper_bound_output
+
+# CI HF token has no access to gated google/embeddinggemma-300m: https://github.com/intel/intel-xpu-backend-for-triton/issues/8355
+tests/v1/attention/test_attention_backends.py::test_sliding_window_encoder_backend_correctness[1-google/embeddinggemma-300m-medium_encoder_prefill]
+tests/v1/attention/test_attention_backends.py::test_sliding_window_encoder_backend_correctness[1-google/embeddinggemma-300m-small_encoder_prefill]
+tests/v1/attention/test_attention_backends.py::test_sliding_window_encoder_backend_correctness[2-google/embeddinggemma-300m-medium_encoder_prefill]
+tests/v1/attention/test_attention_backends.py::test_sliding_window_encoder_backend_correctness[2-google/embeddinggemma-300m-small_encoder_prefill]
+
+# DCP packed all-to-all test expects LSE in the input dtype, kernel returns float32: https://github.com/intel/intel-xpu-backend-for-triton/issues/8361
+tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels::test_pack_unpack_combine_matches_reference[False-True-bfloat16]
+tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels::test_pack_unpack_combine_matches_reference[False-True-float16]
+tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels::test_pack_unpack_combine_matches_reference[True-True-bfloat16]
+tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels::test_pack_unpack_combine_matches_reference[True-True-float16]
+
+# test_indexer_quant_cache_roundtrip runs the CUDA SM100-only mxfp8 cases on XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/8486
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-16-17]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-16-1]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-16-4]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-16-8]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-64-17]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-64-1]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-64-4]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-64-8]

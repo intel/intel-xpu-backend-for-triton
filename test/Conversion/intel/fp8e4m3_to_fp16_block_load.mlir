@@ -18,9 +18,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK-DAG: [[C1:%.*]] = llvm.mlir.constant(1 : i16) : i16
     // CHECK-DAG: [[C8:%.*]] = llvm.mlir.constant(8 : i16) : i16
     // CHECK-DAG: [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK-DAG: [[CA:%.*]] = llvm.mlir.constant(3.686400e+04 : f16) : f16
-    // CHECK-DAG: [[CB:%.*]] = llvm.mlir.constant(6.942750e-03 : f16) : f16
-    // CHECK-DAG: [[C0:%.*]] = llvm.mlir.constant(0.000000e+00 : f16) : f16
+    // CHECK-DAG: [[C256:%.*]] = llvm.mlir.constant(2.560000e+02 : f16) : f16
+    // CHECK-DAG: [[C448:%.*]] = llvm.mlir.constant(4.480000e+02 : f16) : f16
+    // CHECK-DAG: [[QNAN:%.*]] = llvm.mlir.constant(32256 : i16) : i16
     // CHECK-COUNT-3: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, {{.*}} transpose = true, {{.*}} -> vector<8xi32>
     // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 8, {{.*}} transpose = false, {{.*}} -> vector<32xi8>
     %k64 = tt.descriptor_load %k64_desc[%arg1, %arg2] {ttig.block_io = "column_major"} : !tt.tensordesc<16x64xf8E4M3FN> -> tensor<64x16xf8E4M3FN, #dot1>
@@ -35,10 +35,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK-NEXT: [[S0:%.*]] = llvm.ashr [[W0]], [[C1]] : i16
     // CHECK-NEXT: [[A0:%.*]] = llvm.and [[S0]], [[MASK]] : i16
     // CHECK-NEXT: [[H0:%.*]] = llvm.bitcast [[A0]] : i16 to f16
-    // CHECK-NEXT: [[M0:%.*]] = llvm.fmul [[H0]], [[CA]] : f16
-    // CHECK-NEXT: [[M1:%.*]] = llvm.fmul [[M0]], [[CB]] : f16
-    // CHECK-NEXT: [[Z0:%.*]] = llvm.fmul [[M1]], [[C0]] : f16
-    // CHECK-NEXT: llvm.fadd [[M1]], [[Z0]] : f16
+    // CHECK-NEXT: [[M0:%.*]] = llvm.fmul [[H0]], [[C256]] : f16
+    // CHECK-NEXT: [[AB:%.*]] = llvm.intr.fabs([[M0]]) : (f16) -> f16
+    // CHECK-NEXT: [[RS:%.*]] = llvm.fcmp "ogt" [[AB]], [[C448]] : f16
+    // CHECK-NEXT: [[NN:%.*]] = llvm.bitcast [[QNAN]] : i16 to f16
+    // CHECK-NEXT: llvm.select [[RS]], [[NN]], [[M0]] : i1, f16
     // CHECK-NEXT: [[D1:%.*]] = llvm.extractelement [[V]]
     // CHECK-NEXT: [[T1:%.*]] = llvm.trunc [[D1]] : i32 to i16
     // CHECK-NEXT: llvm.ashr [[T1]], [[C1]] : i16
