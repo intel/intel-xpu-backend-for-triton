@@ -131,9 +131,11 @@ Peak, not live-in, pressure is the gate: `liveInPressure` derives from
 `LivenessBlockInfo::in()`, which excludes block arguments and so never counts the
 loop-carried DPAS accumulator.
 
-The decision is per loop: once a loop is over budget, every eligible load in it
-is sunk. Spill cost vs. redundant-reload cost is not modelled, and the loop trip
-count is not consulted.
+For loads defined outside the loop the decision is per loop: once the loop is
+over budget, every eligible one is sunk. Spill cost vs. redundant-reload cost is
+not modelled, and the loop trip count is not consulted. A dot operand load inside
+the loop is sunk to its first use only if the pressure between the two, nested
+regions included, reaches the budget.
 
 ### Design Rationale
 Intel GPUs load dot operands directly into registers from memory (no intermediate SLM staging for A/B matrices). The hardware I/O buffer and cache handle redundant accesses. This differs from NVIDIA GPUs which typically stage through shared memory.
@@ -183,7 +185,7 @@ optimize_module(O3) → post_process_llir
 ```
 
 ### Stage 4: SPIR-V
-LLVM IR → SPIR-V translation via `translate_to_spirv()`. GRF mode flags added to build_flags.
+LLVM IR → SPIR-V translation via `translate_to_spirv()`. An explicit `grf_mode` (`'128'`/`'256'`/`'512'`/`'auto'`) is carried by the kernel's `SPV_INTEL_maximum_registers` execution mode (`!MaximumRegisters` metadata set in `make_llir`); only LTS still adds the `-cl-intel-*-GRF-*` build flags. The default-mode large-GRF retry still uses build flags.
 
 ### Stage 5: ZEBIN
 SPIR-V → native binary via `ocloc compile`. Auto-GRF spill detection may trigger recompilation.
