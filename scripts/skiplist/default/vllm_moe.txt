@@ -303,3 +303,9 @@ tests/kernels/moe/test_gemma4router.py::test_gemma4_routing_kernel_triton[dtype1
 
 # silu_and_mul_with_clamp _C op is missing in vllm-xpu-kernels: https://github.com/intel/intel-xpu-backend-for-triton/issues/8351
 tests/kernels/moe/test_triton_moe_no_act_mul.py::test_supported_apply_moe_activation_executes[MoEActivation.SWIGLUOAI_UNINTERLEAVE]
+
+# H200-only TMA test calls torch.cuda.get_device_name() before its H200 skip check: "Torch not compiled with CUDA enabled"
+tests/kernels/moe/test_block_fp8.py::test_h200_block_fp8_up_and_down_tma_matches_pointer[False-24]
+tests/kernels/moe/test_block_fp8.py::test_h200_block_fp8_up_and_down_tma_matches_pointer[False-1024]
+tests/kernels/moe/test_block_fp8.py::test_h200_block_fp8_up_and_down_tma_matches_pointer[True-24]
+tests/kernels/moe/test_block_fp8.py::test_h200_block_fp8_up_and_down_tma_matches_pointer[True-1024]
