@@ -1,0 +1,50 @@
+name: DevCtl XPU smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/devctl-xpu-smoke.yml
+      - .github/scripts/devctl_xpu_smoke.py
+  pull_request:
+    paths:
+      - .github/workflows/devctl-xpu-smoke.yml
+      - .github/scripts/devctl_xpu_smoke.py
+
+permissions: read-all
+
+jobs:
+  xpu-smoke:
+    name: XPU Triton smoke
+    runs-on: sandbox.prod.amr.dind
+    concurrency:
+      group: devctl-${{ github.repository }}-ci-triton-xpu-smoke
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 35
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Run an XPU Triton kernel through DevCtl
+        id: devctl
+        uses: intel-innersource/frameworks.ai.infrastructure.devctl/.github/actions/run-devctl-job@main
+        with:
+          kubeconfig-b64: ${{ secrets.DEVCTL_KUBECONFIG_B64 }}
+          image: intel/pytorch:xpu-2.11.0-ubuntu24.04
+          workspace: ${{ github.workspace }}/.github/scripts
+          command: python,/workspace/local/devctl_xpu_smoke.py
+          gpu: "1"
+          gpu-model: B60
+          cpu: "4"
+          memory: 8Gi
+          namespace: dev
+          session: ci-triton-xpu-smoke
+          timeout: 20m
+          max-runtime: 15m
+
+      - name: Report DevCtl job
+        run: |
+          echo "Job:   ${{ steps.devctl.outputs.job-name }}"
+          echo "State: ${{ steps.devctl.outputs.state }}"
