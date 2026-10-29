@@ -1030,7 +1030,7 @@ index 83ad6e3bcf..899260eb0e 100644
  
  # Resolve once at module load. Uses amdsmi (no CUDA init) so Ray workers
 diff --git a/vllm/v1/attention/ops/triton_prefill_attention.py b/vllm/v1/attention/ops/triton_prefill_attention.py
-index da65692..ff77833 100644
+index da6569262f..ff77833d22 100644
 --- a/vllm/v1/attention/ops/triton_prefill_attention.py
 +++ b/vllm/v1/attention/ops/triton_prefill_attention.py
 @@ -229,7 +229,12 @@ def get_block_size(dtype: torch.dtype) -> int:
