@@ -30,6 +30,7 @@
 #include "triton/Tools/Sys/GetEnv.h"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
@@ -490,8 +491,9 @@ void init_triton_intel(py::module_ &m) {
 
   m.def(
       "translate_to_spirv",
-      [](const std::string &llvmIR, bool isLTS, bool allowLongVector,
-         bool allowMaximumRegisters) -> std::tuple<py::object, std::string> {
+      [](const std::string &llvmIR, bool isLTS,
+         const std::map<std::string, bool> &probedExtensions)
+          -> std::tuple<py::object, std::string> {
         std::string name;
         std::string spirvBitcode;
         {
@@ -513,14 +515,14 @@ void init_triton_intel(py::module_ &m) {
           const uint32_t numKernels = findKernels(*module, kernels);
           assert(numKernels == 1 && "Expecting a single SPIR kernel");
           name = (*kernels.begin())->getName().str();
-          spirvBitcode = triton::translateLLVMIRToSPIRV(
-              *module, isLTS, allowLongVector, allowMaximumRegisters);
+          spirvBitcode =
+              triton::translateLLVMIRToSPIRV(*module, isLTS, probedExtensions);
         }
         return std::make_tuple(
             py::bytes(spirvBitcode.data(), spirvBitcode.size()), name);
       },
-      py::arg("llvmIR"), py::arg("isLTS"), py::arg("allowLongVector"),
-      py::arg("allowMaximumRegisters"), ret::take_ownership);
+      py::arg("llvmIR"), py::arg("isLTS"), py::arg("probedExtensions"),
+      ret::take_ownership);
 
   m.def(
       "calculate_warps_per_tile",

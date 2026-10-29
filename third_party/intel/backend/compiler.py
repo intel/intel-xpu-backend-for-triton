@@ -921,7 +921,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
         is_lts = cls.is_lts(driver_version)
-        spirv, name = intel.translate_to_spirv(src, is_lts, options.allow_long_vector, options.allow_maximum_registers)
+        probed_extensions = {
+            'SPV_EXT_long_vector': options.allow_long_vector,
+            'SPV_INTEL_maximum_registers': options.allow_maximum_registers,
+        }
+        spirv, name = intel.translate_to_spirv(src, is_lts, probed_extensions)
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
         # `metadata["max_grf_mode"]` is already populated from `options.__dict__`

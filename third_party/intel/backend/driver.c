@@ -592,9 +592,6 @@ static BinaryGRFMode getSpirvGRFMode(const uint8_t *binary, size_t size) {
   return {};
 }
 
-// get_default_context() now lives in sycl_functions.h, shared with
-// extension_utils.c.
-
 static BuildFlags last_build_flag("");
 
 extern "C" EXPORT_FUNC PyObject *get_last_selected_build_flags() {
