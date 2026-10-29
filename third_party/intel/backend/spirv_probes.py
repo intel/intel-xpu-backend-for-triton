@@ -8,34 +8,14 @@ probe is actually run.
 """
 
 import functools
-import multiprocessing
 import os
-import queue
 import struct
 import subprocess
+import sys
 import tempfile
-from pathlib import Path
-
-from triton.backends.intel.driver import compile_module_from_src
 
 # Generous bound on how long a probe child may run before it's assumed hung.
 _PROBE_TIMEOUT_SECONDS = 60
-
-
-@functools.lru_cache(maxsize=1)
-def _get_probe_checker():
-    """Lazily compile and load the SPIR-V capability probe's native module."""
-    dirname = os.path.dirname(os.path.realpath(__file__))
-    src = Path(os.path.join(dirname, "spirv_probes.c")).read_text()
-    return compile_module_from_src(src=src, name="spirv_probes_impl")
-
-
-def _has_spirv_capability_worker(device_id: int, probe_spirv: bytes, result_queue: multiprocessing.Queue) -> None:
-    try:
-        probe_checker = _get_probe_checker()
-        result_queue.put(probe_checker.probe_spirv_module(device_id, probe_spirv))
-    except Exception:
-        result_queue.put(None)
 
 
 @functools.lru_cache(maxsize=None)
@@ -59,25 +39,23 @@ def has_spirv_capability(device_id: int, probe_spirv: bytes) -> bool | None:
         if the device isn't found.
     """
     # An unsupported extension can abort the whole process instead of
-    # returning a clean error, so the probe runs in its own `spawn`ed child
-    # (not `fork`, which would inherit this process's Level Zero state) --
-    # an abort then only costs that child.
-    ctx = multiprocessing.get_context('spawn')
-    result_queue = ctx.Queue()
-    proc = ctx.Process(target=_has_spirv_capability_worker, args=(device_id, probe_spirv, result_queue))
-    proc.start()
-    proc.join(_PROBE_TIMEOUT_SECONDS)
-    if proc.is_alive():
-        proc.terminate()
-        proc.join()
-
-    result = False
-    if not proc.exitcode:
-        try:
-            result = result_queue.get_nowait()
-        except queue.Empty:
-            pass
-    return result
+    # returning a clean error, so the probe runs in a dedicated helper
+    # subprocess (`_spirv_probe_worker`, not `multiprocessing`, which would
+    # re-execute the caller's own `__main__` to bootstrap) -- an abort then
+    # only costs that child.
+    try:
+        proc = subprocess.run([sys.executable, '-m', 'triton.backends.intel._spirv_probe_worker',
+                               str(device_id)], input=probe_spirv, capture_output=True, timeout=_PROBE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        return False  # Hung: treat like a crash.
+    if proc.returncode != 0:
+        return False  # Crashed/aborted: the capability is unsafe to use.
+    output = proc.stdout.decode().strip()
+    if output == 'True':
+        return True
+    if output == 'False':
+        return False
+    return None
 
 
 def _spirv_words(*words):
@@ -111,6 +89,7 @@ _MAX_REGISTERS_PROBE_SPV = (
     _spirv_words(0x07230203, 0x00010400, 0, 5, 0)  # magic, v1.4, generator, bound, schema
     + _spirv_op(17, 6)  # OpCapability Kernel
     + _spirv_op(17, 4)  # OpCapability Addresses
+    + _spirv_op(17, 6460)  # OpCapability RegisterLimitsINTEL (required by MaximumRegistersINTEL)
     + _spirv_op(10, *struct.unpack('<7I', b'SPV_INTEL_maximum_registers\0'))  # OpExtension
     + _spirv_op(14, 2, 2)  # OpMemoryModel Physical64 OpenCL
     + _spirv_op(15, 6, 3, *struct.unpack('<2I', b'main\0\0\0\0'))  # OpEntryPoint Kernel %3 "main"

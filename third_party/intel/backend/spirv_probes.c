@@ -1,11 +1,3 @@
-/*
- * Ground-truth probe for whether a SPIR-V capability/extension is accepted
- * by the installed driver's own JIT. Raw Level Zero (no SYCL), so it skips
- * SYCL's backend/plugin init and doesn't depend on OpenCL or `ocloc` being
- * present -- see `extension_utils.c`'s `check_extension()` for the
- * OpenCL-extension-advertisement side this complements.
- */
-
 #include <algorithm>
 #include <vector>
 

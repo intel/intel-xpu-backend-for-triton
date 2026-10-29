@@ -152,10 +152,7 @@ extern "C" EXPORT_FUNC PyObject *check_extension(int device_id,
     Py_RETURN_FALSE;
 
   } catch (const std::exception &e) {
-    // Surface init failures (e.g. no OpenCL and no `ocloc`) instead of
-    // reporting every extension as unsupported.
-    PyErr_SetString(PyExc_RuntimeError, e.what());
-    return NULL;
+    Py_RETURN_FALSE;
   }
 }
 
