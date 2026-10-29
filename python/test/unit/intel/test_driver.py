@@ -464,3 +464,67 @@ def test_sycl_global_range_overflow(device):
     add_kernel[grid](x, x, output, n_elements, 16)
 
     torch.testing.assert_close(output.cpu(), (x + x).cpu(), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("grf_mode", ["default", "256"])
+def test_clear_cache_grf_mode(device, grf_mode):
+    drv = driver.active
+    cache = drv.get_empty_cache_for_benchmark()
+    cache.fill_(1)
+    drv._flush_grf_mode = grf_mode
+    try:
+        drv.clear_cache(cache)
+    finally:
+        drv._flush_grf_mode = "default"
+    assert int(torch.count_nonzero(cache)) == 0
+
+
+def test_benchmarker_return_types(device):
+    x = torch.zeros(1024, device=device)
+    bench = driver.active.get_benchmarker()
+    assert len(bench(lambda: x.add_(1), quantiles=(0.5, 0.2, 0.8))) == 3
+    assert isinstance(bench(lambda: x.add_(1)), float)
+    assert isinstance(bench(lambda: x.add_(1), return_mode="all"), list)
+
+
+def _flush_grf_modes_used(monkeypatch, fn):
+    drv = driver.active
+    used = set()
+    clear_cache = drv.clear_cache
+
+    def recording_clear_cache(cache):
+        used.add(drv._flush_grf_mode)
+        clear_cache(cache)
+
+    monkeypatch.setattr(drv, "clear_cache", recording_clear_cache)
+    drv.get_benchmarker()(fn)
+    return used
+
+
+@pytest.mark.parametrize("grf_mode", ["default", "256"])
+def test_benchmarker_flushes_in_kernel_grf_mode(device, monkeypatch, grf_mode):
+    # A flush in another GRF mode would charge every timed run a GRF-mode switch (#8465).
+
+    @triton.jit
+    def add_one(x_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(x_ptr + offs, tl.load(x_ptr + offs) + 1)
+
+    x = torch.zeros(1024, device=device)
+    assert _flush_grf_modes_used(monkeypatch, lambda: add_one[(1, )](x, BLOCK=1024, grf_mode=grf_mode)) == {grf_mode}
+
+
+def test_benchmarker_flushes_in_auto_upgraded_grf_mode(device, monkeypatch):
+    # The kernel of test_auto_grf spills on the default GRF mode and is rebuilt with more GRF.
+    BLOCK = 1024 * 32 if is_xpu_cri() else 1024 * 8
+    z = torch.zeros(BLOCK, dtype=torch.int32, device=device)
+
+    @triton.jit
+    def _kernel(z, BLOCK: tl.constexpr):
+        off = tl.arange(0, BLOCK)
+        a = tl.load(z + off)
+        result = tl.sum(a, axis=0, keep_dims=True)
+        tl.store(z + off, a + result)
+
+    used = _flush_grf_modes_used(monkeypatch, lambda: _kernel[(1, )](z, BLOCK=BLOCK, num_warps=2))
+    assert used == {"512" if is_xpu_cri() else "256"}
