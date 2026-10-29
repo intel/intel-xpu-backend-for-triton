@@ -1,3 +1,7 @@
+import re
+import subprocess
+import os
+
 import pytest
 import triton
 import triton.language as tl
@@ -5,6 +9,21 @@ import triton.language as tl
 from triton._internal_testing import numpy_random, to_triton, is_xpu_cri
 from triton.backends.intel.compiler import (REBUILD_SPILL_BYTES_PER_THREAD, XPUBackend, accepts_default_grf,
                                             extract_spill_size_from_zebin)
+
+
+def _igc_version() -> tuple[int, int] | None:
+    """(major, minor) from the installed `libigc2`/`libigc1` package, or None if undetectable."""
+    for pkg in ("libigc2", "libigc1"):
+        try:
+            proc = subprocess.run(["dpkg-query", "--show", "--showformat=${version}\n", pkg], capture_output=True,
+                                  text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if proc.returncode == 0:
+            m = re.match(r'(\d+)\.(\d+)', proc.stdout)
+            if m:
+                return int(m.group(1)), int(m.group(2))
+    return None
 
 
 def test_empty_kernel(device):
@@ -121,3 +140,30 @@ def test_explicit_grf_mode_uses_maximum_registers(device, grf_mode, generate_nat
     assert "GRF" not in k.metadata.build_flags
     if grf_mode != "auto":
         assert k.n_regs == int(grf_mode)
+
+
+@pytest.mark.xfail(os.name == "nt", reason="IGC version detection (dpkg) is not available on Windows", run=False)
+def test_max_registers_matches_known_igc_support(device):
+    min_supported_igc_version = (2, 40)
+
+    igc_version = _igc_version()
+    if igc_version is None:
+        pytest.xfail("IGC version not detectable via dpkg (libigc1/libigc2)")
+    if igc_version <= min_supported_igc_version:
+        pytest.xfail(f"IGC {igc_version[0]}.{igc_version[1]} predates the known-supported "
+                     f"threshold (>{min_supported_igc_version[0]}.{min_supported_igc_version[1]})")
+
+    @triton.jit
+    def kernel(X, SIZE: tl.constexpr):
+        x = tl.arange(0, SIZE)
+        tl.store(X + x, x)
+
+    SIZE = 128
+    x = to_triton(numpy_random(SIZE, dtype_str="int32"), device=device, dst_type="int32")
+    k = kernel[(1, )](x, SIZE=SIZE, num_warps=4, grf_mode="auto")
+
+    assert k.metadata.allow_maximum_registers, (
+        f"IGC {igc_version[0]}.{igc_version[1]} is known to support `SPV_INTEL_maximum_registers` "
+        f"(>{min_supported_igc_version[0]}.{min_supported_igc_version[1]}), but the ground-truth "
+        "probe reported it unsupported.")
+    assert "!MaximumRegisters" in k.asm["llir"]
