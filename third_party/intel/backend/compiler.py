@@ -2,10 +2,11 @@ from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
 from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
+from triton.backends.intel.errors import IntelGPUError
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
-from triton.runtime.errors import IntelGPUError, OutOfResources
+from triton.runtime.errors import OutOfResources
 
 from dataclasses import dataclass
 import functools
