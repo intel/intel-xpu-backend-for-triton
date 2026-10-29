@@ -251,6 +251,194 @@ index ad6b8c9d77..e9fe5fc954 100644
          topk_weight, topk_ids, _ = topk_output
          from sgl_kernel import fused_experts as sgl_fused_experts
  
+diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe_triton_config.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe_triton_config.py
+index c4ad7d49d6..b927826a9b 100644
+--- a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe_triton_config.py
++++ b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe_triton_config.py
+@@ -10,10 +10,11 @@ import torch
+ import triton
+ 
+ from sglang.srt.runtime_context import get_exec
+-from sglang.srt.utils import get_device_name, is_hip
++from sglang.srt.utils import get_device_name, is_hip, is_xpu
+ 
+ logger = logging.getLogger(__name__)
+ _is_hip = is_hip()
++_is_xpu = is_xpu()
+ _LOW_SMEM_FP8_DEFAULT_CUTOFF_BYTES = 128 * 1024
+ 
+ 
+@@ -234,13 +235,14 @@ def get_default_config(
+                         "num_stages": 2 if _is_hip else 4,
+                     }
+         else:
+-            # Block-wise quant: BLOCK_SIZE_K must be divisible by block_shape[1]
++            # Block-wise quant: block_shape[1] must be divisible by BLOCK_SIZE_K.
++            # On XPU the 64x128x128 tile spills registers.
+             config = {
+-                "BLOCK_SIZE_M": 64,
++                "BLOCK_SIZE_M": 32 if _is_xpu else 64,
+                 "BLOCK_SIZE_N": block_shape[0],
+-                "BLOCK_SIZE_K": block_shape[1],
++                "BLOCK_SIZE_K": block_shape[1] // 2 if _is_xpu else block_shape[1],
+                 "GROUP_SIZE_M": 32,
+-                "num_warps": 4,
++                "num_warps": 8 if _is_xpu else 4,
+                 "num_stages": 2 if _is_hip else 3,
+             }
+     else:
+diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/configs/triton_3_9_0/E=64,N=1408,device_name=Intel(R)_Arc(TM)_Pro_B60_Graphics,dtype=fp8_w8a8,block_shape=[128, 128].json b/python/sglang/srt/layers/moe/moe_runner/triton_utils/configs/triton_3_9_0/E=64,N=1408,device_name=Intel(R)_Arc(TM)_Pro_B60_Graphics,dtype=fp8_w8a8,block_shape=[128, 128].json
+new file mode 100644
+index 0000000000..26f58f9344
+--- /dev/null
++++ b/python/sglang/srt/layers/moe/moe_runner/triton_utils/configs/triton_3_9_0/E=64,N=1408,device_name=Intel(R)_Arc(TM)_Pro_B60_Graphics,dtype=fp8_w8a8,block_shape=[128, 128].json	
+@@ -0,0 +1,146 @@
++{
++    "1": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "2": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2
++    },
++    "4": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "8": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "16": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "24": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "32": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "48": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "64": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "96": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "128": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "256": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2
++    },
++    "512": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "1024": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "1536": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "2048": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "3072": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "4096": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2
++    }
++}
 diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
 index 6ad8973393..cf34f8bb17 100644
 --- a/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
