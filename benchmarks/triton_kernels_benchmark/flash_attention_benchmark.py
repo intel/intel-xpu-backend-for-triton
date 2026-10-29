@@ -67,7 +67,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         acc = tl.dot(p, v, acc)
         # update m_i and l_i
         # place this at the end of the loop to reduce register pressure
-        l_i = tl.fma(l_i, alpha, l_ij)
+        l_i = l_i * alpha + l_ij
         m_i = m_ij
         offsetk_y += BLOCK_N
         offsetv_y += BLOCK_N
