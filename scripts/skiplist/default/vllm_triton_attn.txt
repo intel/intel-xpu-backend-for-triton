@@ -27,3 +27,9 @@ tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mx
 tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-64-1]
 tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-64-4]
 tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-64-8]
+
+# fp32 head_dim=512 context attention needs 135168 B shared memory, above the 131072 B PVC limit (OutOfResources)
+tests/kernels/attention/test_triton_prefill_attention.py::test_context_attention[dtype0-True-512-32-32-1024-5]
+tests/kernels/attention/test_triton_prefill_attention.py::test_context_attention[dtype0-True-512-8-32-1024-5]
+tests/kernels/attention/test_triton_prefill_attention.py::test_context_attention[dtype0-False-512-32-32-1024-5]
+tests/kernels/attention/test_triton_prefill_attention.py::test_context_attention[dtype0-False-512-8-32-1024-5]
