@@ -7,6 +7,7 @@ import torch
 import pathlib
 
 import triton
+import triton.language as tl
 from triton._internal_testing import is_xpu
 
 
@@ -469,3 +470,36 @@ def test_block_io_rank_reduced_store(batch, stride_kind, device, tmp_path: pathl
     llir = kernel.asm["llir"]
     block_store = 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
     assert block_store == (stride_kind == "aligned")
+
+
+@triton.jit
+def _rank_reduced_store_kernel(src_ptr, dst_ptr, B, stride_b, batch, M: tl.constexpr, N: tl.constexpr):
+    rows = tl.arange(0, M)[:, None]
+    # dot(I, src) is src exactly, and gives the stored value the DPAS layout a 2D block store takes.
+    eye = (rows == tl.arange(0, M)[None, :]).to(tl.bfloat16)
+    x = tl.dot(eye, tl.load(src_ptr + rows * N + tl.arange(0, N)[None, :])).to(tl.bfloat16)
+    desc = tl.make_tensor_descriptor(dst_ptr, shape=[B, M, N], strides=[stride_b, N, 1], block_shape=[1, M, N])
+    desc.store([batch, 0, 0], x.reshape([1, M, N]))
+
+
+# A runtime plane stride carries only the 16-element hint, which proves the 4-byte-aligned rebase the block store
+# needs whether a plane starts 32 or 0 bytes past a 64-byte boundary; an out-of-range batch writes nothing (#8516).
+@pytest.mark.parametrize("extra, batch", [(16, 3), (32, 3), (16, 0), (16, 4)])
+@pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
+                   reason="Block stores not supported on this architecture")
+@pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
+def test_block_io_rank_reduced_store_runtime_stride(batch, extra, device, with_allocator):
+    B, M, N = 4, 32, 64
+    stride_b = M * N + extra
+    # Normal bf16 bit patterns, compared as int16 so the check is exact.
+    src = (torch.arange(M * N, device=device) + 0x3F80).to(torch.int16)
+    buf = torch.full(((B + 1) * stride_b, ), -1, dtype=torch.int16, device=device)
+    kernel = _rank_reduced_store_kernel[(1, )](src.view(torch.bfloat16), buf.view(torch.bfloat16), B, stride_b, batch,
+                                               M, N)
+
+    expect = torch.full_like(buf, -1)
+    if batch < B:
+        expect[batch * stride_b:batch * stride_b + M * N] = src
+    assert torch.equal(buf, expect)
+    llir = kernel.asm["llir"]
+    assert 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir

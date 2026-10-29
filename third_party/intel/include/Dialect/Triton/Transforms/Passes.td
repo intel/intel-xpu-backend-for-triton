@@ -46,7 +46,7 @@ def TritonIntelRemoveMasks
 
 def TritonIntelFuseReshape
     : Pass<"triton-intel-fuse-reshape", "mlir::ModuleOp"> {
-  let summary = "Fuse a tt.reshape operation with a tt.load operation (tensor descriptors only)";
+  let summary = "Fuse tt.reshape operations into tensor-descriptor loads and stores";
 
   let description = [{
     This pass attempts to fuse a tt.reshape operation with a tt.descriptor_load operation.
@@ -65,6 +65,14 @@ def TritonIntelFuseReshape
         %A = tt.descriptor_load %desc[%x * %div + %y, %z]
                                 : !tt.tensordesc<512x64xf16> -> tensor<512x64xf16>
         dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
+
+    It also folds a tt.reshape that only prepends unit dimensions to a value of rank 2 or more
+    into the tt.descriptor_store of its result, which then stores the value directly (a
+    rank-reduced store):
+        %r = tt.reshape %x : tensor<128x64xf16> -> tensor<1x128x64xf16>
+        tt.descriptor_store %desc[%b, %y, %z], %r : !tt.tensordesc<1x128x64xf16>, tensor<1x128x64xf16>
+    becomes:
+        tt.descriptor_store %desc[%b, %y, %z], %x : !tt.tensordesc<1x128x64xf16>, tensor<128x64xf16>
   }];
 
   let dependentDialects = [

@@ -574,6 +574,26 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// Rank-reducing generic store (1x2x64 descriptor, 2x64 value): the fast dim is
+// the descriptor's last, so each thread's 8 f16 are one vector<4xi32> store.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @rank_reducing_store_vectorized
+  tt.func public @rank_reducing_store_vectorized(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: tensor<2x64xf16, #blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg2, %arg2, %c64_i32], [%arg3, %arg3, %c1_i64] : <f16>, <1x2x64xf16>
+    // CHECK: triton_gen.predicated_store {{.*}} : (!llvm.ptr<1>, vector<4xi32>, i1)
+    tt.descriptor_store %desc[%arg1, %arg1, %c0_i32], %arg4 : !tt.tensordesc<1x2x64xf16>, tensor<2x64xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 // Test divisible descriptor load with a non-zero constant offset:
 // When shape[i] % block_shape[i] == 0 AND offset[i] % block_shape[i] == 0,
 // the load uses BLOCK-LEVEL checks on the base offset directly rather than

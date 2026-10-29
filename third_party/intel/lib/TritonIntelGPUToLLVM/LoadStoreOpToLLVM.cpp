@@ -252,8 +252,11 @@ struct LoadStoreConversionBase {
     AxisInfo *descAxisInfo =
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
             .getAxisInfo(desc);
-    if (!descAxisInfo || static_cast<unsigned>(descAxisInfo->getRank()) != rank)
+    if (!descAxisInfo || static_cast<unsigned>(descAxisInfo->getRank()) < rank)
       return 1;
+    // The AxisInfo has the block rank, and a rank-reducing access drops leading
+    // unit dims, so value dim `d` is descriptor dim `d + rankDelta`.
+    const unsigned rankDelta = descAxisInfo->getRank() - rank;
 
     auto linAttr = triton::gpu::toGenericLinearEncoding(resultType);
     SmallVector<unsigned> order = linAttr.getOrder();
@@ -271,6 +274,7 @@ struct LoadStoreConversionBase {
         descDim = (order[0] == rank - 2) ? rank - 1 : rank - 2;
       }
     }
+    descDim += rankDelta;
 
     unsigned descContiguity = descAxisInfo->getContiguity(descDim);
     if (descContiguity <= 1)
