@@ -21,6 +21,7 @@ from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase, TensorDescABI, decompose_descriptor
 from triton.backends.driver import expand_signature, get_kernel_argument_layout, wrap_handle_tensordesc_impl
+from . import native
 
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
@@ -318,7 +319,7 @@ class SpirvUtils:
         try:
             return self.shared_library.load_binary(args)
         except Exception as e:
-            from triton.backends.intel.errors import IntelGPUError
+            from .errors import IntelGPUError
             from triton.runtime.errors import OutOfResources
             if isinstance(e, OutOfResources):
                 raise
@@ -800,7 +801,7 @@ class XPUDriver(DriverBase):
     @lru_cache
     def _construct_target(self, device):
         import torch
-        from triton.backends.intel.extension_utils import query_device_extensions
+        from .extension_utils import query_device_extensions
 
         dev_property = torch.xpu.get_device_capability(device)
 
@@ -828,8 +829,6 @@ class XPUDriver(DriverBase):
         return self._construct_target(device)
 
     def build_proton_help_lib(self):
-        from triton.backends.intel.driver import compile_module_from_src
-
         dirname = os.path.dirname(os.path.realpath(__file__))
         return compile_module_from_src(src=Path(dirname).joinpath("proton_utils.cpp").read_text(), name="proton_utils")
 
@@ -855,6 +854,8 @@ class XPUDriver(DriverBase):
 
     @staticmethod
     def is_active():
+        if native.error:  # the backend's C++ module could not be loaded (native.py)
+            return False
         try:
             import torch
             return torch.xpu.is_available()
