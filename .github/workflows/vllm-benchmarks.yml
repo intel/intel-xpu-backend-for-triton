@@ -3,6 +3,10 @@ name: vLLM benchmarks
 on:
   workflow_dispatch:
     inputs:
+      head_group_resume_run:
+        description: Resume unfinished head-group cases from this run across four shards
+        type: string
+        default: ""
       head_group_ablation:
         description: Run the paired full-group versus expanded head-group experiment only
         type: boolean
@@ -25,6 +29,10 @@ on:
         default: ""
   workflow_call:
     inputs:
+      head_group_resume_run:
+        description: Resume unfinished head-group cases from this run across four shards
+        type: string
+        default: ""
       head_group_ablation:
         description: Run the paired full-group versus expanded head-group experiment only
         type: boolean
@@ -57,7 +65,12 @@ env:
 
 jobs:
   build:
-    name: vLLM benchmarks
+    name: ${{ inputs.head_group_resume_run && format('Head-group ablation shard {0}', matrix.ablation_shard) || 'vLLM benchmarks' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        ablation_shard: ${{ fromJSON(inputs.head_group_ablation && inputs.head_group_resume_run != '' && '[0,1,2,3]' || '[0]') }}
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'b580' }}
@@ -148,16 +161,32 @@ jobs:
           EOF
           ./scripts/capture-hw-details.sh | tee -a "$REPORTS/.env"
 
+      - name: Download completed head-group measurements
+        if: ${{ inputs.head_group_ablation && inputs.head_group_resume_run != '' }}
+        uses: actions/download-artifact@v7
+        with:
+          name: benchmark-reports
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.head_group_resume_run }}
+          path: ${{ runner.temp }}/ua-head-group-resume
+
       - name: Run paired head-group ablation
         if: ${{ inputs.head_group_ablation && steps.install-vllm.outcome == 'success' && !cancelled() }}
         env:
           TRITON_CACHE_DIR: ${{ runner.temp }}/ua-head-group-ablation-cache
           TRITON_XPU_GEN_NATIVE_CODE: "1"
+          HEAD_GROUP_RESUME_RUN: ${{ inputs.head_group_resume_run }}
+          HEAD_GROUP_SHARD_INDEX: ${{ matrix.ablation_shard }}
         run: |
           source ./scripts/capture-hw-details.sh
           git -C vllm apply "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
           export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
-          python -u scripts/vllm/head_group_ablation.py --output "$REPORTS/head-group-ablation" 2>&1 | tee "$REPORTS/head-group-ablation.log"
+          resume_args=()
+          if [[ -n "$HEAD_GROUP_RESUME_RUN" ]]; then
+            resume_args=(--resume-from "$RUNNER_TEMP/ua-head-group-resume/head-group-ablation" --shard-index "$HEAD_GROUP_SHARD_INDEX" --shard-count 4)
+          fi
+          python scripts/vllm/head_group_ablation.py --plan-only --output "$REPORTS/head-group-ablation" "${resume_args[@]}"
+          python -u scripts/vllm/head_group_ablation.py --output "$REPORTS/head-group-ablation" "${resume_args[@]}" 2>&1 | tee "$REPORTS/head-group-ablation.log"
 
       - name: Run vllm unified attention bf16
         if: ${{ !inputs.head_group_ablation && steps.install-vllm.outcome == 'success' && !cancelled() }}
@@ -204,5 +233,31 @@ jobs:
         if: ${{ always() && steps.install.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: benchmark-reports
+          name: ${{ inputs.head_group_resume_run && format('head-group-ablation-shard-{0}', matrix.ablation_shard) || 'benchmark-reports' }}
+          path: reports
+
+  summarize-head-group-ablation:
+    name: Combine head-group ablation results
+    needs: build
+    if: ${{ always() && inputs.head_group_ablation && inputs.head_group_resume_run != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout experiment
+        uses: actions/checkout@v7
+
+      - name: Download shard measurements
+        uses: actions/download-artifact@v7
+        with:
+          pattern: head-group-ablation-shard-*
+          path: ablation-shards
+
+      - name: Combine and verify all 97 cases
+        run: |
+          python3 scripts/vllm/head_group_ablation.py --merge-from ablation-shards --shard-count 4 --output reports/head-group-ablation
+
+      - name: Upload combined report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: head-group-ablation-combined
           path: reports

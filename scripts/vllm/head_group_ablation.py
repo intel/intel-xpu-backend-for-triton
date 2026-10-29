@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import random
+import shutil
 import statistics
 import sys
 import time
@@ -319,7 +320,62 @@ def summarize(output):
     (output / "summary.md").write_text("\n".join(lines) + "\n")
 
 
-def run(args, inventory):
+def completed_cases(source, inventory):
+    known = {case["id"]: case for case in inventory["cases"]}
+    completed = {}
+    for path in sorted(source.glob("cases/*/result.json")):
+        record = json.loads(path.read_text())
+        ident = path.parent.name
+        assert record.get("complete") and record["case"] == known[ident], ident
+        assert len(record["confirmation"]) == 3, ident
+        assert all(len(cycle["timings_ms"][arm]) == 16
+                   for cycle in record["confirmation"] for arm in ARMS), ident
+        completed[ident] = path
+    return completed
+
+
+def copy_completed(records, output):
+    for ident, path in records.items():
+        destination = output / "cases" / ident
+        if (destination / "result.json").exists():
+            assert (destination / "result.json").read_bytes() == path.read_bytes(), ident
+        else:
+            shutil.copytree(path.parent, destination)
+
+
+def select_cases(args, inventory):
+    completed = completed_cases(args.output, inventory)
+    if args.resume_from:
+        prior = json.loads((args.resume_from / "runtime.json").read_text())
+        assert prior["source_sha256"] == inventory["source_sha256"]
+        for ident, path in completed_cases(args.resume_from, inventory).items():
+            if ident in completed:
+                assert completed[ident].read_bytes() == path.read_bytes(), ident
+            completed[ident] = path
+    remaining = [case for case in inventory["cases"]
+                 if case["id"] not in completed and (not args.case or args.case in case["id"])]
+    return remaining[args.shard_index::args.shard_count], completed
+
+
+def merge_results(args, inventory):
+    sources = sorted(args.merge_from.glob("*/head-group-ablation"))
+    assert len(sources) == args.shard_count, "Missing shard artifacts"
+    provenance = []
+    for source in sources:
+        runtime = json.loads((source / "runtime.json").read_text())
+        assert runtime["source_sha256"] == inventory["source_sha256"]
+        assert runtime["complete"], f"Incomplete shard: {source}"
+        if provenance:
+            for key in ("source_sha256", "torch", "triton", "device"):
+                assert runtime[key] == provenance[0][key], key
+        provenance.append(runtime)
+        copy_completed(completed_cases(source, inventory), args.output)
+    dump(args.output / "provenance.json", provenance)
+    summarize(args.output)
+    assert len(completed_cases(args.output, inventory)) == len(inventory["cases"]), "Incomplete combined suite"
+
+
+def run(args, inventory, selected):
     import torch
     import triton
     torch.set_num_threads(4)
@@ -332,10 +388,16 @@ def run(args, inventory):
     runtime = dict(source_sha256=source_sha, torch=str(torch.__version__), triton=triton.__version__,
                    device=torch.xpu.get_device_name(0), run_id=os.getenv("GITHUB_RUN_ID"),
                    commit=os.getenv("GITHUB_SHA"), runner=os.getenv("RUNNER_NAME"),
-                   inputs=inventory, started=time.time(), complete=False)
+                   inputs=inventory, started=time.time(), complete=False,
+                   selected_case_ids=[case["id"] for case in selected],
+                   shard_index=args.shard_index, shard_count=args.shard_count)
+    if args.resume_from:
+        prior = json.loads((args.resume_from / "runtime.json").read_text())
+        for key in ("source_sha256", "torch", "triton", "device"):
+            assert prior[key] == runtime[key], f"Resume environment mismatch: {key}"
+        runtime["resumed_run_id"] = prior["run_id"]
     dump(args.output / "runtime.json", runtime)
     rng = random.Random(629711)
-    selected = [case for case in inventory["cases"] if not args.case or args.case in case["id"]]
     for case in selected:
         directory = args.output / "cases" / case["id"]
         if (directory / "result.json").exists():
@@ -365,6 +427,10 @@ def main():
     parser.add_argument("--vllm", type=Path, default=Path("vllm"))
     parser.add_argument("--output", type=Path, default=Path("reports/head-group-ablation"))
     parser.add_argument("--case", default="")
+    parser.add_argument("--resume-from", type=Path)
+    parser.add_argument("--merge-from", type=Path)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--plan-only", action="store_true")
     parser.add_argument("--report-only", action="store_true")
     args = parser.parse_args()
@@ -373,13 +439,22 @@ def main():
         case["seq_lens"] = inventory["sequence_patterns"][case["sequence_pattern"]]
     assert len(inventory["cases"]) == 97
     assert len({case["id"] for case in inventory["cases"]}) == 97
+    assert 0 <= args.shard_index < args.shard_count
+    selected, completed = select_cases(args, inventory)
     if args.plan_only:
-        print(json.dumps({"cases": len(inventory["cases"]), "source_sha256": inventory["source_sha256"]}))
+        print(json.dumps({"cases": len(inventory["cases"]), "completed": len(completed),
+                          "selected_case_ids": [case["id"] for case in selected],
+                          "shard_index": args.shard_index, "shard_count": args.shard_count,
+                          "source_sha256": inventory["source_sha256"]}))
     elif args.report_only:
         summarize(args.output)
     else:
         try:
-            run(args, inventory)
+            if args.merge_from:
+                merge_results(args, inventory)
+            else:
+                copy_completed(completed, args.output)
+                run(args, inventory, selected)
         finally:
             summarize(args.output)
             summary = args.output / "summary.md"
