@@ -126,34 +126,6 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
   return std::get<0>(tuple);
 }
 
-sycl::context get_default_context(const sycl::device &sycl_device) {
-  const auto &platform = sycl_device.get_platform();
-#if defined(_WIN32)
-  sycl::context ctx;
-  try {
-#if __SYCL_COMPILER_VERSION >= 20250604
-    ctx = platform.khr_get_default_context();
-#else
-    ctx = platform.ext_oneapi_get_default_context();
-#endif
-  } catch (const std::runtime_error &ex) {
-    // This exception is thrown on Windows because
-    // khr_get_default_context is not implemented. But it can be safely
-    // ignored it seems.
-#if _DEBUG
-    std::cout << "ERROR: " << ex.what() << std::endl;
-#endif
-  }
-  return ctx;
-#else
-#if __SYCL_COMPILER_VERSION >= 20250604
-  return platform.khr_get_default_context();
-#else
-  return platform.ext_oneapi_get_default_context();
-#endif
-#endif
-}
-
 /** SYCL Functions **/
 std::tuple<sycl::kernel_bundle<sycl::bundle_state::executable>, sycl::kernel,
            int32_t, int32_t>

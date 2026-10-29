@@ -106,6 +106,15 @@ public:
   SmallVectorBuffer(llvm::SmallVectorImpl<char> &O) : OS(O) {}
 };
 
+/// Whether `extension` was confirmed usable by a ground-truth probe (see
+/// `compiler.py`'s `has_spirv_capability`/`ocloc_accepts_*`).
+static bool
+isProbedExtensionAllowed(const std::map<std::string, bool> &probedExtensions,
+                         llvm::StringRef extension) {
+  auto It = probedExtensions.find(extension.str());
+  return It != probedExtensions.end() && It->second;
+}
+
 /// Returns the list of SPIR-V extensions the translator is allowed to use.
 /// Ideally the driver would be queried for the extensions it supports, however
 /// no such query is available yet, therefore extensions that are not supported
@@ -115,23 +124,6 @@ public:
 /// knows about; it can be refreshed for a newer LTS by extracting the extension
 /// names from the shipped compiler library, e.g.:
 ///   strings -a libigc.so.<version> | grep -oE 'SPV_[A-Za-z0-9_]+' | sort -u
-///
-/// Vectors beyond the core SPIR-V sizes are expressed with either
-/// `SPV_EXT_long_vector` (when allowed by \p probedExtensions) or the older
-/// `SPV_INTEL_vector_compute`. The former is not known to every compiler that
-/// can consume the module (e.g. an `ocloc` older than the installed driver), so
-/// it is gated on a ground-truth probe rather than being implied by \p isLTS.
-/// Likewise, `SPV_INTEL_maximum_registers` is only added when \p
-/// probedExtensions allows it -- whether the caller requested it at all (see
-/// `compiler.py`'s `options.allow_maximum_registers`) already accounts for a
-/// rolling driver or `ocloc` that doesn't understand it.
-static bool
-isProbedExtensionAllowed(const std::map<std::string, bool> &probedExtensions,
-                         llvm::StringRef extension) {
-  auto It = probedExtensions.find(extension.str());
-  return It != probedExtensions.end() && It->second;
-}
-
 static llvm::SmallVector<SPIRV::ExtensionID>
 getAllowedExtensions(bool isLTS,
                      const std::map<std::string, bool> &probedExtensions) {
