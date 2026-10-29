@@ -46,6 +46,8 @@ env:
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   HF_TOKEN: ${{ secrets.HF_TOKEN || '' }}
   GH_TOKEN: ${{ github.token }}
+  # Bisect experiment: opt back in to FP fusion (upstream #12479 made it opt-in)
+  TRITON_ALLOW_FP_FUSION: "1"
 
 jobs:
   build:
