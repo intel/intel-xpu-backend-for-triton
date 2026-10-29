@@ -365,7 +365,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         native = options.generate_native_code
         device_id = self.target.arch.get("device_id")
         options.allow_long_vector = accepts_long_vector(native, self.device_arch, device_id)
-        options.allow_maximum_registers = accepts_maximum_registers(native, self.device_arch, device_id)
+        # `accepts_maximum_registers` returns True for LTS (but should return False)
+        options.allow_maximum_registers = (not options.is_lts
+                                           and accepts_maximum_registers(native, self.device_arch, device_id))
         return options
 
     @staticmethod
