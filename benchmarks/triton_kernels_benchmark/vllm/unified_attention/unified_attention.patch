@@ -546,7 +546,7 @@ new file mode 100644
 index 0000000..c1af94b
 --- /dev/null
 +++ b/vllm/v1/attention/ops/triton_unified_attention_config.py
-@@ -0,0 +1,521 @@
+@@ -0,0 +1,518 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +
@@ -827,12 +827,9 @@ index 0000000..c1af94b
 +    heads = config.get_heads_per_program(key.num_queries_per_kv)
 +    if key.num_queries_per_kv % heads:
 +        return False
-+    # Smaller groups currently support TD prefill only.
++    # Smaller groups require TD and power-of-two head sizes.
 +    if heads != key.num_queries_per_kv and (
-+        backend != "xpu"
-+        or not key.use_td
-+        or key.is_3d
-+        or key.q_len_bucket == 0
++        not key.use_td
 +        or not _power_of_two(key.head_size)
 +    ):
 +        return False
