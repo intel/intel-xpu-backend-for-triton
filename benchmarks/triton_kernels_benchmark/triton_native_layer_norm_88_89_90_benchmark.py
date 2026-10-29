@@ -77,6 +77,10 @@ def _make_reduction_inputs(xnumel: int, *, dtype: torch.dtype = torch.float16):
 
 
 def _aten_layer_norm_reference(in0: torch.Tensor, weight: torch.Tensor | None = None, bias: torch.Tensor | None = None):
+    if weight is not None:
+        weight = weight.to(torch.float32)
+    if bias is not None:
+        bias = bias.to(torch.float32)
     return torch.ops.aten.native_layer_norm(in0.to(torch.float32), [R0_NUMEL], weight, bias, 1e-6)
 
 
