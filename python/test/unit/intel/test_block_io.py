@@ -408,3 +408,64 @@ def test_block_io_nd_out_of_bounds(padding, device, tmp_path: pathlib.Path):
     llir = kernel.asm["llir"]
     load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
     assert load_count > 0
+
+
+# A rank-reducing block store must apply its batch index and drop an out-of-range one (issue #8516).
+# An odd plane stride would misalign the rebased 2D block message, so that store stays generic.
+@pytest.mark.parametrize("batch", [0, 1, 5, -1])
+@pytest.mark.parametrize("stride_kind", ["aligned", "odd"])
+@pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
+                   reason="Block stores not supported on this architecture")
+@pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
+def test_block_io_rank_reduced_store(batch, stride_kind, device, tmp_path: pathlib.Path):
+    M, N, planes = 32, 32, 4
+    stride = M * N + 8 if stride_kind == "aligned" else M * N + 1
+    layout = DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2, threads_per_warp=16,
+                        warps_per_cta=[1, 1], rep_cluster=[4, 2])
+    tile = f"{M}x{N}xf16"
+
+    # Only the store is tagged; the load carries the desc_padding MaterializeBlockPointer would stamp.
+    ir = f"""
+    #layout = {layout}
+    module attributes {{ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
+        tt.func public @rank_reduced_store(%src: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %dst: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %batch: i32) {{
+            %c0_i32 = arith.constant 0 : i32
+            %planes = arith.constant {planes} : i32
+            %m = arith.constant {M} : i32
+            %n = arith.constant {N} : i32
+            %n_i64 = arith.constant {N} : i64
+            %c1_i64 = arith.constant 1 : i64
+            %stride = arith.constant {stride} : i64
+
+            %src_desc = tt.make_tensor_descriptor %src, [%m, %n], [%n_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<{tile}>
+            %val = tt.descriptor_load %src_desc[%c0_i32, %c0_i32] {{ttig.desc_padding = 1 : i32}} : !tt.tensordesc<{tile}> -> tensor<{tile}, #layout>
+
+            %dst_desc = tt.make_tensor_descriptor %dst, [%planes, %m, %n], [%stride, %n_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<1x{tile}>
+            tt.descriptor_store %dst_desc[%batch, %c0_i32, %c0_i32], %val {{ttig.block_io = "row_major"}} : !tt.tensordesc<1x{tile}>, tensor<{tile}, #layout>
+
+            tt.return
+        }}
+    }}
+    """
+
+    temp_file = tmp_path / "test_block_io_rank_reduced_store.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    # The base sits two dense planes in, so batch -1 still lands inside the buffer.
+    src = torch.arange(M * N, device=device).to(torch.float16).reshape(M, N)
+    buf = torch.full((9 * M * N, ), -1.0, dtype=torch.float16, device=device)
+    base = 2 * M * N
+    kernel[(1, 1, 1)](src, buf[base:], batch)
+
+    expect = torch.full_like(buf, -1.0)
+    if 0 <= batch < planes:
+        start = base + batch * stride
+        expect[start:start + M * N] = src.flatten()
+    hit = (buf != -1).nonzero().flatten().tolist()
+    assert torch.equal(buf, expect), f"wrote [{hit[0]}, {hit[-1]}]" if hit else "wrote nothing"
+
+    # The TTGIR-text path skips MaterializeBlockPointer, so only the LLVM lowering can decline `odd`.
+    llir = kernel.asm["llir"]
+    block_store = 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
+    assert block_store == (stride_kind == "aligned")
