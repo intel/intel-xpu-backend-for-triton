@@ -3,7 +3,8 @@ from triton._C.libtriton import ir, passes, llvm, intel
 from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.errors import IntelGPUError
-from triton.backends.intel.extension_utils import query_device_extensions, has_spirv_capability
+from triton.backends.intel.extension_utils import query_device_extensions
+from triton.backends.intel.ocloc_utils import accepts_long_vector, accepts_maximum_registers
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import OutOfResources
@@ -17,7 +18,6 @@ import tempfile
 import signal
 import re
 import os
-import struct
 import subprocess
 import warnings
 from pathlib import Path
@@ -67,18 +67,9 @@ class XPUOptions:
     fpsan_homomorphic_casts: bool = False
     core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
     is_lts: bool = True
-    # Whether the SPIR-V consumer understands `SPV_EXT_long_vector`; otherwise
-    # `SPV_INTEL_vector_compute` is emitted. The JIT path's consumer is the
-    # installed driver, ground-truth probed via `has_spirv_capability`
-    # (falling back to the `is_lts` guess if the probe is inconclusive); the
-    # AOT path's consumer is `ocloc`, a separate, possibly older compiler, so
-    # it gets its own probe -- see `ocloc_accepts_long_vector`.
+    # Whether these SPIR-V extensions are allowed; overwritten with the
+    # ground-truth probe result in `parse_options`.
     allow_long_vector: bool = True
-    # Whether the SPIR-V consumer understands `SPV_INTEL_maximum_registers`;
-    # otherwise an explicit `grf_mode` falls back to an IGC build flag (see
-    # `GRF_MODE_BUILD_FLAGS`, `make_llir`, `make_spv`). Probed the same way,
-    # and for the same reason, as `allow_long_vector` above -- see
-    # `ocloc_accepts_maximum_registers`/`has_spirv_capability`.
     allow_maximum_registers: bool = True
     # Largest GRF mode the backend's automatic escalation will ever select
     # for this target ("256" everywhere except "cri", which gets "512"); see
@@ -166,135 +157,6 @@ def extract_spill_size_from_zebin(file):
         if match is not None:
             return int(match.group(1))
     return 0
-
-
-def _spirv_words(*words):
-    return b''.join(struct.pack('<I', w) for w in words)
-
-
-def _spirv_op(opcode, *operands):
-    return _spirv_words(((1 + len(operands)) << 16) | opcode, *operands)
-
-
-# Smallest SPIR-V module that declares `SPV_EXT_long_vector`. Sufficient for
-# `ocloc_accepts_long_vector` below only because it checks for one exact
-# rejection message in `ocloc`'s output, ignoring every other failure -- this
-# module has no entry point, so it is not otherwise valid SPIR-V (confirmed
-# with `spirv-val`: it is rejected for lacking the `Addresses` capability
-# `Physical64` requires, regardless of `SPV_EXT_long_vector` support).
-_LONG_VECTOR_PROBE_SPV = (
-    _spirv_words(0x07230203, 0x00010400, 0, 1, 0)  # magic, v1.4, generator, bound, schema
-    + _spirv_op(17, 6)  # OpCapability Kernel
-    + _spirv_op(10, *struct.unpack('<5I', b'SPV_EXT_long_vector\0'.ljust(20, b'\0')))  # OpExtension
-    + _spirv_op(14, 2, 2)  # OpMemoryModel Physical64 OpenCL
-)
-
-# A *complete*, otherwise-valid minimal SPIR-V kernel (verified with
-# `spirv-val`) that additionally declares `SPV_EXT_long_vector`. Required for
-# `has_spirv_capability` below: unlike `ocloc_accepts_long_vector`, it reads
-# `zeModuleCreate`'s return code directly with no message pattern-matching
-# to ignore unrelated rejections, so the probe module must build
-# successfully on its own merits whenever the driver understands the
-# extension -- `_LONG_VECTOR_PROBE_SPV` above would always be rejected here,
-# extension support notwithstanding.
-_LONG_VECTOR_L0_PROBE_SPV = (
-    _spirv_words(0x07230203, 0x00010400, 0, 5, 0)  # magic, v1.4, generator, bound, schema
-    + _spirv_op(17, 6)  # OpCapability Kernel
-    + _spirv_op(17, 4)  # OpCapability Addresses
-    + _spirv_op(10, *struct.unpack('<5I', b'SPV_EXT_long_vector\0'.ljust(20, b'\0')))  # OpExtension
-    + _spirv_op(14, 2, 2)  # OpMemoryModel Physical64 OpenCL
-    + _spirv_op(15, 6, 3, *struct.unpack('<2I', b'main\0\0\0\0'))  # OpEntryPoint Kernel %3 "main"
-    + _spirv_op(19, 1)  # %1 = OpTypeVoid
-    + _spirv_op(33, 2, 1)  # %2 = OpTypeFunction %1
-    + _spirv_op(54, 1, 3, 0, 2)  # %3 = OpFunction %1 None %2
-    + _spirv_op(248, 4)  # %4 = OpLabel
-    + _spirv_op(253)  # OpReturn
-    + _spirv_op(56)  # OpFunctionEnd
-)
-
-# Smallest SPIR-V module that declares `SPV_INTEL_maximum_registers`. Same
-# shape, and same caveat, as `_LONG_VECTOR_PROBE_SPV` above: valid only as
-# input to `_ocloc_accepts_extension`'s message-matching, not to `zeModuleCreate`.
-_MAX_REGISTERS_PROBE_SPV = (
-    _spirv_words(0x07230203, 0x00010400, 0, 1, 0)  # magic, v1.4, generator, bound, schema
-    + _spirv_op(17, 6)  # OpCapability Kernel
-    + _spirv_op(10, *struct.unpack('<7I', b'SPV_INTEL_maximum_registers\0'))  # OpExtension
-    + _spirv_op(14, 2, 2)  # OpMemoryModel Physical64 OpenCL
-)
-
-# A *complete*, otherwise-valid minimal SPIR-V kernel that additionally
-# requests a `MaximumRegistersINTEL` execution mode (register count 128,
-# picked arbitrarily -- any count exercises the same extension declaration
-# and opcode). Instruction shape (`OpExecutionMode %entry Mode Literal`) and
-# the exact opcode/enum values (`OpExecutionMode` = 16, `MaximumRegistersINTEL`
-# = 6461) are cross-checked against this project's own vendored translator
-# (`SPIRVWriter.cpp`'s `transFunctionMetadataAsExecutionMode` and
-# `SPIRVExecutionMode::encode`, which writes exactly `Target << ExecMode <<
-# WordLiterals`) and against `spirv.h` from SPIRV-Headers, not guessed.
-# `spirv-val` from a SPIRV-Tools release that predates this Intel extension's
-# grammar entry flags only the `6461` enumerant as unrecognized and accepts
-# every preceding instruction, consistent with that cross-check.
-_MAX_REGISTERS_L0_PROBE_SPV = (
-    _spirv_words(0x07230203, 0x00010400, 0, 5, 0)  # magic, v1.4, generator, bound, schema
-    + _spirv_op(17, 6)  # OpCapability Kernel
-    + _spirv_op(17, 4)  # OpCapability Addresses
-    + _spirv_op(10, *struct.unpack('<7I', b'SPV_INTEL_maximum_registers\0'))  # OpExtension
-    + _spirv_op(14, 2, 2)  # OpMemoryModel Physical64 OpenCL
-    + _spirv_op(15, 6, 3, *struct.unpack('<2I', b'main\0\0\0\0'))  # OpEntryPoint Kernel %3 "main"
-    + _spirv_op(16, 3, 6461, 128)  # OpExecutionMode %3 MaximumRegistersINTEL 128
-    + _spirv_op(19, 1)  # %1 = OpTypeVoid
-    + _spirv_op(33, 2, 1)  # %2 = OpTypeFunction %1
-    + _spirv_op(54, 1, 3, 0, 2)  # %3 = OpFunction %1 None %2
-    + _spirv_op(248, 4)  # %4 = OpLabel
-    + _spirv_op(253)  # OpReturn
-    + _spirv_op(56)  # OpFunctionEnd
-)
-
-
-def _ocloc_accepts_extension(device_arch: str, extension: str, probe_spv: bytes) -> bool:
-    """Whether the `ocloc` on PATH accepts SPIR-V that declares `extension`.
-
-    AOT compilation (`generate_native_code`) hands the SPIR-V to `ocloc`, whose
-    IGC is independent of the installed driver and may predate the extension
-    (e.g. `ocloc` from an older oneAPI). IGC rejects an unknown extension while
-    reading the module, so a module that only declares it is a sufficient probe
-    -- `probe_spv` need not be otherwise valid (and typically isn't: see
-    `_LONG_VECTOR_PROBE_SPV`), since only that one rejection message is checked
-    for and every other failure is ignored.
-    """
-    with tempfile.TemporaryDirectory() as temp_dir:
-        spv = os.path.join(temp_dir, 'probe.spv')
-        with open(spv, 'wb') as f:
-            f.write(probe_spv)
-        try:
-            proc = subprocess.run([
-                'ocloc', 'compile', '-file', spv, '-o',
-                os.path.join(temp_dir, 'probe.o'), '-spirv_input', '-device', device_arch
-            ], capture_output=True, text=True, timeout=60)
-        except (OSError, subprocess.TimeoutExpired):
-            return True  # No usable `ocloc`: `make_zebin` reports it.
-    output = proc.stdout + proc.stderr
-    return not ('unknown extension' in output and extension in output)
-
-
-@functools.lru_cache(maxsize=None)
-def ocloc_accepts_long_vector(device_arch: str) -> bool:
-    """Whether the `ocloc` on PATH accepts SPIR-V that uses `SPV_EXT_long_vector`."""
-    return _ocloc_accepts_extension(device_arch, 'SPV_EXT_long_vector', _LONG_VECTOR_PROBE_SPV)
-
-
-@functools.lru_cache(maxsize=None)
-def ocloc_accepts_maximum_registers(device_arch: str) -> bool:
-    """Whether the `ocloc` on PATH accepts SPIR-V that uses `SPV_INTEL_maximum_registers`.
-
-    See https://github.com/intel/intel-xpu-backend-for-triton/pull/8322: off LTS, an
-    explicit `grf_mode` is requested through this extension's execution modes
-    (`MaximumRegistersINTEL`/`MaximumRegistersIdINTEL`/`NamedMaximumRegistersINTEL`)
-    instead of an IGC build flag. Gated purely on `is_lts` today with no probe at
-    either end -- this is that probe's AOT (ocloc) half; see
-    `has_spirv_capability`/`_MAX_REGISTERS_L0_PROBE_SPV` for the driver-JIT half.
-    """
-    return _ocloc_accepts_extension(device_arch, 'SPV_INTEL_maximum_registers', _MAX_REGISTERS_PROBE_SPV)
 
 
 def get_max_grf_mode(arch: dict) -> str:
@@ -491,31 +353,19 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["allow_fp8e4nv"] = True
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
-        # Ground-truth probe of the installed driver's own JIT (the consumer
-        # for every non-AOT kernel): catches `SPV_EXT_long_vector` support
-        # landing on a rolling driver ahead of the `is_lts` version threshold
-        # advertising it. Falls back to the version guess if the probe can't
-        # reach a Level Zero device (e.g. `device_id` unset, driver absent).
-        device_id = self.target.arch.get("device_id")
-        accepts_long_vector = (has_spirv_capability(device_id, _LONG_VECTOR_L0_PROBE_SPV)
-                               if device_id is not None else None)
-        args["allow_long_vector"] = accepts_long_vector if accepts_long_vector is not None else not args["is_lts"]
-        # Same probe, for `SPV_INTEL_maximum_registers` (see
-        # https://github.com/intel/intel-xpu-backend-for-triton/pull/8322).
-        accepts_maximum_registers = (has_spirv_capability(device_id, _MAX_REGISTERS_L0_PROBE_SPV)
-                                     if device_id is not None else None)
-        args["allow_maximum_registers"] = (accepts_maximum_registers
-                                           if accepts_maximum_registers is not None else not args["is_lts"])
         args["max_grf_mode"] = self.properties['max_grf_mode']
         args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
         if "in_loop_sink" not in args:
             args["in_loop_sink"] = knobs.intel.in_loop_sink
         options = XPUOptions(**args)
-        if options.generate_native_code:
-            if options.allow_long_vector:
-                options.allow_long_vector = ocloc_accepts_long_vector(self.device_arch)
-            if options.allow_maximum_registers:
-                options.allow_maximum_registers = ocloc_accepts_maximum_registers(self.device_arch)
+
+        # Ground-truth probe of whichever side actually consumes this
+        # SPIR-V -- `ocloc` for an AOT (`generate_native_code`) compile,
+        # otherwise the installed driver's own JIT via Level Zero.
+        native = options.generate_native_code
+        device_id = self.target.arch.get("device_id")
+        options.allow_long_vector = accepts_long_vector(native, self.device_arch, device_id)
+        options.allow_maximum_registers = accepts_maximum_registers(native, self.device_arch, device_id)
         return options
 
     @staticmethod
