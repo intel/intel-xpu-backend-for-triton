@@ -5,7 +5,9 @@
 #include "Driver/GPU/XpuApi.h"
 #include "Driver/GPU/XpuptiApi.h"
 #include "Runtime/XpuRuntime.h"
+#include "Utility/Env.h"
 #include "Utility/Map.h"
+#include "Utility/String.h"
 #include <vector>
 
 #include "pti/pti_view.h"
@@ -25,7 +27,10 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <unordered_map>
+#include <utility>
 
 namespace proton {
 
@@ -72,12 +77,96 @@ convertActivityToMetric(xpupti::Pti_Activity *activity) {
   return metric;
 }
 
+// Phases of GPU operations whose activity record has not been processed yet.
+// PTI keeps one activity buffer per submitting thread and hands each one over
+// on its own, so a buffer only holding records of later phases does not mean
+// that every earlier phase is complete: another thread's buffer may still hold
+// records for them. A phase must not be completed (and flushed or cleared)
+// before all of its records have been processed.
+class PendingPhases {
+public:
+  using Phases = std::vector<std::pair<Data *, size_t>>;
+
+  void add(uint64_t id, Phases phases) {
+    std::lock_guard<std::mutex> lock(mutex);
+    addLocked(id, std::move(phases));
+  }
+
+  void add(uint64_t id, const DataToEntryMap &dataToEntry) {
+    add(id, toPhases(dataToEntry));
+  }
+
+  // Track the entries a pending operation was re-correlated to.
+  void update(uint64_t id, const DataToEntryMap &dataToEntry) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (removeLocked(id))
+      addLocked(id, toPhases(dataToEntry));
+  }
+
+  void remove(uint64_t id) {
+    std::lock_guard<std::mutex> lock(mutex);
+    removeLocked(id);
+  }
+
+  // Cap each data's end phase at its oldest pending phase, so only phases
+  // below it are completed.
+  void capEndPhases(DataPhases &dataPhases) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (auto &[data, phases] : dataPhases) {
+      auto it = dataToPhaseCounts.find(data);
+      if (it != dataToPhaseCounts.end())
+        phases.second = std::min(phases.second, it->second.begin()->first);
+    }
+  }
+
+  void clear() {
+    std::lock_guard<std::mutex> lock(mutex);
+    idToPhases.clear();
+    dataToPhaseCounts.clear();
+  }
+
+private:
+  static Phases toPhases(const DataToEntryMap &dataToEntry) {
+    Phases phases;
+    for (const auto &[data, entry] : dataToEntry)
+      phases.emplace_back(data, entry.phase);
+    return phases;
+  }
+
+  // Ids without phases are kept too, so that update() can still tell a
+  // pending operation from a processed one.
+  void addLocked(uint64_t id, Phases phases) {
+    for (const auto &[data, phase] : phases)
+      ++dataToPhaseCounts[data][phase];
+    idToPhases[id] = std::move(phases);
+  }
+
+  bool removeLocked(uint64_t id) {
+    auto it = idToPhases.find(id);
+    if (it == idToPhases.end())
+      return false;
+    for (const auto &[data, phase] : it->second) {
+      auto &phaseCounts = dataToPhaseCounts[data];
+      if (--phaseCounts[phase] == 0)
+        phaseCounts.erase(phase);
+      if (phaseCounts.empty())
+        dataToPhaseCounts.erase(data);
+    }
+    idToPhases.erase(it);
+    return true;
+  }
+
+  mutable std::mutex mutex;
+  std::unordered_map<uint64_t, Phases> idToPhases;
+  std::map<Data *, std::map<size_t, size_t>> dataToPhaseCounts;
+};
+
 uint32_t
 processActivityKernel(CorrIdToExternIdMap &corrIdToExternId,
                       ExternIdToStateMap &externIdToState,
                       std::map<uint64_t, std::reference_wrapper<ExternIdState>>
                           &externIdToStateCache,
-                      xpupti::Pti_Activity *activity) {
+                      DataPhases &dataPhases, xpupti::Pti_Activity *activity) {
   auto *kernel = reinterpret_cast<pti_view_record_kernel *>(activity);
   auto correlationId = kernel->_correlation_id;
   size_t externId = 0;
@@ -98,6 +187,7 @@ processActivityKernel(CorrIdToExternIdMap &corrIdToExternId,
       for (auto &[data, entry] : dataToEntry) {
         if (auto kernelMetric = convertActivityToMetric(activity)) {
           entry.upsertMetric(std::move(kernelMetric));
+          detail::updateDataPhases(dataPhases, data, entry.phase);
         }
       }
     } else {
@@ -106,6 +196,7 @@ processActivityKernel(CorrIdToExternIdMap &corrIdToExternId,
           auto childEntry =
               data->addOp(entry.phase, entry.id, {Context(kernel->_name)});
           childEntry.upsertMetric(std::move(kernelMetric));
+          detail::updateDataPhases(dataPhases, data, entry.phase);
         }
       }
     }
@@ -132,12 +223,15 @@ processActivity(CorrIdToExternIdMap &corrIdToExternId,
                 ExternIdToStateMap &externIdToState,
                 std::map<uint64_t, std::reference_wrapper<ExternIdState>>
                     &externIdToStateCache,
+                DataPhases &dataPhases, PendingPhases &pendingPhases,
                 xpupti::Pti_Activity *activity) {
-  auto correlationId = 0;
+  uint32_t correlationId = 0;
   switch (activity->_view_kind) {
   case PTI_VIEW_DEVICE_GPU_KERNEL: {
-    correlationId = processActivityKernel(corrIdToExternId, externIdToState,
-                                          externIdToStateCache, activity);
+    correlationId =
+        processActivityKernel(corrIdToExternId, externIdToState,
+                              externIdToStateCache, dataPhases, activity);
+    pendingPhases.remove(correlationId);
     break;
   }
   default:
@@ -177,9 +271,14 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
                          void *global_user_data, void **instance_user_data);
 
   static constexpr size_t AlignSize = 8;
-  static constexpr size_t BufferSize = 64 * 1024 * 1024;
 
   pti_callback_subscriber_handle subscriber;
+  // Keyed by correlation id, from the append until the record is processed.
+  PendingPhases pendingPhases;
+  // Keyed by scope id, from the start of an op until it stops: an op's entries
+  // take their phase when it starts, its kernels only become pending when
+  // they are appended.
+  PendingPhases pendingOps;
 
   /*
   CuptiPCSampling pcSampling;
@@ -193,23 +292,27 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
 
 void XpuptiProfiler::XpuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
                                                       size_t *bufferSize) {
+  const auto envBufferSize =
+      getIntEnv("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024);
 #if defined(_MSC_VER)
-  *buffer = static_cast<uint8_t *>(_aligned_malloc(BufferSize, AlignSize));
+  *buffer = static_cast<uint8_t *>(_aligned_malloc(envBufferSize, AlignSize));
 #else
-  *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, BufferSize));
+  *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, envBufferSize));
 #endif
   if (*buffer == nullptr) {
     throw std::runtime_error("aligned_alloc failed");
   }
-  *bufferSize = BufferSize;
+  *bufferSize = envBufferSize;
 }
 
 void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
                                                          size_t size,
                                                          size_t validSize) {
   XpuptiProfiler &profiler = threadState.profiler;
+  auto &pimpl = dynamic_cast<XpuptiProfilerPimpl &>(*profiler.pImpl);
   auto &correlation = profiler.correlation;
   uint32_t maxCorrelationId = 0;
+  DataPhases dataPhases;
   pti_result status;
   xpupti::Pti_Activity *activity = nullptr;
   std::map<uint64_t, std::reference_wrapper<ExternIdState>>
@@ -219,7 +322,8 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
     if (status == pti_result::PTI_SUCCESS) {
       auto correlationId = processActivity(
           profiler.correlation.corrIdToExternId,
-          profiler.correlation.externIdToState, externIdToStateCache, activity);
+          profiler.correlation.externIdToState, externIdToStateCache,
+          dataPhases, pimpl.pendingPhases, activity);
       // Log latest completed correlation id.  Used to ensure we have flushed
       // all data on stop
       maxCorrelationId = std::max<uint64_t>(maxCorrelationId, correlationId);
@@ -238,6 +342,15 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
 #endif
 
   profiler.correlation.complete(maxCorrelationId);
+  // A phase is complete once it has been advanced past and none of its records
+  // is pending, even if this buffer holds no record of a later phase. Complete
+  // (and flush) it now: Profiler::flush would otherwise mark it complete
+  // without it ever being written in periodic flushing mode.
+  for (auto &[data, phases] : dataPhases)
+    phases.second = data->getPhaseInfo().current;
+  pimpl.pendingOps.capEndPhases(dataPhases);
+  pimpl.pendingPhases.capEndPhases(dataPhases);
+  profiler.flushDataPhases(dataPhases, profiler.pendingGraphPool.get());
 }
 
 void XpuptiProfiler::XpuptiProfilerPimpl::callbackFn(
@@ -251,6 +364,9 @@ void XpuptiProfiler::XpuptiProfilerPimpl::callbackFn(
               << std::endl;
     return;
   }
+  auto &pendingPhases =
+      dynamic_cast<XpuptiProfilerPimpl &>(*threadState.profiler.pImpl)
+          .pendingPhases;
   if (callback_data->_phase == PTI_CB_PHASE_API_ENTER) {
     // TODO: Get kernel name from pti_callback_gpu_op_data
     threadState.enterOp(Scope(""));
@@ -260,6 +376,7 @@ void XpuptiProfiler::XpuptiProfilerPimpl::callbackFn(
     threadState.profiler.correlation.correlate(callback_data->_correlation_id,
                                                scope.scopeId, 1, isMissingName,
                                                dataToEntry);
+    pendingPhases.add(callback_data->_correlation_id, dataToEntry);
   } else if (callback_data->_phase == PTI_CB_PHASE_API_EXIT) {
     // PTI reports the kernel name only on exit: re-enter the unnamed launch op
     // under it, so the kernel's metric lands on the launch op itself.
@@ -276,7 +393,20 @@ void XpuptiProfiler::XpuptiProfilerPimpl::callbackFn(
       threadState.profiler.correlation.correlate(
           callback_data->_correlation_id, scopeId, 1, /*isMissingName=*/false,
           threadState.dataToEntry);
+      pendingPhases.update(callback_data->_correlation_id,
+                           threadState.dataToEntry);
     }
+    // Only records of appended kernels are processed, so a failed append or an
+    // operation without a kernel must not hold back the completion of its
+    // phase.
+    const pti_gpu_op_details *opsEnd =
+        op != nullptr ? op + callback_data->_operation_count : nullptr;
+    if (callback_data->_return_code != 0 ||
+        (op != nullptr &&
+         std::none_of(op, opsEnd, [](const pti_gpu_op_details &details) {
+           return details._operation_kind == PTI_GPU_OPERATION_KIND_KERNEL;
+         })))
+      pendingPhases.remove(callback_data->_correlation_id);
     threadState.exitOp();
     threadState.profiler.correlation.submit(callback_data->_correlation_id);
   } else {
@@ -450,6 +580,10 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
   // setDriverCallbacks(subscriber, /*enable=*/false);
   xpupti::disableDomain<true>(subscriber,
                               PTI_CB_DOMAIN_DRIVER_GPU_OPERATION_APPENDED);
+  profiler.periodicFlushingEnabled = false;
+  profiler.periodicFlushingFormat.clear();
+  pendingPhases.clear();
+  pendingOps.clear();
   xpupti::unsubscribe<true>(subscriber);
   // cupti::finalize<true>();
 }
@@ -460,9 +594,37 @@ XpuptiProfiler::XpuptiProfiler() {
 
 XpuptiProfiler::~XpuptiProfiler() = default;
 
+// An op entered for a GPU API call becomes pending in the same callback, and a
+// kernel's op is re-entered in the current phase when the call returns, so
+// only ops that enclose a launch (e.g. from a launch hook) are held back here.
+void XpuptiProfiler::startOp(const Scope &scope) {
+  if (!threadState.isApiExternOp) {
+    // Hold back the current phase before the op's entries are created in it
+    // (or in a later one: phases only grow), so it cannot be completed before
+    // the op's kernels are pending.
+    PendingPhases::Phases phases;
+    for (auto *data : dataSet)
+      phases.emplace_back(data, data->getPhaseInfo().current);
+    dynamic_cast<XpuptiProfilerPimpl &>(*pImpl).pendingOps.add(
+        scope.scopeId, std::move(phases));
+  }
+  GPUProfiler<XpuptiProfiler>::startOp(scope);
+}
+
+void XpuptiProfiler::stopOp(const Scope &scope) {
+  if (!threadState.isApiExternOp)
+    dynamic_cast<XpuptiProfilerPimpl &>(*pImpl).pendingOps.remove(
+        threadState.scopeStack.back().scopeId);
+  GPUProfiler<XpuptiProfiler>::stopOp(scope);
+}
+
 void XpuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
   auto mode = modeAndOptions[0];
-  if (!mode.empty()) {
+  if (proton::toLower(mode) == "periodic_flushing") {
+    detail::setPeriodicFlushingMode(periodicFlushingEnabled,
+                                    periodicFlushingFormat, modeAndOptions,
+                                    "XpuptiProfiler");
+  } else if (!mode.empty()) {
     throw std::invalid_argument("[PROTON] XpuptiProfiler: unsupported mode: " +
                                 mode);
   }
