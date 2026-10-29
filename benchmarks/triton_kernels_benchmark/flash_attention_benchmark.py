@@ -45,7 +45,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         qk = tl.dot(q, k)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = tl.fma(qk, qk_scale, tl.where(mask, 0, -1.0e6))
+            qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_ij[:, None]
         else:
