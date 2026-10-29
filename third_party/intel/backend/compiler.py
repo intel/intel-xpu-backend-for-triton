@@ -817,7 +817,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if options.grf_mode != 'default' and not options.allow_maximum_registers:
             if options.grf_mode not in GRF_MODE_BUILD_FLAGS:
                 raise RuntimeError(f"grf_mode = {options.grf_mode} requires the SPV_INTEL_maximum_registers "
-                                    "extension, which this driver does not support")
+                                   "extension, which this driver does not support")
             metadata["build_flags"] += f" {GRF_MODE_BUILD_FLAGS[options.grf_mode]}"
 
         if knobs.intel.disable_igc_opt:
