@@ -17,9 +17,9 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-import triton.backends.intel.ocloc_utils as ocloc_utils
+import triton.backends.intel.spirv_probes as spirv_probes
 from triton.backends.intel.compiler import XPUBackend
-from triton.backends.intel.ocloc_utils import ocloc_accepts_long_vector
+from triton.backends.intel.spirv_probes import ocloc_accepts_long_vector
 from triton.compiler.compiler import make_backend
 
 pytestmark = [
@@ -91,7 +91,7 @@ def test_long_vector_follows_consumer(native, backend, old_ocloc, device):
 def test_probe_result_is_part_of_the_cache_key(backend, monkeypatch):
     hashes = {}
     for accepted in (True, False):
-        monkeypatch.setattr(ocloc_utils, "ocloc_accepts_long_vector", lambda arch, accepted=accepted: accepted)
+        monkeypatch.setattr(spirv_probes, "ocloc_accepts_long_vector", lambda arch, accepted=accepted: accepted)
         options = backend.parse_options({"generate_native_code": True})
         assert options.allow_long_vector == accepted
         hashes[accepted] = options.hash()

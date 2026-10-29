@@ -7,21 +7,9 @@ a full PyTorch/SYCL runtime initialization.
 from triton.backends.intel.driver import compile_module_from_src
 
 import functools
-import multiprocessing
 import os
-import queue
 from pathlib import Path
 from triton import knobs
-
-_PROBE_TIMEOUT_SECONDS = 60
-
-
-def _has_spirv_capability_worker(device_id: int, probe_spirv: bytes, result_queue: multiprocessing.Queue) -> None:
-    try:
-        extension_checker = _get_extension_checker()
-        result_queue.put(extension_checker.probe_spirv_module(device_id, probe_spirv))
-    except Exception:
-        result_queue.put(None)
 
 
 @functools.lru_cache(maxsize=1)
@@ -71,47 +59,6 @@ def has_device_extension(device_id: int, extension_name: str) -> bool:
     # This requires minimal SYCL initialization (no PyTorch dependency)
     extension_checker = _get_extension_checker()
     return extension_checker.check_extension(device_id, extension_name.encode())
-
-
-@functools.lru_cache(maxsize=None)
-def has_spirv_capability(device_id: int, probe_spirv: bytes) -> bool | None:
-    """
-    Ground-truth probe for a SPIR-V capability/extension, via the driver's own JIT.
-
-    Unlike `has_device_extension`, which only checks what the driver
-    *advertises*, this feeds `probe_spirv` -- a minimal SPIR-V module
-    declaring only the capability/extension under test -- to `zeModuleCreate`,
-    the same call `load_binary` makes for a real kernel, so a rolling driver
-    that hasn't advertised a newly-landed capability yet is still measured
-    correctly.
-
-    Args:
-        device_id: Device ID to query (from sycl::ext::intel::info::device::device_id)
-        probe_spirv: a minimal SPIR-V module declaring only the capability/extension to test.
-
-    Returns:
-        True/False if the driver accepted/rejected the probe module, or None
-        if the device isn't found. A crashed or hung probe is reported as
-        False, not None: the crash itself proves the capability unsafe to use.
-    """
-    # An unsupported extension can abort the whole process instead of
-    # returning a clean error
-    ctx = multiprocessing.get_context('spawn')
-    result_queue = ctx.Queue()
-    proc = ctx.Process(target=_has_spirv_capability_worker, args=(device_id, probe_spirv, result_queue))
-    proc.start()
-    proc.join(_PROBE_TIMEOUT_SECONDS)
-    if proc.is_alive():
-        proc.terminate()
-        proc.join()
-
-    result = False
-    if not proc.exitcode:
-        try:
-            result = result_queue.get_nowait()
-        except queue.Empty:
-            pass
-    return result
 
 
 def query_device_extensions(device_id: int):

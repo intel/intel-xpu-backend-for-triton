@@ -110,7 +110,7 @@ def test_explicit_grf_mode_uses_maximum_registers(device, grf_mode, generate_nat
     if not k.metadata.allow_maximum_registers:
         # Either an LTS translator (which never enables the extension) or a
         # rolling driver whose JIT rejected the probe module (see
-        # has_spirv_capability in extension_utils.py) -- either way the
+        # has_spirv_capability in spirv_probes.py) -- either way the
         # kernel falls back to the IGC build flag instead.
         assert "!MaximumRegisters" not in k.asm["llir"]
         assert "GRF" in k.metadata.build_flags

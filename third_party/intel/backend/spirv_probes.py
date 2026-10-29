@@ -8,12 +8,76 @@ probe is actually run.
 """
 
 import functools
+import multiprocessing
 import os
+import queue
 import struct
 import subprocess
 import tempfile
+from pathlib import Path
 
-from triton.backends.intel.extension_utils import has_spirv_capability
+from triton.backends.intel.driver import compile_module_from_src
+
+# Generous bound on how long a probe child may run before it's assumed hung.
+_PROBE_TIMEOUT_SECONDS = 60
+
+
+@functools.lru_cache(maxsize=1)
+def _get_probe_checker():
+    """Lazily compile and load the SPIR-V capability probe's native module."""
+    dirname = os.path.dirname(os.path.realpath(__file__))
+    src = Path(os.path.join(dirname, "spirv_probes.c")).read_text()
+    return compile_module_from_src(src=src, name="spirv_probes_impl")
+
+
+def _has_spirv_capability_worker(device_id: int, probe_spirv: bytes, result_queue: multiprocessing.Queue) -> None:
+    try:
+        probe_checker = _get_probe_checker()
+        result_queue.put(probe_checker.probe_spirv_module(device_id, probe_spirv))
+    except Exception:
+        result_queue.put(None)
+
+
+@functools.lru_cache(maxsize=None)
+def has_spirv_capability(device_id: int, probe_spirv: bytes) -> bool | None:
+    """
+    Ground-truth probe for a SPIR-V capability/extension, via the driver's own JIT.
+
+    Unlike `has_device_extension`, which only checks what the driver
+    *advertises*, this feeds `probe_spirv` -- a minimal SPIR-V module
+    declaring only the capability/extension under test -- to `zeModuleCreate`,
+    the same call `load_binary` makes for a real kernel, so a rolling driver
+    that hasn't advertised a newly-landed capability yet is still measured
+    correctly.
+
+    Args:
+        device_id: Device ID to query (from sycl::ext::intel::info::device::device_id)
+        probe_spirv: a minimal SPIR-V module declaring only the capability/extension to test.
+
+    Returns:
+        True/False if the driver accepted/rejected the probe module, or None
+        if the device isn't found.
+    """
+    # An unsupported extension can abort the whole process instead of
+    # returning a clean error, so the probe runs in its own `spawn`ed child
+    # (not `fork`, which would inherit this process's Level Zero state) --
+    # an abort then only costs that child.
+    ctx = multiprocessing.get_context('spawn')
+    result_queue = ctx.Queue()
+    proc = ctx.Process(target=_has_spirv_capability_worker, args=(device_id, probe_spirv, result_queue))
+    proc.start()
+    proc.join(_PROBE_TIMEOUT_SECONDS)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join()
+
+    result = False
+    if not proc.exitcode:
+        try:
+            result = result_queue.get_nowait()
+        except queue.Empty:
+            pass
+    return result
 
 
 def _spirv_words(*words):
@@ -95,38 +159,19 @@ def ocloc_accepts_long_vector(device_arch: str) -> bool:
 
 @functools.lru_cache(maxsize=None)
 def ocloc_accepts_maximum_registers(device_arch: str) -> bool:
-    """Whether the `ocloc` on PATH accepts SPIR-V that uses `SPV_INTEL_maximum_registers`.
-
-    See https://github.com/intel/intel-xpu-backend-for-triton/pull/8322: off LTS, an
-    explicit `grf_mode` is requested through this extension instead of an IGC
-    build flag. This is the AOT half of that probe; `has_spirv_capability` is
-    the driver-JIT half.
-    """
+    """Whether the `ocloc` on PATH accepts SPIR-V that uses `SPV_INTEL_maximum_registers`."""
     return _ocloc_accepts_extension(device_arch, 'SPV_INTEL_maximum_registers', _MAX_REGISTERS_PROBE_SPV)
 
 
 def accepts_long_vector(native: bool, device_arch: str, device_id: int | None) -> bool:
-    """Whether `SPV_EXT_long_vector` is safe to emit for this compile.
-
-    `native` picks the actual consumer of the SPIR-V: `ocloc` for an AOT
-    (`generate_native_code`) compile, otherwise the installed driver's own
-    JIT. Defaults to False (don't use it) when the JIT probe can't reach a
-    Level Zero device (e.g. `device_id` unset, driver absent) -- this only
-    ever picks a fallback encoding, never affects correctness, so there's no
-    need to guess.
-    """
+    """Whether `SPV_EXT_long_vector` is safe to emit for this compile."""
     if native:
         return ocloc_accepts_long_vector(device_arch)
     return bool(device_id is not None and has_spirv_capability(device_id, _LONG_VECTOR_PROBE_SPV))
 
 
 def accepts_maximum_registers(native: bool, device_arch: str, device_id: int | None) -> bool:
-    """Whether `SPV_INTEL_maximum_registers` is safe to emit for this compile.
-
-    Same dispatch as `accepts_long_vector`; see
-    https://github.com/intel/intel-xpu-backend-for-triton/pull/8322 for why
-    this one is probed at all.
-    """
+    """Whether `SPV_INTEL_maximum_registers` is safe to emit for this compile."""
     if native:
         return ocloc_accepts_maximum_registers(device_arch)
     return bool(device_id is not None and has_spirv_capability(device_id, _MAX_REGISTERS_PROBE_SPV))

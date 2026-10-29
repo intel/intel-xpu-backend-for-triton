@@ -4,7 +4,7 @@ from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.errors import IntelGPUError
 from triton.backends.intel.extension_utils import query_device_extensions
-from triton.backends.intel.ocloc_utils import accepts_long_vector, accepts_maximum_registers
+from triton.backends.intel.spirv_probes import accepts_long_vector, accepts_maximum_registers
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import OutOfResources
@@ -787,9 +787,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if options.grf_mode in ('256', '512') and options.num_warps > 32:
             raise RuntimeError(f"grf_mode = {options.grf_mode} cannot be used with num_warps > 32")
         if options.grf_mode in GRF_MODE_BUILD_FLAGS:
-            # When the extension is used the mode is already carried by the SPIR-V execution
-            # mode set in `make_llir`; must agree with that check (`options.allow_maximum_registers`),
-            # not `is_lts`, or a rolling driver whose probe says "no" would get neither.
             if not options.allow_maximum_registers:
                 metadata["build_flags"] += f" {GRF_MODE_BUILD_FLAGS[options.grf_mode]}"
         elif options.grf_mode != 'default':
