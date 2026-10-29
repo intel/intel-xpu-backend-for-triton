@@ -813,7 +813,13 @@ void LayoutPropagation::setEncodingInPlace(Value value, Attribute encoding) {
   auto tensorType = cast<RankedTensorType>(value.getType());
   if (!originalEncodings.count(value))
     originalEncodings[value] = tensorType.getEncoding();
-  value.setType(tensorType.cloneWithEncoding(encoding));
+  auto newType = tensorType.cloneWithEncoding(encoding);
+  if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
+    auto newValue =
+        cast<DenseElementsAttr>(constantOp.getValue()).reshape(newType);
+    constantOp.setValueAttr(newValue);
+  }
+  value.setType(newType);
 }
 
 void LayoutPropagation::rewriteGenericOpInPlace(Operation *op,
