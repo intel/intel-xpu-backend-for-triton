@@ -1029,6 +1029,33 @@ index 83ad6e3bcf..899260eb0e 100644
  
  
  # Resolve once at module load. Uses amdsmi (no CUDA init) so Ray workers
+diff --git a/vllm/v1/attention/ops/triton_prefill_attention.py b/vllm/v1/attention/ops/triton_prefill_attention.py
+index da6569262f..ff77833d22 100644
+--- a/vllm/v1/attention/ops/triton_prefill_attention.py
++++ b/vllm/v1/attention/ops/triton_prefill_attention.py
+@@ -229,7 +229,12 @@ def get_block_size(dtype: torch.dtype) -> int:
+ @cache
+ def _fit_block_to_shared_memory(block: int, head_dim: int, element_size: int) -> int:
+     """Halve the tile until its Q, K and P tiles fit in shared memory."""
+-    max_shared_mem = get_max_shared_memory_bytes()
++    if current_platform.is_xpu():
++        max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(
++            torch.xpu.current_device()
++        )["max_shared_mem"]
++    else:
++        max_shared_mem = get_max_shared_memory_bytes()
+     while block > 16 and element_size * block * (2 * head_dim + block) > max_shared_mem:
+         block //= 2
+     return block
+@@ -259,7 +264,7 @@ def context_attention_fwd(
+     BLOCK = get_block_size(q.dtype)
+     if Lk >= 512:
+         BLOCK = min(BLOCK, 32)
+-    if current_platform.is_cuda():
++    if current_platform.is_cuda() or current_platform.is_xpu():
+         BLOCK = _fit_block_to_shared_memory(
+             BLOCK, triton.next_power_of_2(Lk), q.element_size()
+         )
 diff --git a/vllm/v1/watermarking/gumbel.py b/vllm/v1/watermarking/gumbel.py
 index 31e7bdd616..43100f3efd 100644
 --- a/vllm/v1/watermarking/gumbel.py
