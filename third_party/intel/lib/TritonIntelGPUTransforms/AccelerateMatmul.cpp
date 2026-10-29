@@ -756,9 +756,21 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     } else {
       // FMA case.
       Type DElType = D.getType().getElementType();
+      if (DElType.isBF16()) {
+        // FMA rounds the accumulator after every multiply-add, and IGC lowers
+        // a bf16 multiply-add to a `mad` with a bf16 destination, which rounds
+        // toward zero. Accumulate in fp32 and round the result once instead,
+        // as bf16 DPAS does per instruction. This covers bf16 and fp8 dots
+        // that cannot use DPAS (e.g. fp8 without fp8 DPAS, or mixed fp8).
+        // fp16 accumulators are intentionally left as is: an fp16 multiply-add
+        // rounds to nearest.
+        dotOp = accumulateInF32(dotOp);
+        DElType = builder.getF32Type();
+      }
       if (AElType == DElType)
         return;
       promoteType = DElType;
+      builder.setInsertionPoint(dotOp);
     }
 
     Location loc = dotOp.getLoc();
