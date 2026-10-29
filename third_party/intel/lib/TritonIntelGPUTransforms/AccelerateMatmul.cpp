@@ -725,6 +725,78 @@ static tt::DotOp accumulateInF32(tt::DotOp dotOp) {
   return f32Dot;
 }
 
+// Returns how many threads hold each element of \p dotOperand on average: its
+// elements per thread over an even split of the tensor across the CTA.
+static double getDotOperandReplication(Value dotOperand) {
+  auto type = cast<RankedTensorType>(dotOperand.getType());
+  auto mod = dotOperand.getParentRegion()->getParentOfType<ModuleOp>();
+  int64_t numThreads =
+      int64_t(ttg::lookupNumWarps(dotOperand.getParentRegion())) *
+      ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+  return double(ttg::getTotalElemsPerThread(type)) * numThreads /
+         double(product(type.getShape()));
+}
+
+// Promotes \p operand like promoteOperand. When \p operand is an fp8 layout
+// conversion into a dot operand layout, which replicates each element across
+// threads, the fp8 values can be decoded before the conversion instead, once
+// per element rather than once per copy. They are decoded only to a 16-bit
+// type (fp16 for an fp32 promotion, which is exact for fp8), and a wider
+// promotion is finished in the dot operand layout, where it is a single cheap
+// instruction: moving 32-bit values through the layout conversion costs more
+// registers than it saves. The decode is only moved while it takes several
+// instructions: with native fp8 conversion, fp8 -> fp16 is a single builtin,
+// as cheap as the casts of other types (e.g. int8, fp16), which stay in the
+// dot operand layout, while fp8 -> bf16 is still emulated. An fp16 decode of
+// an operand with little replication keeps the cast in the dot operand layout
+// too.
+// The decode is placed right after the source, so it runs once and is hoisted
+// with it (e.g. out of a loop), at the cost of keeping the decoded 16-bit
+// value live from there; the new conversion is placed at the builder's
+// insertion point (the dot), so the replicated value is created where it is
+// used.
+static Value promoteOperandBeforeLayoutConversion(OpBuilder &builder,
+                                                  Location loc, Value operand,
+                                                  Type promotedType) {
+  Type elemType = getElementTypeOrSelf(operand);
+  bool isFP8 =
+      isa<FloatType>(elemType) && elemType.getIntOrFloatBitWidth() == 8;
+  auto cvtOp = operand.getDefiningOp<ttg::ConvertLayoutOp>();
+  if (!isFP8 || !cvtOp ||
+      isa<ttg::DotOperandEncodingAttr>(cvtOp.getSrc().getType().getEncoding()))
+    return promoteOperand(builder, loc, operand, promotedType);
+
+  // fp8 -> bf16 is always emulated, so it is moved for any replication. An
+  // fp16 decode can be cheap (a shift for e5m2, a builtin with native fp8
+  // conversion): on BMG, moving it paid off only for operands replicated at
+  // least 16 times.
+  constexpr double minReplication = 16;
+  Type decodedType = promotedType.getIntOrFloatBitWidth() > 16
+                         ? builder.getF16Type()
+                         : promotedType;
+  if (!decodedType.isBF16()) {
+    auto mod = operand.getParentRegion()->getParentOfType<ModuleOp>();
+    if (mod->hasAttr(
+            ttgi::TritonIntelGPUDialect::getSupportF8ConversionAttrName()) ||
+        getDotOperandReplication(operand) < minReplication)
+      return promoteOperand(builder, loc, operand, promotedType);
+  }
+
+  Value decodedSrc;
+  {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointAfterValue(cvtOp.getSrc());
+    decodedSrc = promoteOperand(builder, loc, cvtOp.getSrc(), decodedType);
+  }
+  auto decodedTy = cast<RankedTensorType>(operand.getType())
+                       .cloneWith(std::nullopt, decodedType);
+  Value decoded = ttg::ConvertLayoutOp::create(builder, cvtOp.getLoc(),
+                                               decodedTy, decodedSrc);
+  if (decodedType == promotedType)
+    return decoded;
+  return promoteOperand(builder, loc, decoded, promotedType);
+}
+
 // promote operands of dot op if the existing combination is not natively
 // supported.
 static void decomposeMixedModeDotOp(ModuleOp mod) {
@@ -762,10 +834,19 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     }
 
     Location loc = dotOp.getLoc();
-    Value promotedA = promoteOperand(builder, loc, dotOp.getA(), promoteType);
-    Value promotedB = promoteOperand(builder, loc, dotOp.getB(), promoteType);
-    dotOp.setOperand(0, promotedA);
-    dotOp.setOperand(1, promotedB);
+    auto promote =
+        dpasLayout ? promoteOperand : promoteOperandBeforeLayoutConversion;
+    Value oldA = dotOp.getA(), oldB = dotOp.getB();
+    dotOp.setOperand(0, promote(builder, loc, oldA, promoteType));
+    dotOp.setOperand(1, promote(builder, loc, oldB, promoteType));
+    // Drop layout conversions that the promotion left unused.
+    if (auto cvtOp = oldA.getDefiningOp<ttg::ConvertLayoutOp>();
+        cvtOp && cvtOp->use_empty())
+      cvtOp->erase();
+    if (oldB != oldA)
+      if (auto cvtOp = oldB.getDefiningOp<ttg::ConvertLayoutOp>();
+          cvtOp && cvtOp->use_empty())
+        cvtOp->erase();
   });
 }
 
