@@ -17,6 +17,7 @@ import tempfile
 import signal
 import re
 import os
+import struct
 import subprocess
 import warnings
 from pathlib import Path
@@ -66,6 +67,9 @@ class XPUOptions:
     fpsan_homomorphic_casts: bool = False
     core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
     is_lts: bool = True
+    # Whether the SPIR-V consumer understands `SPV_EXT_long_vector`; otherwise
+    # `SPV_INTEL_vector_compute` is emitted. See `ocloc_accepts_long_vector`.
+    allow_long_vector: bool = True
     # Largest GRF mode the backend's automatic escalation will ever select
     # for this target ("256" everywhere except "cri", which gets "512"); see
     # `get_max_grf_mode`, the single source of truth for this policy.
@@ -152,6 +156,47 @@ def extract_spill_size_from_zebin(file):
         if match is not None:
             return int(match.group(1))
     return 0
+
+
+def _spirv_words(*words):
+    return b''.join(struct.pack('<I', w) for w in words)
+
+
+def _spirv_op(opcode, *operands):
+    return _spirv_words(((1 + len(operands)) << 16) | opcode, *operands)
+
+
+# Smallest SPIR-V module that declares `SPV_EXT_long_vector`.
+_LONG_VECTOR_PROBE_SPV = (
+    _spirv_words(0x07230203, 0x00010400, 0, 1, 0)  # magic, v1.4, generator, bound, schema
+    + _spirv_op(17, 6)  # OpCapability Kernel
+    + _spirv_op(10, *struct.unpack('<5I', b'SPV_EXT_long_vector\0'.ljust(20, b'\0')))  # OpExtension
+    + _spirv_op(14, 2, 2)  # OpMemoryModel Physical64 OpenCL
+)
+
+
+@functools.lru_cache(maxsize=None)
+def ocloc_accepts_long_vector(device_arch: str) -> bool:
+    """Whether the `ocloc` on PATH accepts SPIR-V that uses `SPV_EXT_long_vector`.
+
+    AOT compilation (`generate_native_code`) hands the SPIR-V to `ocloc`, whose
+    IGC is independent of the installed driver and may predate the extension
+    (e.g. `ocloc` from an older oneAPI). IGC rejects an unknown extension while
+    reading the module, so a module that only declares it is a sufficient probe.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        spv = os.path.join(temp_dir, 'probe.spv')
+        with open(spv, 'wb') as f:
+            f.write(_LONG_VECTOR_PROBE_SPV)
+        try:
+            proc = subprocess.run([
+                'ocloc', 'compile', '-file', spv, '-o',
+                os.path.join(temp_dir, 'probe.o'), '-spirv_input', '-device', device_arch
+            ], capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return True  # No usable `ocloc`: `make_zebin` reports it.
+    output = proc.stdout + proc.stderr
+    return not ('unknown extension' in output and 'SPV_EXT_long_vector' in output)
 
 
 def get_max_grf_mode(arch: dict) -> str:
@@ -348,11 +393,15 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["allow_fp8e4nv"] = True
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
+        args["allow_long_vector"] = not args["is_lts"]
         args["max_grf_mode"] = self.properties['max_grf_mode']
         args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
         if "in_loop_sink" not in args:
             args["in_loop_sink"] = knobs.intel.in_loop_sink
-        return XPUOptions(**args)
+        options = XPUOptions(**args)
+        if options.generate_native_code and options.allow_long_vector:
+            options.allow_long_vector = ocloc_accepts_long_vector(self.device_arch)
+        return options
 
     @staticmethod
     def parse_attr(desc):
@@ -756,7 +805,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
         is_lts = cls.is_lts(driver_version)
-        spirv, name = intel.translate_to_spirv(src, is_lts)
+        spirv, name = intel.translate_to_spirv(src, is_lts, options.allow_long_vector)
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
         # `metadata["max_grf_mode"]` is already populated from `options.__dict__`

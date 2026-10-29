@@ -490,8 +490,8 @@ void init_triton_intel(py::module_ &m) {
 
   m.def(
       "translate_to_spirv",
-      [](const std::string &llvmIR,
-         bool isLTS) -> std::tuple<py::object, std::string> {
+      [](const std::string &llvmIR, bool isLTS,
+         bool allowLongVector) -> std::tuple<py::object, std::string> {
         std::string name;
         std::string spirvBitcode;
         {
@@ -513,12 +513,14 @@ void init_triton_intel(py::module_ &m) {
           const uint32_t numKernels = findKernels(*module, kernels);
           assert(numKernels == 1 && "Expecting a single SPIR kernel");
           name = (*kernels.begin())->getName().str();
-          spirvBitcode = triton::translateLLVMIRToSPIRV(*module, isLTS);
+          spirvBitcode =
+              triton::translateLLVMIRToSPIRV(*module, isLTS, allowLongVector);
         }
         return std::make_tuple(
             py::bytes(spirvBitcode.data(), spirvBitcode.size()), name);
       },
-      py::arg("llvmIR"), py::arg("isLTS"), ret::take_ownership);
+      py::arg("llvmIR"), py::arg("isLTS"), py::arg("allowLongVector"),
+      ret::take_ownership);
 
   m.def(
       "calculate_warps_per_tile",
