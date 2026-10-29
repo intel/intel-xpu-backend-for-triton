@@ -1,8 +1,12 @@
 """CPU guards for provenance, no-ops, unsupported calls, manifest and reporting."""
 import argparse
+from contextlib import redirect_stderr,redirect_stdout
+import io
 import json
 from pathlib import Path
+import sys
 import tempfile
+from unittest.mock import patch
 
 from transform import inspect,remove_a
 
@@ -60,6 +64,10 @@ def main():
     import run
     study = run.manifest()
     assert study['logical_shape_count']==54 and len(study['cases'])==84
+    diagnostic = run.fp64_dot_diagnostic(1.0,0.0,[4096.0,1.0,4096.0],[4096.0,1.0,-4096.0])
+    assert diagnostic['fp64_reference']==1.0 and diagnostic['triton_within_tolerance'] and not diagnostic['torch_within_tolerance']
+    diagnostic = run.fp64_dot_diagnostic(2.0,3.0,[4096.0,1.0,4096.0],[4096.0,1.0,-4096.0])
+    assert not diagnostic['triton_within_tolerance'] and not diagnostic['torch_within_tolerance']
     from analyze import summarize
     with tempfile.TemporaryDirectory() as tmp:
         reports=Path(tmp);(reports/'manifest.json').write_text(json.dumps(study))
@@ -80,6 +88,41 @@ def main():
         loss=next(c for c in result['cases'] if c['id']==study['cases'][0]['id'])
         assert abs(loss['selected_time_change_pct']-10)<1e-9 and loss['study_break_even_calls'] is None
         assert result['no_op_configuration_policies']==84
+        first = reports/'cases'/study['cases'][0]['id']
+        data = json.loads((first/'result.json').read_text())
+        data['validation_failure'] = {'variant':'stock_driver','phase':'before','full_output_mismatch_count':1,
+                                     'diagnostic_only':True,'fp64_diagnostics':[{'triton_within_tolerance':True}]}
+        (first/'result.json').write_text(json.dumps(data))
+        failure = {'reason':'Synthetic strict correctness failure','exception_type':'CalledProcessError'}
+        (first/'failure.json').write_text(json.dumps(failure))
+        result = summarize(reports,quiet=True)
+        assert not result['complete'] and result['scope_complete']
+        assert result['valid_case_count']==83 and result['invalid_case_count']==1
+        assert all(r['id']!=study['cases'][0]['id'] for r in result['cases'])
+        for case in study['cases']:
+            (reports/'cases'/case['id']/'failure.json').write_text(json.dumps(failure))
+        result = summarize(reports,quiet=True)
+        assert result['valid_case_count']==0 and result['invalid_case_count']==84
+        assert result['summary']['contiguous']['geometric_mean_time_change_pct'] is None
+        attempts=[]
+        def fake_run(command,**kwargs):
+            if '--worker' not in command:
+                assert command[1].endswith('analyze.py');return
+            attempts.append(command[command.index('--worker')+1])
+            kwargs['stdout'].write('Synthetic worker log\n')
+            if len(attempts)==1:
+                raise run.subprocess.CalledProcessError(1,command)
+            if len(attempts)==2:
+                raise run.subprocess.TimeoutExpired(command,1800)
+        schedule_reports=reports/'scheduling'
+        with patch.object(sys,'argv',['run.py','--reports',str(schedule_reports)]), \
+             patch.object(run.subprocess,'run',side_effect=fake_run), \
+             patch.object(run.subprocess,'check_output',return_value='synthetic-commit\n'), \
+             redirect_stderr(io.StringIO()),redirect_stdout(io.StringIO()):
+            run.main()
+        progress=json.loads((schedule_reports/'progress.json').read_text())
+        assert attempts==[c['id'] for c in study['cases']]
+        assert progress['attempted']==84 and len(progress['failed'])==2 and len(progress['completed'])==82
     print(f'CPU checks passed; {count} additional saved LLVM fixtures. No GPU libraries imported.')
 
 

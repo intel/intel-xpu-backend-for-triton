@@ -57,6 +57,15 @@ def compile_native(backend,original,metadata,spv,folder):
     return native,native_meta
 
 
+def fp64_dot_diagnostic(actual,reference,a_values,b_values,atol=1e-4,rtol=1e-3):
+    exact = math.fsum(x*y for x,y in zip(a_values,b_values,strict=True))
+    limit = atol+rtol*abs(exact)
+    return {'fp64_reference':exact,'triton_value':actual,'torch_value':reference,
+            'triton_abs_error':abs(actual-exact),'torch_abs_error':abs(reference-exact),
+            'triton_within_tolerance':abs(actual-exact)<=limit,
+            'torch_within_tolerance':abs(reference-exact)<=limit}
+
+
 def worker(args,case,study):
     import torch
     import triton
@@ -192,20 +201,45 @@ def worker(args,case,study):
                 'selection_ms':[],'measurement_ms':[],'matched_native_control':label+'__baseline'}
         save(out/'result.json',result)
 
-    def validate(key):
+    def validate(key,phase):
         c.fill_(float('nan'))
         functions[key]()
         torch.xpu.synchronize()
         if not torch.isfinite(c).all().item():
             raise RuntimeError('Non-finite or unwritten GEMM output')
-        suite.assert_close(lambda:c,lambda:reference,atol=1e-4,rtol=1e-3,err_msg=key)
         sample = c[rows[:,None],cols[None,:]].cpu().double()
-        triton.testing.assert_close(sample,cpu_reference,atol=1e-4,rtol=1e-3)
+        try:
+            suite.assert_close(lambda:c,lambda:reference,atol=1e-4,rtol=1e-3,err_msg=key)
+            triton.testing.assert_close(sample,cpu_reference,atol=1e-4,rtol=1e-3)
+        except AssertionError as error:
+            mismatch = ~torch.isclose(c,reference,atol=1e-4,rtol=1e-3)
+            count = int(mismatch.count_nonzero().item())
+            details = []
+            mismatch_inputs = []
+            if 0<count<=4096:
+                for row,col in mismatch.nonzero()[:16].cpu().tolist():
+                    a_row,b_col = a0[row].cpu(),b0[:,col].cpu()
+                    detail = fp64_dot_diagnostic(float(c[row,col].item()),float(reference[row,col].item()),
+                        a_row.double().tolist(),b_col.double().tolist())
+                    details.append(dict(row=row,col=col,**detail))
+                    mismatch_inputs.append({'row':row,'col':col,'a_row':a_row,'b_col':b_col})
+            mismatch_file = f'{key}-{phase}-mismatch-inputs.pt' if mismatch_inputs else None
+            if mismatch_file:
+                torch.save(mismatch_inputs,out/mismatch_file)
+            failure = {'variant':key,'phase':phase,'reason':str(error),'atol':1e-4,'rtol':1e-3,
+                'full_output_mismatch_count':count,'output_elements':c.numel(),
+                'sample_max_abs_error':(sample-cpu_reference).abs().max().item(),
+                'fp64_diagnostics':details,'mismatch_inputs_file':mismatch_file,'diagnostic_only':True,
+                'limit':'At most 16 full-output mismatches, collected only when total mismatches <=4096. Diagnostics do not override failed correctness checks.'}
+            result['validation_failure'] = failure
+            save(out/'validation-failure.json',failure)
+            save(out/'result.json',result)
+            raise
         return {'full_output_stock_contract':True,'cpu_fp64_sample_stock_contract':True,
                 'sample_max_abs_error':(sample-cpu_reference).abs().max().item()}
 
     for key in functions:
-        result['variants'][key]['before_validation'] = validate(key)
+        result['variants'][key]['before_validation'] = validate(key,'before')
         for _ in range(2):
             functions[key]()
         torch.xpu.synchronize()
@@ -240,7 +274,7 @@ def worker(args,case,study):
         save(out/'result.json',result)
         print(case['id'],'ROUND',round_index+1,flush=True)
     for key in functions:
-        result['variants'][key]['after_validation'] = validate(key)
+        result['variants'][key]['after_validation'] = validate(key,'after')
     if not torch.equal(a,a0) or not torch.equal(b,b0):
         raise RuntimeError('Read-only inputs changed')
     result.update(complete=True,inputs_unchanged=True)
@@ -269,22 +303,29 @@ def main():
     provenance = {'commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=args.checkout,text=True).strip(),
                   'manifest_sha256':sha((ROOT/'manifest.json').read_bytes()),'python':platform.python_version()}
     save(args.reports/'provenance.json',provenance)
-    completed = []
+    completed,failed = [],[]
     for case in study['cases']:
         log = args.reports/(case['id']+'.log')
         command = [sys.executable,str(Path(__file__).resolve()),'--worker',case['id'],
                    '--reports',str(args.reports),'--checkout',str(args.checkout)]
+        failure = None
         with log.open('w') as output:
             try:
                 subprocess.run(command,stdout=output,stderr=subprocess.STDOUT,check=True,timeout=1800)
-            except (subprocess.CalledProcessError,subprocess.TimeoutExpired):
+            except (subprocess.CalledProcessError,subprocess.TimeoutExpired) as error:
                 output.flush()
                 print(f'Worker failed: {case["id"]}; last 40 log lines:',file=sys.stderr,flush=True)
                 print('\n'.join(log.read_text().splitlines()[-40:]),file=sys.stderr,flush=True)
-                raise
-        completed.append(case['id'])
-        save(args.reports/'progress.json',{'completed':completed,'total':84})
-        print('CASE',len(completed),'/84',case['id'],flush=True)
+                failure = {'id':case['id'],'case':case,'reason':str(error),'log':log.name,
+                           'exception_type':type(error).__name__}
+        if failure:
+            failed.append(case['id'])
+            save(args.reports/'cases'/case['id']/'failure.json',failure)
+        else:
+            completed.append(case['id'])
+        save(args.reports/'progress.json',{'completed':completed,'failed':failed,
+             'attempted':len(completed)+len(failed),'total':84})
+        print('CASE',len(completed)+len(failed),'/84',case['id'],'FAILED' if failure else 'COMPLETE',flush=True)
     subprocess.run([sys.executable,str(ROOT/'analyze.py'),'--reports',str(args.reports)],check=True)
 
 
