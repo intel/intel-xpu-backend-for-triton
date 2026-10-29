@@ -120,6 +120,19 @@ void eraseUnusedOps(SetVector<Operation *> &opsToDelete) {
       op->erase();
 }
 
+// Return the distinct DPAS result encodings of the tt.dot ops in `funcOp`, in
+// walk order.
+static SmallVector<ttgi::DpasEncodingAttr>
+collectDotDpasEncodings(tt::FuncOp funcOp) {
+  SmallVector<ttgi::DpasEncodingAttr> encodings;
+  funcOp.walk([&](tt::DotOp dotOp) {
+    auto dpas = dyn_cast<ttgi::DpasEncodingAttr>(dotOp.getType().getEncoding());
+    if (dpas && !llvm::is_contained(encodings, dpas))
+      encodings.push_back(dpas);
+  });
+  return encodings;
+}
+
 // -----------------------------------------------------------------------------
 //
 // -----------------------------------------------------------------------------
@@ -150,7 +163,8 @@ public:
     LayoutInfo() {}
     llvm::SmallSetVector<Attribute, 8> encodings;
   };
-  LayoutPropagation(tt::FuncOp F) : funcOp(F) {}
+  LayoutPropagation(tt::FuncOp F)
+      : funcOp(F), dotDpasEncodings(collectDotDpasEncodings(F)) {}
   // Find the anchor ops and set their layout in the data structure.
   void initAnchorLayout();
   // Recursively Propagate the layout to all the users of the anchor ops until
@@ -158,6 +172,9 @@ public:
   void propagateLayout();
   // Add layouts given in `Info` to the uses of `value`.
   SmallVector<Value> propagateToUsers(Value value, LayoutInfo &info);
+  // Like inferDstEncoding, but a reshape result whose #linear equals a dot's
+  // DPAS layout gets that DPAS encoding, which resolveConflicts prefers.
+  Attribute inferDstEncodingPreferDpas(Operation *op, Attribute encoding) const;
   // Set the encoding to all the values and fill out the values with new layout
   // in `changed`.
   void setEncoding(ValueRange values, LayoutInfo &info,
@@ -195,6 +212,8 @@ private:
   // original encodings of tensor values rewritten in place.
   DenseMap<Value, Attribute> originalEncodings;
   tt::FuncOp funcOp;
+  // candidates for inferDstEncodingPreferDpas.
+  SmallVector<ttgi::DpasEncodingAttr> dotDpasEncodings;
 };
 
 class LayoutRematerialization {
@@ -497,6 +516,25 @@ void LayoutPropagation::initAnchorLayout() {
   });
 }
 
+Attribute
+LayoutPropagation::inferDstEncodingPreferDpas(Operation *op,
+                                              Attribute encoding) const {
+  Attribute dstEncoding = inferDstEncoding(op, encoding);
+  auto reshapeOp = dyn_cast<tt::ReshapeOp>(op);
+  auto linearEnc = dyn_cast_if_present<ttg::LinearEncodingAttr>(dstEncoding);
+  if (!reshapeOp || !linearEnc)
+    return dstEncoding;
+  ArrayRef<int64_t> shape = reshapeOp.getType().getShape();
+  for (ttgi::DpasEncodingAttr dpas : dotDpasEncodings) {
+    // DPAStoLinearLayout asserts that the ranks match.
+    if (dpas.getWarpsPerCTA().size() != shape.size())
+      continue;
+    if (ttg::areLayoutsEquivalent(shape, linearEnc, dpas))
+      return dpas;
+  }
+  return dstEncoding;
+}
+
 void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
                                     SmallVector<Value> &changed,
                                     Operation *op) {
@@ -511,7 +549,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
         // encoding.
         dstEncoding = encoding;
       } else {
-        dstEncoding = inferDstEncoding(op, encoding);
+        dstEncoding = inferDstEncodingPreferDpas(op, encoding);
       }
       if (dstEncoding)
         hasChanged |= layouts[value].encodings.insert(dstEncoding);
