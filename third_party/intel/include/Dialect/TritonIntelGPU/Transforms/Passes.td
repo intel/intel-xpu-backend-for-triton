@@ -527,13 +527,14 @@ def TritonIntelGPUCodeSinking
 
 def TritonIntelGPUAnnotateCacheControl
     : Pass<"tritonintelgpu-annotate-cache-control", "mlir::ModuleOp"> {
-  let summary = "Annotate tt.load ops with .cg cache control unless the load's encoding indicates cross-subgroup L1 reuse";
+  let summary = "Annotate tt.load ops with .cg cache control unless reuse analysis indicates L1 reuse";
   let description = [{
-    Sets `.cg` (L1UC_L3C) cache control on `tt.load` operations whose result
-    does not participate in a matrix multiply. GEMM operand loads benefit from
-    L1 reuse and are left with the default cache modifier; streaming /
-    elementwise loads bypass L1 to avoid thrashing. User-specified cache
-    modifiers are never overridden.
+    Sets `.cg` (L1UC_L3C) cache control on `tt.load` operations for which
+    reuse analysis finds no evidence of L1 reuse: streaming / elementwise
+    loads bypass L1 to avoid thrashing. Loads with reuse (typically GEMM
+    operand loads) keep the default cache modifier, and loads with proven
+    reuse may be promoted to EVICT_LAST. User-specified cache modifiers and
+    eviction policies are never overridden.
 
     `.cg` on loads is always coherence-safe: it reads from the shared coherent
     L3 rather than the incoherent per-core L1. The filters below are
@@ -541,16 +542,16 @@ def TritonIntelGPUAnnotateCacheControl
     from L1 reuse (e.g. matmul operand loads in complex kernels).
 
     The pass runs **after** `remove_layout_conversions`, so load-result
-    encodings are stable. The heuristic inspects each `tt.load`'s result
-    encoding: if it is a `DotOperandEncodingAttr` whose parent implements
-    `MmaEncodingTrait` (DPAS / Subgroup2DBlockEncoding), annotation is
-    suppressed — the HW access pattern already yields cross-subgroup L1 reuse
-    because the K dimension is broadcast across warps. Nested
-    `SliceEncodingAttr` layers are unwrapped before the dot-operand check.
-    The load is also suppressed when its result feeds the `aScale`/`bScale`
-    operand of a `tt.dot_scaled` — a single-hop use-site check suffices
-    because AccelerateMatmul materialises scale encodings immediately before
-    the consumer, with no `scf.for` / `convert_layout` in between.
+    encodings are stable. Reuse is decided by `ReuseAnalysis` on the load's
+    result layout, not by its encoding kind:
+      - spatial (`SpatialReuseAnalysis`): an axis of the result is shared by
+        all warps (zero warp basis in the LinearLayout), e.g. the K axis of a
+        DPAS dot operand broadcast across warps, or a dot_scaled scale
+        operand. A layout with a single warp has no other subgroup to share
+        with, so it reports no spatial reuse;
+      - temporal (`TemporalReuseAnalysis`): an enclosing loop re-reads the
+        same addresses (loop-invariant or overlapping per-iteration tiles).
+    Loads whose lanes broadcast the same address are also left unannotated.
 
     To avoid unnecessary L1 bypass, loads are additionally skipped when their
     pointer root-traces to a kernel argument that falls into any of the

@@ -44,9 +44,10 @@ static PyObject *getIntelGPUErrorClass() {
     return g_intel_gpu_error_class;
   }
 
-  PyObject *module = PyImport_ImportModule("triton.runtime.errors");
+  PyObject *module = PyImport_ImportModule("triton.backends.intel.errors");
   if (module == nullptr) {
-    PyErr_SetString(PyExc_ImportError, "cannot import triton.runtime.errors");
+    PyErr_SetString(PyExc_ImportError,
+                    "cannot import triton.backends.intel.errors");
     return NULL;
   }
 
@@ -54,8 +55,9 @@ static PyObject *getIntelGPUErrorClass() {
   Py_DECREF(module);
 
   if (g_intel_gpu_error_class == nullptr) {
-    PyErr_SetString(PyExc_AttributeError,
-                    "cannot find IntelGPUError in triton.runtime.errors");
+    PyErr_SetString(
+        PyExc_AttributeError,
+        "cannot find IntelGPUError in triton.backends.intel.errors");
     return NULL;
   }
 
@@ -539,6 +541,57 @@ struct BuildFlags {
   }
 };
 
+// GRF mode a SPIR-V module fixes on its own, independently of `BuildFlags`:
+// off LTS, compiler.py requests an explicit `grf_mode` through the kernel's
+// SPV_INTEL_maximum_registers execution mode instead of an IGC build flag. This
+// has to be known before the build, to decide whether a large-GRF retry is
+// still ours to make; what IGC settled on afterwards comes from
+// `compiledGRFCount`.
+struct BinaryGRFMode {
+  bool isFixed = false; // The binary chooses its GRF mode; do not retry.
+  int32_t nRegs = 0;    // Register count, 0 when not known (e.g. AutoINTEL).
+};
+
+// Scans the SPIR-V module for a MaximumRegistersINTEL (6461),
+// MaximumRegistersIdINTEL (6462) or NamedMaximumRegistersINTEL (6463)
+// execution mode.
+static BinaryGRFMode getSpirvGRFMode(const uint8_t *binary, size_t size) {
+  constexpr uint32_t spirvMagic = 0x07230203;
+  constexpr uint32_t opExecutionMode = 16, opFunction = 54,
+                     opExecutionModeId = 331;
+  constexpr uint32_t maxRegisters = 6461, maxRegistersId = 6462,
+                     namedMaxRegisters = 6463;
+  constexpr size_t headerWords = 5;
+
+  const size_t numWords = size / sizeof(uint32_t);
+  auto word = [&](size_t i) {
+    uint32_t w;
+    std::memcpy(&w, binary + i * sizeof(uint32_t), sizeof(w));
+    return w;
+  };
+  if (numWords < headerWords || word(0) != spirvMagic)
+    return {};
+
+  for (size_t i = headerWords; i < numWords;) {
+    const uint32_t opcode = word(i) & 0xffff, wordCount = word(i) >> 16;
+    if (wordCount == 0 || i + wordCount > numWords)
+      break;
+    // Execution modes all precede the first function definition.
+    if (opcode == opFunction)
+      break;
+    if ((opcode == opExecutionMode || opcode == opExecutionModeId) &&
+        wordCount >= 3) {
+      const uint32_t mode = word(i + 2);
+      if (mode == maxRegisters && wordCount >= 4)
+        return {true, static_cast<int32_t>(word(i + 3))};
+      if (mode == maxRegistersId || mode == namedMaxRegisters)
+        return {true, 0};
+    }
+    i += wordCount;
+  }
+  return {};
+}
+
 sycl::context get_default_context(const sycl::device &sycl_device) {
   const auto &platform = sycl_device.get_platform();
 #if defined(_WIN32)
@@ -628,7 +681,12 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
       compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                               l0_context, build_flags(), is_spv);
   bool firstBuildFailed = PyErr_Occurred();
-  const bool canRetryWithLargeGRF = is_spv && !build_flags.hasGRFSizeFlag();
+  // A zebin needs no equivalent probe: its GRF mode is already baked in, and
+  // `compiledGRFCount` reads it back below.
+  const BinaryGRFMode binaryGRFMode =
+      is_spv ? getSpirvGRFMode(binary_ptr, binary_size) : BinaryGRFMode{};
+  const bool canRetryWithLargeGRF =
+      is_spv && !build_flags.hasGRFSizeFlag() && !binaryGRFMode.isFixed;
   if (firstBuildFailed && !canRetryWithLargeGRF) {
     return NULL;
   }
@@ -771,7 +829,14 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
               << kernel_name << "\"" << std::endl;
   }
 
-  auto n_regs = compiledGRFCount(l0_kernel, build_flags.n_regs());
+  // What IGC compiled with, else what the SPIR-V asked for, else the build
+  // flags. The middle step only covers a driver that leaves
+  // `compiledGRFCount`'s query unanswered: off LTS the GRF mode rides in the
+  // SPIR-V, so `build_flags.n_regs()` would report its no-flag default of 128
+  // for a kernel that really is 256- or 512-GRF.
+  auto n_regs = compiledGRFCount(l0_kernel, binaryGRFMode.nRegs > 0
+                                                ? binaryGRFMode.nRegs
+                                                : build_flags.n_regs());
 
   auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
       sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
