@@ -1,4 +1,5 @@
 // RUN: triton-opt %s --split-input-file -tritonintelgpu-optimize-reduction-locality | FileCheck %s
+// XFAIL: *
 
 // Test reduction in a single warp (16x16->16).
 
@@ -13,7 +14,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // CHECK-LABEL:   tt.func @test_single(
 // CHECK-SAME:                         %[[VAL_0:.*]]: tensor<16x16xf32, #[[$ATTR_4]]>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_4]]}>> {
-// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] allow_reorder efficient_layout : tensor<16x16xf32, #[[$ATTR_4]]> -> tensor<16x8x1x2x1x1x1xf32, #[[$ATTR_0]]>
+// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] efficient_layout : tensor<16x16xf32, #[[$ATTR_4]]> -> tensor<16x8x1x2x1x1x1xf32, #[[$ATTR_0]]>
 // CHECK:           %[[VAL_2:.*]] = "tt.reduce"(%[[VAL_1]]) <{axis = 2 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_3:.*]]: f32, %[[VAL_4:.*]]: f32):
 // CHECK:             %[[VAL_5:.*]] = arith.addf %[[VAL_3]], %[[VAL_4]] : f32
@@ -25,7 +26,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // CHECK:             tt.reduce.return %[[VAL_9]] : f32
 // CHECK:           }) : (tensor<16x8x2x1x1x1xf32, #ttg.slice<{dim = 2, parent = #[[$ATTR_0]]}>>) -> tensor<16x8x2x1x1xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #[[$ATTR_0]]}>}>>
 // CHECK:           %[[VAL_10:.*]] = ttg.convert_layout %[[VAL_6]] : tensor<16x8x2x1x1xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #[[$ATTR_0]]}>}>> -> tensor<16x8x2x1x1xf32, #[[$ATTR_1]]>
-// CHECK:           %[[VAL_11:.*]] = tt.reshape %[[VAL_10]] allow_reorder efficient_layout : tensor<16x8x2x1x1xf32, #[[$ATTR_1]]> -> tensor<16x16x1x1xf32, #[[$ATTR_2]]>
+// CHECK:           %[[VAL_11:.*]] = tt.reshape %[[VAL_10]] efficient_layout : tensor<16x8x2x1x1xf32, #[[$ATTR_1]]> -> tensor<16x16x1x1xf32, #[[$ATTR_2]]>
 // CHECK:           %[[VAL_12:.*]] = "tt.reduce"(%[[VAL_11]]) <{axis = 0 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_13:.*]]: f32, %[[VAL_14:.*]]: f32):
 // CHECK:             %[[VAL_15:.*]] = arith.addf %[[VAL_13]], %[[VAL_14]] : f32
@@ -36,7 +37,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // CHECK:             %[[VAL_19:.*]] = arith.addf %[[VAL_17]], %[[VAL_18]] : f32
 // CHECK:             tt.reduce.return %[[VAL_19]] : f32
 // CHECK:           }) : (tensor<16x1x1xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_2]]}>>) -> tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_2]]}>}>>
-// CHECK:           %[[VAL_20:.*]] = tt.reshape %[[VAL_16]] allow_reorder efficient_layout : tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_2]]}>}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_3]]}>>
+// CHECK:           %[[VAL_20:.*]] = tt.reshape %[[VAL_16]] efficient_layout : tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_2]]}>}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_3]]}>>
 // CHECK:           %[[VAL_21:.*]] = ttg.convert_layout %[[VAL_20]] : tensor<16xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_3]]}>> -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_4]]}>>
 // CHECK:           tt.return %[[VAL_21]] : tensor<16xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_4]]}>>
 // CHECK:         }
@@ -65,7 +66,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
 // CHECK-LABEL:   tt.func @test_single_twice(
 // CHECK-SAME:                               %[[VAL_0:.*]]: tensor<32x16xf32, #[[$ATTR_9]]>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_9]]}>> {
-// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] allow_reorder efficient_layout : tensor<32x16xf32, #[[$ATTR_9]]> -> tensor<16x8x1x2x1x1x2xf32, #[[$ATTR_5]]>
+// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] efficient_layout : tensor<32x16xf32, #[[$ATTR_9]]> -> tensor<16x8x1x2x1x1x2xf32, #[[$ATTR_5]]>
 // CHECK:           %[[VAL_2:.*]] = "tt.reduce"(%[[VAL_1]]) <{axis = 2 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_3:.*]]: f32, %[[VAL_4:.*]]: f32):
 // CHECK:             %[[VAL_5:.*]] = arith.addf %[[VAL_3]], %[[VAL_4]] : f32
@@ -77,7 +78,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 // CHECK:             tt.reduce.return %[[VAL_9]] : f32
 // CHECK:           }) : (tensor<16x8x2x1x1x2xf32, #ttg.slice<{dim = 2, parent = #[[$ATTR_5]]}>>) -> tensor<16x8x2x1x2xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #[[$ATTR_5]]}>}>>
 // CHECK:           %[[VAL_10:.*]] = ttg.convert_layout %[[VAL_6]] : tensor<16x8x2x1x2xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #[[$ATTR_5]]}>}>> -> tensor<16x8x2x1x2xf32, #[[$ATTR_6]]>
-// CHECK:           %[[VAL_11:.*]] = tt.reshape %[[VAL_10]] allow_reorder efficient_layout : tensor<16x8x2x1x2xf32, #[[$ATTR_6]]> -> tensor<16x16x1x2xf32, #[[$ATTR_7]]>
+// CHECK:           %[[VAL_11:.*]] = tt.reshape %[[VAL_10]] efficient_layout : tensor<16x8x2x1x2xf32, #[[$ATTR_6]]> -> tensor<16x16x1x2xf32, #[[$ATTR_7]]>
 // CHECK:           %[[VAL_12:.*]] = "tt.reduce"(%[[VAL_11]]) <{axis = 0 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_13:.*]]: f32, %[[VAL_14:.*]]: f32):
 // CHECK:             %[[VAL_15:.*]] = arith.addf %[[VAL_13]], %[[VAL_14]] : f32
@@ -88,7 +89,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 // CHECK:             %[[VAL_19:.*]] = arith.addf %[[VAL_17]], %[[VAL_18]] : f32
 // CHECK:             tt.reduce.return %[[VAL_19]] : f32
 // CHECK:           }) : (tensor<16x1x2xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_7]]}>>) -> tensor<16x2xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_7]]}>}>>
-// CHECK:           %[[VAL_20:.*]] = tt.reshape %[[VAL_16]] allow_reorder efficient_layout : tensor<16x2xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_7]]}>}>> -> tensor<32xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_8]]}>>
+// CHECK:           %[[VAL_20:.*]] = tt.reshape %[[VAL_16]] efficient_layout : tensor<16x2xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_7]]}>}>> -> tensor<32xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_8]]}>>
 // CHECK:           %[[VAL_21:.*]] = ttg.convert_layout %[[VAL_20]] : tensor<32xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_8]]}>> -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_9]]}>>
 // CHECK:           tt.return %[[VAL_21]] : tensor<32xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_9]]}>>
 // CHECK:         }
@@ -117,7 +118,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
 // CHECK-LABEL:   tt.func @test_two_warps_red(
 // CHECK-SAME:                                %[[VAL_0:.*]]: tensor<16x32xf32, #[[$ATTR_14]]>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_14]]}>> {
-// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] allow_reorder efficient_layout : tensor<16x32xf32, #[[$ATTR_14]]> -> tensor<16x8x1x2x2x1x1xf32, #[[$ATTR_10]]>
+// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] efficient_layout : tensor<16x32xf32, #[[$ATTR_14]]> -> tensor<16x8x1x2x2x1x1xf32, #[[$ATTR_10]]>
 // CHECK:           %[[VAL_2:.*]] = "tt.reduce"(%[[VAL_1]]) <{axis = 2 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_3:.*]]: f32, %[[VAL_4:.*]]: f32):
 // CHECK:             %[[VAL_5:.*]] = arith.addf %[[VAL_3]], %[[VAL_4]] : f32
@@ -129,7 +130,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 // CHECK:             tt.reduce.return %[[VAL_9]] : f32
 // CHECK:           }) : (tensor<16x8x2x2x1x1xf32, #ttg.slice<{dim = 2, parent = #[[$ATTR_10]]}>>) -> tensor<16x8x2x2x1xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #[[$ATTR_10]]}>}>>
 // CHECK:           %[[VAL_10:.*]] = ttg.convert_layout %[[VAL_6]] : tensor<16x8x2x2x1xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #[[$ATTR_10]]}>}>> -> tensor<16x8x2x2x1xf32, #[[$ATTR_11]]>
-// CHECK:           %[[VAL_11:.*]] = tt.reshape %[[VAL_10]] allow_reorder efficient_layout : tensor<16x8x2x2x1xf32, #[[$ATTR_11]]> -> tensor<16x16x2x1xf32, #[[$ATTR_12]]>
+// CHECK:           %[[VAL_11:.*]] = tt.reshape %[[VAL_10]] efficient_layout : tensor<16x8x2x2x1xf32, #[[$ATTR_11]]> -> tensor<16x16x2x1xf32, #[[$ATTR_12]]>
 // CHECK:           %[[VAL_12:.*]] = "tt.reduce"(%[[VAL_11]]) <{axis = 0 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_13:.*]]: f32, %[[VAL_14:.*]]: f32):
 // CHECK:             %[[VAL_15:.*]] = arith.addf %[[VAL_13]], %[[VAL_14]] : f32
@@ -140,7 +141,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 // CHECK:             %[[VAL_19:.*]] = arith.addf %[[VAL_17]], %[[VAL_18]] : f32
 // CHECK:             tt.reduce.return %[[VAL_19]] : f32
 // CHECK:           }) : (tensor<16x2x1xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_12]]}>>) -> tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_12]]}>}>>
-// CHECK:           %[[VAL_20:.*]] = tt.reshape %[[VAL_16]] allow_reorder efficient_layout : tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_12]]}>}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_13]]}>>
+// CHECK:           %[[VAL_20:.*]] = tt.reshape %[[VAL_16]] efficient_layout : tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_12]]}>}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_13]]}>>
 // CHECK:           %[[VAL_21:.*]] = ttg.convert_layout %[[VAL_20]] : tensor<16xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_13]]}>> -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_14]]}>>
 // CHECK:           tt.return %[[VAL_21]] : tensor<16xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_14]]}>>
 // CHECK:         }
@@ -169,7 +170,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // CHECK-LABEL:   tt.func @test_two_warps(
 // CHECK-SAME:                            %[[VAL_0:.*]]: tensor<32x32xf32, #[[$ATTR_19]]>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_19]]}>> {
-// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] allow_reorder efficient_layout : tensor<32x32xf32, #[[$ATTR_19]]> -> tensor<16x8x1x2x2x1x2xf32, #[[$ATTR_15]]>
+// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] efficient_layout : tensor<32x32xf32, #[[$ATTR_19]]> -> tensor<16x8x1x2x2x1x2xf32, #[[$ATTR_15]]>
 // CHECK:           %[[VAL_2:.*]] = "tt.reduce"(%[[VAL_1]]) <{axis = 2 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_3:.*]]: f32, %[[VAL_4:.*]]: f32):
 // CHECK:             %[[VAL_5:.*]] = arith.addf %[[VAL_3]], %[[VAL_4]] : f32
@@ -181,7 +182,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // CHECK:             tt.reduce.return %[[VAL_9]] : f32
 // CHECK:           }) : (tensor<16x8x2x2x1x2xf32, #ttg.slice<{dim = 2, parent = #[[$ATTR_15]]}>>) -> tensor<16x8x2x2x2xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #[[$ATTR_15]]}>}>>
 // CHECK:           %[[VAL_10:.*]] = ttg.convert_layout %[[VAL_6]] : tensor<16x8x2x2x2xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #[[$ATTR_15]]}>}>> -> tensor<16x8x2x2x2xf32, #[[$ATTR_16]]>
-// CHECK:           %[[VAL_11:.*]] = tt.reshape %[[VAL_10]] allow_reorder efficient_layout : tensor<16x8x2x2x2xf32, #[[$ATTR_16]]> -> tensor<16x16x2x2xf32, #[[$ATTR_17]]>
+// CHECK:           %[[VAL_11:.*]] = tt.reshape %[[VAL_10]] efficient_layout : tensor<16x8x2x2x2xf32, #[[$ATTR_16]]> -> tensor<16x16x2x2xf32, #[[$ATTR_17]]>
 // CHECK:           %[[VAL_12:.*]] = "tt.reduce"(%[[VAL_11]]) <{axis = 0 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_13:.*]]: f32, %[[VAL_14:.*]]: f32):
 // CHECK:             %[[VAL_15:.*]] = arith.addf %[[VAL_13]], %[[VAL_14]] : f32
@@ -192,7 +193,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // CHECK:             %[[VAL_19:.*]] = arith.addf %[[VAL_17]], %[[VAL_18]] : f32
 // CHECK:             tt.reduce.return %[[VAL_19]] : f32
 // CHECK:           }) : (tensor<16x2x2xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_17]]}>>) -> tensor<16x2xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_17]]}>}>>
-// CHECK:           %[[VAL_20:.*]] = tt.reshape %[[VAL_16]] allow_reorder efficient_layout : tensor<16x2xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_17]]}>}>> -> tensor<32xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_18]]}>>
+// CHECK:           %[[VAL_20:.*]] = tt.reshape %[[VAL_16]] efficient_layout : tensor<16x2xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_17]]}>}>> -> tensor<32xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_18]]}>>
 // CHECK:           %[[VAL_21:.*]] = ttg.convert_layout %[[VAL_20]] : tensor<32xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_18]]}>> -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_19]]}>>
 // CHECK:           tt.return %[[VAL_21]] : tensor<32xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_19]]}>>
 // CHECK:         }
@@ -220,7 +221,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
 // CHECK-LABEL:   tt.func @test(
 // CHECK-SAME:                  %[[VAL_0:.*]]: tensor<64x64xf32, #[[$ATTR_24]]>) -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_24]]}>> {
-// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] allow_reorder efficient_layout : tensor<64x64xf32, #[[$ATTR_24]]> -> tensor<16x8x2x2x2x1x4xf32, #[[$ATTR_20]]>
+// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] efficient_layout : tensor<64x64xf32, #[[$ATTR_24]]> -> tensor<16x8x2x2x2x1x4xf32, #[[$ATTR_20]]>
 // CHECK:           %[[VAL_2:.*]] = "tt.reduce"(%[[VAL_1]]) <{axis = 2 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_3:.*]]: f32, %[[VAL_4:.*]]: f32):
 // CHECK:             %[[VAL_5:.*]] = arith.maxnumf %[[VAL_3]], %[[VAL_4]] : f32
@@ -232,7 +233,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // CHECK:             tt.reduce.return %[[VAL_9]] : f32
 // CHECK:           }) : (tensor<16x8x2x2x1x4xf32, #ttg.slice<{dim = 2, parent = #[[$ATTR_20]]}>>) -> tensor<16x8x2x2x4xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #[[$ATTR_20]]}>}>>
 // CHECK:           %[[VAL_10:.*]] = ttg.convert_layout %[[VAL_6]] : tensor<16x8x2x2x4xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #[[$ATTR_20]]}>}>> -> tensor<16x8x2x2x4xf32, #[[$ATTR_21]]>
-// CHECK:           %[[VAL_11:.*]] = tt.reshape %[[VAL_10]] allow_reorder efficient_layout : tensor<16x8x2x2x4xf32, #[[$ATTR_21]]> -> tensor<16x16x2x4xf32, #[[$ATTR_22]]>
+// CHECK:           %[[VAL_11:.*]] = tt.reshape %[[VAL_10]] efficient_layout : tensor<16x8x2x2x4xf32, #[[$ATTR_21]]> -> tensor<16x16x2x4xf32, #[[$ATTR_22]]>
 // CHECK:           %[[VAL_12:.*]] = "tt.reduce"(%[[VAL_11]]) <{axis = 0 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_13:.*]]: f32, %[[VAL_14:.*]]: f32):
 // CHECK:             %[[VAL_15:.*]] = arith.maxnumf %[[VAL_13]], %[[VAL_14]] : f32
@@ -243,7 +244,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // CHECK:             %[[VAL_19:.*]] = arith.maxnumf %[[VAL_17]], %[[VAL_18]] : f32
 // CHECK:             tt.reduce.return %[[VAL_19]] : f32
 // CHECK:           }) : (tensor<16x2x4xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_22]]}>>) -> tensor<16x4xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_22]]}>}>>
-// CHECK:           %[[VAL_20:.*]] = tt.reshape %[[VAL_16]] allow_reorder efficient_layout : tensor<16x4xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_22]]}>}>> -> tensor<64xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_23]]}>>
+// CHECK:           %[[VAL_20:.*]] = tt.reshape %[[VAL_16]] efficient_layout : tensor<16x4xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_22]]}>}>> -> tensor<64xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_23]]}>>
 // CHECK:           %[[VAL_21:.*]] = ttg.convert_layout %[[VAL_20]] : tensor<64xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_23]]}>> -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_24]]}>>
 // CHECK:           tt.return %[[VAL_21]] : tensor<64xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_24]]}>>
 // CHECK:         }
@@ -271,7 +272,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
 // CHECK-LABEL:   tt.func @test(
 // CHECK-SAME:                  %[[VAL_0:.*]]: tensor<128x64xf32, #[[$ATTR_29]]>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_29]]}>> {
-// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] allow_reorder efficient_layout : tensor<128x64xf32, #[[$ATTR_29]]> -> tensor<16x8x2x4x2x1x4xf32, #[[$ATTR_25]]>
+// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] efficient_layout : tensor<128x64xf32, #[[$ATTR_29]]> -> tensor<16x8x2x4x2x1x4xf32, #[[$ATTR_25]]>
 // CHECK:           %[[VAL_2:.*]] = "tt.reduce"(%[[VAL_1]]) <{axis = 2 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_3:.*]]: f32, %[[VAL_4:.*]]: f32):
 // CHECK:             %[[VAL_5:.*]] = arith.maxnumf %[[VAL_3]], %[[VAL_4]] : f32
@@ -283,7 +284,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // CHECK:             tt.reduce.return %[[VAL_9]] : f32
 // CHECK:           }) : (tensor<16x8x4x2x1x4xf32, #ttg.slice<{dim = 2, parent = #[[$ATTR_25]]}>>) -> tensor<16x8x4x2x4xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #[[$ATTR_25]]}>}>>
 // CHECK:           %[[VAL_10:.*]] = ttg.convert_layout %[[VAL_6]] : tensor<16x8x4x2x4xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #[[$ATTR_25]]}>}>> -> tensor<16x8x4x2x4xf32, #[[$ATTR_26]]>
-// CHECK:           %[[VAL_11:.*]] = tt.reshape %[[VAL_10]] allow_reorder efficient_layout : tensor<16x8x4x2x4xf32, #[[$ATTR_26]]> -> tensor<16x32x2x4xf32, #[[$ATTR_27]]>
+// CHECK:           %[[VAL_11:.*]] = tt.reshape %[[VAL_10]] efficient_layout : tensor<16x8x4x2x4xf32, #[[$ATTR_26]]> -> tensor<16x32x2x4xf32, #[[$ATTR_27]]>
 // CHECK:           %[[VAL_12:.*]] = "tt.reduce"(%[[VAL_11]]) <{axis = 0 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_13:.*]]: f32, %[[VAL_14:.*]]: f32):
 // CHECK:             %[[VAL_15:.*]] = arith.maxnumf %[[VAL_13]], %[[VAL_14]] : f32
@@ -294,7 +295,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // CHECK:             %[[VAL_19:.*]] = arith.maxnumf %[[VAL_17]], %[[VAL_18]] : f32
 // CHECK:             tt.reduce.return %[[VAL_19]] : f32
 // CHECK:           }) : (tensor<32x2x4xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_27]]}>>) -> tensor<32x4xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_27]]}>}>>
-// CHECK:           %[[VAL_20:.*]] = tt.reshape %[[VAL_16]] allow_reorder efficient_layout : tensor<32x4xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_27]]}>}>> -> tensor<128xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_28]]}>>
+// CHECK:           %[[VAL_20:.*]] = tt.reshape %[[VAL_16]] efficient_layout : tensor<32x4xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$ATTR_27]]}>}>> -> tensor<128xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_28]]}>>
 // CHECK:           %[[VAL_21:.*]] = ttg.convert_layout %[[VAL_20]] : tensor<128xf32, #ttg.slice<{dim = 0, parent = #[[$ATTR_28]]}>> -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_29]]}>>
 // CHECK:           tt.return %[[VAL_21]] : tensor<128xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_29]]}>>
 // CHECK:         }

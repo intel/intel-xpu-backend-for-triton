@@ -346,14 +346,6 @@ bool isLayoutAnchor(Operation *op) {
             dyn_cast<RankedTensorType>(op->getResult(0).getType()))
       return isa<ttg::MmaEncodingTrait>(tensorType.getEncoding());
 
-  // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
-  // anything, so it stops forward-propagation of layouts.  We rely on the
-  // backwards pass to fix it up if necessary.  (If we didn't do this, then
-  // anything following the reshape won't be covered by the forward pass at
-  // all.)
-  if (auto reshape = dyn_cast<tt::ReshapeOp>(op))
-    return reshape.getAllowReorder();
-
   // Anchor a convert_layout that feeds a descriptor store when folding it would
   // demote the store from a 2D block write to a scalar scatter.
   //

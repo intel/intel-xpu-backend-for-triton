@@ -738,7 +738,7 @@ private:
         cast<tt::DialectInferLayoutInterface>(&origEnc.getDialect());
     Attribute dstEnc;
     if (failed(interface->inferReshapeOpEncoding(srcShape, origEnc, dstShape,
-                                                 dstEnc, /*allowReorder=*/false,
+                                                 dstEnc,
                                                  /*loc=*/std::nullopt)))
       return std::nullopt;
     return dstEnc;
@@ -832,11 +832,9 @@ private:
     }
 
     // Reshape pointer and value to [H, W] with their natural 2D encodings
-    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr,
-                                            /*allowReorder=*/false);
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr);
     auto valReshape =
-        tt::ReshapeOp::create(builder, loc, newShape, op.getValue(),
-                              /*allowReorder=*/false);
+        tt::ReshapeOp::create(builder, loc, newShape, op.getValue());
 
     // Build HW delivery encoding and convert both ptr and val into it.
     auto storeEnc =
@@ -942,8 +940,7 @@ private:
     // (allow_reorder + efficient_layout) would be incorrect: that reshape
     // lowers to a no-op, so the registers would still hold the pointers laid
     // out per the 1D source encoding while the type claims HW delivery order.
-    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr,
-                                            /*allowReorder=*/false);
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr);
     auto loadPtrTy =
         RankedTensorType::get(newShape, ptrTensorTy.getElementType(), loadEnc);
     Value loadPtr =
@@ -953,8 +950,7 @@ private:
     Value mask2d;
     if (Value mask = op.getMask()) {
       auto maskTy = cast<RankedTensorType>(mask.getType());
-      auto maskReshape = tt::ReshapeOp::create(builder, loc, newShape, mask,
-                                               /*allowReorder=*/false);
+      auto maskReshape = tt::ReshapeOp::create(builder, loc, newShape, mask);
       auto loadMaskTy =
           RankedTensorType::get(newShape, maskTy.getElementType(), loadEnc);
       mask2d =
@@ -973,8 +969,7 @@ private:
     // carry the load encoding rather than the 1D source encoding.
     Value other2d;
     if (Value other = op.getOther()) {
-      auto otherReshape = tt::ReshapeOp::create(builder, loc, newShape, other,
-                                                /*allowReorder=*/false);
+      auto otherReshape = tt::ReshapeOp::create(builder, loc, newShape, other);
       other2d = ttg::ConvertLayoutOp::create(builder, loc, loadResultTy,
                                              otherReshape);
     }
@@ -1003,9 +998,9 @@ private:
     // encoding intact is `isExpensiveLoadOrStore` anchoring the load, not this
     // reshape.
     auto origResultTy = cast<RankedTensorType>(op.getType());
-    auto reshapeBack = tt::ReshapeOp::create(builder, loc, origResultTy,
-                                             converted, /*allowReorder=*/false,
-                                             /*efficientLayout=*/false);
+    auto reshapeBack =
+        tt::ReshapeOp::create(builder, loc, origResultTy, converted,
+                              /*efficientLayout=*/false);
 
     LDBG("Created 2D block load with layout conversion: " << *newLoad);
 
