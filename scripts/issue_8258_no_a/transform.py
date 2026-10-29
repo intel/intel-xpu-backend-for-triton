@@ -3,7 +3,11 @@ import hashlib
 import re
 
 VALUE = r'%[-a-zA-Z$._0-9]+'
-PREFETCH = re.compile(r'\bcall\s+(?:spir_func\s+)?void\s+@llvm\.genx\.GenISA\.LSC2DBlockPrefetch\.[\w.]+\(i64\s+('+VALUE+r')\s*,')
+PREFETCHES = [
+    re.compile(r'\bcall\s+(?:spir_func\s+)?void\s+@llvm\.genx\.GenISA\.LSC2DBlockPrefetch\.[\w.]+\(i64\s+('+VALUE+r')\s*,'),
+    re.compile(r'\bcall\s+(?:spir_func\s+)?void\s+@_Z36__spirv_Subgroup2DBlockPrefetchINTELiiiiPU3AS1viiiDv2_i'
+               r'\((?:i32\s+[^,\n]+,\s*){4}ptr\s+addrspace\(1\)\s+[^,%\n]*('+VALUE+r')\s*,'),
+]
 
 
 def sha(data):
@@ -42,7 +46,7 @@ def inspect(source):
     for line_number,line in enumerate(source.splitlines(keepends=True),1):
         if not re.search(r'\bcall\b',line) or 'prefetch' not in line.lower():
             continue
-        match = PREFETCH.search(line)
+        match = next((m for pattern in PREFETCHES if (m:=pattern.search(line))),None)
         if match is None:
             raise ValueError(f'Unsupported prefetch call at line {line_number}: {line.strip()}')
         owners = roots(match[1])

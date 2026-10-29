@@ -143,6 +143,9 @@ def worker(args,case,study):
         backend = make_backend(original.metadata.target)
         is_lts = backend.is_lts(original.metadata.target.arch.get('driver_version'))
         baseline_ir = original.asm['llir']
+        evidence = out/label
+        evidence.mkdir(exist_ok=True)
+        (evidence/'original.llir').write_text(baseline_ir)
         treatment_ir,audit = remove_a(baseline_ir)
         baseline_spv,entry = translate(intel,baseline_ir,is_lts)
         if baseline_spv!=original.asm['spv'] or entry!=original.name:
@@ -272,7 +275,13 @@ def main():
         command = [sys.executable,str(Path(__file__).resolve()),'--worker',case['id'],
                    '--reports',str(args.reports),'--checkout',str(args.checkout)]
         with log.open('w') as output:
-            subprocess.run(command,stdout=output,stderr=subprocess.STDOUT,check=True,timeout=1800)
+            try:
+                subprocess.run(command,stdout=output,stderr=subprocess.STDOUT,check=True,timeout=1800)
+            except (subprocess.CalledProcessError,subprocess.TimeoutExpired):
+                output.flush()
+                print(f'Worker failed: {case["id"]}; last 40 log lines:',file=sys.stderr,flush=True)
+                print('\n'.join(log.read_text().splitlines()[-40:]),file=sys.stderr,flush=True)
+                raise
         completed.append(case['id'])
         save(args.reports/'progress.json',{'completed':completed,'total':84})
         print('CASE',len(completed),'/84',case['id'],flush=True)

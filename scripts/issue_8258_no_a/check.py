@@ -17,17 +17,38 @@ FIXTURE = '''define spir_kernel void @kernel(ptr addrspace(1) %A, ptr addrspace(
   ret void
 }
 '''
+SPIRV_FIXTURE = '''define spir_kernel void @kernel(ptr addrspace(1) %A, ptr addrspace(1) %B, ptr addrspace(1) %C, ptr addrspace(1) %scratch) {
+  %ai = ptrtoint ptr addrspace(1) %A to i64
+  %ab = and i64 %ai, -64
+  %23 = inttoptr i64 %ab to ptr addrspace(1)
+  %bi = ptrtoint ptr addrspace(1) %B to i64
+  %bb = and i64 %bi, -64
+  %bp = inttoptr i64 %bb to ptr addrspace(1)
+  tail call spir_func void @_Z36__spirv_Subgroup2DBlockPrefetchINTELiiiiPU3AS1viiiDv2_i(i32 2, i32 32, i32 8, i32 1, ptr addrspace(1) nonnull %23, i32 %26, i32 512, i32 4096, <2 x i32> %29) #7, !spirv.DecorationCacheControlINTEL !53
+  tail call spir_func void @_Z36__spirv_Subgroup2DBlockPrefetchINTELiiiiPU3AS1viiiDv2_i(i32 2, i32 32, i32 8, i32 1, ptr addrspace(1) nonnull %bp, i32 %26, i32 2048, i32 8192, <2 x i32> %29) #7, !spirv.DecorationCacheControlINTEL !53
+  ret void
+}
+'''
 
 
 def main():
     parser = argparse.ArgumentParser();parser.add_argument('--fixtures-root',type=Path);args=parser.parse_args()
-    modified,audit = remove_a(FIXTURE)
-    assert audit['before']['counts']=={'A':1,'B':1} and audit['after']['counts']=={'A':0,'B':1}
-    assert remove_a(modified)[1]['no_op']
+    mixed = SPIRV_FIXTURE.replace('  ret void',
+        '  tail call spir_func void @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid(i64 %ab, i32 4)\n  ret void')
+    for fixture,a_count in [(FIXTURE,1),(SPIRV_FIXTURE,1),(mixed,2)]:
+        modified,audit = remove_a(fixture)
+        assert audit['before']['counts']=={'A':a_count,'B':1} and audit['after']['counts']=={'A':0,'B':1}
+        assert remove_a(modified)[1]['no_op']
+        assert all(c['text'] in modified for c in audit['before']['calls'] if c['owner']=='B')
     for bad in [FIXTURE.replace('i64 %ab, i32 4','i64 %unknown, i32 4'),
                 FIXTURE.replace('LSC2DBlockPrefetch.isVoid','OtherPrefetch'),
                 FIXTURE.replace('%ab = and i64 %ai, -64','%ab = and i64 %ai, %bi'),
-                FIXTURE.replace('ptrtoint ptr addrspace(1) %A','ptrtoint ptr addrspace(1) %scratch')]:
+                FIXTURE.replace('ptrtoint ptr addrspace(1) %A','ptrtoint ptr addrspace(1) %scratch'),
+                SPIRV_FIXTURE.replace('nonnull %23,','nonnull %unknown,'),
+                SPIRV_FIXTURE.replace('nonnull %23,','nonnull %C,'),
+                SPIRV_FIXTURE.replace('nonnull %23,','nonnull %scratch,'),
+                SPIRV_FIXTURE.replace('%ab = and i64 %ai, -64','%ab = and i64 %ai, %bi'),
+                SPIRV_FIXTURE.replace('PrefetchINTELiiiiPU3AS1viiiDv2_i','PrefetchINTEL_unsupported')]:
         try:remove_a(bad)
         except ValueError:pass
         else:raise AssertionError('Unsafe provenance was accepted')
