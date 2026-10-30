@@ -232,10 +232,12 @@ MODELS_BF16 = [
 ]
 
 MODELS_FP8 = [
-    # llama4 scout - full attention
     (64, 8, 128, torch.float8_e4m3fn, None, None),
-    # llama4 scout - sliding window attention (window size 8192)
     (64, 8, 128, torch.float8_e4m3fn, 8192, None),
+    (32, 8, 128, torch.float8_e4m3fn, None, None),
+    (28, 4, 128, torch.float8_e4m3fn, None, None),
+    (64, 4, 128, torch.float8_e4m3fn, None, None),
+    (64, 4, 128, torch.float8_e4m3fn, 256, None),
 ]
 
 
