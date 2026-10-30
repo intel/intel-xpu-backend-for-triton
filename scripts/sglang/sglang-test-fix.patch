@@ -251,6 +251,311 @@ index ad6b8c9d77..e9fe5fc954 100644
          topk_weight, topk_ids, _ = topk_output
          from sgl_kernel import fused_experts as sgl_fused_experts
  
+diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe_triton_config.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe_triton_config.py
+index c4ad7d49d6..b927826a9b 100644
+--- a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe_triton_config.py
++++ b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe_triton_config.py
+@@ -10,10 +10,11 @@ import torch
+ import triton
+ 
+ from sglang.srt.runtime_context import get_exec
+-from sglang.srt.utils import get_device_name, is_hip
++from sglang.srt.utils import get_device_name, is_hip, is_xpu
+ 
+ logger = logging.getLogger(__name__)
+ _is_hip = is_hip()
++_is_xpu = is_xpu()
+ _LOW_SMEM_FP8_DEFAULT_CUTOFF_BYTES = 128 * 1024
+ 
+ 
+@@ -234,13 +235,14 @@ def get_default_config(
+                         "num_stages": 2 if _is_hip else 4,
+                     }
+         else:
+-            # Block-wise quant: BLOCK_SIZE_K must be divisible by block_shape[1]
++            # Block-wise quant: block_shape[1] must be divisible by BLOCK_SIZE_K.
++            # On XPU the 64x128x128 tile spills registers.
+             config = {
+-                "BLOCK_SIZE_M": 64,
++                "BLOCK_SIZE_M": 32 if _is_xpu else 64,
+                 "BLOCK_SIZE_N": block_shape[0],
+-                "BLOCK_SIZE_K": block_shape[1],
++                "BLOCK_SIZE_K": block_shape[1] // 2 if _is_xpu else block_shape[1],
+                 "GROUP_SIZE_M": 32,
+-                "num_warps": 4,
++                "num_warps": 8 if _is_xpu else 4,
+                 "num_stages": 2 if _is_hip else 3,
+             }
+     else:
+diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/configs/triton_3_9_0/E=64,N=1408,device_name=Intel(R)_Arc(TM)_Pro_B60_Graphics,dtype=fp8_w8a8,block_shape=[128, 128].json b/python/sglang/srt/layers/moe/moe_runner/triton_utils/configs/triton_3_9_0/E=64,N=1408,device_name=Intel(R)_Arc(TM)_Pro_B60_Graphics,dtype=fp8_w8a8,block_shape=[128, 128].json
+new file mode 100644
+index 0000000000..26f58f9344
+--- /dev/null
++++ b/python/sglang/srt/layers/moe/moe_runner/triton_utils/configs/triton_3_9_0/E=64,N=1408,device_name=Intel(R)_Arc(TM)_Pro_B60_Graphics,dtype=fp8_w8a8,block_shape=[128, 128].json	
+@@ -0,0 +1,146 @@
++{
++    "1": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "2": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 128,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2
++    },
++    "4": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "8": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "16": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "24": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "32": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "48": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "64": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "96": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "128": {
++        "BLOCK_SIZE_M": 16,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "256": {
++        "BLOCK_SIZE_M": 32,
++        "BLOCK_SIZE_N": 128,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2
++    },
++    "512": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "1024": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "1536": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "2048": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "3072": {
++        "BLOCK_SIZE_M": 64,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 4,
++        "num_stages": 2
++    },
++    "4096": {
++        "BLOCK_SIZE_M": 128,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 64,
++        "GROUP_SIZE_M": 1,
++        "num_warps": 8,
++        "num_stages": 2
++    }
++}
+diff --git a/benchmark/kernels/fused_moe_triton/tuning_fused_moe_triton.py b/benchmark/kernels/fused_moe_triton/tuning_fused_moe_triton.py
+index e1cbe9f6a7..9df8ecf9b2 100644
+--- a/benchmark/kernels/fused_moe_triton/tuning_fused_moe_triton.py
++++ b/benchmark/kernels/fused_moe_triton/tuning_fused_moe_triton.py
+@@ -31,6 +31,7 @@ from sglang.srt.layers.moe.moe_runner.triton_utils.fused_moe_triton_config impor
+     get_moe_configs,
+ )
+ from sglang.srt.layers.moe.topk import TopKConfig, select_experts
++from sglang.srt.layers.moe.utils import initialize_moe_config
+ from sglang.srt.server_args import (
+     ServerArgs,
+     set_global_server_args_for_scheduler,
+@@ -203,35 +204,37 @@ def benchmark_config(
+                 block_shape=block_shape,
+             )
+ 
++    device_module = torch.get_device_module()
++
+     # JIT compilation & warmup
+     run()
+-    torch.cuda.synchronize()
++    device_module.synchronize()
+ 
+     # Capture 10 invocations with CUDA graph
+-    graph = torch.cuda.CUDAGraph()
+-    with torch.cuda.graph(graph):
++    graph = torch.xpu.XPUGraph() if _is_xpu else torch.cuda.CUDAGraph()
++    with torch.xpu.graph(graph) if _is_xpu else torch.cuda.graph(graph):
+         for _ in range(10):
+             run()
+-    torch.cuda.synchronize()
++    device_module.synchronize()
+ 
+     # Warmup
+     for _ in range(5):
+         graph.replay()
+-    torch.cuda.synchronize()
++    device_module.synchronize()
+ 
+     # Flush L2 cache with 256 MB data
+-    cache_flush = torch.empty(int(256e6 // 4), dtype=torch.int, device="cuda")
++    cache_flush = torch.empty(int(256e6 // 4), dtype=torch.int, device=get_device())
+     cache_flush.zero_()
+ 
+-    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_iters)]
+-    end_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_iters)]
++    start_events = [device_module.Event(enable_timing=True) for _ in range(num_iters)]
++    end_events = [device_module.Event(enable_timing=True) for _ in range(num_iters)]
+ 
+     for i in range(num_iters):
+         prepare(i)
+         start_events[i].record()
+         graph.replay()
+         end_events[i].record()
+-    torch.cuda.synchronize()
++    device_module.synchronize()
+ 
+     latencies: List[float] = []
+     for i in range(num_iters):
+@@ -253,6 +256,7 @@ class BenchmarkWorker:
+         # ROCm using the global ray gpu id here raises "invalid device ordinal".
+         self.device_id = 0 if is_hip() else int(ray.get_gpu_ids()[0])
+         set_global_server_args_for_scheduler(server_args)
++        initialize_moe_config()
+ 
+     def benchmark(
+         self,
+@@ -269,7 +273,7 @@ class BenchmarkWorker:
+         per_channel_quant: bool,
+         block_shape: List[int],
+     ) -> Tuple[Dict[str, int], float]:
+-        torch.cuda.manual_seed_all(0)
++        torch.get_device_module().manual_seed_all(0)
+         dtype_str = get_config_dtype_str(
+             dtype,
+             use_int8_w8a16=use_int8_w8a16,
+@@ -302,7 +306,11 @@ class BenchmarkWorker:
+             )
+         else:
+             config = op_config[min(op_config.keys(), key=lambda x: abs(x - num_tokens))]
+-        with torch.cuda.device(self.device_id) if is_hip() else nullcontext():
++        with (
++            torch.get_device_module().device(self.device_id)
++            if _is_xpu or _is_hip
++            else nullcontext()
++        ):
+             kernel_time = benchmark_config(
+                 config,
+                 num_tokens,
+@@ -375,8 +383,13 @@ class BenchmarkWorker:
+ 
+ 
+ def main(args: argparse.Namespace):
++    # The tuned kernel is the Triton one; on XPU fused_moe() otherwise routes
++    # to sgl-kernel's fused_experts, which ignores the config under test.
+     server_args = ServerArgs(
+-        model_path=args.model, tp_size=args.tp_size, ep_size=args.ep_size
++        model_path=args.model,
++        tp_size=args.tp_size,
++        ep_size=args.ep_size,
++        moe_runner_backend="triton",
+     )
+ 
+     model_config = get_model_config(
+@@ -403,7 +416,11 @@ def main(args: argparse.Namespace):
+     else:
+         batch_sizes = get_default_batch_sizes()
+ 
+-    ray.init()
++    if _is_xpu:
++        # Ray only detects Intel GPUs through dpctl, so pass the count.
++        ray.init(num_gpus=torch.xpu.device_count())
++    else:
++        ray.init()
+     num_gpus = int(ray.available_resources()["GPU"])
+     workers = [BenchmarkWorker.remote(args.seed, server_args) for _ in range(num_gpus)]
+ 
 diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
 index 6ad8973393..cf34f8bb17 100644
 --- a/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
