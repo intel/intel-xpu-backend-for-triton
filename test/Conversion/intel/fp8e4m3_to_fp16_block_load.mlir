@@ -7,7 +7,7 @@
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.target_arch = "spir64"} {
   // CHECK-LABEL: @fp8_upcast_from_block_load
-  tt.func public @fp8_upcast_from_block_load(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32, %arg2: i32) -> (tensor<64x16xf16, #dot1>, tensor<32x16xf16, #dot1>, tensor<32x16xf16, #dot1>) {
+  tt.func public @fp8_upcast_from_block_load(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32 {tt.divisibility = 64 : i32}, %arg2: i32 {tt.divisibility = 64 : i32}) -> (tensor<64x16xf16, #dot1>, tensor<32x16xf16, #dot1>, tensor<32x16xf16, #dot1>) {
     %c1_i64 = arith.constant 1 : i64
     %c64_i64 = arith.constant 64 : i64
     %c64_i32 = arith.constant 64 : i32
@@ -69,7 +69,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.target_arch = "spir64"} {
   // CHECK-LABEL: @fp8_upcast_dot_a_from_block_load
-  tt.func public @fp8_upcast_dot_a_from_block_load(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32, %arg2: i32) -> tensor<8x64xf16, #dot0> {
+  tt.func public @fp8_upcast_dot_a_from_block_load(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32 {tt.divisibility = 64 : i32}, %arg2: i32 {tt.divisibility = 64 : i32}) -> tensor<8x64xf16, #dot0> {
     %c1_i64 = arith.constant 1 : i64
     %c64_i64 = arith.constant 64 : i64
     %c64_i32 = arith.constant 64 : i32
@@ -90,7 +90,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.target_arch = "spir64"} {
   // CHECK-LABEL: @fp8_upcast_from_8bit_block_load
-  tt.func public @fp8_upcast_from_8bit_block_load(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32, %arg2: i32) -> tensor<64x16xf16, #dot1> {
+  tt.func public @fp8_upcast_from_8bit_block_load(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32 {tt.divisibility = 64 : i32}, %arg2: i32 {tt.divisibility = 64 : i32}) -> tensor<64x16xf16, #dot1> {
     %c1_i64 = arith.constant 1 : i64
     %c64_i64 = arith.constant 64 : i64
     %c64_i32 = arith.constant 64 : i32
@@ -112,7 +112,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.target_arch = "spir64"} {
   // CHECK-LABEL: @fp8_upcast_dot_a_from_8bit_block_load
-  tt.func public @fp8_upcast_dot_a_from_8bit_block_load(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32, %arg2: i32) -> (tensor<8x32xf16, #dot0>, tensor<8x64xf16, #dot0>) {
+  tt.func public @fp8_upcast_dot_a_from_8bit_block_load(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32 {tt.divisibility = 64 : i32}, %arg2: i32 {tt.divisibility = 64 : i32}) -> (tensor<8x32xf16, #dot0>, tensor<8x64xf16, #dot0>) {
     %c1_i64 = arith.constant 1 : i64
     %c64_i64 = arith.constant 64 : i64
     %c64_i32 = arith.constant 64 : i32
@@ -138,7 +138,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.is_lts, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.target_arch = "spir64"} {
   // CHECK-LABEL: @fp8_upcast_from_block_load_lts
-  tt.func public @fp8_upcast_from_block_load_lts(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32, %arg2: i32) -> (tensor<64x16xf16, #dot1>, tensor<32x16xf16, #dot1>) {
+  tt.func public @fp8_upcast_from_block_load_lts(%arg0: !tt.ptr<f8E4M3FN>, %arg1: i32 {tt.divisibility = 64 : i32}, %arg2: i32 {tt.divisibility = 64 : i32}) -> (tensor<64x16xf16, #dot1>, tensor<32x16xf16, #dot1>) {
     %c1_i64 = arith.constant 1 : i64
     %c64_i64 = arith.constant 64 : i64
     %c64_i32 = arith.constant 64 : i32

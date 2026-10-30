@@ -1,3 +1,5 @@
+import functools
+import re
 import pytest
 import torch
 import pathlib
@@ -294,3 +296,179 @@ def test_tdesc_loop_carried_index(step, device, with_allocator):
 
     assert torch.equal(c, ref), \
         f"step={step}: {num_wrong}/{M * N} elements wrong with {block_loads} 2D block load(s)"
+
+
+# Negative column offsets (issue #8479). The descriptor under test is the kernel's only memory read (the other dot
+# operand is an arithmetic identity), so the output is the loaded tile and 2D call counts belong to that descriptor.
+def _count_2d_calls(llir, kind):
+    """Call sites (not declarations) of a SPIR-V or GenISA 2D block message; kind is "Load" or "Store"."""
+    names = (f"Subgroup2DBlock{kind}", "GenISA.LSC2DBlockRead" if kind == "Load" else "GenISA.LSC2DBlockWrite")
+    return sum(1 for line in llir.splitlines() if re.search(r"\bcall\b", line) and any(n in line for n in names))
+
+
+@triton.jit
+def _neg_col_kernel(c_ptr, x_ptr, LD, R0, OFF, OFFC: tl.constexpr, WHICH: tl.constexpr, TRANS: tl.constexpr,
+                    PAD: tl.constexpr, RW: tl.constexpr, CL: tl.constexpr, ACC: tl.constexpr):
+    col = OFFC if OFFC is not None else OFF
+    t = tl.make_tensor_descriptor(x_ptr, shape=(RW, CL), strides=(LD, 1), block_shape=(RW, CL),
+                                  padding_option=PAD).load([R0, col])
+    if TRANS:
+        t = tl.trans(t)
+    TR: tl.constexpr = CL if TRANS else RW
+    TC: tl.constexpr = RW if TRANS else CL
+    r = tl.arange(0, TR)
+    c = tl.arange(0, TC)
+    if WHICH == 0:
+        acc = tl.dot(t, (c[:, None] == c[None, :]).to(x_ptr.dtype.element_ty), out_dtype=ACC)
+    else:
+        acc = tl.dot((r[:, None] == r[None, :]).to(x_ptr.dtype.element_ty), t, out_dtype=ACC)
+    tl.store(c_ptr + r[:, None] * TC + c[None, :], acc)
+
+
+def _run_neg_col(dtype_str, which, trans, mis, col, device, pad="zero", rw=64, cl=64, runtime_col=False, r0=0):
+    """Load an (rw, cl) tile at [r0, col] from a base `mis` bytes past a 64-byte boundary; return (out, expected, kernel)."""
+    dtype = getattr(torch, dtype_str)
+    eb = torch.empty(0, dtype=dtype).element_size()
+    ld = cl + 64  # elements; keeps the pitch 16-byte aligned for every dtype
+    front = 4096  # bytes of poison before the tensor, so a leaked read is visible
+    buf = torch.full(((front + mis) // eb + rw * ld + 4096, ), 7, dtype=dtype, device=device)
+    assert buf.data_ptr() % 64 == 0
+    x = buf[(front + mis) // eb:]
+    assert x.data_ptr() % 64 == mis
+    data = torch.randint(-2, 3, (rw, cl), generator=torch.Generator().manual_seed(8479)).to(dtype)
+    x[:rw * ld].view(rw, ld)[:, :cl] = data.to(device)
+
+    tr, tc = (cl, rw) if trans else (rw, cl)
+    is_float = dtype.is_floating_point
+    out = torch.full((tr, tc), -999, dtype=torch.float32 if is_float else torch.int32, device=device)
+    acc = tl.float32 if is_float else tl.int32
+    kernel = _neg_col_kernel[(1, )](out, x, ld, r0, col, None if runtime_col else col, which, trans, pad, rw, cl, acc,
+                                    num_warps=4, warp_size=16)
+
+    # tile[i, j] = data[r0 + i, col + j] inside the descriptor, else the padding value.
+    ii = torch.arange(rw)[:, None] + r0
+    jj = torch.arange(cl)[None, :] + col
+    inside = (ii >= 0) & (ii < rw) & (jj >= 0) & (jj < cl)
+    fill = float("nan") if pad == "nan" else 0
+    tile = torch.where(inside, data[ii.clamp(0, rw - 1), jj.clamp(0, cl - 1)].double(), torch.tensor(fill).double())
+    t = tile.T if trans else tile
+    if pad == "nan":  # a NaN poisons its whole row (A operand) or column (B operand) of the identity product
+        poisoned = t.isnan().any(1, keepdim=True) if which == 0 else t.isnan().any(0, keepdim=True)
+        t = torch.where(poisoned, torch.tensor(float("nan")).double(), t)
+    return out.cpu().double(), t, kernel
+
+
+# x is divided by the packing factor; an unsigned divide made a negative x out of bounds for the whole tile. The base is
+# aligned, so the compensation is a no-op.
+@pytest.mark.parametrize("dtype_str, which, trans", [("float16", 0, 1), ("float16", 1, 1), ("bfloat16", 0, 1),
+                                                     ("int8", 0, 0), ("int8", 1, 1)])
+@pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_tdesc_negative_col_packed_aligned_base(dtype_str, which, trans, device, with_allocator):
+    # -4 is legal for every dtype here (int8 needs a multiple of 4 elements).
+    out, expected, kernel = _run_neg_col(dtype_str, which, trans, mis=0, col=-4, device=device)
+    assert _count_2d_calls(kernel.asm["llir"], "Load") > 0, "the load must stay on 2D block I/O"
+    torch.testing.assert_close(out, expected, rtol=0, atol=0, equal_nan=True)
+
+
+# The pad_nan mask must use the logical (pre-compensation) column offset and width.
+@pytest.mark.parametrize("which, col", [(0, -8), (1, -16)])
+@pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_tdesc_nan_padding_negative_col_misaligned_base(which, col, device, with_allocator):
+    out, expected, kernel = _run_neg_col("float16", which, trans=0, mis=32, col=col, device=device, pad="nan")
+    assert _count_2d_calls(kernel.asm["llir"], "Load") > 0, "the load must stay on 2D block I/O"
+    torch.testing.assert_close(out, expected, rtol=0, atol=0, equal_nan=True)
+
+
+# A transposed load pairs the descriptor width with the tile's row dimension; a non-square tile exposes a wrong pairing.
+@pytest.mark.parametrize("which, r0", [(0, 0), (1, 16)])
+@pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_tdesc_nan_padding_transposed_non_square(which, r0, device, with_allocator):
+    out, expected, kernel = _run_neg_col("float16", which, trans=1, mis=0, col=0, device=device, pad="nan", rw=32,
+                                         cl=64, r0=r0)
+    assert _count_2d_calls(kernel.asm["llir"], "Load") > 0, "the load must stay on 2D block I/O"
+    torch.testing.assert_close(out, expected, rtol=0, atol=0, equal_nan=True)
+
+
+@functools.lru_cache(maxsize=None)
+def _unaffected_load_calls(dtype_str, which, trans, rw, cl, device):
+    """2D load calls of the same kernel at column 0, where no negative-column handling is needed."""
+    kernel = _run_neg_col(dtype_str, which, trans, mis=0, col=0, device=device, rw=rw, cl=cl)[2]
+    calls = _count_2d_calls(kernel.asm["llir"], "Load")
+    assert calls > 0, "the reference kernel must use 2D block loads"
+    return calls
+
+
+# Messages wholly left of 0 (-64, -32) are redirected; ones that may straddle 0 (-8, runtime -16) are masked. Both stay 2D.
+# -32 mixes messages left of 0 with ones inside the tensor, so each is judged by its own start.
+@pytest.mark.parametrize("dtype_str, which, trans, col, runtime, mis", [
+    ("float16", 0, 0, -8, False, 32),
+    ("float16", 0, 0, -64, False, 32),
+    ("float16", 1, 0, -32, False, 16),
+    ("float16", 0, 1, -16, True, 32),
+    ("bfloat16", 0, 0, -32, False, 16),
+    ("int8", 0, 0, -32, False, 16),
+    ("int8", 1, 1, -8, False, 32),
+])
+@pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_tdesc_negative_col_misaligned_base(dtype_str, which, trans, col, runtime, mis, device, with_allocator):
+    out, expected, kernel = _run_neg_col(dtype_str, which, trans, mis, col, device, runtime_col=runtime)
+    assert _count_2d_calls(kernel.asm["llir"], "Load") == _unaffected_load_calls(dtype_str, which, trans, 64, 64,
+                                                                                 device)
+    torch.testing.assert_close(out, expected, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("which, col", [(0, -8), (1, -64)])
+@pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_tdesc_negative_col_transposed_non_square(which, col, device, with_allocator):
+    out, expected, kernel = _run_neg_col("float16", which, 1, 32, col, device, rw=32, cl=64)
+    assert _count_2d_calls(kernel.asm["llir"], "Load") == _unaffected_load_calls("float16", which, 1, 32, 64, device)
+    torch.testing.assert_close(out, expected, rtol=0, atol=0, equal_nan=True)
+
+
+@triton.jit
+def _neg_col_store_kernel(x_ptr, LD, OFF, OFFC: tl.constexpr, RW: tl.constexpr, CL: tl.constexpr):
+    col = OFFC if OFFC is not None else OFF
+    r = tl.arange(0, RW)
+    c = tl.arange(0, CL)
+    dt = x_ptr.dtype.element_ty
+    v = ((r[:, None] * CL + c[None, :]) % 5 + 1).to(dt)
+    tile = tl.dot((r[:, None] == r[None, :]).to(dt), v).to(dt)  # the identity dot puts `v` in the accumulator layout
+    tl.make_tensor_descriptor(x_ptr, shape=(RW, CL), strides=(LD, 1), block_shape=(RW, CL)).store([0, col], tile)
+
+
+# Stores cannot be masked per element: redirect when no message can straddle 0, else scatter. Everything outside the
+# tensor, including the poison before it and between rows, must stay unchanged.
+@pytest.mark.parametrize("dtype_str, col, runtime, stays_2d, mis", [
+    ("float16", -8, False, False, 32),
+    ("float16", -16, True, True, 16),
+    ("float16", -64, False, True, 32),
+    ("int8", -32, False, True, 16),
+])
+@pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_tdesc_store_negative_col_misaligned_base(dtype_str, col, runtime, stays_2d, mis, device, with_allocator):
+    dtype = getattr(torch, dtype_str)
+    eb = torch.empty(0, dtype=dtype).element_size()
+    rw = cl = 64
+    ld = cl + 64
+    front = 4096
+    start = (front + mis) // eb  # element index of the tensor within the allocation
+    buf = torch.full((start + rw * ld + 4096, ), 7, dtype=dtype, device=device)
+    assert buf.data_ptr() % 64 == 0
+    kernel = _neg_col_store_kernel[(1, )](buf[start:], ld, col, None if runtime else col, rw, cl, num_warps=4,
+                                          warp_size=16)
+
+    v = ((torch.arange(rw)[:, None] * cl + torch.arange(cl)[None, :]) % 5 + 1).to(dtype)
+    expected = torch.full(buf.shape, 7, dtype=dtype)
+    tensor = expected[start:start + rw * ld].view(rw, ld)
+    for j in range(cl):
+        if 0 <= col + j < cl:
+            tensor[:, col + j] = v[:, j]
+    if dtype_str == "float16":  # int8 tiles are wider, so whether they straddle is not asserted
+        assert (_count_2d_calls(kernel.asm["llir"], "Store") > 0) == stays_2d
+    assert torch.equal(buf.cpu(), expected)
