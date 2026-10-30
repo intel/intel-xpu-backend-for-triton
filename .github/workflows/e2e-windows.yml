@@ -71,7 +71,7 @@ env:
   PYTHONIOENCODING: utf-8
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   TRITON_DISABLE_LINE_INFO: 1
-  PYTHON_VERSION: "3.10"
+  PYTHON_VERSION: "3.11"
   BENCHMARK_REPO: pytorch/benchmark
 
 jobs:
