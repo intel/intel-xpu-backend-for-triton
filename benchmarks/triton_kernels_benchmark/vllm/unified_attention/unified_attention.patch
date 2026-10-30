@@ -167,7 +167,7 @@ index d914e574f2..d97bd27b96 100644
 -            # Per-token-head quant: fuse softmax_scale with per-head k_scale
 -            # to avoid a separate BLOCK_M × TILE_SIZE multiply on S.
 -            S += tl.dot(Q, K) * (score_scale * k_token_head_scales[None, :])
-+        if Q_IS_FP8 and BLOCK_M < 64:
++        if Q_IS_FP8 and BLOCK_M < 1:
 +            # fp8 Q, small BLOCK_M: skip the pre-scale. Xe2 has no hardware fp8
 +            # conversion, so the fp8 -> f32 -> fp8 round trip (~2k instructions per
 +            # program) is not amortized by short decode/mixed kernels.
