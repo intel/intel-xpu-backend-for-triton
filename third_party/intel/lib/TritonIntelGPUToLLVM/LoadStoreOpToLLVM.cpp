@@ -3571,6 +3571,13 @@ struct StoreOpToBlockIOConversion
     assert(!useVNNIFormat && "2D block store does not support VNNI");
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
+    AxisInfo *ptrInfo =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(op.getPtr());
+    if (packedElemSizeInBits > 32 &&
+        (!ptrInfo || ptrInfo->getDivisibility(contiguousDim) % 8))
+      return failure();
+
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value warpId = arith::IndexCastOp::create(
