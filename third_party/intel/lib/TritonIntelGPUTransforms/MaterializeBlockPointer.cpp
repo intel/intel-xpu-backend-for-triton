@@ -16,7 +16,6 @@
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
-#include <limits>
 #include <optional>
 
 #define DEBUG_TYPE "tritonintelgpu-materialize-block-pointer"
@@ -98,17 +97,14 @@ isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
   return ttgi::isDivisible(tt::intel::getFinalValue(v), divisor);
 }
 
-// Programs per axis assumed when a proof needs a bound on tt.get_program_id;
-// the launcher rejects a larger grid for a kernel that relied on it (#8491).
-static constexpr int64_t kAssumedMaxGridDim = 1 << 16;
-
 // An upper bound U with 0 <= \p v <= U (signed, at v's width), or nullopt if v
 // is not proven non-negative. add, mul and shl (at 32 bits or more) give a
 // bound only if the same operation on the bounds does not wrap. An iteration
 // argument is refused: its init says nothing about the yielded values.
-// tt::intel::proveSign is not used: its loop-carried ranges can be too narrow.
-static std::optional<APInt>
-getNonNegativeUpperBound(Value v, uint64_t maxProgramId, unsigned depth = 0) {
+// tt::intel::proveSign is not used: its loop-carried ranges can be too narrow
+// (#8604).
+static std::optional<APInt> getNonNegativeUpperBound(Value v,
+                                                     unsigned depth = 0) {
   // A backstop against pathological IR, not a tuning knob.
   if (depth > 16)
     return std::nullopt;
@@ -117,7 +113,7 @@ getNonNegativeUpperBound(Value v, uint64_t maxProgramId, unsigned depth = 0) {
     return std::nullopt;
   unsigned width = intTy.getWidth();
   auto boundOf = [&](Value operand) {
-    return getNonNegativeUpperBound(operand, maxProgramId, depth + 1);
+    return getNonNegativeUpperBound(operand, depth + 1);
   };
 
   APInt cst;
@@ -136,7 +132,7 @@ getNonNegativeUpperBound(Value v, uint64_t maxProgramId, unsigned depth = 0) {
 
   Operation *def = v.getDefiningOp();
   if (isa<tt::GetProgramIdOp>(def))
-    return APInt(width, maxProgramId);
+    return APInt::getSignedMaxValue(width);
   if (auto extUI = dyn_cast<arith::ExtUIOp>(def))
     return APInt::getMaxValue(extUI.getIn().getType().getIntOrFloatBitWidth())
         .zext(width);
@@ -170,17 +166,6 @@ getNonNegativeUpperBound(Value v, uint64_t maxProgramId, unsigned depth = 0) {
   if (overflow || bound.isNegative())
     return std::nullopt;
   return bound;
-}
-
-// True if the descriptor index \p v is provably non-negative. Sets
-// \p assumesGridLimit if that needs a grid within kAssumedMaxGridDim.
-static bool isProvablyNonNegative(Value v, bool &assumesGridLimit) {
-  if (getNonNegativeUpperBound(v, std::numeric_limits<int32_t>::max()))
-    return true;
-  if (!getNonNegativeUpperBound(v, kAssumedMaxGridDim - 1))
-    return false;
-  assumesGridLimit = true;
-  return true;
 }
 
 struct TritonIntelGPUMaterializeBlockPointerPass
@@ -249,22 +234,10 @@ public:
                          << " has a tt.dot or tt.dot_scaled; skip relayout");
         return;
       }
-      bool assumesGridLimit = false;
-      if (!satisfiesRelayoutGates(func, loads, reduces, threadsPerWarp,
-                                  assumesGridLimit))
+      if (!satisfiesRelayoutGates(func, loads, reduces, threadsPerWarp))
         return;
       for (tt::DescriptorLoadOp load : loads)
         relayoutDescriptorLoadForBlockIO(load);
-      // Tell the launcher, if a relaid-out load rests on the grid limit.
-      if (assumesGridLimit &&
-          llvm::any_of(loads, [](tt::DescriptorLoadOp load) {
-            return load->hasAttr(
-                ttgi::TritonIntelGPUDialect::getBlockIOAnchorAttrName());
-          }))
-        mod->setAttr(
-            ttgi::TritonIntelGPUDialect::getAssumedMaxGridDimAttrName(),
-            IntegerAttr::get(IntegerType::get(context, 32),
-                             kAssumedMaxGridDim));
     });
   }
 
@@ -1332,13 +1305,11 @@ private:
   /// of the function are relaid out, or none. A refused load keeps
   /// ttig.block_io without an anchor, so RemoveLayoutConversions could move it
   /// into an anchored sibling's layout, making it a 2D read after all. Pointer
-  /// tt.loads tagged for 2D reads are not considered. Sets \p assumesGridLimit
-  /// if a column proof needs kAssumedMaxGridDim.
+  /// tt.loads tagged for 2D reads are not considered.
   static bool satisfiesRelayoutGates(tt::FuncOp func,
                                      ArrayRef<tt::DescriptorLoadOp> loads,
                                      ArrayRef<tt::ReduceOp> reduces,
-                                     unsigned threadsPerWarp,
-                                     bool &assumesGridLimit) {
+                                     unsigned threadsPerWarp) {
     for (tt::DescriptorLoadOp load : loads) {
       if (!load->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
         continue;
@@ -1348,7 +1319,7 @@ private:
       // the column index (the stride-one dimension, last) matters: a negative
       // row is fine.
       if (load.getIndices().size() < 2 ||
-          !isProvablyNonNegative(load.getIndices().back(), assumesGridLimit)) {
+          !getNonNegativeUpperBound(load.getIndices().back())) {
         LDBG("G1 (#8479): column index of "
              << *load << " is not provably non-negative; skip relayout of "
              << func.getName());

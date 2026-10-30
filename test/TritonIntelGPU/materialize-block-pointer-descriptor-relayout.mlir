@@ -701,15 +701,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// COM: tt.get_program_id has no bound below 2^31, so its product with 256 can
+// COM: wrap negative in i32, and this load is not relaid out.
+
 // COM: A tt.get_program_id is non-negative, and so is its product with a
 // COM: non-negative constant, so this load is relaid out.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
-  // CHECK-DAG: #[[$BLOCKED_PID_COL:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
-  // ON-DAG: #[[$BIO_PID_COL:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
-  // CHECK-LABEL: tt.func public @pid_col_relaid_out(
-  tt.func public @pid_col_relaid_out(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<256x!tt.ptr<f32>, #blocked1>, %nseg: i32) {
+  // CHECK-LABEL: tt.func public @pid_col_unchanged(
+  // CHECK-NOT: ttig.block_io_anchor
+  tt.func public @pid_col_unchanged(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<256x!tt.ptr<f32>, #blocked1>, %nseg: i32) {
     %c0_i32 = arith.constant 0 : i32
     %c256_i32 = arith.constant 256 : i32
     %c1024_i32 = arith.constant 1024 : i32
@@ -718,18 +720,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %pid = tt.get_program_id x : i32
     %col = arith.muli %pid, %c256_i32 : i32
     %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c1024_i32], [%c1024_i64, %c1_i64] : <f32>, <16x256xf32>
-    // ON: %[[LOAD:.*]] = tt.descriptor_load
-    // ON-SAME: ttig.block_io = "row_major"
-    // ON-SAME: ttig.block_io_anchor
-    // ON-SAME: -> tensor<16x256xf32, #[[$BIO_PID_COL]]>
-    // ON-NEXT: %[[CVT:.*]] = ttg.convert_layout %[[LOAD]] : tensor<16x256xf32, #[[$BIO_PID_COL]]> -> tensor<16x256xf32, #[[$BLOCKED_PID_COL]]>
-    // ON: "tt.reduce"(%[[CVT]]) <{axis = 0 : i32}>
-    // OFF: %[[LOAD:.*]] = tt.descriptor_load
-    // OFF-NOT: ttig.block_io_anchor
-    // OFF-SAME: !tt.tensordesc<16x256xf32>
-    // OFF-SAME: -> tensor<16x256xf32, #[[$BLOCKED_PID_COL]]>
-    // OFF-NOT: ttg.convert_layout
-    // OFF: "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
     %x = tt.descriptor_load %desc[%c0_i32, %col] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
     %0 = "tt.reduce"(%x) <{axis = 0 : i32}> ({
     ^bb0(%a: f32, %b: f32):
@@ -752,7 +742,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked2 = #ttg.slice<{dim = 1, parent = #blocked}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
-  // ON-NOT: ttig.assumed_max_grid_dim
   // CHECK-LABEL: tt.func public @byte_times_large_const_col_unchanged(
   // CHECK-NOT: ttig.block_io_anchor
   // LOWER-LABEL: tt.func public @byte_times_large_const_col_unchanged(
@@ -827,30 +816,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.store %out_ptrs, %1 : tensor<256x!tt.ptr<f32>, #blocked1>
     tt.return
   }
-  // CHECK-LABEL: tt.func public @pid_times_past_limit_col_unchanged(
-  // CHECK-NOT: ttig.block_io_anchor
-  // LOWER-LABEL: tt.func public @pid_times_past_limit_col_unchanged(
-  // LOWER-NOT: ttig.2d_block_load
-  // LOWER: tt.return
-  tt.func public @pid_times_past_limit_col_unchanged(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<256x!tt.ptr<f32>, #blocked1>, %nseg: i32) {
-    %c0_i32 = arith.constant 0 : i32
-    %c32772_i32 = arith.constant 32772 : i32
-    %c1024_i32 = arith.constant 1024 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %c1024_i64 = arith.constant 1024 : i64
-    %pid = tt.get_program_id x : i32
-    %col = arith.muli %pid, %c32772_i32 : i32
-    %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c1024_i32], [%c1024_i64, %c1_i64] : <f32>, <16x256xf32>
-    %x = tt.descriptor_load %desc[%c0_i32, %col] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
-    %0 = "tt.reduce"(%x) <{axis = 0 : i32}> ({
-    ^bb0(%a: f32, %b: f32):
-      %2 = arith.addf %a, %b : f32
-      tt.reduce.return %2 : f32
-    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %1 = ttg.convert_layout %0 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xf32, #blocked1>
-    tt.store %out_ptrs, %1 : tensor<256x!tt.ptr<f32>, #blocked1>
-    tt.return
-  }
   // CHECK-LABEL: tt.func public @loop_iv_scaled_runtime_ub_col_unchanged(
   // CHECK-NOT: ttig.block_io_anchor
   // LOWER-LABEL: tt.func public @loop_iv_scaled_runtime_ub_col_unchanged(
@@ -891,7 +856,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked2 = #ttg.slice<{dim = 1, parent = #blocked}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
   // ON-DAG: #[[$BIO_BOUNDED:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
-  // ON-NOT: ttig.assumed_max_grid_dim
   // CHECK-LABEL: tt.func public @bounded_byte_col_relaid_out(
   // LOWER-LABEL: tt.func public @bounded_byte_col_relaid_out(
   // LOWER: ttig.2d_block_load
@@ -946,44 +910,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       scf.yield %sum : tensor<16xf32, #blocked2>
     }
     tt.store %out_ptrs, %r : tensor<16x!tt.ptr<f32>, #blocked2>
-    tt.return
-  }
-}
-
-// -----
-
-// COM: pid * 32768 is the largest 16-byte-aligned multiple of a program id that fits
-// COM: in i32 for a grid of up to 2^16 programs per axis. The relayout rests on that
-// COM: limit, so it records it on the module for the launcher to enforce.
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
-  // ON-DAG: #[[$BIO_LIMIT:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
-  // ON: module attributes {{.*}}ttig.assumed_max_grid_dim = 65536 : i32
-  // OFF-NOT: ttig.assumed_max_grid_dim
-  // CHECK-LABEL: tt.func public @pid_times_max_const_col_relaid_out(
-  // LOWER-LABEL: tt.func public @pid_times_max_const_col_relaid_out(
-  // LOWER: ttig.2d_block_load
-  // LOWER: tt.return
-  tt.func public @pid_times_max_const_col_relaid_out(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<256x!tt.ptr<f32>, #blocked1>, %nseg: i32) {
-    %c0_i32 = arith.constant 0 : i32
-    %c32768_i32 = arith.constant 32768 : i32
-    %c1024_i32 = arith.constant 1024 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %c1024_i64 = arith.constant 1024 : i64
-    %pid = tt.get_program_id x : i32
-    %col = arith.muli %pid, %c32768_i32 : i32
-    %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c1024_i32], [%c1024_i64, %c1_i64] : <f32>, <16x256xf32>
-    // ON: tt.descriptor_load {{.*}}ttig.block_io_anchor{{.*}} -> tensor<16x256xf32, #[[$BIO_LIMIT]]>
-    // OFF-NOT: ttig.block_io_anchor
-    %x = tt.descriptor_load %desc[%c0_i32, %col] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
-    %0 = "tt.reduce"(%x) <{axis = 0 : i32}> ({
-    ^bb0(%a: f32, %b: f32):
-      %2 = arith.addf %a, %b : f32
-      tt.reduce.return %2 : f32
-    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %1 = ttg.convert_layout %0 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xf32, #blocked1>
-    tt.store %out_ptrs, %1 : tensor<256x!tt.ptr<f32>, #blocked1>
     tt.return
   }
 }
@@ -1488,86 +1414,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ^bb0(%a: f32, %b: f32):
       %2 = arith.addf %a, %b : f32
       tt.reduce.return %2 : f32
-    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %1 = ttg.convert_layout %0 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xf32, #blocked1>
-    tt.store %out_ptrs, %1 : tensor<256x!tt.ptr<f32>, #blocked1>
-    tt.return
-  }
-}
-
-// -----
-
-// COM: The gates are function-wide. A load the relayout refuses keeps ttig.block_io
-// COM: without an anchor, so RLC could move it into an anchored sibling's layout, and
-// COM: LowerTo2DBlockLoad would then make it a 2D read after all. The left tap's column
-// COM: pid * 256 - 1 is not provable, so no tap is relaid out and none becomes a 2D
-// COM: read. With provable taps, the second function is relaid out.
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
-  // CHECK-DAG: #[[$BLOCKED_STENCIL:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
-  // ON-DAG: #[[$BIO_STENCIL:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
-  // CHECK-LABEL: tt.func public @stencil_left_tap_unchanged(
-  // CHECK-NOT: ttig.block_io_anchor
-  // LOWER-LABEL: tt.func public @stencil_left_tap_unchanged(
-  // LOWER-NOT: ttig.2d_block_load
-  // LOWER: tt.return
-  tt.func public @stencil_left_tap_unchanged(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<256x!tt.ptr<f32>, #blocked1>, %nseg: i32, %ncols: i32) {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i32 = arith.constant 1 : i32
-    %c2_i32 = arith.constant 2 : i32
-    %c256_i32 = arith.constant 256 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %c4096_i64 = arith.constant 4096 : i64
-    %pid = tt.get_program_id x : i32
-    %col = arith.muli %pid, %c256_i32 : i32
-    %left = arith.subi %col, %c1_i32 : i32
-    %mid = arith.addi %col, %c0_i32 : i32
-    %right = arith.addi %col, %c1_i32 : i32
-    %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %ncols], [%c4096_i64, %c1_i64] : <f32>, <16x256xf32>
-    %l = tt.descriptor_load %desc[%c0_i32, %left] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
-    %m = tt.descriptor_load %desc[%c0_i32, %mid] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
-    %r = tt.descriptor_load %desc[%c0_i32, %right] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
-    %lm = arith.addf %l, %m : tensor<16x256xf32, #blocked>
-    %lmr = arith.addf %lm, %r : tensor<16x256xf32, #blocked>
-    %0 = "tt.reduce"(%lmr) <{axis = 0 : i32}> ({
-    ^bb0(%x: f32, %y: f32):
-      %t = arith.addf %x, %y : f32
-      tt.reduce.return %t : f32
-    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %1 = ttg.convert_layout %0 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xf32, #blocked1>
-    tt.store %out_ptrs, %1 : tensor<256x!tt.ptr<f32>, #blocked1>
-    tt.return
-  }
-  // CHECK-LABEL: tt.func public @stencil_taps_relaid_out(
-  // LOWER-LABEL: tt.func public @stencil_taps_relaid_out(
-  // LOWER-COUNT-3: ttig.2d_block_load
-  // LOWER: tt.return
-  tt.func public @stencil_taps_relaid_out(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<256x!tt.ptr<f32>, #blocked1>, %nseg: i32, %ncols: i32) {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i32 = arith.constant 1 : i32
-    %c2_i32 = arith.constant 2 : i32
-    %c256_i32 = arith.constant 256 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %c4096_i64 = arith.constant 4096 : i64
-    %pid = tt.get_program_id x : i32
-    %col = arith.muli %pid, %c256_i32 : i32
-    %left = arith.addi %col, %c0_i32 : i32
-    %mid = arith.addi %col, %c1_i32 : i32
-    %right = arith.addi %col, %c2_i32 : i32
-    %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %ncols], [%c4096_i64, %c1_i64] : <f32>, <16x256xf32>
-    // ON-COUNT-3: tt.descriptor_load {{.*}}ttig.block_io_anchor{{.*}} -> tensor<16x256xf32, #[[$BIO_STENCIL]]>
-    // OFF-NOT: ttig.block_io_anchor
-    // OFF-COUNT-3: tt.descriptor_load {{.*}} -> tensor<16x256xf32, #[[$BLOCKED_STENCIL]]>
-    %l = tt.descriptor_load %desc[%c0_i32, %left] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
-    %m = tt.descriptor_load %desc[%c0_i32, %mid] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
-    %r = tt.descriptor_load %desc[%c0_i32, %right] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
-    %lm = arith.addf %l, %m : tensor<16x256xf32, #blocked>
-    %lmr = arith.addf %lm, %r : tensor<16x256xf32, #blocked>
-    %0 = "tt.reduce"(%lmr) <{axis = 0 : i32}> ({
-    ^bb0(%x: f32, %y: f32):
-      %t = arith.addf %x, %y : f32
-      tt.reduce.return %t : f32
     }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
     %1 = ttg.convert_layout %0 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xf32, #blocked1>
     tt.store %out_ptrs, %1 : tensor<256x!tt.ptr<f32>, #blocked1>
