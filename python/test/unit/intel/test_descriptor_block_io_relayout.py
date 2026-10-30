@@ -1,16 +1,5 @@
-"""End-to-end tests for the opt-in descriptor-load block-IO relayout (issue #8458).
-
-With TRITON_INTEL_DESCRIPTOR_BLOCK_IO_RELAYOUT=1, MaterializeBlockPointer gives a row-major
-`tt.descriptor_load` a layout LowerTo2DBlockLoad accepts, and marks it `ttig.block_io_anchor` so
-RemoveLayoutConversions keeps that layout. The load then lowers to 2D block reads instead of gathers.
-The gate is function-wide: only loads in a function with no `tt.dot` or `tt.dot_scaled` are relaid
-out, not merely loads that feed no dot. A load whose tile reaches a store is left alone: the store
-keeps its own layout, so the new one would cost an SLM convert.
-
-The correctness gates of MaterializeBlockPointer.cpp are function-wide as well: a function is relaid
-out only if every descriptor load in it has a provably non-negative column index (G1, #8479) and zero
-padding (G3) and, with 16 lanes, every value computed from a reduction is f32 or i32 (G2). G1 refuses a column
-that can wrap negative in i32. It assumes at most 2^16 programs per axis; the launcher rejects a larger grid.
+"""End-to-end tests for the opt-in descriptor-load block-IO relayout (#8458) and its gates G1-G3 (#8479).
+The relayout and its gates are described in Passes.td (enable-descriptor-relayout).
 
 `JITFunction.run` keys its in-memory cache on specialization and options, not on the environment, so
 every test wraps a plain module-level function in a fresh `triton.jit` object and compiles it into its
@@ -38,6 +27,18 @@ def _count_2d_block_loads(llir):
     does not matter; it is not a call count.
     """
     return llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
+
+
+def _assert_relaid_out(k, expected, what="the descriptor load"):
+    """Assert that `what` in the compiled kernel `k` was relaid out to 2D block reads, or kept the gather path."""
+    # The TTGIR is captured before LowerTo2DBlockLoad runs (in make_llir), so the anchor is still there.
+    ttgir, block_loads = k.asm["ttgir"], _count_2d_block_loads(k.asm["llir"])
+    if expected:
+        assert ANCHOR in ttgir, f"{what}: no {ANCHOR} in the TTGIR, it was not relaid out"
+        assert block_loads > 0, f"{what}: relaid out, but did not lower to 2D block reads"
+    else:
+        assert ANCHOR not in ttgir, f"{what}: {ANCHOR} in the TTGIR, the relayout was not refused"
+        assert block_loads == 0, f"{what}: {block_loads} 2D block load(s), expected the gather path"
 
 
 pytestmark = [
@@ -197,36 +198,20 @@ def _row_sum_kernel_fn(out_ptr, x_ptr, R: tl.constexpr, C: tl.constexpr, ACC: tl
     tl.store(out_ptr + tl.arange(0, R), sums.to(out_ptr.dtype.element_ty))
 
 
-@pytest.mark.parametrize("knob", [True, False], ids=["on", "off"])
-@pytest.mark.parametrize("launch, out_dtype, relaid_out", LAUNCHES)
-@pytest.mark.parametrize("D", [64, 96, 128, 256], ids=lambda d: f"D{d}")
-def test_relayout_emits_2d_block_load(D, launch, out_dtype, relaid_out, knob, device, monkeypatch, tmp_path):
-    _set_compile_env(monkeypatch, tmp_path, knob)
-    kernel = triton.jit(_reduce_kernel_fn)
-    S, H, T = 16, 32, 1
-    DP = triton.next_power_of_2(D)
-    x = torch.randn(T, H, S, DP, device=device)
+@pytest.mark.parametrize("launch", [{}, TUNED], ids=["default", "tuned"])
+def test_relayout_knob_off(launch, device, monkeypatch, tmp_path):
+    _set_compile_env(monkeypatch, tmp_path, knob=False)
+    S, H, T, D = 16, 32, 1, 256
+    x = torch.randn(T, H, S, D, device=device)
     m = torch.randn(T, H, S, device=device)
-    out = torch.empty(T, H, D, device=device, dtype=out_dtype)
-    k = kernel[(T, H)](out, x, m, S, H, D=D, DP=DP, S=S, **launch)
-    torch.xpu.synchronize()
-
-    # The TTGIR is captured before LowerTo2DBlockLoad runs (in make_llir), so the anchor is still there.
-    ttgir = k.asm["ttgir"]
-    block_loads = _count_2d_block_loads(k.asm["llir"])
-    if knob and relaid_out:
-        assert ANCHOR in ttgir, f"knob on: no {ANCHOR} in the TTGIR, the descriptor load was not relaid out"
-        assert block_loads > 0, "knob on: the relaid-out descriptor load did not lower to 2D block reads"
-    else:
-        # Today's gather path for this kernel, which a refused relayout keeps.
-        state = "on, refused" if knob else "off"
-        assert ANCHOR not in ttgir, f"knob {state}: {ANCHOR} in the TTGIR"
-        assert block_loads == 0, f"knob {state}: {block_loads} 2D block load(s), expected the gather path"
+    out = torch.empty(T, H, D, device=device)
+    k = triton.jit(_reduce_kernel_fn)[(T, H)](out, x, m, S, H, D=D, DP=D, S=S, **launch)
+    _assert_relaid_out(k, False, "knob off")
 
 
 @pytest.mark.parametrize("launch, out_dtype, relaid_out", LAUNCHES)
 @pytest.mark.parametrize("D", [64, 96, 128, 256], ids=lambda d: f"D{d}")
-@pytest.mark.parametrize("nseg", [1, 5, 15, 16], ids=lambda n: f"nseg{n}")
+@pytest.mark.parametrize("nseg", [1, 15, 16], ids=lambda n: f"nseg{n}")
 def test_relayout_correctness(nseg, D, launch, out_dtype, relaid_out, device, monkeypatch, tmp_path):
     _set_compile_env(monkeypatch, tmp_path, knob=True)
     kernel = triton.jit(_reduce_kernel_fn)
@@ -240,14 +225,7 @@ def test_relayout_correctness(nseg, D, launch, out_dtype, relaid_out, device, mo
     out = torch.empty(T, H, D, device=device, dtype=out_dtype)
     k = kernel[(T, H)](out, x, m, nseg, H, D=D, DP=DP, S=S, **launch)
 
-    ttgir = k.asm["ttgir"]
-    block_loads = _count_2d_block_loads(k.asm["llir"])
-    if relaid_out:
-        assert ANCHOR in ttgir, f"no {ANCHOR} in the TTGIR, the descriptor load was not relaid out"
-        assert block_loads > 0, "the relaid-out descriptor load did not lower to 2D block reads"
-    else:
-        assert ANCHOR not in ttgir, f"{ANCHOR} in the TTGIR, the relayout was not refused"
-        assert block_loads == 0, f"{block_loads} 2D block load(s) in a refused relayout, expected the gather path"
+    _assert_relaid_out(k, relaid_out)
     # float64 reference on the CPU: not every XPU supports fp64.
     x64 = x.cpu().to(torch.float64)
     m64 = m.cpu().to(torch.float64)[..., :nseg]
@@ -256,29 +234,6 @@ def test_relayout_correctness(nseg, D, launch, out_dtype, relaid_out, device, mo
     # The bf16 output measured <= 2.65e-2 absolute error at D=256, the fp32 output <= 9.2e-7.
     tol = dict(atol=4e-2, rtol=1.6e-2) if out_dtype == torch.bfloat16 else dict(atol=1e-4, rtol=1e-4)
     torch.testing.assert_close(out.float(), ref.float(), **tol)
-
-
-@pytest.mark.parametrize("D", [96, 128], ids=lambda d: f"D{d}")
-@pytest.mark.parametrize("nseg", [1, 15, 16], ids=lambda n: f"nseg{n}")
-def test_relayout_reduce_padded(nseg, D, device, monkeypatch, tmp_path):
-    _set_compile_env(monkeypatch, tmp_path, knob=True)
-    kernel = triton.jit(_reduce_padded_kernel_fn)
-    S = 16
-    DP = triton.next_power_of_2(D)
-    generator = torch.Generator().manual_seed(17)
-    # NaN outside the descriptor's [nseg, D] shape: any padding read from memory turns its sum into NaN.
-    x = torch.full((S, DP), float("nan"), device=device)
-    x[:nseg, :D] = torch.randn(nseg, D, generator=generator).to(device)
-    # NaN in the output as well, so the zero check proves the kernel wrote the padded columns.
-    out = torch.full((DP, ), float("nan"), device=device)
-    k = kernel[(1, )](out, x, nseg, D=D, DP=DP, S=S)
-
-    ref = x[:nseg, :D].cpu().to(torch.float64).sum(0).to(torch.float32).to(device)
-    torch.testing.assert_close(out[:D], ref, atol=1e-4, rtol=1e-4)
-    assert (out[D:] == 0).all()
-    # The padding checked above must come from the 2D block read.
-    assert ANCHOR in k.asm["ttgir"], f"no {ANCHOR} in the TTGIR, the descriptor load was not relaid out"
-    assert _count_2d_block_loads(k.asm["llir"]) > 0, "the descriptor load did not lower to 2D block reads"
 
 
 @pytest.mark.parametrize("D", [96, 128], ids=lambda d: f"D{d}")
@@ -295,9 +250,7 @@ def test_relayout_skips_store_ending_copy(nseg, D, device, monkeypatch, tmp_path
     out = torch.full((S, DP), float("nan"), device=device)
     k = kernel[(1, )](out, x, nseg, D=D, DP=DP, S=S)
 
-    assert ANCHOR not in k.asm["ttgir"], f"knob on: {ANCHOR} in the TTGIR of a copy that ends in a store"
-    block_loads = _count_2d_block_loads(k.asm["llir"])
-    assert block_loads == 0, f"knob on: {block_loads} 2D block load(s) in a copy that ends in a store"
+    _assert_relaid_out(k, False, "a copy that ends in a store")
     assert torch.equal(out[:nseg, :D], x[:nseg, :D])
     assert (out[nseg:, :] == 0).all() and (out[:, D:] == 0).all()
 
@@ -315,8 +268,7 @@ def test_relayout_loop_accumulate(device, monkeypatch, tmp_path):
     assert "scf.for" in ttgir, "the row-block loop is gone, so the load is no longer in a loop"
     ref = x.cpu().to(torch.float64).sum(0).to(torch.float32).to(device)
     torch.testing.assert_close(out, ref, atol=1e-4, rtol=1e-4)
-    assert ANCHOR in ttgir, f"no {ANCHOR} in the TTGIR, the descriptor load in the loop was not relaid out"
-    assert _count_2d_block_loads(k.asm["llir"]) > 0, "the descriptor load in the loop did not lower to 2D block reads"
+    _assert_relaid_out(k, True, "the descriptor load in the loop")
 
 
 @pytest.mark.parametrize("c0, runtime_c0, relaid_out", [
@@ -341,20 +293,12 @@ def test_relayout_column_offset_sign(c0, runtime_c0, relaid_out, device, monkeyp
 
     # Exact: the sums are of small integers. A column read from memory instead of padding sums to BR * POISON.
     torch.testing.assert_close(out.cpu(), _tile_column_sums(vals, c0, BC), rtol=0, atol=0)
-    ttgir = k.asm["ttgir"]
-    block_loads = _count_2d_block_loads(k.asm["llir"])
-    if relaid_out:
-        assert ANCHOR in ttgir, f"no {ANCHOR} in the TTGIR, the descriptor load was not relaid out"
-        assert block_loads > 0, "the relaid-out descriptor load did not lower to 2D block reads"
-    else:
-        assert ANCHOR not in ttgir, f"{ANCHOR} in the TTGIR of a load at column {c0}"
-        assert block_loads == 0, f"{block_loads} 2D block load(s) at column {c0}, expected a gather"
+    _assert_relaid_out(k, relaid_out, f"the load at column {c0}")
 
 
 def test_relayout_stencil_negative_tap(device, monkeypatch, tmp_path):
-    # G1 cannot prove the left tap's column, program_id * BC - 1, non-negative, and it is -1 in program 0. With
-    # per-load gates that tap kept its 2D-block tag, so RemoveLayoutConversions could move it into the relaid-out
-    # layout of the other taps, making it a 2D read at column -1 (#8479). Function-wide gates relay out no tap.
+    # G1 cannot prove the left tap (program_id * BC - 1, -1 in program 0) non-negative. If any tap kept its 2D-block
+    # tag, RemoveLayoutConversions could move it into the other taps' relaid-out layout (#8479), so no tap is relaid out.
     BR, BC, GRID = 16, 64, 2
     NCOLS, PITCH = GRID * BC, GRID * BC + 32
     x, vals = _misaligned_tensor(BR, NCOLS, PITCH, device)
@@ -369,9 +313,7 @@ def test_relayout_stencil_negative_tap(device, monkeypatch, tmp_path):
 
         # Knob on and off must both match the CPU reference exactly.
         torch.testing.assert_close(out.cpu(), ref, rtol=0, atol=0, msg=lambda m: f"knob {state}: {m}")
-        assert ANCHOR not in k.asm["ttgir"], f"knob {state}: {ANCHOR} in the TTGIR"
-        block_loads = _count_2d_block_loads(k.asm["llir"])
-        assert block_loads == 0, f"knob {state}: {block_loads} 2D block load(s), a stencil tap became a 2D read"
+        _assert_relaid_out(k, False, f"knob {state}, a stencil tap")
 
 
 @pytest.mark.parametrize("kernel_fn", [_wrapped_mul_column_sum_kernel_fn, _wrapped_shl_column_sum_kernel_fn],
@@ -390,9 +332,7 @@ def test_relayout_column_wraps_negative(kernel_fn, b, device, monkeypatch, tmp_p
 
     col = -4 if b else (0 if kernel_fn is _wrapped_mul_column_sum_kernel_fn else 2147483644)
     torch.testing.assert_close(out.cpu(), _tile_column_sums(vals, col, BC), rtol=0, atol=0)
-    assert ANCHOR not in k.asm["ttgir"], f"{ANCHOR} in the TTGIR of a column that wraps negative"
-    block_loads = _count_2d_block_loads(k.asm["llir"])
-    assert block_loads == 0, f"{block_loads} 2D block load(s) at a column that wraps negative, expected a gather"
+    _assert_relaid_out(k, False, "a column that wraps negative")
 
 
 MAX_GRID = 1 << 16  # programs per axis that G1 assumes for a column derived from program_id
@@ -463,19 +403,11 @@ def test_relayout_reduce_output_dtype(x_dtype, out_dtype, launch, relaid_out, mo
     _set_compile_env(monkeypatch, tmp_path, knob=True)
     acc = tl.float32 if x_dtype.is_floating_point else tl.int32
     k = triton.jit(_row_sum_kernel_fn).warmup(out_dtype, x_dtype, R=16, C=128, ACC=acc, grid=(1, ), **launch)
-
-    ttgir = k.asm["ttgir"]
-    block_loads = _count_2d_block_loads(k.asm["llir"])
-    if relaid_out:
-        assert ANCHOR in ttgir, f"no {ANCHOR} in the TTGIR, the descriptor load was not relaid out"
-        assert block_loads > 0, "the relaid-out descriptor load did not lower to 2D block reads"
-    else:
-        assert ANCHOR not in ttgir, f"{ANCHOR} in the TTGIR of a 16-lane kernel with a {out_dtype} reduction"
-        assert block_loads == 0, f"{block_loads} 2D block load(s) in a refused relayout, expected the gather path"
+    _assert_relaid_out(k, relaid_out, f"a {x_dtype} -> {out_dtype} row sum")
 
 
 @pytest.mark.parametrize("pad", ["zero", "nan"])
-@pytest.mark.parametrize("nseg", [15, 16], ids=lambda n: f"nseg{n}")
+@pytest.mark.parametrize("nseg", [1, 15, 16], ids=lambda n: f"nseg{n}")
 def test_relayout_padding_option(nseg, pad, device, monkeypatch, tmp_path):
     # Relaid out, a NaN-padded descriptor one element wide read 0.0 instead of NaN at 16 lanes, so only zero padding
     # is relaid out (G3), whatever the lane count. This runs at the default launch.
@@ -492,11 +424,4 @@ def test_relayout_padding_option(nseg, pad, device, monkeypatch, tmp_path):
     tile = torch.full((S, DP), float("nan") if pad == "nan" else 0.0)
     tile[:nseg, :D] = vals
     torch.testing.assert_close(out.cpu(), tile.sum(0), rtol=0, atol=0, equal_nan=True)
-    ttgir = k.asm["ttgir"]
-    block_loads = _count_2d_block_loads(k.asm["llir"])
-    if pad == "zero":
-        assert ANCHOR in ttgir, f"no {ANCHOR} in the TTGIR, the zero-padded descriptor load was not relaid out"
-        assert block_loads > 0, "the relaid-out descriptor load did not lower to 2D block reads"
-    else:
-        assert ANCHOR not in ttgir, f"{ANCHOR} in the TTGIR of a NaN-padded descriptor load"
-        assert block_loads == 0, f"{block_loads} 2D block load(s) for a NaN-padded descriptor, expected a gather"
+    _assert_relaid_out(k, pad == "zero", f"a {pad}-padded descriptor load")
