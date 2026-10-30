@@ -187,6 +187,8 @@ public:
   void rewriteRegion(Region &R);
   // Rewrite an op based on the layout picked by the analysis.
   void rewriteOp(Operation *op);
+  // Return true if op's result can be retyped in place for targetEncoding.
+  bool canRewriteResultInPlace(Operation *op, Attribute targetEncoding) const;
   // Rewrite a for op based on the layout picked by the analysis.
   void rewriteForOp(scf::ForOp forOp);
   void rewriteWhileOp(scf::WhileOp whileOp);
@@ -748,9 +750,13 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         LayoutInfo &info = it->second;
         assert(info.encodings.size() == 1 &&
                "we should have resolved to a single encoding");
+        Attribute targetEncoding = *info.encodings.begin();
         auto encoding = cast<RankedTensorType>(result.getType()).getEncoding();
         // If the encoding is already what we want skip.
-        if (encoding == *info.encodings.begin())
+        if (encoding == targetEncoding)
+          continue;
+        // If it can't be retyped in place, leave it; uses get a convert_layout.
+        if (!canRewriteResultInPlace(&op, targetEncoding))
           continue;
         needRewrite = true;
       }
@@ -1027,6 +1033,17 @@ bool LayoutPropagation::rewriteDescriptorStoreOp(
   return true;
 }
 
+bool LayoutPropagation::canRewriteResultInPlace(
+    Operation *op, Attribute targetEncoding) const {
+  return isa<scf::ForOp, scf::WhileOp, scf::IfOp>(op) ||
+         canUseResultEncoding(op, targetEncoding).has_value() ||
+         op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
+         op->hasTrait<OpTrait::Elementwise>() ||
+         isa<tt::BroadcastOp, tt::ReduceOp, tt::ExpandDimsOp, tt::ReshapeOp,
+             tt::TransOp, tt::JoinOp, tt::SplitOp, tt::GatherOp,
+             ttg::ConvertLayoutOp>(op);
+}
+
 void LayoutPropagation::rewriteOp(Operation *op) {
   if (auto forOp = dyn_cast<scf::ForOp>(op))
     rewriteForOp(forOp);
@@ -1038,11 +1055,7 @@ void LayoutPropagation::rewriteOp(Operation *op) {
     Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
     if (canUseResultEncoding(op, encoding)) {
       setEncodingInPlace(op->getResult(0), encoding);
-    } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
-               op->hasTrait<OpTrait::Elementwise>() ||
-               isa<tt::BroadcastOp, tt::ReduceOp, tt::ExpandDimsOp,
-                   tt::ReshapeOp, tt::TransOp, tt::JoinOp, tt::SplitOp,
-                   tt::GatherOp, ttg::ConvertLayoutOp>(op)) {
+    } else if (canRewriteResultInPlace(op, encoding)) {
       rewriteGenericOpInPlace(op, encoding);
     } else {
       llvm::report_fatal_error("unexpected op in rewrite");
