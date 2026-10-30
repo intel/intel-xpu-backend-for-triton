@@ -1225,12 +1225,10 @@ private:
   };
 
   /// Follow the users of \p op through layout converts, tt.fp_to_fp and
-  /// elementwise ops. A tt.reduce is recorded and ends its path. Any other
-  /// user is not understood and ends the walk: RemoveLayoutConversions can
-  /// rematerialize even an anchored load into a shape op's layout
-  /// (isExpensiveLoadRematCandidate). That includes a tt.store or
-  /// tt.descriptor_store: a store keeps its own layout, so RLC leaves an SLM
-  /// convert in front of it.
+  /// elementwise ops, recording each tt.reduce. Any other user is not
+  /// understood: RemoveLayoutConversions can rematerialize even an anchored
+  /// load into a shape op's layout (isExpensiveLoadRematCandidate), and a store
+  /// keeps its own layout, so an SLM convert would stay in front of it.
   static DescLoadUses analyzeDescLoadUses(tt::DescriptorLoadOp op) {
     DescLoadUses uses;
     SmallVector<Value> worklist{op.getResult()};
@@ -1330,14 +1328,12 @@ private:
     return true;
   }
 
-  /// The relayout's correctness gates, checked over all of \p func: like the
-  /// dot rule, they relay out every eligible load of the function or none.
-  /// Checking each load alone is not enough. A refused load keeps
-  /// ttig.block_io without an anchor, so RemoveLayoutConversions can move it,
-  /// with the ops behind it, into an anchored sibling's layout, and
-  /// LowerTo2DBlockLoad then makes it a 2D read after all. Pointer tt.loads
-  /// tagged for 2D reads are not considered. \p assumesGridLimit is set if a
-  /// column proof needs kAssumedMaxGridDim.
+  /// The relayout's correctness gates, over all of \p func: all eligible loads
+  /// of the function are relaid out, or none. A refused load keeps
+  /// ttig.block_io without an anchor, so RemoveLayoutConversions could move it
+  /// into an anchored sibling's layout, making it a 2D read after all. Pointer
+  /// tt.loads tagged for 2D reads are not considered. Sets \p assumesGridLimit
+  /// if a column proof needs kAssumedMaxGridDim.
   static bool satisfiesRelayoutGates(tt::FuncOp func,
                                      ArrayRef<tt::DescriptorLoadOp> loads,
                                      ArrayRef<tt::ReduceOp> reduces,
@@ -1371,14 +1367,11 @@ private:
       }
     }
 
-    // G2: IGC fptrunc vectorizer miscompile; 16-lane sub-narrow outputs. With
-    // 16 lanes, IGC merges the scalar fptrunc of uniform sub-group reduce
-    // results into a vector fptrunc that writes registers out of bounds (wrong
-    // values or a lost device), and int8 results come out wrong for a reason
-    // not yet known. So only f32 and i32 values, which fuzzing found clean, may
-    // follow a reduction. Every reduction is checked, not only those of the
-    // descriptor loads: RemoveLayoutConversions can move any of them into the
-    // new layout.
+    // G2: with 16 lanes, IGC turns the scalar fptrunc of uniform sub-group
+    // reduce results into a vector fptrunc that writes registers out of bounds,
+    // and int8 results come out wrong too, so only f32 and i32 values may
+    // follow a reduction. Every reduction is checked, since
+    // RemoveLayoutConversions can move any of them into the new layout.
     if (threadsPerWarp != 16)
       return true;
     for (tt::ReduceOp reduce : reduces) {

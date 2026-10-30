@@ -112,12 +112,10 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
                               BlockIOTileSizeInfo &sizeInfoOut);
 
 /// Return a blocked layout under which a row-major rank-2 load of \p type
-/// passes validate2DBlockLoadTile, or std::nullopt. \p numWarps and
-/// \p threadsPerWarp must be > 0. Lanes span at most 64 bytes of a row. Warps
-/// preferably split the dim that is not \p reducedDim (the columns when there
-/// is no reduction), to keep a reduction within a warp; warps left over split
-/// the other dim. The CGA layout comes from \p type's encoding, which must be
-/// set.
+/// passes validate2DBlockLoadTile, or std::nullopt. Lanes span at most 64
+/// bytes of a row, and warps split the dim other than \p reducedDim (the
+/// columns if none) first, to keep a reduction in a warp. \p type must have an
+/// encoding, whose CGA layout is kept.
 std::optional<triton::gpu::BlockedEncodingAttr>
 pickBlockIOLoadEncoding(RankedTensorType type, unsigned numWarps,
                         unsigned threadsPerWarp,
@@ -141,15 +139,10 @@ bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
   return isBlockIOEligible(loadOp.getOperation(), tensorTy);
 }
 
-/// Return true if LowerTo2DBlockLoad's checks for rewriting \p op to
-/// ttig.2d_block_load pass with result type \p tensorTy, which may be a
-/// candidate other than op.getType(): isBlockIOEligible, traceable descriptor
-/// definitions with consistent padding, validate2DBlockLoadTile (honoring
-/// ttig.one_matrix_per_load), no batch dim in the tile, and each foldable
-/// width/height/pitch within its 24-bit field. Returns false if \p tensorTy has
-/// no distributed encoding. Emits no diagnostics. Omits the layout-independent
-/// 16-byte pitch check, which the pass reports as an error, so true means
-/// "eligible", not "safe to emit" for hand-tagged IR.
+/// Return true if LowerTo2DBlockLoad would rewrite \p op to ttig.2d_block_load
+/// with result type \p tensorTy, which may differ from op.getType(). Emits no
+/// diagnostics and skips the 16-byte pitch check, which the pass reports as an
+/// error, so true means "eligible", not "safe to emit" for hand-tagged IR.
 bool isDescriptorLoadLowerableTo2DBlock(triton::DescriptorLoadOp op,
                                         RankedTensorType tensorTy);
 
