@@ -1447,7 +1447,10 @@ private:
       return;
     }
 
-    unsigned currentCost = ttgi::estimateLoadHWCost(currentTy, op);
+    // The current layout is a gather, which estimateLoadHWCost counts per lane;
+    // one gather message serves the sub-group, like one 2D block message.
+    unsigned currentCost = llvm::divideCeil(
+        ttgi::estimateLoadHWCost(currentTy, op), threadsPerWarp);
     unsigned candidateCost = ttgi::estimateLoadHWCost(candidateTy, op);
     if (candidateCost >= currentCost) {
       LDBG("Candidate cost " << candidateCost << " >= current cost "

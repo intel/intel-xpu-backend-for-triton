@@ -325,6 +325,8 @@ def test_relayout_column_wraps_negative(kernel_fn, b, device, monkeypatch, tmp_p
 
 
 L1X16 = dict(num_warps=1, warp_size=16)
+# One warp: with more, each warp's rows are strided and a row sum's 2D reads are too short to beat the gathers.
+L1X32 = dict(num_warps=1, warp_size=32)
 # (input dtype, output dtype, launch, relaid out with the knob on) for _row_sum_kernel_fn.
 ROW_SUM_CASES = [
     # Refused: a narrow output at 16 lanes.
@@ -335,9 +337,9 @@ ROW_SUM_CASES = [
     pytest.param(torch.float16, torch.float32, L1X16, True, id="f16-f32-16lanes"),
     pytest.param(torch.int8, torch.int32, L1X16, True, id="i8-i32-16lanes"),
     pytest.param(torch.float32, torch.float32, L1X16, True, id="f32-f32-16lanes"),
-    pytest.param(torch.float16, torch.float16, {}, True, id="f16-f16-default"),
-    pytest.param(torch.int8, torch.int8, {}, True, id="i8-i8-default"),
-    pytest.param(torch.float32, torch.bfloat16, {}, True, id="f32-bf16-default"),
+    pytest.param(torch.float16, torch.float16, L1X32, True, id="f16-f16-32lanes"),
+    pytest.param(torch.int8, torch.int8, L1X32, True, id="i8-i8-32lanes"),
+    pytest.param(torch.float32, torch.bfloat16, L1X32, True, id="f32-bf16-32lanes"),
 ]
 
 
