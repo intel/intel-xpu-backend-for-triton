@@ -53,12 +53,19 @@ struct FoldTrueCmpIPass
     // avoids interleaved canonicalization that can erase Values and create new
     // ones reusing the same memory addresses, causing the solver to return
     // stale lattice entries with mismatched bitwidths.
+    // The range analysis proves an assumed comparison from the assumption
+    // itself, so a comparison feeding an `llvm.intr.assume` is kept: folding it
+    // would leave `llvm.intr.assume %true` and lose the fact for every later
+    // pass. Its other uses are folded as usual.
+    auto feedsAssume = [](arith::CmpIOp cmpOp) {
+      return llvm::any_of(cmpOp->getUsers(), llvm::IsaPred<LLVM::AssumeOp>);
+    };
+
     SmallVector<std::pair<arith::CmpIOp, bool>> folds;
     mod.walk([&](arith::CmpIOp cmpOp) {
-      // The range analysis proves an assumed comparison from the assumption
-      // itself. Folding it would leave `llvm.intr.assume %true` and lose the
-      // fact for every later pass.
-      if (llvm::any_of(cmpOp->getUsers(), llvm::IsaPred<LLVM::AssumeOp>))
+      // Nothing is left to fold once the assume operands are excluded.
+      if (feedsAssume(cmpOp) &&
+          llvm::all_of(cmpOp->getUsers(), llvm::IsaPred<LLVM::AssumeOp>))
         return;
       if (auto result = evaluateCmpI(*solver, cmpOp))
         folds.emplace_back(cmpOp, *result);
@@ -72,6 +79,13 @@ struct FoldTrueCmpIPass
                                    : rewriter.getZeroAttr(cmpOp.getType());
       auto constOp =
           arith::ConstantOp::create(rewriter, cmpOp.getLoc(), constAttr);
+      if (feedsAssume(cmpOp)) {
+        rewriter.replaceUsesWithIf(
+            cmpOp.getResult(), constOp.getResult(), [](OpOperand &use) {
+              return !isa<LLVM::AssumeOp>(use.getOwner());
+            });
+        continue;
+      }
       rewriter.replaceAllUsesWith(cmpOp.getResult(), constOp.getResult());
       rewriter.eraseOp(cmpOp);
     }

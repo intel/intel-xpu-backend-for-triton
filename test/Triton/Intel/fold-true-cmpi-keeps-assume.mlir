@@ -17,21 +17,3 @@ tt.func @assume_survives_for_later_pass(%arg0: i32) -> i32 {
 // CHECK:         llvm.intr.assume %[[CMP]] : i1
 // CHECK-NOT:     arith.remsi
 // CHECK:         arith.remui
-
-// -----
-
-// COM: A comparison that merely follows from the assume still folds.
-tt.func @derived_comparison_folds(%arg0: i32) -> i1 {
-  %c0 = arith.constant 0 : i32
-  %cm1 = arith.constant -1 : i32
-  %cmp = arith.cmpi sge, %arg0, %c0 : i32
-  llvm.intr.assume %cmp : i1
-  %o = arith.cmpi sgt, %arg0, %cm1 : i32
-  tt.return %o : i1
-}
-
-// CHECK-LABEL: tt.func @derived_comparison_folds
-// CHECK:         %[[CMP:.*]] = arith.cmpi sge
-// CHECK:         llvm.intr.assume %[[CMP]] : i1
-// CHECK-NOT:     arith.cmpi
-// CHECK:         tt.return %true

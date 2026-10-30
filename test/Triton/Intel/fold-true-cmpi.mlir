@@ -235,6 +235,29 @@ module {
 
 // -----
 
+// COM: Only the assume keeps the comparison: the other uses still fold, so the
+// COM: `scf.if` loses its dead branch and the result is true.
+module {
+  tt.func @assume_and_other_uses(%v: i32, %q: !tt.ptr<i32>) -> i1 {
+    %c0 = arith.constant 0 : i32
+    %cmp = arith.cmpi sge, %v, %c0 : i32
+    llvm.intr.assume %cmp : i1
+    scf.if %cmp {
+      tt.store %q, %c0 : !tt.ptr<i32>
+    }
+    tt.return %cmp : i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @assume_and_other_uses
+// CHECK:           %[[CMP:.*]] = arith.cmpi sge, %{{.*}}, %c0_i32 : i32
+// CHECK-NEXT:      llvm.intr.assume %[[CMP]] : i1
+// CHECK-NOT:       scf.if
+// CHECK:           tt.store
+// CHECK:           tt.return %true
+
+// -----
+
 // COM: A loop between the value and the assume still stops it, so the
 // COM: comparison stays.
 module {
