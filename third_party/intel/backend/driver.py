@@ -763,6 +763,8 @@ class XPULauncher(object):
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
         active_driver = triton.runtime.driver.active
+        if active_driver.launched_grf_modes is not None:
+            active_driver.launched_grf_modes.append(_grf_mode_of(kernel_metadata.build_flags))
 
         def allocate_scratch(size, align, allocator):
             if size > 0:
@@ -803,10 +805,34 @@ class XPULauncher(object):
                     args)
 
 
+@lru_cache
+def _zero_fill_kernel():
+    """L2 flush kernel that can be compiled in any GRF mode."""
+    import triton.language as tl
+
+    @triton.jit
+    def _zero_fill(ptr, n, BLOCK: tl.constexpr):
+        offs = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)
+        tl.store(ptr + offs, tl.zeros([BLOCK], dtype=ptr.dtype.element_ty), mask=offs < n)
+
+    return _zero_fill
+
+
+def _grf_mode_of(build_flags):
+    """GRF mode a kernel was built with, as a `grf_mode` launch option."""
+    for mode in ("128", "256", "512"):
+        if f"-cl-intel-{mode}-GRF-per-thread" in build_flags:
+            return mode
+    return "default"
+
+
 class XPUDriver(DriverBase):
 
     def __init__(self):
         self.launcher_cls = XPULauncher
+        # GRF mode of the L2 flush kernel, and the GRF modes of launched kernels while they are being recorded.
+        self._flush_grf_mode = "default"
+        self.launched_grf_modes = None
         try:
             from torch._C import _xpu_getCurrentRawStream, _xpu_getDevice
             self.get_current_device = _xpu_getDevice
@@ -894,8 +920,22 @@ class XPUDriver(DriverBase):
         return ty_to_cpp(ty)
 
     def get_benchmarker(self):
+        return self._grf_matched_do_bench
+
+    def _grf_matched_do_bench(self, fn, *args, **kwargs):
+        """Flush L2 in the GRF mode of the first timed kernel, so its runs pay no GRF-mode switch (#8465)."""
         from triton.testing import do_bench
-        return do_bench
+
+        self.launched_grf_modes = []
+        try:
+            fn()
+        finally:
+            launched, self.launched_grf_modes = self.launched_grf_modes, None
+        self._flush_grf_mode = launched[0] if launched else "default"
+        try:
+            return do_bench(fn, *args, **kwargs)
+        finally:
+            self._flush_grf_mode = "default"
 
     def get_empty_cache_for_benchmark(self):
         import torch
@@ -907,4 +947,9 @@ class XPUDriver(DriverBase):
         return torch.empty(int(cache_size // 4), dtype=torch.int, device='xpu')
 
     def clear_cache(self, cache):
-        cache.zero_()
+        if self._flush_grf_mode == "default":
+            cache.zero_()
+        else:
+            block = 1024
+            _zero_fill_kernel()[(triton.cdiv(cache.numel(), block), )](cache, cache.numel(), BLOCK=block,
+                                                                       grf_mode=self._flush_grf_mode)
