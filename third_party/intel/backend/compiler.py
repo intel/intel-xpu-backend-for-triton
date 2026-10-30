@@ -109,9 +109,9 @@ class XPUOptions:
 REBUILD_SPILL_BYTES_PER_THREAD = 1024
 
 # `predicts_large_grf`'s cut-off on the largest dot's operand and result bytes per
-# hardware thread. On BMG it caught 69% of the dot kernels the retry rebuilds, with no
-# wrong "yes" on held-out models; a wrong "yes" runs a non-spilling kernel at large
-# GRF, measured up to 1.46x slower, so `TRITON_INTEL_PREDICT_LARGE_GRF` is off by default.
+# hardware thread. On BMG it caught 69% of the dot kernels the retry rebuilds; a wrong
+# "yes" runs a non-spilling kernel at large GRF, measured up to 1.46x slower, so
+# `TRITON_INTEL_PREDICT_LARGE_GRF` is off by default.
 LARGE_GRF_TILE_BYTES = 10240
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')

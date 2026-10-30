@@ -42,6 +42,7 @@ def _dot(m, n, k, batch=""):
 LARGEST_IN_MIDDLE = _HEAD + _dot(8, 16, 16) + _dot(8, 16, 64) + _dot(8, 16, 32) + _TAIL
 # The batched dot wins only through its batch, and the later dot of equal work does not displace it.
 BATCH_THEN_TIE = _HEAD + _dot(8, 16, 16) + _dot(8, 16, 16, batch="2x") + _dot(8, 32, 16) + _TAIL
+NO_DOT = _HEAD + _TAIL
 
 
 def _module(tmp_path, src):
@@ -53,8 +54,8 @@ def _module(tmp_path, src):
     return ir.parse_mlir_module(str(path), ctx), ctx
 
 
-@pytest.mark.parametrize("src, expected", [(LARGEST_IN_MIDDLE, 3584), (BATCH_THEN_TIE, 2560)],
-                         ids=["largest_in_middle", "batch_then_tie"])
+@pytest.mark.parametrize("src, expected", [(LARGEST_IN_MIDDLE, 3584), (BATCH_THEN_TIE, 2560), (NO_DOT, 0)],
+                         ids=["largest_in_middle", "batch_then_tie", "no_dot"])
 def test_largest_dot_tile_bytes(tmp_path, src, expected):
     mod, _ctx = _module(tmp_path, src)
     assert intel.largest_dot_tile_bytes(mod) == expected
@@ -68,6 +69,7 @@ def test_largest_dot_tile_bytes(tmp_path, src, expected):
     (640, {"generate_native_code": False}, False),
     (640, {"is_lts": True}, False),
     (640, {"arch": "ptl_h"}, False),
+    (640, {"arch": "lnl"}, True),
     (640, {"disable_igc_opt": True}, False),
 ])
 def test_predicts_large_grf(tmp_path, monkeypatch, threshold, change, expected):
@@ -81,6 +83,7 @@ def test_predicts_large_grf(tmp_path, monkeypatch, threshold, change, expected):
     assert intel_compiler.XPUBackend.predicts_large_grf(mod, opt) == expected
 
 
+# A fresh JITFunction per case: its in-process cache would skip `ocloc` after the first case.
 def _make_dot_kernel():
 
     @triton.jit
