@@ -310,8 +310,8 @@ def get_unified_attention_benchmark(
                  f'{num_blocks}-{block_size}]')
         x_val = (q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size)
         use_pytorch_reference = is_enough_memory(x_val, provider="pytorch")
-        if not is_enough_memory(x_val, provider=provider) or (
-                DEVICE != 'xpu' and BENCHMARKING_CONFIG["verify"] and not use_pytorch_reference):
+        if not is_enough_memory(x_val, provider=provider) or (DEVICE != 'xpu' and BENCHMARKING_CONFIG["verify"]
+                                                              and not use_pytorch_reference):
             print(f"Skipping {provider} due to estimated memory constraints: {x_val}")
             return (float("nan"), ) * 3, (float("nan"), ) * 3, float("nan")
         dtype = torch.bfloat16
