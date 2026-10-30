@@ -362,9 +362,138 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [1, 2, 8], warpsPerCTA = [1, 8, 1], order = [2, 1, 0]}>
+#slice = #ttg.slice<{dim = 0, parent = #blocked3}>
 #coalesced = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 
-// COM: Test 11: unlike Test 10, a rank-reduced descriptor store keeps its
+// COM: ============================================================
+// COM: Test 11: A reshape whose inferred #linear has the dot's DPAS layout
+// COM: takes the DPAS encoding, so the store-feeding convert folds. The 3-D
+// COM: intermediate reshape must be skipped (rank differs), not compared.
+// COM: GitHub issue #8511.
+// COM: ============================================================
+
+// CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<{{.*}}>
+// CHECK-LABEL: @reshape_back_to_dpas_folds_store_convert
+// CHECK-NOT: ttg.convert_layout
+// CHECK: %[[R2:.*]] = tt.reshape {{.*}} -> tensor<64x64xf32, #[[$DPAS]]>
+// CHECK: %[[T:.*]] = arith.truncf %[[R2]] {{.*}} to tensor<64x64xf16, #[[$DPAS]]>
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.descriptor_store {{.*}}, %[[T]] : {{.*}}, tensor<64x64xf16, #[[$DPAS]]>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @reshape_back_to_dpas_folds_store_convert(
+      %desc: !tt.tensordesc<64x64xf16>,
+      %a: tensor<64x64xf16, #dot0>,
+      %b: tensor<64x64xf16, #dot1>,
+      %acc: tensor<64x64xf32, #dpas>) {
+    %c0 = arith.constant 0 : i32
+    %dot = tt.dot %a, %b, %acc, inputPrecision = ieee :
+        tensor<64x64xf16, #dot0> * tensor<64x64xf16, #dot1> -> tensor<64x64xf32, #dpas>
+    %cvt = ttg.convert_layout %dot : tensor<64x64xf32, #dpas> -> tensor<64x64xf32, #blocked>
+    %r1 = tt.reshape %cvt : tensor<64x64xf32, #blocked> -> tensor<1x64x64xf32, #blocked3>
+    %r2 = tt.reshape %r1 : tensor<1x64x64xf32, #blocked3> -> tensor<64x64xf32, #slice>
+    %t = arith.truncf %r2 : tensor<64x64xf32, #slice> to tensor<64x64xf16, #slice>
+    %st = ttg.convert_layout %t : tensor<64x64xf16, #slice> -> tensor<64x64xf16, #coalesced>
+    tt.descriptor_store %desc[%c0, %c0], %st : !tt.tensordesc<64x64xf16>, tensor<64x64xf16, #coalesced>
+    tt.return
+  }
+}
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [1, 2, 8], warpsPerCTA = [1, 8, 1], order = [2, 1, 0]}>
+#blocked3t = #ttg.blocked<{sizePerThread = [1, 4, 1], threadsPerWarp = [1, 8, 2], warpsPerCTA = [1, 1, 8], order = [1, 2, 0]}>
+#slice = #ttg.slice<{dim = 0, parent = #blocked3t}>
+#coalesced = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+
+// COM: ============================================================
+// COM: Test 12: A reshape whose #linear is NOT a DPAS layout (here transposed
+// COM: by tt.trans) keeps #linear, so the convert before the store stays.
+// COM: ============================================================
+
+// CHECK-LABEL: @reshape_linear_not_dpas_keeps_convert
+// CHECK: tt.reshape {{.*}} -> tensor<64x64xf32, #linear{{[0-9]*}}>
+// CHECK: ttg.convert_layout
+// CHECK-NEXT: tt.descriptor_store
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @reshape_linear_not_dpas_keeps_convert(
+      %desc: !tt.tensordesc<64x64xf16>,
+      %a: tensor<64x64xf16, #dot0>,
+      %b: tensor<64x64xf16, #dot1>,
+      %acc: tensor<64x64xf32, #dpas>) {
+    %c0 = arith.constant 0 : i32
+    %dot = tt.dot %a, %b, %acc, inputPrecision = ieee :
+        tensor<64x64xf16, #dot0> * tensor<64x64xf16, #dot1> -> tensor<64x64xf32, #dpas>
+    %cvt = ttg.convert_layout %dot : tensor<64x64xf32, #dpas> -> tensor<64x64xf32, #blocked>
+    %r1 = tt.reshape %cvt : tensor<64x64xf32, #blocked> -> tensor<1x64x64xf32, #blocked3>
+    %tr = tt.trans %r1 {order = array<i32: 0, 2, 1>} : tensor<1x64x64xf32, #blocked3> -> tensor<1x64x64xf32, #blocked3t>
+    %r2 = tt.reshape %tr : tensor<1x64x64xf32, #blocked3t> -> tensor<64x64xf32, #slice>
+    %t = arith.truncf %r2 : tensor<64x64xf32, #slice> to tensor<64x64xf16, #slice>
+    %st = ttg.convert_layout %t : tensor<64x64xf16, #slice> -> tensor<64x64xf16, #coalesced>
+    tt.descriptor_store %desc[%c0, %c0], %st : !tt.tensordesc<64x64xf16>, tensor<64x64xf16, #coalesced>
+    tt.return
+  }
+}
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dpas1 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 4], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+#dot2 = #ttg.dot_op<{opIdx = 0, parent = #dpas1, kWidth = 1}>
+#dot3 = #ttg.dot_op<{opIdx = 1, parent = #dpas1, kWidth = 2}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [1, 2, 8], warpsPerCTA = [1, 8, 1], order = [2, 1, 0]}>
+#slice = #ttg.slice<{dim = 0, parent = #blocked3}>
+#coalesced = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+
+// COM: ============================================================
+// COM: Test 13: With two DPAS encodings in the function, the reshape takes
+// COM: the one whose layout matches (the second dot's), not the first found.
+// COM: ============================================================
+
+// CHECK-LABEL: @reshape_dpas_second_candidate
+// CHECK: tt.dot
+// CHECK: tt.dot {{.*}} -> tensor<64x64xf32, #[[SECOND:.+]]>
+// CHECK: tt.reshape {{.*}} -> tensor<64x64xf32, #[[SECOND]]>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @reshape_dpas_second_candidate(
+      %desc: !tt.tensordesc<64x64xf16>,
+      %a1: tensor<64x64xf16, #dot2>,
+      %b1: tensor<64x64xf16, #dot3>,
+      %acc1: tensor<64x64xf32, #dpas1>,
+      %a: tensor<64x64xf16, #dot0>,
+      %b: tensor<64x64xf16, #dot1>,
+      %acc: tensor<64x64xf32, #dpas>) -> tensor<64x64xf32, #dpas1> {
+    %c0 = arith.constant 0 : i32
+    %first = tt.dot %a1, %b1, %acc1, inputPrecision = ieee :
+        tensor<64x64xf16, #dot2> * tensor<64x64xf16, #dot3> -> tensor<64x64xf32, #dpas1>
+    %dot = tt.dot %a, %b, %acc, inputPrecision = ieee :
+        tensor<64x64xf16, #dot0> * tensor<64x64xf16, #dot1> -> tensor<64x64xf32, #dpas>
+    %cvt = ttg.convert_layout %dot : tensor<64x64xf32, #dpas> -> tensor<64x64xf32, #blocked>
+    %r1 = tt.reshape %cvt : tensor<64x64xf32, #blocked> -> tensor<1x64x64xf32, #blocked3>
+    %r2 = tt.reshape %r1 : tensor<1x64x64xf32, #blocked3> -> tensor<64x64xf32, #slice>
+    %t = arith.truncf %r2 : tensor<64x64xf32, #slice> to tensor<64x64xf16, #slice>
+    %st = ttg.convert_layout %t : tensor<64x64xf16, #slice> -> tensor<64x64xf16, #coalesced>
+    tt.descriptor_store %desc[%c0, %c0], %st : !tt.tensordesc<64x64xf16>, tensor<64x64xf16, #coalesced>
+    tt.return %first : tensor<64x64xf32, #dpas1>
+  }
+}
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+#coalesced = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+
+// COM: Test 14: unlike Test 10, a rank-reduced descriptor store keeps its
 // COM: coalesced layout, also against a backward remat into the DPAS layout,
 // COM: unless it is tagged for 2D block I/O (#8516).
 

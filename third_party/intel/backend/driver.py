@@ -318,7 +318,8 @@ class SpirvUtils:
         try:
             return self.shared_library.load_binary(args)
         except Exception as e:
-            from triton.runtime.errors import IntelGPUError, OutOfResources
+            from triton.backends.intel.errors import IntelGPUError
+            from triton.runtime.errors import OutOfResources
             if isinstance(e, OutOfResources):
                 raise
             if str(e).startswith("ZE_"):
@@ -369,6 +370,33 @@ class ExtensionUtils:
 
     def get_device_id(self, device_idx: int) -> int:
         return self.shared_library.get_device_id(device_idx)
+
+    if os.name != 'nt':
+
+        def __del__(self):
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
+    else:
+
+        def __del__(self):
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
+
+
+class SpirvProbeUtils:
+    """Ground-truth probe for whether a SPIR-V capability is accepted by the driver's own JIT."""
+
+    def __init__(self, cache_path: str):
+        self.shared_library = ctypes.PyDLL(cache_path)
+        self.shared_library.probe_spirv_module.restype = ctypes.py_object
+        self.shared_library.probe_spirv_module.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_size_t)
+
+    def probe_spirv_module(self, device_id: int, spirv: bytes) -> bool | None:
+        return self.shared_library.probe_spirv_module(device_id, spirv, len(spirv))
 
     if os.name != 'nt':
 
@@ -462,6 +490,8 @@ def compile_module_from_src(src: str, name: str, eventless_submit: bool = True):
         return SpirvUtils(cache_path)
     if name == 'extension_utils_impl':
         return ExtensionUtils(cache_path)
+    if name == 'spirv_probes_impl':
+        return SpirvProbeUtils(cache_path)
     if name == 'proton_utils':
         return cache_path
 
