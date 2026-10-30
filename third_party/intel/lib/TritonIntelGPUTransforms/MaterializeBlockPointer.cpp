@@ -96,6 +96,33 @@ isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
   return ttgi::isDivisible(tt::intel::getFinalValue(v), divisor);
 }
 
+// Folding a leading index into the base keeps it 4-byte aligned, as every 2D
+// block access needs (see satisfies2DBlockReadAlignment), only if each
+// candidate's stride is provably a 4-byte multiple or the index is constant 0.
+// Leading strides are indexed by block rank, so the shape count must match.
+static bool isLeadingRebaseAligned(tt::DescriptorStoreOp op,
+                                   const tt::intel::DescriptorDefinitions &defs,
+                                   unsigned shapeRank) {
+  RankedTensorType srcType = op.getSrc().getType();
+  unsigned srcRank = srcType.getRank();
+  unsigned descRank = op.getDesc().getType().getBlockType().getRank();
+  if (srcRank >= descRank)
+    return true;
+  unsigned elementWidth = srcType.getElementTypeBitWidth();
+  if (elementWidth % 8 != 0 || shapeRank != descRank)
+    return false;
+  unsigned strideDivisor = std::max(1u, 4 / (elementWidth / 8));
+  for (unsigned d = 0, e = descRank - srcRank; d < e; ++d) {
+    if (tt::intel::isConstant(op.getIndices()[d], 0))
+      continue;
+    if (!defs.allSatisfy([&](tt::MakeTensorDescOp m) {
+          return ttgi::isDivisible(m.getStrides()[d], strideDivisor);
+        }))
+      return false;
+  }
+  return true;
+}
+
 struct TritonIntelGPUMaterializeBlockPointerPass
     : public triton::gpu::intel::impl::
           TritonIntelGPUMaterializeBlockPointerBase<
@@ -206,6 +233,13 @@ private:
     // rank is unsigned, so rank 0 would wrap rank-1 and rank-2 below.
     if (rank < 2)
       return;
+
+    if constexpr (std::is_same_v<OpType, tt::DescriptorStoreOp>) {
+      if (!isLeadingRebaseAligned(op, defs, rank)) {
+        LDBG("Leading index rebase not provably 4-byte aligned: " << *op);
+        return;
+      }
+    }
 
     if (!satisfies2DBlockReadAlignment(op, axisInfoAnalysis)) {
       LDBG("Alignment checks failed for: " << *op);

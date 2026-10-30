@@ -69,6 +69,119 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 }
 
 // -----
+// Test: Rank-reducing descriptor stores fold each leading index into the base
+// and bounds-check it (#8516); a folded unaligned leading stride stays generic.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_batch_index_tdesc
+  // CHECK: %[[I:.*]] = llvm.sext %arg4 : i32 to i64
+  // CHECK: %[[O:.*]] = llvm.mul %[[I]], %{{.*}} : i64
+  // CHECK: %[[P:.*]] = llvm.getelementptr %{{.*}}[%[[O]]]
+  // CHECK-DAG: llvm.icmp "sge" %arg4
+  // CHECK-DAG: llvm.icmp "slt" %arg4
+  // CHECK: triton_gen.2Dblockstore %[[P]],
+  tt.func public @store_rank_reducing_batch_index_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c1024_i64 = arith.constant 1024 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c4_i32, %arg1, %arg2], [%c1024_i64, %arg3, %c1_i64] : <f16>, <1x32x32xf16, #dpas>
+    tt.descriptor_store %desc[%arg4, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<1x32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+
+  // Each dropped dim uses its own stride and its own extent; the load side had
+  // both bugs (#7882, #7922).
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_rank4_tdesc
+  // CHECK-DAG: %[[SH0:.*]] = llvm.extractvalue %[[DESC:.*]][0] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
+  // CHECK-DAG: %[[SH1:.*]] = llvm.extractvalue %[[DESC]][1]
+  // CHECK-DAG: %[[ST0:.*]] = llvm.extractvalue %[[DESC]][4]
+  // CHECK-DAG: %[[ST1:.*]] = llvm.extractvalue %[[DESC]][5]
+  // CHECK-DAG: %[[I0:.*]] = llvm.sext %arg5 : i32 to i64
+  // CHECK-DAG: %[[O0:.*]] = llvm.mul %[[I0]], %[[ST0]] : i64
+  // CHECK-DAG: %[[P0:.*]] = llvm.getelementptr %{{.*}}[%[[O0]]]
+  // CHECK-DAG: %[[I1:.*]] = llvm.sext %arg6 : i32 to i64
+  // CHECK-DAG: %[[O1:.*]] = llvm.mul %[[I1]], %[[ST1]] : i64
+  // CHECK-DAG: %[[P1:.*]] = llvm.getelementptr %[[P0]][%[[O1]]]
+  // CHECK-DAG: %[[T0:.*]] = llvm.trunc %[[SH0]] : i64 to i32
+  // CHECK-DAG: %[[LT0:.*]] = llvm.icmp "slt" %arg5, %[[T0]] : i32
+  // CHECK-DAG: %[[A0:.*]] = llvm.and %{{.*}}, %[[LT0]] : i1
+  // CHECK-DAG: %[[T1:.*]] = llvm.trunc %[[SH1]] : i64 to i32
+  // CHECK-DAG: %[[LT1:.*]] = llvm.icmp "slt" %arg6, %[[T1]] : i32
+  // CHECK-DAG: %[[A1:.*]] = llvm.and %{{.*}}, %[[LT1]] : i1
+  // CHECK-DAG: %[[PRED:.*]] = llvm.and %[[A0]], %[[A1]] : i1
+  // CHECK-DAG: llvm.select %[[PRED]],
+  // CHECK: triton_gen.2Dblockstore %[[P1]],
+  tt.func public @store_rank_reducing_rank4_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i64) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c1024_i64 = arith.constant 1024 : i64
+    %c4096_i64 = arith.constant 4096 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3, %arg4], [%c4096_i64, %c1024_i64, %arg7, %c1_i64] : <f16>, <1x1x32x32xf16, #dpas>
+    tt.descriptor_store %desc[%arg5, %arg6, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<1x1x32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+
+  // 1025 f16 elements is 2050 bytes, not a 4-byte multiple: rebasing by it
+  // would misalign the 4-byte-aligned base, so the store stays generic.
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_folded_unaligned_stride_generic
+  // CHECK-NOT: triton_gen.2Dblockstore
+  tt.func public @store_rank_reducing_folded_unaligned_stride_generic(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c1025_i64 = arith.constant 1025 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c4_i32, %arg1, %arg2], [%c1025_i64, %arg3, %c1_i64] : <f16>, <1x32x32xf16, #dpas>
+    tt.descriptor_store %desc[%arg4, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<1x32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+
+  // 1026 f16 elements is 2052 bytes, a 4-byte but not 8-byte multiple.
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_folded_4b_stride
+  // CHECK: triton_gen.2Dblockstore
+  tt.func public @store_rank_reducing_folded_4b_stride(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c1026_i64 = arith.constant 1026 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c4_i32, %arg1, %arg2], [%c1026_i64, %arg3, %c1_i64] : <f16>, <1x32x32xf16, #dpas>
+    tt.descriptor_store %desc[%arg4, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<1x32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+
+  // A folded 0 index moves nothing, so even an odd stride keeps the block store.
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_folded_zero_index_unaligned_stride
+  // CHECK: triton_gen.2Dblockstore
+  tt.func public @store_rank_reducing_folded_zero_index_unaligned_stride(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c1025_i64 = arith.constant 1025 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c4_i32, %arg1, %arg2], [%c1025_i64, %arg3, %c1_i64] : <f16>, <1x32x32xf16, #dpas>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<1x32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+
+  // A runtime leading stride relies on the block_io tag and keeps the block store.
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_runtime_stride
+  // CHECK: triton_gen.2Dblockstore
+  tt.func public @store_rank_reducing_runtime_stride(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64, %arg6: i32) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <1x32x32xf16, #dpas>
+    tt.descriptor_store %desc[%arg6, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<1x32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+}
+
+// -----
 // Test 2: f32 dpas layout store — f32 element type produces different tile dims.
 // Mirrors blockptr_store.mlir f32 variant.
 

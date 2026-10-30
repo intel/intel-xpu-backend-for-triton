@@ -854,6 +854,33 @@ private:
   DominanceInfo domInfo;
 };
 
+/// Store `%x` directly where a `tt.descriptor_store` stores a `tt.reshape(%x)`
+/// that only prepends unit dims, making the store rank-reduced. A rank-1 `%x`
+/// is not folded: the 2D block store needs a rank-2 value.
+static void foldReshapeIntoDescriptorStores(ModuleOp moduleOp) {
+  moduleOp.walk([](tt::DescriptorStoreOp storeOp) {
+    auto reshapeOp = storeOp.getSrc().getDefiningOp<tt::ReshapeOp>();
+    if (!reshapeOp || reshapeOp.getAllowReorder())
+      return;
+
+    ArrayRef<int64_t> srcShape = reshapeOp.getSrc().getType().getShape();
+    ArrayRef<int64_t> blockShape =
+        storeOp.getDesc().getType().getBlockType().getShape();
+    const size_t rank = srcShape.size();
+    // Matching element counts don't imply unit leading dims for an empty
+    // tensor (`0x16` -> `2x0x16`), so they are checked explicitly.
+    if (rank < 2 || reshapeOp.getType().getShape() != blockShape ||
+        blockShape.take_back(rank) != srcShape ||
+        llvm::any_of(
+            blockShape.drop_back(rank), [](int64_t dim) { return dim != 1; }))
+      return;
+
+    storeOp.getSrcMutable().assign(reshapeOp.getSrc());
+    if (reshapeOp->use_empty())
+      reshapeOp->erase();
+  });
+}
+
 struct TritonIntelFuseReshape
     : tt::intel::impl::TritonIntelFuseReshapeBase<TritonIntelFuseReshape> {
 public:
@@ -861,6 +888,7 @@ public:
     ModuleOp moduleOp = getOperation();
     FuseReshapeWithLoad fuser;
     fuser.run(moduleOp);
+    foldReshapeIntoDescriptorStores(moduleOp);
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 };

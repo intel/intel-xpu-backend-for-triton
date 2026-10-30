@@ -559,21 +559,31 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
   }
 }
 
+static bool checkMMAorMMADerived(Attribute encoding) {
+  bool isMMAorMMADerived = isa<ttg::MmaEncodingTrait>(encoding);
+  if (isa<ttg::SliceEncodingAttr>(encoding)) {
+    isMMAorMMADerived |= isa<ttg::MmaEncodingTrait>(
+        cast<ttg::SliceEncodingAttr>(encoding).getParent());
+  } else if (isa<ttg::DotOperandEncodingAttr>(encoding)) {
+    isMMAorMMADerived |= isa<ttg::MmaEncodingTrait>(
+        cast<ttg::DotOperandEncodingAttr>(encoding).getParent());
+  }
+  return isMMAorMMADerived;
+}
+
+// A generic store scalarizes an MMA layout, so a rank-reduced descriptor store
+// without 2D block I/O keeps its layout. Full-rank stores take it (#4866).
+static bool keepsStoreLayout(tt::DescriptorStoreOp storeOp,
+                             Attribute encoding) {
+  return checkMMAorMMADerived(encoding) &&
+         storeOp.getSrc().getType().getRank() <
+             storeOp.getDesc().getType().getBlockType().getRank() &&
+         !storeOp->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+}
+
 SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
                                                        LayoutInfo &info) {
   SmallVector<Value> changed;
-  auto checkMMAorMMADerived = [](Attribute encoding) {
-    bool isMMAorMMADerived = isa<ttg::MmaEncodingTrait>(encoding);
-    if (isa<ttg::SliceEncodingAttr>(encoding)) {
-      isMMAorMMADerived |= isa<ttg::MmaEncodingTrait>(
-          cast<ttg::SliceEncodingAttr>(encoding).getParent());
-    } else if (isa<ttg::DotOperandEncodingAttr>(encoding)) {
-      isMMAorMMADerived |= isa<ttg::MmaEncodingTrait>(
-          cast<ttg::DotOperandEncodingAttr>(encoding).getParent());
-    }
-    return isMMAorMMADerived;
-  };
-
   for (OpOperand &use : value.getUses()) {
     Operation *user = use.getOwner();
     if (auto forOp = dyn_cast<scf::ForOp>(user)) {
@@ -1008,6 +1018,9 @@ bool LayoutPropagation::rewriteDescriptorStoreOp(
          "we should have resolved to a single encoding");
   Attribute srcEncoding = getEncodingBeforeRewrite(src);
   Attribute targetEncoding = info.encodings[0];
+  // The caller then converts src back to srcEncoding.
+  if (keepsStoreLayout(storeOp, targetEncoding))
+    return false;
 
   if (auto convertOp = src.getDefiningOp<ttg::ConvertLayoutOp>()) {
     Attribute convertSrcEncoding = getEncodingBeforeRewrite(convertOp.getSrc());
@@ -1636,7 +1649,8 @@ void LayoutRematerialization::forwardPropagateRemat(
       } else if (auto descStore = dyn_cast<tt::DescriptorStoreOp>(&op)) {
         // Only need to deal with the store value
         Value operand = descStore.getSrc();
-        if (!valuesToPropagate.contains(operand))
+        if (!valuesToPropagate.contains(operand) ||
+            keepsStoreLayout(descStore, valuesToPropagate[operand]))
           continue;
         Value newOperand = getRematValue(operand, valuesToPropagate[operand]);
         if (!newOperand || !domInfo.properlyDominates(newOperand, descStore)) {

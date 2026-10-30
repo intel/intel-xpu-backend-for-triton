@@ -64,6 +64,31 @@ static DescriptorFields unpackDescriptor(Value llDesc, unsigned rank,
   return f;
 }
 
+/// Signed `0 <= index < shape` for a descriptor index folded into the base
+/// pointer, which the 2D block message's base_width x base_height clamp misses.
+/// Signed because nothing verifies a descriptor extent is non-negative. A shape
+/// wider than the i32 index is truncated.
+static Value emitInDescBounds(TritonLLVMOpBuilder &b, Value index,
+                              Value shape) {
+  if (shape.getType().getIntOrFloatBitWidth() > 32)
+    shape = b.trunc(b.builder->getI32Type(), shape);
+  Value isNonNegative = b.icmp_sge(index, b.i32_val(0));
+  Value isBelowShape = b.icmp_slt(index, shape);
+  return b.and_(isNonNegative, isBelowShape);
+}
+
+/// The AND of emitInDescBounds over the first `numDropped` dimensions; null
+/// when there are none.
+static Value emitDroppedDimsInBoundsPred(TritonLLVMOpBuilder &b,
+                                         ValueRange indices, ValueRange shapes,
+                                         unsigned numDropped) {
+  Value pred;
+  for (unsigned d = 0; d < numDropped; ++d)
+    pred = maybeAnd(*b.builder, b.loc, pred,
+                    emitInDescBounds(b, indices[d], shapes[d]));
+  return pred;
+}
+
 /// Verify that a rank-reducing tensor descriptor load/store is
 /// shape-compatible.
 ///
@@ -227,8 +252,11 @@ struct LoadStoreConversionBase {
     AxisInfo *descAxisInfo =
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
             .getAxisInfo(desc);
-    if (!descAxisInfo || static_cast<unsigned>(descAxisInfo->getRank()) != rank)
+    if (!descAxisInfo || static_cast<unsigned>(descAxisInfo->getRank()) < rank)
       return 1;
+    // The AxisInfo has the block rank, and a rank-reducing access drops leading
+    // unit dims, so value dim `d` is descriptor dim `d + rankDelta`.
+    const unsigned rankDelta = descAxisInfo->getRank() - rank;
 
     auto linAttr = triton::gpu::toGenericLinearEncoding(resultType);
     SmallVector<unsigned> order = linAttr.getOrder();
@@ -246,6 +274,7 @@ struct LoadStoreConversionBase {
         descDim = (order[0] == rank - 2) ? rank - 1 : rank - 2;
       }
     }
+    descDim += rankDelta;
 
     unsigned descContiguity = descAxisInfo->getContiguity(descDim);
     if (descContiguity <= 1)
@@ -3364,9 +3393,31 @@ struct DescriptorStoreOpToBlockIOConversion
 
     unsigned numElems = getTotalElemsPerThread(tensorType);
 
+    // Each leading index selects a 2D plane: fold it into the base, as
+    // LowerTo2DBlockLoad does for loads, and bounds-check it in the predicate.
+    ValueRange leadingIndices = adaptor.getIndices().take_front(rankDelta);
+    // A 2D block store needs the 4-byte-aligned base MaterializeBlockPointer
+    // proves for the descriptor, and rebasing by a 4-byte multiple keeps it.
+    // Its tag vouches for runtime strides, so only folded ones are checked.
+    const int64_t elemBytes = elemSizeInBits / 8;
+    for (auto [index, stride] : llvm::zip(leadingIndices, desc.strides)) {
+      std::optional<int64_t> folded =
+          triton::intel::getFoldedConstantValue(stride);
+      int64_t strideBytes;
+      if (folded && !triton::intel::isConstant(index, 0) &&
+          (llvm::MulOverflow(*folded, elemBytes, strideBytes) ||
+           strideBytes % 4 != 0))
+        return failure();
+    }
+    Value base = desc.base;
+    for (auto [index, stride] : llvm::zip(leadingIndices, desc.strides)) {
+      Value offset = b.mul(b.sext(i64_ty, index), stride);
+      base = b.gep(ptr_ty(ctx, 1), eltTy, base, offset);
+    }
+
     // The base pointer is uniform across all elements (unlike tensor-of-
     // pointers where each element may have a different pointer).
-    SmallVector<Value> ptrElems(numElems, desc.base);
+    SmallVector<Value> ptrElems(numElems, base);
 
     // --- Shapes (base width / height for 2D block IO payload) ---
     // TensorDesc carries shape as i64 values. The 2D block IO payload
@@ -3411,6 +3462,9 @@ struct DescriptorStoreOpToBlockIOConversion
         getFreeVariableMasks(tensorType);
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    threadPred = maybeAnd(
+        rewriter, loc, threadPred,
+        emitDroppedDimsInBoundsPred(b, leadingIndices, desc.shapes, rankDelta));
 
     unsigned threadsPerWarp =
         TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
@@ -4704,23 +4758,11 @@ struct Subgroup2DBlockLoadOpConversion
     // `rankDelta + d` corresponds to result batch dimension `d`.
     unsigned rankDelta = batchOffsets.size() - batchStrides.size();
 
-    // A batch index is folded into the base pointer, so it escapes the
-    // hardware's base_width x base_height clamp and needs an explicit check.
-    // Both compares are signed: nothing verifies that a descriptor extent is
-    // non-negative, and a lone `icmp ult` would take one as a huge bound.
-    auto inDescBounds = [&](Value index, Value shape) -> Value {
-      Value isNonNegative = b.icmp_sge(index, b.i32_val(0));
-      Value isBelowShape = b.icmp_slt(index, shape);
-      return b.and_(isNonNegative, isBelowShape);
-    };
-
     // Dropped dimensions are not spanned by the result layout, so their bounds
     // check is the same for every sub-tile. Emit it once here rather than
     // rebuilding it inside `computeAddress`.
-    Value droppedDimPred;
-    for (unsigned d = 0; d < rankDelta; ++d)
-      droppedDimPred = maybeAnd(rewriter, loc, droppedDimPred,
-                                inDescBounds(batchOffsets[d], batchShapes[d]));
+    Value droppedDimPred =
+        emitDroppedDimsInBoundsPred(b, batchOffsets, batchShapes, rankDelta);
 
     // Build NaN masks if pad_nan is set.
     SmallVector<Value> nanMaskElems;
@@ -4788,7 +4830,7 @@ struct Subgroup2DBlockLoadOpConversion
           unsigned descDim = dim + rankDelta;
           Value index = b.add(batchOffsets[descDim], adjustedOffset);
           pred = maybeAnd(rewriter, loc, pred,
-                          inDescBounds(index, batchShapes[descDim]));
+                          emitInDescBounds(b, index, batchShapes[descDim]));
         }
       }
       return {addrElem, offsetX, offsetY, baseWidth, baseHeight, pred};
