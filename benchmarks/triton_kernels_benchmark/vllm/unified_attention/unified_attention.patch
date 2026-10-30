@@ -38,7 +38,7 @@ index b50e97b52b..24d2948407 100644
  
      ref_output = ref_paged_attn(
 diff --git a/vllm/v1/attention/ops/triton_attention_helpers.py b/vllm/v1/attention/ops/triton_attention_helpers.py
-index f2399b7423..930eccc825 100644
+index f2399b7423..1f194f521a 100644
 --- a/vllm/v1/attention/ops/triton_attention_helpers.py
 +++ b/vllm/v1/attention/ops/triton_attention_helpers.py
 @@ -68,7 +68,7 @@ def resolve_seq_and_query_len(
@@ -71,8 +71,15 @@ index f2399b7423..930eccc825 100644
      left: tl.int32 = 0
      right = num_seqs
      while left < right:
+@@ -480,5 +484,5 @@ def softmax_step(S, M, L):
+     # alpha : (BLOCK_M, )
+     alpha = tl.exp(M - safe_m_j)
+     # update constants
+-    L_new = L * alpha + l_j
++    L_new = tl.fma(L, alpha, l_j)
+     return m_j, L_new, P, alpha
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index d914e574f2..d97bd27b96 100644
+index d914e574f2..9f710fae28 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -174,9 +181,9 @@ index d914e574f2..d97bd27b96 100644
 +            if USE_PER_TOKEN_HEAD_SCALES:
 +                # Per-token-head quant: fuse softmax_scale with per-head k_scale
 +                # to avoid a separate BLOCK_M × TILE_SIZE multiply on S.
-+                S += tl.dot(Q, K) * (score_scale * k_token_head_scales[None, :])
++                S = tl.fma(tl.dot(Q, K), score_scale * k_token_head_scales[None, :], S)
 +            else:
-+                S += score_scale * tl.dot(Q, K)
++                S = tl.fma(score_scale, tl.dot(Q, K), S)
          else:
 -            S += score_scale * tl.dot(Q, K)
 +            Q_scaled = (Q * score_scale).to(Q.dtype)
@@ -188,10 +195,12 @@ index d914e574f2..d97bd27b96 100644
  
          if USE_SOFTCAP:
              S = apply_softcap(S, softcap)
-@@ -568,25 +638,12 @@ def kernel_unified_attention(
-         M, L, P, alpha = softmax_step(S, M, L)
-         acc = acc * alpha[:, None]
+@@ -566,27 +636,15 @@ def kernel_unified_attention(
+             )
  
+         M, L, P, alpha = softmax_step(S, M, L)
+-        acc = acc * alpha[:, None]
+-
 -        if SLIDING_WINDOW:
 -            qpos_lo = q_block_local_idx * BLOCK_Q
 -            dist = context_len + qpos_lo - seq_offset[:, None]
@@ -207,6 +216,9 @@ index d914e574f2..d97bd27b96 100644
 -            else:
 -                sw_mask_v = (dist < SLIDING_WINDOW) & (dist > -SLIDING_WINDOW)
 -            V = tl.where(sw_mask_v, V, 0.0)
++        if USE_PER_TOKEN_HEAD_SCALES or not V.dtype.is_fp8():
++            acc = acc * alpha[:, None]
++
 +        # In the upstream there is an additional zeroing of V for tokens outside of the sliding window which is redundant.
 +        # Adding it decreases performance for sliding window case
          if USE_PER_TOKEN_HEAD_SCALES:
@@ -217,7 +229,19 @@ index d914e574f2..d97bd27b96 100644
          else:
              # Keep softmax weights representable when the P @ V dot uses FP8
              # tensor cores. Undo the power-of-two scale after the dot.
-@@ -728,7 +785,7 @@ def reduce_segments(
+@@ -596,7 +654,10 @@ def kernel_unified_attention(
+                 p_scale = 128.0
+             else:
+                 p_scale = 1.0
+-            acc += tl.dot((P * p_scale).to(V.dtype), V) / p_scale
++            if V.dtype.is_fp8():
++                acc = tl.fma(acc, alpha[:, None], tl.dot((P * p_scale).to(V.dtype), V) * (1.0 / p_scale))
++            else:
++                acc += tl.dot((P * p_scale).to(V.dtype), V) / p_scale
+ 
+     # ---- Epilogue ---------------------------------------------------------
+     if IS_3D:
+@@ -728,7 +789,7 @@ def reduce_segments(
          return
  
      seq_idx = find_seq_idx(
@@ -226,7 +250,7 @@ index d914e574f2..d97bd27b96 100644
      )
  
      # sequence len for this particular sequence
-@@ -980,17 +1037,6 @@ def unified_attention(
+@@ -980,17 +1041,6 @@ def unified_attention(
          launch_num_warps = 8
          launch_num_stages = 2
  
@@ -244,7 +268,7 @@ index d914e574f2..d97bd27b96 100644
      sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
  
      # Compute chunked block size from sliding window if needed.
-@@ -1001,12 +1047,16 @@ def unified_attention(
+@@ -1001,12 +1051,16 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -267,7 +291,7 @@ index d914e574f2..d97bd27b96 100644
  
      # Wider KV tile for the tuned large-head path (see above). Only the 2D
      # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
-@@ -1085,6 +1135,8 @@ def unified_attention(
+@@ -1085,6 +1139,8 @@ def unified_attention(
          )
          or num_seqs * triton.cdiv(max_seqlen_q, BLOCK_Q) > seq_threshold_3D
          or is_batch_invariant
@@ -276,7 +300,7 @@ index d914e574f2..d97bd27b96 100644
      )
      if use_3d and softmax_segm_max.shape[0] < q.shape[0]:
          logger.debug_once("Split-K scratch rows < query tokens; using 2D.")
-@@ -1114,12 +1166,28 @@ def unified_attention(
+@@ -1114,12 +1170,28 @@ def unified_attention(
      segm_expsum_ptr = softmax_segm_expsum if use_3d else None
      num_segments = num_par_softmax_segments if use_3d else 1
  
@@ -308,7 +332,7 @@ index d914e574f2..d97bd27b96 100644
          tile_size = TILE_SIZE_DECODE
  
      launch_kwargs: dict[str, int] = {}
-@@ -1191,9 +1259,7 @@ def unified_attention(
+@@ -1191,9 +1263,7 @@ def unified_attention(
          stride_vs_slot=vs_slot,
          stride_vs_head=vs_head,
          query_start_len_ptr=cu_seqlens_q,

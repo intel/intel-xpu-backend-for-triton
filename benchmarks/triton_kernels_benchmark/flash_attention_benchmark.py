@@ -45,12 +45,12 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         qk = tl.dot(q, k)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
+            qk = tl.fma(qk, qk_scale, tl.where(mask, 0, -1.0e6))
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_ij[:, None]
         else:
             m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
-            qk = qk * qk_scale - m_ij[:, None]
+            qk = tl.fma(qk, qk_scale, -m_ij[:, None])
         p = tl.math.exp2(qk)
         # -- compute correction factor
         alpha = tl.math.exp2(m_i - m_ij)
@@ -67,7 +67,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         acc = tl.dot(p, v, acc)
         # update m_i and l_i
         # place this at the end of the loop to reduce register pressure
-        l_i = l_i * alpha + l_ij
+        l_i = tl.fma(l_i, alpha, l_ij)
         m_i = m_ij
         offsetk_y += BLOCK_N
         offsetv_y += BLOCK_N

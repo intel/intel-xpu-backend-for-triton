@@ -568,7 +568,7 @@ class runtime_knobs(base_knobs):
 class language_knobs(base_knobs):
     fp32_default: env_opt_str = env_opt_str("TRITON_F32_DEFAULT")
     default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", True)
-    allow_fp_fusion: env_bool = env_bool("TRITON_ALLOW_FP_FUSION", True)
+    allow_fp_fusion: env_bool = env_bool("TRITON_ALLOW_FP_FUSION", False)
 
     def fp_fusion_enabled(self, requested: Optional[bool]) -> bool:
         return self.allow_fp_fusion and (self.default_fp_fusion if requested is None else requested)
