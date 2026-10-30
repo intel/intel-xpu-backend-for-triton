@@ -713,6 +713,8 @@ class XPULauncher(object):
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
+        # 0 (also for metadata cached before this field existed) means no limit.
+        self.max_grid_dim = getattr(metadata, "max_grid_dim", 0)
 
     def _resolve_dump_dir(self, cache_dir):
         dump_dir_root = knobs.intel.dump_kernel_args_dir
@@ -762,6 +764,10 @@ class XPULauncher(object):
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
+        if self.max_grid_dim and max(gridX, gridY, gridZ) > self.max_grid_dim:
+            raise RuntimeError(f"Grid {(gridX, gridY, gridZ)} exceeds {self.max_grid_dim} programs per axis, which the "
+                               "descriptor-load relayout (TRITON_INTEL_DESCRIPTOR_BLOCK_IO_RELAYOUT) assumed when it "
+                               "compiled this kernel. Unset the knob to launch a grid this large.")
         active_driver = triton.runtime.driver.active
 
         def allocate_scratch(size, align, allocator):

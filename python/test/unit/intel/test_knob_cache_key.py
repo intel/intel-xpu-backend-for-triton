@@ -43,6 +43,7 @@ from triton.runtime.cache import get_cache_key
 # kernel from somewhere `XPUOptions` does not reach: a pass that runs or does
 # not run, an IGC build flag, the `ocloc -device` target.
 INVALIDATING_KNOBS = {
+    "descriptor_block_io_relayout",
     "device_arch",
     "disable_annotate_cache_control",
     "disable_canonicalize_pointers",
