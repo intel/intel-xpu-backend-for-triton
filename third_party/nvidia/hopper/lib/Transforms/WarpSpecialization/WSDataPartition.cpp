@@ -156,13 +156,13 @@ struct DataPartitionScheme {
       }
       assert(opPartitionDims.contains(op) && "missing partition dim");
       LDBG(" dim " << opPartitionDims.at(op) << " " << operand);
-      op->dump();
+      op->print(llvm::errs());
     }
     LDBG("\n");
     if (!rematerializedOps.empty()) {
       LDBG(" ops to rematerialize\n");
       for (auto &op : rematerializedOps) {
-        op.first->dump();
+        op.first->print(llvm::errs());
         LDBG(" along dim ");
         for (auto &dim : op.second) {
           LDBG(dim << " ");
@@ -174,7 +174,7 @@ struct DataPartitionScheme {
     if (!opsToSkip.empty()) {
       LDBG(" ops to skip\n");
       for (auto &op : opsToSkip)
-        op->dump();
+        op->print(llvm::errs());
       LDBG("\n");
     }
 
