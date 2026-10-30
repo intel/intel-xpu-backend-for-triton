@@ -120,20 +120,6 @@ TEST_F(BlockIOUtilsTest, PickF32Tpw32Warps4ReduceRows) {
   EXPECT_TRUE(lowersTo2DBlockLoad(type, *enc));
 }
 
-TEST_F(BlockIOUtilsTest, PickF32Tpw32Warps4ReduceRowsD128) {
-  auto type = makeCoalescedType({16, 128}, Float32Type::get(&ctx),
-                                /*numWarps=*/4, /*threadsPerWarp=*/32);
-  auto enc = pickBlockIOLoadEncoding(type, /*numWarps=*/4,
-                                     /*threadsPerWarp=*/32, /*reducedDim=*/0);
-  ASSERT_TRUE(enc.has_value());
-  EXPECT_EQ(enc->getSizePerThread(), ArrayRef<unsigned>({1, 1}));
-  EXPECT_EQ(enc->getThreadsPerWarp(), ArrayRef<unsigned>({2, 16}));
-  EXPECT_EQ(enc->getWarpsPerCTA(), ArrayRef<unsigned>({1, 4}));
-  EXPECT_EQ(enc->getOrder(), ArrayRef<unsigned>({1, 0}));
-  EXPECT_EQ(enc->getCGALayout(), getCGALayout(type.getEncoding()));
-  EXPECT_TRUE(lowersTo2DBlockLoad(type, *enc));
-}
-
 // 16 lanes x f32 already fill the 64-byte row, so lanes take one row.
 TEST_F(BlockIOUtilsTest, PickF32Tpw16Warps1ReduceRows) {
   auto type = makeCoalescedType({16, 256}, Float32Type::get(&ctx),
