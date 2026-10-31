@@ -358,7 +358,7 @@ jobs:
           fi
 
           cd python/triton_kernels
-          pytest -p triton._compile_warmup -s --tb=short --import-mode=importlib --warmup-only \
+          pytest -p triton._compile_warmup -s --tb=short --warmup-only \
             --warmup-workers "$(( $(nproc) < ${WARMUP_MAX_PROCS:-16} ? $(nproc) : ${WARMUP_MAX_PROCS:-16} ))" \
             --device xpu "${skip_args[@]}" tests -k 'not test_mxfp'
 

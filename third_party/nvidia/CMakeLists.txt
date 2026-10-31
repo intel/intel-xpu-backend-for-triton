@@ -10,6 +10,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
       "${triton_SOURCE_DIR}/python/triton/experimental/gsan/src/Hash.cuh")
     set(GSAN_RUNTIME_IR "${CMAKE_CURRENT_SOURCE_DIR}/backend/lib/gsan.ll")
 
+    if(DEFINED TRITON_GSAN_CLANGXX AND NOT EXISTS "${TRITON_GSAN_CLANGXX}")
+      unset(TRITON_GSAN_CLANGXX CACHE)
+    endif()
     find_program(TRITON_GSAN_CLANGXX NAMES clang++
                  PATHS "${LLVM_SYSPATH}/bin"
                  REQUIRED NO_DEFAULT_PATH)
