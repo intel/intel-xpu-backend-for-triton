@@ -3,6 +3,24 @@
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrInterfaces.td"
 
+// Set bits select lane, warp, and CTA coordinates that must be zero.
+def ThreadDomainAttr : TritonGPU_Attr<"ThreadDomain", "thread_domain"> {
+  let mnemonic = "thread_domain";
+  let parameters = (ins "uint32_t":$lane, "uint32_t":$warp,
+                        DefaultValuedParameter<"uint32_t", "0">:$block);
+  let assemblyFormat = "`<` $lane `,` $warp (`,` $block^)? `>`";
+  let extraClassDeclaration = [{
+    bool isFull() const { return !(getLane() | getWarp() | getBlock()); }
+    bool hasSameWarpAndBlock(ThreadDomainAttr other) const {
+      return getWarp() == other.getWarp() && getBlock() == other.getBlock();
+    }
+    bool hasMasksWithin(uint32_t lane, uint32_t warp, uint32_t block) const {
+      return !(getLane() & ~lane) && !(getWarp() & ~warp) &&
+             !(getBlock() & ~block);
+    }
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
@@ -186,7 +204,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
                      "ArrayRef<unsigned>":$order,
                      "CGAEncodingAttr":$CGALayout,
                      "Type":$eltTy), [{
-      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      unsigned bitwidth = ::mlir::getIntOrFloatOrPtrBitWidth(eltTy);
       return get(context, dotOpEnc, shape, order, CGALayout, bitwidth);
     }]>,
 
@@ -196,7 +214,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
                      "CGAEncodingAttr":$CGALayout,
                      "Type":$eltTy,
                      "bool":$needTrans), [{
-      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      unsigned bitwidth = ::mlir::getIntOrFloatOrPtrBitWidth(eltTy);
       return get(context, dotOpEnc, shape, order, CGALayout, bitwidth, needTrans);
     }]>,
   ];
@@ -465,7 +483,7 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
                      "CGAEncodingAttr":$CGALayout,
                      "Type":$eltTy,
                      "bool": $fp4Padded), [{
-        unsigned eleBitWidth = eltTy.getIntOrFloatBitWidth();
+        unsigned eleBitWidth = ::mlir::getIntOrFloatOrPtrBitWidth(eltTy);
         unsigned swizzlingByteWidth = getDefaultSwizzlingByteWidth(
             shape, order, CGALayout, eleBitWidth, fp4Padded);
         bool transposed = order.size() > 1 && order[0] == 0;
@@ -1446,7 +1464,7 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
       if (!parentAttr || (!parentAttr.isAmpere() && !parentAttr.isHopper()))
         return $_get(context, opIdx, parent, 0);
       // For MMAV2 and V3
-      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      unsigned bitwidth = ::mlir::getIntOrFloatOrPtrBitWidth(eltTy);
       unsigned kWidth = std::max(32 / bitwidth, 1u);
       return $_get(context, opIdx, parent, kWidth);
     }]>

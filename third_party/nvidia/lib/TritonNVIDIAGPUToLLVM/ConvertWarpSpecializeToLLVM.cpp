@@ -81,7 +81,10 @@ public:
     if (numThreads == 32) {
       LLVM::NVIDIA::createSyncWarp(b.getLoc(), b);
     } else {
-      NVVM::BarrierOp::create(b, b.getLoc(), handle, b.i32_val(numThreads));
+      // Only this warp partition participates, so the barrier is not
+      // CTA-aligned.
+      NVVM::BarrierOp::create(b, b.getLoc(), handle, b.i32_val(numThreads),
+                              /*aligned=*/false);
     }
   }
 
@@ -103,6 +106,12 @@ static void rewriteWarpSpecializeWarpIdsOnce(ModuleOp mod) {
 
     auto loc = op.getLoc();
     TritonLLVMIRRewriter b(loc, op);
+
+    // If the partition has only one warp, the relative warp ID is always 0.
+    if (lookupNumWarps(op) == 1) {
+      b.replaceOp(op, b.i32_val(0));
+      continue;
+    }
 
     // Keep `ttg.warp_id` for NVGPUToLLVM and only make it relative here.
     Value absWarpId =

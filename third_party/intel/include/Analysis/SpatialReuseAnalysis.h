@@ -21,7 +21,7 @@ namespace mlir::triton::gpu::intel {
 /// Mechanically: in the tensor's LinearLayout, an output dim is
 /// "warp-invariant" iff every basis vector for the "warp" input dim is
 /// zero on that output dim (changing the warp id does not change the
-/// coordinate).
+/// coordinate), except for single-warp layouts (invariant 3 below).
 ///
 /// Example: a DPAS dot-operand-A layout with warpsPerCTA = [4, 1]:
 ///   - warps tile the M dimension (dim 0) → different warps access
@@ -41,12 +41,16 @@ namespace mlir::triton::gpu::intel {
 ///   2. Conservative default: returns the full set {0, ..., rank-1} on
 ///      non-encoded, non-power-of-2, or layouts lacking a "warp" in-dim
 ///      (assume sharing on every axis when we cannot prove otherwise).
+///   3. Single-warp exception: a layout with a single warp reports no
+///      warp-invariant dims. There is no other subgroup to share with, even
+///      though every axis is trivially unaffected by the only warp id.
 class SpatialReuseAnalysis {
 public:
   explicit SpatialReuseAnalysis(ModuleOp module) : ctx(module.getContext()) {}
 
   /// Primary structural query: indices of output dims with zero warp
-  /// basis. Empty result means warps strictly partition every axis.
+  /// basis, subject to the single-warp exception (invariant 3). An empty
+  /// result means no axis is shared by every warp.
   SmallVector<unsigned> getWarpInvariantOutDims(RankedTensorType ty) const;
 
   /// Policy wrapper: any cross-subgroup reuse at all?

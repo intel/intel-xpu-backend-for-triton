@@ -603,7 +603,7 @@ install_deps() {
     pip install -r "$SCRIPTS_DIR/requirements-test.txt"
 
     if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
-      pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+      pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@c7c4c74fb8342c3df9d2d7693cf0a426c7736ecd
     fi
   fi
 
@@ -1313,7 +1313,6 @@ run_vllm_triton_attn_tests() {
       tests/kernels/attention/test_triton_decode_attention.py \
       tests/kernels/attention/test_triton_unified_attention.py \
       tests/kernels/attention/test_triton_prefill_attention.py \
-      tests/kernels/attention/test_cascade_flash_attn.py \
       tests/kernels/attention/test_pack_unpack_triton.py \
       tests/kernels/attention/test_flashmla_sparse.py \
       tests/kernels/attention/test_xpu_mla_sparse.py \

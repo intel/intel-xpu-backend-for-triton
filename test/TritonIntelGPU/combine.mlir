@@ -80,6 +80,26 @@ tt.func @remat_fast_load(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   tt.return
 }
 
+// Do not duplicate a volatile load that is used in two layouts
+// CHECK-LABEL: no_remat_volatile_load
+tt.func @no_remat_volatile_load(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+  %0 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<16x!tt.ptr<i32>, #layout1>
+  %1 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #layout1>
+  %2 = tt.addptr %0, %1 : tensor<16x!tt.ptr<i32>, #layout1>, tensor<16xi32, #layout1>
+  // CHECK: %[[LOAD:.+]] = tt.load {{.*}}{isVolatile = true}
+  // CHECK-NEXT: ttg.convert_layout %[[LOAD]]
+  // CHECK-NOT: tt.load
+  // CHECK: tt.return
+  %3 = tt.load %2 {isVolatile = true} : tensor<16x!tt.ptr<i32>, #layout1>
+  %4 = ttg.convert_layout %3 : tensor<16xi32, #layout1> -> tensor<16xi32, #layout0>
+  %5 = tt.splat %arg1 : !tt.ptr<i32> -> tensor<16x!tt.ptr<i32>, #layout1>
+  %6 = tt.addptr %5, %1 : tensor<16x!tt.ptr<i32>, #layout1>, tensor<16xi32, #layout1>
+  %7 = ttg.convert_layout %6 : tensor<16x!tt.ptr<i32>, #layout1> -> tensor<16x!tt.ptr<i32>, #layout0>
+  tt.store %7, %4 : tensor<16x!tt.ptr<i32>, #layout0>
+  tt.store %6, %3 : tensor<16x!tt.ptr<i32>, #layout1>
+  tt.return
+}
+
 // Hoist the convert on top of ext to make it cheaper.
 // CHECK-LABEL: hoist_above_ext
 tt.func @hoist_above_ext(%arg0: tensor<1024xf16, #layout0>, %arg1: f32) -> tensor<1024xf32, #layout1> {
@@ -3626,5 +3646,73 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       tt.store %ptr, %cv : tensor<2x2x!tt.ptr<i32>, #src>
     }
     tt.return
+  }
+}
+
+// -----
+
+// A volatile load needed in two layouts must not be duplicated.
+
+#layout0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#layout1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#layout2 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @no_remat_volatile_load_two_layouts
+  // CHECK: %[[LOAD:.+]] = tt.load {{.*}}{isVolatile = true}
+  // CHECK-NOT: tt.load
+  // CHECK: ttg.convert_layout %[[LOAD]]
+  // CHECK: ttg.convert_layout %[[LOAD]]
+  // CHECK-NOT: tt.load
+  tt.func @no_remat_volatile_load_two_layouts(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) -> (tensor<16xi32, #layout0>, tensor<16xi32, #layout2>) {
+    %0 = tt.splat %arg : !tt.ptr<i32> -> tensor<16x!tt.ptr<i32>, #layout1>
+    %1 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #layout1>
+    %2 = tt.addptr %0, %1 : tensor<16x!tt.ptr<i32>, #layout1>, tensor<16xi32, #layout1>
+    %3 = tt.load %2 {isVolatile = true} : tensor<16x!tt.ptr<i32>, #layout1>
+    %4 = ttg.convert_layout %3 : tensor<16xi32, #layout1> -> tensor<16xi32, #layout0>
+    %5 = ttg.convert_layout %3 : tensor<16xi32, #layout1> -> tensor<16xi32, #layout2>
+    tt.return %4, %5 : tensor<16xi32, #layout0>, tensor<16xi32, #layout2>
+  }
+}
+
+// -----
+
+// An expensive load feeding a convert and a shape-op chain is cloned into the
+// slice layout; a volatile one must not be, or the original is read as well.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // Control: the non-volatile load is rematerialized into the slice layout.
+  // CHECK-LABEL: @expensive_load_rematerialized_into_slice
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.load {{.*}}#ttg.slice
+  tt.func @expensive_load_rematerialized_into_slice(%arg: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<4x1024xf16, #blocked> {
+    %0 = tt.splat %arg : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1>
+    %1 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked1>
+    %2 = tt.addptr %0, %1 : tensor<1024x!tt.ptr<f16>, #blocked1>, tensor<1024xi32, #blocked1>
+    %3 = tt.load %2 : tensor<1024x!tt.ptr<f16>, #blocked1>
+    %4 = ttg.convert_layout %3 : tensor<1024xf16, #blocked1> -> tensor<1024xf16, #ttg.slice<{dim = 1, parent = #blocked2}>>
+    %5 = tt.expand_dims %4 {axis = 1 : i32} : tensor<1024xf16, #ttg.slice<{dim = 1, parent = #blocked2}>> -> tensor<1024x1xf16, #blocked2>
+    %6 = tt.trans %5 {order = array<i32: 1, 0>} : tensor<1024x1xf16, #blocked2> -> tensor<1x1024xf16, #blocked>
+    %7 = tt.broadcast %6 : tensor<1x1024xf16, #blocked> -> tensor<4x1024xf16, #blocked>
+    tt.return %7 : tensor<4x1024xf16, #blocked>
+  }
+
+  // CHECK-LABEL: @no_remat_expensive_volatile_load
+  // CHECK: %[[LOAD:.+]] = tt.load {{.*}}{isVolatile = true}
+  // CHECK-NOT: tt.load
+  // CHECK: ttg.convert_layout %[[LOAD]]
+  // CHECK-NOT: tt.load
+  tt.func @no_remat_expensive_volatile_load(%arg: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<4x1024xf16, #blocked> {
+    %0 = tt.splat %arg : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1>
+    %1 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked1>
+    %2 = tt.addptr %0, %1 : tensor<1024x!tt.ptr<f16>, #blocked1>, tensor<1024xi32, #blocked1>
+    %3 = tt.load %2 {isVolatile = true} : tensor<1024x!tt.ptr<f16>, #blocked1>
+    %4 = ttg.convert_layout %3 : tensor<1024xf16, #blocked1> -> tensor<1024xf16, #ttg.slice<{dim = 1, parent = #blocked2}>>
+    %5 = tt.expand_dims %4 {axis = 1 : i32} : tensor<1024xf16, #ttg.slice<{dim = 1, parent = #blocked2}>> -> tensor<1024x1xf16, #blocked2>
+    %6 = tt.trans %5 {order = array<i32: 1, 0>} : tensor<1024x1xf16, #blocked2> -> tensor<1x1024xf16, #blocked>
+    %7 = tt.broadcast %6 : tensor<1x1024xf16, #blocked> -> tensor<4x1024xf16, #blocked>
+    tt.return %7 : tensor<4x1024xf16, #blocked>
   }
 }

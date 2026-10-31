@@ -86,6 +86,44 @@ TEST_F(SpatialReuseAnalysisTest, BlockedWarpsPartition) {
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
 
+TEST_F(SpatialReuseAnalysisTest, SingleWarp_NoCrossSubgroupReuse) {
+  // With a single warp the "warp" in-dim has no bases, so every axis is
+  // trivially warp-invariant. There is no other subgroup to share cache lines
+  // with, so this must not be reported as cross-subgroup reuse.
+  SmallVector<unsigned> sizePerThread = {2};
+  SmallVector<unsigned> threadsPerWarp = {32};
+  SmallVector<unsigned> warpsPerCTA = {1};
+  SmallVector<unsigned> order = {0};
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, /*rank=*/1);
+  auto blocked = BlockedEncodingAttr::get(&ctx, sizePerThread, threadsPerWarp,
+                                          warpsPerCTA, order, cgaLayout);
+  auto ty = RankedTensorType::get({64}, builder->getF32Type(), blocked);
+
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
+  EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), IsEmpty());
+  EXPECT_FALSE(analysis.hasCrossSubgroupReuse(ty));
+  EXPECT_FALSE(analysis.knownCrossSubgroupReuse(ty));
+  std::optional<unsigned> factor = analysis.knownWarpBroadcastFactor(ty);
+  ASSERT_TRUE(factor.has_value());
+  EXPECT_EQ(*factor, 1u);
+}
+
+TEST_F(SpatialReuseAnalysisTest, SingleWarp_DotOperandNoCrossSubgroupReuse) {
+  // The single-warp rule is layout-independent: a single-warp DPAS dot
+  // operand has no other warp to share its tile with either.
+  DpasEncodingAttr dpas = makeDpas(/*warps=*/{1, 1});
+  auto dotOpEnc =
+      DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
+  auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
+
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
+  EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), IsEmpty());
+  EXPECT_FALSE(analysis.hasCrossSubgroupReuse(ty));
+  EXPECT_FALSE(analysis.knownCrossSubgroupReuse(ty));
+}
+
 TEST_F(SpatialReuseAnalysisTest, DotOperandDpasOpA) {
   // DotOperand{Dpas, opIdx=0}: K (dim 1) is warp-broadcast, M (dim 0)
   // is warp-partitioned. See DPAStoLinearLayout:396-397.
@@ -258,15 +296,15 @@ TEST_F(SpatialReuseAnalysisTest, Known_NoWarpInDim_ReturnsNullopt) {
   // This shape actually has a warp in-dim (cgaLayout guarantees it), so the
   // fallback is shape-based. To truly test no-warp-in-dim we'd need an
   // encoding without CGA. Instead, verify the behavior: with warpsPerCTA=[1,1]
-  // every dim is warp-invariant (full coverage). The known accessor should
-  // return that honestly, not nullopt, because the layout WAS inspected.
+  // a single warp shares nothing, so the known accessor returns an empty set,
+  // not nullopt, because the layout WAS inspected.
   // Revise: this is NOT the no-warp-in-dim case. Skip explicit test for now;
   // the API doc states "no warp in-dim -> nullopt" is handled in the impl.
   // Leave the test as a placeholder.
   std::optional<SmallVector<unsigned>> dims =
       analysis.knownWarpInvariantOutDims(ty);
   ASSERT_TRUE(dims.has_value());
-  EXPECT_THAT(*dims, ElementsAre(0u, 1u));
+  EXPECT_THAT(*dims, IsEmpty());
 }
 
 TEST_F(SpatialReuseAnalysisTest, Known_BlockedWarpsPartition_ReturnsAxes) {
@@ -309,19 +347,19 @@ TEST_F(SpatialReuseAnalysisTest, Known_DotOperandDpasOpA_ReturnsAxes) {
 }
 
 TEST_F(SpatialReuseAnalysisTest, Known_FullCoverageEveryAxis) {
-  // Rank-3 tensor with warpsPerCTA=[1,1,1] (every axis warp-invariant).
-  // Existing accessor returns {0,1,2} via fallback when warpsPerCTA==1.
-  // Known accessor should ALSO return {0,1,2} but via inspection (not
-  // fallback). This distinguishes "known on every axis" from "fallback to full
-  // axes".
+  // Rank-3 tensor whose 4 warps all broadcast: the tensor is too small along
+  // dim 2 for warpsPerCTA=[1,1,4], so every warp basis is zero and every axis
+  // is warp-invariant. The known accessor should return {0,1,2} via
+  // inspection (not fallback). This distinguishes "known on every axis" from
+  // "fallback to full axes".
   SmallVector<unsigned> sizePerThread = {1, 1, 1};
   SmallVector<unsigned> threadsPerWarp = {1, 1, 32};
-  SmallVector<unsigned> warpsPerCTA = {1, 1, 1};
+  SmallVector<unsigned> warpsPerCTA = {1, 1, 4};
   SmallVector<unsigned> order = {2, 1, 0};
   auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, /*rank=*/3);
   auto blocked3D = BlockedEncodingAttr::get(&ctx, sizePerThread, threadsPerWarp,
                                             warpsPerCTA, order, cgaLayout);
-  auto ty = RankedTensorType::get({8, 8, 8}, builder->getF32Type(), blocked3D);
+  auto ty = RankedTensorType::get({8, 8, 32}, builder->getF32Type(), blocked3D);
 
   OwningOpRef<ModuleOp> module = buildModule();
   SpatialReuseAnalysis analysis(*module);

@@ -30,6 +30,7 @@
 #include "triton/Tools/Sys/GetEnv.h"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
@@ -40,7 +41,8 @@
 namespace py = nanobind;
 
 namespace llvm {
-struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
+struct BreakStructPhiNodesPass
+    : OptionalPassInfoMixin<BreakStructPhiNodesPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
   static StringRef name() { return "BreakStructPhiNodesPass"; }
 };
@@ -290,11 +292,11 @@ void init_triton_intel(py::module_ &m) {
         } else if (pyCb) {
           instrCbPtr = &passInstrCb;
           passInstrCb.registerBeforeNonSkippedPassCallback(
-              [&passStartTimes](llvm::StringRef id, llvm::Any) {
+              [&passStartTimes](llvm::StringRef id, llvm::IRUnitRef) {
                 passStartTimes[id] = std::chrono::high_resolution_clock::now();
               });
           passInstrCb.registerAfterPassCallback(
-              [&passStartTimes, &pyCb](llvm::StringRef id, llvm::Any,
+              [&passStartTimes, &pyCb](llvm::StringRef id, llvm::IRUnitRef,
                                        const llvm::PreservedAnalyses &) {
                 auto start = passStartTimes.find(id);
                 if (start != passStartTimes.end()) {
@@ -329,7 +331,7 @@ void init_triton_intel(py::module_ &m) {
         if (!pluginFile.empty()) {
           // TODO: Add some logging here that we inserted a pass into the LLVM
           // pass pipeline
-          auto passPlugin = llvm::PassPlugin::Load(pluginFile);
+          auto passPlugin = llvm::PassPlugin::load(pluginFile);
           if (!passPlugin) {
             llvm::Error Err = passPlugin.takeError();
             std::string ErrMsg =
@@ -463,10 +465,35 @@ void init_triton_intel(py::module_ &m) {
   m.def("post_process_llir",
         [](llvm::Module *mod) { intel::postProcessLLVMIR(*mod); });
 
+  // Requests the GRF mode through SPV_INTEL_maximum_registers: the SPIR-V
+  // translator turns `!MaximumRegisters` kernel metadata into a
+  // MaximumRegistersINTEL (register count) or NamedMaximumRegistersINTEL
+  // (`AutoINTEL`) execution mode.
+  m.def("set_maximum_registers", [](llvm::Module *mod,
+                                    const std::string &grfMode) {
+    using namespace llvm;
+    LLVMContext &ctx = mod->getContext();
+    Metadata *maxRegisters;
+    unsigned numRegisters;
+    if (grfMode == "auto")
+      maxRegisters = MDString::get(ctx, "AutoINTEL");
+    else if (!StringRef(grfMode).getAsInteger(10, numRegisters))
+      maxRegisters = ConstantAsMetadata::get(
+          ConstantInt::get(Type::getInt32Ty(ctx), numRegisters));
+    else
+      throw std::invalid_argument("Unknown grf_mode: " + grfMode);
+
+    std::set<Function *> kernels;
+    findKernels(*mod, kernels);
+    for (Function *kernel : kernels)
+      kernel->setMetadata("MaximumRegisters", MDNode::get(ctx, maxRegisters));
+  });
+
   m.def(
       "translate_to_spirv",
-      [](const std::string &llvmIR,
-         bool isLTS) -> std::tuple<py::object, std::string> {
+      [](const std::string &llvmIR, bool isLTS,
+         const std::map<std::string, bool> &probedExtensions)
+          -> std::tuple<py::object, std::string> {
         std::string name;
         std::string spirvBitcode;
         {
@@ -488,12 +515,14 @@ void init_triton_intel(py::module_ &m) {
           const uint32_t numKernels = findKernels(*module, kernels);
           assert(numKernels == 1 && "Expecting a single SPIR kernel");
           name = (*kernels.begin())->getName().str();
-          spirvBitcode = triton::translateLLVMIRToSPIRV(*module, isLTS);
+          spirvBitcode =
+              triton::translateLLVMIRToSPIRV(*module, isLTS, probedExtensions);
         }
         return std::make_tuple(
             py::bytes(spirvBitcode.data(), spirvBitcode.size()), name);
       },
-      py::arg("llvmIR"), py::arg("isLTS"), ret::take_ownership);
+      py::arg("llvmIR"), py::arg("isLTS"), py::arg("probedExtensions"),
+      ret::take_ownership);
 
   m.def(
       "calculate_warps_per_tile",
