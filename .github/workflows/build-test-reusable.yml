@@ -357,9 +357,13 @@ jobs:
             skip_args=(--skip-from-file="$skiplist_dir/triton_kernels.txt" --select-fail-on-missing)
           fi
 
+          if [[ "$RUNNER_OS" != "Windows" ]]; then
+            export TRITON_XPU_GEN_NATIVE_CODE=1
+          fi
+
           cd python/triton_kernels
           pytest -p triton._compile_warmup -s --tb=short --warmup-only \
-            --warmup-workers "$(( $(nproc) < ${WARMUP_MAX_PROCS:-16} ? $(nproc) : ${WARMUP_MAX_PROCS:-16} ))" \
+            --warmup-workers "$(( $(nproc) * 60 / 100 ))" \
             --device xpu "${skip_args[@]}" tests -k 'not test_mxfp'
 
       - name: Run triton kernels tests
