@@ -12,6 +12,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
       "${GSAN_RUNTIME_DIR}/AllocationProfile.h"
       "${GSAN_RUNTIME_DIR}/Hash.cuh")
 
+    if(DEFINED TRITON_GSAN_CLANGXX AND NOT EXISTS "${TRITON_GSAN_CLANGXX}")
+      unset(TRITON_GSAN_CLANGXX CACHE)
+    endif()
     find_program(TRITON_GSAN_CLANGXX NAMES clang++
                  PATHS "${LLVM_SYSPATH}/bin"
                  REQUIRED NO_DEFAULT_PATH)
