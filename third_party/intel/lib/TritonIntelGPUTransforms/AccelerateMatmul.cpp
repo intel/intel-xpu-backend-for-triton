@@ -242,14 +242,31 @@ void clearChainedDotKindAttrs(ModuleOp mod) {
   });
 }
 
+/// GRF entries per hardware thread the kernel can end up with.
+static unsigned getMaxGRFEntries(ModuleOp mod, StringRef grfMode,
+                                 unsigned numWarps) {
+  unsigned entries = 0;
+  if (!grfMode.getAsInteger(10, entries))
+    return entries;
+  // "default" and "auto" can escalate up to ttig.max_grf_mode, but a larger
+  // mode cannot launch more than 32 warps.
+  if (numWarps > 32)
+    return 128;
+  if (auto maxGRFMode = mod->getAttrOfType<StringAttr>(
+          ttgi::TritonIntelGPUDialect::getMaxGRFModeAttrName()))
+    if (!maxGRFMode.getValue().getAsInteger(10, entries))
+      return entries;
+  return 256;
+}
+
 template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
                              OpTy, tt::DotOp, tt::DotScaledOp>::value>>
 class BlockedToDPAS : public OpRewritePattern<OpTy> {
   using TensorValue = TypedValue<RankedTensorType>;
 
 public:
-  BlockedToDPAS(MLIRContext *context, int benefit)
-      : OpRewritePattern<OpTy>(context, benefit) {}
+  BlockedToDPAS(MLIRContext *context, int benefit, StringRef grfMode)
+      : OpRewritePattern<OpTy>(context, benefit), grfMode(grfMode) {}
 
   LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
@@ -319,8 +336,9 @@ public:
       }
     }
 
+    unsigned grfEntries = getMaxGRFEntries(mod, grfMode, numWarps);
     SmallVector<unsigned> warpsPerTile =
-        getWarpsPerTile(op, *dpasCap, retShape, numWarps);
+        getWarpsPerTile(op, *dpasCap, retShape, numWarps, grfEntries);
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
 
     size_t rank = retShape.size();
@@ -411,10 +429,65 @@ public:
   }
 
 private:
+  std::string grfMode;
+
+  /// True if B plus the accumulator of the dot do not fit in \p grfEntries.
+  static bool exceedsRegistersWhenDuplicated(
+      Operation *dotOp, ArrayRef<int64_t> shape,
+      const ttgi::DpasEncodingAttr::DPASCapability &dpasCap,
+      unsigned grfEntries) {
+    Value operandB = getDotOperands(dotOp).second;
+    auto bType = dyn_cast<RankedTensorType>(operandB.getType());
+    auto cType = dyn_cast<RankedTensorType>(dotOp->getResult(0).getType());
+    if (!bType || !cType)
+      return false;
+    unsigned rank = shape.size();
+    int64_t m = shape[rank - 2], n = shape[rank - 1];
+    int64_t k = bType.getShape()[rank - 2];
+    int64_t bBytes = k * n * bType.getElementTypeBitWidth() / 8;
+    int64_t accBytes = m * n * cType.getElementTypeBitWidth() / 8;
+    // A GRF entry holds one 32-bit value per lane of the DPAS sub-group.
+    int64_t grfBytes = int64_t(grfEntries) * dpasCap.executionSize * 4;
+    return bBytes + accBytes > grfBytes;
+  }
+
+  /// Dots whose A operand is computed from this dot.
+  static SmallVector<Operation *> getConsumersAlongA(Operation *dotOp) {
+    auto filter = [&dotOp](Operation *op) {
+      return op->getParentRegion() == dotOp->getParentRegion();
+    };
+    SetVector<Operation *> forwardSlice;
+    getForwardSlice(dotOp, &forwardSlice, {filter});
+    SmallVector<Operation *> consumers;
+    for (Operation *op : forwardSlice)
+      if (isa<tt::DotOp, tt::DotScaledOp>(op) &&
+          getChainedDotOps(getDotOperands(op).first).contains(dotOp))
+        consumers.push_back(op);
+    return consumers;
+  }
+
+  /// Whether the warps should go along N instead of being duplicated along M.
+  /// A producer moves only together with an oversized consumer.
+  static bool
+  shouldDistributeAlongN(Operation *dotOp, ArrayRef<int64_t> shape,
+                         const ttgi::DpasEncodingAttr::DPASCapability &dpasCap,
+                         unsigned grfEntries) {
+    if (!exceedsRegistersWhenDuplicated(dotOp, shape, dpasCap, grfEntries))
+      return false;
+    if (!getChainedDotOps(getDotOperands(dotOp).first).empty())
+      return true;
+    return llvm::any_of(getConsumersAlongA(dotOp), [&](Operation *consumer) {
+      auto type = cast<RankedTensorType>(consumer->getResult(0).getType());
+      return exceedsRegistersWhenDuplicated(consumer, type.getShape(), dpasCap,
+                                            grfEntries);
+    });
+  }
+
   SmallVector<unsigned>
   getWarpsPerTile(Operation *dotOp,
                   const ttgi::DpasEncodingAttr::DPASCapability &dpasCap,
-                  const ArrayRef<int64_t> shape, unsigned numWarps) const {
+                  const ArrayRef<int64_t> shape, unsigned numWarps,
+                  unsigned grfEntries) const {
     auto filter = [&dotOp](Operation *op) {
       return op->getParentRegion() == dotOp->getParentRegion();
     };
@@ -474,8 +547,14 @@ private:
       // per-iteration exchange -- measured 1.6x to 7.6x slower for N == 16,
       // M == 128, growing with the warp count. Trading the exchange against the
       // parallelism it costs needs a cost model rather than this guard.
+      //
+      // Duplicating along M only pays off while the copy fits in registers.
       if (chainedDotKind == ChainedDotKind::ChainedAlongA &&
           maxNumWarpsAlongM == 1) {
+        if (shouldDistributeAlongN(dotOp, shape, dpasCap, grfEntries)) {
+          ret[rank - 1] = assignBatchWarps(numWarps);
+          return ret;
+        }
         ret[rank - 2] = assignBatchWarps(numWarps);
         return ret;
       }
@@ -937,9 +1016,11 @@ public:
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     constexpr int benefitDefault = 1;
-    patterns.add<BlockedToDPAS<tt::DotOp>>(context, benefitDefault + 1);
+    patterns.add<BlockedToDPAS<tt::DotOp>>(context, benefitDefault + 1,
+                                           grfMode);
     if (supportBlockScaleDPAS) {
-      patterns.add<BlockedToDPAS<tt::DotScaledOp>>(context, benefitDefault + 1);
+      patterns.add<BlockedToDPAS<tt::DotScaledOp>>(context, benefitDefault + 1,
+                                                   grfMode);
       patterns.add<UpcastScaledBlocked>(context, benefitDefault + 1);
     }
     ttgi::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);

@@ -25,6 +25,11 @@ def TritonIntelGPUAccelerateMatmul
     "mlir::triton::gpu::intel::TritonIntelGPUDialect",
     "mlir::arith::ArithDialect"
   ];
+
+  let options = [
+    Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
+         "GRF mode the kernel is compiled with">,
+  ];
 }
 
 def TritonIntelGPUFoldFpToFp
