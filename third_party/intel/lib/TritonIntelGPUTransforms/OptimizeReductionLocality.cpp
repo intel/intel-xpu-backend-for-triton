@@ -359,11 +359,8 @@ private:
     type.setShape(shape);
     type.setEncoding(encoding);
 
-    // Although this is a NOP, we have to pass allow_reorder=true as static
-    // analysis will fail to infer it.
     return ReshapeOp::create(rewriter, op.getLoc(),
                              static_cast<RankedTensorType>(type), val,
-                             /*allow_reorder=*/true,
                              /*efficient_layout=*/true);
   }
 
@@ -452,11 +449,8 @@ private:
     type.setShape(shape);
     type.setEncoding(encoding);
 
-    // Although this is a NOP, we have to pass allow_reorder=true as static
-    // analysis will fail to infer it.
     return ReshapeOp::create(rewriter, op.getLoc(),
                              static_cast<RankedTensorType>(type), val,
-                             /*allow_reorder=*/true,
                              /*efficient_layout=*/true);
   }
 
@@ -496,7 +490,6 @@ private:
 
     return ReshapeOp::create(rewriter, op.getLoc(),
                              static_cast<RankedTensorType>(type), val,
-                             /*allow_reorder=*/true,
                              /*efficient_layout=*/true);
   }
 

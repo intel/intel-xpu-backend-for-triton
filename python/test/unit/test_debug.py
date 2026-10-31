@@ -6,7 +6,8 @@ import triton
 import sys
 import subprocess
 import os
-from triton._internal_testing import run_in_process
+from triton._internal_testing import is_interpreter, run_in_process
+from triton.runtime.errors import InterpreterError
 
 pytestmark = pytest.mark.usefixtures("process_pool")
 
@@ -39,6 +40,7 @@ def _run_expect_zero_device_assert(device):
         getattr(torch, device).synchronize()
 
 
+@pytest.mark.interpreter
 def test_expect_zero_device_assert(device):
     if device == 'xpu':
         # XPU device-side asserts abort the process via SIGABRT, not a RuntimeError (issue #2755).
@@ -47,9 +49,11 @@ def test_expect_zero_device_assert(device):
         return
 
     result = run_in_process(_run_expect_zero_device_assert, (device, ), env={"TRITON_DEBUG": "1"})
-    assert isinstance(result.exc, RuntimeError)
+    expected_error = InterpreterError if is_interpreter() else RuntimeError
+    assert isinstance(result.exc, expected_error)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize('cond', [True, False])
 @pytest.mark.parametrize('mask', [True, False, None])
 @pytest.mark.parametrize('opt_flag', [True, False, None])
@@ -87,6 +91,7 @@ def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
                                         f"stdout: {result.stdout}, stderr: {result.stderr}")
 
 
+@pytest.mark.interpreter
 def test_device_assert_barrier(device):
     """Subprocess solution to handle XPU SIGABRT from device_assert infrastructure.
     See: https://github.com/pytorch/pytorch/issues/142135"""

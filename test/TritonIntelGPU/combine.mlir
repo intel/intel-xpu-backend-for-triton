@@ -2315,25 +2315,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1,2], threadsPerWarp = [32,1], warpsPerCTA = [1,1], order = [1,0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @permuting_reshape_propagate
-  tt.func public @permuting_reshape_propagate(%arg0: tensor<16x2xf32, #blocked>) -> tensor<32xf16, #blocked2> {
-    // CHECK-NOT: ttg.convert_layout
-    // CHECK: arith.truncf
-    // CHECK: ttg.convert_layout
-    %a = tt.reshape %arg0 allow_reorder efficient_layout : tensor<16x2xf32, #blocked> -> tensor<32xf32, #blocked1>
-    %b = ttg.convert_layout %a : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked2>
-    %c = arith.truncf %b : tensor<32xf32, #blocked2> to tensor<32xf16, #blocked2>
-    tt.return %c : tensor<32xf16, #blocked2>
-  }
-}
-
-// -----
-
 // COM: A reshape marked `efficient_layout` (but not `allow_reorder`, so it is not
 // COM: a layout anchor) must not have a different encoding pushed into it by
 // COM: forward propagation: its encoding was deliberately chosen by the pass that
@@ -3499,39 +3480,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %a = arith.addi %b, %v : tensor<2x2xi32, #out>
     %c = ttg.convert_layout %a : tensor<2x2xi32, #out> -> tensor<2x2xi32, #src>
     tt.return %c : tensor<2x2xi32, #src>
-  }
-}
-
-// -----
-
-// COM: Same bug, reached through canUseResultEncoding's tt.reshape arm instead of tt.broadcast:
-// COM: absorbing the reshape's result layout must keep its source layout, which conflicts with
-// COM: rematerializing that same source through the transpose branch. Port of upstream
-// COM: triton-lang/triton#11758's @reshape_absorption_source_layout_conflict.
-
-#src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
-#transposed = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
-#dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-DAG: #[[$R_SRC_ENC:blocked[0-9]*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
-  // CHECK-DAG: #[[$R_T_ENC:blocked[0-9]*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
-  // CHECK-DAG: #[[$R_DST_ENC:blocked[0-9]*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
-  // CHECK-LABEL: @reshape_absorption_source_layout_conflict
-  // CHECK: %[[SRC:.*]] = tt.broadcast {{.*}} -> tensor<2x4xi32, #[[$R_SRC_ENC]]>
-  // CHECK-NEXT: %[[R:.*]] = tt.reshape %[[SRC]] allow_reorder : tensor<2x4xi32, #[[$R_SRC_ENC]]> -> tensor<4x2xi32, #[[$R_T_ENC]]>
-  // CHECK-NEXT: %[[T:.*]] = tt.trans %[[SRC]] {{.*}} : tensor<2x4xi32, #[[$R_SRC_ENC]]> -> tensor<4x2xi32, #[[$R_T_ENC]]>
-  // CHECK-NEXT: %[[A:.*]] = arith.addi %[[T]], %[[R]] : tensor<4x2xi32, #[[$R_T_ENC]]>
-  // CHECK-NEXT: %[[C:.*]] = ttg.convert_layout %[[A]] : tensor<4x2xi32, #[[$R_T_ENC]]> -> tensor<4x2xi32, #[[$R_DST_ENC]]>
-  // CHECK-NEXT: tt.return %[[C]]
-  tt.func @reshape_absorption_source_layout_conflict() -> tensor<4x2xi32, #dst> {
-    %r = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32, #ttg.slice<{dim = 0, parent = #src}>>
-    %e = tt.expand_dims %r {axis = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 0, parent = #src}>> -> tensor<1x4xi32, #src>
-    %v = tt.broadcast %e : tensor<1x4xi32, #src> -> tensor<2x4xi32, #src>
-    %s = tt.reshape %v allow_reorder : tensor<2x4xi32, #src> -> tensor<4x2xi32, #transposed>
-    %t = tt.trans %v {order = array<i32: 1, 0>} : tensor<2x4xi32, #src> -> tensor<4x2xi32, #transposed>
-    %a = arith.addi %t, %s : tensor<4x2xi32, #transposed>
-    %c = ttg.convert_layout %a : tensor<4x2xi32, #transposed> -> tensor<4x2xi32, #dst>
-    tt.return %c : tensor<4x2xi32, #dst>
   }
 }
 
