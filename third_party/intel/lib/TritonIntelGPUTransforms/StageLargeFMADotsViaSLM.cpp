@@ -1,4 +1,5 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "llvm/ADT/bit.h"
 #include "llvm/Support/Debug.h"
 
@@ -32,10 +33,16 @@ constexpr unsigned kPressureThresholdBytes = 4096;
 // to derive K_TILE adaptively rather than picking from a hardcoded set.
 constexpr unsigned kTargetBytesPerOp = 1024;
 
+// Smallest K tile when an operand is staged decoded (see stageDot). The dot is
+// lowered to FMA, which has no kWidth constraint.
+constexpr uint64_t kMinDecodedKTile = 8;
+
 // SLM safety margin (bytes). Leaves headroom for other passes (RDD,
-// RemoveLayoutConversions) that also stage through SLM. ARL-S iGPU has
-// 64 KB; allowing up to 56 KB for our staging keeps 8 KB free.
-constexpr unsigned kSlmCapBytes = 56u * 1024u;
+// RemoveLayoutConversions) that also stage through SLM. The staging may use
+// the target's SLM minus this margin: 56 KB of the 64 KB on ARL-S, which is
+// also assumed when the SLM size is unknown.
+constexpr unsigned kSlmMarginBytes = 8u * 1024u;
+constexpr unsigned kDefaultSlmBytes = 64u * 1024u;
 
 // Estimate per-thread live operand bytes if FMA unrolls K fully.
 // All arithmetic is done in 64-bit: shapes come from getShape() as int64_t,
@@ -69,19 +76,14 @@ static uint64_t estimatePerThreadBytes(tt::DotOp dotOp) {
   return aBytes + bBytes + cBytes;
 }
 
-// Total SLM bytes required to stage operands A and B in their full shape.
-// Uses the source-side (pre-fp_to_fp) element type if present, since that's
-// what we actually allocate. Falls back to the dot operand element type.
-static uint64_t slmStagingBytes(Value aSrc, Value bSrc) {
-  auto bytes = [](Value v) -> uint64_t {
-    auto t = cast<RankedTensorType>(v.getType());
-    int64_t eb = std::max<int64_t>(1, t.getElementTypeBitWidth() / 8);
-    int64_t n = 1;
-    for (int64_t d : t.getShape())
-      n *= d;
-    return uint64_t(n) * eb;
-  };
-  return bytes(aSrc) + bytes(bSrc);
+// SLM bytes required to stage `v` in its full shape, at its element type.
+static uint64_t slmStagingBytes(Value v) {
+  auto t = cast<RankedTensorType>(v.getType());
+  int64_t eb = std::max<int64_t>(1, t.getElementTypeBitWidth() / 8);
+  int64_t n = 1;
+  for (int64_t d : t.getShape())
+    n *= d;
+  return uint64_t(n) * eb;
 }
 
 // Pick a K_TILE that's a power of 2, divides K, and fits the per-op byte
@@ -135,25 +137,72 @@ static Value findStagedSmem(Value v) {
 //   tt.load -> ttg.convert_layout (to dot_op) -> tt.fp_to_fp (f16->f32) -> dot
 // We stage the pre-fp_to_fp f16 value (smaller in SLM) and replay
 // `fp_to_fp` per K-tile after `local_load`.
+//
+// When the operand was decoded from fp8 before the convert_layout
+// (AccelerateMatmul does this so the multi-instruction decode runs once per
+// element rather than once per replicated copy), staging the fp8 value would
+// replay the decode per copy again. The chain then also records the
+// alternative of staging the decoded value, the convert_layout source, at
+// twice the SLM; `useDecoded` selects it.
 struct OperandChain {
   Value smemSource;                    // pre-staging tensor in BlockedEnc
   ttg::DotOperandEncodingAttr loadEnc; // dot_op encoding for partial-K
                                        // local_load result (post-staging
                                        // tensor element type)
   Type postLoadElemTy;                 // element type after replaying chain
-  // Ops to replay on the partial-K loaded value, innermost first. Each is
-  // either tt.fp_to_fp or arith.extf with a single tensor input.
+  // Ops to replay on the partial-K loaded value, in the order they apply (the
+  // cast nearest the staged value first). Each is either tt.fp_to_fp or
+  // arith.extf with a single tensor input.
   SmallVector<Operation *> replay;
+  // The fp8 value decoded before the convert_layout, and the casts after the
+  // convert_layout to replay on it. Null if there is no such decode.
+  Value decodedSource;
+  SmallVector<Operation *> decodedReplay;
+  bool useDecoded = false;
+
+  Value stagedSource() const { return useDecoded ? decodedSource : smemSource; }
+  ArrayRef<Operation *> stagedReplay() const {
+    return useDecoded ? decodedReplay : replay;
+  }
 };
+
+// Whether the only cast before the convert_layout is an fp8 decode to a 16-bit
+// type, so that the decoded value can be staged instead of the fp8 one.
+// `preCvtCasts` is in the order the casts apply, the one nearest the load
+// first. The size check matters: with fp8 -> fp16 -> fp32, front() is the
+// decode, and staging the conversion's source would stage fp32. With native
+// fp8 conversion, fp8 -> fp16 is a single builtin and replaying it per K tile
+// is cheaper than staging twice the bytes.
+static bool isDecodeBeforeConversion(ArrayRef<Operation *> preCvtCasts,
+                                     ModuleOp mod) {
+  if (preCvtCasts.empty())
+    return false;
+  auto fp = dyn_cast<tt::FpToFpOp>(preCvtCasts.front());
+  if (!fp)
+    return false;
+  Type srcTy = getElementTypeOrSelf(fp.getSrc());
+  Type dstTy = getElementTypeOrSelf(fp.getResult());
+  if (!isa<FloatType>(srcTy) || srcTy.getIntOrFloatBitWidth() != 8 ||
+      !(dstTy.isF16() || dstTy.isBF16()))
+    return false;
+  // Only stage the decoded value if every cast before the convert_layout is
+  // the decode itself: a further widening (e.g. to fp32) would be staged too.
+  if (preCvtCasts.size() != 1)
+    return false;
+  return !(dstTy.isF16() &&
+           mod->hasAttr(
+               ttgi::TritonIntelGPUDialect::getSupportF8ConversionAttrName()));
+}
 
 // Walk back from the dot operand to the smallest pre-promotion boundary.
 // Two real shapes seen in the wild after AccelerateMatmul:
 //   (a) tt.load -> ttg.convert_layout (to dot_op) -> tt.fp_to_fp -> dot
 //   (b) tt.load -> tt.fp_to_fp -> ttg.convert_layout (to dot_op) -> dot
-// We always stage at the smallest representation: hop the convert_layout to
+// The chain records the smallest representation: hop the convert_layout to
 // reach dot_op encoding, then keep walking through fp_to_fp/extf to find
 // the pre-promotion source. The replay ops are applied per K-tile after the
-// partial-K local_load.
+// partial-K local_load. In shape (b), when the fp_to_fp is an fp8 decode, it
+// also records the convert_layout source as the decoded alternative.
 static std::optional<OperandChain> findOperandChain(Value dotOperand) {
   SmallVector<Operation *> replay;
   Value v = dotOperand;
@@ -161,6 +210,8 @@ static std::optional<OperandChain> findOperandChain(Value dotOperand) {
       cast<RankedTensorType>(dotOperand.getType()).getElementType();
   ttg::DotOperandEncodingAttr dotOpEnc;
   bool sawBoundary = false;
+  Value cvtSrc;
+  size_t numPostCvtCasts = 0;
 
   while (true) {
     Operation *def = v.getDefiningOp();
@@ -178,7 +229,9 @@ static std::optional<OperandChain> findOperandChain(Value dotOperand) {
         if (!dotOpEnc)
           return std::nullopt;
         sawBoundary = true;
-        v = cvt.getSrc();
+        cvtSrc = cvt.getSrc();
+        numPostCvtCasts = replay.size();
+        v = cvtSrc;
         continue;
       }
       if (auto load = dyn_cast<ttg::LocalLoadOp>(def)) {
@@ -228,6 +281,15 @@ static std::optional<OperandChain> findOperandChain(Value dotOperand) {
   chain.smemSource = v;
   chain.loadEnc = dotOpEnc;
   chain.postLoadElemTy = postLoadElemTy;
+  // After the reverse, the casts before the convert_layout come first.
+  ArrayRef<Operation *> casts(replay);
+  size_t numPreCvtCasts = casts.size() - numPostCvtCasts;
+  if (isDecodeBeforeConversion(
+          casts.take_front(numPreCvtCasts),
+          dotOperand.getParentRegion()->getParentOfType<ModuleOp>())) {
+    chain.decodedSource = cvtSrc;
+    chain.decodedReplay.assign(casts.begin() + numPreCvtCasts, casts.end());
+  }
   chain.replay = std::move(replay);
   return chain;
 }
@@ -300,26 +362,35 @@ static LogicalResult stageDot(tt::DotOp dotOp, const OperandChain &aChain,
     LDBG("no viable kTile for dot " << dotOp);
     return failure();
   }
+  // A decoded operand is read back from SLM as 16-bit values instead of fp8,
+  // which needs more registers per K tile. On BMG that made IGC spill more on
+  // some tiles, enough to make the dot slower than staging fp8. With the K
+  // tile halved, those spills went away and the decoded staging was no slower
+  // than staging fp8 on any tile measured.
+  if ((aChain.useDecoded || bChain.useDecoded) &&
+      kTile / 2 >= kMinDecodedKTile && uint64_t(K) % (kTile / 2) == 0)
+    kTile /= 2;
   uint64_t numTiles = uint64_t(K) / kTile;
   LDBG("staging dot K=" << K << " kTile=" << kTile << " numTiles=" << numTiles);
 
-  auto aSrcTy = cast<RankedTensorType>(aChain.smemSource.getType());
-  auto bSrcTy = cast<RankedTensorType>(bChain.smemSource.getType());
+  auto aSrcTy = cast<RankedTensorType>(aChain.stagedSource().getType());
+  auto bSrcTy = cast<RankedTensorType>(bChain.stagedSource().getType());
 
   MLIRContext *ctx = dotOp.getContext();
 
   // Reuse SLM if a prior pass already staged it; otherwise allocate at the
-  // pre-promotion (smaller) element type.
+  // element type of the value chosen for staging (the pre-promotion value, or
+  // the decoded one).
   Value aSmem = findStagedSmem(dotOp.getA());
   if (!aSmem)
     aSmem = ttg::LocalAllocOp::create(builder, loc,
                                       buildShared(ctx, aSrcTy, aChain.loadEnc),
-                                      aChain.smemSource);
+                                      aChain.stagedSource());
   Value bSmem = findStagedSmem(dotOp.getB());
   if (!bSmem)
     bSmem = ttg::LocalAllocOp::create(builder, loc,
                                       buildShared(ctx, bSrcTy, bChain.loadEnc),
-                                      bChain.smemSource);
+                                      bChain.stagedSource());
 
   auto aSmemTy = cast<ttg::MemDescType>(aSmem.getType());
   auto bSmemTy = cast<ttg::MemDescType>(bSmem.getType());
@@ -327,8 +398,8 @@ static LogicalResult stageDot(tt::DotOp dotOp, const OperandChain &aChain,
   Value acc = dotOp.getC();
   auto aSubTy = sliceK(aSmemTy, kDimA, kTile);
   auto bSubTy = sliceK(bSmemTy, kDimB, kTile);
-  // The local_load result tensor uses the SLM element type (pre-promotion)
-  // and the dot operand encoding from the chain.
+  // The local_load result tensor uses the SLM element type and the dot
+  // operand encoding from the chain.
   auto aLoadTy = RankedTensorType::get(aSubTy.getShape(),
                                        aSrcTy.getElementType(), aChain.loadEnc);
   auto bLoadTy = RankedTensorType::get(bSubTy.getShape(),
@@ -350,8 +421,8 @@ static LogicalResult stageDot(tt::DotOp dotOp, const OperandChain &aChain,
         ttg::MemDescSubsliceOp::create(builder, loc, bSubTy, bSmem, bOffset);
     Value aPart = ttg::LocalLoadOp::create(builder, loc, aLoadTy, aSub);
     Value bPart = ttg::LocalLoadOp::create(builder, loc, bLoadTy, bSub);
-    aPart = replayChain(builder, loc, aPart, aChain.replay);
-    bPart = replayChain(builder, loc, bPart, bChain.replay);
+    aPart = replayChain(builder, loc, aPart, aChain.stagedReplay());
+    bPart = replayChain(builder, loc, bPart, bChain.stagedReplay());
     acc = tt::DotOp::create(builder, loc, dotOp.getType(), aPart, bPart, acc,
                             dotOp.getInputPrecisionAttr(),
                             dotOp.getMaxNumImpreciseAccAttr());
@@ -386,8 +457,67 @@ static LogicalResult stageDot(tt::DotOp dotOp, const OperandChain &aChain,
 struct StageLargeFMADotsViaSLMPass
     : public ttgi::impl::TritonIntelGPUStageLargeFMADotsViaSLMBase<
           StageLargeFMADotsViaSLMPass> {
+  using Base::Base;
+
+  // A way to stage a dot: which operands to stage decoded, and the SLM bytes
+  // that takes.
+  struct StagingOption {
+    bool decodeA = false;
+    bool decodeB = false;
+    uint64_t bytes = 0;
+  };
+
+  // The ways to stage `dotOp`, most preferred first: both operands decoded,
+  // then only the operand with more copies in total decoded, then the other,
+  // then both as they are. Staging decoded values runs the fp8 decode once per
+  // element instead of once per copy on every K tile, at twice the SLM for that
+  // operand, so the operand with more copies in total (elements per thread)
+  // saves more decodes. If an option does not fit, the next one is tried. The
+  // last option, both as they are, is always there.
+  SmallVector<StagingOption, 4> getStagingOptions(tt::DotOp dotOp,
+                                                  const OperandChain &aChain,
+                                                  const OperandChain &bChain) {
+    auto bytes = [](const OperandChain &chain, bool decoded) {
+      return slmStagingBytes(decoded ? chain.decodedSource : chain.smemSource);
+    };
+    bool canA = stageDecoded && aChain.decodedSource;
+    bool canB = stageDecoded && bChain.decodedSource;
+    SmallVector<std::pair<bool, bool>, 4> choices;
+    if (canA && canB)
+      choices.push_back({true, true});
+    std::pair<bool, bool> onlyA{true, false}, onlyB{false, true};
+    if (ttg::getTotalElemsPerThread(dotOp.getA().getType()) <
+        ttg::getTotalElemsPerThread(dotOp.getB().getType()))
+      std::swap(onlyA, onlyB);
+    for (auto choice : {onlyA, onlyB})
+      if (choice.first ? canA : canB)
+        choices.push_back(choice);
+    choices.push_back({false, false});
+
+    SmallVector<StagingOption, 4> options;
+    for (auto [decodeA, decodeB] : choices)
+      options.push_back(
+          {decodeA, decodeB, bytes(aChain, decodeA) + bytes(bChain, decodeB)});
+    return options;
+  }
+
+  // A candidate dot, its staging options, and the option chosen for it.
+  struct DotPlan {
+    tt::DotOp dotOp;
+    SmallVector<StagingOption, 4> options;
+    // Index into `options`, or -1 if the dot is not staged.
+    int chosen = -1;
+  };
+
   void runOnOperation() override {
     ModuleOp mod = getOperation();
+    unsigned targetSlm = slmSize ? unsigned(slmSize) : kDefaultSlmBytes;
+    uint64_t slmCap =
+        targetSlm > kSlmMarginBytes ? targetSlm - kSlmMarginBytes : 0;
+    // The per-dot limit for staging both operands as they are, which the pass
+    // has always used. It is kept as a floor: every dot that fits it is staged
+    // as before, whatever the target.
+    constexpr uint64_t asIsCap = kDefaultSlmBytes - kSlmMarginBytes;
 
     // The pass fires on any tt.dot whose result still has BlockedEncoding.
     // On DPAS hardware (PVC, BMG, ARL-H Xe2), AccelerateMatmul rewrites
@@ -396,10 +526,9 @@ struct StageLargeFMADotsViaSLMPass
     // are not DPAS-lowerable (DPAS only handles f32 via TF32 truncation),
     // so they retain BlockedEncoding even on DPAS hardware and lower via
     // FMA — exactly the case this pass needs to fire on.
-    SmallVector<std::tuple<tt::DotOp, OperandChain, OperandChain>> targets;
+    SmallVector<DotPlan> plans;
     mod.walk([&](tt::DotOp dotOp) {
-      auto resTy = dotOp.getType();
-      if (!isa<ttg::BlockedEncodingAttr>(resTy.getEncoding()))
+      if (!isa<ttg::BlockedEncodingAttr>(dotOp.getType().getEncoding()))
         return;
       uint64_t bytes = estimatePerThreadBytes(dotOp);
       if (bytes <= kPressureThresholdBytes) {
@@ -412,21 +541,64 @@ struct StageLargeFMADotsViaSLMPass
         LDBG("dot operand chain not at SLM boundary, skipping");
         return;
       }
-      uint64_t smem = slmStagingBytes(aChain->smemSource, bChain->smemSource);
-      if (smem > kSlmCapBytes) {
-        LDBG("dot SLM-staging cost " << smem << " B exceeds cap "
-                                     << kSlmCapBytes << " B, skipping");
-        return;
-      }
       if (selectKTile(dotOp) == 0) {
         LDBG("no viable kTile for dot " << dotOp);
         return;
       }
-      targets.emplace_back(dotOp, std::move(*aChain), std::move(*bChain));
+      plans.push_back({dotOp, getStagingOptions(dotOp, *aChain, *bChain)});
     });
 
-    for (auto &[dotOp, aChain, bChain] : targets)
-      (void)stageDot(dotOp, aChain, bChain);
+    // First stage what fits the per-dot limit as is, as the pass always did.
+    // Then upgrade dots, in program order, to a preferred option (a decoded
+    // operand, or staging as is beyond the per-dot limit) while all the dots
+    // staged in the function still fit in `slmCap` together: a later pass
+    // (ReorderInstructions) can move each local_alloc up to its source, so the
+    // buffers of different dots may be live at the same time.
+    uint64_t total = 0;
+    for (DotPlan &plan : plans) {
+      const StagingOption &asIs = plan.options.back();
+      if (asIs.bytes <= asIsCap) {
+        plan.chosen = static_cast<int>(plan.options.size()) - 1;
+        total += asIs.bytes;
+      }
+    }
+    for (DotPlan &plan : plans) {
+      int current =
+          plan.chosen < 0 ? static_cast<int>(plan.options.size()) : plan.chosen;
+      uint64_t currentBytes =
+          plan.chosen < 0 ? 0 : plan.options[plan.chosen].bytes;
+      for (int i = 0; i < current; ++i) {
+        uint64_t newTotal = total - currentBytes + plan.options[i].bytes;
+        if (newTotal > slmCap) {
+          LDBG("staging A " << (plan.options[i].decodeA ? "decoded" : "as is")
+                            << ", B "
+                            << (plan.options[i].decodeB ? "decoded" : "as is")
+                            << " would stage " << newTotal << " B in total");
+          continue;
+        }
+        plan.chosen = i;
+        total = newTotal;
+        break;
+      }
+      if (plan.chosen < 0)
+        LDBG("dot SLM-staging cost exceeds the limits, skipping");
+    }
+
+    // Stage the chosen dots one at a time: staging a dot replaces it, so the
+    // operand chain of a later dot that uses its result (e.g. a chain of dots)
+    // must be found again afterwards.
+    for (DotPlan &plan : plans) {
+      if (plan.chosen < 0)
+        continue;
+      auto aChain = findOperandChain(plan.dotOp.getA());
+      auto bChain = findOperandChain(plan.dotOp.getB());
+      if (!aChain || !bChain)
+        continue;
+      const StagingOption &option = plan.options[plan.chosen];
+      aChain->useDecoded = option.decodeA && aChain->decodedSource;
+      bChain->useDecoded = option.decodeB && bChain->decodedSource;
+      (void)stageDot(plan.dotOp, *aChain, *bChain);
+    }
   }
 };
 
