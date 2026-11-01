@@ -323,11 +323,32 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --matmul
 
+      - name: Warm scaled_dot compile cache
+        if: matrix.loop.suite == 'scaled_dot'
+        run: |
+          # Reuse the --skip-list dir already resolved into $TRITON_TEST_CMD, so warmup
+          # skips what the real run below will skip on this HW.
+          skiplist_dir="${TRITON_TEST_CMD#*--skip-list }"
+          skiplist_dir="${skiplist_dir%% *}"
+          skip_args=()
+          if [[ "$TEST_UNSKIP" != true && -f "$skiplist_dir/scaled_dot.txt" ]]; then
+            skip_args=(--skip-from-file="$skiplist_dir/scaled_dot.txt" --select-fail-on-missing)
+          fi
+
+          export TRITON_XPU_GEN_NATIVE_CODE=1
+
+          cd python/test/unit
+          pytest -p triton._compile_warmup -s --tb=short --warmup-only \
+            --warmup-workers "$(( $(nproc) * 60 / 100 ))" \
+            --shard-id=${{ matrix.loop.shard_id }} --num-shards=${{ env.NUM_SHARDS_FOR_SUITE }} --sharding-mode=round-robin \
+            --device xpu "${skip_args[@]}" language/test_core.py -k "test_scaled_dot"
+
       - name: Run scaled_dot tests
         if: matrix.loop.suite == 'scaled_dot'
         run: |
           export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS_FOR_SUITE }}
           export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
+          export TRITON_XPU_GEN_NATIVE_CODE=1
           ${{ env.TRITON_TEST_CMD }} --scaled-dot
 
       - name: Run debug tests
