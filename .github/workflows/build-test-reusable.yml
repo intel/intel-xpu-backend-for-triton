@@ -370,6 +370,9 @@ jobs:
         if: matrix.loop.suite == 'triton-kernels'
         run: |
           export PYTEST_MAX_PROCESSES=4
+          if [[ "$RUNNER_OS" != "Windows" ]]; then
+            export TRITON_XPU_GEN_NATIVE_CODE=1
+          fi
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
       - name: Run Tutorials
