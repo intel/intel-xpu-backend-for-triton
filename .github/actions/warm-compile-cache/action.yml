@@ -33,6 +33,6 @@ runs:
 
         ${{ inputs.extra-env }}
 
-        pytest -p triton._compile_warmup -s --tb=short --warmup-only \
+        pytest -p triton._compile_warmup -s --tb=line --warmup-only \
           --warmup-workers "$(( $(nproc) * 60 / 100 ))" \
           --device xpu "${skip_args[@]}" ${{ inputs.pytest-targets }}
