@@ -1,4 +1,5 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "llvm/ADT/bit.h"
 #include "llvm/Support/Debug.h"
 
@@ -33,9 +34,11 @@ constexpr unsigned kPressureThresholdBytes = 4096;
 constexpr unsigned kTargetBytesPerOp = 1024;
 
 // SLM safety margin (bytes). Leaves headroom for other passes (RDD,
-// RemoveLayoutConversions) that also stage through SLM. ARL-S iGPU has
-// 64 KB; allowing up to 56 KB for our staging keeps 8 KB free.
-constexpr unsigned kSlmCapBytes = 56u * 1024u;
+// RemoveLayoutConversions) that also stage through SLM. The staging may use
+// the target's SLM minus this margin: 56 KB of the 64 KB on ARL-S, which is
+// also assumed when the SLM size is unknown.
+constexpr unsigned kSlmMarginBytes = 8u * 1024u;
+constexpr unsigned kDefaultSlmBytes = 64u * 1024u;
 
 // Estimate per-thread live operand bytes if FMA unrolls K fully.
 // All arithmetic is done in 64-bit: shapes come from getShape() as int64_t,
@@ -69,19 +72,14 @@ static uint64_t estimatePerThreadBytes(tt::DotOp dotOp) {
   return aBytes + bBytes + cBytes;
 }
 
-// Total SLM bytes required to stage operands A and B in their full shape.
-// Uses the source-side (pre-fp_to_fp) element type if present, since that's
-// what we actually allocate. Falls back to the dot operand element type.
-static uint64_t slmStagingBytes(Value aSrc, Value bSrc) {
-  auto bytes = [](Value v) -> uint64_t {
-    auto t = cast<RankedTensorType>(v.getType());
-    int64_t eb = std::max<int64_t>(1, t.getElementTypeBitWidth() / 8);
-    int64_t n = 1;
-    for (int64_t d : t.getShape())
-      n *= d;
-    return uint64_t(n) * eb;
-  };
-  return bytes(aSrc) + bytes(bSrc);
+// SLM bytes required to stage `v` in its full shape, at its element type.
+static uint64_t slmStagingBytes(Value v) {
+  auto t = cast<RankedTensorType>(v.getType());
+  int64_t eb = std::max<int64_t>(1, t.getElementTypeBitWidth() / 8);
+  int64_t n = 1;
+  for (int64_t d : t.getShape())
+    n *= d;
+  return uint64_t(n) * eb;
 }
 
 // Pick a K_TILE that's a power of 2, divides K, and fits the per-op byte
@@ -135,6 +133,13 @@ static Value findStagedSmem(Value v) {
 //   tt.load -> ttg.convert_layout (to dot_op) -> tt.fp_to_fp (f16->f32) -> dot
 // We stage the pre-fp_to_fp f16 value (smaller in SLM) and replay
 // `fp_to_fp` per K-tile after `local_load`.
+//
+// When the operand was decoded from fp8 before the convert_layout
+// (AccelerateMatmul does this so the multi-instruction decode runs once per
+// element rather than once per replicated copy), staging the fp8 value would
+// replay the decode per copy again. The chain then also records the
+// alternative of staging the decoded value, the convert_layout source, at
+// twice the SLM; `useDecoded` selects it.
 struct OperandChain {
   Value smemSource;                    // pre-staging tensor in BlockedEnc
   ttg::DotOperandEncodingAttr loadEnc; // dot_op encoding for partial-K
@@ -144,16 +149,52 @@ struct OperandChain {
   // Ops to replay on the partial-K loaded value, innermost first. Each is
   // either tt.fp_to_fp or arith.extf with a single tensor input.
   SmallVector<Operation *> replay;
+  // The fp8 value decoded before the convert_layout, and the casts after the
+  // convert_layout to replay on it. Null if there is no such decode.
+  Value decodedSource;
+  SmallVector<Operation *> decodedReplay;
+  bool useDecoded = false;
+
+  Value stagedSource() const { return useDecoded ? decodedSource : smemSource; }
+  ArrayRef<Operation *> stagedReplay() const {
+    return useDecoded ? decodedReplay : replay;
+  }
 };
+
+// Whether the casts walked past the convert_layout, outermost first, start
+// with a multi-instruction fp8 decode to a 16-bit type. With native fp8
+// conversion, fp8 -> fp16 is a single builtin and replaying it per K tile is
+// cheaper than staging twice the bytes.
+static bool isDecodeBeforeConversion(ArrayRef<Operation *> preCvtCasts,
+                                     ModuleOp mod) {
+  if (preCvtCasts.empty())
+    return false;
+  auto fp = dyn_cast<tt::FpToFpOp>(preCvtCasts.front());
+  if (!fp)
+    return false;
+  Type srcTy = getElementTypeOrSelf(fp.getSrc());
+  Type dstTy = getElementTypeOrSelf(fp.getResult());
+  if (!isa<FloatType>(srcTy) || srcTy.getIntOrFloatBitWidth() != 8 ||
+      !(dstTy.isF16() || dstTy.isBF16()))
+    return false;
+  // Only stage the decoded value if every cast before the convert_layout is
+  // the decode itself: a further widening (e.g. to fp32) would be staged too.
+  if (preCvtCasts.size() != 1)
+    return false;
+  return !(dstTy.isF16() &&
+           mod->hasAttr(
+               ttgi::TritonIntelGPUDialect::getSupportF8ConversionAttrName()));
+}
 
 // Walk back from the dot operand to the smallest pre-promotion boundary.
 // Two real shapes seen in the wild after AccelerateMatmul:
 //   (a) tt.load -> ttg.convert_layout (to dot_op) -> tt.fp_to_fp -> dot
 //   (b) tt.load -> tt.fp_to_fp -> ttg.convert_layout (to dot_op) -> dot
-// We always stage at the smallest representation: hop the convert_layout to
+// The chain records the smallest representation: hop the convert_layout to
 // reach dot_op encoding, then keep walking through fp_to_fp/extf to find
 // the pre-promotion source. The replay ops are applied per K-tile after the
-// partial-K local_load.
+// partial-K local_load. In shape (b), when the fp_to_fp is an fp8 decode, it
+// also records the convert_layout source as the decoded alternative.
 static std::optional<OperandChain> findOperandChain(Value dotOperand) {
   SmallVector<Operation *> replay;
   Value v = dotOperand;
@@ -161,6 +202,8 @@ static std::optional<OperandChain> findOperandChain(Value dotOperand) {
       cast<RankedTensorType>(dotOperand.getType()).getElementType();
   ttg::DotOperandEncodingAttr dotOpEnc;
   bool sawBoundary = false;
+  Value cvtSrc;
+  size_t numPostCvtCasts = 0;
 
   while (true) {
     Operation *def = v.getDefiningOp();
@@ -178,7 +221,9 @@ static std::optional<OperandChain> findOperandChain(Value dotOperand) {
         if (!dotOpEnc)
           return std::nullopt;
         sawBoundary = true;
-        v = cvt.getSrc();
+        cvtSrc = cvt.getSrc();
+        numPostCvtCasts = replay.size();
+        v = cvtSrc;
         continue;
       }
       if (auto load = dyn_cast<ttg::LocalLoadOp>(def)) {
@@ -228,6 +273,15 @@ static std::optional<OperandChain> findOperandChain(Value dotOperand) {
   chain.smemSource = v;
   chain.loadEnc = dotOpEnc;
   chain.postLoadElemTy = postLoadElemTy;
+  // After the reverse, the casts before the convert_layout come first.
+  ArrayRef<Operation *> casts(replay);
+  size_t numPreCvtCasts = casts.size() - numPostCvtCasts;
+  if (isDecodeBeforeConversion(
+          casts.take_front(numPreCvtCasts),
+          dotOperand.getParentRegion()->getParentOfType<ModuleOp>())) {
+    chain.decodedSource = cvtSrc;
+    chain.decodedReplay.assign(casts.begin() + numPreCvtCasts, casts.end());
+  }
   chain.replay = std::move(replay);
   return chain;
 }
@@ -302,8 +356,8 @@ static LogicalResult stageDot(tt::DotOp dotOp, const OperandChain &aChain,
   uint64_t numTiles = uint64_t(K) / kTile;
   LDBG("staging dot K=" << K << " kTile=" << kTile << " numTiles=" << numTiles);
 
-  auto aSrcTy = cast<RankedTensorType>(aChain.smemSource.getType());
-  auto bSrcTy = cast<RankedTensorType>(bChain.smemSource.getType());
+  auto aSrcTy = cast<RankedTensorType>(aChain.stagedSource().getType());
+  auto bSrcTy = cast<RankedTensorType>(bChain.stagedSource().getType());
 
   MLIRContext *ctx = dotOp.getContext();
 
@@ -313,12 +367,12 @@ static LogicalResult stageDot(tt::DotOp dotOp, const OperandChain &aChain,
   if (!aSmem)
     aSmem = ttg::LocalAllocOp::create(builder, loc,
                                       buildShared(ctx, aSrcTy, aChain.loadEnc),
-                                      aChain.smemSource);
+                                      aChain.stagedSource());
   Value bSmem = findStagedSmem(dotOp.getB());
   if (!bSmem)
     bSmem = ttg::LocalAllocOp::create(builder, loc,
                                       buildShared(ctx, bSrcTy, bChain.loadEnc),
-                                      bChain.smemSource);
+                                      bChain.stagedSource());
 
   auto aSmemTy = cast<ttg::MemDescType>(aSmem.getType());
   auto bSmemTy = cast<ttg::MemDescType>(bSmem.getType());
@@ -349,8 +403,8 @@ static LogicalResult stageDot(tt::DotOp dotOp, const OperandChain &aChain,
         ttg::MemDescSubsliceOp::create(builder, loc, bSubTy, bSmem, bOffset);
     Value aPart = ttg::LocalLoadOp::create(builder, loc, aLoadTy, aSub);
     Value bPart = ttg::LocalLoadOp::create(builder, loc, bLoadTy, bSub);
-    aPart = replayChain(builder, loc, aPart, aChain.replay);
-    bPart = replayChain(builder, loc, bPart, bChain.replay);
+    aPart = replayChain(builder, loc, aPart, aChain.stagedReplay());
+    bPart = replayChain(builder, loc, bPart, bChain.stagedReplay());
     acc = tt::DotOp::create(builder, loc, dotOp.getType(), aPart, bPart, acc,
                             dotOp.getInputPrecisionAttr(),
                             dotOp.getMaxNumImpreciseAccAttr());
@@ -385,8 +439,59 @@ static LogicalResult stageDot(tt::DotOp dotOp, const OperandChain &aChain,
 struct StageLargeFMADotsViaSLMPass
     : public ttgi::impl::TritonIntelGPUStageLargeFMADotsViaSLMBase<
           StageLargeFMADotsViaSLMPass> {
+  using Base::Base;
+
+  // Picks, for each operand that was decoded from fp8 before its layout
+  // conversion, whether to stage the decoded value instead of the fp8 one,
+  // and returns false if no choice fits in `slmCap` bytes. Staging decoded
+  // values runs the decode once per element instead of once per replicated
+  // copy on every K tile, at twice the SLM for that operand. The preference
+  // is: both operands decoded, then only the operand with more replicated
+  // copies decoded, then the other, then neither.
+  bool chooseStagedValues(tt::DotOp dotOp, OperandChain &aChain,
+                          OperandChain &bChain, uint64_t slmCap) {
+    auto bytes = [](const OperandChain &chain, bool decoded) {
+      return slmStagingBytes(decoded ? chain.decodedSource : chain.smemSource);
+    };
+    bool canA = stageDecoded && aChain.decodedSource;
+    bool canB = stageDecoded && bChain.decodedSource;
+    uint64_t numThreads =
+        uint64_t(ttg::lookupNumWarps(dotOp)) *
+        ttg::TritonGPUDialect::getThreadsPerWarp(getOperation());
+    auto copies = [&](Value operand) {
+      return uint64_t(ttg::getTotalElemsPerThread(operand.getType())) *
+             numThreads;
+    };
+    SmallVector<std::pair<bool, bool>, 4> options;
+    if (canA && canB)
+      options.push_back({true, true});
+    std::pair<bool, bool> onlyA{true, false}, onlyB{false, true};
+    if (copies(dotOp.getA()) < copies(dotOp.getB()))
+      std::swap(onlyA, onlyB);
+    for (auto option : {onlyA, onlyB})
+      if (option.first ? canA : canB)
+        options.push_back(option);
+    options.push_back({false, false});
+    for (auto [decodeA, decodeB] : options) {
+      uint64_t smem = bytes(aChain, decodeA) + bytes(bChain, decodeB);
+      if (smem > slmCap) {
+        LDBG("staging A " << (decodeA ? "decoded" : "as is") << ", B "
+                          << (decodeB ? "decoded" : "as is") << " needs "
+                          << smem << " B");
+        continue;
+      }
+      aChain.useDecoded = decodeA;
+      bChain.useDecoded = decodeB;
+      return true;
+    }
+    return false;
+  }
+
   void runOnOperation() override {
     ModuleOp mod = getOperation();
+    unsigned targetSlm = slmSize ? unsigned(slmSize) : kDefaultSlmBytes;
+    uint64_t slmCap =
+        targetSlm > kSlmMarginBytes ? targetSlm - kSlmMarginBytes : 0;
 
     // The pass fires on any tt.dot whose result still has BlockedEncoding.
     // On DPAS hardware (PVC, BMG, ARL-H Xe2), AccelerateMatmul rewrites
@@ -395,37 +500,37 @@ struct StageLargeFMADotsViaSLMPass
     // are not DPAS-lowerable (DPAS only handles f32 via TF32 truncation),
     // so they retain BlockedEncoding even on DPAS hardware and lower via
     // FMA — exactly the case this pass needs to fire on.
-    SmallVector<std::tuple<tt::DotOp, OperandChain, OperandChain>> targets;
+    // Collect the candidate dots first, then analyze and stage them one at a
+    // time: staging a dot replaces it, so the operand chain of a later dot
+    // that uses its result (e.g. a chain of dots) must be found afterwards.
+    SmallVector<tt::DotOp> candidates;
     mod.walk([&](tt::DotOp dotOp) {
-      auto resTy = dotOp.getType();
-      if (!isa<ttg::BlockedEncodingAttr>(resTy.getEncoding()))
-        return;
+      if (isa<ttg::BlockedEncodingAttr>(dotOp.getType().getEncoding()))
+        candidates.push_back(dotOp);
+    });
+
+    for (tt::DotOp dotOp : candidates) {
       uint64_t bytes = estimatePerThreadBytes(dotOp);
       if (bytes <= kPressureThresholdBytes) {
         LDBG("dot under pressure threshold (" << bytes << " B), skipping");
-        return;
+        continue;
       }
       auto aChain = findOperandChain(dotOp.getA());
       auto bChain = findOperandChain(dotOp.getB());
       if (!aChain || !bChain) {
         LDBG("dot operand chain not at SLM boundary, skipping");
-        return;
+        continue;
       }
-      uint64_t smem = slmStagingBytes(aChain->smemSource, bChain->smemSource);
-      if (smem > kSlmCapBytes) {
-        LDBG("dot SLM-staging cost " << smem << " B exceeds cap "
-                                     << kSlmCapBytes << " B, skipping");
-        return;
+      if (!chooseStagedValues(dotOp, *aChain, *bChain, slmCap)) {
+        LDBG("dot SLM-staging cost exceeds cap " << slmCap << " B, skipping");
+        continue;
       }
       if (selectKTile(dotOp) == 0) {
         LDBG("no viable kTile for dot " << dotOp);
-        return;
+        continue;
       }
-      targets.emplace_back(dotOp, std::move(*aChain), std::move(*bChain));
-    });
-
-    for (auto &[dotOp, aChain, bChain] : targets)
-      (void)stageDot(dotOp, aChain, bChain);
+      (void)stageDot(dotOp, *aChain, *bChain);
+    }
   }
 };
 

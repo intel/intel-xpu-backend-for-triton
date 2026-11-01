@@ -137,3 +137,53 @@ def test_correctness_outer_loop(M, N, K, BLOCK_K, device):
     ref = torch.matmul(a.float(), b.float()).to(torch.float16)
     err = (c.float() - ref.float()).abs().max().item()
     assert err < 1e-1, f"max abs error {err} exceeds 1e-1"
+
+
+@triton.jit
+def _fp8_fma_matmul_kernel(a_ptr, b_ptr, c_ptr, x_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+                           BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+    offs_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = tl.program_id(1) * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k in range(0, K, BLOCK_K):
+        a = tl.load(a_ptr + offs_m[:, None] * K + (k + offs_k)[None, :])
+        b = tl.load(b_ptr + (k + offs_k)[:, None] * N + offs_n[None, :])
+        acc = tl.dot(a, b, acc)
+    tl.store(c_ptr + offs_m[:, None] * N + offs_n[None, :], acc)
+    # An fp32 IEEE dot in the same kernel keeps the fp8 dot on the FMA path
+    # on DPAS hardware too.
+    r = tl.arange(0, 16)
+    x = (r[:, None] + r[None, :]).to(tl.float32)
+    tl.store(x_ptr + r[:, None] * 16 + r[None, :], tl.dot(x, x, input_precision="ieee"))
+
+
+@pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
+@pytest.mark.parametrize("a_dtype, b_dtype", [("float8_e4m3fn", "float8_e5m2"), ("float8_e5m2", "float8_e4m3fn")])
+def test_fp8_operands_staged_decoded(a_dtype, b_dtype, device):
+    """An fp8 operand that AccelerateMatmul decodes before the layout conversion
+    is staged in SLM as decoded 16-bit values, so the decode is not replayed per
+    K tile in the replicated dot operand layout."""
+    M, N, K, BLOCK_M, BLOCK_N, BLOCK_K = 256, 256, 256, 128, 128, 64
+    torch.manual_seed(0)
+    a = (torch.randn((M, K)) / 4).to(getattr(torch, a_dtype)).to(device)
+    b = (torch.randn((K, N)) / 4).to(getattr(torch, b_dtype)).to(device)
+    c = torch.empty((M, N), dtype=torch.float32, device=device)
+    x = torch.empty((16, 16), dtype=torch.float32, device=device)
+    kernel = _fp8_fma_matmul_kernel[(M // BLOCK_M, N // BLOCK_N)](a, b, c, x, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
+                                                                  num_warps=8)
+
+    ref = (a.cpu().double() @ b.cpu().double()).float()
+    torch.testing.assert_close(c.cpu(), ref, atol=1e-4, rtol=1e-5)
+
+    ttgir = kernel.asm["ttgir"]
+    staged = [line for line in ttgir.splitlines() if "ttg.memdesc_subslice" in line]
+    if "#ttig.dpas" in ttgir or not staged:
+        pytest.skip("the dot is not staged through SLM on this target")
+    if "ttig.support_f8_conversion" in ttgir:
+        pytest.skip("with native fp8 conversion the fp16 decode stays after the layout conversion")
+    # On this tile AccelerateMatmul decodes A before the layout conversion, and
+    # the staging must keep it decoded. B is replicated less, keeps its decode
+    # in the dot operand layout and is staged as fp8.
+    staged_a = [line for line in staged if line.split("->")[-1].strip().startswith(f"!ttg.memdesc<{BLOCK_M}x")]
+    assert staged_a and all("xf16" in line for line in staged_a), "A was staged as fp8 instead of decoded values"
