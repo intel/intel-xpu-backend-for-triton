@@ -20,6 +20,8 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
+        source /opt/intel/oneapi/setvars.sh > /dev/null
+
         # Reuse the --skip-list dir already resolved into $TRITON_TEST_CMD, so warmup
         # skips what the real run below will skip on this HW.
         skiplist_dir="${TRITON_TEST_CMD#*--skip-list }"
