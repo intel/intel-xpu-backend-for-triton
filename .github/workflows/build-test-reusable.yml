@@ -75,9 +75,9 @@ env:
   # Number of shards for the suites listed in PARALLEL_SUITES
   NUM_SHARDS: 2
   # Suites that are split into NUM_SHARDS shards, each shard runs on its own runner
-  PARALLEL_SUITES: ""
+  PARALLEL_SUITES: "scaled_dot"
   # Suites that are run without sharding, one runner per suite
-  SEQUENTIAL_SUITES: "triton-kernels"
+  SEQUENTIAL_SUITES: "minicore language gluon triton-kernels rest"
 
 jobs:
   build:
@@ -357,9 +357,7 @@ jobs:
             skip_args=(--skip-from-file="$skiplist_dir/triton_kernels.txt" --select-fail-on-missing)
           fi
 
-          if [[ "$RUNNER_OS" != "Windows" ]]; then
-            export TRITON_XPU_GEN_NATIVE_CODE=1
-          fi
+          export TRITON_XPU_GEN_NATIVE_CODE=1
 
           cd python/triton_kernels
           pytest -p triton._compile_warmup -s --tb=short --warmup-only \
@@ -370,9 +368,7 @@ jobs:
         if: matrix.loop.suite == 'triton-kernels'
         run: |
           export PYTEST_MAX_PROCESSES=4
-          if [[ "$RUNNER_OS" != "Windows" ]]; then
-            export TRITON_XPU_GEN_NATIVE_CODE=1
-          fi
+          export TRITON_XPU_GEN_NATIVE_CODE=1
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
       - name: Run Tutorials
