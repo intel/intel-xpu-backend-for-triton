@@ -282,13 +282,17 @@ Formats: exact test path, path with parameters, regex patterns (with `@regexp` s
 
 From `scripts/pytest-utils.sh`:
 - Skip lists passed via `--skip-from-file=path/to/suite.txt`
-- `--select-fail-on-missing` ensures skipped tests exist (catches stale skip entries)
+- Expected-failure lists in the same directory: `<suite>.xfail.txt` (`--xfail-from-file`, strict: the test
+  runs, must fail, and an unexpected pass fails the run) and `<suite>.xfail-norun.txt`
+  (`--xfail-norun-from-file`: reported as XFAIL without running). Only tests that always fail go in
+  `<suite>.xfail.txt`; intermittent failures stay in the skip list
+- `--select-fail-on-missing` ensures listed tests exist in skip and xfail lists (catches stale entries)
 - Multiple skip files combined with semicolons
 - Extra suffix-based skip lists via `TRITON_EXTRA_SKIPLIST_SUFFIXES`
 
 ### TEST_UNSKIP Mode
 
-Setting `TEST_UNSKIP=true` ignores all skip/xfail decorators:
+Setting `TEST_UNSKIP=true` ignores all skip/xfail decorators and does not load the skip or xfail lists:
 - Adds `--timeout=500` per test
 - Adds `--max-worker-restart=500` for crash tolerance
 - Useful for validating which skips are still needed

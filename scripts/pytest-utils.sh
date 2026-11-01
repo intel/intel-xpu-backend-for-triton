@@ -83,7 +83,6 @@ pytest() {
             fi
             pytest_extra_args+=(
                 "--skip-from-file=$SKIPFILES"
-                "--select-fail-on-missing"
             )
         else
             pytest_extra_args+=(
@@ -91,6 +90,33 @@ pytest() {
                 "--max-worker-restart=500"
             )
         fi
+    fi
+
+    # Expected-failure lists, next to the skip list of the suite:
+    #   <suite>.xfail.txt:       the test runs, is expected to fail (XFAIL) and fails the run if it passes (strict).
+    #   <suite>.xfail-norun.txt: the test is reported as XFAIL without running.
+    # Put only tests that always fail in <suite>.xfail.txt; tests that fail intermittently stay in the skip list
+    # (strict: an intermittent pass would fail the run).
+    if [[ ! -f $TRITON_TEST_SELECTFILE && -v TRITON_TEST_SUITE && $TEST_UNSKIP = false ]]; then
+        XFAILFILE="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail.txt"
+        XFAILNORUNFILE="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail-norun.txt"
+        if [[ -f $XFAILFILE ]]; then
+            pytest_extra_args+=(
+                "--xfail-from-file=$XFAILFILE"
+                "--xfail-strict"
+            )
+        fi
+        if [[ -f $XFAILNORUNFILE ]]; then
+            pytest_extra_args+=(
+                "--xfail-norun-from-file=$XFAILNORUNFILE"
+            )
+        fi
+    fi
+
+    if [[ " ${pytest_extra_args[*]} " =~ \ --(skip|xfail|xfail-norun)-from-file= ]]; then
+        pytest_extra_args+=(
+            "--select-fail-on-missing"
+        )
     fi
 
     if [[ -v TRITON_TEST_SHARDS && -v TRITON_TEST_SHARD_NUMBER ]]; then
