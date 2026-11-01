@@ -75,9 +75,9 @@ env:
   # Number of shards for the suites listed in PARALLEL_SUITES
   NUM_SHARDS: 2
   # Suites that are split into NUM_SHARDS shards, each shard runs on its own runner
-  PARALLEL_SUITES: "scaled_dot"
+  PARALLEL_SUITES: ""
   # Suites that are run without sharding, one runner per suite
-  SEQUENTIAL_SUITES: "minicore language gluon triton-kernels rest"
+  SEQUENTIAL_SUITES: "minicore language gluon triton-kernels rest scaled_dot"
 
 jobs:
   build:
@@ -308,46 +308,69 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --proton
 
+      - name: Warm regression compile cache
+        if: matrix.loop.suite == 'minicore'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/regression
+          skiplist-name: regression
+          pytest-targets: . --ignore=test_performance.py
+          extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
+
       - name: Run minicore tests
         if: matrix.loop.suite == 'minicore'
         run: |
+          export TRITON_XPU_GEN_NATIVE_CODE=1
           ${{ env.TRITON_TEST_CMD }} --minicore
+
+      - name: Warm language compile cache
+        if: matrix.loop.suite == 'language'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/unit
+          skiplist-name: language
+          pytest-targets: >-
+            language/
+            --ignore=language/test_line_info.py --ignore=language/test_matmul.py
+            --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py
+            -k "not test_mxfp and not test_scaled_dot"
+          extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
 
       - name: Run language tests
         if: matrix.loop.suite == 'language'
         run: |
+          export TRITON_XPU_GEN_NATIVE_CODE=1
           ${{ env.TRITON_TEST_CMD }} --language
+
+      - name: Warm matmul compile cache
+        if: matrix.loop.suite == 'rest'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/unit
+          skiplist-name: matmul
+          pytest-targets: >-
+            language/test_matmul.py
+            -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 or test_mxfp8_mxfp4_matmul"
+          extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
 
       - name: Run matmul tests
         if: matrix.loop.suite == 'rest'
         run: |
+          export TRITON_XPU_GEN_NATIVE_CODE=1
           ${{ env.TRITON_TEST_CMD }} --matmul
 
       - name: Warm scaled_dot compile cache
         if: matrix.loop.suite == 'scaled_dot'
-        run: |
-          # Reuse the --skip-list dir already resolved into $TRITON_TEST_CMD, so warmup
-          # skips what the real run below will skip on this HW.
-          skiplist_dir="${TRITON_TEST_CMD#*--skip-list }"
-          skiplist_dir="${skiplist_dir%% *}"
-          skip_args=()
-          if [[ "$TEST_UNSKIP" != true && -f "$skiplist_dir/scaled_dot.txt" ]]; then
-            skip_args=(--skip-from-file="$skiplist_dir/scaled_dot.txt" --select-fail-on-missing)
-          fi
-
-          export TRITON_XPU_GEN_NATIVE_CODE=1
-
-          cd python/test/unit
-          pytest -p triton._compile_warmup -s --tb=short --warmup-only \
-            --warmup-workers "$(( $(nproc) * 60 / 100 ))" \
-            --shard-id=${{ matrix.loop.shard_id }} --num-shards=${{ env.NUM_SHARDS_FOR_SUITE }} --sharding-mode=round-robin \
-            --device xpu "${skip_args[@]}" language/test_core.py -k "test_scaled_dot"
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/unit
+          skiplist-name: scaled_dot
+          pytest-targets: language/test_core.py -k "test_scaled_dot"
+          extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
 
       - name: Run scaled_dot tests
         if: matrix.loop.suite == 'scaled_dot'
         run: |
-          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS_FOR_SUITE }}
-          export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
           export TRITON_XPU_GEN_NATIVE_CODE=1
           ${{ env.TRITON_TEST_CMD }} --scaled-dot
 
@@ -356,9 +379,19 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --debug
 
+      - name: Warm gluon compile cache
+        if: matrix.loop.suite == 'gluon' && inputs.driver_version == 'rolling'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/gluon
+          skiplist-name: gluon
+          pytest-targets: .
+          extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
+
       - name: Run gluon tests
         if: matrix.loop.suite == 'gluon' && inputs.driver_version == 'rolling'
         run: |
+          export TRITON_XPU_GEN_NATIVE_CODE=1
           ${{ env.TRITON_TEST_CMD }} --gluon
 
       - name: Run interpreter tests
@@ -368,22 +401,12 @@ jobs:
 
       - name: Warm Triton Kernels compile cache
         if: matrix.loop.suite == 'triton-kernels'
-        run: |
-          # Reuse the --skip-list dir already resolved into $TRITON_TEST_CMD, so warmup
-          # skips what the real run below will skip on this HW.
-          skiplist_dir="${TRITON_TEST_CMD#*--skip-list }"
-          skiplist_dir="${skiplist_dir%% *}"
-          skip_args=()
-          if [[ "$TEST_UNSKIP" != true && -f "$skiplist_dir/triton_kernels.txt" ]]; then
-            skip_args=(--skip-from-file="$skiplist_dir/triton_kernels.txt" --select-fail-on-missing)
-          fi
-
-          export TRITON_XPU_GEN_NATIVE_CODE=1
-
-          cd python/triton_kernels
-          pytest -p triton._compile_warmup -s --tb=short --warmup-only \
-            --warmup-workers "$(( $(nproc) * 60 / 100 ))" \
-            --device xpu "${skip_args[@]}" tests -k 'not test_mxfp'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/triton_kernels
+          skiplist-name: triton_kernels
+          pytest-targets: tests -k 'not test_mxfp'
+          extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
 
       - name: Run triton kernels tests
         if: matrix.loop.suite == 'triton-kernels'
