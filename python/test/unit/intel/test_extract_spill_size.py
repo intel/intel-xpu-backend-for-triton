@@ -13,7 +13,7 @@ import warnings
 import pytest
 
 from triton.backends.intel.compiler import extract_spill_size_from_zebin
-from triton.runtime.errors import IntelGPUError
+from triton.backends.intel.errors import IntelGPUError
 
 
 def _build_elf64(sections):

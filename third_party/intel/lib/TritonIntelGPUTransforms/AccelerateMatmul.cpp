@@ -706,6 +706,25 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
       });
 }
 
+// Replaces \p dotOp, which has a bf16 accumulator, with a dot that accumulates
+// in fp32 followed by a single RTNE rounding of the result to bf16.
+static tt::DotOp accumulateInF32(tt::DotOp dotOp) {
+  OpBuilder builder(dotOp);
+  Location loc = dotOp.getLoc();
+  RankedTensorType DType = dotOp.getD().getType();
+  RankedTensorType f32Type = DType.clone(builder.getF32Type());
+  auto acc = tt::FpToFpOp::create(builder, loc, f32Type, dotOp.getC());
+  auto f32Dot = tt::DotOp::create(builder, loc, f32Type, dotOp.getA(),
+                                  dotOp.getB(), acc, dotOp.getInputPrecision(),
+                                  dotOp.getMaxNumImpreciseAcc());
+  auto result = tt::FpToFpOp::create(
+      builder, loc, DType, f32Dot.getD(),
+      tt::RoundingModeAttr::get(builder.getContext(), tt::RoundingMode::RTNE));
+  dotOp.replaceAllUsesWith(result.getResult());
+  dotOp.erase();
+  return f32Dot;
+}
+
 // promote operands of dot op if the existing combination is not natively
 // supported.
 static void decomposeMixedModeDotOp(ModuleOp mod) {
@@ -719,13 +738,20 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     Type promoteType;
     if (dpasLayout) {
       // FP8 is not always natively supported by the DPAS instruction.
-      // Promote to FP16 when needed.
+      // Promote it when needed.
       bool isNativeFP8 = isa<Float8E5M2Type, Float8E4M3FNType>(AElType);
       auto mod = dotOp->getParentOfType<ModuleOp>();
       bool supportsFP8 = mod->hasAttr(
           ttgi::TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
       if (supportsFP8 || !isNativeFP8)
         return;
+      // Extend to fp16, which is exact for fp8. DPAS has a bf16 accumulator
+      // only for bf16 operands, so a dot with a bf16 accumulator accumulates
+      // in fp32 and rounds the result to bf16 once.
+      if (D.getType().getElementType().isBF16()) {
+        dotOp = accumulateInF32(dotOp);
+        builder.setInsertionPoint(dotOp);
+      }
       promoteType = builder.getF16Type();
     } else {
       // FMA case.
