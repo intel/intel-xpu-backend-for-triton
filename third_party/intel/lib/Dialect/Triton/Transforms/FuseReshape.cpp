@@ -854,6 +854,132 @@ private:
   DominanceInfo domInfo;
 };
 
+/// AxisInfo reads these at their stored length, so a rank change would leave
+/// them stale.
+static bool hasRankIndexedHint(Operation *op) {
+  return op->hasAttr("tt.contiguity") || op->hasAttr("tt.divisibility") ||
+         op->hasAttr("tt.constancy");
+}
+
+static RankedTensorType dropUnitDim(Type type) {
+  auto tensorTy = cast<RankedTensorType>(type);
+  return RankedTensorType::get(tensorTy.getShape().drop_front(),
+                               tensorTy.getElementType());
+}
+
+/// A dense tensor constant or a splat, which `rebuildAtRank2` can rebuild.
+static bool isRebuildable(Value v) {
+  auto cstOp = v.getDefiningOp<arith::ConstantOp>();
+  return (cstOp && isa<DenseElementsAttr>(cstOp.getValue())) ||
+         v.getDefiningOp<tt::SplatOp>();
+}
+
+/// Rebuild an `isRebuildable` value at rank 2 right after its definition. The
+/// original may have other users, so it is rebuilt, not retyped.
+static Value rebuildAtRank2(OpBuilder &builder, Value v) {
+  Operation *defOp = v.getDefiningOp();
+  builder.setInsertionPointAfter(defOp);
+  RankedTensorType newTy = dropUnitDim(v.getType());
+  if (auto cstOp = dyn_cast<arith::ConstantOp>(defOp))
+    return arith::ConstantOp::create(
+        builder, cstOp.getLoc(),
+        cast<DenseElementsAttr>(cstOp.getValue()).reshape(newTy));
+  return tt::SplatOp::create(builder, defOp->getLoc(), newTy,
+                             cast<tt::SplatOp>(defOp).getSrc());
+}
+
+/// The one tensor operand of `op` that is not `isRebuildable`, or null if
+/// there is none or more than one.
+static Value singleNonRebuildableOperand(Operation *op) {
+  Value found;
+  for (Value operand : op->getOperands()) {
+    if (!isa<RankedTensorType>(operand.getType()) || isRebuildable(operand))
+      continue;
+    if (found)
+      return {};
+    found = operand;
+  }
+  return found;
+}
+
+/// The ops from `reshapeOp`'s `tt.descriptor_load` up to the reshape, load
+/// first, or an empty list if the reshape cannot be hoisted.
+static SmallVector<Operation *> matchHoistChain(tt::ReshapeOp reshapeOp) {
+  RankedTensorType srcTy = reshapeOp.getSrc().getType();
+  if (reshapeOp.getAllowReorder() || reshapeOp->use_empty() ||
+      srcTy.getRank() != 3 || srcTy.getDimSize(0) != 1 ||
+      reshapeOp.getType().getShape() != srcTy.getShape().drop_front())
+    return {};
+
+  SmallVector<Operation *> chain;
+  for (Value cur = reshapeOp.getSrc();;) {
+    Operation *defOp = cur.getDefiningOp();
+    if (!defOp || !cur.hasOneUse() || hasRankIndexedHint(defOp))
+      return {};
+    chain.push_back(defOp);
+    if (isa<tt::DescriptorLoadOp>(defOp))
+      break;
+    if (auto transOp = dyn_cast<tt::TransOp>(defOp)) {
+      if (transOp.getOrder()[0] != 0)
+        return {};
+      cur = transOp.getSrc();
+      continue;
+    }
+    // Dropping a leading unit dim keeps the element order, so it commutes
+    // with any single-result elementwise op but inline asm, which receives
+    // its elements grouped by thread.
+    if (!defOp->hasTrait<OpTrait::Elementwise>() ||
+        defOp->getNumResults() != 1 || isa<tt::ElementwiseInlineAsmOp>(defOp))
+      return {};
+    cur = singleNonRebuildableOperand(defOp);
+    if (!cur)
+      return {};
+  }
+  if (chain.size() < 2)
+    return {};
+  std::reverse(chain.begin(), chain.end());
+  return chain;
+}
+
+/// Rewrite a `matchHoistChain` chain at rank 2, and queue the reshape, the
+/// replaced `tt.trans` ops and the rebuilt originals in `cleanUp`.
+static void rewriteHoistChain(tt::ReshapeOp reshapeOp,
+                              ArrayRef<Operation *> chain,
+                              SmallPtrSetImpl<Operation *> &cleanUp) {
+  OpBuilder builder(reshapeOp.getContext());
+  builder.setInsertionPointAfter(chain.front());
+  Value prev = chain.front()->getResult(0);
+  Value cur =
+      tt::ReshapeOp::create(builder, reshapeOp.getLoc(),
+                            dropUnitDim(prev.getType()).getShape(), prev);
+  for (Operation *op : llvm::drop_begin(chain)) {
+    if (auto transOp = dyn_cast<tt::TransOp>(op)) {
+      ArrayRef<int32_t> order = transOp.getOrder();
+      builder.setInsertionPoint(transOp);
+      cur = tt::TransOp::create(builder, transOp.getLoc(), cur,
+                                {order[1] - 1, order[2] - 1});
+      cleanUp.insert(transOp);
+      prev = transOp.getResult();
+      continue;
+    }
+    for (OpOperand &operand : op->getOpOperands()) {
+      Value v = operand.get();
+      if (v == prev) {
+        operand.set(cur);
+        continue;
+      }
+      if (!isa<RankedTensorType>(v.getType()))
+        continue;
+      operand.set(rebuildAtRank2(builder, v));
+      cleanUp.insert(v.getDefiningOp());
+    }
+    prev = cur = op->getResult(0);
+    cur.setType(dropUnitDim(cur.getType()));
+  }
+  reshapeOp.replaceAllUsesWith(cur);
+  cleanUp.insert(reshapeOp);
+}
+
 /// Move each `tt.reshape` dropping the leading unit dim of a 3-D tensor up to
 /// its `tt.descriptor_load`, where `FuseReshapeWithLoad` or Combine folds it,
 /// through single-use elementwise ops (retyped in place; other tensor operands
@@ -861,115 +987,16 @@ private:
 /// `tt.trans` ops (rebuilt at rank 2). Inline asm, multi-result ops, and
 /// tt.contiguity/divisibility/constancy on those ops or the load stop it.
 static void hoistUnitDimReshapesToDescriptorLoads(ModuleOp moduleOp) {
-  // AxisInfo reads these at their stored length, so a rank change would leave
-  // them stale.
-  auto hasRankIndexedHint = [](Operation *op) {
-    return op->hasAttr("tt.contiguity") || op->hasAttr("tt.divisibility") ||
-           op->hasAttr("tt.constancy");
-  };
-  auto isRebuildable = [](Value v) {
-    auto cstOp = v.getDefiningOp<arith::ConstantOp>();
-    return (cstOp && isa<DenseElementsAttr>(cstOp.getValue())) ||
-           v.getDefiningOp<tt::SplatOp>();
-  };
-  auto dropUnitDim = [](Type type) {
-    auto tensorTy = cast<RankedTensorType>(type);
-    return RankedTensorType::get(tensorTy.getShape().drop_front(),
-                                 tensorTy.getElementType());
-  };
-
-  // Each chain lists the load first, then the ops up to the reshape.
   SmallVector<std::pair<tt::ReshapeOp, SmallVector<Operation *>>> chains;
   moduleOp.walk([&](tt::ReshapeOp reshapeOp) {
-    RankedTensorType srcTy = reshapeOp.getSrc().getType();
-    if (reshapeOp.getAllowReorder() || reshapeOp->use_empty() ||
-        srcTy.getRank() != 3 || srcTy.getDimSize(0) != 1 ||
-        reshapeOp.getType().getShape() != srcTy.getShape().drop_front())
-      return;
-
-    SmallVector<Operation *> chain;
-    for (Value cur = reshapeOp.getSrc();;) {
-      Operation *defOp = cur.getDefiningOp();
-      if (!defOp || !cur.hasOneUse() || hasRankIndexedHint(defOp))
-        return;
-      chain.push_back(defOp);
-      if (isa<tt::DescriptorLoadOp>(defOp))
-        break;
-      if (auto transOp = dyn_cast<tt::TransOp>(defOp)) {
-        if (transOp.getOrder()[0] != 0)
-          return;
-        cur = transOp.getSrc();
-        continue;
-      }
-      // Dropping a leading unit dim keeps the element order, so it commutes
-      // with any single-result elementwise op but inline asm, which receives
-      // its elements grouped by thread.
-      if (!defOp->hasTrait<OpTrait::Elementwise>() ||
-          defOp->getNumResults() != 1 || isa<tt::ElementwiseInlineAsmOp>(defOp))
-        return;
-      Value next;
-      for (Value operand : defOp->getOperands()) {
-        if (!isa<RankedTensorType>(operand.getType()) || isRebuildable(operand))
-          continue;
-        if (next)
-          return;
-        next = operand;
-      }
-      if (!next)
-        return;
-      cur = next;
-    }
-    if (chain.size() < 2)
-      return;
-    std::reverse(chain.begin(), chain.end());
-    chains.emplace_back(reshapeOp, std::move(chain));
+    SmallVector<Operation *> chain = matchHoistChain(reshapeOp);
+    if (!chain.empty())
+      chains.emplace_back(reshapeOp, std::move(chain));
   });
 
   SmallPtrSet<Operation *, 8> cleanUp;
-  for (auto &[reshapeOp, chain] : chains) {
-    OpBuilder builder(reshapeOp.getContext());
-    builder.setInsertionPointAfter(chain.front());
-    Value prev = chain.front()->getResult(0);
-    Value cur =
-        tt::ReshapeOp::create(builder, reshapeOp.getLoc(),
-                              dropUnitDim(prev.getType()).getShape(), prev);
-    for (Operation *op : llvm::drop_begin(chain)) {
-      if (auto transOp = dyn_cast<tt::TransOp>(op)) {
-        ArrayRef<int32_t> order = transOp.getOrder();
-        builder.setInsertionPoint(transOp);
-        cur = tt::TransOp::create(builder, transOp.getLoc(), cur,
-                                  {order[1] - 1, order[2] - 1});
-        cleanUp.insert(transOp);
-        prev = transOp.getResult();
-        continue;
-      }
-      for (OpOperand &operand : op->getOpOperands()) {
-        Value v = operand.get();
-        if (v == prev) {
-          operand.set(cur);
-          continue;
-        }
-        if (!isa<RankedTensorType>(v.getType()))
-          continue;
-        // The original may have other users, so it is rebuilt, not retyped.
-        Operation *defOp = v.getDefiningOp();
-        builder.setInsertionPointAfter(defOp);
-        RankedTensorType newTy = dropUnitDim(v.getType());
-        if (auto cstOp = dyn_cast<arith::ConstantOp>(defOp))
-          operand.set(arith::ConstantOp::create(
-              builder, cstOp.getLoc(),
-              cast<DenseElementsAttr>(cstOp.getValue()).reshape(newTy)));
-        else
-          operand.set(tt::SplatOp::create(builder, defOp->getLoc(), newTy,
-                                          cast<tt::SplatOp>(defOp).getSrc()));
-        cleanUp.insert(defOp);
-      }
-      prev = cur = op->getResult(0);
-      cur.setType(dropUnitDim(cur.getType()));
-    }
-    reshapeOp.replaceAllUsesWith(cur);
-    cleanUp.insert(reshapeOp);
-  }
+  for (auto &[reshapeOp, chain] : chains)
+    rewriteHoistChain(reshapeOp, chain, cleanUp);
   tt::intel::eraseOperations(cleanUp);
 }
 

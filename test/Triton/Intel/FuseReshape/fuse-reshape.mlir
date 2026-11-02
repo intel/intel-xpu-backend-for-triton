@@ -1718,6 +1718,25 @@ tt.func public @hoistReshapeOverExtfAfterTrans(%arg0: !tt.tensordesc<1x32x64xbf1
 
 // -----
 
+// COM: A tt.trans after a retyped elementwise op, and two tt.trans in one chain.
+tt.func public @hoistReshapeOverTransAfterNegf(%arg0: !tt.tensordesc<1x32x64xbf16>) -> tensor<32x64xbf16> {
+  %c0_i32 = arith.constant 0 : i32
+  %0 = tt.descriptor_load %arg0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x32x64xbf16> -> tensor<1x32x64xbf16>
+  %1 = tt.trans %0 {order = array<i32: 0, 2, 1>} : tensor<1x32x64xbf16> -> tensor<1x64x32xbf16>
+  %2 = arith.negf %1 : tensor<1x64x32xbf16>
+  %3 = tt.trans %2 {order = array<i32: 0, 2, 1>} : tensor<1x64x32xbf16> -> tensor<1x32x64xbf16>
+  %4 = tt.reshape %3 : tensor<1x32x64xbf16> -> tensor<32x64xbf16>
+  tt.return %4 : tensor<32x64xbf16>
+}
+// CHECK-LABEL: hoistReshapeOverTransAfterNegf
+// CHECK: [[RESHAPE:%.*]] = tt.reshape {{.*}} : tensor<1x32x64xbf16> -> tensor<32x64xbf16>
+// CHECK: [[T1:%.*]] = tt.trans [[RESHAPE]] {order = array<i32: 1, 0>} : tensor<32x64xbf16> -> tensor<64x32xbf16>
+// CHECK: [[NEG:%.*]] = arith.negf [[T1]] : tensor<64x32xbf16>
+// CHECK: [[T2:%.*]] = tt.trans [[NEG]] {order = array<i32: 1, 0>} : tensor<64x32xbf16> -> tensor<32x64xbf16>
+// CHECK: tt.return [[T2]]
+
+// -----
+
 // COM: Hoisted without a dot user; Combine rank-reduces such loads later.
 tt.func public @hoistWithoutDot(%arg0: !tt.tensordesc<1x64x64xbf16>, %arg1: !tt.tensordesc<64x64xbf16>, %arg2: bf16) {
   %c0_i32 = arith.constant 0 : i32
