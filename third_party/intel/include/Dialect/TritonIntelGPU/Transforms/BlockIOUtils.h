@@ -174,7 +174,8 @@ struct RowLimitMaskInfo {
 /// conversion needs: `other` is zero-fill-compatible, the bounded dim is
 /// the pitch dim (complement of `contiguousDim`, not the memory-contiguous
 /// one), and the pitch dim isn't a stride-zero (broadcast) pointer, which
-/// relies on a fixed physical height instead.
+/// relies on a fixed physical height instead. Also requires `rowBase`/`bound`
+/// to be exactly i32, as the `base_height` lowering needs.
 ///
 /// All three callers (MaterializeBlockPointer's `maskPermitsBlockTile`,
 /// LowerTo2DBlockLoad, and the prefetch LLVM lowering) must agree on
@@ -189,6 +190,12 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   ArrayRef<int64_t> tensorShape,
                                                   unsigned contiguousDim,
                                                   bool pitchDimIsBroadcast);
+
+/// Compute `clamp(bound - rowBase, 0, rowExtent)` as an i32. Widens to i64
+/// first so the subtraction can't overflow (both are i32 and may be far
+/// apart, e.g. `rowBase = -1`, `bound = INT_MAX`). `rowBase` may be null.
+Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
+                            Value rowBase, int64_t rowExtent);
 
 } // namespace mlir::triton::gpu::intel
 

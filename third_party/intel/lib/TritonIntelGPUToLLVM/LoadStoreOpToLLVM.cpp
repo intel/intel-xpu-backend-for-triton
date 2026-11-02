@@ -1663,17 +1663,10 @@ struct PrefetchOpConversion
         Value boundRemapped = rewriter.getRemappedValue(m->bound);
         Value baseRemapped =
             m->rowBase ? rewriter.getRemappedValue(m->rowBase) : Value();
-        if (boundRemapped && boundRemapped.getType().isInteger(32) &&
-            (!m->rowBase ||
-             (baseRemapped && baseRemapped.getType().isInteger(32)))) {
-          Value diff = baseRemapped
-                           ? arith::SubIOp::create(rewriter, loc, boundRemapped,
-                                                   baseRemapped)
-                                 .getResult()
-                           : boundRemapped;
-          Value zero = arith::ConstantOp::create(rewriter, loc,
-                                                 rewriter.getI32IntegerAttr(0));
-          rowLimitHeight = arith::MaxSIOp::create(rewriter, loc, diff, zero);
+        if (boundRemapped && (!m->rowBase || baseRemapped)) {
+          rowLimitHeight =
+              computeRowLimitHeight(rewriter, loc, boundRemapped, baseRemapped,
+                                    tensorShape[m->boundedDim]);
           rowLimitMask = m;
         }
       }
@@ -5121,11 +5114,12 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
               pred};
     };
 
-    // staticBaseHeight only drives the stride=0 broadcast-row special case
-    // below; it is std::nullopt when base_height is a genuinely runtime
-    // value (e.g. a per-group row bound), which never hits that case.
+    // Disable the stride=0 broadcast-row special case below for a row-limit
+    // height: it replicates row 0 everywhere, which is wrong when height==1
+    // just means "only row 0 is valid" rather than "broadcast".
     std::optional<int64_t> staticBaseHeight =
-        getConstantIntValue(op.getBaseHeight());
+        isRowLimitHeight ? std::nullopt
+                         : getConstantIntValue(op.getBaseHeight());
     return lowerBlockLoad2D(
         op, cfg, *llEncoding, pitch, computeAddress, otherElems,
         /*nanMaskElems=*/{},

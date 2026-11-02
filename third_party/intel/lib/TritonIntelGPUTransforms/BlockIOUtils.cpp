@@ -1081,7 +1081,31 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
   if (!rowBase)
     return std::nullopt;
 
-  return RowLimitMaskInfo{boundedDim, *rowBase, boundSplat.getSrc()};
+  // base_height lowering requires exactly i32; checked here so every caller
+  // agrees on eligibility.
+  Value boundSrc = boundSplat.getSrc();
+  if (!boundSrc.getType().isInteger(32) ||
+      (*rowBase && !rowBase->getType().isInteger(32)))
+    return std::nullopt;
+
+  return RowLimitMaskInfo{boundedDim, *rowBase, boundSrc};
+}
+
+Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
+                            Value rowBase, int64_t rowExtent) {
+  Type i64Ty = builder.getI64Type();
+  Value diff64 = arith::ExtSIOp::create(builder, loc, i64Ty, bound);
+  if (rowBase) {
+    Value rowBase64 = arith::ExtSIOp::create(builder, loc, i64Ty, rowBase);
+    diff64 = arith::SubIOp::create(builder, loc, diff64, rowBase64);
+  }
+  Value zero64 =
+      arith::ConstantOp::create(builder, loc, builder.getI64IntegerAttr(0));
+  Value extent64 = arith::ConstantOp::create(
+      builder, loc, builder.getI64IntegerAttr(rowExtent));
+  Value clamped = arith::MaxSIOp::create(builder, loc, diff64, zero64);
+  clamped = arith::MinSIOp::create(builder, loc, clamped, extent64);
+  return arith::TruncIOp::create(builder, loc, builder.getI32Type(), clamped);
 }
 
 } // namespace mlir::triton::gpu::intel

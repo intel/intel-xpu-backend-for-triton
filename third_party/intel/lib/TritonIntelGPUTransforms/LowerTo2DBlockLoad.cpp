@@ -84,13 +84,6 @@ static Value createZeroSplat(OpBuilder &builder, Location loc,
   return tt::SplatOp::create(builder, loc, tensorTy, zeroVal);
 }
 
-/// True when `v` is null (the zero-base case) or already exactly i32.
-/// Not "any width, extended/truncated as needed": narrowing a wider bound
-/// (e.g. i64 `2^32 + 4`) before the subtraction would silently truncate it
-/// into a wrong, much smaller height. The real-world pattern this matcher
-/// targets uses plain i32 offsets anyway.
-static bool isExactI32(Value v) { return !v || v.getType().isInteger(32); }
-
 struct TritonIntelGPULowerTo2DBlockLoadPass
     : public ttgi::impl::TritonIntelGPULowerTo2DBlockLoadBase<
           TritonIntelGPULowerTo2DBlockLoadPass> {
@@ -391,12 +384,8 @@ private:
           getStride(strideAnalysis, op.getPtr(), pitchTensorDim) == 0;
       if (auto m = ttgi::matchRowLimitMask(op.getMask(), op.getOther(),
                                            tensorTy.getShape(), contiguousDim,
-                                           pitchDimIsBroadcast)) {
-        if (isExactI32(m->rowBase) && isExactI32(m->bound))
-          rowLimitMask = m;
-        else
-          LDBG("Row-limit mask bound/base is not i32 for: " << *op);
-      }
+                                           pitchDimIsBroadcast))
+        rowLimitMask = m;
     }
 
     // Retrieve mask axis info to validate tile constraints consistently
@@ -590,17 +579,13 @@ private:
       // Drop the mask/other: hardware zero-fill at base_height replaces it.
       mask = Value();
       other = Value();
-      Value diff = rowLimitMask->bound;
-      if (rowLimitMask->rowBase)
-        diff = arith::SubIOp::create(builder, loc, rowLimitMask->bound,
-                                     rowLimitMask->rowBase);
-      Value zero =
-          arith::ConstantOp::create(builder, loc, builder.getI32IntegerAttr(0));
       // Relative to the tile's first row, not each sub-tile message's own
       // first row, and can legitimately be <= 0. The LLVM lowering
       // (getBlockIORowLimitAttrName) adjusts per message and never forwards
       // a non-positive base_height, which would underflow.
-      heightOperand = arith::MaxSIOp::create(builder, loc, diff, zero);
+      heightOperand = ttgi::computeRowLimitHeight(
+          builder, loc, rowLimitMask->bound, rowLimitMask->rowBase,
+          tensorTy.getShape()[rowLimitMask->boundedDim]);
     } else {
       // If mask is present but other is absent, create a zero splat as the
       // default padding value (the verifier requires 'other' when 'mask' is

@@ -286,9 +286,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %9 = arith.cmpi slt, %6, %8 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
     %10 = tt.expand_dims %9 {axis = 1 : i32} : tensor<64xi1, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi1, #dot0>
     %11 = tt.broadcast %10 : tensor<64x1xi1, #dot0> -> tensor<64x32xi1, #dot0>
-    // CHECK: %[[DIFF:.*]] = arith.subi %arg3, %arg2 : i32
-    // CHECK: %[[ZERO:.*]] = arith.constant 0 : i32
-    // CHECK: %[[H:.*]] = arith.maxsi %[[DIFF]], %[[ZERO]] : i32
+    // CHECK: %[[BOUND64:.*]] = arith.extsi %arg3 : i32 to i64
+    // CHECK: %[[BASE64:.*]] = arith.extsi %arg2 : i32 to i64
+    // CHECK: %[[DIFF64:.*]] = arith.subi %[[BOUND64]], %[[BASE64]] : i64
+    // CHECK: %[[ZERO64:.*]] = arith.constant 0 : i64
+    // CHECK: %[[EXTENT64:.*]] = arith.constant 64 : i64
+    // CHECK: %[[MAX64:.*]] = arith.maxsi %[[DIFF64]], %[[ZERO64]] : i64
+    // CHECK: %[[CLAMP64:.*]] = arith.minsi %[[MAX64]], %[[EXTENT64]] : i64
+    // CHECK: %[[H:.*]] = arith.trunci %[[CLAMP64]] : i64 to i32
     // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]] {row_major}
     %12 = tt.load %4, %11, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %12 : tensor<64x32xf16, #dot0>
