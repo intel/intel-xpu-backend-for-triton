@@ -3,6 +3,7 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -1610,6 +1611,54 @@ struct PrefetchOpConversion
     const bool memoryRowMajor = isMemoryRowMajor(op);
     contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
 
+    // A row-limit mask (see matchRowLimitMask) doesn't need the per-subtile
+    // predicate skip below: the bound can instead become this prefetch's
+    // dynamic base_height, so the tile-size computation should treat the
+    // prefetch as unmasked. The bound/base values live outside this op, so
+    // getRemappedValue is required to use them here; a failed remap falls
+    // back to the untouched masked-prefetch path below.
+    //
+    // Software pipelining ANDs an extra, uniform "don't prefetch past the
+    // loop bound" guard into the steady-state prefetch's mask (it looks
+    // ahead one stage, so on the last real iteration there is no next tile
+    // to fetch). That guard is a splat of a scalar -- the same value for
+    // every row -- unlike the row-limit submask, so it is still expressible
+    // as the old per-subtile predicate: peel it off and keep applying it,
+    // while handling the row-limit submask via base_height.
+    std::optional<RowLimitMaskInfo> rowLimitMask;
+    Value extraGuardScalar;
+    if (op.getMask() && rank == 2) {
+      Value maskVal = op.getMask();
+      Value otherConjunct;
+      auto m = matchRowLimitMask(maskVal, tensorShape);
+      if (!m) {
+        if (auto andOp = maskVal.getDefiningOp<arith::AndIOp>()) {
+          if ((m = matchRowLimitMask(andOp.getLhs(), tensorShape)))
+            otherConjunct = andOp.getRhs();
+          else if ((m = matchRowLimitMask(andOp.getRhs(), tensorShape)))
+            otherConjunct = andOp.getLhs();
+        }
+      }
+      if (m) {
+        unsigned pitchTensorDim =
+            (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+        if (m->boundedDim == pitchTensorDim) {
+          rowLimitMask = m;
+          if (otherConjunct) {
+            // Only a uniform (splat-of-scalar) extra conjunct can be
+            // expressed as a single per-subtile predicate below; anything
+            // else can't be expressed via base_height either, so give up
+            // the whole row-limit treatment rather than silently dropping
+            // a guard that might matter for safety.
+            if (auto splatOp = otherConjunct.getDefiningOp<triton::SplatOp>())
+              extraGuardScalar = splatOp.getSrc();
+            else
+              rowLimitMask = std::nullopt;
+          }
+        }
+      }
+    }
+
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(tensorOfPointers.getEncoding())
             .toLinearLayout(tensorShape);
@@ -1620,9 +1669,11 @@ struct PrefetchOpConversion
     Type eltTy = getTypeConverter()->convertType(ptrType.getPointeeType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
-    // Get the maximum tile shapes for the given mask constancy.
+    // Get the maximum tile shapes for the given mask constancy. Skipped for
+    // a row-limit mask: its bound is handled via base_height below, not by
+    // clamping the tile.
     AxisInfo *maskAxisInfo = nullptr;
-    if (op.getMask()) {
+    if (op.getMask() && !rowLimitMask) {
       maskAxisInfo =
           const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
               .getAxisInfo(op.getMask());
@@ -1668,6 +1719,39 @@ struct PrefetchOpConversion
     // If the stride is 0, we want to load only the first row.
     int64_t stride = getStride(op.getPtr(), pitchDim);
     Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeight);
+    Value extraGuardRemapped;
+    if (rowLimitMask) {
+      Value boundRemapped = rewriter.getRemappedValue(rowLimitMask->bound);
+      Value baseRemapped =
+          rowLimitMask->rowBase
+              ? rewriter.getRemappedValue(rowLimitMask->rowBase)
+              : Value();
+      if (extraGuardScalar)
+        extraGuardRemapped = rewriter.getRemappedValue(extraGuardScalar);
+      // Require i32 (resp. i1): arith.subi/maxsi below need matching operand
+      // types, and bound/rowBase are ordinary i32 program offsets, and the
+      // extra guard an ordinary i1, in every case this pattern is meant for.
+      if (boundRemapped && boundRemapped.getType().isInteger(32) &&
+          (!rowLimitMask->rowBase ||
+           (baseRemapped && baseRemapped.getType().isInteger(32))) &&
+          (!extraGuardScalar ||
+           (extraGuardRemapped && extraGuardRemapped.getType().isInteger(1)))) {
+        Value diff = baseRemapped
+                         ? arith::SubIOp::create(rewriter, loc, boundRemapped,
+                                                 baseRemapped)
+                               .getResult()
+                         : boundRemapped;
+        baseHeight = arith::MaxSIOp::create(rewriter, loc, diff, b.i32_val(0));
+      } else {
+        // Could not recover the bound/base/guard as already-legalized
+        // values; fall back to the untouched masked-prefetch path below.
+        // (Falling back here rather than silently ignoring a guard we
+        // failed to remap matters: dropping it would let a steady-state
+        // prefetch run on the loop's draining iteration, reading past the
+        // tile this kernel actually owns.)
+        rowLimitMask = std::nullopt;
+      }
+    }
     Value baseWidth =
         b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
 
@@ -1733,8 +1817,16 @@ struct PrefetchOpConversion
       adjustedBaseWidth =
           b.umax(adjustedBaseWidth, b.i32_val(MIN_BASE_WIDTH_BYTES));
       // Use the top-left address and mask of the block to load the data.
-      // (The first value referred to by the registerIdx.)
-      if (maskElems.size()) {
+      // (The first value referred to by the registerIdx.) For a row-limit
+      // mask, baseHeight above already encodes the bound, so this
+      // per-subtile uniform predicate is only needed for the extra,
+      // uniform loop-drain guard peeled off above, if any -- applying it to
+      // the per-row-varying submask itself would be unsound (it reads a
+      // single row's value for the whole subtile).
+      if (rowLimitMask) {
+        if (extraGuardRemapped)
+          pred = extraGuardRemapped;
+      } else if (maskElems.size()) {
         pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
       }
 
@@ -4985,7 +5077,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
     }
 
     Value baseWidth = b.i32_val(op.getBaseWidth() * cfg.vBlocks);
-    Value baseHeight = b.i32_val(op.getBaseHeight());
+    Value baseHeight = adaptor.getBaseHeight();
     Value pitch = adaptor.getBasePitch();
 
     unsigned blockColIdx = cfg.isTransposeRequired ? cfg.rowDim : cfg.colDim;
@@ -5013,10 +5105,16 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
               adjustedBaseWidth, baseHeight, pred};
     };
 
-    return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
-                            otherElems, /*nanMaskElems=*/{},
-                            /*staticBaseHeight=*/op.getBaseHeight(), targetInfo,
-                            getTypeConverter(), loc, rewriter);
+    // staticBaseHeight only drives the stride=0 broadcast-row special case
+    // below; it is std::nullopt when base_height is a genuinely runtime
+    // value (e.g. a per-group row bound), which never hits that case.
+    std::optional<int64_t> staticBaseHeight =
+        getConstantIntValue(op.getBaseHeight());
+    return lowerBlockLoad2D(
+        op, cfg, *llEncoding, pitch, computeAddress, otherElems,
+        /*nanMaskElems=*/{},
+        staticBaseHeight ? std::optional<int>(*staticBaseHeight) : std::nullopt,
+        targetInfo, getTypeConverter(), loc, rewriter);
   }
 };
 

@@ -4,6 +4,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/Interfaces/CastInterfaces.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -944,6 +945,109 @@ Attribute canonicalCoalescedDescStoreLayout(RankedTensorType type, int numWarps,
       type.getContext(), type.getShape(), sizePerThread, order, numWarps,
       threadsPerWarp, cgaLayout);
   return layout;
+}
+
+namespace {
+
+/// Look through single-operand cast-like ops (index_cast, extui, extsi,
+/// trunci, etc.) to find the underlying value.
+Value lookThroughCasts(Value val) {
+  while (Operation *def = val.getDefiningOp()) {
+    if (!isa<CastOpInterface>(def) || def->getNumOperands() != 1)
+      break;
+    val = def->getOperand(0);
+  }
+  return val;
+}
+
+/// If `val` is the result of a `tt.expand_dims` that introduced a size-1
+/// dim, return the lower-rank value it was applied to; otherwise return
+/// `val` unchanged. A row-limit mask's index and bound may be expanded to
+/// 2D before the comparison, or the comparison may happen in 1D and get
+/// expanded afterwards -- both are legal lowerings of `rows[:, None]`.
+Value stripExpandDims(Value val) {
+  auto expandOp = val.getDefiningOp<triton::ExpandDimsOp>();
+  return expandOp ? expandOp.getSrc() : val;
+}
+
+/// Match `val` against `base + arange(0, expectedEnd)` (either operand
+/// order of the add), or a bare `arange(0, expectedEnd)`. On success returns
+/// the base scalar value -- a null Value for the bare-arange, zero-base
+/// case. Returns std::nullopt if `val` does not have this shape.
+std::optional<Value> matchBaseAndRange(Value val, int64_t expectedEnd) {
+  val = lookThroughCasts(stripExpandDims(lookThroughCasts(val)));
+  if (auto makeRange = val.getDefiningOp<triton::MakeRangeOp>()) {
+    if (makeRange.getStart() == 0 &&
+        static_cast<int64_t>(makeRange.getEnd()) == expectedEnd)
+      return Value();
+    return std::nullopt;
+  }
+  auto addI = val.getDefiningOp<arith::AddIOp>();
+  if (!addI)
+    return std::nullopt;
+  Value lhs = lookThroughCasts(addI.getLhs());
+  Value rhs = lookThroughCasts(addI.getRhs());
+  for (int i = 0; i < 2; ++i) {
+    auto makeRange = lhs.getDefiningOp<triton::MakeRangeOp>();
+    auto splatOp = rhs.getDefiningOp<triton::SplatOp>();
+    if (makeRange && splatOp && makeRange.getStart() == 0 &&
+        static_cast<int64_t>(makeRange.getEnd()) == expectedEnd)
+      return splatOp.getSrc();
+    std::swap(lhs, rhs);
+  }
+  return std::nullopt;
+}
+
+} // namespace
+
+std::optional<RowLimitMaskInfo>
+matchRowLimitMask(Value mask, ArrayRef<int64_t> tensorShape) {
+  if (!mask || tensorShape.size() != 2)
+    return std::nullopt;
+
+  auto broadcastOp = mask.getDefiningOp<triton::BroadcastOp>();
+  if (!broadcastOp)
+    return std::nullopt;
+
+  Value narrow = broadcastOp.getSrc();
+  auto narrowTy = dyn_cast<RankedTensorType>(narrow.getType());
+  if (!narrowTy || narrowTy.getRank() != 2)
+    return std::nullopt;
+
+  // Identify which dim kept the full tensor's extent across the broadcast
+  // -- the dim the mask is bounded along -- versus the dim that stayed
+  // degenerate (size 1), which the mask must instead be constant along.
+  ArrayRef<int64_t> narrowShape = narrowTy.getShape();
+  unsigned boundedDim;
+  if (narrowShape[0] == 1 && narrowShape[1] == tensorShape[1])
+    boundedDim = 1;
+  else if (narrowShape[1] == 1 && narrowShape[0] == tensorShape[0])
+    boundedDim = 0;
+  else
+    return std::nullopt;
+
+  // The comparison may already be 2D (its operands were expanded to 2D
+  // before comparing) or still 1D (the comparison was computed in 1D, then
+  // the bool result was expanded) -- look through one level of expand_dims
+  // to find it either way.
+  Value cmpCandidate = stripExpandDims(narrow);
+  auto cmpOp = cmpCandidate.getDefiningOp<arith::CmpIOp>();
+  if (!cmpOp)
+    return std::nullopt;
+  if (cmpOp.getPredicate() != arith::CmpIPredicate::slt &&
+      cmpOp.getPredicate() != arith::CmpIPredicate::ult)
+    return std::nullopt;
+
+  auto boundSplat = cmpOp.getRhs().getDefiningOp<triton::SplatOp>();
+  if (!boundSplat)
+    return std::nullopt;
+
+  std::optional<Value> rowBase =
+      matchBaseAndRange(cmpOp.getLhs(), tensorShape[boundedDim]);
+  if (!rowBase)
+    return std::nullopt;
+
+  return RowLimitMaskInfo{boundedDim, *rowBase, boundSplat.getSrc()};
 }
 
 } // namespace mlir::triton::gpu::intel

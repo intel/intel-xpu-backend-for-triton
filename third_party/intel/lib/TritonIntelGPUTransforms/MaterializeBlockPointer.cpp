@@ -388,6 +388,16 @@ private:
   /// count in a grouped GEMM, `offs_am < tl.load(offsets_ptr + g)` — has
   /// constancy 1 along the M dim, because the compare visitor can only derive
   /// constancy from the divisibility of both sides.
+  ///
+  /// For a `tt::LoadOp`, such a mask may still be a "row-limit" pattern --
+  /// `(rowBase + arange) < bound`, constant along the memory-contiguous dim
+  /// -- that `ttgi::matchRowLimitMask` recognizes. The LLVM lowering
+  /// (LowerTo2DBlockLoad.cpp) re-derives the same match and, when it is
+  /// valid for this op's layout, expresses the bound as the 2D block
+  /// message's `base_height` operand instead of per-element predication, so
+  /// permit block IO here too. Stores are not covered: nothing downstream
+  /// consumes a store-side row limit the same way, so a store mask is still
+  /// held to the constancy check below.
   template <typename OpType>
   bool maskPermitsBlockTile(OpType op,
                             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -395,6 +405,16 @@ private:
     Value mask = op.getMask();
     if (!mask || matchPattern(mask, m_One()))
       return true;
+
+    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
+      if (rank == 2) {
+        auto maskTy = cast<RankedTensorType>(mask.getType());
+        if (ttgi::matchRowLimitMask(mask, maskTy.getShape())) {
+          LDBG("Mask is a row-limit pattern; permitting block IO for: " << op);
+          return true;
+        }
+      }
+    }
 
     const tt::AxisInfo *maskAxisInfo = axisInfoAnalysis.getAxisInfo(mask);
     if (!maskAxisInfo) {

@@ -152,6 +152,27 @@ Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
 Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
                             unsigned elemSizeInBytes);
 
+/// Information extracted from a mask recognized as a "row-limit" pattern:
+/// `(rowBase + arange(0, N)) < bound`, broadcast (held constant) across the
+/// tensor's other dimension -- e.g. a grouped-GEMM row mask
+/// `offs_am < tl.load(group_end_ptr)`. Such a mask can be expressed as a 2D
+/// block load's `base_height` operand instead of per-element predication:
+/// the hardware already zero-fills rows at or beyond `base_height`, which is
+/// exactly what the mask would have done.
+struct RowLimitMaskInfo {
+  unsigned boundedDim; // tensor dim the mask varies (and is bounded) along
+  Value rowBase;       // scalar base of the linear index; null means zero
+  Value bound;         // scalar upper bound compared against
+};
+
+/// Match `mask` against the row-limit pattern described above, for a rank-2
+/// tensor of the given shape. Returns std::nullopt for any other mask shape
+/// -- including a mask that also varies along the other dimension, or a
+/// non-strict/non-splat comparison -- in which case the caller must still
+/// use per-element masking.
+std::optional<RowLimitMaskInfo>
+matchRowLimitMask(Value mask, ArrayRef<int64_t> tensorShape);
+
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H

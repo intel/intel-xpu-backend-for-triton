@@ -8,6 +8,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
@@ -81,6 +82,47 @@ static Value createZeroSplat(OpBuilder &builder, Location loc,
   Value zeroVal =
       arith::ConstantOp::create(builder, loc, cast<TypedAttr>(zeroAttr));
   return tt::SplatOp::create(builder, loc, tensorTy, zeroVal);
+}
+
+/// True when `other` is absent or a splat of zero -- the only fill value the
+/// 2D block message's hardware boundary check can produce, so the only case
+/// where a row-limit mask (see ttgi::matchRowLimitMask) can be dropped in
+/// favor of a dynamic `base_height` operand.
+static bool isZeroFillOther(Value other) {
+  if (!other)
+    return true;
+  DenseElementsAttr constAttr;
+  if (!matchPattern(other, m_Constant(&constAttr)) || !constAttr.isSplat())
+    return false;
+  Type elemTy = constAttr.getElementType();
+  if (isa<FloatType>(elemTy))
+    return constAttr.getSplatValue<APFloat>().isZero();
+  if (isa<IntegerType>(elemTy))
+    return constAttr.getSplatValue<APInt>().isZero();
+  return false;
+}
+
+/// True when `v` is a type `toI32` below can convert (or `v` is null, the
+/// zero-base case). arith.cmpi operands are always integer or index, so this
+/// is expected to always hold for a matched row-limit mask; kept as an
+/// explicit, cheap guard rather than relying on that invariant silently.
+static bool isI32Convertible(Value v) {
+  return !v || v.getType().isIndex() || isa<IntegerType>(v.getType());
+}
+
+/// Normalize an integer or index scalar to i32 via index_cast/ext/trunc, so
+/// it can feed an i32 block-load operand (base_pitch, base_height). `v` must
+/// satisfy isI32Convertible.
+static Value toI32(OpBuilder &builder, Location loc, Value v) {
+  Type i32Ty = builder.getI32Type();
+  if (v.getType() == i32Ty)
+    return v;
+  if (v.getType().isIndex())
+    return arith::IndexCastOp::create(builder, loc, i32Ty, v);
+  auto intTy = cast<IntegerType>(v.getType());
+  if (intTy.getWidth() < 32)
+    return arith::ExtSIOp::create(builder, loc, i32Ty, v);
+  return arith::TruncIOp::create(builder, loc, i32Ty, v);
 }
 
 struct TritonIntelGPULowerTo2DBlockLoadPass
@@ -371,10 +413,33 @@ private:
     bool oneMatrixPerLoadForBT =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
 
+    // A mask of the form `(rowBase + arange) < bound`, constant along the
+    // memory-contiguous dim, doesn't need per-element masking: the bound can
+    // instead become the 2D block message's `base_height` operand, and the
+    // hardware's own out-of-bounds zero-fill does what the mask would have
+    // done. Gate on `other` being zero (the only fill value the hardware can
+    // produce) and on the mask's bounded dim actually being the surface's
+    // pitch dim, both decided up front so the tile-size computation below
+    // can treat this load as unmasked consistently with the operand
+    // construction further down.
+    std::optional<ttgi::RowLimitMaskInfo> rowLimitMask;
+    if (op.getMask() && rank == 2 && isZeroFillOther(op.getOther())) {
+      if (auto m = ttgi::matchRowLimitMask(op.getMask(), tensorTy.getShape())) {
+        unsigned pitchTensorDim =
+            (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+        if (m->boundedDim == pitchTensorDim && isI32Convertible(m->rowBase) &&
+            isI32Convertible(m->bound))
+          rowLimitMask = m;
+        else
+          LDBG("Row-limit mask does not match the pitch dim for: " << *op);
+      }
+    }
+
     // Retrieve mask axis info to validate tile constraints consistently
-    // with the downstream LLVM lowering.
+    // with the downstream LLVM lowering. Skipped for a row-limit mask: its
+    // bound is handled via base_height below, not by clamping the tile.
     tt::AxisInfo *maskAxisInfo = nullptr;
-    if (op.getMask())
+    if (op.getMask() && !rowLimitMask)
       maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
 
     // Whether this load was annotated by the 1D→2D reshape in
@@ -544,25 +609,47 @@ private:
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;
 
-    // If mask is present but other is absent, create a zero splat as the
-    // default padding value (the verifier requires 'other' when 'mask' is set).
-    Value mask = op.getMask();
-    Value other = op.getOther();
-    if (mask && !other)
-      other = createZeroSplat(builder, loc, tensorTy);
-
     // Pitch is a single i32 operand: the runtime value when we have one, an
-    // arith.constant otherwise (the lowering and asserts treat both the same).
+    // arith.constant otherwise (the lowering and asserts treat both the
+    // same).
     Value pitchOperand =
         pitchValue
             ? pitchValue
             : arith::ConstantOp::create(
                   builder, loc,
                   builder.getI32IntegerAttr(static_cast<int32_t>(pitch)));
+
+    Value mask = op.getMask();
+    Value other = op.getOther();
+    Value heightOperand;
+    if (rowLimitMask) {
+      // Drop the mask/other: the hardware's own zero-fill at base_height
+      // replaces the per-element predication.
+      mask = Value();
+      other = Value();
+      Value boundI32 = toI32(builder, loc, rowLimitMask->bound);
+      Value diff = boundI32;
+      if (rowLimitMask->rowBase) {
+        Value baseI32 = toI32(builder, loc, rowLimitMask->rowBase);
+        diff = arith::SubIOp::create(builder, loc, boundI32, baseI32);
+      }
+      Value zero =
+          arith::ConstantOp::create(builder, loc, builder.getI32IntegerAttr(0));
+      heightOperand = arith::MaxSIOp::create(builder, loc, diff, zero);
+    } else {
+      // If mask is present but other is absent, create a zero splat as the
+      // default padding value (the verifier requires 'other' when 'mask' is
+      // set).
+      if (mask && !other)
+        other = createZeroSplat(builder, loc, tensorTy);
+      heightOperand = arith::ConstantOp::create(
+          builder, loc,
+          builder.getI32IntegerAttr(static_cast<int32_t>(baseHeightRows)));
+    }
+
     auto blockPtrLoadOp = ttgi::Subgroup2DBlockLoadFromPtrOp::create(
-        builder, loc, op.getType(), op.getPtr(), pitchOperand, mask, other,
-        builder.getI32IntegerAttr(baseWidthBytes),
-        builder.getI32IntegerAttr(baseHeightRows),
+        builder, loc, op.getType(), op.getPtr(), pitchOperand, heightOperand,
+        mask, other, builder.getI32IntegerAttr(baseWidthBytes),
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate attributes if present.
