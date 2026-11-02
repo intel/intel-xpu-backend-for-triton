@@ -1126,9 +1126,12 @@ tt.func public @ptr_offset(%arg0: i32, %arg1: tensor<128x1xi32>) {
   %2 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // CHECK: contiguity = [128], divisibility = [128], constancy = [1], constant_value = <none>
   %3 = arith.addi %1, %2 : tensor<128xi32>
-  // CHECK: contiguity = [128], divisibility = [128], constancy = [1], constant_value = <none>
+  // COM: Nothing bounds %arg0, so the dividend's sign is unknown and the
+  // COM: contiguity deduction is declined. A kernel would carry either a
+  // COM: program id or a tl.assume here - see axis-info-assume.mlir.
+  // CHECK: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
   %4 = arith.remsi %3, %cst_1 : tensor<128xi32>
-  // CHECK: contiguity = [128, 1], divisibility = [128, 1], constancy = [1, 1], constant_value = <none>
+  // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
   %5 = tt.expand_dims %4 {axis = 1 : i32} : tensor<128xi32> -> tensor<128x1xi32>
   // CHECK: contiguity = [1, 1], divisibility = [512, 512], constancy = [1, 1], constant_value = <none>
   %6 = arith.muli %5, %cst_0 : tensor<128x1xi32>

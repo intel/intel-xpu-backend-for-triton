@@ -382,17 +382,16 @@ tt.func @ptr_offset_pattern(%arg0: i32, %arg1: tensor<128x1xi32>) {
   // [0] + [1] = [1]
   // CHECK: arith.addi {{.*}} => stride = [1]
   %3 = arith.addi %1, %2 : tensor<128xi32>
-  // rem with constant modulus preserves stride
-  // CHECK: arith.remsi {{.*}} => stride = [1]
+  // Nothing bounds %arg0, so the dividend's sign is unknown and the signed
+  // remainder reports unknown stride, which then propagates.
+  // CHECK: arith.remsi {{.*}} => stride = [-1]
   %4 = arith.remsi %3, %cst_1 : tensor<128xi32>
-  // expand_dims at axis=1: [1] -> [1, 0]
-  // CHECK: tt.expand_dims {{.*}} => stride = [1, 0]
+  // expand_dims at axis=1: [-1] -> [-1, 0]
+  // CHECK: tt.expand_dims {{.*}} => stride = [-1, 0]
   %5 = tt.expand_dims %4 {axis = 1 : i32} : tensor<128xi32> -> tensor<128x1xi32>
-  // [1, 0] * splat(512) => stride = [512, 0]
-  // CHECK: arith.muli {{.*}} => stride = [512, 0]
+  // CHECK: arith.muli {{.*}} => stride = [-1, 0]
   %6 = arith.muli %5, %cst_0 : tensor<128x1xi32>
-  // broadcast preserves stride: [512, 0]
-  // CHECK: tt.broadcast {{.*}} => stride = [512, 0]
+  // CHECK: tt.broadcast {{.*}} => stride = [-1, 0]
   %7 = tt.broadcast %6 : tensor<128x1xi32> -> tensor<128x64xi32>
   // muli with unknown stride input => [-1, -1]
   // CHECK: arith.muli {{.*}} => stride = [-1, -1]
