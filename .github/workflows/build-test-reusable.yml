@@ -77,7 +77,7 @@ env:
   # Suites that are split into NUM_SHARDS shards, each shard runs on its own runner
   PARALLEL_SUITES: ""
   # Suites that are run without sharding, one runner per suite
-  SEQUENTIAL_SUITES: "minicore language gluon triton-kernels rest scaled_dot"
+  SEQUENTIAL_SUITES: "minicore language_and_scaled_dot gluon triton-kernels rest"
 
 jobs:
   build:
@@ -324,7 +324,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --minicore
 
       - name: Warm language compile cache
-        if: matrix.loop.suite == 'language'
+        if: matrix.loop.suite == 'language_and_scaled_dot'
         uses: ./.github/actions/warm-compile-cache
         with:
           working-directory: python/test/unit
@@ -337,7 +337,7 @@ jobs:
           extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
 
       - name: Run language tests
-        if: matrix.loop.suite == 'language'
+        if: matrix.loop.suite == 'language_and_scaled_dot'
         run: |
           export TRITON_XPU_GEN_NATIVE_CODE=1
           ${{ env.TRITON_TEST_CMD }} --language
@@ -360,7 +360,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --matmul
 
       - name: Warm scaled_dot compile cache
-        if: matrix.loop.suite == 'scaled_dot'
+        if: matrix.loop.suite == 'language_and_scaled_dot'
         uses: ./.github/actions/warm-compile-cache
         with:
           working-directory: python/test/unit
@@ -369,7 +369,7 @@ jobs:
           extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
 
       - name: Run scaled_dot tests
-        if: matrix.loop.suite == 'scaled_dot'
+        if: matrix.loop.suite == 'language_and_scaled_dot'
         run: |
           export TRITON_XPU_GEN_NATIVE_CODE=1
           ${{ env.TRITON_TEST_CMD }} --scaled-dot
