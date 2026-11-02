@@ -158,7 +158,7 @@ jobs:
           FP8="1" bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
 
       - name: Run vllm batched moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: false
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -167,7 +167,7 @@ jobs:
 
 
       - name: Run vllm batched moe fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: false
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -175,7 +175,7 @@ jobs:
           FP8="1" bash run_benchmark.sh batched_moe --reports $REPORTS --tag $TAG
 
       - name: Run vllm fused moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: false
         run: |
           source ./scripts/capture-hw-details.sh
 
