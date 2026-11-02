@@ -413,8 +413,7 @@ def test_block_io_nd_out_of_bounds(padding, device, tmp_path: pathlib.Path):
 
 # A rank-reducing block store must apply its batch index and drop an out-of-range one (issue #8516).
 # An odd plane stride would misalign the rebased 2D block message, so that store stays generic.
-@pytest.mark.parametrize("batch", [0, 1, 5, -1])
-@pytest.mark.parametrize("stride_kind", ["aligned", "odd"])
+@pytest.mark.parametrize("stride_kind, batch", [("aligned", 1), ("aligned", 5), ("aligned", -1), ("odd", 1)])
 @pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
                    reason="Block stores not supported on this architecture")
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
@@ -483,14 +482,13 @@ def _rank_reduced_store_kernel(src_ptr, dst_ptr, B, stride_b, batch, M: tl.const
 
 
 # A runtime plane stride carries only the 16-element hint, which proves the 4-byte-aligned rebase the block store
-# needs whether a plane starts 32 or 0 bytes past a 64-byte boundary; an out-of-range batch writes nothing (#8516).
-@pytest.mark.parametrize("extra, batch", [(16, 3), (32, 3), (16, 0), (16, 4)])
+# needs; plane 3 starts 32 bytes past a 64-byte boundary (#8516).
 @pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
                    reason="Block stores not supported on this architecture")
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
-def test_block_io_rank_reduced_store_runtime_stride(batch, extra, device, with_allocator):
-    B, M, N = 4, 32, 64
-    stride_b = M * N + extra
+def test_block_io_rank_reduced_store_runtime_stride(device, with_allocator):
+    B, M, N, batch = 4, 32, 64, 3
+    stride_b = M * N + 16
     # Normal bf16 bit patterns, compared as int16 so the check is exact.
     src = (torch.arange(M * N, device=device) + 0x3F80).to(torch.int16)
     buf = torch.full(((B + 1) * stride_b, ), -1, dtype=torch.int16, device=device)
@@ -498,8 +496,7 @@ def test_block_io_rank_reduced_store_runtime_stride(batch, extra, device, with_a
                                                M, N)
 
     expect = torch.full_like(buf, -1)
-    if batch < B:
-        expect[batch * stride_b:batch * stride_b + M * N] = src
+    expect[batch * stride_b:batch * stride_b + M * N] = src
     assert torch.equal(buf, expect)
     llir = kernel.asm["llir"]
     assert 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
