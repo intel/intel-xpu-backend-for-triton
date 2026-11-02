@@ -50,9 +50,9 @@ public:
 
   /// Implements "abstract interpretation" of loops with known bounds in order
   /// to infer the ranges for loop carried values. Lattice states are propagated
-  /// to all region successors N times, where N is the total trip count of the
-  /// loop. After propagation both loop body values and users of loop results
-  /// will have accurate ranges.
+  /// to all region successors N times, where N is the loop's simulation steps
+  /// (see `loopSimulationSteps`). After propagation both loop body values and
+  /// users of loop results will have accurate ranges.
   ///
   /// Notes:
   ///   - it attempts to compute loop's total trip count in the context of a
@@ -60,9 +60,10 @@ public:
   ///     actually visit the loop N times for each iter_arg (each argument
   ///     lattice) so we actually track visit count for (loop, arg) not just
   ///     (loop).
-  ///   - before propagating, we check if we have propagated for (loop, arg)
-  ///     >= N times. If so, we do not propagate (and thus the traversal
-  ///     converges/ends).
+  ///   - before propagating along a backedge, we check if we have propagated
+  ///     for (loop, arg) >= N - 1 times (N for the loop results). If so, we do
+  ///     not propagate (and thus the traversal converges/ends). The init
+  ///     values are always propagated.
   ///
   /// Note, for loops where the trip count cannot be inferred *and* loops
   /// with a total trip count larger than `kDefaultMaxTripCount`, fallback
@@ -94,18 +95,19 @@ private:
   llvm::SmallMapVector<Value, ConstantIntRanges, 2> opResultAssumption;
   DominanceInfo &domInfo;
 
-  /// Trip counts of all loops with static loop bounds contained under the root
-  /// operation being analyzed. Note, nested loops have trip counts computed as
-  /// a product of enclosing loops; i.e. for
+  /// Simulation steps of all loops contained under the root operation being
+  /// analyzed: the loop's total trip count, raised to that of any nested loop.
+  /// Note, nested loops have trip counts computed as a product of enclosing
+  /// loops; i.e. for
   ///   scf.for i = 1 to 10
   ///     scf.for j = 1 to 10
   /// the trip count of the outer loop (on i) is 10 but the trip count of the
-  /// inner loop (on j) is 100.
-  llvm::SmallDenseMap<LoopLikeOpInterface, int64_t> loopTripCounts;
+  /// inner loop (on j) is 100, so both loops are simulated 100 steps.
+  llvm::SmallDenseMap<LoopLikeOpInterface, int64_t> loopSimulationSteps;
 
   /// Visit counts tabulating how many times each lattice has been propagated
-  /// through each loop. This is used in visitRegionSuccessors to end
-  /// propagation when loopVisits[loop, lattice] reaches loopTripCounts[loop].
+  /// along a backedge of each loop. This is used in visitRegionSuccessors to
+  /// end propagation when loopVisits[loop, lattice] reaches the step limit.
   llvm::SmallDenseMap<
       std::pair<LoopLikeOpInterface, dataflow::IntegerValueRangeLattice *>,
       int64_t>
