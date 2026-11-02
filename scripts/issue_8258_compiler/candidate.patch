@@ -1,0 +1,360 @@
+--- a/third_party/intel/backend/compiler.py
++++ b/third_party/intel/backend/compiler.py
+@@ -521,6 +521,8 @@
+         module_opts.is_fast_math = knobs.intel.fast_math
+         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
+         pm.run(mod, 'annotate_module')
++        if cls.device_arch == 'bmg':
++            mod.set_attr('ttig.dpas_prefetch_stages', ir.builder(mod.context).get_int32_attr(opt.num_stages))
+ 
+         # Overwrite the warp_size option with the module annotation.
+         opt.warp_size = intel.get_threads_per_warp(mod)
+@@ -717,7 +719,7 @@
+             llvm.link_extern_libs(llvm_mod, paths)
+ 
+         cls.optimize_llvm_mod(llvm_mod, options)
+-        intel.post_process_llir(llvm_mod)
++        intel.post_process_llir(llvm_mod, cls.device_arch == 'bmg' and options.num_stages == 1)
+ 
+         # Get some metadata
+         total_num_warps = src.get_int_attr("ttg.total-num-warps")
+--- a/third_party/intel/lib/TritonIntelGPUTransforms/AccelerateMatmul.cpp
++++ b/third_party/intel/lib/TritonIntelGPUTransforms/AccelerateMatmul.cpp
+@@ -2,6 +2,7 @@
+ #include "Dialect/TritonIntelGPU/Transforms/DecomposeScaledBlocked.h"
+ #include "Dialect/TritonIntelGPU/Transforms/Utility.h"
+ #include "mlir/Analysis/SliceAnalysis.h"
++#include "mlir/Dialect/Utils/StaticValueUtils.h"
+ #include "mlir/IR/Builders.h"
+ #include "mlir/IR/BuiltinTypes.h"
+ #include "mlir/IR/PatternMatch.h"
+@@ -242,6 +243,17 @@
+   });
+ }
+ 
++static bool hasLongConstantReduction(scf::ForOp loop) {
++  auto lower = getConstantIntValue(loop.getLowerBound());
++  auto upper = getConstantIntValue(loop.getUpperBound());
++  auto step = getConstantIntValue(loop.getStep());
++  if (!lower || !upper || !step || *lower < 0 || *upper <= *lower || *step <= 0)
++    return false;
++  int64_t span = *upper - *lower;
++  int64_t fullTrips = span / *step;
++  return fullTrips > 256 || (fullTrips == 256 && span % *step != 0);
++}
++
+ template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                              OpTy, tt::DotOp, tt::DotScaledOp>::value>>
+ class BlockedToDPAS : public OpRewritePattern<OpTy> {
+@@ -329,6 +341,22 @@
+         oldAType.getElementType().getIntOrFloatBitWidth(),
+         isa<Float8E5M2Type, Float8E4M3FNType>(oldAType.getElementType()),
+         oldAType.getShape(), oldBType.getShape(), warpsPerTile);
++
++    auto stageHint = mod->getAttrOfType<IntegerAttr>("ttig.dpas_prefetch_stages");
++    auto loop = op->template getParentOfType<scf::ForOp>();
++    auto chain = getChainedDotKindAttr(op);
++    if (stageHint && loop && op->getBlock() == loop.getBody() && rank == 2 &&
++        isa<tt::DotOp>(op.getOperation()) && dpasCap->executionSize == 16 &&
++        oldAType.getShape()[rank - 2] == oldBType.getShape()[rank - 1] &&
++        isa<Float16Type, BFloat16Type>(oldAType.getElementType()) &&
++        (!chain || *chain == ChainedDotKind::NoChained)) {
++      int64_t stages = stageHint.getInt();
++      if (auto local = loop->template getAttrOfType<IntegerAttr>("tt.num_stages"))
++        stages = local.getInt();
++      // Use smaller A load clusters only for long, pipelined reductions.
++      if (stages > 1 && hasLongConstantReduction(loop))
++        repCluster[rank - 2] = std::min(repCluster[rank - 2], 2u);
++    }
+ 
+     unsigned repeatCount = std::min(
+         dpasCap->repeatCount, static_cast<unsigned>(retShape[rank - 2] /*M*/));
+--- a/third_party/intel/lib/Target/LLVMIR/PostProcess.cpp
++++ b/third_party/intel/lib/Target/LLVMIR/PostProcess.cpp
+@@ -2,6 +2,8 @@
+ #include "third_party/intel/lib/Target/LLVMIR/LLVMPasses.h"
+ 
+ #include "llvm/ADT/SetVector.h"
++#include "llvm/Analysis/LoopInfo.h"
++#include "llvm/IR/Dominators.h"
+ #include "llvm/IR/DataLayout.h"
+ #include "llvm/IR/DerivedTypes.h"
+ #include "llvm/IR/IRBuilder.h"
+@@ -391,7 +393,50 @@
+     legalizeI1VectorStore(store, dl);
+ }
+ 
+-void postProcessLLVMIR(llvm::Module &mod) {
++static void hintOneStageDotLoops(Module &mod) {
++  LLVMContext &ctx = mod.getContext();
++  for (Function &function : mod) {
++    if (function.isDeclaration())
++      continue;
++    DominatorTree dominators(function);
++    LoopInfo loops(dominators);
++    SmallVector<Loop *> pending(loops.begin(), loops.end());
++    while (!pending.empty()) {
++      Loop *loop = pending.pop_back_val();
++      if (!loop->getSubLoops().empty()) {
++        pending.append(loop->getSubLoops().begin(), loop->getSubLoops().end());
++        continue;
++      }
++      if (loop->getLoopID() || !loop->getLoopLatch())
++        continue;
++      unsigned dots = 0;
++      bool blockLoad = false, prefetch = false;
++      for (BasicBlock *block : loop->blocks()) {
++        for (Instruction &inst : *block) {
++          auto *call = dyn_cast<CallBase>(&inst);
++          Function *callee = call ? call->getCalledFunction() : nullptr;
++          if (!callee)
++            continue;
++          StringRef name = callee->getName();
++          dots += name.contains("SubgroupMatrixMultiplyAccumulateINTEL");
++          blockLoad |= name.contains("Subgroup2DBlockLoad");
++          prefetch |= name.contains("Prefetch");
++        }
++      }
++      if (!blockLoad || prefetch || dots < 8 || dots > 32)
++        continue;
++      Metadata *count[] = {
++          MDString::get(ctx, "llvm.loop.unroll.count"),
++          ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(ctx), 2))};
++      Metadata *operands[] = {nullptr, MDNode::get(ctx, count)};
++      MDNode *id = MDNode::getDistinct(ctx, operands);
++      id->replaceOperandWith(0, id);
++      loop->setLoopID(id);
++    }
++  }
++}
++
++void postProcessLLVMIR(llvm::Module &mod, bool unrollOneStageDots) {
+   // __devicelib_assert_fail must be a declaration so that
+   // IGC can replace it with a runtime assert function.
+   // If a 'fallback' implementation is defined in SYCL libarary, the
+@@ -415,6 +460,8 @@
+ 
+   // IGC and LLVM disagree on the memory layout of `<N x i1>`.
+   legalizeI1VectorMemory(mod);
++  if (unrollOneStageDots)
++    hintOneStageDotLoops(mod);
+ }
+ 
+ } // namespace mlir::triton::intel
+--- a/third_party/intel/include/Target/LLVMIR/PostProcess.h
++++ b/third_party/intel/include/Target/LLVMIR/PostProcess.h
+@@ -6,7 +6,7 @@
+ } // namespace llvm
+ 
+ namespace mlir::triton::intel {
+-void postProcessLLVMIR(llvm::Module &module);
++void postProcessLLVMIR(llvm::Module &module, bool unrollOneStageDots = false);
+ } // namespace mlir::triton::intel
+ 
+ #endif // TRITON_TARGET_LLVMIR_POSTPROCESS_H
+--- a/third_party/intel/triton_xpu.cc
++++ b/third_party/intel/triton_xpu.cc
+@@ -461,7 +461,10 @@
+   });
+ 
+   m.def("post_process_llir",
+-        [](llvm::Module *mod) { intel::postProcessLLVMIR(*mod); });
++        [](llvm::Module *mod, bool unrollOneStageDots) {
++          intel::postProcessLLVMIR(*mod, unrollOneStageDots);
++        },
++        py::arg("module"), py::arg("unroll_one_stage_dots") = false);
+ 
+   m.def(
+       "translate_to_spirv",
+--- a/test/TritonIntelGPU/accelerate-matmul-edge-cases.mlir
++++ b/test/TritonIntelGPU/accelerate-matmul-edge-cases.mlir
+@@ -87,3 +87,145 @@
+     tt.return
+   }
+ }
++
++// -----
++// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [2, 2]
++#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
++module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.dpas_prefetch_stages = 2 : i32} {
++  // CHECK-LABEL: tt.func public @prefetched_dot_cluster
++  tt.func public @prefetched_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
++    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
++    %lo = arith.constant 0 : index
++    %hi = arith.constant 512 : index
++    %step = arith.constant 1 : index
++    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
++      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
++      scf.yield %dot : tensor<256x256xf32, #blocked>
++    }
++    tt.return %result : tensor<256x256xf32, #blocked>
++  }
++}
++
++// -----
++// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
++#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
++module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.dpas_prefetch_stages = 1 : i32} {
++  // CHECK-LABEL: tt.func public @one_stage_dot_cluster
++  tt.func public @one_stage_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
++    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
++    %lo = arith.constant 0 : index
++    %hi = arith.constant 512 : index
++    %step = arith.constant 1 : index
++    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
++      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
++      scf.yield %dot : tensor<256x256xf32, #blocked>
++    }
++    tt.return %result : tensor<256x256xf32, #blocked>
++  }
++}
++
++// -----
++// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
++#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
++module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.dpas_prefetch_stages = 3 : i32} {
++  // CHECK-LABEL: tt.func public @local_one_stage_dot_cluster
++  tt.func public @local_one_stage_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
++    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
++    %lo = arith.constant 0 : index
++    %hi = arith.constant 512 : index
++    %step = arith.constant 1 : index
++    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
++      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
++      scf.yield %dot : tensor<256x256xf32, #blocked>
++    } {tt.num_stages = 1 : i32}
++    tt.return %result : tensor<256x256xf32, #blocked>
++  }
++}
++
++// -----
++// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
++#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
++module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate} {
++  // CHECK-LABEL: tt.func public @legacy_target_dot_cluster
++  tt.func public @legacy_target_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
++    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
++    %lo = arith.constant 0 : index
++    %hi = arith.constant 512 : index
++    %step = arith.constant 1 : index
++    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
++      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
++      scf.yield %dot : tensor<256x256xf32, #blocked>
++    }
++    tt.return %result : tensor<256x256xf32, #blocked>
++  }
++}
++// -----
++// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
++#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
++module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.dpas_prefetch_stages = 2 : i32} {
++  // CHECK-LABEL: tt.func public @rectangular_dot_cluster
++  tt.func public @rectangular_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x128xf32, #blocked> {
++    %zero = arith.constant dense<0.0> : tensor<256x128xf32, #blocked>
++    %lo = arith.constant 0 : index
++    %hi = arith.constant 512 : index
++    %step = arith.constant 1 : index
++    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x128xf32, #blocked>) {
++      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x128xf32, #blocked>
++      scf.yield %dot : tensor<256x128xf32, #blocked>
++    }
++    tt.return %result : tensor<256x128xf32, #blocked>
++  }
++}
++
++// -----
++// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
++#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
++module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.dpas_prefetch_stages = 2 : i32} {
++  // CHECK-LABEL: tt.func public @short_reduction_dot_cluster
++  tt.func public @short_reduction_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
++    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
++    %lo = arith.constant 0 : index
++    %hi = arith.constant 8192 : index
++    %step = arith.constant 32 : index
++    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
++      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
++      scf.yield %dot : tensor<256x256xf32, #blocked>
++    }
++    tt.return %result : tensor<256x256xf32, #blocked>
++  }
++}
++
++// -----
++// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [2, 2]
++#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
++module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.dpas_prefetch_stages = 2 : i32} {
++  // CHECK-LABEL: tt.func public @long_boundary_dot_cluster
++  tt.func public @long_boundary_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
++    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
++    %lo = arith.constant 0 : index
++    %hi = arith.constant 8193 : index
++    %step = arith.constant 32 : index
++    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
++      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
++      scf.yield %dot : tensor<256x256xf32, #blocked>
++    }
++    tt.return %result : tensor<256x256xf32, #blocked>
++  }
++}
++
++// -----
++// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
++#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
++module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.dpas_prefetch_stages = 2 : i32} {
++  // CHECK-LABEL: tt.func public @dynamic_reduction_dot_cluster
++  tt.func public @dynamic_reduction_dot_cluster(%hi: index, %a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
++    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
++    %lo = arith.constant 0 : index
++    %step = arith.constant 1 : index
++    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
++      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
++      scf.yield %dot : tensor<256x256xf32, #blocked>
++    }
++    tt.return %result : tensor<256x256xf32, #blocked>
++  }
++}
+--- a/python/test/unit/test_stages_inspection.py
++++ b/python/test/unit/test_stages_inspection.py
+@@ -88,3 +88,41 @@
+ 
+     # Check that repros match
+     assert golden_repro.replace('k1', 'dummy') == hook_repro.replace('k2', 'dummy')
++
++
++@pytest.mark.parametrize("stages,frontend_unroll,expected", [(1, 1, True), (2, 1, False), (1, 4, False)])
++def test_intel_one_stage_dot_loop_hint(monkeypatch, stages, frontend_unroll, expected):
++    from triton._C import libtriton
++    if not hasattr(libtriton, "intel"):
++        pytest.skip("Intel backend is required")
++    import triton.language as tl
++    from triton.backends.compiler import GPUTarget
++    from triton.compiler.compiler import ASTSource
++
++    monkeypatch.setenv("TRITON_INTEL_DEVICE_ARCH", "bmg")
++    target = GPUTarget("xpu", {
++        "architecture": 21479031808, "arch": "bmg", "name": "Intel Arc B580",
++        "driver_version": "1.17.39758+11", "gpu_eu_count": 160, "gpu_subslice_count": 20,
++        "max_work_group_size": 1024, "max_num_sub_groups": 64, "sub_group_sizes": [16, 32],
++        "has_2d_block_io": True, "has_bfloat16_conversion": True,
++        "has_subgroup_matrix_multiply_accumulate": True, "local_mem_size": 131072,
++        "max_grf_mode": "256", "__intel_already_queried_extensions__": True,
++    }, 32)
++
++    @triton.jit
++    def dot_loop(A, B, C, UNROLL: tl.constexpr):
++        a = tl.make_tensor_descriptor(A, (256, 1024), (1024, 1), (256, 32))
++        b = tl.make_tensor_descriptor(B, (1024, 256), (256, 1), (32, 256))
++        acc = tl.full((256, 256), 0, tl.float32)
++        for k in tl.range(0, 1024, 32, loop_unroll_factor=UNROLL):
++            acc = tl.dot(a.load([0, k]), b.load([k, 0]), acc)
++        rows = tl.arange(0, 256)
++        cols = tl.arange(0, 256)
++        tl.store(C + rows[:, None] * 256 + cols[None, :], acc)
++
++    source = ASTSource(dot_loop, {"A": "*bf16", "B": "*bf16", "C": "*fp32", "UNROLL": "constexpr"},
++                       {"UNROLL": frontend_unroll},
++                       {(i,): [("tt.divisibility", 16)] for i in range(3)})
++    compiled = triton.compile(source, target=target, options={"num_warps": 32, "num_stages": stages,
++                                                           "grf_mode": "256", "generate_native_code": False})
++    assert ("llvm.loop.unroll.count" in compiled.asm["llir"]) == expected
