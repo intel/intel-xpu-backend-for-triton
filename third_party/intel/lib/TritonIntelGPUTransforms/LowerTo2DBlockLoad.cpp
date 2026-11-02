@@ -84,46 +84,12 @@ static Value createZeroSplat(OpBuilder &builder, Location loc,
   return tt::SplatOp::create(builder, loc, tensorTy, zeroVal);
 }
 
-/// True when `other` is absent or a splat of zero -- the only fill value the
-/// 2D block message's hardware boundary check can produce, so the only case
-/// where a row-limit mask (see ttgi::matchRowLimitMask) can be dropped in
-/// favor of a dynamic `base_height` operand.
-static bool isZeroFillOther(Value other) {
-  if (!other)
-    return true;
-  DenseElementsAttr constAttr;
-  if (!matchPattern(other, m_Constant(&constAttr)) || !constAttr.isSplat())
-    return false;
-  Type elemTy = constAttr.getElementType();
-  if (isa<FloatType>(elemTy))
-    return constAttr.getSplatValue<APFloat>().isZero();
-  if (isa<IntegerType>(elemTy))
-    return constAttr.getSplatValue<APInt>().isZero();
-  return false;
-}
-
-/// True when `v` is a type `toI32` below can convert (or `v` is null, the
-/// zero-base case). arith.cmpi operands are always integer or index, so this
-/// is expected to always hold for a matched row-limit mask; kept as an
-/// explicit, cheap guard rather than relying on that invariant silently.
-static bool isI32Convertible(Value v) {
-  return !v || v.getType().isIndex() || isa<IntegerType>(v.getType());
-}
-
-/// Normalize an integer or index scalar to i32 via index_cast/ext/trunc, so
-/// it can feed an i32 block-load operand (base_pitch, base_height). `v` must
-/// satisfy isI32Convertible.
-static Value toI32(OpBuilder &builder, Location loc, Value v) {
-  Type i32Ty = builder.getI32Type();
-  if (v.getType() == i32Ty)
-    return v;
-  if (v.getType().isIndex())
-    return arith::IndexCastOp::create(builder, loc, i32Ty, v);
-  auto intTy = cast<IntegerType>(v.getType());
-  if (intTy.getWidth() < 32)
-    return arith::ExtSIOp::create(builder, loc, i32Ty, v);
-  return arith::TruncIOp::create(builder, loc, i32Ty, v);
-}
+/// True when `v` is null (the zero-base case) or already exactly i32.
+/// Not "any width, extended/truncated as needed": narrowing a wider bound
+/// (e.g. i64 `2^32 + 4`) before the subtraction would silently truncate it
+/// into a wrong, much smaller height. The real-world pattern this matcher
+/// targets uses plain i32 offsets anyway.
+static bool isExactI32(Value v) { return !v || v.getType().isInteger(32); }
 
 struct TritonIntelGPULowerTo2DBlockLoadPass
     : public ttgi::impl::TritonIntelGPULowerTo2DBlockLoadBase<
@@ -413,25 +379,23 @@ private:
     bool oneMatrixPerLoadForBT =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
 
-    // A mask of the form `(rowBase + arange) < bound`, constant along the
-    // memory-contiguous dim, doesn't need per-element masking: the bound can
-    // instead become the 2D block message's `base_height` operand, and the
-    // hardware's own out-of-bounds zero-fill does what the mask would have
-    // done. Gate on `other` being zero (the only fill value the hardware can
-    // produce) and on the mask's bounded dim actually being the surface's
-    // pitch dim, both decided up front so the tile-size computation below
-    // can treat this load as unmasked consistently with the operand
-    // construction further down.
+    // A mask of the form `(rowBase + arange) < bound` can become the 2D
+    // block message's `base_height` operand instead of per-element
+    // masking, relying on hardware zero-fill. Decided up front so the
+    // tile-size computation below can treat this load as unmasked.
     std::optional<ttgi::RowLimitMaskInfo> rowLimitMask;
-    if (op.getMask() && rank == 2 && isZeroFillOther(op.getOther())) {
-      if (auto m = ttgi::matchRowLimitMask(op.getMask(), tensorTy.getShape())) {
-        unsigned pitchTensorDim =
-            (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
-        if (m->boundedDim == pitchTensorDim && isI32Convertible(m->rowBase) &&
-            isI32Convertible(m->bound))
+    if (op.getMask() && rank == 2) {
+      unsigned pitchTensorDim =
+          (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+      bool pitchDimIsBroadcast =
+          getStride(strideAnalysis, op.getPtr(), pitchTensorDim) == 0;
+      if (auto m = ttgi::matchRowLimitMask(op.getMask(), op.getOther(),
+                                           tensorTy.getShape(), contiguousDim,
+                                           pitchDimIsBroadcast)) {
+        if (isExactI32(m->rowBase) && isExactI32(m->bound))
           rowLimitMask = m;
         else
-          LDBG("Row-limit mask does not match the pitch dim for: " << *op);
+          LDBG("Row-limit mask bound/base is not i32 for: " << *op);
       }
     }
 
@@ -623,18 +587,19 @@ private:
     Value other = op.getOther();
     Value heightOperand;
     if (rowLimitMask) {
-      // Drop the mask/other: the hardware's own zero-fill at base_height
-      // replaces the per-element predication.
+      // Drop the mask/other: hardware zero-fill at base_height replaces it.
       mask = Value();
       other = Value();
-      Value boundI32 = toI32(builder, loc, rowLimitMask->bound);
-      Value diff = boundI32;
-      if (rowLimitMask->rowBase) {
-        Value baseI32 = toI32(builder, loc, rowLimitMask->rowBase);
-        diff = arith::SubIOp::create(builder, loc, boundI32, baseI32);
-      }
+      Value diff = rowLimitMask->bound;
+      if (rowLimitMask->rowBase)
+        diff = arith::SubIOp::create(builder, loc, rowLimitMask->bound,
+                                     rowLimitMask->rowBase);
       Value zero =
           arith::ConstantOp::create(builder, loc, builder.getI32IntegerAttr(0));
+      // Relative to the tile's first row, not each sub-tile message's own
+      // first row, and can legitimately be <= 0. The LLVM lowering
+      // (getBlockIORowLimitAttrName) adjusts per message and never forwards
+      // a non-positive base_height, which would underflow.
       heightOperand = arith::MaxSIOp::create(builder, loc, diff, zero);
     } else {
       // If mask is present but other is absent, create a zero splat as the
@@ -661,6 +626,10 @@ private:
             ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName()))
       blockPtrLoadOp->setAttr(
           ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName(), attr);
+    if (rowLimitMask)
+      blockPtrLoadOp->setAttr(
+          ttgi::TritonIntelGPUDialect::getBlockIORowLimitAttrName(),
+          builder.getUnitAttr());
 
     op.replaceAllUsesWith(blockPtrLoadOp.getResult());
     op.erase();

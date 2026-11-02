@@ -4,7 +4,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/Interfaces/CastInterfaces.h"
+#include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -949,11 +949,14 @@ Attribute canonicalCoalescedDescStoreLayout(RankedTensorType type, int numWarps,
 
 namespace {
 
-/// Look through single-operand cast-like ops (index_cast, extui, extsi,
-/// trunci, etc.) to find the underlying value.
+/// Look through single-operand *widening* integer casts (`extsi`/`extui`) to
+/// find the underlying value. Excludes `trunci`/`index_cast`: a narrowing
+/// cast can wrap, turning a clean "index < bound" prefix into a
+/// non-contiguous one (e.g. `trunci(120 + arange(64)) : i8 < 5` is true for
+/// [0,4] and [8,63], not just [0,4]).
 Value lookThroughCasts(Value val) {
   while (Operation *def = val.getDefiningOp()) {
-    if (!isa<CastOpInterface>(def) || def->getNumOperands() != 1)
+    if (!isa<arith::ExtSIOp, arith::ExtUIOp>(def))
       break;
     val = def->getOperand(0);
   }
@@ -971,9 +974,14 @@ Value stripExpandDims(Value val) {
 }
 
 /// Match `val` against `base + arange(0, expectedEnd)` (either operand
-/// order of the add), or a bare `arange(0, expectedEnd)`. On success returns
-/// the base scalar value -- a null Value for the bare-arange, zero-base
-/// case. Returns std::nullopt if `val` does not have this shape.
+/// order), or a bare `arange(0, expectedEnd)`. Returns the base scalar (null
+/// for the bare-arange, zero-base case), or std::nullopt if `val` doesn't
+/// have this shape.
+///
+/// Not checked: `base` wrapping within `expectedEnd` of INT_MAX/INT_MIN,
+/// which would make the comparison's valid set non-contiguous. Triton emits
+/// no `nsw` hint to check instead, and reaching this requires a billions-row
+/// index -- not a real tensor.
 std::optional<Value> matchBaseAndRange(Value val, int64_t expectedEnd) {
   val = lookThroughCasts(stripExpandDims(lookThroughCasts(val)));
   if (auto makeRange = val.getDefiningOp<triton::MakeRangeOp>()) {
@@ -1000,9 +1008,27 @@ std::optional<Value> matchBaseAndRange(Value val, int64_t expectedEnd) {
 
 } // namespace
 
-std::optional<RowLimitMaskInfo>
-matchRowLimitMask(Value mask, ArrayRef<int64_t> tensorShape) {
-  if (!mask || tensorShape.size() != 2)
+bool isZeroFillOther(Value other) {
+  if (!other)
+    return true;
+  DenseElementsAttr constAttr;
+  if (!matchPattern(other, m_Constant(&constAttr)) || !constAttr.isSplat())
+    return false;
+  Type elemTy = constAttr.getElementType();
+  if (isa<FloatType>(elemTy))
+    return constAttr.getSplatValue<APFloat>().isZero() &&
+           !constAttr.getSplatValue<APFloat>().isNegative();
+  if (isa<IntegerType>(elemTy))
+    return constAttr.getSplatValue<APInt>().isZero();
+  return false;
+}
+
+std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
+                                                  ArrayRef<int64_t> tensorShape,
+                                                  unsigned contiguousDim,
+                                                  bool pitchDimIsBroadcast) {
+  if (!mask || tensorShape.size() != 2 || !isZeroFillOther(other) ||
+      pitchDimIsBroadcast)
     return std::nullopt;
 
   auto broadcastOp = mask.getDefiningOp<triton::BroadcastOp>();
@@ -1026,6 +1052,11 @@ matchRowLimitMask(Value mask, ArrayRef<int64_t> tensorShape) {
   else
     return std::nullopt;
 
+  // Must be bounded along the pitch dim, not the memory-contiguous one.
+  unsigned pitchDim = (contiguousDim == 0) ? 1 : 0;
+  if (boundedDim != pitchDim)
+    return std::nullopt;
+
   // The comparison may already be 2D (its operands were expanded to 2D
   // before comparing) or still 1D (the comparison was computed in 1D, then
   // the bool result was expanded) -- look through one level of expand_dims
@@ -1034,8 +1065,11 @@ matchRowLimitMask(Value mask, ArrayRef<int64_t> tensorShape) {
   auto cmpOp = cmpCandidate.getDefiningOp<arith::CmpIOp>();
   if (!cmpOp)
     return std::nullopt;
-  if (cmpOp.getPredicate() != arith::CmpIPredicate::slt &&
-      cmpOp.getPredicate() != arith::CmpIPredicate::ult)
+  // Signed only: the height formula (`max(bound - rowBase, 0)`) assumes it.
+  // An unsigned comparison can disagree arbitrarily (e.g. rowBase =
+  // 0xffffff00 makes every `ult` false but is a large negative i32, for
+  // which the signed formula wrongly computes a large positive height).
+  if (cmpOp.getPredicate() != arith::CmpIPredicate::slt)
     return std::nullopt;
 
   auto boundSplat = cmpOp.getRhs().getDefiningOp<triton::SplatOp>();

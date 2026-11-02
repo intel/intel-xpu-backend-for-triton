@@ -152,26 +152,43 @@ Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
 Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
                             unsigned elemSizeInBytes);
 
-/// Information extracted from a mask recognized as a "row-limit" pattern:
-/// `(rowBase + arange(0, N)) < bound`, broadcast (held constant) across the
-/// tensor's other dimension -- e.g. a grouped-GEMM row mask
-/// `offs_am < tl.load(group_end_ptr)`. Such a mask can be expressed as a 2D
-/// block load's `base_height` operand instead of per-element predication:
-/// the hardware already zero-fills rows at or beyond `base_height`, which is
-/// exactly what the mask would have done.
+/// True when `other` is absent or a splat of positive zero -- the only fill
+/// value the 2D block message's hardware boundary check can produce. `-0.0`
+/// is excluded even though `APFloat::isZero()` accepts it, since dropping
+/// `other = -0.0` would flip masked-out elements' sign bit.
+bool isZeroFillOther(Value other);
+
+/// A mask recognized as a "row-limit" pattern: `(rowBase + arange(0, N)) <
+/// bound`, constant across the tensor's other dimension -- e.g. a
+/// grouped-GEMM row mask `offs_am < tl.load(group_end_ptr)`. Expressible as
+/// a 2D block load's `base_height` operand instead of per-element
+/// predication, since the hardware already zero-fills rows past it.
 struct RowLimitMaskInfo {
   unsigned boundedDim; // tensor dim the mask varies (and is bounded) along
   Value rowBase;       // scalar base of the linear index; null means zero
   Value bound;         // scalar upper bound compared against
 };
 
-/// Match `mask` against the row-limit pattern described above, for a rank-2
-/// tensor of the given shape. Returns std::nullopt for any other mask shape
-/// -- including a mask that also varies along the other dimension, or a
-/// non-strict/non-splat comparison -- in which case the caller must still
-/// use per-element masking.
-std::optional<RowLimitMaskInfo>
-matchRowLimitMask(Value mask, ArrayRef<int64_t> tensorShape);
+/// Match `mask` against the row-limit pattern above for a rank-2 tensor of
+/// the given shape, and verify every other condition the `base_height`
+/// conversion needs: `other` is zero-fill-compatible, the bounded dim is
+/// the pitch dim (complement of `contiguousDim`, not the memory-contiguous
+/// one), and the pitch dim isn't a stride-zero (broadcast) pointer, which
+/// relies on a fixed physical height instead.
+///
+/// All three callers (MaterializeBlockPointer's `maskPermitsBlockTile`,
+/// LowerTo2DBlockLoad, and the prefetch LLVM lowering) must agree on
+/// eligibility for the same op, or a load gets `ttig.block_io` stamped on a
+/// promise a later pass refuses, de-anchoring it (see
+/// `isExpensiveLoadOrStore`) without ever gaining a real 2D block read.
+/// Centralizing every check here is what keeps them from drifting apart.
+///
+/// Returns std::nullopt otherwise, in which case the caller must still use
+/// per-element masking.
+std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
+                                                  ArrayRef<int64_t> tensorShape,
+                                                  unsigned contiguousDim,
+                                                  bool pitchDimIsBroadcast);
 
 } // namespace mlir::triton::gpu::intel
 
