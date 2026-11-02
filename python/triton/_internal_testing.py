@@ -397,7 +397,8 @@ def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_list
         try:
             client_fn(*args, **kwargs)
             # Raise any asynchronous device errors
-            triton.runtime.driver.active.get_device_interface().synchronize()
+            if not is_interpreter():
+                triton.runtime.driver.active.get_device_interface().synchronize()
         except Exception as e:
             exc = e
         finally:
