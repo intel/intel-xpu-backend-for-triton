@@ -552,3 +552,6 @@ tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-222]
 tests/kernels/moe/test_moe_layer.py::test_moe_layer[False-allgather_reducescatter-1-2-False]
 tests/kernels/moe/test_moe_layer.py::test_moe_layer[False-allgather_reducescatter-2-1-True]
 tests/kernels/moe/test_moe_layer.py::test_moe_layer[True-allgather_reducescatter-2-1-True]
+
+# Upstream source-sync test compares kernel.fn sources, but batched_moe.patch autotunes/constexpr-ifies only the swapped kernel (.fn is a JITFunction): https://github.com/intel/intel-xpu-backend-for-triton/issues/8591
+tests/kernels/moe/test_batched_moe.py::test_swapped_kernel_matches_original_source
