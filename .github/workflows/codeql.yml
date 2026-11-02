@@ -50,6 +50,13 @@ jobs:
       with:
         languages: ${{ matrix.language }}
         build-mode: ${{ matrix.build-mode }}
+        config: |
+          paths:
+            - third_party/intel
+            - benchmarks
+            - scripts
+            - utils/TritonKernelRunner
+            - .github
         # If you wish to specify custom queries, you can do so here or in a config file.
         # queries: security-extended,security-and-quality
 
@@ -76,6 +83,28 @@ jobs:
       with:
         category: "/language:${{matrix.language}}"
         output: results
+        upload: failure-only
+
+    # Manual C/C++ extraction ignores paths; filter findings before either upload.
+    - name: Filter SARIF to owned paths
+      if: matrix.language == 'c-cpp'
+      uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
+      with:
+        input: results/cpp.sarif
+        output: results/cpp.sarif
+        patterns: |
+          -**/*
+          +third_party/intel/**/*
+          +benchmarks/**/*
+          +scripts/**/*
+          +utils/TritonKernelRunner/**/*
+          +.github/**/*
+
+    - name: Upload filtered code scanning results
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: results
+        category: "/language:${{matrix.language}}"
 
     - name: Upload SARIF results
       uses: actions/upload-artifact@v7
