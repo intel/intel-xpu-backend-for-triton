@@ -1953,7 +1953,7 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
             pytest.xfail("contig_dim too small for swizzle_byte_width in NVMMASharedLayout")
 
     # A simple blocked layout
-    num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(dist_layout, shape))))
+    num_warps = math.prod(ttgl._layouts.warps_per_cta(dist_layout, shape))
     blocked_layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[4, THREADS_PER_WARP // 4],
                                         warps_per_cta=[1, num_warps], order=[0, 1])
 

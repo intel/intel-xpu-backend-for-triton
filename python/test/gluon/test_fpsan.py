@@ -2162,8 +2162,11 @@ def test_dot_explicit_and_implicit_upcasts_match(device, src_type, mid_type, m, 
 
 @pytest.mark.xfail(not (is_cuda() or is_xpu()), reason="Requires NVIDIA or Intel dot acceleration", run=False)
 @pytest.mark.parametrize("homomorphic_casts", [
-    pytest.param(False, id="non-homomorphic", marks=pytest.mark.xfail(
-        strict=True, reason="FPSan downcasts are non-homomorphic by default")),
+    pytest.param(
+        False, id="non-homomorphic", marks=(
+            pytest.mark.xfail(strict=True, reason="FPSan downcasts are non-homomorphic by default"),
+            pytest.mark.disable_warmup(reason="relies on real numeric divergence, not shape-only compilation"),
+        )),
     pytest.param(True, id="homomorphic"),
 ])
 @pytest.mark.enable_warmup
