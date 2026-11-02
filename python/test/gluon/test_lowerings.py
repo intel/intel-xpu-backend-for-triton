@@ -1999,8 +1999,8 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
     y = torch.zeros_like(x)
     obj = kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
     _assert_close(y, x)
-    if (is_cuda() and isinstance(shared_layout, ttgl.NVMMASharedLayout) and dist_layout in _ld_st_mma_layouts
-            and dist_layout.version[0] >= 3 and dtype == "float16"):
+    if (not is_compile_warmup() and is_cuda() and isinstance(shared_layout, ttgl.NVMMASharedLayout)
+            and dist_layout in _ld_st_mma_layouts and dist_layout.version[0] >= 3 and dtype == "float16"):
         assert "stmatrix" in obj.asm["ptx"]
 
 

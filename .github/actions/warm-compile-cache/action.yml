@@ -13,6 +13,9 @@ inputs:
   extra-env:
     description: Shell statements (e.g. `export TRITON_XPU_GEN_NATIVE_CODE=1`) to run before warmup
     default: ""
+  ignore-errors:
+    description: Treat a warmup failure as non-fatal, mirroring the real suite's error policy
+    default: "false"
 runs:
   using: composite
   steps:
@@ -35,4 +38,5 @@ runs:
 
         pytest -p triton._compile_warmup -s --tb=line --warmup-only \
           --warmup-workers "$(( $(nproc) * 60 / 100 ))" \
-          --device xpu "${skip_args[@]}" ${{ inputs.pytest-targets }}
+          --device xpu "${skip_args[@]}" ${{ inputs.pytest-targets }} \
+          || [[ "${{ inputs.ignore-errors }}" == true ]]

@@ -316,6 +316,7 @@ jobs:
           skiplist-name: regression
           pytest-targets: . --ignore=test_performance.py
           extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Run minicore tests
         if: matrix.loop.suite == 'minicore'
@@ -335,6 +336,7 @@ jobs:
             --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py
             -k "not test_mxfp and not test_scaled_dot"
           extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Run language tests
         if: matrix.loop.suite == 'language_and_scaled_dot'
@@ -352,6 +354,7 @@ jobs:
             language/test_matmul.py
             -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 or test_mxfp8_mxfp4_matmul"
           extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Run matmul tests
         if: matrix.loop.suite == 'rest'
@@ -367,6 +370,7 @@ jobs:
           skiplist-name: scaled_dot
           pytest-targets: language/test_core.py -k "test_scaled_dot"
           extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Run scaled_dot tests
         if: matrix.loop.suite == 'language_and_scaled_dot'
@@ -387,6 +391,7 @@ jobs:
           skiplist-name: gluon
           pytest-targets: .
           extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Run gluon tests
         if: matrix.loop.suite == 'gluon' && inputs.driver_version == 'rolling'
@@ -407,6 +412,7 @@ jobs:
           skiplist-name: triton_kernels
           pytest-targets: tests -k 'not test_mxfp'
           extra-env: export TRITON_XPU_GEN_NATIVE_CODE=1
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Run triton kernels tests
         if: matrix.loop.suite == 'triton-kernels'

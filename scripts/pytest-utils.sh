@@ -214,6 +214,11 @@ spirv_dis_build_jobs() {
     nproc 2>/dev/null || python -c 'import os; print(os.cpu_count() or 1)' 2>/dev/null || echo 4
 }
 
+# Number of available CPUs. nproc is unavailable under Git-for-Windows bash.
+available_cpu_count() {
+    nproc 2>/dev/null || python -c 'import os; print(os.cpu_count() or 1)' 2>/dev/null || echo 4
+}
+
 ensure_spirv_dis() {
     export PATH="$HOME/.local/bin:$PATH"
 
