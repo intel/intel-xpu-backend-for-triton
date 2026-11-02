@@ -1,7 +1,8 @@
 """
 Dedicated helper subprocess for `spirv_probes.has_spirv_capability`. Invoked
 as `python -m triton.backends.intel._spirv_probe_worker <device_id>` with
-the probe SPIR-V on stdin; prints `True`/`False`/`None` and exits 0.
+the probe SPIR-V on stdin; prints a `PROBE_RESULT_MARKER`-prefixed
+`True`/`False`/`None` line and exits 0.
 """
 
 import os
@@ -9,6 +10,7 @@ import sys
 from pathlib import Path
 
 from triton.backends.intel.driver import compile_module_from_src
+from triton.backends.intel.spirv_probes import PROBE_RESULT_MARKER
 
 
 def _get_probe_checker():
@@ -24,7 +26,7 @@ def main() -> None:
         result = _get_probe_checker().probe_spirv_module(device_id, probe_spirv)
     except Exception:
         result = None
-    print(result)
+    print(f'{PROBE_RESULT_MARKER}{result}')
 
 
 if __name__ == "__main__":
