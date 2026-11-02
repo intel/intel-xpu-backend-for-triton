@@ -980,8 +980,8 @@ Value stripExpandDims(Value val) {
 ///
 /// Not checked: `base` wrapping within `expectedEnd` of INT_MAX/INT_MIN,
 /// which would make the comparison's valid set non-contiguous. Triton emits
-/// no `nsw` hint to check instead, and reaching this requires a billions-row
-/// index -- not a real tensor.
+/// no `nsw` hint to check instead; accepted as a theoretical gap since a real
+/// kernel's row bound is never anywhere near INT_MAX.
 std::optional<Value> matchBaseAndRange(Value val, int64_t expectedEnd) {
   val = lookThroughCasts(stripExpandDims(lookThroughCasts(val)));
   if (auto makeRange = val.getDefiningOp<triton::MakeRangeOp>()) {
