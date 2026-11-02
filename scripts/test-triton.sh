@@ -801,7 +801,7 @@ run_interpreter_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-16} -m interpreter language/test_core.py language/test_standard.py \
+    run_pytest_command -vvv -n "$(( $(nproc) * 60 / 100 ))" -m interpreter language/test_core.py language/test_standard.py \
     language/test_random.py language/test_line_info.py --device cpu
 }
 
