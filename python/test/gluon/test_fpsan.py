@@ -8,8 +8,8 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton import language as tl
-from triton._internal_testing import (is_blackwell, is_blackwell_ultra, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4,
-                                      is_hip_cdna5, is_hopper, is_interpreter, is_xpu)
+from triton._internal_testing import (is_blackwell, is_blackwell_ultra, is_compile_warmup, is_cuda, is_hip,
+                                      is_hip_cdna3, is_hip_cdna4, is_hip_cdna5, is_hopper, is_interpreter, is_xpu)
 
 try:
     from triton.experimental.gluon.language.nvidia.ampere import mma_v2
@@ -698,6 +698,7 @@ def _expect_zero_upper_triangle_kernel(x_ptr, out_ptr, N: gl.constexpr, THREADS_
     gl.store(out_ptr + row * N + col, y)
 
 
+@pytest.mark.enable_warmup
 def test_expect_zero_upper_triangle_exp(device, fresh_knobs):
     _require_backend(device)
 
@@ -714,6 +715,8 @@ def test_expect_zero_upper_triangle_exp(device, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
     _expect_zero_upper_triangle_kernel[(1, )](x, fpsan_out, N=N, THREADS_PER_WARP=THREADS_PER_WARP)
 
+    if is_compile_warmup():
+        return
     assert torch.equal(regular_out[upper_triangle], torch.zeros_like(regular_out[upper_triangle]))
     assert torch.equal(fpsan_out[upper_triangle], torch.zeros_like(fpsan_out[upper_triangle]))
     assert not torch.equal(regular_out, fpsan_out)
@@ -2041,6 +2044,7 @@ _TCGEN05_MMA_SCALED_CASES = [
 
 
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k"), _DOT_FMA_CASES)
+@pytest.mark.enable_warmup
 def test_dot_fma(device, type_a, type_b, acc_type, m, n, k, fresh_knobs):
     _require_backend(device)
     if is_cuda() and torch.cuda.get_device_capability()[0] < 9 and "e4m3" in (type_a, type_b):
@@ -2083,6 +2087,8 @@ def test_dot_fma(device, type_a, type_b, acc_type, m, n, k, fresh_knobs):
     out, outw = _as_float_bits_tensor(np.empty((m, n), dtype=_float_dtype_info(acc_type)[2]), acc_type, device)
 
     compiled = kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+    if is_compile_warmup():
+        return
     ttgir = compiled.asm["ttgir"]
     assert "ttng.tc_gen5_mma" not in ttgir
     assert "ttng.warp_group_dot" not in ttgir
@@ -2160,6 +2166,7 @@ def test_dot_explicit_and_implicit_upcasts_match(device, src_type, mid_type, m, 
         strict=True, reason="FPSan downcasts are non-homomorphic by default")),
     pytest.param(True, id="homomorphic"),
 ])
+@pytest.mark.enable_warmup
 def test_bf16_dot_sharding(device, homomorphic_casts, fresh_knobs):
     _require_backend(device)
     if is_cuda() and torch.cuda.get_device_capability()[0] < 8:
@@ -2274,6 +2281,7 @@ def test_mma_v2(device, type_a, type_b, acc_type, m, n, k, instr_m, fresh_knobs)
     _assert_payload_equal(out, exp_bits)
 
 
+@pytest.mark.enable_warmup
 def test_dot_fma_batched(device, fresh_knobs):
     if not (is_cuda() or is_xpu()):
         pytest.skip("dot_fma not yet supported on non-CUDA backends")
@@ -2325,6 +2333,8 @@ def test_dot_fma_batched(device, fresh_knobs):
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
     compiled = kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+    if is_compile_warmup():
+        return
     ttgir = compiled.asm["ttgir"]
     assert "ttng.tc_gen5_mma" not in ttgir
     assert "ttng.warp_group_dot" not in ttgir
@@ -3317,6 +3327,7 @@ def test_tmem_store_in_warp_specialize_partition_visible_to_parent(device, fresh
     torch.testing.assert_close(out, torch.ones_like(out), rtol=0, atol=0)
 
 
+@pytest.mark.enable_warmup
 def test_reduction(device, fresh_knobs):
     _require_backend(device)
 
@@ -3342,15 +3353,18 @@ def test_reduction(device, fresh_knobs):
 
     reduce_kernel[(K, )](a, c1, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=0)
     reduce_kernel[(K, )](a, c2, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=1)
-    assert not _payload_equal(c1, c2)
+    if not is_compile_warmup():
+        assert not _payload_equal(c1, c2)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     reduce_kernel[(K, )](a, c1, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=0)
     reduce_kernel[(K, )](a, c2, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=1)
-    assert _payload_equal(c1, c2)
+    if not is_compile_warmup():
+        assert _payload_equal(c1, c2)
 
 
+@pytest.mark.enable_warmup
 def test_reduction_matches_loop(device, fresh_knobs):
     _require_backend(device)
 
@@ -3374,13 +3388,15 @@ def test_reduction_matches_loop(device, fresh_knobs):
 
     reduce_sum_kernel[(1, )](x, reduce_out, N=N)
     loop_sum_kernel[(1, )](x, loop_out, N=N)
-    assert not _payload_equal(reduce_out, loop_out)
+    if not is_compile_warmup():
+        assert not _payload_equal(reduce_out, loop_out)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     reduce_sum_kernel[(1, )](x, reduce_out, N=N)
     loop_sum_kernel[(1, )](x, loop_out, N=N)
-    _assert_payload_equal(reduce_out, loop_out)
+    if not is_compile_warmup():
+        _assert_payload_equal(reduce_out, loop_out)
 
 
 def test_f32_loop_preserves_snan_payload(device, fresh_knobs):

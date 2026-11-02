@@ -118,6 +118,7 @@ def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl
     ]))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("sanitize_overflow", [False, True])
+@pytest.mark.enable_warmup
 def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
 
     torch.manual_seed(0)
@@ -1930,6 +1931,7 @@ def test_local_load_transposed_nvmma_zero_swizzle(device):
 ])
 @pytest.mark.parametrize("dist_layout", _ld_st_dot_layouts + _ld_st_mma_layouts)
 @pytest.mark.parametrize("shared_layout", _ld_st_shared_layouts)
+@pytest.mark.enable_warmup
 def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, device):
     if shared_layout == "shared_linear_layout":
         rank = len(shape)
