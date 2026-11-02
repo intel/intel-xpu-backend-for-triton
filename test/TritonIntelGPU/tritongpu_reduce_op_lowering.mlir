@@ -25,7 +25,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 64 : i32, "ttg.th
 
   // get final result
   // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
-  // CHECK: [[FINAL_RESULT:%.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
+  // CHECK: [[FINAL_RESULT:%.*]] = llvm.load volatile %{{.*}} : !llvm.ptr<3> -> i32
 
     %g = "tt.reduce" (%f) ({
     ^bb0(%arg0: i32, %arg1: i32):

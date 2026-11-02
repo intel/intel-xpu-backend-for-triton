@@ -700,6 +700,16 @@ private:
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto axis = op.getAxis();
     auto smemOrder = ttgi::getOrderWithAxisAtBeginning(helper, op);
+    // These loads are the last readers of the reduction scratch buffer, which
+    // the next shared-memory user (e.g. a second reduction) overwrites right
+    // after the next work-group barrier. With plain loads, the device code IGC
+    // generates for two such reductions whose results are then added returns
+    // wrong, run-to-run varying values at 2 warps x 16 lanes, although the
+    // emitted LLVM IR and SPIR-V keep every read before that barrier (see
+    // intel-xpu-backend-for-triton #8487). Volatile loads avoid it.
+    auto loadResult = [&](Type elemTy, Value ptr) {
+      return b.load(elemTy, ptr, /*alignment=*/0, /*isVolatile=*/true);
+    };
     SmallVector<Value> results(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       auto elemTy = getElementType(op, i);
@@ -732,14 +742,14 @@ private:
               linearize(rewriter, loc, readIdx, smemShape, smemOrder);
           Value readPtr =
               b.gep(smemBases[i].getType(), elemTy, smemBases[i], readOffset);
-          resultVals[j] = b.load(elemTy, readPtr);
+          resultVals[j] = loadResult(elemTy, readPtr);
         }
 
         results[i] = packLLElements(loc, getTypeConverter(), resultVals,
                                     rewriter, resultTy);
       } else {
         // 0d-tensor -> scalar
-        results[i] = b.load(elemTy, smemBases[i]);
+        results[i] = loadResult(elemTy, smemBases[i]);
       }
     }
     rewriter.replaceOp(op, results);

@@ -1163,3 +1163,31 @@ def test_issue7491(device):
     roundtrip_kernel[(1, )](x, y, 1)
 
     assert y.item() == x.to(torch.float16).float().item()
+
+
+@triton.jit
+def _two_row_sums_kernel(a_ptr, b_ptr, out_ptr, R: tl.constexpr, C: tl.constexpr):
+    r = tl.arange(0, R)[:, None]
+    c = tl.arange(0, C)[None, :]
+    s = tl.sum(tl.load(a_ptr + r * C + c), axis=1)
+    s = s + tl.sum(tl.load(b_ptr + r * C + c), axis=1)
+    tl.store(out_ptr + tl.arange(0, R), s)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.int32])
+@pytest.mark.parametrize("R, C", [(16, 128), (8, 128), (32, 128), (16, 256)])
+@pytest.mark.parametrize("num_warps, warp_size", [(2, 16), (4, 16), (2, 32)])
+def test_two_row_reductions_added(dtype, R, C, num_warps, warp_size, device):
+    # https://github.com/intel/intel-xpu-backend-for-triton/issues/8487
+    # Two cross-warp row reductions whose results are added returned wrong,
+    # run-to-run varying values at num_warps=2, warp_size=16. Small integers keep
+    # the f32 sums exact.
+    g = torch.Generator().manual_seed(0)
+    a = torch.randint(-2, 3, (R, C), generator=g).to(dtype)
+    b = torch.randint(-2, 3, (R, C), generator=g).to(dtype)
+    expected = (a.sum(1) + b.sum(1)).to(dtype)
+    a, b = a.to(device), b.to(device)
+    for _ in range(3):
+        out = torch.full((R, ), -1, dtype=dtype, device=device)
+        _two_row_sums_kernel[(1, )](a, b, out, R=R, C=C, num_warps=num_warps, warp_size=warp_size)
+        torch.testing.assert_close(out.cpu(), expected, rtol=0, atol=0)
