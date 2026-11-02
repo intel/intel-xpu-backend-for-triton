@@ -204,9 +204,45 @@ def full_tiles(
     c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], acc)
 
 
+@triton.jit
+def zero_streamk_tiles(
+        # Pointer to the output matrix and its shape
+        c_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
+        stride_cm: tl.constexpr, stride_cn: tl.constexpr,
+        # Meta-parameters
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
+    # The stream-K tiles are the first ones in the tile order of `mac_loop`.
+    tile_id = tl.program_id(axis=0)
+    if GROUP_SIZE_M > 0:
+        pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
+    else:
+        pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
+    c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
+    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32))
+
+
 # ---------------------------------------------------------------------------
 # Wrapper
 # ---------------------------------------------------------------------------
+
+
+def should_use_streamk(M: int, N: int, K: int) -> bool:
+    """Whether stream-K is expected to beat the data-parallel GEMM kernel for a plain 2D GEMM of this shape.
+
+    It pays off when the last wave of output tiles is mostly empty (the idle cores are what stream-K fills) and K is
+    long enough to share out. The limits are conservative and come from 17 tile counts at K = 2048 and 8192 on one
+    Arc B580 (20 Xe cores, bf16 in, fp32 out, zeroing included): the 7 shapes inside them gained 1.4% to 17.6% over
+    the data-parallel kernel, the same tile counts at K = 2048 gained less (0.2% to 7.7%), and the other shapes were
+    mixed, from -12.5% to +15.9%.
+    """
+    num_xe_core = torch.xpu.get_device_capability(0)['gpu_subslice_count']
+    if M % BLOCK_SIZES['BLOCK_SIZE_M'] or N % BLOCK_SIZES['BLOCK_SIZE_N'] or K % BLOCK_SIZES['BLOCK_SIZE_K']:
+        return False
+    total_tiles = (M // BLOCK_SIZES['BLOCK_SIZE_M']) * (N // BLOCK_SIZES['BLOCK_SIZE_N'])
+    last_wave = total_tiles % num_xe_core
+    return (total_tiles >= 2 * num_xe_core and 0 < last_wave <= num_xe_core // 2
+            and triton.cdiv(total_tiles, num_xe_core) <= 8 and K // BLOCK_SIZES['BLOCK_SIZE_K'] >= 256)
 
 
 def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
@@ -243,9 +279,11 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
     streamk_full_tiles = streamk_iters // streamk_programs
     streamk_partial_tiles = streamk_iters % streamk_programs
 
-    # Tiles that `first_wave` splits across programs are accumulated with atomics, so they have to start from zero,
-    # and the timed iterations have to pay for that like any caller would.
-    c.zero_()
+    # The tiles of `first_wave` are accumulated with atomics where programs share them, so they have to start from
+    # zero, and the timed iterations have to pay for that like any caller would. `full_tiles` overwrites the rest.
+    if streamk_tiles > 0:
+        zero_streamk_tiles[(streamk_tiles, )](c, M, N, K, c.stride(0), c.stride(1), BLOCK_SIZE_M, BLOCK_SIZE_N,
+                                              BLOCK_SIZE_K, BLOCK_SIZES['GROUP_SIZE_M'], num_warps=8)
 
     first_wave[(streamk_programs, )](
         a, b, c,  #
