@@ -160,7 +160,7 @@ def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size, fresh
                                                 f"{logged_threshold} B rebuild threshold")
 
 
-def test_n_regs_reports_compiled_grf_count(device):
+def test_n_regs_reports_compiled_grf_count(device, fresh_knobs):
     """`n_regs` is the GRF count IGC compiled with, not one inferred from the
     build flags: under `grf_mode='auto'` IGC picks the size itself.
 
@@ -168,6 +168,7 @@ def test_n_regs_reports_compiled_grf_count(device):
     selection, so a flags-derived 128 would be wrong. The JIT build's `n_regs`
     must match the `grf_count` in the zebin `ocloc` produces with the same flags.
     """
+    fresh_knobs.intel.gen_native_code = False
     BM, BN, BK = 256, 256, 32
 
     @triton.jit
