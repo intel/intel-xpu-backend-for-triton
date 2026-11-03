@@ -355,7 +355,6 @@ class ProcessPoolWarmupDispatcher:
                                                  initializer=_initialize_preload_worker,
                                                  initargs=(triton.runtime.cache.triton_key(), ))
         self._max_workers = max_workers
-        self._cache_dir = triton.knobs.cache.dir
         self._trace_directory = trace_directory
         self._phase = phase
         self.current_phase = phase
@@ -385,6 +384,7 @@ class ProcessPoolWarmupDispatcher:
 
         with self._capture_lock:
             instrumentation_mode = triton.knobs.compilation.instrumentation_mode
+            cache_dir = triton.knobs.cache.dir
             environment = get_cache_invalidating_env_vars()
             captures = self._capture_preloads(
                 instrumentation_mode,
@@ -409,7 +409,7 @@ class ProcessPoolWarmupDispatcher:
                     repr(kernel),
                     instrumentation_mode,
                     capture.environment,
-                    self._cache_dir,
+                    cache_dir,
                     self._trace_directory,
                     phase,
                     capture.test,
