@@ -33,9 +33,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
-  // CHECK-LABEL: llvm.func spir_kernelcc @i8_d64_store_runtime_column_div8
+  // CHECK-LABEL: llvm.func spir_kernelcc @i8_d64_store_runtime_column_div32
   // CHECK: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 64
-  tt.func public @i8_d64_store_runtime_column_div8(%dst: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %col: i32 {tt.divisibility = 8 : i32}) {
+  tt.func public @i8_d64_store_runtime_column_div32(%dst: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %col: i32 {tt.divisibility = 32 : i32}) {
     %val = arith.constant dense<1> : tensor<32x32xi8, #blocked>
     %c1_i64 = arith.constant 1 : i64
     %c96_i64 = arith.constant 96 : i64
