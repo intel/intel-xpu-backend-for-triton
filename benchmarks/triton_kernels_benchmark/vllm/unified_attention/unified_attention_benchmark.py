@@ -108,8 +108,9 @@ def is_enough_memory(x_val, safety_factor=0.80, provider="triton"):
     """
     Estimate whether a provider fits within safety_factor of GPU memory.
 
-    PyTorch includes the reference's score tensors. Other providers include an
-    accuracy output when verification is enabled; kernel workspaces are not modeled.
+    When verification is enabled, include memory for the reference output
+    used to check correctness. Temporary allocations internal to kernels
+    are not included in the estimate.
     """
     q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size = x_val
     dtype = torch.bfloat16

@@ -387,7 +387,7 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
 #blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
 tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>> {
-  %0 = tt.reshape %arg0 allow_reorder efficient_layout : tensor<16x32xf32, #mma> -> tensor<16x8x2x2x1x1x1xf32, #blocked>
+  %0 = tt.reshape %arg0 efficient_layout : tensor<16x32xf32, #mma> -> tensor<16x8x2x2x1x1x1xf32, #blocked>
   %1 = "tt.reduce"(%0) <{axis = 2 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
     %9 = arith.addf %arg1, %arg2 : f32
@@ -399,7 +399,7 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
     tt.reduce.return %9 : f32
   }) : (tensor<16x8x2x1x1x1xf32, #ttg.slice<{dim = 2, parent = #blocked}>>) -> tensor<16x8x2x1x1xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>>
   %3 = ttg.convert_layout %2 : tensor<16x8x2x1x1xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>> -> tensor<16x8x2x1x1xf32, #blocked1>
-  %4 = tt.reshape %3 allow_reorder efficient_layout : tensor<16x8x2x1x1xf32, #blocked1> -> tensor<16x16x1x1xf32, #blocked2>
+  %4 = tt.reshape %3 efficient_layout : tensor<16x8x2x1x1xf32, #blocked1> -> tensor<16x16x1x1xf32, #blocked2>
   %5 = "tt.reduce"(%4) <{axis = 0 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
     %9 = arith.addf %arg1, %arg2 : f32
@@ -410,7 +410,7 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
     %9 = arith.addf %arg1, %arg2 : f32
     tt.reduce.return %9 : f32
   }) : (tensor<16x1x1xf32, #ttg.slice<{dim = 0, parent = #blocked2}>>) -> tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #blocked2}>}>>
-  %7 = tt.reshape %6 allow_reorder efficient_layout : tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #blocked2}>}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked3}>>
+  %7 = tt.reshape %6 efficient_layout : tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #blocked2}>}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked3}>>
   %8 = ttg.convert_layout %7 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked3}>> -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>>
   tt.return %8 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>>
 }

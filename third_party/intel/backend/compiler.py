@@ -4,6 +4,7 @@ from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.errors import IntelGPUError
 from triton.backends.intel.extension_utils import query_device_extensions
+from triton.backends.intel.spirv_probes import accepts_long_vector, accepts_maximum_registers
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import OutOfResources
@@ -17,7 +18,6 @@ import tempfile
 import signal
 import re
 import os
-import struct
 import subprocess
 import warnings
 from pathlib import Path
@@ -67,9 +67,10 @@ class XPUOptions:
     fpsan_homomorphic_casts: bool = False
     core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
     is_lts: bool = True
-    # Whether the SPIR-V consumer understands `SPV_EXT_long_vector`; otherwise
-    # `SPV_INTEL_vector_compute` is emitted. See `ocloc_accepts_long_vector`.
+    # Whether these SPIR-V extensions are allowed; overwritten with the
+    # ground-truth probe result in `parse_options`.
     allow_long_vector: bool = True
+    allow_maximum_registers: bool = True
     # Largest GRF mode the backend's automatic escalation will ever select
     # for this target ("256" everywhere except "cri", which gets "512"); see
     # `get_max_grf_mode`, the single source of truth for this policy.
@@ -112,8 +113,9 @@ class XPUOptions:
 # `accepts_default_grf`.
 REBUILD_SPILL_BYTES_PER_THREAD = 1024
 
-# IGC build flag for each explicit `grf_mode`. Only LTS passes these; elsewhere the mode is requested
-# through the kernel's SPV_INTEL_maximum_registers execution mode (see `make_llir`).
+# IGC build flag for each explicit `grf_mode` that has one. Only LTS passes these; elsewhere the mode is
+# requested through the kernel's SPV_INTEL_maximum_registers execution mode (see `make_llir`). '160' and '192'
+# have no such flag, so they require the execution mode.
 GRF_MODE_BUILD_FLAGS = {
     '128': '-cl-intel-128-GRF-per-thread',
     '256': '-cl-intel-256-GRF-per-thread',
@@ -158,47 +160,6 @@ def extract_spill_size_from_zebin(file):
     return 0
 
 
-def _spirv_words(*words):
-    return b''.join(struct.pack('<I', w) for w in words)
-
-
-def _spirv_op(opcode, *operands):
-    return _spirv_words(((1 + len(operands)) << 16) | opcode, *operands)
-
-
-# Smallest SPIR-V module that declares `SPV_EXT_long_vector`.
-_LONG_VECTOR_PROBE_SPV = (
-    _spirv_words(0x07230203, 0x00010400, 0, 1, 0)  # magic, v1.4, generator, bound, schema
-    + _spirv_op(17, 6)  # OpCapability Kernel
-    + _spirv_op(10, *struct.unpack('<5I', b'SPV_EXT_long_vector\0'.ljust(20, b'\0')))  # OpExtension
-    + _spirv_op(14, 2, 2)  # OpMemoryModel Physical64 OpenCL
-)
-
-
-@functools.lru_cache(maxsize=None)
-def ocloc_accepts_long_vector(device_arch: str) -> bool:
-    """Whether the `ocloc` on PATH accepts SPIR-V that uses `SPV_EXT_long_vector`.
-
-    AOT compilation (`generate_native_code`) hands the SPIR-V to `ocloc`, whose
-    IGC is independent of the installed driver and may predate the extension
-    (e.g. `ocloc` from an older oneAPI). IGC rejects an unknown extension while
-    reading the module, so a module that only declares it is a sufficient probe.
-    """
-    with tempfile.TemporaryDirectory() as temp_dir:
-        spv = os.path.join(temp_dir, 'probe.spv')
-        with open(spv, 'wb') as f:
-            f.write(_LONG_VECTOR_PROBE_SPV)
-        try:
-            proc = subprocess.run([
-                'ocloc', 'compile', '-file', spv, '-o',
-                os.path.join(temp_dir, 'probe.o'), '-spirv_input', '-device', device_arch
-            ], capture_output=True, text=True, timeout=60)
-        except (OSError, subprocess.TimeoutExpired):
-            return True  # No usable `ocloc`: `make_zebin` reports it.
-    output = proc.stdout + proc.stderr
-    return not ('unknown extension' in output and 'SPV_EXT_long_vector' in output)
-
-
 def get_max_grf_mode(arch: dict) -> str:
     """
     Returns the largest GRF mode the backend's automatic escalation paths
@@ -228,6 +189,21 @@ def get_max_grf_mode(arch: dict) -> str:
       "512" if the target is "cri", otherwise "256".
     """
     return "512" if arch.get("arch") == "cri" else "256"
+
+
+def get_grf_modes(arch: dict) -> tuple[str, ...]:
+    """
+    Returns the explicit `grf_mode` register counts a target accepts, besides
+    'default' and 'auto'. "cri" additionally accepts 160, 192 and 512, which
+    every other target (PVC, BMG, ...) rejects.
+
+    Arguments:
+      arch: the `target.arch` dict for the current device.
+
+    Returns:
+      ("128", "160", "192", "256", "512") if the target is "cri", otherwise ("128", "256").
+    """
+    return ("128", "160", "192", "256", "512") if arch.get("arch") == "cri" else ("128", "256")
 
 
 def accepts_default_grf(spill_size, is_lts):
@@ -372,11 +348,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # the same bad value, with the worst combination (a permissive
         # 512-byte pressure budget paired with a 256-GRF hardware ceiling)
         # silently reproducing a register-pressure undercount.
-        # Validate here, once, so every downstream consumer agrees.
+        # Validate here, once, so every downstream consumer agrees, against
+        # `get_grf_modes` rather than a fixed list so an override cannot name a
+        # mode an explicit `grf_mode` request would reject as unknown.
         dev_prop['max_grf_mode'] = tgt_prop.get('max_grf_mode', get_max_grf_mode(tgt_prop))
-        if dev_prop['max_grf_mode'] not in ("128", "256", "512"):
-            raise AssertionError(
-                f"invalid max_grf_mode override {dev_prop['max_grf_mode']!r}: must be one of '128', '256', '512'")
+        if dev_prop['max_grf_mode'] not in (grf_modes := get_grf_modes(tgt_prop)):
+            raise AssertionError(f"invalid max_grf_mode override {dev_prop['max_grf_mode']!r}: must be one of "
+                                 f"{grf_modes} on {tgt_prop.get('arch')}")
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -393,14 +371,25 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["allow_fp8e4nv"] = True
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
-        args["allow_long_vector"] = not args["is_lts"]
         args["max_grf_mode"] = self.properties['max_grf_mode']
+        grf_mode = args.get("grf_mode", XPUOptions.grf_mode)
+        if grf_mode not in ("default", "auto") and grf_mode not in (grf_modes := get_grf_modes(self.target.arch)):
+            raise RuntimeError(f"Unknown grf_mode: {grf_mode}; expected 'default', 'auto' or one of {grf_modes} "
+                               f"on {self.target.arch.get('arch')}")
         args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
         if "in_loop_sink" not in args:
             args["in_loop_sink"] = knobs.intel.in_loop_sink
         options = XPUOptions(**args)
-        if options.generate_native_code and options.allow_long_vector:
-            options.allow_long_vector = ocloc_accepts_long_vector(self.device_arch)
+
+        # Ground-truth probe of whichever side actually consumes this
+        # SPIR-V -- `ocloc` for an AOT (`generate_native_code`) compile,
+        # otherwise the installed driver's own JIT via Level Zero.
+        native = options.generate_native_code
+        device_id = self.target.arch.get("device_id")
+        options.allow_long_vector = accepts_long_vector(native, self.device_arch, device_id)
+        # `accepts_maximum_registers` returns True for LTS (but should return False)
+        options.allow_maximum_registers = (not options.is_lts
+                                           and accepts_maximum_registers(native, self.device_arch, device_id))
         return options
 
     @staticmethod
@@ -776,9 +765,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         cls.optimize_llvm_mod(llvm_mod, options)
         intel.post_process_llir(llvm_mod)
-        # An explicit GRF mode is requested on the kernel itself (SPV_INTEL_maximum_registers); only LTS, whose
-        # translator does not enable that extension, keeps passing it as a build flag in `make_spv`.
-        if options.grf_mode in GRF_MODE_BUILD_FLAGS and not cls.is_lts(driver_version):
+        # An explicit GRF mode is requested on the kernel itself (SPV_INTEL_maximum_registers)
+        # whenever the consumer is known to understand it; otherwise `make_spv` keeps passing
+        # it as a build flag instead (see `options.allow_maximum_registers`).
+        if options.grf_mode != 'default' and options.allow_maximum_registers:
             intel.set_maximum_registers(llvm_mod, options.grf_mode)
 
         # Get some metadata
@@ -805,7 +795,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
         is_lts = cls.is_lts(driver_version)
-        spirv, name = intel.translate_to_spirv(src, is_lts, options.allow_long_vector)
+        probed_extensions = {
+            'SPV_EXT_long_vector': options.allow_long_vector,
+            'SPV_INTEL_maximum_registers': options.allow_maximum_registers,
+        }
+        spirv, name = intel.translate_to_spirv(src, is_lts, probed_extensions)
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
         # `metadata["max_grf_mode"]` is already populated from `options.__dict__`
@@ -814,14 +808,17 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Triton and the Gluon stage lists uniformly. Carried downstream to
         # `make_zebin`'s retry below and to `driver.c`'s JIT retry via the
         # `load_binary` metadata argument.
-        if options.grf_mode in ('256', '512') and options.num_warps > 32:
+        # Any mode above 128 GRFs lowers thread occupancy, so num_warps > 32 becomes unlaunchable.
+        if options.grf_mode in ('160', '192', '256', '512') and options.num_warps > 32:
             raise RuntimeError(f"grf_mode = {options.grf_mode} cannot be used with num_warps > 32")
-        if options.grf_mode in GRF_MODE_BUILD_FLAGS:
-            # Off LTS the mode is already carried by the SPIR-V execution mode set in `make_llir`.
-            if is_lts:
-                metadata["build_flags"] += f" {GRF_MODE_BUILD_FLAGS[options.grf_mode]}"
-        elif options.grf_mode != 'default':
-            raise RuntimeError(f"Unknown grf_mode: {options.grf_mode}")
+        # When the consumer doesn't understand SPV_INTEL_maximum_registers, a non-default mode
+        # must instead be carried as a build flag (see `options.allow_maximum_registers`); '160'
+        # and '192' have no such flag, so they require the execution mode set in `make_llir`.
+        if options.grf_mode != 'default' and not options.allow_maximum_registers:
+            if options.grf_mode not in GRF_MODE_BUILD_FLAGS:
+                raise RuntimeError(f"grf_mode = {options.grf_mode} requires the SPV_INTEL_maximum_registers "
+                                   "extension, which this driver does not support")
+            metadata["build_flags"] += f" {GRF_MODE_BUILD_FLAGS[options.grf_mode]}"
 
         if knobs.intel.disable_igc_opt:
             metadata["build_flags"] += " -cl-opt-disable"

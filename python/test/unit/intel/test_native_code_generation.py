@@ -1,3 +1,7 @@
+import re
+import subprocess
+import os
+
 import pytest
 import triton
 import triton.language as tl
@@ -5,6 +9,21 @@ import triton.language as tl
 from triton._internal_testing import numpy_random, to_triton, is_xpu_cri
 from triton.backends.intel.compiler import (REBUILD_SPILL_BYTES_PER_THREAD, XPUBackend, accepts_default_grf,
                                             extract_spill_size_from_zebin)
+
+
+def _igc_version() -> tuple[int, int] | None:
+    """(major, minor) from the installed `libigc2`/`libigc1` package, or None if undetectable."""
+    for pkg in ("libigc2", "libigc1"):
+        try:
+            proc = subprocess.run(["dpkg-query", "--show", "--showformat=${version}\n", pkg], capture_output=True,
+                                  text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if proc.returncode == 0:
+            m = re.match(r'(\d+)\.(\d+)', proc.stdout)
+            if m:
+                return int(m.group(1)), int(m.group(2))
+    return None
 
 
 def test_empty_kernel(device):
@@ -93,10 +112,8 @@ def test_auto_large_grf(device, tmp_path):
 
 
 @pytest.mark.parametrize("generate_native_code", [False, True], ids=["load_binary", "make_zebin"])
-@pytest.mark.parametrize("grf_mode", ["128", "256", "512", "auto"])
+@pytest.mark.parametrize("grf_mode", ["128", "160", "192", "256", "512", "auto"])
 def test_explicit_grf_mode_uses_maximum_registers(device, grf_mode, generate_native_code):
-    if grf_mode == "512" and not is_xpu_cri():
-        pytest.xfail("512-GRF mode is only available on CRI")
 
     @triton.jit
     def kernel(X, SIZE: tl.constexpr):
@@ -105,16 +122,51 @@ def test_explicit_grf_mode_uses_maximum_registers(device, grf_mode, generate_nat
 
     SIZE = 128
     x = to_triton(numpy_random(SIZE, dtype_str="int32"), device=device, dst_type="int32")
+    if grf_mode in ("160", "192", "512") and not is_xpu_cri():
+        # Only CRI accepts 160-, 192- and 512-GRF modes; see `get_grf_modes`.
+        with pytest.raises(RuntimeError, match=f"Unknown grf_mode: {grf_mode}"):
+            kernel[(1, )](x, SIZE=SIZE, num_warps=4, grf_mode=grf_mode, generate_native_code=generate_native_code)
+        return
     k = kernel[(1, )](x, SIZE=SIZE, num_warps=4, grf_mode=grf_mode, generate_native_code=generate_native_code)
 
-    if XPUBackend.is_lts(k.metadata.target.arch.get("driver_version")):
-        # The LTS translator does not enable SPV_INTEL_maximum_registers.
+    if not k.metadata.allow_maximum_registers:
+        # Either an LTS translator (which never enables the extension) or a
+        # rolling driver whose JIT rejected the probe module (see
+        # has_spirv_capability in spirv_probes.py) -- either way the
+        # kernel falls back to the IGC build flag instead.
         assert "!MaximumRegisters" not in k.asm["llir"]
         assert "GRF" in k.metadata.build_flags
         return
 
-    # Off LTS the GRF mode is requested by the kernel itself, not by an IGC build flag.
+    # The GRF mode is requested by the kernel itself, not by an IGC build flag.
     assert "!MaximumRegisters" in k.asm["llir"]
     assert "GRF" not in k.metadata.build_flags
     if grf_mode != "auto":
         assert k.n_regs == int(grf_mode)
+
+
+@pytest.mark.xfail(os.name == "nt", reason="IGC version detection (dpkg) is not available on Windows", run=False)
+def test_max_registers_matches_known_igc_support(device):
+    min_supported_igc_version = (2, 40)
+
+    igc_version = _igc_version()
+    if igc_version is None:
+        pytest.xfail("IGC version not detectable via dpkg (libigc1/libigc2)")
+    if igc_version <= min_supported_igc_version:
+        pytest.xfail(f"IGC {igc_version[0]}.{igc_version[1]} predates the known-supported "
+                     f"threshold (>{min_supported_igc_version[0]}.{min_supported_igc_version[1]})")
+
+    @triton.jit
+    def kernel(X, SIZE: tl.constexpr):
+        x = tl.arange(0, SIZE)
+        tl.store(X + x, x)
+
+    SIZE = 128
+    x = to_triton(numpy_random(SIZE, dtype_str="int32"), device=device, dst_type="int32")
+    k = kernel[(1, )](x, SIZE=SIZE, num_warps=4, grf_mode="auto")
+
+    assert k.metadata.allow_maximum_registers, (
+        f"IGC {igc_version[0]}.{igc_version[1]} is known to support `SPV_INTEL_maximum_registers` "
+        f"(>{min_supported_igc_version[0]}.{min_supported_igc_version[1]}), but the ground-truth "
+        "probe reported it unsupported.")
+    assert "!MaximumRegisters" in k.asm["llir"]
