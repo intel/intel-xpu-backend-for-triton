@@ -625,7 +625,7 @@ private:
           ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName(), attr);
     if (rowLimitMask)
       blockPtrLoadOp->setAttr(
-          ttgi::TritonIntelGPUDialect::getBlockIORowLimitAttrName(),
+          ttgi::TritonIntelGPUDialect::getBlockIORuntimeRowLimitAttrName(),
           builder.getUnitAttr());
 
     op.replaceAllUsesWith(blockPtrLoadOp.getResult());

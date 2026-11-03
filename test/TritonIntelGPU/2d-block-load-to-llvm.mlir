@@ -160,9 +160,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// COM: A row-limit base_height (ttig.block_io_row_limit) that is a genuinely
-// COM: runtime (non-foldable) value, exercised across both of the tile's
-// COM: sub-tile row offsets (0 and 8).
+// COM: A row-limit base_height (ttig.block_io_runtime_row_limit) that is a
+// COM: genuinely runtime (non-foldable) value, exercised across both of the
+// COM: tile's sub-tile row offsets (0 and 8).
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
@@ -182,15 +182,16 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: llvm.icmp "sgt" %[[LOCAL1]], %{{.*}} : i32
     // CHECK: llvm.intr.smax(%[[LOCAL1]], %{{.*}}) : (i32, i32) -> i32
     // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
-    %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height {row_major} {base_width = 64 : i32, ttig.block_io_row_limit} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32) -> tensor<64x32xf16, #dot0>
+    %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height {row_major} {base_width = 64 : i32, ttig.block_io_runtime_row_limit} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32) -> tensor<64x32xf16, #dot0>
     tt.return
   }
 }
 
 // -----
 
-// COM: A row-limit base_height (ttig.block_io_row_limit) that folds to
-// COM: constant 1 must not take the stride=0 broadcast-row replication path.
+// COM: A row-limit base_height (ttig.block_io_runtime_row_limit) that folds
+// COM: to constant 1 must not take the stride=0 broadcast-row replication
+// COM: path.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
@@ -211,7 +212,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: %[[HEIGHT1:.*]] = llvm.intr.smax(%[[SUB1]], %{{.*}}) : (i32, i32) -> i32
     // CHECK: triton_gen.2Dblockload %{{.*}}, %{{.*}}, %[[HEIGHT1]], %{{.*}}, %{{.*}}, %{{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
     // CHECK-NOT: llvm.insertelement
-    %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height {row_major} {base_width = 64 : i32, ttig.block_io_row_limit} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32) -> tensor<64x32xf16, #dot0>
+    %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height {row_major} {base_width = 64 : i32, ttig.block_io_runtime_row_limit} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32) -> tensor<64x32xf16, #dot0>
     tt.return
   }
 }

@@ -5098,12 +5098,12 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
     unsigned blockColIdx = cfg.isTransposeRequired ? cfg.rowDim : cfg.colDim;
     unsigned blockRowIdx = cfg.isTransposeRequired ? cfg.colDim : cfg.rowDim;
 
-    // A row-limit `base_height` (see ttgi::getBlockIORowLimitAttrName) is
-    // relative to the tile's first row; each message subtracts its own row
-    // offset below, since base_height 0 would underflow the GenISA
+    // A row-limit `base_height` (see ttgi::getBlockIORuntimeRowLimitAttrName)
+    // is relative to the tile's first row; each message subtracts its own
+    // row offset below, since base_height 0 would underflow the GenISA
     // `base_height - 1` encoding.
     bool isRowLimitHeight =
-        op->hasAttr(TritonIntelGPUDialect::getBlockIORowLimitAttrName());
+        op->hasAttr(TritonIntelGPUDialect::getBlockIORuntimeRowLimitAttrName());
 
     // Per-sub-tile: use ptrElems[registerIdx] with subtraction-based
     // addressing.

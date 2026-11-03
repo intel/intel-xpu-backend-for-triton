@@ -171,9 +171,6 @@ struct RowLimitMaskInfo {
 /// zero-fill-compatible, the bounded dim is the pitch dim, it isn't a
 /// broadcast pointer, and `rowBase`/`bound` are i32.
 ///
-/// All callers (MaterializeBlockPointer, LowerTo2DBlockLoad, prefetch
-/// lowering) must agree on eligibility, so this is centralized here.
-///
 /// Returns std::nullopt if the mask doesn't match; caller falls back to
 /// per-element masking.
 std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
