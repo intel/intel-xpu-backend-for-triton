@@ -108,9 +108,8 @@ def TritonIntelGPU_Dialect : Dialect {
     }
 
     /// Get the name of the attribute marking a `ttig.2d_block_load_from_ptr`
-    /// (or prefetch) whose `base_height` is a runtime row-limit bound (see
-    /// ttgi::matchRowLimitMask), not a fixed per-message tile height. The
-    /// LLVM lowering uses this to adjust `base_height` per sub-tile message.
+    /// (or prefetch) whose `base_height` is a runtime row-limit bound, not a
+    /// fixed per-message tile height (see ttgi::matchRowLimitMask).
     static constexpr llvm::StringRef getBlockIORowLimitAttrName() {
       return "ttig.block_io_row_limit";
     }

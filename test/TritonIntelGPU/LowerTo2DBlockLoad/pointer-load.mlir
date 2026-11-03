@@ -251,23 +251,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// COM: Regression test for issue #8565. A row-only mask whose bound is a
-// COM: runtime scalar -- `rows[:, None] < bound`, constant along K -- no
-// COM: longer falls back to a masked gather: MaterializeBlockPointer permits
-// COM: block IO for this mask shape (ttgi::matchRowLimitMask), and this pass
-// COM: drops the mask/other operands in favor of a dynamic base_height
-// COM: operand (`max(0, bound - rowBase)`), since the hardware's own
-// COM: out-of-bounds zero-fill does what the mask would have done.
+// COM: Regression test for issue #8565. A row-only mask `rows[:, None] <
+// COM: bound` with a runtime bound no longer falls back to a masked gather:
+// COM: this pass drops the mask/other in favor of a dynamic base_height
+// COM: operand (`max(0, bound - rowBase)`) instead.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: tt.func @row_limit_mask
   tt.func @row_limit_mask(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %lda: i32 {tt.divisibility = 16 : i32}, %row_base: i32, %bound: i32) -> tensor<64x32xf16, #dot0> {
     %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
-    // Build ptr[i, j] = arg0 + i * lda + j (row-major, runtime row stride):
-    // the row dim must actually vary per row (not be a broadcast pointer),
-    // or matchRowLimitMask correctly excludes it to avoid disabling the
-    // unrelated broadcast-row-replication mechanism.
+    // ptr[i, j] = arg0 + i * lda + j (row dim must vary, not be broadcast).
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
     %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
     %lda_splat = tt.splat %lda : i32 -> tensor<64x1xi32, #dot0>

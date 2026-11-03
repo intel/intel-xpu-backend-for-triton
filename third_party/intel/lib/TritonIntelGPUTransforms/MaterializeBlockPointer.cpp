@@ -348,10 +348,8 @@ private:
       return true;
     };
 
-    // Computed before the mask gate (attribute-setting stays after it):
-    // maskPermitsBlockTile's row-limit bypass needs the contiguous dim up
-    // front to check the mask is bounded along the complementary (pitch)
-    // dim.
+    // Needed before the mask gate: maskPermitsBlockTile's row-limit bypass
+    // checks the mask is bounded along the complementary (pitch) dim.
     const bool isRowMajor =
         isMajor(tensorTy, rank - 1 /*fastChangeDim*/, *axisInfo);
     const bool isColMajor =
@@ -399,15 +397,12 @@ private:
   /// constancy 1 along the M dim, because the compare visitor can only derive
   /// constancy from the divisibility of both sides.
   ///
-  /// For a `tt::LoadOp`, such a mask may still be a "row-limit" pattern --
-  /// `(rowBase + arange) < bound`, constant along the memory-contiguous dim
-  /// -- that `ttgi::matchRowLimitMask` recognizes, so permit block IO here
-  /// too. `contiguousDim`/`strideInfo` must match what LowerTo2DBlockLoad
-  /// will later use: stamping `ttig.block_io` on a mask shape it then
-  /// rejects de-anchors the load (see `isExpensiveLoadOrStore`) without it
-  /// ever gaining a real 2D block read. Stores aren't covered: nothing
-  /// downstream consumes a store-side row limit, so they stay on the
-  /// constancy check below.
+  /// For a `tt::LoadOp`, such a mask may still be a `ttgi::matchRowLimitMask`
+  /// row-limit pattern, so permit block IO here too.
+  /// `contiguousDim`/`strideInfo` must match what LowerTo2DBlockLoad later
+  /// uses, or stamping `ttig.block_io` here de-anchors the load without it
+  /// gaining a real 2D block read. Stores aren't covered: nothing downstream
+  /// consumes a store-side row limit.
   template <typename OpType>
   bool maskPermitsBlockTile(OpType op,
                             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,

@@ -1615,20 +1615,11 @@ struct PrefetchOpConversion
     Location loc = op.getLoc();
 
     // A row-limit mask (see matchRowLimitMask) can become this prefetch's
-    // dynamic base_height instead of a per-subtile predicate, so the tile
-    // size below should treat the prefetch as unmasked. The bound/base
-    // values live outside this op, so getRemappedValue is needed; a failed
-    // remap falls back to the masked path. Match, remap, and type
-    // validation all happen up front, before `maskAxisInfo` is decided
-    // below -- `rowLimitMask` must be final by then, or the tile gets sized
-    // as unmasked while still being masked per-element, silently including
-    // masked-out rows.
+    // dynamic base_height instead of a per-subtile predicate, so decide this
+    // before `maskAxisInfo` below treats the prefetch as masked.
     //
-    // Pipelining ANDs an extra, uniform "don't prefetch past the loop
-    // bound" guard into the steady-state mask (it looks one stage ahead, so
-    // the last iteration has no next tile). That guard is a scalar splat,
-    // so it's still expressible as the old per-subtile predicate: peel it
-    // off and keep applying it alongside the row-limit submask's height.
+    // Pipelining ANDs an extra, uniform loop-drain guard into the mask; peel
+    // it off and keep applying it alongside the row-limit submask's height.
     std::optional<RowLimitMaskInfo> rowLimitMask;
     Value extraGuardRemapped;
     Value rowLimitHeight; // max(bound - rowBase, 0); valid iff rowLimitMask.
@@ -1651,9 +1642,8 @@ struct PrefetchOpConversion
         }
       }
       if (m && otherConjunct) {
-        // Only a uniform (splat-of-scalar) extra conjunct is expressible as
-        // a per-subtile predicate; anything else means giving up the whole
-        // row-limit treatment rather than silently dropping a guard.
+        // Only a uniform splat conjunct is expressible as a predicate;
+        // anything else means giving up row-limit treatment entirely.
         if (auto splatOp = otherConjunct.getDefiningOp<triton::SplatOp>())
           extraGuardRemapped = rewriter.getRemappedValue(splatOp.getSrc());
         if (!extraGuardRemapped || !extraGuardRemapped.getType().isInteger(1))
@@ -1729,8 +1719,8 @@ struct PrefetchOpConversion
       return failure();
 
     // If the stride is 0, we want to load only the first row. For a
-    // row-limit mask, `rowLimitHeight` replaces this; it's relative to the
-    // tile's first row, so the loop below adjusts it per message.
+    // row-limit mask, `rowLimitHeight` replaces this; the loop below
+    // adjusts it per message.
     int64_t stride = getStride(op.getPtr(), pitchDim);
     Value baseHeight =
         rowLimitMask ? rowLimitHeight : b.i32_val(stride == 0 ? 1 : tileHeight);
@@ -1802,11 +1792,10 @@ struct PrefetchOpConversion
       // (The first value referred to by the registerIdx.)
       Value messageBaseHeight = baseHeight;
       if (rowLimitMask) {
-        // `baseHeight` is relative to the tile's first row; a message
-        // starting partway in must subtract its own row offset first. If
-        // nothing is valid for this message, push it out of bounds via
-        // offsetY below instead of passing base_height 0: the GenISA
-        // encoding is `base_height - 1`, which would underflow.
+        // Relative to the tile's first row; a message starting partway in
+        // must subtract its own row offset. If nothing is valid, push it
+        // out of bounds via offsetY instead of base_height 0, which would
+        // underflow the GenISA `base_height - 1` encoding.
         Value rowOffset = offsets[pitchDim].second;
         Value localHeight = b.sub(baseHeight, rowOffset);
         Value isValid = b.icmp_sgt(localHeight, b.i32_val(0));
@@ -5072,11 +5061,9 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
     unsigned blockRowIdx = cfg.isTransposeRequired ? cfg.colDim : cfg.rowDim;
 
     // A row-limit `base_height` (see ttgi::getBlockIORowLimitAttrName) is
-    // relative to the tile's first row, not each message's own first row:
-    // a message starting partway in must subtract its row offset first. If
-    // that leaves nothing valid, push it out of bounds via the existing
-    // pred/adjustedBaseHeight mechanism rather than passing base_height 0,
-    // which the GenISA `base_height - 1` encoding would underflow.
+    // relative to the tile's first row; each message subtracts its own row
+    // offset below, since base_height 0 would underflow the GenISA
+    // `base_height - 1` encoding.
     bool isRowLimitHeight =
         op->hasAttr(TritonIntelGPUDialect::getBlockIORowLimitAttrName());
 
@@ -5114,9 +5101,8 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
               pred};
     };
 
-    // Disable the stride=0 broadcast-row special case below for a row-limit
-    // height: it replicates row 0 everywhere, which is wrong when height==1
-    // just means "only row 0 is valid" rather than "broadcast".
+    // Disable the stride=0 broadcast-row special case for a row-limit
+    // height, where height==1 means "only row 0 valid", not "broadcast".
     std::optional<int64_t> staticBaseHeight =
         isRowLimitHeight ? std::nullopt
                          : getConstantIntValue(op.getBaseHeight());

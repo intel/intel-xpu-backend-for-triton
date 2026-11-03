@@ -950,10 +950,8 @@ Attribute canonicalCoalescedDescStoreLayout(RankedTensorType type, int numWarps,
 namespace {
 
 /// Look through single-operand *widening* integer casts (`extsi`/`extui`) to
-/// find the underlying value. Excludes `trunci`/`index_cast`: a narrowing
-/// cast can wrap, turning a clean "index < bound" prefix into a
-/// non-contiguous one (e.g. `trunci(120 + arange(64)) : i8 < 5` is true for
-/// [0,4] and [8,63], not just [0,4]).
+/// find the underlying value. Excludes `trunci`/`index_cast`, since a
+/// narrowing cast can wrap and break contiguity.
 Value lookThroughCasts(Value val) {
   while (Operation *def = val.getDefiningOp()) {
     if (!isa<arith::ExtSIOp, arith::ExtUIOp>(def))
@@ -965,9 +963,7 @@ Value lookThroughCasts(Value val) {
 
 /// If `val` is the result of a `tt.expand_dims` that introduced a size-1
 /// dim, return the lower-rank value it was applied to; otherwise return
-/// `val` unchanged. A row-limit mask's index and bound may be expanded to
-/// 2D before the comparison, or the comparison may happen in 1D and get
-/// expanded afterwards -- both are legal lowerings of `rows[:, None]`.
+/// `val` unchanged.
 Value stripExpandDims(Value val) {
   auto expandOp = val.getDefiningOp<triton::ExpandDimsOp>();
   return expandOp ? expandOp.getSrc() : val;
@@ -976,12 +972,8 @@ Value stripExpandDims(Value val) {
 /// Match `val` against `base + arange(0, expectedEnd)` (either operand
 /// order), or a bare `arange(0, expectedEnd)`. Returns the base scalar (null
 /// for the bare-arange, zero-base case), or std::nullopt if `val` doesn't
-/// have this shape.
-///
-/// Not checked: `base` wrapping within `expectedEnd` of INT_MAX/INT_MIN,
-/// which would make the comparison's valid set non-contiguous. Triton emits
-/// no `nsw` hint to check instead; accepted as a theoretical gap since a real
-/// kernel's row bound is never anywhere near INT_MAX.
+/// have this shape. Does not check `base` wrapping near INT_MAX/INT_MIN,
+/// which is a theoretical gap only.
 std::optional<Value> matchBaseAndRange(Value val, int64_t expectedEnd) {
   val = lookThroughCasts(stripExpandDims(lookThroughCasts(val)));
   if (auto makeRange = val.getDefiningOp<triton::MakeRangeOp>()) {
@@ -1040,9 +1032,8 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
   if (!narrowTy || narrowTy.getRank() != 2)
     return std::nullopt;
 
-  // Identify which dim kept the full tensor's extent across the broadcast
-  // -- the dim the mask is bounded along -- versus the dim that stayed
-  // degenerate (size 1), which the mask must instead be constant along.
+  // Find the dim that kept the full extent across the broadcast -- the
+  // bounded dim -- versus the degenerate (size-1) dim.
   ArrayRef<int64_t> narrowShape = narrowTy.getShape();
   unsigned boundedDim;
   if (narrowShape[0] == 1 && narrowShape[1] == tensorShape[1])
@@ -1057,18 +1048,14 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
   if (boundedDim != pitchDim)
     return std::nullopt;
 
-  // The comparison may already be 2D (its operands were expanded to 2D
-  // before comparing) or still 1D (the comparison was computed in 1D, then
-  // the bool result was expanded) -- look through one level of expand_dims
-  // to find it either way.
+  // The comparison may be 2D already, or still 1D with the bool result
+  // expanded afterwards -- look through one level of expand_dims either way.
   Value cmpCandidate = stripExpandDims(narrow);
   auto cmpOp = cmpCandidate.getDefiningOp<arith::CmpIOp>();
   if (!cmpOp)
     return std::nullopt;
-  // Signed only: the height formula (`max(bound - rowBase, 0)`) assumes it.
-  // An unsigned comparison can disagree arbitrarily (e.g. rowBase =
-  // 0xffffff00 makes every `ult` false but is a large negative i32, for
-  // which the signed formula wrongly computes a large positive height).
+  // Signed only: the height formula (`max(bound - rowBase, 0)`) assumes it
+  // and disagrees arbitrarily with an unsigned comparison.
   if (cmpOp.getPredicate() != arith::CmpIPredicate::slt)
     return std::nullopt;
 

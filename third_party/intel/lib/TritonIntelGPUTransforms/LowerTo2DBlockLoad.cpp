@@ -372,10 +372,9 @@ private:
     bool oneMatrixPerLoadForBT =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
 
-    // A mask of the form `(rowBase + arange) < bound` can become the 2D
-    // block message's `base_height` operand instead of per-element
-    // masking, relying on hardware zero-fill. Decided up front so the
-    // tile-size computation below can treat this load as unmasked.
+    // A row-limit mask can become `base_height` instead of per-element
+    // masking (hardware zero-fill). Decided up front so tile-size
+    // computation below can treat this load as unmasked.
     std::optional<ttgi::RowLimitMaskInfo> rowLimitMask;
     if (op.getMask() && rank == 2) {
       unsigned pitchTensorDim =
@@ -579,10 +578,8 @@ private:
       // Drop the mask/other: hardware zero-fill at base_height replaces it.
       mask = Value();
       other = Value();
-      // Relative to the tile's first row, not each sub-tile message's own
-      // first row, and can legitimately be <= 0. The LLVM lowering
-      // (getBlockIORowLimitAttrName) adjusts per message and never forwards
-      // a non-positive base_height, which would underflow.
+      // Relative to the tile's first row and may be <= 0; the LLVM lowering
+      // adjusts per message and never forwards a non-positive base_height.
       heightOperand = ttgi::computeRowLimitHeight(
           builder, loc, rowLimitMask->bound, rowLimitMask->rowBase,
           tensorTy.getShape()[rowLimitMask->boundedDim]);
