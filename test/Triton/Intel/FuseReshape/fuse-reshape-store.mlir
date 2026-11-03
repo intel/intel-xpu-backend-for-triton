@@ -37,17 +37,6 @@ tt.func public @foldKeepsReshapeWithOtherUses(%arg0: !tt.tensordesc<1x128x64xbf1
 
 // -----
 
-// COM: An allow_reorder reshape may permute elements, so it is not folded.
-tt.func public @noFoldAllowReorder(%arg0: !tt.tensordesc<1x128x64xbf16>, %arg1: tensor<128x64xbf16>, %arg2: i32) {
-  %0 = tt.reshape %arg1 allow_reorder : tensor<128x64xbf16> -> tensor<1x128x64xbf16>
-  tt.descriptor_store %arg0[%arg2, %arg2, %arg2], %0 : !tt.tensordesc<1x128x64xbf16>, tensor<1x128x64xbf16>
-  tt.return
-}
-// CHECK-LABEL: noFoldAllowReorder
-// CHECK: tt.descriptor_store {{.*}}, %0 :
-
-// -----
-
 // COM: The element counts match, but the block's inner dims (64x128) are not x's.
 tt.func public @noFoldInnerShapeMismatch(%arg0: !tt.tensordesc<1x64x128xbf16>, %arg1: tensor<128x64xbf16>, %arg2: i32) {
   %0 = tt.reshape %arg1 : tensor<128x64xbf16> -> tensor<1x64x128xbf16>

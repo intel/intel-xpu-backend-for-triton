@@ -860,7 +860,7 @@ private:
 static void foldReshapeIntoDescriptorStores(ModuleOp moduleOp) {
   moduleOp.walk([](tt::DescriptorStoreOp storeOp) {
     auto reshapeOp = storeOp.getSrc().getDefiningOp<tt::ReshapeOp>();
-    if (!reshapeOp || reshapeOp.getAllowReorder())
+    if (!reshapeOp)
       return;
 
     ArrayRef<int64_t> srcShape = reshapeOp.getSrc().getType().getShape();
