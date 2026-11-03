@@ -1573,22 +1573,11 @@ struct PrefetchOpConversion
             converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
-  /// What a row-limit mask (see matchRowLimitMask) implies for a prefetch's
-  /// dynamic base_height: the clamped height itself, plus any extra uniform
-  /// guard pipelining ANDed into the mask (the loop-drain guard), which
-  /// still needs to gate the message once the submask becomes a height
-  /// instead of a predicate.
   struct RowLimit {
-    Value height;     // max(bound - rowBase, 0) clamped to the bounded extent
-    Value extraGuard; // uniform i1 guard ANDed into the mask; may be null
+    Value height;
+    Value extraGuard;
   };
 
-  /// Recognize a row-limit mask on a prefetch's mask operand -- either
-  /// bare, or ANDed with one extra uniform conjunct (pipelining's
-  /// loop-drain guard) -- and compute the dynamic base_height it implies.
-  /// Returns std::nullopt if the mask doesn't match this shape, or matches
-  /// but the extra conjunct isn't expressible as a uniform predicate; the
-  /// caller then falls back to per-subtile masking.
   std::optional<RowLimit> matchPrefetchRowLimitMask(
       triton::gpu::intel::PrefetchOp op, ArrayRef<int64_t> tensorShape,
       unsigned contiguousDim, unsigned pitchTensorDim, Location loc,

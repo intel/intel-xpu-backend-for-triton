@@ -161,18 +161,15 @@ bool isZeroFillOther(Value other);
 /// tensor's other dimension. Expressible as a 2D block load's `base_height`
 /// instead of per-element predication.
 struct RowLimitMaskInfo {
-  unsigned boundedDim; // tensor dim the mask varies (and is bounded) along
-  Value rowBase;       // scalar base of the linear index; null means zero
-  Value bound;         // scalar upper bound compared against
+  unsigned boundedDim;
+  Value rowBase;
+  Value bound;
 };
 
 /// Match `mask` against the row-limit pattern above for a rank-2 tensor, and
 /// check the remaining conditions `base_height` needs: `other` is
 /// zero-fill-compatible, the bounded dim is the pitch dim, it isn't a
 /// broadcast pointer, and `rowBase`/`bound` are i32.
-///
-/// Returns std::nullopt if the mask doesn't match; caller falls back to
-/// per-element masking.
 std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   ArrayRef<int64_t> tensorShape,
                                                   unsigned contiguousDim,
