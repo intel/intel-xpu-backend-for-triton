@@ -21,9 +21,10 @@ namespace mlir::triton {
 /// one that holds for any in-range index computation.
 ///
 /// Facts come from operations whose sign is structural (`tt.get_program_id`,
-/// `tt.make_range`, constants) and from `llvm.intr.assume`, which is how
-/// `tl.assume` reaches the compiler. An assume counts only where it is certain
-/// to have executed first; see the implementation for the (conservative) test.
+/// `tt.make_range`, constants, an `scf.for` counter over non-negative bounds)
+/// and from `llvm.intr.assume`, which is how `tl.assume` reaches the compiler.
+/// An assume counts only where it is certain to have executed first; see the
+/// implementation for the (conservative) test.
 ///
 /// This belongs here rather than in a backend: `tritongpu-coalesce` builds
 /// `triton::ModuleAxisInfoAnalysis` directly, and that analysis' deductions

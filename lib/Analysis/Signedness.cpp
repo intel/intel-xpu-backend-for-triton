@@ -1,5 +1,6 @@
 #include "triton/Analysis/Signedness.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <cassert>
@@ -69,14 +70,32 @@ bool assumedNonNegative(Value v, Operation *useOp) {
   return false;
 }
 
-bool allElementsNonNegative(Attribute value) {
+/// True if every element of `value` satisfies `pred`.
+bool allElements(Attribute value, function_ref<bool(const APInt &)> pred) {
   if (auto intAttr = dyn_cast<IntegerAttr>(value))
-    return intAttr.getValue().isNonNegative();
+    return pred(intAttr.getValue());
   auto denseAttr = dyn_cast<DenseElementsAttr>(value);
   if (!denseAttr || !denseAttr.getElementType().isSignlessInteger())
     return false;
-  return llvm::all_of(denseAttr.getValues<APInt>(),
-                      [](const APInt &v) { return v.isNonNegative(); });
+  return llvm::all_of(denseAttr.getValues<APInt>(), pred);
+}
+
+bool allElementsNonNegative(Attribute value) {
+  return allElements(value, [](const APInt &v) { return v.isNonNegative(); });
+}
+
+/// True if `v` is a constant whose every element is 2 or more *read as
+/// unsigned*. Dividing unsigned by such a divisor brings any dividend below
+/// 2^(w-1), so the quotient's top bit is clear whatever the dividend's was.
+bool isUnsignedDivisorAboveOne(Value v) {
+  auto constOp = v.getDefiningOp<arith::ConstantOp>();
+  if (!constOp) {
+    if (auto splat = v.getDefiningOp<SplatOp>())
+      return isUnsignedDivisorAboveOne(splat.getSrc());
+    return false;
+  }
+  return allElements(constOp.getValue(),
+                     [](const APInt &c) { return c.ugt(1); });
 }
 
 bool isNonNegative(Value v, Operation *useOp, unsigned depth) {
@@ -86,8 +105,18 @@ bool isNonNegative(Value v, Operation *useOp, unsigned depth) {
     return true;
 
   Operation *defOp = v.getDefiningOp();
-  if (!defOp)
-    return false;
+  if (!defOp) {
+    // An `scf.for` induction variable takes the values `lb + k * step`, so
+    // non-negative bounds make every one of them non-negative. Both bounds are
+    // read at the loop, not at `useOp`, which is inside it.
+    auto blockArg = cast<BlockArgument>(v);
+    auto forOp =
+        dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
+    if (!forOp || blockArg != forOp.getInductionVar())
+      return false;
+    return isNonNegative(forOp.getLowerBound(), forOp, depth + 1) &&
+           isNonNegative(forOp.getStep(), forOp, depth + 1);
+  }
 
   auto operandIsNonNegative = [&](Value operand) {
     return isNonNegative(operand, useOp, depth + 1);
@@ -129,9 +158,22 @@ bool isNonNegative(Value v, Operation *useOp, unsigned depth) {
         return operandIsNonNegative(op.getLhs()) &&
                operandIsNonNegative(op.getRhs());
       })
-      // Unsigned results and zero-extension have the top bit clear.
-      .Case<arith::RemUIOp, arith::DivUIOp, arith::ExtUIOp>(
-          [](auto) { return true; })
+      // An unsigned remainder is at or below its dividend (as unsigned) and
+      // below its divisor, so either operand having its top bit clear clears
+      // the result's. remui(0xffffffc0, 0xfffffff0) is 0xffffffc0, i.e. -64.
+      .Case<arith::RemUIOp>([&](arith::RemUIOp op) {
+        return operandIsNonNegative(op.getLhs()) ||
+               operandIsNonNegative(op.getRhs());
+      })
+      // An unsigned quotient is at or below its dividend, and a divisor of 2 or
+      // more clears the top bit on its own. A divisor of 1 is the identity and
+      // carries a negative dividend straight through.
+      .Case<arith::DivUIOp>([&](arith::DivUIOp op) {
+        return operandIsNonNegative(op.getLhs()) ||
+               isUnsignedDivisorAboveOne(op.getRhs());
+      })
+      // Zero extension always widens, so the result's top bit is clear.
+      .Case<arith::ExtUIOp>([](auto) { return true; })
       // Sign extension preserves the value; an arithmetic shift right
       // preserves the sign bit.
       .Case<arith::ExtSIOp>(
