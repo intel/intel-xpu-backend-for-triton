@@ -662,8 +662,8 @@ def benchmark_cat_reduce_2d(M, N, provider):
 
 
 @triton.jit
-def grouped_matmul_load_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, N: tl.constexpr, BM: tl.constexpr,
-                               BN: tl.constexpr, BK: tl.constexpr, MASK_A: tl.constexpr):
+def grouped_matmul_load_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, N: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr,
+                               BK: tl.constexpr, MASK_A: tl.constexpr):
     tile = tl.program_id(0)
     g = tl.program_id(1)
     group_start = tl.load(offsets_ptr + g)
@@ -687,8 +687,8 @@ def grouped_matmul_load_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, N: tl.constexpr
 
 
 @triton.jit
-def grouped_matmul_desc_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, N: tl.constexpr, BM: tl.constexpr,
-                               BN: tl.constexpr, BK: tl.constexpr):
+def grouped_matmul_desc_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, N: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr,
+                               BK: tl.constexpr):
     tile = tl.program_id(0)
     g = tl.program_id(1)
     group_start = tl.load(offsets_ptr + g)
@@ -738,20 +738,18 @@ def benchmark_grouped_matmul_row_limit(G, N, provider):
     grid = (tiles, G)
 
     assert_close(
-        lambda: (grouped_matmul_load_kernel[grid](
-            offsets, a, b, c_ref, N, BM, BN, BK, True, num_warps=16, num_stages=3), c_ref)[1],
-        lambda: (grouped_matmul_desc_kernel[grid](
-            offsets, a, b, c, N, BM, BN, BK, num_warps=16, num_stages=3), c)[1],
+        lambda: (grouped_matmul_load_kernel[grid]
+                 (offsets, a, b, c_ref, N, BM, BN, BK, True, num_warps=16, num_stages=3), c_ref)[1],
+        lambda: (grouped_matmul_desc_kernel[grid](offsets, a, b, c, N, BM, BN, BK, num_warps=16, num_stages=3), c)[1],
         atol=1e-2,
         rtol=1e-2,
     )
 
-    load_masked_fn = lambda: grouped_matmul_load_kernel[grid](
-        offsets, a, b, c, N, BM, BN, BK, True, num_warps=16, num_stages=3)
-    load_unmasked_fn = lambda: grouped_matmul_load_kernel[grid](
-        offsets, a, b, c, N, BM, BN, BK, False, num_warps=16, num_stages=3)
-    desc_fn = lambda: grouped_matmul_desc_kernel[grid](
-        offsets, a, b, c, N, BM, BN, BK, num_warps=16, num_stages=3)
+    load_masked_fn = lambda: grouped_matmul_load_kernel[grid](offsets, a, b, c, N, BM, BN, BK, True, num_warps=16,
+                                                              num_stages=3)
+    load_unmasked_fn = lambda: grouped_matmul_load_kernel[grid](offsets, a, b, c, N, BM, BN, BK, False, num_warps=16,
+                                                                num_stages=3)
+    desc_fn = lambda: grouped_matmul_desc_kernel[grid](offsets, a, b, c, N, BM, BN, BK, num_warps=16, num_stages=3)
 
     if provider == 'load_masked':
         fn = load_masked_fn
