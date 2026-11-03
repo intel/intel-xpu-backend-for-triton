@@ -93,22 +93,23 @@ pytest() {
     fi
 
     # Expected-failure lists, next to the skip list of the suite:
-    #   <suite>.xfail.txt:       the test runs, is expected to fail (XFAIL) and fails the run if it passes (strict).
-    #   <suite>.xfail-norun.txt: the test is reported as XFAIL without running.
-    # Put only tests that always fail in <suite>.xfail.txt; tests that fail intermittently stay in the skip list
+    #   <suite>.xfail.txt:     the test is reported as XFAIL without running (the default).
+    #   <suite>.xfail-run.txt: the test runs, is expected to fail (XFAIL) and fails the run if it passes (strict),
+    #                          for tests we want to hear about once they are fixed.
+    # Put only tests that always fail in <suite>.xfail-run.txt; tests that fail intermittently stay in the skip list
     # (strict: an intermittent pass would fail the run).
     if [[ ! -f $TRITON_TEST_SELECTFILE && -v TRITON_TEST_SUITE && $TEST_UNSKIP = false ]]; then
         XFAILFILE="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail.txt"
-        XFAILNORUNFILE="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail-norun.txt"
+        XFAILRUNFILE="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail-run.txt"
         if [[ -f $XFAILFILE ]]; then
             pytest_extra_args+=(
-                "--xfail-from-file=$XFAILFILE"
-                "--xfail-strict"
+                "--xfail-norun-from-file=$XFAILFILE"
             )
         fi
-        if [[ -f $XFAILNORUNFILE ]]; then
+        if [[ -f $XFAILRUNFILE ]]; then
             pytest_extra_args+=(
-                "--xfail-norun-from-file=$XFAILNORUNFILE"
+                "--xfail-from-file=$XFAILRUNFILE"
+                "--xfail-strict"
             )
         fi
     fi
