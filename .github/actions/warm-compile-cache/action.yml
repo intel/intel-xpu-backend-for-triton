@@ -10,9 +10,6 @@ inputs:
   pytest-targets:
     description: Pytest target paths/filters, e.g. `language/test_core.py -k "test_scaled_dot"`
     required: true
-  extra-env:
-    description: Shell statements (e.g. `export TRITON_XPU_GEN_NATIVE_CODE=1`) to run before warmup
-    default: ""
   ignore-errors:
     description: Treat a warmup failure as non-fatal, mirroring the real suite's error policy
     default: "false"
@@ -34,7 +31,9 @@ runs:
           skip_args=(--skip-from-file="$skiplist_dir/${{ inputs.skiplist-name }}.txt" --select-fail-on-missing)
         fi
 
-        ${{ inputs.extra-env }}
+        # Matches the TRITON_CI_CACHE_PHASE the real run sets (via TRITON_TEST_SUITE,
+        # see scripts/pytest-utils.sh), so "report --require-complete" can pair them up.
+        export TRITON_CI_CACHE_PHASE="warmup-${{ inputs.skiplist-name }}"
 
         pytest -p triton._compile_warmup -s --tb=line --warmup-only \
           --warmup-workers "$(( $(nproc) * 60 / 100 ))" \
