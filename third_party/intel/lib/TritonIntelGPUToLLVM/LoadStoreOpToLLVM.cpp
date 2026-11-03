@@ -3372,6 +3372,13 @@ struct DescriptorStoreOpToBlockIOConversion
     assert(!useVNNIFormat && "2D block store does not support VNNI");
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
+    AxisInfo *colInfo =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(op.getIndices().back());
+    if (packedElemSizeInBits > 32 &&
+        (!colInfo || colInfo->getDivisibility(0) % numPackedVals))
+      return failure();
+
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
@@ -3616,6 +3623,13 @@ struct StoreOpToBlockIOConversion
         std::move(sizeInfo);
     assert(!useVNNIFormat && "2D block store does not support VNNI");
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
+
+    AxisInfo *ptrInfo =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(op.getPtr());
+    if (packedElemSizeInBits > 32 &&
+        (!ptrInfo || ptrInfo->getDivisibility(contiguousDim) % 8))
+      return failure();
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
