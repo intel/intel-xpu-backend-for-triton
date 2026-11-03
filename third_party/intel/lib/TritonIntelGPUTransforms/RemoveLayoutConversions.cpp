@@ -256,6 +256,8 @@ public:
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
+  LogicalResult rematerializeUpToAnchors(ttg::ConvertLayoutOp convertOp);
+
   /**
   Forward propagate a rematerialized value to its users.
   This is needed to clean up the IR after backward rematerialization. For
@@ -2132,6 +2134,8 @@ void LayoutRematerialization::backwardRematerialization(
       convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout);
   if (result.failed()) {
     LDBG("  getRematerializableSlice failed");
+    if (succeeded(rematerializeUpToAnchors(convertOp)))
+      LDBG("  rematerialized up to anchors");
     return;
   }
 
@@ -2222,6 +2226,106 @@ void LayoutRematerialization::backwardRematerialization(
 
   // 5. Forward propagate remat values created during backward propagation.
   forwardPropagateRemat(forwardPropagateCandidates);
+}
+
+// When the backward slice of a convert in a loop to an MMA-derived layout is
+// blocked by anchors, relabel single-use rank-1 loads into that layout and
+// convert the other anchors defined outside the loop once.
+LogicalResult LayoutRematerialization::rematerializeUpToAnchors(
+    ttg::ConvertLayoutOp convertOp) {
+  auto loop = convertOp->getParentOfType<scf::ForOp>();
+  if (!loop)
+    return failure();
+  Attribute targetEnc = convertOp.getType().getEncoding();
+  Attribute parentEnc = targetEnc;
+  if (auto sliceEnc = dyn_cast<ttg::SliceEncodingAttr>(targetEnc))
+    parentEnc = sliceEnc.getParent();
+  if (!isa<ttg::MmaEncodingTrait>(parentEnc))
+    return failure();
+
+  auto isRelabeledLoad = [&](Operation *op) {
+    if (!isa<tt::LoadOp, tt::DescriptorLoadOp>(op) ||
+        hasEffect<MemoryEffects::Write>(op) ||
+        !ttgi::isExpensiveLoadOrStore(op))
+      return false;
+    Value result = op->getResult(0);
+    auto type = dyn_cast<RankedTensorType>(result.getType());
+    return type && type.getRank() == 1 && result.hasOneUse() &&
+           isUnconstrainedShapeOp(*result.getUsers().begin());
+  };
+  auto isLoopInvariantAnchor = [&](Operation *op) {
+    return !isRematerializableInSlice(op) && !isRelabeledLoad(op) &&
+           !loop->isAncestor(op);
+  };
+
+  SetVector<Value> slice;
+  DenseMap<Value, Attribute> layout;
+  if (failed(getConvertBackwardSlice(convertOp.getSrcMutable(), targetEnc,
+                                     slice, layout, isLoopInvariantAnchor)))
+    return failure();
+
+  SmallVector<Value> anchors;
+  bool relabels = false;
+  for (Value v : slice) {
+    Operation *op = v.getDefiningOp();
+    if (!op)
+      continue;
+    if (isLoopInvariantAnchor(op))
+      anchors.push_back(v);
+    else if (isRelabeledLoad(op))
+      relabels = true;
+    else if (!isRematerializableInSlice(op))
+      return failure();
+  }
+  slice.set_subtract(anchors);
+  if (slice.empty() || (anchors.empty() && !relabels))
+    return failure();
+  // A relabeled load that is still used outside the slice would be loaded
+  // twice.
+  SetVector<Value> usedOutside = getNonSliceOnlyValues(slice, convertOp);
+  if (llvm::any_of(slice, [&](Value v) {
+        Operation *op = v.getDefiningOp();
+        return op && isRelabeledLoad(op) && usedOutside.contains(v);
+      }))
+    return failure();
+
+  for (Value v : slice) {
+    Value ptr;
+    if (auto loadOp = v.getDefiningOp<tt::LoadOp>())
+      ptr = loadOp.getPtr();
+    else if (auto descLoadOp = v.getDefiningOp<tt::DescriptorLoadOp>())
+      ptr = descLoadOp.getDesc();
+    else
+      continue;
+    if (isPointerStoredWithDifferentEncoding(getBasePointer(ptr), funcOp,
+                                             targetEnc))
+      return failure();
+  }
+  if (rematDegradesLoad(slice, layout))
+    return failure();
+
+  // The anchors are converted once, so they only need to cost less than one
+  // iteration of the convert. isRematBeneficial prices the in-loop part.
+  int64_t anchorCvtCost = 0;
+  for (Value anchor : anchors)
+    anchorCvtCost += getConvertCost(anchor, layout[anchor], convertCostCache);
+  if (anchorCvtCost >
+          getConvertCost(convertOp.getSrc(), targetEnc, convertCostCache) ||
+      !isRematBeneficial(convertOp, slice, layout, /*newCvtCost=*/0,
+                         convertCostCache))
+    return failure();
+
+  IRMapping mapping;
+  for (Value anchor : anchors) {
+    OpBuilder builder(convertOp.getContext());
+    builder.setInsertionPointAfterValue(anchor);
+    auto newType = cast<RankedTensorType>(anchor.getType())
+                       .cloneWithEncoding(layout[anchor]);
+    mapping.map(anchor, ttg::ConvertLayoutOp::create(
+                            builder, convertOp.getLoc(), newType, anchor));
+  }
+  rewriteSlice(slice, layout, convertOp, mapping);
+  return success();
 }
 
 bool LayoutRematerialization::hoistConvertDotOperand() {
