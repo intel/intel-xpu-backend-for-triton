@@ -653,6 +653,121 @@ def benchmark_cat_reduce_2d(M, N, provider):
     return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), cv
 
 
+# ---------------------------------------------------------------------------
+# grouped_matmul_row_limit (covers #8565)
+# ---------------------------------------------------------------------------
+# Pattern: grouped GEMM where A's row mask bound is read from memory at
+# runtime. 'load_masked' exercises the row-limit-mask optimization (PR
+# #8615); 'load_unmasked' and 'descriptor' are references.
+
+
+@triton.jit
+def grouped_matmul_load_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, N: tl.constexpr, BM: tl.constexpr,
+                               BN: tl.constexpr, BK: tl.constexpr, MASK_A: tl.constexpr):
+    tile = tl.program_id(0)
+    g = tl.program_id(1)
+    group_start = tl.load(offsets_ptr + g)
+    group_end = tl.load(offsets_ptr + g + 1)
+    num_m_tiles = tl.cdiv(group_end - group_start, BM)
+    tile_m = tile % num_m_tiles
+    tile_n = tile // num_m_tiles
+    rows = group_start + tile_m * BM + tl.arange(0, BM)
+    cols = tile_n * BN + tl.arange(0, BN)
+    row_valid = rows < group_end
+    acc = tl.zeros((BM, BN), dtype=tl.float32)
+    for k0 in tl.range(0, N, BK):
+        ks = k0 + tl.arange(0, BK)
+        if MASK_A:
+            a = tl.load(a_ptr + rows[:, None] * N + ks[None, :], mask=row_valid[:, None], other=0.0)
+        else:
+            a = tl.load(a_ptr + rows[:, None] * N + ks[None, :])
+        b = tl.load(b_ptr + ks[:, None] * N + cols[None, :])
+        acc = tl.dot(a, b, acc)
+    tl.store(c_ptr + rows[:, None] * N + cols[None, :], acc.to(tl.bfloat16), mask=row_valid[:, None])
+
+
+@triton.jit
+def grouped_matmul_desc_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, N: tl.constexpr, BM: tl.constexpr,
+                               BN: tl.constexpr, BK: tl.constexpr):
+    tile = tl.program_id(0)
+    g = tl.program_id(1)
+    group_start = tl.load(offsets_ptr + g)
+    group_end = tl.load(offsets_ptr + g + 1)
+    group_m = group_end - group_start
+    num_m_tiles = tl.cdiv(group_m, BM)
+    tile_m = tile % num_m_tiles
+    tile_n = tile // num_m_tiles
+    a_desc = tl.make_tensor_descriptor(a_ptr + group_start * N, shape=[group_m, N], strides=[N, 1],
+                                       block_shape=[BM, BK])
+    b_desc = tl.make_tensor_descriptor(b_ptr, shape=[N, N], strides=[N, 1], block_shape=[BK, BN])
+    acc = tl.zeros((BM, BN), dtype=tl.float32)
+    for k0 in tl.range(0, N, BK):
+        acc = tl.dot(a_desc.load([tile_m * BM, k0]), b_desc.load([k0, tile_n * BN]), acc)
+    rows = group_start + tile_m * BM + tl.arange(0, BM)
+    cols = tile_n * BN + tl.arange(0, BN)
+    tl.store(c_ptr + rows[:, None] * N + cols[None, :], acc.to(tl.bfloat16))
+
+
+@perf_report(
+    Benchmark(
+        x_names=['G', 'N'],
+        x_vals=[(4, 1024), (4, 2048), (8, 2048)],
+        line_arg='provider',
+        line_vals=['load_masked', 'load_unmasked', 'descriptor'],
+        line_names=['tl.load (masked)', 'tl.load (unmasked)', 'Tensor Descriptor'],
+        styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
+        ylabel=['TFlops'],
+        plot_name='grouped-matmul-row-limit',
+        args={},
+    ))
+def benchmark_grouped_matmul_row_limit(G, N, provider):
+    quantiles = [0.5, 0.0, 1.0]
+    dtype = torch.bfloat16
+    torch.manual_seed(0)
+
+    BM = BN = 128
+    BK = 64
+
+    a = torch.randn(G * N, N, dtype=dtype, device=DEVICE)
+    b = torch.randn(N, N, dtype=dtype, device=DEVICE)
+    c = torch.empty(G * N, N, dtype=dtype, device=DEVICE)
+    c_ref = torch.empty(G * N, N, dtype=dtype, device=DEVICE)
+    offsets = torch.arange(0, (G + 1) * N, N, dtype=torch.int32, device=DEVICE)
+
+    tiles = triton.cdiv(N, BM) * triton.cdiv(N, BN)
+    grid = (tiles, G)
+
+    assert_close(
+        lambda: (grouped_matmul_load_kernel[grid](
+            offsets, a, b, c_ref, N, BM, BN, BK, True, num_warps=16, num_stages=3), c_ref)[1],
+        lambda: (grouped_matmul_desc_kernel[grid](
+            offsets, a, b, c, N, BM, BN, BK, num_warps=16, num_stages=3), c)[1],
+        atol=1e-2,
+        rtol=1e-2,
+    )
+
+    load_masked_fn = lambda: grouped_matmul_load_kernel[grid](
+        offsets, a, b, c, N, BM, BN, BK, True, num_warps=16, num_stages=3)
+    load_unmasked_fn = lambda: grouped_matmul_load_kernel[grid](
+        offsets, a, b, c, N, BM, BN, BK, False, num_warps=16, num_stages=3)
+    desc_fn = lambda: grouped_matmul_desc_kernel[grid](
+        offsets, a, b, c, N, BM, BN, BK, num_warps=16, num_stages=3)
+
+    if provider == 'load_masked':
+        fn = load_masked_fn
+    elif provider == 'load_unmasked':
+        fn = load_unmasked_fn
+    else:
+        fn = desc_fn
+
+    _, min_ms, max_ms, mean_ms, cv = do_bench(fn, n_warmup=25, n_repeat=100, quantiles=quantiles)
+
+    def tflops(ms):
+        return 2 * G * N * N * N * 1e-12 / (ms * 1e-3)
+
+    return (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
+
+
 def _gpu_warmup():
     """Run a simple kernel a few times to bring the GPU to steady-state frequency."""
     n = 1024 * 1024
@@ -675,6 +790,7 @@ def run_benchmarks():
     benchmark_layer_norm_2d.run(show_plots=False, print_data=True)
     benchmark_matmul_desc.run(show_plots=False, print_data=True)
     benchmark_cat_reduce_2d.run(show_plots=False, print_data=True)
+    benchmark_grouped_matmul_row_limit.run(show_plots=False, print_data=True)
 
 
 if __name__ == '__main__':
