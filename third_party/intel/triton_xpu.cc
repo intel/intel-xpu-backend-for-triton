@@ -463,7 +463,10 @@ void init_triton_intel(py::module_ &m) {
   });
 
   m.def("post_process_llir",
-        [](llvm::Module *mod) { intel::postProcessLLVMIR(*mod); });
+        [](llvm::Module *mod, bool unrollOneStageDots) {
+          intel::postProcessLLVMIR(*mod, unrollOneStageDots);
+        },
+        py::arg("module"), py::arg("unroll_one_stage_dots") = false);
 
   // Requests the GRF mode through SPV_INTEL_maximum_registers: the SPIR-V
   // translator turns `!MaximumRegisters` kernel metadata into a

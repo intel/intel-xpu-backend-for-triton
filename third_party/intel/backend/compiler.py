@@ -36,6 +36,7 @@ class XPUOptions:
     num_warps: int = 4
     num_ctas: int = 1
     num_stages: int = 2
+    gemm_policy: str = "learned"
     cluster_dims: tuple = (1, 1, 1)
     warp_size: int = 32
     optimize_epilogue: bool = False
@@ -77,6 +78,8 @@ class XPUOptions:
     max_grf_mode: str = "256"
 
     def __post_init__(self):
+        if self.gemm_policy not in {"baseline", "unconditional", "reference", "learned", "intervention"}:
+            raise ValueError("Unknown experimental GEMM policy")
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
@@ -568,6 +571,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.is_fast_math = knobs.intel.fast_math
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
         pm.run(mod, 'annotate_module')
+        if cls.device_arch == 'bmg':
+            mod.set_attr('ttig.dpas_prefetch_stages', ir.builder(mod.context).get_int32_attr(opt.num_stages))
+            mode = {"baseline": 0, "unconditional": 1, "reference": 2, "learned": 3, "intervention": 4}[opt.gemm_policy]
+            mod.set_attr('ttig.gemm_policy_mode', ir.builder(mod.context).get_int32_attr(mode))
 
         # Overwrite the warp_size option with the module annotation.
         opt.warp_size = intel.get_threads_per_warp(mod)
@@ -764,7 +771,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             llvm.link_extern_libs(llvm_mod, paths)
 
         cls.optimize_llvm_mod(llvm_mod, options)
-        intel.post_process_llir(llvm_mod)
+        selected = bool(src.get_int_attr("ttig.gemm_unroll_apply"))
+        intel.post_process_llir(llvm_mod, cls.device_arch == "bmg" and options.num_stages == 1 and selected)
         # An explicit GRF mode is requested on the kernel itself (SPV_INTEL_maximum_registers)
         # whenever the consumer is known to understand it; otherwise `make_spv` keeps passing
         # it as a build flag instead (see `options.allow_maximum_registers`).

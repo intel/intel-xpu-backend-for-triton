@@ -2,6 +2,8 @@
 #include "third_party/intel/lib/Target/LLVMIR/LLVMPasses.h"
 
 #include "llvm/ADT/SetVector.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
@@ -391,7 +393,50 @@ void legalizeI1VectorMemory(Module &module) {
     legalizeI1VectorStore(store, dl);
 }
 
-void postProcessLLVMIR(llvm::Module &mod) {
+static void hintOneStageDotLoops(Module &mod) {
+  LLVMContext &ctx = mod.getContext();
+  for (Function &function : mod) {
+    if (function.isDeclaration())
+      continue;
+    DominatorTree dominators(function);
+    LoopInfo loops(dominators);
+    SmallVector<Loop *> pending(loops.begin(), loops.end());
+    while (!pending.empty()) {
+      Loop *loop = pending.pop_back_val();
+      if (!loop->getSubLoops().empty()) {
+        pending.append(loop->getSubLoops().begin(), loop->getSubLoops().end());
+        continue;
+      }
+      if (loop->getLoopID() || !loop->getLoopLatch())
+        continue;
+      unsigned dots = 0;
+      bool blockLoad = false, prefetch = false;
+      for (BasicBlock *block : loop->blocks()) {
+        for (Instruction &inst : *block) {
+          auto *call = dyn_cast<CallBase>(&inst);
+          Function *callee = call ? call->getCalledFunction() : nullptr;
+          if (!callee)
+            continue;
+          StringRef name = callee->getName();
+          dots += name.contains("SubgroupMatrixMultiplyAccumulateINTEL");
+          blockLoad |= name.contains("Subgroup2DBlockLoad");
+          prefetch |= name.contains("Prefetch");
+        }
+      }
+      if (!blockLoad || prefetch || dots < 8 || dots > 32)
+        continue;
+      Metadata *count[] = {
+          MDString::get(ctx, "llvm.loop.unroll.count"),
+          ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(ctx), 2))};
+      Metadata *operands[] = {nullptr, MDNode::get(ctx, count)};
+      MDNode *id = MDNode::getDistinct(ctx, operands);
+      id->replaceOperandWith(0, id);
+      loop->setLoopID(id);
+    }
+  }
+}
+
+void postProcessLLVMIR(llvm::Module &mod, bool unrollOneStageDots) {
   // __devicelib_assert_fail must be a declaration so that
   // IGC can replace it with a runtime assert function.
   // If a 'fallback' implementation is defined in SYCL libarary, the
@@ -415,6 +460,8 @@ void postProcessLLVMIR(llvm::Module &mod) {
 
   // IGC and LLVM disagree on the memory layout of `<N x i1>`.
   legalizeI1VectorMemory(mod);
+  if (unrollOneStageDots)
+    hintOneStageDotLoops(mod);
 }
 
 } // namespace mlir::triton::intel

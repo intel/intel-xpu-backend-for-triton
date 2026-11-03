@@ -2,12 +2,15 @@
 #include "Dialect/TritonIntelGPU/Transforms/DecomposeScaledBlocked.h"
 #include "Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "intel/include/Analysis/DPAS.h"
+#include "intel/include/Analysis/GemmPolicy.h"
+#include "intel/include/Analysis/GemmPolicyAlignment.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
@@ -242,6 +245,175 @@ void clearChainedDotKindAttrs(ModuleOp mod) {
   });
 }
 
+static bool hasLongConstantReduction(scf::ForOp loop, int64_t minimumTrips = 256) {
+  auto lower = getConstantIntValue(loop.getLowerBound());
+  auto upper = getConstantIntValue(loop.getUpperBound());
+  auto step = getConstantIntValue(loop.getStep());
+  if (!lower || !upper || !step || *lower < 0 || *upper <= *lower || *step <= 0)
+    return false;
+  int64_t span = *upper - *lower;
+  int64_t fullTrips = span / *step;
+  return fullTrips > minimumTrips || (fullTrips == minimumTrips && span % *step != 0);
+}
+
+struct GemmOperand {
+  bool descriptor;
+  bool kContiguous;
+  bool compute;
+  int64_t pitchBytes;
+};
+
+static int64_t pitchAlignment(int64_t bytes) {
+  if (bytes <= 0)
+    return 0;
+  uint64_t value = bytes;
+  return value & (~value + 1);
+}
+
+static int64_t bytesFromElements(int64_t elements) {
+  if (elements <= 0 || elements > INT64_MAX / 2)
+    return 0;
+  return elements * 2;
+}
+
+static std::optional<GemmOperand>
+analyzeGemmOperand(Value value, unsigned kAxis) {
+  bool compute = false;
+  unsigned casts = 0, transposes = 0, exponentials = 0;
+  for (unsigned depth = 0; depth < 16; ++depth) {
+    Operation *def = value.getDefiningOp();
+    if (!def)
+      return std::nullopt;
+    if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(def)) {
+      value = convert.getSrc();
+    } else if (auto transpose = dyn_cast<tt::TransOp>(def)) {
+      auto order = transpose.getOrder();
+      if (order.size() != 2 || order[0] != 1 || order[1] != 0 || ++transposes > 1)
+        return std::nullopt;
+      kAxis = 1 - kAxis;
+      value = transpose.getSrc();
+    } else if (isa<arith::ExtFOp, arith::TruncFOp>(def)) {
+      if (++casts > 2)
+        return std::nullopt;
+      auto from = dyn_cast<RankedTensorType>(def->getOperand(0).getType());
+      auto to = dyn_cast<RankedTensorType>(value.getType());
+      if (!from || !to ||
+          !((from.getElementType().isF32() && isa<BFloat16Type>(to.getElementType())) ||
+            (isa<BFloat16Type>(from.getElementType()) && to.getElementType().isF32())))
+        return std::nullopt;
+      value = def->getOperand(0);
+    } else if (def->getName().getStringRef() == "math.exp") {
+      auto type = dyn_cast<RankedTensorType>(value.getType());
+      if (++exponentials > 1 || !type || !type.getElementType().isF32())
+        return std::nullopt;
+      compute = true;
+      value = def->getOperand(0);
+    } else if (auto load = dyn_cast<tt::DescriptorLoadOp>(def)) {
+      auto type = dyn_cast<RankedTensorType>(load.getType());
+      auto desc = load.getDesc().getDefiningOp<tt::MakeTensorDescOp>();
+      if (!type || type.getRank() != 2 || !desc ||
+          desc.getStrides().size() != 2 ||
+          getConstantIntValue(desc.getStrides()[1]) != 1)
+        return std::nullopt;
+      auto pitch = getConstantIntValue(desc.getStrides()[0]);
+      return GemmOperand{true, kAxis == 1, compute,
+                         pitch ? bytesFromElements(*pitch) : 0};
+    } else {
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
+}
+
+struct GemmFeaturePacket {
+  gemm_policy_alignment::Features x;
+  std::array<int64_t, 2> pitches;
+};
+
+static std::optional<GemmFeaturePacket>
+analyzeGemmFeatures(tt::DotOp dot) {
+  auto loop = dot->getParentOfType<scf::ForOp>();
+  auto aType = dyn_cast<RankedTensorType>(dot.getA().getType());
+  auto bType = dyn_cast<RankedTensorType>(dot.getB().getType());
+  if (!loop || dot->getBlock() != loop.getBody() || !aType || !bType ||
+      aType.getRank() != 2 || bType.getRank() != 2 ||
+      !isa<BFloat16Type>(aType.getElementType()) ||
+      bType.getElementType() != aType.getElementType())
+    return std::nullopt;
+  unsigned dots = 0;
+  bool nested = false;
+  loop.walk([&](Operation *op) {
+    dots += isa<tt::DotOp, tt::DotScaledOp>(op);
+    nested |= isa<scf::ForOp>(op) && op != loop.getOperation();
+  });
+  if (dots != 1 || nested)
+    return std::nullopt;
+  auto lower = getConstantIntValue(loop.getLowerBound());
+  auto upper = getConstantIntValue(loop.getUpperBound());
+  auto step = getConstantIntValue(loop.getStep());
+  if (!lower || !upper || !step || *lower < 0 || *upper <= *lower || *step <= 0)
+    return std::nullopt;
+  int64_t trips = (*upper - *lower) / *step + ((*upper - *lower) % *step != 0);
+  auto mod = dot->getParentOfType<ModuleOp>();
+  auto stages = mod->getAttrOfType<IntegerAttr>("ttig.dpas_prefetch_stages");
+  if (auto local = loop->getAttrOfType<IntegerAttr>("tt.num_stages"))
+    stages = local;
+  if (!stages)
+    return std::nullopt;
+  auto a = analyzeGemmOperand(dot.getA(), 1);
+  auto b = analyzeGemmOperand(dot.getB(), 0);
+  if (!a || !b || b->compute || b->kContiguous)
+    return std::nullopt;
+  auto func = dot->getParentOfType<tt::FuncOp>();
+  gemm_policy_alignment::Features x{
+      double(stages.getInt()), double(trips), double(aType.getShape()[0]),
+      double(bType.getShape()[1]), double(aType.getShape()[1]),
+      double(ttg::lookupNumWarps(func)), double(a->descriptor),
+      double(a->kContiguous), double(a->compute), double(b->descriptor), 16.0,
+      double(pitchAlignment(a->pitchBytes)), double(pitchAlignment(b->pitchBytes))};
+  return GemmFeaturePacket{x, {a->pitchBytes, b->pitchBytes}};
+}
+
+static bool hasSupportedGemmProfile(const gemm_policy_alignment::Features &x) {
+  return x[1] >= 32 && x[1] <= 768 && x[2] == 256 && x[3] == 256 &&
+         x[4] == 32 && x[5] == 32 && x[10] == 16 &&
+         x[6] == 1 && x[9] == 1 && x[11] > 0 && x[12] > 0;
+}
+
+static void annotateGemmPolicies(ModuleOp mod) {
+  auto modeAttr = mod->getAttrOfType<IntegerAttr>("ttig.gemm_policy_mode");
+  if (!modeAttr || modeAttr.getInt() == 0)
+    return;
+  int64_t mode = modeAttr.getInt();
+  bool forced = mode == 1 || mode == 4;
+  unsigned totalDots = 0, allowedUnroll = 0;
+  mod.walk([&](Operation *op) { totalDots += isa<tt::DotOp, tt::DotScaledOp>(op); });
+  if (!totalDots)
+    return;
+  SmallVector<Attribute> featureVectors, pitchVectors;
+  mod.walk([&](tt::DotOp dot) {
+    auto packet = analyzeGemmFeatures(dot);
+    if (!packet)
+      return;
+    const auto &x = packet->x;
+    featureVectors.push_back(DenseF64ArrayAttr::get(mod.getContext(), x));
+    pitchVectors.push_back(DenseI64ArrayAttr::get(mod.getContext(), packet->pitches));
+    bool supported = hasSupportedGemmProfile(x);
+    bool layout = supported && (forced ||
+        (mode == 3 ? gemm_policy_alignment::apply_layout(x)
+                   : mode == 2 && x[0] == 2 && x[7] == 1 &&
+                     (x[12] >= 128 || x[1] >= 384)));
+    dot->setAttr("ttig.gemm_layout_apply", BoolAttr::get(mod.getContext(), layout));
+    bool referenceUnroll = !x[8] && (!x[7] || x[11] >= 256);
+    allowedUnroll += supported && x[0] == 1 && (forced ||
+        (mode == 3 ? gemm_policy_alignment::apply_unroll(x) : referenceUnroll));
+  });
+  mod->setAttr("ttig.gemm_feature_vectors", ArrayAttr::get(mod.getContext(), featureVectors));
+  mod->setAttr("ttig.gemm_pitch_bytes", ArrayAttr::get(mod.getContext(), pitchVectors));
+  mod->setAttr("ttig.gemm_unroll_apply", IntegerAttr::get(
+      IntegerType::get(mod.getContext(), 32), totalDots == 1 && allowedUnroll == 1));
+}
+
 template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
                              OpTy, tt::DotOp, tt::DotScaledOp>::value>>
 class BlockedToDPAS : public OpRewritePattern<OpTy> {
@@ -329,6 +501,26 @@ public:
         oldAType.getElementType().getIntOrFloatBitWidth(),
         isa<Float8E5M2Type, Float8E4M3FNType>(oldAType.getElementType()),
         oldAType.getShape(), oldBType.getShape(), warpsPerTile);
+
+    auto stageHint = mod->getAttrOfType<IntegerAttr>("ttig.dpas_prefetch_stages");
+    auto loop = op->template getParentOfType<scf::ForOp>();
+    auto chain = getChainedDotKindAttr(op);
+    if (stageHint && loop && op->getBlock() == loop.getBody() && rank == 2 &&
+        isa<tt::DotOp>(op.getOperation()) && dpasCap->executionSize == 16 &&
+        oldAType.getShape()[rank - 2] == oldBType.getShape()[rank - 1] &&
+        isa<Float16Type, BFloat16Type>(oldAType.getElementType()) &&
+        (!chain || *chain == ChainedDotKind::NoChained)) {
+      int64_t stages = stageHint.getInt();
+      if (auto local = loop->template getAttrOfType<IntegerAttr>("tt.num_stages"))
+        stages = local.getInt();
+      // Use smaller A load clusters only for long, pipelined reductions.
+      auto mode = mod->getAttrOfType<IntegerAttr>("ttig.gemm_policy_mode");
+      auto selected = op->template getAttrOfType<BoolAttr>("ttig.gemm_layout_apply");
+      bool forced = mode && (mode.getInt() == 1 || mode.getInt() == 4);
+      bool apply = selected && selected.getValue();
+      if (stages > 1 && apply && hasLongConstantReduction(loop, forced ? 0 : 256))
+        repCluster[rank - 2] = std::min(repCluster[rank - 2], 2u);
+    }
 
     unsigned repeatCount = std::min(
         dpasCap->repeatCount, static_cast<unsigned>(retShape[rank - 2] /*M*/));
@@ -1014,6 +1206,7 @@ public:
       transposeDotScaledOp(mod);
 
     annotateChainedDotKinds(mod);
+    annotateGemmPolicies(mod);
 
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);

@@ -87,3 +87,186 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+// Tensor arguments lack a proven descriptor origin, including in forced modes.
+// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
+// CHECK: ttig.gemm_feature_vectors = []
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.gemm_policy_mode = 1 : i32, ttig.dpas_prefetch_stages = 2 : i32} {
+  // CHECK-LABEL: tt.func public @prefetched_dot_cluster
+  tt.func public @prefetched_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
+    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
+    %lo = arith.constant 0 : index
+    %hi = arith.constant 512 : index
+    %step = arith.constant 1 : index
+    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
+      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
+      scf.yield %dot : tensor<256x256xf32, #blocked>
+    }
+    tt.return %result : tensor<256x256xf32, #blocked>
+  }
+}
+
+// -----
+// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.gemm_policy_mode = 1 : i32, ttig.dpas_prefetch_stages = 1 : i32} {
+  // CHECK-LABEL: tt.func public @one_stage_dot_cluster
+  tt.func public @one_stage_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
+    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
+    %lo = arith.constant 0 : index
+    %hi = arith.constant 512 : index
+    %step = arith.constant 1 : index
+    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
+      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
+      scf.yield %dot : tensor<256x256xf32, #blocked>
+    }
+    tt.return %result : tensor<256x256xf32, #blocked>
+  }
+}
+
+// -----
+// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.gemm_policy_mode = 1 : i32, ttig.dpas_prefetch_stages = 3 : i32} {
+  // CHECK-LABEL: tt.func public @local_one_stage_dot_cluster
+  tt.func public @local_one_stage_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
+    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
+    %lo = arith.constant 0 : index
+    %hi = arith.constant 512 : index
+    %step = arith.constant 1 : index
+    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
+      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
+      scf.yield %dot : tensor<256x256xf32, #blocked>
+    } {tt.num_stages = 1 : i32}
+    tt.return %result : tensor<256x256xf32, #blocked>
+  }
+}
+
+// -----
+// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate} {
+  // CHECK-LABEL: tt.func public @legacy_target_dot_cluster
+  tt.func public @legacy_target_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
+    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
+    %lo = arith.constant 0 : index
+    %hi = arith.constant 512 : index
+    %step = arith.constant 1 : index
+    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
+      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
+      scf.yield %dot : tensor<256x256xf32, #blocked>
+    }
+    tt.return %result : tensor<256x256xf32, #blocked>
+  }
+}
+// -----
+// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.gemm_policy_mode = 1 : i32, ttig.dpas_prefetch_stages = 2 : i32} {
+  // CHECK-LABEL: tt.func public @rectangular_dot_cluster
+  tt.func public @rectangular_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x128xf32, #blocked> {
+    %zero = arith.constant dense<0.0> : tensor<256x128xf32, #blocked>
+    %lo = arith.constant 0 : index
+    %hi = arith.constant 512 : index
+    %step = arith.constant 1 : index
+    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x128xf32, #blocked>) {
+      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x128xf32, #blocked>
+      scf.yield %dot : tensor<256x128xf32, #blocked>
+    }
+    tt.return %result : tensor<256x128xf32, #blocked>
+  }
+}
+
+// -----
+// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.gemm_policy_mode = 1 : i32, ttig.dpas_prefetch_stages = 2 : i32} {
+  // CHECK-LABEL: tt.func public @short_reduction_dot_cluster
+  tt.func public @short_reduction_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
+    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
+    %lo = arith.constant 0 : index
+    %hi = arith.constant 8192 : index
+    %step = arith.constant 32 : index
+    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
+      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
+      scf.yield %dot : tensor<256x256xf32, #blocked>
+    }
+    tt.return %result : tensor<256x256xf32, #blocked>
+  }
+}
+
+// -----
+// Tensor arguments lack a proven descriptor origin, including in forced modes.
+// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
+// CHECK: ttig.gemm_feature_vectors = []
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.gemm_policy_mode = 1 : i32, ttig.dpas_prefetch_stages = 2 : i32} {
+  // CHECK-LABEL: tt.func public @long_boundary_dot_cluster
+  tt.func public @long_boundary_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
+    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
+    %lo = arith.constant 0 : index
+    %hi = arith.constant 8193 : index
+    %step = arith.constant 32 : index
+    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
+      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
+      scf.yield %dot : tensor<256x256xf32, #blocked>
+    }
+    tt.return %result : tensor<256x256xf32, #blocked>
+  }
+}
+
+// -----
+// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.gemm_policy_mode = 1 : i32, ttig.dpas_prefetch_stages = 2 : i32} {
+  // CHECK-LABEL: tt.func public @dynamic_reduction_dot_cluster
+  tt.func public @dynamic_reduction_dot_cluster(%hi: index, %a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
+    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
+    %lo = arith.constant 0 : index
+    %step = arith.constant 1 : index
+    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
+      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
+      scf.yield %dot : tensor<256x256xf32, #blocked>
+    }
+    tt.return %result : tensor<256x256xf32, #blocked>
+  }
+}
+
+// -----
+// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.gemm_policy_mode = 4 : i32, ttig.dpas_prefetch_stages = 2 : i32} {
+  // CHECK-LABEL: tt.func public @dynamic_intervention_dot_cluster
+  tt.func public @dynamic_intervention_dot_cluster(%hi: index, %a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
+    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
+    %lo = arith.constant 0 : index
+    %step = arith.constant 1 : index
+    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
+      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
+      scf.yield %dot : tensor<256x256xf32, #blocked>
+    }
+    tt.return %result : tensor<256x256xf32, #blocked>
+  }
+}
+
+// -----
+// Tensor arguments lack a proven descriptor origin, including in forced modes.
+// CHECK: #{{.*}} = #ttig.dpas<{{.*}}repCluster = [4, 2]
+// CHECK: ttig.gemm_feature_vectors = []
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [8, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.gemm_policy_mode = 4 : i32, ttig.dpas_prefetch_stages = 2 : i32} {
+  // CHECK-LABEL: tt.func public @short_intervention_dot_cluster
+  tt.func public @short_intervention_dot_cluster(%a: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<256x256xf32, #blocked> {
+    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #blocked>
+    %lo = arith.constant 0 : index
+    %hi = arith.constant 8192 : index
+    %step = arith.constant 32 : index
+    %result = scf.for %iv = %lo to %hi step %step iter_args(%acc = %zero) -> (tensor<256x256xf32, #blocked>) {
+      %dot = tt.dot %a, %b, %acc : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
+      scf.yield %dot : tensor<256x256xf32, #blocked>
+    }
+    tt.return %result : tensor<256x256xf32, #blocked>
+  }
+}
