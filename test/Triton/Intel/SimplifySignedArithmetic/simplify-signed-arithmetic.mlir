@@ -992,3 +992,73 @@ tt.func public @no_convert_ceildivsi_negative_divisor() -> i32 {
 // CHECK: arith.ceildivsi
 // CHECK-NOT: arith.ceildivui
 }
+
+// -----
+
+// Negative Test 26: an unsigned remainder is not non-negative on its own. With
+// %arg0 = 0xffffffc0 and %arg1 = 0xfffffff0 the remainder is 0xffffffc0, i.e.
+// -64 -> do NOT convert
+module {
+tt.func public @no_convert_remsi_over_remui(%arg0: i32, %arg1: i32) -> i32 {
+  %c16 = arith.constant 16 : i32
+  %u = arith.remui %arg0, %arg1 : i32
+  %rem = arith.remsi %u, %c16 : i32
+  tt.return %rem : i32
+}
+// CHECK-LABEL: @no_convert_remsi_over_remui
+// CHECK: arith.remui %arg0, %arg1
+// CHECK: arith.remsi
+}
+
+// -----
+
+// Negative Test 27: an unsigned division by 1 is the identity, so it carries a
+// negative dividend straight through -> do NOT convert
+module {
+tt.func public @no_convert_remsi_over_divui_by_one(%arg0: i32) -> i32 {
+  %c1 = arith.constant 1 : i32
+  %c16 = arith.constant 16 : i32
+  %u = arith.divui %arg0, %c1 : i32
+  %rem = arith.remsi %u, %c16 : i32
+  tt.return %rem : i32
+}
+// CHECK-LABEL: @no_convert_remsi_over_divui_by_one
+// CHECK: arith.remsi
+// CHECK-NOT: arith.remui
+}
+
+// -----
+
+// Test 31: a non-negative divisor bounds the unsigned remainder below it,
+// which clears the result's MSB -> convert
+module {
+tt.func public @remsi_over_remui_non_negative_divisor(%arg0: i32, %arg1: i32) -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c16 = arith.constant 16 : i32
+  %nonneg = arith.cmpi sge, %arg1, %c0 : i32
+  llvm.intr.assume %nonneg : i1
+  %u = arith.remui %arg0, %arg1 : i32
+  %rem = arith.remsi %u, %c16 : i32
+  tt.return %rem : i32
+}
+// CHECK-LABEL: @remsi_over_remui_non_negative_divisor
+// CHECK: arith.remui %arg0, %arg1
+// CHECK: arith.remui %{{.*}}, %c16
+}
+
+// -----
+
+// Test 32: an unsigned division by 2 or more clears the MSB on its own
+// -> convert
+module {
+tt.func public @remsi_over_divui_by_two(%arg0: i32) -> i32 {
+  %c2 = arith.constant 2 : i32
+  %c16 = arith.constant 16 : i32
+  %u = arith.divui %arg0, %c2 : i32
+  %rem = arith.remsi %u, %c16 : i32
+  tt.return %rem : i32
+}
+// CHECK-LABEL: @remsi_over_divui_by_two
+// CHECK: arith.divui
+// CHECK: arith.remui
+}
