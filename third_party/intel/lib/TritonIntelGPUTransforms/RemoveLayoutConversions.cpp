@@ -707,7 +707,8 @@ void LayoutPropagation::resolveConflicts() {
                   tt::DescriptorStoreOp, tt::AtomicRMWOp, tt::AtomicCASOp>(op);
     for (Attribute e : info.encodings) {
       if ((isLoadOrStore && isa<ttg::BlockedEncodingAttr>(e)) ||
-          (!isLoadOrStore && isa<ttg::MmaEncodingTrait>(e))) {
+          (!isLoadOrStore && isa<ttg::MmaEncodingTrait>(e)) ||
+          (!isLoadOrStore && isa<ttg::LinearEncodingAttr>(e))) {
         encoding = e;
         break;
       }
