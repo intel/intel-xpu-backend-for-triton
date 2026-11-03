@@ -121,7 +121,7 @@ public:
     SmallVector<tt::DescriptorLoadOp> descLoadOps;
     mod.walk([&](tt::DescriptorLoadOp op) { descLoadOps.push_back(op); });
     for (auto op : descLoadOps)
-      convertDescriptorLoadOp(op);
+      convertDescriptorLoadOp(op, axisInfoAnalysis);
 
     SmallVector<tt::LoadOp> loadOps;
     mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
@@ -131,7 +131,9 @@ public:
 
 private:
   /// Convert a tt.descriptor_load to ttig.2d_block_load.
-  void convertDescriptorLoadOp(tt::DescriptorLoadOp op) {
+  void
+  convertDescriptorLoadOp(tt::DescriptorLoadOp op,
+                          tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
     if (!isBlockIOEligible(op))
       return;
 
@@ -176,18 +178,26 @@ private:
       return;
     }
 
+    auto sizeInfo = ttgi::getBlockIOLoadTileSize(
+        llEncoding, contiguousDim, elemSizeInBits,
+        /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
+
     // For descriptor loads, the 2D block I/O tile must use only the inner 2
     // dims. Reject if rowDim or colDim falls in a batch dimension.
     if (rank > 2) {
-      auto sizeInfo = ttgi::getBlockIOLoadTileSize(
-          llEncoding, contiguousDim, elemSizeInBits,
-          /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
       int innerDimStart = static_cast<int>(rank - 2);
       if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart) {
         LDBG("Batch dim in tile for descriptor load: " << *op);
         return;
       }
     }
+
+    tt::AxisInfo *colInfo =
+        axisInfoAnalysis.getAxisInfo(op.getIndices()[descRank - 1]);
+    if (elemSizeInBits * sizeInfo.numElemPerPackedVal > 32 &&
+        (!colInfo ||
+         colInfo->getDivisibility(0) % sizeInfo.numElemPerPackedVal))
+      return;
 
     // The 2D block message encodes base_width (bytes), base_height (rows) and
     // base_pitch (bytes) as value-1 in 24-bit fields, so each must be in
@@ -411,6 +421,11 @@ private:
     tileHeight = sizeInfo.tileHeight;
     isTranspose = sizeInfo.transpose;
     numPackedVals = sizeInfo.numElemPerPackedVal;
+
+    tt::AxisInfo *ptrInfo = axisInfoAnalysis.getAxisInfo(op.getPtr());
+    if (elemSizeInBits * numPackedVals > 32 &&
+        (!ptrInfo || ptrInfo->getDivisibility(contiguousDim) % 8))
+      return;
 
     // For the 2D block load surface, the pitch dimension is always the
     // non-contiguous memory direction. For transposed loads, rowDim is the
