@@ -1828,26 +1828,6 @@ tt.func public @noHoistTransMovingUnitDim(%arg0: tensor<64x16xbf16>, %arg1: !tt.
 
 // -----
 
-tt.func public @noHoistAllowReorder(%arg0: tensor<64x64xbf16>, %arg1: !tt.ptr<bf16>, %arg2: tensor<64x64xf32>) {
-  %c0_i32 = arith.constant 0 : i32
-  %c64_i32 = arith.constant 64 : i32
-  %c1_i64 = arith.constant 1 : i64
-  %c64_i64 = arith.constant 64 : i64
-  %c4096_i64 = arith.constant 4096 : i64
-  %0 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c64_i32, %c64_i32], [%c4096_i64, %c64_i64, %c1_i64] : <bf16>, <1x64x64xbf16>
-  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x64x64xbf16> -> tensor<1x64x64xbf16>
-  %2 = arith.negf %1 : tensor<1x64x64xbf16>
-  %3 = tt.reshape %2 allow_reorder : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
-  %4 = tt.dot %3, %arg0, %arg2 : tensor<64x64xbf16> * tensor<64x64xbf16> -> tensor<64x64xf32>
-  tt.return
-}
-// CHECK-LABEL: noHoistAllowReorder
-// CHECK: tt.descriptor_load {{.*}} -> tensor<1x64x64xbf16>
-// CHECK: [[X:%.*]] = arith.negf
-// CHECK: tt.reshape [[X]] allow_reorder : tensor<1x64x64xbf16> -> tensor<64x64xbf16>
-
-// -----
-
 // COM: A plain tt.load is not a descriptor load.
 tt.func public @noHoistWithoutDescriptorLoad(%arg0: tensor<64x64xbf16>, %arg1: !tt.ptr<bf16>, %arg2: tensor<64x64xf32>) {
   %0 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<1x64x64x!tt.ptr<bf16>>

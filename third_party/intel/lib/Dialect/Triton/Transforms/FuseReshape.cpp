@@ -906,8 +906,8 @@ static Value singleNonRebuildableOperand(Operation *op) {
 /// first, or an empty list if the reshape cannot be hoisted.
 static SmallVector<Operation *> matchHoistChain(tt::ReshapeOp reshapeOp) {
   RankedTensorType srcTy = reshapeOp.getSrc().getType();
-  if (reshapeOp.getAllowReorder() || reshapeOp->use_empty() ||
-      srcTy.getRank() != 3 || srcTy.getDimSize(0) != 1 ||
+  if (reshapeOp->use_empty() || srcTy.getRank() != 3 ||
+      srcTy.getDimSize(0) != 1 ||
       reshapeOp.getType().getShape() != srcTy.getShape().drop_front())
     return {};
 
