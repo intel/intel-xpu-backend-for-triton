@@ -421,21 +421,19 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial --tutorial06-run-mode skip
 
-      # Run 06-fused-attention.py separately, because it is split into 3 configs
-      - name: Run Flash Attention tutorials (HEAD_DIM=64)
+      - name: Warm Flash Attention tutorials compile cache
         if: matrix.loop.suite == 'rest'
-        run: |
-          HEAD_DIM=64 ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/tutorials
+          skiplist-name: tutorials
+          pytest-targets: test_tutorials.py --tutorial06-mode fa_only
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
-      - name: Run Flash Attention tutorials (HEAD_DIM=128, FP8 only)
+      - name: Run Flash Attention tutorials
         if: matrix.loop.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fp8_only
-
-      - name: Run Flash Attention tutorials (HEAD_DIM=128, skip FP8)
-        if: matrix.loop.suite == 'rest'
-        run: |
-          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode skip_fp8
+          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
 
       - name: Install transformers
         if: matrix.loop.suite == 'rest'
