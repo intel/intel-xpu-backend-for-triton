@@ -1,0 +1,41 @@
+name: warm-compile-cache
+description: Warm the Triton compile cache for @pytest.mark.enable_warmup tests before a suite's real run
+inputs:
+  working-directory:
+    description: Directory (relative to repo root) to run pytest from
+    required: true
+  skiplist-name:
+    description: Skiplist file stem under scripts/skiplist/<arch>/ matching the suite's TRITON_TEST_SUITE
+    required: true
+  pytest-targets:
+    description: Pytest target paths/filters, e.g. `language/test_core.py -k "test_scaled_dot"`
+    required: true
+  ignore-errors:
+    description: Treat a warmup failure as non-fatal, mirroring the real suite's error policy
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Warm compile cache
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        source /opt/intel/oneapi/setvars.sh > /dev/null
+
+        # Reuse the --skip-list dir already resolved into $TRITON_TEST_CMD, so warmup
+        # skips what the real run below will skip on this HW.
+        skiplist_dir="${TRITON_TEST_CMD#*--skip-list }"
+        skiplist_dir="${skiplist_dir%% *}"
+        skip_args=()
+        if [[ "$TEST_UNSKIP" != true && -f "$skiplist_dir/${{ inputs.skiplist-name }}.txt" ]]; then
+          skip_args=(--skip-from-file="$skiplist_dir/${{ inputs.skiplist-name }}.txt" --select-fail-on-missing)
+        fi
+
+        # Matches the TRITON_CI_CACHE_PHASE the real run sets (via TRITON_TEST_SUITE,
+        # see scripts/pytest-utils.sh), so "report --require-complete" can pair them up.
+        export TRITON_CI_CACHE_PHASE="warmup-${{ inputs.skiplist-name }}"
+
+        pytest -p triton._compile_warmup -s --tb=line --warmup-only \
+          --warmup-workers "$(( $(nproc) * 60 / 100 ))" \
+          --device xpu "${skip_args[@]}" ${{ inputs.pytest-targets }} \
+          || [[ "${{ inputs.ignore-errors }}" == true ]]
