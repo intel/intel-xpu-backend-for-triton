@@ -25,7 +25,7 @@ from triton_kernels.tensor import (
     wrap_torch_tensor,
 )
 from triton_kernels.testing import assert_equal
-from triton._internal_testing import is_cuda
+from triton._internal_testing import is_compile_warmup, is_cuda
 from triton_kernels.tensor_details.layout import (
     BlackwellActMXScaleLayout,
     BlackwellMX4ValueShuffledLayout,
@@ -770,6 +770,7 @@ def test_remap_ragged_tensor_metadata(n_slices, device):
 @pytest.mark.parametrize("n_rows", [0, 7, 256, 17111])
 @pytest.mark.parametrize("n_cols", [13, 32, 128, 811])
 @pytest.mark.parametrize("k", [1, 3, 4, 7, 8, 12, 18, 33, 63])
+@pytest.mark.enable_warmup
 def test_make_bitmatrix_metadata(n_rows, n_cols, k, device):
     if k > n_cols:
         pytest.skip("k must be <= n_cols")
@@ -785,6 +786,8 @@ def test_make_bitmatrix_metadata(n_rows, n_cols, k, device):
     bitmask = wrap_torch_tensor(bitmask_data.view(torch.uint32), dtype=BIT, shape=(n_rows, n_cols))
     # make metadata and compare
     metadata_tri = make_bitmatrix_metadata(indx, bitmask)
+    if is_compile_warmup():
+        return
     metadata_ref = make_bitmatrix_metadata_torch(indx, bitmask)
     assert_equal(metadata_tri.col_sum, metadata_ref.col_sum)
     assert_equal(metadata_tri.row_sorted_indx, metadata_ref.row_sorted_indx)
