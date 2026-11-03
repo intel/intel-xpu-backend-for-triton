@@ -17,6 +17,11 @@ import tempfile
 # Generous bound on how long a probe child may run before it's assumed hung.
 _PROBE_TIMEOUT_SECONDS = 60
 
+# Prefix the worker puts on its result line, so the parent can pick the
+# answer out of stdout even if some unrelated library the worker imports
+# also writes to stdout.
+PROBE_RESULT_MARKER = 'SPIRV_PROBE_RESULT:'
+
 
 @functools.lru_cache(maxsize=None)
 def has_spirv_capability(device_id: int, probe_spirv: bytes) -> bool | None:
@@ -50,12 +55,12 @@ def has_spirv_capability(device_id: int, probe_spirv: bytes) -> bool | None:
         return False  # Hung: treat like a crash.
     if proc.returncode != 0:
         return False  # Crashed/aborted: the capability is unsafe to use.
-    output = proc.stdout.decode().strip()
-    if output == 'True':
-        return True
-    if output == 'False':
-        return False
-    return None
+    lines = proc.stdout.decode(errors='replace').splitlines()
+    marker_line = next((line for line in lines if line.startswith(PROBE_RESULT_MARKER)), None)
+    if marker_line is None:
+        return None  # Worker didn't get far enough to report.
+    value = marker_line.removeprefix(PROBE_RESULT_MARKER)
+    return {'True': True, 'False': False}.get(value)
 
 
 def _spirv_words(*words):
