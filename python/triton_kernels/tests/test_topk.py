@@ -34,6 +34,7 @@ def test_topk(n_rows, n_cols, k, apply_softmax, dtype, device):
 @pytest.mark.parametrize("apply_softmax", [True, False])
 @pytest.mark.parametrize("use_provided_indices", [True, False])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.enable_warmup
 def test_topk_arbitrary_k_forward_backward(k, apply_softmax, use_provided_indices, dtype, device):
     torch.manual_seed(0)
     n_rows, n_experts = 7, 67
@@ -64,6 +65,7 @@ def test_topk_arbitrary_k_forward_backward(k, apply_softmax, use_provided_indice
 @pytest.mark.parametrize("use_provided_indices", [False, True])
 @pytest.mark.parametrize("n_rows", [1, 7, 16, 31, 32, 128])
 @pytest.mark.parametrize("k", [8, 18, 33, 63, 64])
+@pytest.mark.enable_warmup
 def test_topk_all_gather_uses_reserved_bitmap_size(n_rows, k, use_provided_indices, device):
     torch.manual_seed(0)
     n_experts = 67

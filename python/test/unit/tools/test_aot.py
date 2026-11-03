@@ -607,8 +607,9 @@ int main(void) {{
 
 # Test edge case where the provided kernel signature has no specializations
 @pytest.mark.parametrize("generate_native_code", [True, False])
-def test_compile_link_matmul_no_specialization(generate_native_code):
+def test_compile_link_matmul_no_specialization(fresh_knobs, generate_native_code):
     np.random.seed(3)
+    fresh_knobs.intel.gen_native_code = generate_native_code
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         dtype = "fp16"
@@ -642,8 +643,9 @@ def test_compile_link_matmul_no_specialization(generate_native_code):
 
 
 @pytest.mark.parametrize("generate_native_code", [True, False])
-def test_compile_link_matmul(generate_native_code):
+def test_compile_link_matmul(fresh_knobs, generate_native_code):
     np.random.seed(3)
+    fresh_knobs.intel.gen_native_code = generate_native_code
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         dtype = "fp16"
@@ -676,8 +678,9 @@ def test_compile_link_matmul(generate_native_code):
 
 
 @pytest.mark.parametrize("generate_native_code", [True, False])
-def test_launcher_has_no_available_kernel(generate_native_code):
+def test_launcher_has_no_available_kernel(fresh_knobs, generate_native_code):
     np.random.seed(3)
+    fresh_knobs.intel.gen_native_code = generate_native_code
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         dtype = "fp16"
@@ -938,10 +941,11 @@ int main(void) {{
 
 
 @pytest.mark.parametrize("dtype, alpha", SCALAR_FLOAT_VALUES.items())
-def test_compile_link_scalar_float(dtype, alpha):
+def test_compile_link_scalar_float(fresh_knobs, dtype, alpha):
     """Check that AOT scalar argument storage matches the kernel ABI."""
     block = 16
     exe = "test_scalar_float"
+    fresh_knobs.intel.gen_native_code = False
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         kernel_path = write_triton_kernels(tmp_dir, scalar_float_kernel_src, kernel_utils_src)
