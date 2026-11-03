@@ -131,6 +131,13 @@ pytest() {
         USING_SHARDS=false
     fi
 
+    # Tag this run's compile events with its suite name, matching the "warmup-<name>"
+    # phase the corresponding warm-compile-cache step records, so
+    # `triton._test_runner report --require-complete` can pair them up.
+    if [[ -v TRITON_TEST_SUITE && -n "${TRITON_CI_COMPILE_TRACE_DIR:-}" ]]; then
+        export TRITON_CI_CACHE_PHASE="$TRITON_TEST_SUITE"
+    fi
+
     export TEST_UNSKIP
     # Exit code 5 means no tests were collected, which is not an error for a shard:
     # a shard may get no tests at all if the suite has fewer tests than shards.
@@ -236,9 +243,14 @@ find_spirv_dis_with_predicated_io() {
     return 1
 }
 
-# Number of parallel build jobs. nproc is unavailable under Git-for-Windows bash.
-spirv_dis_build_jobs() {
+# Number of available CPUs. nproc is unavailable under Git-for-Windows bash.
+available_cpu_count() {
     nproc 2>/dev/null || python -c 'import os; print(os.cpu_count() or 1)' 2>/dev/null || echo 4
+}
+
+# Number of parallel build jobs.
+spirv_dis_build_jobs() {
+    available_cpu_count
 }
 
 ensure_spirv_dis() {
