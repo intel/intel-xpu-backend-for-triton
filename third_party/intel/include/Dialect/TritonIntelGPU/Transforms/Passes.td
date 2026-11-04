@@ -244,6 +244,10 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
     Apply software pipelinining to loops containing `tt.dot` operations.
     The pass supports prefetching `tt.dot` operands. The `num-stages` argument controls
     the prefetching and distance (i.e. the number of iterations to prefetch in advance).
+    On a device for which the prefetch cost model has constants (`device-arch`) and
+    whose facts are given (`core-clock-khz`, `mem-clock-mhz`), the
+    prefetch of one dot operand is dropped when the model predicts that demand-loading
+    it is faster.
   }];
 
   let dependentDialects = ["mlir::arith::ArithDialect",
@@ -258,6 +262,12 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
            "number of pipeline stages">,
     Option<"useBarrier", "use-barrier", "bool", /*default*/"false",
            "generate barriers">,
+    Option<"deviceArch", "device-arch", "std::string", /*default*/"\"\"",
+           "device architecture, e.g. 'bmg' (empty if unknown)">,
+    Option<"coreClockKhz", "core-clock-khz", "unsigned", /*default*/"0",
+           "core clock in kHz (0 if unknown)">,
+    Option<"memClockMhz", "mem-clock-mhz", "unsigned", /*default*/"0",
+           "memory clock in MHz, as the device reports it (0 if unknown)">,
   ];
 }
 
