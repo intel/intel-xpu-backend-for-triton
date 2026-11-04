@@ -2147,6 +2147,7 @@ struct PreciseSqrtOpConversion
             op, intel::TritonIntelGPUDialect::
                     getUseClRoundedDivideSqrtAttrName())) {
       return {LLVM::SqrtOp::create(rewriter, loc, elemTy, operandsRanges[0],
+                                   LLVM::SqrtOp::Properties{},
                                    adaptor.getAttributes().getValue())};
     }
 
