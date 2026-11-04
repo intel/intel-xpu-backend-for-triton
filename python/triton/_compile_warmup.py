@@ -16,6 +16,7 @@ import triton
 # between warmup and the real run. Snapshot the ambient value before any test can
 # delete it, so `pytest_runtest_call` below can restore it for `enable_warmup` tests.
 _AMBIENT_GEN_NATIVE_CODE = triton.knobs.intel.gen_native_code
+_NO_OVERRIDE = object()
 
 
 class _FakeCudaTensorMode(TorchFunctionMode):
@@ -245,8 +246,10 @@ def pytest_runtest_call(item):
             with open(path, "a", encoding="utf-8") as output:
                 output.write(json.dumps({"phase": phase, "test": item.nodeid}, sort_keys=True) + "\n")
 
-    previous_gen_native_code = triton.knobs.intel.gen_native_code
     if is_warmed:
+        # Capture whether gen_native_code had an instance override at all, not just its
+        # resolved value.
+        previous_gen_native_code = triton.knobs.intel.__dict__.get("gen_native_code", _NO_OVERRIDE)
         triton.knobs.intel.gen_native_code = _AMBIENT_GEN_NATIVE_CODE
 
     dispatcher = getattr(item.config, "_triton_warmup_dispatcher", None)
@@ -265,7 +268,11 @@ def pytest_runtest_call(item):
         if dispatcher is not None:
             dispatcher.current_test = previous_test
             dispatcher.current_phase = previous_phase
-        triton.knobs.intel.gen_native_code = previous_gen_native_code
+        if is_warmed:
+            if previous_gen_native_code is _NO_OVERRIDE:
+                del triton.knobs.intel.gen_native_code
+            else:
+                triton.knobs.intel.gen_native_code = previous_gen_native_code
         triton.knobs.compilation.listener = previous_listener
 
 
