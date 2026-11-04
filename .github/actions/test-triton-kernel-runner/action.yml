@@ -1,0 +1,60 @@
+name: test-triton-kernel-runner
+description: Build TritonKernelRunner and run its tests
+runs:
+  using: "composite"
+  steps:
+    - name: Install CMake
+      shell: bash
+      run: |
+        pip install cmake -c python/requirements.txt
+
+    - name: Prepare LLVM cache key
+      shell: bash
+      run: |
+        LLVM_HASH="$(sha256sum cmake/llvm-info.json | cut -d\  -f1)"
+        TRITON_LLVM_CACHE_KEY=$(echo $LLVM_HASH ${{ hashFiles('setup.py') }} | sha256sum - | cut -d\  -f1)
+        echo "TRITON_LLVM_CACHE_KEY=$TRITON_LLVM_CACHE_KEY" | tee -a $GITHUB_ENV
+
+    - name: Load LLVM from Triton cache
+      id: llvm-cache
+      uses: ./.github/actions/load
+      env:
+        # Keep in sync with CACHE_NUMBER in .github/actions/setup-triton
+        CACHE_NUMBER: 1
+      with:
+        path: $HOME/.triton/llvm
+        key: triton-llvm-${{ env.TRITON_LLVM_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
+
+    - name: Download LLVM
+      shell: bash
+      run: |
+        python python/build_helpers.py write_thirdparty_cmake_vars --triton-cache-path $HOME/.triton --packages llvm --output $RUNNER_TEMP/llvm.cmake
+
+    - name: Save LLVM to Triton cache
+      if: steps.llvm-cache.outputs.status == 'miss'
+      uses: ./.github/actions/save
+      with:
+        path: ${{ steps.llvm-cache.outputs.path }}
+        dest: ${{ steps.llvm-cache.outputs.dest }}
+
+    - name: Build TritonKernelRunner
+      shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+      run: |
+        set -x
+        export LLVM_DIR="$HOME/.triton/llvm/llvm-ubuntu-x64"
+        export CMAKE_PREFIX_PATH="$(python scripts/torch_cmake.py)"
+        cd utils/TritonKernelRunner
+        mkdir build
+        cd build
+        cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+        make -j
+
+    - name: Test TritonKernelRunner
+      shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+      run: |
+        set -x
+        pip install pytest
+        export TRITON_KERNEL_RUNNER_PATH="$GITHUB_WORKSPACE/utils/TritonKernelRunner/build/TritonKernelRunner"
+        export TRITON_KERNEL_RUNNER_TESTS="$GITHUB_WORKSPACE/utils/TritonKernelRunner/tests"
+        cd utils/TritonKernelRunner
+        pytest tests/test_triton_kernel_runner.py
