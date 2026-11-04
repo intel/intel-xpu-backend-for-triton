@@ -74,7 +74,21 @@ def TritonIntelGPUStageLargeFMADotsViaSLM
     pipelining (which already stages SLM).
 
     Pass is a no-op on DPAS-capable hardware (PVC, BMG, ARL-H Xe2).
+
+    An fp8 operand that AccelerateMatmul decoded before its layout conversion
+    can be staged either as fp8, with the decode replayed per K tile in the
+    replicated dot operand layout, or already decoded, at twice the shared
+    memory. The pass stages decoded values when they fit.
   }];
+
+  let options = [
+    Option<"slmSize", "slm-size", "unsigned", /*default*/"0",
+           "Shared local memory per work-group, in bytes, that the staging "
+           "may use with a margin for other passes; 0 means 64 KB">,
+    Option<"stageDecoded", "stage-decoded", "bool", /*default*/"true",
+           "Stage fp8 operands decoded before their layout conversion as "
+           "decoded values when they fit">
+  ];
 
   let dependentDialects = [
     "mlir::arith::ArithDialect",
