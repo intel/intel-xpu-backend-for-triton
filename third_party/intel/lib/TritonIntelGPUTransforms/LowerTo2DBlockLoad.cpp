@@ -112,7 +112,7 @@ public:
     SmallVector<tt::DescriptorLoadOp> descLoadOps;
     mod.walk([&](tt::DescriptorLoadOp op) { descLoadOps.push_back(op); });
     for (auto op : descLoadOps)
-      convertDescriptorLoadOp(op);
+      convertDescriptorLoadOp(op, axisInfoAnalysis);
 
     SmallVector<tt::LoadOp> loadOps;
     mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
@@ -122,9 +122,12 @@ public:
 
 private:
   /// Convert a tt.descriptor_load to ttig.2d_block_load.
-  void convertDescriptorLoadOp(tt::DescriptorLoadOp op) {
+  void
+  convertDescriptorLoadOp(tt::DescriptorLoadOp op,
+                          tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
     auto tensorTy = cast<RankedTensorType>(op.getType());
-    if (!ttgi::isDescriptorLoadLowerableTo2DBlock(op, tensorTy))
+    if (!ttgi::isDescriptorLoadLowerableTo2DBlock(op, tensorTy,
+                                                  axisInfoAnalysis))
       return;
 
     unsigned rank = tensorTy.getRank();
@@ -321,6 +324,11 @@ private:
     isTranspose = sizeInfo.transpose;
     numPackedVals = sizeInfo.numElemPerPackedVal;
 
+    tt::AxisInfo *ptrInfo = axisInfoAnalysis.getAxisInfo(op.getPtr());
+    if (elemSizeInBits * numPackedVals > 32 &&
+        (!ptrInfo || ptrInfo->getDivisibility(contiguousDim) % 8))
+      return;
+
     // For the 2D block load surface, the pitch dimension is always the
     // non-contiguous memory direction. For transposed loads, rowDim is the
     // memory-contiguous dim and colDim is non-contiguous, so pitch uses colDim.
@@ -468,10 +476,12 @@ private:
             : arith::ConstantOp::create(
                   builder, loc,
                   builder.getI32IntegerAttr(static_cast<int32_t>(pitch)));
+    Value heightOperand = arith::ConstantOp::create(
+        builder, loc,
+        builder.getI32IntegerAttr(static_cast<int32_t>(baseHeightRows)));
     auto blockPtrLoadOp = ttgi::Subgroup2DBlockLoadFromPtrOp::create(
-        builder, loc, op.getType(), op.getPtr(), pitchOperand, mask, other,
-        builder.getI32IntegerAttr(baseWidthBytes),
-        builder.getI32IntegerAttr(baseHeightRows),
+        builder, loc, op.getType(), op.getPtr(), pitchOperand, heightOperand,
+        mask, other, builder.getI32IntegerAttr(baseWidthBytes),
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate attributes if present.

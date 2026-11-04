@@ -17,3 +17,13 @@ tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels::test_pack_unpack_combin
 tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels::test_pack_unpack_combine_matches_reference[False-True-float16]
 tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels::test_pack_unpack_combine_matches_reference[True-True-bfloat16]
 tests/distributed/test_dcp_a2a.py::TestPackedA2AKernels::test_pack_unpack_combine_matches_reference[True-True-float16]
+
+# test_indexer_quant_cache_roundtrip runs the CUDA SM100-only mxfp8 cases on XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/8486
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-16-17]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-16-1]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-16-4]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-16-8]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-64-17]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-64-1]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-64-4]
+tests/kernels/test_compressor_kv_cache.py::test_indexer_quant_cache_roundtrip[mxfp8-64-8]

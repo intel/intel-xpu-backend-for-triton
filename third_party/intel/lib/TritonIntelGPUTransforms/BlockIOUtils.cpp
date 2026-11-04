@@ -1,4 +1,5 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
+#include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
@@ -909,8 +910,9 @@ bool isBlockIOEligible(Operation *loadOp, RankedTensorType tensorTy) {
   return true;
 }
 
-bool isDescriptorLoadLowerableTo2DBlock(triton::DescriptorLoadOp op,
-                                        RankedTensorType tensorTy) {
+bool isDescriptorLoadLowerableTo2DBlock(
+    triton::DescriptorLoadOp op, RankedTensorType tensorTy,
+    triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   if (!isBlockIOEligible(op, tensorTy))
     return false;
 
@@ -955,17 +957,28 @@ bool isDescriptorLoadLowerableTo2DBlock(triton::DescriptorLoadOp op,
     return false;
   }
 
+  BlockIOTileSizeInfo sizeInfo =
+      getBlockIOLoadTileSize(llEncoding, contiguousDim, elemSizeInBits,
+                             /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
+
   // For descriptor loads, the 2D block I/O tile must use only the inner 2
   // dims. Reject if rowDim or colDim falls in a batch dimension.
   if (rank > 2) {
-    BlockIOTileSizeInfo sizeInfo =
-        getBlockIOLoadTileSize(llEncoding, contiguousDim, elemSizeInBits,
-                               /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
     int innerDimStart = static_cast<int>(rank - 2);
     if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart) {
       LDBG("Batch dim in tile for descriptor load: " << *op);
       return false;
     }
+  }
+
+  AxisInfo *colInfo =
+      axisInfoAnalysis.getAxisInfo(op.getIndices()[descRank - 1]);
+  if (elemSizeInBits * sizeInfo.numElemPerPackedVal > 32 &&
+      (!colInfo ||
+       colInfo->getDivisibility(0) % sizeInfo.numElemPerPackedVal)) {
+    LDBG(
+        "Column not divisible by the d64 packing for descriptor load: " << *op);
+    return false;
   }
 
   // The 2D block message encodes base_width (bytes), base_height (rows) and

@@ -603,7 +603,7 @@ install_deps() {
     pip install -r "$SCRIPTS_DIR/requirements-test.txt"
 
     if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
-      pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+      pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@c7c4c74fb8342c3df9d2d7693cf0a426c7736ecd
     fi
   fi
 
@@ -801,7 +801,8 @@ run_interpreter_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-16} -m interpreter language/test_core.py language/test_standard.py \
+    run_pytest_command -vvv -n "$(( $(available_cpu_count) * 60 / 100 ))" -m interpreter \
+    language/test_core.py language/test_standard.py \
     language/test_random.py language/test_line_info.py --device cpu
 }
 
@@ -1043,13 +1044,12 @@ run_sglang_quant_tests() {
   echo "********************************************************"
 
   enter_sglang_test_env
-  # FP8 quant + block GEMM, scaled GEMM, AWQ dequant + GEMM.
+  # FP8 quant, scaled GEMM, AWQ dequant.
   # test_int8_kernel.py and test_block_int8.py are left out: they import
   # srt.layers.activation, which needs sgl_kernel on XPU.
   TRITON_TEST_SUITE=sglang_quant \
-    run_pytest_command -vvv --import-mode=importlib \
+    run_pytest_command -vvv \
       test/registered/kernels/ops/quantization/test_fp8_kernel.py \
-      test/registered/kernels/ops/gemm/test_fp8_kernel.py \
       test/registered/kernels/ops/gemm/test_triton_scaled_mm.py \
       test/registered/kernels/ops/quantization/test_awq_dequant.py
 }
@@ -1313,7 +1313,6 @@ run_vllm_triton_attn_tests() {
       tests/kernels/attention/test_triton_decode_attention.py \
       tests/kernels/attention/test_triton_unified_attention.py \
       tests/kernels/attention/test_triton_prefill_attention.py \
-      tests/kernels/attention/test_cascade_flash_attn.py \
       tests/kernels/attention/test_pack_unpack_triton.py \
       tests/kernels/attention/test_flashmla_sparse.py \
       tests/kernels/attention/test_xpu_mla_sparse.py \

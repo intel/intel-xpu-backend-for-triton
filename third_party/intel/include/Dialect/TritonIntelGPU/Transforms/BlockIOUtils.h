@@ -13,6 +13,7 @@
 #include <optional>
 
 namespace mlir::triton::intel {
+class ModuleAxisInfoAnalysis;
 class ModuleStrideAnalysis;
 } // namespace mlir::triton::intel
 
@@ -143,8 +144,9 @@ bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
 /// with result type \p tensorTy, which may differ from op.getType(). Emits no
 /// diagnostics and skips the 16-byte pitch check, which the pass reports as an
 /// error, so true means "eligible", not "safe to emit" for hand-tagged IR.
-bool isDescriptorLoadLowerableTo2DBlock(triton::DescriptorLoadOp op,
-                                        RankedTensorType tensorTy);
+bool isDescriptorLoadLowerableTo2DBlock(
+    triton::DescriptorLoadOp op, RankedTensorType tensorTy,
+    triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis);
 
 /// Estimate the hardware message count for a load with the given type and
 /// encoding. Higher values indicate more HW cost. Used for cost modeling in

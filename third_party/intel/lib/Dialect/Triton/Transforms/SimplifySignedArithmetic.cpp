@@ -5,6 +5,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Verifier.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
@@ -170,6 +171,28 @@ private:
     return true;
   }
 
+  /// Returns true if value is a constant whose every element is 2 or more
+  /// *read as unsigned*. Dividing unsigned by such a divisor brings any
+  /// dividend below 2^(w-1), so the quotient's MSB is clear whatever the
+  /// dividend's was.
+  static bool isUnsignedDivisorAboveOne(Value value) {
+    if (auto splatOp = value.getDefiningOp<tt::SplatOp>())
+      return isUnsignedDivisorAboveOne(splatOp.getSrc());
+
+    auto constOp = value.getDefiningOp<arith::ConstantOp>();
+    if (!constOp)
+      return false;
+
+    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
+      return intAttr.getValue().ugt(1);
+    if (auto denseAttr = dyn_cast<DenseElementsAttr>(constOp.getValue())) {
+      if (denseAttr.getElementType().isSignlessInteger())
+        return llvm::all_of(denseAttr.getValues<APInt>(),
+                            [](const APInt &v) { return v.ugt(1); });
+    }
+    return false;
+  }
+
   /// Returns true if value is provably non-negative (>= 0).
   bool isNonNegative(Value value) const {
     // Check range analysis first
@@ -217,10 +240,24 @@ private:
     if (auto mulOp = dyn_cast<arith::MulIOp>(defOp))
       return isNonNegative(mulOp.getLhs()) && isNonNegative(mulOp.getRhs());
 
-    // arith.remui/divui/extui produce non-negative results. extui zero-extends
-    // into a wider type, so the result MSB is always clear.
-    if (isa<arith::RemUIOp, arith::DivUIOp, arith::ExtUIOp>(defOp))
+    // arith.extui zero-extends into a wider type, so the result MSB is always
+    // clear.
+    if (isa<arith::ExtUIOp>(defOp))
       return true;
+
+    // arith.remui is at or below its dividend read as unsigned and below its
+    // divisor, so either operand having its MSB clear clears the result's.
+    // Neither having it does not: remui(0xffffffc0, 0xfffffff0) is 0xffffffc0,
+    // which is -64 to the signed op that would be rewritten.
+    if (auto remOp = dyn_cast<arith::RemUIOp>(defOp))
+      return isNonNegative(remOp.getLhs()) || isNonNegative(remOp.getRhs());
+
+    // arith.divui is at or below its dividend, and a divisor of 2 or more
+    // clears the MSB on its own. A divisor of 1 is the identity and carries a
+    // negative dividend straight through.
+    if (auto divOp = dyn_cast<arith::DivUIOp>(defOp))
+      return isNonNegative(divOp.getLhs()) ||
+             isUnsignedDivisorAboveOne(divOp.getRhs());
 
     // arith.divsi with non-negative dividend and non-negative divisor.
     // For well-defined programs the divisor is non-zero, so non-negative
@@ -372,18 +409,18 @@ public:
     ModuleOp moduleOp = getOperation();
 
     // Set up range analysis
-    DataFlowSolver solver;
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     DominanceInfo domInfo(moduleOp);
-    solver.load<tt::intel::IntegerRangeAnalysis>(moduleOp, domInfo);
+    solver->load<tt::intel::IntegerRangeAnalysis>(moduleOp, domInfo);
 
-    if (failed(solver.initializeAndRun(moduleOp))) {
+    if (failed(solver->initializeAndRun(moduleOp))) {
       LLVM_DEBUG(llvm::dbgs()
                  << "Range analysis failed, proceeding without it\n");
       // Continue without range analysis - fall back to pattern matching only
       SignedArithmeticSimplifier simplifier(nullptr);
       simplifier.run(moduleOp);
     } else {
-      SignedArithmeticSimplifier simplifier(&solver);
+      SignedArithmeticSimplifier simplifier(solver.get());
       simplifier.run(moduleOp);
     }
 

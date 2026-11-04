@@ -126,12 +126,12 @@ def trunc(arg0, _semantic=None):
 
 @core.extern
 def exp2(arg0, _semantic=None):
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp16"), ): ("__imf_exp2f16", core.dtype("fp16")),
-            (core.dtype("fp32"), ): ("__imf_exp2f", core.dtype("fp32")),
-            (core.dtype("fp64"), ): ("__imf_exp2", core.dtype("fp64")),
-        }, is_pure=True, _semantic=_semantic)
+    arg0 = _semantic.to_tensor(arg0)
+    if arg0.dtype.name in ("fp16", "fp32"):
+        return core.tensor(_semantic.builder.create_exp2(arg0.handle), arg0.type)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp64"), ): ("__imf_exp2", core.dtype("fp64")),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern

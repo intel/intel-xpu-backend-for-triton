@@ -1,5 +1,7 @@
+import io
 import re
 import shutil
+import sys
 
 import pytest
 import torch
@@ -8,15 +10,18 @@ import triton.language as tl
 
 import pathlib
 
+from elftools.elf.elffile import ELFFile
 from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
 from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
 from triton.backends.intel.driver import find_sycl_icpx
-from triton.runtime.errors import IntelGPUError, OutOfResources
+from triton.backends.intel.errors import IntelGPUError
+from triton.runtime.errors import OutOfResources
 
 
-def test_auto_grf(device, monkeypatch, capfd):
+def test_auto_grf(device, monkeypatch, capfd, fresh_knobs):
+    fresh_knobs.intel.gen_native_code = False
     monkeypatch.setenv("TRITON_DEBUG", "1")
     # CRI's larger (512-GRF) register file needs a bigger tile to spill; other
     # targets already spill at 8K.
@@ -50,8 +55,35 @@ def test_auto_grf(device, monkeypatch, capfd):
     assert retried.group(1) == selected.group(1)
 
 
+def test_packed_metadata_reflects_auto_grf_retry(device, monkeypatch, capfd, fresh_knobs):
+    """`packed_metadata` must track the GRF mode `load_binary` actually settled on.
+
+    `__getitem__` launches with `packed_metadata`, and `serialize_args` (the
+    TritonKernelRunner repro dump) reads `build_flags` off that same object, not off
+    `metadata`. If the two fall out of sync after a JIT auto-GRF retry (issue
+    #5529), the dumped repro replays the pre-retry, un-escalated flags and can
+    build a different binary than the one Triton actually ran.
+    """
+    fresh_knobs.intel.gen_native_code = False
+    monkeypatch.setenv("TRITON_DEBUG", "1")
+    BLOCK = 1024 * 32 if is_xpu_cri() else 1024 * 8
+    z_tri = torch.empty(BLOCK, dtype=torch.int32, device=device)
+
+    @triton.jit
+    def _kernel(z, BLOCK: tl.constexpr):
+        off = tl.arange(0, BLOCK)
+        a = tl.load(z + off)
+        result = tl.sum(a, axis=0, keep_dims=True)
+        tl.store(z + off, a + result)
+
+    k = _kernel[(1, )](z_tri, BLOCK=BLOCK, num_warps=2)
+
+    assert "retrying with large GRF mode" in capfd.readouterr().out
+    assert k.packed_metadata.build_flags == k.metadata.build_flags
+
+
 @pytest.mark.parametrize("warp_size", [16, 32])
-def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
+def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size, fresh_knobs):
     """`n_spills` is dword-equivalents per lane, as on CUDA/HIP (issue #7896).
 
     Level Zero reports `spillMemSize` in bytes per hardware thread, so the value
@@ -68,6 +100,7 @@ def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
     two *gates* agree, since driver.c has no `is_lts` input and compiler.py rebuilds
     on any spill for LTS.
     """
+    fresh_knobs.intel.gen_native_code = False
     monkeypatch.setenv("TRITON_DEBUG", "1")
     # Same fixture size as test_auto_grf: CRI's larger (512-GRF) register file
     # needs a bigger tile to spill; other targets already spill at 8K.
@@ -125,6 +158,39 @@ def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
     else:
         assert spill_bytes < logged_threshold, (f"accepted {spill_bytes} B/hardware-thread at or above the "
                                                 f"{logged_threshold} B rebuild threshold")
+
+
+def test_n_regs_reports_compiled_grf_count(device, fresh_knobs):
+    """`n_regs` is the GRF count IGC compiled with, not one inferred from the
+    build flags: under `grf_mode='auto'` IGC picks the size itself.
+
+    A 256x256 bf16 dot at 32 warps is placed at large GRF by IGC's auto
+    selection, so a flags-derived 128 would be wrong. The JIT build's `n_regs`
+    must match the `grf_count` in the zebin `ocloc` produces with the same flags.
+    """
+    fresh_knobs.intel.gen_native_code = False
+    BM, BN, BK = 256, 256, 32
+
+    @triton.jit
+    def _kernel(a, b, c, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
+        rm = tl.arange(0, BM)
+        rn = tl.arange(0, BN)
+        rk = tl.arange(0, BK)
+        x = tl.load(a + rm[:, None] * BK + rk[None, :])
+        y = tl.load(b + rk[:, None] * BN + rn[None, :])
+        tl.store(c + rm[:, None] * BN + rn[None, :], tl.dot(x, y))
+
+    a = torch.randn(BM, BK, dtype=torch.bfloat16, device=device)
+    b = torch.randn(BK, BN, dtype=torch.bfloat16, device=device)
+    c = torch.empty(BM, BN, dtype=torch.float32, device=device)
+
+    jit = _kernel[(1, )](a, b, c, BM, BN, BK, num_warps=32, grf_mode="auto")
+    native = _kernel[(1, )](a, b, c, BM, BN, BK, num_warps=32, grf_mode="auto", generate_native_code=True)
+
+    zeinfo = ELFFile(io.BytesIO(native.asm["zebin"])).get_section_by_name(".ze_info").data().decode()
+    grf_count = int(re.search(r"grf_count:\s*(\d+)", zeinfo).group(1))
+    assert native.n_regs == grf_count
+    assert jit.n_regs == grf_count
 
 
 def test_n_spills_zero_without_spills(device):
@@ -250,6 +316,29 @@ def test_load_binary_error_kernel_error(device, tmp_path: pathlib.Path):
                                             device)
 
 
+def test_load_binary_does_not_leak_kernel_capsule(device):
+
+    @triton.jit
+    def _kernel(x_ptr):
+        tl.store(x_ptr, 1)
+
+    x = torch.zeros(1, dtype=torch.int32, device=device)
+    kernel = _kernel[(1, )](x)
+
+    module = kernel.module
+    function = kernel.function
+
+    # An object held by exactly one name, so the comparison does not depend on
+    # whether `getrefcount` counts its own argument reference.
+    throwaway = object()
+    baseline = sys.getrefcount(throwaway)
+
+    assert sys.getrefcount(module) == baseline + 1, \
+        "kernel.module capsule has a reference beyond the attribute and this local -- it leaked"
+    assert sys.getrefcount(function) == baseline + 1, \
+        "kernel.function capsule has a reference beyond the attribute and this local -- it leaked"
+
+
 def test_wait_on_sycl_queue_error(device):
     # Pass an invalid (non-pointer) value to trigger conversion error
     with pytest.raises(RuntimeError, match=r"Failed to convert PyObject to void\* for queue.*"):
@@ -296,11 +385,13 @@ def test_has_opencl_extension_error(device):
                                                     ("128", False),  # Explicit small GRF — should fail, no retry
                                                     ])
 @pytest.mark.parametrize("generate_native_code", [False, True], ids=["load_binary", "make_zebin"])
-def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_retry, generate_native_code):
+def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_retry, generate_native_code,
+                                   fresh_knobs):
     """Test GRF mode behavior for register-heavy kernels on both compilation paths:
     - load_binary (generate_native_code=False): L0 runtime compilation via zeModuleCreate
     - make_zebin (generate_native_code=True): offline compilation via ocloc
     """
+    fresh_knobs.intel.gen_native_code = False
     monkeypatch.setenv("TRITON_DEBUG", "1")
 
     @triton.jit
