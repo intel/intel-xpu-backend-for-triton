@@ -1,8 +1,7 @@
 import torch
 import triton
 import triton.language as tl
-
-from triton_kernels_benchmark import Benchmark, do_bench, perf_report, assert_close
+from triton_kernels_benchmark import Benchmark, assert_close, do_bench, perf_report
 
 DEVICE = 'xpu'
 
@@ -661,11 +660,12 @@ def benchmark_cat_reduce_2d(M, N, provider):
 # exercises the row-limit-mask optimization (PR #8615); 'load_unmasked' and
 # 'descriptor' are references.
 #
-# Group sizes are deliberately not multiples of BM (see
-# _ragged_group_sizes), so some tiles straddle the group boundary and
-# row_valid is partially false. With group sizes exactly BM-aligned, every
-# row_valid would be True and the masked path would never diverge from the
-# unmasked one.
+# Group sizes are deliberately not multiples of BM and not all equal in
+# m-tile count (see _ragged_group_sizes), so some tiles straddle the group
+# boundary (row_valid partially false) and groups with fewer m-tiles than
+# the largest group exercise the tile_n >= num_n_tiles guard below. With
+# group sizes exactly BM-aligned and equal in tile count, every row_valid
+# would be True and the guard would never fire.
 
 
 @triton.jit
@@ -680,8 +680,9 @@ def grouped_matmul_load_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, N: tl.constexpr
     tile_m = tile % num_m_tiles
     tile_n = tile // num_m_tiles
     if tile_n >= num_n_tiles:
-        # grid is sized from the largest group's tile count, so smaller
-        # groups see tile indices with no corresponding n-tile.
+        # grid is sized from the largest group's tile count (max_m_tiles),
+        # so groups with fewer m-tiles see trailing tile indices with no
+        # corresponding n-tile.
         return
     rows = group_start + tile_m * BM + tl.arange(0, BM)
     cols = tile_n * BN + tl.arange(0, BN)
@@ -726,20 +727,33 @@ def grouped_matmul_desc_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, N: tl.constexpr
     tl.store(c_ptr + rows[:, None] * N + cols[None, :], acc.to(tl.bfloat16), mask=row_valid[:, None])
 
 
-def _ragged_group_sizes(num_groups, group_m, block_m):
+def _ragged_group_sizes(num_groups, group_m, block_m, small_groups=False):
     """Cycle group sizes through varied remainders mod block_m (near-empty,
     mid, near-full last tile), so the row-limit boundary lands at different,
     non-aligned offsets within a tile across groups, instead of always at
-    the same spot (e.g. always the midpoint)."""
+    the same spot (e.g. always the midpoint). Also cycle the m-tile count
+    itself across groups, so some groups have fewer m-tiles than the
+    largest group (exercising the tile_n >= num_n_tiles guard).
+
+    With small_groups=True, every group has a single, partially masked
+    m-tile (size < block_m), matching workloads with many small groups
+    (e.g. imbalanced MoE expert assignment) rather than few large ones."""
     remainders = [1, block_m // 4 + 5, block_m // 2 + 11, block_m - 1]
-    base = (group_m // block_m) * block_m
-    return [base + remainders[i % len(remainders)] for i in range(num_groups)]
+    if small_groups:
+        return [remainders[i % len(remainders)] for i in range(num_groups)]
+    tile_count_deltas = [-1, 0, 1, 0]
+    base_tiles = group_m // block_m
+    sizes = []
+    for i in range(num_groups):
+        tiles = base_tiles + tile_count_deltas[i % len(tile_count_deltas)]
+        sizes.append(tiles * block_m + remainders[i % len(remainders)])
+    return sizes
 
 
 @perf_report(
     Benchmark(
-        x_names=['G', 'N'],
-        x_vals=[(4, 1024), (4, 2048), (8, 2048)],
+        x_names=['G', 'N', 'small_groups'],
+        x_vals=[(4, 1024, False), (4, 2048, False), (16, 2048, True)],
         line_arg='provider',
         line_vals=['load_masked', 'load_unmasked', 'descriptor'],
         line_names=['tl.load (masked)', 'tl.load (unmasked)', 'Tensor Descriptor'],
@@ -748,7 +762,7 @@ def _ragged_group_sizes(num_groups, group_m, block_m):
         plot_name='grouped-matmul-row-limit',
         args={},
     ))
-def benchmark_grouped_matmul_row_limit(G, N, provider):
+def benchmark_grouped_matmul_row_limit(G, N, small_groups, provider):
     quantiles = [0.5, 0.0, 1.0]
     dtype = torch.bfloat16
     torch.manual_seed(0)
@@ -756,7 +770,7 @@ def benchmark_grouped_matmul_row_limit(G, N, provider):
     BM = BN = 128
     BK = 64
 
-    group_sizes = _ragged_group_sizes(G, N, BM)
+    group_sizes = _ragged_group_sizes(G, N, BM, small_groups=small_groups)
     offsets_list = [0]
     for size in group_sizes:
         offsets_list.append(offsets_list[-1] + size)

@@ -585,7 +585,6 @@ private:
             : arith::ConstantOp::create(
                   builder, loc,
                   builder.getI32IntegerAttr(static_cast<int32_t>(pitch)));
-
     Value mask = op.getMask();
     Value other = op.getOther();
     Value heightOperand;
