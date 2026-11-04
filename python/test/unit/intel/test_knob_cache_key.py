@@ -81,9 +81,9 @@ KNOBS_REFLECTED_IN_TARGET = {"device_extensions"}
 # Knobs that cannot change the compiled kernel, and why.
 CACHE_NEUTRAL_KNOBS = {
     "spirv_dis": "disassembler used by triton.tools.disasm, never during compilation",
-    "enable_dump_spirv_kernel_args": "XPULauncher runtime behaviour only",
-    "dump_spirv_kernel_args_dir": "XPULauncher runtime behaviour only",
-    "print_dump_spirv_kernel_args_info": "XPULauncher runtime behaviour only",
+    "enable_dump_kernel_args": "XPULauncher runtime behaviour only",
+    "dump_kernel_args_dir": "XPULauncher runtime behaviour only",
+    "print_dump_kernel_args_info": "XPULauncher runtime behaviour only",
     "sycl_compiler": "builds the host launcher .so, which has its own cache key",
 }
 

@@ -876,3 +876,46 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return %r : tensor<32x32xf32, #dpas_m>
   }
 }
+
+// -----
+
+// COM: Single-warp streaming load must still get CG. With one warp the
+// COM: LinearLayout's warp in-dim has no bases, so there is no other warp to
+// COM: share lines with; a degenerate "every axis is warp-invariant" answer
+// COM: must not be mistaken for cross-subgroup reuse.
+
+#blocked1d_1w = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @single_warp_streaming_load_gets_cg
+  tt.func public @single_warp_streaming_load_gets_cg(%ptr: tensor<1024x!tt.ptr<f32>, #blocked1d_1w>, %out: tensor<1024x!tt.ptr<f32>, #blocked1d_1w>) {
+    // CHECK: tt.load {{.*}}cache_modifier = cg
+    %0 = tt.load %ptr : tensor<1024x!tt.ptr<f32>, #blocked1d_1w>
+    // CHECK: tt.store
+    // CHECK-NOT: cache_modifier = cg
+    tt.store %out, %0 : tensor<1024x!tt.ptr<f32>, #blocked1d_1w>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The single-warp rule is layout-independent: single-warp GEMM operand
+// COM: loads have no other warp to share their tiles with, so without temporal
+// COM: reuse they get CG like any other load.
+
+#dpas_1w = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a_1w = #ttg.dot_op<{opIdx = 0, parent = #dpas_1w, kWidth = 1}>
+#dot_b_1w = #ttg.dot_op<{opIdx = 1, parent = #dpas_1w, kWidth = 2}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @single_warp_dot_operand_load_gets_cg
+  tt.func public @single_warp_dot_operand_load_gets_cg(%aptr: tensor<32x32x!tt.ptr<f16>, #dot_a_1w>,
+                                                    %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b_1w>,
+                                                    %c: tensor<32x32xf32, #dpas_1w>) -> tensor<32x32xf32, #dpas_1w> {
+    // CHECK: tt.load {{.*}}cache_modifier = cg
+    // CHECK: tt.load {{.*}}cache_modifier = cg
+    %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a_1w>
+    %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b_1w>
+    %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_1w> * tensor<32x32xf16, #dot_b_1w> -> tensor<32x32xf32, #dpas_1w>
+    tt.return %d : tensor<32x32xf32, #dpas_1w>
+  }
+}

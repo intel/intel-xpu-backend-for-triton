@@ -1369,6 +1369,7 @@ struct TritonSubGroupGatherLoadLowering
         "=rw,rw.u,rw.u",
         /*has_side_effects=*/false,
         /*is_align_stack=*/false, LLVM::TailCallKind::None,
+        /*convergent=*/false,
         LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
         ArrayAttr::get(ctx, {}));
 

@@ -75,9 +75,9 @@ env:
   # Number of shards for the suites listed in PARALLEL_SUITES
   NUM_SHARDS: 2
   # Suites that are split into NUM_SHARDS shards, each shard runs on its own runner
-  PARALLEL_SUITES: "scaled_dot"
+  PARALLEL_SUITES: ""
   # Suites that are run without sharding, one runner per suite
-  SEQUENTIAL_SUITES: "minicore language gluon triton-kernels rest tutorial-fa-128-nofwdfp8"
+  SEQUENTIAL_SUITES: "minicore language_and_scaled_dot gluon triton-kernels rest"
 
 jobs:
   build:
@@ -173,7 +173,7 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@c7c4c74fb8342c3df9d2d7693cf0a426c7736ecd
 
       # Unit tests require `build` directory.
       - name: Run unit tests
@@ -214,6 +214,9 @@ jobs:
         loop: ${{ fromJson(needs.build.outputs.integration-tests-matrix) }}
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
+    env:
+      TRITON_XPU_GEN_NATIVE_CODE: 1
+      PYTEST_ADDOPTS: "-p triton._compile_warmup"
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -285,11 +288,15 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@c7c4c74fb8342c3df9d2d7693cf0a426c7736ecd
 
       - name: Set test-triton command line
         run: |
           echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
+
+      - name: Set compile warmup trace directory
+        run: |
+          echo "TRITON_CI_COMPILE_TRACE_DIR=$RUNNER_TEMP/triton-ci-compile-trace" | tee -a $GITHUB_ENV
 
       - name: Determine number of shards for current suite
         run: |
@@ -308,32 +315,81 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --proton
 
+      - name: Warm regression compile cache
+        if: matrix.loop.suite == 'minicore'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/regression
+          skiplist-name: regression
+          pytest-targets: . --ignore=test_performance.py
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+
       - name: Run minicore tests
         if: matrix.loop.suite == 'minicore'
         run: |
           ${{ env.TRITON_TEST_CMD }} --minicore
 
+      - name: Warm language compile cache
+        if: matrix.loop.suite == 'language_and_scaled_dot'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/unit
+          skiplist-name: language
+          pytest-targets: >-
+            language/
+            --ignore=language/test_line_info.py --ignore=language/test_matmul.py
+            --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py
+            -k "not test_mxfp and not test_scaled_dot"
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+
       - name: Run language tests
-        if: matrix.loop.suite == 'language'
+        if: matrix.loop.suite == 'language_and_scaled_dot'
         run: |
           ${{ env.TRITON_TEST_CMD }} --language
+
+      - name: Warm matmul compile cache
+        if: matrix.loop.suite == 'rest'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/unit
+          skiplist-name: matmul
+          pytest-targets: >-
+            language/test_matmul.py
+            -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 or test_mxfp8_mxfp4_matmul"
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Run matmul tests
         if: matrix.loop.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --matmul
 
+      - name: Warm scaled_dot compile cache
+        if: matrix.loop.suite == 'language_and_scaled_dot'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/unit
+          skiplist-name: scaled_dot
+          pytest-targets: language/test_core.py -k "test_scaled_dot"
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+
       - name: Run scaled_dot tests
-        if: matrix.loop.suite == 'scaled_dot'
+        if: matrix.loop.suite == 'language_and_scaled_dot'
         run: |
-          export TRITON_TEST_SHARDS=${{ env.NUM_SHARDS_FOR_SUITE }}
-          export TRITON_TEST_SHARD_NUMBER=${{ matrix.loop.shard_id }}
           ${{ env.TRITON_TEST_CMD }} --scaled-dot
 
       - name: Run debug tests
         if: matrix.loop.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --debug
+
+      - name: Warm gluon compile cache
+        if: matrix.loop.suite == 'gluon' && inputs.driver_version == 'rolling'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/gluon
+          skiplist-name: gluon
+          pytest-targets: .
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Run gluon tests
         if: matrix.loop.suite == 'gluon' && inputs.driver_version == 'rolling'
@@ -344,6 +400,15 @@ jobs:
         if: matrix.loop.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --interpreter
+
+      - name: Warm Triton Kernels compile cache
+        if: matrix.loop.suite == 'triton-kernels'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/triton_kernels
+          skiplist-name: triton_kernels
+          pytest-targets: tests -k 'not test_mxfp'
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Run triton kernels tests
         if: matrix.loop.suite == 'triton-kernels'
@@ -356,21 +421,19 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial --tutorial06-run-mode skip
 
-      # Run 06-fused-attention.py separately, because it is split into 3 configs
-      - name: Run Flash Attention tutorials (HEAD_DIM=64)
+      - name: Warm Flash Attention tutorials compile cache
+        if: matrix.loop.suite == 'rest'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/tutorials
+          skiplist-name: tutorials
+          pytest-targets: test_tutorials.py --tutorial06-mode fa_only
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+
+      - name: Run Flash Attention tutorials
         if: matrix.loop.suite == 'rest'
         run: |
-          HEAD_DIM=64 ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
-
-      - name: Run Flash Attention tutorials (HEAD_DIM=128, FP8 only)
-        if: matrix.loop.suite == 'rest'
-        run: |
-          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fp8_only
-
-      - name: Run Flash Attention tutorials (HEAD_DIM=128, skip FP8)
-        if: matrix.loop.suite == 'tutorial-fa-128-nofwdfp8'
-        run: |
-          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode skip_fp8
+          ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
 
       - name: Install transformers
         if: matrix.loop.suite == 'rest'
@@ -382,6 +445,13 @@ jobs:
         if: matrix.loop.suite == 'rest'
         run: |
           timeout -s KILL 4900 ${{ env.TRITON_TEST_CMD }} --inductor || ${{ inputs.ignore_errors }}
+
+      # Skipped when gluon has no warmup to compare against (see the gluon steps above).
+      - name: Verify compile warmup completeness
+        if: matrix.loop.suite != 'gluon' || inputs.driver_version == 'rolling'
+        run: |
+          python -m triton._test_runner report --require-complete \
+            || ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}

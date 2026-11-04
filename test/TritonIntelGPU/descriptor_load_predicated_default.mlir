@@ -37,7 +37,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // PREDICATED-NEXT:    %[[V0:.*]] = triton_gen.predicated_load %[[PTR0]], %{{.*}}, %[[OTHER0]] {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED-NEXT: llvm.cond_br %{{.*}}, ^[[BB_LOAD:bb[0-9]+]], ^[[BB_MERGE:bb[0-9]+]](%[[OTHER0]] : i32)
     // NO-PREDICATED-NEXT: ^[[BB_LOAD]]:
-    // NO-PREDICATED-NEXT: %[[LOADED0:.*]] = llvm.load %[[PTR0]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED-NEXT: %[[LOADED0:.*]] = llvm.load %[[PTR0]] <alignment = 4> : !llvm.ptr<1> -> i32
     // NO-PREDICATED-NEXT: llvm.br ^[[BB_MERGE]](%[[LOADED0]] : i32)
     // NO-PREDICATED-NEXT: ^[[BB_MERGE]](%[[V0:.*]]: i32):
     // CHECK-NEXT:         llvm.bitcast %[[V0]] : i32 to f32
@@ -68,7 +68,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // PREDICATED-NEXT:    %[[V0:.*]] = triton_gen.predicated_load %[[PTR0]], %{{.*}}, %[[OTHER0]] {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED-NEXT: llvm.cond_br %{{.*}}, ^[[BB_LOAD:bb[0-9]+]], ^[[BB_MERGE:bb[0-9]+]](%[[OTHER0]] : i32)
     // NO-PREDICATED-NEXT: ^[[BB_LOAD]]:
-    // NO-PREDICATED-NEXT: %[[LOADED0:.*]] = llvm.load %[[PTR0]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED-NEXT: %[[LOADED0:.*]] = llvm.load %[[PTR0]] <alignment = 4> : !llvm.ptr<1> -> i32
     // NO-PREDICATED-NEXT: llvm.br ^[[BB_MERGE]](%[[LOADED0]] : i32)
     // NO-PREDICATED-NEXT: ^[[BB_MERGE]](%[[V0:.*]]: i32):
     // CHECK-NEXT:         llvm.bitcast %[[V0]] : i32 to f32
@@ -97,7 +97,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:      %[[OTHER:.*]] = llvm.bitcast %{{.*}} : vector<1xf32> to i32
     // CHECK-NEXT: llvm.cond_br %{{.*}}, ^[[BB_LOAD:bb[0-9]+]], ^[[BB_MERGE:bb[0-9]+]](%[[OTHER]] : i32)
     // CHECK-NEXT: ^[[BB_LOAD]]:
-    // CHECK-NEXT: %[[LOADED:.*]] = llvm.load %[[PTR]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // CHECK-NEXT: %[[LOADED:.*]] = llvm.load %[[PTR]] <alignment = 4> : !llvm.ptr<1> -> i32
     // CHECK-NEXT: llvm.br ^[[BB_MERGE]](%[[LOADED]] : i32)
     // CHECK-NOT:  triton_gen.predicated_load
     %3 = tt.descriptor_load %0[%arg1, %arg2] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
