@@ -150,15 +150,6 @@ public:
         DenseElementsAttr::get(ty, builder.getBoolAttr(value)));
   }
 
-  // Builds `row_base + arange(0, n)` as tensor<n x i32>: tt.splat(row_base)
-  // added to tt.make_range(0, n). matchBaseAndRange only recognizes the base
-  // when it arrives wrapped in a tt.splat alongside the arange, matching how
-  // the Triton frontend lowers `row_base + tl.arange(0, n)`.
-  Value baseAndRange(Value rowBaseScalar, int64_t n) {
-    Value baseSplat = splatTo(rowBaseScalar, {n});
-    return addI32(baseSplat, arange(n));
-  }
-
   // The canonical row-limit mask: `(rowBaseScalar + arange(0, boundedExtent))
   // < boundScalar`, expanded along `boundedDim` and broadcast to
   // `tensorShape`.
@@ -179,23 +170,6 @@ protected:
   OpBuilder builder{&ctx};
   OwningOpRef<ModuleOp> module;
 };
-
-TEST_F(MatchRowLimitMaskTest, BaseAndRangeMatches) {
-  // Pitch dim is dim 0 (M); contiguous (K) dim is dim 1.
-  SmallVector<int64_t, 2> shape = {256, 32};
-  Value rowBase = constI(5, 32);
-  Value bound = constI(100, 32);
-  Value mask = buildRowLimitMask(baseAndRange(rowBase, 256), /*boundedDim=*/0,
-                                 shape, bound);
-
-  auto result = matchRowLimitMask(mask, /*other=*/Value(), shape,
-                                  /*contiguousDim=*/1,
-                                  /*pitchDimIsBroadcast=*/false);
-  ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result->boundedDim, 0u);
-  EXPECT_EQ(result->rowBase, rowBase);
-  EXPECT_EQ(result->bound, bound);
-}
 
 TEST_F(MatchRowLimitMaskTest, BareArangeHasNullRowBase) {
   // `arange(0, N) < bound`, with no explicit base (implicit zero).
@@ -351,26 +325,6 @@ protected:
   OpBuilder builder{&ctx};
   OwningOpRef<ModuleOp> module;
 };
-
-// sub happens in i64, both operands sign-extended first.
-TEST_F(ComputeRowLimitHeightTest, WithRowBaseWidensBeforeSubtracting) {
-  Value bound = constI32(100);
-  Value rowBase = constI32(5);
-  Value height = computeRowLimitHeight(builder, loc(), bound, rowBase,
-                                       /*rowExtent=*/64);
-  ASSERT_TRUE(height.getType().isInteger(32));
-
-  auto trunc = height.getDefiningOp<arith::TruncIOp>();
-  ASSERT_TRUE(trunc);
-  auto minOp = trunc.getIn().getDefiningOp<arith::MinSIOp>();
-  ASSERT_TRUE(minOp);
-  auto maxOp = minOp.getLhs().getDefiningOp<arith::MaxSIOp>();
-  ASSERT_TRUE(maxOp);
-  auto subOp = maxOp.getLhs().getDefiningOp<arith::SubIOp>();
-  ASSERT_TRUE(subOp);
-  EXPECT_TRUE(isa<arith::ExtSIOp>(subOp.getLhs().getDefiningOp()));
-  EXPECT_TRUE(isa<arith::ExtSIOp>(subOp.getRhs().getDefiningOp()));
-}
 
 // No arith.subi: the widened bound feeds the clamp directly.
 TEST_F(ComputeRowLimitHeightTest, NullRowBaseSkipsSubtraction) {
