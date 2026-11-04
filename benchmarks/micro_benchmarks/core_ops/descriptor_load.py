@@ -657,8 +657,15 @@ def benchmark_cat_reduce_2d(M, N, provider):
 # grouped_matmul_row_limit (covers #8565)
 # ---------------------------------------------------------------------------
 # Pattern: grouped GEMM where A's row mask bound is read from memory at
-# runtime. 'load_masked' exercises the row-limit-mask optimization (PR
-# #8615); 'load_unmasked' and 'descriptor' are references.
+# runtime (same kernel shape as the #8565 reproducer). 'load_masked'
+# exercises the row-limit-mask optimization (PR #8615); 'load_unmasked' and
+# 'descriptor' are references.
+#
+# Group sizes are deliberately not multiples of BM (see
+# _ragged_group_sizes), so some tiles straddle the group boundary and
+# row_valid is partially false. With group sizes exactly BM-aligned, every
+# row_valid would be True and the masked path would never diverge from the
+# unmasked one.
 
 
 @triton.jit
@@ -669,8 +676,13 @@ def grouped_matmul_load_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, N: tl.constexpr
     group_start = tl.load(offsets_ptr + g)
     group_end = tl.load(offsets_ptr + g + 1)
     num_m_tiles = tl.cdiv(group_end - group_start, BM)
+    num_n_tiles = tl.cdiv(N, BN)
     tile_m = tile % num_m_tiles
     tile_n = tile // num_m_tiles
+    if tile_n >= num_n_tiles:
+        # grid is sized from the largest group's tile count, so smaller
+        # groups see tile indices with no corresponding n-tile.
+        return
     rows = group_start + tile_m * BM + tl.arange(0, BM)
     cols = tile_n * BN + tl.arange(0, BN)
     row_valid = rows < group_end
@@ -695,8 +707,11 @@ def grouped_matmul_desc_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, N: tl.constexpr
     group_end = tl.load(offsets_ptr + g + 1)
     group_m = group_end - group_start
     num_m_tiles = tl.cdiv(group_m, BM)
+    num_n_tiles = tl.cdiv(N, BN)
     tile_m = tile % num_m_tiles
     tile_n = tile // num_m_tiles
+    if tile_n >= num_n_tiles:
+        return
     a_desc = tl.make_tensor_descriptor(a_ptr + group_start * N, shape=[group_m, N], strides=[N, 1],
                                        block_shape=[BM, BK])
     b_desc = tl.make_tensor_descriptor(b_ptr, shape=[N, N], strides=[N, 1], block_shape=[BK, BN])
@@ -705,7 +720,20 @@ def grouped_matmul_desc_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, N: tl.constexpr
         acc = tl.dot(a_desc.load([tile_m * BM, k0]), b_desc.load([k0, tile_n * BN]), acc)
     rows = group_start + tile_m * BM + tl.arange(0, BM)
     cols = tile_n * BN + tl.arange(0, BN)
-    tl.store(c_ptr + rows[:, None] * N + cols[None, :], acc.to(tl.bfloat16))
+    row_valid = rows < group_end
+    # group_m isn't necessarily a multiple of BM, so the last m-tile can run
+    # past group_end into the next group's rows; mask that off.
+    tl.store(c_ptr + rows[:, None] * N + cols[None, :], acc.to(tl.bfloat16), mask=row_valid[:, None])
+
+
+def _ragged_group_sizes(num_groups, group_m, block_m):
+    """Cycle group sizes through varied remainders mod block_m (near-empty,
+    mid, near-full last tile), so the row-limit boundary lands at different,
+    non-aligned offsets within a tile across groups, instead of always at
+    the same spot (e.g. always the midpoint)."""
+    remainders = [1, block_m // 4 + 5, block_m // 2 + 11, block_m - 1]
+    base = (group_m // block_m) * block_m
+    return [base + remainders[i % len(remainders)] for i in range(num_groups)]
 
 
 @perf_report(
@@ -728,13 +756,22 @@ def benchmark_grouped_matmul_row_limit(G, N, provider):
     BM = BN = 128
     BK = 64
 
-    a = torch.randn(G * N, N, dtype=dtype, device=DEVICE)
-    b = torch.randn(N, N, dtype=dtype, device=DEVICE)
-    c = torch.empty(G * N, N, dtype=dtype, device=DEVICE)
-    c_ref = torch.empty(G * N, N, dtype=dtype, device=DEVICE)
-    offsets = torch.arange(0, (G + 1) * N, N, dtype=torch.int32, device=DEVICE)
+    group_sizes = _ragged_group_sizes(G, N, BM)
+    offsets_list = [0]
+    for size in group_sizes:
+        offsets_list.append(offsets_list[-1] + size)
+    total_rows = offsets_list[-1]
+    max_m_tiles = max(triton.cdiv(size, BM) for size in group_sizes)
 
-    tiles = triton.cdiv(N, BM) * triton.cdiv(N, BN)
+    # Padding past the last group's end keeps the unmasked A load in-bounds
+    # when the last group's size isn't a multiple of BM.
+    a = torch.randn(total_rows + BM, N, dtype=dtype, device=DEVICE)
+    b = torch.randn(N, N, dtype=dtype, device=DEVICE)
+    c = torch.empty(total_rows, N, dtype=dtype, device=DEVICE)
+    c_ref = torch.empty(total_rows, N, dtype=dtype, device=DEVICE)
+    offsets = torch.tensor(offsets_list, dtype=torch.int32, device=DEVICE)
+
+    tiles = max_m_tiles * triton.cdiv(N, BN)
     grid = (tiles, G)
 
     assert_close(
@@ -761,7 +798,7 @@ def benchmark_grouped_matmul_row_limit(G, N, provider):
     _, min_ms, max_ms, mean_ms, cv = do_bench(fn, n_warmup=25, n_repeat=100, quantiles=quantiles)
 
     def tflops(ms):
-        return 2 * G * N * N * N * 1e-12 / (ms * 1e-3)
+        return 2 * total_rows * N * N * 1e-12 / (ms * 1e-3)
 
     return (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
