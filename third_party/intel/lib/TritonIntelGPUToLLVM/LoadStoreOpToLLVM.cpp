@@ -3,6 +3,7 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -4999,7 +5000,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
     }
 
     Value baseWidth = b.i32_val(op.getBaseWidth() * cfg.vBlocks);
-    Value baseHeight = b.i32_val(op.getBaseHeight());
+    Value baseHeight = adaptor.getBaseHeight();
     Value pitch = adaptor.getBasePitch();
 
     unsigned blockColIdx = cfg.isTransposeRequired ? cfg.rowDim : cfg.colDim;
@@ -5027,10 +5028,13 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
               adjustedBaseWidth, baseHeight, pred};
     };
 
-    return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
-                            otherElems, /*nanMaskElems=*/{},
-                            /*staticBaseHeight=*/op.getBaseHeight(), targetInfo,
-                            getTypeConverter(), loc, rewriter);
+    std::optional<int64_t> staticBaseHeight =
+        getConstantIntValue(op.getBaseHeight());
+    return lowerBlockLoad2D(
+        op, cfg, *llEncoding, pitch, computeAddress, otherElems,
+        /*nanMaskElems=*/{},
+        staticBaseHeight ? std::optional<int>(*staticBaseHeight) : std::nullopt,
+        targetInfo, getTypeConverter(), loc, rewriter);
   }
 };
 
