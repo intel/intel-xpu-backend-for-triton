@@ -160,6 +160,65 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// COM: A row-limit base_height (ttig.block_io_runtime_row_limit) that is a
+// COM: genuinely runtime (non-foldable) value, exercised across both of the
+// COM: tile's sub-tile row offsets (0 and 8).
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_from_ptr_row_limit_runtime
+  tt.func public @block_load_from_ptr_row_limit_runtime(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32) {
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
+    %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
+    %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %pitch = arith.constant 64 : i32
+    // CHECK: %[[LOCAL0:.*]] = llvm.sub %arg1, %{{.*}} : i32
+    // CHECK: llvm.icmp "sgt" %[[LOCAL0]], %{{.*}} : i32
+    // CHECK: llvm.intr.smax(%[[LOCAL0]], %{{.*}}) : (i32, i32) -> i32
+    // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
+    // CHECK: %[[LOCAL1:.*]] = llvm.sub %arg1, %{{.*}} : i32
+    // CHECK: llvm.icmp "sgt" %[[LOCAL1]], %{{.*}} : i32
+    // CHECK: llvm.intr.smax(%[[LOCAL1]], %{{.*}}) : (i32, i32) -> i32
+    // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
+    %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height {row_major} {base_width = 64 : i32, ttig.block_io_runtime_row_limit} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32) -> tensor<64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A row-limit base_height (ttig.block_io_runtime_row_limit) that folds
+// COM: to constant 1 must not take the stride=0 broadcast-row replication
+// COM: path.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_from_ptr_row_limit_const_one
+  tt.func public @block_load_from_ptr_row_limit_const_one(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
+    %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
+    %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %pitch = arith.constant 64 : i32
+    %height = arith.constant 1 : i32
+    // COM: Row-limit path for both sub-tile messages -- not row replication.
+    // CHECK: llvm.icmp "sgt" %[[SUB0:.*]], %{{.*}} : i32
+    // CHECK: %[[HEIGHT0:.*]] = llvm.intr.smax(%[[SUB0]], %{{.*}}) : (i32, i32) -> i32
+    // CHECK: triton_gen.2Dblockload %{{.*}}, %{{.*}}, %[[HEIGHT0]], %{{.*}}, %{{.*}}, %{{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
+    // CHECK: llvm.icmp "sgt" %[[SUB1:.*]], %{{.*}} : i32
+    // CHECK: %[[HEIGHT1:.*]] = llvm.intr.smax(%[[SUB1]], %{{.*}}) : (i32, i32) -> i32
+    // CHECK: triton_gen.2Dblockload %{{.*}}, %{{.*}}, %[[HEIGHT1]], %{{.*}}, %{{.*}}, %{{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
+    // CHECK-NOT: llvm.insertelement
+    %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height {row_major} {base_width = 64 : i32, ttig.block_io_runtime_row_limit} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32) -> tensor<64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Test ttig.2d_block_load_from_ptr with 1D->2D reshape stride attribute.
 // COM: The blocked encoding + ttig.block_io_stride triggers the manual tile
 // COM: construction path in the LLVM lowering.

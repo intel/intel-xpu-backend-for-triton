@@ -251,6 +251,87 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
+// COM: Regression test for issue #8565. A row-only mask `rows[:, None] <
+// COM: bound` with a runtime bound no longer falls back to a masked gather:
+// COM: this pass drops the mask/other in favor of a dynamic base_height
+// COM: operand (`max(0, bound - rowBase)`) instead.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @row_limit_mask
+  tt.func @row_limit_mask(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %lda: i32 {tt.divisibility = 16 : i32}, %row_base: i32, %bound: i32) -> tensor<64x32xf16, #dot0> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    // ptr[i, j] = arg0 + i * lda + j (row dim must vary, not be broadcast).
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+    %lda_splat = tt.splat %lda : i32 -> tensor<64x1xi32, #dot0>
+    %row = arith.muli %1, %lda_splat : tensor<64x1xi32, #dot0>
+    %2 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %rowb = tt.broadcast %row : tensor<64x1xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %colb = tt.broadcast %3 : tensor<1x32xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %off = arith.addi %rowb, %colb : tensor<64x32xi32, #dot0>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %4 = tt.addptr %base, %off : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+    // rows = row_base + arange(0, 64); rows_valid = rows < bound.
+    %5 = tt.splat %row_base : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %6 = arith.addi %5, %0 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %8 = tt.splat %bound : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %9 = arith.cmpi slt, %6, %8 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %10 = tt.expand_dims %9 {axis = 1 : i32} : tensor<64xi1, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi1, #dot0>
+    %11 = tt.broadcast %10 : tensor<64x1xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    // CHECK: %[[BOUND64:.*]] = arith.extsi %arg3 : i32 to i64
+    // CHECK: %[[BASE64:.*]] = arith.extsi %arg2 : i32 to i64
+    // CHECK: %[[DIFF64:.*]] = arith.subi %[[BOUND64]], %[[BASE64]] : i64
+    // CHECK: %[[ZERO64:.*]] = arith.constant 0 : i64
+    // CHECK: %[[EXTENT64:.*]] = arith.constant 64 : i64
+    // CHECK: %[[MAX64:.*]] = arith.maxsi %[[DIFF64]], %[[ZERO64]] : i64
+    // CHECK: %[[CLAMP64:.*]] = arith.minsi %[[MAX64]], %[[EXTENT64]] : i64
+    // CHECK: %[[H:.*]] = arith.trunci %[[CLAMP64]] : i64 to i32
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]] {row_major}
+    %12 = tt.load %4, %11, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+    tt.return %12 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+// COM: Companion negative case for the row-limit mask test above: a mask
+// COM: that varies along BOTH dims (also bounded along K) is not a row-limit
+// COM: pattern, so it still falls back to a masked tt.load.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @row_and_col_limit_mask
+  tt.func @row_and_col_limit_mask(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %lda: i32 {tt.divisibility = 16 : i32}, %row_bound: i32, %col_bound: i32) -> tensor<64x32xf16, #dot0> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+    %lda_splat = tt.splat %lda : i32 -> tensor<64x1xi32, #dot0>
+    %row = arith.muli %1, %lda_splat : tensor<64x1xi32, #dot0>
+    %2 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %rowb = tt.broadcast %row : tensor<64x1xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %colb = tt.broadcast %3 : tensor<1x32xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %off = arith.addi %rowb, %colb : tensor<64x32xi32, #dot0>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %4 = tt.addptr %base, %off : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+    %5 = tt.splat %col_bound : i32 -> tensor<1x32xi32, #dot0>
+    %6 = arith.cmpi slt, %3, %5 : tensor<1x32xi32, #dot0>
+    %7 = tt.broadcast %6 : tensor<1x32xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    %9 = tt.splat %row_bound : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %10 = arith.cmpi slt, %0, %9 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %11 = tt.expand_dims %10 {axis = 1 : i32} : tensor<64xi1, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi1, #dot0>
+    %12 = tt.broadcast %11 : tensor<64x1xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    %mask = arith.andi %7, %12 : tensor<64x32xi1, #dot0>
+    // CHECK: tt.load
+    %13 = tt.load %4, %mask, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+    tt.return %13 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
 // COM: Env var TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 forces the attribute on
 // COM: all loads, even those without it originally.
 // RUN: env TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --check-prefix=ENV-CHECK

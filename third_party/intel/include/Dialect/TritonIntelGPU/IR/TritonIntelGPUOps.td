@@ -281,7 +281,8 @@ def TTIG_Subgroup2DBlockLoadFromPtrOp : TTIG_Op<"2d_block_load_from_ptr", [
     runtime `i32` operands, matching `ttig.2d_block_load` and
     `triton_gen.2Dblockload`. A compile-time value is just an
     `arith.constant`; a runtime one (e.g. grouped-GEMM `lda`, or a per-group
-    row bound) is the computed SSA value.
+    row bound) is the computed SSA value. Rows at or beyond `base_height` are
+    zero-filled by the hardware instead of being read.
   }];
 
   let arguments = (ins

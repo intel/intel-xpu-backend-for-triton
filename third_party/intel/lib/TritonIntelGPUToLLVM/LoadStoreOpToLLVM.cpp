@@ -5004,6 +5004,14 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
     Value pitch = adaptor.getBasePitch();
 
     unsigned blockColIdx = cfg.isTransposeRequired ? cfg.rowDim : cfg.colDim;
+    unsigned blockRowIdx = cfg.isTransposeRequired ? cfg.colDim : cfg.rowDim;
+
+    // A row-limit `base_height` (see ttgi::getBlockIORuntimeRowLimitAttrName)
+    // is relative to the tile's first row; each message subtracts its own
+    // row offset below, since base_height 0 would underflow the GenISA
+    // `base_height - 1` encoding.
+    bool isRowLimitHeight =
+        op->hasAttr(TritonIntelGPUDialect::getBlockIORuntimeRowLimitAttrName());
 
     // Per-sub-tile: use ptrElems[registerIdx] with subtraction-based
     // addressing.
@@ -5020,16 +5028,30 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       // The HW requires a base width of at least 64 bytes.
       adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
 
+      Value adjustedBaseHeight = baseHeight;
       Value pred;
-      if (maskElems.size())
+      if (isRowLimitHeight) {
+        Value rowOffset = offsets[blockRowIdx].second;
+        Value localHeight = b.sub(baseHeight, rowOffset);
+        pred = b.icmp_sgt(localHeight, b.i32_val(0));
+        adjustedBaseHeight = b.smax(localHeight, b.i32_val(1));
+      } else if (maskElems.size()) {
         pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
+      }
 
-      return {addrElem,          offsetX,    /*offsetY=*/b.i32_val(0),
-              adjustedBaseWidth, baseHeight, pred};
+      return {addrElem,
+              offsetX,
+              /*offsetY=*/b.i32_val(0),
+              adjustedBaseWidth,
+              adjustedBaseHeight,
+              pred};
     };
 
+    // Disable the stride=0 broadcast-row special case for a row-limit
+    // height, where height==1 means "only row 0 valid", not "broadcast".
     std::optional<int64_t> staticBaseHeight =
-        getConstantIntValue(op.getBaseHeight());
+        isRowLimitHeight ? std::nullopt
+                         : getConstantIntValue(op.getBaseHeight());
     return lowerBlockLoad2D(
         op, cfg, *llEncoding, pitch, computeAddress, otherElems,
         /*nanMaskElems=*/{},

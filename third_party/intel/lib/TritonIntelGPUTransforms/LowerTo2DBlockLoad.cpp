@@ -8,6 +8,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
@@ -381,10 +382,26 @@ private:
     bool oneMatrixPerLoadForBT =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
 
+    // A row-limit mask can become `base_height` instead of per-element
+    // masking (hardware zero-fill). Decided up front so tile-size
+    // computation below can treat this load as unmasked.
+    std::optional<ttgi::RowLimitMaskInfo> rowLimitMask;
+    if (op.getMask() && rank == 2) {
+      unsigned pitchTensorDim =
+          (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+      bool pitchDimIsBroadcast =
+          getStride(strideAnalysis, op.getPtr(), pitchTensorDim) == 0;
+      if (auto m = ttgi::matchRowLimitMask(op.getMask(), op.getOther(),
+                                           tensorTy.getShape(), contiguousDim,
+                                           pitchDimIsBroadcast))
+        rowLimitMask = m;
+    }
+
     // Retrieve mask axis info to validate tile constraints consistently
-    // with the downstream LLVM lowering.
+    // with the downstream LLVM lowering. Skipped for a row-limit mask: its
+    // bound is handled via base_height below, not by clamping the tile.
     tt::AxisInfo *maskAxisInfo = nullptr;
-    if (op.getMask())
+    if (op.getMask() && !rowLimitMask)
       maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
 
     // Whether this load was annotated by the 1D→2D reshape in
@@ -559,24 +576,38 @@ private:
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;
 
-    // If mask is present but other is absent, create a zero splat as the
-    // default padding value (the verifier requires 'other' when 'mask' is set).
-    Value mask = op.getMask();
-    Value other = op.getOther();
-    if (mask && !other)
-      other = createZeroSplat(builder, loc, tensorTy);
-
     // Pitch is a single i32 operand: the runtime value when we have one, an
-    // arith.constant otherwise (the lowering and asserts treat both the same).
+    // arith.constant otherwise (the lowering and asserts treat both the
+    // same).
     Value pitchOperand =
         pitchValue
             ? pitchValue
             : arith::ConstantOp::create(
                   builder, loc,
                   builder.getI32IntegerAttr(static_cast<int32_t>(pitch)));
-    Value heightOperand = arith::ConstantOp::create(
-        builder, loc,
-        builder.getI32IntegerAttr(static_cast<int32_t>(baseHeightRows)));
+    Value mask = op.getMask();
+    Value other = op.getOther();
+    Value heightOperand;
+    if (rowLimitMask) {
+      // Drop the mask/other: hardware zero-fill at base_height replaces it.
+      mask = Value();
+      other = Value();
+      // Relative to the tile's first row and may be <= 0; the LLVM lowering
+      // adjusts per message and never forwards a non-positive base_height.
+      heightOperand = ttgi::computeRowLimitHeight(
+          builder, loc, rowLimitMask->bound, rowLimitMask->rowBase,
+          tensorTy.getShape()[rowLimitMask->boundedDim]);
+    } else {
+      // If mask is present but other is absent, create a zero splat as the
+      // default padding value (the verifier requires 'other' when 'mask' is
+      // set).
+      if (mask && !other)
+        other = createZeroSplat(builder, loc, tensorTy);
+      heightOperand = arith::ConstantOp::create(
+          builder, loc,
+          builder.getI32IntegerAttr(static_cast<int32_t>(baseHeightRows)));
+    }
+
     auto blockPtrLoadOp = ttgi::Subgroup2DBlockLoadFromPtrOp::create(
         builder, loc, op.getType(), op.getPtr(), pitchOperand, heightOperand,
         mask, other, builder.getI32IntegerAttr(baseWidthBytes),
@@ -591,6 +622,10 @@ private:
             ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName()))
       blockPtrLoadOp->setAttr(
           ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName(), attr);
+    if (rowLimitMask)
+      blockPtrLoadOp->setAttr(
+          ttgi::TritonIntelGPUDialect::getBlockIORuntimeRowLimitAttrName(),
+          builder.getUnitAttr());
 
     op.replaceAllUsesWith(blockPtrLoadOp.getResult());
     op.erase();
