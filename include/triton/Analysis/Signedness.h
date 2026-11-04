@@ -21,8 +21,9 @@ namespace mlir::triton {
 /// one that holds for any in-range index computation.
 ///
 /// Facts come from operations whose sign is structural (`tt.get_program_id`,
-/// `tt.make_range`, constants, an `scf.for` counter over non-negative bounds)
-/// and from `llvm.intr.assume`, which is how `tl.assume` reaches the compiler.
+/// `tt.make_range`, constants, a loop counter over non-negative bounds - as an
+/// `scf.for` induction variable or as the block argument it lowers to) and from
+/// `llvm.intr.assume`, which is how `tl.assume` reaches the compiler.
 /// An assume counts only where it is certain to have executed first; see the
 /// implementation for the (conservative) test.
 ///

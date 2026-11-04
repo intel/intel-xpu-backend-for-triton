@@ -1,6 +1,7 @@
 #include "triton/Analysis/Signedness.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <cassert>
@@ -14,7 +15,14 @@ namespace {
 /// operations deep.
 constexpr unsigned kMaxDepth = 12;
 
-bool isNonNegative(Value v, Operation *useOp, unsigned depth);
+/// Block arguments taken as non-negative; see `blockArgIsNonNegative`. Passed
+/// by value, so a hypothesis reaches only the sub-walk that introduced it:
+/// shared, one branch of a `max` or `select` could draw on a hypothesis a
+/// failed sibling left behind undischarged.
+using Hypotheses = SmallPtrSet<Value, 4>;
+
+bool isNonNegative(Value v, Operation *useOp, unsigned depth,
+                   Hypotheses assumed);
 
 /// True if `assume` is certain to have executed by the time `useOp` does.
 ///
@@ -98,9 +106,47 @@ bool isUnsignedDivisorAboveOne(Value v) {
                      [](const APInt &c) { return c.ugt(1); });
 }
 
-bool isNonNegative(Value v, Operation *useOp, unsigned depth) {
+/// True if every value reaching `arg` along a CFG edge is non-negative, taking
+/// `arg` itself as non-negative while proving them. This is the `scf.for`
+/// counter once `convert-scf-to-cf` has turned it into a header block argument,
+/// the form the LLVM lowering's AxisInfo sees.
+///
+/// Assuming `arg` to prove `arg` is induction over block entries, not
+/// circularity: the value arriving on the n-th entry can only use the `arg` of
+/// the (n-1)-th, and the first entry has to arrive along an edge whose value
+/// does not use `arg` at all, since `arg` does not dominate that predecessor.
+bool blockArgIsNonNegative(BlockArgument arg, unsigned depth,
+                           Hypotheses assumed) {
+  Block *block = arg.getOwner();
+  // A function or region entry argument. Declining is what stops the hypothesis
+  // below from standing in for every incoming value, there being none.
+  if (block->hasNoPredecessors())
+    return false;
+
+  assumed.insert(arg);
+
+  for (BlockOperand &edge : block->getUses()) {
+    auto branch = dyn_cast<BranchOpInterface>(edge.getOwner());
+    if (!branch)
+      return false;
+    SuccessorOperands operands =
+        branch.getSuccessorOperands(edge.getOperandNumber());
+    // Null for an operand the successor produces rather than receives.
+    Value incoming = arg.getArgNumber() < operands.size()
+                         ? operands[arg.getArgNumber()]
+                         : Value();
+    if (!incoming || !isNonNegative(incoming, branch, depth + 1, assumed))
+      return false;
+  }
+  return true;
+}
+
+bool isNonNegative(Value v, Operation *useOp, unsigned depth,
+                   Hypotheses assumed) {
   if (depth >= kMaxDepth)
     return false;
+  if (assumed.contains(v))
+    return true;
   if (assumedNonNegative(v, useOp))
     return true;
 
@@ -112,14 +158,14 @@ bool isNonNegative(Value v, Operation *useOp, unsigned depth) {
     auto blockArg = cast<BlockArgument>(v);
     auto forOp =
         dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
-    if (!forOp || blockArg != forOp.getInductionVar())
-      return false;
-    return isNonNegative(forOp.getLowerBound(), forOp, depth + 1) &&
-           isNonNegative(forOp.getStep(), forOp, depth + 1);
+    if (forOp && blockArg == forOp.getInductionVar())
+      return isNonNegative(forOp.getLowerBound(), forOp, depth + 1, assumed) &&
+             isNonNegative(forOp.getStep(), forOp, depth + 1, assumed);
+    return blockArgIsNonNegative(blockArg, depth, assumed);
   }
 
   auto operandIsNonNegative = [&](Value operand) {
-    return isNonNegative(operand, useOp, depth + 1);
+    return isNonNegative(operand, useOp, depth + 1, assumed);
   };
 
   return llvm::TypeSwitch<Operation *, bool>(defOp)
@@ -196,7 +242,7 @@ bool dividendIsNonNegative(Operation *op) {
     return true;
   assert((isa<arith::DivSIOp, arith::RemSIOp>(op)) &&
          "expected a division or remainder");
-  return isNonNegative(op->getOperand(0), op, /*depth=*/0);
+  return isNonNegative(op->getOperand(0), op, /*depth=*/0, /*assumed=*/{});
 }
 
 } // namespace mlir::triton

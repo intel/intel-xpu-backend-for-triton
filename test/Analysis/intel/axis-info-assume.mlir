@@ -218,3 +218,83 @@ tt.func @rem_over_unsigned_division(%a: i32 {tt.divisibility = 16 : i32}) {
   %rem2 = arith.remsi %offs2, %cst : tensor<128xi32>
   tt.return
 }
+
+// -----
+
+// The same counter after `convert-scf-to-cf`, as a header block argument: it
+// reaches the header with 0 from outside and with the incremented counter from
+// the back edge, so it stays non-negative.
+
+// CHECK-LABEL: @rem_branch_counter
+tt.func @rem_branch_counter(%rnumel: i32, %HW: i32 {tt.divisibility = 16 : i32}) {
+  %c0 = arith.constant 0 : i32
+  %c128 = arith.constant 128 : i32
+  cf.br ^header(%c0 : i32)
+^header(%roffset: i32):
+  %cond = arith.cmpi slt, %roffset, %rnumel : i32
+  cf.cond_br %cond, ^body, ^exit
+^body:
+  %splat = tt.splat %roffset : i32 -> tensor<128xi32>
+  %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  %rindex = arith.addi %splat, %range : tensor<128xi32>
+  %mod = tt.splat %HW : i32 -> tensor<128xi32>
+  // CHECK: arith.remsi {{.*}} => contiguity = [16], divisibility = [16], constancy = [1]
+  %rem = arith.remsi %rindex, %mod : tensor<128xi32>
+  // CHECK: arith.divsi {{.*}} => contiguity = [1], divisibility = [1], constancy = [16]
+  %div = arith.divsi %rindex, %mod : tensor<128xi32>
+  %next = arith.addi %roffset, %c128 : i32
+  cf.br ^header(%next : i32)
+^exit:
+  tt.return
+}
+
+// -----
+
+// Entered with a lower bound of unknown sign: the edge that is the base case of
+// the induction cannot be proved, so the deduction is declined.
+
+// CHECK-LABEL: @rem_branch_counter_negative_start
+tt.func @rem_branch_counter_negative_start(%lb: i32 {tt.divisibility = 128 : i32}, %rnumel: i32, %HW: i32 {tt.divisibility = 16 : i32}) {
+  %c128 = arith.constant 128 : i32
+  cf.br ^header(%lb : i32)
+^header(%roffset: i32):
+  %cond = arith.cmpi slt, %roffset, %rnumel : i32
+  cf.cond_br %cond, ^body, ^exit
+^body:
+  %splat = tt.splat %roffset : i32 -> tensor<128xi32>
+  %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  %rindex = arith.addi %splat, %range : tensor<128xi32>
+  %mod = tt.splat %HW : i32 -> tensor<128xi32>
+  // CHECK: arith.remsi {{.*}} => contiguity = [1], divisibility = [1], constancy = [1]
+  %rem = arith.remsi %rindex, %mod : tensor<128xi32>
+  %next = arith.addi %roffset, %c128 : i32
+  cf.br ^header(%next : i32)
+^exit:
+  tt.return
+}
+
+// -----
+
+// The back edge is checked too: this counter starts at a non-negative bound but
+// counts down, and `arith.subi` says nothing about its result's sign.
+
+// CHECK-LABEL: @rem_branch_counter_counting_down
+tt.func @rem_branch_counter_counting_down(%rnumel: i32 {tt.divisibility = 128 : i32}, %HW: i32 {tt.divisibility = 16 : i32}) {
+  %c0 = arith.constant 0 : i32
+  %c128 = arith.constant 128 : i32
+  cf.br ^header(%rnumel : i32)
+^header(%roffset: i32):
+  %cond = arith.cmpi sgt, %roffset, %c0 : i32
+  cf.cond_br %cond, ^body, ^exit
+^body:
+  %splat = tt.splat %roffset : i32 -> tensor<128xi32>
+  %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  %rindex = arith.addi %splat, %range : tensor<128xi32>
+  %mod = tt.splat %HW : i32 -> tensor<128xi32>
+  // CHECK: arith.remsi {{.*}} => contiguity = [1], divisibility = [1], constancy = [1]
+  %rem = arith.remsi %rindex, %mod : tensor<128xi32>
+  %next = arith.subi %roffset, %c128 : i32
+  cf.br ^header(%next : i32)
+^exit:
+  tt.return
+}
