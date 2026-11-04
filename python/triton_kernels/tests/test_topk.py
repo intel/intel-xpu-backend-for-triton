@@ -4,7 +4,6 @@ import pytest
 import torch
 import triton
 import triton.profiler as proton
-from triton._internal_testing import is_compile_warmup
 from triton.testing import cuda_graph_without_gc
 from triton_kernels.topk import topk, topk_torch
 from triton_kernels.testing import assert_equal, assert_close
@@ -104,7 +103,6 @@ def test_topk_all_gather_uses_reserved_bitmap_size(n_rows, k, use_provided_indic
     (torch.bfloat16, torch.int16),
     (torch.float32, torch.int32),
 ])
-@pytest.mark.enable_warmup
 def test_topk_fpsan_masks_padded_experts(fresh_knobs, n_experts, k, apply_softmax, dtype, storage_dtype, device):
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
@@ -114,8 +112,6 @@ def test_topk_fpsan_masks_padded_experts(fresh_knobs, n_experts, k, apply_softma
     logits = torch.full((n_rows, n_experts), -1, dtype=storage_dtype, device=device).view(dtype)
 
     sparse_logits = topk(logits, k, apply_softmax=apply_softmax)
-    if is_compile_warmup():
-        return
 
     expected_indices = torch.arange(k, dtype=torch.int16, device=device).expand(n_rows, k)
     assert_equal(sparse_logits.indx, expected_indices)
