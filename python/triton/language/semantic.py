@@ -679,14 +679,14 @@ class TritonSemantic(Generic[TensorTy]):
     def unsplat(self, value: TensorTy) -> TensorTy:
         return self.make_tensor(self.builder.create_unsplat(value.handle), value.dtype)
 
-    def reshape(self, input: TensorTy, dst_shape: List[int], can_reorder: bool) -> TensorTy:
+    def reshape(self, input: TensorTy, dst_shape: List[int]) -> TensorTy:
         numel = 1
         for s in dst_shape:
             numel *= s
         if input.type.numel != numel:
             raise ValueError("reshape() cannot change total number of elements in tensor")
         ret_ty = tl.block_type(input.type.scalar, dst_shape)
-        return self.make_tensor(self.builder.create_reshape(input.handle, dst_shape, can_reorder), ret_ty)
+        return self.make_tensor(self.builder.create_reshape(input.handle, dst_shape), ret_ty)
 
     def expand_dims(self, input: TensorTy, axis: int) -> TensorTy:
         dst_shape = [tl._unwrap_if_constexpr(x) for x in input.shape]
@@ -720,7 +720,7 @@ class TritonSemantic(Generic[TensorTy]):
         ret = self.make_tensor(self.builder.create_join(a.handle, b.handle), ret_type)
 
         if was_rank_1:
-            ret = self.reshape(ret, [2], can_reorder=False)
+            ret = self.reshape(ret, [2])
 
         return ret
 
@@ -1613,7 +1613,11 @@ class TritonSemantic(Generic[TensorTy]):
             _0 = self.builder.get_int32(0)
             ret_scalar_ty = tl.int32
         elif out_dtype.is_bf16():
-            if self.builder.options.backend_name == 'intel':
+            # A bf16 accumulator is an Intel-only feature for bf16 x bf16 -> bf16 and fp8 x fp8 -> bf16, the operand
+            # types DPAS has a bf16 accumulator for (fp8 on targets with fp8 DPAS, the FMA path elsewhere). This also
+            # covers out_dtype inferred from a bf16 `acc`.
+            if self.builder.options.backend_name == 'intel' and ((lhs.dtype.is_bf16() and rhs.dtype.is_bf16()) or
+                                                                 (lhs.dtype.is_fp8() and rhs.dtype.is_fp8())):
                 _0 = self.builder.get_bf16(0)
                 ret_scalar_ty = tl.bfloat16
             else:
@@ -1797,7 +1801,7 @@ class TritonSemantic(Generic[TensorTy]):
 
     def reduction(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn) -> Tuple[TensorTy, ...]:
         if axis is None:
-            inputs = tuple(self.reshape(t, [t.numel.value], can_reorder=False) for t in inputs)
+            inputs = tuple(self.reshape(t, [t.numel.value]) for t in inputs)
             axis = 0
         # get result shape
         shape = inputs[0].type.shape
