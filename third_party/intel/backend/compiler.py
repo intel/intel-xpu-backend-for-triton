@@ -113,6 +113,12 @@ class XPUOptions:
 # `accepts_default_grf`.
 REBUILD_SPILL_BYTES_PER_THREAD = 1024
 
+# Parts whose driver's default L1 store policy is write-bypass (the generic Xe-HPG..Xe3 default in
+# intel/compute-runtime; DG2 and PTL override it to write-back). There a 2D block store with rows narrower than a
+# 64 B line sends partial writes to L2, so such rows are written back through L1 instead. Other write-bypass parts,
+# such as LNL and PVC, stay out until measured.
+L1_STORE_WRITE_BYPASS_ARCHES = ("bmg", )
+
 # IGC build flag for each explicit `grf_mode` that has one. Only LTS passes these; elsewhere the mode is
 # requested through the kernel's SPV_INTEL_maximum_registers execution mode (see `make_llir`). '160' and '192'
 # have no such flag, so they require the execution mode.
@@ -511,6 +517,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.threads_per_warp = opt.warp_size
         module_opts.sub_32_dpas = opt.sub_32_dpas
         module_opts.target_arch = cls.target_arch
+        module_opts.l1_store_write_bypass = (getattr(cls, "device_arch", None) in L1_STORE_WRITE_BYPASS_ARCHES
+                                             and not knobs.intel.disable_store_l1_write_back)
         module_opts.block_io_base_alignment = properties["block_io_base_alignment"]
         module_opts.max_grf_mode = opt.max_grf_mode
 

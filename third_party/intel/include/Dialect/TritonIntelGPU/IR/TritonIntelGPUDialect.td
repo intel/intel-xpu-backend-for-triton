@@ -120,6 +120,20 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.is_lts";
     }
 
+    /// Name of the module attribute set when the driver's default L1 store
+    /// policy is write-bypass, as on BMG. Narrow 2D block-store rows are then
+    /// written back through L1.
+    static constexpr llvm::StringRef getL1StoreWriteBypassAttrName() {
+      return "ttig.l1_store_write_bypass";
+    }
+
+    /// Name of the module attribute the LLVM conversion sets when the module
+    /// may hand data to another work-group inside the kernel (atomics,
+    /// volatile loads, inline asm). Its stores keep the default cache policy.
+    static constexpr llvm::StringRef getSyncsAcrossWorkGroupsAttrName() {
+      return "ttig.syncs_across_work_groups";
+    }
+
     /// Get the name of the attribute holding the core clock rate in kHz, used
     /// to convert cycles to nanoseconds.
     static constexpr llvm::StringRef getCoreClockRateAttrName() {

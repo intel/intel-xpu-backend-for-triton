@@ -112,6 +112,27 @@ struct ConvertTritonGPUToLLVM
     ModuleMembarAnalysis membarPass(allocation, ::mlir::intel::membarFilter);
     membarPass.run();
 
+    // Atomics, volatile loads and inline asm may hand data to another
+    // work-group inside the kernel, and then 2D block stores keep the default
+    // cache policy (see get2DBlockStoreCacheControl). Check the whole module
+    // before anything is converted: a noinline callee is a separate function.
+    bool syncs =
+        mod.walk([](Operation *op) {
+             auto load = dyn_cast<triton::LoadOp>(op);
+             if (isa<triton::AtomicRMWOp, triton::AtomicCASOp,
+                     triton::AtomicLoadOp, triton::AtomicStoreOp,
+                     triton::AtomicPollOp, triton::ElementwiseInlineAsmOp>(
+                     op) ||
+                 (load && load.getIsVolatile()))
+               return WalkResult::interrupt();
+             return WalkResult::advance();
+           })
+            .wasInterrupted();
+    if (syncs)
+      mod->setAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                       getSyncsAcrossWorkGroupsAttrName(),
+                   UnitAttr::get(context));
+
     // Lower functions
     {
       mlir::LowerToLLVMOptions option(context);
