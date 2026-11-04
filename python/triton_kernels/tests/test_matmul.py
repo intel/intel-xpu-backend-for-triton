@@ -964,8 +964,6 @@ def test_matmul_mixed_fp8_matches_upcast(fp8_lhs, dtype, out_dtype, b_transpose,
     actual = matmul(a, b, None, precision_config=config)
     expected = matmul(a_upcast, b_upcast, None, precision_config=config)
 
-    if is_compile_warmup():
-        return
     if use_fpsan:
         torch.testing.assert_close(actual.contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8),
                                    rtol=0, atol=0)

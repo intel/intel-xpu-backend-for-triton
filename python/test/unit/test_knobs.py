@@ -97,6 +97,26 @@ def test_reset_clears_plain_fields(fresh_knobs) -> None:
     assert fresh_knobs.autotuning.copy().reset().listener is None
 
 
+def test_reset_restores_non_empty_default() -> None:
+    # instrumentation_mode's "default" is whatever TRITON_INSTRUMENTATION_MODE was
+    # at process import time (see the comment on the field): a plain class attribute,
+    # not a dynamically re-read env_base descriptor. Simulate a non-"" default --
+    # the shape TRITON_INSTRUMENTATION_MODE=fpsan at import time would produce -- with
+    # a throwaway subclass instead of touching the real triton.knobs module (tried
+    # reloading it, which replaces every knobset singleton and broke restoration for
+    # unrelated knobs in other tests later in the session); this has zero effect on
+    # anything outside the local `instance`.
+    class _CompilationKnobsWithFpsanDefault(triton.knobs.compilation_knobs):
+        instrumentation_mode = "fpsan"
+
+    instance = _CompilationKnobsWithFpsanDefault()
+    assert instance.instrumentation_mode == "fpsan"
+
+    instance.instrumentation_mode = "consan"
+    reset_copy = instance.copy().reset()
+    assert reset_copy.instrumentation_mode == "fpsan"
+
+
 def _register_pressure_scheduler_kernel():
     from triton.backends.compiler import GPUTarget
     from triton.backends.nvidia import compiler

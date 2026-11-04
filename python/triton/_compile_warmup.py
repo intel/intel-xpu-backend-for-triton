@@ -10,6 +10,19 @@ from torch.overrides import TorchFunctionMode
 
 import triton
 
+# `fresh_knobs` deletes every env-backed knob's env var for the duration of a test
+# that uses it, including TRITON_XPU_GEN_NATIVE_CODE -- a job-level build toggle, not
+# per-test state. Warmup's actual compile happens in a long-lived pool-worker process
+# that never sees that deletion (it inherited the env at pool startup), while a real
+# run computes it directly in the test's own process, mid-deletion. That flips
+# `XPUOptions.generate_native_code` -- and therefore the compile hash -- for every
+# kernel any `fresh_knobs`-using `enable_warmup` test compiles. Snapshotting the
+# ambient value once at import time (before any test's `fresh_knobs` can touch it)
+# and restoring it for the duration of such tests' `call` phase keeps both phases
+# consistent; a test that sets `fresh_knobs.intel.gen_native_code` itself still wins,
+# since that assignment runs strictly after this restore.
+_AMBIENT_GEN_NATIVE_CODE = triton.knobs.intel.gen_native_code
+
 
 class _FakeCudaTensorMode(TorchFunctionMode):
     """Preserve CUDA allocation alignment and view offsets in fake pointers."""
@@ -228,14 +241,19 @@ def compile_warmup(request):
 def pytest_runtest_call(item):
     directory = os.environ.get("TRITON_CI_COMPILE_TRACE_DIR")
     phase = _cache_phase_for_item(item)
+    is_warmed = (item.get_closest_marker("enable_warmup") is not None
+                 and item.get_closest_marker("disable_warmup") is None)
     previous_listener = triton.knobs.compilation.listener
     if directory:
         triton.knobs.compilation.listener = CompilationTrace(directory, phase, item.nodeid)
-        if (not item.config.getoption("--warmup-only") and item.get_closest_marker("enable_warmup") is not None
-                and item.get_closest_marker("disable_warmup") is None):
+        if not item.config.getoption("--warmup-only") and is_warmed:
             path = os.path.join(directory, f"{phase}-{os.getpid()}.tests")
             with open(path, "a", encoding="utf-8") as output:
                 output.write(json.dumps({"phase": phase, "test": item.nodeid}, sort_keys=True) + "\n")
+
+    previous_gen_native_code = triton.knobs.intel.gen_native_code
+    if is_warmed:
+        triton.knobs.intel.gen_native_code = _AMBIENT_GEN_NATIVE_CODE
 
     dispatcher = getattr(item.config, "_triton_warmup_dispatcher", None)
     if dispatcher is not None:
@@ -253,6 +271,7 @@ def pytest_runtest_call(item):
         if dispatcher is not None:
             dispatcher.current_test = previous_test
             dispatcher.current_phase = previous_phase
+        triton.knobs.intel.gen_native_code = previous_gen_native_code
         triton.knobs.compilation.listener = previous_listener
 
 
