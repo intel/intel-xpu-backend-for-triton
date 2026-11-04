@@ -10,17 +10,11 @@ from torch.overrides import TorchFunctionMode
 
 import triton
 
-# `fresh_knobs` deletes every env-backed knob's env var for the duration of a test
-# that uses it, including TRITON_XPU_GEN_NATIVE_CODE -- a job-level build toggle, not
-# per-test state. Warmup's actual compile happens in a long-lived pool-worker process
-# that never sees that deletion (it inherited the env at pool startup), while a real
-# run computes it directly in the test's own process, mid-deletion. That flips
-# `XPUOptions.generate_native_code` -- and therefore the compile hash -- for every
-# kernel any `fresh_knobs`-using `enable_warmup` test compiles. Snapshotting the
-# ambient value once at import time (before any test's `fresh_knobs` can touch it)
-# and restoring it for the duration of such tests' `call` phase keeps both phases
-# consistent; a test that sets `fresh_knobs.intel.gen_native_code` itself still wins,
-# since that assignment runs strictly after this restore.
+# `fresh_knobs` deletes TRITON_XPU_GEN_NATIVE_CODE for the duration of any test that
+# uses it, but warmup's compile runs in a separate pool-worker process that never sees
+# that deletion -- flipping `generate_native_code`, and therefore the compile hash,
+# between warmup and the real run. Snapshot the ambient value before any test can
+# delete it, so `pytest_runtest_call` below can restore it for `enable_warmup` tests.
 _AMBIENT_GEN_NATIVE_CODE = triton.knobs.intel.gen_native_code
 
 

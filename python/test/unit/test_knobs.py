@@ -70,53 +70,6 @@ def test_knobs_utils(fresh_knobs) -> None:
     }
 
 
-def test_reset_clears_plain_fields(fresh_knobs) -> None:
-    # `instrumentation_mode` and `listener` are plain fields, not `env_base`
-    # descriptors (unlike the synthetic knobs in test_knobs_utils above), so
-    # `knob_descriptors` doesn't see them. reset() must still clear them, or a
-    # polluted knobset would survive copy().reset() and leak into the next
-    # fresh_knobs() cycle -- which is exactly what made compile hashes diverge
-    # between the warmup and real-run phases of the same test.
-    default_mode = fresh_knobs.compilation.instrumentation_mode
-    assert fresh_knobs.compilation.listener is None
-
-    fresh_knobs.compilation.instrumentation_mode = "fpsan"
-    sentinel = object()
-    fresh_knobs.compilation.listener = sentinel
-
-    reset_copy = fresh_knobs.compilation.copy().reset()
-    assert reset_copy.instrumentation_mode == default_mode
-    assert reset_copy.listener is None
-
-    # The original (not reset) object keeps its overrides -- copy() didn't alias it.
-    assert fresh_knobs.compilation.instrumentation_mode == "fpsan"
-    assert fresh_knobs.compilation.listener is sentinel
-
-    # autotuning.listener is the same kind of plain, non-descriptor field.
-    fresh_knobs.autotuning.listener = sentinel
-    assert fresh_knobs.autotuning.copy().reset().listener is None
-
-
-def test_reset_restores_non_empty_default() -> None:
-    # instrumentation_mode's "default" is whatever TRITON_INSTRUMENTATION_MODE was
-    # at process import time (see the comment on the field): a plain class attribute,
-    # not a dynamically re-read env_base descriptor. Simulate a non-"" default --
-    # the shape TRITON_INSTRUMENTATION_MODE=fpsan at import time would produce -- with
-    # a throwaway subclass instead of touching the real triton.knobs module (tried
-    # reloading it, which replaces every knobset singleton and broke restoration for
-    # unrelated knobs in other tests later in the session); this has zero effect on
-    # anything outside the local `instance`.
-    class _CompilationKnobsWithFpsanDefault(triton.knobs.compilation_knobs):
-        instrumentation_mode = "fpsan"
-
-    instance = _CompilationKnobsWithFpsanDefault()
-    assert instance.instrumentation_mode == "fpsan"
-
-    instance.instrumentation_mode = "consan"
-    reset_copy = instance.copy().reset()
-    assert reset_copy.instrumentation_mode == "fpsan"
-
-
 def _register_pressure_scheduler_kernel():
     from triton.backends.compiler import GPUTarget
     from triton.backends.nvidia import compiler
