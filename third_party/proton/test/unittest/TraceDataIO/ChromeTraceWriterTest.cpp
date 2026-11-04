@@ -10,7 +10,11 @@
 #include <gtest/gtest.h>
 #include <iostream>
 #include <system_error>
+#if defined(_WIN32)
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 #include <vector>
 
 using json = nlohmann::json;
@@ -23,7 +27,14 @@ public:
     std::string pattern =
         (std::filesystem::temp_directory_path() / "proton-chrome-trace-XXXXXX")
             .string();
+#if defined(_WIN32)
+    char *created = _mktemp_s(pattern.data(), pattern.size() + 1) == 0 &&
+                            std::filesystem::create_directory(pattern)
+                        ? pattern.data()
+                        : nullptr;
+#else
     char *created = ::mkdtemp(pattern.data());
+#endif
     ASSERT_NE(created, nullptr) << std::strerror(errno);
 
     chromeTraceDir = created;
