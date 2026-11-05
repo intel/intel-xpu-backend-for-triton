@@ -1573,15 +1573,20 @@ struct PrefetchOpConversion
             converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
+  // The matched row-limit mask. `computeRowLimitHeight` is deferred until the
+  // lowering can no longer bail out, so a failed lowering leaves no dead ops.
   struct RowLimit {
-    Value height;
-    Value extraGuard;
+    Value bound;
+    Value rowBase; // May be null.
+    int64_t rowExtent;
+    Value extraGuard; // May be null.
   };
 
-  std::optional<RowLimit> matchPrefetchRowLimitMask(
-      triton::gpu::intel::PrefetchOp op, ArrayRef<int64_t> tensorShape,
-      unsigned contiguousDim, unsigned pitchTensorDim, Location loc,
-      ConversionPatternRewriter &rewriter) const {
+  std::optional<RowLimit>
+  matchPrefetchRowLimitMask(triton::gpu::intel::PrefetchOp op,
+                            ArrayRef<int64_t> tensorShape,
+                            unsigned contiguousDim, unsigned pitchTensorDim,
+                            ConversionPatternRewriter &rewriter) const {
     if (!op.getMask() || tensorShape.size() != 2)
       return std::nullopt;
 
@@ -1602,7 +1607,10 @@ struct PrefetchOpConversion
           otherConjunct = andOp.getLhs();
       }
     }
-    if (!m)
+    // `extraPred` is a batch-dims-only predicate of a rank > 2 mask. It would
+    // have to be ANDed into the per-message predicate (as the load path does);
+    // this matcher is rank 2 only, so give up rather than drop it silently.
+    if (!m || m->extraPred)
       return std::nullopt;
 
     Value extraGuardRemapped;
@@ -1621,9 +1629,8 @@ struct PrefetchOpConversion
     if (!boundRemapped || (m->rowBase && !baseRemapped))
       return std::nullopt;
 
-    Value height = computeRowLimitHeight(
-        rewriter, loc, boundRemapped, baseRemapped, tensorShape[m->boundedDim]);
-    return RowLimit{height, extraGuardRemapped};
+    return RowLimit{boundRemapped, baseRemapped, tensorShape[m->boundedDim],
+                    extraGuardRemapped};
   }
 
   LogicalResult
@@ -1670,9 +1677,14 @@ struct PrefetchOpConversion
     // A row-limit mask can become this prefetch's dynamic base_height
     // instead of a per-subtile predicate, so decide this before
     // `maskAxisInfo` below treats the prefetch as masked.
+    //
+    // Rank >= 3 is deliberately not handled yet (the load path accepts it):
+    // it needs the batch-dims `extraPred` ANDed into the per-message
+    // predicate, and a `boundedDim != pitchDim` bail like the load path's,
+    // since only at rank 2 does the bounded dim always equal the pitch dim.
     std::optional<RowLimit> rowLimit =
         rank == 2 ? matchPrefetchRowLimitMask(op, tensorShape, contiguousDim,
-                                              pitchTensorDim, loc, rewriter)
+                                              pitchTensorDim, rewriter)
                   : std::nullopt;
 
     std::optional<LinearLayout> llEncoding =
@@ -1715,7 +1727,8 @@ struct PrefetchOpConversion
     // Get the LLVM values for pointers
     SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
     SmallVector<Value> maskElems;
-    if (llMask)
+    // A row-limit mask is handled via base_height; its elements are unused.
+    if (llMask && !rowLimit)
       maskElems = unpackLLElements(loc, llMask, rewriter);
 
     unsigned pitchDim = isTransposeRequired ? colDim : rowDim;
@@ -1732,11 +1745,13 @@ struct PrefetchOpConversion
       return failure();
 
     // If the stride is 0, we want to load only the first row. For a
-    // row-limit mask, `rowLimit->height` replaces this; the loop below
-    // adjusts it per message.
+    // row-limit mask, the computed row-limit height replaces this; the loop
+    // below adjusts it per message.
     int64_t stride = getStride(op.getPtr(), pitchDim);
     Value baseHeight =
-        rowLimit ? rowLimit->height : b.i32_val(stride == 0 ? 1 : tileHeight);
+        rowLimit ? computeRowLimitHeight(rewriter, loc, rowLimit->bound,
+                                         rowLimit->rowBase, rowLimit->rowExtent)
+                 : b.i32_val(stride == 0 ? 1 : tileHeight);
     Value baseWidth =
         b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
 

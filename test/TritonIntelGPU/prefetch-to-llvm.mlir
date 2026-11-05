@@ -474,3 +474,26 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return
   }
 }
+
+// -----
+
+// COM: A row-limit mask on a prefetch whose pitch can't be recovered (the
+// COM: pointer tensor is a bare function argument). The lowering bails to a
+// COM: no-op, and must do so before materializing the row-limit height, so no
+// COM: dead clamp ops are left behind.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @prefetch_row_limit_unknown_stride
+  // CHECK-NOT: triton_gen.2Dblockprefetch
+  // CHECK-NOT: llvm.intr.smax
+  tt.func public @prefetch_row_limit_unknown_stride(%arg0: tensor<64x32x!tt.ptr<f16>, #dot0>, %bound: i32) {
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %1 = tt.splat %bound : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %2 = arith.cmpi slt, %0, %1 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %3 = tt.expand_dims %2 {axis = 1 : i32} : tensor<64xi1, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi1, #dot0>
+    %mask = tt.broadcast %3 : tensor<64x1xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    ttig.prefetch %arg0, %mask {cache = 1 : i32, evict = 1 : i32, isVolatile = false, ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+    tt.return
+  }
+}
