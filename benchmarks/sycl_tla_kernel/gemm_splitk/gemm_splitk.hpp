@@ -17,11 +17,20 @@
 // PRIVATE FUNCTION
 ////////////////////////////////////////////////////////////////////////////////
 
+// The split-K and stream-K references share one kernel: the Xe stream-K tile
+// scheduler, which `mode` drives into either decomposition. `split_k` is only
+// read in SplitK mode.
+using StreamKMode = cutlass::gemm::kernel::detail::
+    PersistentTileSchedulerXeStreamKParams::DecompositionMode;
+
 template <typename GemmConfig>
 static auto gemm_splitk_run(const at::Tensor &A, const at::Tensor &B,
                             at::Tensor &C, const int M, const int N,
-                            const int K, const int split_k) -> int {
-  RECORD_FUNCTION("sycl-tla gemm_splitk", {});
+                            const int K, const int split_k,
+                            const StreamKMode mode) -> int {
+  RECORD_FUNCTION(mode == StreamKMode::StreamK ? "sycl-tla gemm_streamk"
+                                               : "sycl-tla gemm_splitk",
+                  {});
 
   using ElementComputeEpilogue = float;
 
@@ -57,9 +66,6 @@ static auto gemm_splitk_run(const at::Tensor &A, const at::Tensor &B,
           cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
     }
 
-    using StreamKMode = cutlass::gemm::kernel::detail::
-        PersistentTileSchedulerXeStreamKParams::DecompositionMode;
-
     arguments = GemmConfig::defaultArguments();
     arguments.mode = cutlass::gemm::GemmUniversalMode::kGemm;
     arguments.problem_shape = problem_size;
@@ -71,7 +77,7 @@ static auto gemm_splitk_run(const at::Tensor &A, const at::Tensor &B,
         _C,
         stride_D};
     arguments.hw_info = hw_info;
-    arguments.scheduler = {split_k, StreamKMode::SplitK};
+    arguments.scheduler = {split_k, mode};
 
     Gemm gemm_op;
 
@@ -102,21 +108,39 @@ static auto gemm_splitk_run(const at::Tensor &A, const at::Tensor &B,
 using SplitKDim = std::tuple<int, int, int>;
 using GemmSplitKRunPtr = int (*)(const at::Tensor &A, const at::Tensor &B,
                                  at::Tensor &C, const int M, const int N,
-                                 const int K, const int split_k);
+                                 const int K, const int split_k,
+                                 const StreamKMode mode);
 
 #include GEMM_SPLITK_CONFIG_HEADER
 
-auto gemm_splitk_kernel(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
-                        const int M, const int N, const int K,
-                        const int split_k) -> int {
+static auto gemm_splitk_dispatch(const at::Tensor &A, const at::Tensor &B,
+                                 at::Tensor &C, const int M, const int N,
+                                 const int K, const int split_k,
+                                 const StreamKMode mode) -> int {
   const SplitKDim test_case{M, N, K};
 
   for (auto const &kv : gemm_splitk_config) {
     if (test_case == kv.first) {
-      return kv.second(A, B, C, M, N, K, split_k);
+      return kv.second(A, B, C, M, N, K, split_k, mode);
     }
   }
 
   return gemm_splitk_run<PvcGemmSplitKBF16BF16FP32_RRR_1>(A, B, C, M, N, K,
-                                                          split_k);
+                                                          split_k, mode);
+}
+
+auto gemm_splitk_kernel(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
+                        const int M, const int N, const int K,
+                        const int split_k) -> int {
+  return gemm_splitk_dispatch(A, B, C, M, N, K, split_k, StreamKMode::SplitK);
+}
+
+// Stream-K decomposition: the scheduler splits the K iterations of the tiles
+// in the last, partial wave across the otherwise idle work-groups. `splits` is
+// not read in this mode; 1 matches SYCL-TLA's own stream-K benchmark config.
+auto gemm_streamk_kernel(const at::Tensor &A, const at::Tensor &B,
+                         at::Tensor &C, const int M, const int N, const int K)
+    -> int {
+  return gemm_splitk_dispatch(A, B, C, M, N, K, /*split_k=*/1,
+                              StreamKMode::StreamK);
 }
