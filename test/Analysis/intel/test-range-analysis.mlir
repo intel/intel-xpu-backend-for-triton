@@ -1826,7 +1826,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// The inner trip count grows with %upper from 1 to 4, so the result includes 4.
+// The inner bound grows with each outer step until the trip count passes the limit, so the
+// result is the full range.
 // CHECK-LABEL: tt.func @forNestedWideningInnerBound
 module attributes {"ttg.num-warps" = 4 : i32} {
   tt.func @forNestedWideningInnerBound() -> i32 {

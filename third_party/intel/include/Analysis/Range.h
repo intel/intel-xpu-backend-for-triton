@@ -96,7 +96,8 @@ private:
   DominanceInfo &domInfo;
 
   /// Simulation steps of all loops contained under the root operation being
-  /// analyzed: the loop's total trip count, raised to that of any nested loop.
+  /// analyzed: the loop's total trip count, raised to that of any nested loop
+  /// up to `kDefaultMaxTripCount`.
   /// Note, nested loops have trip counts computed as a product of enclosing
   /// loops; i.e. for
   ///   scf.for i = 1 to 10
