@@ -369,8 +369,8 @@ static void disableLICM(LLVM::BrOp latchBr) {
   MLIRContext *ctx = b.getContext();
   auto licmMD = LLVM::LoopLICMAttr::get(ctx, b.getBoolAttr(true), {});
   auto loopMD =
-      LLVM::LoopAnnotationAttr::get(b.getContext(), {}, {}, {}, {}, {}, licmMD,
-                                    {}, {}, {}, {}, {}, {}, {}, {}, {});
+      LLVM::LoopAnnotationAttr::get(b.getContext(), {}, {}, {}, {}, {}, {},
+                                    licmMD, {}, {}, {}, {}, {}, {}, {}, {}, {});
   latchBr.setLoopAnnotationAttr(loopMD);
 }
 
