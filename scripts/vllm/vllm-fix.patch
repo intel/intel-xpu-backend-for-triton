@@ -885,10 +885,18 @@ index b99e5bbd37..f8fb74534d 100644
      reduced_precision_val = (
          (False, False) if is_torch_equal_or_newer("2.10.0") else False
 diff --git a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
-index 699cad10af..27cbfba203 100644
+index 699cad10af..a92dab7dd6 100644
 --- a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
 +++ b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
-@@ -81,6 +81,13 @@ def _msa_prebuild_kwargs(
+@@ -11,7 +11,6 @@ from vllm.model_executor.warmup.attention_warmup import (
+ )
+ from vllm.models.minimax_m3.nvidia.indexer_msa import MiniMaxM3IndexerMSAImpl
+ from vllm.models.minimax_m3.nvidia.indexer_nvfp4 import MiniMaxM3IndexerNvfp4Impl
+-from vllm.models.minimax_m3.nvidia.model import MiniMaxM3SparseAttention
+ from vllm.models.minimax_m3.nvidia.msa_cutlass_sparse_decode import (
+     NVFP4_BLOCK_SCALE_SHIFT,
+     uses_q8kv4_decode,
+@@ -81,6 +80,13 @@ def _msa_prebuild_kwargs(
  
  @instrument(span_name="MiniMax M3 MSA warmup")
  def minimax_m3_msa_warmup(worker: "Worker") -> None:
@@ -902,7 +910,7 @@ index 699cad10af..27cbfba203 100644
      sparse_module = next(
          (
              module
-@@ -91,10 +98,6 @@ def minimax_m3_msa_warmup(worker: "Worker") -> None:
+@@ -91,10 +97,6 @@ def minimax_m3_msa_warmup(worker: "Worker") -> None:
      )
      if sparse_module is None:
          return
