@@ -732,7 +732,8 @@ private:
     } else {
       RankedTensorType vType =
           v.getType().clone(getScalarType(rewriter, computeType));
-      tt::FpToFpOp op = tt::FpToFpOp::create(rewriter, loc, vType, v);
+      tt::FpToFpOp op =
+          tt::FpToFpOp::create(rewriter, loc, vType, v, tt::RoundingModeAttr{});
       v = cast<TypedValue<RankedTensorType>>(op.getResult());
     }
     return v;
@@ -769,7 +770,8 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
 
   return llvm::TypeSwitch<Type, Value>(elemType)
       .Case<FloatType>([&](auto) {
-        return tt::FpToFpOp::create(builder, loc, tensorPromotedType, operand);
+        return tt::FpToFpOp::create(builder, loc, tensorPromotedType, operand,
+                                    tt::RoundingModeAttr{});
       })
       .Case<IntegerType>([&](auto) {
         unsigned tgtBitWidth = elemType.getIntOrFloatBitWidth(),
@@ -792,7 +794,8 @@ static tt::DotOp accumulateInF32(tt::DotOp dotOp) {
   Location loc = dotOp.getLoc();
   RankedTensorType DType = dotOp.getD().getType();
   RankedTensorType f32Type = DType.clone(builder.getF32Type());
-  auto acc = tt::FpToFpOp::create(builder, loc, f32Type, dotOp.getC());
+  auto acc = tt::FpToFpOp::create(builder, loc, f32Type, dotOp.getC(),
+                                  tt::RoundingModeAttr{});
   auto f32Dot = tt::DotOp::create(builder, loc, f32Type, dotOp.getA(),
                                   dotOp.getB(), acc, dotOp.getInputPrecision(),
                                   dotOp.getMaxNumImpreciseAcc());
