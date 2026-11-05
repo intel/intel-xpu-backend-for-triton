@@ -1579,7 +1579,12 @@ struct PrefetchOpConversion
     Value bound;
     Value rowBase; // May be null.
     int64_t rowExtent;
+    unsigned boundedDim;
     Value extraGuard; // May be null.
+    // Lowered batch-dims-only predicate of a rank > 2 mask (may be null). It
+    // is degenerate along the pitch and contiguous dims, so it is uniform per
+    // hardware message and is ANDed into that message's predicate.
+    Value extraPred;
   };
 
   std::optional<RowLimit>
@@ -1587,7 +1592,7 @@ struct PrefetchOpConversion
                             ArrayRef<int64_t> tensorShape,
                             unsigned contiguousDim, unsigned pitchTensorDim,
                             ConversionPatternRewriter &rewriter) const {
-    if (!op.getMask() || tensorShape.size() != 2)
+    if (!op.getMask() || tensorShape.size() < 2)
       return std::nullopt;
 
     Value maskVal = op.getMask();
@@ -1607,10 +1612,7 @@ struct PrefetchOpConversion
           otherConjunct = andOp.getLhs();
       }
     }
-    // `extraPred` is a batch-dims-only predicate of a rank > 2 mask. It would
-    // have to be ANDed into the per-message predicate (as the load path does);
-    // this matcher is rank 2 only, so give up rather than drop it silently.
-    if (!m || m->extraPred)
+    if (!m)
       return std::nullopt;
 
     Value extraGuardRemapped;
@@ -1629,8 +1631,16 @@ struct PrefetchOpConversion
     if (!boundRemapped || (m->rowBase && !baseRemapped))
       return std::nullopt;
 
-    return RowLimit{boundRemapped, baseRemapped, tensorShape[m->boundedDim],
-                    extraGuardRemapped};
+    Value extraPredRemapped;
+    if (m->extraPred) {
+      extraPredRemapped = rewriter.getRemappedValue(m->extraPred);
+      if (!extraPredRemapped)
+        return std::nullopt;
+    }
+
+    return RowLimit{
+        boundRemapped, baseRemapped,       tensorShape[m->boundedDim],
+        m->boundedDim, extraGuardRemapped, extraPredRemapped};
   }
 
   LogicalResult
@@ -1677,15 +1687,8 @@ struct PrefetchOpConversion
     // A row-limit mask can become this prefetch's dynamic base_height
     // instead of a per-subtile predicate, so decide this before
     // `maskAxisInfo` below treats the prefetch as masked.
-    //
-    // Rank >= 3 is deliberately not handled yet (the load path accepts it):
-    // it needs the batch-dims `extraPred` ANDed into the per-message
-    // predicate, and a `boundedDim != pitchDim` bail like the load path's,
-    // since only at rank 2 does the bounded dim always equal the pitch dim.
-    std::optional<RowLimit> rowLimit =
-        rank == 2 ? matchPrefetchRowLimitMask(op, tensorShape, contiguousDim,
-                                              pitchTensorDim, rewriter)
-                  : std::nullopt;
+    std::optional<RowLimit> rowLimit = matchPrefetchRowLimitMask(
+        op, tensorShape, contiguousDim, pitchTensorDim, rewriter);
 
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(tensorOfPointers.getEncoding())
@@ -1710,11 +1713,30 @@ struct PrefetchOpConversion
     auto m = op->template getParentOfType<mlir::ModuleOp>();
     bool isPrefetch256BSupported =
         m->hasAttr(TritonIntelGPUDialect::getSupportPrefetch256BAttrName());
-    BlockIOTileSizeInfo sizeInfo = getBlockIOPrefetchTileSize(
-        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
-        isPrefetch256BSupported);
+    auto getTileSize = [&]() {
+      return getBlockIOPrefetchTileSize(llEncoding.value(), contiguousDim,
+                                        elemSizeInBits, maskAxisInfo,
+                                        isPrefetch256BSupported);
+    };
+    BlockIOTileSizeInfo sizeInfo = getTileSize();
     if (!sizeInfo.isValid())
       return failure();
+    // base_height only bounds the tile's pitch dim. matchRowLimitMask assumed
+    // the conventional pitch dim, but for rank > 2 the tile's actual one can
+    // land on a batch dim, so a mismatch would apply the bound to the wrong
+    // dimension. Fall back to the per-subtile mask path, redoing tile
+    // selection with the mask's real axis info.
+    if (rowLimit &&
+        rowLimit->boundedDim !=
+            (sizeInfo.transpose ? sizeInfo.colDim : sizeInfo.rowDim)) {
+      rowLimit = std::nullopt;
+      maskAxisInfo =
+          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+              .getAxisInfo(op.getMask());
+      sizeInfo = getTileSize();
+      if (!sizeInfo.isValid())
+        return failure();
+    }
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
           isTransposeRequired, _, regPackedBases] = std::move(sizeInfo);
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
@@ -1727,8 +1749,11 @@ struct PrefetchOpConversion
     // Get the LLVM values for pointers
     SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
     SmallVector<Value> maskElems;
-    // A row-limit mask is handled via base_height; its elements are unused.
-    if (llMask && !rowLimit)
+    // A row-limit mask is handled via base_height; its elements are unused,
+    // except for the batch-dims `extraPred` ANDed into each message.
+    if (rowLimit && rowLimit->extraPred)
+      maskElems = unpackLLElements(loc, rowLimit->extraPred, rewriter);
+    else if (llMask && !rowLimit)
       maskElems = unpackLLElements(loc, llMask, rewriter);
 
     unsigned pitchDim = isTransposeRequired ? colDim : rowDim;
@@ -1831,6 +1856,9 @@ struct PrefetchOpConversion
         // The extra loop-drain guard (if any) still gates the message too.
         pred = rowLimit->extraGuard ? b.and_(isValid, rowLimit->extraGuard)
                                     : isValid;
+        if (rowLimit->extraPred)
+          pred = b.and_(pred, targetInfo.shuffleIdx(rewriter, loc,
+                                                    maskElems[registerIdx], 0));
       } else if (maskElems.size()) {
         pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
       }
