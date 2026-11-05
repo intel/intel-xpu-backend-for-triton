@@ -176,29 +176,24 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %pitch = arith.constant 64 : i32
     // Column (x) offset: subtracted to re-base the address, and scaled into
     // the adjusted base_width. Bound here so the row-limit sub below can be
-    // checked to use a *different* value (catches a row/col offset swap).
+    // checked to use a *different* value -- catches a row/col offset swap.
+    // The forbidden text is checked up to the icmp match rather than the sub
+    // match, so it isn't shadowed by CHECK-NOT's exclusive-of-next-match
+    // boundary. The second sub-tile (row offset 8) exercises the same code
+    // path, so a terser check below suffices for it.
     // CHECK: %[[NEGX0:.*]] = llvm.sub %{{.*}}, %[[COLOFF0:.*]] : i32
     // CHECK: llvm.getelementptr %{{.*}}[%[[NEGX0]]]
-    // COM: The row-limit sub below must use a *different* value than
-    // COM: COLOFF0 (catches a row/col offset swap). The forbidden text is
-    // COM: checked up to the icmp match, not the sub match, so it isn't
-    // COM: shadowed by CHECK-NOT's exclusive-of-next-match boundary.
     // CHECK-NOT: llvm.sub %arg1, %[[COLOFF0]] : i32
     // CHECK: %[[PRED0:.*]] = llvm.icmp "sgt" %[[LOCAL0:.*]], %{{.*}} : i32
     // CHECK: %[[HEIGHT0:.*]] = llvm.intr.smax(%[[LOCAL0]], %{{.*}}) : (i32, i32) -> i32
-    // CHECK: %[[YZERO0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COM: pred selects offsetY=0 (in-bounds) or offsetY=baseHeight (push
     // COM: the whole message out of range) -- ties icmp sgt to the load's y.
-    // CHECK: %[[Y0:.*]] = llvm.select %[[PRED0]], %[[YZERO0]], %[[HEIGHT0]] : i1, i32
+    // CHECK: %[[Y0:.*]] = llvm.select %[[PRED0]], %{{.*}}, %[[HEIGHT0]] : i1, i32
     // CHECK: triton_gen.2Dblockload %{{.*}}, %{{.*}}, %[[HEIGHT0]], %{{.*}}, %{{.*}}, %[[Y0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
-    // CHECK: %[[NEGX1:.*]] = llvm.sub %{{.*}}, %[[COLOFF1:.*]] : i32
-    // CHECK: llvm.getelementptr %{{.*}}[%[[NEGX1]]]
-    // CHECK-NOT: llvm.sub %arg1, %[[COLOFF1]] : i32
-    // CHECK: %[[PRED1:.*]] = llvm.icmp "sgt" %[[LOCAL1:.*]], %{{.*}} : i32
-    // CHECK: %[[HEIGHT1:.*]] = llvm.intr.smax(%[[LOCAL1]], %{{.*}}) : (i32, i32) -> i32
-    // CHECK: %[[YZERO1:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[Y1:.*]] = llvm.select %[[PRED1]], %[[YZERO1]], %[[HEIGHT1]] : i1, i32
-    // CHECK: triton_gen.2Dblockload %{{.*}}, %{{.*}}, %[[HEIGHT1]], %{{.*}}, %{{.*}}, %[[Y1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
+    // CHECK: %[[LOCAL1:.*]] = llvm.sub %arg1, %{{.*}} : i32
+    // CHECK: llvm.icmp "sgt" %[[LOCAL1]], %{{.*}} : i32
+    // CHECK: llvm.intr.smax(%[[LOCAL1]], %{{.*}}) : (i32, i32) -> i32
+    // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
     %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height {row_major} {base_width = 64 : i32, ttig.block_io_runtime_row_limit} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32) -> tensor<64x32xf16, #dot0>
     tt.return
   }

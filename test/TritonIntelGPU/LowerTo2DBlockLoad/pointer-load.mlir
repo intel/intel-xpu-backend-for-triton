@@ -347,14 +347,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   // CHECK-LABEL: tt.func @row_limit_mask_rank3_batch_pred
   tt.func @row_limit_mask_rank3_batch_pred(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %row_base: i32 {tt.divisibility = 16 : i32}, %bound: i32 {tt.divisibility = 16 : i32}, %batch_bound: i32 {tt.divisibility = 16 : i32}) -> tensor<4x64x32xf16, #dot0> {
     %zero = arith.constant dense<0.000000e+00> : tensor<4x64x32xf16, #dot0>
-    %c2048 = arith.constant dense<2048> : tensor<4x1x1xi32, #dot0>
     %c32 = arith.constant dense<32> : tensor<1x64x1xi32, #dot0>
-    // ptr[b, i, j] = arg0 + b * 2048 + i * 32 + j (row dim i must vary, not
-    // be broadcast).
+    // ptr[b, i, j] = arg0 + i * 32 + j (row dim i must vary, not broadcast;
+    // batch addressing itself is irrelevant to this pattern, so every batch
+    // reads the same 64x32 slice).
     %rb = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>>
-    %eba = tt.expand_dims %rb {axis = 1 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>> -> tensor<4x1xi32, #sK>
-    %eb = tt.expand_dims %eba {axis = 2 : i32} : tensor<4x1xi32, #sK> -> tensor<4x1x1xi32, #dot0>
-    %ob = arith.muli %eb, %c2048 : tensor<4x1x1xi32, #dot0>
     %rm = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
     %ema = tt.expand_dims %rm {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>> -> tensor<1x64xi32, #sK>
     %em = tt.expand_dims %ema {axis = 2 : i32} : tensor<1x64xi32, #sK> -> tensor<1x64x1xi32, #dot0>
@@ -362,11 +359,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %rk = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sM}>>
     %eka = tt.expand_dims %rk {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sM}>> -> tensor<1x32xi32, #sM>
     %ek = tt.expand_dims %eka {axis = 1 : i32} : tensor<1x32xi32, #sM> -> tensor<1x1x32xi32, #dot0>
-    %bb = tt.broadcast %ob : tensor<4x1x1xi32, #dot0> -> tensor<4x64x32xi32, #dot0>
     %bm = tt.broadcast %om : tensor<1x64x1xi32, #dot0> -> tensor<4x64x32xi32, #dot0>
     %bk = tt.broadcast %ek : tensor<1x1x32xi32, #dot0> -> tensor<4x64x32xi32, #dot0>
-    %s01 = arith.addi %bb, %bm : tensor<4x64x32xi32, #dot0>
-    %off = arith.addi %s01, %bk : tensor<4x64x32xi32, #dot0>
+    %off = arith.addi %bm, %bk : tensor<4x64x32xi32, #dot0>
     %ps = tt.splat %arg0 : !tt.ptr<f16> -> tensor<4x64x32x!tt.ptr<f16>, #dot0>
     %ptr = tt.addptr %ps, %off : tensor<4x64x32x!tt.ptr<f16>, #dot0>, tensor<4x64x32xi32, #dot0>
     // Row-limit on M (dim 1): rows = row_base + arange(0, 64) < bound.
@@ -385,9 +380,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // CHECK: %[[BATCHMASK:.*]] = tt.broadcast %{{.*}} : tensor<4x1x1xi1, #{{.*}}> -> tensor<4x64x32xi1, #{{.*}}>
     %batchmask = tt.broadcast %bc2 : tensor<4x1x1xi1, #dot0> -> tensor<4x64x32xi1, #dot0>
     %mask = arith.andi %rowmask, %batchmask : tensor<4x64x32xi1, #dot0>
-    // CHECK: %[[BOUND64:.*]] = arith.extsi %arg2 : i32 to i64
-    // CHECK: %[[BASE64:.*]] = arith.extsi %arg1 : i32 to i64
-    // CHECK: %[[DIFF64:.*]] = arith.subi %[[BOUND64]], %[[BASE64]] : i64
+    // The height-clamp arithmetic itself is already covered by @row_limit_mask
+    // above; here it's enough to confirm a runtime height was computed (not
+    // a fixed tile height) and that the batch predicate survives as the mask
+    // operand instead of being folded into (or blocking) base_height.
     // CHECK: %[[H:.*]] = arith.trunci %{{.*}} : i64 to i32
     // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]], %[[BATCHMASK]], %{{.*}} {row_major}
     // CHECK-SAME: ttig.block_io_runtime_row_limit
@@ -426,10 +422,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %8 = arith.cmpi slt, %6, %7 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot1}>>
     %9 = tt.expand_dims %8 {axis = 0 : i32} : tensor<64xi1, #ttg.slice<{dim = 0, parent = #dot1}>> -> tensor<1x64xi1, #dot1>
     %10 = tt.broadcast %9 : tensor<1x64xi1, #dot1> -> tensor<32x64xi1, #dot1>
+    // The height-clamp arithmetic is already covered by @row_limit_mask
+    // above; the new thing to confirm here is that the pitch still comes
+    // from `lda` (not confused with the row-limit bound) under column_major.
     // CHECK: %[[PITCH:.*]] = arith.muli %arg1, %{{.*}} : i32
-    // CHECK: %[[BOUND64:.*]] = arith.extsi %arg3 : i32 to i64
-    // CHECK: %[[BASE64:.*]] = arith.extsi %arg2 : i32 to i64
-    // CHECK: %[[DIFF64:.*]] = arith.subi %[[BOUND64]], %[[BASE64]] : i64
     // CHECK: %[[H:.*]] = arith.trunci %{{.*}} : i64 to i32
     // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]], %[[H]] {column_major}
     // CHECK-SAME: ttig.block_io_runtime_row_limit
@@ -470,8 +466,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %7 = arith.cmpi slt, %0, %6 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot1}>>
     %8 = tt.expand_dims %7 {axis = 1 : i32} : tensor<64xi1, #ttg.slice<{dim = 1, parent = #dot1}>> -> tensor<64x1xi1, #dot1>
     %9 = tt.broadcast %8 : tensor<64x1xi1, #dot1> -> tensor<64x32xi1, #dot1>
+    // Confirms the matcher accepts an opaque scalar bound (computed via
+    // subi, not a bare splat argument) and a bare arange with no row base.
     // CHECK: %[[KREM:.*]] = arith.subi %arg2, %arg3 : i32
-    // CHECK: %[[KREM64:.*]] = arith.extsi %[[KREM]] : i32 to i64
     // CHECK: %[[H:.*]] = arith.trunci %{{.*}} : i64 to i32
     // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]] {row_major}
     // CHECK-SAME: ttig.block_io_runtime_row_limit
