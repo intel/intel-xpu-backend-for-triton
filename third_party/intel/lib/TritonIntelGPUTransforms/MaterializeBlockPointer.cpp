@@ -448,6 +448,9 @@ private:
 
   /// Look through cast wrappers (index_cast, extui, extsi, trunci, etc.)
   /// to find the underlying arithmetic operation.
+  /// NOTE: BlockIOUtils.cpp has a stricter twin (`lookThroughCasts` /
+  /// `matchBaseAndRange`, widening casts only) used by `matchRowLimitMask`,
+  /// whose result feeds a `base_height` clamp. Keep the two in sync.
   static Value lookThroughCasts(Value val) {
     while (Operation *def = val.getDefiningOp()) {
       if (!isa<CastOpInterface>(def) || def->getNumOperands() != 1)

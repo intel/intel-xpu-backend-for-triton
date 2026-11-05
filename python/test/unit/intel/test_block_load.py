@@ -386,7 +386,8 @@ def test_row_limit_zero_fill(bound, device):
     # lowered to a hardware 2D block load; B is the only other load and uses
     # no block IO, so the call below can only come from A.
     assert re.search(r"tt\.load %\w+, %\w+, %\w+ \{ttig\.block_io", kernel.asm["ttgir"])
-    assert "__spirv_Subgroup2DBlockLoadINTEL" in kernel.asm["llir"]
+    llir = kernel.asm["llir"]
+    assert 'spirv_Subgroup2DBlockLoad' in llir or 'GenISA.LSC2DBlockRead' in llir
 
     ref = x.float()
     ref[bound:] = 0

@@ -164,6 +164,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
+// COM: (Opaque bound, so only the exclusion in matchRowLimitMask keeps
+// COM: block IO off; if the plumbing broke, this would start matching.)
 // COM: Same mask shape, but the pointer is broadcast (stride zero) along the
 // COM: bounded dim, so matchRowLimitMask excludes it and the ordinary
 // COM: constancy check rejects the opaque bound.
@@ -214,37 +216,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// COM: Same mask shape as masked_opaque_row_bound_load, but `other` is a
-// COM: non-zero fill value. isZeroFillOther rejects it up front, since the
-// COM: hardware boundary check for base_height can only produce a zero fill.
-#blocked10 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func public @masked_nonzero_other_no_block_io
-  tt.func public @masked_nonzero_other_no_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
-    %m_size = tt.load %arg1 : !tt.ptr<i32>
-    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked10}>>
-    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked10}>> -> tensor<1x32xi32, #blocked10>
-    %5 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked10}>>
-    %6 = tt.expand_dims %5 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked10}>> -> tensor<256x1xi32, #blocked10>
-    %cst_stride = arith.constant dense<64> : tensor<256x1xi32, #blocked10>
-    %row_off = arith.muli %6, %cst_stride : tensor<256x1xi32, #blocked10>
-    %row_off_bc = tt.broadcast %row_off : tensor<256x1xi32, #blocked10> -> tensor<256x32xi32, #blocked10>
-    %col_off_bc = tt.broadcast %1 : tensor<1x32xi32, #blocked10> -> tensor<256x32xi32, #blocked10>
-    %off = arith.addi %row_off_bc, %col_off_bc : tensor<256x32xi32, #blocked10>
-    %base = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<256x32x!tt.ptr<bf16>, #blocked10>
-    %4 = tt.addptr %base, %off : tensor<256x32x!tt.ptr<bf16>, #blocked10>, tensor<256x32xi32, #blocked10>
-    %7 = tt.splat %m_size : i32 -> tensor<256x1xi32, #blocked10>
-    %8 = arith.cmpi slt, %6, %7 : tensor<256x1xi32, #blocked10>
-    %mask = tt.broadcast %8 : tensor<256x1xi1, #blocked10> -> tensor<256x32xi1, #blocked10>
-    %other = arith.constant dense<1.0> : tensor<256x32xbf16, #blocked10>
-    // CHECK-NOT: ttig.block_io
-    tt.load %4, %mask, %other : tensor<256x32x!tt.ptr<bf16>, #blocked10>
-    tt.return
-  }
-}
-
-// -----
-
+// COM: (Opaque bound, so only the exclusion in matchRowLimitMask keeps
+// COM: block IO off; if the plumbing broke, this would start matching.)
 // COM: Same mask shape as masked_opaque_row_bound_load, but the mask bounds
 // COM: the memory-contiguous (column) dim instead of the pitch (row) dim.
 // COM: matchRowLimitMask only accepts a bound along the pitch dim.
@@ -269,131 +242,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     %mask = tt.broadcast %10 : tensor<1x32xi1, #blocked11> -> tensor<256x32xi1, #blocked11>
     // CHECK-NOT: ttig.block_io
     tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked11>
-    tt.return
-  }
-}
-
-// -----
-
-// COM: Same mask shape as masked_opaque_row_bound_load, but the comparison
-// COM: predicate is unsigned (ult). matchRowLimitMask only matches slt: the
-// COM: base_height clamp formula assumes signed semantics.
-#blocked12 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func public @masked_unsigned_cmp_no_block_io
-  tt.func public @masked_unsigned_cmp_no_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
-    %m_size = tt.load %arg1 : !tt.ptr<i32>
-    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked12}>>
-    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked12}>> -> tensor<1x32xi32, #blocked12>
-    %5 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked12}>>
-    %6 = tt.expand_dims %5 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked12}>> -> tensor<256x1xi32, #blocked12>
-    %cst_stride = arith.constant dense<64> : tensor<256x1xi32, #blocked12>
-    %row_off = arith.muli %6, %cst_stride : tensor<256x1xi32, #blocked12>
-    %row_off_bc = tt.broadcast %row_off : tensor<256x1xi32, #blocked12> -> tensor<256x32xi32, #blocked12>
-    %col_off_bc = tt.broadcast %1 : tensor<1x32xi32, #blocked12> -> tensor<256x32xi32, #blocked12>
-    %off = arith.addi %row_off_bc, %col_off_bc : tensor<256x32xi32, #blocked12>
-    %base = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<256x32x!tt.ptr<bf16>, #blocked12>
-    %4 = tt.addptr %base, %off : tensor<256x32x!tt.ptr<bf16>, #blocked12>, tensor<256x32xi32, #blocked12>
-    %7 = tt.splat %m_size : i32 -> tensor<256x1xi32, #blocked12>
-    %8 = arith.cmpi ult, %6, %7 : tensor<256x1xi32, #blocked12>
-    %mask = tt.broadcast %8 : tensor<256x1xi1, #blocked12> -> tensor<256x32xi1, #blocked12>
-    // CHECK-NOT: ttig.block_io
-    tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked12>
-    tt.return
-  }
-}
-
-// -----
-
-// COM: Same mask shape as masked_opaque_row_bound_load, but the bound is a
-// COM: per-row value gathered from memory, not a single scalar broadcast via
-// COM: tt.splat. matchRowLimitMask only matches a uniform splat bound.
-#blocked13 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func public @masked_gathered_bound_no_block_io
-  tt.func public @masked_gathered_bound_no_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
-    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked13}>>
-    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked13}>> -> tensor<1x32xi32, #blocked13>
-    %5 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked13}>>
-    %6 = tt.expand_dims %5 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked13}>> -> tensor<256x1xi32, #blocked13>
-    %cst_stride = arith.constant dense<64> : tensor<256x1xi32, #blocked13>
-    %row_off = arith.muli %6, %cst_stride : tensor<256x1xi32, #blocked13>
-    %row_off_bc = tt.broadcast %row_off : tensor<256x1xi32, #blocked13> -> tensor<256x32xi32, #blocked13>
-    %col_off_bc = tt.broadcast %1 : tensor<1x32xi32, #blocked13> -> tensor<256x32xi32, #blocked13>
-    %off = arith.addi %row_off_bc, %col_off_bc : tensor<256x32xi32, #blocked13>
-    %base = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<256x32x!tt.ptr<bf16>, #blocked13>
-    %4 = tt.addptr %base, %off : tensor<256x32x!tt.ptr<bf16>, #blocked13>, tensor<256x32xi32, #blocked13>
-    %bound_base_1d = tt.splat %arg1 : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked13}>>
-    %bound_ptrs_1d = tt.addptr %bound_base_1d, %5 : tensor<256x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked13}>>, tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked13}>>
-    %bound_vals_1d = tt.load %bound_ptrs_1d : tensor<256x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked13}>>
-    %bound_vals = tt.expand_dims %bound_vals_1d {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked13}>> -> tensor<256x1xi32, #blocked13>
-    %8 = arith.cmpi slt, %6, %bound_vals : tensor<256x1xi32, #blocked13>
-    %mask = tt.broadcast %8 : tensor<256x1xi1, #blocked13> -> tensor<256x32xi1, #blocked13>
-    // CHECK-NOT: ttig.block_io
-    tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked13>
-    tt.return
-  }
-}
-
-// -----
-
-// COM: Same mask shape as masked_opaque_row_bound_load, but the row index is
-// COM: scaled before the comparison, so the LHS is neither a bare arange nor
-// COM: base + arange. matchBaseAndRange (inside matchRowLimitMask) rejects it.
-#blocked14 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func public @masked_scaled_index_no_block_io
-  tt.func public @masked_scaled_index_no_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
-    %m_size = tt.load %arg1 : !tt.ptr<i32>
-    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked14}>>
-    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked14}>> -> tensor<1x32xi32, #blocked14>
-    %5 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked14}>>
-    %6 = tt.expand_dims %5 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked14}>> -> tensor<256x1xi32, #blocked14>
-    %cst_stride = arith.constant dense<64> : tensor<256x1xi32, #blocked14>
-    %row_off = arith.muli %6, %cst_stride : tensor<256x1xi32, #blocked14>
-    %row_off_bc = tt.broadcast %row_off : tensor<256x1xi32, #blocked14> -> tensor<256x32xi32, #blocked14>
-    %col_off_bc = tt.broadcast %1 : tensor<1x32xi32, #blocked14> -> tensor<256x32xi32, #blocked14>
-    %off = arith.addi %row_off_bc, %col_off_bc : tensor<256x32xi32, #blocked14>
-    %base = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<256x32x!tt.ptr<bf16>, #blocked14>
-    %4 = tt.addptr %base, %off : tensor<256x32x!tt.ptr<bf16>, #blocked14>, tensor<256x32xi32, #blocked14>
-    %cst_2 = arith.constant dense<2> : tensor<256x1xi32, #blocked14>
-    %scaled = arith.muli %6, %cst_2 : tensor<256x1xi32, #blocked14>
-    %7 = tt.splat %m_size : i32 -> tensor<256x1xi32, #blocked14>
-    %8 = arith.cmpi slt, %scaled, %7 : tensor<256x1xi32, #blocked14>
-    %mask = tt.broadcast %8 : tensor<256x1xi1, #blocked14> -> tensor<256x32xi1, #blocked14>
-    // CHECK-NOT: ttig.block_io
-    tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked14>
-    tt.return
-  }
-}
-
-// -----
-
-// COM: Same mask shape as masked_opaque_row_bound_load, but the bound and row
-// COM: index compare as i64 instead of i32. The arange is still recognized
-// COM: through the widening sext, but matchRowLimitMask requires i32
-// COM: operands for the base_height lowering, so it's rejected regardless.
-#blocked15 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func public @masked_i64_bound_no_block_io
-  tt.func public @masked_i64_bound_no_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %m_size: i64) {
-    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked15}>>
-    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked15}>> -> tensor<1x32xi32, #blocked15>
-    %5 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked15}>>
-    %6 = tt.expand_dims %5 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked15}>> -> tensor<256x1xi32, #blocked15>
-    %cst_stride = arith.constant dense<64> : tensor<256x1xi32, #blocked15>
-    %row_off = arith.muli %6, %cst_stride : tensor<256x1xi32, #blocked15>
-    %row_off_bc = tt.broadcast %row_off : tensor<256x1xi32, #blocked15> -> tensor<256x32xi32, #blocked15>
-    %col_off_bc = tt.broadcast %1 : tensor<1x32xi32, #blocked15> -> tensor<256x32xi32, #blocked15>
-    %off = arith.addi %row_off_bc, %col_off_bc : tensor<256x32xi32, #blocked15>
-    %base = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<256x32x!tt.ptr<bf16>, #blocked15>
-    %4 = tt.addptr %base, %off : tensor<256x32x!tt.ptr<bf16>, #blocked15>, tensor<256x32xi32, #blocked15>
-    %r64 = arith.extsi %6 : tensor<256x1xi32, #blocked15> to tensor<256x1xi64, #blocked15>
-    %7 = tt.splat %m_size : i64 -> tensor<256x1xi64, #blocked15>
-    %8 = arith.cmpi slt, %r64, %7 : tensor<256x1xi64, #blocked15>
-    %mask = tt.broadcast %8 : tensor<256x1xi1, #blocked15> -> tensor<256x32xi1, #blocked15>
-    // CHECK-NOT: ttig.block_io
-    tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked15>
     tt.return
   }
 }

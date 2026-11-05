@@ -952,6 +952,14 @@ namespace {
 /// Look through single-operand *widening* integer casts (`extsi`/`extui`) to
 /// find the underlying value. Excludes `trunci`/`index_cast`, since a
 /// narrowing cast can wrap and break contiguity.
+///
+/// NOTE: `MaterializeBlockPointer::lookThroughCasts` (and its
+/// `isCanonicalLinearIndex` matcher) is a near-twin of this and the
+/// `matchBaseAndRange` below, but accepts any `CastOpInterface`. The two are
+/// kept separate because the row-limit rewrite below turns the mask into a
+/// hardware `base_height` clamp, which is only correct if the compared index
+/// provably equals `base + arange`; the permissive variant is only used for
+/// stride/contiguity heuristics. Keep the two in sync when changing either.
 Value lookThroughCasts(Value val) {
   while (Operation *def = val.getDefiningOp()) {
     if (!isa<arith::ExtSIOp, arith::ExtUIOp>(def))
