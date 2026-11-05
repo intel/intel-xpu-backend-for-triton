@@ -5224,8 +5224,9 @@ def _scaled_dot_scale_kernel(X, W, S, Y, RHS_SCALE: tl.constexpr, NORMAL_TYPE: t
 @pytest.mark.parametrize("rhs_scale", [False, True])
 @pytest.mark.parametrize("normal_type", ["bf16", "fp16"])
 @pytest.mark.parametrize("fast_math", [False, True])
+@pytest.mark.parametrize("scale_dtype", [torch.uint8, torch.float8_e8m0fnu])
 @pytest.mark.enable_warmup(min_capability=9)
-def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
+def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, scale_dtype, device):
     if not (is_xpu() and not is_xpu_cri()) and (not is_cuda() or torch.cuda.get_device_capability() < (8, 9)):
         pytest.xfail("requires CUDA FP8 support")
 
@@ -5242,7 +5243,10 @@ def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
         if fast_math and scale == 255:
             continue
         scales.fill_(scale)
-        _scaled_dot_scale_kernel[(1, )](x, w, scales, out, rhs_scale, normal_type, 32, fast_math, num_warps=4)
+        # A native float8_e8m0fnu scale must decode like the same bytes viewed
+        # as uint8, including byte 0xFF, which is the E8M0 NaN encoding.
+        _scaled_dot_scale_kernel[(1, )](x, w, scales.view(scale_dtype), out, rhs_scale, normal_type, 32, fast_math,
+                                        num_warps=4)
         if is_compile_warmup():
             return
         torch.testing.assert_close(out, torch.full_like(out, expected), rtol=0, atol=0, equal_nan=True)

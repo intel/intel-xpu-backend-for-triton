@@ -83,6 +83,13 @@ private:
                                          FloatType computeType) const {
     auto loc = scale.getLoc();
     auto scaleTy = scale.getType();
+    // A native E8M0 scale is a FloatType, but the Intel FpToFp lowering has no
+    // entry for it. Bitcast it to i8 and decode it on the integer path below.
+    if (isa<Float8E8M0FNUType>(scaleTy.getElementType())) {
+      scaleTy = scaleTy.clone(rewriter.getI8Type());
+      scale = cast<TypedValue<RankedTensorType>>(
+          BitcastOp::create(rewriter, loc, scaleTy, scale).getResult());
+    }
     assert(computeType == rewriter.getBF16Type() ||
            computeType == rewriter.getF16Type());
 
@@ -225,6 +232,14 @@ private:
 
     // Scale is NaN
     auto scaleTy = scale.getType();
+    // A native E8M0 scale must take the integer branch below. Its float
+    // branch would decode byte 0xFF as +inf on the integer path of scaleTo16
+    // and `cmpf uno` would never fire, so NaN scales would go unmasked.
+    if (isa<Float8E8M0FNUType>(scaleTy.getElementType())) {
+      scaleTy = scaleTy.clone(rewriter.getI8Type());
+      scale = cast<TypedValue<RankedTensorType>>(
+          BitcastOp::create(rewriter, loc, scaleTy, scale).getResult());
+    }
     TypedValue<RankedTensorType> scaleIsNan;
     if (isa<FloatType>(scaleTy.getElementType())) {
       auto computeType = cast<FloatType>(mxfp.getType().getElementType());
