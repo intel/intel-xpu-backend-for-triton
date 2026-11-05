@@ -1,3 +1,5 @@
+import re
+
 import pytest
 import torch
 import pathlib
@@ -334,3 +336,58 @@ def test_block_tdesc_column_major_load(threads_per_warp, device, tmp_path: pathl
     assert 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
     load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
     assert load_count >= 2
+
+
+# ---------------------------------------------------------------------------
+# Row-limit mask (runtime bound) lowered to a 2D block load's base_height
+# ---------------------------------------------------------------------------
+@triton.jit
+def row_limit_dot_kernel(a_ptr, eye_ptr, out_ptr, bound, K: tl.constexpr, BM: tl.constexpr):
+    # `bound` is only known at run time, so `rows < bound` is a row-limit mask
+    # that can become the 2D block load's base_height. A is multiplied by the
+    # identity and the result is stored unmasked, so any row past `bound` that
+    # the load did not zero-fill shows up in the output.
+    pid = tl.program_id(0)
+    rows = pid * BM + tl.arange(0, BM)
+    cols = tl.arange(0, K)
+    a = tl.load(a_ptr + rows[:, None] * K + cols[None, :], mask=(rows < bound)[:, None], other=0.0)
+    # Element stride 2 keeps this load off the 2D block path, so any 2D block
+    # load in the kernel comes from A.
+    eye = tl.load(eye_ptr + cols[:, None] * (2 * K) + cols[None, :] * 2)
+    tl.store(out_ptr + rows[:, None] * K + cols[None, :], tl.dot(a, eye))
+
+
+@pytest.mark.parametrize("bound", [
+    70,  # inside tile 2; tile 3 starts below the bound
+    69,  # inside tile 2 (odd)
+    65,  # a single valid row in tile 2
+    64,  # at the start of tile 2: tiles 2 and 3 are entirely zero
+    33,  # inside tile 1
+    3,  # inside tile 0 (Triton specializes an int argument equal to 1 to a constexpr)
+    0,  # at the start of tile 0: everything is zero
+    128,  # every tile is fully valid
+])
+@pytest.mark.skipif(not is_xpu(), reason="Row-limit zero fill is specific to the XPU backend")
+@pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io'],
+                   reason="Block loads not supported on this architecture", run=False)
+def test_row_limit_zero_fill(bound, device):
+    BM, BK, num_tiles = 32, 64, 4
+    rows = BM * num_tiles
+    # Non-zero everywhere, so rows past `bound` are only zero if the load zero-fills them.
+    x = torch.arange(1, rows * BK + 1, device=device, dtype=torch.float32).reshape(rows, BK).to(torch.float16)
+    eye = torch.zeros(BK, 2 * BK, device=device, dtype=torch.float16)
+    eye[:, ::2] = torch.eye(BK, device=device, dtype=torch.float16)
+    out = torch.full((rows, BK), -1, device=device, dtype=torch.float32)
+
+    kernel = row_limit_dot_kernel[(num_tiles, )](x, eye, out, bound, BK, BM, num_warps=4)
+
+    # Guard against the test silently exercising the per-element path.
+    # The masked A load must get block IO (MaterializeBlockPointer) and be
+    # lowered to a hardware 2D block load; B is the only other load and uses
+    # no block IO, so the call below can only come from A.
+    assert re.search(r"tt\.load %\w+, %\w+, %\w+ \{ttig\.block_io", kernel.asm["ttgir"])
+    assert "__spirv_Subgroup2DBlockLoadINTEL" in kernel.asm["llir"]
+
+    ref = x.float()
+    ref[bound:] = 0
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
