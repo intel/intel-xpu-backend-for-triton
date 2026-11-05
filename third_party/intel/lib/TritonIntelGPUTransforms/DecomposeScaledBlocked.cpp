@@ -83,13 +83,6 @@ private:
                                          FloatType computeType) const {
     auto loc = scale.getLoc();
     auto scaleTy = scale.getType();
-    // A native E8M0 scale is a FloatType, but the Intel FpToFp lowering has no
-    // entry for it. Bitcast it to i8 and decode it on the integer path below.
-    if (isa<Float8E8M0FNUType>(scaleTy.getElementType())) {
-      scaleTy = scaleTy.clone(rewriter.getI8Type());
-      scale = cast<TypedValue<RankedTensorType>>(
-          BitcastOp::create(rewriter, loc, scaleTy, scale).getResult());
-    }
     assert(computeType == rewriter.getBF16Type() ||
            computeType == rewriter.getF16Type());
 
@@ -232,14 +225,6 @@ private:
 
     // Scale is NaN
     auto scaleTy = scale.getType();
-    // A native E8M0 scale must take the integer branch below. Its float
-    // branch would decode byte 0xFF as +inf on the integer path of scaleTo16
-    // and `cmpf uno` would never fire, so NaN scales would go unmasked.
-    if (isa<Float8E8M0FNUType>(scaleTy.getElementType())) {
-      scaleTy = scaleTy.clone(rewriter.getI8Type());
-      scale = cast<TypedValue<RankedTensorType>>(
-          BitcastOp::create(rewriter, loc, scaleTy, scale).getResult());
-    }
     TypedValue<RankedTensorType> scaleIsNan;
     if (isa<FloatType>(scaleTy.getElementType())) {
       auto computeType = cast<FloatType>(mxfp.getType().getElementType());
@@ -298,6 +283,20 @@ private:
     }
     if (!scale)
       return v;
+
+    // A native E8M0 scale is a FloatType, so scaleTo16 and maskNan would take
+    // their float branches and emit `tt.fp_to_fp f8E8M0FNU -> bf16`, which the
+    // Intel FpToFp lowering has no entry for. Bitcast it to i8 once here so
+    // both helpers reuse the integer path: scaleTo16 shifts the byte into the
+    // exponent field, and maskNan compares the raw byte against 0xFF. The
+    // latter matters because this copy has no handleNan: on the float path
+    // byte 0xFF would decode as +inf and `cmpf uno` would never fire, leaving
+    // NaN scales unmasked.
+    if (isa<Float8E8M0FNUType>(scale.getType().getElementType())) {
+      auto i8Ty = scale.getType().clone(rewriter.getI8Type());
+      scale = cast<TypedValue<RankedTensorType>>(
+          BitcastOp::create(rewriter, scale.getLoc(), i8Ty, scale).getResult());
+    }
 
     // 1) Cast scale to fp16/bf16, broadcast it and convert its layout
     auto reshapeScale = extendAndBroadcastScale(

@@ -5224,11 +5224,12 @@ def _scaled_dot_scale_kernel(X, W, S, Y, RHS_SCALE: tl.constexpr, NORMAL_TYPE: t
 @pytest.mark.parametrize("rhs_scale", [False, True])
 @pytest.mark.parametrize("normal_type", ["bf16", "fp16"])
 @pytest.mark.parametrize("fast_math", [False, True])
-@pytest.mark.parametrize("scale_dtype", [torch.uint8, torch.float8_e8m0fnu])
+@pytest.mark.parametrize("scale_dtype", ["uint8", "float8_e8m0fnu"])
 @pytest.mark.enable_warmup(min_capability=9)
 def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, scale_dtype, device):
     if not (is_xpu() and not is_xpu_cri()) and (not is_cuda() or torch.cuda.get_device_capability() < (8, 9)):
         pytest.xfail("requires CUDA FP8 support")
+    scale_dtype = getattr(torch, scale_dtype)
 
     dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
     x = torch.full((128, 128), 2.0**112 if normal_type == "bf16" else 1.0, dtype=dtype, device=device)

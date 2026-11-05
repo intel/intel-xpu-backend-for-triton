@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonintelgpu-accelerate-matmul | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonintelgpu-accelerate-matmul | FileCheck %s --implicit-check-not='tt.fp_to_fp {{.*}}f8E8M0FNU' --implicit-check-not='arith.cmpf uno'
 
 // COM: Regression test for native f8E8M0FNU scales in DecomposeScaledBlocked.
 // COM:
@@ -6,9 +6,12 @@
 // COM: scale type. Float8E8M0FNUType is a FloatType, so scaleTo16 and maskNan
 // COM: used to send it down their float branches and emit
 // COM: `tt.fp_to_fp f8E8M0FNU -> bf16`, which the Intel FpToFp lowering cannot
-// COM: handle. Both helpers must instead bitcast the scale to i8 and reuse the
-// COM: integer path: shift the byte into the exponent field, and compare the raw
-// COM: byte against 0xFF for the NaN mask.
+// COM: handle. scaleArg must instead bitcast the scale to i8 once, so that both
+// COM: helpers reuse the integer path: scaleTo16 shifts the byte into the
+// COM: exponent field, and maskNan compares the raw byte against 0xFF.
+// COM:
+// COM: The implicit checks assert that neither the E8M0 fp_to_fp nor the float
+// COM: branch's `cmpf uno` NaN test appear anywhere in the output.
 // COM:
 // COM: The module deliberately omits ttig.support_subgroup_scaled_matrix_multiply_accumulate
 // COM: so that AccelerateMatmul's BDPAS-aware patterns are gated off and
@@ -22,21 +25,16 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, "ttg.n
   // CHECK-LABEL: tt.func public @kernel_e8m0_scale
   // COM: Constants are hoisted to the function entry; 0xFF prints as -1 for i8.
   // CHECK: %[[FF:.*]] = arith.constant dense<-1> : tensor<128x4xi8, #{{.*}}>
-  // CHECK-NOT: tt.fp_to_fp {{.*}}f8E8M0FNU
-  // CHECK-NOT: arith.cmpf
-  // COM: scaleTo16: bitcast to i8, then the integer decode path.
-  // CHECK: %[[S:.*]] = tt.bitcast %[[SCALE:.*]] : tensor<128x4xf8E8M0FNU, #{{.*}}> -> tensor<128x4xi8, #{{.*}}>
+  // COM: A single bitcast feeds both the decode and the NaN mask.
+  // CHECK: %[[S:.*]] = tt.bitcast %{{.*}} : tensor<128x4xf8E8M0FNU, #{{.*}}> -> tensor<128x4xi8, #{{.*}}>
+  // CHECK-NOT: tt.bitcast {{.*}}f8E8M0FNU
+  // COM: scaleTo16: the integer decode path.
   // CHECK: arith.extui %[[S]] : tensor<128x4xi8, #{{.*}}> to tensor<128x4xi16, #{{.*}}>
-  // CHECK-NOT: tt.fp_to_fp {{.*}}f8E8M0FNU
-  // CHECK-NOT: arith.cmpf
-  // COM: maskNan: bitcast to i8, then compare the raw byte against 0xFF.
-  // CHECK: %[[M:.*]] = tt.bitcast %[[SCALE]] : tensor<128x4xf8E8M0FNU, #{{.*}}> -> tensor<128x4xi8, #{{.*}}>
-  // CHECK: arith.cmpi eq, %[[M]], %[[FF]] : tensor<128x4xi8, #{{.*}}>
-  // CHECK-NOT: tt.fp_to_fp {{.*}}f8E8M0FNU
-  // CHECK-NOT: arith.cmpf
+  // CHECK-NOT: tt.bitcast {{.*}}f8E8M0FNU
+  // COM: maskNan: compare the raw byte against 0xFF.
+  // CHECK: arith.cmpi eq, %[[S]], %[[FF]] : tensor<128x4xi8, #{{.*}}>
+  // CHECK-NOT: tt.bitcast {{.*}}f8E8M0FNU
   // CHECK: tt.dot
-  // CHECK-NOT: tt.fp_to_fp {{.*}}f8E8M0FNU
-  // CHECK-NOT: arith.cmpf
   // CHECK: tt.return
   tt.func public @kernel_e8m0_scale(%a: tensor<128x128xf8E4M3FN, #blocked2>, %scale_a: tensor<128x4xf8E8M0FNU, #blocked1>, %b: tensor<128x128xbf16, #blocked>) -> tensor<128x128xf32, #blocked> {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
