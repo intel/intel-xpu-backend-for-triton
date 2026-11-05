@@ -2,6 +2,8 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "llvm/Support/raw_ostream.h"
+#include "mlir/IR/OperationSupport.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "nvidia/hopper/include/Transforms/Passes.h"
@@ -159,13 +161,15 @@ struct DataPartitionScheme {
       }
       assert(opPartitionDims.contains(op) && "missing partition dim");
       LDBG(" dim " << opPartitionDims.at(op) << " " << operand);
-      op->dump();
+      op->print(llvm::errs(), mlir::OpPrintingFlags().useLocalScope());
+      llvm::errs() << "\n";
     }
     LDBG("\n");
     if (!rematerializedOps.empty()) {
       LDBG(" ops to rematerialize\n");
       for (auto &op : rematerializedOps) {
-        op.first->dump();
+        op.first->print(llvm::errs(), mlir::OpPrintingFlags().useLocalScope());
+        llvm::errs() << "\n";
         LDBG(" along dim ");
         for (auto &dim : op.second) {
           LDBG(dim << " ");
@@ -176,8 +180,10 @@ struct DataPartitionScheme {
 
     if (!opsToSkip.empty()) {
       LDBG(" ops to skip\n");
-      for (auto &op : opsToSkip)
-        op->dump();
+      for (auto& op : opsToSkip) {
+        op->print(llvm::errs(), mlir::OpPrintingFlags().useLocalScope());
+        llvm::errs() << "\n";
+      }
       LDBG("\n");
     }
 

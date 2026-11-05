@@ -31,6 +31,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
+#include "llvm/Support/raw_ostream.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
@@ -552,7 +553,7 @@ void init_triton_ir(py::module_ &m) {
                                  Location loc) { self.addArgument(ty, loc); })
       .def("get_num_arguments", &Block::getNumArguments)
       .def("get_argument", &Block::getArgument)
-      .def("dump", &Block::dump)
+      .def("dump", [](Block &self) { self.print(llvm::errs()); })
       .def("move_before",
            [](Block &self, Block &dst) { self.moveBefore(&dst); })
       .def("insert_before", &Block::insertBefore)
@@ -637,7 +638,7 @@ void init_triton_ir(py::module_ &m) {
             return self.getBody(idx);
           },
           ret::reference)
-      .def("dump", [](OpState &self) { self->dump(); })
+      .def("dump", [](OpState &self) { self->print(llvm::errs()); })
       .def("__str__",
            [](OpState &self) -> std::string {
              std::string str;
@@ -748,7 +749,7 @@ void init_triton_ir(py::module_ &m) {
 
   // dynamic_attr is used to attach attributes such as module.context in Python
   py::class_<ModuleOp, OpState>(m, "module", py::dynamic_attr())
-      .def("dump", &ModuleOp::dump)
+      .def("dump", [](ModuleOp &self) { self.print(llvm::errs()); })
       .def("str",
            [](ModuleOp &self) -> std::string {
              std::string str;
