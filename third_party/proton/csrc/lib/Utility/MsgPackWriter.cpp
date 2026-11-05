@@ -1,6 +1,5 @@
 #include "Utility/MsgPackWriter.h"
 
-#include <bit>
 #include <cstring>
 #include <limits>
 #include <type_traits>
@@ -78,7 +77,10 @@ void MsgPackWriter::packInt(int64_t value) {
 
 void MsgPackWriter::packDouble(double value) {
   out.push_back(0xcb);
-  writeBE(out, std::bit_cast<uint64_t>(value));
+  uint64_t bits{};
+  static_assert(sizeof(bits) == sizeof(value));
+  std::memcpy(&bits, &value, sizeof(bits));
+  writeBE(out, bits);
 }
 
 void MsgPackWriter::packStr(std::string_view value) {

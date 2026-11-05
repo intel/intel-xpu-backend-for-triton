@@ -6,6 +6,9 @@
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Support/LogicalResult.h"
+#include "llvm/ADT/STLExtras.h"
+
+#include <utility>
 
 namespace mlir {
 namespace OpTrait {
@@ -35,6 +38,12 @@ LogicalResult verifySameLoadStoreOperandsShape(Operation *op);
 
 LogicalResult verifySameLoadStoreOperandsAndResultShape(Operation *op);
 
+template <typename T>
+using has_get_other_mutable_t =
+    decltype(std::declval<T &>().getOtherMutable());
+template <typename T>
+using has_get_mask_mutable_t = decltype(std::declval<T &>().getMaskMutable());
+
 } // namespace impl
 
 template <typename ConcreteType>
@@ -52,14 +61,16 @@ public:
       return failure();
 
     predicate.clear();
-    if constexpr (requires { concrete.getOtherMutable(); })
+    if constexpr (llvm::is_detected<impl::has_get_other_mutable_t,
+                                    ConcreteType>::value)
       concrete.getOtherMutable().clear();
     return success();
   }
 
 private:
   static MutableOperandRange getPredicateRange(ConcreteType op) {
-    if constexpr (requires { op.getMaskMutable(); })
+    if constexpr (llvm::is_detected<impl::has_get_mask_mutable_t,
+                                    ConcreteType>::value)
       return op.getMaskMutable();
     else
       return op.getPredMutable();

@@ -137,7 +137,10 @@ struct ThreadIssuer {
   Kind kind = Unknown;
   Region *region = nullptr;
 
-  bool operator==(const ThreadIssuer &) const = default;
+  bool operator==(const ThreadIssuer &other) const {
+    return kind == other.kind && region == other.region;
+  }
+  bool operator!=(const ThreadIssuer &other) const { return !(*this == other); }
 };
 
 // Empty summaries contain no operations. Nonempty summaries preserve an issuer
@@ -151,7 +154,12 @@ public:
   bool hasSameKnownIssuer(const IssuerSummary &other) const;
   void join(const IssuerSummary &other);
 
-  bool operator==(const IssuerSummary &) const = default;
+  bool operator==(const IssuerSummary &other) const {
+    return issuer == other.issuer;
+  }
+  bool operator!=(const IssuerSummary &other) const {
+    return !(*this == other);
+  }
 
 private:
   std::optional<ThreadIssuer> issuer;
@@ -176,7 +184,14 @@ struct BlockInfo {
     CompletionSync completion = CompletionSync::None;
     bool peerWaitNeedsSync = false;
 
-    bool operator==(const ThreadSyncState &) const = default;
+    bool operator==(const ThreadSyncState &other) const {
+      return effectIssuers == other.effectIssuers &&
+             completion == other.completion &&
+             peerWaitNeedsSync == other.peerWaitNeedsSync;
+    }
+    bool operator!=(const ThreadSyncState &other) const {
+      return !(*this == other);
+    }
   } threadSync;
   struct ThreadDemandState {
     bool hasDemand = false;
@@ -186,7 +201,15 @@ struct BlockInfo {
     IssuerSummary publicationIssuers;
     bool mayNotifyPeer = false;
 
-    bool operator==(const ThreadDemandState &) const = default;
+    bool operator==(const ThreadDemandState &other) const {
+      return hasDemand == other.hasDemand &&
+             hasDemandBeyondGlobalReads == other.hasDemandBeyondGlobalReads &&
+             publicationIssuers == other.publicationIssuers &&
+             mayNotifyPeer == other.mayNotifyPeer;
+    }
+    bool operator!=(const ThreadDemandState &other) const {
+      return !(*this == other);
+    }
   } threadDemands;
 
   BlockInfo() = default;
@@ -275,7 +298,13 @@ struct BlockInfo {
     threadDemands = {};
   }
 
-  bool operator==(const BlockInfo &) const = default;
+  bool operator==(const BlockInfo &other) const {
+    return syncReadSlices == other.syncReadSlices &&
+           syncWriteSlices == other.syncWriteSlices &&
+           threadSync == other.threadSync &&
+           threadDemands == other.threadDemands;
+  }
+  bool operator!=(const BlockInfo &other) const { return !(*this == other); }
 
   /// Checks one pair of access maps with the same alias and operation filters.
   static bool isIntersected(const SliceMapT &lhsSlices,
@@ -359,7 +388,13 @@ struct MembarInfo {
     entryBlockInfo.transformSlices(transform);
   }
 
-  bool operator==(const MembarInfo &) const = default;
+  bool operator==(const MembarInfo &other) const {
+    return pending == other.pending &&
+           entryBlockInfo == other.entryBlockInfo &&
+           allPathsFromEntrySynced == other.allPathsFromEntrySynced &&
+           warpsSynced == other.warpsSynced;
+  }
+  bool operator!=(const MembarInfo &other) const { return !(*this == other); }
 };
 
 /// Classify the barriers that synchronize local memory accesses in `op`

@@ -215,7 +215,7 @@ convertToTimelineTrace(std::vector<CycleEvent> &cycleEvents) {
           }
 
           auto scopeName = event.contexts.back().name;
-          if (!scopeNameToId.contains(scopeName)) {
+          if (!scopeNameToId.count(scopeName)) {
             scopeIdToName[curScopeId] = scopeName;
             scopeNameToId[scopeName] = curScopeId;
             curScopeId++;

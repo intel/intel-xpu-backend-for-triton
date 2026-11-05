@@ -365,7 +365,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
       auto *cubinData = getCubinData(pcData->cubinCrc);
       auto key =
           CubinData::LineInfoKey{pcData->functionIndex, pcData->pcOffset};
-      if (!cubinData->lineInfo.contains(key)) {
+      if (!cubinData->lineInfo.count(key)) {
         auto [lineNumber, fileName, dirName] =
             getSassToSourceCorrelation(pcData->functionName, pcData->pcOffset,
                                        cubinData->cubin, cubinData->cubinSize);
@@ -376,7 +376,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
       auto &lineInfo = cubinData->lineInfo[key];
       for (size_t j = 0; j < pcData->stallReasonCount; ++j) {
         auto *stallReason = &pcData->stallReason[j];
-        if (!configureData->stallReasonIndexToMetricIndex.contains(
+        if (!configureData->stallReasonIndexToMetricIndex.count(
                 stallReason->pcSamplingStallReasonIndex))
           throw makeOutOfRange("Invalid stall reason index");
         for (const auto &[data, baseEntry] : dataToEntry) {
@@ -392,7 +392,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
                   [stallReason->pcSamplingStallReasonIndex]);
           auto samples = stallReason->samples;
           auto stalledSamples =
-              configureData->notIssuedStallReasonIndices.contains(
+              configureData->notIssuedStallReasonIndices.count(
                   stallReason->pcSamplingStallReasonIndex)
                   ? 0
                   : samples;

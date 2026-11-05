@@ -1,5 +1,4 @@
 #include <atomic>
-#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -260,12 +259,23 @@ constexpr uint32_t ToFloatBits(uint16_t h) {
   }
 }
 
+template <class To, class From>
+typename std::enable_if_t<sizeof(To) == sizeof(From) &&
+                              std::is_trivially_copyable_v<From> &&
+                              std::is_trivially_copyable_v<To>,
+                          To>
+bit_cast(const From &src) noexcept {
+  To dst;
+  std::memcpy(&dst, &src, sizeof(To));
+  return dst;
+}
+
 triton_half npy_float_to_half(float f) {
-  return {FromFloatBits(std::bit_cast<uint32_t>(f))};
+  return {FromFloatBits(bit_cast<uint32_t>(f))};
 }
 
 float npy_half_to_float(triton_half h) {
-  return std::bit_cast<float>(ToFloatBits(h.value));
+  return bit_cast<float>(ToFloatBits(h.value));
 }
 
 template <>

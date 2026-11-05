@@ -834,6 +834,14 @@ private:
 
 } // namespace mlir::triton
 
+static void setApproxDivFastmathFlags(LLVM::FDivOp op) {
+  op.setFastmathFlags(LLVM::FastmathFlags::afn);
+}
+
+static void setSqrtFastmathFlags(LLVM::SqrtOp op) {
+  op.setFastmathFlags(LLVM::FastmathFlags::afn);
+}
+
 void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
@@ -849,8 +857,7 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
       typeConverter, axisInfoAnalysis, benefit.getBenefit() + 1);
 
 #define POPULATE_OP(SRC_OP, DST_OP, ...)                                       \
-  patterns.add<                                                                \
-      ElementwiseOpConversion<SRC_OP, DST_OP __VA_OPT__(, ) __VA_ARGS__>>(     \
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP, ##__VA_ARGS__>>(        \
       typeConverter, axisInfoAnalysis, benefit)
 
   POPULATE_OP(arith::SubFOp, LLVM::FSubOp);
@@ -858,13 +865,9 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   POPULATE_OP(arith::MulFOp, LLVM::FMulOp);
   POPULATE_OP(triton::PreciseDivFOp, LLVM::FDivOp);
   POPULATE_OP(triton::PreciseSqrtOp, LLVM::SqrtOp);
-  POPULATE_OP(math::SqrtOp, LLVM::SqrtOp, [](LLVM::SqrtOp op) {
-    op.setFastmathFlags(LLVM::FastmathFlags::afn);
-  });
+  POPULATE_OP(math::SqrtOp, LLVM::SqrtOp, setSqrtFastmathFlags);
   POPULATE_OP(math::RsqrtOp, NVVM::RsqrtOp);
-  POPULATE_OP(triton::ApproxDivFOp, LLVM::FDivOp, [](LLVM::FDivOp op) {
-    op.setFastmathFlags(LLVM::FastmathFlags::afn);
-  });
+  POPULATE_OP(triton::ApproxDivFOp, LLVM::FDivOp, setApproxDivFastmathFlags);
 
   POPULATE_OP(arith::TruncFOp, LLVM::FPTruncOp);
   POPULATE_OP(arith::FPToSIOp, LLVM::FPToSIOp);
