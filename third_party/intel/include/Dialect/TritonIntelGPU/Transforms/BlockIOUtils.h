@@ -181,6 +181,19 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   unsigned contiguousDim,
                                                   bool pitchDimIsBroadcast);
 
+/// `tt-reorder-broadcast` sinks broadcasts below elementwise ops, so a mask
+/// `and(row_limit, batch_pred)` reaches the TTGPU passes as
+/// `broadcast(and(broadcast(row), broadcast(batch)))` with the AND on a
+/// narrow tensor, which `matchRowLimitMask` does not look through. If `mask`
+/// has that form, rebuild it before `mask`'s defining op as
+/// `and(broadcast(a), broadcast(b))` over the full shape (each operand
+/// broadcast straight from its innermost source) and return it, provided the
+/// result is a row-limit mask; otherwise return a null Value and leave the IR
+/// unchanged. The old ops are left for DCE.
+Value hoistBroadcastAboveAnd(OpBuilder &builder, Value mask, Value other,
+                             ArrayRef<int64_t> tensorShape,
+                             unsigned contiguousDim, bool pitchDimIsBroadcast);
+
 /// Compute `clamp(bound - rowBase, 0, rowExtent)` as an i32, widening to i64
 /// first to avoid overflow. `rowBase` may be null.
 Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,

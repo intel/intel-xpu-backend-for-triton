@@ -1118,6 +1118,40 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
   return RowLimitMaskInfo{pitchDim, *rowBase, boundSrc, extraPred};
 }
 
+Value hoistBroadcastAboveAnd(OpBuilder &builder, Value mask, Value other,
+                             ArrayRef<int64_t> tensorShape,
+                             unsigned contiguousDim, bool pitchDimIsBroadcast) {
+  auto broadcastOp = mask.getDefiningOp<triton::BroadcastOp>();
+  if (!broadcastOp)
+    return Value();
+  auto andOp = broadcastOp.getSrc().getDefiningOp<arith::AndIOp>();
+  if (!andOp)
+    return Value();
+
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPoint(broadcastOp);
+  Location loc = broadcastOp.getLoc();
+  SmallVector<Operation *> created;
+  auto widen = [&](Value v) {
+    while (auto inner = v.getDefiningOp<triton::BroadcastOp>())
+      v = inner.getSrc();
+    auto bc = triton::BroadcastOp::create(builder, loc, mask.getType(), v);
+    created.push_back(bc);
+    return bc.getResult();
+  };
+  Value lhs = widen(andOp.getLhs());
+  Value rhs = widen(andOp.getRhs());
+  auto hoisted = arith::AndIOp::create(builder, loc, lhs, rhs);
+  created.push_back(hoisted);
+
+  if (matchRowLimitMask(hoisted, other, tensorShape, contiguousDim,
+                        pitchDimIsBroadcast))
+    return hoisted;
+  for (Operation *op : llvm::reverse(created))
+    op->erase();
+  return Value();
+}
+
 Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
                             Value rowBase, int64_t rowExtent) {
   Type i64Ty = builder.getI64Type();

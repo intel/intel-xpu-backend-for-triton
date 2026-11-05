@@ -413,14 +413,25 @@ private:
       return true;
 
     if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
-      if (rank == 2 && contiguousDim) {
+      if (rank >= 2 && contiguousDim) {
         auto maskTy = cast<RankedTensorType>(mask.getType());
-        unsigned pitchDim = (*contiguousDim == 0) ? 1 : 0;
+        unsigned pitchDim = (*contiguousDim == rank - 1) ? rank - 2 : rank - 1;
         bool pitchDimIsBroadcast =
             strideInfo && strideInfo->getStride(pitchDim) == 0;
         if (ttgi::matchRowLimitMask(mask, op.getOther(), maskTy.getShape(),
                                     *contiguousDim, pitchDimIsBroadcast)) {
           LDBG("Mask is a row-limit pattern; permitting block IO for: " << op);
+          return true;
+        }
+        // The AND of a row limit and a batch predicate may have been sunk
+        // below a broadcast; hoist it back so the later passes (which match
+        // the mask again) see the row-limit form too.
+        OpBuilder builder(op);
+        if (Value hoisted = ttgi::hoistBroadcastAboveAnd(
+                builder, mask, op.getOther(), maskTy.getShape(), *contiguousDim,
+                pitchDimIsBroadcast)) {
+          LDBG("Hoisted a broadcast above the mask's AND: " << op);
+          op.getMaskMutable().assign(hoisted);
           return true;
         }
       }

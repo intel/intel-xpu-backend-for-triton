@@ -579,3 +579,54 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// COM: Rank-3 row-limit mask ANDed with a batch-only predicate, with the AND
+// COM: sunk below the final broadcast, as `tt-reorder-broadcast` leaves it:
+// COM: broadcast(and(broadcast(row), broadcast(batch))). The pass hoists the
+// COM: broadcast back above the AND so the mask is a row-limit pattern again,
+// COM: and the load gets block IO.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [1, 8, 16], B = [1, 16, 16], C = [1, 8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#sK = #ttg.slice<{dim = 2, parent = #dot0}>
+#sM = #ttg.slice<{dim = 1, parent = #dot0}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @row_limit_rank3_sunk_and
+  tt.func public @row_limit_rank3_sunk_and(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %bound: i32, %batch_bound: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<4x64x32xf16, #dot0>
+    %c32 = arith.constant dense<32> : tensor<1x64x1xi32, #dot0>
+    %rb = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>>
+    %rm = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+    %ema = tt.expand_dims %rm {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>> -> tensor<1x64xi32, #sK>
+    %em = tt.expand_dims %ema {axis = 2 : i32} : tensor<1x64xi32, #sK> -> tensor<1x64x1xi32, #dot0>
+    %om = arith.muli %em, %c32 : tensor<1x64x1xi32, #dot0>
+    %rk = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sM}>>
+    %eka = tt.expand_dims %rk {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sM}>> -> tensor<1x32xi32, #sM>
+    %ek = tt.expand_dims %eka {axis = 1 : i32} : tensor<1x32xi32, #sM> -> tensor<1x1x32xi32, #dot0>
+    %bm = tt.broadcast %om : tensor<1x64x1xi32, #dot0> -> tensor<4x64x32xi32, #dot0>
+    %bk = tt.broadcast %ek : tensor<1x1x32xi32, #dot0> -> tensor<4x64x32xi32, #dot0>
+    %off = arith.addi %bm, %bk : tensor<4x64x32xi32, #dot0>
+    %ps = tt.splat %arg0 : !tt.ptr<f16> -> tensor<4x64x32x!tt.ptr<f16>, #dot0>
+    %ptr = tt.addptr %ps, %off : tensor<4x64x32x!tt.ptr<f16>, #dot0>, tensor<4x64x32xi32, #dot0>
+    %boundsplat = tt.splat %bound : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+    %rowcmp = arith.cmpi slt, %rm, %boundsplat : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+    %rc1 = tt.expand_dims %rowcmp {axis = 0 : i32} : tensor<64xi1, #ttg.slice<{dim = 0, parent = #sK}>> -> tensor<1x64xi1, #sK>
+    %rc2 = tt.expand_dims %rc1 {axis = 2 : i32} : tensor<1x64xi1, #sK> -> tensor<1x64x1xi1, #dot0>
+    %bboundsplat = tt.splat %batch_bound : i32 -> tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>>
+    %batchcmp = arith.cmpi slt, %rb, %bboundsplat : tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>>
+    %bc1 = tt.expand_dims %batchcmp {axis = 1 : i32} : tensor<4xi1, #ttg.slice<{dim = 1, parent = #sK}>> -> tensor<4x1xi1, #sK>
+    %bc2 = tt.expand_dims %bc1 {axis = 2 : i32} : tensor<4x1xi1, #sK> -> tensor<4x1x1xi1, #dot0>
+    // The AND is on [4, 64, 1], below the final broadcast.
+    %rowb = tt.broadcast %rc2 : tensor<1x64x1xi1, #dot0> -> tensor<4x64x1xi1, #dot0>
+    %batchb = tt.broadcast %bc2 : tensor<4x1x1xi1, #dot0> -> tensor<4x64x1xi1, #dot0>
+    %and = arith.andi %rowb, %batchb : tensor<4x64x1xi1, #dot0>
+    %mask = tt.broadcast %and : tensor<4x64x1xi1, #dot0> -> tensor<4x64x32xi1, #dot0>
+    // CHECK: %[[ROW:.*]] = tt.broadcast %{{.*}} : tensor<1x64x1xi1, #{{.*}}> -> tensor<4x64x32xi1, #{{.*}}>
+    // CHECK: %[[BATCH:.*]] = tt.broadcast %{{.*}} : tensor<4x1x1xi1, #{{.*}}> -> tensor<4x64x32xi1, #{{.*}}>
+    // CHECK: %[[HOISTED:.*]] = arith.andi %[[ROW]], %[[BATCH]]
+    // CHECK: tt.load %{{.*}}, %[[HOISTED]], %{{.*}} {ttig.block_io = "row_major"}
+    %v = tt.load %ptr, %mask, %zero : tensor<4x64x32x!tt.ptr<f16>, #dot0>
+    tt.return
+  }
+}
