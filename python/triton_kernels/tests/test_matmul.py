@@ -935,6 +935,7 @@ def test_matmul_mixed_fp8_resource_limits(shape, fp8_lhs, constraints, device, o
     ((67, 80, 272), dict(is_persistent=False, split_k=3)),
     ((67, 80, 272), dict(is_persistent=True, split_k=1)),
 ])
+@pytest.mark.enable_warmup
 def test_matmul_mixed_fp8_matches_upcast(fp8_lhs, dtype, out_dtype, b_transpose, use_fpsan, shape,
                                         constraints, device, opt_flags_scope, fresh_knobs):
     if is_cuda() and torch.cuda.get_device_capability()[0] < 9:

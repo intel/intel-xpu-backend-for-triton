@@ -118,6 +118,7 @@ def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl
     ]))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("sanitize_overflow", [False, True])
+@pytest.mark.enable_warmup
 def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
 
     torch.manual_seed(0)
@@ -1930,6 +1931,7 @@ def test_local_load_transposed_nvmma_zero_swizzle(device):
 ])
 @pytest.mark.parametrize("dist_layout", _ld_st_dot_layouts + _ld_st_mma_layouts)
 @pytest.mark.parametrize("shared_layout", _ld_st_shared_layouts)
+@pytest.mark.enable_warmup
 def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, device):
     if shared_layout == "shared_linear_layout":
         rank = len(shape)
@@ -1951,7 +1953,7 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
             pytest.xfail("contig_dim too small for swizzle_byte_width in NVMMASharedLayout")
 
     # A simple blocked layout
-    num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(dist_layout, shape))))
+    num_warps = math.prod(ttgl._layouts.warps_per_cta(dist_layout, shape))
     blocked_layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[4, THREADS_PER_WARP // 4],
                                         warps_per_cta=[1, num_warps], order=[0, 1])
 
@@ -1997,8 +1999,8 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
     y = torch.zeros_like(x)
     obj = kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
     _assert_close(y, x)
-    if (is_cuda() and isinstance(shared_layout, ttgl.NVMMASharedLayout) and dist_layout in _ld_st_mma_layouts
-            and dist_layout.version[0] >= 3 and dtype == "float16"):
+    if (not is_compile_warmup() and is_cuda() and isinstance(shared_layout, ttgl.NVMMASharedLayout)
+            and dist_layout in _ld_st_mma_layouts and dist_layout.version[0] >= 3 and dtype == "float16"):
         assert "stmatrix" in obj.asm["ptx"]
 
 
