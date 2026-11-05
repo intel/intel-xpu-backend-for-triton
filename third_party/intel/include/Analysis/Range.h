@@ -60,10 +60,10 @@ public:
   ///     actually visit the loop N times for each iter_arg (each argument
   ///     lattice) so we actually track visit count for (loop, arg) not just
   ///     (loop).
-  ///   - before propagating along a backedge, we check if we have propagated
-  ///     for (loop, arg) >= N - 1 times (N for the loop results). If so, we do
-  ///     not propagate (and thus the traversal converges/ends). The init
-  ///     values are always propagated.
+  ///   - before propagating along a backedge into an iter_arg, we check if we
+  ///     have propagated for (loop, arg) >= N - 1 times. If so, we do not
+  ///     propagate (and thus the traversal converges/ends). The init values
+  ///     and the loop results are always propagated.
   ///
   /// Note, for loops where the trip count cannot be inferred *and* loops
   /// with a total trip count larger than `kDefaultMaxTripCount`, fallback

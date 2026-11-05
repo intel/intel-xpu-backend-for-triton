@@ -670,11 +670,8 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
     loopSimulationSteps[loop] = std::max(loopSimulationSteps[loop], steps);
   }
 
-  // Iter_args see the init values plus N - 1 backedges, results N backedges.
-  int64_t maxBackedges = 0;
-  if (loop)
-    maxBackedges = successor.isOperation() ? loopSimulationSteps[loop]
-                                           : loopSimulationSteps[loop] - 1;
+  // Iter_args see the init values plus N - 1 backedges.
+  int64_t maxBackedges = loop ? loopSimulationSteps[loop] - 1 : 0;
 
   const auto *predecessors =
       getOrCreateFor<dataflow::PredecessorState>(point, point);
@@ -704,8 +701,10 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
   //
   for (Operation *op : predecessors->getKnownPredecessors()) {
     std::optional<OperandRange> operands;
-    // The init values are not a backedge: never block or count them.
-    bool isBackedge = loop && op != branch.getOperation();
+    // Only backedges into iter_args are limited: they bound what the loop
+    // yields, and a result's count is spent early while an init converges.
+    bool isLimited =
+        loop && op != branch.getOperation() && !successor.isOperation();
     if (op == branch)
       operands = branch.getEntrySuccessorOperands(successor);
     else if (auto regionTerminator =
@@ -754,7 +753,7 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
          llvm::zip(*operands, ArrayRef(lattices).drop_front(firstIndex))) {
       std::pair loopArgLat = {loop, argLat};
       // If we've "run the loop" #maxBackedges times, stop propagating.
-      if (isBackedge && loopVisits[loopArgLat] >= maxBackedges)
+      if (isLimited && loopVisits[loopArgLat] >= maxBackedges)
         continue;
 
       ChangeResult changed;
@@ -784,7 +783,7 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
       // lattice because otherwise we will over count the number of visits
       // (since not all iter_arg lattices are updated/propagated on each
       // visit).
-      if (isBackedge && changed == ChangeResult::Change)
+      if (isLimited && changed == ChangeResult::Change)
         ++loopVisits[loopArgLat];
     }
   }
