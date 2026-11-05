@@ -98,11 +98,12 @@ isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
 
 // Folding a leading index into the base keeps it 4-byte aligned, as every 2D
 // block access needs (see satisfies2DBlockReadAlignment), only if each
-// candidate's stride is provably a 4-byte multiple or the index is constant 0.
-// Leading strides are indexed by block rank, so the shape count must match.
-static bool isLeadingRebaseAligned(tt::DescriptorStoreOp op,
-                                   const tt::intel::DescriptorDefinitions &defs,
-                                   unsigned shapeRank) {
+// candidate's stride is a 4-byte multiple (an unknown runtime stride is trusted
+// as the pitch is) or the index is constant 0. Leading strides are indexed by
+// block rank, so the shape count must match.
+static bool isLeadingRebaseAligned(
+    tt::DescriptorStoreOp op, const tt::intel::DescriptorDefinitions &defs,
+    unsigned shapeRank, tt::intel::ModuleAxisInfoAnalysis &axisInfo) {
   RankedTensorType srcType = op.getSrc().getType();
   unsigned srcRank = srcType.getRank();
   unsigned descRank = op.getDesc().getType().getBlockType().getRank();
@@ -116,7 +117,8 @@ static bool isLeadingRebaseAligned(tt::DescriptorStoreOp op,
     if (tt::intel::isConstant(op.getIndices()[d], 0))
       continue;
     if (!defs.allSatisfy([&](tt::MakeTensorDescOp m) {
-          return ttgi::isDivisible(m.getStrides()[d], strideDivisor);
+          return isDescriptorAligned(axisInfo, m.getStrides()[d],
+                                     strideDivisor);
         }))
       return false;
   }
@@ -235,7 +237,7 @@ private:
       return;
 
     if constexpr (std::is_same_v<OpType, tt::DescriptorStoreOp>) {
-      if (!isLeadingRebaseAligned(op, defs, rank)) {
+      if (!isLeadingRebaseAligned(op, defs, rank, axisInfoAnalysis)) {
         LDBG("Leading index rebase not provably 4-byte aligned: " << *op);
         return;
       }

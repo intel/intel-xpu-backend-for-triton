@@ -481,14 +481,14 @@ def _rank_reduced_store_kernel(src_ptr, dst_ptr, B, stride_b, batch, M: tl.const
     desc.store([batch, 0, 0], x.reshape([1, M, N]))
 
 
-# A runtime plane stride carries only the 16-element hint, which proves the 4-byte-aligned rebase the block store
-# needs; plane 3 starts 32 bytes past a 64-byte boundary (#8516).
+# A runtime plane stride without a divisibility hint is trusted under the 16-byte descriptor contract, which keeps
+# the rebase 4-byte aligned; plane 3 starts 48 bytes past a 64-byte boundary (#8516).
 @pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
                    reason="Block stores not supported on this architecture", run=False)
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
 def test_block_io_rank_reduced_store_runtime_stride(device, with_allocator):
     B, M, N, batch = 4, 32, 64, 3
-    stride_b = M * N + 16
+    stride_b = M * N + 8
     # Normal bf16 bit patterns, compared as int16 so the check is exact.
     src = (torch.arange(M * N, device=device) + 0x3F80).to(torch.int16)
     buf = torch.full(((B + 1) * stride_b, ), -1, dtype=torch.int16, device=device)

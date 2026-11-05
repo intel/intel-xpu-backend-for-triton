@@ -299,8 +299,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // -----
 
 // COM: Rebasing a rank-reducing store by index * stride needs every candidate's
-// COM: leading stride to be a provable multiple of 4 bytes, unless that index is a
-// COM: constant 0 (#8516). Untagged stores pin the whole dictionary (no block_io).
+// COM: leading stride to be a multiple of 4 bytes, unless that index is a constant 0
+// COM: (#8516). An unknown runtime stride is trusted under the 16-byte descriptor
+// COM: contract, as the pitch is. Untagged stores pin the whole dictionary.
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: tt.func public @store_rank_reducing_f16_stride_div16(
@@ -322,6 +323,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %d = tt.make_tensor_descriptor %base, [%c32_i32, %c32_i32, %c32_i32], [%stride, %pitch, %c1_i64] : <f32>, <1x32x32xf32>
     // CHECK: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"{{.*}}}
     tt.descriptor_store %d[%b, %c0_i32, %c0_i32], %v : !tt.tensordesc<1x32x32xf32>, tensor<32x32xf32, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func public @store_rank_reducing_f16_unhinted_stride(
+  tt.func public @store_rank_reducing_f16_unhinted_stride(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %stride: i64, %b: i32, %v: tensor<32x32xf16, #blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %d = tt.make_tensor_descriptor %base, [%c32_i32, %c32_i32, %c32_i32], [%stride, %pitch, %c1_i64] : <f16>, <1x32x32xf16>
+    // CHECK: tt.descriptor_store {{.*}} {ttig.block_io = "row_major"{{.*}}}
+    tt.descriptor_store %d[%b, %c0_i32, %c0_i32], %v : !tt.tensordesc<1x32x32xf16>, tensor<32x32xf16, #blocked>
     tt.return
   }
 
@@ -360,10 +372,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // CHECK-LABEL: tt.func public @store_rank_reducing_rank5_middle_dim_unaligned(
-  tt.func public @store_rank_reducing_rank5_middle_dim_unaligned(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %s0: i64 {tt.divisibility = 16 : i32}, %s1: i64, %s2: i64 {tt.divisibility = 16 : i32}, %b0: i32, %b1: i32, %b2: i32, %v: tensor<32x32xf16, #blocked>) {
+  tt.func public @store_rank_reducing_rank5_middle_dim_unaligned(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %s0: i64 {tt.divisibility = 16 : i32}, %s2: i64 {tt.divisibility = 16 : i32}, %b0: i32, %b1: i32, %b2: i32, %v: tensor<32x32xf16, #blocked>) {
     %c0_i32 = arith.constant 0 : i32
     %c32_i32 = arith.constant 32 : i32
     %c1_i64 = arith.constant 1 : i64
+    %s1 = arith.constant 1025 : i64
     %d = tt.make_tensor_descriptor %base, [%c32_i32, %c32_i32, %c32_i32, %c32_i32, %c32_i32], [%s0, %s1, %s2, %pitch, %c1_i64] : <f16>, <1x1x1x32x32xf16>
     // CHECK: tt.descriptor_store {{.*}} {ttig.desc_padding = 1 : i32} :
     tt.descriptor_store %d[%b0, %b1, %b2, %c0_i32, %c0_i32], %v : !tt.tensordesc<1x1x1x32x32xf16>, tensor<32x32xf16, #blocked>
@@ -372,10 +385,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // COM: The tracer visits the else operand first, so the aligned candidate leads.
   // CHECK-LABEL: tt.func public @store_rank_reducing_two_candidates(
-  tt.func public @store_rank_reducing_two_candidates(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %su: i64, %s16: i64 {tt.divisibility = 16 : i32}, %b: i32, %cond: i1, %v: tensor<32x32xf16, #blocked>) {
+  tt.func public @store_rank_reducing_two_candidates(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %s16: i64 {tt.divisibility = 16 : i32}, %b: i32, %cond: i1, %v: tensor<32x32xf16, #blocked>) {
     %c0_i32 = arith.constant 0 : i32
     %c32_i32 = arith.constant 32 : i32
     %c1_i64 = arith.constant 1 : i64
+    %su = arith.constant 1025 : i64
     %du = tt.make_tensor_descriptor %base, [%c32_i32, %c32_i32, %c32_i32], [%su, %pitch, %c1_i64] : <f16>, <1x32x32xf16>
     %d16 = tt.make_tensor_descriptor %base, [%c32_i32, %c32_i32, %c32_i32], [%s16, %pitch, %c1_i64] : <f16>, <1x32x32xf16>
     %d = scf.if %cond -> (!tt.tensordesc<1x32x32xf16>) {
