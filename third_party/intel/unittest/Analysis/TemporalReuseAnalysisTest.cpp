@@ -97,14 +97,17 @@ public:
   // Helper to build a tt.load with a pointer operand and tensor result type
   LoadOp buildLoadOp(OpBuilder &b, Value ptr, RankedTensorType resultTy) {
     Location loc = b.getUnknownLoc();
-    return LoadOp::create(b, loc, resultTy, ptr);
+    return LoadOp::create(b, loc, resultTy, ptr, /*mask=*/Value(),
+                          /*other=*/Value(), /*cachePolicy=*/Attribute(),
+                          /*isVolatile=*/nullptr);
   }
 
   // Helper to build a tt.descriptor_load
   DescriptorLoadOp buildDescriptorLoadOp(OpBuilder &b, Value desc,
                                          RankedTensorType resultTy) {
     Location loc = b.getUnknownLoc();
-    return DescriptorLoadOp::create(b, loc, resultTy, desc);
+    return DescriptorLoadOp::create(b, loc, resultTy, desc, /*indices=*/{},
+                                    /*cachePolicy=*/Attribute());
   }
 
   // Helper to build a tt.descriptor_load with explicit indices

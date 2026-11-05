@@ -1,0 +1,38 @@
+diff --git a/Makefile.pre.in b/Makefile.pre.in
+--- a/Makefile.pre.in
++++ b/Makefile.pre.in
+@@ -1530,2 +1530,4 @@
+ 
++COMPILEALL_OPTS=-j0
++
+ TEST_MODULES=@TEST_MODULES@
+@@ -1605,3 +1607,3 @@
+ 		$(PYTHON_FOR_BUILD) -Wi $(DESTDIR)$(LIBDEST)/compileall.py \
+-		-j0 -d $(LIBDEST) -f \
++		$(COMPILEALL_OPTS) -d $(LIBDEST) -f \
+ 		-x 'bad_coding|badsyntax|site-packages|lib2to3/tests/data' \
+@@ -1610,3 +1612,3 @@
+ 		$(PYTHON_FOR_BUILD) -Wi -O $(DESTDIR)$(LIBDEST)/compileall.py \
+-		-j0 -d $(LIBDEST) -f \
++		$(COMPILEALL_OPTS) -d $(LIBDEST) -f \
+ 		-x 'bad_coding|badsyntax|site-packages|lib2to3/tests/data' \
+@@ -1615,3 +1617,3 @@
+ 		$(PYTHON_FOR_BUILD) -Wi -OO $(DESTDIR)$(LIBDEST)/compileall.py \
+-		-j0 -d $(LIBDEST) -f \
++		$(COMPILEALL_OPTS) -d $(LIBDEST) -f \
+ 		-x 'bad_coding|badsyntax|site-packages|lib2to3/tests/data' \
+@@ -1620,3 +1622,3 @@
+ 		$(PYTHON_FOR_BUILD) -Wi $(DESTDIR)$(LIBDEST)/compileall.py \
+-		-j0 -d $(LIBDEST)/site-packages -f \
++		$(COMPILEALL_OPTS) -d $(LIBDEST)/site-packages -f \
+ 		-x badsyntax $(DESTDIR)$(LIBDEST)/site-packages
+@@ -1624,3 +1626,3 @@
+ 		$(PYTHON_FOR_BUILD) -Wi -O $(DESTDIR)$(LIBDEST)/compileall.py \
+-		-j0 -d $(LIBDEST)/site-packages -f \
++		$(COMPILEALL_OPTS) -d $(LIBDEST)/site-packages -f \
+ 		-x badsyntax $(DESTDIR)$(LIBDEST)/site-packages
+@@ -1628,3 +1630,3 @@
+ 		$(PYTHON_FOR_BUILD) -Wi -OO $(DESTDIR)$(LIBDEST)/compileall.py \
+-		-j0 -d $(LIBDEST)/site-packages -f \
++		$(COMPILEALL_OPTS) -d $(LIBDEST)/site-packages -f \
+ 		-x badsyntax $(DESTDIR)$(LIBDEST)/site-packages

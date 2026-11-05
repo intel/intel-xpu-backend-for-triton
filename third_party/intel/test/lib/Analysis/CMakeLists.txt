@@ -6,6 +6,7 @@ add_library(TritonIntelTestAnalysis
   TestRangeAnalysis.cpp
   TestRegisterPressureAnalysis.cpp
   TestStrideInfo.cpp
+  TestSymbolicBounds.cpp
 )
 add_dependencies(TritonIntelTestAnalysis
   TritonTableGen

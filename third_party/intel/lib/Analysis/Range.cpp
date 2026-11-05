@@ -5,6 +5,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/InferIntRangeInterface.h"
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "mlir/Support/LLVM.h"
@@ -101,17 +102,68 @@ static void inferResultRange(arith::BitcastOp op,
   setResultRange(op.getResult(), argRanges[0]);
 }
 
+// Whether `op` is certain to finish and pass control to the next op.
+static bool transfersExecution(Operation *op) {
+  // May abort or may not return.
+  if (isa<tt::AssertOp>(op) || isa<CallOpInterface>(op))
+    return false;
+  // Regionless and not CallOpInterface, yet a poll may spin until the
+  // expected value appears (its timeout is a runtime value and may be
+  // unbounded), and an impure external call or inline asm may never return.
+  if (isa<tt::AtomicPollOp>(op))
+    return false;
+  if (auto ext = dyn_cast<tt::ExternElementwiseOp>(op); ext && !ext.getPure())
+    return false;
+  if (auto asmOp = dyn_cast<tt::ElementwiseInlineAsmOp>(op);
+      asmOp && !asmOp.getPure())
+    return false;
+  if (op->getNumRegions() == 0)
+    return true;
+  // These run single-block regions a bounded number of times, so they finish
+  // if their nested ops do. Loops are not modelled, and `tt.map_elementwise`
+  // regions may hold CFG cycles.
+  if (!isa<scf::IfOp, tt::ReduceOp, tt::ScanOp>(op))
+    return false;
+  for (Region &region : op->getRegions())
+    for (Operation &nested : region.getOps())
+      if (!transfersExecution(&nested))
+        return false;
+  return true;
+}
+
+bool assumeApplies(LLVM::AssumeOp assume, Operation *useOp,
+                   const DominanceInfo &domInfo) {
+  // Forward case: the assume runs before useOp on every path to useOp.
+  if (domInfo.properlyDominates(assume.getOperation(), useOp))
+    return true;
+  // Backward case: the assume comes later. Take the op in the assume's block
+  // that is useOp or encloses it; it must precede the assume, and everything
+  // from it (inclusive) up to the assume must be certain to transfer
+  // execution. Block dominance is not enough: a parent block dominates a loop
+  // body nested in it, which would let an assume after a loop apply inside it.
+  Block *ab = assume->getBlock();
+  Operation *anc = ab->findAncestorOpInBlock(*useOp);
+  if (!anc || !anc->isBeforeInBlock(assume.getOperation()))
+    return false;
+  for (Operation *op = anc; op != assume.getOperation(); op = op->getNextNode())
+    if (!transfersExecution(op))
+      return false;
+  return true;
+}
+
 static std::optional<ConstantIntRanges>
 getAssumedRange(const IntegerRangeAnalysis::AssumptionsOps &assumptions,
-                Value val, Block *useBlock, const DominanceInfo &domInfo) {
+                Value val, Operation *useOp, const DominanceInfo &domInfo) {
   std::optional<ConstantIntRanges> result;
   for (Operation *assumption : assumptions) {
-    arith::CmpIOp cmpOp = dyn_cast<arith::CmpIOp>(assumption);
+    auto assumeOp = dyn_cast<LLVM::AssumeOp>(assumption);
+    arith::CmpIOp cmpOp =
+        assumeOp ? assumeOp.getCond().getDefiningOp<arith::CmpIOp>() : nullptr;
     if (!cmpOp) {
       emitRemark(assumption->getLoc(), "unsupported operation");
       continue;
     }
-    if (!useBlock || !domInfo.dominates(cmpOp->getBlock(), useBlock))
+    if (!useOp || !tt::intel::assumeApplies(assumeOp, useOp, domInfo))
       continue;
 
     if (auto assumedRange = tt::getBoundFromCmpOp(cmpOp, val)) {
@@ -155,13 +207,13 @@ static bool isEmpty(ConstantIntRanges range) {
 /// the range of `val` is:
 ///   [0, INT_MAX] ∩ [INT_MIN, 128] = [0, 128]
 static std::optional<ConstantIntRanges> getAssumedRange(
-    Value val, Block *useBlock,
+    Value val, Operation *useOp,
     const llvm::DenseMap<Value, IntegerRangeAnalysis::AssumptionsOps>
         &assumptions,
     const DominanceInfo &domInfo) {
   if (!assumptions.contains(val))
     return std::nullopt;
-  return getAssumedRange(assumptions.lookup(val), val, useBlock, domInfo);
+  return getAssumedRange(assumptions.lookup(val), val, useOp, domInfo);
 }
 
 ///*****************************************************************************/
@@ -205,8 +257,15 @@ void IntegerRangeAnalysis::setToEntryState(
   IntegerValueRange range = IntegerValueRange::getMaxRange(anchor);
   Block *entryBlock = &funcOp->getBody().front();
 
+  // The entry state holds at every use, so an assume constrains it only if it
+  // is certain to execute once the value exists: from just after the defining
+  // op for an op result (from the op itself if it is last in its block, which
+  // verified IR does not produce), else from the start of the function.
+  Operation *from = &entryBlock->front();
+  if (Operation *def = anchor.getDefiningOp())
+    from = def->getNextNode() ? def->getNextNode() : def;
   if (std::optional<ConstantIntRanges> assumedRange =
-          getAssumedRange(anchor, entryBlock, assumptions, domInfo))
+          getAssumedRange(anchor, from, assumptions, domInfo))
     range = *assumedRange;
 
   if (!lattice->getValue().isUninitialized() && !range.isUninitialized()) {
@@ -240,13 +299,11 @@ LogicalResult IntegerRangeAnalysis::visitOperation(
     Operation *op,
     ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
     ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices) {
-  Block *block = op->getBlock();
-
   // Figure out the implied range of result and source operands.
   opResultAssumption.clear();
   for (OpResult result : op->getResults()) {
     if (std::optional<ConstantIntRanges> assumedRange =
-            getAssumedRange(result, block, assumptions, domInfo))
+            getAssumedRange(result, op, assumptions, domInfo))
       opResultAssumption.insert(std::pair(result, *assumedRange));
   }
 
@@ -256,7 +313,7 @@ LogicalResult IntegerRangeAnalysis::visitOperation(
 
   for (auto [index, opnd] : llvm::enumerate(op->getOperands())) {
     std::optional<ConstantIntRanges> assumedRange =
-        getAssumedRange(opnd, block, assumptions, domInfo);
+        getAssumedRange(opnd, op, assumptions, domInfo);
     if (!assumedRange) {
       opndRanges.push_back(operands[index]);
       continue;
@@ -310,10 +367,19 @@ IntegerRangeAnalysis::collectAssumptions(Operation *top, bool filterConstants) {
   DenseMap<Value, AssumptionsOps> assumptions;
   top->walk([&](LLVM::AssumeOp op) {
     Operation *defOp = op.getCond().getDefiningOp();
+    if (!defOp)
+      return; // e.g. an assume on a block argument: nothing to anchor on
     for (auto operand : defOp->getOperands()) {
+      // Wider than 64 bits is unknown: getConstantIntValue and
+      // tt::getBoundFromCmpOp narrow to int64_t.
+      if (ConstantIntRanges::getStorageBitwidth(operand.getType()) > 64)
+        continue;
       if (filterConstants && getConstantIntValue(operand))
         continue;
-      assumptions[operand].insert(defOp);
+      // Store the assume, not its comparison: applicability is decided by
+      // where the assume executes, and a comparison can be hoisted far above
+      // it (see assumeApplies).
+      assumptions[operand].insert(op.getOperation());
     }
   });
   return assumptions;
@@ -326,6 +392,9 @@ IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) const {
     return std::nullopt;
 
   const unsigned width = ConstantIntRanges::getStorageBitwidth(iv->getType());
+  // The trip count is computed in int64_t: wider than 64 bits is unknown.
+  if (width > 64)
+    return std::nullopt;
 
   auto getLoopRangeInfo = [&](std::optional<OpFoldResult> loopBound,
                               Block *block, bool getUpper,
@@ -418,12 +487,9 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
     // TODO: I think this is bit conservative, the better way is:
     //  final_range = (old_range ∪ incomingRange) ∩ assume_range
     auto iter = opResultAssumption.find(resultVal);
-    if (iter != opResultAssumption.end()) {
-      const ConstantIntRanges &range = iter->second;
-      if (std::optional<ConstantIntRanges> assumedRange =
-              getAssumedRange(resultVal, op->getBlock(), assumptions, domInfo))
-        newRange = IntegerValueRange(newRange.getValue().intersection(range));
-    }
+    if (iter != opResultAssumption.end())
+      newRange =
+          IntegerValueRange(newRange.getValue().intersection(iter->second));
 
     // Update the range. Note that we are using `join` operation which means
     // `union`. Transfer function must be monotone! The resolver would otherwise
@@ -718,8 +784,8 @@ void IntegerRangeAnalysis::initializeModule(ModuleOp &mod) {
           getLatticeElement(argument);
 
       IntegerValueRange range = IntegerValueRange::getMaxRange(argument);
-      if (auto assumedRange =
-              getAssumedRange(argument, entryBlock, assumptions, domInfo))
+      if (auto assumedRange = getAssumedRange(argument, &entryBlock->front(),
+                                              assumptions, domInfo))
         range = *assumedRange;
 
       // The lattice must be in the "bottom" state, the join() operation is to
@@ -778,6 +844,9 @@ collectLoopIVRange(scf::ForOp forOp, const DataFlowSolver &solver) {
   // Temporary workaround implementation.
   std::optional<Value> iv = forOp.getSingleInductionVar();
   if (!iv)
+    return std::nullopt;
+  // The bounds are narrowed to int64_t below: wider than 64 bits is unknown.
+  if (ConstantIntRanges::getStorageBitwidth(iv->getType()) > 64)
     return std::nullopt;
 
   auto getRange =

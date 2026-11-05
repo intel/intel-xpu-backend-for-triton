@@ -3,7 +3,7 @@ description: Sets up python
 inputs:
   python_version:
     description: Python version
-    default: "3.10"
+    default: "3.11"
   use_pyenv:
     description: Use pyenv to install Python
     default: "false"

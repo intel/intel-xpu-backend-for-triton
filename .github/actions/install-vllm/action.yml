@@ -6,6 +6,10 @@ inputs:
     description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
     required: false
     default: ""
+  omni:
+    description: Install vLLM at the release targeted by the pinned vllm-omni, then vllm-omni
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -16,5 +20,8 @@ runs:
         install_args=()
         if [[ -n "${{ inputs.kernels-hash }}" ]]; then
           install_args+=(--kernels-hash "${{ inputs.kernels-hash }}")
+        fi
+        if [[ "${{ inputs.omni }}" == true ]]; then
+          install_args+=(--omni)
         fi
         ./scripts/vllm/install-vllm.sh "${install_args[@]}"

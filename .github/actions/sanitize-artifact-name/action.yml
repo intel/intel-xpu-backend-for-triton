@@ -1,0 +1,24 @@
+name: sanitize-artifact-name
+description: >-
+  Replaces characters rejected by actions/upload-artifact in artifact names (", :, <, >, |, *, ?, \, /)
+  with '-' and strips CR/LF. Use it for values such as runner labels or driver versions (e.g. "dle:2026.1.3")
+  that become part of an artifact name.
+inputs:
+  name:
+    description: Artifact name (or part of it) to sanitize
+    required: true
+outputs:
+  name:
+    description: Sanitized artifact name
+    value: ${{ steps.sanitize.outputs.name }}
+runs:
+  using: "composite"
+  steps:
+    - name: Sanitize artifact name
+      id: sanitize
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+      run: |
+        name="$(printf '%s' "$NAME" | tr -d '\r\n' | tr ':"<>|*?\\/' '-')"
+        echo "name=$name" | tee -a "$GITHUB_OUTPUT"

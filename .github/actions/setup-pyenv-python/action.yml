@@ -35,11 +35,37 @@ runs:
 
     - name: Setup Python
       shell: bash
+      env:
+        PYTHON_VERSION: ${{ inputs.python-version }}
       run: |
         set -x
-        pyenv install ${{ inputs.python-version }}
-        pyenv global ${{ inputs.python-version }}
-        echo PATH="$(dirname $(pyenv which python${{ inputs.python-version }})):$PATH" >> ${GITHUB_ENV}
+        workers=$(env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc)
+        workers=$((workers < 8 ? workers : 8))
+        quota=max
+        if [[ -r /sys/fs/cgroup/cpu.max ]]; then
+          read -r quota period < /sys/fs/cgroup/cpu.max
+        elif [[ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us && -r /sys/fs/cgroup/cpu/cpu.cfs_period_us ]]; then
+          quota=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us)
+          period=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)
+        fi
+        if [[ "$quota" != max && "$quota" -gt 0 ]]; then
+          quota_workers=$((quota / period))
+          quota_workers=$((quota_workers > 0 ? quota_workers : 1))
+          workers=$((workers < quota_workers ? workers : quota_workers))
+        fi
+        export PYTHON_MAKE_OPTS="${PYTHON_MAKE_OPTS:+${PYTHON_MAKE_OPTS} }-j${workers}"
+        export PYTHON_MAKE_INSTALL_OPTS="${PYTHON_MAKE_INSTALL_OPTS:+${PYTHON_MAKE_INSTALL_OPTS} }COMPILEALL_OPTS=-j${workers}"
+        case "$PYTHON_VERSION" in
+          3.10|3.10.*|3.11|3.11.*)
+            # These releases hardcode compileall -j0; backport the install-only Makefile option.
+            pyenv install --patch "$PYTHON_VERSION" < "${GITHUB_ACTION_PATH}/compileall-workers.patch"
+            ;;
+          *)
+            pyenv install "$PYTHON_VERSION"
+            ;;
+        esac
+        pyenv global "${PYTHON_VERSION}"
+        echo PATH="$(dirname "$(pyenv which "python${PYTHON_VERSION}")"):$PATH" >> "${GITHUB_ENV}"
 
     - name: Update pip
       shell: bash

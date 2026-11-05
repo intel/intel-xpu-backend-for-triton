@@ -150,6 +150,34 @@ inline std::optional<bool> isEnvValueBool(std::string str) {
 // OutOfResources on PTSS overflow). Thread-local: each call clears it.
 inline thread_local std::string g_last_module_build_log;
 
+inline sycl::context get_default_context(const sycl::device &sycl_device) {
+  const auto &platform = sycl_device.get_platform();
+#if defined(_WIN32)
+  sycl::context ctx;
+  try {
+#if __SYCL_COMPILER_VERSION >= 20250604
+    ctx = platform.khr_get_default_context();
+#else
+    ctx = platform.ext_oneapi_get_default_context();
+#endif
+  } catch (const std::runtime_error &ex) {
+    // This exception is thrown on Windows because
+    // khr_get_default_context is not implemented. But it can be safely
+    // ignored it seems.
+#if _DEBUG
+    std::cout << "ERROR: " << ex.what() << std::endl;
+#endif
+  }
+  return ctx;
+#else
+#if __SYCL_COMPILER_VERSION >= 20250604
+  return platform.khr_get_default_context();
+#else
+  return platform.ext_oneapi_get_default_context();
+#endif
+#endif
+}
+
 std::tuple<ze_module_handle_t, ze_result_t>
 create_module(ze_context_handle_t context, ze_device_handle_t device,
               uint8_t *binary_ptr, size_t binary_size, const char *build_flags,

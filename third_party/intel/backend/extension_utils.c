@@ -4,10 +4,12 @@
  * requiring a PyTorch sycl queue.
  */
 
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <sycl/sycl.hpp>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -17,6 +19,8 @@
 #endif
 
 #include <Python.h>
+
+#include "sycl_functions.h"
 
 // Cached device lists separated by platform/backend and their Intel device IDs
 // OpenCL devices
@@ -29,6 +33,13 @@ static std::vector<int> g_levelzero_device_ids;
 
 static bool g_devices_initialized = false;
 static bool has_opencl = false;
+
+// Index of `device_id` in `device_ids`, or -1 if absent.
+static int findDeviceIndex(const std::vector<int> &device_ids, int device_id) {
+  auto it = std::find(device_ids.begin(), device_ids.end(), device_id);
+  return it == device_ids.end() ? -1
+                                : static_cast<int>(it - device_ids.begin());
+}
 
 bool has_ocloc_in_path() {
   const char *path_env = std::getenv("PATH");
@@ -103,38 +114,22 @@ static void initializeDevicesIfNeeded() {
   g_devices_initialized = true;
 }
 
+// The device/device_id lists to query, matching whichever backend
+// `initializeDevicesIfNeeded()` found (OpenCL preferred, else Level Zero).
+static std::pair<const std::vector<sycl::device> *, const std::vector<int> *>
+activeDeviceLists() {
+  if (has_opencl)
+    return {&g_opencl_devices, &g_opencl_device_ids};
+  return {&g_levelzero_devices, &g_levelzero_device_ids};
+}
+
 extern "C" EXPORT_FUNC PyObject *check_extension(int device_id,
                                                  const char *extension) {
   try {
     initializeDevicesIfNeeded();
 
-    // Choose the appropriate device list based on backend availability
-    const std::vector<sycl::device> *devices = nullptr;
-    const std::vector<int> *device_ids = nullptr;
-
-    if (has_opencl) {
-      // Use OpenCL devices if available
-      devices = &g_opencl_devices;
-      device_ids = &g_opencl_device_ids;
-    } else {
-      // Fall back to Level Zero devices
-      devices = &g_levelzero_devices;
-      device_ids = &g_levelzero_device_ids;
-    }
-
-    if (devices->empty()) {
-      Py_RETURN_NONE;
-    }
-
-    // Find the device matching the provided device_id
-    int device_idx = -1;
-    for (size_t i = 0; i < devices->size(); ++i) {
-      if ((*device_ids)[i] == device_id) {
-        device_idx = i;
-        break;
-      }
-    }
-
+    auto [devices, device_ids] = activeDeviceLists();
+    int device_idx = findDeviceIndex(*device_ids, device_id);
     if (device_idx == -1) {
       Py_RETURN_NONE;
     }
@@ -165,17 +160,8 @@ extern "C" EXPORT_FUNC PyObject *get_device_id(int device_idx) {
   try {
     initializeDevicesIfNeeded();
 
-    // Choose the appropriate device list based on backend availability
-    const std::vector<int> *device_ids = nullptr;
-    size_t device_count = 0;
-
-    if (has_opencl) {
-      device_ids = &g_opencl_device_ids;
-      device_count = g_opencl_devices.size();
-    } else {
-      device_ids = &g_levelzero_device_ids;
-      device_count = g_levelzero_devices.size();
-    }
+    const std::vector<int> *device_ids = activeDeviceLists().second;
+    size_t device_count = device_ids->size();
 
     if (device_count == 0) {
       PyErr_SetString(PyExc_RuntimeError, "No GPU devices available");

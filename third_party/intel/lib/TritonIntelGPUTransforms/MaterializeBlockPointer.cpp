@@ -71,16 +71,16 @@ static bool isDescriptorAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo,
 // Check a descriptor's load/store-time index in the stride-one dimension.
 // Unlike isDescriptorAligned (base pointer / pitch), an unknown divisibility
 // must refuse here: make_tensor_descriptor makes no alignment promise about the
-// indices, so there is no contract to fall back on. ttgi::isDivisible alone is
-// unsound because tt::intel::getFinalValue resolves an scf.for iteration
-// argument to its init operand and never sees the yielded update, so an index
-// initialized to zero and advanced by an odd step is proved from the zero and
-// an odd offsetX reaches the 2D block message (issue #7990). Requiring the
-// dataflow analysis - which trusts tt.divisibility hints - to agree closes that
-// hole; being a conjunction it can only refuse more, never admit an index that
-// is rejected today. ttgi::isDivisible is kept rather than replaced because it
-// also refuses a nested-loop induction variable that the analysis would admit,
-// so dropping it would widen the gate; it is not kept for soundness.
+// indices, so there is no contract to fall back on. ttgi::isDivisible alone was
+// once unsound because tt::intel::getFinalValue resolved an scf.for iteration
+// argument to its init operand without looking at the yielded update, so an
+// index initialized to zero and advanced by an odd step was proved from the
+// zero and an odd offsetX reached the 2D block message (issue #7990).
+// getFinalValue now stops at such an argument, and the dataflow analysis -
+// which trusts tt.divisibility hints - must still agree; being a conjunction it
+// can only refuse more. ttgi::isDivisible is kept rather than replaced because
+// it also refuses a nested-loop induction variable that the analysis would
+// admit, so dropping it would widen the gate; it is not kept for soundness.
 static bool
 isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
                          unsigned divisor) {
@@ -738,7 +738,7 @@ private:
         cast<tt::DialectInferLayoutInterface>(&origEnc.getDialect());
     Attribute dstEnc;
     if (failed(interface->inferReshapeOpEncoding(srcShape, origEnc, dstShape,
-                                                 dstEnc, /*allowReorder=*/false,
+                                                 dstEnc,
                                                  /*loc=*/std::nullopt)))
       return std::nullopt;
     return dstEnc;
@@ -832,11 +832,9 @@ private:
     }
 
     // Reshape pointer and value to [H, W] with their natural 2D encodings
-    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr,
-                                            /*allowReorder=*/false);
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr);
     auto valReshape =
-        tt::ReshapeOp::create(builder, loc, newShape, op.getValue(),
-                              /*allowReorder=*/false);
+        tt::ReshapeOp::create(builder, loc, newShape, op.getValue());
 
     // Build HW delivery encoding and convert both ptr and val into it.
     auto storeEnc =
@@ -942,8 +940,7 @@ private:
     // (allow_reorder + efficient_layout) would be incorrect: that reshape
     // lowers to a no-op, so the registers would still hold the pointers laid
     // out per the 1D source encoding while the type claims HW delivery order.
-    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr,
-                                            /*allowReorder=*/false);
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr);
     auto loadPtrTy =
         RankedTensorType::get(newShape, ptrTensorTy.getElementType(), loadEnc);
     Value loadPtr =
@@ -953,8 +950,7 @@ private:
     Value mask2d;
     if (Value mask = op.getMask()) {
       auto maskTy = cast<RankedTensorType>(mask.getType());
-      auto maskReshape = tt::ReshapeOp::create(builder, loc, newShape, mask,
-                                               /*allowReorder=*/false);
+      auto maskReshape = tt::ReshapeOp::create(builder, loc, newShape, mask);
       auto loadMaskTy =
           RankedTensorType::get(newShape, maskTy.getElementType(), loadEnc);
       mask2d =
@@ -973,8 +969,7 @@ private:
     // carry the load encoding rather than the 1D source encoding.
     Value other2d;
     if (Value other = op.getOther()) {
-      auto otherReshape = tt::ReshapeOp::create(builder, loc, newShape, other,
-                                                /*allowReorder=*/false);
+      auto otherReshape = tt::ReshapeOp::create(builder, loc, newShape, other);
       other2d = ttg::ConvertLayoutOp::create(builder, loc, loadResultTy,
                                              otherReshape);
     }
@@ -1003,9 +998,9 @@ private:
     // encoding intact is `isExpensiveLoadOrStore` anchoring the load, not this
     // reshape.
     auto origResultTy = cast<RankedTensorType>(op.getType());
-    auto reshapeBack = tt::ReshapeOp::create(builder, loc, origResultTy,
-                                             converted, /*allowReorder=*/false,
-                                             /*efficientLayout=*/false);
+    auto reshapeBack =
+        tt::ReshapeOp::create(builder, loc, origResultTy, converted,
+                              /*efficientLayout=*/false);
 
     LDBG("Created 2D block load with layout conversion: " << *newLoad);
 
@@ -1062,11 +1057,6 @@ private:
 
     // Analyze the shape of the stride one dimension to ensure it satisfies HW
     // constraints.
-    // NOTE: this still proves the extent through getFinalValue and so carries
-    // the same init-only hole as the index check below did, for a descriptor
-    // rebuilt in a loop with a loop-carried extent, and only at element widths
-    // under 32 bits where the divisor exceeds 1. No in-tree kernel writes that
-    // shape, so it is left out of scope here rather than widened into this fix.
     Value baseWidth = tt::intel::getFinalValue((*shape)[strideOneDimVal]);
     unsigned divisor = llvm::divideCeil(32u, elementWidth);
     if (!ttgi::isDivisible(baseWidth, divisor)) {

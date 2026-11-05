@@ -74,13 +74,13 @@ cmake-build-*
 cuobjdump
 nvdisasm
 ptxas
-ptxas-blackwell
 
 # Third-party include
 third_party/nvidia/backend/include
 third_party/nvidia/backend/lib/cupti
 third_party/nvidia/backend/lib/cupti-blackwell
 third_party/nvidia/backend/lib/gsan.ll
+third_party/nvidia/backend/lib/gsan-profile.ll
 third_party/amd/backend/lib/libtriton_amd_codegen.dylib
 third_party/amd/backend/lib/libtriton_amd_codegen.so
 third_party/amd/backend/lib/triton_amd_codegen.dll
@@ -116,6 +116,7 @@ AGENTS.override.md
 # Third-party repos cloned for testing/benchmarking (root-level only)
 /vllm/
 /vllm-xpu-kernels/
+/vllm-omni/
 /pytorch/
 /sglang/
 /Liger-Kernel/

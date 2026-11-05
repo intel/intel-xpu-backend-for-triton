@@ -109,23 +109,14 @@ inline FailureOr<Operation *> matchEligibleSubgroupScan(triton::ScanOp op) {
   if (failed(combineOp))
     return failure();
 
+  // `arith.maxnumf`/`minnumf` return the numeric operand when exactly one
+  // operand is NaN, and SPIR-V group FMax/FMin do too. But SPIR-V leaves an
+  // all-NaN set undefined, which a scan hits on every leading-NaN prefix.
+  // Excluded rather than inherited from the reduce path: cumsum/cumprod do not
+  // need them.
   if (!isa<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
            arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
            arith::AndIOp, arith::OrIOp, arith::XOrIOp>(*combineOp))
-    return failure();
-
-  // `arith.maxnumf`/`minnumf` return the numeric operand when exactly one
-  // operand is NaN, but SPIR-V leaves the group FMax/FMin choice undefined
-  // there (signed zeros likewise). Excluded rather than inherited from the
-  // reduce path: cumsum/cumprod do not need them.
-  //
-  // For i1, three entries of the shared arith-to-SPIR-V logical map are wrong
-  // (add should be Xor, maxsi And, minsi Or). Both are pre-existing reduce-path
-  // defects tracked in #8212; exclude the affected combinations so this second
-  // consumer does not propagate them.
-  Type resultType = (*combineOp)->getResult(0).getType();
-  if (resultType.isInteger(1) &&
-      isa<arith::AddIOp, arith::MaxSIOp, arith::MinSIOp>(*combineOp))
     return failure();
 
   return combineOp;

@@ -27,7 +27,7 @@ One flag per kernel family, each with its own `TRITON_TEST_SUITE` and skip list
 | Flag | Test files, relative to `sglang/test/` |
 |---|---|
 | `--sglang-attention` | `registered/attention/test_create_kvindices.py`, `registered/attention/test_triton_attention_kernels.py`, `registered/attention/unittests/dense/test_triton.py` |
-| `--sglang-quant` | `registered/kernels/ops/quantization/test_fp8_kernel.py`, `test_awq_dequant.py`, `registered/kernels/ops/gemm/test_fp8_kernel.py`, `test_triton_scaled_mm.py` |
+| `--sglang-quant` | `registered/kernels/ops/quantization/test_fp8_kernel.py`, `test_awq_dequant.py`, `registered/kernels/ops/gemm/test_triton_scaled_mm.py` |
 | `--sglang-moe` | `registered/moe/test_fused_moe.py`, `registered/lora/test_fused_moe_lora_kernel.py` |
 | `--sglang-mamba` | `registered/layers/mamba/test_causal_conv1d.py`, `test_mamba_ssm.py`, `test_mamba_ssm_ssd.py` |
 | `--sglang-gdn` | `registered/attention/test_chunk_gated_delta_rule.py` |
@@ -35,14 +35,12 @@ One flag per kernel family, each with its own `TRITON_TEST_SUITE` and skip list
 | `--sglang-spec` | `registered/spec/dspark/test_dspark_kernel_parity.py` |
 | `--sglang-e2e` | `registered/xpu/test_xpu_basic.py` |
 
-Three things to know before editing this:
+Two things to know before editing this:
 
 - Suites run without `-n`. With `-n 4` the attention tests crash an xdist worker
   with a GPU page fault on a single-GPU runner.
 - Skip list node ids start at `registered/`, not `test/registered/`: SGLang ships
   `test/pytest.ini`, so `sglang/test` is the pytest rootdir.
-- `--sglang-quant` needs `--import-mode=importlib`: its two `test_fp8_kernel.py`
-  have no `__init__.py`, so the default mode cannot collect both.
 
 ## Kernel coverage
 
@@ -57,7 +55,7 @@ kernels to `kernels/ops/` (RFC #29630), so recheck them after a pin bump.
 | `decode_attention_fwd`, `_normal`, `_grouped` | `kernels/ops/attention/decode_attention.py` |
 | `extend_attention_fwd`, `_unified`, `build_unified_kv_indices` | `kernels/ops/attention/extend_attention.py` |
 | `context_attention_fwd` | `kernels/ops/attention/prefill_attention.py` |
-| `create_flashinfer_kv_indices_triton` | `kernels/ops/kvcache/kv_indices.py`, re-exported from `kernels/ops/attention/utils.py` |
+| `create_flashinfer_kv_indices_triton` | `kernels/ops/attention/kv_indices.py` |
 | `get_num_kv_splits_triton` | `kernels/ops/attention/metadata.py` |
 
 `unittests/dense/test_triton.py` is the second source of coverage for those
@@ -79,14 +77,14 @@ capture stream device-agnostic via `get_device_module()` and adds
 | Kernels | Source |
 |---|---|
 | `per_token_group_quant_fp8` | `kernels/ops/quantization/fp8_kernel.py` |
-| `w8a8_block_fp8_matmul`, `triton_scaled_mm` | `kernels/ops/gemm/fp8_kernel.py` |
-| `awq_dequantize`, `awq_gemm` | `kernels/ops/quantization/awq_triton.py` |
+| `triton_scaled_mm` | `kernels/ops/gemm/fp8_kernel.py` |
+| `awq_dequantize` | `kernels/ops/quantization/awq_triton.py` |
 
 `--sglang-moe`:
 
 | Kernels | Source |
 |---|---|
-| `fused_moe_lora` | `kernels/ops/moe/fused_moe_lora_kernel.py` |
+| `fused_moe_lora` | `kernels/ops/lora/moe/fused_moe_lora_kernel.py` |
 
 `--sglang-mamba`. causal conv1d is shared with GDN and KDA, so this suite covers
 those paths too:
@@ -122,7 +120,7 @@ fork silently picks the NVIDIA kernels instead of failing.
 |---|---|
 | `fused_recurrent_kda`, `kda_gate_chunk_cumsum`, `chunk_kda_scaled_dot_kkt_fwd` | `kernels/ops/attention/fla/kda.py` |
 | `fused_recurrent_kda_packed_decode` | `kernels/ops/attention/fla/fused_recurrent.py` |
-| `fused_sigmoid_gating_delta_rule_update` | `kernels/ops/attention/fla/fused_sigmoid_gating_recurrent.py` |
+| `fused_sigmoid_gating_delta_rule_update` | `kernels/ops/attention/linear/fused_sigmoid_gating_recurrent.py` |
 | `chunk_local_cumsum` | `kernels/ops/attention/fla/cumsum.py` |
 
 `--sglang-spec`:
@@ -130,7 +128,7 @@ fork silently picks the NVIDIA kernels instead of failing.
 | Kernels | Source |
 |---|---|
 | `pad_verify_lens_to_bucket`, `build_qo_indptr` | `kernels/ops/speculative/ragged_verify_kernels.py` |
-| `expand_prefill_causally`, `build_page_table_positions`, `build_causal_swa_page_indices` | `kernels/ops/attention/dsv4_attn_metadata_kernels.py` |
+| `expand_prefill_causally`, `build_page_table_positions`, `build_causal_swa_page_indices` | `kernels/ops/attention/dsv4/attn_metadata_kernels.py` |
 | `dspark_accept`, `dspark_attn_metadata`, `dspark_draft_model`, `dspark_schedule`, `dspark_verify_window` | `kernels/ops/speculative/dspark/` |
 
 `--sglang-e2e`. The only suite that runs a real forward pass, so the only one
@@ -160,13 +158,13 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
 
 | Suite | Result | Time |
 |---|---|---|
-| `--sglang-attention` | 21 passed, 3 skipped (2 upstream, 1 skip-listed) | 24s |
-| `--sglang-quant` | 5 passed | 14s |
+| `--sglang-attention` | 24 passed, 3 skipped upstream | 578s |
+| `--sglang-quant` | 3 passed | 14s |
 | `--sglang-moe` | 110 passed | 46s |
 | `--sglang-mamba` | 940 passed, 16 skipped upstream | 19s |
 | `--sglang-gdn` | 30 passed, 1 skipped upstream | 9s |
-| `--sglang-kda` | 1 passed, 14 skipped upstream | 10s |
-| `--sglang-spec` | 1 skipped, skip-listed | 11s |
+| `--sglang-kda` | 1 passed, 19 skipped upstream | 18s |
+| `--sglang-spec` | 1 passed, 20 subtests | 35s |
 | `--sglang-e2e` | not measured locally - needs model weights and a server launch | - |
 
 ## Known gaps
@@ -218,8 +216,7 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
   `sglang-test-fix.patch` moves the GDN path, XPU overrides included, to tensor
   descriptors; the remaining uses, e.g. in `kda.py`, are not reached by the
   suites here.
-- **CUDA-only tests.** `test_dspark_kernel_parity.py` calls `torch.cuda` and is
-  skip-listed. Three of four `test_kda_kernels.py` classes skip themselves.
+- **CUDA-only tests.** Three of four `test_kda_kernels.py` classes skip themselves.
 - **e2e is smoke only.** `--sglang-e2e` asserts throughput, not numerics, so a
   subtly wrong position id or token-pool write still passes. No SGLang test
   checks those two kernels against a reference.
@@ -233,8 +230,6 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
   `lightning_attention.py`, `dsa_attention.py`, `dsv4_attention.py`). Enable one
   family at a time; `gdn/` and `kda/` stay blocked on `tl.make_block_ptr`
   regardless (see above).
-- **Sliding window OOM.** `test_extend_attention_sliding_window` runs the kernel
-  fine, but its torch reference needs more than 48 GB. Unskip when it is chunked.
 - **BMG.** `scripts/skiplist/xe2/` is a copy of `default/`; nothing measured on
   B580 yet. `--skip-list` replaces the directory instead of merging, so the
   entries have to be duplicated.
@@ -268,9 +263,11 @@ entry installs SGLang itself, because `run_sglang_tests` calls
 `install-sglang.sh` - there is no install step in the workflow as there is for
 vLLM.
 
-`install_sgl_kernel_xpu` adds one `--install-sgl-kernel-xpu` step before the
-suites and is only set for BMG. It is idempotent across matrix entries, but the
-pip cache key is per suite, so the first entry on a fresh runner pays the build.
+`install_sgl_kernel_xpu` is only set for BMG. The setup job builds the
+`sgl-kernel-xpu` wheel once and uploads it, and each matrix entry installs it
+with `pip install --no-deps`. The wheel is cached in `/cache`, keyed by the
+`sgl-kernel-xpu` pin, AOT target, PyTorch cache key and `icpx` version, so it is
+only rebuilt when one of them changes.
 
 ## Usage
 

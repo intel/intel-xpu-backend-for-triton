@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import triton_utils
-from triton_utils.gh_utils import GHArtifact, GHAWheelDownloader
+from triton_utils.gh_utils import CLIUtils, GHArtifact, GHAWheelDownloader, GHAWorkflow
 
 
 def test_config_parse_minimal():
@@ -176,3 +176,78 @@ def test_resolve_run_invalid_preset():
     d = GHAWheelDownloader(download_dir=Path("/tmp"), latest_wf_run="nonexistent")
     with pytest.raises(ValueError, match="Unknown workflow preset"):
         d._resolve_run()
+
+
+def _run(run_id, **overrides):
+    """Workflow run as returned by ``GET .../actions/workflows/{id}/runs``."""
+    return {
+        "id": run_id,
+        "name": "wf",
+        "path": ".github/workflows/wf.yml",
+        "run_number": run_id,
+        "html_url": f"https://github.com/org/repo/actions/runs/{run_id}",
+        "head_sha": f"sha{run_id}",
+        "created_at": f"2026-10-0{run_id}T06:30:00Z",
+        "updated_at": f"2026-10-0{run_id}T07:00:00Z",
+        "head_branch": "main",
+        "status": "completed",
+        "conclusion": "success"
+    } | overrides
+
+
+def _fake_runs(monkeypatch, runs):
+    """Serve ``runs`` from ``CLIUtils.gh_json``; return the recorded ``gh`` argument lists."""
+    calls = []
+
+    def gh_json(args):
+        calls.append(args)
+        return {"workflow_runs": runs}
+
+    monkeypatch.setattr(CLIUtils, "gh_json", gh_json)
+    return calls
+
+
+def test_latest_success_run_matches_branch_locally(monkeypatch, capsys):
+    """#8318: no server-side branch/status filters (stale search index); the branch is matched locally."""
+    calls = _fake_runs(
+        monkeypatch, [
+            _run(5, status="in_progress", conclusion=None),
+            _run(4, conclusion="failure"),
+            _run(3, head_branch="feature"),
+            _run(2),
+            _run(1)
+        ]
+    )
+    wf = GHAWorkflow(id="1", name="wf", repo="org/repo", path=".github/workflows/wf.yml", branch="main")
+
+    run = wf.get_latest_success_run()
+
+    assert [arg for arg in calls[0] if arg.startswith(("branch=", "status="))] == []
+    assert "per_page=100" in calls[0]
+    assert run.id == 2
+    out, err = capsys.readouterr()
+    assert out == ""
+    for value in ("https://github.com/org/repo/actions/runs/2", "sha2", "2026-10-02T06:30:00Z"):
+        assert value in err
+
+
+def test_latest_success_run_picks_highest_run_number(monkeypatch):
+    """The listing order is not documented; the highest run_number wins regardless of position."""
+    _fake_runs(monkeypatch, [_run(1), _run(3, head_branch="feature"), _run(2)])
+    wf = GHAWorkflow(id="1", name="wf", repo="org/repo", path=".github/workflows/wf.yml", branch="main")
+
+    assert wf.get_latest_success_run().id == 2
+
+
+def test_latest_success_run_raises_when_no_run_qualifies(monkeypatch):
+    """Nothing successful on the branch among the newest runs is still an error."""
+    _fake_runs(
+        monkeypatch,
+        [_run(3, head_branch="feature"),
+         _run(2, conclusion="failure"),
+         _run(1, status="in_progress", conclusion=None)]
+    )
+    wf = GHAWorkflow(id="1", name="wf", repo="org/repo", path=".github/workflows/wf.yml", branch="main")
+
+    with pytest.raises(RuntimeError, match="No successful completed runs found"):
+        wf.get_latest_success_run()

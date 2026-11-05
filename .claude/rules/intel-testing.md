@@ -119,7 +119,7 @@ For testing multiple code paths in one file:
 make test-lit
 
 # Via build directory
-cd build/cmake.linux-x86_64-cpython-3.10 && lit -v test/
+cd build/cmake.linux-x86_64-cpython-3.11 && lit -v test/
 
 # Specific directory
 lit test/TritonIntelGPU/
@@ -242,7 +242,7 @@ For tests needing IR construction, add `OpBuilder`/`Block` members. For shared c
 make test-cpp
 
 # Via CTest
-cd build/cmake.linux-x86_64-cpython-3.10 && ctest .
+cd build/cmake.linux-x86_64-cpython-3.11 && ctest .
 
 # Run specific test binary
 build/.../unittest/TestDPASLinearLayout
@@ -282,13 +282,18 @@ Formats: exact test path, path with parameters, regex patterns (with `@regexp` s
 
 From `scripts/pytest-utils.sh`:
 - Skip lists passed via `--skip-from-file=path/to/suite.txt`
-- `--select-fail-on-missing` ensures skipped tests exist (catches stale skip entries)
+- Expected-failure lists in the same directory: `<suite>.xfail.txt` (`--xfail-norun-from-file`, the
+  default: reported as XFAIL without running) and `<suite>.xfail-run.txt` (`--xfail-from-file`, strict:
+  the test runs, must fail, and an unexpected pass fails the run; for tests we want to hear about once
+  they are fixed). Only tests that always fail go in `<suite>.xfail-run.txt`; intermittent failures stay
+  in the skip list
+- `--select-fail-on-missing` ensures listed tests exist in skip and xfail lists (catches stale entries)
 - Multiple skip files combined with semicolons
 - Extra suffix-based skip lists via `TRITON_EXTRA_SKIPLIST_SUFFIXES`
 
 ### TEST_UNSKIP Mode
 
-Setting `TEST_UNSKIP=true` ignores all skip/xfail decorators:
+Setting `TEST_UNSKIP=true` ignores all skip/xfail decorators and does not load the skip or xfail lists:
 - Adds `--timeout=500` per test
 - Adds `--max-worker-restart=500` for crash tolerance
 - Useful for validating which skips are still needed

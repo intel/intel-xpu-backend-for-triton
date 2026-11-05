@@ -16,8 +16,28 @@ import triton.language as tl
 from triton_kernels_benchmark import gemm_benchmark
 
 
+def get_cri_matmul_autotune_configs() -> List[triton.Config]:
+    if not gemm_benchmark.is_xpu_cri():
+        return []
+    return [
+        triton.Config(
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '512'},
+            num_stages=2, num_warps=32)
+    ]
+
+
+def get_cri_matmul_batched_autotune_configs() -> List[triton.Config]:
+    if not gemm_benchmark.is_xpu_cri():
+        return []
+    return [
+        triton.Config(
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '512'},
+            num_stages=2, num_warps=32)
+    ]
+
+
 @triton.autotune(
-    configs=gemm_benchmark.get_matmul_autotune_configs(),
+    configs=gemm_benchmark.get_matmul_autotune_configs() + get_cri_matmul_autotune_configs(),
     key=['M', 'N', 'K'],
     restore_value=['c_ptr'],
 )
@@ -43,6 +63,9 @@ def matmul_kernel(
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
+
+    tl.assume(pid_m >= 0)
+    tl.assume(pid_n >= 0)
 
     offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
@@ -70,7 +93,7 @@ def matmul_kernel(
 
 # pylint: disable=unused-argument
 @triton.autotune(
-    configs=gemm_benchmark.get_matmul_batched_autotune_configs(),
+    configs=gemm_benchmark.get_matmul_batched_autotune_configs() + get_cri_matmul_batched_autotune_configs(),
     key=['M', 'N', 'K'],
     restore_value=['c_ptr'],
 )
@@ -97,6 +120,9 @@ def matmul_kernel_batched(
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
+
+    tl.assume(pid_m >= 0)
+    tl.assume(pid_n >= 0)
 
     offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N

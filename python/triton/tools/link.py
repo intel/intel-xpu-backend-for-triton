@@ -192,22 +192,12 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
     src += (f"TT_ResultTy {name}(TT_StreamTy stream, {gen_signature_with_full_args(metas[-1])}){{")
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        if is_xpu():
-            cond_fn = (  #
-                lambda val, hint: f"(reinterpret_cast<uintptr_t>({val}) % {hint} == 0)"  #
-                if val in ('A', 'B', 'C')  #
-                else f"({val} % {hint} == 0)"  #
-                if hint == 16  #
-                else f"({val} == {hint})"  #
-                if hint == 1  #
-                else None)
-        else:
-            cond_fn = (  #
-                lambda val, hint: f"((uintptr_t){val} % {hint} == 0)"  #
-                if hint == 16  #
-                else f"({val} == {hint})"  #
-                if hint == 1  #
-                else None)
+        cond_fn = (  #
+            lambda val, hint: f"((uintptr_t){val} % {hint} == 0)"  #
+            if hint == 16  #
+            else f"({val} == {hint})"  #
+            if hint == 1  #
+            else None)
         conds = " && ".join([  #
             cond_fn(val, hint)  #
             for val, hint in zip(meta.arg_names, meta.sizes)  #

@@ -22,7 +22,6 @@ import torch
 import triton
 import triton.language as tl
 from triton._internal_testing import is_xpu
-from triton.runtime._allocation import NullAllocator
 
 
 @triton.jit
@@ -94,23 +93,8 @@ def _splat_value(line):
         return None
 
 
-@pytest.fixture
-def xpu_allocator(device):
-    # Tensor descriptors require a global memory allocation. The allocator is
-    # process-wide, so restore the null one afterwards instead of leaking it
-    # into later tests.
-    def alloc_fn(size: int, alignment: int, stream):
-        return torch.empty(size, device=device, dtype=torch.int8)
-
-    triton.set_allocator(alloc_fn)
-    try:
-        yield
-    finally:
-        triton.set_allocator(NullAllocator())
-
-
 @pytest.mark.skipif(not is_xpu(), reason="Divergent descriptor padding lowering is specific to the XPU backend")
-def test_descriptor_divergent_padding(device, xpu_allocator):
+def test_descriptor_divergent_padding(device):
 
     # Surface is 48x48, tiles are 32x32 and the grid covers 64x64, so every tile
     # except (0, 0) is partially or wholly out of bounds. That is what makes the

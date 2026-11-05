@@ -25,7 +25,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
     // COM: 256 elements / 32 threads = 8 per thread, all contiguous aligned.
     // COM: 8 f32 elements * 32 bits = 256 bits -> one vector<8xi32> load
     // COM: (baseline would be two vector<4xi32> loads).
-    // CHECK-COUNT-1: llvm.load {{.*}} {alignment = 32 : i64} : !llvm.ptr<1> -> vector<8xi32>
+    // CHECK-COUNT-1: llvm.load {{.*}} <alignment = 32> : !llvm.ptr<1> -> vector<8xi32>
     // CHECK-NOT:     vector<4xi32>
     tt.return
   }
@@ -48,7 +48,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
     %6 = tt.addptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
     tt.store %6, %cst : tensor<256x!tt.ptr<f32>, #blocked0>
     // COM: Same widening applies to stores. Widened -> single vector<8xi32> store.
-    // CHECK-COUNT-1: llvm.store {{.*}} {alignment = 32 : i64} : vector<8xi32>, !llvm.ptr<1>
+    // CHECK-COUNT-1: llvm.store {{.*}} <alignment = 32> : vector<8xi32>, !llvm.ptr<1>
     // CHECK-NOT:     vector<4xi32>
     tt.return
   }
@@ -73,7 +73,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
     // COM: 512 elements / 32 threads = 16 per thread. At 16 bits/elem, that is 256 bits/thread.
     // COM: Widened cap produces one 256-bit store packed as vector<8xi32>
     // COM: (baseline would be two vector<4xi32> stores of 8xf16 each).
-    // CHECK-COUNT-1: llvm.store {{.*}} {alignment = 32 : i64} : vector<8xi32>, !llvm.ptr<1>
+    // CHECK-COUNT-1: llvm.store {{.*}} <alignment = 32> : vector<8xi32>, !llvm.ptr<1>
     // CHECK-NOT:     vector<4xi32>
     tt.return
   }
@@ -98,7 +98,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
     // COM: 1024 elements / 32 threads = 32 per thread. At 8 bits/elem, that is 256 bits/thread.
     // COM: Widened cap produces one 256-bit store packed as vector<8xi32>
     // COM: (baseline would be two vector<4xi32> stores of 16xi8 each).
-    // CHECK-COUNT-1: llvm.store {{.*}} {alignment = 32 : i64} : vector<8xi32>, !llvm.ptr<1>
+    // CHECK-COUNT-1: llvm.store {{.*}} <alignment = 32> : vector<8xi32>, !llvm.ptr<1>
     // CHECK-NOT:     vector<4xi32>
     tt.return
   }
@@ -137,17 +137,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
     // CHECK: %[[GROUPMASK0:.*]] = llvm.and {{.*}} : i1
     // CHECK-NEXT: llvm.cond_br %[[GROUPMASK0]], ^[[BB_FAST0:bb[0-9]+]], ^[[BB_SLOW0:bb[0-9]+]]
     // CHECK: ^[[BB_FAST0]]:
-    // CHECK:   llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK:   llvm.store {{.*}} <alignment = 16> : vector<4xi32>, !llvm.ptr<1>
     // CHECK: ^[[BB_SLOW0]]:
-    // CHECK-COUNT-4: llvm.store {{.*}} {alignment = 4 : i64} : f32, !llvm.ptr<1>
+    // CHECK-COUNT-4: llvm.store {{.*}} <alignment = 4> : f32, !llvm.ptr<1>
     // COM: Group 2: same structure, second vec=4 group.
     // CHECK-COUNT-2: llvm.and {{.*}} : i1
     // CHECK: %[[GROUPMASK1:.*]] = llvm.and {{.*}} : i1
     // CHECK-NEXT: llvm.cond_br %[[GROUPMASK1]], ^[[BB_FAST1:bb[0-9]+]], ^[[BB_SLOW1:bb[0-9]+]]
     // CHECK: ^[[BB_FAST1]]:
-    // CHECK:   llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK:   llvm.store {{.*}} <alignment = 16> : vector<4xi32>, !llvm.ptr<1>
     // CHECK: ^[[BB_SLOW1]]:
-    // CHECK-COUNT-4: llvm.store {{.*}} {alignment = 4 : i64} : f32, !llvm.ptr<1>
+    // CHECK-COUNT-4: llvm.store {{.*}} <alignment = 4> : f32, !llvm.ptr<1>
     tt.return
   }
 }

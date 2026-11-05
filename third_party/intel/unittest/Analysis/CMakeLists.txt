@@ -30,12 +30,6 @@ add_triton_ut(
     MLIRFuncDialect
 )
 
-# Suppress deprecation warnings for OpBuilder::create<> API
-# TODO: Migrate to modern MLIR operation creation patterns
-if(NOT WIN32)
-  target_compile_options(DPASAnalysis PRIVATE -Wno-deprecated-declarations)
-endif()
-
 add_triton_ut(
   NAME AliasAnalysis
   SRCS AliasAnalysisTest.cpp
@@ -53,10 +47,6 @@ add_triton_ut(
     MLIRFuncDialect
     MLIRSCFDialect
 )
-
-if(NOT WIN32)
-  target_compile_options(AliasAnalysis PRIVATE -Wno-deprecated-declarations)
-endif()
 
 add_triton_ut(
   NAME SpatialReuseAnalysis
@@ -92,11 +82,6 @@ add_triton_ut(
     MLIRFuncDialect
     MLIRSCFDialect
 )
-
-# Suppress deprecation warnings for OpBuilder::create<> API
-if(NOT WIN32)
-  target_compile_options(StrideInfo PRIVATE -Wno-deprecated-declarations)
-endif()
 
 add_triton_ut(
   NAME TemporalReuseAnalysis
@@ -154,6 +139,44 @@ add_triton_ut(
 add_triton_ut(
   NAME SignednessProver
   SRCS SignednessProverTest.cpp
+  LIBS
+    TritonAnalysis
+    TritonGPUIR
+    TritonGPUTransforms
+    TritonIR
+    TritonIntelAnalysis
+    TritonIntelGPUIR
+    TritonIntelGPUTransforms
+    TritonNvidiaGPUIR
+    TritonNvidiaGPUTransforms
+    MLIRArithDialect
+    MLIRFuncDialect
+    MLIRParser
+    MLIRSCFDialect
+)
+
+add_triton_ut(
+  NAME SymbolicBounds
+  SRCS SymbolicBoundsTest.cpp
+  LIBS
+    TritonAnalysis
+    TritonGPUIR
+    TritonGPUTransforms
+    TritonIR
+    TritonIntelAnalysis
+    TritonIntelGPUIR
+    TritonIntelGPUTransforms
+    TritonNvidiaGPUIR
+    TritonNvidiaGPUTransforms
+    MLIRArithDialect
+    MLIRFuncDialect
+    MLIRParser
+    MLIRSCFDialect
+)
+
+add_triton_ut(
+  NAME SymbolicBoundsOracle
+  SRCS SymbolicBoundsOracleTest.cpp
   LIBS
     TritonAnalysis
     TritonGPUIR

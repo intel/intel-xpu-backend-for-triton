@@ -34,13 +34,18 @@ module attributes {"ttg.num-warps" = 4 : i32} {
   }
 }
 
+// COM: The comparisons feeding the assumes are proven from the assumes
+// COM: themselves, so folding them would leave `llvm.intr.assume %true` and
+// COM: lose the facts for later passes. They must stay.
 // CHECK-LABEL:   tt.func @assumepid(
 // CHECK-SAME:                       %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<1024xf32> {
-// CHECK:           %[[VAL_1:.*]] = arith.constant true
+// CHECK:           %[[C0:.*]] = arith.constant 0 : i32
 // CHECK:           %[[VAL_2:.*]] = arith.constant 1024 : i32
 // CHECK:           %[[VAL_3:.*]] = tt.get_program_id x : i32
-// CHECK:           llvm.intr.assume %[[VAL_1]] : i1
-// CHECK:           llvm.intr.assume %[[VAL_1]] : i1
+// CHECK:           %[[SLE:.*]] = arith.cmpi sle, %[[VAL_3]], %[[VAL_2]] : i32
+// CHECK:           llvm.intr.assume %[[SLE]] : i1
+// CHECK:           %[[SGE:.*]] = arith.cmpi sge, %[[VAL_3]], %[[C0]] : i32
+// CHECK:           llvm.intr.assume %[[SGE]] : i1
 // CHECK:           %[[VAL_4:.*]] = arith.muli %[[VAL_3]], %[[VAL_2]] : i32
 // CHECK:           %[[VAL_5:.*]] = tt.addptr %[[VAL_0]], %[[VAL_4]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_6:.*]] = tt.splat %[[VAL_5]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
@@ -179,3 +184,99 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           scf.for
 // CHECK:             arith.minsi
 // CHECK:           tt.return
+
+// -----
+
+// COM: An scf.if between a value and a later assume does not stop the assume:
+// COM: the scf.if always finishes, so `%v >= -1` folds to true.
+module {
+  tt.func @scf_if_between_op_result_folds(%p: !tt.ptr<i32>, %q: !tt.ptr<i32>, %f: i1) -> i1 {
+    %c0 = arith.constant 0 : i32
+    %cm1 = arith.constant -1 : i32
+    %v = tt.load %p : !tt.ptr<i32>
+    scf.if %f {
+      tt.store %q, %c0 : !tt.ptr<i32>
+    }
+    %cmp = arith.cmpi sge, %v, %c0 : i32
+    llvm.intr.assume %cmp : i1
+    %o = arith.cmpi sge, %v, %cm1 : i32
+    tt.return %o : i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @scf_if_between_op_result_folds
+// CHECK:           %[[CMP:.*]] = arith.cmpi sge, %{{.*}}, %c0_i32 : i32
+// CHECK-NEXT:      llvm.intr.assume %[[CMP]] : i1
+// CHECK-NOT:       arith.cmpi
+// CHECK:           tt.return %true
+
+// -----
+
+// COM: Same, with the value a function argument.
+module {
+  tt.func @scf_if_between_func_arg_folds(%v: i32, %q: !tt.ptr<i32>, %f: i1) -> i1 {
+    %c0 = arith.constant 0 : i32
+    %cm1 = arith.constant -1 : i32
+    scf.if %f {
+      tt.store %q, %c0 : !tt.ptr<i32>
+    }
+    %cmp = arith.cmpi sge, %v, %c0 : i32
+    llvm.intr.assume %cmp : i1
+    %o = arith.cmpi sge, %v, %cm1 : i32
+    tt.return %o : i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @scf_if_between_func_arg_folds
+// CHECK:           %[[CMP:.*]] = arith.cmpi sge, %{{.*}}, %c0_i32 : i32
+// CHECK-NEXT:      llvm.intr.assume %[[CMP]] : i1
+// CHECK-NOT:       arith.cmpi
+// CHECK:           tt.return %true
+
+// -----
+
+// COM: Only the assume keeps the comparison: the other uses still fold, so the
+// COM: `scf.if` loses its dead branch and the result is true.
+module {
+  tt.func @assume_and_other_uses(%v: i32, %q: !tt.ptr<i32>) -> i1 {
+    %c0 = arith.constant 0 : i32
+    %cmp = arith.cmpi sge, %v, %c0 : i32
+    llvm.intr.assume %cmp : i1
+    scf.if %cmp {
+      tt.store %q, %c0 : !tt.ptr<i32>
+    }
+    tt.return %cmp : i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @assume_and_other_uses
+// CHECK:           %[[CMP:.*]] = arith.cmpi sge, %{{.*}}, %c0_i32 : i32
+// CHECK-NEXT:      llvm.intr.assume %[[CMP]] : i1
+// CHECK-NOT:       scf.if
+// CHECK:           tt.store
+// CHECK:           tt.return %true
+
+// -----
+
+// COM: A loop between the value and the assume still stops it, so the
+// COM: comparison stays.
+module {
+  tt.func @scf_for_between_not_folded(%p: !tt.ptr<i32>, %q: !tt.ptr<i32>, %ub: i32) -> i1 {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %cm1 = arith.constant -1 : i32
+    %v = tt.load %p : !tt.ptr<i32>
+    scf.for %i = %c0 to %ub step %c1 : i32 {
+      tt.store %q, %c0 : !tt.ptr<i32>
+    }
+    %cmp = arith.cmpi sge, %v, %c0 : i32
+    llvm.intr.assume %cmp : i1
+    %o = arith.cmpi sge, %v, %cm1 : i32
+    tt.return %o : i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @scf_for_between_not_folded
+// CHECK:           scf.for
+// CHECK:           %[[O:.*]] = arith.cmpi sge, %{{.*}}, %c-1_i32 : i32
+// CHECK:           tt.return %[[O]]

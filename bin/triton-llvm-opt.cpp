@@ -74,6 +74,21 @@ static cl::opt<bool> ExpandSubByteVectorBitcast(
                    "extractelement + icmp onto the source i1 lanes"),
     cl::init(false));
 
+static cl::opt<bool> LegalizeI1VectorMemory(
+    "legalize-i1-vector-memory",
+    llvm::cl::desc("rewrite `<N x i1>` loads and stores as integer accesses"),
+    cl::init(false));
+
+static cl::opt<bool> NVPTXVectorize(
+    "nvptx-vectorize",
+    llvm::cl::desc("run hardware-aware NVPTX arithmetic vectorization"),
+    cl::init(false));
+
+static cl::opt<unsigned> NVPTXComputeCapability(
+    "nvptx-compute-capability",
+    llvm::cl::desc("NVIDIA compute capability used for vectorization"),
+    cl::init(90));
+
 namespace {
 static std::function<Error(Module *)> makeOptimizingPipeline() {
   return [](Module *m) -> Error {
@@ -99,6 +114,8 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
       mpm.addPass(ExpandSubByteBitwiseAndPass());
     if (ExpandSubByteVectorBitcast)
       mpm.addPass(ExpandSubByteVectorBitcastPass());
+    if (LegalizeI1VectorMemory)
+      mpm.addPass(LegalizeI1VectorMemoryPass());
     llvm::FunctionPassManager fpm;
     if (BreakStructPhiNodes)
       fpm.addPass(BreakStructPhiNodesPass());
@@ -106,6 +123,8 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
       fpm.addPass(GuardMaskedDivRemPass());
     if (ScalarizePtrVectors)
       fpm.addPass(ScalarizePtrVectorsPass());
+    if (NVPTXVectorize)
+      fpm.addPass(NVPTXVectorizerPass(NVPTXComputeCapability));
     mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
     mpm.run(*m, mam);
     return Error::success();

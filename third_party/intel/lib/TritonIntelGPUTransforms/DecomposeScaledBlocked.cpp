@@ -89,7 +89,8 @@ private:
     if (isa<FloatType>(scaleTy.getElementType())) {
       auto scaleType = scaleTy.clone(computeType);
       return cast<TypedValue<RankedTensorType>>(
-          FpToFpOp::create(rewriter, loc, scaleType, scale).getResult());
+          FpToFpOp::create(rewriter, loc, scaleType, scale, RoundingModeAttr{})
+              .getResult());
     }
 
     // Choose an fp type that can fit the scale value.
@@ -108,9 +109,18 @@ private:
         arith::ConstantIntOp::create(rewriter, loc, shiftValue, intWidth);
     auto shift =
         SplatOp::create(rewriter, loc, scaleTy.clone(intType), shiftConst);
-    auto shlRes = arith::ShLIOp::create(rewriter, loc, zexted, shift);
+    Value scaleBits = arith::ShLIOp::create(rewriter, loc, zexted, shift);
+    if (computeType.isBF16()) {
+      // E8M0 byte zero is 2^-127, which is subnormal in bf16 and rounds to
+      // zero in fp16.
+      auto minScaleBits =
+          arith::ConstantIntOp::create(rewriter, loc, 0x0040, 16);
+      auto minScale =
+          SplatOp::create(rewriter, loc, scaleTy.clone(intType), minScaleBits);
+      scaleBits = arith::MaxUIOp::create(rewriter, loc, scaleBits, minScale);
+    }
     Value scaleFP =
-        BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), shlRes);
+        BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), scaleBits);
     if (largeFpType != computeType) {
       scaleFP = arith::TruncFOp::create(rewriter, loc,
                                         scaleTy.clone(computeType), scaleFP);
@@ -146,13 +156,11 @@ private:
         cast<DialectInferLayoutInterface>(&dstEncoding.getDialect());
     Attribute broadcastEncoding;
     auto result = interface->inferReshapeOpEncoding(
-        resultShape, dstEncoding, broadcastShape, broadcastEncoding,
-        /*allowReorder=*/false, loc);
+        resultShape, dstEncoding, broadcastShape, broadcastEncoding, loc);
     assert(succeeded(result));
     Attribute srcEncoding;
-    result = interface->inferReshapeOpEncoding(expandedShape, broadcastEncoding,
-                                               scaleTy.getShape(), srcEncoding,
-                                               /*allowReorder=*/false, loc);
+    result = interface->inferReshapeOpEncoding(
+        expandedShape, broadcastEncoding, scaleTy.getShape(), srcEncoding, loc);
     assert(succeeded(result));
 
     auto srcType = scaleTy.cloneWithEncoding(srcEncoding);
@@ -166,9 +174,9 @@ private:
     // We know this layout avoids having any layout conversions after we expand
     // the scales, so mark the layout as efficient. Otherwise, forward layout
     // propagation may try to sink the convert layout.
-    auto expandScale = ReshapeOp::create(
-        rewriter, loc, expandType, scale,
-        /*allow_reorder=*/nullptr, /*efficient_layout=*/rewriter.getUnitAttr());
+    auto expandScale =
+        ReshapeOp::create(rewriter, loc, expandType, scale,
+                          /*efficient_layout=*/rewriter.getUnitAttr());
     // Broadcast the dimension to the microscaling factor.
     auto broadcastType = RankedTensorType::get(
         broadcastShape, scaleTy.getElementType(), broadcastEncoding);
@@ -254,7 +262,6 @@ private:
                                         DotScaledOp scaledDotOp, int opIdx,
                                         FloatType computeType) const {
     auto v = opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
-    auto res = scaledDotOp.getD();
     auto scale = opIdx == 0 ? scaledDotOp.getAScale() : scaledDotOp.getBScale();
     auto isFp4 =
         ScaleDotElemType::E2M1 ==
@@ -266,18 +273,15 @@ private:
 
     // 0) Upcast value to computeType (fp16/bf16)
     if (isFp4) {
-      auto resShape = res.getType().getShape();
-      auto vShape = v.getType().getShape();
-      auto packDim = kDim;
-      if ((opIdx == 0 && resShape[rank - 2] != vShape[rank - 2]) ||
-          (opIdx == 1 && resShape[rank - 1] != vShape[rank - 1])) {
-        packDim = (packDim + 1) % 2;
-      }
+      bool kPack =
+          opIdx == 0 ? scaledDotOp.getLhsKPack() : scaledDotOp.getRhsKPack();
+      int packDim = kPack ? kDim : (opIdx == 0 ? rank - 2 : rank - 1);
       v = Fp4ToFpOp::create(rewriter, loc, v, computeType, packDim);
     } else {
       auto vType16 = v.getType().clone(computeType);
       v = cast<TypedValue<RankedTensorType>>(
-          FpToFpOp::create(rewriter, loc, vType16, v).getResult());
+          FpToFpOp::create(rewriter, loc, vType16, v, RoundingModeAttr{})
+              .getResult());
     }
     if (!scale)
       return v;

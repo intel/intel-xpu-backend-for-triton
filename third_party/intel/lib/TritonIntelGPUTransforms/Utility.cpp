@@ -10,11 +10,13 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "intel/include/Utils/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -90,13 +92,22 @@ bool isDivisible(Value value, int64_t divisor) {
              divisibilityAttr.getValue().getZExtValue() % divisor == 0;
     }
     if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      // An iteration argument advanced by a loop-invariant amount,
+      // `x = init; x += c`, holds `init + i * c` on iteration i, so it is
+      // divisible on every iteration if both `init` and `c` are. `c` must be
+      // defined outside the loop, which keeps it independent of `x` and the
+      // recursion finite.
+      if (blockArg != forOp.getInductionVar()) {
+        Value step = tt::intel::getIterArgIncrement(forOp, blockArg);
+        if (!step || !forOp.isDefinedOutsideOfLoop(step))
+          return false;
+        return isDivisible(forOp.getTiedLoopInit(blockArg)->get(), divisor) &&
+               isDivisible(step, divisor);
+      }
       // Nested loops aren't currently handled.
       if (forOp->template getParentOfType<scf::ForOp>())
         return false;
       if (!forOp.getSingleInductionVar())
-        return false;
-      // Check only if the block arg is the loop-var.
-      if (blockArg != forOp.getInductionVar())
         return false;
       return isDivisible(forOp.getLowerBound(), divisor) &&
              isDivisible(forOp.getStep(), divisor);
@@ -302,9 +313,8 @@ LogicalResult getConvertBackwardSlice(
   DenseSet<std::pair<OpOperand *, Attribute>> seen;
   SmallVector<std::pair<OpOperand *, Attribute>> queue;
 
-  std::optional<bool> enableForLoopSupport =
-      mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
-          "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP"));
+  bool enableForLoopSupport = mlir::triton::tools::getBoolEnv(
+      "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP");
 
   auto enqueue = [&](OpOperand &operand, Attribute encoding) {
     auto x = std::make_pair(&operand, encoding);
@@ -407,8 +417,17 @@ LogicalResult getConvertBackwardSlice(
         enqueue(definingOp->getOpOperand(0), encoding);
         continue;
       }
-      if (canUseResultEncoding(definingOp, encoding))
+      if (auto fixedOperands = canUseResultEncoding(definingOp, encoding)) {
+        // Another path through the slice must preserve these operand layouts.
+        for (OpOperand *operand : *fixedOperands) {
+          Value src = operand->get();
+          auto srcEncoding =
+              cast<RankedTensorType>(src.getType()).getEncoding();
+          if (failed(updateLayout(src, srcEncoding)))
+            return failure();
+        }
         continue;
+      }
       if (stopPropagation && stopPropagation(definingOp))
         continue;
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
@@ -682,6 +701,21 @@ calculateDPASRepetitions(ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx,
   }
 
   llvm_unreachable("unexpected opIdx");
+}
+
+bool mayWriteMemory(Operation *op, bool ignoreSharedMemory) {
+  std::optional<SmallVector<MemoryEffects::EffectInstance>> effects =
+      getEffectsRecursively(op);
+  if (!effects)
+    return true;
+  return llvm::any_of(*effects, [&](const MemoryEffects::EffectInstance &e) {
+    if (!isa<MemoryEffects::Write>(e.getEffect()))
+      return false;
+    SideEffects::Resource *resource = e.getResource();
+    if (ignoreSharedMemory && isa<SharedMemory>(resource))
+      return false;
+    return !isa<L2Cache>(resource);
+  });
 }
 
 } // namespace mlir::triton::gpu::intel

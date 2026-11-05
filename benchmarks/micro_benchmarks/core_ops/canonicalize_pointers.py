@@ -87,18 +87,7 @@ def fused_sum_kernel(out_ptr, p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, 
 
 
 def _select_pass(enabled: bool):
-    """Make the next kernel launch recompile with the canonicalize pass on/off.
-
-    The pass toggle is read at compile time and is NOT part of Triton's compile
-    cache key, so a plain re-launch would reuse whatever binary was compiled
-    first. To actually get a fresh compile with the requested setting we:
-      1. set the toggle env var,
-      2. force recompilation (TRITON_ALWAYS_COMPILE) into a per-setting cache
-         dir so the on-disk caches don't collide, and
-      3. clear the JITFunction's in-memory cache.
-    """
     os.environ[_CANON_ENV] = '0' if enabled else '1'
-    os.environ['TRITON_ALWAYS_COMPILE'] = '1'
     os.environ['TRITON_CACHE_DIR'] = os.path.join(tempfile.gettempdir(), f"canon_bench_{'on' if enabled else 'off'}")
     fused_sum_kernel.device_caches.clear()
 

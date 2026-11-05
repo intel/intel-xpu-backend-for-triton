@@ -106,6 +106,11 @@ protected:
 // Intel-specific visitors
 //===----------------------------------------------------------------------===//
 
+static AxisInfo getPessimisticDescriptorState(TensorDescInterface descType) {
+  AxisInfo::DimVectorT ones(descType.getBlockType().getRank(), 1);
+  return AxisInfo(ones, ones, ones);
+}
+
 /// Compute AxisInfo for ops that create a tensor descriptor.
 ///
 /// MakeTensorDescOp has the following operand layout:
@@ -183,9 +188,11 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     LDBG("MakeTensorDescOpAxisInfoVisitor: " << *op);
 
-    RankedTensorType tensorType =
-        cast<TensorDescType>(op.getResult().getType()).getBlockType();
-    unsigned rank = op.getShape().size();
+    auto descType = cast<TensorDescType>(op.getResult().getType());
+    RankedTensorType tensorType = descType.getBlockType();
+    unsigned rank = tensorType.getRank();
+    if (op.getShape().size() != rank)
+      return getPessimisticDescriptorState(descType);
 
     assert(operands.size() >= rank * 2 + 1 &&
            "Insufficient operands for MakeTensorDescOp AxisInfo analysis");
@@ -370,6 +377,44 @@ AxisInfoAnalysisExt::AxisInfoAnalysisExt(DataFlowSolver &solver)
 triton::AxisInfoAnalysis *
 AxisInfoAnalysisExt::loadAnalysis(DataFlowSolver *solver) {
   return solver->load<AxisInfoAnalysisExt>();
+}
+
+void AxisInfoAnalysisExt::setToEntryState(
+    dataflow::Lattice<AxisInfo> *lattice) {
+  Value value = lattice->getAnchor();
+  auto descType = dyn_cast<TensorDescInterface>(value.getType());
+  if (!descType) {
+    triton::AxisInfoAnalysis::setToEntryState(lattice);
+    return;
+  }
+
+  // Entry states must match the descriptor visitor's block rank (#8170).
+  AxisInfo state = getPessimisticDescriptorState(descType);
+  AxisInfo::DimVectorT contiguity = state.getContiguity();
+  AxisInfo::DimVectorT divisibility = state.getDivisibility();
+  AxisInfo::DimVectorT constancy = state.getConstancy();
+  auto blockArg = dyn_cast<BlockArgument>(value);
+  if (blockArg && blockArg.getOwner()->isEntryBlock()) {
+    if (auto func =
+            dyn_cast<FunctionOpInterface>(blockArg.getOwner()->getParentOp()))
+      AxisInfo::initPessimisticStateFromFunc(blockArg.getArgNumber(), func,
+                                             &contiguity, &divisibility,
+                                             &constancy);
+  } else if (Operation *op = value.getDefiningOp()) {
+    AxisInfo::initDimVectorFromHint(op->getDiscardableAttr("tt.contiguity"),
+                                    &contiguity);
+    AxisInfo::initDimVectorFromHint(op->getDiscardableAttr("tt.divisibility"),
+                                    &divisibility);
+    AxisInfo::initDimVectorFromHint(op->getDiscardableAttr("tt.constancy"),
+                                    &constancy);
+  }
+
+  unsigned rank = descType.getBlockType().getRank();
+  for (AxisInfo::DimVectorT *vec : {&contiguity, &divisibility, &constancy})
+    if (vec->size() != rank)
+      *vec = AxisInfo::DimVectorT(rank, 1);
+  propagateIfChanged(
+      lattice, lattice->join(AxisInfo(contiguity, divisibility, constancy)));
 }
 
 //===----------------------------------------------------------------------===//

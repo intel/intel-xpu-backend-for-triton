@@ -69,7 +69,7 @@ jobs:
       - name: Matrix
         id: matrix
         run: |
-          integration_matrix='{"python": ["3.10", "3.11", "3.12"], "driver": ["rolling", "lts"]}'
+          integration_matrix='{"python": ["3.11", "3.12"], "driver": ["rolling", "lts"]}'
 
           echo "integration_matrix=$integration_matrix" | tee -a $GITHUB_OUTPUT
           e2e_matrix='{
@@ -93,7 +93,7 @@ jobs:
       pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
       suite: ${{ needs.prepare.outputs.inductor-suite }}
       runner_label: ${{ inputs.runner_label }}
-      python_version: "3.10"
+      python_version: "3.11"
 
   integration-tests:
     name: Integration tests

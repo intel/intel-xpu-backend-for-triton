@@ -31,20 +31,20 @@ GPU_DIALECT = "ttg"
 
 ## Language Features
 
-- **Minimum Python version**: 3.10
+- **Minimum Python version**: 3.11
 - Use modern type annotations and language features (e.g., `str | None` instead of `Optional[str]`, match statements)
 - Prefer explicit over implicit behavior
 
 ## Type Hints
 
-Use type hints on function signatures. Prefer modern Python 3.10+ syntax:
+Use type hints on function signatures. Prefer modern Python 3.11+ syntax:
 
 ```python
 # Preferred: modern syntax
 def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
     ...
 
-# Preferred: union syntax (3.10+)
+# Preferred: union syntax (3.11+)
 def min_dot_size(device_props: dict | GPUTarget) -> int:
     ...
 

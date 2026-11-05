@@ -307,6 +307,8 @@ def get_unified_attention_benchmark(
                   provider):
         print("Config:", q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks,
               block_size, provider)
+        shape = (f'[{q_heads}-{k_heads}-{head_size}-{qdtype}-{seq_lens}-{sliding_window}-{soft_cap}-'
+                 f'{num_blocks}-{block_size}]')
         dtype = torch.bfloat16
         torch.manual_seed(20)
         n_warmup = 100
@@ -420,7 +422,7 @@ def get_unified_attention_benchmark(
             if qdtype is not None:
                 atol, rtol = 3 / 8 + 1e-6, 1.5e-1
             benchmark_suite.assert_close(triton_fn, lambda: expected_output, atol=atol, rtol=rtol,
-                                         err_msg='triton to torch')
+                                         err_msg=f'{provider} to torch {shape}')
             del expected_output
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
@@ -452,7 +454,7 @@ def get_unified_attention_benchmark(
                 )
 
             benchmark_suite.assert_close(sycl_tla_fn, lambda: expected_output, atol=2.5e-2, rtol=1e-2,
-                                         err_msg='sycl-tla to torch')
+                                         err_msg=f'{provider} to torch {shape}')
             del expected_output
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(

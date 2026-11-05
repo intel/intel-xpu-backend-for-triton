@@ -118,6 +118,12 @@ calculateDPASRepetitions(ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx,
                          unsigned systolicDepth, unsigned executionSize,
                          unsigned opsPerChannel);
 
+// Returns true if `op` or an op nested in it may write memory. Unknown effects
+// count as writes (TritonGPUReorderInstructions treats them as none). L2Cache
+// writes are ignored: prefetches declare them only to survive CSE/DCE. Shared
+// memory writes are ignored if `ignoreSharedMemory`.
+bool mayWriteMemory(Operation *op, bool ignoreSharedMemory = false);
+
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_DIALECT_TRITONINTELGPU_TRANSFORMS_UTILITY_H

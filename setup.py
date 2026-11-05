@@ -378,7 +378,6 @@ class CMakeBuild(build_ext):
             "TRITON_NVDISASM_PATH",
             "TRITON_AMD_CODEGEN_PATH",
             "TRITON_PTXAS_PATH",
-            "TRITON_PTXAS_BLACKWELL_PATH",
         ]
         cmake_args += [f"-D{option}={os.getenv(option)}" for option in passthrough_args if option in os.environ]
 
@@ -612,7 +611,7 @@ def get_triton_version_suffix():
 TRITON_VERSION = "3.9.0" + get_triton_version_suffix()
 
 # Dynamically define supported Python versions and classifiers
-MIN_PYTHON = (3, 10)
+MIN_PYTHON = (3, 11)
 MAX_PYTHON = (3, 15)
 
 PYTHON_REQUIRES = f">={MIN_PYTHON[0]}.{MIN_PYTHON[1]},<{MAX_PYTHON[0]}.{MAX_PYTHON[1] + 1}"

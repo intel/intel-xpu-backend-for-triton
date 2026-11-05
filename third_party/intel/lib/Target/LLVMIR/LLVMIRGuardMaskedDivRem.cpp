@@ -1,71 +1,72 @@
 #include "LLVMPasses.h"
-#include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/SimplifyQuery.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 
 using namespace llvm;
 
-static bool processPhiNode(PHINode *PhiNode) {
-  if (none_of(PhiNode->incoming_values(), [](Use &U) {
-        Constant *C = dyn_cast<Constant>(&U);
-        return isa<UndefValue>(U) || C && C->isNullValue();
-      })) {
-    return false;
-  }
+// Triton evaluates arithmetic on masked-off lanes; a masked load's default
+// value (usually 0) can reach the divisor of an integer div/rem. The language
+// allows it because the result on those lanes is never used, but in LLVM IR
+// (and SPIR-V) division by zero is immediate undefined behavior.
+//
+// LLVM >= 20 SimplifyCFG treats a path whose phi value feeds a div/rem as
+// unreachable and replaces the branch with llvm.assume(mask); GVN then folds
+// predicated-store masks to true, so masked-off lanes store out of bounds.
+//
+// The previous version only guarded a phi used directly as the divisor in the
+// phi's own block. That missed vectorized masked loads (phi <N x iK> ->
+// extractelement -> div in a later block), which IGC's scalarizer later turns
+// into the exploitable shape. This version guards by value: every integer
+// div/rem whose divisor is not provably non-zero gets select(freeze(d) == 0, 1,
+// freeze(d)). freeze makes an undef/poison divisor a fixed value so the select
+// really excludes 0.
+//
+// Side effect: a genuine x / 0 now yields x / 1 (accepted for the phi case in
+// intel-xpu-backend-for-triton#6903).
+//
+// Signed INT_MIN / -1 is also UB but is not produced by masked-load defaults;
+// not handled.
 
-  bool Changed = false;
-  BasicBlock *BB = const_cast<BasicBlock *>(PhiNode->getParent());
-  for (Instruction &I : *BB) {
-    if (I.getOpcode() == Instruction::SDiv ||
-        I.getOpcode() == Instruction::SRem ||
-        I.getOpcode() == Instruction::UDiv ||
-        I.getOpcode() == Instruction::URem) {
-      const size_t OpIdx = 1;
-      if (I.getOperand(OpIdx) == PhiNode) {
-        // Triton masked loads lower to conditional blocks that produce
-        // phi nodes with a zero default on the false path:
-        //
-        //   br i1 %mask, label %load_bb, label %merge
-        // load_bb:
-        //   %val = load ...
-        //   br label %merge
-        // merge:
-        //   %phi = phi [%val, %load_bb], [0, %entry]
-        //   %res = sdiv %x, %phi          ; UB when %mask is false
-        //
-        // LLVM exploits the sdiv-by-zero UB to insert llvm.assume(%mask)
-        // which propagates and corrupts unrelated operations (e.g. makes
-        // predicated stores unconditional).
-        //
-        // Replace the divisor with select(divisor == 0, 1, divisor).
-        // This is legal: the zero case only arises on the false path
-        // where both dividend and divisor are zero, so 0/0 (UB) becomes
-        // 0/1 = 0, a well-defined value whose result is never observed.
-        IRBuilder<> Builder(&I);
-        Type *Ty = PhiNode->getType();
-        Value *Zero = ConstantInt::get(Ty, 0);
-        Value *One = ConstantInt::get(Ty, 1);
-        Value *IsZero = Builder.CreateICmpEQ(PhiNode, Zero,
-                                             PhiNode->getName() + ".is_zero");
-        Value *SafeDiv = Builder.CreateSelect(IsZero, One, PhiNode,
-                                              PhiNode->getName() + ".safe");
-        I.setOperand(OpIdx, SafeDiv);
-        Changed = true;
-      }
-    }
-  }
-  return Changed;
+static bool guardDivisor(BinaryOperator &I, const SimplifyQuery &SQ) {
+  if (!I.isIntDivRem())
+    return false;
+
+  Value *Divisor = I.getOperand(1);
+
+  if (isKnownNonZero(Divisor, SQ.getWithInstruction(&I)))
+    return false;
+
+  IRBuilder<> Builder(&I);
+  Type *Ty = Divisor->getType();
+  Value *Frozen = Builder.CreateFreeze(Divisor, Divisor->getName() + ".fr");
+  Value *IsZero = Builder.CreateICmpEQ(Frozen, Constant::getNullValue(Ty),
+                                       Divisor->getName() + ".is_zero");
+  Value *Safe = Builder.CreateSelect(IsZero, ConstantInt::get(Ty, 1), Frozen,
+                                     Divisor->getName() + ".safe");
+  I.setOperand(1, Safe);
+
+  return true;
 }
 
 static bool runOnFunction(Function &F) {
-  bool Changed = false;
+  SimplifyQuery SQ(F.getDataLayout());
 
-  for (BasicBlock &BB : F) {
-    for (PHINode &PhiNode : BB.phis()) {
-      Changed |= processPhiNode(&PhiNode);
+  SmallVector<BinaryOperator *, 16> DivRems;
+  for (Instruction &I : instructions(F)) {
+    if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
+      if (BO->isIntDivRem()) {
+        DivRems.push_back(BO);
+      }
     }
+  }
+
+  bool Changed = false;
+  for (BinaryOperator *BO : DivRems) {
+    Changed |= guardDivisor(*BO, SQ);
   }
 
   return Changed;

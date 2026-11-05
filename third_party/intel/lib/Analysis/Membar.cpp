@@ -49,7 +49,8 @@ bool areSafeToOverlapSubGroupTransposeOps(Operation *lhsOp, Operation *rhsOp) {
 }
 } // namespace
 bool membarFilter(Operation *lhsOp, Operation *rhsOp, bool /*lhsOpIsRead*/,
-                  bool /*rhsOpIsRead*/, Allocation *allocation) {
+                  bool /*rhsOpIsRead*/, Allocation *allocation,
+                  const AllocationSlice &, const AllocationSlice &) {
   // For now, we only check these aren't layout conversions implemented as the
   // same sub-group transposition.
   assert(lhsOp && rhsOp && "Expecting valid operations");

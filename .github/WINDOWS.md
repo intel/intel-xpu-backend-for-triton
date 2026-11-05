@@ -59,7 +59,7 @@ If you do not have a system Python installed at this step, you can install one w
 For example:
 
 ```
-choco install python --version=3.10.11
+choco install python --version=3.11.9
 ```
 
 ### Git

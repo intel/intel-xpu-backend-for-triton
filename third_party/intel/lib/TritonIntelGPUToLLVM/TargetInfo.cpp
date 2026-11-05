@@ -365,6 +365,10 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   return emitter.assertFail(rewriter, loc, message, file, func, line);
 }
 
+void TargetInfo::assertTrap(RewriterBase &rewriter, Location loc) const {
+  llvm_unreachable("requiresAssertTrap() is false; no separate trap needed");
+}
+
 unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
   // Sole home of the within-thread fold order: treeReduce degenerates to a left
   // fold once the arity reaches the number of values combined. #6667 needs that
