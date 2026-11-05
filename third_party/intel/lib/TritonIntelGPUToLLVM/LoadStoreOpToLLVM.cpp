@@ -3440,6 +3440,10 @@ struct DescriptorStoreOpToBlockIOConversion
     // Each leading index selects a 2D plane: fold it into the base, as
     // LowerTo2DBlockLoad does for loads, and bounds-check it in the predicate.
     ValueRange leadingIndices = adaptor.getIndices().take_front(rankDelta);
+    // A sub-byte stride has no byte size to check, as in
+    // isLeadingRebaseAligned.
+    if (!leadingIndices.empty() && elemSizeInBits % 8 != 0)
+      return failure();
     // A 2D block store needs the 4-byte-aligned base MaterializeBlockPointer
     // proves for the descriptor, and rebasing by a 4-byte multiple keeps it.
     // Its tag vouches for runtime strides, so only folded ones are checked.

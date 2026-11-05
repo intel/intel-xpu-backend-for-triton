@@ -182,6 +182,24 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 }
 
 // -----
+// A sub-byte element has no byte stride to prove, so the rebase check rejects
+// it as MaterializeBlockPointer does.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_sub_byte_generic
+  // CHECK-NOT: triton_gen.2Dblockstore
+  tt.func public @store_rank_reducing_sub_byte_generic(%arg0: !tt.ptr<i1>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i64, %arg5: i32, %arg6: tensor<8x128xi1, #blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c4_i32, %arg1, %arg2], [%arg3, %arg4, %c1_i64] : <i1>, <1x8x128xi1>
+    tt.descriptor_store %desc[%arg5, %c0_i32, %c0_i32], %arg6 {ttig.block_io = "row_major"} : !tt.tensordesc<1x8x128xi1>, tensor<8x128xi1, #blocked>
+    tt.return
+  }
+}
+
+// -----
 // Test 2: f32 dpas layout store — f32 element type produces different tile dims.
 // Mirrors blockptr_store.mlir f32 variant.
 
