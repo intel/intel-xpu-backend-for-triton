@@ -1,8 +1,8 @@
 // RUN: triton-opt %s -test-print-stride-info -split-input-file -o %t 2>&1 | FileCheck %s
 
-// The stride deduction for a signed remainder needs a dividend the analysis can
-// prove non-negative.
-// `%base` is a function argument, so nothing bounds it.
+// COM: The stride deduction for a signed remainder needs a dividend the analysis can
+// COM: prove non-negative.
+// COM: `%base` is a function argument, so nothing bounds it.
 
 // CHECK-LABEL: @rem_unknown_sign
 tt.func @rem_unknown_sign(%base: i32) {
@@ -19,9 +19,9 @@ tt.func @rem_unknown_sign(%base: i32) {
 
 // -----
 
-// Assuming `%base >= 0` makes the dividend provably non-negative, so the
-// stride survives the remainder: the window is 128-aligned and 128 wide, so
-// it cannot reach a multiple of 512.
+// COM: Assuming `%base >= 0` makes the dividend provably non-negative, so the
+// COM: stride survives the remainder: the window is 128-aligned and 128 wide, so
+// COM: it cannot reach a multiple of 512.
 
 // CHECK-LABEL: @rem_assumed_non_negative
 tt.func @rem_assumed_non_negative(%base: i32) {
@@ -41,8 +41,8 @@ tt.func @rem_assumed_non_negative(%base: i32) {
 
 // -----
 
-// The same for the stride deduction of a signed division. Nothing bounds
-// `%base`, so it is declined.
+// COM: The same for the stride deduction of a signed division. Nothing bounds
+// COM: `%base`, so it is declined.
 
 // CHECK-LABEL: @div_unknown_sign
 tt.func @div_unknown_sign(%base: i32) {
@@ -60,8 +60,8 @@ tt.func @div_unknown_sign(%base: i32) {
 
 // -----
 
-// With `%base >= 0` assumed the stride survives the division: a stride of 4
-// divided by 4 is a stride of 1.
+// COM: With `%base >= 0` assumed the stride survives the division: a stride of 4
+// COM: divided by 4 is a stride of 1.
 
 // CHECK-LABEL: @div_assumed_non_negative
 tt.func @div_assumed_non_negative(%base: i32) {
@@ -82,7 +82,7 @@ tt.func @div_assumed_non_negative(%base: i32) {
 
 // -----
 
-// An `scf.for` counter over non-negative bounds is non-negative.
+// COM: An `scf.for` counter over non-negative bounds is non-negative.
 
 // CHECK-LABEL: @loop_counter
 tt.func @loop_counter(%rnumel: i32) {
@@ -101,8 +101,8 @@ tt.func @loop_counter(%rnumel: i32) {
 
 // -----
 
-// A counter that can start below zero is not non-negative. `%lb` carries a
-// divisibility so that only its sign is unknown.
+// COM: A counter that can start below zero is not non-negative. `%lb` carries a
+// COM: divisibility so that only its sign is unknown.
 
 // CHECK-LABEL: @loop_counter_negative_start
 tt.func @loop_counter_negative_start(%lb: i32 {tt.divisibility = 128 : i32}, %rnumel: i32) {

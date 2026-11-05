@@ -665,9 +665,9 @@ private:
     // NOTE: For signed division (DivSIOp), truncation toward zero breaks the
     // constancy pattern for negative inputs, so the deduction is taken only
     // where the dividend is provably non-negative.
-    if (triton::dividendIsNonNegative(op) &&
-        AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+    if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        triton::dividendIsNonNegative(op)) {
       constancy = std::max(constancy,
                            gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                                rhs.getDivisibility(dim)));
@@ -725,9 +725,9 @@ private:
     // NOTE: For signed remainder (RemSIOp), srem produces negative results for
     // negative dividends, breaking the contiguity pattern, so the deduction is
     // taken only where the dividend is provably non-negative.
-    if (triton::dividendIsNonNegative(op) &&
-        AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+    if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        triton::dividendIsNonNegative(op)) {
       contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                        rhs.getDivisibility(dim));
     }

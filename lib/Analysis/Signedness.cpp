@@ -1,6 +1,7 @@
 #include "triton/Analysis/Signedness.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/RegionKindInterface.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -26,16 +27,27 @@ bool isNonNegative(Value v, Operation *useOp, unsigned depth,
 
 /// True if `assume` is certain to have executed by the time `useOp` does.
 ///
-/// Asks whether the assume precedes `useOp` in the assume's own block, taking
-/// an enclosing operation when `useOp` is nested, so an assume ahead of a loop
-/// covers its body. Missing what only a dominance tree establishes - an assume
-/// in a predecessor block - costs precision, never soundness.
+/// Two tests, in place of a dominance tree. The assume precedes `useOp` in the
+/// assume's own block, taking an enclosing operation when `useOp` is nested, so
+/// an assume ahead of a loop covers its body. Or the assume sits in the entry
+/// block of a region `useOp` is somewhere inside: that block runs before every
+/// other block of the region, on every entry into it. The second case is the
+/// form `convert-scf-to-cf` leaves - the assume stays in the entry block while
+/// the use moves into a loop body block - and so is what the LLVM lowering's
+/// AxisInfo sees. Missing what only a dominance tree establishes - an assume in
+/// some other predecessor block - costs precision, never soundness.
 bool executesBefore(Operation *assume, Operation *useOp) {
   Block *assumeBlock = assume->getBlock();
   if (!assumeBlock)
     return false;
-  Operation *ancestor = assumeBlock->findAncestorOpInBlock(*useOp);
-  return ancestor && assume->isBeforeInBlock(ancestor);
+  if (Operation *ancestor = assumeBlock->findAncestorOpInBlock(*useOp))
+    return assume->isBeforeInBlock(ancestor);
+
+  Region *region = assumeBlock->getParent();
+  if (!region || !region->getParentOp() || &region->front() != assumeBlock)
+    return false;
+  // A graph region has no execution order between its blocks to appeal to.
+  return !mayBeGraphRegion(*region) && region->findAncestorOpInRegion(*useOp);
 }
 
 /// True if `cmp` states that `v` is at or above some non-negative bound. Both
@@ -65,6 +77,10 @@ bool comparisonImpliesNonNegative(arith::CmpIOp cmp, Value v) {
 
 /// Looks for an `llvm.intr.assume` of a comparison that bounds `v` below by a
 /// non-negative constant. `tl.assume(x >= 0)` lowers to exactly that.
+///
+/// The assume is matched by name rather than with `isa<LLVM::AssumeOp>`: this
+/// library does not link the LLVM dialect, and should not, being built on the
+/// Triton side of the pipeline.
 bool assumedNonNegative(Value v, Operation *useOp) {
   for (Operation *user : v.getUsers()) {
     auto cmp = dyn_cast<arith::CmpIOp>(user);

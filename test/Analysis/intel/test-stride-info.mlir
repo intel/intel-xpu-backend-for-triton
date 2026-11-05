@@ -363,16 +363,20 @@ tt.func @descriptor_load(%arg0: !tt.ptr<f16>) {
 
 // CHECK-LABEL: @ptr_offset_pattern
 // This tests a realistic pattern: computing 2D pointer offsets
-tt.func @ptr_offset_pattern(%arg0: i32, %arg1: tensor<128x1xi32>) {
+tt.func @ptr_offset_pattern(%arg1: tensor<128x1xi32>) {
   // CHECK: arith.constant {{.*}} => stride = [0, 0]
   %cst_0 = arith.constant dense<512> : tensor<128x1xi32>
   // CHECK: arith.constant {{.*}} => stride = [0]
   %cst_1 = arith.constant dense<512> : tensor<128xi32>
   // CHECK: arith.constant {{.*}} => stride = [0]
   %c128_i32 = arith.constant 128 : i32
+  // A program id is non-negative, so the remainder below keeps its stride.
+  // The declined case is in stride-info-assume.mlir.
+  // CHECK: tt.get_program_id {{.*}} => stride = [-1]
+  %pid = tt.get_program_id x : i32
   // scalar * scalar => stride = [0]
   // CHECK: arith.muli {{.*}} => stride = [0]
-  %0 = arith.muli %arg0, %c128_i32 : i32
+  %0 = arith.muli %pid, %c128_i32 : i32
   // Splat scalar => stride = [0]
   // CHECK: tt.splat {{.*}} => stride = [0]
   %1 = tt.splat %0 : i32 -> tensor<128xi32>
@@ -382,16 +386,17 @@ tt.func @ptr_offset_pattern(%arg0: i32, %arg1: tensor<128x1xi32>) {
   // [0] + [1] = [1]
   // CHECK: arith.addi {{.*}} => stride = [1]
   %3 = arith.addi %1, %2 : tensor<128xi32>
-  // Nothing bounds %arg0, so the dividend's sign is unknown and the signed
-  // remainder reports unknown stride, which then propagates.
-  // CHECK: arith.remsi {{.*}} => stride = [-1]
+  // rem with constant modulus preserves stride
+  // CHECK: arith.remsi {{.*}} => stride = [1]
   %4 = arith.remsi %3, %cst_1 : tensor<128xi32>
-  // expand_dims at axis=1: [-1] -> [-1, 0]
-  // CHECK: tt.expand_dims {{.*}} => stride = [-1, 0]
+  // expand_dims at axis=1: [1] -> [1, 0]
+  // CHECK: tt.expand_dims {{.*}} => stride = [1, 0]
   %5 = tt.expand_dims %4 {axis = 1 : i32} : tensor<128xi32> -> tensor<128x1xi32>
-  // CHECK: arith.muli {{.*}} => stride = [-1, 0]
+  // [1, 0] * splat(512) => stride = [512, 0]
+  // CHECK: arith.muli {{.*}} => stride = [512, 0]
   %6 = arith.muli %5, %cst_0 : tensor<128x1xi32>
-  // CHECK: tt.broadcast {{.*}} => stride = [-1, 0]
+  // broadcast preserves stride: [512, 0]
+  // CHECK: tt.broadcast {{.*}} => stride = [512, 0]
   %7 = tt.broadcast %6 : tensor<128x1xi32> -> tensor<128x64xi32>
   // muli with unknown stride input => [-1, -1]
   // CHECK: arith.muli {{.*}} => stride = [-1, -1]

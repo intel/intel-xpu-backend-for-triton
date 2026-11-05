@@ -619,9 +619,9 @@ protected:
       // when the input window crosses zero:
       //   divsi([-2,-1,0,1], 2) = [-1,0,0,0] (not evenly strided)
       // so the deduction is taken only for a provably non-negative dividend.
-      if (mlir::triton::dividendIsNonNegative(op) && lhs[d] > 0 &&
-          rhsConst.has_value() && rhsConst.value() > 0 &&
-          lhs[d] % rhsConst.value() == 0)
+      if (lhs[d] > 0 && rhsConst.has_value() && rhsConst.value() > 0 &&
+          lhs[d] % rhsConst.value() == 0 &&
+          mlir::triton::dividendIsNonNegative(op))
         stride.push_back(lhs[d] / rhsConst.value());
       else if (lhs[d] == 0 && rhsConst.has_value() && rhsConst.value() != 0)
         stride.push_back(0);
@@ -648,8 +648,8 @@ protected:
       if (lhs[d] == 0 && (*rhs)[d] == 0) {
         // Both sides are uniform/constant — result is uniform.
         stride.push_back(0);
-      } else if (mlir::triton::dividendIsNonNegative(op) && lhs[d] > 0 &&
-                 rhsConst.has_value() && rhsConst.value() > 0) {
+      } else if (lhs[d] > 0 && rhsConst.has_value() && rhsConst.value() > 0 &&
+                 mlir::triton::dividendIsNonNegative(op)) {
         // Stride preserved when range span doesn't cross a modulus boundary.
         // Effective period is gcd(divisibility, modulus) when AxisInfo is
         // available; falls back to modulus otherwise.
@@ -657,7 +657,8 @@ protected:
         // NOTE: For RemSIOp this only holds when the input window starts at
         // a non-negative value. For negative starts at multiples of M,
         // truncation-toward-zero creates a discontinuity between x=kM and
-        // x=kM+1 (k<0), breaking stride - hence the dividend check above.
+        // x=kM+1 (k<0), breaking stride - hence the dividend check in the
+        // condition.
         auto resTy = dyn_cast<RankedTensorType>(op.getType());
         if (resTy) {
           int64_t dimSize = resTy.getDimSize(d);
