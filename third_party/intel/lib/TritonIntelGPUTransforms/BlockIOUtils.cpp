@@ -961,12 +961,13 @@ Value lookThroughCasts(Value val) {
   return val;
 }
 
-/// If `val` is the result of a `tt.expand_dims` that introduced a size-1
-/// dim, return the lower-rank value it was applied to; otherwise return
-/// `val` unchanged.
+/// Repeatedly look through `tt.expand_dims` layers to find the value they
+/// wrap, however many are nested (a rank > 2 row-limit comparison can have
+/// degenerate dims inserted on both sides of the bounded dim).
 Value stripExpandDims(Value val) {
-  auto expandOp = val.getDefiningOp<triton::ExpandDimsOp>();
-  return expandOp ? expandOp.getSrc() : val;
+  while (auto expandOp = val.getDefiningOp<triton::ExpandDimsOp>())
+    val = expandOp.getSrc();
+  return val;
 }
 
 /// Match `val` against `base + arange(0, expectedEnd)` (either operand
@@ -998,6 +999,20 @@ std::optional<Value> matchBaseAndRange(Value val, int64_t expectedEnd) {
   return std::nullopt;
 }
 
+/// True if `v` is a `tt.broadcast` degenerate (size 1) along every dim in
+/// `dims` in its pre-broadcast tensor.
+bool isDegenerateAlongDims(Value v, ArrayRef<int64_t> tensorShape,
+                           ArrayRef<unsigned> dims) {
+  auto broadcastOp = v.getDefiningOp<triton::BroadcastOp>();
+  if (!broadcastOp)
+    return false;
+  auto narrowTy = dyn_cast<RankedTensorType>(broadcastOp.getSrc().getType());
+  if (!narrowTy || narrowTy.getRank() != tensorShape.size())
+    return false;
+  ArrayRef<int64_t> narrowShape = narrowTy.getShape();
+  return llvm::all_of(dims, [&](unsigned d) { return narrowShape[d] == 1; });
+}
+
 } // namespace
 
 bool isZeroFillOther(Value other) {
@@ -1019,34 +1034,50 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   ArrayRef<int64_t> tensorShape,
                                                   unsigned contiguousDim,
                                                   bool pitchDimIsBroadcast) {
-  if (!mask || tensorShape.size() != 2 || !isZeroFillOther(other) ||
+  if (!mask || tensorShape.size() < 2 || !isZeroFillOther(other) ||
       pitchDimIsBroadcast)
     return std::nullopt;
 
-  auto broadcastOp = mask.getDefiningOp<triton::BroadcastOp>();
+  unsigned rank = tensorShape.size();
+  // Must be bounded along the pitch dim (the 2D tile's non-contiguous dim),
+  // not the memory-contiguous one or a batch dim.
+  unsigned pitchDim = (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+
+  // The mask may be the row-limit comparison alone, or ANDed (either order)
+  // with a batch-dims-only predicate -- degenerate along the pitch and
+  // contiguous dims, so it's uniform per hardware block-load message and
+  // safe to peel off as `extraPred` instead of folding into `base_height`.
+  Value rowLimitCandidate = mask;
+  Value extraPred;
+  if (auto andOp = mask.getDefiningOp<arith::AndIOp>()) {
+    Value lhs = andOp.getLhs(), rhs = andOp.getRhs();
+    if (isDegenerateAlongDims(rhs, tensorShape, {pitchDim, contiguousDim})) {
+      rowLimitCandidate = lhs;
+      extraPred = rhs;
+    } else if (isDegenerateAlongDims(lhs, tensorShape,
+                                     {pitchDim, contiguousDim})) {
+      rowLimitCandidate = rhs;
+      extraPred = lhs;
+    }
+  }
+
+  auto broadcastOp = rowLimitCandidate.getDefiningOp<triton::BroadcastOp>();
   if (!broadcastOp)
     return std::nullopt;
 
   Value narrow = broadcastOp.getSrc();
   auto narrowTy = dyn_cast<RankedTensorType>(narrow.getType());
-  if (!narrowTy || narrowTy.getRank() != 2)
+  if (!narrowTy || narrowTy.getRank() != rank)
     return std::nullopt;
 
-  // Find the dim that kept the full extent across the broadcast -- the
-  // bounded dim -- versus the degenerate (size-1) dim.
+  // Every dim but the pitch dim must be degenerate (size 1) in the
+  // pre-broadcast comparison -- it can only vary along the bounded dim.
   ArrayRef<int64_t> narrowShape = narrowTy.getShape();
-  unsigned boundedDim;
-  if (narrowShape[0] == 1 && narrowShape[1] == tensorShape[1])
-    boundedDim = 1;
-  else if (narrowShape[1] == 1 && narrowShape[0] == tensorShape[0])
-    boundedDim = 0;
-  else
-    return std::nullopt;
-
-  // Must be bounded along the pitch dim, not the memory-contiguous one.
-  unsigned pitchDim = (contiguousDim == 0) ? 1 : 0;
-  if (boundedDim != pitchDim)
-    return std::nullopt;
+  for (unsigned d = 0; d < rank; ++d) {
+    int64_t expected = (d == pitchDim) ? tensorShape[d] : 1;
+    if (narrowShape[d] != expected)
+      return std::nullopt;
+  }
 
   // The comparison may be 2D already, or still 1D with the bool result
   // expanded afterwards -- look through one level of expand_dims either way.
@@ -1064,7 +1095,7 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
     return std::nullopt;
 
   std::optional<Value> rowBase =
-      matchBaseAndRange(cmpOp.getLhs(), tensorShape[boundedDim]);
+      matchBaseAndRange(cmpOp.getLhs(), tensorShape[pitchDim]);
   if (!rowBase)
     return std::nullopt;
 
@@ -1075,7 +1106,7 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
       (*rowBase && !rowBase->getType().isInteger(32)))
     return std::nullopt;
 
-  return RowLimitMaskInfo{boundedDim, *rowBase, boundSrc};
+  return RowLimitMaskInfo{pitchDim, *rowBase, boundSrc, extraPred};
 }
 
 Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,

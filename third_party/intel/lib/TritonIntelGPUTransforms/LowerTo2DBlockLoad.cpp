@@ -386,7 +386,7 @@ private:
     // masking (hardware zero-fill). Decided up front so tile-size
     // computation below can treat this load as unmasked.
     std::optional<ttgi::RowLimitMaskInfo> rowLimitMask;
-    if (op.getMask() && rank == 2) {
+    if (op.getMask() && rank >= 2) {
       unsigned pitchTensorDim =
           (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
       bool pitchDimIsBroadcast =
@@ -589,9 +589,11 @@ private:
     Value other = op.getOther();
     Value heightOperand;
     if (rowLimitMask) {
-      // Drop the mask/other: hardware zero-fill at base_height replaces it.
-      mask = Value();
-      other = Value();
+      // Drop the row-limit component: base_height replaces it. Keep any
+      // batch-dim extraPred as the mask operand for the LLVM lowering to
+      // AND into its per-message select.
+      mask = rowLimitMask->extraPred;
+      other = mask ? createZeroSplat(builder, loc, tensorTy) : Value();
       // Relative to the tile's first row and may be <= 0; the LLVM lowering
       // adjusts per message and never forwards a non-positive base_height.
       heightOperand = ttgi::computeRowLimitHeight(

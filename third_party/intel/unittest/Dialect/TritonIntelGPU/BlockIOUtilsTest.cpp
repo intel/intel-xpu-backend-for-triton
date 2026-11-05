@@ -165,6 +165,42 @@ public:
     return broadcastTo(cmp, tensorShape);
   }
 
+  // Expands a 1D tensor along `varyDim` up to `narrowShape`'s rank, with
+  // size-1 dims elsewhere.
+  Value expandToShape(Value v, unsigned varyDim,
+                      ArrayRef<int64_t> narrowShape) {
+    for (unsigned d = 0; d < varyDim; ++d) {
+      auto curShape = cast<RankedTensorType>(v.getType()).getShape();
+      SmallVector<int64_t> newShape{1};
+      newShape.append(curShape.begin(), curShape.end());
+      v = expandDims(v, /*axis=*/0, newShape);
+    }
+    for (unsigned d = varyDim + 1; d < narrowShape.size(); ++d) {
+      auto curShape = cast<RankedTensorType>(v.getType()).getShape();
+      SmallVector<int64_t> newShape(curShape.begin(), curShape.end());
+      newShape.push_back(1);
+      v = expandDims(v, /*axis=*/newShape.size() - 1, newShape);
+    }
+    return v;
+  }
+
+  // Generalizes `buildRowLimitMask` to any rank: varies only along
+  // `varyDim`, degenerate elsewhere, broadcast to `tensorShape`. Used for
+  // both the row-limit comparison and a batch-only predicate ANDed with it.
+  Value buildBoundedMask(Value index1D, unsigned varyDim,
+                        ArrayRef<int64_t> tensorShape, Value boundScalar) {
+    SmallVector<int64_t> narrowShape(tensorShape.size(), 1);
+    narrowShape[varyDim] = tensorShape[varyDim];
+    Value indexND = expandToShape(index1D, varyDim, narrowShape);
+    Value boundSplatND = splatTo(boundScalar, narrowShape);
+    Value cmp = cmpSlt(indexND, boundSplatND);
+    return broadcastTo(cmp, tensorShape);
+  }
+
+  Value andI(Value lhs, Value rhs) {
+    return arith::AndIOp::create(builder, loc(), lhs, rhs);
+  }
+
 protected:
   MLIRContext ctx;
   OpBuilder builder{&ctx};
@@ -299,6 +335,61 @@ TEST_F(MatchRowLimitMaskTest, NonI32BoundRejected) {
 
   EXPECT_FALSE(matchRowLimitMask(mask, /*other=*/Value(), shape,
                                  /*contiguousDim=*/1,
+                                 /*pitchDimIsBroadcast=*/false)
+                   .has_value());
+}
+
+// A rank-3 tensor (batch dim 0, pitch dim 1, contiguous dim 2) with just the
+// row-limit comparison, no batch predicate: generalizes the rank-2 case,
+// `extraPred` stays null.
+TEST_F(MatchRowLimitMaskTest, RankThreeRowLimitOnlyAccepted) {
+  SmallVector<int64_t, 3> shape = {4, 256, 32}; // [batch, M, K]
+  Value bound = constI(100, 32);
+  Value mask = buildBoundedMask(arange(256), /*varyDim=*/1, shape, bound);
+
+  auto result = matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                  /*contiguousDim=*/2,
+                                  /*pitchDimIsBroadcast=*/false);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->boundedDim, 1u);
+  EXPECT_EQ(result->bound, bound);
+  EXPECT_FALSE(result->extraPred);
+}
+
+// The mask also ANDs in a batch-index bound (degenerate along the pitch and
+// contiguous dims), in either operand order: the row-limit half still
+// becomes `base_height`, and the batch half comes back as `extraPred`.
+TEST_F(MatchRowLimitMaskTest, RankThreeBatchPredicateKeptAsExtraPred) {
+  SmallVector<int64_t, 3> shape = {4, 256, 32}; // [batch, M, K]
+  Value rowBound = constI(100, 32);
+  Value rowLimit = buildBoundedMask(arange(256), /*varyDim=*/1, shape, rowBound);
+  Value batchBound = constI(3, 32);
+  Value batchPred = buildBoundedMask(arange(4), /*varyDim=*/0, shape, batchBound);
+
+  for (Value mask : {andI(rowLimit, batchPred), andI(batchPred, rowLimit)}) {
+    auto result = matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                    /*contiguousDim=*/2,
+                                    /*pitchDimIsBroadcast=*/false);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->boundedDim, 1u);
+    EXPECT_EQ(result->bound, rowBound);
+    EXPECT_EQ(result->extraPred, batchPred);
+  }
+}
+
+// A second AND operand varying along the contiguous (K) dim isn't a pure
+// batch-dim predicate -- it can change within a single hardware message --
+// so the whole AND is rejected rather than misidentified.
+TEST_F(MatchRowLimitMaskTest, ExtraPredVaryingAlongContiguousDimRejected) {
+  SmallVector<int64_t, 3> shape = {4, 256, 32}; // [batch, M, K]
+  Value rowLimit =
+      buildBoundedMask(arange(256), /*varyDim=*/1, shape, constI(100, 32));
+  Value colPred =
+      buildBoundedMask(arange(32), /*varyDim=*/2, shape, constI(16, 32));
+  Value mask = andI(rowLimit, colPred);
+
+  EXPECT_FALSE(matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                 /*contiguousDim=*/2,
                                  /*pitchDimIsBroadcast=*/false)
                    .has_value());
 }
