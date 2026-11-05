@@ -188,7 +188,7 @@ public:
   // `varyDim`, degenerate elsewhere, broadcast to `tensorShape`. Used for
   // both the row-limit comparison and a batch-only predicate ANDed with it.
   Value buildBoundedMask(Value index1D, unsigned varyDim,
-                        ArrayRef<int64_t> tensorShape, Value boundScalar) {
+                         ArrayRef<int64_t> tensorShape, Value boundScalar) {
     SmallVector<int64_t> narrowShape(tensorShape.size(), 1);
     narrowShape[varyDim] = tensorShape[varyDim];
     Value indexND = expandToShape(index1D, varyDim, narrowShape);
@@ -362,9 +362,11 @@ TEST_F(MatchRowLimitMaskTest, RankThreeRowLimitOnlyAccepted) {
 TEST_F(MatchRowLimitMaskTest, RankThreeBatchPredicateKeptAsExtraPred) {
   SmallVector<int64_t, 3> shape = {4, 256, 32}; // [batch, M, K]
   Value rowBound = constI(100, 32);
-  Value rowLimit = buildBoundedMask(arange(256), /*varyDim=*/1, shape, rowBound);
+  Value rowLimit =
+      buildBoundedMask(arange(256), /*varyDim=*/1, shape, rowBound);
   Value batchBound = constI(3, 32);
-  Value batchPred = buildBoundedMask(arange(4), /*varyDim=*/0, shape, batchBound);
+  Value batchPred =
+      buildBoundedMask(arange(4), /*varyDim=*/0, shape, batchBound);
 
   for (Value mask : {andI(rowLimit, batchPred), andI(batchPred, rowLimit)}) {
     auto result = matchRowLimitMask(mask, /*other=*/Value(), shape,
