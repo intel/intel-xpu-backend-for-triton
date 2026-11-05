@@ -79,7 +79,7 @@ index f2399b7423..1f194f521a 100644
 +    L_new = tl.fma(L, alpha, l_j)
      return m_j, L_new, P, alpha
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 3cb96878b1..b55fb596ce 100644
+index 3cb96878b1..598a3243c3 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -250,7 +250,25 @@ index 3cb96878b1..b55fb596ce 100644
      )
  
      # sequence len for this particular sequence
-@@ -1139,12 +1200,16 @@ def unified_attention(
+@@ -1118,17 +1179,6 @@ def unified_attention(
+             BLOCK_M, rdna_prefill_tile, launch_num_warps, launch_num_stages = config
+             BLOCK_Q = BLOCK_M // num_queries_per_kv
+ 
+-    # Ideally we would launch with kernel with:
+-    # \sum_i[ceil(query_len[i] / BLOCK_Q)] blocks.
+-    # However, it is slow to realize the query_lens on cpu.
+-    # Instead we use upper-bound:
+-    # \sum_i[ceil(query_len[i] / BLOCK_Q)]
+-    #   <= \sum_i[floor(query_len[i] / BLOCK_Q) + 1]
+-    #    = \sum_i[floor(query_len[i] / BLOCK_Q)] + num_seqs
+-    #   <= floor(\sum_i(query_len[i]) / BLOCK_Q) + num_seqs
+-    #    = floor(q.shape[0] / BLOCK_Q) + num_seqs
+-    total_num_q_blocks = q.shape[0] // BLOCK_Q + num_seqs
+-
+     sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
+ 
+     # Compute chunked block size from sliding window if needed.
+@@ -1139,12 +1189,16 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -273,7 +291,7 @@ index 3cb96878b1..b55fb596ce 100644
  
      # Wider KV tile for the tuned large-head path (see above). Only the 2D
      # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
-@@ -1236,6 +1301,8 @@ def unified_attention(
+@@ -1236,6 +1290,8 @@ def unified_attention(
          )
          or num_seqs * triton.cdiv(max_seqlen_q, BLOCK_Q) > seq_threshold_3D
          or is_batch_invariant
@@ -282,7 +300,7 @@ index 3cb96878b1..b55fb596ce 100644
      )
      if use_3d and softmax_segm_max.shape[0] < q.shape[0]:
          logger.debug_once("Split-K scratch rows < query tokens; using 2D.")
-@@ -1378,12 +1445,28 @@ def unified_attention(
+@@ -1378,12 +1434,28 @@ def unified_attention(
      segm_expsum_ptr = softmax_segm_expsum if use_3d else None
      num_segments = num_par_softmax_segments if use_3d else 1
  
@@ -314,7 +332,7 @@ index 3cb96878b1..b55fb596ce 100644
          tile_size = TILE_SIZE_DECODE
  
      launch_kwargs: dict[str, int] = {}
-@@ -1455,9 +1538,7 @@ def unified_attention(
+@@ -1455,9 +1527,7 @@ def unified_attention(
          stride_vs_slot=vs_slot,
          stride_vs_head=vs_head,
          query_start_len_ptr=cu_seqlens_q,
