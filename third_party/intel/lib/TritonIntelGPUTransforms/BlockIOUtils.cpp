@@ -1080,7 +1080,8 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
   }
 
   // The comparison may be 2D already, or still 1D with the bool result
-  // expanded afterwards -- look through one level of expand_dims either way.
+  // expanded afterwards (through however many nested expand_dims) -- strip
+  // them either way.
   Value cmpCandidate = stripExpandDims(narrow);
   auto cmpOp = cmpCandidate.getDefiningOp<arith::CmpIOp>();
   if (!cmpOp)

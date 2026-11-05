@@ -283,6 +283,11 @@ def TTIG_Subgroup2DBlockLoadFromPtrOp : TTIG_Op<"2d_block_load_from_ptr", [
     `arith.constant`; a runtime one (e.g. grouped-GEMM `lda`, or a per-group
     row bound) is the computed SSA value. Rows at or beyond `base_height` are
     zero-filled by the hardware instead of being read.
+
+    When the `ttig.block_io_runtime_row_limit` attribute is set, `base_height`
+    is relative to the *tensor's* first row, not any individual hardware
+    message's first row: the LLVM lowering subtracts each message's own row
+    offset from `base_height` before passing it to `triton_gen.2Dblockload`.
   }];
 
   let arguments = (ins

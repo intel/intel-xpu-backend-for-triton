@@ -174,15 +174,90 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
     %pitch = arith.constant 64 : i32
-    // CHECK: %[[LOCAL0:.*]] = llvm.sub %arg1, %{{.*}} : i32
-    // CHECK: llvm.icmp "sgt" %[[LOCAL0]], %{{.*}} : i32
-    // CHECK: llvm.intr.smax(%[[LOCAL0]], %{{.*}}) : (i32, i32) -> i32
-    // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
-    // CHECK: %[[LOCAL1:.*]] = llvm.sub %arg1, %{{.*}} : i32
-    // CHECK: llvm.icmp "sgt" %[[LOCAL1]], %{{.*}} : i32
-    // CHECK: llvm.intr.smax(%[[LOCAL1]], %{{.*}}) : (i32, i32) -> i32
-    // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
+    // Column (x) offset: subtracted to re-base the address, and scaled into
+    // the adjusted base_width. Bound here so the row-limit sub below can be
+    // checked to use a *different* value (catches a row/col offset swap).
+    // CHECK: %[[NEGX0:.*]] = llvm.sub %{{.*}}, %[[COLOFF0:.*]] : i32
+    // CHECK: llvm.getelementptr %{{.*}}[%[[NEGX0]]]
+    // COM: The row-limit sub below must use a *different* value than
+    // COM: COLOFF0 (catches a row/col offset swap). The forbidden text is
+    // COM: checked up to the icmp match, not the sub match, so it isn't
+    // COM: shadowed by CHECK-NOT's exclusive-of-next-match boundary.
+    // CHECK-NOT: llvm.sub %arg1, %[[COLOFF0]] : i32
+    // CHECK: %[[PRED0:.*]] = llvm.icmp "sgt" %[[LOCAL0:.*]], %{{.*}} : i32
+    // CHECK: %[[HEIGHT0:.*]] = llvm.intr.smax(%[[LOCAL0]], %{{.*}}) : (i32, i32) -> i32
+    // CHECK: %[[YZERO0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // COM: pred selects offsetY=0 (in-bounds) or offsetY=baseHeight (push
+    // COM: the whole message out of range) -- ties icmp sgt to the load's y.
+    // CHECK: %[[Y0:.*]] = llvm.select %[[PRED0]], %[[YZERO0]], %[[HEIGHT0]] : i1, i32
+    // CHECK: triton_gen.2Dblockload %{{.*}}, %{{.*}}, %[[HEIGHT0]], %{{.*}}, %{{.*}}, %[[Y0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
+    // CHECK: %[[NEGX1:.*]] = llvm.sub %{{.*}}, %[[COLOFF1:.*]] : i32
+    // CHECK: llvm.getelementptr %{{.*}}[%[[NEGX1]]]
+    // CHECK-NOT: llvm.sub %arg1, %[[COLOFF1]] : i32
+    // CHECK: %[[PRED1:.*]] = llvm.icmp "sgt" %[[LOCAL1:.*]], %{{.*}} : i32
+    // CHECK: %[[HEIGHT1:.*]] = llvm.intr.smax(%[[LOCAL1]], %{{.*}}) : (i32, i32) -> i32
+    // CHECK: %[[YZERO1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[Y1:.*]] = llvm.select %[[PRED1]], %[[YZERO1]], %[[HEIGHT1]] : i1, i32
+    // CHECK: triton_gen.2Dblockload %{{.*}}, %{{.*}}, %[[HEIGHT1]], %{{.*}}, %{{.*}}, %[[Y1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
     %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height {row_major} {base_width = 64 : i32, ttig.block_io_runtime_row_limit} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32) -> tensor<64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Column-major counterpart of the runtime row-limit test above: the
+// COM: pitch dim under transpose is colDim, so blockRowIdx/blockColIdx swap
+// COM: relative to row-major, and the row-limit height still has to track
+// COM: the right one.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_from_ptr_row_limit_column_major
+  tt.func public @block_load_from_ptr_row_limit_column_major(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32) {
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot1}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot1}>> -> tensor<1x64xi32, #dot1>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x64x!tt.ptr<f16>, #dot1>
+    %3 = tt.addptr %2, %1 : tensor<1x64x!tt.ptr<f16>, #dot1>, tensor<1x64xi32, #dot1>
+    %4 = tt.broadcast %3 : tensor<1x64x!tt.ptr<f16>, #dot1> -> tensor<32x64x!tt.ptr<f16>, #dot1>
+    %pitch = arith.constant 64 : i32
+    // CHECK: %[[LOCAL0:.*]] = llvm.sub %arg1, %{{.*}} : i32
+    // CHECK: %[[PRED0:.*]] = llvm.icmp "sgt" %[[LOCAL0]], %{{.*}} : i32
+    // CHECK: %[[HEIGHT0:.*]] = llvm.intr.smax(%[[LOCAL0]], %{{.*}}) : (i32, i32) -> i32
+    // CHECK: %[[Y0:.*]] = llvm.select %[[PRED0]], %{{.*}}, %[[HEIGHT0]] : i1, i32
+    // CHECK: triton_gen.2Dblockload %{{.*}}, %{{.*}}, %[[HEIGHT0]], %{{.*}}, %{{.*}}, %[[Y0]] {{.*}} transpose = true
+    %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height {column_major} {base_width = 64 : i32, ttig.block_io_runtime_row_limit} : (tensor<32x64x!tt.ptr<f16>, #dot1>, i32, i32) -> tensor<32x64xf16, #dot1>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A row-limit height combined with a mask/other operand (the extraPred
+// COM: batch-dim predicate matchRowLimitMask leaves behind). The LLVM
+// COM: lowering must AND the mask into the same per-message pred the
+// COM: row-limit icmp produces, not drop either one.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_from_ptr_row_limit_with_mask
+  tt.func public @block_load_from_ptr_row_limit_with_mask(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32, %pred: i1) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    %mask = tt.splat %pred : i1 -> tensor<64x32xi1, #dot0>
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
+    %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
+    %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %pitch = arith.constant 64 : i32
+    // CHECK: %[[LOCAL0:.*]] = llvm.sub %arg1, %{{.*}} : i32
+    // CHECK: %[[PRED0:.*]] = llvm.icmp "sgt" %[[LOCAL0]], %{{.*}} : i32
+    // CHECK: %[[HEIGHT0:.*]] = llvm.intr.smax(%[[LOCAL0]], %{{.*}}) : (i32, i32) -> i32
+    // CHECK: %[[MASKPRED0:.*]] = llvm.trunc %{{.*}} : i8 to i1
+    // CHECK: %[[AND0:.*]] = llvm.and %[[PRED0]], %[[MASKPRED0]] : i1
+    // CHECK: %[[Y0:.*]] = llvm.select %[[AND0]], %{{.*}}, %[[HEIGHT0]] : i1, i32
+    // CHECK: triton_gen.2Dblockload %{{.*}}, %{{.*}}, %[[HEIGHT0]], %{{.*}}, %{{.*}}, %[[Y0]]
+    %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height, %mask, %cst {row_major} {base_width = 64 : i32, ttig.block_io_runtime_row_limit} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32, tensor<64x32xi1, #dot0>, tensor<64x32xf16, #dot0>) -> tensor<64x32xf16, #dot0>
     tt.return
   }
 }

@@ -150,6 +150,20 @@ public:
         DenseElementsAttr::get(ty, builder.getBoolAttr(value)));
   }
 
+  Value denseIntSplat(ArrayRef<int64_t> shape, int64_t value) {
+    auto ty = RankedTensorType::get(shape, builder.getI32Type());
+    return arith::ConstantOp::create(
+        builder, loc(), ty,
+        DenseElementsAttr::get(ty, builder.getI32IntegerAttr(value)));
+  }
+
+  Value denseFloatSplat(ArrayRef<int64_t> shape, double value) {
+    auto ty = RankedTensorType::get(shape, builder.getF32Type());
+    return arith::ConstantOp::create(
+        builder, loc(), ty,
+        DenseElementsAttr::get(ty, builder.getF32FloatAttr(value)));
+  }
+
   // The canonical row-limit mask: `(rowBaseScalar + arange(0, boundedExtent))
   // < boundScalar`, expanded along `boundedDim` and broadcast to
   // `tensorShape`.
@@ -243,13 +257,30 @@ TEST_F(MatchRowLimitMaskTest, BoundOnContiguousDimRejected) {
                    .has_value());
 }
 
-// Any value that isn't a zero splat (or absent) fails isZeroFillOther.
+// Any value that isn't a zero splat (or absent) fails isZeroFillOther. Uses a
+// dense splat (not a bare scalar constant) so the integer branch of
+// isZeroFillOther is actually exercised, rather than being rejected earlier
+// by the splat-attribute check.
 TEST_F(MatchRowLimitMaskTest, NonZeroFillOtherRejected) {
   SmallVector<int64_t, 2> shape = {256, 32};
   Value mask =
       buildRowLimitMask(arange(256), /*boundedDim=*/0, shape, constI(100, 32));
-  Value nonZeroOther = constI(1, 32);
+  Value nonZeroOther = denseIntSplat(shape, /*value=*/1);
   EXPECT_FALSE(matchRowLimitMask(mask, nonZeroOther, shape,
+                                 /*contiguousDim=*/1,
+                                 /*pitchDimIsBroadcast=*/false)
+                   .has_value());
+}
+
+// `-0.0` is a zero-valued float splat, but isZeroFillOther's sign check
+// must still reject it: the HW boundary check only ever produces +0.0, and
+// -0.0 would flip the sign bit of masked-out elements.
+TEST_F(MatchRowLimitMaskTest, NegativeZeroFillOtherRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value mask =
+      buildRowLimitMask(arange(256), /*boundedDim=*/0, shape, constI(100, 32));
+  Value negZeroOther = denseFloatSplat(shape, -0.0);
+  EXPECT_FALSE(matchRowLimitMask(mask, negZeroOther, shape,
                                  /*contiguousDim=*/1,
                                  /*pitchDimIsBroadcast=*/false)
                    .has_value());
