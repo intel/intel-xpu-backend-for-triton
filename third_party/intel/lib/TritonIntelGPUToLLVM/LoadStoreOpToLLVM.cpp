@@ -1573,59 +1573,6 @@ struct PrefetchOpConversion
             converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
-  struct RowLimit {
-    Value height;
-    Value extraGuard;
-  };
-
-  std::optional<RowLimit> matchPrefetchRowLimitMask(
-      triton::gpu::intel::PrefetchOp op, ArrayRef<int64_t> tensorShape,
-      unsigned contiguousDim, unsigned pitchTensorDim, Location loc,
-      ConversionPatternRewriter &rewriter) const {
-    if (!op.getMask() || tensorShape.size() != 2)
-      return std::nullopt;
-
-    Value maskVal = op.getMask();
-    bool pitchDimIsBroadcast = getStride(op.getPtr(), pitchTensorDim) == 0;
-    Value otherConjunct;
-    auto m = matchRowLimitMask(maskVal, /*other=*/Value(), tensorShape,
-                               contiguousDim, pitchDimIsBroadcast);
-    if (!m) {
-      if (auto andOp = maskVal.getDefiningOp<arith::AndIOp>()) {
-        if ((m = matchRowLimitMask(andOp.getLhs(), /*other=*/Value(),
-                                   tensorShape, contiguousDim,
-                                   pitchDimIsBroadcast)))
-          otherConjunct = andOp.getRhs();
-        else if ((m = matchRowLimitMask(andOp.getRhs(), /*other=*/Value(),
-                                        tensorShape, contiguousDim,
-                                        pitchDimIsBroadcast)))
-          otherConjunct = andOp.getLhs();
-      }
-    }
-    if (!m)
-      return std::nullopt;
-
-    Value extraGuardRemapped;
-    if (otherConjunct) {
-      // Only a uniform splat conjunct is expressible as a predicate;
-      // anything else means giving up row-limit treatment entirely.
-      if (auto splatOp = otherConjunct.getDefiningOp<triton::SplatOp>())
-        extraGuardRemapped = rewriter.getRemappedValue(splatOp.getSrc());
-      if (!extraGuardRemapped || !extraGuardRemapped.getType().isInteger(1))
-        return std::nullopt;
-    }
-
-    Value boundRemapped = rewriter.getRemappedValue(m->bound);
-    Value baseRemapped =
-        m->rowBase ? rewriter.getRemappedValue(m->rowBase) : Value();
-    if (!boundRemapped || (m->rowBase && !baseRemapped))
-      return std::nullopt;
-
-    Value height = computeRowLimitHeight(
-        rewriter, loc, boundRemapped, baseRemapped, tensorShape[m->boundedDim]);
-    return RowLimit{height, extraGuardRemapped};
-  }
-
   LogicalResult
   matchAndRewrite(triton::gpu::intel::PrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
@@ -1663,17 +1610,6 @@ struct PrefetchOpConversion
     unsigned contiguousDim;
     const bool memoryRowMajor = isMemoryRowMajor(op);
     contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
-    unsigned pitchTensorDim = (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
-
-    Location loc = op.getLoc();
-
-    // A row-limit mask can become this prefetch's dynamic base_height
-    // instead of a per-subtile predicate, so decide this before
-    // `maskAxisInfo` below treats the prefetch as masked.
-    std::optional<RowLimit> rowLimit =
-        rank == 2 ? matchPrefetchRowLimitMask(op, tensorShape, contiguousDim,
-                                              pitchTensorDim, loc, rewriter)
-                  : std::nullopt;
 
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(tensorOfPointers.getEncoding())
@@ -1685,11 +1621,9 @@ struct PrefetchOpConversion
     Type eltTy = getTypeConverter()->convertType(ptrType.getPointeeType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
-    // Get the maximum tile shapes for the given mask constancy. Skipped for
-    // a row-limit mask: its bound is handled via base_height below, not by
-    // clamping the tile.
+    // Get the maximum tile shapes for the given mask constancy.
     AxisInfo *maskAxisInfo = nullptr;
-    if (op.getMask() && !rowLimit) {
+    if (op.getMask()) {
       maskAxisInfo =
           const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
               .getAxisInfo(op.getMask());
@@ -1707,6 +1641,7 @@ struct PrefetchOpConversion
           isTransposeRequired, _, regPackedBases] = std::move(sizeInfo);
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
+    Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     Value llPtr = adaptor.getPtr();
@@ -1731,12 +1666,9 @@ struct PrefetchOpConversion
     if (!rowStrideInBytes)
       return failure();
 
-    // If the stride is 0, we want to load only the first row. For a
-    // row-limit mask, `rowLimit->height` replaces this; the loop below
-    // adjusts it per message.
+    // If the stride is 0, we want to load only the first row.
     int64_t stride = getStride(op.getPtr(), pitchDim);
-    Value baseHeight =
-        rowLimit ? rowLimit->height : b.i32_val(stride == 0 ? 1 : tileHeight);
+    Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeight);
     Value baseWidth =
         b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
 
@@ -1803,20 +1735,7 @@ struct PrefetchOpConversion
           b.umax(adjustedBaseWidth, b.i32_val(MIN_BASE_WIDTH_BYTES));
       // Use the top-left address and mask of the block to load the data.
       // (The first value referred to by the registerIdx.)
-      Value messageBaseHeight = baseHeight;
-      if (rowLimit) {
-        // Relative to the tile's first row; a message starting partway in
-        // must subtract its own row offset. If nothing is valid, push it
-        // out of bounds via offsetY instead of base_height 0, which would
-        // underflow the GenISA `base_height - 1` encoding.
-        Value rowOffset = offsets[pitchDim].second;
-        Value localHeight = b.sub(baseHeight, rowOffset);
-        Value isValid = b.icmp_sgt(localHeight, b.i32_val(0));
-        messageBaseHeight = b.smax(localHeight, b.i32_val(1));
-        // The extra loop-drain guard (if any) still gates the message too.
-        pred = rowLimit->extraGuard ? b.and_(isValid, rowLimit->extraGuard)
-                                    : isValid;
-      } else if (maskElems.size()) {
+      if (maskElems.size()) {
         pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
       }
 
@@ -1827,7 +1746,7 @@ struct PrefetchOpConversion
         // after issuing the 2d block read operation, we will select the
         // result of the load only if the mask evaluate to true, otherwise
         // we will use 'other'.
-        offsetY = b.select(pred, offsetY, messageBaseHeight);
+        offsetY = b.select(pred, offsetY, baseHeight);
       }
 
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
@@ -1835,7 +1754,7 @@ struct PrefetchOpConversion
           rewriter, loc,
           /*ptr*/ addrElem,
           /*base_width*/ adjustedBaseWidth,
-          /*base_height*/ messageBaseHeight,
+          /*base_height*/ baseHeight,
           /*base_pitch*/ rowStrideInBytes,
           // offsetX was in terms of original elements. The 2d block io
           // requires offsetX to be in terms of packed elements.
