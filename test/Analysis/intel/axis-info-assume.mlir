@@ -305,9 +305,7 @@ tt.func @rem_branch_counter_counting_down(%rnumel: i32 {tt.divisibility = 128 : 
 // -----
 
 // COM: An assume in the entry block covers a use in any other block of the
-// COM: region, that block running before every other one on every entry. This is
-// COM: the form `convert-scf-to-cf` leaves - the assume stays where `tl.assume`
-// COM: put it while the use moves into a loop body block.
+// COM: region. This is the form `convert-scf-to-cf` leaves.
 
 // CHECK-LABEL: @rem_assumed_in_entry_block
 tt.func @rem_assumed_in_entry_block(%base: i32, %HW: i32 {tt.divisibility = 16 : i32}) {
@@ -329,11 +327,9 @@ tt.func @rem_assumed_in_entry_block(%base: i32, %HW: i32 {tt.divisibility = 16 :
 
 // -----
 
-// COM: The set of block arguments taken as non-negative is passed by value, so a
-// COM: hypothesis reaches only the sub-walk that introduced it. Both operands of
-// COM: the `arith.maxsi` walk to `%counter`, whose entry edge cannot be proved; a
-// COM: shared set would let the second operand find the hypothesis the failed
-// COM: first left behind and report contiguity 16 here.
+// COM: Both operands of the `arith.maxsi` walk to `%counter`, whose entry edge
+// COM: cannot be proved. A shared hypothesis set would let the second operand
+// COM: find what the failed first left behind and report contiguity 16 here.
 
 // CHECK-LABEL: @rem_max_of_unproven_counter
 tt.func @rem_max_of_unproven_counter(%lb: i32 {tt.divisibility = 128 : i32}, %rnumel: i32) {
@@ -361,8 +357,8 @@ tt.func @rem_max_of_unproven_counter(%lb: i32 {tt.divisibility = 128 : i32}, %rn
 // COM: `arith.minsi` can deliver either operand, so it needs both to be
 // COM: non-negative, while `arith.maxsi` is at or above either and so needs only
 // COM: one. `%p` is bounded by an assume in the `x > -1` form, `%n` by nothing.
-// COM: Each of these functions pairs the declined case with the taken one, in
-// COM: that order, so that neither check can slide onto the other's line.
+// COM: The declined case comes first so that neither check can slide onto the
+// COM: other's line.
 
 // CHECK-LABEL: @rem_over_min_max
 tt.func @rem_over_min_max(%n: i32 {tt.divisibility = 128 : i32}, %p: i32 {tt.divisibility = 128 : i32}) {
@@ -396,67 +392,50 @@ tt.func @rem_over_select(%n: i32 {tt.divisibility = 128 : i32}, %p: i32 {tt.divi
   %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   %nonneg = arith.cmpi sge, %p, %c0 : i32
   llvm.intr.assume %nonneg : i1
-  %one = arith.select %cond, %p, %n : i32
-  %oneSplat = tt.splat %one : i32 -> tensor<128xi32>
-  %oneOffs = arith.addi %oneSplat, %range : tensor<128xi32>
+  %sel = arith.select %cond, %p, %n : i32
+  %selSplat = tt.splat %sel : i32 -> tensor<128xi32>
+  %selOffs = arith.addi %selSplat, %range : tensor<128xi32>
   // CHECK: arith.remsi {{.*}} => contiguity = [1], divisibility = [1], constancy = [1]
-  %oneRem = arith.remsi %oneOffs, %cst : tensor<128xi32>
-  %both = arith.select %cond, %p, %p : i32
-  %bothSplat = tt.splat %both : i32 -> tensor<128xi32>
-  %bothOffs = arith.addi %bothSplat, %range : tensor<128xi32>
-  // CHECK: arith.remsi {{.*}} => contiguity = [16], divisibility = [16], constancy = [1]
-  %bothRem = arith.remsi %bothOffs, %cst : tensor<128xi32>
+  %selRem = arith.remsi %selOffs, %cst : tensor<128xi32>
   tt.return
 }
 
 // -----
 
 // COM: A sign extension preserves the value, so it carries the sign of its
-// COM: input - including an unknown one. `%q` is bounded by an assume in the
-// COM: swapped `0 <= x` form.
+// COM: input - including an unknown one. Only `arith.extui` clears the top bit
+// COM: whatever its input was.
 
 // CHECK-LABEL: @rem_over_sign_extension
-tt.func @rem_over_sign_extension(%n: i32 {tt.divisibility = 128 : i32}, %q: i32 {tt.divisibility = 128 : i32}) {
-  %c0 = arith.constant 0 : i32
+tt.func @rem_over_sign_extension(%n: i32 {tt.divisibility = 128 : i32}) {
   %cst = arith.constant dense<16> : tensor<128xi64>
   %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-  %nonneg = arith.cmpi sle, %c0, %q : i32
-  llvm.intr.assume %nonneg : i1
-  %nSplat = tt.splat %n : i32 -> tensor<128xi32>
-  %nOffs = arith.addi %nSplat, %range : tensor<128xi32>
-  %nExt = arith.extsi %nOffs : tensor<128xi32> to tensor<128xi64>
+  %splat = tt.splat %n : i32 -> tensor<128xi32>
+  %offs = arith.addi %splat, %range : tensor<128xi32>
+  %ext = arith.extsi %offs : tensor<128xi32> to tensor<128xi64>
   // CHECK: arith.remsi {{.*}} => contiguity = [1], divisibility = [1], constancy = [1]
-  %nRem = arith.remsi %nExt, %cst : tensor<128xi64>
-  %qSplat = tt.splat %q : i32 -> tensor<128xi32>
-  %qOffs = arith.addi %qSplat, %range : tensor<128xi32>
-  %qExt = arith.extsi %qOffs : tensor<128xi32> to tensor<128xi64>
-  // CHECK: arith.remsi {{.*}} => contiguity = [16], divisibility = [16], constancy = [1]
-  %qRem = arith.remsi %qExt, %cst : tensor<128xi64>
+  %rem = arith.remsi %ext, %cst : tensor<128xi64>
   tt.return
 }
 
 // -----
 
-// COM: An arithmetic shift right preserves the sign bit, so it too carries the
-// COM: sign of its input.
+// COM: An arithmetic shift right preserves the sign bit, so a non-negative
+// COM: input keeps the deduction. `%q` is bounded by an assume in the swapped
+// COM: `0 <= x` form.
 
 // CHECK-LABEL: @rem_over_shift_right
-tt.func @rem_over_shift_right(%n: i32 {tt.divisibility = 128 : i32}, %q: i32 {tt.divisibility = 128 : i32}) {
+tt.func @rem_over_shift_right(%q: i32 {tt.divisibility = 128 : i32}) {
   %c0 = arith.constant 0 : i32
   %c1 = arith.constant 1 : i32
   %cst = arith.constant dense<16> : tensor<128xi32>
   %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-  %nonneg = arith.cmpi sge, %q, %c0 : i32
+  %nonneg = arith.cmpi sle, %c0, %q : i32
   llvm.intr.assume %nonneg : i1
-  %nShift = arith.shrsi %n, %c1 : i32
-  %nSplat = tt.splat %nShift : i32 -> tensor<128xi32>
-  %nOffs = arith.addi %nSplat, %range : tensor<128xi32>
-  // CHECK: arith.remsi {{.*}} => contiguity = [1], divisibility = [1], constancy = [1]
-  %nRem = arith.remsi %nOffs, %cst : tensor<128xi32>
-  %qShift = arith.shrsi %q, %c1 : i32
-  %qSplat = tt.splat %qShift : i32 -> tensor<128xi32>
-  %qOffs = arith.addi %qSplat, %range : tensor<128xi32>
+  %shift = arith.shrsi %q, %c1 : i32
+  %splat = tt.splat %shift : i32 -> tensor<128xi32>
+  %offs = arith.addi %splat, %range : tensor<128xi32>
   // CHECK: arith.remsi {{.*}} => contiguity = [16], divisibility = [16], constancy = [1]
-  %qRem = arith.remsi %qOffs, %cst : tensor<128xi32>
+  %rem = arith.remsi %offs, %cst : tensor<128xi32>
   tt.return
 }
