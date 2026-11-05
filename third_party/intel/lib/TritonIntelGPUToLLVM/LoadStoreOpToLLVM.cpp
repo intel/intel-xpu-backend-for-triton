@@ -77,8 +77,9 @@ static DescriptorFields unpackDescriptor(Value llDesc, unsigned rank,
 
 /// Signed `0 <= index < shape` for a descriptor index folded into the base
 /// pointer, which the 2D block message's base_width x base_height clamp misses.
-/// Signed because nothing verifies a descriptor extent is non-negative. A shape
-/// wider than the i32 index is truncated.
+/// Signed because nothing verifies a descriptor extent is non-negative. Shapes
+/// are i32 values widened to i64 in the descriptor, so truncating them is
+/// exact.
 static Value emitInDescBounds(TritonLLVMOpBuilder &b, Value index,
                               Value shape) {
   if (shape.getType().getIntOrFloatBitWidth() > 32)
