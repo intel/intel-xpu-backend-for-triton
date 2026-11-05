@@ -65,6 +65,14 @@ def TritonIntelFuseReshape
         %A = tt.descriptor_load %desc[%x * %div + %y, %z]
                                 : !tt.tensordesc<512x64xf16> -> tensor<512x64xf16>
         dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
+
+    Before fusing, a reshape that drops the leading unit dimension of a 3-dim tensor is moved
+    up until it uses the tt.descriptor_load result directly, even without a dot user, in which
+    case Combine rank-reduces the load instead. It crosses single-use elementwise operations,
+    retyped in place, whose other tensor operands must be constants or splats, and tt.trans
+    operations that keep dimension 0 in place; those operands and the tt.trans operations are
+    rebuilt at rank 2. Inline asm, multi-result operations, and any operation or load carrying
+    tt.contiguity, tt.divisibility or tt.constancy block the move.
   }];
 
   let dependentDialects = [
@@ -214,9 +222,18 @@ def TritonIntelGPUPrepareIfCombining
     : Pass<"triton-intel-prepare-if-combining", "mlir::triton::FuncOp"> {
   let summary = "Move ops between scf.if pairs to enable combining";
   let description = [{
-    Moves pure operations from between scf.if pairs that share the same
-    condition, enabling canonicalization to combine them into a single scf.if.
+    Moves operations from between scf.if pairs that share the same condition
+    (the pass first runs CSE on the whole function, so guards computed by
+    identical expressions are the same value), enabling canonicalization to
+    combine them into a single scf.if.
+    Pure operations that do not depend on the first if are moved above it; the
+    others are copied into both of its branches when the condition is uniform
+    across the program. An operation containing an scf.if is never copied.
   }];
+  let options = [
+    Option<"maxClonedOps", "max-cloned-ops", "unsigned", /*default*/"32",
+           "maximum source operations cloned per if pair, including nested ones">,
+  ];
   let dependentDialects = ["mlir::scf::SCFDialect"];
 }
 

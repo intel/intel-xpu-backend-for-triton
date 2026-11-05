@@ -503,7 +503,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @basic_view_broadcast(%arg : tensor<256xf32,#blocked0>) {
     // CHECK:      [[ARG0_0:%.*]] = llvm.extractvalue %arg0[0]
     // CHECK-NEXT: [[ARG0_1:%.*]] = llvm.extractvalue %arg0[1]
-    %0 = tt.reshape %arg allow_reorder : tensor<256xf32, #blocked0> -> tensor<256x1xf32,#blocked2>
+    %0 = tt.reshape %arg : tensor<256xf32, #blocked0> -> tensor<256x1xf32,#blocked2>
     // CHECK:      [[RES:%.*]] = llvm.mlir.undef : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // CHECK-NEXT: [[RES1:%.*]] = llvm.insertvalue [[ARG0_0]], [[RES]][0]
     // CHECK-NEXT: [[RES2:%.*]] = llvm.insertvalue [[ARG0_1]], [[RES1]][1]
@@ -1319,8 +1319,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[ARG1_0:%.*]] = llvm.extractvalue %arg1[0] : !llvm.struct<(f32, f32)>
     // CHECK-NEXT: [[ARG1_1:%.*]] = llvm.extractvalue %arg1[1] : !llvm.struct<(f32, f32)>
     // CHECK:      {{.*}} = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:      [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.call spir_funccc @_Z12get_local_idj([[ZERO]]) {{.*}} : (i32) -> i64
+    // CHECK-NOT:  llvm.call spir_funccc @_Z12get_local_idj
     // CHECK:      [[UNDEF:%.*]] = llvm.mlir.undef : vector<1xf32>
     // CHECK-NEXT: [[BCAST_STORE:%.*]] = llvm.bitcast [[ARG1_0]] : f32 to f32
     // CHECK-NEXT: [[ZERO1:%.*]] =  llvm.mlir.constant(0 : i32) : i32

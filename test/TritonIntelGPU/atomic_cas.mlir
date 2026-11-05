@@ -76,7 +76,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 
-  // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
   // CHECK-DAG: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_tensor
@@ -92,16 +91,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
     // CHECK: %[[C0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[C0_2:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[TID_CALL:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[C0_2]])
-    // CHECK-SAME: {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return} : (i32) -> i64
-    // CHECK: %[[TID:.*]] = llvm.trunc %[[TID_CALL]] : i64 to i32
-
-    // CHECK: %[[C31:.*]] = llvm.mlir.constant(31 : i32) : i32
-    // CHECK: %[[TID_MASKED:.*]] = llvm.and %[[TID]], %[[C31]] : i32
-
-    // CHECK: %[[C32:.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK: %[[C0_3:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[C0_4:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-NOT: llvm.call spir_funccc @_Z12get_local_idj
 
     // CHECK: %[[CMP_CAST:.*]] = llvm.bitcast %[[CMP]] : i32 to i32
     // CHECK: %[[VAL_CAST:.*]] = llvm.bitcast %[[VAL]] : i32 to i32
