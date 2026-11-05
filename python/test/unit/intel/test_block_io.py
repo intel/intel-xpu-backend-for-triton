@@ -415,7 +415,7 @@ def test_block_io_nd_out_of_bounds(padding, device, tmp_path: pathlib.Path):
 # An odd plane stride would misalign the rebased 2D block message, so that store stays generic.
 @pytest.mark.parametrize("stride_kind, batch", [("aligned", 1), ("aligned", 5), ("aligned", -1), ("odd", 1)])
 @pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
-                   reason="Block stores not supported on this architecture")
+                   reason="Block stores not supported on this architecture", run=False)
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
 def test_block_io_rank_reduced_store(batch, stride_kind, device, tmp_path: pathlib.Path):
     M, N, planes = 32, 32, 4
@@ -484,7 +484,7 @@ def _rank_reduced_store_kernel(src_ptr, dst_ptr, B, stride_b, batch, M: tl.const
 # A runtime plane stride carries only the 16-element hint, which proves the 4-byte-aligned rebase the block store
 # needs; plane 3 starts 32 bytes past a 64-byte boundary (#8516).
 @pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
-                   reason="Block stores not supported on this architecture")
+                   reason="Block stores not supported on this architecture", run=False)
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
 def test_block_io_rank_reduced_store_runtime_stride(device, with_allocator):
     B, M, N, batch = 4, 32, 64, 3
