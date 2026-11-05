@@ -555,7 +555,7 @@ TERNARY_EXTERN_SYMBOLS = {
     ],
     "hip": [],
     "xpu": [
-        ("fma", "__imf_fmaf"),
+        ("fma_rz", "__imf_fmaf_rz"),
     ],
 }
 
