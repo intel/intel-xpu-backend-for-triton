@@ -186,10 +186,12 @@ emitAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
   auto ordering = getMemoryOrdering(sem);
   if (!binOp || !ordering)
     return failure();
-  return LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, vals.front(),
-                                   *ordering,
-                                   targetInfo.getAtomicSyncScope(scope))
-      .getResult();
+  auto op = LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, vals.front(),
+                                      *ordering,
+                                      targetInfo.getAtomicSyncScope(scope));
+  if (*binOp == LLVM::AtomicBinOp::fadd)
+    op.setIgnoreDenormalMode(true);
+  return op.getResult();
 }
 
 inline Value emitPtxAtomicCAS(ConversionPatternRewriter &rewriter, Location loc,

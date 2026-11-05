@@ -71,10 +71,12 @@ FailureOr<Value> emitSharedAtomicRMW(ConversionPatternRewriter &rewriter,
     auto binOp = matchAtomicOp(rmwOp);
     if (!binOp)
       return failure();
-    return LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, value,
-                                     LLVM::AtomicOrdering::monotonic,
-                                     isCluster ? "cluster" : "block")
-        .getResult();
+    auto op = LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, value,
+                                        LLVM::AtomicOrdering::monotonic,
+                                        isCluster ? "cluster" : "block");
+    if (*binOp == LLVM::AtomicBinOp::fadd)
+      op.setIgnoreDenormalMode(true);
+    return op.getResult();
   }
   auto addrSpace = isCluster ? PtxAtomicAddrSpace::SharedCluster
                              : PtxAtomicAddrSpace::Shared;

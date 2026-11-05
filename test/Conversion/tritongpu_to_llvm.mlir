@@ -4651,9 +4651,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
   // CHECK-LABEL: @scalar_atomic_float_ops
   // CHECK-NOT: llvm.cond_br
   // CHECK: atom.global.gpu.relaxed.add.noftz.f16
-  // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f32
+  // CHECK: llvm.atomicrmw ignore_denormal_mode fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f32
   // CHECK: llvm.atomicrmw xchg {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f32
-  // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f64
+  // CHECK: llvm.atomicrmw ignore_denormal_mode fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f64
   // CHECK: llvm.atomicrmw xchg {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f64
   // PTX-LABEL: .visible .entry scalar_atomic_float_ops(
   // PTX: atom.global.gpu.relaxed.add.noftz.f16
