@@ -13,6 +13,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/CheckedArithmetic.h"
 #include "llvm/Support/Debug.h"
 #include <algorithm>
 #include <optional>
@@ -451,10 +452,14 @@ IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) const {
   if (stepVal.isZero())
     stepVal = stepValDefault;
 
-  if (max.sge(min))
-    return llvm::divideCeilSigned(max.getSExtValue() - min.getSExtValue(),
-                                  stepVal.getSExtValue());
-  return std::nullopt;
+  if (max.slt(min))
+    return std::nullopt;
+  // The difference of two i64 bounds can overflow: the count is then unknown.
+  std::optional<int64_t> diff =
+      llvm::checkedSub(max.getSExtValue(), min.getSExtValue());
+  if (!diff)
+    return std::nullopt;
+  return llvm::divideCeilSigned(*diff, stepVal.getSExtValue());
 }
 
 LogicalResult IntegerRangeAnalysis::visitOperationHelper(
@@ -911,10 +916,12 @@ uint64_t getTotalTripCount(LoopLikeOpInterface loop,
     parentOp = parentOp->getParentOp();
   }
 
-  return std::accumulate(loops.begin(), loops.end(), 1ll,
+  // Saturate: a wrapped product could be smaller than the real count.
+  return std::accumulate(loops.begin(), loops.end(), uint64_t(1),
                          [&analysis](uint64_t accum, LoopLikeOpInterface loop) {
-                           return accum * analysis.getTripCount(loop).value_or(
-                                              kDefaultMaxTripCount + 1);
+                           return llvm::SaturatingMultiply(
+                               accum, analysis.getTripCount(loop).value_or(
+                                          kDefaultMaxTripCount + 1));
                          });
 }
 

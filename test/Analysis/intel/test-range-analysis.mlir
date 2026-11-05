@@ -1893,3 +1893,42 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     tt.return %r : i32
   }
 }
+
+// -----
+
+// The difference of the unknown i64 bounds overflows int64, so the trip count is unknown.
+// CHECK-LABEL: tt.func @forOpUnknownI64Bounds
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @forOpUnknownI64Bounds(%lo: i64, %hi: i64) -> i32 {
+    %c2 = arith.constant 2 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %r = scf.for %i = %lo to %hi step %c2 iter_args(%v = %c0_i32) -> (i32) : i64 {
+      %v1 = arith.addi %v, %c1_i32 : i32
+      scf.yield %v1 : i32
+    }
+    tt.return %r : i32
+  }
+}
+
+// -----
+
+// The inner total trip count (2^63 - 1)^2 saturates instead of wrapping to 1.
+// CHECK-LABEL: tt.func @forNestedTripCountProduct
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @forNestedTripCountProduct(%n: i64, %m: i64) {
+    %c0 = arith.constant 0 : i64
+    %c1 = arith.constant 1 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    scf.for %i = %c0 to %n step %c1 : i64 {
+      // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+      %s = scf.for %j = %c0 to %m step %c1 iter_args(%v = %c0_i32) -> (i32) : i64 {
+        %v1 = arith.addi %v, %c1_i32 : i32
+        scf.yield %v1 : i32
+      }
+    }
+    tt.return
+  }
+}
