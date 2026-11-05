@@ -601,6 +601,16 @@ bool normalizeCondition(BoundCondition &cond);
 Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
                   OpBuilder &builder);
 
+/// Builds `form` as an i64 value immediately before `before`, or returns null
+/// and builds nothing unless every term is an integer or index scalar of at
+/// most 64 bits that properly dominates `before` (never a `TripCount`, nor a
+/// `Quotient` with a non-positive divisor) and plain i64 arithmetic cannot
+/// overflow, which rules out i64 and index terms. The value equals the IR's
+/// only if the obligations `normalize` returned hold; `NonNegative` ones never
+/// may be assumed.
+Value materializeForm(const AffineForm &form, Operation *before,
+                      OpBuilder &builder);
+
 /// Stable renderings for tests and the test pass.
 std::string toString(const AffineForm &af);
 std::string toString(const BoundCondition &c);

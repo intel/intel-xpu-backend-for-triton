@@ -470,6 +470,37 @@ bool guardFitsPlainI64(const AffineForm &e) {
   return acc.ult(limit);
 }
 
+/// Emits `c0 + sum(ci * si)` in i64 through `gb`; the caller has checked the
+/// terms.
+Value buildAffineSum(GuardBuilder &gb, OpBuilder &builder, Location loc,
+                     const AffineForm &e) {
+  Value sum = gb.constant(e.constant());
+  for (auto &[sym, k] : e.terms()) {
+    Value term = gb.extend(sym.value());
+    // A quotient's runtime value is the division itself, which equals the
+    // narrow quotient because the divisor is positive.
+    if (sym.kind() == SymbolKind::Quotient)
+      term = arith::DivSIOp::create(builder, loc, term,
+                                    gb.constant(sym.divisor()));
+    sum = gb.add(sum, gb.mul(term, k));
+  }
+  return sum;
+}
+
+/// `materializeForm`'s term rule. Width is checked here, before
+/// `guardFitsPlainI64` sizes the term from it.
+bool isMaterializableTerm(const Symbol &sym, Operation *before,
+                          DominanceInfo &domInfo) {
+  Value v = sym.value();
+  if (!v || sym.kind() == SymbolKind::TripCount ||
+      (sym.kind() == SymbolKind::Quotient && sym.divisor() <= 0))
+    return false;
+  Type type = v.getType();
+  if (!isa<IntegerType, IndexType>(type) || !isSupportedWidth(type))
+    return false;
+  return domInfo.properlyDominates(v, before);
+}
+
 } // namespace
 
 Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
@@ -499,22 +530,15 @@ Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
     bool checked = !guardFitsPlainI64(cond.expr);
     GuardBuilder gb(builder, loc, checked);
 
-    Value sum = gb.constant(cond.expr.constant());
-    for (auto &[sym, k] : cond.expr.terms()) {
-      Value v = sym.value();
+    for (const auto &term : cond.expr.terms()) {
+      [[maybe_unused]] Value v = term.first.value();
       assert(v && "condition subject has no SSA value");
       assert(!isa<ShapedType>(v.getType()) &&
              "condition subject must be a scalar");
       assert(domInfo.properlyDominates(v, before) &&
              "condition subject must dominate the guard");
-      Value term = gb.extend(v);
-      // A quotient's runtime value is the division itself, which equals the
-      // narrow quotient because the divisor is positive.
-      if (sym.kind() == SymbolKind::Quotient)
-        term = arith::DivSIOp::create(builder, loc, term,
-                                      gb.constant(sym.divisor()));
-      sum = gb.add(sum, gb.mul(term, k));
     }
+    Value sum = buildAffineSum(gb, builder, loc, cond.expr);
 
     Value cmp;
     switch (cond.goal) {
@@ -550,6 +574,28 @@ Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
                : guard;
   }
   return result;
+}
+
+Value materializeForm(const AffineForm &form, Operation *before,
+                      OpBuilder &builder) {
+  assert(before && "need an insertion anchor");
+  if (form.overflowed())
+    return {};
+  OpBuilder::InsertionGuard insertionGuard(builder);
+  builder.setInsertionPoint(before);
+  Location loc = before->getLoc();
+  // A constant needs no fit check, which INT64_MIN would fail.
+  if (form.isConstant())
+    return arith::ConstantIntOp::create(builder, loc, builder.getI64Type(),
+                                        form.constant());
+  DominanceInfo domInfo(before->getParentOp());
+  for (const auto &term : form.terms())
+    if (!isMaterializableTerm(term.first, before, domInfo))
+      return {};
+  if (!guardFitsPlainI64(form))
+    return {};
+  GuardBuilder gb(builder, loc, /*checked=*/false);
+  return buildAffineSum(gb, builder, loc, form);
 }
 
 std::string toString(const BoundCondition &c) {

@@ -968,6 +968,89 @@ TEST_F(SymbolicBoundsTest, MaterializeInsertsBeforeTheAnchor) {
   EXPECT_TRUE(b.getInsertionPoint() == Block::iterator(term));
 }
 
+// Each rejection leaves the IR untouched; the i32 loop IV materializes inside
+// its loop, so only the kind can reject the trip count there.
+TEST_F(SymbolicBoundsTest, MaterializeFormDeclines) {
+  parse(R"(
+    tt.func @f(%a: i32, %n: i32, %l: i64, %i: index, %w: i129,
+               %p: !tt.ptr<f32>, %x: f32) {
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      %lane = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32> loc("lane")
+      %t = tt.splat %a : i32 -> tensor<16xi32> loc("t")
+      scf.for %iv = %c0 to %n step %c1 : i32 {
+        %in = arith.addi %iv, %c1 : i32 loc("in")
+        scf.yield
+      } loc("loop")
+      %late = arith.addi %a, %c1 : i32 loc("late")
+      tt.return
+    })");
+  using namespace tt::intel;
+  auto sym = [&](SymbolKind kind, Value v, int64_t divisor = 0) {
+    return AffineForm::symbol(prover->symbolFor(kind, v, divisor));
+  };
+  auto numOps = [&] {
+    unsigned n = 0;
+    func().walk([&](Operation *) { ++n; });
+    return n;
+  };
+  scf::ForOp loop = forNamed("loop");
+  Value iv = loop.getInductionVar();
+  Operation *in = get("in").getDefiningOp();
+  Operation *term = func().getBody().front().getTerminator();
+  OpBuilder b(term);
+  auto declines = [&](const AffineForm &f, Operation *before, StringRef what) {
+    unsigned n = numOps();
+    EXPECT_FALSE(materializeForm(f, before, b)) << what.str();
+    EXPECT_EQ(numOps(), n) << what.str();
+  };
+
+  ASSERT_TRUE(materializeForm(sym(SymbolKind::LoopIV, iv), in, b));
+  declines(sym(SymbolKind::TripCount, iv, 1), in, "trip count");
+  declines(sym(SymbolKind::LoopIV, iv), term, "IV outside its loop");
+  declines(sym(SymbolKind::Lane, get("lane")), term, "lane");
+  declines(sym(SymbolKind::Opaque, get("t")), term, "tensor");
+  declines(sym(SymbolKind::Opaque, get("late")), loop, "defined later");
+  declines(sym(SymbolKind::KernelArg, arg(2)), term, "i64");
+  declines(sym(SymbolKind::KernelArg, arg(3)), term, "index");
+  declines(sym(SymbolKind::KernelArg, arg(4)), term, "i129");
+  declines(sym(SymbolKind::KernelArg, arg(5)), term, "ptr");
+  declines(sym(SymbolKind::KernelArg, arg(6)), term, "f32");
+  declines(sym(SymbolKind::Opaque, Value()), term, "no value");
+  declines(sym(SymbolKind::Quotient, arg(0), 0), term, "divisor 0");
+  declines(sym(SymbolKind::Quotient, arg(0), -4), term, "divisor -4");
+  declines(AffineForm::constant(INT64_MAX).add(AffineForm::constant(1)), term,
+           "overflowed constant");
+
+  // A valid form lands right before the anchor, whatever the insertion point.
+  AffineForm valid =
+      sym(SymbolKind::KernelArg, arg(0)).scale(3).add(AffineForm::constant(1));
+  Value v = materializeForm(valid, loop, b);
+  ASSERT_TRUE(v);
+  EXPECT_EQ(v.getDefiningOp()->getNextNode(), loop.getOperation());
+  EXPECT_EQ(b.getInsertionBlock(), term->getBlock());
+  EXPECT_TRUE(b.getInsertionPoint() == Block::iterator(term));
+}
+
+// `materializeForm` declines index terms, but `materialize` must keep
+// emitting them through `index_cast`.
+TEST_F(SymbolicBoundsTest, MaterializeKeepsIndexGuards) {
+  parse(R"(
+    tt.func @f(%i: index) {
+      %z = arith.constant 0 : index
+      %cmpIdx = arith.cmpi sge, %i, %z : index loc("cmpIdx")
+      tt.return
+    })");
+  tt::intel::BoundProof p = proof(get("cmpIdx"));
+  ASSERT_EQ(tt::intel::toString(p), "Conditional{arg0 >= 0}");
+  Operation *term = func().getBody().front().getTerminator();
+  OpBuilder b(term);
+  ASSERT_TRUE(tt::intel::materialize(p.conditions, term, b));
+  unsigned casts = 0;
+  func().walk([&](arith::IndexCastOp) { ++casts; });
+  EXPECT_EQ(casts, 1u);
+}
+
 TEST_F(SymbolicBoundsTest, NormalizeRejectsNonPositiveDivisor) {
   parse(R"(
     tt.func @f(%a: i32, %b: i32) {

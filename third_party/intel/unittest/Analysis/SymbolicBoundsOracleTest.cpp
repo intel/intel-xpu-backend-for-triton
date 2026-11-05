@@ -225,34 +225,41 @@ public:
     return masks;
   }
 
-  /// Evaluates a materialized guard for one launch: a pure scalar expression
+  /// Evaluates a materialized value for one launch: a pure scalar expression
   /// over the kernel arguments, so it is evaluated on demand through its
   /// operand cone rather than by executing the function.
-  bool evalGuard(Value guard, ArrayRef<int64_t> argValues) {
+  std::optional<APInt> evalScalar(Value value, ArrayRef<int64_t> argValues) {
     env.clear();
     masks.clear();
     mask = StringRef();
 
-    if (!guard) {
-      ADD_FAILURE() << "oracle: no guard to evaluate";
-      return false;
+    if (!value) {
+      ADD_FAILURE() << "oracle: no value to evaluate";
+      return std::nullopt;
     }
-    Operation *def = guard.getDefiningOp();
+    Operation *def = value.getDefiningOp();
     if (!def) {
-      ADD_FAILURE() << "oracle: guard is a block argument";
-      return false;
+      ADD_FAILURE() << "oracle: value is a block argument";
+      return std::nullopt;
     }
     tt::FuncOp f = def->getParentOfType<tt::FuncOp>();
     if (!f) {
-      ADD_FAILURE() << "oracle: guard is not inside a tt.func";
-      return false;
+      ADD_FAILURE() << "oracle: value is not inside a tt.func";
+      return std::nullopt;
     }
     if (bindArgs(f, argValues) != Status::Ok)
-      return false;
-    if (evalDemand(guard) != Status::Ok)
-      return false;
-    const Val &v = env.find(guard)->second;
-    return !v.elems.empty() && v.elems.front().getBoolValue();
+      return std::nullopt;
+    if (evalDemand(value) != Status::Ok)
+      return std::nullopt;
+    const Val &v = env.find(value)->second;
+    if (v.elems.empty())
+      return std::nullopt;
+    return v.elems.front();
+  }
+
+  bool evalGuard(Value guard, ArrayRef<int64_t> argValues) {
+    std::optional<APInt> v = evalScalar(guard, argValues);
+    return v && v->getBoolValue();
   }
 
   /// Executes one launch like `run`, and returns the trip count of every
@@ -1585,6 +1592,43 @@ TEST_F(SymbolicBoundsGuardTest, GuardMatchesExactArithmetic) {
             << k << " " << t << " " << a;
       }
     }
+}
+
+// `materializeForm` against exact arithmetic: a linear form, a quotient
+// (divsi semantics), the plain i64 fit limit, and constants at the i64 extrema.
+TEST_F(SymbolicBoundsGuardTest, FormMatchesExactArithmetic) {
+  parse(R"(tt.func @f(%a: i8, %b: i8) { tt.return })");
+  using namespace tt::intel;
+  Operation *term = func().getBody().front().getTerminator();
+  OpBuilder b(term);
+  auto sym = [&](SymbolKind kind, unsigned idx, int64_t divisor = 0) {
+    return AffineForm::symbol(prover->symbolFor(kind, arg(idx), divisor));
+  };
+  auto eval = [&](Value v, int64_t x, int64_t y) -> std::optional<int64_t> {
+    if (std::optional<APInt> r = oracle.evalScalar(v, {x, y}))
+      return r->getSExtValue();
+    return std::nullopt;
+  };
+  AffineForm a = sym(SymbolKind::KernelArg, 0);
+  AffineForm bb = sym(SymbolKind::KernelArg, 1);
+  int64_t k55 = int64_t(1) << 55;
+  Value lin = materializeForm(
+      a.scale(3).sub(bb.scale(2)).add(AffineForm::constant(7)), term, b);
+  Value quot = materializeForm(sym(SymbolKind::Quotient, 0, 4), term, b);
+  Value big = materializeForm(a.scale(k55), term, b);
+  ASSERT_TRUE(lin && quot && big);
+  EXPECT_FALSE(materializeForm(a.scale(int64_t(1) << 56), term, b));
+  for (int64_t x = -128; x <= 127; ++x) {
+    EXPECT_EQ(eval(quot, x, 0), x / 4) << x;
+    EXPECT_EQ(eval(big, x, 0), x * k55) << x;
+    for (int64_t y = -128; y <= 127; ++y)
+      EXPECT_EQ(eval(lin, x, y), 3 * x - 2 * y + 7) << x << " " << y;
+  }
+  for (int64_t c : {INT64_MIN, INT64_MAX}) {
+    Value v = materializeForm(AffineForm::constant(c), term, b);
+    ASSERT_TRUE(v && isa<arith::ConstantOp>(v.getDefiningOp())) << c;
+    EXPECT_EQ(eval(v, 0, 0), c);
+  }
 }
 
 //===----------------------------------------------------------------------===//
