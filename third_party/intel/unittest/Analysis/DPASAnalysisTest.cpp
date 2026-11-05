@@ -58,8 +58,8 @@ public:
     builder->setInsertionPointToEnd(module.getBody());
 
     auto funcType = builder->getFunctionType({}, {});
-    auto funcOp =
-        builder->create<func::FuncOp>(builder->getUnknownLoc(), name, funcType);
+    auto funcOp = func::FuncOp::create(*builder, builder->getUnknownLoc(), name,
+                                       funcType);
     auto *block = funcOp.addEntryBlock();
     builder->setInsertionPointToStart(block);
 
@@ -79,17 +79,17 @@ public:
     auto tensorTypeC = RankedTensorType::get({32, 32}, cElemType);
 
     // Create placeholder values
-    auto a = builder->create<arith::ConstantOp>(
-        loc, tensorTypeA, builder->getZeroAttr(tensorTypeA));
-    auto b = builder->create<arith::ConstantOp>(
-        loc, tensorTypeB, builder->getZeroAttr(tensorTypeB));
-    auto c = builder->create<arith::ConstantOp>(
-        loc, tensorTypeC, builder->getZeroAttr(tensorTypeC));
+    auto a = arith::ConstantOp::create(*builder, loc, tensorTypeA,
+                                       builder->getZeroAttr(tensorTypeA));
+    auto b = arith::ConstantOp::create(*builder, loc, tensorTypeB,
+                                       builder->getZeroAttr(tensorTypeB));
+    auto c = arith::ConstantOp::create(*builder, loc, tensorTypeC,
+                                       builder->getZeroAttr(tensorTypeC));
 
     auto dotOp =
-        builder->create<DotOp>(loc, tensorTypeC, a, b, c, precision, 0);
+        DotOp::create(*builder, loc, tensorTypeC, a, b, c, precision, 0);
 
-    builder->create<func::ReturnOp>(loc);
+    func::ReturnOp::create(*builder, loc);
     return dotOp;
   }
 
@@ -107,22 +107,23 @@ public:
     auto tensorTypeC = RankedTensorType::get({32, 32}, cElemType);
     auto scaleType = RankedTensorType::get({32, 2}, builder->getI8Type());
 
-    auto a = builder->create<arith::ConstantOp>(
-        loc, tensorTypeA, builder->getZeroAttr(tensorTypeA));
-    auto b = builder->create<arith::ConstantOp>(
-        loc, tensorTypeB, builder->getZeroAttr(tensorTypeB));
-    auto c = builder->create<arith::ConstantOp>(
-        loc, tensorTypeC, builder->getZeroAttr(tensorTypeC));
-    auto scaleA = builder->create<arith::ConstantOp>(
-        loc, scaleType, builder->getZeroAttr(scaleType));
-    auto scaleB = builder->create<arith::ConstantOp>(
-        loc, scaleType, builder->getZeroAttr(scaleType));
+    auto a = arith::ConstantOp::create(*builder, loc, tensorTypeA,
+                                       builder->getZeroAttr(tensorTypeA));
+    auto b = arith::ConstantOp::create(*builder, loc, tensorTypeB,
+                                       builder->getZeroAttr(tensorTypeB));
+    auto c = arith::ConstantOp::create(*builder, loc, tensorTypeC,
+                                       builder->getZeroAttr(tensorTypeC));
+    auto scaleA = arith::ConstantOp::create(*builder, loc, scaleType,
+                                            builder->getZeroAttr(scaleType));
+    auto scaleB = arith::ConstantOp::create(*builder, loc, scaleType,
+                                            builder->getZeroAttr(scaleType));
 
-    auto dotScaledOp = builder->create<DotScaledOp>(
-        loc, tensorTypeC, a, b, c, scaleA, scaleB, aScaleType, bScaleType,
-        /*fastMath=*/false, lhsKPack, rhsKPack);
+    auto dotScaledOp =
+        DotScaledOp::create(*builder, loc, tensorTypeC, a, b, c, scaleA, scaleB,
+                            aScaleType, bScaleType,
+                            /*fastMath=*/false, lhsKPack, rhsKPack);
 
-    builder->create<func::ReturnOp>(loc);
+    func::ReturnOp::create(*builder, loc);
     return dotScaledOp;
   }
 
@@ -151,6 +152,68 @@ TEST_F(DPASAnalysisTest, DotOp_BF16_BF16_BF16) {
 
   auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
   EXPECT_EQ(dpasType, DPASEngineTypeXe2::BF16_BF16_BF16_BF16);
+}
+
+// Without fp8 DPAS, fp8 operands with a bf16 accumulator are extended to
+// fp16 and accumulate in fp32, mixed fp8 formats too.
+TEST_F(DPASAnalysisTest, DotOp_FP8_FP8_BF16) {
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp = createDotOp(*module, Float8E5M2Type::get(&ctx),
+                           Float8E5M2Type::get(&ctx), builder->getBF16Type());
+
+  auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe2::FP32_FP32_FP16_FP16);
+}
+
+TEST_F(DPASAnalysisTest, DotOp_MixedFP8_BF16) {
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp = createDotOp(*module, Float8E4M3FNType::get(&ctx),
+                           Float8E5M2Type::get(&ctx), builder->getBF16Type());
+
+  auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe2::FP32_FP32_FP16_FP16);
+}
+
+// Without fp8 DPAS, mixed fp8 formats with an fp32 accumulator are extended
+// to fp16 like same-format fp8.
+TEST_F(DPASAnalysisTest, DotOp_MixedFP8_FP32) {
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp = createDotOp(*module, Float8E4M3FNType::get(&ctx),
+                           Float8E5M2Type::get(&ctx), builder->getF32Type());
+
+  auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe2::FP32_FP32_FP16_FP16);
+}
+
+// Mixed fp8 formats with an fp16 accumulator have no DPAS form.
+TEST_F(DPASAnalysisTest, DotOp_MixedFP8_FP16) {
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp = createDotOp(*module, Float8E4M3FNType::get(&ctx),
+                           Float8E5M2Type::get(&ctx), builder->getF16Type());
+
+  auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe2::NOT_APPLICABLE);
+}
+
+// With fp8 DPAS, mixed fp8 formats keep the FMA path.
+TEST_F(DPASAnalysisTest, DotOp_Xe3P_MixedFP8_BF16) {
+  OwningOpRef<ModuleOp> module =
+      createModule(/*supportDPAS=*/true, /*supportFp8=*/true);
+  auto dotOp = createDotOp(*module, Float8E4M3FNType::get(&ctx),
+                           Float8E5M2Type::get(&ctx), builder->getBF16Type());
+
+  auto dpasType = DPASAnalysisV2::getDPASType(dotOp);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe3P::NOT_APPLICABLE);
+}
+
+TEST_F(DPASAnalysisTest, DotOp_Xe3P_MixedFP8_FP32) {
+  OwningOpRef<ModuleOp> module =
+      createModule(/*supportDPAS=*/true, /*supportFp8=*/true);
+  auto dotOp = createDotOp(*module, Float8E4M3FNType::get(&ctx),
+                           Float8E5M2Type::get(&ctx), builder->getF32Type());
+
+  auto dpasType = DPASAnalysisV2::getDPASType(dotOp);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe3P::NOT_APPLICABLE);
 }
 
 TEST_F(DPASAnalysisTest, DotOp_BF16_BF16_FP32) {
@@ -289,7 +352,7 @@ TEST_F(DPASAnalysisTest, CanUseDPAS_EmptyFunction) {
   OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
   auto funcOp = createFunction(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
-  builder->create<func::ReturnOp>(builder->getUnknownLoc());
+  func::ReturnOp::create(*builder, builder->getUnknownLoc());
 
   DPASAnalysisV1 analysis(*module);
   auto result = analysis.canUseDPAS(funcOp);
@@ -432,17 +495,17 @@ TEST_F(DPASAnalysisTest, EdgeCase_MultipleDotOps) {
     auto tensorType = RankedTensorType::get({32, 32}, builder->getF16Type());
     auto tensorTypeOut = RankedTensorType::get({32, 32}, builder->getF32Type());
 
-    auto a = builder->create<arith::ConstantOp>(
-        loc, tensorType, builder->getZeroAttr(tensorType));
-    auto b = builder->create<arith::ConstantOp>(
-        loc, tensorType, builder->getZeroAttr(tensorType));
-    auto c = builder->create<arith::ConstantOp>(
-        loc, tensorTypeOut, builder->getZeroAttr(tensorTypeOut));
+    auto a = arith::ConstantOp::create(*builder, loc, tensorType,
+                                       builder->getZeroAttr(tensorType));
+    auto b = arith::ConstantOp::create(*builder, loc, tensorType,
+                                       builder->getZeroAttr(tensorType));
+    auto c = arith::ConstantOp::create(*builder, loc, tensorTypeOut,
+                                       builder->getZeroAttr(tensorTypeOut));
 
-    builder->create<DotOp>(loc, tensorTypeOut, a, b, c, InputPrecision::IEEE,
-                           0);
+    DotOp::create(*builder, loc, tensorTypeOut, a, b, c, InputPrecision::IEEE,
+                  0);
   }
-  builder->create<func::ReturnOp>(builder->getUnknownLoc());
+  func::ReturnOp::create(*builder, builder->getUnknownLoc());
 
   DPASAnalysisV1 analysis(*module);
   auto result = analysis.canUseDPAS(funcOp);
@@ -462,15 +525,15 @@ TEST_F(DPASAnalysisTest, EdgeCase_MixedValidAndInvalidOps) {
     auto tensorType = RankedTensorType::get({32, 32}, builder->getF16Type());
     auto tensorTypeOut = RankedTensorType::get({32, 32}, builder->getF32Type());
 
-    auto a = builder->create<arith::ConstantOp>(
-        loc, tensorType, builder->getZeroAttr(tensorType));
-    auto b = builder->create<arith::ConstantOp>(
-        loc, tensorType, builder->getZeroAttr(tensorType));
-    auto c = builder->create<arith::ConstantOp>(
-        loc, tensorTypeOut, builder->getZeroAttr(tensorTypeOut));
+    auto a = arith::ConstantOp::create(*builder, loc, tensorType,
+                                       builder->getZeroAttr(tensorType));
+    auto b = arith::ConstantOp::create(*builder, loc, tensorType,
+                                       builder->getZeroAttr(tensorType));
+    auto c = arith::ConstantOp::create(*builder, loc, tensorTypeOut,
+                                       builder->getZeroAttr(tensorTypeOut));
 
-    builder->create<DotOp>(loc, tensorTypeOut, a, b, c, InputPrecision::IEEE,
-                           0);
+    DotOp::create(*builder, loc, tensorTypeOut, a, b, c, InputPrecision::IEEE,
+                  0);
   }
 
   // Create one invalid dot op (mismatched types)
@@ -480,18 +543,18 @@ TEST_F(DPASAnalysisTest, EdgeCase_MixedValidAndInvalidOps) {
     auto tensorTypeB = RankedTensorType::get({32, 32}, builder->getF32Type());
     auto tensorTypeOut = RankedTensorType::get({32, 32}, builder->getF32Type());
 
-    auto a = builder->create<arith::ConstantOp>(
-        loc, tensorTypeA, builder->getZeroAttr(tensorTypeA));
-    auto b = builder->create<arith::ConstantOp>(
-        loc, tensorTypeB, builder->getZeroAttr(tensorTypeB));
-    auto c = builder->create<arith::ConstantOp>(
-        loc, tensorTypeOut, builder->getZeroAttr(tensorTypeOut));
+    auto a = arith::ConstantOp::create(*builder, loc, tensorTypeA,
+                                       builder->getZeroAttr(tensorTypeA));
+    auto b = arith::ConstantOp::create(*builder, loc, tensorTypeB,
+                                       builder->getZeroAttr(tensorTypeB));
+    auto c = arith::ConstantOp::create(*builder, loc, tensorTypeOut,
+                                       builder->getZeroAttr(tensorTypeOut));
 
-    builder->create<DotOp>(loc, tensorTypeOut, a, b, c, InputPrecision::IEEE,
-                           0);
+    DotOp::create(*builder, loc, tensorTypeOut, a, b, c, InputPrecision::IEEE,
+                  0);
   }
 
-  builder->create<func::ReturnOp>(builder->getUnknownLoc());
+  func::ReturnOp::create(*builder, builder->getUnknownLoc());
 
   DPASAnalysisV1 analysis(*module);
   auto result = analysis.canUseDPAS(funcOp);

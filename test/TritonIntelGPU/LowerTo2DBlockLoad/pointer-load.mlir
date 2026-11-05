@@ -14,7 +14,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
     // CHECK: %[[P:.*]] = arith.constant 128 : i32
-    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]] {row_major} {base_height = 1 : i32, base_width = 32 : i32}
+    // CHECK: %[[H:.*]] = arith.constant 1 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]], %[[H]] {row_major} {base_width = 32 : i32}
     %5 = tt.load %4 {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %5 : tensor<64x32xf16, #dot0>
   }
@@ -35,7 +36,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %3 = tt.addptr %2, %1 : tensor<1x64x!tt.ptr<f16>, #dot1>, tensor<1x64xi32, #dot1>
     %4 = tt.broadcast %3 : tensor<1x64x!tt.ptr<f16>, #dot1> -> tensor<32x64x!tt.ptr<f16>, #dot1>
     // CHECK: %[[P:.*]] = arith.constant 128 : i32
-    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]] {column_major} {base_height = 1 : i32, base_width = 32 : i32}
+    // CHECK: %[[H:.*]] = arith.constant 1 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]], %[[H]] {column_major} {base_width = 32 : i32}
     %5 = tt.load %4 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f16>, #dot1>
     tt.return %5 : tensor<32x64xf16, #dot1>
   }
@@ -105,7 +107,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
     // CHECK: %[[P:.*]] = arith.constant 512 : i32
-    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]] {row_major} {base_height = 64 : i32, base_width = 64 : i32, ttig.block_io_stride = 256 : i64}
+    // CHECK: %[[H:.*]] = arith.constant 64 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]], %[[H]] {row_major} {base_width = 64 : i32, ttig.block_io_stride = 256 : i64}
     %5 = tt.load %4 {ttig.block_io = "row_major", ttig.block_io_stride = 256 : i64} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %5 : tensor<64x32xf16, #dot0>
   }
@@ -172,7 +175,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %8 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x64x!tt.ptr<f16>, #dot1>
     %9 = tt.addptr %8, %7 : tensor<32x64x!tt.ptr<f16>, #dot1>, tensor<32x64xi32, #dot1>
     // CHECK: %[[P:.*]] = arith.constant 256 : i32
-    // CHECK: ttig.2d_block_load_from_ptr %9, %[[P]] {column_major}
+    // CHECK: ttig.2d_block_load_from_ptr %9, %[[P]], %{{.*}} {column_major}
     %10 = tt.load %9 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f16>, #dot1>
     tt.return %10 : tensor<32x64xf16, #dot1>
   }
@@ -203,7 +206,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %ptr = tt.addptr %base, %off : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
     // CHECK: %[[C2:.*]] = arith.constant 2 : i32
     // CHECK: %[[PITCH:.*]] = arith.muli %{{.*}}, %[[C2]] : i32
-    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]] {row_major} {base_height = 8 : i32, base_width = 32 : i32}
+    // CHECK: %[[H:.*]] = arith.constant 8 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]], %[[H]] {row_major} {base_width = 32 : i32}
     %5 = tt.load %ptr {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %5 : tensor<64x32xf16, #dot0>
   }
@@ -234,7 +238,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %cst32 = arith.constant dense<32> : tensor<64x32xi32, #dot0>
     // CHECK: scf.for
     // CHECK: %[[PITCH:.*]] = arith.muli %{{.*}}, %{{.*}} : i32
-    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]] {row_major}
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]], %{{.*}} {row_major}
     %res = scf.for %i = %lb to %ub step %step iter_args(%p = %ptr0) -> (tensor<64x32x!tt.ptr<f16>, #dot0>) {
       %ld = tt.load %p {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
       %pn = tt.addptr %p, %cst32 : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>

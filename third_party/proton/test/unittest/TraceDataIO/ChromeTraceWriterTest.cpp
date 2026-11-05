@@ -1,12 +1,20 @@
 #include "TraceDataIO/EntryDecoder.h"
 #include "TraceDataIO/TraceWriter.h"
 #include "nlohmann/json.hpp"
+#include <cerrno>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <iostream>
+#include <system_error>
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 #include <vector>
 
 using json = nlohmann::json;
@@ -14,15 +22,33 @@ using namespace proton;
 
 class ChromeTraceWriterTest : public ::testing::Test {
 public:
-  void SetUp() override {}
+  void SetUp() override {
+    // CTest can run individual cases alongside the whole test executable.
+    std::string pattern =
+        (std::filesystem::temp_directory_path() / "proton-chrome-trace-XXXXXX")
+            .string();
+#if defined(_WIN32)
+    char *created = _mktemp_s(pattern.data(), pattern.size() + 1) == 0 &&
+                            std::filesystem::create_directory(pattern)
+                        ? pattern.data()
+                        : nullptr;
+#else
+    char *created = ::mkdtemp(pattern.data());
+#endif
+    ASSERT_NE(created, nullptr) << std::strerror(errno);
+
+    chromeTraceDir = created;
+    chromeTracePath = (chromeTraceDir / "chrome_trace.json").string();
+  }
 
   void TearDown() override {
-    try {
-      std::filesystem::remove_all(chromeTracePath);
-    } catch (const std::filesystem::filesystem_error &e) {
-      std::cerr << "Error cleaning up test trace files: " << e.what()
-                << std::endl;
-    }
+    if (chromeTraceDir.empty())
+      return;
+
+    std::error_code error;
+    std::filesystem::remove_all(chromeTraceDir, error);
+    EXPECT_FALSE(error) << "Error cleaning up " << chromeTraceDir << ": "
+                        << error.message();
   }
 
   void printJsonTrace(json data) { std::cout << data.dump(4) << std::endl; }
@@ -66,7 +92,8 @@ public:
   }
 
 protected:
-  std::string chromeTracePath = "chrome_trace.json";
+  std::filesystem::path chromeTraceDir;
+  std::string chromeTracePath;
 };
 
 TEST_F(ChromeTraceWriterTest, SingleBlock) {

@@ -134,7 +134,19 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
     aElemTy = aTy.getElementType();
     bElemTy = bTy.getElementType();
 
-    if (aElemTy != bElemTy)
+    // Without fp8 DPAS, AccelerateMatmul extends fp8 operands with an fp32 or
+    // a bf16 accumulator to fp16 (exactly), accumulating in fp32, so mixed fp8
+    // formats become the same type there.
+    auto isFP8 = [](Type ty) {
+      return isa<Float8E5M2Type, Float8E4M3FNType>(ty);
+    };
+    auto mod = op->template getParentOfType<ModuleOp>();
+    bool fp8ToF16 =
+        (dElemTy.isF32() || dElemTy.isBF16()) && isFP8(aElemTy) &&
+        isFP8(bElemTy) && mod &&
+        !mod->hasAttr(TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
+
+    if (aElemTy != bElemTy && !fp8ToF16)
       return DPASEngineType::NOT_APPLICABLE;
 
     if (dElemTy.isIntOrIndex()) {
@@ -173,6 +185,8 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
       } else if (dElemTy.isBF16()) {
         if (aElemTy.isBF16())
           return DPASEngineType::BF16_BF16_BF16_BF16;
+        if (fp8ToF16)
+          return DPASEngineType::FP32_FP32_FP16_FP16;
         if constexpr (std::is_same<DPASEngineType, DPASEngineTypeXe3P>::value)
           if (isFp8Supported && isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy))
             return DPASEngineType::BF16_BF16_FP8_FP8;

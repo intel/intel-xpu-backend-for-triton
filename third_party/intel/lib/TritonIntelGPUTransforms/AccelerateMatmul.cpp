@@ -242,14 +242,31 @@ void clearChainedDotKindAttrs(ModuleOp mod) {
   });
 }
 
+/// GRF entries per hardware thread the kernel can end up with.
+static unsigned getMaxGRFEntries(ModuleOp mod, StringRef grfMode,
+                                 unsigned numWarps) {
+  unsigned entries = 0;
+  if (!grfMode.getAsInteger(10, entries))
+    return entries;
+  // "default" and "auto" can escalate up to ttig.max_grf_mode, but a larger
+  // mode cannot launch more than 32 warps.
+  if (numWarps > 32)
+    return 128;
+  if (auto maxGRFMode = mod->getAttrOfType<StringAttr>(
+          ttgi::TritonIntelGPUDialect::getMaxGRFModeAttrName()))
+    if (!maxGRFMode.getValue().getAsInteger(10, entries))
+      return entries;
+  return 256;
+}
+
 template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
                              OpTy, tt::DotOp, tt::DotScaledOp>::value>>
 class BlockedToDPAS : public OpRewritePattern<OpTy> {
   using TensorValue = TypedValue<RankedTensorType>;
 
 public:
-  BlockedToDPAS(MLIRContext *context, int benefit)
-      : OpRewritePattern<OpTy>(context, benefit) {}
+  BlockedToDPAS(MLIRContext *context, int benefit, StringRef grfMode)
+      : OpRewritePattern<OpTy>(context, benefit), grfMode(grfMode) {}
 
   LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
@@ -319,8 +336,9 @@ public:
       }
     }
 
+    unsigned grfEntries = getMaxGRFEntries(mod, grfMode, numWarps);
     SmallVector<unsigned> warpsPerTile =
-        getWarpsPerTile(op, *dpasCap, retShape, numWarps);
+        getWarpsPerTile(op, *dpasCap, retShape, numWarps, grfEntries);
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
 
     size_t rank = retShape.size();
@@ -411,10 +429,65 @@ public:
   }
 
 private:
+  std::string grfMode;
+
+  /// True if B plus the accumulator of the dot do not fit in \p grfEntries.
+  static bool exceedsRegistersWhenDuplicated(
+      Operation *dotOp, ArrayRef<int64_t> shape,
+      const ttgi::DpasEncodingAttr::DPASCapability &dpasCap,
+      unsigned grfEntries) {
+    Value operandB = getDotOperands(dotOp).second;
+    auto bType = dyn_cast<RankedTensorType>(operandB.getType());
+    auto cType = dyn_cast<RankedTensorType>(dotOp->getResult(0).getType());
+    if (!bType || !cType)
+      return false;
+    unsigned rank = shape.size();
+    int64_t m = shape[rank - 2], n = shape[rank - 1];
+    int64_t k = bType.getShape()[rank - 2];
+    int64_t bBytes = k * n * bType.getElementTypeBitWidth() / 8;
+    int64_t accBytes = m * n * cType.getElementTypeBitWidth() / 8;
+    // A GRF entry holds one 32-bit value per lane of the DPAS sub-group.
+    int64_t grfBytes = int64_t(grfEntries) * dpasCap.executionSize * 4;
+    return bBytes + accBytes > grfBytes;
+  }
+
+  /// Dots whose A operand is computed from this dot.
+  static SmallVector<Operation *> getConsumersAlongA(Operation *dotOp) {
+    auto filter = [&dotOp](Operation *op) {
+      return op->getParentRegion() == dotOp->getParentRegion();
+    };
+    SetVector<Operation *> forwardSlice;
+    getForwardSlice(dotOp, &forwardSlice, {filter});
+    SmallVector<Operation *> consumers;
+    for (Operation *op : forwardSlice)
+      if (isa<tt::DotOp, tt::DotScaledOp>(op) &&
+          getChainedDotOps(getDotOperands(op).first).contains(dotOp))
+        consumers.push_back(op);
+    return consumers;
+  }
+
+  /// Whether the warps should go along N instead of being duplicated along M.
+  /// A producer moves only together with an oversized consumer.
+  static bool
+  shouldDistributeAlongN(Operation *dotOp, ArrayRef<int64_t> shape,
+                         const ttgi::DpasEncodingAttr::DPASCapability &dpasCap,
+                         unsigned grfEntries) {
+    if (!exceedsRegistersWhenDuplicated(dotOp, shape, dpasCap, grfEntries))
+      return false;
+    if (!getChainedDotOps(getDotOperands(dotOp).first).empty())
+      return true;
+    return llvm::any_of(getConsumersAlongA(dotOp), [&](Operation *consumer) {
+      auto type = cast<RankedTensorType>(consumer->getResult(0).getType());
+      return exceedsRegistersWhenDuplicated(consumer, type.getShape(), dpasCap,
+                                            grfEntries);
+    });
+  }
+
   SmallVector<unsigned>
   getWarpsPerTile(Operation *dotOp,
                   const ttgi::DpasEncodingAttr::DPASCapability &dpasCap,
-                  const ArrayRef<int64_t> shape, unsigned numWarps) const {
+                  const ArrayRef<int64_t> shape, unsigned numWarps,
+                  unsigned grfEntries) const {
     auto filter = [&dotOp](Operation *op) {
       return op->getParentRegion() == dotOp->getParentRegion();
     };
@@ -474,8 +547,14 @@ private:
       // per-iteration exchange -- measured 1.6x to 7.6x slower for N == 16,
       // M == 128, growing with the warp count. Trading the exchange against the
       // parallelism it costs needs a cost model rather than this guard.
+      //
+      // Duplicating along M only pays off while the copy fits in registers.
       if (chainedDotKind == ChainedDotKind::ChainedAlongA &&
           maxNumWarpsAlongM == 1) {
+        if (shouldDistributeAlongN(dotOp, shape, dpasCap, grfEntries)) {
+          ret[rank - 1] = assignBatchWarps(numWarps);
+          return ret;
+        }
         ret[rank - 2] = assignBatchWarps(numWarps);
         return ret;
       }
@@ -653,7 +732,8 @@ private:
     } else {
       RankedTensorType vType =
           v.getType().clone(getScalarType(rewriter, computeType));
-      tt::FpToFpOp op = tt::FpToFpOp::create(rewriter, loc, vType, v);
+      tt::FpToFpOp op =
+          tt::FpToFpOp::create(rewriter, loc, vType, v, tt::RoundingModeAttr{});
       v = cast<TypedValue<RankedTensorType>>(op.getResult());
     }
     return v;
@@ -690,7 +770,8 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
 
   return llvm::TypeSwitch<Type, Value>(elemType)
       .Case<FloatType>([&](auto) {
-        return tt::FpToFpOp::create(builder, loc, tensorPromotedType, operand);
+        return tt::FpToFpOp::create(builder, loc, tensorPromotedType, operand,
+                                    tt::RoundingModeAttr{});
       })
       .Case<IntegerType>([&](auto) {
         unsigned tgtBitWidth = elemType.getIntOrFloatBitWidth(),
@@ -706,6 +787,98 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
       });
 }
 
+// Replaces \p dotOp, which has a bf16 accumulator, with a dot that accumulates
+// in fp32 followed by a single RTNE rounding of the result to bf16.
+static tt::DotOp accumulateInF32(tt::DotOp dotOp) {
+  OpBuilder builder(dotOp);
+  Location loc = dotOp.getLoc();
+  RankedTensorType DType = dotOp.getD().getType();
+  RankedTensorType f32Type = DType.clone(builder.getF32Type());
+  auto acc = tt::FpToFpOp::create(builder, loc, f32Type, dotOp.getC(),
+                                  tt::RoundingModeAttr{});
+  auto f32Dot = tt::DotOp::create(builder, loc, f32Type, dotOp.getA(),
+                                  dotOp.getB(), acc, dotOp.getInputPrecision(),
+                                  dotOp.getMaxNumImpreciseAcc());
+  auto result = tt::FpToFpOp::create(
+      builder, loc, DType, f32Dot.getD(),
+      tt::RoundingModeAttr::get(builder.getContext(), tt::RoundingMode::RTNE));
+  dotOp.replaceAllUsesWith(result.getResult());
+  dotOp.erase();
+  return f32Dot;
+}
+
+// Returns how many threads hold each element of \p dotOperand on average: its
+// elements per thread over an even split of the tensor across the CTA.
+static double getDotOperandReplication(Value dotOperand) {
+  auto type = cast<RankedTensorType>(dotOperand.getType());
+  auto mod = dotOperand.getParentRegion()->getParentOfType<ModuleOp>();
+  int64_t numThreads =
+      int64_t(ttg::lookupNumWarps(dotOperand.getParentRegion())) *
+      ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+  return double(ttg::getTotalElemsPerThread(type)) * numThreads /
+         double(product(type.getShape()));
+}
+
+// Promotes \p operand like promoteOperand. When \p operand is an fp8 layout
+// conversion into a dot operand layout, which replicates each element across
+// threads, the fp8 values can be decoded before the conversion instead, once
+// per element rather than once per copy. They are decoded only to a 16-bit
+// type (fp16 for an fp32 promotion, which is exact for fp8), and a wider
+// promotion is finished in the dot operand layout, where it is a single cheap
+// instruction: moving 32-bit values through the layout conversion costs more
+// registers than it saves. The decode is only moved while it takes several
+// instructions: with native fp8 conversion, fp8 -> fp16 is a single builtin,
+// as cheap as the casts of other types (e.g. int8, fp16), which stay in the
+// dot operand layout, while fp8 -> bf16 is still emulated. An fp16 decode of
+// an operand with little replication keeps the cast in the dot operand layout
+// too.
+// The decode is placed right after the source, so it runs once and is hoisted
+// with it (e.g. out of a loop), at the cost of keeping the decoded 16-bit
+// value live from there; the new conversion is placed at the builder's
+// insertion point (the dot), so the replicated value is created where it is
+// used.
+static Value promoteOperandBeforeLayoutConversion(OpBuilder &builder,
+                                                  Location loc, Value operand,
+                                                  Type promotedType) {
+  Type elemType = getElementTypeOrSelf(operand);
+  bool isFP8 =
+      isa<FloatType>(elemType) && elemType.getIntOrFloatBitWidth() == 8;
+  auto cvtOp = operand.getDefiningOp<ttg::ConvertLayoutOp>();
+  if (!isFP8 || !cvtOp ||
+      isa<ttg::DotOperandEncodingAttr>(cvtOp.getSrc().getType().getEncoding()))
+    return promoteOperand(builder, loc, operand, promotedType);
+
+  // fp8 -> bf16 is always emulated, so it is moved for any replication. An
+  // fp16 decode can be cheap (a shift for e5m2, a builtin with native fp8
+  // conversion): on BMG, moving it paid off only for operands replicated at
+  // least 16 times.
+  constexpr double minReplication = 16;
+  Type decodedType = promotedType.getIntOrFloatBitWidth() > 16
+                         ? builder.getF16Type()
+                         : promotedType;
+  if (!decodedType.isBF16()) {
+    auto mod = operand.getParentRegion()->getParentOfType<ModuleOp>();
+    if (mod->hasAttr(
+            ttgi::TritonIntelGPUDialect::getSupportF8ConversionAttrName()) ||
+        getDotOperandReplication(operand) < minReplication)
+      return promoteOperand(builder, loc, operand, promotedType);
+  }
+
+  Value decodedSrc;
+  {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointAfterValue(cvtOp.getSrc());
+    decodedSrc = promoteOperand(builder, loc, cvtOp.getSrc(), decodedType);
+  }
+  auto decodedTy = cast<RankedTensorType>(operand.getType())
+                       .cloneWith(std::nullopt, decodedType);
+  Value decoded = ttg::ConvertLayoutOp::create(builder, cvtOp.getLoc(),
+                                               decodedTy, decodedSrc);
+  if (decodedType == promotedType)
+    return decoded;
+  return promoteOperand(builder, loc, decoded, promotedType);
+}
+
 // promote operands of dot op if the existing combination is not natively
 // supported.
 static void decomposeMixedModeDotOp(ModuleOp mod) {
@@ -719,27 +892,55 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     Type promoteType;
     if (dpasLayout) {
       // FP8 is not always natively supported by the DPAS instruction.
-      // Promote to FP16 when needed.
+      // Promote it when needed.
       bool isNativeFP8 = isa<Float8E5M2Type, Float8E4M3FNType>(AElType);
       auto mod = dotOp->getParentOfType<ModuleOp>();
       bool supportsFP8 = mod->hasAttr(
           ttgi::TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
       if (supportsFP8 || !isNativeFP8)
         return;
+      // Extend to fp16, which is exact for fp8. DPAS has a bf16 accumulator
+      // only for bf16 operands, so a dot with a bf16 accumulator accumulates
+      // in fp32 and rounds the result to bf16 once.
+      if (D.getType().getElementType().isBF16()) {
+        dotOp = accumulateInF32(dotOp);
+        builder.setInsertionPoint(dotOp);
+      }
       promoteType = builder.getF16Type();
     } else {
       // FMA case.
       Type DElType = D.getType().getElementType();
+      if (DElType.isBF16()) {
+        // FMA rounds the accumulator after every multiply-add, and IGC lowers
+        // a bf16 multiply-add to a `mad` with a bf16 destination, which rounds
+        // toward zero. Accumulate in fp32 and round the result once instead,
+        // as bf16 DPAS does per instruction. This covers bf16 and fp8 dots
+        // that cannot use DPAS (e.g. fp8 without fp8 DPAS, or mixed fp8).
+        // fp16 accumulators are intentionally left as is: an fp16 multiply-add
+        // rounds to nearest.
+        dotOp = accumulateInF32(dotOp);
+        DElType = builder.getF32Type();
+      }
       if (AElType == DElType)
         return;
       promoteType = DElType;
+      builder.setInsertionPoint(dotOp);
     }
 
     Location loc = dotOp.getLoc();
-    Value promotedA = promoteOperand(builder, loc, dotOp.getA(), promoteType);
-    Value promotedB = promoteOperand(builder, loc, dotOp.getB(), promoteType);
-    dotOp.setOperand(0, promotedA);
-    dotOp.setOperand(1, promotedB);
+    auto promote =
+        dpasLayout ? promoteOperand : promoteOperandBeforeLayoutConversion;
+    Value oldA = dotOp.getA(), oldB = dotOp.getB();
+    dotOp.setOperand(0, promote(builder, loc, oldA, promoteType));
+    dotOp.setOperand(1, promote(builder, loc, oldB, promoteType));
+    // Drop layout conversions that the promotion left unused.
+    if (auto cvtOp = oldA.getDefiningOp<ttg::ConvertLayoutOp>();
+        cvtOp && cvtOp->use_empty())
+      cvtOp->erase();
+    if (oldB != oldA)
+      if (auto cvtOp = oldB.getDefiningOp<ttg::ConvertLayoutOp>();
+          cvtOp && cvtOp->use_empty())
+        cvtOp->erase();
   });
 }
 
@@ -911,9 +1112,11 @@ public:
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     constexpr int benefitDefault = 1;
-    patterns.add<BlockedToDPAS<tt::DotOp>>(context, benefitDefault + 1);
+    patterns.add<BlockedToDPAS<tt::DotOp>>(context, benefitDefault + 1,
+                                           grfMode);
     if (supportBlockScaleDPAS) {
-      patterns.add<BlockedToDPAS<tt::DotScaledOp>>(context, benefitDefault + 1);
+      patterns.add<BlockedToDPAS<tt::DotScaledOp>>(context, benefitDefault + 1,
+                                                   grfMode);
       patterns.add<UpcastScaledBlocked>(context, benefitDefault + 1);
     }
     ttgi::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
