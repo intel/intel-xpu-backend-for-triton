@@ -594,6 +594,25 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// The column-major remap happens in value space, before the rank shift.
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [2, 8], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @rank_reducing_colmaj_load_vectorized
+  tt.func public @rank_reducing_colmaj_load_vectorized(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}) -> tensor<8x16xf32, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg2, %arg2, %c8_i32], [%arg3, %arg3, %c1_i64] : <f32>, <1x16x8xf32>
+    // CHECK-COUNT-2: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, vector<4xi32>) -> vector<4xi32>
+    %l = tt.descriptor_load %desc[%arg1, %c0_i32, %c0_i32] {ttig.block_io = "column_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x16x8xf32> -> tensor<8x16xf32, #blocked>
+    tt.return %l : tensor<8x16xf32, #blocked>
+  }
+}
+
+// -----
+
 // Test divisible descriptor load with a non-zero constant offset:
 // When shape[i] % block_shape[i] == 0 AND offset[i] % block_shape[i] == 0,
 // the load uses BLOCK-LEVEL checks on the base offset directly rather than
