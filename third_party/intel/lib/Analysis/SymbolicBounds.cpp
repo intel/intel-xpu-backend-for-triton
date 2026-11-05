@@ -652,8 +652,9 @@ static Operation *numberingScope(Operation *root) {
 
 SymbolicBoundsProver::SymbolicBoundsProver(const DataFlowSolver &solver,
                                            DominanceInfo &domInfo,
-                                           Operation *root)
-    : solver(solver), domInfo(domInfo), root(root),
+                                           Operation *root,
+                                           ScalarHandling scalars)
+    : solver(solver), domInfo(domInfo), root(root), scalars(scalars),
       scope(numberingScope(root)) {
   // Number every value in pre-order, from 1, so the symbol sort is total over
   // distinct values and reproducible across processes: a block's arguments as
@@ -1014,7 +1015,14 @@ AffineForm SymbolicBoundsProver::normalizeUncached(
       .Case<tt::SplatOp>([&](auto op) {
         // A scalar has the same value in every element, so the placement of
         // the result says nothing about the operand.
-        return normalizeImpl(op.getSrc(), ctx, obligations, {}, depth + 1);
+        if (scalars == ScalarHandling::LookThrough)
+          return normalizeImpl(op.getSrc(), ctx, obligations, {}, depth + 1);
+        // A form with no obligation is exact; any other is replaced by the
+        // scalar itself, and its obligations go with it.
+        SmallVector<Obligation, 4> srcObligations;
+        AffineForm src =
+            normalizeImpl(op.getSrc(), ctx, srcObligations, {}, depth + 1);
+        return srcObligations.empty() ? src : opaque(op.getSrc(), {});
       })
       .Case<tt::ExpandDimsOp>([&](auto op) {
         // The operand's axis i lands on result axis i for i < axis, else
@@ -2047,6 +2055,8 @@ BoundProof SymbolicBoundsProver::finalize(BoundProof::Verdict onD,
 
 BoundProof SymbolicBoundsProver::prove(arith::CmpIPredicate pred, Value lhs,
                                        Value rhs, QueryContext ctx) {
+  if (scalars == ScalarHandling::SplatLeaves)
+    return {};
   SmallVector<Obligation, 4> obligations;
   exhausted = false;
   AffineForm l =
@@ -2437,6 +2447,8 @@ BoundProof SymbolicBoundsProver::proveDifferenceAtLeast(
 }
 
 BoundProof SymbolicBoundsProver::tripCountAtLeast(scf::ForOp loop, int64_t n) {
+  if (scalars == ScalarHandling::SplatLeaves)
+    return {};
   // Only a constant positive step: proveDifferenceAtLeast takes a constant
   // threshold, and the trip-count identity needs step > 0. constantStep also
   // rejects unsupported widths.
@@ -2473,6 +2485,8 @@ BoundProof SymbolicBoundsProver::tripCountAtLeast(scf::ForOp loop, int64_t n) {
 //===----------------------------------------------------------------------===//
 
 BoundProof SymbolicBoundsProver::proveTrue(Value v, QueryContext ctx) {
+  if (scalars == ScalarHandling::SplatLeaves)
+    return {};
   maskVisits = 0;
   maskBudgetExhausted = false;
   MaskResult r = proveTrueImpl(v, ctx, 0);

@@ -226,15 +226,25 @@ struct QueryContext {
 /// `Exhausted`, when a budget is exceeded, which is `Unknown`.
 enum class CandidateResult { Accepted, Declined, Exhausted };
 
+/// What `normalize` does with a splatted scalar. `SplatLeaves` keeps the
+/// scalar's form only if it carries no obligation, else the scalar itself is
+/// the symbol, so `materializeForm` rebuilds the splatted value exactly. Wraps
+/// on tensor arithmetic still apply: only one whose `expr` has a `Lane` term
+/// is a per-element offset a consumer may choose to assume.
+enum class ScalarHandling { LookThrough, SplatLeaves };
+
 class SymbolicBoundsProver {
 public:
   /// `solver` must already have `IntegerRangeAnalysis` loaded and run, as
   /// `SignednessProver` requires. Collects the assume facts under `root` once
   /// and numbers every value of its enclosing function (of `root` itself, for a
   /// module) for the symbol order, so a prover rooted at a loop still orders
-  /// the function arguments and everything else a query can reach.
+  /// the function arguments and everything else a query can reach. A
+  /// `SplatLeaves` prover only normalizes: `prove`, `proveTrue` and
+  /// `tripCountAtLeast` answer `Unknown`.
   SymbolicBoundsProver(const DataFlowSolver &solver, DominanceInfo &domInfo,
-                       Operation *root);
+                       Operation *root,
+                       ScalarHandling scalars = ScalarHandling::LookThrough);
 
   /// The only way to create a `Symbol`: fills `order` from the pre-order
   /// numbering built at construction. A value that numbering does not cover -
@@ -483,6 +493,7 @@ private:
   const DataFlowSolver &solver;
   DominanceInfo &domInfo;
   Operation *root;
+  const ScalarHandling scalars;
   /// The operation whose values are numbered: `root` if it is a function,
   /// else its enclosing function, else `root` (a module).
   Operation *scope;

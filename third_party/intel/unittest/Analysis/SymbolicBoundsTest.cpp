@@ -48,7 +48,8 @@ public:
 
   /// Parses `ir`, runs the range analysis over it exactly as a consumer pass
   /// does, and builds the prover. Must be called before any query.
-  void parse(StringRef ir) {
+  void parse(StringRef ir, tt::intel::ScalarHandling scalars =
+                               tt::intel::ScalarHandling::LookThrough) {
     module = parseSourceString<ModuleOp>(ir, &ctx);
     ASSERT_TRUE(module) << "failed to parse:\n" << ir.str();
     ModuleOp mod = module.get();
@@ -56,8 +57,8 @@ public:
     solver = createDataFlowSolver();
     solver->load<tt::intel::IntegerRangeAnalysis>(mod, *domInfo);
     ASSERT_TRUE(succeeded(solver->initializeAndRun(mod)));
-    prover = std::make_unique<tt::intel::SymbolicBoundsProver>(*solver,
-                                                               *domInfo, mod);
+    prover = std::make_unique<tt::intel::SymbolicBoundsProver>(
+        *solver, *domInfo, mod, scalars);
   }
 
   /// The single function in the parsed IR. A ModuleOp body's front() is that
@@ -1049,6 +1050,79 @@ TEST_F(SymbolicBoundsTest, MaterializeKeepsIndexGuards) {
   unsigned casts = 0;
   func().walk([&](arith::IndexCastOp) { ++casts; });
   EXPECT_EQ(casts, 1u);
+}
+
+// Under SplatLeaves a splatted scalar keeps its form only when no obligation
+// came with it (Wrap or NonNegative); otherwise the scalar itself is the leaf.
+TEST_F(SymbolicBoundsTest, SplatLeavesKeepOnlyExactForms) {
+  StringRef ir = R"(
+    tt.func @f(%a: i32, %b: i32, %c: i8) {
+      %c1 = arith.constant 1 : i32
+      %kr = arith.subi %a, %b : i32 loc("kr")
+      %s1 = tt.splat %kr : i32 -> tensor<16xi32> loc("s1")
+      %s2 = tt.splat %a : i32 -> tensor<16xi32> loc("s2")
+      %ap1 = arith.addi %a, %c1 : i32
+      %e1 = arith.extsi %ap1 : i32 to i64
+      %e0 = arith.extsi %a : i32 to i64
+      %d = arith.subi %e1, %e0 : i64 loc("d")
+      %s3 = tt.splat %d : i64 -> tensor<16xi64> loc("s3")
+      %u = arith.extui %c : i8 to i32 loc("u")
+      %s4 = tt.splat %u : i32 -> tensor<16xi32> loc("s4")
+      tt.return
+    })";
+  auto normWithObls = [&](StringRef name) {
+    SmallVector<tt::intel::Obligation, 4> obls;
+    Value v = get(name);
+    std::string form = tt::intel::toString(prover->normalize(v, at(v), obls));
+    return std::make_pair(form, obls);
+  };
+  parse(ir);
+  auto [deep, deepObls] = normWithObls("s1");
+  EXPECT_EQ(deep, "arg0 - arg1");
+  ASSERT_EQ(deepObls.size(), 1u);
+  EXPECT_EQ(deepObls.front().kind, tt::intel::Obligation::Wrap);
+
+  parse(ir, tt::intel::ScalarHandling::SplatLeaves);
+  for (auto [name, expected] :
+       {std::pair<StringRef, StringRef>{"s1", "opaque(kr)"},
+        {"s2", "arg0"},
+        {"s3", "opaque(d)"},
+        {"s4", "opaque(u)"}}) {
+    auto [form, obls] = normWithObls(name);
+    EXPECT_EQ(form, expected.str()) << name.str();
+    EXPECT_TRUE(obls.empty()) << name.str();
+  }
+}
+
+// A SplatLeaves prover only normalizes: every query that a default prover
+// decides comes back Unknown, constants included.
+TEST_F(SymbolicBoundsTest, SplatLeavesProverIsNormalizeOnly) {
+  StringRef ir = R"(
+    tt.func @f() {
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      %c4 = arith.constant 4 : i32
+      %t = arith.constant true loc("t")
+      %f = arith.constant false loc("f")
+      %cmp = arith.cmpi slt, %c0, %c4 : i32 loc("cmp")
+      scf.for %i = %c0 to %c4 step %c1 : i32 {
+        scf.yield
+      } loc("loop")
+      tt.return
+    })";
+  auto verdicts = [&] {
+    Value cmp = get("cmp"), t = get("t"), f = get("f");
+    return std::vector<std::string>{
+        verdict(cmp), tt::intel::toString(prover->proveTrue(cmp, at(cmp))),
+        tt::intel::toString(prover->proveTrue(t, at(t))),
+        tt::intel::toString(prover->proveTrue(f, at(f))), trip("loop", 2)};
+  };
+  parse(ir);
+  EXPECT_EQ(verdicts(),
+            (std::vector<std::string>{"Satisfied", "Satisfied", "Satisfied",
+                                      "Refuted", "Satisfied"}));
+  parse(ir, tt::intel::ScalarHandling::SplatLeaves);
+  EXPECT_EQ(verdicts(), std::vector<std::string>(5, "Unknown"));
 }
 
 TEST_F(SymbolicBoundsTest, NormalizeRejectsNonPositiveDivisor) {
