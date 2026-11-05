@@ -171,6 +171,40 @@ Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
 Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
                             unsigned elemSizeInBytes);
 
+/// True when `other` is absent or a positive-zero splat, the only fill value
+/// the 2D block message's HW boundary check can produce. `-0.0` is excluded
+/// to avoid flipping masked-out elements' sign bit.
+bool isZeroFillOther(Value other);
+
+/// A mask of the form `(rowBase + arange(0, N)) < bound`, broadcast along
+/// every other dim (contiguous dim and any batch dims). Expressible as a
+/// 2D block load's `base_height` instead of per-element predication.
+///
+/// `extraPred`, if non-null, is a batch-dims-only predicate ANDed into the
+/// original mask (degenerate along the pitch and contiguous dims, so it's
+/// uniform per hardware block-load message); the caller ANDs it into its
+/// own per-message select instead of folding it into `base_height`.
+struct RowLimitMaskInfo {
+  unsigned boundedDim;
+  Value rowBase;
+  Value bound;
+  Value extraPred;
+};
+
+/// Match `mask` against the row-limit pattern above for a tensor of any
+/// rank >= 2, and check the remaining conditions `base_height` needs:
+/// `other` is zero-fill-compatible, the bounded dim is the pitch dim, it
+/// isn't a broadcast pointer, and `rowBase`/`bound` are i32.
+std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
+                                                  ArrayRef<int64_t> tensorShape,
+                                                  unsigned contiguousDim,
+                                                  bool pitchDimIsBroadcast);
+
+/// Compute `clamp(bound - rowBase, 0, rowExtent)` as an i32, widening to i64
+/// first to avoid overflow. `rowBase` may be null.
+Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
+                            Value rowBase, int64_t rowExtent);
+
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
