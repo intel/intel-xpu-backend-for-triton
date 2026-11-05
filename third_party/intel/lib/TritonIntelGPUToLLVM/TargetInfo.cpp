@@ -17,6 +17,7 @@
 #include "Utility.h"
 #include "Utils/LLVMIntr.h"
 #include "Utils/Mangling.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
 
 #include <limits>
@@ -151,8 +152,15 @@ void TargetInfo::storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
 
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  b.barrier(targets);
+  switch (targets) {
+  case triton::gpu::AddrSpace::Local:
+    TritonGEN::BarrierOp::create(rewriter, loc, TritonGEN::MemFence::LOCAL);
+    break;
+  default:
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    b.barrier(targets);
+    break;
+  }
 }
 
 void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter,
