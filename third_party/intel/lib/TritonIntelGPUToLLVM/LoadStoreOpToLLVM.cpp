@@ -5116,8 +5116,14 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
         Value localHeight = b.sub(baseHeight, rowOffset);
         pred = b.icmp_sgt(localHeight, b.i32_val(0));
         adjustedBaseHeight = b.smax(localHeight, b.i32_val(1));
-      } else if (maskElems.size()) {
-        pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
+      }
+      // The row-limit height and a mask aren't mutually exclusive: the mask
+      // is matchRowLimitMask's leftover batch-dim extraPred, uniform per
+      // message, so it's ANDed into the same `pred`.
+      if (maskElems.size()) {
+        Value maskPred =
+            targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
+        pred = pred ? b.and_(pred, maskPred) : maskPred;
       }
 
       return {addrElem,

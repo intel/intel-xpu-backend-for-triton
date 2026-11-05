@@ -89,7 +89,8 @@ private:
     if (isa<FloatType>(scaleTy.getElementType())) {
       auto scaleType = scaleTy.clone(computeType);
       return cast<TypedValue<RankedTensorType>>(
-          FpToFpOp::create(rewriter, loc, scaleType, scale).getResult());
+          FpToFpOp::create(rewriter, loc, scaleType, scale, RoundingModeAttr{})
+              .getResult());
     }
 
     // Choose an fp type that can fit the scale value.
@@ -279,7 +280,8 @@ private:
     } else {
       auto vType16 = v.getType().clone(computeType);
       v = cast<TypedValue<RankedTensorType>>(
-          FpToFpOp::create(rewriter, loc, vType16, v).getResult());
+          FpToFpOp::create(rewriter, loc, vType16, v, RoundingModeAttr{})
+              .getResult());
     }
     if (!scale)
       return v;

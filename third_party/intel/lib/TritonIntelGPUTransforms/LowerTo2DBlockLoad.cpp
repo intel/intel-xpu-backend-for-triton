@@ -8,7 +8,6 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
@@ -386,7 +385,7 @@ private:
     // masking (hardware zero-fill). Decided up front so tile-size
     // computation below can treat this load as unmasked.
     std::optional<ttgi::RowLimitMaskInfo> rowLimitMask;
-    if (op.getMask() && rank == 2) {
+    if (op.getMask() && rank >= 2) {
       unsigned pitchTensorDim =
           (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
       bool pitchDimIsBroadcast =
@@ -448,6 +447,39 @@ private:
     // non-contiguous memory direction. For transposed loads, rowDim is the
     // memory-contiguous dim and colDim is non-contiguous, so pitch uses colDim.
     unsigned pitchDim = isTranspose ? colDim : rowDim;
+
+    // matchRowLimitMask assumed the pitch dim is the conventional rank-2/
+    // rank-1 dim, but for rank > 2 the tile's actual pitch dim (above) can
+    // land on a batch dim instead (e.g. a layout with no register packing).
+    // base_height only predicates `pitchDim`, so a mismatch here would
+    // silently apply the bound to the wrong dimension; fall back to the
+    // per-element masked path, redoing tile selection with the mask's real
+    // axis info now that it is no longer absorbed into base_height.
+    if (rowLimitMask && rowLimitMask->boundedDim != pitchDim) {
+      LDBG("Row-limit mask bounds dim " << rowLimitMask->boundedDim
+                                        << " but tile pitch dim is " << pitchDim
+                                        << "; falling back to "
+                                           "masked load: "
+                                        << *op);
+      rowLimitMask = std::nullopt;
+      maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
+      if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
+                                         elemSizeInBits, tensorTy,
+                                         oneMatrixPerLoadForBT, maskAxisInfo)) {
+        LDBG("Tile validation failed for load (row-limit fallback): " << *op);
+        return;
+      }
+      sizeInfo = ttgi::getBlockIOLoadTileSize(llEncoding, contiguousDim,
+                                              elemSizeInBits, maskAxisInfo,
+                                              oneMatrixPerLoadForBT);
+      rowDim = sizeInfo.rowDim;
+      colDim = sizeInfo.colDim;
+      tileWidth = sizeInfo.tileWidth;
+      tileHeight = sizeInfo.tileHeight;
+      isTranspose = sizeInfo.transpose;
+      numPackedVals = sizeInfo.numElemPerPackedVal;
+      pitchDim = isTranspose ? colDim : rowDim;
+    }
 
     // Compute pitch from stride analysis or the 1D->2D reshape attribute.
     // For the HW surface: width is along memory-contiguous direction, height
@@ -589,9 +621,11 @@ private:
     Value other = op.getOther();
     Value heightOperand;
     if (rowLimitMask) {
-      // Drop the mask/other: hardware zero-fill at base_height replaces it.
-      mask = Value();
-      other = Value();
+      // Drop the row-limit component: base_height replaces it. Keep any
+      // batch-dim extraPred as the mask operand for the LLVM lowering to
+      // AND into its per-message select.
+      mask = rowLimitMask->extraPred;
+      other = mask ? createZeroSplat(builder, loc, tensorTy) : Value();
       // Relative to the tile's first row and may be <= 0; the LLVM lowering
       // adjusts per message and never forwards a non-positive base_height.
       heightOperand = ttgi::computeRowLimitHeight(
