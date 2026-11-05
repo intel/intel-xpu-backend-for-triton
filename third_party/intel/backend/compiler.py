@@ -2,7 +2,7 @@ from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
 from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
-from triton.backends.intel.errors import IntelGPUError
+from triton.backends.intel.errors import IntelGPUError, WorkGroupSizeOutOfResources
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton.backends.intel.spirv_probes import accepts_long_vector, accepts_maximum_registers
 from triton import knobs
@@ -481,6 +481,18 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             raise ValueError(
                 f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
             )
+        # `max_num_sub_groups` is the limit at the smallest sub-group size, so a
+        # kernel with 32 threads per warp can pass the check above and still need
+        # more work-items than a work-group can hold (e.g. num_warps=64 with
+        # TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32), which only fails at launch
+        # with ZE_RESULT_ERROR_INVALID_GROUP_SIZE_DIMENSION. Raise an `OutOfResources`
+        # so the autotuner skips such a config instead of aborting.
+        max_work_group_size = properties.get('max_work_group_size')
+        if max_work_group_size and opt.num_warps * opt.warp_size > max_work_group_size:
+            fitting = [s for s in properties['sub_group_sizes'] if opt.num_warps * s <= max_work_group_size]
+            smaller_warp_size = max(fitting) if fitting else None
+            raise WorkGroupSizeOutOfResources(opt.num_warps, opt.warp_size, max_work_group_size, smaller_warp_size,
+                                              opt.sub_32_dpas)
         # The backend has no CTA cluster support: getClusterCTAId is hardwired to
         # 0, clusterBarrier is a plain workgroup barrier, and loadDShared /
         # storeDShared ignore the ctaId they are given. Accepting num_ctas > 1
