@@ -46,6 +46,9 @@ struct TritonGENBarrierLowering
     auto scope = spirv::Scope::Workgroup;
     spirv::MemorySemantics memorySemantics;
     switch (op.getMemFence()) {
+    case TritonGEN::MemFence::NONE:
+      memorySemantics = spirv::MemorySemantics::None;
+      break;
     case TritonGEN::MemFence::LOCAL:
       memorySemantics = spirv::MemorySemantics::AcquireRelease |
                         spirv::MemorySemantics::WorkgroupMemory;
