@@ -1328,12 +1328,19 @@ def test_math_divide_op(expr, num_ctas, device):
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
 def test_fdiv_approx(approx, reciprocal, enable_fp_fusion, device):
 
-    @triton.jit
-    def kernel(X, Y, Z, APPROX: tl.constexpr, RECIPROCAL: tl.constexpr, BLOCK: tl.constexpr):
-        offsets = tl.arange(0, BLOCK)
-        x = 1.0 if RECIPROCAL else tl.load(X + offsets)
-        y = tl.load(Y + offsets)
-        tl.store(Z + offsets, tl.fdiv(x, y, approx=APPROX))
+  @triton.jit
+  def kernel(
+      X,
+      Y,
+      Z,
+      APPROX: tl.constexpr,
+      RECIPROCAL: tl.constexpr,
+      BLOCK: tl.constexpr,
+  ):
+    offsets = tl.arange(0, BLOCK)
+    x = 1.0 if RECIPROCAL else tl.load(X + offsets)
+    y = tl.load(Y + offsets)
+    tl.store(Z + offsets, tl.fdiv(x, y, approx=APPROX))
 
     rng = RandomState(0)
     # Keep inputs and results normal for both approximate backends.
