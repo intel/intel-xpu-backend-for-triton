@@ -89,3 +89,28 @@ module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32
 
 // Sanity check for the conversion pass to correctly process even empty modules
 module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32 } {}
+
+// -----
+
+module attributes {"ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @barrier_memory_domains
+  tt.func public @barrier_memory_domains() {
+    // CHECK: triton_gen.barrier {{.*}}None
+    ttg.barrier none
+    // CHECK: triton_gen.barrier {{.*}}Local
+    ttg.barrier local
+    // CHECK: triton_gen.barrier {{.*}}Global
+    ttg.barrier global_read
+    // CHECK: triton_gen.barrier {{.*}}Global
+    ttg.barrier global_write
+    // CHECK: triton_gen.barrier {{.*}}Global
+    ttg.barrier global_read|global_write
+    // CHECK: triton_gen.barrier {{.*}}LocalAndGlobal
+    ttg.barrier local|global_read
+    // CHECK: triton_gen.barrier {{.*}}LocalAndGlobal
+    ttg.barrier local|global_write
+    // CHECK: triton_gen.barrier {{.*}}LocalAndGlobal
+    ttg.barrier all
+    tt.return
+  }
+}
