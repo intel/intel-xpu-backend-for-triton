@@ -160,9 +160,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// COM: A row-limit base_height (ttig.block_io_runtime_row_limit) that is a
-// COM: genuinely runtime (non-foldable) value, exercised across both of the
-// COM: tile's sub-tile row offsets (0 and 8).
+// COM: Runtime (non-foldable) base_height; the tile splits into 2 sub-tile
+// COM: messages (row offsets 0, 8). The CHECK-NOT on message 1 (scoped to
+// COM: the icmp, not the sub, so it isn't shadowed by CHECK-NOT's
+// COM: exclusive-of-next-match rule) catches a row/col offset swap.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
@@ -174,22 +175,16 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
     %pitch = arith.constant 64 : i32
-    // Column (x) offset: subtracted to re-base the address, and scaled into
-    // the adjusted base_width. Bound here so the row-limit sub below can be
-    // checked to use a *different* value -- catches a row/col offset swap.
-    // The forbidden text is checked up to the icmp match rather than the sub
-    // match, so it isn't shadowed by CHECK-NOT's exclusive-of-next-match
-    // boundary. The second sub-tile (row offset 8) exercises the same code
-    // path, so a terser check below suffices for it.
+    // Column offset, bound so the row-limit sub below can be checked to use
+    // a *different* value (catches a row/col offset swap).
     // CHECK: %[[NEGX0:.*]] = llvm.sub %{{.*}}, %[[COLOFF0:.*]] : i32
     // CHECK: llvm.getelementptr %{{.*}}[%[[NEGX0]]]
     // CHECK-NOT: llvm.sub %arg1, %[[COLOFF0]] : i32
     // CHECK: %[[PRED0:.*]] = llvm.icmp "sgt" %[[LOCAL0:.*]], %{{.*}} : i32
     // CHECK: %[[HEIGHT0:.*]] = llvm.intr.smax(%[[LOCAL0]], %{{.*}}) : (i32, i32) -> i32
-    // COM: pred selects offsetY=0 (in-bounds) or offsetY=baseHeight (push
-    // COM: the whole message out of range) -- ties icmp sgt to the load's y.
     // CHECK: %[[Y0:.*]] = llvm.select %[[PRED0]], %{{.*}}, %[[HEIGHT0]] : i1, i32
     // CHECK: triton_gen.2Dblockload %{{.*}}, %{{.*}}, %[[HEIGHT0]], %{{.*}}, %{{.*}}, %[[Y0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
+    // COM: Message 2 runs the same code path; a terser check suffices here.
     // CHECK: %[[LOCAL1:.*]] = llvm.sub %arg1, %{{.*}} : i32
     // CHECK: llvm.icmp "sgt" %[[LOCAL1]], %{{.*}} : i32
     // CHECK: llvm.intr.smax(%[[LOCAL1]], %{{.*}}) : (i32, i32) -> i32
@@ -201,10 +196,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// COM: Column-major counterpart of the runtime row-limit test above: the
-// COM: pitch dim under transpose is colDim, so blockRowIdx/blockColIdx swap
-// COM: relative to row-major, and the row-limit height still has to track
-// COM: the right one.
+// COM: Column-major (transpose) counterpart of @..._runtime: the pitch dim
+// COM: is colDim, so blockRowIdx/blockColIdx swap relative to row-major.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
@@ -228,10 +221,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// COM: A row-limit height combined with a mask/other operand (the extraPred
-// COM: batch-dim predicate matchRowLimitMask leaves behind). The LLVM
-// COM: lowering must AND the mask into the same per-message pred the
-// COM: row-limit icmp produces, not drop either one.
+// COM: Row-limit height combined with a mask/other (matchRowLimitMask's
+// COM: leftover extraPred) must AND both into the same per-message pred.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
@@ -259,9 +250,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// COM: A row-limit base_height (ttig.block_io_runtime_row_limit) that folds
-// COM: to constant 1 must not take the stride=0 broadcast-row replication
-// COM: path.
+// COM: base_height folds to constant 1; row-limit must still take the
+// COM: icmp/smax path on both messages, not the stride=0 broadcast path.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
@@ -274,7 +264,6 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
     %pitch = arith.constant 64 : i32
     %height = arith.constant 1 : i32
-    // COM: Row-limit path for both sub-tile messages -- not row replication.
     // CHECK: llvm.icmp "sgt" %[[SUB0:.*]], %{{.*}} : i32
     // CHECK: %[[HEIGHT0:.*]] = llvm.intr.smax(%[[SUB0]], %{{.*}}) : (i32, i32) -> i32
     // CHECK: triton_gen.2Dblockload %{{.*}}, %{{.*}}, %[[HEIGHT0]], %{{.*}}, %{{.*}}, %{{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
