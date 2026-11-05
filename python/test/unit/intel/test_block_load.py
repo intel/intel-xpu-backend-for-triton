@@ -392,3 +392,48 @@ def test_row_limit_zero_fill(bound, device):
     ref = x.float()
     ref[bound:] = 0
     torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+@triton.jit
+def row_limit_dot_rank3_kernel(a_ptr, eye_ptr, out_ptr, bound, batch_bound, K: tl.constexpr, BB: tl.constexpr,
+                               BM: tl.constexpr, A_BSTRIDE: tl.constexpr):
+    # Rank-3 variant: a row limit along dim 1, ANDed with a batch-only
+    # predicate. `tt-reorder-broadcast` leaves the AND below the final
+    # broadcast, which MaterializeBlockPointer must still recognize.
+    pid = tl.program_id(0)
+    batch = tl.arange(0, BB)
+    rows = pid * BM + tl.arange(0, BM)
+    cols = tl.arange(0, K)
+    offs = batch[:, None, None] * A_BSTRIDE + rows[None, :, None] * K + cols[None, None, :]
+    mask = (rows < bound)[None, :, None] & (batch < batch_bound)[:, None, None]
+    a = tl.load(a_ptr + offs, mask=mask, other=0.0)
+    # Element stride 2 keeps this load off the 2D block path.
+    eye = tl.load(eye_ptr + batch[:, None, None] * (K * 2 * K) + cols[None, :, None] * (2 * K) +
+                  cols[None, None, :] * 2)
+    tl.store(out_ptr + offs, tl.dot(a, eye))
+
+
+@pytest.mark.parametrize("bound", [70, 64, 33, 3, 0, 128])
+@pytest.mark.parametrize("batch_bound", [2, 1, 0])
+@pytest.mark.skipif(not is_xpu(), reason="Row-limit zero fill is specific to the XPU backend")
+@pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io'],
+                   reason="Block loads not supported on this architecture", run=False)
+def test_row_limit_zero_fill_rank3(bound, batch_bound, device):
+    BB, BM, BK, num_tiles = 2, 32, 64, 4
+    rows = BM * num_tiles
+    x = torch.arange(1, BB * rows * BK + 1, device=device, dtype=torch.float32).reshape(BB, rows, BK).to(torch.float16)
+    eye = torch.zeros(BB, BK, 2 * BK, device=device, dtype=torch.float16)
+    eye[:, :, ::2] = torch.eye(BK, device=device, dtype=torch.float16)
+    out = torch.full((BB, rows, BK), -1, device=device, dtype=torch.float32)
+
+    kernel = row_limit_dot_rank3_kernel[(num_tiles, )](x, eye, out, bound, batch_bound, BK, BB, BM, rows * BK,
+                                                       num_warps=4)
+
+    # The masked A load must get block IO, with the batch predicate and row
+    # limit both recognized.
+    assert re.search(r"tt\.load %\w+, %\w+, %\w+ \{ttig\.block_io", kernel.asm["ttgir"])
+
+    ref = x.float()
+    ref[:, bound:] = 0
+    ref[batch_bound:] = 0
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
