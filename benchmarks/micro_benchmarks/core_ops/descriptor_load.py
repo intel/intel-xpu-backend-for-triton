@@ -817,6 +817,159 @@ def benchmark_grouped_matmul_row_limit(G, N, small_groups, provider):
     return (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
 
+# ---------------------------------------------------------------------------
+# batched_grouped_matmul_row_limit (rank-3 variant of grouped_matmul_row_limit)
+# ---------------------------------------------------------------------------
+# Same ragged-group row-limit mask as above, but A is a rank-3 [BB, BM, BK]
+# tile (batched tl.dot). `row_valid[None, :, None]` is a row-limit along dim 1,
+# constant along the batch and contiguous dims; the partial last batch tile
+# adds a batch-only predicate `batch_valid[:, None, None]` ANDed into the load
+# mask (matchRowLimitMask's "extraPred"). NB % BB != 0, so it is not all-true.
+
+
+@triton.jit
+def batched_grouped_matmul_load_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, NB, N: tl.constexpr, BB: tl.constexpr,
+                                       BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr, A_BSTRIDE: tl.constexpr,
+                                       C_BSTRIDE: tl.constexpr, MASK_A: tl.constexpr):
+    tile = tl.program_id(0)
+    g = tl.program_id(1)
+    batch_tile = tl.program_id(2)
+    group_start = tl.load(offsets_ptr + g)
+    group_end = tl.load(offsets_ptr + g + 1)
+    num_m_tiles = tl.cdiv(group_end - group_start, BM)
+    num_n_tiles = tl.cdiv(N, BN)
+    tile_m = tile % num_m_tiles
+    tile_n = tile // num_m_tiles
+    if tile_n >= num_n_tiles:
+        return
+    batches = batch_tile * BB + tl.arange(0, BB)
+    rows = group_start + tile_m * BM + tl.arange(0, BM)
+    cols = tile_n * BN + tl.arange(0, BN)
+    row_valid = rows < group_end
+    batch_valid = batches < NB
+    acc = tl.zeros((BB, BM, BN), dtype=tl.float32)
+    for k0 in tl.range(0, N, BK):
+        ks = k0 + tl.arange(0, BK)
+        a_ptrs = a_ptr + batches[:, None, None] * A_BSTRIDE + rows[None, :, None] * N + ks[None, None, :]
+        if MASK_A:
+            a = tl.load(a_ptrs, mask=row_valid[None, :, None] & batch_valid[:, None, None], other=0.0)
+        else:
+            a = tl.load(a_ptrs)
+        b = tl.load(b_ptr + batches[:, None, None] * (N * N) + ks[None, :, None] * N + cols[None, None, :])
+        acc = tl.dot(a, b, acc)
+    c_ptrs = c_ptr + batches[:, None, None] * C_BSTRIDE + rows[None, :, None] * N + cols[None, None, :]
+    tl.store(c_ptrs, acc.to(tl.bfloat16), mask=row_valid[None, :, None] & batch_valid[:, None, None])
+
+
+@triton.jit
+def batched_grouped_matmul_desc_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, NB, N: tl.constexpr, BB: tl.constexpr,
+                                       BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr, A_BSTRIDE: tl.constexpr,
+                                       C_BSTRIDE: tl.constexpr):
+    tile = tl.program_id(0)
+    g = tl.program_id(1)
+    batch_tile = tl.program_id(2)
+    group_start = tl.load(offsets_ptr + g)
+    group_end = tl.load(offsets_ptr + g + 1)
+    group_m = group_end - group_start
+    num_m_tiles = tl.cdiv(group_m, BM)
+    num_n_tiles = tl.cdiv(N, BN)
+    tile_m = tile % num_m_tiles
+    tile_n = tile // num_m_tiles
+    if tile_n >= num_n_tiles:
+        return
+    a_desc = tl.make_tensor_descriptor(a_ptr + group_start * N, shape=[NB, group_m, N], strides=[A_BSTRIDE, N, 1],
+                                       block_shape=[BB, BM, BK])
+    b_desc = tl.make_tensor_descriptor(b_ptr, shape=[NB, N, N], strides=[N * N, N, 1], block_shape=[BB, BK, BN])
+    acc = tl.zeros((BB, BM, BN), dtype=tl.float32)
+    for k0 in tl.range(0, N, BK):
+        acc = tl.dot(a_desc.load([batch_tile * BB, tile_m * BM, k0]), b_desc.load([batch_tile * BB, k0, tile_n * BN]),
+                     acc)
+    batches = batch_tile * BB + tl.arange(0, BB)
+    rows = group_start + tile_m * BM + tl.arange(0, BM)
+    cols = tile_n * BN + tl.arange(0, BN)
+    c_ptrs = c_ptr + batches[:, None, None] * C_BSTRIDE + rows[None, :, None] * N + cols[None, None, :]
+    tl.store(c_ptrs, acc.to(tl.bfloat16), mask=(rows < group_end)[None, :, None] & (batches < NB)[:, None, None])
+
+
+@perf_report(
+    Benchmark(
+        x_names=['G', 'N', 'small_groups'],
+        x_vals=[(4, 1024, False), (4, 2048, False), (16, 2048, True)],
+        line_arg='provider',
+        line_vals=['load_masked', 'load_unmasked', 'descriptor'],
+        line_names=['tl.load (masked)', 'tl.load (unmasked)', 'Tensor Descriptor'],
+        styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
+        ylabel=['TFlops'],
+        plot_name='batched-grouped-matmul-row-limit',
+        args={},
+    ))
+def benchmark_batched_grouped_matmul_row_limit(G, N, small_groups, provider):
+    quantiles = [0.5, 0.0, 1.0]
+    dtype = torch.bfloat16
+    torch.manual_seed(0)
+
+    NB, BB = 3, 2
+    BM, BN, BK = 64, 128, 32
+
+    group_sizes = _ragged_group_sizes(G, N, BM, small_groups=small_groups)
+    offsets_list = [0]
+    for size in group_sizes:
+        offsets_list.append(offsets_list[-1] + size)
+    total_rows = offsets_list[-1]
+    max_m_tiles = max(triton.cdiv(size, BM) for size in group_sizes)
+    num_batch_tiles = triton.cdiv(NB, BB)
+    padded_nb = num_batch_tiles * BB
+
+    # Padding past the last group's end and past the last batch keeps the
+    # unmasked A/B loads in-bounds.
+    a_rows = total_rows + BM
+    a = torch.randn(padded_nb, a_rows, N, dtype=dtype, device=DEVICE)
+    b = torch.randn(padded_nb, N, N, dtype=dtype, device=DEVICE)
+    c = torch.empty(padded_nb, total_rows, N, dtype=dtype, device=DEVICE)
+    c_ref = torch.empty(padded_nb, total_rows, N, dtype=dtype, device=DEVICE)
+    offsets = torch.tensor(offsets_list, dtype=torch.int32, device=DEVICE)
+
+    tiles = max_m_tiles * triton.cdiv(N, BN)
+    grid = (tiles, G, num_batch_tiles)
+    a_bstride, c_bstride = a_rows * N, total_rows * N
+    meta = {
+        'BB': BB,
+        'BM': BM,
+        'BN': BN,
+        'BK': BK,
+        'A_BSTRIDE': a_bstride,
+        'C_BSTRIDE': c_bstride,
+        'num_warps': 16,
+        'num_stages': 3,
+    }
+
+    assert_close(
+        lambda: (batched_grouped_matmul_load_kernel[grid]
+                 (offsets, a, b, c_ref, NB, N, MASK_A=True, **meta), c_ref[:NB])[1],
+        lambda: (batched_grouped_matmul_desc_kernel[grid](offsets, a, b, c, NB, N, **meta), c[:NB])[1],
+        atol=1e-2,
+        rtol=1e-2,
+    )
+
+    load_masked_fn = lambda: batched_grouped_matmul_load_kernel[grid](offsets, a, b, c, NB, N, MASK_A=True, **meta)
+    load_unmasked_fn = lambda: batched_grouped_matmul_load_kernel[grid](offsets, a, b, c, NB, N, MASK_A=False, **meta)
+    desc_fn = lambda: batched_grouped_matmul_desc_kernel[grid](offsets, a, b, c, NB, N, **meta)
+
+    if provider == 'load_masked':
+        fn = load_masked_fn
+    elif provider == 'load_unmasked':
+        fn = load_unmasked_fn
+    else:
+        fn = desc_fn
+
+    _, min_ms, max_ms, mean_ms, cv = do_bench(fn, n_warmup=25, n_repeat=100, quantiles=quantiles)
+
+    def tflops(ms):
+        return 2 * NB * total_rows * N * N * 1e-12 / (ms * 1e-3)
+
+    return (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
+
+
 def _gpu_warmup():
     """Run a simple kernel a few times to bring the GPU to steady-state frequency."""
     n = 1024 * 1024
@@ -840,6 +993,7 @@ def run_benchmarks():
     benchmark_matmul_desc.run(show_plots=False, print_data=True)
     benchmark_cat_reduce_2d.run(show_plots=False, print_data=True)
     benchmark_grouped_matmul_row_limit.run(show_plots=False, print_data=True)
+    benchmark_batched_grouped_matmul_row_limit.run(show_plots=False, print_data=True)
 
 
 if __name__ == '__main__':
