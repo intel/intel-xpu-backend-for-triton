@@ -2368,6 +2368,10 @@ void populateElementwiseOpToLLVMPatterns(
   assert(benefit > 0);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, benefit.getBenefit() - 1);
+  patterns.add<gpu::ElementwiseOpConversion<arith::UIToFPOp, LLVM::UIToFPOp>,
+               gpu::ElementwiseOpConversion<math::SqrtOp, math::SqrtOp>,
+               gpu::ElementwiseOpConversion<math::RsqrtOp, math::RsqrtOp>>(
+      typeConverter, axisInfoAnalysis, benefit.getBenefit() - 1);
 
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FmaOpConversion>(typeConverter, axisInfoAnalysis, benefit);
