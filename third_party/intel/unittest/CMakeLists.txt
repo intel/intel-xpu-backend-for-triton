@@ -1,5 +1,6 @@
 # All Intel unit tests share one executable: every extra test executable costs a
-# full link against the Triton/MLIR/LLVM static libraries.
+# full link against the Triton/MLIR/LLVM static libraries. Add new tests (and any
+# libraries they need) to the lists below instead of creating a new executable.
 add_triton_ut(
   NAME TritonIntelUnitTests
   SRCS
