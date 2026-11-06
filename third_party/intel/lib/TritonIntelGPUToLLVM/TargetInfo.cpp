@@ -327,14 +327,24 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
 
 bool TargetInfo::warpScan(RewriterBase &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ScanOp op,
-                          unsigned scanDim, unsigned warpSize) const {
+                          unsigned scanDim, unsigned threadStride) const {
   if (!gpu::intel::isSubgroupScanEnabled())
     return false;
+
+  auto mod = op->getParentOfType<ModuleOp>();
+  unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
   // `InclusiveScan` scans the entire sub-group and SPIR-V offers no portable
   // clustered scan, so the axis must occupy every lane. Gate on the
   // unique-data lane count, which discounts broadcast duplicates.
   if (scanDim != warpSize)
+    return false;
+
+  // The builtin walks the lanes in lane order. A full-sub-group scan axis
+  // implies unit thread stride for every layout `ScanLoweringHelper::
+  // isSupported` admits today, but gate on it rather than assert, so widening
+  // that set cannot silently start scanning the wrong lanes in a release build.
+  if (threadStride != 1)
     return false;
 
   FailureOr<Operation *> combineOp = matchSupportedWarpScanOp(op);
