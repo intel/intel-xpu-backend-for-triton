@@ -34,14 +34,12 @@ struct TestSymbolicBoundsPass
   // A pass carrying an Option member is not implicitly copyable, but
   // PassWrapper::clonePass needs a copy constructor.
   TestSymbolicBoundsPass(const TestSymbolicBoundsPass &other)
-      : PassWrapper(other) {
-    // Preserve option values when cloning the pass.
-    splatLeaves = other.splatLeaves.getValue();
-  }
+      : PassWrapper(other) {}
 
   StringRef getArgument() const final { return "test-intel-symbolic-bounds"; }
   StringRef getDescription() const final {
-    return "print the symbolic bounds prover's verdict for every arith.cmpi";
+    return "print the symbolic bounds prover's verdict for every arith.cmpi, "
+           "or with splat-leaves its normalized rhs - lhs and obligations";
   }
 
   Option<bool> splatLeaves{

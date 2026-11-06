@@ -1018,7 +1018,7 @@ AffineForm SymbolicBoundsProver::normalizeUncached(
         if (scalars == ScalarHandling::LookThrough)
           return normalizeImpl(op.getSrc(), ctx, obligations, {}, depth + 1);
         // A form with no obligation is exact; any other is replaced by the
-        // scalar itself, and its obligations go with it.
+        // scalar itself, and its obligations are dropped.
         SmallVector<Obligation, 4> srcObligations;
         AffineForm src =
             normalizeImpl(op.getSrc(), ctx, srcObligations, {}, depth + 1);

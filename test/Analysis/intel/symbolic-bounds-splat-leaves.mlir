@@ -20,7 +20,7 @@ module {
 // -----
 
 // COM: The splatted bound is scalar arithmetic that can wrap, so it stays the
-// COM: kernel's own value, and its wrap obligation goes with it.
+// COM: kernel's own value, and its wrap obligation is dropped.
 
 // CHECK-LABEL: tt.func @k_tail
 module {

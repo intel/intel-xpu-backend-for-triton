@@ -1634,7 +1634,7 @@ TEST_F(SymbolicBoundsGuardTest, FormMatchesExactArithmetic) {
 
 // A row count rebuilt from `normalize` as `H = (rhs - lhs) + lane` must give
 // `mask[i] == (i < H)` on every i8 launch under SplatLeaves. Under LookThrough,
-// fixture (a)'s wrapping `subi` comes back unwrapped, and mismatches.
+// `kWrappingBound`'s wrapping `subi` comes back unwrapped, and mismatches.
 TEST_F(SymbolicBoundsGuardTest, SplatLeafRowCountMatchesMask) {
   using namespace tt::intel;
   const char *kWrappingBound = R"(
