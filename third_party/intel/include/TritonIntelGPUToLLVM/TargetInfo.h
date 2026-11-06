@@ -77,7 +77,8 @@ public:
   /// it must equal `warpSize` because the builtin scans the whole sub-group
   /// all-or-nothing (SPIR-V has no portable clustered scan).
   bool warpScan(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
-                triton::ScanOp op, unsigned scanDim, unsigned warpSize) const;
+                triton::ScanOp op, unsigned scanDim,
+                unsigned warpSize) const override;
 
   unsigned getReductionTreeArity(Operation *combinerOp) const override;
 

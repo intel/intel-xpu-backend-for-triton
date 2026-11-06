@@ -106,6 +106,16 @@ public:
                           unsigned reduceLaneIdMask,
                           unsigned broadcastLaneIdMask) const = 0;
 
+  // Replaces the in-warp phase of a scan with a hardware warp scan, updating
+  // |acc| in place. scanDim is the number of lanes holding unique data along
+  // the scan axis and the lanes along it are contiguous. Return false, leaving
+  // |acc| untouched, to fall back to the generic shuffle chain.
+  virtual bool warpScan(RewriterBase &rewriter, Location loc,
+                        SmallVector<Value> &acc, triton::ScanOp op,
+                        unsigned scanDim, unsigned warpSize) const {
+    return false;
+  }
+
   // Emits LLVM code with |rewriter| to print a message following the given
   // format from the device. |formatStrStart| is the pointer to the start of
   // the format string global variable; |args| are the arguments to fill

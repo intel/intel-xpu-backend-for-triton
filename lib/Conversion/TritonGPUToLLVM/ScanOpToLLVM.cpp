@@ -52,14 +52,18 @@ scanThreadContiguousElements(SmallVector<SmallVector<Value>> &srcValues,
 // contiguous group of elements.
 static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
                      ConversionPatternRewriter &rewriter,
-                     const TargetInfoBase &targetInfo,
-                     ScanLoweringHelper &helper, Value laneIdAxis) {
+                     const TargetInfoBase &targetInfo, triton::ScanOp op,
+                     ScanLoweringHelper &helper, Value laneIdAxis,
+                     unsigned warpSize) {
   Location loc = helper.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
   unsigned scanDim = helper.getAxisNumThreadsPerWarpWithUniqueData();
+  // A hardware warp scan walks the lanes in lane order, so it only applies when
+  // the lanes along the scan axis are contiguous.
+  bool tryHardwareScan = threadStride == 1;
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
     unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
     // Only consider the last element of each contiguous chunk of elements.
@@ -67,16 +71,20 @@ static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
       continue;
     // Reduce within warps.
     SmallVector<Value> acc = srcValues[srcIndex];
-    for (unsigned i = 1; i <= scanDim / 2; i <<= 1) {
-      SmallVector<Value> shfl(acc.size());
-      for (unsigned j = 0; j < acc.size(); ++j) {
-        shfl[j] = targetInfo.shuffleUp(rewriter, loc, acc[j], i * threadStride);
-      }
-      Value mask = b.icmp_sge(laneIdAxis, b.i32_val(i));
-      SmallVector<Value> tempAcc =
-          accumulate(helper, rewriter, shfl, acc, mask);
-      for (unsigned j = 0; j < acc.size(); ++j) {
-        acc[j] = b.select(mask, tempAcc[j], acc[j]);
+    if (!tryHardwareScan ||
+        !targetInfo.warpScan(rewriter, loc, acc, op, scanDim, warpSize)) {
+      for (unsigned i = 1; i <= scanDim / 2; i <<= 1) {
+        SmallVector<Value> shfl(acc.size());
+        for (unsigned j = 0; j < acc.size(); ++j) {
+          shfl[j] =
+              targetInfo.shuffleUp(rewriter, loc, acc[j], i * threadStride);
+        }
+        Value mask = b.icmp_sge(laneIdAxis, b.i32_val(i));
+        SmallVector<Value> tempAcc =
+            accumulate(helper, rewriter, shfl, acc, mask);
+        for (unsigned j = 0; j < acc.size(); ++j) {
+          acc[j] = b.select(mask, tempAcc[j], acc[j]);
+        }
       }
     }
     srcValues[srcIndex] = std::move(acc);
@@ -499,7 +507,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   scanThreadContiguousElements(srcValues, rewriter, helper);
   // Apply warp level scan to the last element of each chunk of contiguous
   // elements.
-  warpScan(srcValues, rewriter, targetInfo, helper, laneIdAxis);
+  warpScan(srcValues, rewriter, targetInfo, op, helper, laneIdAxis, iWarpSize);
 
   if (axisNumWarps > 1) {
     // Slow path for the case where there are multiple warps with unique data on
