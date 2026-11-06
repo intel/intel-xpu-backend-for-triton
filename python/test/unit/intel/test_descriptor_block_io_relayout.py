@@ -52,13 +52,18 @@ ANCHOR = "ttig.block_io_anchor"
 POISON = 7.0
 # The default launch is 4 warps of 32 lanes; "tuned" is the issue's hand-tuned launch.
 TUNED = dict(num_warps=1, warp_size=16, grf_mode="256")
-# (launch, output dtype, relaid out with the knob on) for the issue kernel. With 16 lanes G2 refuses a function in
-# which a value computed from a reduction is not f32 or i32, since IGC miscompiles f32->f16 conversions of sub-group
-# reduction results there. So the issue's bf16 output keeps the gather path at the tuned launch; fp32 is the control.
+W4X16 = dict(num_warps=4, warp_size=16)
+# (launch, output dtype, relaid out with the knob on) for the issue kernel. The tuned launch's one-warp column sum
+# needs no shared memory, but the relayout's fp32 result convert would, so it keeps the gathers. With 16 lanes G2 refuses
+# a function in which a value computed from a reduction is not f32 or i32 (IGC miscompiles f32->f16 conversions of
+# sub-group reduction results there); 4 warps x 16 lanes is G2's pair, since the rule above lets both through, except
+# at D=256, where the warps sit along the columns and the column sum is in-warp again.
 LAUNCHES = [
     pytest.param({}, torch.bfloat16, True, id="default"),
     pytest.param(TUNED, torch.bfloat16, False, id="tuned-bf16-refused"),
-    pytest.param(TUNED, torch.float32, True, id="tuned-fp32"),
+    pytest.param(TUNED, torch.float32, False, id="tuned-fp32-refused"),
+    pytest.param(W4X16, torch.bfloat16, False, id="w4x16-bf16-refused"),
+    pytest.param(W4X16, torch.float32, {64, 96, 128}, id="w4x16-fp32"),
 ]
 
 
@@ -188,7 +193,7 @@ def test_relayout_correctness(nseg, D, launch, out_dtype, relaid_out, device, mo
     out = torch.empty(T, H, D, device=device, dtype=out_dtype)
     k = kernel[(T, H)](out, x, m, nseg, H, D=D, DP=DP, S=S, **launch)
 
-    _assert_relaid_out(k, relaid_out)
+    _assert_relaid_out(k, D in relaid_out if isinstance(relaid_out, set) else relaid_out)
     # float64 reference on the CPU: not every XPU supports fp64.
     x64 = x.cpu().to(torch.float64)
     m64 = m.cpu().to(torch.float64)[..., :nseg]

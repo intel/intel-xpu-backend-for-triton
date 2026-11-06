@@ -1,3 +1,4 @@
+#include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -1304,6 +1305,93 @@ private:
     return true;
   }
 
+  struct ReductionPathSLM {
+    bool off;
+    bool on;
+  };
+
+  /// Whether the reductions of a load in \p currentTy (as isWarpSynchronous
+  /// decides), and the conversion of each result to its tt.store, need shared
+  /// memory now (off) and with the candidate encoding (on). RLC carries the
+  /// candidate up to the store's value operand, so the on side sizes that
+  /// convert on two temporary ops, erased before returning. nullopt when the
+  /// path is not that shape.
+  static std::optional<ReductionPathSLM>
+  predictReductionPathSLM(ArrayRef<tt::ReduceOp> reduces,
+                          RankedTensorType currentTy, Attribute candidateEnc) {
+    auto fail = [](StringRef why) -> std::optional<ReductionPathSLM> {
+      LDBG("Reduction-path SLM: nullopt (" << why << ")");
+      return std::nullopt;
+    };
+    auto isSplatOrConstant = [](Value v) {
+      Operation *def = v.getDefiningOp();
+      return def && isa<tt::SplatOp, arith::ConstantOp>(def);
+    };
+    ReductionPathSLM slm{false, false};
+    for (tt::ReduceOp reduce : reduces) {
+      if (reduce.getNumOperands() != 1)
+        return fail("variadic reduce");
+      auto srcTy = cast<RankedTensorType>(reduce.getOperands()[0].getType());
+      if (srcTy.getEncoding() != currentTy.getEncoding())
+        return fail("reduce operand is not in the load's encoding");
+      unsigned axis = reduce.getAxis();
+      slm.off |= ttg::getWarpsPerCTA(currentTy.getEncoding(),
+                                     srcTy.getShape())[axis] != 1;
+      slm.on |= ttg::getWarpsPerCTA(candidateEnc, srcTy.getShape())[axis] != 1;
+
+      Value v = reduce.getResult()[0];
+      auto resultTy = dyn_cast<RankedTensorType>(v.getType());
+      if (!resultTy)
+        return fail("scalar reduce result");
+      ttg::ConvertLayoutOp cvt;
+      tt::StoreOp store;
+      while (!store) {
+        if (!v.hasOneUse())
+          return fail("result value without a single use");
+        OpOperand &use = *v.getUses().begin();
+        Operation *user = use.getOwner();
+        if (auto st = dyn_cast<tt::StoreOp>(user)) {
+          if (&use != &st.getValueMutable())
+            return fail("result reaches a store's pointer or mask");
+          store = st;
+        } else if (auto c = dyn_cast<ttg::ConvertLayoutOp>(user)) {
+          if (cvt)
+            return fail("more than one convert");
+          cvt = c;
+          v = c.getResult();
+        } else if (user->hasTrait<OpTrait::Elementwise>() &&
+                   user->getNumResults() == 1) {
+          for (Value operand : user->getOperands())
+            if (operand != v && isa<RankedTensorType>(operand.getType()) &&
+                !isSplatOrConstant(operand))
+              return fail("elementwise op with another tensor operand");
+          v = user->getResult(0);
+        } else {
+          return fail("result reaches an op other than a store");
+        }
+      }
+      if (cvt)
+        slm.off |= tt::intel::allocationAnalysisScratchSizeFn(cvt) > 0;
+
+      // Size the convert RLC would create, the way getValueAsImpl builds it.
+      auto storedTy = cast<RankedTensorType>(v.getType());
+      if (storedTy.getShape() != resultTy.getShape())
+        return fail("stored value is not shaped like the reduce result");
+      auto onTy = storedTy.cloneWithEncoding(ttg::SliceEncodingAttr::get(
+          v.getContext(), axis,
+          cast<ttg::DistributedEncodingTrait>(candidateEnc)));
+      OpBuilder builder(v.getContext());
+      builder.setInsertionPointAfterValue(v);
+      auto t1 = ttg::ConvertLayoutOp::create(builder, v.getLoc(), onTy, v);
+      auto t2 = ttg::ConvertLayoutOp::create(builder, v.getLoc(), storedTy, t1);
+      slm.on |= tt::intel::allocationAnalysisScratchSizeFn(t2) > 0;
+      t2.erase();
+      t1.erase();
+    }
+    LDBG("Reduction-path SLM off=" << slm.off << " on=" << slm.on);
+    return slm;
+  }
+
   /// Issue #8458: give the row-major descriptor load \p op, whose blocked
   /// layout does not lower to 2D block reads, a layout that does. The result is
   /// converted back to the old type, and ttig.block_io_anchor makes
@@ -1406,6 +1494,15 @@ private:
     if (candidateCost >= currentCost) {
       LDBG("Candidate cost " << candidateCost << " >= current cost "
                              << currentCost << "; skip relayout");
+      return;
+    }
+    // A reduction path that needs no shared memory now is usually cheaper than
+    // a 2D read that would add some to it (B580: up to 1.45x slower).
+    std::optional<ReductionPathSLM> slm =
+        predictReductionPathSLM(uses.reduces, currentTy, *candidateEnc);
+    if (slm && !slm->off && slm->on) {
+      LDBG("Reduction path needs no shared memory now but would with the "
+           "candidate; skip relayout");
       return;
     }
 

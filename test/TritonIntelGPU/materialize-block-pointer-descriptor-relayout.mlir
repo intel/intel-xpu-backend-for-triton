@@ -551,9 +551,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // COM: With 16 lanes, a reduction whose result is narrowed below 32 bits is not
 // COM: relaid out: IGC's vectorizer turns the scalar fptrunc of uniform sub-group
 // COM: reduce results into out-of-bounds register writes, and int8 results come out
-// COM: wrong. This is the issue kernel's tuned launch, with an f16 output.
+// COM: wrong. This is the issue kernel's tuned launch, with an f16 output (stored
+// COM: in a layout the shared-memory rule lets through, so G2 alone decides).
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: tt.func public @tpw16_f16_out_unchanged(
   // CHECK-NOT: ttig.block_io_anchor
@@ -734,7 +735,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // COM: A narrowing inside the combine region is refused: the result type does not show it.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: tt.func public @tpw16_combine_f16_unchanged(
   // CHECK-NOT: ttig.block_io_anchor
@@ -762,7 +763,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // COM: Two reductions of the load, and only the second result is narrowed.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: tt.func public @tpw16_two_reduces_unchanged(
   // CHECK-NOT: ttig.block_io_anchor
@@ -823,7 +824,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // COM: An fp32 result is not narrowed, so with 16 lanes the load is relaid out.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   // CHECK-DAG: #[[$BLOCKED_TPW16_F32:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
   // ON-DAG: #[[$BIO_TPW16_F32:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
@@ -906,7 +907,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // COM: An i32 result is not narrowed either, so with 16 lanes the load is relaid out.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   // CHECK-DAG: #[[$BLOCKED_TPW16_I32:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
   // ON-DAG: #[[$BIO_TPW16_I32:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
@@ -1146,6 +1147,184 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     }) : (tensor<16x128xf32, #blocked>) -> tensor<128xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
     %s = arith.addf %ra, %rb : tensor<128xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
     tt.store %out_ptrs, %s : tensor<128x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: With 1 warp the column sum and its bf16 result's convert for the store need no
+// COM: shared memory; with the relayout the convert would, so the load is not relaid out.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @in_warp_reduce_refused(
+  // CHECK-NEXT: arith.constant 0 : i32
+  // CHECK-NEXT: arith.constant 256 : i32
+  // CHECK-NEXT: arith.constant 1 : i64
+  // CHECK-NEXT: arith.constant 256 : i64
+  // CHECK-NEXT: %[[DESC:.*]] = tt.make_tensor_descriptor
+  // CHECK-NEXT: %[[LOAD:.*]] = tt.descriptor_load %[[DESC]]{{.*}} {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #[[$BLK_IWR:.+]]>
+  // CHECK-NEXT: %[[RED:.*]] = "tt.reduce"(%[[LOAD]])
+  // CHECK: tt.reduce.return
+  // CHECK-NEXT: }) : (tensor<16x256xf32, #[[$BLK_IWR]]>)
+  // CHECK-NEXT: %[[TR:.*]] = arith.truncf %[[RED]]
+  // CHECK-NEXT: %[[CVT:.*]] = ttg.convert_layout %[[TR]]
+  // CHECK-NEXT: tt.store %{{.*}}, %[[CVT]]
+  // CHECK-NEXT: tt.return
+  // LOWER-LABEL: tt.func public @in_warp_reduce_refused(
+  // LOWER-NOT: ttig.2d_block_load
+  // LOWER: tt.return
+  tt.func public @in_warp_reduce_refused(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<256x!tt.ptr<bf16>, #blocked1>, %nseg: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <16x256xf32>
+    %x = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
+    %0 = "tt.reduce"(%x) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %r = arith.addf %a, %b : f32
+      tt.reduce.return %r : f32
+    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %t1 = arith.truncf %0 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> to tensor<256xbf16, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %c1 = ttg.convert_layout %t1 : tensor<256xbf16, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xbf16, #blocked1>
+    tt.store %out_ptrs, %c1 : tensor<256x!tt.ptr<bf16>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: One load, two reduces: only one result's convert would need shared memory with
+// COM: the relayout, which is enough to refuse it.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @one_load_two_reduces_refused(
+  // CHECK-NOT: ttig.block_io_anchor
+  // CHECK: tt.return
+  tt.func public @one_load_two_reduces_refused(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_a: tensor<256x!tt.ptr<bf16>, #blocked2>, %out_b: tensor<256x!tt.ptr<bf16>, #blocked1>, %nseg: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <16x256xf32>
+    %x = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
+    %0 = "tt.reduce"(%x) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %r = arith.addf %a, %b : f32
+      tt.reduce.return %r : f32
+    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %t1 = arith.truncf %0 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> to tensor<256xbf16, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %c1 = ttg.convert_layout %t1 : tensor<256xbf16, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xbf16, #blocked2>
+    tt.store %out_a, %c1 : tensor<256x!tt.ptr<bf16>, #blocked2>
+    %1 = "tt.reduce"(%x) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %r = arith.maxnumf %a, %b : f32
+      tt.reduce.return %r : f32
+    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %t2 = arith.truncf %1 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> to tensor<256xbf16, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %c2 = ttg.convert_layout %t2 : tensor<256xbf16, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xbf16, #blocked1>
+    tt.store %out_b, %c2 : tensor<256x!tt.ptr<bf16>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The same, but the first result's convert already needs shared memory: relaid out.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @one_load_two_reduces_off_has_slm_kept(
+  // ON: tt.descriptor_load {{.*}}ttig.block_io_anchor
+  // OFF-NOT: ttig.block_io_anchor
+  // CHECK: tt.return
+  tt.func public @one_load_two_reduces_off_has_slm_kept(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_a: tensor<256x!tt.ptr<bf16>, #ttg.slice<{dim = 0, parent = #blocked3}>>, %out_b: tensor<256x!tt.ptr<bf16>, #blocked1>, %nseg: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <16x256xf32>
+    %x = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
+    %0 = "tt.reduce"(%x) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %r = arith.addf %a, %b : f32
+      tt.reduce.return %r : f32
+    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %t1 = arith.truncf %0 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> to tensor<256xbf16, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %c1 = ttg.convert_layout %t1 : tensor<256xbf16, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xbf16, #ttg.slice<{dim = 0, parent = #blocked3}>>
+    tt.store %out_a, %c1 : tensor<256x!tt.ptr<bf16>, #ttg.slice<{dim = 0, parent = #blocked3}>>
+    %1 = "tt.reduce"(%x) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %r = arith.maxnumf %a, %b : f32
+      tt.reduce.return %r : f32
+    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %t2 = arith.truncf %1 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> to tensor<256xbf16, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %c2 = ttg.convert_layout %t2 : tensor<256xbf16, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xbf16, #blocked1>
+    tt.store %out_b, %c2 : tensor<256x!tt.ptr<bf16>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A convert between the load and the reduce leaves the rule's prediction undecided,
+// COM: so the load is relaid out as before.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked4 = #ttg.blocked<{sizePerThread = [2, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @cvt_before_reduce_rule_skipped(
+  // ON: tt.descriptor_load {{.*}}ttig.block_io_anchor
+  // OFF-NOT: ttig.block_io_anchor
+  // CHECK: tt.return
+  tt.func public @cvt_before_reduce_rule_skipped(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<256x!tt.ptr<bf16>, #blocked1>, %nseg: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <16x256xf32>
+    %x = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
+    %y = ttg.convert_layout %x : tensor<16x256xf32, #blocked> -> tensor<16x256xf32, #blocked4>
+    %0 = "tt.reduce"(%y) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %r = arith.addf %a, %b : f32
+      tt.reduce.return %r : f32
+    }) : (tensor<16x256xf32, #blocked4>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked4}>>
+    %t1 = arith.truncf %0 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked4}>> to tensor<256xbf16, #ttg.slice<{dim = 0, parent = #blocked4}>>
+    %c1 = ttg.convert_layout %t1 : tensor<256xbf16, #ttg.slice<{dim = 0, parent = #blocked4}>> -> tensor<256xbf16, #blocked1>
+    tt.store %out_ptrs, %c1 : tensor<256x!tt.ptr<bf16>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The column sum crosses warps, so the reduction path already needs shared
+// COM: memory: relaid out even though the result is stored without a convert.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @cross_warp_reduce_kept(
+  // ON: tt.descriptor_load {{.*}}ttig.block_io_anchor
+  // OFF-NOT: ttig.block_io_anchor
+  // CHECK: tt.return
+  tt.func public @cross_warp_reduce_kept(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<64x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>>, %nseg: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i64 = arith.constant 64 : i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%nseg, %c64_i32], [%c64_i64, %c1_i64] : <f32>, <16x64xf32>
+    %x = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<16x64xf32> -> tensor<16x64xf32, #blocked>
+    %0 = "tt.reduce"(%x) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %r = arith.addf %a, %b : f32
+      tt.reduce.return %r : f32
+    }) : (tensor<16x64xf32, #blocked>) -> tensor<64xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    tt.store %out_ptrs, %0 : tensor<64x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>>
     tt.return
   }
 }
