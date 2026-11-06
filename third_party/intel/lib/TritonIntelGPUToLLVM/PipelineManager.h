@@ -60,7 +60,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
                                    SmallVectorImpl<NamedAttribute> &result) {
 
     for (const auto &attr : op->getAttrs()) {
-      if (attr.getName() == SymbolTable::getSymbolAttrName() ||
+      if (attr.getName() == op.getSymNameAttrName() ||
           attr.getName() == op.getFunctionTypeAttrName() ||
           attr.getName() == "std.varargs" ||
           (filterArgAttrs && attr.getName() == op.getArgAttrsAttrName()))
