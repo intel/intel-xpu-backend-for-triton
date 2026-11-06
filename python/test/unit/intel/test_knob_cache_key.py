@@ -71,6 +71,7 @@ KNOBS_REFLECTED_IN_OPTIONS = {
     "enable_sub_32_dpas": "sub_32_dpas",
     "gen_native_code": "generate_native_code",
     "in_loop_sink": "in_loop_sink",
+    "predict_large_grf": "predict_large_grf",
     "libdevice_path": "extern_libs",
 }
 
