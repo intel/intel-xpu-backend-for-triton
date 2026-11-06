@@ -2,6 +2,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Tools/GenericSwizzling.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir::triton::gpu::intel {
@@ -486,6 +488,71 @@ bool isWarpSynchronous(ReduceOpHelper &helper, triton::ReduceOp op) {
   RankedTensorType srcTy = helper.getSrcTy();
   return getWarpsPerCTA(srcTy.getEncoding(), srcTy.getShape())[op.getAxis()] ==
          1;
+}
+
+LinearLayout getInterWarpReductionLayout(triton::ReduceOp op,
+                                         const LinearLayout &srcLayout) {
+  auto *ctx = op.getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kWarp = StringAttr::get(ctx, "warp");
+  unsigned axis = op.getAxis();
+  auto kAxis = *(srcLayout.getOutDimNames().begin() + axis);
+  assert(getInputBasisMask(srcLayout, kReg, {kAxis}) == 0 &&
+         getInputBasisMask(srcLayout, kLane, {kAxis}) == 0 &&
+         "expected partial results reduced within threads and warps");
+  // Start from the partials, not the original tensor or result encoding:
+  // register and lane reductions have already removed their axis bases.
+  auto bases = srcLayout.getBases();
+  SmallVector<std::vector<int32_t>> axisBases;
+  for (auto &basis : bases[kWarp]) {
+    if (basis[axis] == 0)
+      continue;
+    assert(llvm::count_if(basis, [](int32_t value) { return value != 0; }) ==
+           1);
+    axisBases.push_back(basis);
+    // Former axis warps will load identical partials and compute identical
+    // results; warps owning different non-axis coordinates remain distinct.
+    basis[axis] = 0;
+  }
+
+  auto &laneBases = bases[kLane];
+  unsigned axisBits = axisBases.size();
+  unsigned freeLaneBits = llvm::count_if(laneBases, [](const auto &basis) {
+    return llvm::all_of(basis, [](int32_t value) { return value == 0; });
+  });
+  unsigned laneBits = std::min(axisBits, freeLaneBits);
+  // Only broadcast lanes are available. Replacing a nonzero lane basis would
+  // displace output coordinates and require another layout conversion.
+  // A non-commutative combiner must combine consecutive register partials
+  // before combining their groups across lanes.
+  unsigned firstLaneBit = op.isCommutative() ? 0 : axisBits - laneBits;
+  unsigned laneBit = 0;
+  for (auto &basis : laneBases) {
+    if (laneBit == laneBits)
+      break;
+    if (llvm::all_of(basis, [](int32_t value) { return value == 0; }))
+      basis = axisBases[firstLaneBit + laneBit++];
+  }
+  // Each remaining bit doubles the loaded values per thread without changing
+  // lane ownership. With no free lanes, all partials are reduced in registers.
+  for (unsigned bit = 0; bit < axisBits; ++bit)
+    if (bit < firstLaneBit || bit >= firstLaneBit + laneBits)
+      bases[kReg].push_back(axisBases[bit]);
+  return LinearLayout(std::move(bases), srcLayout.getOutDims(),
+                      /*requireSurjective=*/true);
+}
+
+ReduceOpHelper::ScratchConfig
+getReductionScratchConfig(triton::ReduceOp op, const LinearLayout &srcLayout,
+                          const LinearLayout &dstLayout) {
+  // Count the full swizzled footprint, including repetitions. The common
+  // scratch helper also assigns aligned byte offsets for mixed-width operands.
+  return ReduceOpHelper(op).getScratchConfig(
+      srcLayout, dstLayout,
+      [](const LinearLayout &src, const LinearLayout &dst, unsigned bitwidth) {
+        return optimalSwizzlingLdSt(src, dst, bitwidth).getTotalOutDimSize();
+      });
 }
 
 SmallVector<unsigned> getScratchRepShape(ReduceOpHelper &helper,
