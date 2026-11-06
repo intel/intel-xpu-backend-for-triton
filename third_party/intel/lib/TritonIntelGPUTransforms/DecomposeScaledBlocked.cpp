@@ -286,6 +286,20 @@ private:
     if (!scale)
       return v;
 
+    // A native E8M0 scale is a FloatType, so scaleTo16 and maskNan would take
+    // their float branches and emit `tt.fp_to_fp f8E8M0FNU -> bf16`, which the
+    // Intel FpToFp lowering has no entry for. Bitcast it to i8 once here so
+    // both helpers reuse the integer path: scaleTo16 shifts the byte into the
+    // exponent field, and maskNan compares the raw byte against 0xFF. The
+    // latter matters because this copy has no handleNan: on the float path
+    // byte 0xFF would decode as +inf and `cmpf uno` would never fire, leaving
+    // NaN scales unmasked.
+    if (isa<Float8E8M0FNUType>(scale.getType().getElementType())) {
+      auto i8Ty = scale.getType().clone(rewriter.getI8Type());
+      scale = cast<TypedValue<RankedTensorType>>(
+          BitcastOp::create(rewriter, scale.getLoc(), i8Ty, scale).getResult());
+    }
+
     // 1) Cast scale to fp16/bf16, broadcast it and convert its layout
     auto reshapeScale = extendAndBroadcastScale(
         rewriter, scaledDotOp, scale, computeType, v.getType(), opIdx);
