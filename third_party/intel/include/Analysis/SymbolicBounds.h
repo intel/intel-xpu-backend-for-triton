@@ -615,10 +615,10 @@ Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
 /// Builds `form` as an i64 value immediately before `before`, or returns null
 /// and builds nothing unless every term is an integer or index scalar of at
 /// most 64 bits that properly dominates `before` (never a `TripCount`, nor a
-/// `Quotient` with a non-positive divisor) and plain i64 arithmetic cannot
-/// overflow, which rules out i64 and index terms. The value equals the IR's
-/// only if the obligations `normalize` returned hold; `NonNegative` ones may
-/// never be assumed.
+/// `Quotient` with a non-positive divisor) and a conservative magnitude check
+/// rules out i64 overflow; that check fails on any i64 or index term, even a
+/// lone one. The value equals the IR's only if the obligations `normalize`
+/// returned hold; `NonNegative` ones may never be assumed.
 Value materializeForm(const AffineForm &form, Operation *before,
                       OpBuilder &builder);
 
