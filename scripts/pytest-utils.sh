@@ -93,11 +93,9 @@ pytest() {
     fi
 
     # Expected-failure lists, next to the skip list of the suite:
-    #   <suite>.xfail.txt:     the test is reported as XFAIL without running (the default).
-    #   <suite>.xfail-run.txt: the test runs, is expected to fail (XFAIL) and fails the run if it passes (strict),
-    #                          for tests we want to hear about once they are fixed.
-    # Put only tests that always fail in <suite>.xfail-run.txt; tests that fail intermittently stay in the skip list
-    # (strict: an intermittent pass would fail the run).
+    #   <suite>.xfail.txt:     reported as XFAIL without running. For a platform limitation, not a bug.
+    #   <suite>.xfail-run.txt: runs, expected to fail, fails the run if it passes (strict). Currently unused.
+    # Everything else, including bugs owned by other teams, goes in the skip list.
     if [[ ! -f $TRITON_TEST_SELECTFILE && -v TRITON_TEST_SUITE && $TEST_UNSKIP = false ]]; then
         XFAILFILE="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail.txt"
         XFAILRUNFILE="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail-run.txt"

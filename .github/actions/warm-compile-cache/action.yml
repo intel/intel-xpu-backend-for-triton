@@ -23,12 +23,20 @@ runs:
         source /opt/intel/oneapi/setvars.sh > /dev/null
 
         # Reuse the --skip-list dir already resolved into $TRITON_TEST_CMD, so warmup
-        # skips what the real run below will skip on this HW.
+        # skips and xfails what the real run below will skip and xfail on this HW.
         skiplist_dir="${TRITON_TEST_CMD#*--skip-list }"
         skiplist_dir="${skiplist_dir%% *}"
         skip_args=()
-        if [[ "$TEST_UNSKIP" != true && -f "$skiplist_dir/${{ inputs.skiplist-name }}.txt" ]]; then
-          skip_args=(--skip-from-file="$skiplist_dir/${{ inputs.skiplist-name }}.txt" --select-fail-on-missing)
+        if [[ "$TEST_UNSKIP" != true ]]; then
+          if [[ -f "$skiplist_dir/${{ inputs.skiplist-name }}.txt" ]]; then
+            skip_args+=(--skip-from-file="$skiplist_dir/${{ inputs.skiplist-name }}.txt")
+          fi
+          if [[ -f "$skiplist_dir/${{ inputs.skiplist-name }}.xfail.txt" ]]; then
+            skip_args+=(--xfail-norun-from-file="$skiplist_dir/${{ inputs.skiplist-name }}.xfail.txt")
+          fi
+          if (( ${#skip_args[@]} )); then
+            skip_args+=(--select-fail-on-missing)
+          fi
         fi
 
         # Matches the TRITON_CI_CACHE_PHASE the real run sets (via TRITON_TEST_SUITE,

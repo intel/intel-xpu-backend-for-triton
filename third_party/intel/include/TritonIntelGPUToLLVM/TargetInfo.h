@@ -9,7 +9,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H
 
-#include "Utils/LibCallEmitter.h"
+#include "intel/lib/Utils/LibCallEmitter.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
@@ -75,9 +75,12 @@ public:
   ///
   /// `scanDim` is the number of lanes holding unique data along the scan axis;
   /// it must equal `warpSize` because the builtin scans the whole sub-group
-  /// all-or-nothing (SPIR-V has no portable clustered scan).
+  /// all-or-nothing (SPIR-V has no portable clustered scan), and the lanes
+  /// along the axis must be contiguous (`threadStride == 1`) because the
+  /// builtin walks them in lane order.
   bool warpScan(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
-                triton::ScanOp op, unsigned scanDim, unsigned warpSize) const;
+                triton::ScanOp op, unsigned scanDim,
+                unsigned threadStride) const override;
 
   unsigned getReductionTreeArity(Operation *combinerOp) const override;
 
