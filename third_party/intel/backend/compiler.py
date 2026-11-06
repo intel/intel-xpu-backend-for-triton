@@ -335,6 +335,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # this so the downstream 64-byte alignment compensation is skipped.
         dev_prop['block_io_base_alignment'] = tgt_prop.get('block_io_base_alignment', 64)
         dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
+        # MHz from torch.xpu.get_device_capability(). A missing key (0) leaves the prefetch cost model inert,
+        # so loops keep every prefetch; kXe2Discrete is calibrated against the reported value (19000 on the B580).
+        dev_prop['memory_clock_rate'] = tgt_prop.get('memory_clock_rate') or 0
         dev_prop['is_lts'] = is_lts
         # Largest GRF mode the backend's automatic escalation will ever select
         # for this target; see `get_max_grf_mode`. A driver- or out-of-tree
@@ -600,7 +603,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if os.environ.get("TRITON_INTEL_ANNOTATE_LATENCIES", "0") == "1":
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier, cls.device_arch,
+                                          properties['core_clock_rate'], properties['memory_clock_rate'])
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode, not opt.in_loop_sink)

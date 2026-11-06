@@ -38,3 +38,4 @@ set_source_files_properties(Analysis/DPASAnalysisTest.cpp
   PROPERTIES COMPILE_DEFINITIONS TRITON_DPAS_UNIT_TESTING)
 
 add_subdirectory(Conversion)
+add_subdirectory(Transforms)
