@@ -113,8 +113,7 @@ public:
   // chain.
   virtual bool warpScan(RewriterBase &rewriter, Location loc,
                         SmallVector<Value> &acc, triton::ScanOp op,
-                        unsigned scanDim, unsigned threadStride,
-                        unsigned warpSize) const {
+                        unsigned scanDim, unsigned threadStride) const {
     return false;
   }
 

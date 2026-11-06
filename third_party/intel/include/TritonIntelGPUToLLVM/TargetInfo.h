@@ -79,8 +79,8 @@ public:
   /// along the axis must be contiguous (`threadStride == 1`) because the
   /// builtin walks them in lane order.
   bool warpScan(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
-                triton::ScanOp op, unsigned scanDim, unsigned threadStride,
-                unsigned warpSize) const override;
+                triton::ScanOp op, unsigned scanDim,
+                unsigned threadStride) const override;
 
   unsigned getReductionTreeArity(Operation *combinerOp) const override;
 
