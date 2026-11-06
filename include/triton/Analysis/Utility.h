@@ -149,6 +149,7 @@ public:
   // Stride between contiguous blocks along axis dim.
   unsigned getAxisBlockStride();
 
+  triton::ScanOp getOperation() { return scanOp; }
   Location getLoc() { return scanOp.getLoc(); }
   unsigned getAxis() { return scanOp.getAxis(); }
   bool getReverse() { return scanOp.getReverse(); }
