@@ -576,6 +576,50 @@ index 1b8df969a7..5feeb712a2 100644
  # Remove FLASHMLA from the list if not supported
  if not is_flashmla_dense_supported()[0]:
      BACKENDS_TO_TEST.remove(AttentionBackendEnum.FLASHMLA)
+diff --git a/tests/v1/kv_connector/unit/test_nixl_connector.py b/tests/v1/kv_connector/unit/test_nixl_connector.py
+index 5010706f15..7f2956943c 100644
+--- a/tests/v1/kv_connector/unit/test_nixl_connector.py
++++ b/tests/v1/kv_connector/unit/test_nixl_connector.py
+@@ -2991,14 +2991,13 @@ def test_register_packed_dsv4_mla_cache_as_single_region(
+             kv_caches.update(zip(layer_names, views))
+         connector.register_kv_caches(kv_caches)
+ 
+-        # MLA pages transfer as whole rows; a ring page past the row start keeps
+-        # its own region.
++        # MLA pages transfer as whole rows; a ring page keeps its own region,
++        # since a region is keyed by (base_addr, block_len).
+         ring_pages = [
+             (cache.data_ptr(), spec.page_size_bytes)
+             for layer_names, spec in zip(group_layers, specs)
+             if isinstance(spec, CircularBufferSpec)
+             for cache in (kv_caches[name] for name in layer_names)
+-            if cache.data_ptr() != raw.data_ptr()
+         ]
+         _agent, block_runs = wrapper.prep_xfer_dlist.call_args[0]
+         assert connector.connector_worker.kv_caches_base_addr[
+@@ -5222,7 +5221,10 @@ def test_ucx_backend_params(dist_init, extra_config, agent_backends, created_bac
+             num_threads=num_threads,
+         )
+ 
+-    vllm_config = create_vllm_config(kv_connector_extra_config=extra_config)
++    block_size = maybe_update_block_size(16)
++    vllm_config = create_vllm_config(
++        block_size=block_size, kv_connector_extra_config=extra_config
++    )
+     with (
+         patch(
+             "vllm.distributed.kv_transfer.kv_connector.v1.nixl.base_worker.NixlWrapper",
+@@ -5235,7 +5237,9 @@ def test_ucx_backend_params(dist_init, extra_config, agent_backends, created_bac
+         set_current_vllm_config(vllm_config),
+     ):
+         connector = NixlConnector(
+-            vllm_config, KVConnectorRole.WORKER, make_kv_cache_config(block_size=16)
++            vllm_config,
++            KVConnectorRole.WORKER,
++            make_kv_cache_config(block_size=block_size),
+         )
+     wrapper = connector.connector_worker.nixl_wrapper
+     assert wrapper.config.backends == agent_backends
 diff --git a/tests/v1/sample/test_logprobs.py b/tests/v1/sample/test_logprobs.py
 index 4f8c378589..54e4576b08 100644
 --- a/tests/v1/sample/test_logprobs.py
@@ -884,6 +928,31 @@ index b99e5bbd37..f8fb74534d 100644
  
      reduced_precision_val = (
          (False, False) if is_torch_equal_or_newer("2.10.0") else False
+diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
+index 943e551b64..eacbe5b9c5 100644
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -572,10 +572,18 @@ def fused_moe_kernel(
+                     a_scale_ptrs + offs_ks * stride_ask, mask=token_mask, other=0.0
+                 )
+                 b_scale = tl.load(b_scale_ptrs + offs_ks * stride_bsk)
++                # b_scale is a scalar when one group spans the whole N tile, and
++                # Triton rejects indexing a scalar.
++                if group_n >= BLOCK_SIZE_N and group_n % BLOCK_SIZE_N == 0:
++                    b_scale_n = b_scale
++                elif SWAP_AB:
++                    b_scale_n = b_scale[:, None]
++                else:
++                    b_scale_n = b_scale[None, :]
+                 if SWAP_AB:
+-                    accumulator += tl.dot(b, a) * b_scale[:, None] * a_scale[None, :]
++                    accumulator += tl.dot(b, a) * b_scale_n * a_scale[None, :]
+                 else:
+-                    accumulator += tl.dot(a, b) * a_scale[:, None] * b_scale[None, :]
++                    accumulator += tl.dot(a, b) * a_scale[:, None] * b_scale_n
+             else:
+                 if use_fp8_w8a8:
+                     # acc used to enable fp8_fast_accum
 diff --git a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
 index 699cad10af..a92dab7dd6 100644
 --- a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py

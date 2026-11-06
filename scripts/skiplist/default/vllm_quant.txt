@@ -13,3 +13,6 @@ tests/kernels/quantization/test_fp8_quant.py::test_static_fp8_quant_1d_scale
 tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_functionality
 tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_multidimensional
 tests/kernels/quantization/test_fp8_quant_group.py::test_quantfp8_group_edge_cases
+
+# SYCL dynamic_scaled_fp8_quant (vllm-xpu-kernels) turns an all-zero input's zero scale into NaN, so the output saturates to 448 instead of 0: https://github.com/intel/intel-xpu-backend-for-triton/issues/ISSUE_TBD_FP8_ALL_ZERO
+tests/kernels/quantization/test_fp8_quant.py::test_dynamic_per_tensor_fp8_quant_all_zero
