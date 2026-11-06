@@ -1,3 +1,4 @@
+#include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -6,6 +7,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/Value.h"
@@ -165,6 +167,36 @@ public:
         [&](tt::DescriptorLoadOp op) { visit(op, axisInfoAnalysis, context); });
     mod.walk([&](tt::DescriptorStoreOp op) {
       visit(op, axisInfoAnalysis, context);
+    });
+
+    // The relayout needs the ttig.block_io tags set above.
+    if (!enableDescriptorRelayout) {
+      LDBG("enable-descriptor-relayout is off; skip the descriptor relayout");
+      return;
+    }
+    unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+    mod.walk([&](tt::FuncOp func) {
+      bool funcHasDot = false;
+      SmallVector<tt::DescriptorLoadOp> loads;
+      SmallVector<tt::ReduceOp> reduces;
+      func.walk([&](Operation *op) {
+        if (isa<tt::DotOp, tt::DotScaledOp>(op))
+          funcHasDot = true;
+        else if (auto load = dyn_cast<tt::DescriptorLoadOp>(op))
+          loads.push_back(load);
+        else if (auto reduce = dyn_cast<tt::ReduceOp>(op))
+          reduces.push_back(reduce);
+      });
+      // A function with a dot is excluded whole, as a conservative policy.
+      if (funcHasDot) {
+        LDBG("Function " << func.getName()
+                         << " has a tt.dot or tt.dot_scaled; skip relayout");
+        return;
+      }
+      if (!satisfiesRelayoutGates(func, loads, reduces, threadsPerWarp))
+        return;
+      for (tt::DescriptorLoadOp load : loads)
+        relayoutDescriptorLoadForBlockIO(load, axisInfoAnalysis);
     });
   }
 
@@ -1119,6 +1151,372 @@ private:
     LDBG("offset: " << offset);
 
     return true;
+  }
+
+  struct DescLoadUses {
+    bool understood = true;
+    SmallVector<tt::ReduceOp, 2> reduces;
+  };
+
+  /// Follow the users of \p op through layout converts, tt.fp_to_fp and
+  /// elementwise ops, recording each tt.reduce. Any other user is not
+  /// understood: RemoveLayoutConversions can rematerialize even an anchored
+  /// load into a shape op's layout (isExpensiveLoadRematCandidate), and a store
+  /// keeps its own layout, so an SLM convert would stay in front of it.
+  static DescLoadUses analyzeDescLoadUses(tt::DescriptorLoadOp op) {
+    DescLoadUses uses;
+    SmallVector<Value> worklist{op.getResult()};
+    SmallPtrSet<Operation *, 8> visited;
+    while (!worklist.empty()) {
+      Value value = worklist.pop_back_val();
+      for (Operation *user : value.getUsers()) {
+        if (auto reduce = dyn_cast<tt::ReduceOp>(user)) {
+          uses.reduces.push_back(reduce);
+          continue;
+        }
+        if (!isa<ttg::ConvertLayoutOp, tt::FpToFpOp>(user) &&
+            !user->hasTrait<OpTrait::Elementwise>()) {
+          uses.understood = false;
+          return uses;
+        }
+        if (visited.insert(user).second)
+          llvm::append_range(worklist, user->getResults());
+      }
+    }
+    return uses;
+  }
+
+  /// True if every value computed from the results of \p root, or inside the
+  /// combine region of \p root or of a later reduction, has an f32 or i32
+  /// element type. The walk follows layout converts, elementwise ops
+  /// (tt.fp_to_fp included), tt.expand_dims, tt.broadcast, tt.splat, further
+  /// reductions, and values carried by scf.for and scf.if. A store ends a
+  /// path. Any other user is not understood and makes the answer false.
+  static bool isReduceConeF32OrI32(tt::ReduceOp root) {
+    auto isF32OrI32 = [](Value v) {
+      Type elemTy = getElementTypeOrSelf(v.getType());
+      return elemTy.isF32() || elemTy.isInteger(32);
+    };
+    SmallVector<Value> worklist;
+    // Queue a reduction's results. Return false if its combine region computes
+    // another type, which the result types would not show.
+    auto visitReduce = [&](tt::ReduceOp reduce) {
+      llvm::append_range(worklist, reduce.getResults());
+      return !reduce.getCombineOp()
+                  .walk([&](Operation *op) {
+                    return llvm::all_of(op->getResults(), isF32OrI32)
+                               ? WalkResult::advance()
+                               : WalkResult::interrupt();
+                  })
+                  .wasInterrupted();
+    };
+    if (!visitReduce(root))
+      return false;
+
+    DenseSet<Value> visited;
+    while (!worklist.empty()) {
+      Value value = worklist.pop_back_val();
+      if (!visited.insert(value).second)
+        continue;
+      if (!isF32OrI32(value))
+        return false;
+      for (OpOperand &use : value.getUses()) {
+        Operation *user = use.getOwner();
+        if (auto yield = dyn_cast<scf::YieldOp>(user)) {
+          // The value reaches the parent's result and, in a loop, the next
+          // iteration's iter_arg.
+          Operation *parent = yield->getParentOp();
+          unsigned idx = use.getOperandNumber();
+          if (auto forOp = dyn_cast<scf::ForOp>(parent))
+            worklist.push_back(forOp.getRegionIterArgs()[idx]);
+          else if (!isa<scf::IfOp>(parent))
+            return false;
+          worklist.push_back(parent->getResult(idx));
+          continue;
+        }
+        if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+          // Only an init value is carried; a bound or the step is not followed.
+          BlockArgument iterArg = forOp.getTiedLoopRegionIterArg(&use);
+          if (!iterArg)
+            return false;
+          worklist.push_back(iterArg);
+          worklist.push_back(forOp.getTiedLoopResult(&use));
+          continue;
+        }
+        if (auto reduce = dyn_cast<tt::ReduceOp>(user)) {
+          if (!visitReduce(reduce))
+            return false;
+          continue;
+        }
+        // A store ends the path: the operand it takes from the cone was
+        // checked when it was popped.
+        if (isa<tt::StoreOp, tt::DescriptorStoreOp>(user))
+          continue;
+        if (!isa<ttg::ConvertLayoutOp, tt::ExpandDimsOp, tt::BroadcastOp,
+                 tt::SplatOp>(user) &&
+            !user->hasTrait<OpTrait::Elementwise>())
+          return false;
+        llvm::append_range(worklist, user->getResults());
+      }
+    }
+    return true;
+  }
+
+  /// The relayout's correctness gates, over all of \p func: all eligible loads
+  /// of the function are relaid out, or none. A refused load keeps
+  /// ttig.block_io without an anchor, so RemoveLayoutConversions could move it
+  /// into an anchored sibling's layout, making it a 2D read after all. Pointer
+  /// tt.loads tagged for 2D reads are not considered.
+  static bool satisfiesRelayoutGates(tt::FuncOp func,
+                                     ArrayRef<tt::DescriptorLoadOp> loads,
+                                     ArrayRef<tt::ReduceOp> reduces,
+                                     unsigned threadsPerWarp) {
+    for (tt::DescriptorLoadOp load : loads) {
+      if (!load->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
+        continue;
+      // G3: once relaid out, a NaN-padded descriptor one element wide read 0.0
+      // instead of NaN at 16 lanes, for a reason not yet known. So at any lane
+      // count only zero padding, which an absent attribute also means, is
+      // allowed.
+      auto padding = load->getAttrOfType<tt::PaddingOptionAttr>(
+          ttgi::TritonIntelGPUDialect::getDescPaddingAttrName());
+      if (padding && padding.getValue() != tt::PaddingOption::PAD_ZERO) {
+        LDBG("G3: " << *load << " is not zero padded; skip relayout of "
+                    << func.getName());
+        return false;
+      }
+    }
+
+    // G2: with 16 lanes, IGC turns the scalar fptrunc of uniform sub-group
+    // reduce results into a vector fptrunc that writes registers out of bounds,
+    // and int8 results come out wrong too, so only f32 and i32 values may
+    // follow a reduction. Every reduction is checked, since
+    // RemoveLayoutConversions can move any of them into the new layout.
+    if (threadsPerWarp != 16)
+      return true;
+    for (tt::ReduceOp reduce : reduces) {
+      if (!isReduceConeF32OrI32(reduce)) {
+        LDBG("G2: 16 lanes and a value from "
+             << *reduce << " is not f32 or i32; skip relayout of "
+             << func.getName());
+        return false;
+      }
+    }
+    return true;
+  }
+
+  struct ReductionPathSLM {
+    bool off;
+    bool on;
+  };
+
+  /// Whether the reductions of a load in \p currentTy (as isWarpSynchronous
+  /// decides), and the conversion of each result to its tt.store, need shared
+  /// memory now (off) and with the candidate encoding (on). RLC carries the
+  /// candidate up to the store's value operand, so the on side sizes that
+  /// convert on two temporary ops, erased before returning. nullopt when the
+  /// path is not that shape.
+  static std::optional<ReductionPathSLM>
+  predictReductionPathSLM(ArrayRef<tt::ReduceOp> reduces,
+                          RankedTensorType currentTy, Attribute candidateEnc) {
+    auto fail = [](StringRef why) -> std::optional<ReductionPathSLM> {
+      LDBG("Reduction-path SLM: nullopt (" << why << ")");
+      return std::nullopt;
+    };
+    auto isSplatOrConstant = [](Value v) {
+      Operation *def = v.getDefiningOp();
+      return def && isa<tt::SplatOp, arith::ConstantOp>(def);
+    };
+    ReductionPathSLM slm{false, false};
+    for (tt::ReduceOp reduce : reduces) {
+      if (reduce.getNumOperands() != 1)
+        return fail("variadic reduce");
+      auto srcTy = cast<RankedTensorType>(reduce.getOperands()[0].getType());
+      if (srcTy.getEncoding() != currentTy.getEncoding())
+        return fail("reduce operand is not in the load's encoding");
+      unsigned axis = reduce.getAxis();
+      slm.off |= ttg::getWarpsPerCTA(currentTy.getEncoding(),
+                                     srcTy.getShape())[axis] != 1;
+      slm.on |= ttg::getWarpsPerCTA(candidateEnc, srcTy.getShape())[axis] != 1;
+
+      Value v = reduce.getResult()[0];
+      auto resultTy = dyn_cast<RankedTensorType>(v.getType());
+      if (!resultTy)
+        return fail("scalar reduce result");
+      ttg::ConvertLayoutOp cvt;
+      tt::StoreOp store;
+      while (!store) {
+        if (!v.hasOneUse())
+          return fail("result value without a single use");
+        OpOperand &use = *v.getUses().begin();
+        Operation *user = use.getOwner();
+        if (auto st = dyn_cast<tt::StoreOp>(user)) {
+          if (&use != &st.getValueMutable())
+            return fail("result reaches a store's pointer or mask");
+          store = st;
+        } else if (auto c = dyn_cast<ttg::ConvertLayoutOp>(user)) {
+          if (cvt)
+            return fail("more than one convert");
+          cvt = c;
+          v = c.getResult();
+        } else if (user->hasTrait<OpTrait::Elementwise>() &&
+                   user->getNumResults() == 1) {
+          for (Value operand : user->getOperands())
+            if (operand != v && isa<RankedTensorType>(operand.getType()) &&
+                !isSplatOrConstant(operand))
+              return fail("elementwise op with another tensor operand");
+          v = user->getResult(0);
+        } else {
+          return fail("result reaches an op other than a store");
+        }
+      }
+      if (cvt)
+        slm.off |= tt::intel::allocationAnalysisScratchSizeFn(cvt) > 0;
+
+      // Size the convert RLC would create, the way getValueAsImpl builds it.
+      auto storedTy = cast<RankedTensorType>(v.getType());
+      if (storedTy.getShape() != resultTy.getShape())
+        return fail("stored value is not shaped like the reduce result");
+      auto onTy = storedTy.cloneWithEncoding(ttg::SliceEncodingAttr::get(
+          v.getContext(), axis,
+          cast<ttg::DistributedEncodingTrait>(candidateEnc)));
+      OpBuilder builder(v.getContext());
+      builder.setInsertionPointAfterValue(v);
+      auto t1 = ttg::ConvertLayoutOp::create(builder, v.getLoc(), onTy, v);
+      auto t2 = ttg::ConvertLayoutOp::create(builder, v.getLoc(), storedTy, t1);
+      slm.on |= tt::intel::allocationAnalysisScratchSizeFn(t2) > 0;
+      t2.erase();
+      t1.erase();
+    }
+    LDBG("Reduction-path SLM off=" << slm.off << " on=" << slm.on);
+    return slm;
+  }
+
+  /// Issue #8458: give the row-major descriptor load \p op, whose blocked
+  /// layout does not lower to 2D block reads, a layout that does. The result is
+  /// converted back to the old type, and ttig.block_io_anchor makes
+  /// RemoveLayoutConversions carry the new layout to the users. The caller
+  /// checks the option, and skips every function with a dot or that fails
+  /// satisfiesRelayoutGates.
+  void relayoutDescriptorLoadForBlockIO(
+      tt::DescriptorLoadOp op,
+      tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
+    LDBG("Considering descriptor load for relayout: " << *op);
+
+    if (isBlockIOForAllLayoutsExplicitlyDisabled()) {
+      LDBG("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 disables non-DPAS 2D "
+           "block loads; skip relayout");
+      return;
+    }
+
+    auto blockIOAttr = op->getAttrOfType<StringAttr>(
+        ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+    if (!blockIOAttr ||
+        blockIOAttr.getValue() !=
+            ttgi::stringifyBlockIOMode(ttgi::BlockIOMode::RowMajor)) {
+      LDBG("Not tagged ttig.block_io = row_major; skip relayout");
+      return;
+    }
+
+    RankedTensorType currentTy = op.getType();
+    if (currentTy.getRank() != 2) {
+      LDBG("Rank " << currentTy.getRank() << " is not 2; skip relayout");
+      return;
+    }
+
+    auto currentEnc =
+        dyn_cast<ttg::BlockedEncodingAttr>(currentTy.getEncoding());
+    if (!currentEnc) {
+      LDBG("Result encoding is not blocked; skip relayout");
+      return;
+    }
+
+    unsigned elemSizeInBits = currentTy.getElementTypeBitWidth();
+    bool oneMatrixPerLoadForBT =
+        op->hasAttr(ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
+    if (ttgi::validate2DBlockLoadTile(
+            currentEnc.toLinearLayout(currentTy.getShape()),
+            /*memContiguousDim=*/1, elemSizeInBits, currentTy,
+            oneMatrixPerLoadForBT)) {
+      LDBG("Current layout already lowers to 2D block reads; skip relayout");
+      return;
+    }
+
+    DescLoadUses uses = analyzeDescLoadUses(op);
+    if (!uses.understood) {
+      LDBG("A transitive user is not understood; skip relayout");
+      return;
+    }
+
+    auto reduceAxes = llvm::map_range(
+        uses.reduces, [](tt::ReduceOp reduce) { return reduce.getAxis(); });
+    if (!llvm::all_equal(reduceAxes)) {
+      LDBG("Reduces along more than one axis; skip relayout");
+      return;
+    }
+    std::optional<unsigned> reducedDim;
+    if (!uses.reduces.empty())
+      reducedDim = uses.reduces.front().getAxis();
+
+    // isExpensiveLoadOrStore does not anchor a smaller load, so
+    // RemoveLayoutConversions would undo the relayout.
+    unsigned numWarps = ttg::lookupNumWarps(op);
+    unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
+    if (currentTy.getNumElements() < int64_t(numWarps) * threadsPerWarp) {
+      LDBG(currentTy.getNumElements()
+           << " elements < " << numWarps * threadsPerWarp
+           << " threads; skip relayout");
+      return;
+    }
+
+    std::optional<ttg::BlockedEncodingAttr> candidateEnc =
+        ttgi::pickBlockIOLoadEncoding(currentTy, numWarps, threadsPerWarp,
+                                      reducedDim);
+    if (!candidateEnc) {
+      LDBG("No 2D block layout for " << currentTy << "; skip relayout");
+      return;
+    }
+    RankedTensorType candidateTy = currentTy.cloneWithEncoding(*candidateEnc);
+
+    if (!ttgi::isDescriptorLoadLowerableTo2DBlock(op, candidateTy,
+                                                  axisInfoAnalysis)) {
+      LDBG("Candidate " << candidateTy
+                        << " does not lower to a 2D block load; skip relayout");
+      return;
+    }
+
+    // The current layout is a gather, which estimateLoadHWCost counts per lane;
+    // one gather message serves the sub-group, like one 2D block message.
+    unsigned currentCost = llvm::divideCeil(
+        ttgi::estimateLoadHWCost(currentTy, op), threadsPerWarp);
+    unsigned candidateCost = ttgi::estimateLoadHWCost(candidateTy, op);
+    if (candidateCost >= currentCost) {
+      LDBG("Candidate cost " << candidateCost << " >= current cost "
+                             << currentCost << "; skip relayout");
+      return;
+    }
+    // A reduction path that needs no shared memory now is usually cheaper than
+    // a 2D read that would add some to it (B580: up to 1.45x slower).
+    std::optional<ReductionPathSLM> slm =
+        predictReductionPathSLM(uses.reduces, currentTy, *candidateEnc);
+    if (slm && !slm->off && slm->on) {
+      LDBG("Reduction path needs no shared memory now but would with the "
+           "candidate; skip relayout");
+      return;
+    }
+
+    // Retype in place, so the load keeps all of its attributes.
+    op.getResult().setType(candidateTy);
+    op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAnchorAttrName(),
+                UnitAttr::get(op.getContext()));
+    OpBuilder builder(op.getContext());
+    builder.setInsertionPointAfter(op);
+    auto cvt = ttg::ConvertLayoutOp::create(builder, op.getLoc(), currentTy,
+                                            op.getResult());
+    op.getResult().replaceAllUsesExcept(cvt.getResult(), cvt);
+    LDBG("Relaid out (cost " << currentCost << " -> " << candidateCost
+                             << "): " << *op);
   }
 };
 
