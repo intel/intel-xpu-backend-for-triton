@@ -58,8 +58,6 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           pip install -U pybind11 cmake
-          $env:MAX_JOBS = $env:NUMBER_OF_PROCESSORS
-          $env:TRITON_PARALLEL_LINK_JOBS = [Math]::Max(1, [int]($env:MAX_JOBS / 2))
           pip install -v .
 
       - name: Clean
