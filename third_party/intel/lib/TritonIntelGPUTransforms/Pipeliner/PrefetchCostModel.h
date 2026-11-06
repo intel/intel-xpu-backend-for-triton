@@ -44,10 +44,13 @@ struct OperandWalk {
   int64_t rowBytes;
   int64_t stepBytes;
   /// Bytes pulled per iteration: a run shorter than `granule` whose step skips
-  /// past it costs min(|step|, granule).
+  /// past it costs min(|step|, granule); any other run costs `rowBytes`.
   int64_t fetchedBytes(unsigned granule) const;
   int64_t usedBytes() const;
-  /// True when the fetch pulls bytes the loop never reads.
+  /// True when the step skips past a run shorter than `granule`, so the fetch
+  /// pulls bytes the walk never reads. A step-0 run never counts, however
+  /// short: next to a B with 128 B step-0 rows, dropping a gapped A's prefetch
+  /// was still measured faster.
   bool gapped(unsigned granule) const;
 };
 
