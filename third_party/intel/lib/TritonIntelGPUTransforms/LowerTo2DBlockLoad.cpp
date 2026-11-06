@@ -488,10 +488,9 @@ private:
     // width/height.
     unsigned surfaceWidthDim = isTranspose ? rowDim : colDim;
     unsigned surfaceHeightDim = isTranspose ? colDim : rowDim;
+    // Dummy pitch for broadcast loads below; see isBlockPitchSupported for
+    // the validity check.
     constexpr int64_t MIN_PITCH = 64;
-    // Surface pitch is encoded in 24 bits in the 2D block IO message
-    // descriptor (see `triton_gen.2Dblockload` verifier in TritonGENOps.cpp).
-    constexpr int64_t MAX_PITCH = int64_t(1) << 24;
 
     // Pitch is either a compile-time constant or a runtime SSA value,
     // never both.
@@ -557,24 +556,14 @@ private:
       }
     }
 
-    // The HW needs pitch >= 64 bytes, a multiple of 16, and within 24 bits.
-    // For a constant pitch we just check it. For a runtime pitch we can't,
-    // so we rely on the checks already done: MaterializeBlockPointer proved
-    // the stride is 16-byte aligned, `lda >= K` keeps pitch >= the row width,
-    // and the row-width check below covers the 64-byte minimum.
-    if (!pitchValue) {
-      if (pitch < MIN_PITCH || (pitch % 16) != 0 || pitch > MAX_PITCH) {
-        LDBG("Invalid pitch " << pitch << " for load: " << *op);
-        return;
-      }
-    } else {
-      int64_t fullRowBytes =
-          tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8;
-      if (fullRowBytes < MIN_PITCH) {
-        LDBG("Runtime pitch: full row width " << fullRowBytes << " < "
-                                              << MIN_PITCH << " bytes");
-        return;
-      }
+    // A runtime pitch can't be range-checked here; MaterializeBlockPointer
+    // proved it 16-byte aligned and the row-width check covers the minimum.
+    if (!ttgi::isBlockPitchSupported(
+            pitchValue ? std::nullopt : std::optional<int64_t>(pitch),
+            /*hasRuntimeStride=*/pitchValue != nullptr,
+            tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8)) {
+      LDBG("Unsupported pitch for load: " << *op);
+      return;
     }
 
     // For broadcast loads, the LLVM lowering's row replication

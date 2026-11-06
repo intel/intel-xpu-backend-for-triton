@@ -508,4 +508,21 @@ TEST_F(ComputeRowLimitHeightTest, NullRowBaseSkipsSubtraction) {
   EXPECT_TRUE(isa<arith::ExtSIOp>(maxOp.getLhs().getDefiningOp()));
 }
 
+// The pitch policy shared by MaterializeBlockPointer and LowerTo2DBlockLoad.
+// The runtime cases are not reachable from lit: a runtime row stride does not
+// pass MaterializeBlockPointer's alignment check there.
+TEST(IsBlockPitchSupportedTest, ConstantPitch) {
+  EXPECT_TRUE(isBlockPitchSupported(64, false, 0));
+  EXPECT_TRUE(isBlockPitchSupported(int64_t(1) << 24, false, 0));
+  EXPECT_FALSE(isBlockPitchSupported(32, false, 1024)); // < 64
+  EXPECT_FALSE(isBlockPitchSupported(72, false, 1024)); // not 16-aligned
+  EXPECT_FALSE(isBlockPitchSupported((int64_t(1) << 24) + 16, false, 1024));
+}
+
+TEST(IsBlockPitchSupportedTest, RuntimePitch) {
+  EXPECT_TRUE(isBlockPitchSupported(std::nullopt, true, 64));
+  EXPECT_FALSE(isBlockPitchSupported(std::nullopt, true, 32));   // narrow row
+  EXPECT_FALSE(isBlockPitchSupported(std::nullopt, false, 128)); // no stride
+}
+
 } // namespace

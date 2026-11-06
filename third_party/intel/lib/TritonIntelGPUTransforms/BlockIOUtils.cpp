@@ -21,6 +21,17 @@ Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
   return {};
 }
 
+bool isBlockPitchSupported(std::optional<int64_t> constPitchBytes,
+                           bool hasRuntimeStride, int64_t fullRowBytes) {
+  constexpr int64_t minPitch = 64;
+  // The pitch field is 24 bits (see the `triton_gen.2Dblockload` verifier).
+  constexpr int64_t maxPitch = int64_t(1) << 24;
+  if (constPitchBytes)
+    return *constPitchBytes >= minPitch && *constPitchBytes % 16 == 0 &&
+           *constPitchBytes <= maxPitch;
+  return hasRuntimeStride && fullRowBytes >= minPitch;
+}
+
 Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
                             unsigned elemSizeInBytes) {
   Type i32Ty = builder.getI32Type();

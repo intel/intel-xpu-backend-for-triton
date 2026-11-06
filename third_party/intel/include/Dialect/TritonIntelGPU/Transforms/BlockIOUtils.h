@@ -148,6 +148,13 @@ Attribute canonicalCoalescedDescStoreLayout(RankedTensorType type, int numWarps,
 Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
                             Value ptr, unsigned dim);
 
+/// Whether a 2D block surface supports this row pitch. Shared by
+/// MaterializeBlockPointer and LowerTo2DBlockLoad so they cannot drift.
+/// A constant pitch must be >= 64 bytes, a multiple of 16 and fit in 24 bits.
+/// A runtime pitch needs a stride value and a full row of >= 64 bytes.
+bool isBlockPitchSupported(std::optional<int64_t> constPitchBytes,
+                           bool hasRuntimeStride, int64_t fullRowBytes);
+
 /// Build `stride * elemSizeInBytes` as an i32; null for non-integer stride.
 Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
                             unsigned elemSizeInBytes);
