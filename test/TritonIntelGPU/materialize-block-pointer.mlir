@@ -629,3 +629,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COM: A row-limit mask, but the compile-time row pitch is 32 bytes (< 64), so
+// COM: LowerTo2DBlockLoad would reject the load: the bypass must not stamp it.
+#blocked10 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 2], warpsPerCTA = [32, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @row_limit_narrow_const_pitch
+  tt.func public @row_limit_narrow_const_pitch(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+    %m_size = tt.load %arg1 : !tt.ptr<i32>
+    %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked10}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked10}>> -> tensor<1x16xi32, #blocked10>
+    %5 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked10}>>
+    %6 = tt.expand_dims %5 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked10}>> -> tensor<256x1xi32, #blocked10>
+    %cst_stride = arith.constant dense<16> : tensor<256x1xi32, #blocked10>
+    %row_off = arith.muli %6, %cst_stride : tensor<256x1xi32, #blocked10>
+    %row_off_bc = tt.broadcast %row_off : tensor<256x1xi32, #blocked10> -> tensor<256x16xi32, #blocked10>
+    %col_off_bc = tt.broadcast %1 : tensor<1x16xi32, #blocked10> -> tensor<256x16xi32, #blocked10>
+    %off = arith.addi %row_off_bc, %col_off_bc : tensor<256x16xi32, #blocked10>
+    %base = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<256x16x!tt.ptr<bf16>, #blocked10>
+    %4 = tt.addptr %base, %off : tensor<256x16x!tt.ptr<bf16>, #blocked10>, tensor<256x16xi32, #blocked10>
+    %7 = tt.splat %m_size : i32 -> tensor<256x1xi32, #blocked10>
+    %8 = arith.cmpi slt, %6, %7 : tensor<256x1xi32, #blocked10>
+    %mask = tt.broadcast %8 : tensor<256x1xi1, #blocked10> -> tensor<256x16xi1, #blocked10>
+    // CHECK-NOT: ttig.block_io
+    tt.load %4, %mask : tensor<256x16x!tt.ptr<bf16>, #blocked10>
+    tt.return
+  }
+}

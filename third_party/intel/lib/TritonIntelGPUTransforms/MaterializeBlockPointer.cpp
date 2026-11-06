@@ -437,8 +437,11 @@ private:
   /// row-limit pattern, so permit block IO here too.
   /// `contiguousDim`/`strideInfo` must match what LowerTo2DBlockLoad later
   /// uses, or stamping `ttig.block_io` here de-anchors the load without it
-  /// gaining a real 2D block read. Stores aren't covered: nothing downstream
-  /// consumes a store-side row limit.
+  /// gaining a real 2D block read. For the same reason the bypass is skipped
+  /// when LowerTo2DBlockLoad would reject the row pitch (under 64 bytes, not a
+  /// multiple of 16, over 24 bits, or a runtime pitch with no recoverable
+  /// stride value). Stores aren't covered: nothing downstream consumes a
+  /// store-side row limit.
   template <typename OpType>
   bool maskPermitsBlockTile(OpType op,
                             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -456,8 +459,36 @@ private:
             strideInfo && strideInfo->getStride(pitchDim) == 0;
         if (ttgi::matchRowLimitMask(mask, op.getOther(), maskTy.getShape(),
                                     *contiguousDim, pitchDimIsBroadcast)) {
-          LDBG("Mask is a row-limit pattern; permitting block IO for: " << op);
-          return true;
+          // Mirror the pitch checks in LowerTo2DBlockLoad::convertLoadOp: when
+          // it would reject the load, the bypass would only de-anchor it.
+          constexpr int64_t minPitch = 64;
+          constexpr int64_t maxPitch = int64_t(1) << 24;
+          unsigned elemBits = cast<tt::PointerType>(
+                                  cast<RankedTensorType>(op.getPtr().getType())
+                                      .getElementType())
+                                  .getPointeeType()
+                                  .getIntOrFloatBitWidth();
+          int64_t stride = strideInfo ? strideInfo->getStride(pitchDim) : -1;
+          bool pitchOk;
+          if (stride >= 0) {
+            int64_t pitch = stride * elemBits / 8;
+            pitchOk =
+                pitch >= minPitch && pitch % 16 == 0 && pitch <= maxPitch;
+          } else {
+            // Runtime pitch: needs a recoverable stride value and a row of at
+            // least the minimum pitch.
+            pitchOk = strideInfo && strideInfo->getStrideValue(pitchDim) &&
+                      maskTy.getDimSize(*contiguousDim) * elemBits / 8 >=
+                          minPitch;
+          }
+          if (pitchOk) {
+            LDBG("Mask is a row-limit pattern; permitting block IO for: "
+                 << op);
+            return true;
+          }
+          LDBG("Row-limit mask, but LowerTo2DBlockLoad would reject the "
+               "pitch; skip the bypass for: "
+               << op);
         }
       }
     }
