@@ -21,6 +21,17 @@ Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
   return {};
 }
 
+bool isBlockPitchSupported(std::optional<int64_t> constPitchBytes,
+                           bool hasRuntimeStride, int64_t fullRowBytes) {
+  constexpr int64_t minPitch = 64;
+  // The pitch field is 24 bits (see the `triton_gen.2Dblockload` verifier).
+  constexpr int64_t maxPitch = int64_t(1) << 24;
+  if (constPitchBytes)
+    return *constPitchBytes >= minPitch && *constPitchBytes % 16 == 0 &&
+           *constPitchBytes <= maxPitch;
+  return hasRuntimeStride && fullRowBytes >= minPitch;
+}
+
 Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
                             unsigned elemSizeInBytes) {
   Type i32Ty = builder.getI32Type();
@@ -952,6 +963,14 @@ namespace {
 /// Look through single-operand *widening* integer casts (`extsi`/`extui`) to
 /// find the underlying value. Excludes `trunci`/`index_cast`, since a
 /// narrowing cast can wrap and break contiguity.
+///
+/// NOTE: `MaterializeBlockPointer::lookThroughCasts` (and its
+/// `isCanonicalLinearIndex` matcher) is a near-twin of this and the
+/// `matchBaseAndRange` below, but accepts any `CastOpInterface`. The two are
+/// kept separate because the row-limit rewrite below turns the mask into a
+/// hardware `base_height` clamp, which is only correct if the compared index
+/// provably equals `base + arange`; the permissive variant is only used for
+/// stride/contiguity heuristics. Keep the two in sync when changing either.
 Value lookThroughCasts(Value val) {
   while (Operation *def = val.getDefiningOp()) {
     if (!isa<arith::ExtSIOp, arith::ExtUIOp>(def))
@@ -1047,9 +1066,20 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
   // with a batch-dims-only predicate -- degenerate along the pitch and
   // contiguous dims, so it's uniform per hardware block-load message and
   // safe to peel off as `extraPred` instead of folding into `base_height`.
+  //
+  // `tt-reorder-broadcast` may have sunk the AND below the final broadcast,
+  // `broadcast(and(broadcast(row), broadcast(batch)))`; look through that
+  // outer broadcast so the AND is matched on its narrow tensor. The operands'
+  // own broadcasts are checked against `tensorShape` below, which only
+  // depends on the dims they are degenerate along. `extraPred` is then
+  // narrow too (see `RowLimitMaskInfo`).
   Value rowLimitCandidate = mask;
   Value extraPred;
-  if (auto andOp = mask.getDefiningOp<arith::AndIOp>()) {
+  Value andRoot = mask;
+  if (auto outerBroadcast = mask.getDefiningOp<triton::BroadcastOp>())
+    if (outerBroadcast.getSrc().getDefiningOp<arith::AndIOp>())
+      andRoot = outerBroadcast.getSrc();
+  if (auto andOp = andRoot.getDefiningOp<arith::AndIOp>()) {
     Value lhs = andOp.getLhs(), rhs = andOp.getRhs();
     if (isDegenerateAlongDims(rhs, tensorShape, {pitchDim, contiguousDim})) {
       rowLimitCandidate = lhs;
@@ -1108,6 +1138,15 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
     return std::nullopt;
 
   return RowLimitMaskInfo{pitchDim, *rowBase, boundSrc, extraPred};
+}
+
+Value materializeExtraPred(OpBuilder &builder, Location loc, Value extraPred,
+                           RankedTensorType maskTy) {
+  if (extraPred.getType() == maskTy)
+    return extraPred;
+  while (auto inner = extraPred.getDefiningOp<triton::BroadcastOp>())
+    extraPred = inner.getSrc();
+  return triton::BroadcastOp::create(builder, loc, maskTy, extraPred);
 }
 
 Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
