@@ -106,11 +106,8 @@ public:
                           unsigned reduceLaneIdMask,
                           unsigned broadcastLaneIdMask) const = 0;
 
-  // Replaces the in-warp phase of a scan with a hardware warp scan, updating
-  // |acc| in place. scanDim is the number of lanes holding unique data along
-  // the scan axis and threadStride the lane distance between consecutive ones.
-  // Return false, leaving |acc| untouched, to fall back to the generic shuffle
-  // chain.
+  // Lets the target lower the in-warp phase of a scan, updating |acc| in
+  // place. Returns false, leaving |acc| untouched, to use the generic lowering.
   virtual bool warpScan(RewriterBase &rewriter, Location loc,
                         SmallVector<Value> &acc, triton::ScanOp op,
                         unsigned scanDim, unsigned threadStride) const {
