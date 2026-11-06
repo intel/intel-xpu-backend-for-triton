@@ -472,18 +472,17 @@ private:
           bool pitchOk;
           if (stride >= 0) {
             int64_t pitch = stride * elemBits / 8;
-            pitchOk =
-                pitch >= minPitch && pitch % 16 == 0 && pitch <= maxPitch;
+            pitchOk = pitch >= minPitch && pitch % 16 == 0 && pitch <= maxPitch;
           } else {
             // Runtime pitch: needs a recoverable stride value and a row of at
             // least the minimum pitch.
-            pitchOk = strideInfo && strideInfo->getStrideValue(pitchDim) &&
-                      maskTy.getDimSize(*contiguousDim) * elemBits / 8 >=
-                          minPitch;
+            pitchOk =
+                strideInfo && strideInfo->getStrideValue(pitchDim) &&
+                maskTy.getDimSize(*contiguousDim) * elemBits / 8 >= minPitch;
           }
           if (pitchOk) {
-            LDBG("Mask is a row-limit pattern; permitting block IO for: "
-                 << op);
+            LDBG(
+                "Mask is a row-limit pattern; permitting block IO for: " << op);
             return true;
           }
           LDBG("Row-limit mask, but LowerTo2DBlockLoad would reject the "
