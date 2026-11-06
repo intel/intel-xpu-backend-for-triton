@@ -61,9 +61,6 @@ static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
   unsigned scanDim = helper.getAxisNumThreadsPerWarpWithUniqueData();
-  // A hardware warp scan walks the lanes in lane order, so it only applies when
-  // the lanes along the scan axis are contiguous.
-  bool tryHardwareScan = threadStride == 1;
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
     unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
     // Only consider the last element of each contiguous chunk of elements.
@@ -71,20 +68,21 @@ static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
       continue;
     // Reduce within warps.
     SmallVector<Value> acc = srcValues[srcIndex];
-    if (!tryHardwareScan ||
-        !targetInfo.warpScan(rewriter, loc, acc, op, scanDim, warpSize)) {
-      for (unsigned i = 1; i <= scanDim / 2; i <<= 1) {
-        SmallVector<Value> shfl(acc.size());
-        for (unsigned j = 0; j < acc.size(); ++j) {
-          shfl[j] =
-              targetInfo.shuffleUp(rewriter, loc, acc[j], i * threadStride);
-        }
-        Value mask = b.icmp_sge(laneIdAxis, b.i32_val(i));
-        SmallVector<Value> tempAcc =
-            accumulate(helper, rewriter, shfl, acc, mask);
-        for (unsigned j = 0; j < acc.size(); ++j) {
-          acc[j] = b.select(mask, tempAcc[j], acc[j]);
-        }
+    if (targetInfo.warpScan(rewriter, loc, acc, op, scanDim, threadStride,
+                            warpSize)) {
+      srcValues[srcIndex] = std::move(acc);
+      continue;
+    }
+    for (unsigned i = 1; i <= scanDim / 2; i <<= 1) {
+      SmallVector<Value> shfl(acc.size());
+      for (unsigned j = 0; j < acc.size(); ++j) {
+        shfl[j] = targetInfo.shuffleUp(rewriter, loc, acc[j], i * threadStride);
+      }
+      Value mask = b.icmp_sge(laneIdAxis, b.i32_val(i));
+      SmallVector<Value> tempAcc =
+          accumulate(helper, rewriter, shfl, acc, mask);
+      for (unsigned j = 0; j < acc.size(); ++j) {
+        acc[j] = b.select(mask, tempAcc[j], acc[j]);
       }
     }
     srcValues[srcIndex] = std::move(acc);
