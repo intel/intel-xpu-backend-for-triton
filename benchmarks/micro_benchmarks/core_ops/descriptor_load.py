@@ -750,20 +750,47 @@ def _ragged_group_sizes(num_groups, group_m, block_m, small_groups=False):
     return sizes
 
 
-@perf_report(
-    Benchmark(
-        x_names=['G', 'N', 'small_groups'],
-        x_vals=[(4, 1024, False), (4, 2048, False), (16, 2048, True)],
-        line_arg='provider',
-        line_vals=['load_masked', 'load_unmasked', 'descriptor'],
-        line_names=['tl.load (masked)', 'tl.load (unmasked)', 'Tensor Descriptor'],
-        styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
-        ylabel=['TFlops'],
-        plot_name='grouped-matmul-row-limit',
-        args={},
-    ))
+def _group_offsets(group_sizes, block_m):
+    """Prefix-sum `group_sizes` into the kernels' `offsets` list. Also return
+    the total row count and the largest per-group m-tile count (the grid
+    size along the m-tile axis)."""
+    offsets_list = [0]
+    for size in group_sizes:
+        offsets_list.append(offsets_list[-1] + size)
+    max_m_tiles = max(triton.cdiv(size, block_m) for size in group_sizes)
+    return offsets_list, offsets_list[-1], max_m_tiles
+
+
+def _row_limit_perf_report(plot_name):
+    """`perf_report` shared by the grouped-matmul row-limit benchmarks."""
+    return perf_report(
+        Benchmark(
+            x_names=['G', 'N', 'small_groups'],
+            x_vals=[(4, 1024, False), (4, 2048, False), (16, 2048, True)],
+            line_arg='provider',
+            line_vals=['load_masked', 'load_unmasked', 'descriptor'],
+            line_names=['tl.load (masked)', 'tl.load (unmasked)', 'Tensor Descriptor'],
+            styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
+            ylabel=['TFlops'],
+            plot_name=plot_name,
+            args={},
+        ))
+
+
+def _bench_row_limit_provider(provider, load_masked_fn, load_unmasked_fn, desc_fn, flops):
+    """Time the callable selected by `provider` and return TFlops for `flops`
+    floating-point operations per call, as `perf_report` expects."""
+    fn = {'load_masked': load_masked_fn, 'load_unmasked': load_unmasked_fn, 'descriptor': desc_fn}[provider]
+    _, min_ms, max_ms, mean_ms, cv = do_bench(fn, n_warmup=25, n_repeat=100, quantiles=[0.5, 0.0, 1.0])
+
+    def tflops(ms):
+        return flops * 1e-12 / (ms * 1e-3)
+
+    return (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
+
+
+@_row_limit_perf_report('grouped-matmul-row-limit')
 def benchmark_grouped_matmul_row_limit(G, N, small_groups, provider):
-    quantiles = [0.5, 0.0, 1.0]
     dtype = torch.bfloat16
     torch.manual_seed(0)
 
@@ -771,11 +798,7 @@ def benchmark_grouped_matmul_row_limit(G, N, small_groups, provider):
     BK = 64
 
     group_sizes = _ragged_group_sizes(G, N, BM, small_groups=small_groups)
-    offsets_list = [0]
-    for size in group_sizes:
-        offsets_list.append(offsets_list[-1] + size)
-    total_rows = offsets_list[-1]
-    max_m_tiles = max(triton.cdiv(size, BM) for size in group_sizes)
+    offsets_list, total_rows, max_m_tiles = _group_offsets(group_sizes, BM)
 
     # Padding past the last group's end keeps the unmasked A load in-bounds
     # when the last group's size isn't a multiple of BM.
@@ -802,19 +825,7 @@ def benchmark_grouped_matmul_row_limit(G, N, small_groups, provider):
                                                                 num_stages=3)
     desc_fn = lambda: grouped_matmul_desc_kernel[grid](offsets, a, b, c, N, BM, BN, BK, num_warps=16, num_stages=3)
 
-    if provider == 'load_masked':
-        fn = load_masked_fn
-    elif provider == 'load_unmasked':
-        fn = load_unmasked_fn
-    else:
-        fn = desc_fn
-
-    _, min_ms, max_ms, mean_ms, cv = do_bench(fn, n_warmup=25, n_repeat=100, quantiles=quantiles)
-
-    def tflops(ms):
-        return 2 * total_rows * N * N * 1e-12 / (ms * 1e-3)
-
-    return (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
+    return _bench_row_limit_provider(provider, load_masked_fn, load_unmasked_fn, desc_fn, 2 * total_rows * N * N)
 
 
 # ---------------------------------------------------------------------------
@@ -858,13 +869,16 @@ def batched_grouped_matmul_load_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, NB, N: 
         b = tl.load(b_ptr + batches[:, None, None] * (N * N) + ks[None, :, None] * N + cols[None, None, :])
         acc = tl.dot(a, b, acc)
     c_ptrs = c_ptr + batches[:, None, None] * C_BSTRIDE + rows[None, :, None] * N + cols[None, None, :]
-    tl.store(c_ptrs, acc.to(tl.bfloat16), mask=row_valid[None, :, None] & batch_valid[:, None, None])
+    # The batch predicate is deliberately not in the store mask: the padded batch
+    # rows are stored too, so the benchmark's check sees whether the A load
+    # zero-filled them (it must, via `batch_valid`).
+    tl.store(c_ptrs, acc.to(tl.bfloat16), mask=row_valid[None, :, None])
 
 
 @triton.jit
-def batched_grouped_matmul_desc_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, NB, N: tl.constexpr, BB: tl.constexpr,
-                                       BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr, A_BSTRIDE: tl.constexpr,
-                                       C_BSTRIDE: tl.constexpr):
+def batched_grouped_matmul_desc_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, NB, PADDED_NB, N: tl.constexpr,
+                                       BB: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+                                       A_BSTRIDE: tl.constexpr, C_BSTRIDE: tl.constexpr):
     tile = tl.program_id(0)
     g = tl.program_id(1)
     batch_tile = tl.program_id(2)
@@ -879,7 +893,9 @@ def batched_grouped_matmul_desc_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, NB, N: 
         return
     a_desc = tl.make_tensor_descriptor(a_ptr + group_start * N, shape=[NB, group_m, N], strides=[A_BSTRIDE, N, 1],
                                        block_shape=[BB, BM, BK])
-    b_desc = tl.make_tensor_descriptor(b_ptr, shape=[NB, N, N], strides=[N * N, N, 1], block_shape=[BB, BK, BN])
+    # B is allocated for PADDED_NB batches, so that is its true extent; only A's
+    # descriptor carries the partial last batch tile (shape NB).
+    b_desc = tl.make_tensor_descriptor(b_ptr, shape=[PADDED_NB, N, N], strides=[N * N, N, 1], block_shape=[BB, BK, BN])
     acc = tl.zeros((BB, BM, BN), dtype=tl.float32)
     for k0 in tl.range(0, N, BK):
         acc = tl.dot(a_desc.load([batch_tile * BB, tile_m * BM, k0]), b_desc.load([batch_tile * BB, k0, tile_n * BN]),
@@ -888,23 +904,11 @@ def batched_grouped_matmul_desc_kernel(offsets_ptr, a_ptr, b_ptr, c_ptr, NB, N: 
     rows = group_start + tile_m * BM + tl.arange(0, BM)
     cols = tile_n * BN + tl.arange(0, BN)
     c_ptrs = c_ptr + batches[:, None, None] * C_BSTRIDE + rows[None, :, None] * N + cols[None, None, :]
-    tl.store(c_ptrs, acc.to(tl.bfloat16), mask=(rows < group_end)[None, :, None] & (batches < NB)[:, None, None])
+    tl.store(c_ptrs, acc.to(tl.bfloat16), mask=(rows < group_end)[None, :, None])
 
 
-@perf_report(
-    Benchmark(
-        x_names=['G', 'N', 'small_groups'],
-        x_vals=[(4, 1024, False), (4, 2048, False), (16, 2048, True)],
-        line_arg='provider',
-        line_vals=['load_masked', 'load_unmasked', 'descriptor'],
-        line_names=['tl.load (masked)', 'tl.load (unmasked)', 'Tensor Descriptor'],
-        styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
-        ylabel=['TFlops'],
-        plot_name='batched-grouped-matmul-row-limit',
-        args={},
-    ))
+@_row_limit_perf_report('batched-grouped-matmul-row-limit')
 def benchmark_batched_grouped_matmul_row_limit(G, N, small_groups, provider):
-    quantiles = [0.5, 0.0, 1.0]
     dtype = torch.bfloat16
     torch.manual_seed(0)
 
@@ -912,11 +916,7 @@ def benchmark_batched_grouped_matmul_row_limit(G, N, small_groups, provider):
     BM, BN, BK = 64, 128, 32
 
     group_sizes = _ragged_group_sizes(G, N, BM, small_groups=small_groups)
-    offsets_list = [0]
-    for size in group_sizes:
-        offsets_list.append(offsets_list[-1] + size)
-    total_rows = offsets_list[-1]
-    max_m_tiles = max(triton.cdiv(size, BM) for size in group_sizes)
+    offsets_list, total_rows, max_m_tiles = _group_offsets(group_sizes, BM)
     num_batch_tiles = triton.cdiv(NB, BB)
     padded_nb = num_batch_tiles * BB
 
@@ -943,31 +943,21 @@ def benchmark_batched_grouped_matmul_row_limit(G, N, small_groups, provider):
         'num_stages': 3,
     }
 
+    # Compare all padded batches: the padded batch rows are stored unmasked, so
+    # they are zero only if the masked A load zero-fills them via `batch_valid`
+    # (the descriptor path gets that from its `shape=[NB, ...]`).
     assert_close(
-        lambda: (batched_grouped_matmul_load_kernel[grid]
-                 (offsets, a, b, c_ref, NB, N, MASK_A=True, **meta), c_ref[:NB])[1],
-        lambda: (batched_grouped_matmul_desc_kernel[grid](offsets, a, b, c, NB, N, **meta), c[:NB])[1],
+        lambda: (batched_grouped_matmul_load_kernel[grid](offsets, a, b, c_ref, NB, N, MASK_A=True, **meta), c_ref)[1],
+        lambda: (batched_grouped_matmul_desc_kernel[grid](offsets, a, b, c, NB, padded_nb, N, **meta), c)[1],
         atol=1e-2,
         rtol=1e-2,
     )
 
     load_masked_fn = lambda: batched_grouped_matmul_load_kernel[grid](offsets, a, b, c, NB, N, MASK_A=True, **meta)
     load_unmasked_fn = lambda: batched_grouped_matmul_load_kernel[grid](offsets, a, b, c, NB, N, MASK_A=False, **meta)
-    desc_fn = lambda: batched_grouped_matmul_desc_kernel[grid](offsets, a, b, c, NB, N, **meta)
+    desc_fn = lambda: batched_grouped_matmul_desc_kernel[grid](offsets, a, b, c, NB, padded_nb, N, **meta)
 
-    if provider == 'load_masked':
-        fn = load_masked_fn
-    elif provider == 'load_unmasked':
-        fn = load_unmasked_fn
-    else:
-        fn = desc_fn
-
-    _, min_ms, max_ms, mean_ms, cv = do_bench(fn, n_warmup=25, n_repeat=100, quantiles=quantiles)
-
-    def tflops(ms):
-        return 2 * NB * total_rows * N * N * 1e-12 / (ms * 1e-3)
-
-    return (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
+    return _bench_row_limit_provider(provider, load_masked_fn, load_unmasked_fn, desc_fn, 2 * NB * total_rows * N * N)
 
 
 def _gpu_warmup():
