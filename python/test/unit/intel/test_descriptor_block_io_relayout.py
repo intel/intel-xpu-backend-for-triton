@@ -70,12 +70,9 @@ def triton_block_io(monkeypatch):
 
 
 def _set_compile_env(monkeypatch, tmp_path, knob):
-    """Compile into an empty on-disk cache, with the relayout knob set (on) or unset (off)."""
+    """Compile into an empty on-disk cache, with the relayout knob explicitly on or off."""
     monkeypatch.setenv("TRITON_CACHE_DIR", str(tmp_path))
-    if knob:
-        monkeypatch.setenv(RELAYOUT_ENV, "1")
-    else:
-        monkeypatch.delenv(RELAYOUT_ENV, raising=False)
+    monkeypatch.setenv(RELAYOUT_ENV, "1" if knob else "0")
 
 
 def _misaligned_tensor(rows, cols, pitch, device, misalign=32):
