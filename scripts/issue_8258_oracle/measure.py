@@ -12,7 +12,7 @@ import traceback
 from types import SimpleNamespace
 from compile import save
 from gpu_guard import acquire,assert_exclusive
-from freeze_inputs import verify
+from freeze_inputs import capture_provenance,verify
 from native_image import fingerprint
 
 ROOT=Path(os.environ['GEMM_CI_REPORTS']).resolve()
@@ -23,7 +23,7 @@ def med(rounds):return statistics.median(statistics.median(row) for row in round
 def sequence_id(record):
     return sha(json.dumps([(fingerprint(Path(kernel['folder'])/'kernel.zebin'),kernel['launch'],kernel['runtime_signature'],kernel['pointer_names'],kernel['execution_metadata']) for kernel in record['kernels']],sort_keys=True).encode())
 
-def allocation(torch,triton,key,case,audit,protocol,skew,output,winners=None):
+def allocation(torch,triton,key,case,audit,protocol,skew,output,provenance,winners=None):
     from triton.compiler.compiler import CompiledKernel
     family=case['baseline']['family'];m,n,k=case['baseline']['shape']
     torch.manual_seed(protocol['seed'])
@@ -47,7 +47,7 @@ def allocation(torch,triton,key,case,audit,protocol,skew,output,winners=None):
     if family=='add':cpu_reference=cpu_reference+d[rows[:,None],cols[None,:]].cpu().double()
     flush=torch.empty(256*1024*1024//4,device='xpu',dtype=torch.int32)
     result={'complete':False,'started':time.time(),'pid':os.getpid(),
-            'provenance':{name:sha((ROOT/name).read_bytes()) for name in ['protocol.json','suite.json','compiler-manifest.json','audit.json','run.py']},'case':key,'family':family,'shape':[m,n,k],'skew_mib':skew,
+            'provenance':provenance,'case':key,'family':family,'shape':[m,n,k],'skew_mib':skew,
             'strides':{'A':list(a.stride()),'B':list(b.stride())},'a_pad':a_pad,'b_pad':b_pad,
             'addresses':{'guard':guard.data_ptr(),'A':a.data_ptr(),'B':b.data_ptr(),'C':c.data_ptr(),'D':d.data_ptr() if d is not None else None},
             'input_sample_sha256':sha(sampled_a.numpy().tobytes()+sampled_b.numpy().tobytes()),
@@ -170,6 +170,7 @@ def main():
     if args.skew not in protocol['allocation_arrangements']:raise ValueError('Unregistered allocation history')
     winners=json.loads(Path(args.winners).read_text()) if args.winners else None
     verify()
+    provenance=capture_provenance(ROOT,Path(__file__))
     with acquire(output.with_suffix('.availability.json')):
         os.environ.update(TRITON_CACHE_DIR=str(ROOT/'launcher-cache'),TRITON_BACKENDS_IN_TREE='1')
         import torch,triton
@@ -179,7 +180,7 @@ def main():
         library=Path(triton.__file__).parent/'_C/libtriton.so'
         manifest=json.loads((ROOT/'compiler-manifest.json').read_text())
         if sha(library.read_bytes())!=manifest['compilers']['baseline']['sha256']:raise RuntimeError('Runtime provenance mismatch')
-        result=allocation(torch,triton,args.case,{p:manifests[p]['cases'][args.case] for p in POLICIES},audit['cases'][args.case],protocol,args.skew,output,winners)
+        result=allocation(torch,triton,args.case,{p:manifests[p]['cases'][args.case] for p in POLICIES},audit['cases'][args.case],protocol,args.skew,output,provenance,winners)
         if result['failures']:raise RuntimeError('Correctness failures prevent a completed measurement')
         result.update(pid=os.getpid(),device=str(torch.xpu.get_device_properties(0)),torch=torch.__version__,finished=time.time())
         save(output,result)

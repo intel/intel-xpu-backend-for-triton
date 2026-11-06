@@ -1,8 +1,15 @@
 """CPU-only checks for diagnostic selection and the portable source bundle."""
 import ast
+from contextlib import contextmanager
+import importlib.util
 import json
+import os
+from pathlib import Path
+import sys
+import tempfile
 from types import SimpleNamespace
-from driver import HERE, REPO, SCOPE, sha
+from driver import HERE, REPO, SCOPE, prepare_case, sha
+from freeze_inputs import capture_provenance
 from oracle import confirmed_ms, require_matching_availability, select_oracle
 
 
@@ -26,6 +33,64 @@ def configuration_pool(family):
         exec(compile(ast.Module(body=[function], type_ignores=[]), '<stock-configs>', 'exec'), namespace)
         return namespace['get_autotune_configs']()
     return eval(info['configs_expression'], namespace)
+
+
+def check_measurement_startup():
+    class GPUBoundaryReached(Exception):
+        pass
+
+    previous_env = os.environ.get('GEMM_CI_REPORTS')
+    previous_argv = sys.argv
+    previous_compile = sys.modules.get('compile')
+    try:
+        with tempfile.TemporaryDirectory() as temporary:
+            reports = Path(temporary)
+            (reports / 'compiler-manifest.json').write_text('{}')
+            folder = prepare_case(reports, SCOPE['cases'][0])
+            (folder / 'audit.json').write_text('{}')
+            for policy in SCOPE['policies']:
+                (folder / f'compiled-{policy}.json').write_text(json.dumps({
+                    'complete': True, 'protocol_sha256': sha(folder / 'protocol.json')}))
+            assert not (folder / 'run.py').exists()
+            assert not (folder / 'measure.py').exists()
+            os.environ['GEMM_CI_REPORTS'] = str(folder)
+            spec = importlib.util.spec_from_file_location('oracle_measure_startup', HERE / 'measure.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            captured = {}
+
+            def capture(root, runner):
+                captured.update(capture_provenance(root, runner))
+                return dict(captured)
+
+            @contextmanager
+            def gpu_boundary(path):
+                assert set(captured) == {'protocol.json', 'suite.json',
+                                         'compiler-manifest.json', 'audit.json', 'measure.py'}
+                assert captured['measure.py'] == sha(HERE / 'measure.py')
+                raise GPUBoundaryReached
+                yield
+
+            module.capture_provenance = capture
+            module.acquire = gpu_boundary
+            sys.argv = ['measure.py', '--case', SCOPE['cases'][0]['id'], '--skew', '0',
+                        '--output', str(folder / 'skew-0.json')]
+            try:
+                module.main()
+            except GPUBoundaryReached:
+                pass
+            else:
+                raise AssertionError('Measurement startup did not reach the GPU boundary')
+    finally:
+        sys.argv = previous_argv
+        if previous_env is None:
+            os.environ.pop('GEMM_CI_REPORTS', None)
+        else:
+            os.environ['GEMM_CI_REPORTS'] = previous_env
+        if previous_compile is None:
+            sys.modules.pop('compile', None)
+        else:
+            sys.modules['compile'] = previous_compile
 
 
 def main():
@@ -78,10 +143,12 @@ def main():
     observation = {'mapping': mapping, 'confirmation_ms': {key: [[value]] for key, value in
                    [('0:baseline', 11), ('0:intervention', 1), ('1:baseline', 12), ('1:intervention', 30)]}}
     assert confirmed_ms(observation, selected) == 11
+    check_measurement_startup()
     print(json.dumps({'cases': 180, 'configurations_per_family': counts,
                       'configuration_policy_compilations': sum(counts[case['family']] * 3 for case in SCOPE['cases']),
                       'checks': ['Python syntax', 'exact kernel bodies', 'source hashes', 'full stock pools',
                                  'all compile-time arguments supplied',
+                                 'measurement CLI startup and provenance before GPU initialization',
                                  'asymmetric compile rejection', 'oracle gain', 'oracle baseline fallback',
                                  'independent confirmation selection']}, indent=2))
 
