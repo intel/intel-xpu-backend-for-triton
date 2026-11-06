@@ -577,7 +577,7 @@ index 1b8df969a7..5feeb712a2 100644
  if not is_flashmla_dense_supported()[0]:
      BACKENDS_TO_TEST.remove(AttentionBackendEnum.FLASHMLA)
 diff --git a/tests/v1/kv_connector/unit/test_nixl_connector.py b/tests/v1/kv_connector/unit/test_nixl_connector.py
-index 5010706f15..7f2956943c 100644
+index 5010706f15..c3e2dcd23b 100644
 --- a/tests/v1/kv_connector/unit/test_nixl_connector.py
 +++ b/tests/v1/kv_connector/unit/test_nixl_connector.py
 @@ -2991,14 +2991,13 @@ def test_register_packed_dsv4_mla_cache_as_single_region(
@@ -602,9 +602,9 @@ index 5010706f15..7f2956943c 100644
          )
  
 -    vllm_config = create_vllm_config(kv_connector_extra_config=extra_config)
-+    block_size = maybe_update_block_size(16)
 +    vllm_config = create_vllm_config(
-+        block_size=block_size, kv_connector_extra_config=extra_config
++        block_size=maybe_update_block_size(16),
++        kv_connector_extra_config=extra_config,
 +    )
      with (
          patch(
@@ -616,7 +616,7 @@ index 5010706f15..7f2956943c 100644
 -            vllm_config, KVConnectorRole.WORKER, make_kv_cache_config(block_size=16)
 +            vllm_config,
 +            KVConnectorRole.WORKER,
-+            make_kv_cache_config(block_size=block_size),
++            make_kv_cache_config(block_size=maybe_update_block_size(16)),
          )
      wrapper = connector.connector_worker.nixl_wrapper
      assert wrapper.config.backends == agent_backends
@@ -929,15 +929,15 @@ index b99e5bbd37..f8fb74534d 100644
      reduced_precision_val = (
          (False, False) if is_torch_equal_or_newer("2.10.0") else False
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
-index 943e551b64..eacbe5b9c5 100644
+index 943e551b64..fbb5feef47 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
 @@ -572,10 +572,18 @@ def fused_moe_kernel(
                      a_scale_ptrs + offs_ks * stride_ask, mask=token_mask, other=0.0
                  )
                  b_scale = tl.load(b_scale_ptrs + offs_ks * stride_bsk)
-+                # b_scale is a scalar when one group spans the whole N tile, and
-+                # Triton rejects indexing a scalar.
++                # b_scale is a scalar when the whole N tile falls inside a single
++                # quant group; Triton rejects indexing a scalar.
 +                if group_n >= BLOCK_SIZE_N and group_n % BLOCK_SIZE_N == 0:
 +                    b_scale_n = b_scale
 +                elif SWAP_AB:
