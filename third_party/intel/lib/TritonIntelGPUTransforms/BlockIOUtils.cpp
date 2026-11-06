@@ -1055,9 +1055,20 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
   // with a batch-dims-only predicate -- degenerate along the pitch and
   // contiguous dims, so it's uniform per hardware block-load message and
   // safe to peel off as `extraPred` instead of folding into `base_height`.
+  //
+  // `tt-reorder-broadcast` may have sunk the AND below the final broadcast,
+  // `broadcast(and(broadcast(row), broadcast(batch)))`; look through that
+  // outer broadcast so the AND is matched on its narrow tensor. The operands'
+  // own broadcasts are checked against `tensorShape` below, which only
+  // depends on the dims they are degenerate along. `extraPred` is then
+  // narrow too (see `RowLimitMaskInfo`).
   Value rowLimitCandidate = mask;
   Value extraPred;
-  if (auto andOp = mask.getDefiningOp<arith::AndIOp>()) {
+  Value andRoot = mask;
+  if (auto outerBroadcast = mask.getDefiningOp<triton::BroadcastOp>())
+    if (outerBroadcast.getSrc().getDefiningOp<arith::AndIOp>())
+      andRoot = outerBroadcast.getSrc();
+  if (auto andOp = andRoot.getDefiningOp<arith::AndIOp>()) {
     Value lhs = andOp.getLhs(), rhs = andOp.getRhs();
     if (isDegenerateAlongDims(rhs, tensorShape, {pitchDim, contiguousDim})) {
       rowLimitCandidate = lhs;
@@ -1118,38 +1129,13 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
   return RowLimitMaskInfo{pitchDim, *rowBase, boundSrc, extraPred};
 }
 
-Value hoistBroadcastAboveAnd(OpBuilder &builder, Value mask, Value other,
-                             ArrayRef<int64_t> tensorShape,
-                             unsigned contiguousDim, bool pitchDimIsBroadcast) {
-  auto broadcastOp = mask.getDefiningOp<triton::BroadcastOp>();
-  if (!broadcastOp)
-    return Value();
-  auto andOp = broadcastOp.getSrc().getDefiningOp<arith::AndIOp>();
-  if (!andOp)
-    return Value();
-
-  OpBuilder::InsertionGuard guard(builder);
-  builder.setInsertionPoint(broadcastOp);
-  Location loc = broadcastOp.getLoc();
-  SmallVector<Operation *> created;
-  auto widen = [&](Value v) {
-    while (auto inner = v.getDefiningOp<triton::BroadcastOp>())
-      v = inner.getSrc();
-    auto bc = triton::BroadcastOp::create(builder, loc, mask.getType(), v);
-    created.push_back(bc);
-    return bc.getResult();
-  };
-  Value lhs = widen(andOp.getLhs());
-  Value rhs = widen(andOp.getRhs());
-  auto hoisted = arith::AndIOp::create(builder, loc, lhs, rhs);
-  created.push_back(hoisted);
-
-  if (matchRowLimitMask(hoisted, other, tensorShape, contiguousDim,
-                        pitchDimIsBroadcast))
-    return hoisted;
-  for (Operation *op : llvm::reverse(created))
-    op->erase();
-  return Value();
+Value materializeExtraPred(OpBuilder &builder, Location loc, Value extraPred,
+                           RankedTensorType maskTy) {
+  if (extraPred.getType() == maskTy)
+    return extraPred;
+  while (auto inner = extraPred.getDefiningOp<triton::BroadcastOp>())
+    extraPred = inner.getSrc();
+  return triton::BroadcastOp::create(builder, loc, maskTy, extraPred);
 }
 
 Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,

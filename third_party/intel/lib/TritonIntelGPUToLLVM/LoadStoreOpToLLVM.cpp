@@ -24,6 +24,7 @@
 #include "intel/include/Utils/Utility.h"
 #include "triton/Tools/LinearLayout.h"
 #include <limits>
+#include <map>
 #include <optional>
 #include <triton/Tools/Sys/GetEnv.h>
 
@@ -1615,7 +1616,36 @@ struct PrefetchOpConversion
     // is degenerate along the pitch and contiguous dims, so it is uniform per
     // hardware message and is ANDed into that message's predicate.
     Value extraPred;
+    // Tensor type of `extraPred` before lowering. Its shape is narrower than
+    // the tile's when the mask's AND sat below the final broadcast.
+    RankedTensorType extraPredTy;
   };
+
+  /// Expand the per-thread elements of a narrow batch predicate (size 1 along
+  /// the dims the full tile varies over) to the elements of the full tile, in
+  /// the order `tt.broadcast` would produce them.
+  ///
+  /// TODO: this duplicates `BroadcastOpConversion`'s logic; make it a utility
+  /// in the general code (next to `emitOffsetForLayout`) and reuse it there.
+  static SmallVector<Value> broadcastPredElems(ArrayRef<Value> narrowVals,
+                                               RankedTensorType narrowTy,
+                                               RankedTensorType fullTy) {
+    SmallVector<SmallVector<unsigned>> srcOffsets =
+        emitOffsetForLayout(narrowTy.getEncoding(), narrowTy);
+    SmallVector<SmallVector<unsigned>> resultOffsets =
+        emitOffsetForLayout(fullTy.getEncoding(), fullTy);
+    std::map<SmallVector<unsigned>, Value> srcValues;
+    for (size_t i = 0; i < srcOffsets.size(); ++i)
+      srcValues[srcOffsets[i]] = narrowVals[i];
+    SmallVector<Value> resultVals;
+    for (SmallVector<unsigned> offset : resultOffsets) {
+      for (size_t d = 0; d < narrowTy.getRank(); ++d)
+        if (narrowTy.getDimSize(d) == 1)
+          offset[d] = 0;
+      resultVals.push_back(srcValues.at(offset));
+    }
+    return resultVals;
+  }
 
   std::optional<RowLimit>
   matchPrefetchRowLimitMask(triton::gpu::intel::PrefetchOp op,
@@ -1668,9 +1698,15 @@ struct PrefetchOpConversion
         return std::nullopt;
     }
 
-    return RowLimit{
-        boundRemapped, baseRemapped,       tensorShape[m->boundedDim],
-        m->boundedDim, extraGuardRemapped, extraPredRemapped};
+    return RowLimit{boundRemapped,
+                    baseRemapped,
+                    tensorShape[m->boundedDim],
+                    m->boundedDim,
+                    extraGuardRemapped,
+                    extraPredRemapped,
+                    m->extraPred
+                        ? cast<RankedTensorType>(m->extraPred.getType())
+                        : RankedTensorType()};
   }
 
   LogicalResult
@@ -1781,9 +1817,14 @@ struct PrefetchOpConversion
     SmallVector<Value> maskElems;
     // A row-limit mask is handled via base_height; its elements are unused,
     // except for the batch-dims `extraPred` ANDed into each message.
-    if (rowLimit && rowLimit->extraPred)
+    if (rowLimit && rowLimit->extraPred) {
       maskElems = unpackLLElements(loc, rowLimit->extraPred, rewriter);
-    else if (llMask && !rowLimit)
+      if (rowLimit->extraPredTy.getShape() != tensorShape)
+        maskElems = broadcastPredElems(
+            maskElems, rowLimit->extraPredTy,
+            RankedTensorType::get(tensorShape, rewriter.getI1Type(),
+                                  tensorOfPointers.getEncoding()));
+    } else if (llMask && !rowLimit)
       maskElems = unpackLLElements(loc, llMask, rewriter);
 
     unsigned pitchDim = isTransposeRequired ? colDim : rowDim;

@@ -584,9 +584,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // COM: Rank-3 row-limit mask ANDed with a batch-only predicate, with the AND
 // COM: sunk below the final broadcast, as `tt-reorder-broadcast` leaves it:
-// COM: broadcast(and(broadcast(row), broadcast(batch))). The pass hoists the
-// COM: broadcast back above the AND so the mask is a row-limit pattern again,
-// COM: and the load gets block IO.
+// COM: broadcast(and(broadcast(row), broadcast(batch))). matchRowLimitMask
+// COM: looks through the narrow AND, so the load gets block IO and its mask is
+// COM: left untouched.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [1, 8, 16], B = [1, 16, 16], C = [1, 8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 #sK = #ttg.slice<{dim = 2, parent = #dot0}>
@@ -622,10 +622,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %batchb = tt.broadcast %bc2 : tensor<4x1x1xi1, #dot0> -> tensor<4x64x1xi1, #dot0>
     %and = arith.andi %rowb, %batchb : tensor<4x64x1xi1, #dot0>
     %mask = tt.broadcast %and : tensor<4x64x1xi1, #dot0> -> tensor<4x64x32xi1, #dot0>
-    // CHECK: %[[ROW:.*]] = tt.broadcast %{{.*}} : tensor<1x64x1xi1, #{{.*}}> -> tensor<4x64x32xi1, #{{.*}}>
-    // CHECK: %[[BATCH:.*]] = tt.broadcast %{{.*}} : tensor<4x1x1xi1, #{{.*}}> -> tensor<4x64x32xi1, #{{.*}}>
-    // CHECK: %[[HOISTED:.*]] = arith.andi %[[ROW]], %[[BATCH]]
-    // CHECK: tt.load %{{.*}}, %[[HOISTED]], %{{.*}} {ttig.block_io = "row_major"}
+    // CHECK: %[[AND:.*]] = arith.andi {{.*}} : tensor<4x64x1xi1, #{{.*}}>
+    // CHECK: %[[MASK:.*]] = tt.broadcast %[[AND]] : tensor<4x64x1xi1, #{{.*}}> -> tensor<4x64x32xi1, #{{.*}}>
+    // CHECK: tt.load %{{.*}}, %[[MASK]], %{{.*}} {ttig.block_io = "row_major"}
     %v = tt.load %ptr, %mask, %zero : tensor<4x64x32x!tt.ptr<f16>, #dot0>
     tt.return
   }

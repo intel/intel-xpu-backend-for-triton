@@ -625,6 +625,10 @@ private:
       // batch-dim extraPred as the mask operand for the LLVM lowering to
       // AND into its per-message select.
       mask = rowLimitMask->extraPred;
+      if (mask)
+        mask = ttgi::materializeExtraPred(
+            builder, op.getLoc(), mask,
+            cast<RankedTensorType>(op.getMask().getType()));
       other = mask ? createZeroSplat(builder, loc, tensorTy) : Value();
       // Relative to the tile's first row and may be <= 0; the LLVM lowering
       // adjusts per message and never forwards a non-positive base_height.

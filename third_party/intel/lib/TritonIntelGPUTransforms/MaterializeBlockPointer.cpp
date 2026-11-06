@@ -459,17 +459,6 @@ private:
           LDBG("Mask is a row-limit pattern; permitting block IO for: " << op);
           return true;
         }
-        // The AND of a row limit and a batch predicate may have been sunk
-        // below a broadcast; hoist it back so the later passes (which match
-        // the mask again) see the row-limit form too.
-        OpBuilder builder(op);
-        if (Value hoisted = ttgi::hoistBroadcastAboveAnd(
-                builder, mask, op.getOther(), maskTy.getShape(), *contiguousDim,
-                pitchDimIsBroadcast)) {
-          LDBG("Hoisted a broadcast above the mask's AND: " << op);
-          op.getMaskMutable().assign(hoisted);
-          return true;
-        }
       }
     }
 

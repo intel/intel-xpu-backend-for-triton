@@ -410,6 +410,48 @@ TEST_F(MatchRowLimitMaskTest, RankThreeBatchPredicateKeptAsExtraPred) {
   }
 }
 
+// `tt-reorder-broadcast` can sink the AND below the final broadcast:
+// broadcast(and(broadcast(row), broadcast(batch))) with the AND on [B, M, 1].
+// The matcher looks through it, and `extraPred` keeps that narrow shape; the
+// IR is not rewritten.
+TEST_F(MatchRowLimitMaskTest, RankThreeAndSunkBelowBroadcastAccepted) {
+  SmallVector<int64_t, 3> shape = {4, 256, 32};      // [batch, M, K]
+  SmallVector<int64_t, 3> narrowShape = {4, 256, 1}; // AND's shape
+  Value rowBound = constI(100, 32);
+  Value rowLimit =
+      buildBoundedMask(arange(256), /*varyDim=*/1, narrowShape, rowBound);
+  Value batchPred =
+      buildBoundedMask(arange(4), /*varyDim=*/0, narrowShape, constI(3, 32));
+
+  for (Value narrowAnd :
+       {andI(rowLimit, batchPred), andI(batchPred, rowLimit)}) {
+    Value mask = broadcastTo(narrowAnd, shape);
+    auto result = matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                    /*contiguousDim=*/2,
+                                    /*pitchDimIsBroadcast=*/false);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->boundedDim, 1u);
+    EXPECT_EQ(result->bound, rowBound);
+    EXPECT_EQ(result->extraPred, batchPred);
+  }
+}
+
+// A sunk AND whose second operand varies along the pitch dim is not a batch
+// predicate, so it is rejected just like the un-sunk form.
+TEST_F(MatchRowLimitMaskTest, SunkAndWithNonBatchOperandRejected) {
+  SmallVector<int64_t, 3> shape = {4, 256, 32};
+  SmallVector<int64_t, 3> narrowShape = {4, 256, 1};
+  Value rowLimit = buildBoundedMask(arange(256), /*varyDim=*/1, narrowShape,
+                                    constI(100, 32));
+  Value otherRow =
+      buildBoundedMask(arange(256), /*varyDim=*/1, narrowShape, constI(50, 32));
+  Value mask = broadcastTo(andI(rowLimit, otherRow), shape);
+  EXPECT_FALSE(matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                 /*contiguousDim=*/2,
+                                 /*pitchDimIsBroadcast=*/false)
+                   .has_value());
+}
+
 // A second AND operand varying along the contiguous (K) dim isn't a pure
 // batch-dim predicate -- it can change within a single hardware message --
 // so the whole AND is rejected rather than misidentified.
