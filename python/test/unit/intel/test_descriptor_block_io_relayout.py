@@ -1,4 +1,4 @@
-"""End-to-end tests for the opt-in descriptor-load block-IO relayout (#8458) and its gates G1-G3 (#8479).
+"""End-to-end tests for the opt-in descriptor-load block-IO relayout (#8458) and its gates.
 The relayout and its gates are described in Passes.td (enable-descriptor-relayout).
 
 `JITFunction.run` keys its in-memory cache on specialization and options, not on the environment, so
@@ -157,29 +157,6 @@ def _column_sum_runtime_offset_kernel_fn(out_ptr, x_ptr, NCOLS, PITCH, c0, BR: t
     tl.store(out_ptr + tl.arange(0, BC), tl.sum(desc.load([0, c0]), axis=0))
 
 
-def _stencil_kernel_fn(out_ptr, x_ptr, NCOLS, PITCH, BR: tl.constexpr, BC: tl.constexpr):
-    """For the BC columns c from 0, sum the 3-tap stencil x[:, c - 1] + x[:, c] + x[:, c + 1] over the BR rows."""
-    desc = tl.make_tensor_descriptor(x_ptr, shape=(BR, NCOLS), strides=(PITCH, 1), block_shape=(BR, BC))
-    taps = desc.load([0, -1]) + desc.load([0, 0]) + desc.load([0, 1])
-    tl.store(out_ptr + tl.arange(0, BC), tl.sum(taps, axis=0))
-
-
-def _wrapped_mul_column_sum_kernel_fn(out_ptr, x_ptr, b_ptr, NCOLS, PITCH, BR: tl.constexpr, BC: tl.constexpr):
-    """_column_sum_kernel_fn at column byte * 67372036, for the byte at b_ptr: 16-byte aligned, and -4 in i32 for
-    255."""
-    col = tl.load(b_ptr).to(tl.uint8).to(tl.int32) * 67372036
-    desc = tl.make_tensor_descriptor(x_ptr, shape=(BR, NCOLS), strides=(PITCH, 1), block_shape=(BR, BC))
-    tl.store(out_ptr + tl.arange(0, BC), tl.sum(desc.load([0, col]), axis=0))
-
-
-def _wrapped_shl_column_sum_kernel_fn(out_ptr, x_ptr, b_ptr, NCOLS, PITCH, BR: tl.constexpr, BC: tl.constexpr):
-    """_column_sum_kernel_fn at column (flag << 31) + 2147483644, for the flag at b_ptr: 16-byte aligned, and -4
-    in i32 when it is set."""
-    col = (tl.load(b_ptr).to(tl.int1).to(tl.int32) << 31) + 2147483644
-    desc = tl.make_tensor_descriptor(x_ptr, shape=(BR, NCOLS), strides=(PITCH, 1), block_shape=(BR, BC))
-    tl.store(out_ptr + tl.arange(0, BC), tl.sum(desc.load([0, col]), axis=0))
-
-
 def _row_sum_kernel_fn(out_ptr, x_ptr, R: tl.constexpr, C: tl.constexpr, ACC: tl.constexpr):
     """Sum each row of an [R, C] descriptor tile in ACC and store the sums in the output's dtype."""
     desc = tl.make_tensor_descriptor(x_ptr, shape=(R, C), strides=(C, 1), block_shape=(R, C))
@@ -260,17 +237,16 @@ def test_relayout_loop_accumulate(device, monkeypatch, tmp_path):
     _assert_relaid_out(k, True, "the descriptor load in the loop")
 
 
-@pytest.mark.parametrize("c0, runtime_c0, relaid_out", [
-    pytest.param(-4, False, False, id="const-4"),
-    pytest.param(-8, False, False, id="const-8"),
-    pytest.param(0, False, True, id="const0"),
-    pytest.param(-8, True, False, id="arg-8"),
-    pytest.param(8, True, False, id="arg8"),
+@pytest.mark.parametrize("c0, runtime_c0", [
+    pytest.param(-4, False, id="const-4"),
+    pytest.param(-8, False, id="const-8"),
+    pytest.param(0, False, id="const0"),
+    pytest.param(-8, True, id="arg-8"),
+    pytest.param(8, True, id="arg8"),
 ])
-def test_relayout_column_offset_sign(c0, runtime_c0, relaid_out, device, monkeypatch, tmp_path):
-    # Issue #8479: from a base that is not 64-byte aligned, a 2D block read at a negative column offset returns the
-    # memory left of the base instead of zeros. So G1 needs a provably non-negative column index, which a runtime
-    # argument never is, and the refused load stays a gather. Offset 0 from the same base is the control.
+def test_relayout_column_offset_sign(c0, runtime_c0, device, monkeypatch, tmp_path):
+    # Issue #8479: from a base that is not 64-byte aligned, a 2D block read at a negative column offset returned the
+    # memory left of the base instead of zeros. Now the column's sign is not checked, so every load is relaid out.
     _set_compile_env(monkeypatch, tmp_path, knob=True)
     BR, BC, PITCH = 16, 64, 96
     x, vals = _misaligned_tensor(BR, BC, PITCH, device)
@@ -282,46 +258,7 @@ def test_relayout_column_offset_sign(c0, runtime_c0, relaid_out, device, monkeyp
 
     # Exact: the sums are of small integers. A column read from memory instead of padding sums to BR * POISON.
     torch.testing.assert_close(out.cpu(), _tile_column_sums(vals, c0, BC), rtol=0, atol=0)
-    _assert_relaid_out(k, relaid_out, f"the load at column {c0}")
-
-
-def test_relayout_stencil_negative_tap(device, monkeypatch, tmp_path):
-    # G1 refuses the left tap at column -1. If it kept its 2D-block tag, RemoveLayoutConversions could move it into the
-    # other taps' relaid-out layout (#8479), so no tap is relaid out.
-    BR, BC = 16, 64
-    NCOLS, PITCH = BC, BC + 32
-    x, vals = _misaligned_tensor(BR, NCOLS, PITCH, device)
-    padded = torch.nn.functional.pad(vals, (1, 1))  # columns -1 and NCOLS are outside the tensor: zero
-    ref = (padded[:, :-2] + padded[:, 1:-1] + padded[:, 2:]).sum(0)
-    for knob in (True, False):
-        state = "on" if knob else "off"
-        (tmp_path / state).mkdir()
-        _set_compile_env(monkeypatch, tmp_path / state, knob)
-        out = torch.full((NCOLS, ), float("nan"), device=device)
-        k = triton.jit(_stencil_kernel_fn)[(1, )](out, x, NCOLS, PITCH, BR=BR, BC=BC)
-
-        # Knob on and off must both match the CPU reference exactly.
-        torch.testing.assert_close(out.cpu(), ref, rtol=0, atol=0, msg=lambda m: f"knob {state}: {m}")
-        _assert_relaid_out(k, False, f"knob {state}, a stencil tap")
-
-
-@pytest.mark.parametrize("kernel_fn", [_wrapped_mul_column_sum_kernel_fn, _wrapped_shl_column_sum_kernel_fn],
-                         ids=["mul", "shl-add"])
-@pytest.mark.parametrize("b", [255, 0], ids=["wraps", "no-wrap"])
-def test_relayout_column_wraps_negative(kernel_fn, b, device, monkeypatch, tmp_path):
-    # byte * 67372036 and (flag << 31) + 2147483644 are 16-byte aligned and wrap to -4 in i32 for byte 255 or a set
-    # flag, a column that reads memory left of a misaligned base (#8479). G1 refuses both statically, so b = 0 is a
-    # gather too; the result is exact for both.
-    _set_compile_env(monkeypatch, tmp_path, knob=True)
-    BR, BC, PITCH = 16, 64, 96
-    x, vals = _misaligned_tensor(BR, BC, PITCH, device)
-    b_dev = torch.tensor([b], dtype=torch.uint8, device=device)
-    out = torch.full((BC, ), float("nan"), device=device)
-    k = triton.jit(kernel_fn)[(1, )](out, x, b_dev, BC, PITCH, BR=BR, BC=BC)
-
-    col = -4 if b else (0 if kernel_fn is _wrapped_mul_column_sum_kernel_fn else 2147483644)
-    torch.testing.assert_close(out.cpu(), _tile_column_sums(vals, col, BC), rtol=0, atol=0)
-    _assert_relaid_out(k, False, "a column that wraps negative")
+    _assert_relaid_out(k, True, f"the load at column {c0}")
 
 
 L1X16 = dict(num_warps=1, warp_size=16)

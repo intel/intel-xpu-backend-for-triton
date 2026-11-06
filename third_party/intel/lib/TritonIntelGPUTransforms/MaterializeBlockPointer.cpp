@@ -97,77 +97,6 @@ isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
   return ttgi::isDivisible(tt::intel::getFinalValue(v), divisor);
 }
 
-// An upper bound U with 0 <= \p v <= U (signed, at v's width), or nullopt if v
-// is not proven non-negative. add, mul and shl (at 32 bits or more) give a
-// bound only if the same operation on the bounds does not wrap. An iteration
-// argument is refused: its init says nothing about the yielded values.
-// tt::intel::proveSign is not used: its loop-carried ranges can be too narrow
-// (#8604).
-static std::optional<APInt> getNonNegativeUpperBound(Value v,
-                                                     unsigned depth = 0) {
-  // A backstop against pathological IR, not a tuning knob.
-  if (depth > 16)
-    return std::nullopt;
-  auto intTy = dyn_cast<IntegerType>(v.getType());
-  if (!intTy)
-    return std::nullopt;
-  unsigned width = intTy.getWidth();
-  auto boundOf = [&](Value operand) {
-    return getNonNegativeUpperBound(operand, depth + 1);
-  };
-
-  APInt cst;
-  if (matchPattern(v, m_ConstantInt(&cst)))
-    return cst.isNegative() ? std::nullopt : std::optional<APInt>(cst);
-
-  if (auto arg = dyn_cast<BlockArgument>(v)) {
-    auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp());
-    if (!forOp || arg != forOp.getInductionVar() || forOp.getUnsignedCmp() ||
-        !boundOf(forOp.getLowerBound()) || !boundOf(forOp.getStep()))
-      return std::nullopt;
-    if (std::optional<APInt> upper = boundOf(forOp.getUpperBound()))
-      return upper;
-    return APInt::getSignedMaxValue(width);
-  }
-
-  Operation *def = v.getDefiningOp();
-  if (isa<tt::GetProgramIdOp>(def))
-    return APInt::getSignedMaxValue(width);
-  if (auto extUI = dyn_cast<arith::ExtUIOp>(def))
-    return APInt::getMaxValue(extUI.getIn().getType().getIntOrFloatBitWidth())
-        .zext(width);
-  if (auto extSI = dyn_cast<arith::ExtSIOp>(def)) {
-    std::optional<APInt> in = boundOf(extSI.getIn());
-    return in ? std::optional<APInt>(in->zext(width)) : std::nullopt;
-  }
-  if (width < 32)
-    return std::nullopt;
-
-  bool overflow = false;
-  APInt bound;
-  if (isa<arith::AddIOp, arith::MulIOp>(def)) {
-    std::optional<APInt> lhs = boundOf(def->getOperand(0));
-    std::optional<APInt> rhs = boundOf(def->getOperand(1));
-    if (!lhs || !rhs)
-      return std::nullopt;
-    bound = isa<arith::AddIOp>(def) ? lhs->uadd_ov(*rhs, overflow)
-                                    : lhs->umul_ov(*rhs, overflow);
-  } else if (auto shlOp = dyn_cast<arith::ShLIOp>(def)) {
-    APInt amount;
-    std::optional<APInt> lhs = boundOf(shlOp.getLhs());
-    if (!lhs || !matchPattern(shlOp.getRhs(), m_ConstantInt(&amount)) ||
-        !amount.ult(width))
-      return std::nullopt;
-    bound = lhs->ushl_ov(amount, overflow);
-  } else {
-    return std::nullopt;
-  }
-  // A bound with the sign bit set is a value that may wrap negative.
-  if (overflow || bound.isNegative())
-    return std::nullopt;
-  return bound;
-}
-
 // Folding a leading index into the base keeps it 4-byte aligned, as every 2D
 // block access needs (see satisfies2DBlockReadAlignment), only if each
 // candidate's stride is a 4-byte multiple (an unknown runtime stride is trusted
@@ -1344,18 +1273,6 @@ private:
     for (tt::DescriptorLoadOp load : loads) {
       if (!load->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
         continue;
-      // G1, issue #8479: when the base is not 64-byte aligned, the 2D block
-      // read's base-alignment compensation moves the surface start left of the
-      // base, so a negative column offset reads memory instead of zeros. Only
-      // the column index (the stride-one dimension, last) matters: a negative
-      // row is fine.
-      if (load.getIndices().size() < 2 ||
-          !getNonNegativeUpperBound(load.getIndices().back())) {
-        LDBG("G1 (#8479): column index of "
-             << *load << " is not provably non-negative; skip relayout of "
-             << func.getName());
-        return false;
-      }
       // G3: once relaid out, a NaN-padded descriptor one element wide read 0.0
       // instead of NaN at 16 lanes, for a reason not yet known. So at any lane
       // count only zero padding, which an absent attribute also means, is

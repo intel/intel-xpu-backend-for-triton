@@ -346,8 +346,7 @@ def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-blo
     reductions along a single axis (not stores), the 2D block load lowering accepts the new layout, and the
     new layout needs fewer HW messages. The load is marked `ttig.block_io_anchor` and converted back to its
     old layout, so RemoveLayoutConversions carries the new layout to its users.
-    Every tagged descriptor load in the function also needs a provably non-negative column index (#8479) and
-    zero padding, and with 16 lanes every value computed from a reduction must be f32 or i32 (an op the check
+    Every tagged descriptor load in the function also needs zero padding, and with 16 lanes every value computed from a reduction must be f32 or i32 (an op the check
     does not recognize refuses too), since such kernels miscompile. These gates are function-wide: a function
     relays out all its eligible loads or none.
     `TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0` disables the re-encoding.
