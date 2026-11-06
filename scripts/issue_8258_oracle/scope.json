@@ -1,0 +1,2282 @@
+{
+  "compiler_parent": "64da192bf49730aee02f444591623bd8b5ccb4ee",
+  "compiler_base": "6a31baec2ce8538524d529094b5ba8ca5c994fab",
+  "branch": "ci/issue-8258-policy-oracle-20261106",
+  "policies": [
+    "baseline",
+    "intervention",
+    "learned"
+  ],
+  "cases": [
+    {
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "anchors",
+      "family": "plain",
+      "id": "plain_2048x6144x24576_a0_b0",
+      "shape": [
+        2048,
+        6144,
+        24576
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "anchors",
+      "family": "plain",
+      "id": "plain_8192x6144x12288_a0_b0",
+      "shape": [
+        8192,
+        6144,
+        12288
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "anchors",
+      "family": "plain",
+      "id": "plain_8192x6144x24576_a0_b0",
+      "shape": [
+        8192,
+        6144,
+        24576
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "add",
+      "id": "add_1792x7168x9408_a64_b32",
+      "shape": [
+        1792,
+        7168,
+        9408
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "add",
+      "id": "add_2304x5120x12256_a32_b64",
+      "shape": [
+        2304,
+        5120,
+        12256
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "add",
+      "id": "add_3584x8192x12320_a0_b0",
+      "shape": [
+        3584,
+        8192,
+        12320
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "add",
+      "id": "add_5120x4096x17216_a64_b32",
+      "shape": [
+        5120,
+        4096,
+        17216
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "add",
+      "id": "add_5632x6144x21952_a32_b64",
+      "shape": [
+        5632,
+        6144,
+        21952
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "add",
+      "id": "add_768x5120x8224_a0_b0",
+      "shape": [
+        768,
+        5120,
+        8224
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "exp",
+      "id": "exp_1792x7168x9408_a64_b64",
+      "shape": [
+        1792,
+        7168,
+        9408
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "exp",
+      "id": "exp_2304x5120x12256_a32_b0",
+      "shape": [
+        2304,
+        5120,
+        12256
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "exp",
+      "id": "exp_3584x8192x12320_a0_b32",
+      "shape": [
+        3584,
+        8192,
+        12320
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "exp",
+      "id": "exp_5120x4096x17216_a64_b64",
+      "shape": [
+        5120,
+        4096,
+        17216
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "exp",
+      "id": "exp_5632x6144x21952_a32_b0",
+      "shape": [
+        5632,
+        6144,
+        21952
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "exp",
+      "id": "exp_768x5120x8224_a0_b32",
+      "shape": [
+        768,
+        5120,
+        8224
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "gelu",
+      "id": "gelu_1792x7168x9408_a64_b0",
+      "shape": [
+        1792,
+        7168,
+        9408
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "gelu",
+      "id": "gelu_2304x5120x12256_a32_b32",
+      "shape": [
+        2304,
+        5120,
+        12256
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "gelu",
+      "id": "gelu_3584x8192x12320_a0_b64",
+      "shape": [
+        3584,
+        8192,
+        12320
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "gelu",
+      "id": "gelu_5120x4096x17216_a64_b0",
+      "shape": [
+        5120,
+        4096,
+        17216
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "gelu",
+      "id": "gelu_5632x6144x21952_a32_b32",
+      "shape": [
+        5632,
+        6144,
+        21952
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "gelu",
+      "id": "gelu_768x5120x8224_a0_b64",
+      "shape": [
+        768,
+        5120,
+        8224
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "plain",
+      "id": "plain_1792x7168x9408_a0_b32",
+      "shape": [
+        1792,
+        7168,
+        9408
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "plain",
+      "id": "plain_2304x5120x12256_a64_b64",
+      "shape": [
+        2304,
+        5120,
+        12256
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "plain",
+      "id": "plain_3584x8192x12320_a32_b0",
+      "shape": [
+        3584,
+        8192,
+        12320
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "plain",
+      "id": "plain_5120x4096x17216_a0_b32",
+      "shape": [
+        5120,
+        4096,
+        17216
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "plain",
+      "id": "plain_5632x6144x21952_a64_b64",
+      "shape": [
+        5632,
+        6144,
+        21952
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "plain",
+      "id": "plain_768x5120x8224_a32_b0",
+      "shape": [
+        768,
+        5120,
+        8224
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "splitk",
+      "id": "splitk_1792x7168x37632_a0_b64",
+      "shape": [
+        1792,
+        7168,
+        37632
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "splitk",
+      "id": "splitk_2304x5120x49024_a64_b0",
+      "shape": [
+        2304,
+        5120,
+        49024
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "splitk",
+      "id": "splitk_3584x8192x49280_a32_b32",
+      "shape": [
+        3584,
+        8192,
+        49280
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "splitk",
+      "id": "splitk_5120x4096x68864_a0_b64",
+      "shape": [
+        5120,
+        4096,
+        68864
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "splitk",
+      "id": "splitk_5632x6144x87808_a64_b0",
+      "shape": [
+        5632,
+        6144,
+        87808
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "splitk",
+      "id": "splitk_768x5120x32896_a32_b32",
+      "shape": [
+        768,
+        5120,
+        32896
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "streamk",
+      "id": "streamk_1792x7168x9408_a0_b0",
+      "shape": [
+        1792,
+        7168,
+        9408
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "streamk",
+      "id": "streamk_2304x5120x12256_a64_b32",
+      "shape": [
+        2304,
+        5120,
+        12256
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "streamk",
+      "id": "streamk_3584x8192x12320_a32_b64",
+      "shape": [
+        3584,
+        8192,
+        12320
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "streamk",
+      "id": "streamk_5120x4096x17216_a0_b0",
+      "shape": [
+        5120,
+        4096,
+        17216
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "streamk",
+      "id": "streamk_5632x6144x21952_a64_b32",
+      "shape": [
+        5632,
+        6144,
+        21952
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "streamk",
+      "id": "streamk_768x5120x8224_a32_b64",
+      "shape": [
+        768,
+        5120,
+        8224
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "transpose_a",
+      "id": "transpose_a_1792x7168x9408_a32_b32",
+      "shape": [
+        1792,
+        7168,
+        9408
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "transpose_a",
+      "id": "transpose_a_2304x5120x12256_a0_b64",
+      "shape": [
+        2304,
+        5120,
+        12256
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "transpose_a",
+      "id": "transpose_a_3584x8192x12320_a64_b0",
+      "shape": [
+        3584,
+        8192,
+        12320
+      ]
+    },
+    {
+      "a_pad": 32,
+      "b_pad": 32,
+      "cohort": "local",
+      "family": "transpose_a",
+      "id": "transpose_a_5120x4096x17216_a32_b32",
+      "shape": [
+        5120,
+        4096,
+        17216
+      ]
+    },
+    {
+      "a_pad": 0,
+      "b_pad": 64,
+      "cohort": "local",
+      "family": "transpose_a",
+      "id": "transpose_a_5632x6144x21952_a0_b64",
+      "shape": [
+        5632,
+        6144,
+        21952
+      ]
+    },
+    {
+      "a_pad": 64,
+      "b_pad": 0,
+      "cohort": "local",
+      "family": "transpose_a",
+      "id": "transpose_a_768x5120x8224_a64_b0",
+      "shape": [
+        768,
+        5120,
+        8224
+      ]
+    },
+    {
+      "id": "add_1024x1024x1024_a0_b0",
+      "family": "add",
+      "shape": [
+        1024,
+        1024,
+        1024
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_1024x8192x16384_a0_b0",
+      "family": "add",
+      "shape": [
+        1024,
+        8192,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_1024x8192x28672_a0_b0",
+      "family": "add",
+      "shape": [
+        1024,
+        8192,
+        28672
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_16384x1024x8192_a0_b0",
+      "family": "add",
+      "shape": [
+        16384,
+        1024,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_16384x4096x8192_a0_b0",
+      "family": "add",
+      "shape": [
+        16384,
+        4096,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_16384x8192x1024_a0_b0",
+      "family": "add",
+      "shape": [
+        16384,
+        8192,
+        1024
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_16384x8192x4096_a0_b0",
+      "family": "add",
+      "shape": [
+        16384,
+        8192,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_1x13824x5120_a0_b0",
+      "family": "add",
+      "shape": [
+        1,
+        13824,
+        5120
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_2048x2048x2048_a0_b0",
+      "family": "add",
+      "shape": [
+        2048,
+        2048,
+        2048
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_3072x3072x4096_a0_b0",
+      "family": "add",
+      "shape": [
+        3072,
+        3072,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_4096x4096x4096_a0_b0",
+      "family": "add",
+      "shape": [
+        4096,
+        4096,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_4096x8192x16384_a0_b0",
+      "family": "add",
+      "shape": [
+        4096,
+        8192,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_4x12288x4096_a0_b0",
+      "family": "add",
+      "shape": [
+        4,
+        12288,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_512x32768x8192_a0_b0",
+      "family": "add",
+      "shape": [
+        512,
+        32768,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_512x8192x32768_a0_b0",
+      "family": "add",
+      "shape": [
+        512,
+        8192,
+        32768
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_512x8192x8192_a0_b0",
+      "family": "add",
+      "shape": [
+        512,
+        8192,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_8192x1024x16384_a0_b0",
+      "family": "add",
+      "shape": [
+        8192,
+        1024,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_8192x4096x16384_a0_b0",
+      "family": "add",
+      "shape": [
+        8192,
+        4096,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "add_8192x8192x8192_a0_b0",
+      "family": "add",
+      "shape": [
+        8192,
+        8192,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_1024x1024x1024_a0_b0",
+      "family": "exp",
+      "shape": [
+        1024,
+        1024,
+        1024
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_1024x8192x16384_a0_b0",
+      "family": "exp",
+      "shape": [
+        1024,
+        8192,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_1024x8192x28672_a0_b0",
+      "family": "exp",
+      "shape": [
+        1024,
+        8192,
+        28672
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_16384x1024x8192_a0_b0",
+      "family": "exp",
+      "shape": [
+        16384,
+        1024,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_16384x4096x8192_a0_b0",
+      "family": "exp",
+      "shape": [
+        16384,
+        4096,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_16384x8192x1024_a0_b0",
+      "family": "exp",
+      "shape": [
+        16384,
+        8192,
+        1024
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_16384x8192x4096_a0_b0",
+      "family": "exp",
+      "shape": [
+        16384,
+        8192,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_1x13824x5120_a0_b0",
+      "family": "exp",
+      "shape": [
+        1,
+        13824,
+        5120
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_2048x2048x2048_a0_b0",
+      "family": "exp",
+      "shape": [
+        2048,
+        2048,
+        2048
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_3072x3072x4096_a0_b0",
+      "family": "exp",
+      "shape": [
+        3072,
+        3072,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_4096x4096x4096_a0_b0",
+      "family": "exp",
+      "shape": [
+        4096,
+        4096,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_4096x8192x16384_a0_b0",
+      "family": "exp",
+      "shape": [
+        4096,
+        8192,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_4x12288x4096_a0_b0",
+      "family": "exp",
+      "shape": [
+        4,
+        12288,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_512x32768x8192_a0_b0",
+      "family": "exp",
+      "shape": [
+        512,
+        32768,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_512x8192x32768_a0_b0",
+      "family": "exp",
+      "shape": [
+        512,
+        8192,
+        32768
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_512x8192x8192_a0_b0",
+      "family": "exp",
+      "shape": [
+        512,
+        8192,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_8192x1024x16384_a0_b0",
+      "family": "exp",
+      "shape": [
+        8192,
+        1024,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_8192x4096x16384_a0_b0",
+      "family": "exp",
+      "shape": [
+        8192,
+        4096,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "exp_8192x8192x8192_a0_b0",
+      "family": "exp",
+      "shape": [
+        8192,
+        8192,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_1024x1024x1024_a0_b0",
+      "family": "gelu",
+      "shape": [
+        1024,
+        1024,
+        1024
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_1024x8192x16384_a0_b0",
+      "family": "gelu",
+      "shape": [
+        1024,
+        8192,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_1024x8192x28672_a0_b0",
+      "family": "gelu",
+      "shape": [
+        1024,
+        8192,
+        28672
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_16384x1024x8192_a0_b0",
+      "family": "gelu",
+      "shape": [
+        16384,
+        1024,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_16384x4096x8192_a0_b0",
+      "family": "gelu",
+      "shape": [
+        16384,
+        4096,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_16384x8192x1024_a0_b0",
+      "family": "gelu",
+      "shape": [
+        16384,
+        8192,
+        1024
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_16384x8192x4096_a0_b0",
+      "family": "gelu",
+      "shape": [
+        16384,
+        8192,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_1x13824x5120_a0_b0",
+      "family": "gelu",
+      "shape": [
+        1,
+        13824,
+        5120
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_2048x2048x2048_a0_b0",
+      "family": "gelu",
+      "shape": [
+        2048,
+        2048,
+        2048
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_3072x3072x4096_a0_b0",
+      "family": "gelu",
+      "shape": [
+        3072,
+        3072,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_4096x4096x4096_a0_b0",
+      "family": "gelu",
+      "shape": [
+        4096,
+        4096,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_4096x8192x16384_a0_b0",
+      "family": "gelu",
+      "shape": [
+        4096,
+        8192,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_4x12288x4096_a0_b0",
+      "family": "gelu",
+      "shape": [
+        4,
+        12288,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_512x32768x8192_a0_b0",
+      "family": "gelu",
+      "shape": [
+        512,
+        32768,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_512x8192x32768_a0_b0",
+      "family": "gelu",
+      "shape": [
+        512,
+        8192,
+        32768
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_512x8192x8192_a0_b0",
+      "family": "gelu",
+      "shape": [
+        512,
+        8192,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_8192x1024x16384_a0_b0",
+      "family": "gelu",
+      "shape": [
+        8192,
+        1024,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_8192x4096x16384_a0_b0",
+      "family": "gelu",
+      "shape": [
+        8192,
+        4096,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "gelu_8192x8192x8192_a0_b0",
+      "family": "gelu",
+      "shape": [
+        8192,
+        8192,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_1024x1024x1024_a0_b0",
+      "family": "plain",
+      "shape": [
+        1024,
+        1024,
+        1024
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_1024x8192x16384_a0_b0",
+      "family": "plain",
+      "shape": [
+        1024,
+        8192,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_1024x8192x28672_a0_b0",
+      "family": "plain",
+      "shape": [
+        1024,
+        8192,
+        28672
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_16384x1024x8192_a0_b0",
+      "family": "plain",
+      "shape": [
+        16384,
+        1024,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_16384x4096x8192_a0_b0",
+      "family": "plain",
+      "shape": [
+        16384,
+        4096,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_16384x8192x1024_a0_b0",
+      "family": "plain",
+      "shape": [
+        16384,
+        8192,
+        1024
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_16384x8192x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        16384,
+        8192,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_1x1024x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        1,
+        1024,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_1x128256x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        1,
+        128256,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_1x13824x5120_a0_b0",
+      "family": "plain",
+      "shape": [
+        1,
+        13824,
+        5120
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_1x14336x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        1,
+        14336,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_1x28672x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        1,
+        28672,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_1x4096x14336_a0_b0",
+      "family": "plain",
+      "shape": [
+        1,
+        4096,
+        14336
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_1x4096x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        1,
+        4096,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_1x6144x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        1,
+        6144,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_2048x2048x2048_a0_b0",
+      "family": "plain",
+      "shape": [
+        2048,
+        2048,
+        2048
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_3072x3072x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        3072,
+        3072,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_4096x4096x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        4096,
+        4096,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_4096x8192x16384_a0_b0",
+      "family": "plain",
+      "shape": [
+        4096,
+        8192,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_4x12288x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        4,
+        12288,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_512x32768x8192_a0_b0",
+      "family": "plain",
+      "shape": [
+        512,
+        32768,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_512x8192x32768_a0_b0",
+      "family": "plain",
+      "shape": [
+        512,
+        8192,
+        32768
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_512x8192x8192_a0_b0",
+      "family": "plain",
+      "shape": [
+        512,
+        8192,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_8192x1024x16384_a0_b0",
+      "family": "plain",
+      "shape": [
+        8192,
+        1024,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_8192x4096x16384_a0_b0",
+      "family": "plain",
+      "shape": [
+        8192,
+        4096,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_8192x4096x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        8192,
+        4096,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_8192x8192x8192_a0_b0",
+      "family": "plain",
+      "shape": [
+        8192,
+        8192,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_8x1024x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        8,
+        1024,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_8x128256x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        8,
+        128256,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_8x14336x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        8,
+        14336,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_8x28672x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        8,
+        28672,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_8x4096x14336_a0_b0",
+      "family": "plain",
+      "shape": [
+        8,
+        4096,
+        14336
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_8x4096x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        8,
+        4096,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "plain_8x6144x4096_a0_b0",
+      "family": "plain",
+      "shape": [
+        8,
+        6144,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "splitk_1024x8192x28672_a0_b0",
+      "family": "splitk",
+      "shape": [
+        1024,
+        8192,
+        28672
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "splitk_3072x3072x4096_a0_b0",
+      "family": "splitk",
+      "shape": [
+        3072,
+        3072,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "splitk_4096x4096x4096_a0_b0",
+      "family": "splitk",
+      "shape": [
+        4096,
+        4096,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "splitk_512x8192x32768_a0_b0",
+      "family": "splitk",
+      "shape": [
+        512,
+        8192,
+        32768
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "streamk_1024x8192x16384_a0_b0",
+      "family": "streamk",
+      "shape": [
+        1024,
+        8192,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "streamk_1024x8192x28672_a0_b0",
+      "family": "streamk",
+      "shape": [
+        1024,
+        8192,
+        28672
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "streamk_3072x3072x4096_a0_b0",
+      "family": "streamk",
+      "shape": [
+        3072,
+        3072,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "streamk_512x8192x32768_a0_b0",
+      "family": "streamk",
+      "shape": [
+        512,
+        8192,
+        32768
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "streamk_512x8192x8192_a0_b0",
+      "family": "streamk",
+      "shape": [
+        512,
+        8192,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "streamk_8192x1024x16384_a0_b0",
+      "family": "streamk",
+      "shape": [
+        8192,
+        1024,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_1024x1024x1024_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        1024,
+        1024,
+        1024
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_1024x8192x16384_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        1024,
+        8192,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_1024x8192x28672_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        1024,
+        8192,
+        28672
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_16384x1024x8192_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        16384,
+        1024,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_16384x4096x8192_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        16384,
+        4096,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_16384x8192x1024_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        16384,
+        8192,
+        1024
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_16384x8192x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        16384,
+        8192,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_1x1024x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        1,
+        1024,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_1x128256x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        1,
+        128256,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_1x13824x5120_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        1,
+        13824,
+        5120
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_1x14336x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        1,
+        14336,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_1x28672x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        1,
+        28672,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_1x4096x14336_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        1,
+        4096,
+        14336
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_1x4096x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        1,
+        4096,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_1x6144x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        1,
+        6144,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_2048x2048x2048_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        2048,
+        2048,
+        2048
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_3072x3072x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        3072,
+        3072,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_4096x4096x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        4096,
+        4096,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_4096x8192x16384_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        4096,
+        8192,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_4x12288x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        4,
+        12288,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_512x32768x8192_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        512,
+        32768,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_512x8192x32768_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        512,
+        8192,
+        32768
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_512x8192x8192_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        512,
+        8192,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_8192x1024x16384_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        8192,
+        1024,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_8192x4096x16384_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        8192,
+        4096,
+        16384
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_8192x4096x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        8192,
+        4096,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_8192x8192x8192_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        8192,
+        8192,
+        8192
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_8x1024x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        8,
+        1024,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_8x128256x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        8,
+        128256,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_8x14336x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        8,
+        14336,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_8x28672x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        8,
+        28672,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_8x4096x14336_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        8,
+        4096,
+        14336
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_8x4096x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        8,
+        4096,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    },
+    {
+      "id": "transpose_a_8x6144x4096_a0_b0",
+      "family": "transpose_a",
+      "shape": [
+        8,
+        6144,
+        4096
+      ],
+      "a_pad": 0,
+      "b_pad": 0,
+      "cohort": "ci"
+    }
+  ],
+  "families": {
+    "add": {
+      "source": "benchmarks/triton_kernels_benchmark/gemm_postop_addmatrix_benchmark.py",
+      "source_sha256": "862ef360f0f57bc04c1cf1c054c7a2a80ac6861a7cb8f3bcd1f44aaadba039fb",
+      "kernel_source": "kernels/add.py",
+      "kernel_source_sha256": "f4a534f8593698a82c6f62ebfc6484652ba30eea2d34c18d53c7e055cfdcaf83",
+      "functions": [
+        "matmul_kernel_with_tensor_descriptors"
+      ],
+      "configs_expression": "[triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'}, num_stages=2, num_warps=32), triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'}, num_stages=3, num_warps=32), triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'}, num_stages=2, num_warps=32), triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'}, num_stages=2, num_warps=32), triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': '256'}, num_stages=2, num_warps=32)]",
+      "shapes": []
+    },
+    "exp": {
+      "source": "benchmarks/triton_kernels_benchmark/gemm_preop_exp_benchmark.py",
+      "source_sha256": "303099e35ab1542063abef804cea20f3c001f286df282e415093ba9125e5791a",
+      "kernel_source": "kernels/exp.py",
+      "kernel_source_sha256": "ee5436fa4d23c146864a03ffb5947bba97457ba2b22784be7cf851cf3705227d",
+      "functions": [
+        "matmul_kernel_with_tensor_descriptors"
+      ],
+      "configs_expression": "[triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'}, num_stages=2, num_warps=32), triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'}, num_stages=3, num_warps=32), triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'}, num_stages=2, num_warps=32), triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'}, num_stages=2, num_warps=32), triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': '256'}, num_stages=2, num_warps=32)]",
+      "shapes": []
+    },
+    "gelu": {
+      "source": "benchmarks/triton_kernels_benchmark/gemm_postop_gelu_benchmark.py",
+      "source_sha256": "c5e8f5fb13f32bb9ca83acfa6198e50e842c8a3d64c6317ef73d2c9cf1d0b8f6",
+      "kernel_source": "kernels/gelu.py",
+      "kernel_source_sha256": "270eca199c9be87d4fc177032969cb491449da50a5d82bacaeacbe271b55f757",
+      "functions": [
+        "tanh",
+        "gelu",
+        "matmul_kernel_with_tensor_descriptors"
+      ],
+      "configs_expression": "[triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'}, num_stages=2, num_warps=32), triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'}, num_stages=3, num_warps=32), triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'}, num_stages=2, num_warps=32), triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'}, num_stages=2, num_warps=32), triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': '256'}, num_stages=2, num_warps=32)]",
+      "shapes": []
+    },
+    "plain": {
+      "source": "benchmarks/triton_kernels_benchmark/gemm_benchmark.py",
+      "source_sha256": "b7381c83afe170d8a18ee3d40324fec6e2a3ce805e88694c0117e3871d9abe30",
+      "kernel_source": "kernels/plain.py",
+      "kernel_source_sha256": "7dcd7ea4de8040bc4d77a7244042326c77fdc956645e6f25c6ed474391d1f6ff",
+      "functions": [
+        "matmul_kernel_with_tensor_descriptors"
+      ],
+      "configs_expression": null,
+      "shapes": []
+    },
+    "splitk": {
+      "source": "benchmarks/triton_kernels_benchmark/gemm_splitk_benchmark.py",
+      "source_sha256": "d0ec2b865ce4dd2a2c2e3dd9efac89b1d2882291042a5c4f2e32ea22e8c3ce95",
+      "kernel_source": "kernels/splitk.py",
+      "kernel_source_sha256": "870f674ff4ac5713443e495f748e4c65f7d561636fa8842113fea8fc7c21cf9d",
+      "functions": [
+        "_kernel"
+      ],
+      "configs_expression": null,
+      "shapes": []
+    },
+    "streamk": {
+      "source": "benchmarks/triton_kernels_benchmark/gemm_streamk_benchmark.py",
+      "source_sha256": "23d1c8401a15a8c53e7c2e4adadea11b2069ea9aa3eea5fec20c5190f6598d92",
+      "kernel_source": "kernels/streamk.py",
+      "kernel_source_sha256": "d2e83d3138287d3ba542c27a6a95d29ddd52c9d06980403c76912bb2cc178b5a",
+      "functions": [
+        "swizzle_tile",
+        "linear_tile",
+        "mac_loop",
+        "first_wave",
+        "full_tiles"
+      ],
+      "configs_expression": null,
+      "shapes": []
+    },
+    "transpose_a": {
+      "source": "benchmarks/triton_kernels_benchmark/gemm_benchmark.py",
+      "source_sha256": "b7381c83afe170d8a18ee3d40324fec6e2a3ce805e88694c0117e3871d9abe30",
+      "kernel_source": "kernels/transpose_a.py",
+      "kernel_source_sha256": "7dcd7ea4de8040bc4d77a7244042326c77fdc956645e6f25c6ed474391d1f6ff",
+      "functions": [
+        "matmul_kernel_with_tensor_descriptors"
+      ],
+      "configs_expression": null,
+      "shapes": []
+    }
+  },
+  "allocation_arrangements": [
+    0,
+    17,
+    129
+  ],
+  "selection_rounds": 5,
+  "confirmation_rounds": 7,
+  "seed": 123,
+  "atol": 0.0001,
+  "rtol": 0.001,
+  "prune_factor": 1e+100,
+  "count": 180,
+  "cohort_counts": {
+    "ci": 135,
+    "local": 42,
+    "anchors": 3
+  },
+  "limits": [
+    "Unbatched TD BF16 GEMMs only",
+    "Forced mode preserves current compiler profile and structural guards",
+    "No grouped GEMM, attention, pointer-load kernels or unrelated benchmarks",
+    "Oracle selected on tuning rounds then independently confirmed",
+    "One B580 job; no remote action authorized yet",
+    "Asymmetric policy compile availability fails the case instead of silently shrinking the baseline pool"
+  ]
+}
