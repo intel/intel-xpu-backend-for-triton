@@ -9,7 +9,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H
 
-#include "Utils/LibCallEmitter.h"
+#include "intel/lib/Utils/LibCallEmitter.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
