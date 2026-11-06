@@ -108,6 +108,24 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     tt.return %r : tensor<256x256xf32, #dpas>
   }
 
+  // COM: A stored K x M and B stored N x K, both loaded column-major: only B is gapped, and dropping a
+  // COM: gapped B was never measured, so keep both.
+  // CHECK-LABEL: tt.func public @gapped_b_keeps_both
+  // CHECK:         ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<256x32xbf16>
+  tt.func public @gapped_b_keeps_both(%descA: !tt.tensordesc<32x256xbf16>, %descB: !tt.tensordesc<256x32xbf16>) -> tensor<256x256xf32, #dpas> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c28672_i32 = arith.constant 28672 : i32
+    %r = scf.for %k = %c0_i32 to %c28672_i32 step %c128_i32 iter_args(%acc = %cst) -> (tensor<256x256xf32, #dpas>) : i32 {
+      %a = tt.descriptor_load %descA[%k, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<32x256xbf16> -> tensor<256x32xbf16, #dot0>
+      %b = tt.descriptor_load %descB[%c0_i32, %k] {ttig.block_io = "column_major"} : !tt.tensordesc<256x32xbf16> -> tensor<32x256xbf16, #dot1>
+      %d = tt.dot %a, %b, %acc, inputPrecision = tf32 : tensor<256x32xbf16, #dot0> * tensor<32x256xbf16, #dot1> -> tensor<256x256xf32, #dpas>
+      scf.yield %d : tensor<256x256xf32, #dpas>
+    }
+    tt.return %r : tensor<256x256xf32, #dpas>
+  }
+
   // COM: f16 operands, and the indices are a unit-step index induction variable times 128, cast to i32,
   // COM: plus a loop-invariant base: drop A.
   // CHECK-LABEL: tt.func public @tile_count_loop_drops_a

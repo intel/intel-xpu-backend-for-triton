@@ -191,9 +191,10 @@ static bool isLoopInvariant(scf::ForOp forOp, Value v, unsigned depth = 0) {
 /// 16-bit DPAS-equivalent work of one iteration over the dots in \p forOp, or
 /// nullopt unless every dot is a DPAS dot fed by \p candidates through layout
 /// conversions in the body, and every candidate feeds one: the model prices dot
-/// operands only.
+/// operands only. Candidates that feed a B operand are added to \p feedsB.
 static std::optional<double>
-getDotFlopsPerIter(scf::ForOp forOp, ArrayRef<PrefetchCandidate> candidates) {
+getDotFlopsPerIter(scf::ForOp forOp, ArrayRef<PrefetchCandidate> candidates,
+                   SmallPtrSetImpl<Operation *> &feedsB) {
   auto traceToCandidate = [&](Value v) -> Operation * {
     while (auto cvt = v.getDefiningOp<ttg::ConvertLayoutOp>()) {
       if (cvt->getBlock() != forOp.getBody())
@@ -215,12 +216,12 @@ getDotFlopsPerIter(scf::ForOp forOp, ArrayRef<PrefetchCandidate> candidates) {
     auto dpas = dyn_cast<ttgi::DpasEncodingAttr>(dTy.getEncoding());
     if (!dpas)
       return WalkResult::interrupt();
-    for (Value operand : {dot.getA(), dot.getB()}) {
-      Operation *src = traceToCandidate(operand);
-      if (!src)
-        return WalkResult::interrupt();
-      fed.insert(src);
-    }
+    Operation *a = traceToCandidate(dot.getA());
+    Operation *b = traceToCandidate(dot.getB());
+    if (!a || !b)
+      return WalkResult::interrupt();
+    fed.insert({a, b});
+    feedsB.insert(b);
     // The DPAS rate scales with opsPerChannel, which is 2 for 16-bit operands.
     flops += 2.0 * dTy.getNumElements() * aTy.getShape().back() * 2 /
              dpas.getOpsPerChannel();
@@ -266,7 +267,8 @@ choosePrefetchToDrop(scf::ForOp forOp, int numStages,
                          : 0;
   if (numIters < numStages)
     return keep("trip count");
-  std::optional<double> flops = getDotFlopsPerIter(forOp, candidates);
+  SmallPtrSet<Operation *, 2> feedsB;
+  std::optional<double> flops = getDotFlopsPerIter(forOp, candidates, feedsB);
   if (!flops)
     return keep("dot operands");
 
@@ -296,6 +298,9 @@ choosePrefetchToDrop(scf::ForOp forOp, int numStages,
     return keep("prefetch distance");
 
   std::optional<unsigned> drop = prefetchcost::chooseDrop(shape, *dev);
+  // Every fit dropped a gapped A; dropping a gapped B was never measured.
+  if (drop && feedsB.contains(candidates[*drop].op))
+    return keep("gapped operand feeds B");
   LLVM_DEBUG({
     auto us = [&](std::optional<unsigned> plan) {
       return llvm::format("%.2f",
