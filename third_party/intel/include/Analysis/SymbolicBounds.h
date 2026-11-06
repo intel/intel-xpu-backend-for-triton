@@ -617,8 +617,8 @@ Value materialize(ArrayRef<BoundCondition> conds, Operation *before,
 /// most 64 bits that properly dominates `before` (never a `TripCount`, nor a
 /// `Quotient` with a non-positive divisor) and plain i64 arithmetic cannot
 /// overflow, which rules out i64 and index terms. The value equals the IR's
-/// only if the obligations `normalize` returned hold; `NonNegative` ones may never
-/// be assumed.
+/// only if the obligations `normalize` returned hold; `NonNegative` ones may
+/// never be assumed.
 Value materializeForm(const AffineForm &form, Operation *before,
                       OpBuilder &builder);
 
