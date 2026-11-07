@@ -94,7 +94,7 @@ def _language_from_filename(source_name: str) -> str:
 
 
 def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_dirs: list[str], libraries: list[str],
-           ccflags: list[str], language: str = "c") -> str:
+           ccflags: list[str], language: str = "c", use_sycl_compiler: bool = True) -> str:
     if impl := knobs.build.impl:
         return impl(name, src, srcdir, library_dirs, include_dirs, libraries, ccflags)
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
@@ -115,6 +115,9 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
             icpx = shutil.which("icpx")
             dpclang = shutil.which("dpclang++")
             csycl = icpx or dpclang
+        if not use_sycl_compiler:
+            # A SYCL compiler adds its own SYCL headers and runtime, which need not be those given.
+            csycl = None
         cxx = shutil.which(os.environ.get("CXX", "shutil-dummy-value"))
         if cxx is None:
             clangpp = shutil.which("clang++")
