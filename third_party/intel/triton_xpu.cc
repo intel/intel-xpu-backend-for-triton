@@ -153,6 +153,8 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
       .def_rw("target_arch",
               &gpu::intel::TritonAnnotateModuleOptions::targetArch)
       .def_rw("is_lts", &gpu::intel::TritonAnnotateModuleOptions::isLTS)
+      .def_rw("l1_store_write_bypass",
+              &gpu::intel::TritonAnnotateModuleOptions::l1StoreWriteBypass)
       .def_rw("is_fast_math",
               &gpu::intel::TritonAnnotateModuleOptions::isFastMath)
       .def_rw("sub_32_dpas",

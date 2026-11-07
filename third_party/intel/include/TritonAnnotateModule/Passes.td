@@ -56,6 +56,8 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "target architecture name">,
     Option<"isLTS", "is-lts", "bool", /*default*/"false",
            "whether driver is LTS">,
+    Option<"l1StoreWriteBypass", "l1-store-write-bypass", "bool", /*default*/"false",
+           "whether the driver's default L1 store policy bypasses L1">,
     Option<"supportPrefetch256Bytes", "support-prefetch-256b", "bool", /*default*/"false",
            "whether prefetch 256 bytes is supported">,
     Option<"support256bLoadStore", "support-256b-load-store", "bool", /*default*/"false",

@@ -61,6 +61,10 @@ struct TritonAnnotateModule
     mod->setAttr(ttgi::TritonIntelGPUDialect::getTargetArchAttrName(),
                  builder.getStringAttr(targetArch));
 
+    if (l1StoreWriteBypass)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getL1StoreWriteBypassAttrName(),
+                   builder.getUnitAttr());
+
     mod->setAttr(
         ttgi::TritonIntelGPUDialect::get2DBlockIOBaseAlignmentAttrName(),
         builder.getI32IntegerAttr(blockIOBaseAlignment));
