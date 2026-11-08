@@ -5,5 +5,3 @@ python/test/unit/language/test_matmul.py::test_simple_matmul[r".*-1-64-128-32-4-
 python/test/unit/language/test_matmul.py::test_simple_matmul[r".*-1-128-128-16-4-float16-float16"]@regexp
 python/test/unit/language/test_matmul.py::test_simple_matmul[r".*-4-1-512-64-32-2-float32-float8e5"]@regexp
 python/test/unit/language/test_matmul.py::test_simple_matmul[r".*-4-1-256-128-32-4-float32-float8e5"]@regexp
-python/test/unit/language/test_matmul.py::test_blocked_scale_mxfp[r"[^-]*-[^-]*-[^-]*-128-[^-]*-[^-]*-[^-]*-512"]@regexp
-python/test/unit/language/test_matmul.py::test_blocked_scale_mxfp[r"[^-]*-[^-]*-[^-]*-[^-]*-128-[^-]*-[^-]*-512"]@regexp
