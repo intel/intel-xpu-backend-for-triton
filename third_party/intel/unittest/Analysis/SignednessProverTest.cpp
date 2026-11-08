@@ -1,13 +1,12 @@
 //===- SignednessProverTest.cpp -------------------------------------------===//
 //
-// Unit tests for triton::intel::proveSign(), the goal-directed sign prover
-// behind TritonIntelSpeculateSignedDivRem.
+// Unit tests for triton::intel::proveSign(), the goal-directed sign prover.
 //
 // Every decomposition rule is a soundness claim ("the result meets the goal if
-// these operands do"), and a wrong one lets the pass convert an operation whose
-// dividend can be negative. A lit test can only observe the enclosing pass's
-// aggregate verdict, so each rule is exercised here directly, in both
-// directions: the fact it establishes, and the fact it declines to establish.
+// these operands do"), and a wrong one lets a caller act on a value that can be
+// negative. A lit test can only observe the enclosing pass's aggregate verdict,
+// so each rule is exercised here directly, in both directions: the fact it
+// establishes, and the fact it declines to establish.
 //
 // The cases are written so the range analysis cannot answer the top-level
 // question by itself - typically by rooting a chain at a function argument,
@@ -47,8 +46,8 @@ public:
     ctx.getOrLoadDialect<tt::TritonDialect>();
   }
 
-  /// Parses `ir` and runs the range analysis over it, exactly as the pass does
-  /// (see SpeculateSignedDivRem.cpp). Must be called before prove().
+  /// Parses `ir` and runs the range analysis over it, as proveSign()'s callers
+  /// do. Must be called before prove().
   void parse(StringRef ir) {
     module = parseSourceString<ModuleOp>(ir, &ctx);
     ASSERT_TRUE(module) << "failed to parse:\n" << ir.str();
