@@ -6550,7 +6550,7 @@ def test_num_warps_pow2(device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm(num_ctas, device):
     if not is_cuda():
-        pytest.xfail("test_inline_asm is only supported in CUDA")
+        pytest.skip("test_inline_asm is only supported in CUDA")
 
     @triton.jit
     def kernel(X, Y, Z, n: tl.constexpr, BLOCK: tl.constexpr):
@@ -6578,7 +6578,7 @@ def test_inline_asm(num_ctas, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm_packed(num_ctas, device):
     if not is_cuda():
-        pytest.xfail("test_inline_asm is only supported in CUDA")
+        pytest.skip("test_inline_asm is only supported in CUDA")
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -6605,7 +6605,7 @@ def test_inline_asm_packed(num_ctas, device):
 @pytest.mark.parametrize('num_ctas', num_ctas_list)
 def test_inline_asm_with_pointers(num_ctas, device):
     if not is_cuda():
-        pytest.xfail('test_inline_asm is only supported in CUDA')
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -6630,7 +6630,7 @@ def test_inline_asm_with_pointers(num_ctas, device):
 
 def test_inline_asm_multiple_outputs(device):
     if not is_cuda():
-        pytest.xfail('test_inline_asm is only supported in CUDA')
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(A, B, C, D, BLOCK: tl.constexpr):
@@ -6676,7 +6676,7 @@ def test_inline_asm_multiple_outputs(device):
 
 def test_inline_asm_packed_multiple_outputs(device):
     if not is_cuda():
-        pytest.xfail('test_inline_asm is only supported in CUDA')
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(A, B, C, D, BLOCK: tl.constexpr):
@@ -7673,7 +7673,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs):
 
 def test_num_ctas_pre_sm90(device, fresh_knobs):
     if not is_cuda() and not is_hip():
-        pytest.xfail("Only supported on CUDA and HIP")
+        pytest.skip("Only supported on CUDA and HIP")
 
     @triton.jit
     def _kernel(src):
@@ -8190,7 +8190,7 @@ def test_dtype(device):
 
 def test_side_effectful_scan(device):
     if device != "cuda":
-        pytest.xfail()
+        pytest.skip()
 
     @triton.jit(debug=True)
     def sanitize_cumsum_kernel(Z, X, BLOCK: tl.constexpr):

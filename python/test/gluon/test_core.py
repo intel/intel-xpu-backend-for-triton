@@ -133,7 +133,7 @@ def _inline_asm_tmem_load(outputs, inputs):
 ])
 def test_inline_asm_memdesc_view(memory_space, threadwise, pack, device):
     if not is_cuda() or (memory_space == "tensor" and not (is_blackwell() or is_blackwell_ultra() or is_rubin())):
-        pytest.xfail("requires CUDA shared memory or Blackwell tensor memory")
+        pytest.skip("requires CUDA shared memory or Blackwell tensor memory")
 
     generator = _inline_asm_tmem_load if memory_space == "tensor" else _inline_asm_shared_load
     if threadwise:
@@ -189,7 +189,7 @@ def _inline_asm_sum(outputs, inputs):
 @pytest.mark.parametrize("elementwise", [False, True])
 def test_inline_asm_memdesc_store(elementwise, device):
     if not is_cuda():
-        pytest.xfail("uses PTX")
+        pytest.skip("uses PTX")
 
     @gluon.jit
     def kernel(Out, ELEMENTWISE: ttgl.constexpr):
@@ -220,7 +220,7 @@ def test_inline_asm_memdesc_store(elementwise, device):
 
 def test_inline_asm_many_elements(device):
     if not is_cuda():
-        pytest.xfail("uses PTX")
+        pytest.skip("uses PTX")
 
     @gluon.jit
     def kernel(X, Y):
@@ -248,7 +248,7 @@ def _inline_asm_add_bias(outputs, inputs):
 
 def test_inline_asm_replicated_registers(device):
     if not is_cuda():
-        pytest.xfail("uses PTX")
+        pytest.skip("uses PTX")
 
     @gluon.jit
     def kernel(X, Y, bias):
@@ -274,7 +274,7 @@ def _inline_asm_count(out):
 @pytest.mark.parametrize("warp_specialized", [False, True])
 def test_inline_asm_once_per_thread(warp_specialized, device):
     if not is_cuda():
-        pytest.xfail("uses PTX")
+        pytest.skip("uses PTX")
 
     @gluon.jit
     def kernel(Out, WS: ttgl.constexpr):
@@ -8066,7 +8066,7 @@ def test_tma_cache_policy_ptx(target, rank, kind, multicast, policy, expected, t
 @pytest.mark.parametrize("atomic", [False, True])
 def test_thread_regions_async_wait_scalar_store(atomic, device):
     if not is_ampere_or_newer():
-        pytest.xfail("requires Ampere or newer")
+        pytest.skip("requires Ampere or newer")
 
     @gluon.jit
     def kernel(In, Out, Flag, ATOMIC: ttgl.constexpr):
@@ -8094,7 +8094,7 @@ def test_thread_regions_async_wait_scalar_store(atomic, device):
 @pytest.mark.parametrize("call_depth", [0, 1, 2], ids=["inline", "noinline", "transitive"])
 def test_thread_regions_map_elementwise_callees(call_depth, device, fresh_knobs):
     if not is_ampere_or_newer():
-        pytest.xfail("requires Ampere or newer")
+        pytest.skip("requires Ampere or newer")
     fresh_knobs.compilation.instrumentation_mode = ""
     # Map calls currently lack the debug locations required for noinline callees.
     fresh_knobs.compilation.disable_line_info = call_depth > 0
@@ -8141,7 +8141,7 @@ def test_thread_regions_map_elementwise_callees(call_depth, device, fresh_knobs)
 @pytest.mark.parametrize("indirect", [False, True])
 def test_thread_regions_combiner_callees(kind, indirect, device, fresh_knobs):
     if not is_cuda():
-        pytest.xfail("requires NVIDIA thread region lowering")
+        pytest.skip("requires NVIDIA thread region lowering")
     fresh_knobs.compilation.instrumentation_mode = ""
 
     # Immutable loads make address selection an associative combiner.
@@ -8226,7 +8226,7 @@ def test_thread_regions_multi_cta_noinline_worker(device, fresh_knobs):
 @pytest.mark.parametrize("atomic", [False, True])
 def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, device, fresh_knobs):
     if not is_cuda():
-        pytest.xfail("requires NVIDIA thread region lowering")
+        pytest.skip("requires NVIDIA thread region lowering")
     skip_if_unsupported_cluster_size(num_ctas)
     fresh_knobs.compilation.instrumentation_mode = ""
 

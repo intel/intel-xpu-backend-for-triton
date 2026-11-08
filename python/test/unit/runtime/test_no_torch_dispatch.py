@@ -50,7 +50,7 @@ def test_hip_backend_discovery_without_torch():
     # Only backend discovery is checked: HIPDriver construction and kernel
     # launch still depend on torch.
     if not is_hip():
-        pytest.xfail("Requires an AMD GPU")
+        pytest.skip("Requires an AMD GPU")
 
     env = os.environ.copy()
     env.pop("TRITON_DEFAULT_BACKEND", None)

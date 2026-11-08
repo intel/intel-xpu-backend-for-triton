@@ -334,7 +334,7 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
 
 def test_i4_m_minor_join_bk16_matmul(device):
     if not is_cuda():
-        pytest.xfail("i4 M-minor join regression is CUDA-specific")
+        pytest.skip("i4 M-minor join regression is CUDA-specific")
     if torch.cuda.get_device_capability()[0] < 8:
         pytest.skip("bf16 dot requires NVIDIA compute capability >= 8")
 
@@ -1068,6 +1068,7 @@ def lhs_in_tmem_kernel_mxfp(  #
 @pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
                     reason="Requires compute capability == 10")
 def test_lhs_in_tmem_mxfp(device, monkeypatch):
+    _knob_promote_lhs_to_tmem(monkeypatch)
     M, N, K = 128, 64, 32
     torch.manual_seed(42)
     a = torch.randint(20, 40, (M, K), dtype=torch.uint8, device=device)
