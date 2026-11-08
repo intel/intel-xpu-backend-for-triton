@@ -73,3 +73,48 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// Test BF16 -> BF16 accumulation without DPAS (FMA accumulates in FP32, rounded to BF16)
+// CHECK-NOT: ttig.dpas
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32} {
+  // CHECK-LABEL: tt.func public @kernel_bf16_to_bf16_fma
+  tt.func public @kernel_bf16_to_bf16_fma(
+    %arg0: tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+    %arg1: tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+    %arg2: tensor<128x128xbf16, #blocked>,
+    %arg3: tensor<128x128x!tt.ptr<bf16>, #blocked>) {
+    // CHECK-DAG: tt.fp_to_fp %arg2 : tensor<128x128xbf16, #blocked> -> tensor<128x128xf32, #blocked>
+    // CHECK-DAG: tt.fp_to_fp %arg0 : tensor<128x64xbf16, {{.*}}> -> tensor<128x64xf32, {{.*}}>
+    // CHECK-DAG: tt.fp_to_fp %arg1 : tensor<64x128xbf16, {{.*}}> -> tensor<64x128xf32, {{.*}}>
+    // CHECK: tt.dot {{.*}} : tensor<128x64xf32{{.*}}> * tensor<64x128xf32{{.*}}> -> tensor<128x128xf32, #blocked>
+    // CHECK: tt.fp_to_fp {{.*}}, rounding = rtne : tensor<128x128xf32, #blocked> -> tensor<128x128xbf16, #blocked>
+    %result = tt.dot %arg0, %arg1, %arg2 : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xbf16, #blocked>
+    tt.store %arg3, %result : tensor<128x128x!tt.ptr<bf16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Test FP8 -> BF16 accumulation without DPAS (FMA accumulates in FP32, rounded to BF16)
+// CHECK-NOT: ttig.dpas
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32} {
+  // CHECK-LABEL: tt.func public @kernel_fp8_to_bf16_fma
+  tt.func public @kernel_fp8_to_bf16_fma(
+    %arg0: tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+    %arg1: tensor<64x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+    %arg2: tensor<128x128x!tt.ptr<bf16>, #blocked>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xbf16, #blocked>
+    // CHECK-DAG: tt.fp_to_fp %arg0 : tensor<128x64xf8E5M2, {{.*}}> -> tensor<128x64xf32, {{.*}}>
+    // CHECK-DAG: tt.fp_to_fp %arg1 : tensor<64x128xf8E5M2, {{.*}}> -> tensor<64x128xf32, {{.*}}>
+    // CHECK: tt.dot {{.*}} : tensor<128x64xf32{{.*}}> * tensor<64x128xf32{{.*}}> -> tensor<128x128xf32, #blocked>
+    // CHECK: tt.fp_to_fp {{.*}}, rounding = rtne : tensor<128x128xf32, #blocked> -> tensor<128x128xbf16, #blocked>
+    %result = tt.dot %arg0, %arg1, %cst : tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xbf16, #blocked>
+    tt.store %arg2, %result : tensor<128x128x!tt.ptr<bf16>, #blocked>
+    tt.return
+  }
+}

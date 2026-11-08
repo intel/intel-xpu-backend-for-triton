@@ -6,7 +6,7 @@ import pathlib
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu
+from triton._internal_testing import is_xpu, is_xpu_cri
 
 
 @pytest.mark.parametrize("M, N",
@@ -469,6 +469,8 @@ def test_tdesc_store_negative_col_misaligned_base(dtype_str, col, runtime, stays
     for j in range(cl):
         if 0 <= col + j < cl:
             tensor[:, col + j] = v[:, j]
-    if dtype_str == "float16":  # int8 tiles are wider, so whether they straddle is not asserted
-        assert (_count_2d_calls(kernel.asm["llir"], "Store") > 0) == stays_2d
     assert torch.equal(buf.cpu(), expected)
+    if dtype_str == "float16":  # int8 tiles are wider, so whether they straddle is not asserted
+        if is_xpu_cri():
+            pytest.xfail("`stays_2d` assumes a 64-byte message (span 32 for float16); CRI's span differs")
+        assert (_count_2d_calls(kernel.asm["llir"], "Store") > 0) == stays_2d

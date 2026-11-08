@@ -101,6 +101,10 @@ def _bitwidth(dtype: str) -> int:
     return int(re.search(r'(\d+)$', dtype).group(1))
 
 
+def _assert_128bit_global_memory(ptx, op):
+    assert re.search(rf"\b{op}\.global\.v(?:4\.b32|2\.b64)\b", ptx)
+
+
 def _dtype(dtype: str) -> str:
     # ex.: "int64" -> "int"
     return re.match(r'([a-zA-Z]+)', dtype).group(0)
@@ -3664,9 +3668,9 @@ reduce_configs3 = [(op, 'float32', shape, axis, False)
                    for shape in reduce3d_shapes
                    for axis in [0, 1, 2]]
 invalid_config = [
-    pytest.param('sum', 'float32', (32, 32), axis, False, marks=pytest.mark.disable_warmup) for axis in [2, 3]
+    pytest.param('sum', 'float32', (32, 32), axis, False, marks=pytest.mark.disable_warmup) for axis in [2, 3, -3]
 ]
-negative_config = [('sum', 'float32', (32, 32), -1, False)]
+negative_config = [('xor_sum', 'int32', (4, 8), axis, keep_dims) for axis in [-1, -2] for keep_dims in [False, True]]
 keep_dims_2d_configs = [(op, 'float32', (32, 32), axis, True)
                         for op in ['min', 'max', 'sum', 'argmin', 'argmax']
                         for axis in [0, 1]] + [(op, 'float32', (32, 32), None, True) for op in ['min', 'max', 'sum']]
@@ -3717,7 +3721,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, thre
             elif AXIS == 2 or AXIS == -1:
                 z_ptr = Z + range_m[:, None] * BLOCK_N + range_n[None, :]
         else:
-            if AXIS == 0:
+            if AXIS == 0 or AXIS == -2:
                 z_ptr = Z + range_n
             elif AXIS == 1 or AXIS == -1:
                 z_ptr = Z + range_m
@@ -3740,7 +3744,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, thre
 
     # numpy result
     # Silence numpy error on axis out of bounds, to give triton a chance to fail
-    np_axis = axis if axis is not None and axis < len(shape) else None
+    np_axis = axis if axis is not None and -len(shape) <= axis < len(shape) else None
     if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
         z_dtype_str = 'float32'
         z_tri_dtype_str = 'bfloat16'
@@ -3760,7 +3764,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, thre
     if is_xpu():
         kern_kwargs['num_warps'] = num_warps
         kern_kwargs['warp_size'] = threads_per_warp
-    if axis is not None and axis >= len(shape):
+    if axis is not None and not -len(shape) <= axis < len(shape):
         with pytest.raises(triton.TritonError):
             kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
                           KEEP_DIMS=keep_dims, USE_I1=USE_I1, num_ctas=num_ctas, **kern_kwargs)
@@ -4414,11 +4418,11 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
 
     # parse ptx to make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
-    assert 'ld.global.v4' in ptx
-    assert 'st.global.v4' in ptx
+    _assert_128bit_global_memory(ptx, 'ld')
+    _assert_128bit_global_memory(ptx, 'st')
     ptx = pgm_contiguous.asm['ptx']
-    assert 'ld.global.v4' in ptx
-    assert 'st.global.v4' in ptx
+    _assert_128bit_global_memory(ptx, 'ld')
+    _assert_128bit_global_memory(ptx, 'st')
 
 
 @pytest.mark.interpreter
@@ -4889,20 +4893,15 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     ptx = pgm.asm['ptx']
 
     # XXX: skip small sizes because they are not vectorized; with runtime
-    # strides, v4 needs the contiguous dim >= 16 (K for loads, N for stores).
+    # strides, 128-bit vectors need the contiguous dim >= 16 (K for loads, N for stores).
     enough_work = (M * N // (num_warps * 32) >= 4) and (K > 16 or N > 16 or M > 16)
     if enough_work and K >= 16:
-        if 'float64' in in_dtype:
-            assert 'ld.global.v2.b64' in ptx
-        else:
-            assert 'ld.global.v4' in ptx
+        _assert_128bit_global_memory(ptx, 'ld')
     if enough_work and N >= 16:
         if 'float8' in in_dtype:
             assert 'st.global.v2' in ptx
-        elif 'float64' in in_dtype:
-            assert 'st.global.v2.b64' in ptx
         else:
-            assert 'st.global.v4' in ptx
+            _assert_128bit_global_memory(ptx, 'st')
 
     is_tcgen5 = (capability[0] == 10) and (num_warps % 4) == 0 and (M % 64) == 0 and (N % 8) == 0
 
@@ -5235,9 +5234,9 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     if is_cuda():
         ptx = pgm.asm['ptx']
         if (max(M, N) * K) // (num_warps * 32) >= 4:
-            assert 'ld.global.v4' in ptx
+            _assert_128bit_global_memory(ptx, 'ld')
         if M * N // (num_warps * 32) >= 4:
-            assert 'st.global.v4' in ptx
+            _assert_128bit_global_memory(ptx, 'st')
         assert (re.search(r'(mma|wgmma.mma_async).sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.(f|bf)16.(f|bf)16', ptx)
                 or "tcgen05.mma.cta_group::1.kind::f16" in ptx)
     if is_hip_cdna4() and normal_type in ["bf16", "fp16"]:
@@ -5935,12 +5934,11 @@ def test_load_cache_modifier(cache, device):
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        all_modifiers = ['.ca', '.cg', '.cs', '.cv']
-        for modifier in all_modifiers:
-            if modifier == cache:
-                assert f'ld.global{modifier}' in ptx
-            else:
-                assert f'ld.global{modifier}' not in ptx
+        modifiers = re.findall(r'\bld\.global(?:\.(ca|cg|cs|cv))?\.(?:v[248]\.)?[busf]\d+\b', ptx)
+        assert modifiers
+        # An omitted load cache modifier means .ca.
+        expected = cache.removeprefix('.') or 'ca'
+        assert all((modifier or 'ca') == expected for modifier in modifiers)
 
 
 @pytest.mark.interpreter
@@ -6110,12 +6108,11 @@ def test_store_cache_modifier(cache, device):
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        all_modifiers = ['.wb', '.cg', '.cs', '.wt']
-        for modifier in all_modifiers:
-            if modifier == cache:
-                assert f'st.global{modifier}' in ptx
-            else:
-                assert f'st.global{modifier}' not in ptx
+        modifiers = re.findall(r'\bst\.global(?:\.(wb|cg|cs|wt))?\.(?:v[248]\.)?[busf]\d+\b', ptx)
+        assert modifiers
+        # An omitted store cache modifier means .wb.
+        expected = cache.removeprefix('.') or 'wb'
+        assert all((modifier or 'wb') == expected for modifier in modifiers)
 
 
 @pytest.mark.interpreter
@@ -6942,6 +6939,45 @@ def test_if_else(device):
     assert to_numpy(out)[0] == false_val[0]
 
 
+@pytest.mark.xfail(not is_hip(), reason="AMD pointer canonicalization regression", run=False)
+@pytest.mark.parametrize("num_tensors", [32, 100])
+def test_if_elif_shared_pointer_body(num_tensors, device, fresh_knobs):
+    fresh_knobs.amd.use_buffer_ops = True
+
+    @triton.jit
+    def kernel(Inputs, Outputs, n_elements, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        blocks = tl.cdiv(n_elements, BLOCK)
+        # DISPATCH
+        offsets = local * BLOCK + tl.arange(0, BLOCK)
+        value = tl.load(in_ptr + offsets, offsets < n_elements, other=0)
+        tl.store(out_ptr + offsets, value + 1, offsets < n_elements)
+
+    # Selecting both pointers before the shared body produces nested scf.if
+    # operations with two pointer results. The forward-slice walk must not
+    # revisit their users once for every path through those results.
+    dispatch = []
+    for i in range(num_tensors):
+        dispatch += [
+            f"{'if' if i == 0 else 'elif'} pid < {i + 1} * blocks:",
+            f"    local = pid - {i} * blocks",
+            f"    in_ptr = Inputs[{i}]",
+            f"    out_ptr = Outputs[{i}]",
+        ]
+    dispatch += ["else:", "    local = pid", "    in_ptr = Inputs[0]", "    out_ptr = Outputs[0]"]
+    kernel = patch_kernel(kernel, {"# DISPATCH": "\n    ".join(dispatch)})
+
+    # Distinct data across tensors and elements catches incorrect pointer or
+    # offset propagation. The final block also exercises the load/store masks.
+    n_elements = 1000
+    inputs = tuple(
+        torch.arange(n_elements, device=device, dtype=torch.float32) + i * n_elements for i in range(num_tensors))
+    outputs = tuple(torch.full_like(x, float("nan")) for x in inputs)
+    kernel[(num_tensors * triton.cdiv(n_elements, 128), )](inputs, outputs, n_elements, BLOCK=128)
+    for x, y in zip(inputs, outputs):
+        torch.testing.assert_close(y, x + 1, rtol=0, atol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("mode", ["dynamic", "static"])
 def test_if_return(mode, device):
@@ -7302,7 +7338,8 @@ def test_globaltimer(device):
         start = func()
         off = tl.arange(0, 128)
         for i in range(10000):
-            tl.store(Out1 + off, tl.load(Out1 + off) + 1)
+            # Keep the timed loop from folding into a single addition.
+            tl.store(Out1 + off, tl.load(Out1 + off, volatile=True) + 1)
         end = func()
         tl.store(Out2, start)
         tl.store(Out2 + 1, end)

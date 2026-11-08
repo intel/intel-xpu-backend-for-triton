@@ -381,10 +381,26 @@ private:
     bool oneMatrixPerLoadForBT =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
 
+    // A row-limit mask can become `base_height` instead of per-element
+    // masking (hardware zero-fill). Decided up front so tile-size
+    // computation below can treat this load as unmasked.
+    std::optional<ttgi::RowLimitMaskInfo> rowLimitMask;
+    if (op.getMask() && rank >= 2) {
+      unsigned pitchTensorDim =
+          (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+      bool pitchDimIsBroadcast =
+          getStride(strideAnalysis, op.getPtr(), pitchTensorDim) == 0;
+      if (auto m = ttgi::matchRowLimitMask(op.getMask(), op.getOther(),
+                                           tensorTy.getShape(), contiguousDim,
+                                           pitchDimIsBroadcast))
+        rowLimitMask = m;
+    }
+
     // Retrieve mask axis info to validate tile constraints consistently
-    // with the downstream LLVM lowering.
+    // with the downstream LLVM lowering. Skipped for a row-limit mask: its
+    // bound is handled via base_height below, not by clamping the tile.
     tt::AxisInfo *maskAxisInfo = nullptr;
-    if (op.getMask())
+    if (op.getMask() && !rowLimitMask)
       maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
 
     // Whether this load was annotated by the 1D→2D reshape in
@@ -431,6 +447,39 @@ private:
     // non-contiguous memory direction. For transposed loads, rowDim is the
     // memory-contiguous dim and colDim is non-contiguous, so pitch uses colDim.
     unsigned pitchDim = isTranspose ? colDim : rowDim;
+
+    // matchRowLimitMask assumed the pitch dim is the conventional rank-2/
+    // rank-1 dim, but for rank > 2 the tile's actual pitch dim (above) can
+    // land on a batch dim instead (e.g. a layout with no register packing).
+    // base_height only predicates `pitchDim`, so a mismatch here would
+    // silently apply the bound to the wrong dimension; fall back to the
+    // per-element masked path, redoing tile selection with the mask's real
+    // axis info now that it is no longer absorbed into base_height.
+    if (rowLimitMask && rowLimitMask->boundedDim != pitchDim) {
+      LDBG("Row-limit mask bounds dim " << rowLimitMask->boundedDim
+                                        << " but tile pitch dim is " << pitchDim
+                                        << "; falling back to "
+                                           "masked load: "
+                                        << *op);
+      rowLimitMask = std::nullopt;
+      maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
+      if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
+                                         elemSizeInBits, tensorTy,
+                                         oneMatrixPerLoadForBT, maskAxisInfo)) {
+        LDBG("Tile validation failed for load (row-limit fallback): " << *op);
+        return;
+      }
+      sizeInfo = ttgi::getBlockIOLoadTileSize(llEncoding, contiguousDim,
+                                              elemSizeInBits, maskAxisInfo,
+                                              oneMatrixPerLoadForBT);
+      rowDim = sizeInfo.rowDim;
+      colDim = sizeInfo.colDim;
+      tileWidth = sizeInfo.tileWidth;
+      tileHeight = sizeInfo.tileHeight;
+      isTranspose = sizeInfo.transpose;
+      numPackedVals = sizeInfo.numElemPerPackedVal;
+      pitchDim = isTranspose ? colDim : rowDim;
+    }
 
     // Compute pitch from stride analysis or the 1D->2D reshape attribute.
     // For the HW surface: width is along memory-contiguous direction, height
@@ -559,25 +608,43 @@ private:
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;
 
-    // If mask is present but other is absent, create a zero splat as the
-    // default padding value (the verifier requires 'other' when 'mask' is set).
-    Value mask = op.getMask();
-    Value other = op.getOther();
-    if (mask && !other)
-      other = createZeroSplat(builder, loc, tensorTy);
-
     // Pitch is a single i32 operand: the runtime value when we have one, an
-    // arith.constant otherwise (the lowering and asserts treat both the same).
+    // arith.constant otherwise (the lowering and asserts treat both the
+    // same).
     Value pitchOperand =
         pitchValue
             ? pitchValue
             : arith::ConstantOp::create(
                   builder, loc,
                   builder.getI32IntegerAttr(static_cast<int32_t>(pitch)));
+    Value mask = op.getMask();
+    Value other = op.getOther();
+    Value heightOperand;
+    if (rowLimitMask) {
+      // Drop the row-limit component: base_height replaces it. Keep any
+      // batch-dim extraPred as the mask operand for the LLVM lowering to
+      // AND into its per-message select.
+      mask = rowLimitMask->extraPred;
+      other = mask ? createZeroSplat(builder, loc, tensorTy) : Value();
+      // Relative to the tile's first row and may be <= 0; the LLVM lowering
+      // adjusts per message and never forwards a non-positive base_height.
+      heightOperand = ttgi::computeRowLimitHeight(
+          builder, loc, rowLimitMask->bound, rowLimitMask->rowBase,
+          tensorTy.getShape()[rowLimitMask->boundedDim]);
+    } else {
+      // If mask is present but other is absent, create a zero splat as the
+      // default padding value (the verifier requires 'other' when 'mask' is
+      // set).
+      if (mask && !other)
+        other = createZeroSplat(builder, loc, tensorTy);
+      heightOperand = arith::ConstantOp::create(
+          builder, loc,
+          builder.getI32IntegerAttr(static_cast<int32_t>(baseHeightRows)));
+    }
+
     auto blockPtrLoadOp = ttgi::Subgroup2DBlockLoadFromPtrOp::create(
-        builder, loc, op.getType(), op.getPtr(), pitchOperand, mask, other,
-        builder.getI32IntegerAttr(baseWidthBytes),
-        builder.getI32IntegerAttr(baseHeightRows),
+        builder, loc, op.getType(), op.getPtr(), pitchOperand, heightOperand,
+        mask, other, builder.getI32IntegerAttr(baseWidthBytes),
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate attributes if present.
@@ -589,6 +656,10 @@ private:
             ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName()))
       blockPtrLoadOp->setAttr(
           ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName(), attr);
+    if (rowLimitMask)
+      blockPtrLoadOp->setAttr(
+          ttgi::TritonIntelGPUDialect::getBlockIORuntimeRowLimitAttrName(),
+          builder.getUnitAttr());
 
     op.replaceAllUsesWith(blockPtrLoadOp.getResult());
     op.erase();

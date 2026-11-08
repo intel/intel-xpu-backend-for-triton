@@ -598,7 +598,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.passes.ttgpuir.add_canonicalize_pointers(pm, True)
             passes.common.add_canonicalizer(pm)
 
-        intel.passes.ttgpuir.add_accelerate_matmul(pm)
+        intel.passes.ttgpuir.add_accelerate_matmul(pm, opt.grf_mode)
         intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
@@ -703,9 +703,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
-        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
-        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
+        # Instrumentation point here so we can override IRs above (e.g., ttir and ttgir).
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
+        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         pm.run(mod, 'make_llir.allocate_memory')
 
         metadata["shared"] = src.get_int_attr("ttg.shared")

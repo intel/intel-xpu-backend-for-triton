@@ -14,7 +14,7 @@
 
 extern "C" PROTON_UTILS_EXPORT void waitOnSyclQueue(void *syclQueue) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
-  queue->wait();
+  queue->wait_and_throw();
 }
 
 extern "C" PROTON_UTILS_EXPORT void copyDeviceToHostAsync(void *syclQueue,
@@ -68,13 +68,27 @@ extern "C" PROTON_UTILS_EXPORT void synchronizeDevice(void *syclQueue) {
   queue->wait_and_throw();
 }
 
-// Returns the Level-Zero native device handle as a stable map key for
-// MetricBuffer's per-device buffer cache.
+// Returns this device's ordinal among the SYCL context's devices, as a
+// stable map key for MetricBuffer's per-device buffer cache. Also used
+// directly as `proton::CycleMetric`'s `DeviceId` value (see
+// `InstrumentationProfiler`), which -- like the other backends'
+// `getDevice()` -- must be a small, bounded index, not an opaque pointer.
+//
+// NOTE: `driver.c`'s `g_sycl_l0_device_list` builds the same ordinal scheme
+// (index into the context's device list) for the same devices. The two
+// cannot share a single list -- this file builds into a separate shared
+// library, dlopen'd independently of that one -- so keep them consistent by
+// hand if the indexing scheme changes.
 extern "C" PROTON_UTILS_EXPORT void *getDeviceKey(void *syclQueue) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
-  auto native = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-      queue->get_device());
-  return reinterpret_cast<void *>(native);
+  static const std::vector<sycl::device> devices =
+      queue->get_context().get_devices();
+  sycl::device dev = queue->get_device();
+  for (size_t i = 0; i < devices.size(); ++i) {
+    if (devices[i] == dev)
+      return reinterpret_cast<void *>(static_cast<uintptr_t>(i));
+  }
+  return reinterpret_cast<void *>(static_cast<uintptr_t>(0));
 }
 
 // FIXME: Should it be in DeviceInfo class?
