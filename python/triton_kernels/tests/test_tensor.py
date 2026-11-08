@@ -25,7 +25,7 @@ from triton_kernels.tensor import (
     wrap_torch_tensor,
 )
 from triton_kernels.testing import assert_equal
-from triton._internal_testing import is_compile_warmup, is_cuda
+from triton._internal_testing import is_compile_warmup
 from triton_kernels.tensor_details.layout import (
     BlackwellActMXScaleLayout,
     BlackwellMX4ValueShuffledLayout,
@@ -618,7 +618,6 @@ def test_mxfp4_value_convert_layout_meta(layout, major_dim, inverse):
 @pytest.mark.parametrize("major", [-2, -1])
 @pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("with_out", [False, True])
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_layout_conversion_compile_warmup(kind, inverse, major, step, with_out, monkeypatch):
     from triton._compile_warmup import compile_warmup_only
     from triton.runtime.jit import JITFunction
