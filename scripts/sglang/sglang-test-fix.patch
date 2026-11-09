@@ -487,6 +487,48 @@ index 401ec6bba3..8d4a5ed966 100644
  
  
  def _reset_cuda_graph_test_buffers() -> None:
+diff --git a/python/sglang/test/kits/attention_unittest/runner_modes/cuda_graph_decode_runner.py b/python/sglang/test/kits/attention_unittest/runner_modes/cuda_graph_decode_runner.py
+index d4adf872b1..da0a1c7a70 100644
+--- a/python/sglang/test/kits/attention_unittest/runner_modes/cuda_graph_decode_runner.py
++++ b/python/sglang/test/kits/attention_unittest/runner_modes/cuda_graph_decode_runner.py
+@@ -4,6 +4,7 @@ from typing import Any, Callable
+ import torch
+ 
+ from sglang.srt.model_executor.forward_context import ForwardContext, forward_context
++from sglang.srt.utils import get_device_module, is_xpu
+ from sglang.test.kits.attention_unittest.attention_methods.dense_attention import (
+     _make_forward_batch as _make_dsa_forward_batch,
+ )
+@@ -407,14 +408,15 @@ def _run_cuda_graph_decode_case(
+         device=device,
+     )
+ 
+-    caller_stream = torch.cuda.current_stream(device=device)
+-    stream = torch.cuda.Stream(device=device)
++    device_module = get_device_module()
++    caller_stream = device_module.current_stream(device=device)
++    stream = device_module.Stream(device=device)
+     stream.wait_stream(caller_stream)
+     graphs = []
+     try:
+         with (
+             torch.no_grad(),
+-            torch.cuda.stream(stream),
++            device_module.stream(stream),
+             forward_context(ForwardContext(attn_backend=backend)),
+         ):
+             backend.init_cuda_graph_state(
+@@ -428,8 +430,8 @@ def _run_cuda_graph_decode_case(
+                 backend.init_forward_metadata_in_graph(capture_batch)
+                 adapter.run_forward(graph_fixture, capture_batch, capture_inputs)
+                 backend.on_after_cuda_graph_warmup()
+-                graph = torch.cuda.CUDAGraph()
+-                with torch.cuda.graph(graph, stream=stream):
++                graph = torch.xpu.XPUGraph() if is_xpu() else torch.cuda.CUDAGraph()
++                with device_module.graph(graph, stream=stream):
+                     backend.init_forward_metadata_in_graph(capture_batch)
+                     output = adapter.run_forward(
+                         graph_fixture, capture_batch, capture_inputs
 diff --git a/test/registered/attention/unittests/dense/test_triton.py b/test/registered/attention/unittests/dense/test_triton.py
 index 2d79949829..2e8184b657 100644
 --- a/test/registered/attention/unittests/dense/test_triton.py
@@ -633,7 +675,7 @@ index 99523e59fb..2cff915928 100644
  
      def transfer_kv_all_layer_mla(*args, **kwargs):
 diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
-index 3c18f44e0a..6eb01a618f 100644
+index 3c18f44e0a..a35fca8096 100644
 --- a/python/sglang/srt/mem_cache/memory_pool.py
 +++ b/python/sglang/srt/mem_cache/memory_pool.py
 @@ -134,7 +134,11 @@ _is_fp8_fnuz = is_fp8_fnuz()
@@ -658,6 +700,18 @@ index 3c18f44e0a..6eb01a618f 100644
          return store_cache_xpu(
              k.view(-1, row_dim),
              v.view(-1, row_dim),
+@@ -220,8 +224,9 @@ def _set_kv_buffer_impl(
+             v_cache[indices] = v
+         current_stream.wait_stream(alt_stream)
+     else:  # fallback to naive implementation
+-        k_cache[indices] = k
+-        v_cache[indices] = v
++        with torch.no_grad():
++            k_cache[indices] = k
++            v_cache[indices] = v
+ 
+ 
+ def _set_kv_buffer_prefix_valid_impl(
 diff --git a/python/sglang/srt/layers/attention/dsa_backend.py b/python/sglang/srt/layers/attention/dsa_backend.py
 index 0c9e2c01df..256de0081d 100644
 --- a/python/sglang/srt/layers/attention/dsa_backend.py
