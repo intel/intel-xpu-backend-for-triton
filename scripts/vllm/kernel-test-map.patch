@@ -1,0 +1,130 @@
+diff --git a/requirements/test/xpu.txt b/requirements/test/xpu.txt
+index 8d91ac191c..eed6234b87 100644
+--- a/requirements/test/xpu.txt
++++ b/requirements/test/xpu.txt
+@@ -800,8 +800,7 @@ pytest-forked==1.7.5
+     # via -r requirements/test/xpu.in
+ pytest-rerunfailures==16.6
+     # via -r requirements/test/xpu.in
+-pytest-shard==0.1.2
+-    # via -r requirements/test/xpu.in
++pytest-skip
+ pytest-timeout==2.4.0
+     # via -r requirements/test/xpu.in
+ python-dateutil==2.9.0.post0
+@@ -1049,23 +1048,6 @@ tokenizers==0.23.1
+     #   cohere
+     #   sentence-transformers
+     #   transformers
+-torch==2.14.0+xpu
+-    # via
+-    #   -c requirements/xpu.txt
+-    #   accelerate
+-    #   compressed-tensors
+-    #   mteb
+-    #   open-clip-torch
+-    #   runai-model-streamer
+-    #   sentence-transformers
+-    #   tensorizer
+-    #   timm
+-    #   torchvision
+-    #   xgrammar
+-torchvision==0.29.0+xpu
+-    # via
+-    #   open-clip-torch
+-    #   timm
+ tqdm==4.70.0
+     # via
+     #   -r requirements/test/../common.txt
+@@ -1090,14 +1072,6 @@ transformers==5.17.0
+     #   mteb
+     #   sentence-transformers
+     #   xgrammar
+-triton==3.8.0+xpu
+-    # via
+-    #   -c requirements/xpu.txt
+-    #   xgrammar
+-triton-xpu==3.8.0
+-    # via
+-    #   torch
+-    #   triton
+ truststore==0.10.4
+     # via
+     #   httpcore2
+diff --git a/tests/conftest.py b/tests/conftest.py
+index cd1d11917b..39bb3c6df4 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1625,6 +1625,72 @@ def pytest_addoption(parser):
+         "--optional", action="store_true", default=False, help="run optional test"
+     )
+ 
++from collections import defaultdict
++import sys
++
++_VLLM_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
++
++class _KernelTestMapRecorder:
++    def __init__(self):
++        self.included_kernels: set[str] | None = None
++        self.kernel_to_tests: defaultdict[str, set[str]] = defaultdict(set)
++        self.out_path: str | None = None
++
++    def launch_hook(self, metadata) -> None:
++        kernel_name = metadata.get()["name"]
++
++        if self.included_kernels is not None and kernel_name not in self.included_kernels:
++            return
++
++        # Key kernels as "<file>::<qualname>" (the sheet's kernel_id format) so same-named
++        # kernels in different files or classes stay distinct. JITFunction.run is on the stack here.
++        from triton.runtime.jit import JITFunction
++        frame = sys._getframe(1)
++        while frame is not None:
++            jit_fn = frame.f_locals.get("self") if frame.f_code.co_name == "run" else None
++            if isinstance(jit_fn, JITFunction):
++                src = os.path.realpath(jit_fn.fn.__code__.co_filename)
++                rel = os.path.relpath(src, _VLLM_ROOT)
++                qualname = jit_fn.fn.__qualname__.replace("<locals>.", "")
++                kernel_name = f"{src if rel.startswith('..') else rel}::{qualname}"
++                break
++            frame = frame.f_back
++
++        # PYTEST_CURRENT_TEST has a trailing " (<STAGE>)" suffix.
++        self.kernel_to_tests[kernel_name].add(os.environ["PYTEST_CURRENT_TEST"].rsplit(" ", 1)[0])
++
++_kernel_test_map_recorder = _KernelTestMapRecorder()
++
++def pytest_configure(config):
++    out_path = os.environ.get("VLLM_KERNEL_TEST_MAP_OUT")
++    if not out_path:
++        return
++
++    kernel_names = os.environ.get("VLLM_KERNEL_TEST_MAP_NAMES", "").strip()
++    _kernel_test_map_recorder.included_kernels = {
++        kernel_name.strip() for kernel_name in kernel_names.split(",") if kernel_name.strip()
++    } if kernel_names else None
++
++    import triton
++    triton.knobs.runtime.launch_enter_hook.add(_kernel_test_map_recorder.launch_hook)
++
++    _kernel_test_map_recorder.out_path = out_path
++
++def pytest_sessionfinish(session, exitstatus):
++    if _kernel_test_map_recorder.out_path is None:
++        return
++
++    with open(_kernel_test_map_recorder.out_path, "w") as f:
++        json.dump(
++            {
++                kernel: sorted(tests)
++                for kernel, tests in _kernel_test_map_recorder.kernel_to_tests.items()
++            },
++            f,
++            indent=4,
++            sort_keys=True,
++        )
++        f.write("\n")
+ 
+ def pytest_collection_modifyitems(config, items):
+     if config.getoption("--optional"):
