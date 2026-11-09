@@ -1,4 +1,5 @@
-# Stream-K GEMM shapes: the shapes of gemm_streamk_benchmark.py, whose last wave of tiles is mostly empty.
+# Stream-K GEMM shapes: the shapes of gemm_streamk_benchmark.py. All but the first have a mostly empty last
+# wave of tiles, where stream-K is meant to help; 3072x4096x3072 is the benchmark's dense baseline shape.
 # Kept separate from input_gemm_splitk.in so that split-K tuning entries never retarget the stream-K reference.
 
 PvcGemmStreamKBF16BF16FP32_RRR_1 --bm_name=bf16_bf16_fp32 --m=3072 --k=4096 --n=3072

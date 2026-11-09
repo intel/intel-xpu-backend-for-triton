@@ -46,7 +46,7 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols, extra_para
 
     df['params'] = df.apply(serialize_params, axis=1)
 
-    compilers = ['pytorch', 'triton', 'triton-td', 'sycl-tla', 'sycl-tla-streamk']
+    compilers = ['pytorch', 'triton', 'triton-td', 'sycl-tla']
 
     dfs = []
     for compiler_name in compilers:

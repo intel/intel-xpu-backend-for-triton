@@ -37,11 +37,15 @@ static auto gemm_splitk_run(const at::Tensor &A, const at::Tensor &B,
 
   if (mode == StreamKMode::StreamK) {
     // The scheduler silently falls back to a plain data-parallel decomposition
-    // when it cannot form a single stream-K unit of min_iters_per_sk_unit_ k
-    // iterations. In StreamK mode it always has at least one tile to split, so
-    // ceil(K / TileK) >= min_iters_per_sk_unit_ rules the fallback out. Fail
-    // loudly instead of measuring a data-parallel kernel as stream-K. Raised
-    // outside the try below so that it reaches Python as an exception.
+    // when the stream-K tiles do not hold min_iters_per_sk_unit_ k iterations
+    // between them (k_tiles * sk_tiles < min_iters_per_sk_unit_). This
+    // reference requires that many k tiles on its own, which is stricter than
+    // the scheduler needs (in StreamK mode sk_tiles >= min(output_tiles,
+    // wgs_per_wave), so a small K still runs stream-K once there are a few
+    // output tiles) but rules the fallback out without replicating the
+    // scheduler's wave arithmetic. Fail loudly instead of measuring a
+    // data-parallel kernel as stream-K. Raised outside the try below so that
+    // it reaches Python as an exception.
     using Params =
         cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams;
     constexpr int tile_k =
@@ -49,10 +53,10 @@ static auto gemm_splitk_run(const at::Tensor &A, const at::Tensor &B,
     const int k_tiles = (K + tile_k - 1) / tile_k;
     TORCH_CHECK(k_tiles >= static_cast<int>(Params::min_iters_per_sk_unit_),
                 "sycl-tla gemm_streamk: K=", K, " spans only ", k_tiles,
-                " k tiles of ", tile_k,
-                "; the stream-K scheduler needs at least ",
+                " k tiles of ", tile_k, "; this reference requires at least ",
                 Params::min_iters_per_sk_unit_,
-                " or it falls back to a data-parallel decomposition");
+                " so that the scheduler cannot fall back to a data-parallel "
+                "decomposition");
   }
 
   try {
@@ -161,9 +165,11 @@ auto gemm_splitk_kernel(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
                               A, B, C, M, N, K, split_k, StreamKMode::SplitK);
 }
 
-// Stream-K decomposition: the scheduler splits the K iterations of the tiles
-// in the last, partial wave across the otherwise idle work-groups. `splits` is
-// not read in this mode; 1 matches SYCL-TLA's own stream-K benchmark config.
+// Stream-K decomposition: the scheduler hands the last full wave of output
+// tiles plus the partial one (every tile, when there are fewer than two full
+// waves) to a single persistent wave that splits their K iterations, and runs
+// the remaining full waves data-parallel. `splits` is not read in this mode;
+// 1 matches SYCL-TLA's own stream-K benchmark config.
 auto gemm_streamk_kernel(const at::Tensor &A, const at::Tensor &B,
                          at::Tensor &C, const int M, const int N, const int K)
     -> int {
