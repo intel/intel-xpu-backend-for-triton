@@ -550,8 +550,6 @@ def _supports_descriptor_scatter():
 @pytest.mark.skipif(not _supports_descriptor_scatter(),
                     reason="TMA/TDM Scatter only works on cloud Blackwell Chips or AMD CDNA5")
 def test_scatter_pipeline(device):
-    if is_xpu():
-        pytest.xfail("XPU does not support TMA scatter")
 
     def alloc_fn(size, alignment, stream):
         return torch.empty(size, device=device, dtype=torch.int8)

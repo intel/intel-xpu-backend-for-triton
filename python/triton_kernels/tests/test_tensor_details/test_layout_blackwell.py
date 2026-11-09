@@ -36,7 +36,6 @@ def test_act_scale_storage_preservation():
 @pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)
 @pytest.mark.parametrize("layout", [BlackwellMXScaleLayout(), BlackwellActMXScaleLayout(None)])
 @pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_scale_zero_sized_roundtrip(shape, layout, device):
     x = torch.empty(shape, dtype=torch.uint8, device=device)
     src = wrap_torch_tensor(x)
@@ -55,7 +54,6 @@ def test_scale_zero_sized_roundtrip(shape, layout, device):
     (BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout(), BlackwellMXValueLayout()),
 ])
 @pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_value_zero_sized_roundtrip(shape, major_dim, layouts, device):
     src_layout = StridedLayout(major_dim)
     src = empty(shape, dtype=FP4, device=device, layout=src_layout)
@@ -234,7 +232,6 @@ def test_blackwell_fp4_shuffle_conversion(shape, tiles, step, with_out, mode, in
 
 @pytest.mark.parametrize("with_out", [False, True])
 @pytest.mark.parametrize("inverse", [False, True])
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_blackwell_fp4_shuffle_peak_allocation(with_out, inverse):
     canonical = empty((8, 1024, 2048), dtype=FP4, device="cuda")
     plain, shuffled = BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout()
@@ -408,7 +405,6 @@ def test_mxfp4_value_transform_fake(inverse, monkeypatch):
 
 @pytest.mark.parametrize(("slice_sizes", "shape"), [([0], (0, 64)), ([2, 0], (2, 0))])
 @pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_act_scale_zero_sized_ragged_roundtrip(slice_sizes, shape, device):
     metadata = make_ragged_tensor_metadata_torch(torch.tensor(slice_sizes, dtype=torch.int32), shape[0])
     x = torch.empty(shape, device=device)
@@ -430,7 +426,6 @@ def test_act_scale_zero_sized_ragged_roundtrip(slice_sizes, shape, device):
         (3, 2, 36),
     ],
 )
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_mxfp4_scale_roundtrip(shape):
     x = torch.randint(0, 256, shape, dtype=torch.uint8, device="cuda")
     layout = BlackwellMXScaleLayout()
@@ -439,7 +434,6 @@ def test_mxfp4_scale_roundtrip(shape):
     assert (res == x).all()
 
 
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_mxfp4_scale_roundtrip_noncontiguous():
     x = torch.randint(0, 256, (2, 16, 1024), dtype=torch.uint8, device="cuda")[..., ::2]
     assert not x.is_contiguous()
@@ -458,7 +452,6 @@ def test_mxfp4_scale_swizzle_meta():
     assert swizzled.shape == (1, 2, 4, 2, 256)
 
 
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 @pytest.mark.parametrize("shape", [(2, 256, 192), (1, 128, 64)])
 def test_act_scale_roundtrip_batched(shape):
     x = torch.randn(shape, device="cuda", dtype=torch.float32)
@@ -468,7 +461,6 @@ def test_act_scale_roundtrip_batched(shape):
     torch.testing.assert_close(res, x)
 
 
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 @pytest.mark.parametrize("shape", [(256, 192), (128, 64), (130, 65)])
 def test_act_scale_roundtrip_2d_without_ragged_metadata(shape):
     x = torch.randn(shape, device="cuda", dtype=torch.float32)
@@ -480,7 +472,6 @@ def test_act_scale_roundtrip_2d_without_ragged_metadata(shape):
     assert torch.equal(res, x)
 
 
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 @pytest.mark.parametrize("shape", [(256, 192), (128, 64), (130, 65)])
 def test_act_scale_convert_layout_roundtrip_2d_without_ragged_metadata(shape):
     x = torch.randn(shape, device="cuda", dtype=torch.float32)
@@ -491,7 +482,6 @@ def test_act_scale_convert_layout_roundtrip_2d_without_ragged_metadata(shape):
     assert torch.equal(x_tri_roundtrip.data, x)
 
 
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 @pytest.mark.parametrize(
     "slice_sizes, m, k, align_m",
     [
@@ -529,7 +519,6 @@ def test_act_scale_roundtrip_ragged(slice_sizes, m, k, align_m):
 @pytest.mark.parametrize("inverse", [False, True])
 @pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("with_out", [False, True])
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_scale_convert_layout_strided_storage(layout, shape, inverse, major, step, with_out):
     strided = StridedLayout(major)
     data = torch.randint(0, 256, shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
@@ -574,7 +563,6 @@ def test_scale_convert_layout_strided_storage(layout, shape, inverse, major, ste
 @pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("with_out", [False, True])
 @pytest.mark.parametrize("major", [-2, -1])
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_act_scale_convert_layout_ragged_padding(sizes, shape, step, with_out, major):
     metadata = make_ragged_tensor_metadata(torch.tensor(sizes, dtype=torch.int32, device="cuda"), shape[0])
     layout = BlackwellActMXScaleLayout(metadata)
@@ -623,7 +611,6 @@ def test_act_scale_convert_layout_ragged_padding(sizes, shape, step, with_out, m
 
 @pytest.mark.parametrize("layout", [BlackwellActMXScaleLayout(None), BlackwellMXScaleLayout()])
 @pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.float8_e5m2, torch.float32])
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_scale_convert_layout_dtype(layout, dtype):
     bits = torch.randint(0, 256, (2, 130, 9), dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
     data = bits.view(dtype) if dtype.itemsize == 1 else bits.to(dtype)
@@ -703,7 +690,6 @@ def test_act_scale_encoded_conversion_replay(rows, columns, source_slices, dest_
 @pytest.mark.parametrize("kind", ["act", "mx", "ragged_act"])
 @pytest.mark.parametrize("with_out", [False, True])
 @pytest.mark.parametrize("inverse", [False, True])
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_scale_convert_layout_peak_allocation(kind, with_out, inverse):
     shape = (32768, 128) if kind == "ragged_act" else (16, 2048, 128)
     data = torch.empty(shape, dtype=torch.uint8, device="cuda")
@@ -763,7 +749,6 @@ def test_scale_convert_layout_uses_input_device(layout, with_out):
 
 
 @pytest.mark.parametrize("layout", [BlackwellActMXScaleLayout(None), BlackwellMXScaleLayout()])
-@pytest.mark.xfail(condition=not is_cuda(), reason="Only supported on CUDA", run=False)
 def test_scale_convert_layout_fake(layout, monkeypatch):
 
     def reject_launch(*args, **kwargs):
