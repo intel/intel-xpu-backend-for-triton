@@ -214,16 +214,19 @@ def test_testcase_with_multiple_outcome_tags_is_failed(tmp_path, capsys, childre
         assert diagnostic in case.error_message
         assert f'{diagnostic} tb' in case.error_text
     err = capsys.readouterr().err
-    assert 'test_multi' in err
-    assert 'language' in err
+    assert 'language::python.test.unit.language.test_core::test_multi' in err
 
 
-def test_testcase_with_multiple_outcome_tags_does_not_abort_tests_stats(tmp_path):
+def test_testcase_with_multiple_outcome_tags_is_failed_in_tests_stats(tmp_path):
     children = '<failure message="call">call tb</failure><error message="teardown">teardown tb</error>'
     (tmp_path / 'language.xml').write_text(_multi_child_report(children), encoding='utf-8')
     config = triton_utils.Config(action='tests_stats', reports=str(tmp_path), merge_test_results=True)
 
-    triton_utils.TestsStatsActionRunner(config)()
+    stats = {}
+    for line in triton_utils.TestsStatsActionRunner(config)().splitlines():
+        stats.update(json.loads(line))
+
+    assert stats['language::python/test/unit/language/test_core.py::test_multi']['failed'] == 1
 
 
 def test_testcase_with_only_skipped_tags_raises_with_identity(tmp_path):
