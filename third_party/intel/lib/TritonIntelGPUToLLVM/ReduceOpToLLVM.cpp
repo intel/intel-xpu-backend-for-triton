@@ -39,6 +39,10 @@ public:
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ReduceOpHelper helper(op);
+    if (!helper.isReduceWithinCTA())
+      return rewriter.notifyMatchFailure(op,
+                                         "cross-CTA reduction not supported");
+
     Location loc = op->getLoc();
     auto accs = unpackInputs(loc, op, adaptor, rewriter);
     unsigned axis = op.getAxis();
@@ -64,20 +68,18 @@ public:
            ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(), axis));
 
     // Step 3: reduce across warps.
-    if (!helper.isReduceWithinCTA())
-      return rewriter.notifyMatchFailure(op,
-                                         "cross-CTA reduction not supported");
+    auto reduced = reduceAcrossWarpsIntel(op, std::move(accs), rewriter, regLl);
+    if (failed(reduced))
+      return failure();
 
-    accs = reduceAcrossWarpsIntel(op, std::move(accs), rewriter, regLl);
-
-    packResults(op, accs, rewriter);
+    packResults(op, *reduced, rewriter);
     return success();
   }
 
 private:
   const TargetInfoBase &targetInfo;
 
-  SmallVector<SmallVector<Value>> reduceAcrossWarpsIntel(
+  FailureOr<SmallVector<SmallVector<Value>>> reduceAcrossWarpsIntel(
       triton::ReduceOp op, SmallVector<SmallVector<Value>> accs,
       ConversionPatternRewriter &rewriter, LinearLayout &regLl) const {
     auto *ctx = op.getContext();
@@ -102,7 +104,10 @@ private:
       auto outputLayout =
           triton::gpu::toLinearLayout(resultTy).removeZeroBasesAlongDim(
               str_attr("register"));
-      assert(regLl == outputLayout && "expected result ownership after reduce");
+      if (regLl != outputLayout) {
+        op.emitError("reduction result ownership does not match result layout");
+        return failure();
+      }
     }
     return accs;
   }
@@ -535,7 +540,7 @@ private:
           value = b.inttoptr(elemTy, value);
       } else if (elemTy.getIntOrFloatBitWidth() < 8) {
         for (Value &value : results[i])
-          value = b.trunc(elemTy, value, LLVM::IntegerOverflowFlags::nuw);
+          value = b.trunc(elemTy, value);
       }
     }
     return results;
