@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 from __future__ import annotations
 
 import csv
@@ -265,6 +266,22 @@ class TestCaseWithResult(
         TestCase,
 ):
 
+    @staticmethod
+    def _collapse_outcome_tags(identity: str, child_tags: list[XMLElement]) -> XMLElement:
+        """Reduce several outcome tags of one testcase to a single failure/error tag.
+
+        E.g. an xdist worker crash in teardown of a failed test yields <failure> and <error> in one testcase.
+        """
+        tag_names = [child_tag.tag for child_tag in child_tags]
+        failing_tags = [child_tag for child_tag in child_tags if child_tag.tag != "skipped"]
+        if not failing_tags:
+            raise ValueError(f"Unexpected number of child tags for the test {identity}: {tag_names}")
+        print(f"WARNING: test {identity} has multiple outcome tags {tag_names}, counting it as failed", file=sys.stderr)
+        collapsed = stdET.Element(failing_tags[0].tag)
+        collapsed.set("message", "\n".join("[" + tag.tag + "] " + tag.get("message", "") for tag in failing_tags))
+        collapsed.text = "\n".join("[" + tag.tag + "] " + (tag.text or "") for tag in failing_tags)
+        return collapsed
+
     @classmethod
     def from_xml(cls, testsuite: str, xml_element: XMLElement) -> TestCaseWithResult:
         raw_name = xml_element.get("name", "")
@@ -278,7 +295,7 @@ class TestCaseWithResult(
         child_tags = [child_tag for child_tag in list(xml_element) if child_tag.tag in ["failure", "skipped", "error"]]
         run_result = RunResult.PASSED
         if len(child_tags) > 1:
-            raise ValueError("Unexpected number of child tags for the test")
+            child_tags = [cls._collapse_outcome_tags(f"{testsuite}::{classname}::{raw_name}", child_tags)]
         if len(child_tags) == 1:
             child_element = child_tags[0]
             child_tag = child_element.tag
