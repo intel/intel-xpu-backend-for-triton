@@ -1067,7 +1067,7 @@ run_sglang_moe_tests() {
   TRITON_TEST_SUITE=sglang_moe \
     run_pytest_command -vvv \
       test/registered/moe/test_fused_moe.py \
-      test/registered/lora/test_fused_moe_lora_kernel.py
+      test/registered/kernels/ops/lora/test_fused_moe_lora_kernel.py
 }
 
 run_sglang_mamba_tests() {

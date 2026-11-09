@@ -98,7 +98,8 @@ patch_sglang() {
   # Remove sgl-kernel due to a bug in the current environment (newer torch); we don't use it here.
   # Remove timm because it depends on torchvision, which depends on a pinned torch.
   sed -i -e '/^requires = /s/ *"torch[^"]*",\?//' \
-    -e '/pytorch\|torch\|sgl-kernel\|sglang-kernel\|timm/d' "$SGLANG_DIR/python/pyproject.toml"
+    -e '/^requires = /s/ *"triton[^"]*",\?//' \
+    -e '/pytorch\|torch\|triton\|sgl-kernel\|sglang-kernel\|timm/d' "$SGLANG_DIR/python/pyproject.toml"
   cat "$SGLANG_DIR/python/pyproject.toml"
 }
 
