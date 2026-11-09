@@ -1,0 +1,9 @@
+# Stream-K GEMM shapes: the shapes of gemm_streamk_benchmark.py, whose last wave of tiles is mostly empty.
+# Kept separate from input_gemm_splitk.in so that split-K tuning entries never retarget the stream-K reference.
+
+PvcGemmStreamKBF16BF16FP32_RRR_1 --bm_name=bf16_bf16_fp32 --m=3072 --k=4096 --n=3072
+PvcGemmStreamKBF16BF16FP32_RRR_1 --bm_name=bf16_bf16_fp32 --m=512 --k=32768 --n=8192
+PvcGemmStreamKBF16BF16FP32_RRR_1 --bm_name=bf16_bf16_fp32 --m=512 --k=8192 --n=8192
+PvcGemmStreamKBF16BF16FP32_RRR_1 --bm_name=bf16_bf16_fp32 --m=8192 --k=16384 --n=1024
+PvcGemmStreamKBF16BF16FP32_RRR_1 --bm_name=bf16_bf16_fp32 --m=1024 --k=28672 --n=8192
+PvcGemmStreamKBF16BF16FP32_RRR_1 --bm_name=bf16_bf16_fp32 --m=1024 --k=16384 --n=8192

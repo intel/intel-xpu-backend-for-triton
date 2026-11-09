@@ -33,9 +33,29 @@ static auto gemm_splitk_run(const at::Tensor &A, const at::Tensor &B,
                   {});
 
   using ElementComputeEpilogue = float;
+  using Gemm = typename GemmConfig::Gemm;
+
+  if (mode == StreamKMode::StreamK) {
+    // The scheduler silently falls back to a plain data-parallel decomposition
+    // when it cannot form a single stream-K unit of min_iters_per_sk_unit_ k
+    // iterations. In StreamK mode it always has at least one tile to split, so
+    // ceil(K / TileK) >= min_iters_per_sk_unit_ rules the fallback out. Fail
+    // loudly instead of measuring a data-parallel kernel as stream-K. Raised
+    // outside the try below so that it reaches Python as an exception.
+    using Params =
+        cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams;
+    constexpr int tile_k =
+        cute::size<2>(typename Gemm::GemmKernel::TileShape{});
+    const int k_tiles = (K + tile_k - 1) / tile_k;
+    TORCH_CHECK(k_tiles >= static_cast<int>(Params::min_iters_per_sk_unit_),
+                "sycl-tla gemm_streamk: K=", K, " spans only ", k_tiles,
+                " k tiles of ", tile_k,
+                "; the stream-K scheduler needs at least ",
+                Params::min_iters_per_sk_unit_,
+                " or it falls back to a data-parallel decomposition");
+  }
 
   try {
-    using Gemm = GemmConfig::Gemm;
     typename Gemm::Arguments arguments;
 
     const cutlass::bfloat16_t *_A =
@@ -111,28 +131,34 @@ using GemmSplitKRunPtr = int (*)(const at::Tensor &A, const at::Tensor &B,
                                  const int K, const int split_k,
                                  const StreamKMode mode);
 
+// Split-K and stream-K each have their own shape table (input_gemm_splitk.in
+// and input_gemm_streamk.in), so that tuning one never retargets the other.
 #include GEMM_SPLITK_CONFIG_HEADER
+#include GEMM_STREAMK_CONFIG_HEADER
 
-static auto gemm_splitk_dispatch(const at::Tensor &A, const at::Tensor &B,
+template <typename Table>
+static auto gemm_splitk_dispatch(const Table &table, GemmSplitKRunPtr fallback,
+                                 const at::Tensor &A, const at::Tensor &B,
                                  at::Tensor &C, const int M, const int N,
                                  const int K, const int split_k,
                                  const StreamKMode mode) -> int {
   const SplitKDim test_case{M, N, K};
 
-  for (auto const &kv : gemm_splitk_config) {
+  for (auto const &kv : table) {
     if (test_case == kv.first) {
       return kv.second(A, B, C, M, N, K, split_k, mode);
     }
   }
 
-  return gemm_splitk_run<PvcGemmSplitKBF16BF16FP32_RRR_1>(A, B, C, M, N, K,
-                                                          split_k, mode);
+  return fallback(A, B, C, M, N, K, split_k, mode);
 }
 
 auto gemm_splitk_kernel(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
                         const int M, const int N, const int K,
                         const int split_k) -> int {
-  return gemm_splitk_dispatch(A, B, C, M, N, K, split_k, StreamKMode::SplitK);
+  return gemm_splitk_dispatch(gemm_splitk_config,
+                              &gemm_splitk_run<PvcGemmSplitKBF16BF16FP32_RRR_1>,
+                              A, B, C, M, N, K, split_k, StreamKMode::SplitK);
 }
 
 // Stream-K decomposition: the scheduler splits the K iterations of the tiles
@@ -141,6 +167,7 @@ auto gemm_splitk_kernel(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
 auto gemm_streamk_kernel(const at::Tensor &A, const at::Tensor &B,
                          at::Tensor &C, const int M, const int N, const int K)
     -> int {
-  return gemm_splitk_dispatch(A, B, C, M, N, K, /*split_k=*/1,
-                              StreamKMode::StreamK);
+  return gemm_splitk_dispatch(
+      gemm_streamk_config, &gemm_splitk_run<PvcGemmStreamKBF16BF16FP32_RRR_1>,
+      A, B, C, M, N, K, /*split_k=*/1, StreamKMode::StreamK);
 }
