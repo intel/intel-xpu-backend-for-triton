@@ -10,7 +10,7 @@ if len(sys.argv) != 3:
 try:
     with open(sys.argv[1], encoding="utf-8") as f:
         data = json.load(f)
-except Exception as e:
+except (OSError, ValueError) as e:
     sys.exit(f"Error: {e}")
 
 with open(sys.argv[2], "w", encoding="utf-8") as f:

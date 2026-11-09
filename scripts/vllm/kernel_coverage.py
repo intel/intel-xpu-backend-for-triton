@@ -14,7 +14,7 @@ args = parser.parse_args()
 
 names = args.kernels or sys.stdin.read().split()
 
-tests_by_kernel = {}
+tests_by_kernel: dict[str, set[str]] = {}
 for path in sorted(args.maps_dir.rglob("*.json")):
     for kernel, tests in json.loads(path.read_text(encoding="utf-8")).items():
         tests_by_kernel.setdefault(kernel, set()).update(tests)
