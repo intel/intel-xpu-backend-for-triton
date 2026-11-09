@@ -154,7 +154,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: llvm.or [[S1]], %{{.*}} : i1
     // CHECK: llvm.zext %{{.*}} : i1 to i8
     // CHECK: llvm.store %{{.*}}, %{{.*}} : {{.*}}i8{{.*}}, !llvm.ptr<3>
-    // CHECK: llvm.call spir_funccc @_Z7barrierj
+    // CHECK: triton_gen.barrier {mem_fence = Local}
     // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> {{.*}}i8
     // CHECK: llvm.trunc %{{.*}} {{.*}} : i8 to i1
     %g = "tt.reduce" (%f) ({

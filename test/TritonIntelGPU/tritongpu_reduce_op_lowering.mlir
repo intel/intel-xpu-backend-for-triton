@@ -9,19 +9,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 64 : i32, "ttg.th
 
   // 1st round intra-warp reduce
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
-  // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
+  // CHECK: llvm.store %{{.*}}, %{{.*}} : vector<1xi32>, !llvm.ptr<3>
 
   // COM: Load all 64 partials, combine register pairs, then reduce 32 lanes.
-  // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
-  // CHECK-NOT: llvm.call spir_funccc @_Z7barrierj
+  // CHECK: triton_gen.barrier {mem_fence = Local}
+  // CHECK-NOT: triton_gen.barrier
   // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> {{.*}}i32
-  // CHECK-NOT: llvm.call spir_funccc @_Z7barrierj
+  // CHECK-NOT: triton_gen.barrier
   // CHECK: llvm.add
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
   // COM: The final reduction is already in registers.
   // CHECK-NOT: llvm.store
   // CHECK-NOT: llvm.load
-  // CHECK-NOT: llvm.call spir_funccc @_Z7barrierj
+  // CHECK-NOT: triton_gen.barrier
   // CHECK: llvm.return
 
     %g = "tt.reduce" (%f) ({
@@ -42,11 +42,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.tar
     // COM: No lanes vary along axis 0, so store before reducing across warps.
     // CHECK:     llvm.store
     // CHECK-NOT: llvm.load
-    // CHECK:     llvm.call spir_funccc @_Z7barrierj
+    // CHECK:     triton_gen.barrier {mem_fence = Local}
     // CHECK:     llvm.load
     // COM: Preserve output lanes, reducing warp partials in registers.
     // CHECK:     llvm.fadd
-    // CHECK-NOT: llvm.call spir_funccc @_Z7barrierj
+    // CHECK-NOT: triton_gen.barrier
     // CHECK-NOT: llvm.store
     // CHECK:     llvm.return
     %1 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
@@ -70,17 +70,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
   // 1st round: intra-warp full reduce across 16 lanes (3 args = Reduce)
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
-  // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
+  // CHECK: llvm.store %{{.*}}, %{{.*}} : vector<1xi32>, !llvm.ptr<3>
 
   // COM: Combine register pairs, then perform a full 16-lane reduction.
-  // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
-  // CHECK-NOT: llvm.call spir_funccc @_Z7barrierj
+  // CHECK: triton_gen.barrier {mem_fence = Local}
+  // CHECK-NOT: triton_gen.barrier
   // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> {{.*}}i32
   // CHECK: llvm.add
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
   // CHECK-NOT: llvm.store
   // CHECK-NOT: llvm.load
-  // CHECK-NOT: llvm.call spir_funccc @_Z7barrierj
+  // CHECK-NOT: triton_gen.barrier
   // CHECK: llvm.return
 
     %g = "tt.reduce" (%f) ({
@@ -105,11 +105,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // 1st round: intra-warp full reduce across 16 lanes using GroupNonUniformSMax (3 args = Reduce)
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformSMaxiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
-  // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
+  // CHECK: llvm.store %{{.*}}, %{{.*}} : vector<1xi32>, !llvm.ptr<3>
 
   // 2nd round: inter-warp reduce with 4 warps using ClusteredReduce (4 args)
-  // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
-  // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
+  // CHECK: triton_gen.barrier {mem_fence = Local}
+  // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xi32>
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformSMaxiijj(%{{.*}}) {{.*}} : (i32, i32, i32, i32) -> i32
 
     %g = "tt.reduce" (%f) ({
@@ -138,12 +138,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // Store partial results to shared memory (may be vectorized or scalarized)
   // CHECK:     llvm.store %{{.*}}, %{{.*}} : {{.*}}, !llvm.ptr<3>
-  // CHECK:     llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
+  // CHECK:     triton_gen.barrier {mem_fence = Local}
 
   // COM: All output lanes remain in place, so no layout restoration is needed.
   // CHECK:     llvm.load %{{.*}} : !llvm.ptr<3> -> {{.*}}
   // CHECK:     llvm.fadd
-  // CHECK-NOT: llvm.call spir_funccc @_Z7barrierj
+  // CHECK-NOT: triton_gen.barrier
   // CHECK-NOT: llvm.store
   // CHECK:     llvm.return
 
@@ -165,15 +165,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: reduce_mixed_width_reps
   tt.func @reduce_mixed_width_reps(%x: tensor<4x256xi64, #blocked>, %y: tensor<4x256xi8, #blocked>) -> (tensor<256xi64, #ttg.slice<{dim = 0, parent = #blocked}>>, tensor<256xi8, #ttg.slice<{dim = 0, parent = #blocked}>>) {
     // CHECK: llvm.store %{{.*}}, %{{.*}} : {{.*}}i64{{.*}}, !llvm.ptr<3>
-    // CHECK-NOT: llvm.call spir_funccc @_Z7barrierj
+    // CHECK-NOT: triton_gen.barrier
     // CHECK-NOT: llvm.load
     // CHECK: llvm.store %{{.*}}, %{{.*}} : {{.*}}i8{{.*}}, !llvm.ptr<3>
-    // CHECK: llvm.call spir_funccc @_Z7barrierj
-    // CHECK-NOT: llvm.call spir_funccc @_Z7barrierj
+    // CHECK: triton_gen.barrier {mem_fence = Local}
+    // CHECK-NOT: triton_gen.barrier
     // CHECK-NOT: llvm.store
     // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> {{.*}}i64
     // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> {{.*}}i8
-    // CHECK-NOT: llvm.call spir_funccc @_Z7barrierj
+    // CHECK-NOT: triton_gen.barrier
     // CHECK-NOT: llvm.store
     // CHECK: llvm.return
     %a, %b = "tt.reduce"(%x, %y) ({
