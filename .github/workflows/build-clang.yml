@@ -1,0 +1,66 @@
+# Builds Triton with clang and lld (TRITON_BUILD_WITH_CLANG_LLD), without running tests. PR CI builds
+# only with GCC, which does not catch errors that only clang reports, such as calls to deprecated
+# APIs. The runner, shell and build command mirror the GCC build in build-test-reusable.yml.
+name: Build with clang
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 3 * * *"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build-clang.yml
+
+permissions: read-all
+
+env:
+  PYTHON_VERSION: "3.11"
+  # Increase this value to reset cache
+  PIP_CACHE_NUMBER: 1
+
+jobs:
+  build:
+    name: Build
+    timeout-minutes: 720
+    runs-on:
+      - linux
+      - max1100
+      - rolling
+      - runner-0.0.22
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install clang and lld
+        run: |
+          if ! command -v clang++ >/dev/null 2>&1 || ! command -v ld.lld >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends clang lld
+          fi
+          command -v clang++ ld.lld
+          clang++ --version
+          ld.lld --version
+
+      - name: Load pip cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Install Python
+        uses: ./.github/actions/setup-python
+        with:
+          python_version: ${{ env.PYTHON_VERSION }}
+
+      - name: Build Triton
+        uses: ./.github/actions/setup-triton
+        with:
+          command: >
+            DEBUG=1
+            TRITON_BUILD_WITH_CLANG_LLD=1
+            python -m build --wheel --no-isolation
