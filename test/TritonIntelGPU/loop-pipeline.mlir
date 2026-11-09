@@ -19,13 +19,16 @@
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
 
+// CHECK: module attributes {{.*}}ttig.pipelined_prefetch = {barrier = false, total_bytes = 61440 : i64}
+// TWO-STAGES: module attributes {{.*}}ttig.pipelined_prefetch = {barrier = false, total_bytes = 40960 : i64}
+// POST-OPT: module attributes {{.*}}ttig.pipelined_prefetch = {barrier = false, total_bytes = 61440 : i64}
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   tt.func public @matmul_kernel(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32, %arg8: i32) {
     // CHECK-LABEL:   tt.func public @matmul_kernel
     // TWO-STAGES-LABEL: tt.func public @matmul_kernel
-    // TWO-STAGES: } {ttig.pipelined_prefetch = {barrier = false, num_stages = 2 : i32, total_bytes = 40960 : i64}}
+    // TWO-STAGES: } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 40960 : i64}}
     // POST-OPT-LABEL: tt.func public @matmul_kernel
-    // POST-OPT: } {ttig.pipelined_prefetch = {barrier = false, num_stages = 3 : i32, total_bytes = 61440 : i64}}
+    // POST-OPT: } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 61440 : i64}}
     %c8_i32 = arith.constant 8 : i32
     %c64_i32 = arith.constant 64 : i32
     %c256_i32 = arith.constant 256 : i32
@@ -120,7 +123,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:   %[[VAL_123:.*]] = tt.dot %[[VAL_121]], %[[VAL_122]], %[[VAL_93]], inputPrecision = tf32 : tensor<64x32xf16, #{{.*}}<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>> * tensor<32x256xf16, #{{.*}}<{opIdx = 1, parent = #[[$DPAS]], kWidth = 2}>> -> tensor<64x256xf32, #[[$DPAS]]>
     // CHECK:   scf.yield %[[VAL_123]], %[[VAL_106]], %[[VAL_107]], %[[VAL_94]], %[[ARG_14]], %[[LOAD_MASK_2D_1]], %[[VAL_95]], %[[ARG_17]], %[[VAL_108]] :
     // CHECK-SAME: tensor<64x256xf32, #[[$DPAS]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<64x32xi1, #[[$BLOCK_0]]>, tensor<64x32xi1, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, i32, i32
-    // CHECK-NEXT: } {ttig.pipelined_prefetch = {barrier = false, num_stages = 3 : i32, total_bytes = 61440 : i64}}
+    // CHECK-NEXT: } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 61440 : i64}}
     %53:3 = scf.for %arg9 = %c0_i32 to %50 step %c1_i32 iter_args(%arg10 = %cst_2, %arg11 = %38, %arg12 = %48) -> (tensor<64x256xf32, #dpas>, tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<32x256x!tt.ptr<f16>, #blocked1>)  : i32 {
       %72 = arith.muli %arg9, %c32_i32 : i32
       %73 = arith.subi %arg5, %72 : i32
@@ -157,9 +160,9 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
   tt.func public @matmul_kernel_descriptor(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i64, %arg7: i64) {
     // CHECK-LABEL:   tt.func public @matmul_kernel_descriptor
     // TWO-STAGES-LABEL: tt.func public @matmul_kernel_descriptor
-    // TWO-STAGES: } {ttig.pipelined_prefetch = {barrier = false, num_stages = 2 : i32, total_bytes = 98304 : i64}}
+    // TWO-STAGES: } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 98304 : i64}}
     // POST-OPT-LABEL: tt.func public @matmul_kernel_descriptor
-    // POST-OPT: } {ttig.pipelined_prefetch = {barrier = false, num_stages = 3 : i32, total_bytes = 147456 : i64}}
+    // POST-OPT: } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 147456 : i64}}
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
@@ -179,7 +182,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     // CHECK:        ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<64x256xf16>
     // CHECK:        tt.dot {{.*}} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$DPAS]], kWidth = 2}>> -> tensor<128x256xf32, #[[$DPAS]]>
     // CHECK:        scf.yield
-    // CHECK-NEXT: } {ttig.pipelined_prefetch = {barrier = false, num_stages = 3 : i32, total_bytes = 147456 : i64}}
+    // CHECK-NEXT: } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 147456 : i64}}
     %result:2 = scf.for %k = %c0_i32 to %arg5 step %c64_i32 iter_args(%acc = %cst, %koff = %c0_i32) -> (tensor<128x256xf32, #dpas>, i32) : i32 {
       %a = tt.descriptor_load %descA[%c0_i32, %koff] {ttig.block_io = "row_major"} : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #dot0>
       %b = tt.descriptor_load %descB[%koff, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #dot1>

@@ -250,12 +250,15 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
     The pass supports prefetching `tt.dot` operands. The `num-stages` argument controls
     the prefetching and distance (i.e. the number of iterations to prefetch in advance).
     Successfully pipelined loops carry a `ttig.pipelined_prefetch` dictionary:
-    `barrier` indicates whether this pass inserted a split barrier,
-    `num_stages` is the configured stage count and `total_bytes` is the sum
-    of prefetched load tile sizes in bytes multiplied by that count. Each
-    element is rounded up to a whole byte. The size is an estimate, not the
-    actual number of bytes fetched at runtime, and is omitted when it cannot
-    be represented statically. Elementwise prefetch candidates are included too.
+    `barrier` indicates whether this pass inserted a split barrier and
+    `total_bytes` is the sum of prefetched load tile sizes in bytes multiplied
+    by the configured stage count. Each element is rounded up to a whole byte.
+    The size is an estimate, not the actual number of bytes fetched at runtime,
+    and is omitted when it cannot be represented statically. Elementwise
+    prefetch candidates are included too. The module carries the same dictionary
+    with the barrier flags OR-ed and the byte estimates summed across all
+    annotated loops. Its total is omitted if any loop's size is unknown or the
+    sum overflows.
   }];
 
   let dependentDialects = ["mlir::arith::ArithDialect",
