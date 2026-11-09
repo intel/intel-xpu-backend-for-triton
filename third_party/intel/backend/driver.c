@@ -609,10 +609,19 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   PyObject *py_bytes;
   int is_spv;
   int devId;
+  PyObject *cooperationForwarding = Py_None;
 
-  if (!PyArg_ParseTuple(args, "sSispi|z", &name, &py_bytes, &shared,
-                        &build_flags_ptr, &is_spv, &devId, &maxGRFMode)) {
+  if (!PyArg_ParseTuple(args, "sSispi|zO", &name, &py_bytes, &shared,
+                        &build_flags_ptr, &is_spv, &devId, &maxGRFMode,
+                        &cooperationForwarding)) {
     // PyArg_ParseTuple will set a PyErr
+    return NULL;
+  }
+
+  if (cooperationForwarding != Py_None &&
+      !PyBool_Check(cooperationForwarding)) {
+    PyErr_SetString(PyExc_TypeError,
+                    "cooperation_forwarding must be a bool or None");
     return NULL;
   }
 
@@ -789,6 +798,18 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
                        e.what());
       // construct previous working version
       build_flags = BuildFlags(build_flags_ptr);
+    }
+  }
+
+  if (cooperationForwarding == Py_True) {
+    ze_scheduling_hint_exp_desc_t hint{};
+    hint.stype = ZE_STRUCTURE_TYPE_SCHEDULING_HINT_EXP_DESC;
+    hint.flags = ZE_SCHEDULING_HINT_EXP_FLAG_ROUND_ROBIN;
+    ze_result_t result = zeKernelSchedulingHintExp(l0_kernel, &hint);
+    if (result != ZE_RESULT_SUCCESS) {
+      zeKernelDestroy(l0_kernel);
+      zeModuleDestroy(l0_module);
+      TRITON_ZE_FAIL_SET_INTEL(__FILE__, __LINE__, result);
     }
   }
 

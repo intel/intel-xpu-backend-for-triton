@@ -3,6 +3,8 @@
 
 #include "mlir/Dialect/SCF/Transforms/Transforms.h"
 #include <string>
+#include <cstdint>
+#include <optional>
 
 namespace mlir::triton::gpu::intel {
 
@@ -18,7 +20,8 @@ struct PipelineTarget {
 
 bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
                                   const PipelineTarget &target,
-                                  mlir::scf::PipeliningOption &options);
+                                  mlir::scf::PipeliningOption &options,
+                                  std::optional<int64_t> &prefetchBytes);
 
 } // namespace mlir::triton::gpu::intel
 

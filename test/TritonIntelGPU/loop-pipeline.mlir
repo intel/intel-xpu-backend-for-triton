@@ -1,4 +1,8 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3" | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3" -canonicalize -triton-licm | FileCheck %s --check-prefix=POST-OPT
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=2" | FileCheck %s --check-prefix=TWO-STAGES
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=1" | FileCheck %s --check-prefix=NO-PIPELINE --implicit-check-not=ttig.pipelined_prefetch
+// NO-PIPELINE: tt.func public @matmul_kernel
 // COM: Behavior-preservation cross-check: when upstream `tritongpu-assign-latencies` and
 // COM: `tritongpu-schedule-loops` annotate the IR before Intel's pipeline pass and the
 // COM: opt-in env var is on, every CHECK line in this file must still match. This proves
@@ -15,9 +19,16 @@
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
 
+// CHECK: module attributes {{.*}}ttig.pipelined_prefetch = {barrier = false, total_bytes = 61440 : i64}
+// TWO-STAGES: module attributes {{.*}}ttig.pipelined_prefetch = {barrier = false, total_bytes = 40960 : i64}
+// POST-OPT: module attributes {{.*}}ttig.pipelined_prefetch = {barrier = false, total_bytes = 61440 : i64}
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   tt.func public @matmul_kernel(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32, %arg8: i32) {
     // CHECK-LABEL:   tt.func public @matmul_kernel
+    // TWO-STAGES-LABEL: tt.func public @matmul_kernel
+    // TWO-STAGES: } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 40960 : i64}}
+    // POST-OPT-LABEL: tt.func public @matmul_kernel
+    // POST-OPT: } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 61440 : i64}}
     %c8_i32 = arith.constant 8 : i32
     %c64_i32 = arith.constant 64 : i32
     %c256_i32 = arith.constant 256 : i32
@@ -155,6 +166,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   tt.func public @matmul_kernel_descriptor(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i64, %arg7: i64) {
     // CHECK-LABEL:   tt.func public @matmul_kernel_descriptor
+    // TWO-STAGES-LABEL: tt.func public @matmul_kernel_descriptor
+    // TWO-STAGES: } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 98304 : i64}}
+    // POST-OPT-LABEL: tt.func public @matmul_kernel_descriptor
+    // POST-OPT: } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 147456 : i64}}
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
@@ -174,6 +189,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     // CHECK:        ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<64x256xf16>
     // CHECK:        tt.dot {{.*}} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$DPAS]], kWidth = 2}>> -> tensor<128x256xf32, #[[$DPAS]]>
     // CHECK:        scf.yield
+    // CHECK-NEXT: } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 147456 : i64}}
     %result:2 = scf.for %k = %c0_i32 to %arg5 step %c64_i32 iter_args(%acc = %cst, %koff = %c0_i32) -> (tensor<128x256xf32, #dpas>, i32) : i32 {
       %a = tt.descriptor_load %descA[%c0_i32, %koff] {ttig.block_io = "row_major"} : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #dot0>
       %b = tt.descriptor_load %descB[%koff, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #dot1>
