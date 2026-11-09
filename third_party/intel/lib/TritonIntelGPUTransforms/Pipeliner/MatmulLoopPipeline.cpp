@@ -69,7 +69,7 @@ static unsigned getTileBytes(Operation *op, int numStages) {
   auto tensorType = dyn_cast<RankedTensorType>(op->getResultTypes()[0]);
   if (!tensorType || !tensorType.hasStaticShape())
     return std::numeric_limits<unsigned>::max();
-  unsigned bits = tensorType.getElementType().getIntOrFloatBitWidth();
+  unsigned bits = getIntOrFloatOrPtrBitWidth(tensorType.getElementType());
   int64_t numElems = tensorType.getNumElements();
   int64_t bytesPerElem = llvm::divideCeil(bits, 8u);
   int64_t totalBytes = numElems * bytesPerElem * numStages;
@@ -497,7 +497,8 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
         ArrayRef<int64_t> shape = tensorType.getShape();
         auto numElems = product<int64_t>(shape);
         prefetchBytes +=
-            numElems * tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+            numElems * getIntOrFloatOrPtrBitWidth(tensorType.getElementType()) /
+            8;
       }
       DBGS() << "  " << *op << "\n";
     }

@@ -14,6 +14,7 @@
 #include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/CastInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
@@ -111,7 +112,7 @@ static bool isLeadingRebaseAligned(
   unsigned descRank = op.getDesc().getType().getBlockType().getRank();
   if (srcRank >= descRank)
     return true;
-  unsigned elementWidth = srcType.getElementTypeBitWidth();
+  unsigned elementWidth = getIntOrFloatOrPtrBitWidth(srcType.getElementType());
   if (elementWidth % 8 != 0 || shapeRank != descRank)
     return false;
   unsigned strideDivisor = std::max(1u, 4 / (elementWidth / 8));
@@ -280,7 +281,8 @@ private:
       return;
     }
 
-    unsigned elementWidth = tensorType.getElementTypeBitWidth();
+    unsigned elementWidth =
+        getIntOrFloatOrPtrBitWidth(tensorType.getElementType());
     LDBG("elementWidth: " << elementWidth);
 
     // The row_major attribute stamped below requires a unit last stride. The
@@ -394,7 +396,7 @@ private:
           strideInfo ? strideInfo->getStride(otherDim) : -1;
       Type elemTy =
           cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
-      unsigned elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
+      unsigned elemSizeInBytes = getIntOrFloatOrPtrBitWidth(elemTy) / 8;
       if (otherDimStride >= 0) {
         if ((otherDimStride * elemSizeInBytes) % 16 != 0) {
           LDBG("Non 16-byte aligned stride: " << otherDimStride);
@@ -491,11 +493,11 @@ private:
         if (ttgi::matchRowLimitMask(mask, op.getOther(), maskTy.getShape(),
                                     *contiguousDim, pitchDimIsBroadcast)) {
           // Skip the bypass if LowerTo2DBlockLoad would reject the pitch.
-          unsigned elemBits = cast<tt::PointerType>(
-                                  cast<RankedTensorType>(op.getPtr().getType())
-                                      .getElementType())
-                                  .getPointeeType()
-                                  .getIntOrFloatBitWidth();
+          unsigned elemBits = getIntOrFloatOrPtrBitWidth(
+              cast<tt::PointerType>(
+                  cast<RankedTensorType>(op.getPtr().getType())
+                      .getElementType())
+                  .getPointeeType());
           int64_t stride = strideInfo ? strideInfo->getStride(pitchDim) : -1;
           bool pitchOk = ttgi::isBlockPitchSupported(
               stride >= 0 ? std::optional<int64_t>(stride * elemBits / 8)
@@ -749,7 +751,7 @@ private:
     // Validate HW constraints common to both loads and stores.
     Type pointeeTy =
         cast<tt::PointerType>(ptrTensorTy.getElementType()).getPointeeType();
-    unsigned elemBits = pointeeTy.getIntOrFloatBitWidth();
+    unsigned elemBits = getIntOrFloatOrPtrBitWidth(pointeeTy);
     unsigned elemBytes = elemBits / 8;
 
     // Minimum pitch is 64 bytes.
@@ -1163,7 +1165,8 @@ private:
     // comparing its input and result types, so a candidate's type can differ.
     tt::TensorDescType descType = cast<tt::TensorDescType>(desc.getType());
     RankedTensorType tensorType = descType.getBlockType();
-    unsigned elementWidth = tensorType.getElementTypeBitWidth();
+    unsigned elementWidth =
+        getIntOrFloatOrPtrBitWidth(tensorType.getElementType());
     LDBG("strideOneDim: " << strideOneDimVal);
 
     // Ensure the base ptr is 4-byte aligned.

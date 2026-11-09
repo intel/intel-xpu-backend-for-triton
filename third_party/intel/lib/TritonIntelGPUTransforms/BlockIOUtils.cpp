@@ -1064,7 +1064,7 @@ unsigned estimateLoadHWCost(RankedTensorType type, Operation *loadOp) {
   if (!isBlockIOEligible(loadOp, type))
     return estimateGatherCost(type);
 
-  unsigned elemSizeInBits = type.getElementTypeBitWidth();
+  unsigned elemSizeInBits = getIntOrFloatOrPtrBitWidth(type.getElementType());
   if (elemSizeInBits > 64)
     return estimateGatherCost(type);
 
@@ -1121,7 +1121,7 @@ Attribute canonicalCoalescedDescStoreLayout(RankedTensorType type, int numWarps,
 
   // 128-bit max per-thread vector access (the coalesced-access granularity);
   // mirrors Coalesce.cpp. Divide by the element width to get elements/lane.
-  int maxVectorSize = 128 / type.getElementTypeBitWidth();
+  int maxVectorSize = 128 / getIntOrFloatOrPtrBitWidth(type.getElementType());
 
   int vectorSize = std::min(numElemsPerThread, maxVectorSize);
   SmallVector<unsigned> sizePerThread(type.getRank(), 1);
