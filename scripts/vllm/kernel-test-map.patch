@@ -1,61 +1,8 @@
-diff --git a/requirements/test/xpu.txt b/requirements/test/xpu.txt
-index 8d91ac191c..eed6234b87 100644
---- a/requirements/test/xpu.txt
-+++ b/requirements/test/xpu.txt
-@@ -800,8 +800,7 @@ pytest-forked==1.7.5
-     # via -r requirements/test/xpu.in
- pytest-rerunfailures==16.6
-     # via -r requirements/test/xpu.in
--pytest-shard==0.1.2
--    # via -r requirements/test/xpu.in
-+pytest-skip
- pytest-timeout==2.4.0
-     # via -r requirements/test/xpu.in
- python-dateutil==2.9.0.post0
-@@ -1049,23 +1048,6 @@ tokenizers==0.23.1
-     #   cohere
-     #   sentence-transformers
-     #   transformers
--torch==2.14.0+xpu
--    # via
--    #   -c requirements/xpu.txt
--    #   accelerate
--    #   compressed-tensors
--    #   mteb
--    #   open-clip-torch
--    #   runai-model-streamer
--    #   sentence-transformers
--    #   tensorizer
--    #   timm
--    #   torchvision
--    #   xgrammar
--torchvision==0.29.0+xpu
--    # via
--    #   open-clip-torch
--    #   timm
- tqdm==4.70.0
-     # via
-     #   -r requirements/test/../common.txt
-@@ -1090,14 +1072,6 @@ transformers==5.17.0
-     #   mteb
-     #   sentence-transformers
-     #   xgrammar
--triton==3.8.0+xpu
--    # via
--    #   -c requirements/xpu.txt
--    #   xgrammar
--triton-xpu==3.8.0
--    # via
--    #   torch
--    #   triton
- truststore==0.10.4
-     # via
-     #   httpcore2
 diff --git a/tests/conftest.py b/tests/conftest.py
-index cd1d11917b..39bb3c6df4 100644
+index 579a4400e6..018a4e373e 100644
 --- a/tests/conftest.py
 +++ b/tests/conftest.py
-@@ -1625,6 +1625,72 @@ def pytest_addoption(parser):
+@@ -1618,6 +1618,72 @@ def pytest_addoption(parser):
          "--optional", action="store_true", default=False, help="run optional test"
      )
  
