@@ -482,6 +482,8 @@ private:
     // Let only representative threads store to avoid duplicate SLM writes.
     Value write = triton::gpu::emitRedundantThreadPredicate(
         regLl.getFreeVariableMasks(), rewriter, loc, targetInfo);
+    if (!write)
+      write = b.true_val();
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       Type elemTy = getElementType(op, i);
       SmallVector<Value> values = inVals[i];

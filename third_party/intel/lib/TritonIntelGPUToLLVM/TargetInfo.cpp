@@ -6,12 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <llvm/ADT/TypeSwitch.h>
-#include <llvm/Support/ErrorHandling.h>
-#include <llvm/Support/FormatVariadic.h>
 #include "intel/include/TritonIntelGPUToLLVM/TargetInfo.h"
-#include "intel/include/TritonIntelGPUToLLVM/XeAsmFormat.h"
-#include <TritonGENToLLVM/GenIntrinsicHelper.h>
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "SPIRVTargetInfo.h"
 #include "Utility.h"
@@ -19,6 +14,12 @@
 #include "Utils/Mangling.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
+#include "intel/include/TritonIntelGPUToLLVM/XeAsmFormat.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
+#include <TritonGENToLLVM/GenIntrinsicHelper.h>
+#include <llvm/ADT/TypeSwitch.h>
+#include <llvm/Support/ErrorHandling.h>
+#include <llvm/Support/FormatVariadic.h>
 
 #include <limits>
 #include <numeric>
@@ -177,8 +178,10 @@ void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter,
 }
 
 void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
-  llvm::report_fatal_error(
-      "Warp synchronization is not supported on Intel GPU");
+  spirv::ControlBarrierOp::create(rewriter, loc, spirv::Scope::Subgroup,
+                                  spirv::Scope::Subgroup,
+                                  spirv::MemorySemantics::AcquireRelease |
+                                      spirv::MemorySemantics::WorkgroupMemory);
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
