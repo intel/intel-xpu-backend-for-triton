@@ -689,7 +689,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.su
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
+  // CHECK: llvm.func spir_funccc @_Z22__spirv_ControlBarrieriii(i32, i32, i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_blocked_blocked
   tt.func @convert_layout_blocked_blocked(%arg0: tensor<32x32xf32, #blocked0>) {
     // CHECK: llvm.store
@@ -709,7 +709,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.store
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
     // CHECK: [[ONE:%.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-NEXT: llvm.call spir_funccc  @_Z7barrierj([[ONE]]) {{.*}} : (i32) -> ()
+    // CHECK-NEXT: llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii([[EXEC]], [[MEM]], [[SEM]]) {{.*}} : (i32, i32, i32) -> ()
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
@@ -736,15 +736,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 2], warpsPerCTA = [2, 2], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
+  // CHECK: llvm.func spir_funccc @_Z22__spirv_ControlBarrieriii(i32, i32, i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_blocked_blocked_vec
   tt.func @convert_layout_blocked_blocked_vec(%arg0: tensor<32x32xf32, #blocked0>) {
     // CHECK: llvm.store
     // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
     // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
-    // CHECK: [[ONE:%.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-NEXT: llvm.call spir_funccc @_Z7barrierj([[ONE]]) {{.*}} : (i32) -> ()
+    // CHECK: [[EXEC:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK-NEXT: [[MEM:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK-NEXT: [[SEM:%.*]] = llvm.mlir.constant(264 : i32) : i32
+    // CHECK-NEXT: llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii([[EXEC]], [[MEM]], [[SEM]]) {{.*}} : (i32, i32, i32) -> ()
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
     // CHECK: llvm.load
@@ -808,14 +810,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
+  // CHECK: llvm.func spir_funccc @_Z22__spirv_ControlBarrieriii(i32, i32, i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_dpas_block
   tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x16xf32, #dpas>) {
     // CHECK: llvm.store
     // CHECK-SAME: vector<2xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
     // CHECK-SAME: vector<2xf32>, !llvm.ptr<3>
-    // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
+    // CHECK: llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii({{.*}}) {{.*}} : (i32, i32, i32) -> ()
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<2xf32>
     %0 = ttg.convert_layout %arg0 : tensor<32x16xf32, #dpas> -> tensor<32x16xf32, #blocked0>
@@ -828,7 +830,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
+  // CHECK: llvm.func spir_funccc @_Z22__spirv_ControlBarrieriii(i32, i32, i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_dpas_block
   tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x64xf32, #dpas>) {
     // CHECK: llvm.store
@@ -839,7 +841,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
     // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
-    // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
+    // CHECK: llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii({{.*}}) {{.*}} : (i32, i32, i32) -> ()
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
     %0 = ttg.convert_layout %arg0 : tensor<32x64xf32, #dpas> -> tensor<32x64xf32, #blocked>
@@ -855,7 +857,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   // CHECK-LABEL: convert_layout_dpas_transpose
   tt.func @convert_layout_dpas_transpose(%arg0: tensor<128x256xf8E5M2, #dpas>) {
     // CHECK-COUNT-16: llvm.store %{{.*}} : vector<16xi8>, !llvm.ptr<3>
-    // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
+    // CHECK: llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii({{.*}}) {{.*}} : (i32, i32, i32) -> ()
     // CHECK-COUNT-2: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<16xi8>
     %0 = ttg.convert_layout %arg0 : tensor<128x256xf8E5M2, #dpas> -> tensor<128x256xf8E5M2, #blocked>
     tt.return
@@ -909,12 +911,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
+  // CHECK: llvm.func spir_funccc @_Z22__spirv_ControlBarrieriii(i32, i32, i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_blocked_to_blocked_ptr
   tt.func @convert_blocked_to_blocked_ptr(%src:tensor<32x!tt.ptr<f32>, #blocked0>) {
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.store
-    // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
+    // CHECK: [[EXEC:%.*]] = llvm.mlir.constant(3 : i32) : i32
+    // CHECK-NEXT: [[MEM:%.*]] = llvm.mlir.constant(3 : i32) : i32
+    // CHECK-NEXT: [[SEM:%.*]] = llvm.mlir.constant(264 : i32) : i32
+    // CHECK-NEXT: llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii([[EXEC]], [[MEM]], [[SEM]]) {{.*}} : (i32, i32, i32) -> ()
     // CHECK: llvm.inttoptr
     // CHECK-COUNT-4: llvm.insertvalue
     %cvt = ttg.convert_layout %src : tensor<32x!tt.ptr<f32>, #blocked0> -> tensor<32x!tt.ptr<f32>, #blocked1>
@@ -1063,7 +1068,7 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
 // -----
 
 module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
+  // CHECK: llvm.func spir_funccc @_Z22__spirv_ControlBarrieriii(i32, i32, i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: atomic_cas_f32_scalar
   tt.func @atomic_cas_f32_scalar(%ptr : !tt.ptr<f32>, %cmp : f32, %val : f32) {
     // CHECK:      [[ZERO0:%.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -1095,8 +1100,10 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK-NEXT:   llvm.store [[RES_CAST]], [[GEP]] : f32, !llvm.ptr<3>
     // CHECK-NEXT:   llvm.br ^bb4
     // CHECK-NEXT: ^bb4:
-    // CHECK-NEXT:   [[ONE:%.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-NEXT    llvm.call spir_funccc @_Z7barrierj([[ONE]]) {{.*}} : (i32) -> ()
+    // CHECK-NEXT:   [[EXEC:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK-NEXT:   [[MEM:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK-NEXT:   [[SEM:%.*]] = llvm.mlir.constant(264 : i32) : i32
+    // CHECK-NEXT:   llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii([[EXEC]], [[MEM]], [[SEM]]) {{.*}} : (i32, i32, i32) -> ()
     %0 = "tt.atomic_cas" (%ptr, %cmp, %val) {sem = 4 : i32, scope = 1 : i32} : (!tt.ptr<f32>, f32, f32) -> f32
     tt.store %ptr, %0 : !tt.ptr<f32>
     tt.return
@@ -1179,7 +1186,7 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
 // -----
 
 module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
+  // CHECK: llvm.func spir_funccc @_Z22__spirv_ControlBarrieriii(i32, i32, i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: atomic_add_f32_scalar
   tt.func @atomic_add_f32_scalar(%arg0 : !tt.ptr<f32>, %arg1 : i1, %arg2 : f32) {
     // CHECK:      [[ZERO0:%.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -1212,8 +1219,10 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK-NEXT:    llvm.store [[RMW_CAST]], [[GEP]] : f32, !llvm.ptr<3>
     // CHECK-NEXT:    llvm.br ^bb4
     // CHECK-NEXT:  ^bb4:
-    // CHECK-NEXT:    [[ONE:%.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-NEXT:    llvm.call spir_funccc @_Z7barrierj([[ONE]]) {{.*}} : (i32) -> ()
+    // CHECK-NEXT:    [[EXEC:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK-NEXT:    [[MEM:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK-NEXT:    [[SEM:%.*]] = llvm.mlir.constant(264 : i32) : i32
+    // CHECK-NEXT:    llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii([[EXEC]], [[MEM]], [[SEM]]) {{.*}} : (i32, i32, i32) -> ()
     %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2, %arg1 : (!tt.ptr<f32>, f32, i1) -> f32
     tt.store %arg0, %0 : !tt.ptr<f32>
     tt.return
@@ -1767,10 +1776,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // CHECK-LABEL: sum_reduction
 // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (i32, i32, i32) -> i32
-// CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
+// CHECK: llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii({{.*}}) {{.*}} : (i32, i32, i32) -> ()
 // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiijj(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (i32, i32, i32, i32) -> i32
 
-// CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
+// CHECK: llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii({{.*}}) {{.*}} : (i32, i32, i32) -> ()
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -1838,7 +1847,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
 
 //  CHECK-LABEL: reduce_md_slice
 //  CHECK: llvm.store {{.*}} !llvm.ptr<3>
-//  CHECK: llvm.store {{.*}} !llvm.ptr<3>
+//  CHECK: llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii
 //  CHECK: llvm.load {{.*}} !llvm.ptr<3>
 //  CHECK: llvm.store {{.*}} !llvm.ptr<3>
 #blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 2, 2], order = [2, 1, 0]}>

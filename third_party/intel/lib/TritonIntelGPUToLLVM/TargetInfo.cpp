@@ -6,9 +6,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <llvm/ADT/TypeSwitch.h>
-#include <llvm/Support/ErrorHandling.h>
-#include <llvm/Support/FormatVariadic.h>
 #include "intel/include/TritonIntelGPUToLLVM/TargetInfo.h"
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "SPIRVTargetInfo.h"
@@ -17,6 +14,7 @@
 #include "Utils/Mangling.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
+#include <llvm/Support/ErrorHandling.h>
 
 #include <limits>
 #include <numeric>
