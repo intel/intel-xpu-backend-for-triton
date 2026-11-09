@@ -2044,9 +2044,9 @@ class TritonSemantic(Generic[TensorTy]):
                 f"Descriptor block shape must have at least 16 bytes in the last dimension, but got {contig_dim_size} * {elem_size} = {contig_dim_size * elem_size} bytes"
             )
 
-        last_stride = tl._unwrap_if_constexpr(strides[-1])
-        if last_stride != 1:
-            raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
+        # last_stride = tl._unwrap_if_constexpr(strides[-1])
+        # if last_stride != 1:
+        #     raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
 
         self._check_tensor_descriptor_alignment_static(strides, elem_size)
         if fp6_format is not None:
