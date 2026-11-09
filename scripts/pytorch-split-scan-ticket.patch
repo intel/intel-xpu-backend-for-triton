@@ -1,0 +1,59 @@
+--- a/torch/_inductor/codegen/triton_split_scan.py
++++ b/torch/_inductor/codegen/triton_split_scan.py
+@@ -44,6 +44,7 @@
+             raise AssertionError("not supported")
+         if fixed_config is not None:
+             raise AssertionError("not supported")
++        self._block_ticket: str | None = None
+         super().__init__(
+             tiling,
+             **kwargs,
+@@ -56,6 +57,48 @@
+     def should_use_cooperative_reduction(self) -> bool:
+         return False
+ 
++    def iteration_ranges_get_pid(self, entry: IterationRangesRoot) -> str:
++        """Use an atomic ticket instead of ``tl.program_id`` as the scan block index.
++
++        Decoupled look-back makes block ``i`` spin until block ``i - 1`` has published
++        its prefix. With ``tl.program_id`` order nothing guarantees that block ``i - 1``
++        is running when block ``i`` spins, and on Intel GPUs this deadlocks when several
++        processes share the device. A ticket taken when the block starts guarantees that
++        the predecessor has already started. The ticket is used for both the data block
++        and the look-back index.
++
++        The workspace is not re-zeroed between back-to-back launches (e.g. autotune
++        benchmark repetitions), but every launch takes exactly ``num_programs`` tickets
++        in order, so ``% num_programs`` maps each launch onto ``0..num_programs-1``.
++        """
++        if not prefix_is_reduction(entry.prefix):
++            return super().iteration_ranges_get_pid(entry)
++        if self._block_ticket is None:
++            if entry.grid_dim is None:
++                raise AssertionError("entry.grid_dim must not be None")
++            pointwise_numel = sympy_product(
++                numel
++                for prefix, numel in self.numels.items()
++                if not prefix_is_reduction(prefix)
++            )
++            # One int32 counter per pointwise row, padded to 8 bytes so the look-back
++            # scratch that follows in the workspace stays 8-byte aligned.
++            counters, _, offset = self.args.workspace(
++                nelem=8 * pointwise_numel, zero_fill=True
++            )
++            if offset != 0:
++                counters = f"({counters} + {self.index_to_str(offset)})"
++            row_pid = "tl.program_id(1)" if len(self.numels) > 1 else "0"
++            ticket = f"{entry.prefix}ticket"
++            self.body.writeline(
++                f"{ticket} = tl.atomic_add({counters}.to(tl.pointer_type(tl.int32)) + "
++                f"2 * {row_pid}, 1, sem=\"relaxed\") % tl.num_programs({entry.grid_dim})"
++            )
++            self._block_ticket = ticket
++        if self.index_dtype != "tl.int32":
++            return f"{self._block_ticket}.to({self.index_dtype})"
++        return self._block_ticket
++
+     def initialize_range_tree(self, pid_cache):
+         prefixes = ["y", "x", "r0_"]
+         if len(self.numels) > len(prefixes):

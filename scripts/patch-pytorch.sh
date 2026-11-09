@@ -35,3 +35,6 @@ apply_patch() {
 echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
+# Split-scan deadlock on Intel GPUs when the device is shared: take the block index
+# from an atomic ticket instead of tl.program_id. https://github.com/intel/intel-xpu-backend-for-triton/issues/8261
+apply_patch pytorch-split-scan-ticket.patch
