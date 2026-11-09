@@ -101,6 +101,10 @@ def _bitwidth(dtype: str) -> int:
     return int(re.search(r'(\d+)$', dtype).group(1))
 
 
+def _assert_128bit_global_memory(ptx, op):
+    assert re.search(rf"\b{op}\.global\.v(?:4\.b32|2\.b64)\b", ptx)
+
+
 def _dtype(dtype: str) -> str:
     # ex.: "int64" -> "int"
     return re.match(r'([a-zA-Z]+)', dtype).group(0)
@@ -579,6 +583,7 @@ def test_ptr_sub_unsigned_offset(device):
     (dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes
 ] + [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
+@pytest.mark.enable_warmup
 def test_floordiv(dtype_x, dtype_y, num_ctas, device):
     # Triton has IEEE, not numpy/torch, semantics for %, and those carry
     # through to //, so we have to use a nonstandard expression to get a
@@ -1698,6 +1703,7 @@ def make_ptr_str(name, shape):
                                              for s in ['None, :', ':, None', 'None, :, :', ':, :, None']
                                              for d in ['int32', 'uint32', 'uint16']])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
+@pytest.mark.enable_warmup
 def test_index1d(expr, dtype_str, num_ctas, device):
     rank_x = expr.count(':')
     rank_y = expr.count(',') + 1
@@ -1735,6 +1741,8 @@ def test_index1d(expr, dtype_str, num_ctas, device):
     z_tri = to_triton(np.empty_like(z_ref), device=device)
     x_tri = to_triton(x, device=device)
     kernel_match[(1, )](z_tri, x_tri, num_warps=1, SIZE=shape_x[0])
+    if is_compile_warmup():
+        return
     # compare
     assert (z_ref == to_numpy(z_tri)).all()
 
@@ -1872,6 +1880,7 @@ def test_noinline_returns_tensor(device):
 ])
 @pytest.mark.parametrize("scalar", [False, True])
 @pytest.mark.parametrize("ordered", [False, True])
+@pytest.mark.enable_warmup
 def test_atomic_load_store(dtype, scalar, ordered, device):
 
     @triton.jit
@@ -1899,6 +1908,8 @@ def test_atomic_load_store(dtype, scalar, ordered, device):
 
     compiled = kernel[(1, )](src, dst, src.numel(), scalar, ordered)
 
+    if is_compile_warmup():
+        return
     torch.testing.assert_close(dst, expected)
     if dtype == torch.bool:
         assert torch.all(dst.view(torch.uint8) <= 1)
@@ -2080,6 +2091,7 @@ def test_atomic_poll_waits_for_remote_cta(device):
         ]
                                        for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
                                        for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']])))
+@pytest.mark.enable_warmup
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     check_type_supported(dtype_x_str, device)
     if is_interpreter():
@@ -2126,6 +2138,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     z_tri = to_triton(np.array([neutral], dtype=getattr(np, dtype_x_str)), device=device, dst_type=dst_type)
     old_tri = to_triton(np.empty_like(x), device=device, dst_type=dst_type)
     h = kernel[(n_programs, )](x_tri, z_tri, old_tri)
+    if is_compile_warmup():
+        return
     # torch result
     if dst_type == 'bfloat16':
         z_ref = numpy_op(x).astype(getattr(np, dtype_x_str))
@@ -2177,6 +2191,7 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for num_ctas in num_ctas_list
                           for dtype_x_str in ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64']
                           for check_return_val in ([True, False] if is_hip() else [True])])
+@pytest.mark.enable_warmup
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val, device):
     check_type_supported(dtype_x_str, device)
     shape0, shape1 = shape
@@ -2235,6 +2250,8 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
     kernel[(1, )](z_tri, x_tri, old_tri, axis, shape0, shape1, torch_to_triton_dtype(x_tri.dtype), check_return_val,
                   num_ctas=num_ctas)
 
+    if is_compile_warmup():
+        return
     if dtype_x_str == 'bfloat16':
         # trunc mantissa for a fair comparison of accuracy
         z_ref = (z_ref.view('uint32') & np.uint32(0xffff0000)).view('float32')
@@ -2256,6 +2273,7 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
                                                          for size in [2, 4, 8, 32, 64, 128]
                                                          for num_ctas in num_ctas_list
                                                          for dtype_x_str in ['bfloat16', 'float16', 'float32']])
+@pytest.mark.enable_warmup
 def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
 
@@ -2271,6 +2289,8 @@ def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, dev
     x = torch.zeros(shape, dtype=dtype, device=device)
     val = torch.randn((size**2), dtype=dtype, device=device)
     kernel[(1, )](x, val, size, num_warps=1, num_ctas=num_ctas)
+    if is_compile_warmup():
+        return
     ref = val[0::2] + val[1::2]
     torch.testing.assert_close(ref, x.reshape(math.prod(shape)))
 
@@ -2313,6 +2333,7 @@ def test_tensor_atomic_add_shift_1(size, num_ctas, dtype_x_str, device):
                           for mask_step in range(1, 5)
                           for num_ctas in num_ctas_list
                           for dtype_x_str in ['bfloat16', 'float16', 'float32']])
+@pytest.mark.enable_warmup
 def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
     if is_interpreter():
@@ -2346,15 +2367,18 @@ def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas
 
     dst_ref = dst.clone()
 
-    cnt = 0
-    for i, row in enumerate(idx):
-        for j, elem in enumerate(row):
-            if cnt % mask_step != 0:
-                dst_ref[i][elem] += val[i][j]
-            cnt += 1
+    if not is_compile_warmup():
+        cnt = 0
+        for i, row in enumerate(idx):
+            for j, elem in enumerate(row):
+                if cnt % mask_step != 0:
+                    dst_ref[i][elem] += val[i][j]
+                cnt += 1
 
     kernel[(1, )](val, idx, dst, shape0, shape1, mask_step, 64, num_ctas=num_ctas)
 
+    if is_compile_warmup():
+        return
     if dtype_x_str == 'bfloat16':
         torch.testing.assert_close(dst_ref, dst, rtol=0.1, atol=0.1)
         return
@@ -2508,6 +2532,7 @@ def test_tensor_atomic_cas_multicta_result(size, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 @pytest.mark.parametrize("size", [4, 128, 512, 1024])
 @pytest.mark.parametrize("dtype_str", ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64'])
+@pytest.mark.enable_warmup
 def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
     check_type_supported(dtype_str, device)
     if is_hip_cdna2():
@@ -2530,6 +2555,8 @@ def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
 
     tl_dtype = getattr(tl, dtype_str)
     change_value[(2, )](X, BLOCK_SIZE=size // 2, sem=sem, dtype=tl_dtype)
+    if is_compile_warmup():
+        return
     assert torch.equal(X, Y)
 
 
@@ -2901,6 +2928,7 @@ def test_cast_fp8_rounding(dtype_x, dtype_z, device):
 @pytest.mark.parametrize("dtype_str, num_warps",
                          [(dtype_str, num_warps) for dtype_str in int_dtypes + float_dtypes for num_warps in [4, 8]])
 @pytest.mark.parametrize("can_reorder", [True, False])
+@pytest.mark.enable_warmup
 def test_cat(dtype_str, num_warps, can_reorder, device):
     check_type_supported(dtype_str, device)
 
@@ -2917,6 +2945,8 @@ def test_cat(dtype_str, num_warps, can_reorder, device):
     z_ref = torch.cat([x, y], dim=0)
     z = torch.zeros((256, ), dtype=getattr(torch, dtype_str), device=device)
     kernel[(1, )](x, y, z, N=128, num_warps=num_warps, CAN_REORDER=can_reorder)
+    if is_compile_warmup():
+        return
     assert z.sum() == z_ref.sum()
     torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
     # check if there's no duplicate value in z
@@ -3492,6 +3522,7 @@ def get_reduce_input(dtype_str, shape):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 @pytest.mark.parametrize("num_warps, threads_per_warp",
                          [(64, 16), (4, THREADS_PER_WARP)] if is_xpu() else [(4, THREADS_PER_WARP)])
+@pytest.mark.enable_warmup(priority=1)
 def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
     check_threads_supported(num_warps, threads_per_warp, device)
@@ -3556,6 +3587,8 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
         kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas, num_warps=num_warps, warp_size=threads_per_warp)
     else:
         kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas)
+    if is_compile_warmup():
+        return
     z_tri = to_numpy(z_tri)
     # compare
     if op == 'sum' and dtype_str in integral_dtypes:
@@ -3634,8 +3667,10 @@ reduce_configs3 = [(op, 'float32', shape, axis, False)
                    for op in ['min', 'max', 'sum', 'argmin', 'argmax']
                    for shape in reduce3d_shapes
                    for axis in [0, 1, 2]]
-invalid_config = [('sum', 'float32', (32, 32), axis, False) for axis in [2, 3]]
-negative_config = [('sum', 'float32', (32, 32), -1, False)]
+invalid_config = [
+    pytest.param('sum', 'float32', (32, 32), axis, False, marks=pytest.mark.disable_warmup) for axis in [2, 3, -3]
+]
+negative_config = [('xor_sum', 'int32', (4, 8), axis, keep_dims) for axis in [-1, -2] for keep_dims in [False, True]]
 keep_dims_2d_configs = [(op, 'float32', (32, 32), axis, True)
                         for op in ['min', 'max', 'sum', 'argmin', 'argmax']
                         for axis in [0, 1]] + [(op, 'float32', (32, 32), None, True) for op in ['min', 'max', 'sum']]
@@ -3653,6 +3688,7 @@ reduce_bool = [(op, 'bool', shape, axis, False) for op in ['xor_sum'] for shape 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 @pytest.mark.parametrize("num_warps, threads_per_warp",
                          [(64, 16), (4, THREADS_PER_WARP)] if is_xpu() else [(4, THREADS_PER_WARP)])
+@pytest.mark.enable_warmup(priority=1)
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, threads_per_warp, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
     check_threads_supported(num_warps, threads_per_warp, device)
@@ -3685,7 +3721,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, thre
             elif AXIS == 2 or AXIS == -1:
                 z_ptr = Z + range_m[:, None] * BLOCK_N + range_n[None, :]
         else:
-            if AXIS == 0:
+            if AXIS == 0 or AXIS == -2:
                 z_ptr = Z + range_n
             elif AXIS == 1 or AXIS == -1:
                 z_ptr = Z + range_m
@@ -3708,7 +3744,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, thre
 
     # numpy result
     # Silence numpy error on axis out of bounds, to give triton a chance to fail
-    np_axis = axis if axis is not None and axis < len(shape) else None
+    np_axis = axis if axis is not None and -len(shape) <= axis < len(shape) else None
     if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
         z_dtype_str = 'float32'
         z_tri_dtype_str = 'bfloat16'
@@ -3728,7 +3764,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, thre
     if is_xpu():
         kern_kwargs['num_warps'] = num_warps
         kern_kwargs['warp_size'] = threads_per_warp
-    if axis is not None and axis >= len(shape):
+    if axis is not None and not -len(shape) <= axis < len(shape):
         with pytest.raises(triton.TritonError):
             kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
                           KEEP_DIMS=keep_dims, USE_I1=USE_I1, num_ctas=num_ctas, **kern_kwargs)
@@ -3737,6 +3773,8 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, thre
         kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
                       KEEP_DIMS=keep_dims, USE_I1=USE_I1, num_ctas=num_ctas, **kern_kwargs)
 
+    if is_compile_warmup():
+        return
     z_tri = to_numpy(z_tri)
 
     # compare
@@ -3987,6 +4025,7 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.enable_warmup
 def test_scan_bfloat16(op, axis, reverse, num_warps, device):
     check_type_supported("bfloat16", device)
 
@@ -4009,6 +4048,8 @@ def test_scan_bfloat16(op, axis, reverse, num_warps, device):
         expected = expected.flip((axis, ))
     out = torch.empty_like(x)
     kernel[(1, )](x, out, op, axis, reverse, num_warps=num_warps)
+    if is_compile_warmup():
+        return
     torch.testing.assert_close(out, expected.to(torch.bfloat16), rtol=0, atol=0)
 
 
@@ -4330,6 +4371,7 @@ def test_generic_reduction(device, shape, axis, keep_dims):
                                                     for shape in [(64, 64), (128, 128)]
                                                     for perm in [(1, 0)]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
+@pytest.mark.enable_warmup
 def test_permute(dtype_str, shape, perm, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
     if dtype_str == "float8e4b15" and (is_hip() or (is_cuda() and torch.cuda.get_device_capability() >= (9, 0))):
@@ -4360,6 +4402,8 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
     pgm_contiguous = kernel[(1, 1)](x_tri, x_tri.stride(1),
                                     x_tri.stride(0), z_tri_contiguous, z_tri_contiguous.stride(0),
                                     z_tri_contiguous.stride(1), BLOCK_M=shape[0], BLOCK_N=shape[1], num_ctas=num_ctas)
+    if is_compile_warmup():
+        return
     if dtype_str == 'float8e4b15':
         z_tri = z_tri.base
         z_tri_contiguous = z_tri_contiguous.base
@@ -4374,11 +4418,11 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
 
     # parse ptx to make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
-    assert 'ld.global.v4' in ptx
-    assert 'st.global.v4' in ptx
+    _assert_128bit_global_memory(ptx, 'ld')
+    _assert_128bit_global_memory(ptx, 'st')
     ptx = pgm_contiguous.asm['ptx']
-    assert 'ld.global.v4' in ptx
-    assert 'st.global.v4' in ptx
+    _assert_128bit_global_memory(ptx, 'ld')
+    _assert_128bit_global_memory(ptx, 'st')
 
 
 @pytest.mark.interpreter
@@ -4408,6 +4452,7 @@ def test_trans_2d(dtype_str, shape, perm, device):
 @pytest.mark.parametrize("dtype_str", ["int32", "int8"])
 @pytest.mark.parametrize("shape", [(2, 2, 8, 64), (4, 4, 4, 16)])
 @pytest.mark.parametrize("perm", list(itertools.permutations([0, 1, 2, 3])))
+@pytest.mark.enable_warmup
 def test_trans_4d(dtype_str, shape, perm, device, with_allocator):
 
     @triton.jit
@@ -4437,6 +4482,8 @@ def test_trans_4d(dtype_str, shape, perm, device, with_allocator):
 
     kernel[(1, )](input, actual, *shape, *[shape[i] for i in perm], *perm, num_warps=8)
 
+    if is_compile_warmup():
+        return
     np.testing.assert_equal(to_numpy(expected), to_numpy(actual))
 
 
@@ -4846,20 +4893,15 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     ptx = pgm.asm['ptx']
 
     # XXX: skip small sizes because they are not vectorized; with runtime
-    # strides, v4 needs the contiguous dim >= 16 (K for loads, N for stores).
+    # strides, 128-bit vectors need the contiguous dim >= 16 (K for loads, N for stores).
     enough_work = (M * N // (num_warps * 32) >= 4) and (K > 16 or N > 16 or M > 16)
     if enough_work and K >= 16:
-        if 'float64' in in_dtype:
-            assert 'ld.global.v2.b64' in ptx
-        else:
-            assert 'ld.global.v4' in ptx
+        _assert_128bit_global_memory(ptx, 'ld')
     if enough_work and N >= 16:
         if 'float8' in in_dtype:
             assert 'st.global.v2' in ptx
-        elif 'float64' in in_dtype:
-            assert 'st.global.v2.b64' in ptx
         else:
-            assert 'st.global.v4' in ptx
+            _assert_128bit_global_memory(ptx, 'st')
 
     is_tcgen5 = (capability[0] == 10) and (num_warps % 4) == 0 and (M % 64) == 0 and (N % 8) == 0
 
@@ -5192,9 +5234,9 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     if is_cuda():
         ptx = pgm.asm['ptx']
         if (max(M, N) * K) // (num_warps * 32) >= 4:
-            assert 'ld.global.v4' in ptx
+            _assert_128bit_global_memory(ptx, 'ld')
         if M * N // (num_warps * 32) >= 4:
-            assert 'st.global.v4' in ptx
+            _assert_128bit_global_memory(ptx, 'st')
         assert (re.search(r'(mma|wgmma.mma_async).sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.(f|bf)16.(f|bf)16', ptx)
                 or "tcgen05.mma.cta_group::1.kind::f16" in ptx)
     if is_hip_cdna4() and normal_type in ["bf16", "fp16"]:
@@ -5502,6 +5544,7 @@ def test_dot_mulbroadcasted(in_dtype, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", int_dtypes + uint_dtypes + float_dtypes + ['bfloat16'])
 @pytest.mark.parametrize("shape", [(), (1, ), (128, )])
+@pytest.mark.enable_warmup
 def test_full(dtype_str, shape, device):
     if dtype_str in uint_dtypes and not hasattr(torch, dtype_str):
         # PyTorch only has unsigned 8, but not 16, 32, or 64
@@ -5530,11 +5573,14 @@ def test_full(dtype_str, shape, device):
     })
     out_static = torch.zeros((128), dtype=dtype, device=device)
     kernel_static_patched[(1, )](out_static)
-    assert torch.all(out_static == 2)
+    if not is_compile_warmup():
+        assert torch.all(out_static == 2)
 
     kernel_dynamic_patched = patch_kernel(kernel_dynamic, {'SHAPE': str(list(shape))})
     out_dynamic = torch.zeros((128), dtype=dtype, device=device)
     kernel_dynamic_patched[(1, )](out_dynamic, 2, getattr(triton.language, dtype_str))
+    if is_compile_warmup():
+        return
     assert torch.all(out_dynamic == 2)
 
 
@@ -5701,6 +5747,7 @@ def test_arange(start, num_ctas, device):
                                                                for size_diff in [0, 1, 2, 3, 4]
                                                                for other in [None, 0, 1]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
+@pytest.mark.enable_warmup
 def test_masked_load(dtype_str, size, size_diff, other, num_ctas, device):
     dtype = getattr(torch, dtype_str)
     check_type_supported(dtype, device)  # bfloat16 on cc < 80 will not be tested
@@ -5729,6 +5776,8 @@ def test_masked_load(dtype_str, size, size_diff, other, num_ctas, device):
     kernel = patch_kernel(_kernel, {'GENERATE_TEST_HERE': f"tl.load(in_ptr + in_offsets, {mask_str})"})
     kernel[(1, )](input, output, input_size, output_size, num_ctas=num_ctas)
 
+    if is_compile_warmup():
+        return
     reference_out = torch.cat((input, torch.full((size_diff, ), other if other else 0, dtype=dtype, device=device)))
     torch.testing.assert_close(output, reference_out)
 
@@ -5885,12 +5934,11 @@ def test_load_cache_modifier(cache, device):
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        all_modifiers = ['.ca', '.cg', '.cs', '.cv']
-        for modifier in all_modifiers:
-            if modifier == cache:
-                assert f'ld.global{modifier}' in ptx
-            else:
-                assert f'ld.global{modifier}' not in ptx
+        modifiers = re.findall(r'\bld\.global(?:\.(ca|cg|cs|cv))?\.(?:v[248]\.)?[busf]\d+\b', ptx)
+        assert modifiers
+        # An omitted load cache modifier means .ca.
+        expected = cache.removeprefix('.') or 'ca'
+        assert all((modifier or 'ca') == expected for modifier in modifiers)
 
 
 @pytest.mark.interpreter
@@ -6060,12 +6108,11 @@ def test_store_cache_modifier(cache, device):
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        all_modifiers = ['.wb', '.cg', '.cs', '.wt']
-        for modifier in all_modifiers:
-            if modifier == cache:
-                assert f'st.global{modifier}' in ptx
-            else:
-                assert f'st.global{modifier}' not in ptx
+        modifiers = re.findall(r'\bst\.global(?:\.(wb|cg|cs|wt))?\.(?:v[248]\.)?[busf]\d+\b', ptx)
+        assert modifiers
+        # An omitted store cache modifier means .wb.
+        expected = cache.removeprefix('.') or 'wb'
+        assert all((modifier or 'wb') == expected for modifier in modifiers)
 
 
 @pytest.mark.interpreter
@@ -6892,6 +6939,45 @@ def test_if_else(device):
     assert to_numpy(out)[0] == false_val[0]
 
 
+@pytest.mark.xfail(not is_hip(), reason="AMD pointer canonicalization regression", run=False)
+@pytest.mark.parametrize("num_tensors", [32, 100])
+def test_if_elif_shared_pointer_body(num_tensors, device, fresh_knobs):
+    fresh_knobs.amd.use_buffer_ops = True
+
+    @triton.jit
+    def kernel(Inputs, Outputs, n_elements, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        blocks = tl.cdiv(n_elements, BLOCK)
+        # DISPATCH
+        offsets = local * BLOCK + tl.arange(0, BLOCK)
+        value = tl.load(in_ptr + offsets, offsets < n_elements, other=0)
+        tl.store(out_ptr + offsets, value + 1, offsets < n_elements)
+
+    # Selecting both pointers before the shared body produces nested scf.if
+    # operations with two pointer results. The forward-slice walk must not
+    # revisit their users once for every path through those results.
+    dispatch = []
+    for i in range(num_tensors):
+        dispatch += [
+            f"{'if' if i == 0 else 'elif'} pid < {i + 1} * blocks:",
+            f"    local = pid - {i} * blocks",
+            f"    in_ptr = Inputs[{i}]",
+            f"    out_ptr = Outputs[{i}]",
+        ]
+    dispatch += ["else:", "    local = pid", "    in_ptr = Inputs[0]", "    out_ptr = Outputs[0]"]
+    kernel = patch_kernel(kernel, {"# DISPATCH": "\n    ".join(dispatch)})
+
+    # Distinct data across tensors and elements catches incorrect pointer or
+    # offset propagation. The final block also exercises the load/store masks.
+    n_elements = 1000
+    inputs = tuple(
+        torch.arange(n_elements, device=device, dtype=torch.float32) + i * n_elements for i in range(num_tensors))
+    outputs = tuple(torch.full_like(x, float("nan")) for x in inputs)
+    kernel[(num_tensors * triton.cdiv(n_elements, 128), )](inputs, outputs, n_elements, BLOCK=128)
+    for x, y in zip(inputs, outputs):
+        torch.testing.assert_close(y, x + 1, rtol=0, atol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("mode", ["dynamic", "static"])
 def test_if_return(mode, device):
@@ -7252,7 +7338,8 @@ def test_globaltimer(device):
         start = func()
         off = tl.arange(0, 128)
         for i in range(10000):
-            tl.store(Out1 + off, tl.load(Out1 + off) + 1)
+            # Keep the timed loop from folding into a single addition.
+            tl.store(Out1 + off, tl.load(Out1 + off, volatile=True) + 1)
         end = func()
         tl.store(Out2, start)
         tl.store(Out2 + 1, end)
@@ -7417,6 +7504,7 @@ def matmul_kernel(  #
     "in_type_str",
     ['float8e5', 'float8e5b16', 'float8e4b8', 'float8e4nv'] if is_hip() else ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
+@pytest.mark.enable_warmup
 def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_str, low_precision_acc, device):
     num_stages = 3
     if is_cuda():
@@ -7447,6 +7535,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)
     th_b = f8_to_f16(torch_b, in_type_str)
+    if is_compile_warmup():
+        return
     ref_out = torch.matmul(th_a, th_b).to(torch.float32)
     if in_type_str == 'float8e4nv':
         torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)
@@ -7651,6 +7741,7 @@ def test_propagate_nan(dtype, propagate_nan, func, device):
 @pytest.mark.parametrize("dtype", integral_dtypes + ['bool', 'bfloat16', 'float16', 'float32'])
 @pytest.mark.parametrize("scalar_bounds", [False, True])
 @pytest.mark.parametrize("propagate_nan", ['NONE', 'ALL'])
+@pytest.mark.enable_warmup
 def test_clamp(dtype, scalar_bounds, propagate_nan, device):
     check_type_supported(dtype, device)
     if is_hip_cdna5() and dtype == 'bfloat16' and scalar_bounds and propagate_nan == 'NONE':
@@ -7695,6 +7786,8 @@ def test_clamp(dtype, scalar_bounds, propagate_nan, device):
                             dst_type=dtype), out, size, BLOCK_SIZE=size, SCALAR_BOUNDS=scalar_bounds, LOWER=lower,
                   UPPER=upper, PROPAGATE_NAN=getattr(tl.PropagateNan, propagate_nan))
 
+    if is_compile_warmup():
+        return
     ref = np.clip(x, lower, upper) if scalar_bounds else np.clip(x, _min, _max)
     np.testing.assert_array_equal(to_numpy(out), ref)
 
@@ -8574,6 +8667,7 @@ def test_unsplat(device):
 @pytest.mark.parametrize("in_dtype", [tl.int1, tl.int8, tl.uint8], ids=str)
 @pytest.mark.parametrize("dtype", [None, tl.int8, tl.int64], ids=str)
 @pytest.mark.parametrize("member", [False, True])
+@pytest.mark.enable_warmup
 def test_scan_dtype(op, in_dtype, dtype, member, device):
 
     @triton.jit
@@ -8597,6 +8691,8 @@ def test_scan_dtype(op, in_dtype, dtype, member, device):
     x = torch.full((4, ), value, dtype=torch_dtype, device=device)
     z = torch.empty(4, dtype=torch.int64, device=device)
     kernel[(1, )](x, z, op, dtype, member, expected_dtype)
+    if is_compile_warmup():
+        return
     expected = getattr(np, op)(np.full(4, value, dtype=np.int64))
     if expected_dtype == tl.int8:
         expected = expected.astype(np.int8).astype(np.int64)
@@ -8608,6 +8704,7 @@ def test_scan_dtype(op, in_dtype, dtype, member, device):
 @pytest.mark.parametrize("trans_a", [False, True])
 @pytest.mark.parametrize("trans_b", [False, True])
 @pytest.mark.parametrize("num_ctas", [1, 2, 4])
+@pytest.mark.enable_warmup
 def test_dot_multidim(rank, trans_a, trans_b, num_ctas, device):
 
     if is_interpreter():
@@ -8633,6 +8730,8 @@ def test_dot_multidim(rank, trans_a, trans_b, num_ctas, device):
     c = torch.empty(shape, dtype=torch.float32, device=device)
     kernel[(1, )](a, b, c, rank, trans_a, trans_b, num_ctas=num_ctas)
 
+    if is_compile_warmup():
+        return
     if trans_a:
         a = torch.transpose(a, -1, -2)
     if trans_b:

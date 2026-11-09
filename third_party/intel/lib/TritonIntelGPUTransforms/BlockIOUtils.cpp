@@ -1,15 +1,23 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
+#include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 #include <numeric>
+
+#define DEBUG_TYPE "tritonintelgpu-block-io-utils"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton::gpu::intel {
 
@@ -18,6 +26,17 @@ Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
   if (triton::intel::StrideInfo *info = strideAnalysis.getStrideInfo(ptr))
     return info->getStrideValue(dim);
   return {};
+}
+
+bool isBlockPitchSupported(std::optional<int64_t> constPitchBytes,
+                           bool hasRuntimeStride, int64_t fullRowBytes) {
+  constexpr int64_t minPitch = 64;
+  // The pitch field is 24 bits (see the `triton_gen.2Dblockload` verifier).
+  constexpr int64_t maxPitch = int64_t(1) << 24;
+  if (constPitchBytes)
+    return *constPitchBytes >= minPitch && *constPitchBytes % 16 == 0 &&
+           *constPitchBytes <= maxPitch;
+  return hasRuntimeStride && fullRowBytes >= minPitch;
 }
 
 Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
@@ -828,6 +847,54 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
   return true;
 }
 
+std::optional<triton::gpu::BlockedEncodingAttr>
+pickBlockIOLoadEncoding(RankedTensorType type, unsigned numWarps,
+                        unsigned threadsPerWarp,
+                        std::optional<unsigned> reducedDim) {
+  // Check isIntOrFloat before taking the bit width, which asserts on !tt.ptr.
+  Type elemTy = type.getElementType();
+  if (type.getRank() != 2 || !elemTy.isIntOrFloat())
+    return std::nullopt;
+  unsigned bits = elemTy.getIntOrFloatBitWidth();
+  if (bits < 8 || bits > 64 || bits % 8 != 0)
+    return std::nullopt;
+
+  // Lanes fill up to one 64-byte row of the contiguous dim, then stack rows.
+  ArrayRef<int64_t> shape = type.getShape();
+  unsigned cols =
+      std::min<int64_t>({threadsPerWarp, 64 / (bits / 8), shape[1]});
+  if (threadsPerWarp % cols != 0)
+    return std::nullopt;
+  unsigned rows = threadsPerWarp / cols;
+  if (shape[0] % rows != 0)
+    return std::nullopt;
+
+  // Warps split the columns first, which gives taller per-warp tiles, unless
+  // the reduction runs along them.
+  int64_t groups[] = {shape[0] / rows, shape[1] / cols};
+  unsigned wd = (reducedDim == 1u) ? 0 : 1;
+  SmallVector<unsigned, 2> warpsPerCTA(2);
+  warpsPerCTA[wd] = std::min<int64_t>(numWarps, groups[wd]);
+  if (numWarps % warpsPerCTA[wd] != 0)
+    return std::nullopt;
+  warpsPerCTA[1 - wd] = numWarps / warpsPerCTA[wd];
+  // More warps than lane tiles along the other dim would replicate data.
+  if (warpsPerCTA[1 - wd] > groups[1 - wd])
+    return std::nullopt;
+
+  auto enc = triton::gpu::BlockedEncodingAttr::get(
+      type.getContext(), /*sizePerThread=*/{1, 1},
+      /*threadsPerWarp=*/{rows, cols}, warpsPerCTA, /*order=*/{1, 0},
+      triton::gpu::getCGALayout(type.getEncoding()));
+  if (!validate2DBlockLoadTile(enc.toLinearLayout(shape),
+                               /*memContiguousDim=*/1, bits,
+                               type.cloneWithEncoding(enc))) {
+    LDBG("Tile validation failed for picked layout " << enc << " of " << type);
+    return std::nullopt;
+  }
+  return enc;
+}
+
 bool isMemoryRowMajor(Operation *op) {
   auto blockIOAttr = op->getAttrOfType<StringAttr>(
       TritonIntelGPUDialect::getBlockIOAttrName());
@@ -850,6 +917,130 @@ bool isBlockIOEligible(Operation *loadOp, RankedTensorType tensorTy) {
       triton::tools::getStrEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
   if (enableBlockIOForAllLayout.has_value() &&
       !enableBlockIOForAllLayout.value() && !hasDpas)
+    return false;
+
+  return true;
+}
+
+bool isDescriptorLoadLowerableTo2DBlock(
+    triton::DescriptorLoadOp op, RankedTensorType tensorTy,
+    triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  if (!isBlockIOEligible(op, tensorTy))
+    return false;
+
+  unsigned rank = tensorTy.getRank();
+  unsigned elemSizeInBits = tensorTy.getElementTypeBitWidth();
+
+  // Find all MakeTensorDescOps that could define this descriptor.
+  Value desc = op.getDesc();
+  triton::intel::DescriptorDefinitions defs =
+      triton::intel::findDescriptorDefinitions(desc);
+  if (defs.empty()) {
+    LDBG("Could not find MakeTensorDescOp for: " << *op);
+    return false;
+  }
+
+  if (!defs.consistentPadding()) {
+    LDBG("Inconsistent padding across descriptor candidates for: " << *op);
+    return false;
+  }
+
+  auto descType = cast<triton::TensorDescType>(desc.getType());
+  unsigned descRank = descType.getBlockType().getRank();
+  assert(descRank >= rank && "descriptor rank must be >= result tensor rank");
+
+  bool memoryRowMajor = isMemoryRowMajor(op);
+
+  // Validate that tile computation will succeed during LLVM lowering.
+  bool oneMatrixPerLoadForBT =
+      op->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
+
+  unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
+  auto encoding = dyn_cast_if_present<triton::gpu::DistributedEncodingTrait>(
+      tensorTy.getEncoding());
+  if (!encoding) {
+    LDBG("Not a distributed encoding: " << tensorTy);
+    return false;
+  }
+  LinearLayout llEncoding = encoding.toLinearLayout(tensorTy.getShape());
+  if (!validate2DBlockLoadTile(llEncoding, contiguousDim, elemSizeInBits,
+                               tensorTy, oneMatrixPerLoadForBT)) {
+    LDBG("Tile validation failed for descriptor load: " << *op);
+    return false;
+  }
+
+  BlockIOTileSizeInfo sizeInfo =
+      getBlockIOLoadTileSize(llEncoding, contiguousDim, elemSizeInBits,
+                             /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
+
+  // For descriptor loads, the 2D block I/O tile must use only the inner 2
+  // dims. Reject if rowDim or colDim falls in a batch dimension.
+  if (rank > 2) {
+    int innerDimStart = static_cast<int>(rank - 2);
+    if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart) {
+      LDBG("Batch dim in tile for descriptor load: " << *op);
+      return false;
+    }
+  }
+
+  AxisInfo *colInfo =
+      axisInfoAnalysis.getAxisInfo(op.getIndices()[descRank - 1]);
+  if (elemSizeInBits * sizeInfo.numElemPerPackedVal > 32 &&
+      (!colInfo ||
+       colInfo->getDivisibility(0) % sizeInfo.numElemPerPackedVal)) {
+    LDBG(
+        "Column not divisible by the d64 packing for descriptor load: " << *op);
+    return false;
+  }
+
+  // The 2D block message encodes base_width (bytes), base_height (rows) and
+  // base_pitch (bytes) as value-1 in 24-bit fields, so each must be in
+  // [1, 2^24]. Where the target needs 64-byte base alignment, the lowering
+  // adds the base's misalignment (base & 63) to base_width, so base_width
+  // must leave 63 bytes of room. This is the last point a descriptor load
+  // can fall back: Subgroup2DBlockLoadOpConversion does not re-validate.
+  // Bail if ANY candidate MakeTensorDescOp has a compile-time-foldable field
+  // outside that range. Read the defining MakeTensorDescOp(s): the
+  // ttig.extract_desc values LowerTo2DBlockLoad builds do not fold.
+  //
+  // Not checked here:
+  //  - Non-foldable (runtime) values are trusted to be in range.
+  //  - Alignment (base 4B, width multiple of 4B):
+  //    in the normal pipeline MaterializeBlockPointer checks it before it
+  //    tags the load (runtime values rely on the tt.make_tensor_descriptor
+  //    16-byte contract); hand-tagged IR is not re-checked here.
+  //  - The HW 64-byte minimum for width/pitch is deliberately not enforced;
+  //    it would move narrow descriptors off 2D block I/O.
+  //  - pitch >= width (a TritonGEN verifier rule) is not a range check and
+  //    is not enforced here either.
+  constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
+  int64_t maxBaseWidth = needs2DBlockIOAlignmentCompensation(op)
+                             ? kMax2DBlockField - 63
+                             : kMax2DBlockField;
+  int64_t elemBytesConst = elemSizeInBits / 8;
+  auto isOutOfRange = [&](unsigned operandIdx, int64_t scale, int64_t maxValue,
+                          StringRef field) {
+    return llvm::any_of(defs, [&](triton::MakeTensorDescOp d) {
+      std::optional<int64_t> folded =
+          triton::intel::getFoldedConstantValue(d->getOperand(operandIdx));
+      if (!folded)
+        return false;
+      int64_t value;
+      if (!llvm::MulOverflow(*folded, scale, value) && value >= 1 &&
+          value <= maxValue)
+        return false;
+      LDBG("Invalid " << field << " (" << *folded << " x " << scale
+                      << ") for descriptor load: " << *op);
+      return true;
+    });
+  };
+  // MakeTensorDescOp operands: base, shape[descRank], strides[descRank].
+  if (isOutOfRange(/*inner shape*/ 1 + (descRank - 1), elemBytesConst,
+                   maxBaseWidth, "base_width") ||
+      isOutOfRange(/*outer shape*/ 1 + (descRank - 2), /*scale=*/1,
+                   kMax2DBlockField, "base_height") ||
+      isOutOfRange(/*pitch stride*/ 1 + descRank + (descRank - 2),
+                   elemBytesConst, kMax2DBlockField, "base_pitch"))
     return false;
 
   return true;
@@ -944,6 +1135,214 @@ Attribute canonicalCoalescedDescStoreLayout(RankedTensorType type, int numWarps,
       type.getContext(), type.getShape(), sizePerThread, order, numWarps,
       threadsPerWarp, cgaLayout);
   return layout;
+}
+
+namespace {
+
+/// Look through single-operand *widening* integer casts (`extsi`/`extui`) to
+/// find the underlying value. Excludes `trunci`/`index_cast`, since a
+/// narrowing cast can wrap and break contiguity.
+///
+/// NOTE: `MaterializeBlockPointer::lookThroughCasts` (and its
+/// `isCanonicalLinearIndex` matcher) is a near-twin of this and the
+/// `matchBaseAndRange` below, but accepts any `CastOpInterface`. The two are
+/// kept separate because the row-limit rewrite below turns the mask into a
+/// hardware `base_height` clamp, which is only correct if the compared index
+/// provably equals `base + arange`; the permissive variant is only used for
+/// stride/contiguity heuristics. Keep the two in sync when changing either.
+Value lookThroughCasts(Value val) {
+  while (Operation *def = val.getDefiningOp()) {
+    if (!isa<arith::ExtSIOp, arith::ExtUIOp>(def))
+      break;
+    val = def->getOperand(0);
+  }
+  return val;
+}
+
+/// Repeatedly look through `tt.expand_dims` layers to find the value they
+/// wrap, however many are nested (a rank > 2 row-limit comparison can have
+/// degenerate dims inserted on both sides of the bounded dim).
+Value stripExpandDims(Value val) {
+  while (auto expandOp = val.getDefiningOp<triton::ExpandDimsOp>())
+    val = expandOp.getSrc();
+  return val;
+}
+
+/// Match `val` against `base + arange(0, expectedEnd)` (either operand
+/// order), or a bare `arange(0, expectedEnd)`. Returns the base scalar (null
+/// for the bare-arange, zero-base case), or std::nullopt if `val` doesn't
+/// have this shape. Does not check `base` wrapping near INT_MAX/INT_MIN,
+/// which is a theoretical gap only.
+std::optional<Value> matchBaseAndRange(Value val, int64_t expectedEnd) {
+  val = lookThroughCasts(stripExpandDims(lookThroughCasts(val)));
+  if (auto makeRange = val.getDefiningOp<triton::MakeRangeOp>()) {
+    if (makeRange.getStart() == 0 &&
+        static_cast<int64_t>(makeRange.getEnd()) == expectedEnd)
+      return Value();
+    return std::nullopt;
+  }
+  auto addI = val.getDefiningOp<arith::AddIOp>();
+  if (!addI)
+    return std::nullopt;
+  Value lhs = lookThroughCasts(addI.getLhs());
+  Value rhs = lookThroughCasts(addI.getRhs());
+  for (int i = 0; i < 2; ++i) {
+    auto makeRange = lhs.getDefiningOp<triton::MakeRangeOp>();
+    auto splatOp = rhs.getDefiningOp<triton::SplatOp>();
+    if (makeRange && splatOp && makeRange.getStart() == 0 &&
+        static_cast<int64_t>(makeRange.getEnd()) == expectedEnd)
+      return splatOp.getSrc();
+    std::swap(lhs, rhs);
+  }
+  return std::nullopt;
+}
+
+/// True if `v` is a `tt.broadcast` degenerate (size 1) along every dim in
+/// `dims` in its pre-broadcast tensor.
+bool isDegenerateAlongDims(Value v, ArrayRef<int64_t> tensorShape,
+                           ArrayRef<unsigned> dims) {
+  auto broadcastOp = v.getDefiningOp<triton::BroadcastOp>();
+  if (!broadcastOp)
+    return false;
+  auto narrowTy = dyn_cast<RankedTensorType>(broadcastOp.getSrc().getType());
+  if (!narrowTy || narrowTy.getRank() != tensorShape.size())
+    return false;
+  ArrayRef<int64_t> narrowShape = narrowTy.getShape();
+  return llvm::all_of(dims, [&](unsigned d) { return narrowShape[d] == 1; });
+}
+
+} // namespace
+
+bool isZeroFillOther(Value other) {
+  if (!other)
+    return true;
+  DenseElementsAttr constAttr;
+  if (!matchPattern(other, m_Constant(&constAttr)) || !constAttr.isSplat())
+    return false;
+  Type elemTy = constAttr.getElementType();
+  if (isa<FloatType>(elemTy))
+    return constAttr.getSplatValue<APFloat>().isZero() &&
+           !constAttr.getSplatValue<APFloat>().isNegative();
+  if (isa<IntegerType>(elemTy))
+    return constAttr.getSplatValue<APInt>().isZero();
+  return false;
+}
+
+std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
+                                                  ArrayRef<int64_t> tensorShape,
+                                                  unsigned contiguousDim,
+                                                  bool pitchDimIsBroadcast) {
+  if (!mask || tensorShape.size() < 2 || !isZeroFillOther(other) ||
+      pitchDimIsBroadcast)
+    return std::nullopt;
+
+  unsigned rank = tensorShape.size();
+  // Must be bounded along the pitch dim (the 2D tile's non-contiguous dim),
+  // not the memory-contiguous one or a batch dim.
+  unsigned pitchDim = (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+
+  // The mask may be the row-limit comparison alone, or ANDed (either order)
+  // with a batch-dims-only predicate -- degenerate along the pitch and
+  // contiguous dims, so it's uniform per hardware block-load message and
+  // safe to peel off as `extraPred` instead of folding into `base_height`.
+  //
+  // `tt-reorder-broadcast` may have sunk the AND below the final broadcast,
+  // `broadcast(and(broadcast(row), broadcast(batch)))`; look through that
+  // outer broadcast so the AND is matched on its narrow tensor. The operands'
+  // own broadcasts are checked against `tensorShape` below, which only
+  // depends on the dims they are degenerate along. `extraPred` is then
+  // narrow too (see `RowLimitMaskInfo`).
+  Value rowLimitCandidate = mask;
+  Value extraPred;
+  Value andRoot = mask;
+  if (auto outerBroadcast = mask.getDefiningOp<triton::BroadcastOp>())
+    if (outerBroadcast.getSrc().getDefiningOp<arith::AndIOp>())
+      andRoot = outerBroadcast.getSrc();
+  if (auto andOp = andRoot.getDefiningOp<arith::AndIOp>()) {
+    Value lhs = andOp.getLhs(), rhs = andOp.getRhs();
+    if (isDegenerateAlongDims(rhs, tensorShape, {pitchDim, contiguousDim})) {
+      rowLimitCandidate = lhs;
+      extraPred = rhs;
+    } else if (isDegenerateAlongDims(lhs, tensorShape,
+                                     {pitchDim, contiguousDim})) {
+      rowLimitCandidate = rhs;
+      extraPred = lhs;
+    }
+  }
+
+  auto broadcastOp = rowLimitCandidate.getDefiningOp<triton::BroadcastOp>();
+  if (!broadcastOp)
+    return std::nullopt;
+
+  Value narrow = broadcastOp.getSrc();
+  auto narrowTy = dyn_cast<RankedTensorType>(narrow.getType());
+  if (!narrowTy || narrowTy.getRank() != rank)
+    return std::nullopt;
+
+  // Every dim but the pitch dim must be degenerate (size 1) in the
+  // pre-broadcast comparison -- it can only vary along the bounded dim.
+  ArrayRef<int64_t> narrowShape = narrowTy.getShape();
+  for (unsigned d = 0; d < rank; ++d) {
+    int64_t expected = (d == pitchDim) ? tensorShape[d] : 1;
+    if (narrowShape[d] != expected)
+      return std::nullopt;
+  }
+
+  // The comparison may be 2D already, or still 1D with the bool result
+  // expanded afterwards (through however many nested expand_dims) -- strip
+  // them either way.
+  Value cmpCandidate = stripExpandDims(narrow);
+  auto cmpOp = cmpCandidate.getDefiningOp<arith::CmpIOp>();
+  if (!cmpOp)
+    return std::nullopt;
+  // Signed only: the height formula (`max(bound - rowBase, 0)`) assumes it
+  // and disagrees arbitrarily with an unsigned comparison.
+  if (cmpOp.getPredicate() != arith::CmpIPredicate::slt)
+    return std::nullopt;
+
+  auto boundSplat = cmpOp.getRhs().getDefiningOp<triton::SplatOp>();
+  if (!boundSplat)
+    return std::nullopt;
+
+  std::optional<Value> rowBase =
+      matchBaseAndRange(cmpOp.getLhs(), tensorShape[pitchDim]);
+  if (!rowBase)
+    return std::nullopt;
+
+  // base_height lowering requires exactly i32; checked here so every caller
+  // agrees on eligibility.
+  Value boundSrc = boundSplat.getSrc();
+  if (!boundSrc.getType().isInteger(32) ||
+      (*rowBase && !rowBase->getType().isInteger(32)))
+    return std::nullopt;
+
+  return RowLimitMaskInfo{pitchDim, *rowBase, boundSrc, extraPred};
+}
+
+Value materializeExtraPred(OpBuilder &builder, Location loc, Value extraPred,
+                           RankedTensorType maskTy) {
+  if (extraPred.getType() == maskTy)
+    return extraPred;
+  while (auto inner = extraPred.getDefiningOp<triton::BroadcastOp>())
+    extraPred = inner.getSrc();
+  return triton::BroadcastOp::create(builder, loc, maskTy, extraPred);
+}
+
+Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
+                            Value rowBase, int64_t rowExtent) {
+  Type i64Ty = builder.getI64Type();
+  Value diff64 = arith::ExtSIOp::create(builder, loc, i64Ty, bound);
+  if (rowBase) {
+    Value rowBase64 = arith::ExtSIOp::create(builder, loc, i64Ty, rowBase);
+    diff64 = arith::SubIOp::create(builder, loc, diff64, rowBase64);
+  }
+  Value zero64 =
+      arith::ConstantOp::create(builder, loc, builder.getI64IntegerAttr(0));
+  Value extent64 = arith::ConstantOp::create(
+      builder, loc, builder.getI64IntegerAttr(rowExtent));
+  Value clamped = arith::MaxSIOp::create(builder, loc, diff64, zero64);
+  clamped = arith::MinSIOp::create(builder, loc, clamped, extent64);
+  return arith::TruncIOp::create(builder, loc, builder.getI32Type(), clamped);
 }
 
 } // namespace mlir::triton::gpu::intel

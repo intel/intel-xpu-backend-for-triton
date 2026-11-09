@@ -148,10 +148,10 @@ index 588ce52dbe..c95f1a1f28 100644
  @pytest.mark.parametrize("geometry", _TP_GEOMETRIES)
  @pytest.mark.parametrize("tp", [2])
 diff --git a/tests/kernels/moe/test_block_fp8.py b/tests/kernels/moe/test_block_fp8.py
-index 0a4fd90f09..587c27566e 100644
+index 91bbfdb935..6877ccd1fb 100644
 --- a/tests/kernels/moe/test_block_fp8.py
 +++ b/tests/kernels/moe/test_block_fp8.py
-@@ -49,7 +49,9 @@ from vllm.utils.import_utils import has_deep_gemm
+@@ -51,7 +51,9 @@ from vllm.utils.import_utils import has_deep_gemm
  dg_available = has_deep_gemm()
  
  device_capability = current_platform.get_device_capability()
@@ -162,7 +162,7 @@ index 0a4fd90f09..587c27566e 100644
      pytest.skip("FP8 Triton requires CUDA 9.0 or higher", allow_module_level=True)
  if current_platform.is_fp8_fnuz():
      pytest.skip(
-@@ -244,7 +246,11 @@ def test_w8a8_block_fp8_fused_moe(
+@@ -295,7 +297,11 @@ def test_w8a8_block_fp8_fused_moe(
      # while fused_experts/the reference round SiLU to bf16 first. On large K/N this
      # ~1-ULP gap pushes m_out past the base tol, so validate m_out against an
      # fp32-SiLU reference — keeping the tight base tolerance, no widened override.
@@ -191,10 +191,10 @@ index 5f69b960c2..97fc1f25ff 100644
  
  vllm_config = VllmConfig()
 diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
-index 26e9f87f10..c1a8d47e0e 100644
+index d250d69a6c..39c5ebc9bc 100644
 --- a/tests/kernels/moe/test_moe.py
 +++ b/tests/kernels/moe/test_moe.py
-@@ -386,6 +386,20 @@ def test_fused_moe(
+@@ -383,6 +383,20 @@ def test_fused_moe(
  
      score = torch.randn((m, e), device=DEVICE_TYPE, dtype=dtype)
  
@@ -215,7 +215,7 @@ index 26e9f87f10..c1a8d47e0e 100644
      if ep_size > 1:
          local_e = e // ep_size
          e_ids = torch.randint(0, e, (local_e,), device=DEVICE_TYPE, dtype=torch.int32)
-@@ -1050,7 +1064,10 @@ class MarlinMoEWeightData:
+@@ -1019,7 +1033,10 @@ class MarlinMoEWeightData:
      ("a_type, b_type, c_type, group_blocks,m, n, k, e, topk, ep_size"),
      marlin_moe_generate_valid_test_cases(),
  )
@@ -227,7 +227,7 @@ index 26e9f87f10..c1a8d47e0e 100644
  @pytest.mark.usefixtures("default_vllm_config")
  def test_fused_marlin_moe(
      a_type: ScalarType,
-@@ -1172,7 +1189,10 @@ def test_fused_marlin_moe(
+@@ -1127,7 +1144,10 @@ def test_fused_marlin_moe(
  
  
  @pytest.mark.flaky(reruns=2)
@@ -239,7 +239,7 @@ index 26e9f87f10..c1a8d47e0e 100644
  @pytest.mark.usefixtures("default_vllm_config")
  @pytest.mark.parametrize("m", [1, 256])
  def test_fused_marlin_moe_with_bias(m):
-@@ -1236,7 +1256,10 @@ def test_fused_marlin_moe_with_bias(m):
+@@ -1191,7 +1211,10 @@ def test_fused_marlin_moe_with_bias(m):
  
  
  @pytest.mark.flaky(reruns=2)
@@ -251,8 +251,8 @@ index 26e9f87f10..c1a8d47e0e 100644
  @pytest.mark.usefixtures("default_vllm_config")
  @pytest.mark.parametrize("m", [1, 64, 256])
  @pytest.mark.parametrize("n,k", [(1024, 1024), (2048, 2048)])
-@@ -1999,7 +2022,10 @@ def _batched_fused_marlin_moe_cases() -> list[Any]:
-     ("m,n,k,e,topk,max_tokens_per_batch,dtype,quant_dtype,input_type,atol"),
+@@ -1935,7 +1958,10 @@ def _batched_fused_marlin_moe_cases() -> list[Any]:
+     ("m,n,k,e,topk,max_tokens_per_batch,dtype,quant_dtype,atol"),
      _batched_fused_marlin_moe_cases(),
  )
 -@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
@@ -292,7 +292,7 @@ index 53c3bae336..c02a3f056c 100644
  
  vllm_config = VllmConfig()
 diff --git a/tests/kernels/quantization/test_nvfp4_emulation.py b/tests/kernels/quantization/test_nvfp4_emulation.py
-index 9fc97d0e09..8bbc4bc9dd 100644
+index 93bb25ad6b..d132d9aa99 100644
 --- a/tests/kernels/quantization/test_nvfp4_emulation.py
 +++ b/tests/kernels/quantization/test_nvfp4_emulation.py
 @@ -636,7 +636,7 @@ def _load_nvfp4_moe_weights(
@@ -305,10 +305,10 @@ index 9fc97d0e09..8bbc4bc9dd 100644
  )
  @pytest.mark.parametrize("num_tokens", [1, 2, 4, 1024])
 diff --git a/tests/kernels/test_compressor_kv_cache.py b/tests/kernels/test_compressor_kv_cache.py
-index 9d4756424a..ee27bfd29b 100644
+index 3cd8c1a0b5..eef88229f0 100644
 --- a/tests/kernels/test_compressor_kv_cache.py
 +++ b/tests/kernels/test_compressor_kv_cache.py
-@@ -1096,7 +1096,7 @@ def test_v41_rope_insert_plain_row(compress_ratio: int, store_fp8: bool):
+@@ -1097,7 +1097,7 @@ def test_v41_rope_insert_plain_row(compress_ratio: int, store_fp8: bool):
          )
  
  
@@ -331,7 +331,7 @@ index e44a683495..4531b02c93 100644
  )
  @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 diff --git a/tests/models/inkling/test_mtp_input_fusion.py b/tests/models/inkling/test_mtp_input_fusion.py
-index 7ab33dd45a..01a76c5e32 100644
+index 0e17eb5234..18e258695b 100644
 --- a/tests/models/inkling/test_mtp_input_fusion.py
 +++ b/tests/models/inkling/test_mtp_input_fusion.py
 @@ -14,7 +14,7 @@ import torch
@@ -356,67 +356,6 @@ index 1e0bf49bb6..5eee7ef8cd 100644
  @torch.inference_mode()
  def test_fused_sconv_negative_slots_skip_cache_writes():
      args = list(_make_inputs(is_local=True, tokens=9))
-diff --git a/tests/quantization/test_per_token_kv_cache.py b/tests/quantization/test_per_token_kv_cache.py
-index e66a577737..5c8e9f7afb 100644
---- a/tests/quantization/test_per_token_kv_cache.py
-+++ b/tests/quantization/test_per_token_kv_cache.py
-@@ -580,9 +580,10 @@ def test_triton_unified_attention_per_token_head_scale(
-     value_cache_bf16 = torch.randn_like(key_cache_bf16)
- 
-     if is_int4:
--        # Asymmetric quantization reference (matches the Triton kernel).
--        kf = key_cache_bf16.float()
--        vf = value_cache_bf16.float()
-+        # The INT4 cache lives in the RHT domain: rotate K/V before the
-+        # asymmetric quantization, like reshape_and_cache_int4 does.
-+        kf = single_rht(key_cache_bf16.float()).to(torch.bfloat16).float()
-+        vf = single_rht(value_cache_bf16.float()).to(torch.bfloat16).float()
-         k_min = kf.amin(dim=-1)
-         k_max = kf.amax(dim=-1)
-         v_min = vf.amin(dim=-1)
-@@ -599,11 +600,22 @@ def test_triton_unified_attention_per_token_head_scale(
-             (vf / v_scale_cache[..., None] + v_zp[..., None]).round().clamp(0, 15)
-         )
- 
--        # Dequantized reference: x_hat = (q - zp) * scale
--        key_cache_deq = (key_cache_q_full - k_zp[..., None]) * k_scale_cache[..., None]
--        value_cache_deq = (value_cache_q_full - v_zp[..., None]) * v_scale_cache[
--            ..., None
--        ]
-+        # Dequantized reference: x_hat = (q - zp) * scale, then IRHT/d back
-+        # to the original domain the reference attention runs in.
-+        key_cache_deq = (
-+            single_rht(
-+                (key_cache_q_full - k_zp[..., None]) * k_scale_cache[..., None],
-+                inverse=True,
-+            )
-+            / head_size
-+        )
-+        value_cache_deq = (
-+            single_rht(
-+                (value_cache_q_full - v_zp[..., None]) * v_scale_cache[..., None],
-+                inverse=True,
-+            )
-+            / head_size
-+        )
- 
-         # Pack two uint4 values into one byte
-         def _pack_int4(data_float):
-@@ -727,12 +739,5 @@ def test_triton_unified_attention_per_token_head_scale(
-         softmax_segm_expsum=softmax_segm_expsum,
-     )
- 
--    # Coarser quantization → wider tolerance.
--    if is_int4:
--        # Hopper's attention reduction order can move a few BF16 elements by
--        # just over 1.0 after INT4 quantization.
--        atol = 1.1 if current_platform.is_device_capability_family(90) else 0.5
--        rtol = 0.5
--    else:
--        atol, rtol = 5e-2, 5e-2
--    torch.testing.assert_close(output_q, output_ref, atol=atol, rtol=rtol)
-+    # Both runs see the same dequantized KV, so INT4 needs no wider tolerance.
-+    torch.testing.assert_close(output_q, output_ref, atol=5e-2, rtol=5e-2)
 diff --git a/tests/utils.py b/tests/utils.py
 index 94f62ef8b8..66567439bf 100644
 --- a/tests/utils.py
@@ -436,7 +375,7 @@ index 94f62ef8b8..66567439bf 100644
  
              result = subprocess.run(
 diff --git a/tests/v1/attention/test_deepseek_v4_swa_visible.py b/tests/v1/attention/test_deepseek_v4_swa_visible.py
-index a46495f790..797aefda39 100644
+index 3983a82446..a70b4bdee3 100644
 --- a/tests/v1/attention/test_deepseek_v4_swa_visible.py
 +++ b/tests/v1/attention/test_deepseek_v4_swa_visible.py
 @@ -219,7 +219,7 @@ CASES: list[_Case] = [
@@ -530,11 +469,11 @@ index a46495f790..797aefda39 100644
      """Graph captures build without model-specific kwargs: a replaying group's
      metadata then bounds nothing."""
 diff --git a/tests/v1/attention/test_indexer_dcp_localize.py b/tests/v1/attention/test_indexer_dcp_localize.py
-index 22dc3ee44f..67ea5a918d 100644
+index 28935f695a..4614c7b33c 100644
 --- a/tests/v1/attention/test_indexer_dcp_localize.py
 +++ b/tests/v1/attention/test_indexer_dcp_localize.py
-@@ -588,7 +588,7 @@ def test_cutedsl_dcp_candidate_pack_and_select_matches_reference(
-         assert set(actual[row].cpu().tolist()) == set(expected[row].cpu().tolist())
+@@ -657,7 +657,7 @@ def test_cutedsl_gathered_select_compact_keys_match_reference(
+         assert sorted(compact[row].tolist()) == want
  
  
 -@pytest.mark.skipif(not current_platform.is_cuda(), reason="This test requires CUDA")
@@ -542,7 +481,7 @@ index 22dc3ee44f..67ea5a918d 100644
  def test_sparse_prefill_dcp_metadata_localizes_causal_bounds():
      device = torch.device("cuda")
      seq_len = 8
-@@ -663,7 +663,7 @@ def test_sparse_prefill_dcp_metadata_localizes_causal_bounds():
+@@ -732,7 +732,7 @@ def test_sparse_prefill_dcp_metadata_localizes_causal_bounds():
      )
  
  
@@ -551,7 +490,7 @@ index 22dc3ee44f..67ea5a918d 100644
  @pytest.mark.parametrize("block_stride_rows", [None, 12])
  def test_dcp_filter_compacts_valid_slots_for_sparse_kernel(
      block_stride_rows: int | None,
-@@ -701,7 +701,7 @@ def test_dcp_filter_compacts_valid_slots_for_sparse_kernel(
+@@ -770,7 +770,7 @@ def test_dcp_filter_compacts_valid_slots_for_sparse_kernel(
      )
  
  
@@ -560,7 +499,7 @@ index 22dc3ee44f..67ea5a918d 100644
  @pytest.mark.parametrize("interleave", [1, 2])
  @pytest.mark.parametrize("dcp_rank", [0, 1])
  # Include padded single-tile compaction and the multi-tile atomic fallback.
-@@ -766,7 +766,7 @@ def test_dcp_filter_compaction_matches_reference(
+@@ -835,7 +835,7 @@ def test_dcp_filter_compaction_matches_reference(
          assert set(out[r, :n].cpu().tolist()) == set(expected.cpu().tolist())
  
  
@@ -569,7 +508,7 @@ index 22dc3ee44f..67ea5a918d 100644
  @pytest.mark.parametrize("interleave", [1, 2, 4])
  def test_dcp_global_topk_physical_attention_matches_non_dcp(interleave: int):
      torch.manual_seed(2)
-@@ -839,7 +839,7 @@ def test_dcp_global_topk_physical_attention_matches_non_dcp(interleave: int):
+@@ -908,7 +908,7 @@ def test_dcp_global_topk_physical_attention_matches_non_dcp(interleave: int):
      torch.testing.assert_close(dcp_lse, ref_lse, atol=1e-5, rtol=1e-5)
  
  
@@ -579,10 +518,10 @@ index 22dc3ee44f..67ea5a918d 100644
  def test_correct_attn_out_zeroes_empty_nan_partial(is_lse_base_on_e: bool):
      out = torch.full((1, 1, 4), float("nan"), device="cuda")
 diff --git a/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py b/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py
-index 57164a4380..c238287c17 100644
+index 7c00b6d991..9477276519 100644
 --- a/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py
 +++ b/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py
-@@ -229,7 +229,7 @@ def test_indexer_draft_decode_refresh_follows_new_batch(monkeypatch, compress_ra
+@@ -293,7 +293,7 @@ def test_indexer_draft_decode_refresh_follows_new_batch(monkeypatch, compress_ra
      torch.testing.assert_close(decode.seq_lens.flatten(), expected_seq_lens)
  
  
@@ -591,7 +530,7 @@ index 57164a4380..c238287c17 100644
  @pytest.mark.parametrize(
      "query_lens", [[1], [0, 257, 1, 0, 3], [6] * 64, [2, 6, 4, 0], [0, 0, 0]]
  )
-@@ -390,7 +390,7 @@ def test_compressed_slot_mapping_warmup_includes_index_kpool():
+@@ -456,7 +456,7 @@ def test_compressed_slot_mapping_warmup_includes_index_kpool():
      assert {(key.compress_ratio, key.block_size) for key in keys} == {(32, 2)}
  
  
@@ -600,7 +539,7 @@ index 57164a4380..c238287c17 100644
  def test_compressed_slot_mapping_inherits_padded_token_slots():
      """A token whose own slot is padded (SWA bounded replay) closes no
      compressed state either."""
-@@ -545,7 +545,7 @@ def test_zero_token_pcp_rank_participates_in_compressed_mapping_gather(monkeypat
+@@ -611,7 +611,7 @@ def test_zero_token_pcp_rank_participates_in_compressed_mapping_gather(monkeypat
      torch.testing.assert_close(metadata.slot_mapping, gathered_slot_mapping)
  
  
@@ -610,7 +549,7 @@ index 57164a4380..c238287c17 100644
      """Regression test: DeepseekV4 compression path must compute slot_mapping from
      compressed positions, not reuse the uncompressed common metadata mapping.
 diff --git a/tests/v1/attention/test_mla_backends.py b/tests/v1/attention/test_mla_backends.py
-index ddafc37ba6..cf35566f7f 100644
+index 1b8df969a7..5feeb712a2 100644
 --- a/tests/v1/attention/test_mla_backends.py
 +++ b/tests/v1/attention/test_mla_backends.py
 @@ -52,7 +52,7 @@ from vllm.v1.attention.backends.mla.prefill.selector import (
@@ -637,8 +576,52 @@ index ddafc37ba6..cf35566f7f 100644
  # Remove FLASHMLA from the list if not supported
  if not is_flashmla_dense_supported()[0]:
      BACKENDS_TO_TEST.remove(AttentionBackendEnum.FLASHMLA)
+diff --git a/tests/v1/kv_connector/unit/test_nixl_connector.py b/tests/v1/kv_connector/unit/test_nixl_connector.py
+index 5010706f15..c3e2dcd23b 100644
+--- a/tests/v1/kv_connector/unit/test_nixl_connector.py
++++ b/tests/v1/kv_connector/unit/test_nixl_connector.py
+@@ -2991,14 +2991,13 @@ def test_register_packed_dsv4_mla_cache_as_single_region(
+             kv_caches.update(zip(layer_names, views))
+         connector.register_kv_caches(kv_caches)
+ 
+-        # MLA pages transfer as whole rows; a ring page past the row start keeps
+-        # its own region.
++        # MLA pages transfer as whole rows; a ring page keeps its own region,
++        # since a region is keyed by (base_addr, block_len).
+         ring_pages = [
+             (cache.data_ptr(), spec.page_size_bytes)
+             for layer_names, spec in zip(group_layers, specs)
+             if isinstance(spec, CircularBufferSpec)
+             for cache in (kv_caches[name] for name in layer_names)
+-            if cache.data_ptr() != raw.data_ptr()
+         ]
+         _agent, block_runs = wrapper.prep_xfer_dlist.call_args[0]
+         assert connector.connector_worker.kv_caches_base_addr[
+@@ -5222,7 +5221,10 @@ def test_ucx_backend_params(dist_init, extra_config, agent_backends, created_bac
+             num_threads=num_threads,
+         )
+ 
+-    vllm_config = create_vllm_config(kv_connector_extra_config=extra_config)
++    vllm_config = create_vllm_config(
++        block_size=maybe_update_block_size(16),
++        kv_connector_extra_config=extra_config,
++    )
+     with (
+         patch(
+             "vllm.distributed.kv_transfer.kv_connector.v1.nixl.base_worker.NixlWrapper",
+@@ -5235,7 +5237,9 @@ def test_ucx_backend_params(dist_init, extra_config, agent_backends, created_bac
+         set_current_vllm_config(vllm_config),
+     ):
+         connector = NixlConnector(
+-            vllm_config, KVConnectorRole.WORKER, make_kv_cache_config(block_size=16)
++            vllm_config,
++            KVConnectorRole.WORKER,
++            make_kv_cache_config(block_size=maybe_update_block_size(16)),
+         )
+     wrapper = connector.connector_worker.nixl_wrapper
+     assert wrapper.config.backends == agent_backends
 diff --git a/tests/v1/sample/test_logprobs.py b/tests/v1/sample/test_logprobs.py
-index f7f51ac47d..ce494d557e 100644
+index 4f8c378589..54e4576b08 100644
 --- a/tests/v1/sample/test_logprobs.py
 +++ b/tests/v1/sample/test_logprobs.py
 @@ -1607,7 +1607,7 @@ def test_token_logprobs_large_batch_int64_row_offset():
@@ -669,10 +652,10 @@ index c23fe6c0ce..89d37c2d34 100644
      fake_logits = torch.full((batch_size, vocab_size), 1e-2, dtype=torch.float)
      return fake_logits
 diff --git a/tests/v1/spec_decode/test_rejection_sampler_utils.py b/tests/v1/spec_decode/test_rejection_sampler_utils.py
-index fd282f4346..61e8cc592e 100644
+index a6d0fd91fd..eaab5c1589 100644
 --- a/tests/v1/spec_decode/test_rejection_sampler_utils.py
 +++ b/tests/v1/spec_decode/test_rejection_sampler_utils.py
-@@ -24,7 +24,7 @@ VOCAB_SIZE = 4096
+@@ -26,7 +26,7 @@ VOCAB_SIZE = 4096
  
  # Skip if no CUDA - Triton kernel requires GPU
  pytest.importorskip("triton")
@@ -751,10 +734,10 @@ index f0e5bd43a5..a58bf22402 100644
          "CUDA required for Model Runner V2 logits processor tests",
          allow_module_level=True,
 diff --git a/tests/v1/worker/test_gpu_rejection_sampler_i64.py b/tests/v1/worker/test_gpu_rejection_sampler_i64.py
-index 769444ed64..ab88ea2264 100644
+index 5a571d0314..f17c298c55 100644
 --- a/tests/v1/worker/test_gpu_rejection_sampler_i64.py
 +++ b/tests/v1/worker/test_gpu_rejection_sampler_i64.py
-@@ -95,7 +95,7 @@ def _run(
+@@ -98,7 +98,7 @@ def _run(
      return sampled[roi_req].clone(), num_sampled[roi_req].clone()
  
  
@@ -764,11 +747,11 @@ index 769444ed64..ab88ea2264 100644
      # Overflow triggers when roi_req * LOGITS_PER_REQ * VOCAB_SIZE (target
      # logits) or req_state_idx * NUM_SPECULATIVE_STEPS * VOCAB_SIZE (draft
 diff --git a/tests/v1/worker/test_mamba_utils.py b/tests/v1/worker/test_mamba_utils.py
-index 61ad7e24dd..818ac43dde 100644
+index 7c047a1b07..2a2dc9ff15 100644
 --- a/tests/v1/worker/test_mamba_utils.py
 +++ b/tests/v1/worker/test_mamba_utils.py
-@@ -869,7 +869,7 @@ def _run_gpu_postprocess(
-     torch.accelerator.synchronize()
+@@ -1243,7 +1243,7 @@ def _run_gpu_postprocess(
+     return accepted_gpu
  
  
 -@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -777,10 +760,10 @@ index 61ad7e24dd..818ac43dde 100644
      """Tests for postprocess_mamba_fused_kernel comparing GPU vs CPU paths."""
  
 diff --git a/tests/watermarking/test_watermarking.py b/tests/watermarking/test_watermarking.py
-index dd1e90926d..4730689025 100644
+index e7a3b580ea..e41481b37a 100644
 --- a/tests/watermarking/test_watermarking.py
 +++ b/tests/watermarking/test_watermarking.py
-@@ -742,7 +742,7 @@ def test_gpu_sampler_wires_request_history_scope():
+@@ -755,7 +755,7 @@ def test_gpu_sampler_wires_request_history_scope():
  
  
  @pytest.mark.skipif(
@@ -789,7 +772,7 @@ index dd1e90926d..4730689025 100644
  )
  @pytest.mark.parametrize("max_history", [5, 6])
  @pytest.mark.parametrize("include_prompt", [False, True])
-@@ -770,7 +770,7 @@ def test_repeated_context_mask_max_history_accelerator_parity(
+@@ -783,7 +783,7 @@ def test_repeated_context_mask_max_history_accelerator_parity(
  
  
  @pytest.mark.skipif(
@@ -798,7 +781,7 @@ index dd1e90926d..4730689025 100644
  )
  def test_repeated_context_mask_partial_context_accelerator_parity():
      inputs = (
-@@ -811,7 +811,7 @@ def _unaligned_max_history_inputs() -> tuple[torch.Tensor, ...]:
+@@ -824,7 +824,7 @@ def _unaligned_max_history_inputs() -> tuple[torch.Tensor, ...]:
  
  
  @pytest.mark.skipif(
@@ -807,7 +790,7 @@ index dd1e90926d..4730689025 100644
  )
  @pytest.mark.parametrize(
      "max_history,expected", [(1200 - 680, True), (1200 - 680 - 1, False)]
-@@ -873,12 +873,12 @@ def test_repeated_context_mask(context_width: int):
+@@ -886,12 +886,12 @@ def test_repeated_context_mask(context_width: int):
  
  
  @pytest.mark.skipif(
@@ -822,7 +805,7 @@ index dd1e90926d..4730689025 100644
      contexts = accelerator_inputs[-1]
      storage = torch.empty(
          contexts.shape[0], contexts.shape[1] * 2, dtype=contexts.dtype, device="cuda"
-@@ -893,7 +893,7 @@ def test_repeated_context_mask_accelerator_parity(context_width: int):
+@@ -906,7 +906,7 @@ def test_repeated_context_mask_accelerator_parity(context_width: int):
  
  
  @pytest.mark.skipif(
@@ -831,7 +814,7 @@ index dd1e90926d..4730689025 100644
  )
  def test_repeated_context_mask_scans_multiple_blocks():
      context = [1, 2, 3, 4]
-@@ -920,7 +920,7 @@ def test_repeated_context_mask_scans_multiple_blocks():
+@@ -933,7 +933,7 @@ def test_repeated_context_mask_scans_multiple_blocks():
  
  
  @pytest.mark.skipif(
@@ -840,7 +823,7 @@ index dd1e90926d..4730689025 100644
  )
  def test_repeated_context_mask_last_request_at_capacity():
      max_model_len = 1024
-@@ -941,7 +941,7 @@ def test_repeated_context_mask_last_request_at_capacity():
+@@ -954,7 +954,7 @@ def test_repeated_context_mask_last_request_at_capacity():
  
  
  @pytest.mark.skipif(
@@ -849,7 +832,7 @@ index dd1e90926d..4730689025 100644
  )
  def test_gpu_sampler_uses_fused_gumbel_for_repeated_contexts():
      device = torch.device("cuda")
-@@ -1126,7 +1126,7 @@ def test_gpu_sampler_all_scope_skips_only_partial_speculative_contexts():
+@@ -1141,7 +1141,7 @@ def test_rejection_sampler_skips_only_partial_speculative_contexts(scope):
  
  
  @pytest.mark.skipif(
@@ -858,7 +841,7 @@ index dd1e90926d..4730689025 100644
  )
  @pytest.mark.parametrize("max_history,expected_last", [(None, True), (3, False)])
  def test_speculative_context_repetition_accelerator_parity(
-@@ -1169,7 +1169,7 @@ def test_speculative_context_repetition_accelerator_parity(
+@@ -1184,7 +1184,7 @@ def test_speculative_context_repetition_accelerator_parity(
  
  
  @pytest.mark.skipif(
@@ -867,7 +850,7 @@ index dd1e90926d..4730689025 100644
  )
  @pytest.mark.parametrize("steps_layout", ["per_row", "broadcast"])
  @pytest.mark.parametrize("req_indices_layout", ["contiguous", "column_view"])
-@@ -1273,7 +1273,7 @@ def test_gpu_sampler_builds_chunked_multi_request_speculative_contexts():
+@@ -1288,7 +1288,7 @@ def test_gpu_sampler_builds_chunked_multi_request_speculative_contexts():
  
  
  @pytest.mark.skipif(
@@ -876,7 +859,7 @@ index dd1e90926d..4730689025 100644
  )
  def test_draft_context_deduplication_broadcasts_the_draft_step():
      """The draft step is one 0-d tensor broadcast over the batch.
-@@ -1475,7 +1475,7 @@ def test_draft_sampler_uses_ordinary_samples_for_repeated_contexts(monkeypatch):
+@@ -1498,7 +1498,7 @@ def test_draft_sampler_uses_ordinary_samples_for_repeated_contexts(monkeypatch):
  
  
  @pytest.mark.skipif(
@@ -885,7 +868,7 @@ index dd1e90926d..4730689025 100644
  )
  def test_draft_context_deduplication_reads_strided_request_indices():
      """DSpark samples a step at a time, so req_indices is an `idx_map[:, i]` column."""
-@@ -1568,7 +1568,7 @@ def test_draft_sampler_deduplicates_against_committed_history(monkeypatch):
+@@ -1591,7 +1591,7 @@ def test_draft_sampler_deduplicates_against_committed_history(monkeypatch):
  
  
  @pytest.mark.skipif(
@@ -894,7 +877,7 @@ index dd1e90926d..4730689025 100644
  )
  @pytest.mark.parametrize("idx_mapping_layout", ["contiguous", "column_view"])
  def test_draft_watermarker_deduplicates_across_a_block_on_cuda(
-@@ -1664,7 +1664,7 @@ def test_draft_watermarker_deduplicates_across_a_block_on_cuda(
+@@ -1687,7 +1687,7 @@ def test_draft_watermarker_deduplicates_across_a_block_on_cuda(
  
  
  @pytest.mark.skipif(
@@ -904,10 +887,10 @@ index dd1e90926d..4730689025 100644
  def test_draft_watermarker_cuda_graph_reads_current_prompt_lens():
      draft_watermarker = DraftWatermarker(
 diff --git a/vllm/model_executor/determinism/batch_invariant.py b/vllm/model_executor/determinism/batch_invariant.py
-index 589452c751..b0c4cba8ae 100644
+index b99e5bbd37..f8fb74534d 100644
 --- a/vllm/model_executor/determinism/batch_invariant.py
 +++ b/vllm/model_executor/determinism/batch_invariant.py
-@@ -1356,24 +1356,25 @@ def enable_batch_invariant_mode():
+@@ -1417,24 +1417,25 @@ def enable_batch_invariant_mode():
      # Native mean can change reduction order with the row count on XPU too.
      _batch_invariant_LIB.impl("aten::mean.dim", mean_batch_invariant, key)
  
@@ -945,19 +928,44 @@ index 589452c751..b0c4cba8ae 100644
  
      reduced_precision_val = (
          (False, False) if is_torch_equal_or_newer("2.10.0") else False
+diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
+index 943e551b64..fbb5feef47 100644
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -572,10 +572,18 @@ def fused_moe_kernel(
+                     a_scale_ptrs + offs_ks * stride_ask, mask=token_mask, other=0.0
+                 )
+                 b_scale = tl.load(b_scale_ptrs + offs_ks * stride_bsk)
++                # b_scale is a scalar when the whole N tile falls inside a single
++                # quant group; Triton rejects indexing a scalar.
++                if group_n >= BLOCK_SIZE_N and group_n % BLOCK_SIZE_N == 0:
++                    b_scale_n = b_scale
++                elif SWAP_AB:
++                    b_scale_n = b_scale[:, None]
++                else:
++                    b_scale_n = b_scale[None, :]
+                 if SWAP_AB:
+-                    accumulator += tl.dot(b, a) * b_scale[:, None] * a_scale[None, :]
++                    accumulator += tl.dot(b, a) * b_scale_n * a_scale[None, :]
+                 else:
+-                    accumulator += tl.dot(a, b) * a_scale[:, None] * b_scale[None, :]
++                    accumulator += tl.dot(a, b) * a_scale[:, None] * b_scale_n
+             else:
+                 if use_fp8_w8a8:
+                     # acc used to enable fp8_fast_accum
 diff --git a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
-index 2c8996a933..cc4b047c14 100644
+index 699cad10af..a92dab7dd6 100644
 --- a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
 +++ b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
-@@ -7,7 +7,6 @@ from vllm.logger import init_logger
- from vllm.model_executor.warmup.attention_warmup import (
-     mixed_batch_attention_warmup,
+@@ -11,7 +11,6 @@ from vllm.model_executor.warmup.attention_warmup import (
  )
+ from vllm.models.minimax_m3.nvidia.indexer_msa import MiniMaxM3IndexerMSAImpl
+ from vllm.models.minimax_m3.nvidia.indexer_nvfp4 import MiniMaxM3IndexerNvfp4Impl
 -from vllm.models.minimax_m3.nvidia.model import MiniMaxM3SparseAttention
- from vllm.platforms import current_platform
- from vllm.tracing import instrument
- 
-@@ -19,6 +18,13 @@ logger = init_logger(__name__)
+ from vllm.models.minimax_m3.nvidia.msa_cutlass_sparse_decode import (
+     NVFP4_BLOCK_SCALE_SHIFT,
+     uses_q8kv4_decode,
+@@ -81,6 +80,13 @@ def _msa_prebuild_kwargs(
  
  @instrument(span_name="MiniMax M3 MSA warmup")
  def minimax_m3_msa_warmup(worker: "Worker") -> None:
@@ -971,7 +979,7 @@ index 2c8996a933..cc4b047c14 100644
      sparse_module = next(
          (
              module
-@@ -29,10 +35,6 @@ def minimax_m3_msa_warmup(worker: "Worker") -> None:
+@@ -91,10 +97,6 @@ def minimax_m3_msa_warmup(worker: "Worker") -> None:
      )
      if sparse_module is None:
          return
@@ -1017,7 +1025,7 @@ index 38cba0b81c..7401a0c1d2 100644
              )
  
 diff --git a/vllm/platforms/rocm.py b/vllm/platforms/rocm.py
-index 83ad6e3bcf..899260eb0e 100644
+index 1778bf26fc..a638ec633f 100644
 --- a/vllm/platforms/rocm.py
 +++ b/vllm/platforms/rocm.py
 @@ -206,7 +206,7 @@ def _get_gcn_arch() -> str:
@@ -1030,10 +1038,10 @@ index 83ad6e3bcf..899260eb0e 100644
  
  # Resolve once at module load. Uses amdsmi (no CUDA init) so Ray workers
 diff --git a/vllm/v1/attention/ops/triton_prefill_attention.py b/vllm/v1/attention/ops/triton_prefill_attention.py
-index da6569262f..ff77833d22 100644
+index 192d0950a8..01803192eb 100644
 --- a/vllm/v1/attention/ops/triton_prefill_attention.py
 +++ b/vllm/v1/attention/ops/triton_prefill_attention.py
-@@ -229,7 +229,12 @@ def get_block_size(dtype: torch.dtype) -> int:
+@@ -309,7 +309,12 @@ def get_block_size(dtype: torch.dtype) -> int:
  @cache
  def _fit_block_to_shared_memory(block: int, head_dim: int, element_size: int) -> int:
      """Halve the tile until its Q, K and P tiles fit in shared memory."""
@@ -1047,7 +1055,7 @@ index da6569262f..ff77833d22 100644
      while block > 16 and element_size * block * (2 * head_dim + block) > max_shared_mem:
          block //= 2
      return block
-@@ -259,7 +264,7 @@ def context_attention_fwd(
+@@ -339,7 +344,7 @@ def context_attention_fwd(
      BLOCK = get_block_size(q.dtype)
      if Lk >= 512:
          BLOCK = min(BLOCK, 32)

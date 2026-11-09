@@ -2,7 +2,7 @@ from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
 from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
-from triton.backends.intel.errors import IntelGPUError
+from triton.backends.intel.errors import IntelGPUError, WorkGroupSizeOutOfResources
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton.backends.intel.spirv_probes import accepts_long_vector, accepts_maximum_registers
 from triton import knobs
@@ -481,6 +481,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             raise ValueError(
                 f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
             )
+        # `max_num_sub_groups` assumes the smallest sub-group size, so 32-lane kernels can pass it
+        # and still exceed `max_work_group_size`; raise `OutOfResources` so the autotuner skips them.
+        max_work_group_size = properties.get('max_work_group_size')
+        if max_work_group_size and opt.num_warps * opt.warp_size > max_work_group_size:
+            fitting = [s for s in properties['sub_group_sizes'] if opt.num_warps * s <= max_work_group_size]
+            smaller_warp_size = max(fitting) if fitting else None
+            raise WorkGroupSizeOutOfResources(opt.num_warps, opt.warp_size, max_work_group_size, smaller_warp_size,
+                                              opt.sub_32_dpas)
         # The backend has no CTA cluster support: getClusterCTAId is hardwired to
         # 0, clusterBarrier is a plain workgroup barrier, and loadDShared /
         # storeDShared ignore the ctaId they are given. Accepting num_ctas > 1
@@ -590,9 +598,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.passes.ttgpuir.add_canonicalize_pointers(pm, True)
             passes.common.add_canonicalizer(pm)
 
-        intel.passes.ttgpuir.add_accelerate_matmul(pm)
+        intel.passes.ttgpuir.add_accelerate_matmul(pm, opt.grf_mode)
         intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm)
-        intel.passes.ttgpuir.add_materialize_block_pointer(pm)
+        intel.passes.ttgpuir.add_materialize_block_pointer(pm, knobs.intel.descriptor_block_io_relayout)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_fold_fp_to_fp(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
@@ -695,9 +703,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
-        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
-        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
+        # Instrumentation point here so we can override IRs above (e.g., ttir and ttgir).
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
+        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         pm.run(mod, 'make_llir.allocate_memory')
 
         metadata["shared"] = src.get_int_attr("ttg.shared")

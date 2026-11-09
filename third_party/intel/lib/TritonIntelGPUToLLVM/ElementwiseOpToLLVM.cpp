@@ -2048,6 +2048,27 @@ struct AbsFOpConversion
   }
 };
 
+// FIXME: Remove this IGC W/A (#8626).
+struct FmaOpConversion
+    : ElementwiseOpConversionBase<math::FmaOp, FmaOpConversion> {
+  using Base = ElementwiseOpConversionBase<math::FmaOp, FmaOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(math::FmaOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    Value a = operands[0][0], b = operands[0][1], c = operands[0][2];
+    if (!elemTy.isF32())
+      return {LLVM::FMAOp::create(rewriter, loc, elemTy, a, b, c)};
+    auto fmf = LLVM::FastmathFlagsAttr::get(rewriter.getContext(),
+                                            LLVM::FastmathFlags::contract);
+    Value mul = LLVM::FMulOp::create(rewriter, loc, elemTy, a, b, fmf);
+    return {LLVM::FAddOp::create(rewriter, loc, elemTy, mul, c, fmf)};
+  }
+};
+
 // Without native bf16 arithmetic (LTS drivers), lower a bf16 `tt.clampf` in
 // f32. `tt.clampf` is not an arith op, so `arith-emulate-unsupported-floats`
 // does not widen it. The result is one of the inputs or NaN, so the f32
@@ -2126,6 +2147,7 @@ struct PreciseSqrtOpConversion
             op, intel::TritonIntelGPUDialect::
                     getUseClRoundedDivideSqrtAttrName())) {
       return {LLVM::SqrtOp::create(rewriter, loc, elemTy, operandsRanges[0],
+                                   LLVM::SqrtOp::Properties{},
                                    adaptor.getAttributes().getValue())};
     }
 
@@ -2346,8 +2368,13 @@ void populateElementwiseOpToLLVMPatterns(
   assert(benefit > 0);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, benefit.getBenefit() - 1);
+  patterns.add<gpu::ElementwiseOpConversion<arith::UIToFPOp, LLVM::UIToFPOp>,
+               gpu::ElementwiseOpConversion<math::SqrtOp, math::SqrtOp>,
+               gpu::ElementwiseOpConversion<math::RsqrtOp, math::RsqrtOp>>(
+      typeConverter, axisInfoAnalysis, benefit.getBenefit() - 1);
 
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FmaOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SigmoidConversion>(typeConverter, benefit.getBenefit() + 10);
   patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
       typeConverter, axisInfoAnalysis, benefit);

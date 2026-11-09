@@ -4,3 +4,4 @@ add_public_tablegen_target(ProtonGPUConversionPassIncGen)
 
 add_subdirectory(ProtonNvidiaGPUToLLVM)
 add_subdirectory(ProtonAMDGPUToLLVM)
+add_subdirectory(ProtonIntelGPUToLLVM)

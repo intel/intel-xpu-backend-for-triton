@@ -118,6 +118,7 @@ def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl
     ]))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("sanitize_overflow", [False, True])
+@pytest.mark.enable_warmup
 def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
 
     torch.manual_seed(0)
@@ -375,25 +376,24 @@ def test_convert_layout_cross_cta_in_warp_specialize(use_worker_partition, devic
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
-@pytest.mark.skipif(is_hip(), reason="Uses 32-thread NVIDIA layouts")
+@pytest.mark.xfail(not is_hip(), reason="Generic linear layouts are only supported on AMD", run=False)
 @pytest.mark.parametrize("src_warp, dst_warp", [(64, 96), (96, 64)])
 def test_convert_layout_overlapping_identity_dims(src_warp, dst_warp, device):
 
     @gluon.jit
-    def kernel(x_ptr, y_ptr, SRC_WARP: ttgl.constexpr, DST_WARP: ttgl.constexpr):
-        src: ttgl.constexpr = ttgl.DistributedLinearLayout([[32]], [[1], [2], [4], [8], [16]], [[SRC_WARP], [128]], [],
-                                                           [256])
-        dst: ttgl.constexpr = ttgl.DistributedLinearLayout([[32]], [[1], [2], [4], [8], [16]], [[DST_WARP], [128]], [],
-                                                           [256])
+    def kernel(x_ptr, y_ptr, src: ttgl.constexpr, dst: ttgl.constexpr):
         src_offsets = ttgl.arange(0, 256, layout=src)
         x = ttgl.load(x_ptr + src_offsets)
         y = ttgl.convert_layout(x, dst)
         dst_offsets = ttgl.arange(0, 256, layout=dst)
         ttgl.store(y_ptr + dst_offsets, y)
 
+    lane_bases = [[1], [2], [4], [8], [16]] + [[0]] * (THREADS_PER_WARP // 32 - 1)
+    src = ttgl.DistributedLinearLayout([[32]], lane_bases, [[src_warp], [128]], [], [256])
+    dst = ttgl.DistributedLinearLayout([[32]], lane_bases, [[dst_warp], [128]], [], [256])
     x = torch.arange(256, dtype=torch.int32, device=device)
     y = torch.empty_like(x)
-    kernel[(1, )](x, y, src_warp, dst_warp, num_warps=4)
+    kernel[(1, )](x, y, src, dst, num_warps=4)
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
@@ -488,7 +488,11 @@ def _swizzled_warp_layouts():
 
 # ===--- Tests with swizzled/non-injective DistributedLinearLayout ---===
 
+requires_generic_linear = pytest.mark.xfail(not is_hip(), reason="Generic linear layouts are only supported on AMD",
+                                            run=False)
 
+
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 def test_elementwise_generic_linear(src_layout, device):
     shape = src_layout.shape
@@ -525,6 +529,7 @@ def test_elementwise_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x * x + x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts_2d()))
 def test_expand_dims_generic_linear(src_layout, device):
     M, N = src_layout.shape
@@ -545,6 +550,7 @@ def test_expand_dims_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 def test_reshape_generic_linear(src_layout, device):
     shape = src_layout.shape
@@ -588,6 +594,7 @@ def test_reshape_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts_2d()))
 def test_permute_generic_linear(src_layout, device):
     M, N = src_layout.shape
@@ -609,6 +616,7 @@ def test_permute_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 def test_split_join_generic_linear(src_layout, device):
     if any(all(v == 0 for v in b) for b in src_layout.reg_bases):
@@ -659,6 +667,7 @@ def test_split_join_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x + x * 2)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts_2d()))
 def test_broadcast_generic_linear(src_layout, device):
     M, N = src_layout.shape
@@ -709,6 +718,7 @@ def _make_shared_layout(kind, shape):
     raise ValueError(f"Unknown shared layout kind: {kind}")
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 @pytest.mark.parametrize("shared_kind", _shared_layout_kinds())
 def test_local_load_store_generic_linear(src_layout, shared_kind, device):
@@ -1930,6 +1940,7 @@ def test_local_load_transposed_nvmma_zero_swizzle(device):
 ])
 @pytest.mark.parametrize("dist_layout", _ld_st_dot_layouts + _ld_st_mma_layouts)
 @pytest.mark.parametrize("shared_layout", _ld_st_shared_layouts)
+@pytest.mark.enable_warmup
 def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, device):
     if shared_layout == "shared_linear_layout":
         rank = len(shape)
@@ -1951,7 +1962,7 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
             pytest.xfail("contig_dim too small for swizzle_byte_width in NVMMASharedLayout")
 
     # A simple blocked layout
-    num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(dist_layout, shape))))
+    num_warps = math.prod(ttgl._layouts.warps_per_cta(dist_layout, shape))
     blocked_layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[4, THREADS_PER_WARP // 4],
                                         warps_per_cta=[1, num_warps], order=[0, 1])
 
@@ -1997,8 +2008,8 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
     y = torch.zeros_like(x)
     obj = kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
     _assert_close(y, x)
-    if (is_cuda() and isinstance(shared_layout, ttgl.NVMMASharedLayout) and dist_layout in _ld_st_mma_layouts
-            and dist_layout.version[0] >= 3 and dtype == "float16"):
+    if (not is_compile_warmup() and is_cuda() and isinstance(shared_layout, ttgl.NVMMASharedLayout)
+            and dist_layout in _ld_st_mma_layouts and dist_layout.version[0] >= 3 and dtype == "float16"):
         assert "stmatrix" in obj.asm["ptx"]
 
 

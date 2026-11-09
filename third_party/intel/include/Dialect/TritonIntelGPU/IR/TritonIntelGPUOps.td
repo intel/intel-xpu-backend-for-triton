@@ -277,26 +277,33 @@ def TTIG_Subgroup2DBlockLoadFromPtrOp : TTIG_Op<"2d_block_load_from_ptr", [
     and known `row_stride`. Creating this op from a ptr tensor that does not
     satisfy this precondition produces undefined behavior at lowering.
 
-    `base_pitch` (row stride in bytes) is a runtime `i32` operand, matching
-    `ttig.2d_block_load` and `triton_gen.2Dblockload`. A compile-time pitch is
-    just an `arith.constant`; a runtime one (e.g. grouped-GEMM `lda`) is the
-    computed SSA value.
+    `base_pitch` (row stride in bytes) and `base_height` (valid row count) are
+    runtime `i32` operands, matching `ttig.2d_block_load` and
+    `triton_gen.2Dblockload`. A compile-time value is just an
+    `arith.constant`; a runtime one (e.g. grouped-GEMM `lda`, or a per-group
+    row bound) is the computed SSA value. Rows at or beyond `base_height` are
+    zero-filled by the hardware instead of being read.
+
+    When the `ttig.block_io_runtime_row_limit` attribute is set, `base_height`
+    is relative to the *tensor's* first row, not any individual hardware
+    message's first row: the LLVM lowering subtracts each message's own row
+    offset from `base_height` before passing it to `triton_gen.2Dblockload`.
   }];
 
   let arguments = (ins
     Arg<TT_PtrLike, "tensor of pointers to the memory surface",
         [MemRead<GlobalMemory>]>:$ptr,
     I32:$base_pitch,
+    I32:$base_height,
     Optional<TT_BoolLike>:$mask,
     Optional<TT_Type>:$other,
     I32Attr:$base_width,
-    I32Attr:$base_height,
     TTIG_BlockIOMode:$memory_layout
   );
 
   let results = (outs TT_Tensor:$result);
   let assemblyFormat = [{
-    $ptr `,` $base_pitch (`,` $mask^ `,` $other)?
+    $ptr `,` $base_pitch `,` $base_height (`,` $mask^ `,` $other)?
     ` ` `{` $memory_layout `}`
     attr-dict `:` functional-type(operands, results)
   }];

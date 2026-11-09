@@ -1,7 +1,9 @@
 import os
 import pytest
 import shutil
+import torch
 import triton
+import triton.language as tl
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from triton._internal_testing import is_hip
@@ -236,10 +238,10 @@ def test_amd_llvm_options_concurrent():
 
 
 @pytest.mark.parametrize(("arch", "enable_fp_fusion", "disable_opt", "expected_flags", "disable_optimization"), [
-    ("gfx90a", True, None, [], False),
-    ("gfx942", False, "1", [], True),
-    ("gfx950", True, "disable-lsr", [], False),
-    ("gfx1250", True, "0", ["amdgpu-anti-hints-for-va-vdst"], False),
+    ("gfx90a", True, None, ["instcombine-simplify-vector-elts-depth=32"], False),
+    ("gfx942", False, "1", ["instcombine-simplify-vector-elts-depth=32"], True),
+    ("gfx950", True, "disable-lsr", ["instcombine-simplify-vector-elts-depth=32"], False),
+    ("gfx1250", True, "0", ["instcombine-simplify-vector-elts-depth=32", "amdgpu-anti-hints-for-va-vdst"], False),
 ])
 def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags, disable_optimization, fresh_knobs,
                              monkeypatch):
@@ -531,11 +533,13 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
 
     assert fresh_knobs.amd.use_buffer_atomics
 
-    # Just to prove that use_buffer_ops is coming from env
-    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
-    assert not fresh_knobs.amd.use_buffer_ops
-    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
-    assert fresh_knobs.amd.use_buffer_ops
+    # Just to prove that buffer_ops_analyze_small_tensor_range is coming from env
+    monkeypatch.setenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE", "1")
+    assert fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+    monkeypatch.delenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE")
+    assert not fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+
+    fresh_knobs.amd.use_buffer_ops = True
 
     with fresh_knobs.amd.scope():
         # Use the environment
@@ -548,18 +552,38 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
     assert fresh_knobs.amd.use_buffer_atomics
     assert fresh_knobs.amd.use_buffer_ops
 
-    # Just to prove that use_buffer_ops is coming from env
-    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
-    assert not fresh_knobs.amd.use_buffer_ops
-    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
+    # Just to prove that buffer_ops_analyze_small_tensor_range is coming from env
+    monkeypatch.setenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE", "1")
+    assert fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+    monkeypatch.delenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE")
+    assert not fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+
+
+def test_use_buffer_ops_is_read_once(fresh_knobs, monkeypatch):
+    # use_buffer_ops is read at import time, only refresh_knobs() re-reads it
+    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS", raising=False)
+    triton.knobs.refresh_knobs()
     assert fresh_knobs.amd.use_buffer_ops
+
+    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
+    assert fresh_knobs.amd.use_buffer_ops
+    triton.knobs.refresh_knobs()
+    assert not fresh_knobs.amd.use_buffer_ops
+
+    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
+    triton.knobs.refresh_knobs()
+    assert fresh_knobs.amd.use_buffer_ops
+
+    # Explicit assignment still wins
+    fresh_knobs.amd.use_buffer_ops = False
+    assert not fresh_knobs.amd.use_buffer_ops
 
 
 def test_env_updated(fresh_knobs, monkeypatch):
-    fresh_knobs.amd.use_buffer_ops = False
-    assert os.getenv("AMDGCN_USE_BUFFER_OPS") == "0"
+    fresh_knobs.amd.use_buffer_atomics = False
+    assert os.getenv("AMDGCN_USE_BUFFER_ATOMICS") == "0"
     # Just triple checking both APIs give us what we expect
-    assert os.environ["AMDGCN_USE_BUFFER_OPS"] == "0"
+    assert os.environ["AMDGCN_USE_BUFFER_ATOMICS"] == "0"
 
     fresh_knobs.cache.home_dir = "/foo/bar"
     assert os.getenv("TRITON_HOME") == "/foo/bar"
@@ -572,9 +596,8 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     fresh_knobs = fresh_knobs_including_libraries
     # bool defaulting to False
     assert not fresh_knobs.runtime.debug
-    # bool defaulting to True
-    assert fresh_knobs.language.default_fp_fusion
-    assert fresh_knobs.language.allow_fp_fusion
+    assert not fresh_knobs.language.default_fp_fusion
+    assert not fresh_knobs.language.allow_fp_fusion
     # str defaulting to None
     assert fresh_knobs.compilation.use_ir_loc is None
     # str defaulting to not None
@@ -585,7 +608,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     assert len(fresh_knobs.build.backend_dirs) == 0
 
     monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", falsey)
-    monkeypatch.setenv("TRITON_ALLOW_FP_FUSION", falsey)
+    monkeypatch.setenv("TRITON_ALLOW_FP_FUSION", truthy)
     monkeypatch.setenv("TRITON_DEBUG", truthy)
     monkeypatch.setenv("USE_IR_LOC", "ttir")
     monkeypatch.setenv("TRITON_CACHE_DIR", "/tmp/triton_cache")
@@ -597,7 +620,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     triton.knobs.refresh_knobs()
     assert fresh_knobs.runtime.debug
     assert not fresh_knobs.language.default_fp_fusion
-    assert not fresh_knobs.language.allow_fp_fusion
+    assert fresh_knobs.language.allow_fp_fusion
     assert fresh_knobs.compilation.use_ir_loc == "ttir"
     assert fresh_knobs.cache.home_dir == "/tmp/triton_home"
     assert fresh_knobs.cache.dir == "/tmp/triton_cache"
@@ -748,3 +771,28 @@ def test_opt_bool(fresh_knobs_including_libraries, monkeypatch):
     assert fresh_knobs.amd.use_block_pingpong
     monkeypatch.delenv("TRITON_HIP_USE_BLOCK_PINGPONG")
     assert fresh_knobs.amd.use_block_pingpong is None
+
+
+@triton.jit
+def _fresh_knobs_kernel(x_ptr):
+    tl.store(x_ptr, 1)
+
+
+def test_fresh_knobs_does_not_reuse_kernel_compiled_outside(device, monkeypatch, fresh_triton_cache) -> None:
+    from triton._internal_testing import _fresh_knobs_impl
+
+    x = torch.zeros(1, dtype=torch.int32, device=device)
+
+    # Outside `fresh_knobs`: compiled with an env var that changes the disk hash.
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+    outside = _fresh_knobs_kernel[(1, )](x)
+
+    # Inside `fresh_knobs`: the env var is deleted, so the disk hash differs. The in-memory key
+    # ignores knobs/env vars, so without a per-context key namespace the outside kernel is reused.
+    fresh, reset = _fresh_knobs_impl()
+    fresh()
+    try:
+        inside = _fresh_knobs_kernel[(1, )](x)
+        assert inside.hash != outside.hash, "kernel compiled outside `fresh_knobs` was reused from the in-memory cache"
+    finally:
+        reset()

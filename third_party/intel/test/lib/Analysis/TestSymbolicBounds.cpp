@@ -30,10 +30,23 @@ struct TestSymbolicBoundsPass
 
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestSymbolicBoundsPass)
 
+  TestSymbolicBoundsPass() = default;
+  // A pass carrying an Option member is not implicitly copyable, but
+  // PassWrapper::clonePass needs a copy constructor.
+  TestSymbolicBoundsPass(const TestSymbolicBoundsPass &other)
+      : PassWrapper(other) {}
+
   StringRef getArgument() const final { return "test-intel-symbolic-bounds"; }
   StringRef getDescription() const final {
-    return "print the symbolic bounds prover's verdict for every arith.cmpi";
+    return "print the symbolic bounds prover's verdict for every arith.cmpi, "
+           "or with splat-leaves its normalized rhs - lhs and obligations";
   }
+
+  Option<bool> splatLeaves{
+      *this, "splat-leaves",
+      llvm::cl::desc("build a SplatLeaves prover and report each comparison's "
+                     "normalized rhs - lhs and its obligations instead"),
+      llvm::cl::init(false)};
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
@@ -46,7 +59,11 @@ struct TestSymbolicBoundsPass
     if (failed(solver->initializeAndRun(mod)))
       return signalPassFailure();
 
-    SymbolicBoundsProver prover(*solver, getAnalysis<DominanceInfo>(), mod);
+    SymbolicBoundsProver prover(*solver, getAnalysis<DominanceInfo>(), mod,
+                                splatLeaves ? ScalarHandling::SplatLeaves
+                                            : ScalarHandling::LookThrough);
+    if (splatLeaves)
+      return reportDifferences(mod, prover);
 
     // Pre-order, so the remarks appear in program order: the prover's
     // condition insertion order - and so the rendered condition order - is
@@ -63,6 +80,29 @@ struct TestSymbolicBoundsPass
         emitRemark(forOp.getLoc(),
                    "trip>=" + std::to_string(n) + ": " +
                        toString(prover.tripCountAtLeast(forOp, n)));
+    });
+  }
+
+  /// One remark per comparison, `diff: <rhs - lhs>; wraps: [<ops>]`, plus
+  /// `; nonneg: [<ops>]` when there are NonNegative obligations. Bracketed so
+  /// an expected remark matches the whole list.
+  static void reportDifferences(ModuleOp mod, SymbolicBoundsProver &prover) {
+    mod.walk<WalkOrder::PreOrder>([&](arith::CmpIOp cmpOp) {
+      QueryContext ctx{cmpOp.getOperation(),
+                       cmpOp->getParentOfType<scf::ForOp>()};
+      SmallVector<Obligation, 4> obls;
+      AffineForm rhs = prover.normalize(cmpOp.getRhs(), ctx, obls);
+      AffineForm diff = rhs.sub(prover.normalize(cmpOp.getLhs(), ctx, obls));
+      std::string wraps, nonneg;
+      for (const Obligation &o : obls) {
+        std::string &list = o.kind == Obligation::Wrap ? wraps : nonneg;
+        list +=
+            (list.empty() ? "" : ", ") + o.op->getName().getStringRef().str();
+      }
+      std::string msg = "diff: " + toString(diff) + "; wraps: [" + wraps + "]";
+      if (!nonneg.empty())
+        msg += "; nonneg: [" + nonneg + "]";
+      emitRemark(cmpOp.getLoc(), msg);
     });
   }
 };

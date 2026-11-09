@@ -2,9 +2,10 @@
 
 Verifies that host-side TensorDescriptor objects (created on the host and passed
 as kernel arguments) reach the efficient 2D block I/O hardware path, producing
-the same results and codegen as device-side tl.make_tensor_descriptor, and that
+the same results and codegen as device-side tl.make_tensor_descriptor, that
 collapsing a rank-3 descriptor load into a rank-2 one keeps the bounds the
-rank-3 form had (device-side descriptors included).
+rank-3 form had (device-side descriptors included), and that the collapse still
+happens when elementwise ops or a permute sit between the load and its reshape.
 """
 
 import pytest
@@ -200,6 +201,39 @@ def test_descriptor_rank3_unit_outer_dim_pads(device, with_allocator):
     torch.testing.assert_close(out, tile.to(torch.float32))
 
     assert f"!tt.tensordesc<1x{BLOCK_R}x{BLOCK_C}x" not in kernel.asm["ttir"], "not fused"
+    llir = kernel.asm["llir"]
+    assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
+
+
+@triton.jit
+def _scaled_qk_kernel(q_ptr, k_ptr, out_ptr, head, S: tl.constexpr, D: tl.constexpr, BM: tl.constexpr,
+                      BN: tl.constexpr):
+    q_desc = tl.make_tensor_descriptor(q_ptr, shape=[2, S, D], strides=[S * D, D, 1], block_shape=[1, BM, D])
+    k_desc = tl.make_tensor_descriptor(k_ptr, shape=[2, S, D], strides=[S * D, D, 1], block_shape=[1, BN, D])
+    scale = 0.125  # A local float is an fp32 tensor: Q gets the extf -> mulf -> truncf chain.
+    q = (q_desc.load([head, 0, 0]) * scale).to(tl.bfloat16).reshape(BM, D)
+    k = tl.permute(k_desc.load([head, 0, 0]), [0, 2, 1]).reshape(D, BN)
+    offs = tl.arange(0, BM)[:, None] * BN + tl.arange(0, BN)[None, :]
+    tl.store(out_ptr + offs, tl.dot(q, k))
+
+
+# The #8511 attention prologue: Q is scaled and K permuted between the rank-3
+# load and its reshape, so both fuse only once the reshape is hoisted to the load.
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_rank3_reshape_hoisted_to_load(device, with_allocator):
+    S, D, BM, BN, HEAD = 128, 64, 128, 32, 1
+
+    torch.manual_seed(42)
+    q = torch.randn((2, S, D), dtype=torch.bfloat16, device=device)
+    k = torch.randn((2, S, D), dtype=torch.bfloat16, device=device)
+    out = torch.empty((BM, BN), dtype=torch.float32, device=device)
+    kernel = _scaled_qk_kernel[(1, )](q, k, out, HEAD, S, D, BM, BN)
+
+    ref = (q[HEAD, :BM].float() * 0.125).to(torch.bfloat16).float() @ k[HEAD, :BN].float().T
+    torch.testing.assert_close(out, ref, rtol=1e-2, atol=1e-2)
+
+    assert "!tt.tensordesc<1x" not in kernel.asm["ttir"], "not fused"
     llir = kernel.asm["llir"]
     assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
 

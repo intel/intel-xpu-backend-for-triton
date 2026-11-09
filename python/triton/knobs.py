@@ -567,8 +567,8 @@ class runtime_knobs(base_knobs):
 
 class language_knobs(base_knobs):
     fp32_default: env_opt_str = env_opt_str("TRITON_F32_DEFAULT")
-    default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", True)
-    allow_fp_fusion: env_bool = env_bool("TRITON_ALLOW_FP_FUSION", True)
+    default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", False)
+    allow_fp_fusion: env_bool = env_bool("TRITON_ALLOW_FP_FUSION")
 
     def fp_fusion_enabled(self, requested: Optional[bool]) -> bool:
         return self.allow_fp_fusion and (self.default_fp_fusion if requested is None else requested)
@@ -596,6 +596,7 @@ class intel_knobs(base_knobs):
     dump_shader_info: env_bool = env_bool("TRITON_INTEL_ENABLE_IGC_SHADER_DUMP", False)
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
+    descriptor_block_io_relayout: env_bool = env_bool("TRITON_INTEL_DESCRIPTOR_BLOCK_IO_RELAYOUT", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
     # Disabled on Windows after the regressions tracked in issue #7495. The harmful
     # `cg`-to-`!nontemporal` lowering (an L3 bypass) was removed in issue #7901, so
@@ -631,7 +632,9 @@ class intel_knobs(base_knobs):
 class amd_knobs(base_knobs):
     codegen_path: env_opt_str = env_opt_str("TRITON_AMD_CODEGEN_PATH")
     bitcode_path: env_opt_str = env_opt_str("TRITON_AMD_BITCODE_PATH")
-    use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
+    # use_buffer_ops is read once per tensor arg on the kernel launch critical path
+    # avoid repeated reads from env-var by calling get directly
+    use_buffer_ops: bool = env_bool("AMDGCN_USE_BUFFER_OPS", True).get()
     # Note: This requires use_buffer_ops be true to have any effect
     use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)
     # Note: This requires use_buffer_ops be true to have any effect
@@ -710,3 +713,4 @@ proton = proton_knobs()
 def refresh_knobs():
     runtime.debug = env_bool("TRITON_DEBUG").get()
     compilation.instrumentation_mode = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
+    amd.use_buffer_ops = env_bool("AMDGCN_USE_BUFFER_OPS", True).get()

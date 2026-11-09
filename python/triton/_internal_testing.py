@@ -1,4 +1,5 @@
 import importlib
+import itertools
 import functools
 import multiprocessing
 import os
@@ -32,6 +33,19 @@ torch_float8_dtypes = ['float8_e4m3fn', 'float8_e5m2']
 torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
 _PROCESS_POOL = None
+
+
+def fp6_values(fmt, codes):
+    mantissa, bias = (3, 1) if fmt == "e2m3" else (2, 3)
+    exp = (codes & 31) >> mantissa
+    fraction = (codes & ((1 << mantissa) - 1)).float() / (1 << mantissa)
+    return torch.ldexp(fraction + (exp != 0), exp.clamp_min(1) - bias) * (1 - 2 * (codes >> 5))
+
+
+def pack_fp6(codes):
+    groups = codes.reshape(*codes.shape[:-1], -1, 4)
+    words = groups[..., 0] | groups[..., 1] << 6 | groups[..., 2] << 12 | groups[..., 3] << 18
+    return torch.stack([words, words >> 8, words >> 16], -1).byte().flatten(-2)
 
 
 def is_interpreter():
@@ -559,6 +573,9 @@ def run_in_process(client_fn, args=(), kwargs=None, env=None):
     return ProcessResult(exc, stderr)
 
 
+_fresh_knobs_counter = itertools.count()
+
+
 def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
     from triton import knobs
 
@@ -581,6 +598,17 @@ def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
 
     def fresh_function():
         nonlocal env_to_unset
+        # The in-memory kernel key ignores knobs and env vars (only the disk hash has them),
+        # so a kernel compiled outside this context would be reused here without reaching
+        # `compile`. Give this context its own key namespace; `monkeypatch.undo()` restores it.
+        # Not during warm-up: nothing is launched there, and per-test keys would defeat the
+        # warm-up dispatcher's deduplication (the key is part of the compile-context digest).
+        if not is_compile_warmup():
+            from triton.runtime import jit
+
+            compute_cache_key = jit.compute_cache_key
+            namespace = f"|fresh_knobs-{next(_fresh_knobs_counter)}"
+            monkeypatch.setattr(jit, "compute_cache_key", lambda *args: compute_cache_key(*args) + namespace)
         for name, knobset in knobs_map.items():
             setattr(knobs, name, knobset.copy().reset())
             for knob in knobset.knob_descriptors.values():

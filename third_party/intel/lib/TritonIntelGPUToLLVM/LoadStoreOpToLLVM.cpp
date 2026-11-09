@@ -3,6 +3,7 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -12,8 +13,8 @@
 #include "llvm/Support/MathExtras.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
-#include "TargetInfo.h"
 #include "Utility.h"
+#include "intel/include/TritonIntelGPUToLLVM/TargetInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "intel/include/Analysis/StrideInfo.h"
@@ -23,6 +24,7 @@
 #include "intel/include/Utils/Utility.h"
 #include "triton/Tools/LinearLayout.h"
 #include <limits>
+#include <map>
 #include <optional>
 #include <triton/Tools/Sys/GetEnv.h>
 
@@ -72,6 +74,32 @@ static DescriptorFields unpackDescriptor(Value llDesc, unsigned rank,
   f.strides.assign(elems.begin() + rank, elems.begin() + 2 * rank);
   f.base = elems[2 * rank];
   return f;
+}
+
+/// Signed `0 <= index < shape` for a descriptor index folded into the base
+/// pointer, which the 2D block message's base_width x base_height clamp misses.
+/// Signed because nothing verifies a descriptor extent is non-negative. Shapes
+/// are i32 values widened to i64 in the descriptor, so truncating them is
+/// exact.
+static Value emitInDescBounds(TritonLLVMOpBuilder &b, Value index,
+                              Value shape) {
+  if (shape.getType().getIntOrFloatBitWidth() > 32)
+    shape = b.trunc(b.builder->getI32Type(), shape);
+  Value isNonNegative = b.icmp_sge(index, b.i32_val(0));
+  Value isBelowShape = b.icmp_slt(index, shape);
+  return b.and_(isNonNegative, isBelowShape);
+}
+
+/// The AND of emitInDescBounds over the first `numDropped` dimensions; null
+/// when there are none.
+static Value emitDroppedDimsInBoundsPred(TritonLLVMOpBuilder &b,
+                                         ValueRange indices, ValueRange shapes,
+                                         unsigned numDropped) {
+  Value pred;
+  for (unsigned d = 0; d < numDropped; ++d)
+    pred = maybeAnd(*b.builder, b.loc, pred,
+                    emitInDescBounds(b, indices[d], shapes[d]));
+  return pred;
 }
 
 /// Verify that a rank-reducing tensor descriptor load/store is
@@ -237,8 +265,11 @@ struct LoadStoreConversionBase {
     AxisInfo *descAxisInfo =
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
             .getAxisInfo(desc);
-    if (!descAxisInfo || static_cast<unsigned>(descAxisInfo->getRank()) != rank)
+    if (!descAxisInfo || static_cast<unsigned>(descAxisInfo->getRank()) < rank)
       return 1;
+    // The AxisInfo has the block rank, and a rank-reducing access drops leading
+    // unit dims, so value dim `d` is descriptor dim `d + rankDelta`.
+    const unsigned rankDelta = descAxisInfo->getRank() - rank;
 
     auto linAttr = triton::gpu::toGenericLinearEncoding(resultType);
     SmallVector<unsigned> order = linAttr.getOrder();
@@ -256,6 +287,7 @@ struct LoadStoreConversionBase {
         descDim = (order[0] == rank - 2) ? rank - 1 : rank - 2;
       }
     }
+    descDim += rankDelta;
 
     unsigned descContiguity = descAxisInfo->getContiguity(descDim);
     if (descContiguity <= 1)
@@ -1572,6 +1604,111 @@ struct PrefetchOpConversion
             converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
+  // The matched row-limit mask. `computeRowLimitHeight` is deferred until the
+  // lowering can no longer bail out, so a failed lowering leaves no dead ops.
+  struct RowLimit {
+    Value bound;
+    Value rowBase; // May be null.
+    int64_t rowExtent;
+    unsigned boundedDim;
+    Value extraGuard; // May be null.
+    // Lowered batch-dims-only predicate of a rank > 2 mask (may be null). It
+    // is degenerate along the pitch and contiguous dims, so it is uniform per
+    // hardware message and is ANDed into that message's predicate.
+    Value extraPred;
+    // Tensor type of `extraPred` before lowering. Its shape is narrower than
+    // the tile's when the mask's AND sat below the final broadcast.
+    RankedTensorType extraPredTy;
+  };
+
+  /// Expand the per-thread elements of a narrow batch predicate (size 1 along
+  /// the dims the full tile varies over) to the elements of the full tile, in
+  /// the order `tt.broadcast` would produce them.
+  ///
+  /// TODO: this duplicates `BroadcastOpConversion`'s logic; make it a utility
+  /// in the general code (next to `emitOffsetForLayout`) and reuse it there.
+  static SmallVector<Value> broadcastPredElems(ArrayRef<Value> narrowVals,
+                                               RankedTensorType narrowTy,
+                                               RankedTensorType fullTy) {
+    SmallVector<SmallVector<unsigned>> srcOffsets =
+        emitOffsetForLayout(narrowTy.getEncoding(), narrowTy);
+    SmallVector<SmallVector<unsigned>> resultOffsets =
+        emitOffsetForLayout(fullTy.getEncoding(), fullTy);
+    std::map<SmallVector<unsigned>, Value> srcValues;
+    for (size_t i = 0; i < srcOffsets.size(); ++i)
+      srcValues[srcOffsets[i]] = narrowVals[i];
+    SmallVector<Value> resultVals;
+    for (SmallVector<unsigned> offset : resultOffsets) {
+      for (size_t d = 0; d < narrowTy.getRank(); ++d)
+        if (narrowTy.getDimSize(d) == 1)
+          offset[d] = 0;
+      resultVals.push_back(srcValues.at(offset));
+    }
+    return resultVals;
+  }
+
+  std::optional<RowLimit>
+  matchPrefetchRowLimitMask(triton::gpu::intel::PrefetchOp op,
+                            ArrayRef<int64_t> tensorShape,
+                            unsigned contiguousDim, unsigned pitchTensorDim,
+                            ConversionPatternRewriter &rewriter) const {
+    if (!op.getMask() || tensorShape.size() < 2)
+      return std::nullopt;
+
+    Value maskVal = op.getMask();
+    bool pitchDimIsBroadcast = getStride(op.getPtr(), pitchTensorDim) == 0;
+    Value otherConjunct;
+    auto m = matchRowLimitMask(maskVal, /*other=*/Value(), tensorShape,
+                               contiguousDim, pitchDimIsBroadcast);
+    if (!m) {
+      if (auto andOp = maskVal.getDefiningOp<arith::AndIOp>()) {
+        if ((m = matchRowLimitMask(andOp.getLhs(), /*other=*/Value(),
+                                   tensorShape, contiguousDim,
+                                   pitchDimIsBroadcast)))
+          otherConjunct = andOp.getRhs();
+        else if ((m = matchRowLimitMask(andOp.getRhs(), /*other=*/Value(),
+                                        tensorShape, contiguousDim,
+                                        pitchDimIsBroadcast)))
+          otherConjunct = andOp.getLhs();
+      }
+    }
+    if (!m)
+      return std::nullopt;
+
+    Value extraGuardRemapped;
+    if (otherConjunct) {
+      // Only a uniform splat conjunct is expressible as a predicate;
+      // anything else means giving up row-limit treatment entirely.
+      if (auto splatOp = otherConjunct.getDefiningOp<triton::SplatOp>())
+        extraGuardRemapped = rewriter.getRemappedValue(splatOp.getSrc());
+      if (!extraGuardRemapped || !extraGuardRemapped.getType().isInteger(1))
+        return std::nullopt;
+    }
+
+    Value boundRemapped = rewriter.getRemappedValue(m->bound);
+    Value baseRemapped =
+        m->rowBase ? rewriter.getRemappedValue(m->rowBase) : Value();
+    if (!boundRemapped || (m->rowBase && !baseRemapped))
+      return std::nullopt;
+
+    Value extraPredRemapped;
+    if (m->extraPred) {
+      extraPredRemapped = rewriter.getRemappedValue(m->extraPred);
+      if (!extraPredRemapped)
+        return std::nullopt;
+    }
+
+    return RowLimit{boundRemapped,
+                    baseRemapped,
+                    tensorShape[m->boundedDim],
+                    m->boundedDim,
+                    extraGuardRemapped,
+                    extraPredRemapped,
+                    m->extraPred
+                        ? cast<RankedTensorType>(m->extraPred.getType())
+                        : RankedTensorType()};
+  }
+
   LogicalResult
   matchAndRewrite(triton::gpu::intel::PrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
@@ -1609,6 +1746,15 @@ struct PrefetchOpConversion
     unsigned contiguousDim;
     const bool memoryRowMajor = isMemoryRowMajor(op);
     contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
+    unsigned pitchTensorDim = (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+
+    Location loc = op.getLoc();
+
+    // A row-limit mask can become this prefetch's dynamic base_height
+    // instead of a per-subtile predicate, so decide this before
+    // `maskAxisInfo` below treats the prefetch as masked.
+    std::optional<RowLimit> rowLimit = matchPrefetchRowLimitMask(
+        op, tensorShape, contiguousDim, pitchTensorDim, rewriter);
 
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(tensorOfPointers.getEncoding())
@@ -1620,9 +1766,11 @@ struct PrefetchOpConversion
     Type eltTy = getTypeConverter()->convertType(ptrType.getPointeeType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
-    // Get the maximum tile shapes for the given mask constancy.
+    // Get the maximum tile shapes for the given mask constancy. Skipped for
+    // a row-limit mask: its bound is handled via base_height below, not by
+    // clamping the tile.
     AxisInfo *maskAxisInfo = nullptr;
-    if (op.getMask()) {
+    if (op.getMask() && !rowLimit) {
       maskAxisInfo =
           const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
               .getAxisInfo(op.getMask());
@@ -1631,16 +1779,34 @@ struct PrefetchOpConversion
     auto m = op->template getParentOfType<mlir::ModuleOp>();
     bool isPrefetch256BSupported =
         m->hasAttr(TritonIntelGPUDialect::getSupportPrefetch256BAttrName());
-    BlockIOTileSizeInfo sizeInfo = getBlockIOPrefetchTileSize(
-        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
-        isPrefetch256BSupported);
+    auto getTileSize = [&]() {
+      return getBlockIOPrefetchTileSize(llEncoding.value(), contiguousDim,
+                                        elemSizeInBits, maskAxisInfo,
+                                        isPrefetch256BSupported);
+    };
+    BlockIOTileSizeInfo sizeInfo = getTileSize();
     if (!sizeInfo.isValid())
       return failure();
+    // base_height only bounds the tile's pitch dim. matchRowLimitMask assumed
+    // the conventional pitch dim, but for rank > 2 the tile's actual one can
+    // land on a batch dim, so a mismatch would apply the bound to the wrong
+    // dimension. Fall back to the per-subtile mask path, redoing tile
+    // selection with the mask's real axis info.
+    if (rowLimit &&
+        rowLimit->boundedDim !=
+            (sizeInfo.transpose ? sizeInfo.colDim : sizeInfo.rowDim)) {
+      rowLimit = std::nullopt;
+      maskAxisInfo =
+          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+              .getAxisInfo(op.getMask());
+      sizeInfo = getTileSize();
+      if (!sizeInfo.isValid())
+        return failure();
+    }
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
           isTransposeRequired, _, regPackedBases] = std::move(sizeInfo);
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
-    Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     Value llPtr = adaptor.getPtr();
@@ -1649,7 +1815,16 @@ struct PrefetchOpConversion
     // Get the LLVM values for pointers
     SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
     SmallVector<Value> maskElems;
-    if (llMask)
+    // A row-limit mask is handled via base_height; its elements are unused,
+    // except for the batch-dims `extraPred` ANDed into each message.
+    if (rowLimit && rowLimit->extraPred) {
+      maskElems = unpackLLElements(loc, rowLimit->extraPred, rewriter);
+      if (rowLimit->extraPredTy.getShape() != tensorShape)
+        maskElems = broadcastPredElems(
+            maskElems, rowLimit->extraPredTy,
+            RankedTensorType::get(tensorShape, rewriter.getI1Type(),
+                                  tensorOfPointers.getEncoding()));
+    } else if (llMask && !rowLimit)
       maskElems = unpackLLElements(loc, llMask, rewriter);
 
     unsigned pitchDim = isTransposeRequired ? colDim : rowDim;
@@ -1665,9 +1840,14 @@ struct PrefetchOpConversion
     if (!rowStrideInBytes)
       return failure();
 
-    // If the stride is 0, we want to load only the first row.
+    // If the stride is 0, we want to load only the first row. For a
+    // row-limit mask, the computed row-limit height replaces this; the loop
+    // below adjusts it per message.
     int64_t stride = getStride(op.getPtr(), pitchDim);
-    Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeight);
+    Value baseHeight =
+        rowLimit ? computeRowLimitHeight(rewriter, loc, rowLimit->bound,
+                                         rowLimit->rowBase, rowLimit->rowExtent)
+                 : b.i32_val(stride == 0 ? 1 : tileHeight);
     Value baseWidth =
         b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
 
@@ -1734,7 +1914,23 @@ struct PrefetchOpConversion
           b.umax(adjustedBaseWidth, b.i32_val(MIN_BASE_WIDTH_BYTES));
       // Use the top-left address and mask of the block to load the data.
       // (The first value referred to by the registerIdx.)
-      if (maskElems.size()) {
+      Value messageBaseHeight = baseHeight;
+      if (rowLimit) {
+        // Relative to the tile's first row; a message starting partway in
+        // must subtract its own row offset. If nothing is valid, push it
+        // out of bounds via offsetY instead of base_height 0, which would
+        // underflow the GenISA `base_height - 1` encoding.
+        Value rowOffset = offsets[pitchDim].second;
+        Value localHeight = b.sub(baseHeight, rowOffset);
+        Value isValid = b.icmp_sgt(localHeight, b.i32_val(0));
+        messageBaseHeight = b.smax(localHeight, b.i32_val(1));
+        // The extra loop-drain guard (if any) still gates the message too.
+        pred = rowLimit->extraGuard ? b.and_(isValid, rowLimit->extraGuard)
+                                    : isValid;
+        if (rowLimit->extraPred)
+          pred = b.and_(pred, targetInfo.shuffleIdx(rewriter, loc,
+                                                    maskElems[registerIdx], 0));
+      } else if (maskElems.size()) {
         pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
       }
 
@@ -1745,7 +1941,7 @@ struct PrefetchOpConversion
         // after issuing the 2d block read operation, we will select the
         // result of the load only if the mask evaluate to true, otherwise
         // we will use 'other'.
-        offsetY = b.select(pred, offsetY, baseHeight);
+        offsetY = b.select(pred, offsetY, messageBaseHeight);
       }
 
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
@@ -1753,7 +1949,7 @@ struct PrefetchOpConversion
           rewriter, loc,
           /*ptr*/ addrElem,
           /*base_width*/ adjustedBaseWidth,
-          /*base_height*/ baseHeight,
+          /*base_height*/ messageBaseHeight,
           /*base_pitch*/ rowStrideInBytes,
           // offsetX was in terms of original elements. The 2d block io
           // requires offsetX to be in terms of packed elements.
@@ -3372,6 +3568,13 @@ struct DescriptorStoreOpToBlockIOConversion
     assert(!useVNNIFormat && "2D block store does not support VNNI");
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
+    AxisInfo *colInfo =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(op.getIndices().back());
+    if (packedElemSizeInBits > 32 &&
+        (!colInfo || colInfo->getDivisibility(0) % numPackedVals))
+      return failure();
+
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
@@ -3400,9 +3603,35 @@ struct DescriptorStoreOpToBlockIOConversion
 
     unsigned numElems = getTotalElemsPerThread(tensorType);
 
+    // Each leading index selects a 2D plane: fold it into the base, as
+    // LowerTo2DBlockLoad does for loads, and bounds-check it in the predicate.
+    ValueRange leadingIndices = adaptor.getIndices().take_front(rankDelta);
+    // A sub-byte stride has no byte size to check, as in
+    // isLeadingRebaseAligned.
+    if (!leadingIndices.empty() && elemSizeInBits % 8 != 0)
+      return failure();
+    // A 2D block store needs the 4-byte-aligned base MaterializeBlockPointer
+    // proves for the descriptor, and rebasing by a 4-byte multiple keeps it.
+    // Its tag vouches for runtime strides, so only folded ones are checked.
+    const int64_t elemBytes = elemSizeInBits / 8;
+    for (auto [index, stride] : llvm::zip(leadingIndices, desc.strides)) {
+      std::optional<int64_t> folded =
+          triton::intel::getFoldedConstantValue(stride);
+      int64_t strideBytes;
+      if (folded && !triton::intel::isConstant(index, 0) &&
+          (llvm::MulOverflow(*folded, elemBytes, strideBytes) ||
+           strideBytes % 4 != 0))
+        return failure();
+    }
+    Value base = desc.base;
+    for (auto [index, stride] : llvm::zip(leadingIndices, desc.strides)) {
+      Value offset = b.mul(b.sext(i64_ty, index), stride);
+      base = b.gep(ptr_ty(ctx, 1), eltTy, base, offset);
+    }
+
     // The base pointer is uniform across all elements (unlike tensor-of-
     // pointers where each element may have a different pointer).
-    SmallVector<Value> ptrElems(numElems, desc.base);
+    SmallVector<Value> ptrElems(numElems, base);
 
     // --- Shapes (base width / height for 2D block IO payload) ---
     // TensorDesc carries shape as i64 values. The 2D block IO payload
@@ -3447,6 +3676,9 @@ struct DescriptorStoreOpToBlockIOConversion
         getFreeVariableMasks(tensorType);
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    threadPred = maybeAnd(
+        rewriter, loc, threadPred,
+        emitDroppedDimsInBoundsPred(b, leadingIndices, desc.shapes, rankDelta));
 
     unsigned threadsPerWarp =
         TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
@@ -3616,6 +3848,13 @@ struct StoreOpToBlockIOConversion
         std::move(sizeInfo);
     assert(!useVNNIFormat && "2D block store does not support VNNI");
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
+
+    AxisInfo *ptrInfo =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(op.getPtr());
+    if (packedElemSizeInBits > 32 &&
+        (!ptrInfo || ptrInfo->getDivisibility(contiguousDim) % 8))
+      return failure();
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -4763,23 +5002,11 @@ struct Subgroup2DBlockLoadOpConversion
     // `rankDelta + d` corresponds to result batch dimension `d`.
     unsigned rankDelta = batchOffsets.size() - batchStrides.size();
 
-    // A batch index is folded into the base pointer, so it escapes the
-    // hardware's base_width x base_height clamp and needs an explicit check.
-    // Both compares are signed: nothing verifies that a descriptor extent is
-    // non-negative, and a lone `icmp ult` would take one as a huge bound.
-    auto inDescBounds = [&](Value index, Value shape) -> Value {
-      Value isNonNegative = b.icmp_sge(index, b.i32_val(0));
-      Value isBelowShape = b.icmp_slt(index, shape);
-      return b.and_(isNonNegative, isBelowShape);
-    };
-
     // Dropped dimensions are not spanned by the result layout, so their bounds
     // check is the same for every sub-tile. Emit it once here rather than
     // rebuilding it inside `computeAddress`.
-    Value droppedDimPred;
-    for (unsigned d = 0; d < rankDelta; ++d)
-      droppedDimPred = maybeAnd(rewriter, loc, droppedDimPred,
-                                inDescBounds(batchOffsets[d], batchShapes[d]));
+    Value droppedDimPred =
+        emitDroppedDimsInBoundsPred(b, batchOffsets, batchShapes, rankDelta);
 
     // Build NaN masks if pad_nan is set.
     SmallVector<Value> nanMaskElems;
@@ -4867,7 +5094,7 @@ struct Subgroup2DBlockLoadOpConversion
           unsigned descDim = dim + rankDelta;
           Value index = b.add(batchOffsets[descDim], adjustedOffset);
           pred = maybeAnd(rewriter, loc, pred,
-                          inDescBounds(index, batchShapes[descDim]));
+                          emitInDescBounds(b, index, batchShapes[descDim]));
         }
       }
       return {addrElem,   offsetX, offsetY,       baseWidth,
@@ -4985,10 +5212,18 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
     }
 
     Value baseWidth = b.i32_val(op.getBaseWidth() * cfg.vBlocks);
-    Value baseHeight = b.i32_val(op.getBaseHeight());
+    Value baseHeight = adaptor.getBaseHeight();
     Value pitch = adaptor.getBasePitch();
 
     unsigned blockColIdx = cfg.isTransposeRequired ? cfg.rowDim : cfg.colDim;
+    unsigned blockRowIdx = cfg.isTransposeRequired ? cfg.colDim : cfg.rowDim;
+
+    // A row-limit `base_height` (see ttgi::getBlockIORuntimeRowLimitAttrName)
+    // is relative to the tile's first row; each message subtracts its own
+    // row offset below, since base_height 0 would underflow the GenISA
+    // `base_height - 1` encoding.
+    bool isRowLimitHeight =
+        op->hasAttr(TritonIntelGPUDialect::getBlockIORuntimeRowLimitAttrName());
 
     // Per-sub-tile: use ptrElems[registerIdx] with subtraction-based
     // addressing.
@@ -5005,18 +5240,41 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       // The HW requires a base width of at least 64 bytes.
       adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
 
+      Value adjustedBaseHeight = baseHeight;
       Value pred;
-      if (maskElems.size())
-        pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
+      if (isRowLimitHeight) {
+        Value rowOffset = offsets[blockRowIdx].second;
+        Value localHeight = b.sub(baseHeight, rowOffset);
+        pred = b.icmp_sgt(localHeight, b.i32_val(0));
+        adjustedBaseHeight = b.smax(localHeight, b.i32_val(1));
+      }
+      // The row-limit height and a mask aren't mutually exclusive: the mask
+      // is matchRowLimitMask's leftover batch-dim extraPred, uniform per
+      // message, so it's ANDed into the same `pred`.
+      if (maskElems.size()) {
+        Value maskPred =
+            targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
+        pred = pred ? b.and_(pred, maskPred) : maskPred;
+      }
 
-      return {addrElem,          offsetX,    /*offsetY=*/b.i32_val(0),
-              adjustedBaseWidth, baseHeight, pred};
+      return {addrElem,
+              offsetX,
+              /*offsetY=*/b.i32_val(0),
+              adjustedBaseWidth,
+              adjustedBaseHeight,
+              pred};
     };
 
-    return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
-                            otherElems, /*nanMaskElems=*/{},
-                            /*staticBaseHeight=*/op.getBaseHeight(), targetInfo,
-                            getTypeConverter(), loc, rewriter);
+    // Disable the stride=0 broadcast-row special case for a row-limit
+    // height, where height==1 means "only row 0 valid", not "broadcast".
+    std::optional<int64_t> staticBaseHeight =
+        isRowLimitHeight ? std::nullopt
+                         : getConstantIntValue(op.getBaseHeight());
+    return lowerBlockLoad2D(
+        op, cfg, *llEncoding, pitch, computeAddress, otherElems,
+        /*nanMaskElems=*/{},
+        staticBaseHeight ? std::optional<int>(*staticBaseHeight) : std::nullopt,
+        targetInfo, getTypeConverter(), loc, rewriter);
   }
 };
 
