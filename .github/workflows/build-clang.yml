@@ -37,6 +37,8 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install clang and lld
+        # Plain bash, as setup-triton's build step uses, so this finds the clang the build will use.
+        shell: bash
         run: |
           if ! command -v clang++ >/dev/null 2>&1 || ! command -v ld.lld >/dev/null 2>&1; then
             sudo apt-get update
@@ -47,6 +49,7 @@ jobs:
           ld.lld --version
 
       - name: Load pip cache
+        id: pip-cache
         uses: ./.github/actions/load
         with:
           path: $HOME/.cache/pip
@@ -64,3 +67,10 @@ jobs:
             DEBUG=1
             TRITON_BUILD_WITH_CLANG_LLD=1
             python -m build --wheel --no-isolation
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
