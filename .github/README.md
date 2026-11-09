@@ -6,12 +6,6 @@
 This is the development repository of Intel® XPU Backend for Triton\*, a new [Triton](https://github.com/triton-lang/triton) backend for Intel GPUs.
 Intel® XPU Backend for Triton\* is an out of tree backend module for [Triton](https://github.com/triton-lang/triton) used to provide best-in-class performance and productivity on any Intel GPUs for [PyTorch](https://github.com/pytorch/pytorch) and standalone usage.
 
-Triton is a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs.
-
-The foundations of the Triton project are described in the following MAPL2019 publication: [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf). Please consider citing this work if you use Triton!
-
-The [official Triton documentation](https://triton-lang.org) contains installation instructions and tutorials.  See also these third-party [Triton puzzles](https://github.com/srush/Triton-Puzzles), which can all be run using the Triton interpreter -- no GPU required.
-
 # Compatibility
 
 * Operating systems:
@@ -541,38 +535,6 @@ make dev-install-llvm LLVM_BUILD=amd  # AMD LLVM only
 make dev-install-llvm LLVM_BUILD=all
 ```
 
-<details>
-<summary>
-Alternatively, follow these steps to build LLVM from source manually.
-</summary>
-
-1. `git checkout` LLVM at the `llvm_hash` revision from `cmake/llvm-info.json`.
-   Optionally, make additional modifications to LLVM.
-
-2. [Build LLVM](https://llvm.org/docs/CMake.html) with the SPIR-V target enabled.
-   For example, you might run:
-
-       $ cd $HOME/llvm-project  # your clone of LLVM.
-       $ mkdir build
-       $ cd build
-       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld;clang" -DLLVM_TARGETS_TO_BUILD="X86;NVPTX;AMDGPU;SPIRV"
-       $ ninja
-
-3. Grab a snack, this will take a while.
-
-4. Build Triton as above, but set the following environment variables:
-
-       # Modify as appropriate to point to your LLVM build.
-       $ export LLVM_BUILD_DIR=$HOME/llvm-project/build
-
-       $ cd <triton install>
-       $ LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include \
-         LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib \
-         LLVM_SYSPATH=$LLVM_BUILD_DIR \
-         pip install -e .
-
-</details>
-
 # Tips for building
 
 - Set `TRITON_BUILD_WITH_CLANG_LLD=true` as an environment variable to use clang
@@ -618,20 +580,6 @@ follow the following recipe.
 
 ```shell
 scripts/test-triton.sh
-```
-
-The upstream `make` targets are available as well:
-
-```shell
-# One-time setup.  Note this will reinstall local Triton because torch
-# overwrites it with the public version.
-$ make dev-install
-
-# To run all tests (requires a GPU)
-$ make test
-
-# Or, to run tests without a gpu
-$ make test-nogpu
 ```
 
 # Tips for hacking
