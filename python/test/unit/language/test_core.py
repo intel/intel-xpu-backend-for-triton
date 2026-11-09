@@ -5250,13 +5250,17 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
 
 @triton.jit
 def _scaled_dot_scale_kernel(X, W, S, Y, RHS_SCALE: tl.constexpr, NORMAL_TYPE: tl.constexpr, SCALE_FACTOR: tl.constexpr,
-                             FAST_MATH: tl.constexpr):
+                             FAST_MATH: tl.constexpr, S2=None, BOTH_SCALE: tl.constexpr = False):
     indices = tl.arange(0, 128)
     offsets = indices[:, None] * 128 + indices[None, :]
     x = tl.load(X + offsets)
     w = tl.load(W + offsets)
     scales = tl.load(S + indices[:, None] * (128 // SCALE_FACTOR) + tl.arange(0, 128 // SCALE_FACTOR)[None, :])
-    if RHS_SCALE:
+    if BOTH_SCALE:
+        # The rhs is the same e4m3 weight, scaled by S2.
+        scales2 = tl.load(S2 + indices[:, None] * (128 // SCALE_FACTOR) + tl.arange(0, 128 // SCALE_FACTOR)[None, :])
+        y = tl.dot_scaled(w, scales, "e4m3", w, scales2, "e4m3", fast_math=FAST_MATH)
+    elif RHS_SCALE:
         y = tl.dot_scaled(x, None, NORMAL_TYPE, w, scales, "e4m3", fast_math=FAST_MATH)
     else:
         y = tl.dot_scaled(w, scales, "e4m3", x, None, NORMAL_TYPE, fast_math=FAST_MATH)
@@ -5266,10 +5270,12 @@ def _scaled_dot_scale_kernel(X, W, S, Y, RHS_SCALE: tl.constexpr, NORMAL_TYPE: t
 @pytest.mark.parametrize("rhs_scale", [False, True])
 @pytest.mark.parametrize("normal_type", ["bf16", "fp16"])
 @pytest.mark.parametrize("fast_math", [False, True])
+@pytest.mark.parametrize("scale_dtype", ["uint8", "float8_e8m0fnu"])
 @pytest.mark.enable_warmup(min_capability=9)
-def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
+def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, scale_dtype, device):
     if not (is_xpu() and not is_xpu_cri()) and (not is_cuda() or torch.cuda.get_device_capability() < (8, 9)):
         pytest.xfail("requires CUDA FP8 support")
+    scale_dtype = getattr(torch, scale_dtype)
 
     dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
     x = torch.full((128, 128), 2.0**112 if normal_type == "bf16" else 1.0, dtype=dtype, device=device)
@@ -5284,7 +5290,36 @@ def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
         if fast_math and scale == 255:
             continue
         scales.fill_(scale)
-        _scaled_dot_scale_kernel[(1, )](x, w, scales, out, rhs_scale, normal_type, 32, fast_math, num_warps=4)
+        # A native float8_e8m0fnu scale must decode like the same bytes viewed
+        # as uint8, including byte 0xFF, which is the E8M0 NaN encoding.
+        _scaled_dot_scale_kernel[(1, )](x, w, scales.view(scale_dtype), out, rhs_scale, normal_type, 32, fast_math,
+                                        num_warps=4)
+        if is_compile_warmup():
+            return
+        torch.testing.assert_close(out, torch.full_like(out, expected), rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("scale_dtype", ["uint8", "float8_e8m0fnu"])
+@pytest.mark.enable_warmup(min_capability=9)
+def test_scaled_dot_both_operands_minimum_scale(scale_dtype, device):
+    # Without block-scale DPAS, a rank-2 dot with only an rhs scale is transposed into an lhs-scaled one before it is
+    # decomposed, so test_scaled_dot_minimum_scale never reaches the rhs decode path there. Scaling both operands does,
+    # with fast_math off so the NaN handling runs on both.
+    if not (is_xpu() and not is_xpu_cri()) and (not is_cuda() or torch.cuda.get_device_capability() < (8, 9)):
+        pytest.xfail("requires CUDA FP8 support")
+    scale_dtype = getattr(torch, scale_dtype)
+
+    w = torch.full((128, 128), 256.0, dtype=torch.float8_e4m3fn, device=device)
+    scales = torch.empty((128, 4), dtype=torch.uint8, device=device)
+    unit_scales = torch.full((128, 4), 127, dtype=torch.uint8, device=device)  # E8M0 for 2^0
+    out = torch.empty((128, 128), dtype=torch.float32, device=device)
+    # lhs = 2^8 * 2^(scale - 127) and rhs = 2^8, summed over K = 2^7: 2^(scale - 104). Byte 254 overflows the bf16
+    # operand to inf, and byte 255 is the E8M0 NaN encoding.
+    expected_values = (2.0**-104, 2.0**-103, 2.0**23, float("inf"), float("nan"))
+    for scale, expected in zip((0, 1, 127, 254, 255), expected_values):
+        scales.fill_(scale)
+        _scaled_dot_scale_kernel[(1, )](w, w, scales.view(scale_dtype), out, False, "bf16", 32, False,
+                                        unit_scales.view(scale_dtype), BOTH_SCALE=True, num_warps=4)
         if is_compile_warmup():
             return
         torch.testing.assert_close(out, torch.full_like(out, expected), rtol=0, atol=0, equal_nan=True)

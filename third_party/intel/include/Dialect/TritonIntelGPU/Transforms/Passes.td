@@ -23,7 +23,10 @@ def TritonIntelGPUAccelerateMatmul
   let dependentDialects = [
     "mlir::triton::TritonDialect",
     "mlir::triton::gpu::intel::TritonIntelGPUDialect",
-    "mlir::arith::ArithDialect"
+    "mlir::arith::ArithDialect",
+    // DecomposeScaledBlocked emits `math.fma` to turn the +inf that the E8M0
+    // NaN encoding (byte 0xFF) decodes to into NaN.
+    "mlir::math::MathDialect"
   ];
 
   let options = [
