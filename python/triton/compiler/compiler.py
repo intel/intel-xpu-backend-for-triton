@@ -507,7 +507,7 @@ class CompiledKernel:
                 max_grf_mode = "512"
             self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
                 self.name, self.kernel, shared, self.metadata.build_flags, not self.metadata.generate_native_code,
-                device, max_grf_mode)
+                device, max_grf_mode, getattr(self.metadata, "cooperation_forwarding", None))
             # PyTorch could use the updated build flags in load binary.
             if hasattr(driver.active.utils, "get_last_selected_build_flags"):
                 new_build_flags = driver.active.utils.get_last_selected_build_flags()

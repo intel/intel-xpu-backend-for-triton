@@ -733,7 +733,8 @@ createSchedule(scf::ForOp forOp, int numStages) {
 
 bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
                                         const PipelineTarget &target,
-                                        mlir::scf::PipeliningOption &options) {
+                                        mlir::scf::PipeliningOption &options,
+                                        std::optional<int64_t> &retPrefetchBytes) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
   SmallVector<PrefetchCandidate> candidates =
@@ -743,8 +744,7 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
     return false;
   }
 
-  LLVM_DEBUG({
-    DBGS() << "Loads to pipeline:\n";
+  if (retPrefetchBytes) {
     unsigned prefetchBytes = 0;
     for (const PrefetchCandidate &candidate : candidates) {
       Operation *op = candidate.op;
@@ -757,16 +757,11 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
             numElems * getIntOrFloatOrPtrBitWidth(tensorType.getElementType()) /
             8;
       }
-      DBGS() << "  " << *op << "\n";
     }
-    prefetchBytes *= numStages;
-    constexpr unsigned BYTES_PER_KB = 1024;
-    DBGS() << "Total number of bytes to prefetch: "
-           << (prefetchBytes > BYTES_PER_KB
-                   ? std::to_string(prefetchBytes / BYTES_PER_KB) + " KB"
-                   : std::to_string(prefetchBytes) + " B")
-           << " in " << numStages << " stages\n";
-  });
+
+    retPrefetchBytes = prefetchBytes * numStages;
+  }
+
 
   // When the upstream annotation pipeline has run and covers every
   // candidate, drive the prefetch op's stage from upstream's

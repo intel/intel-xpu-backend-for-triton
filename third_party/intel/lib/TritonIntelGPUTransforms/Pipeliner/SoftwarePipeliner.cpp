@@ -10,6 +10,7 @@
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 namespace ttgi = mlir::triton::gpu::intel;
@@ -82,8 +83,9 @@ static void pipelineLoop(scf::ForOp forOp, int numStages,
   if (!preCondition(forOp))
     return;
 
+  std::optional<int64_t> prefetchBytes;
   bool foundSchedule =
-      ttgi::preProcessLoopAndGetSchedule(forOp, numStages, target, options);
+      ttgi::preProcessLoopAndGetSchedule(forOp, numStages, target, options, prefetchBytes);
   if (!foundSchedule)
     return;
 
@@ -107,6 +109,14 @@ static void pipelineLoop(scf::ForOp forOp, int numStages,
   } else if (target.tileBarrier) {
     insertTileBarrier(loop);
   }
+
+  Builder builder(loop.getContext());
+  NamedAttrList prefetchInfo;
+  prefetchInfo.set("barrier", builder.getBoolAttr(target.useBarrier));
+  if (prefetchBytes)
+    prefetchInfo.set("total_bytes", builder.getI64IntegerAttr(*prefetchBytes));
+  loop->setAttr("ttig.pipelined_prefetch",
+                prefetchInfo.getDictionary(loop.getContext()));
 }
 
 namespace {
@@ -133,6 +143,44 @@ struct IntelGPUPipelinePass
                                 useBarrier, tileBarrier};
     for (scf::ForOp forOp : loops)
       pipelineLoop(forOp, numStages, target);
+
+    bool hasPipeline = false;
+    bool hasBarrier = false;
+    std::optional<int64_t> totalBytes = 0;
+    WalkResult result = m.walk([&](scf::ForOp loop) {
+      Attribute attr = loop->getAttr("ttig.pipelined_prefetch");
+      if (!attr)
+        return WalkResult::advance();
+      auto info = dyn_cast<DictionaryAttr>(attr);
+      auto barrier = info ? info.getAs<BoolAttr>("barrier") : BoolAttr();
+      Attribute bytesAttr = info ? info.get("total_bytes") : Attribute();
+      auto bytes = dyn_cast_or_null<IntegerAttr>(bytesAttr);
+      if (!barrier || (bytesAttr && (!bytes || !bytes.getType().isInteger(64) ||
+                                     bytes.getInt() < 0))) {
+        loop.emitError("invalid ttig.pipelined_prefetch annotation");
+        return WalkResult::interrupt();
+      }
+      hasPipeline = true;
+      hasBarrier |= barrier.getValue();
+      if (!bytes || !totalBytes)
+        totalBytes.reset();
+      else if (llvm::AddOverflow(*totalBytes, bytes.getInt(), *totalBytes))
+        totalBytes.reset();
+      return WalkResult::advance();
+    });
+    if (result.wasInterrupted()) {
+      signalPassFailure();
+      return;
+    }
+    if (hasPipeline) {
+      Builder builder(m.getContext());
+      NamedAttrList info;
+      info.set("barrier", builder.getBoolAttr(hasBarrier));
+      if (totalBytes)
+        info.set("total_bytes", builder.getI64IntegerAttr(*totalBytes));
+      m->setAttr("ttig.pipelined_prefetch", info.getDictionary(m.getContext()));
+    } else
+      m->removeAttr("ttig.pipelined_prefetch");
   }
 };
 } // anonymous namespace
