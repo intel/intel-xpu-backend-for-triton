@@ -184,20 +184,23 @@ def _multi_child_report(children: str) -> str:
 
 # A worker crash during teardown of a failed test makes pytest write several outcome tags into ONE <testcase>.
 @pytest.mark.parametrize(
-    ('children', 'reason', 'diagnostics'),
+    ('children', 'reason', 'message', 'text'),
     [
         ('<failure message="call">call tb</failure><error message="teardown">teardown tb</error>', 'failure',
-         ('call', 'teardown')),
+         '[failure] call\n[error] teardown', '[failure] call tb\n[error] teardown tb'),
         ('<error message="teardown">teardown tb</error><failure message="call">call tb</failure>', 'error',
-         ('call', 'teardown')),
+         '[error] teardown\n[failure] call', '[error] teardown tb\n[failure] call tb'),
         ('<skipped type="pytest.xfail" message="xfail"/><failure message="call">call tb</failure>', 'failure',
-         ('call', )),
+         '[failure] call', '[failure] call tb'),
         ('<failure message="call">call tb</failure><skipped type="pytest.skip" message="skip"/>', 'failure',
-         ('call', )),
-        ('<error message="a">a tb</error><error message="b">b tb</error>', 'error', ('a', 'b')),
+         '[failure] call', '[failure] call tb'),
+        ('<error message="a">a tb</error><error message="b">b tb</error>', 'error', '[error] a\n[error] b',
+         '[error] a tb\n[error] b tb'),
     ],
 )
-def test_testcase_with_multiple_outcome_tags_is_failed(tmp_path, capsys, children, reason, diagnostics):
+def test_testcase_with_multiple_outcome_tags_is_failed(  # pylint: disable=R0913, R0917
+    tmp_path, capsys, children, reason, message, text
+):
     (tmp_path / 'language.xml').write_text(_multi_child_report(children), encoding='utf-8')
     config = triton_utils.Config(action='pass_rate', reports=str(tmp_path))
 
@@ -210,9 +213,8 @@ def test_testcase_with_multiple_outcome_tags_is_failed(tmp_path, capsys, childre
     assert case.result == triton_utils.RunResult.FAILED
     assert case.result_reason == reason
     assert case.time == 1.5
-    for diagnostic in diagnostics:
-        assert diagnostic in case.error_message
-        assert f'{diagnostic} tb' in case.error_text
+    assert case.error_message == message
+    assert case.error_text == text
     err = capsys.readouterr().err
     assert 'language::python.test.unit.language.test_core::test_multi' in err
 
