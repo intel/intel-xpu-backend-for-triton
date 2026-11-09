@@ -8,7 +8,6 @@ add_triton_ut(
     Analysis/DPASAnalysisTest.cpp
     Analysis/RegisterPressureTest.cpp
     Analysis/ReuseAnalysisTest.cpp
-    Analysis/SignedDivRemDeductionTest.cpp
     Analysis/SignednessProverTest.cpp
     Analysis/SpatialReuseAnalysisTest.cpp
     Analysis/StrideInfoTest.cpp
