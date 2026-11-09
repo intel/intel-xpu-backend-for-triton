@@ -537,9 +537,13 @@ private:
           builder.getI32IntegerAttr(static_cast<int32_t>(baseHeightRows)));
     }
 
+    Value widthOperand = arith::ConstantOp::create(
+        builder, loc,
+        builder.getI32IntegerAttr(static_cast<int32_t>(baseWidthBytes)));
+
     auto blockPtrLoadOp = ttgi::Subgroup2DBlockLoadFromPtrOp::create(
         builder, loc, op.getType(), op.getPtr(), pitchOperand, heightOperand,
-        mask, other, builder.getI32IntegerAttr(baseWidthBytes),
+        widthOperand, mask, other,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate attributes if present.

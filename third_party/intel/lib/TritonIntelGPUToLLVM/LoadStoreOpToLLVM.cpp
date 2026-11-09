@@ -5211,7 +5211,9 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       }
     }
 
-    Value baseWidth = b.i32_val(op.getBaseWidth() * cfg.vBlocks);
+    Value baseWidth = adaptor.getBaseWidth();
+    if (cfg.vBlocks > 1)
+      baseWidth = b.mul(baseWidth, b.i32_val(cfg.vBlocks));
     Value baseHeight = adaptor.getBaseHeight();
     Value pitch = adaptor.getBasePitch();
 
