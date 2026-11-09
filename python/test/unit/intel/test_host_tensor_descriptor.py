@@ -580,3 +580,26 @@ def test_descriptor_overlapping_strides_out_of_range_middle_pads(device, with_al
     assert f"!tt.tensordesc<{BLOCK_M}x1x{BLOCK_D}x" not in kernel.asm["ttir"], "not fused"
     llir = kernel.asm["llir"]
     assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
+
+
+@triton.jit
+def _bool_copy_kernel(src_desc, dst_desc):
+    dst_desc.store([0, 0], src_desc.load([0, 0]))
+
+
+# Bool descriptors are bytes in memory: nonzero loads as True, stores write 0x01 (#8670).
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+def test_host_descriptor_bool_copy(device):
+    raw = torch.ones((1, 32), dtype=torch.uint8, device=device)  # hidden columns 20-31 are nonzero
+    raw[0, :20] = torch.tensor([0, 1, 2, 1] * 5, dtype=torch.uint8)  # 0x02 is nonzero with the low bit clear
+    src = raw.view(torch.bool)[:, :20]  # shape [1, 20], stride [32, 1]: meets the 16-byte stride rule
+    dst = torch.full((1, 32), 0xAA, dtype=torch.uint8, device=device)  # poison, so the fill lanes must be written
+    kernel = _bool_copy_kernel[(1, )](TensorDescriptor.from_tensor(src, [1, 32]),
+                                      TensorDescriptor.from_tensor(dst.view(torch.bool), [1, 32]))
+
+    expected = torch.zeros_like(raw)
+    expected[0, :20] = (raw[0, :20] != 0).to(torch.uint8)
+    torch.testing.assert_close(dst, expected, rtol=0, atol=0)
+    ttgir = kernel.asm["ttgir"]
+    assert "tt.descriptor_load" in ttgir and "tt.descriptor_store" in ttgir, "expected descriptor-native ops"
+    assert "ttig.block_io" not in ttgir, "expected the generic descriptor path"

@@ -3034,6 +3034,10 @@ struct DescriptorLoadOpConversion
     // Get result type information
     auto resultType = cast<RankedTensorType>(op.getType());
     Type valueElemTy = typeConverter->convertType(resultType.getElementType());
+    // Bools are bytes in memory, as for tl.load; each is narrowed below.
+    bool isBool = valueElemTy.isInteger(1);
+    if (isBool)
+      valueElemTy = i8_ty;
     unsigned numElems = getTotalElemsPerThread(resultType);
 
     // Descriptor rank may differ from result rank for rank-reducing loads.
@@ -3308,6 +3312,8 @@ struct DescriptorLoadOpConversion
         Value loaded = rets[ii / tmp];
         if (isa<VectorType>(loaded.getType()))
           loaded = b.extract_element(valueElemTy, loaded, b.i32_val(ii % tmp));
+        if (isBool)
+          loaded = b.icmp_ne(loaded, b.i8_val(0));
         loadedVals.push_back(loaded);
       }
     } // end vec
@@ -3349,6 +3355,9 @@ struct DescriptorStoreOpConversion
     // Get value type information
     auto valueTy = cast<RankedTensorType>(op.getSrc().getType());
     Type valueElemTy = typeConverter->convertType(valueTy.getElementType());
+    // Bools are bytes in memory, as for tl.store.
+    if (valueElemTy.isInteger(1))
+      valueElemTy = i8_ty;
     unsigned numElems = getTotalElemsPerThread(valueTy);
 
     // Descriptor rank may differ from stored value rank for rank-reducing
@@ -3436,7 +3445,7 @@ struct DescriptorStoreOpConversion
           assert(elemOffset < valueElems.size());
           Value elem = valueElems[elemOffset];
           if (elem.getType().isInteger(1))
-            elem = b.sext(i8_ty, elem);
+            elem = b.zext(i8_ty, elem);
           elem = b.bitcast(elem, valueElemTy);
 
           llWord = b.insert_element(wordTy, llWord, elem, b.i32_val(elemIdx));
