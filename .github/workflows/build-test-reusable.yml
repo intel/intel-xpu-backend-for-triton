@@ -500,9 +500,9 @@ jobs:
         run: |
           timeout -s KILL 4900 ${{ env.TRITON_TEST_CMD }} --inductor || ${{ inputs.ignore_errors }}
 
-      # Skipped when gluon has no warmup to compare against (see the gluon steps above).
+      # Skipped when gluon has no warmup to compare against (see the gluon steps above), and for triton-kernel-runner, which has none.
       - name: Verify compile warmup completeness
-        if: matrix.loop.suite != 'gluon' || inputs.driver_version == 'rolling'
+        if: matrix.loop.suite != 'triton-kernel-runner' && (matrix.loop.suite != 'gluon' || inputs.driver_version == 'rolling')
         run: |
           python -m triton._test_runner report --require-complete \
             || ${{ inputs.ignore_errors || inputs.enable_unskip }}
