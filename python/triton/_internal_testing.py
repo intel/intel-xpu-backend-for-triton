@@ -608,9 +608,7 @@ def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
 
             compute_cache_key = jit.compute_cache_key
             namespace = f"|fresh_knobs-{next(_fresh_knobs_counter)}"
-            monkeypatch.setattr(
-                jit, "compute_cache_key", lambda kernel_key_cache, specialization, options: compute_cache_key(
-                    kernel_key_cache, specialization, options) + namespace)
+            monkeypatch.setattr(jit, "compute_cache_key", lambda *args: compute_cache_key(*args) + namespace)
         for name, knobset in knobs_map.items():
             setattr(knobs, name, knobset.copy().reset())
             for knob in knobset.knob_descriptors.values():
