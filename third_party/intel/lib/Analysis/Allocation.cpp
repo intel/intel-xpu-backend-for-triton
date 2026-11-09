@@ -1,7 +1,6 @@
 #include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 namespace ttgi = mlir::triton::gpu::intel;
@@ -49,16 +48,7 @@ unsigned allocationAnalysisScratchSizeFn(Operation *op) {
       })
       .Case<ReduceOp>([](auto op) {
         ReduceOpHelper helper(op);
-        auto layout = ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(),
-                                                           op.getAxis());
-        auto kAxis = *(layout.getOutDimNames().begin() + op.getAxis());
-        if (layout.getOutDimSize(kAxis) == 1)
-          return 0u;
-        // Match the lowering's full-repetition allocation and operand offsets;
-        // a reusable single-tile allocation cannot hold all stores at once.
-        auto tmpLayout = ttgi::getInterWarpReductionLayout(op, layout);
-        return ttgi::getReductionScratchConfig(op, layout, tmpLayout)
-            .sizeInBytes;
+        return ttgi::getScratchSizeInBytesOld(helper, op);
       })
       .Case<HistogramOp>([](HistogramOp op) {
         // The Intel lowering always counts in shared memory, including the
