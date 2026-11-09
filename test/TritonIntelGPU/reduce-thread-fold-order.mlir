@@ -142,9 +142,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 // -----
 
 // COM: Sub-byte types left-fold like any other non-float type. This case also
-// COM: pins the scratch sizing: the reduction is cross-warp, and both the legacy
-// COM: shape-based allocator and getScratchSizeInBytes() round i1 up to a byte
-// COM: (tt::getBitwidth clamps to 8), so neither path allocates zero.
+// COM: pins the scratch sizing and byte-wide shared-memory transfer: the
+// COM: cross-warp conversion rounds i1 up to a byte (tt::getBitwidth clamps to 8).
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 // CHECK: ttg.shared = 4 : i32
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 32 : i32} {
@@ -153,6 +152,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: [[S0:%.*]] = llvm.or %{{.*}}, %{{.*}} : i1
     // CHECK: [[S1:%.*]] = llvm.or [[S0]], %{{.*}} : i1
     // CHECK: llvm.or [[S1]], %{{.*}} : i1
+    // CHECK: llvm.zext %{{.*}} : i1 to i8
+    // CHECK: llvm.store %{{.*}}, %{{.*}} : {{.*}}i8{{.*}}, !llvm.ptr<3>
+    // CHECK: llvm.call spir_funccc @_Z7barrierj
+    // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> {{.*}}i8
+    // CHECK: llvm.trunc %{{.*}} : i8 to i1
     %g = "tt.reduce" (%f) ({
     ^bb0(%arg0: i1, %arg1: i1):
       %or = arith.ori %arg0, %arg1 : i1

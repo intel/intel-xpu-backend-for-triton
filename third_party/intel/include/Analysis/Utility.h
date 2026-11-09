@@ -45,6 +45,16 @@ bool isValidElementTypeForSubGroupTranspose(Type type);
 /// Return whether the reduction needs no inter-warp communication.
 bool isWarpSynchronous(ReduceOpHelper &helper, triton::ReduceOp op);
 
+/// Move the partial-result layout's warp-axis bases into unused lanes and then
+/// registers, preserving all non-reduction bases.
+LinearLayout getInterWarpReductionLayout(triton::ReduceOp op,
+                                         const LinearLayout &srcLayout);
+
+/// Reserve all swizzled repetitions at once rather than reusing a single tile.
+ReduceOpHelper::ScratchConfig
+getReductionScratchConfig(triton::ReduceOp op, const LinearLayout &srcLayout,
+                          const LinearLayout &dstLayout);
+
 /// Return the shape of the shared memory space needed for the reduction.
 SmallVector<unsigned> getScratchRepShape(ReduceOpHelper &helper,
                                          triton::ReduceOp op);
