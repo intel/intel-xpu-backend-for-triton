@@ -1,4 +1,5 @@
 import importlib
+import itertools
 import functools
 import multiprocessing
 import os
@@ -572,6 +573,9 @@ def run_in_process(client_fn, args=(), kwargs=None, env=None):
     return ProcessResult(exc, stderr)
 
 
+_fresh_knobs_counter = itertools.count()
+
+
 def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
     from triton import knobs
 
@@ -594,6 +598,16 @@ def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
 
     def fresh_function():
         nonlocal env_to_unset
+        # The in-memory kernel key ignores knobs and env vars (only the disk hash has them),
+        # so a kernel compiled outside this context would be reused here without reaching
+        # `compile`. Give this context its own key namespace; `monkeypatch.undo()` restores it.
+        from triton.runtime import jit
+
+        compute_cache_key = jit.compute_cache_key
+        namespace = f"|fresh_knobs-{next(_fresh_knobs_counter)}"
+        monkeypatch.setattr(
+            jit, "compute_cache_key", lambda kernel_key_cache, specialization, options: compute_cache_key(
+                kernel_key_cache, specialization, options) + namespace)
         for name, knobset in knobs_map.items():
             setattr(knobs, name, knobset.copy().reset())
             for knob in knobset.knob_descriptors.values():
