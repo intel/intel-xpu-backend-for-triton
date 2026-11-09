@@ -340,9 +340,6 @@ private:
       return;
     }
 
-    if (!maskPermitsBlockTile(op, axisInfoAnalysis, rank))
-      return;
-
     // Determine if LoadOp is row-major or column-major.
     tt::intel::StrideInfo *strideInfo = strideAnalysis.getStrideInfo(ptr);
     auto isMajor = [rank, &strideInfo](RankedTensorType tensorTy,
@@ -387,18 +384,29 @@ private:
       return true;
     };
 
-    const StringRef blockIOAttrName =
-        ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
+    // Needed before the mask gate: maskPermitsBlockTile's row-limit bypass
+    // checks the mask is bounded along the complementary (pitch) dim.
     const bool isRowMajor =
         isMajor(tensorTy, rank - 1 /*fastChangeDim*/, *axisInfo);
+    const bool isColMajor =
+        isMajor(tensorTy, rank - 2 /*fastChangeDim*/, *axisInfo);
+    std::optional<unsigned> contiguousDim;
+    if (isRowMajor)
+      contiguousDim = rank - 1;
+    if (isColMajor)
+      contiguousDim = rank - 2;
+
+    if (!maskPermitsBlockTile(op, axisInfoAnalysis, strideInfo, rank,
+                              contiguousDim))
+      return;
+
+    const StringRef blockIOAttrName =
+        ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
     if (isRowMajor)
       op->setAttr(blockIOAttrName,
                   StringAttr::get(
                       op.getContext(),
                       ttgi::stringifyBlockIOMode(ttgi::BlockIOMode::RowMajor)));
-
-    const bool isColMajor =
-        isMajor(tensorTy, rank - 2 /*fastChangeDim*/, *axisInfo);
     if (isColMajor)
       op->setAttr(blockIOAttrName,
                   StringAttr::get(op.getContext(),
@@ -424,13 +432,55 @@ private:
   /// count in a grouped GEMM, `offs_am < tl.load(offsets_ptr + g)` — has
   /// constancy 1 along the M dim, because the compare visitor can only derive
   /// constancy from the divisibility of both sides.
+  ///
+  /// For a `tt::LoadOp`, such a mask may still be a `ttgi::matchRowLimitMask`
+  /// row-limit pattern, so permit block IO here too.
+  /// `contiguousDim`/`strideInfo` must match what LowerTo2DBlockLoad later
+  /// uses, or stamping `ttig.block_io` here de-anchors the load without it
+  /// gaining a real 2D block read. For the same reason the bypass is skipped
+  /// when LowerTo2DBlockLoad would reject the row pitch
+  /// (`ttgi::isBlockPitchSupported`). Stores aren't covered: nothing
+  /// downstream consumes a store-side row limit.
   template <typename OpType>
   bool maskPermitsBlockTile(OpType op,
                             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                            unsigned rank) const {
+                            tt::intel::StrideInfo *strideInfo, unsigned rank,
+                            std::optional<unsigned> contiguousDim) const {
     Value mask = op.getMask();
     if (!mask || matchPattern(mask, m_One()))
       return true;
+
+    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
+      if (rank >= 2 && contiguousDim) {
+        auto maskTy = cast<RankedTensorType>(mask.getType());
+        unsigned pitchDim = (*contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+        bool pitchDimIsBroadcast =
+            strideInfo && strideInfo->getStride(pitchDim) == 0;
+        if (ttgi::matchRowLimitMask(mask, op.getOther(), maskTy.getShape(),
+                                    *contiguousDim, pitchDimIsBroadcast)) {
+          // Skip the bypass if LowerTo2DBlockLoad would reject the pitch.
+          unsigned elemBits = cast<tt::PointerType>(
+                                  cast<RankedTensorType>(op.getPtr().getType())
+                                      .getElementType())
+                                  .getPointeeType()
+                                  .getIntOrFloatBitWidth();
+          int64_t stride = strideInfo ? strideInfo->getStride(pitchDim) : -1;
+          bool pitchOk = ttgi::isBlockPitchSupported(
+              stride >= 0 ? std::optional<int64_t>(stride * elemBits / 8)
+                          : std::nullopt,
+              strideInfo && strideInfo->getStrideValue(pitchDim),
+              maskTy.getDimSize(*contiguousDim) * elemBits / 8);
+          if (pitchOk) {
+            LDBG(
+                "Mask is a row-limit pattern; permitting block IO for: " << op);
+            return true;
+          }
+          LDBG("Row-limit mask, but LowerTo2DBlockLoad would reject the "
+               "pitch; skip the bypass for: "
+               << op);
+        }
+      }
+    }
 
     const tt::AxisInfo *maskAxisInfo = axisInfoAnalysis.getAxisInfo(mask);
     if (!maskAxisInfo) {
@@ -454,6 +504,9 @@ private:
 
   /// Look through cast wrappers (index_cast, extui, extsi, trunci, etc.)
   /// to find the underlying arithmetic operation.
+  /// NOTE: BlockIOUtils.cpp has a stricter twin (`lookThroughCasts` /
+  /// `matchBaseAndRange`, widening casts only) used by `matchRowLimitMask`,
+  /// whose result feeds a `base_height` clamp. Keep the two in sync.
   static Value lookThroughCasts(Value val) {
     while (Operation *def = val.getDefiningOp()) {
       if (!isa<CastOpInterface>(def) || def->getNumOperands() != 1)

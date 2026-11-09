@@ -552,6 +552,60 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
+// COM: Same as @prefetch_row_limit_rank3_sunk_and, but with the AND below the
+// COM: final broadcast, as `tt-reorder-broadcast` leaves it:
+// COM: broadcast(and(broadcast(row), broadcast(batch))). The batch predicate is
+// COM: lowered at its narrow [4, 64, 1] shape and expanded to the tile's elements.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [1, 8, 16], B = [1, 16, 16], C = [1, 8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#sK = #ttg.slice<{dim = 2, parent = #dot0}>
+#sM = #ttg.slice<{dim = 1, parent = #dot0}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @prefetch_row_limit_rank3_sunk_and
+  tt.func @prefetch_row_limit_rank3_sunk_and(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %row_base: i32 {tt.divisibility = 16 : i32}, %bound: i32 {tt.divisibility = 16 : i32}, %batch_bound: i32 {tt.divisibility = 16 : i32}) {
+    %c32 = arith.constant dense<32> : tensor<1x64x1xi32, #dot0>
+    // ptr[b, i, j] = arg0 + i * 32 + j; batch addressing is irrelevant here,
+    // so every batch reads the same 64x32 slice.
+    %rb = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>>
+    %rm = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+    %ema = tt.expand_dims %rm {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>> -> tensor<1x64xi32, #sK>
+    %em = tt.expand_dims %ema {axis = 2 : i32} : tensor<1x64xi32, #sK> -> tensor<1x64x1xi32, #dot0>
+    %om = arith.muli %em, %c32 : tensor<1x64x1xi32, #dot0>
+    %rk = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sM}>>
+    %eka = tt.expand_dims %rk {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sM}>> -> tensor<1x32xi32, #sM>
+    %ek = tt.expand_dims %eka {axis = 1 : i32} : tensor<1x32xi32, #sM> -> tensor<1x1x32xi32, #dot0>
+    %bm = tt.broadcast %om : tensor<1x64x1xi32, #dot0> -> tensor<4x64x32xi32, #dot0>
+    %bk = tt.broadcast %ek : tensor<1x1x32xi32, #dot0> -> tensor<4x64x32xi32, #dot0>
+    %off = arith.addi %bm, %bk : tensor<4x64x32xi32, #dot0>
+    %ps = tt.splat %arg0 : !tt.ptr<f16> -> tensor<4x64x32x!tt.ptr<f16>, #dot0>
+    %ptr = tt.addptr %ps, %off : tensor<4x64x32x!tt.ptr<f16>, #dot0>, tensor<4x64x32xi32, #dot0>
+    // rows = row_base + arange(0, 64) < bound; batch = arange(0, 4) < batch_bound.
+    %rbase = tt.splat %row_base : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+    %rows = arith.addi %rbase, %rm : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+    %boundsplat = tt.splat %bound : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+    %rowcmp = arith.cmpi slt, %rows, %boundsplat : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+    %rc1 = tt.expand_dims %rowcmp {axis = 0 : i32} : tensor<64xi1, #ttg.slice<{dim = 0, parent = #sK}>> -> tensor<1x64xi1, #sK>
+    %rc2 = tt.expand_dims %rc1 {axis = 2 : i32} : tensor<1x64xi1, #sK> -> tensor<1x64x1xi1, #dot0>
+    %rowb = tt.broadcast %rc2 : tensor<1x64x1xi1, #dot0> -> tensor<4x64x1xi1, #dot0>
+    %bboundsplat = tt.splat %batch_bound : i32 -> tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>>
+    %batchcmp = arith.cmpi slt, %rb, %bboundsplat : tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>>
+    %bc1 = tt.expand_dims %batchcmp {axis = 1 : i32} : tensor<4xi1, #ttg.slice<{dim = 1, parent = #sK}>> -> tensor<4x1xi1, #sK>
+    %bc2 = tt.expand_dims %bc1 {axis = 2 : i32} : tensor<4x1xi1, #sK> -> tensor<4x1x1xi1, #dot0>
+    %batchb = tt.broadcast %bc2 : tensor<4x1x1xi1, #dot0> -> tensor<4x64x1xi1, #dot0>
+    %and = arith.andi %rowb, %batchb : tensor<4x64x1xi1, #dot0>
+    %mask = tt.broadcast %and : tensor<4x64x1xi1, #dot0> -> tensor<4x64x32xi1, #dot0>
+    // CHECK: llvm.intr.smax
+    // CHECK: llvm.icmp "sgt"
+    // CHECK: llvm.and {{.*}} : i1
+    // CHECK: llvm.select
+    // CHECK: triton_gen.2Dblockprefetch
+    ttig.prefetch %ptr, %mask {cache = 1 : i32, evict = 1 : i32, isVolatile = false, ttig.block_io = "row_major"} : tensor<4x64x32x!tt.ptr<f16>, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Rank-3 prefetch whose mask is a bare row-limit (no batch predicate).
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [1, 8, 16], B = [1, 16, 16], C = [1, 8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
