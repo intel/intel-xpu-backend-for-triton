@@ -107,6 +107,12 @@ TEST(PrefetchCostModelTest, WideRow_FetchesRow) {
   EXPECT_EQ((OperandWalk{32, 512, 1024}.fetchedBytes(256)), 32 * 512);
 }
 
+TEST(PrefetchCostModelTest, Step0ShortRow_NotGapped) {
+  OperandWalk walk{32, 128, 0};
+  EXPECT_EQ(walk.fetchedBytes(256), 32 * 128);
+  EXPECT_FALSE(walk.gapped(256));
+}
+
 // The most negative step has no signed magnitude; it still reads as gapped.
 TEST(PrefetchCostModelTest, Int64MinStep_Gapped) {
   OperandWalk walk{256, 64, std::numeric_limits<int64_t>::min()};

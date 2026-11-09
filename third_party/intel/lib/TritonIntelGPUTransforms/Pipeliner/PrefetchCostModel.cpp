@@ -7,7 +7,7 @@
 
 namespace mlir::triton::gpu::intel::prefetchcost {
 
-// Xe2 discrete, fit on the B580 (phases 61-79) with split-K GEMMs (256x256x32
+// Xe2 discrete, fit on the B580 (issue #8652) with split-K GEMMs (256x256x32
 // bf16, 1 WG/core) at PR #8520's demand-load order (A issued last).
 // The onset, span and DRAM terms include slack relative to the B580 fits. They
 // are not validated bounds for other Xe2 parts or for launches with few
@@ -15,12 +15,12 @@ namespace mlir::triton::gpu::intel::prefetchcost {
 static const ArchConstants kXe2Discrete = {
     .granuleBytes = 256,         // measured: 64, 128 B rows waste; A/B 2.64x.
     .dpasFlopsPerClk = 1712,     // 84% of the 2048 peak; contiguous grid.
-    .fillBytesPerClk = 19.3,     // L1 fill roof; fill sweep, phase 76.
-    .dramBytesPerMemClk = 1.035, // bound: fit 0.828 + 25%; E3.4 unshared.
-    // bound: fit + 25%, rounded up to 10; fits 136 / 102 / 104 / 111 / 107 /
-    // 98, phases 77-79, 82. Distances beyond the table keep until measured.
+    .fillBytesPerClk = 19.3,     // L1 fill roof, from a fill-rate sweep.
+    .dramBytesPerMemClk = 1.035, // bound: fit 0.828 + 25%, unshared ceiling.
+    // bound: fit + 25%, rounded up to 10; fits by distance 136 / 102 / 104 /
+    // 111 / 107 / 98. Distances beyond the table keep until measured.
     .onsetItersByDistance = {170, 130, 130, 140, 140, 130},
-    .rampSpanIters = 650, // bound: fit 500 + 30%; phases 77-78.
+    .rampSpanIters = 650, // bound: fit 500 + 30%.
 };
 
 // The ramp sum is exact up to this trip count and its integral beyond, which

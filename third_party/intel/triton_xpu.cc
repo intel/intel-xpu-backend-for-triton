@@ -98,12 +98,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
                      gpu::intel::createTritonIntelGPUStageLargeFMADotsViaSLM);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
-  m.def("add_pipeline", [](mlir::PassManager &pm, int numStages,
-                           bool useBarrier, std::string deviceArch,
-                           unsigned coreClockKhz, unsigned memClockMhz) {
-    pm.addPass(gpu::intel::createTritonIntelGPUPipeline(
-        {numStages, useBarrier, deviceArch, coreClockKhz, memClockMhz}));
-  });
+  ADD_PASS_OPTION_WRAPPER_5("add_pipeline",
+                            gpu::intel::createTritonIntelGPUPipeline, int, bool,
+                            std::string, unsigned, unsigned);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      gpu::intel::createIntelAllocateSharedMemory);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",

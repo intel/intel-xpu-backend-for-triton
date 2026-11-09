@@ -11,14 +11,14 @@
 /// dot loop; free of MLIR so the arithmetic is unit-testable.
 namespace mlir::triton::gpu::intel::prefetchcost {
 
-/// Per-architecture coefficients, per Xe core, named after the spec's symbols.
+/// Per-architecture coefficients, per Xe core.
 struct ArchConstants {
-  unsigned granuleBytes;     // G
-  double dpasFlopsPerClk;    // R_core per core clock, 16-bit DPAS
-  double fillBytesPerClk;    // Phi_L1 per core clock
-  double dramBytesPerMemClk; // DRAM share per memory clock
-  std::array<double, 6> onsetItersByDistance; // i0 at prefetch distance 1..size
-  double rampSpanIters;                       // L
+  unsigned granuleBytes;                      // bytes one row access fetches
+  double dpasFlopsPerClk;                     // 16-bit DPAS rate per core clock
+  double fillBytesPerClk;                     // L1 fill rate per core clock
+  double dramBytesPerMemClk;                  // DRAM share per memory clock
+  std::array<double, 6> onsetItersByDistance; // ramp onset, distance 1..size
+  double rampSpanIters; // iterations from the onset to the DRAM ceiling
 };
 
 /// What the compiler reads from the target device.
@@ -70,7 +70,7 @@ double loopSeconds(const LoopShape &shape, const Device &dev,
 /// Index of the operand whose prefetch to drop, or nullopt to keep all. Only a
 /// loop with a positive trip count, a prefetch distance in the onset table
 /// (distances beyond the table keep) and exactly one gapped operand qualifies,
-/// and dropping must be faster by more than `margin`, the model's error band.
+/// and dropping must be predicted faster by more than the decision `margin`.
 std::optional<unsigned> chooseDrop(const LoopShape &shape, const Device &dev,
                                    double margin = 0.15);
 

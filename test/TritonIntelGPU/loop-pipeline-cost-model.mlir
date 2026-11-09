@@ -9,8 +9,8 @@
 
 // COM: The prefetch cost model drops the prefetch of the one gapped dot operand (A: 64-byte rows read
 // COM: 256 bytes apart) in a long loop, and keeps every prefetch outside its calibrated regime. KEEP
-// COM: runs leave it (no device-arch or clock; split barriers) or run 2 stages, whose later onset
-// COM: outlasts 224 iterations; 3 and 7 stages drop (DROP).
+// COM: runs leave it (no device-arch or clock; split barriers) or run 2 stages, whose predicted gain
+// COM: at 224 iterations is under the 15% margin (the drop starts at 259); 3 and 7 stages drop (DROP).
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>

@@ -403,7 +403,7 @@ static bool annotationsAreUsable(scf::ForOp forOp,
 
   // (3) Each candidate must carry loop.stage, except the Xe3P+ elementwise
   // carve-out (a candidate that does not feed a dot, on a module that supports
-  // 256B prefetch -- see collectPrefetchCandidates lines 100-110).
+  // 256B prefetch -- see the elementwise branch of collectPrefetchCandidates).
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   bool enableElementwisePrefetch = moduleOp->hasAttr(
       ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName());
