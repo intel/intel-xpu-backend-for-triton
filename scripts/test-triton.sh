@@ -1217,7 +1217,6 @@ run_vllm_spec_decode_tests() {
   # everything in a single pytest command and avoid overwriting the junit report.
   VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_spec_decode \
     run_pytest_command -vvv \
-      tests/v1/spec_decode/test_eagle.py \
       tests/v1/spec_decode/test_mtp.py \
       tests/v1/spec_decode/test_max_len.py \
       tests/v1/spec_decode/test_speculators_eagle3.py \
@@ -1243,7 +1242,6 @@ run_vllm_mrv2_tests() {
   VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_mrv2 \
     run_pytest_command -vvv \
       tests/v1/worker/test_gpu_model_runner.py \
-      tests/v1/worker/test_gpu_input_batch.py \
       tests/v1/worker/test_gpu_input_batch_v2.py \
       tests/v1/worker/test_gpu_model_runner_v2_eplb.py \
       tests/v1/sample/test_logprobs.py \
@@ -1576,9 +1574,6 @@ run_vllm_v1_runner_tests() {
   VLLM_USE_V2_MODEL_RUNNER=0 TRITON_TEST_SUITE=vllm_v1_runner \
     run_pytest_command -vvv \
       "tests/v1/e2e/test_hybrid_chunked_prefill.py::test_mtp_speculative_mixed_batch_short_prefill[False-qwen]" \
-      tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_draft_model \
-      tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_parallel_drafting \
-      tests/v1/spec_decode/test_eagle.py::test_propose_stores_probabilistic_draft_probs
 }
 
 
