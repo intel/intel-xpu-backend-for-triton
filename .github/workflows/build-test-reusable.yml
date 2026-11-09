@@ -169,6 +169,9 @@ jobs:
           for s in $SEQUENTIAL_SUITES; do
             matrix="$matrix, {\"suite\":\"$s\",\"shard_id\":-1}"
           done
+          if [[ "${{ inputs.driver_version }}" == "rolling" && "${{ inputs.runner_label }}" != "lts" ]]; then
+            matrix="$matrix, {\"suite\":\"triton-kernel-runner\",\"shard_id\":-1}"
+          fi
           echo "matrix=[${matrix#,}]" | tee -a $GITHUB_OUTPUT
 
       - name: Install test dependencies
@@ -415,6 +418,57 @@ jobs:
         run: |
           export PYTEST_MAX_PROCESSES=4
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
+
+      - name: Prepare LLVM cache key
+        if: matrix.loop.suite == 'triton-kernel-runner'
+        run: |
+          LLVM_HASH="$(sha256sum cmake/llvm-info.json | cut -d\  -f1)"
+          TRITON_LLVM_CACHE_KEY=$(echo $LLVM_HASH ${{ hashFiles('setup.py') }} | sha256sum - | cut -d\  -f1)
+          echo "TRITON_LLVM_CACHE_KEY=$TRITON_LLVM_CACHE_KEY" | tee -a $GITHUB_ENV
+
+      - name: Load LLVM from Triton cache
+        if: matrix.loop.suite == 'triton-kernel-runner'
+        id: llvm-cache
+        uses: ./.github/actions/load
+        env:
+          # Keep in sync with CACHE_NUMBER in .github/actions/setup-triton
+          CACHE_NUMBER: 1
+        with:
+          path: $HOME/.triton/llvm
+          key: triton-llvm-${{ env.TRITON_LLVM_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
+
+      - name: Download LLVM
+        if: matrix.loop.suite == 'triton-kernel-runner'
+        run: |
+          python python/build_helpers.py write_thirdparty_cmake_vars --triton-cache-path $HOME/.triton --packages llvm --output $RUNNER_TEMP/llvm.cmake
+
+      - name: Save LLVM to Triton cache
+        if: matrix.loop.suite == 'triton-kernel-runner' && steps.llvm-cache.outputs.status == 'miss'
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.llvm-cache.outputs.path }}
+          dest: ${{ steps.llvm-cache.outputs.dest }}
+
+      - name: Build TritonKernelRunner
+        if: matrix.loop.suite == 'triton-kernel-runner'
+        run: |
+          export LLVM_DIR="$HOME/.triton/llvm/llvm-ubuntu-x64"
+          export CMAKE_PREFIX_PATH="$(python scripts/torch_cmake.py)"
+          cd utils/TritonKernelRunner
+          mkdir build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+          make -j
+
+      - name: Run TritonKernelRunner tests
+        if: matrix.loop.suite == 'triton-kernel-runner'
+        env:
+          TRITON_XPU_GEN_NATIVE_CODE: 0
+        run: |
+          export TRITON_KERNEL_RUNNER_PATH="$GITHUB_WORKSPACE/utils/TritonKernelRunner/build/TritonKernelRunner"
+          export TRITON_KERNEL_RUNNER_TESTS="$GITHUB_WORKSPACE/utils/TritonKernelRunner/tests"
+          cd utils/TritonKernelRunner
+          pytest tests/test_triton_kernel_runner.py
 
       - name: Run Tutorials
         if: matrix.loop.suite == 'rest'
