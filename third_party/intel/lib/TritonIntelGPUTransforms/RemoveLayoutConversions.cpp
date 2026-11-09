@@ -2171,8 +2171,6 @@ void LayoutRematerialization::backwardRematerialization(
       convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout);
   if (result.failed()) {
     LDBG("  getRematerializableSlice failed");
-    if (succeeded(rematerializeUpToAnchors(convertOp)))
-      LDBG("  rematerialized up to anchors");
     return;
   }
 
