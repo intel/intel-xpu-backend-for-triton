@@ -601,13 +601,16 @@ def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
         # The in-memory kernel key ignores knobs and env vars (only the disk hash has them),
         # so a kernel compiled outside this context would be reused here without reaching
         # `compile`. Give this context its own key namespace; `monkeypatch.undo()` restores it.
-        from triton.runtime import jit
+        # Not during warm-up: nothing is launched there, and per-test keys would defeat the
+        # warm-up dispatcher's deduplication (the key is part of the compile-context digest).
+        if not is_compile_warmup():
+            from triton.runtime import jit
 
-        compute_cache_key = jit.compute_cache_key
-        namespace = f"|fresh_knobs-{next(_fresh_knobs_counter)}"
-        monkeypatch.setattr(
-            jit, "compute_cache_key", lambda kernel_key_cache, specialization, options: compute_cache_key(
-                kernel_key_cache, specialization, options) + namespace)
+            compute_cache_key = jit.compute_cache_key
+            namespace = f"|fresh_knobs-{next(_fresh_knobs_counter)}"
+            monkeypatch.setattr(
+                jit, "compute_cache_key", lambda kernel_key_cache, specialization, options: compute_cache_key(
+                    kernel_key_cache, specialization, options) + namespace)
         for name, knobset in knobs_map.items():
             setattr(knobs, name, knobset.copy().reset())
             for knob in knobset.knob_descriptors.values():
