@@ -471,6 +471,7 @@ def get_benchmark(
             if ('B580' in DEVICE_NAME and matmul_kernel is matmul_kernel_with_tensor_descriptors
                     and not (transpose_a or transpose_b) and len(a.shape) == 2
                     and gemm_streamk_benchmark.should_use_streamk(M, N, K)):
+                c.fill_(float('nan'))  # the check below then fails for an unwritten or unzeroed shared tile
                 triton_fn = lambda: gemm_streamk_benchmark.matmul(a, b, c)
             torch_fn = lambda: torch_mm(torch_a, torch_b, out_dtype=torch.float32)
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')

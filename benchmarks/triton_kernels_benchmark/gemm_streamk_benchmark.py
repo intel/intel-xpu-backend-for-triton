@@ -116,14 +116,12 @@ def get_autotune_configs() -> List[triton.Config]:
 # Stream-K splits the work on the host, so the tile math in `matmul` has to use the same block sizes as
 # the kernels. Autotuning over several configs would desynchronize the two, hence the single config.
 BLOCK_SIZES = get_autotune_configs()[0].kwargs
+NUM_WARPS = get_autotune_configs()[0].num_warps
 
 
 @triton.autotune(
     configs=get_autotune_configs(),
     key=['M', 'N', 'K'],
-    # `mac_loop` accumulates into c with `atomic_add`, so every launch needs c zeroed.
-    # `first_wave` runs before `full_tiles`, so zeroing the whole buffer here is safe.
-    reset_to_zero=['c_ptr'],
 )
 @triton.jit
 def first_wave(
@@ -231,14 +229,17 @@ def should_use_streamk(M: int, N: int, K: int) -> bool:
     """Whether stream-K is expected to beat the data-parallel GEMM kernel for a plain 2D GEMM of this shape.
 
     It pays off when the last wave of output tiles is mostly empty (the idle cores are what stream-K fills) and K is
-    long enough to share out. The limits are conservative and come from 17 tile counts at K = 2048 and 8192 on one
-    Arc B580 (20 Xe cores, bf16 in, fp32 out, zeroing included): the 7 shapes inside them gained 1.4% to 17.6% over
-    the data-parallel kernel, the same tile counts at K = 2048 gained less (0.2% to 7.7%), and the other shapes were
-    mixed, from -12.5% to +15.9%.
+    long enough to share out. The shape must satisfy all of:
+      - M, N and K are multiples of the block sizes,
+      - at least two full waves of output tiles and at most eight in total,
+      - a partial last wave of at most half as many tiles as Xe cores,
+      - at least 256 K iterations.
+    These limits are conservative and were measured only on an Arc B580.
     """
-    num_xe_core = torch.xpu.get_device_capability(0)['gpu_subslice_count']
-    if M % BLOCK_SIZES['BLOCK_SIZE_M'] or N % BLOCK_SIZES['BLOCK_SIZE_N'] or K % BLOCK_SIZES['BLOCK_SIZE_K']:
+    if DEVICE != 'xpu' or M % BLOCK_SIZES['BLOCK_SIZE_M'] or N % BLOCK_SIZES['BLOCK_SIZE_N'] or K % BLOCK_SIZES[
+            'BLOCK_SIZE_K']:
         return False
+    num_xe_core = torch.xpu.get_device_capability(0)['gpu_subslice_count']
     total_tiles = (M // BLOCK_SIZES['BLOCK_SIZE_M']) * (N // BLOCK_SIZES['BLOCK_SIZE_N'])
     last_wave = total_tiles % num_xe_core
     return (total_tiles >= 2 * num_xe_core and 0 < last_wave <= num_xe_core // 2
@@ -279,11 +280,14 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
     streamk_full_tiles = streamk_iters // streamk_programs
     streamk_partial_tiles = streamk_iters % streamk_programs
 
-    # The tiles of `first_wave` are accumulated with atomics where programs share them, so they have to start from
-    # zero, and the timed iterations have to pay for that like any caller would. `full_tiles` overwrites the rest.
-    if streamk_tiles > 0:
+    # Tiles of `first_wave` that several programs share are accumulated with atomics, so they have to start from
+    # zero. Clearing all first-wave tiles is cheap, and the timed iterations have to pay for it like any caller would.
+    # `full_tiles` overwrites the rest.
+    if DEVICE != 'xpu':
+        c.zero_()  # the tile-only kernel was only measured on XPU
+    elif streamk_tiles > 0:
         zero_streamk_tiles[(streamk_tiles, )](c, M, N, K, c.stride(0), c.stride(1), BLOCK_SIZE_M, BLOCK_SIZE_N,
-                                              BLOCK_SIZE_K, BLOCK_SIZES['GROUP_SIZE_M'], num_warps=8)
+                                              BLOCK_SIZE_K, BLOCK_SIZES['GROUP_SIZE_M'], num_warps=NUM_WARPS)
 
     first_wave[(streamk_programs, )](
         a, b, c,  #
@@ -340,7 +344,8 @@ def benchmark(M, N, K, provider):
     if provider == 'onednn':
         _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.mm(a, b, out_dtype=torch.float32))
     elif provider == 'triton':
-        c = torch.zeros((M, N), device=a.device, dtype=torch.float32)
+        # NaN, so the check below fails for an unwritten tile or a shared tile that was not zeroed.
+        c = torch.full((M, N), float('nan'), device=a.device, dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.mm(a, b, out_dtype=torch.float32)
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
