@@ -1,0 +1,33 @@
+name: setup-llvm
+description: Download prebuilt LLVM to ~/.triton/llvm using a shared cache
+runs:
+  using: "composite"
+  steps:
+    - name: Prepare Triton cache for llvm
+      shell: bash
+      run: |
+        LLVM_HASH="$(sha256sum cmake/llvm-info.json | cut -d\  -f1)"
+        TRITON_LLVM_CACHE_KEY=$(echo $LLVM_HASH ${{ hashFiles('setup.py') }} | sha256sum - | cut -d\  -f1)
+        echo "TRITON_LLVM_CACHE_KEY=$TRITON_LLVM_CACHE_KEY" | tee -a $GITHUB_ENV
+
+    - name: Load llvm from Triton cache
+      id: triton-cache-llvm
+      uses: ./.github/actions/load
+      env:
+        # Increase this value to reset cache
+        CACHE_NUMBER: 1
+      with:
+        path: $HOME/.triton/llvm
+        key: triton-llvm-${{ env.TRITON_LLVM_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
+
+    - name: Download llvm
+      shell: bash
+      run: |
+        python python/build_helpers.py write_thirdparty_cmake_vars --triton-cache-path $HOME/.triton --packages llvm --output $RUNNER_TEMP/llvm.cmake
+
+    - name: Save llvm in Triton cache
+      if: steps.triton-cache-llvm.outputs.status == 'miss'
+      uses: ./.github/actions/save
+      with:
+        path: ${{ steps.triton-cache-llvm.outputs.path }}
+        dest: ${{ steps.triton-cache-llvm.outputs.dest }}
