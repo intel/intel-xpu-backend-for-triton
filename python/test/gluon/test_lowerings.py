@@ -3,6 +3,7 @@ import torch
 import pytest
 
 import triton
+from triton.language import PropagateNan
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton._internal_testing import (
@@ -11,7 +12,7 @@ from triton._internal_testing import (
     is_compile_warmup,
     is_cuda,
     is_hip,
-    is_hip_gfx1250,
+    is_hip_cdna5,
     is_hopper_or_newer,
     is_xpu,
     skip_if_unsupported_cluster_size,
@@ -117,6 +118,7 @@ def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl
     ]))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("sanitize_overflow", [False, True])
+@pytest.mark.enable_warmup
 def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
 
     torch.manual_seed(0)
@@ -374,25 +376,24 @@ def test_convert_layout_cross_cta_in_warp_specialize(use_worker_partition, devic
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
-@pytest.mark.skipif(is_hip(), reason="Uses 32-thread NVIDIA layouts")
+@pytest.mark.xfail(not is_hip(), reason="Generic linear layouts are only supported on AMD", run=False)
 @pytest.mark.parametrize("src_warp, dst_warp", [(64, 96), (96, 64)])
 def test_convert_layout_overlapping_identity_dims(src_warp, dst_warp, device):
 
     @gluon.jit
-    def kernel(x_ptr, y_ptr, SRC_WARP: ttgl.constexpr, DST_WARP: ttgl.constexpr):
-        src: ttgl.constexpr = ttgl.DistributedLinearLayout([[32]], [[1], [2], [4], [8], [16]], [[SRC_WARP], [128]], [],
-                                                           [256])
-        dst: ttgl.constexpr = ttgl.DistributedLinearLayout([[32]], [[1], [2], [4], [8], [16]], [[DST_WARP], [128]], [],
-                                                           [256])
+    def kernel(x_ptr, y_ptr, src: ttgl.constexpr, dst: ttgl.constexpr):
         src_offsets = ttgl.arange(0, 256, layout=src)
         x = ttgl.load(x_ptr + src_offsets)
         y = ttgl.convert_layout(x, dst)
         dst_offsets = ttgl.arange(0, 256, layout=dst)
         ttgl.store(y_ptr + dst_offsets, y)
 
+    lane_bases = [[1], [2], [4], [8], [16]] + [[0]] * (THREADS_PER_WARP // 32 - 1)
+    src = ttgl.DistributedLinearLayout([[32]], lane_bases, [[src_warp], [128]], [], [256])
+    dst = ttgl.DistributedLinearLayout([[32]], lane_bases, [[dst_warp], [128]], [], [256])
     x = torch.arange(256, dtype=torch.int32, device=device)
     y = torch.empty_like(x)
-    kernel[(1, )](x, y, src_warp, dst_warp, num_warps=4)
+    kernel[(1, )](x, y, src, dst, num_warps=4)
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
@@ -487,7 +488,11 @@ def _swizzled_warp_layouts():
 
 # ===--- Tests with swizzled/non-injective DistributedLinearLayout ---===
 
+requires_generic_linear = pytest.mark.xfail(not is_hip(), reason="Generic linear layouts are only supported on AMD",
+                                            run=False)
 
+
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 def test_elementwise_generic_linear(src_layout, device):
     shape = src_layout.shape
@@ -524,6 +529,7 @@ def test_elementwise_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x * x + x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts_2d()))
 def test_expand_dims_generic_linear(src_layout, device):
     M, N = src_layout.shape
@@ -544,6 +550,7 @@ def test_expand_dims_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 def test_reshape_generic_linear(src_layout, device):
     shape = src_layout.shape
@@ -587,6 +594,7 @@ def test_reshape_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts_2d()))
 def test_permute_generic_linear(src_layout, device):
     M, N = src_layout.shape
@@ -608,6 +616,7 @@ def test_permute_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 def test_split_join_generic_linear(src_layout, device):
     if any(all(v == 0 for v in b) for b in src_layout.reg_bases):
@@ -658,6 +667,7 @@ def test_split_join_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x + x * 2)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts_2d()))
 def test_broadcast_generic_linear(src_layout, device):
     M, N = src_layout.shape
@@ -708,6 +718,7 @@ def _make_shared_layout(kind, shape):
     raise ValueError(f"Unknown shared layout kind: {kind}")
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 @pytest.mark.parametrize("shared_kind", _shared_layout_kinds())
 def test_local_load_store_generic_linear(src_layout, shared_kind, device):
@@ -742,7 +753,7 @@ def test_local_load_store_generic_linear(src_layout, shared_kind, device):
     torch.testing.assert_close(y, x)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250 FP8 conversion")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5 FP8 conversion")
 def test_generic_linear_fp8_cast(device):
     shape = (128, 256)
     src_layout = ttgl.DistributedLinearLayout(
@@ -1929,6 +1940,7 @@ def test_local_load_transposed_nvmma_zero_swizzle(device):
 ])
 @pytest.mark.parametrize("dist_layout", _ld_st_dot_layouts + _ld_st_mma_layouts)
 @pytest.mark.parametrize("shared_layout", _ld_st_shared_layouts)
+@pytest.mark.enable_warmup
 def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, device):
     if shared_layout == "shared_linear_layout":
         rank = len(shape)
@@ -1950,7 +1962,7 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
             pytest.xfail("contig_dim too small for swizzle_byte_width in NVMMASharedLayout")
 
     # A simple blocked layout
-    num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(dist_layout, shape))))
+    num_warps = math.prod(ttgl._layouts.warps_per_cta(dist_layout, shape))
     blocked_layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[4, THREADS_PER_WARP // 4],
                                         warps_per_cta=[1, num_warps], order=[0, 1])
 
@@ -1996,8 +2008,8 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
     y = torch.zeros_like(x)
     obj = kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
     _assert_close(y, x)
-    if (is_cuda() and isinstance(shared_layout, ttgl.NVMMASharedLayout) and dist_layout in _ld_st_mma_layouts
-            and dist_layout.version[0] >= 3 and dtype == "float16"):
+    if (not is_compile_warmup() and is_cuda() and isinstance(shared_layout, ttgl.NVMMASharedLayout)
+            and dist_layout in _ld_st_mma_layouts and dist_layout.version[0] >= 3 and dtype == "float16"):
         assert "stmatrix" in obj.asm["ptx"]
 
 
@@ -2664,3 +2676,46 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
 
     # Verify output matches input
     torch.testing.assert_close(output_tensor, input_tensor, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("axis, keep_dims", [(None, False), (0, False), (0, True), (1, False), (1, True)])
+@pytest.mark.parametrize("op", ["max", "min"])
+@pytest.mark.parametrize("propagate_nan", [False, True])
+def test_min_max_nan_keep_dims(axis, keep_dims, op, propagate_nan, device):
+
+    @gluon.jit
+    def kernel(X, Values, AXIS: ttgl.constexpr, KEEP: ttgl.constexpr, OP: ttgl.constexpr, NAN_MODE: ttgl.constexpr,
+               layout: ttgl.constexpr):
+        rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+        x = ttgl.load(X + rows[:, None] * 32 + cols[None, :])
+        if OP == "max":
+            value = ttgl.max(x, AXIS, keep_dims=KEEP, propagate_nan=NAN_MODE)
+        else:
+            value = ttgl.min(x, AXIS, keep_dims=KEEP, propagate_nan=NAN_MODE)
+        if AXIS is None:
+            ttgl.store(Values, ttgl.reshape(value, ()))
+        else:
+            if AXIS == 0:
+                out = cols
+            else:
+                out = rows
+            value = ttgl.convert_layout(ttgl.reshape(value, (out.numel, )), out.type.layout)
+            ttgl.store(Values + out, value)
+
+    torch.manual_seed(9840)
+    x = torch.randint(-3, 4, (8, 32), device=device).float()
+    x[0, :] = torch.nan
+    x[:, 0] = torch.nan
+    source = x.flatten() if axis is None else x
+    dim = 0 if axis is None else axis
+    nan = torch.isnan(source)
+    numeric = source.masked_fill(nan, -torch.inf if op == "max" else torch.inf)
+    extreme = numeric.amax(dim, keepdim=True) if op == "max" else numeric.amin(dim, keepdim=True)
+    nan_wins = nan.any(dim, keepdim=True) if propagate_nan else nan.all(dim, keepdim=True)
+    expected_values = extreme.masked_fill(nan_wins, torch.nan).flatten()
+    values = torch.empty_like(expected_values)
+    mode = PropagateNan.ALL if propagate_nan else PropagateNan.NONE
+    layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0])
+    kernel[(1, )](x, values, axis, keep_dims, op, mode, layout)
+    torch.testing.assert_close(values, expected_values, rtol=0, atol=0, equal_nan=True)

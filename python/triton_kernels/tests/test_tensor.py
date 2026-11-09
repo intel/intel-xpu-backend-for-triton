@@ -25,14 +25,14 @@ from triton_kernels.tensor import (
     wrap_torch_tensor,
 )
 from triton_kernels.testing import assert_equal
-from triton._internal_testing import is_cuda
+from triton._internal_testing import is_compile_warmup, is_cuda
 from triton_kernels.tensor_details.layout import (
     BlackwellActMXScaleLayout,
     BlackwellMX4ValueShuffledLayout,
     BlackwellMXScaleLayout,
     BlackwellMXValueLayout,
     CDNA4MXScaleLayout,
-    GFX1250MXScaleLayout,
+    CDNA5MXScaleLayout,
     HopperMXScaleLayout,
     HopperMXValueLayout,
     StridedLayout,
@@ -150,8 +150,8 @@ def test_fpsan_embed_unembed_torch_tensor(dtype, layout, fresh_knobs, device):
         ((0, 64), False, BlackwellActMXScaleLayout(None), [1, 0, 16, 2, 256]),
         ((3, 254, 60), False, CDNA4MXScaleLayout(), [3, 8192, 2]),
         ((0, 64), False, CDNA4MXScaleLayout(), [1, 0, 2]),
-        ((3, 254, 60), False, GFX1250MXScaleLayout(), [3, 32768, 1]),
-        ((0, 64), False, GFX1250MXScaleLayout(), [1, 0, 1]),
+        ((3, 254, 60), False, CDNA5MXScaleLayout(), [3, 32768, 1]),
+        ((0, 64), False, CDNA5MXScaleLayout(), [1, 0, 1]),
     ],
 )
 def test_layout_storage_shape_matches_conversion(logical_shape, is_fp4, layout, storage_shape):
@@ -393,8 +393,8 @@ def test_convert_layout_between_strided_layouts_peak_allocation(dtype, with_out,
         ((64, 64), (64, 128), FP4, HopperMXValueLayout(-2, 3), HopperMXValueLayout(-2, 3)),
         ((10, 254, 60), None, UINT8, CDNA4MXScaleLayout(), CDNA4MXScaleLayout()),
         ((8, 1), None, UINT8, CDNA4MXScaleLayout(), CDNA4MXScaleLayout()),
-        ((10, 254, 60), None, UINT8, GFX1250MXScaleLayout(), GFX1250MXScaleLayout()),
-        ((4, 1), None, UINT8, GFX1250MXScaleLayout(), GFX1250MXScaleLayout()),
+        ((10, 254, 60), None, UINT8, CDNA5MXScaleLayout(), CDNA5MXScaleLayout()),
+        ((4, 1), None, UINT8, CDNA5MXScaleLayout(), CDNA5MXScaleLayout()),
     ],
 )
 def test_convert_layout_noop_for_equivalent_layout(storage_shape, logical_shape, dtype, layout, equivalent_layout):
@@ -724,6 +724,29 @@ def test_make_ragged_tensor_metadata(n_slices, device):
     assert_equal(meta.block_schedule_data, ref.block_schedule_data)
 
 
+@pytest.mark.parametrize("n_slices,capacity", [(1, 0), (1, 1), (1, 15), (1, 16), (1, 17), (1, 512), (1, 3072),
+                                               (1, 131072), (2, 512), (6, 3072)])
+def test_ragged_tensor_metadata_replay(n_slices, capacity, device):
+    sizes = torch.zeros(n_slices, device=device, dtype=torch.int32)
+    make_ragged_tensor_metadata(sizes, capacity)
+    device_module = torch.get_device_module(device)
+    graph = device_module.XPUGraph() if device == "xpu" else device_module.CUDAGraph()
+    with device_module.graph(graph):
+        actual = make_ragged_tensor_metadata(sizes, capacity)
+    fields = (actual.slice_offs, actual.block_offs_data, actual.block_schedule_data)
+    pointers = [field.data_ptr() for field in fields]
+    for active in (capacity, capacity // 2, 0):
+        sizes.copy_(
+            torch.tensor([active // n_slices + (i < active % n_slices) for i in range(n_slices)], device=device,
+                         dtype=torch.int32))
+        expected = make_ragged_tensor_metadata_torch(sizes, capacity)
+        graph.replay()
+        for result, reference in zip(fields,
+                                     (expected.slice_offs, expected.block_offs_data, expected.block_schedule_data)):
+            assert_equal(result, reference)
+        assert pointers == [field.data_ptr() for field in fields]
+
+
 @pytest.mark.parametrize("n_slices", [9, 32, 911, 1025])
 def test_remap_ragged_tensor_metadata(n_slices, device):
     max_slice_size = 200
@@ -747,6 +770,7 @@ def test_remap_ragged_tensor_metadata(n_slices, device):
 @pytest.mark.parametrize("n_rows", [0, 7, 256, 17111])
 @pytest.mark.parametrize("n_cols", [13, 32, 128, 811])
 @pytest.mark.parametrize("k", [1, 3, 4, 7, 8, 12, 18, 33, 63])
+@pytest.mark.enable_warmup
 def test_make_bitmatrix_metadata(n_rows, n_cols, k, device):
     if k > n_cols:
         pytest.skip("k must be <= n_cols")
@@ -762,6 +786,8 @@ def test_make_bitmatrix_metadata(n_rows, n_cols, k, device):
     bitmask = wrap_torch_tensor(bitmask_data.view(torch.uint32), dtype=BIT, shape=(n_rows, n_cols))
     # make metadata and compare
     metadata_tri = make_bitmatrix_metadata(indx, bitmask)
+    if is_compile_warmup():
+        return
     metadata_ref = make_bitmatrix_metadata_torch(indx, bitmask)
     assert_equal(metadata_tri.col_sum, metadata_ref.col_sum)
     assert_equal(metadata_tri.row_sorted_indx, metadata_ref.row_sorted_indx)

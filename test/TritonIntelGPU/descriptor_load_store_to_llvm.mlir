@@ -574,6 +574,45 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// Rank-reducing generic store (1x2x64 descriptor, 2x64 value): the fast dim is
+// the descriptor's last, so each thread's 8 f16 are one vector<4xi32> store.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @rank_reducing_store_vectorized
+  tt.func public @rank_reducing_store_vectorized(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: tensor<2x64xf16, #blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg2, %arg2, %c64_i32], [%arg3, %arg3, %c1_i64] : <f16>, <1x2x64xf16>
+    // CHECK: triton_gen.predicated_store {{.*}} : (!llvm.ptr<1>, vector<4xi32>, i1)
+    tt.descriptor_store %desc[%arg1, %arg1, %c0_i32], %arg4 : !tt.tensordesc<1x2x64xf16>, tensor<2x64xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// The column-major remap happens in value space, before the rank shift.
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [2, 8], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @rank_reducing_colmaj_load_vectorized
+  tt.func public @rank_reducing_colmaj_load_vectorized(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}) -> tensor<8x16xf32, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg2, %arg2, %c8_i32], [%arg3, %arg3, %c1_i64] : <f32>, <1x16x8xf32>
+    // CHECK-COUNT-2: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, vector<4xi32>) -> vector<4xi32>
+    %l = tt.descriptor_load %desc[%arg1, %c0_i32, %c0_i32] {ttig.block_io = "column_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x16x8xf32> -> tensor<8x16xf32, #blocked>
+    tt.return %l : tensor<8x16xf32, #blocked>
+  }
+}
+
+// -----
+
 // Test divisible descriptor load with a non-zero constant offset:
 // When shape[i] % block_shape[i] == 0 AND offset[i] % block_shape[i] == 0,
 // the load uses BLOCK-LEVEL checks on the base offset directly rather than
@@ -772,7 +811,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %stride = arith.constant 64 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: llvm.load {{.*}} {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // CHECK-COUNT-16: llvm.load {{.*}} <alignment = 2> : !llvm.ptr<1> -> i16
     // CHECK-NOT: llvm.load {{.*}} -> vector<4xi32>
     %v = tt.descriptor_load %desc[%c0_i32, %idx] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
     tt.return
@@ -786,7 +825,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %c1_i64 = arith.constant 1 : i64
     %stride = arith.constant 64 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
-    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK-COUNT-2: llvm.load {{.*}} <alignment = 16> : !llvm.ptr<1> -> vector<4xi32>
     %v = tt.descriptor_load %desc[%c0_i32, %idx] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
     tt.return
   }
@@ -803,7 +842,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %stride = arith.constant 64 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT: llvm.load {{.*}} -> vector<
-    // CHECK-COUNT-8: llvm.load {{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // CHECK-COUNT-8: llvm.load {{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
     // CHECK-NOT: llvm.load {{.*}} -> vector<
     %v = tt.descriptor_load %desc[%c0_i32, %idx] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
     tt.return
@@ -819,7 +858,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %stride = arith.constant 64 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT: llvm.store {{.*}} : vector<4xi32>, !llvm.ptr<1>
-    // CHECK-COUNT-8: llvm.store {{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK-COUNT-8: llvm.store {{.*}} <alignment = 4> : i32, !llvm.ptr<1>
     // CHECK-NOT: llvm.store {{.*}} : vector<4xi32>, !llvm.ptr<1>
     tt.descriptor_store %desc[%c0_i32, %idx], %arg2 : !tt.tensordesc<64x32xf16>, tensor<64x32xf16, #blocked>
     tt.return

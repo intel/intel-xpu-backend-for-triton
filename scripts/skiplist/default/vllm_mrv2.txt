@@ -1,9 +1,3 @@
-# Model Runner V2 does not yet support: ngram/ngram_gpu speculative decoding: https://github.com/intel/intel-xpu-backend-for-triton/issues/7166
-tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logits]
-tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logprobs]
-tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logits]
-tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logprobs]
-
 # GPU mode runner tried to instantiate dummy base class Event: https://github.com/intel/intel-xpu-backend-for-triton/issues/7684
 tests/v1/worker/test_gpu_model_runner.py::test_reasoning_config_without_custom_logitsprocs_does_not_need_output_token_ids
 tests/v1/worker/test_gpu_model_runner.py::test_init_kv_cache_without_kv_sharing
@@ -26,3 +20,10 @@ tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logits]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logprobs]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-processed_logits]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-processed_logprobs]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logprobs]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logprobs]
+
+# Hybrid chunked-prefill e2e test times out waiting for device memory left by earlier in-process engines: https://github.com/intel/intel-xpu-backend-for-triton/issues/8406
+tests/v1/e2e/test_hybrid_chunked_prefill.py::test_qwen_mtp_mamba_prefix_cache_hit_is_bounded

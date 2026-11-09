@@ -83,7 +83,6 @@ pytest() {
             fi
             pytest_extra_args+=(
                 "--skip-from-file=$SKIPFILES"
-                "--select-fail-on-missing"
             )
         else
             pytest_extra_args+=(
@@ -91,6 +90,32 @@ pytest() {
                 "--max-worker-restart=500"
             )
         fi
+    fi
+
+    # Expected-failure lists, next to the skip list of the suite:
+    #   <suite>.xfail.txt:     reported as XFAIL without running. For a platform limitation, not a bug.
+    #   <suite>.xfail-run.txt: runs, expected to fail, fails the run if it passes (strict). Currently unused.
+    # Everything else, including bugs owned by other teams, goes in the skip list.
+    if [[ ! -f $TRITON_TEST_SELECTFILE && -v TRITON_TEST_SUITE && $TEST_UNSKIP = false ]]; then
+        XFAILFILE="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail.txt"
+        XFAILRUNFILE="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail-run.txt"
+        if [[ -f $XFAILFILE ]]; then
+            pytest_extra_args+=(
+                "--xfail-norun-from-file=$XFAILFILE"
+            )
+        fi
+        if [[ -f $XFAILRUNFILE ]]; then
+            pytest_extra_args+=(
+                "--xfail-from-file=$XFAILRUNFILE"
+                "--xfail-strict"
+            )
+        fi
+    fi
+
+    if [[ " ${pytest_extra_args[*]} " =~ \ --(skip|xfail|xfail-norun)-from-file= ]]; then
+        pytest_extra_args+=(
+            "--select-fail-on-missing"
+        )
     fi
 
     if [[ -v TRITON_TEST_SHARDS && -v TRITON_TEST_SHARD_NUMBER ]]; then
@@ -102,6 +127,13 @@ pytest() {
         USING_SHARDS=true
     else
         USING_SHARDS=false
+    fi
+
+    # Tag this run's compile events with its suite name, matching the "warmup-<name>"
+    # phase the corresponding warm-compile-cache step records, so
+    # `triton._test_runner report --require-complete` can pair them up.
+    if [[ -v TRITON_TEST_SUITE && -n "${TRITON_CI_COMPILE_TRACE_DIR:-}" ]]; then
+        export TRITON_CI_CACHE_PHASE="$TRITON_TEST_SUITE"
     fi
 
     export TEST_UNSKIP
@@ -209,9 +241,14 @@ find_spirv_dis_with_predicated_io() {
     return 1
 }
 
-# Number of parallel build jobs. nproc is unavailable under Git-for-Windows bash.
-spirv_dis_build_jobs() {
+# Number of available CPUs. nproc is unavailable under Git-for-Windows bash.
+available_cpu_count() {
     nproc 2>/dev/null || python -c 'import os; print(os.cpu_count() or 1)' 2>/dev/null || echo 4
+}
+
+# Number of parallel build jobs.
+spirv_dis_build_jobs() {
+    available_cpu_count
 }
 
 ensure_spirv_dis() {

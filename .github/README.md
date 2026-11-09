@@ -527,6 +527,14 @@ which must be in the same directory as `intel-xpu-backend-for-triton`:
     ./scripts/compile-triton.sh --llvm --triton
     ```
 
+Alternatively, the upstream `make` targets also work in this repository and build LLVM for you:
+
+```shell
+make dev-install-llvm                 # Core LLVM (default)
+make dev-install-llvm LLVM_BUILD=amd  # AMD LLVM only
+make dev-install-llvm LLVM_BUILD=all
+```
+
 # Tips for building
 
 - Set `TRITON_BUILD_WITH_CLANG_LLD=true` as an environment variable to use clang
@@ -539,19 +547,25 @@ which must be in the same directory as `intel-xpu-backend-for-triton`:
   during the build. By default, this is the user's home directory. It
   can be changed anytime.
 
+- If you're running out of memory when building Triton, specify the `MAX_JOBS`
+  environment variable (to the `pip install -e .` command) to limit the
+  number of jobs.
+
 - Pass `--no-build-isolation` to `pip install` to make nop builds faster.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
 
-- VSCcode IntelliSense has some difficulty figuring out how to build Triton's C++
-  (probably because, in our build, users don't invoke cmake directly, but
-  instead use setup.py).  Teach vscode how to compile Triton as follows.
+- The build system creates a `compile_commands.json` file under the Triton repo
+  directory. This file is used by VSCode IntelliSense and clangd to provide
+  code completion and other features for C++ code.
 
-    - Do a local build. Run command `pip install -e .`
+  If IntelliSense does not work, you can try the following steps:
+
+    - Do a local build. Run command `pip install -e .`.
     - Get the full path to the `compile_commands.json` file produced by the build:
-      `find build -name 'compile_commands.json' | xargs readlink -f`.
-      You might get a full path similar to `/Users/{username}/triton/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`
-    - In vscode, install the
+      `find ./build -name 'compile_commands.json' | xargs readlink -f`.
+      You might get a full path similar to `/Users/{username}/triton/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`.
+    - In VSCode, install the
       [C/C++
       extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools),
       then open the command palette (`Shift + Command + P` on Mac, or `Shift +
@@ -572,12 +586,18 @@ scripts/test-triton.sh
 
 For detailed instructions on how to debug Triton's frontend, please refer to this [tutorial](https://triton-lang.org/main/programming-guide/chapter-3/debugging.html). The following includes additional tips for hacking on Triton's backend.
 
-**Helpful environment variables**
+**Configuration knobs**
+
+See [`python/triton/knobs.py`](../python/triton/knobs.py) for the full list of configuration knobs. You can set those knobs directly in python or use environment variables to control them. Below are some of the environment variables you can specify (see `knobs.py` for the full list):
 
 - `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all
    kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
   - Triton cache can interfere with the dump. In cases where `MLIR_ENABLE_DUMP=1` does not work, try cleaning your triton cache: `rm -r ~/.triton/cache/*`
+- `MLIR_DUMP_PATH` specifies where `MLIR_ENABLE_DUMP` will dump to. If unset will dump to stderr.
 - `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
+- `TRITON_REPRODUCER_PATH=<reproducer_path>` will generate an MLIR reproducer file
+  at `<reproducer_path>` before each MLIR compiler stage. If any of the stages fail,
+  `<reproducer_path>` will be a local MLIR reproducer captured right before the failing pass.
 - `TRITON_INTERPRET=1` uses the Triton interpreter instead of running on the
   GPU.  You can insert Python breakpoints in your kernel code!
 - `TRITON_ENABLE_LLVM_DEBUG=1` passes `-debug` to LLVM, printing a lot of
@@ -594,16 +614,16 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   DEBUG_TYPE` throughout LLVM and Triton) in order to allow the debug output to
   be less noisy. `TRITON_LLVM_DEBUG_ONLY` allows for one or more comma
   separated values to be specified (eg
-  `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions` or
+  `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions"` or
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions,regalloc"`).
 - `USE_IR_LOC={ttir,ttgir}` reparses the IR such that the location information
   will be the line number of the IR file with that particular extension,
   instead of line number of the python file. This can provide a direct mapping
-  from the IR to llir/ptx. When used with performance tools, it can provide a
+  from the IR to llir/spv. When used with performance tools, it can provide a
   breakdown on IR instructions.
 - `TRITON_PRINT_AUTOTUNING=1` prints out the best autotuning config and total time
   spent for each kernel after autotuning is complete.
-- `DISABLE_LLVM_OPT` will disable llvm optimizations for make_llir and make_ptx
+- `DISABLE_LLVM_OPT` will disable llvm optimizations for make_llir and make_spv
   if its value is true when parsing as Bool. Otherwise, it will be parsed as a list
   of flags to disable llvm optimizations. One usage case is
   `DISABLE_LLVM_OPT="disable-lsr"`
@@ -612,8 +632,60 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `TRITON_ALWAYS_COMPILE=1` forces to compile kernels regardless of cache hit.
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
-- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
-- `MLIR_ENABLE_REMARK` enables the performance warnings that are emitted as remarks.
+- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of disabling fp fusion (mul+add->fma).
+- `TRITON_ALLOW_FP_FUSION=1` allows kernels to control implicit fp fusion through
+  `enable_fp_fusion`. Without this opt-in, implicit fusion is disabled. Explicit
+  fused operations such as `tl.fma` are unchanged.
+- `MLIR_ENABLE_DIAGNOSTICS=<comma-separated>` controls diagnostic emission in MLIR.
+  Options are: `warnings`, `remarks`, `stacktraces`, `operations`.
+  Use comma-separated values to customize output. For example,
+  `MLIR_ENABLE_DIAGNOSTICS=remarks,operations` enables remarks and IR operations,
+  while `MLIR_ENABLE_DIAGNOSTICS=warnings,stacktraces` enables warnings with
+  stacktraces. By default, only errors are shown. Setting `warnings` includes
+  errors and warnings; `remarks` includes errors, warnings, and remarks.
+- `MLIR_ENABLE_REMARK` is deprecated. Please use `MLIR_ENABLE_DIAGNOSTICS=remarks`.
+- `TRITON_KERNEL_DUMP` enables the dumping of the IR from each compilation stage and the final spv/asm.
+- `TRITON_DUMP_DIR` specifies the directory to save the dumped IR and spv/asm when `TRITON_KERNEL_DUMP` is set to 1.
+- `TRITON_KERNEL_OVERRIDE` enables the override of the compiled kernel with a user-specified IR/spv/asm at the beginning of each compilation stage.
+- `TRITON_OVERRIDE_DIR` specifies the directory from which to load the IR/spv/asm files when `TRITON_KERNEL_OVERRIDE` is set to 1.
+- `TRITON_F32_DEFAULT` sets the default input precision of `tl.dot` when using 32-bit floats, which can be either `ieee`, `tf32`, or `tf32x3`.
+- `TRITON_FRONT_END_DEBUGGING=1` disables exception wrapping when an error occurs in the compiler frontend, allowing the full stack trace to be seen.
+- `TRITON_DISABLE_LINE_INFO=1` removes all line information from the module.
+- `LLVM_EXTRACT_DI_LOCAL_VARIABLES` emit full debug info, allowing for eval of values in gpu debuggers (ie cuda-gdb, rocm-gdb etc)
+- `TRITON_DEFAULT_BACKEND=<backend>` optionally sets the default backend used by Triton when
+  constructing the active driver (i.e., `triton.runtime.driver.active`).
+- `TRITON_ENABLE_ASAN=1` invokes the LLVM address sanitizer for
+  memory leak and out of bounds access detection. Currently only supported on the AMD
+  backend. This must be run using the ASAN libraries documented [here](https://rocm.docs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html).
+- `PTXAS_OPTIONS` passes additional command-line options to the PTX assembler `ptxas` (only on NVIDIA).
+
+> [!NOTE]
+> Some of these environment variables don't have a knob in `knobs.py`-- those are only relevant to the C++ layer(s), hence they don't exist in the python layer.
+
+**Kernel Override Steps**
+
+```bash
+export TRITON_ALWAYS_COMPILE=1
+export TRITON_KERNEL_DUMP=1
+export TRITON_DUMP_DIR=<dump_dir>
+export TRITON_KERNEL_OVERRIDE=1
+export TRITON_OVERRIDE_DIR=<override_dir>
+# Step 1: Run the kernel once to dump kernel's IRs and spv/asm in $TRITON_DUMP_DIR
+# Step 2: Copy $TRITON_DUMP_DIR/<kernel_hash> to $TRITON_OVERRIDE_DIR
+# Step 3: Delete the stages that you do not want to override and modify the stage you do want to override
+# Step 4: Run the kernel again to see the overridden result
+```
+
+**Compiler Pipeline Inspection Steps**
+To introspect the pipeline `add_stages`, before running your kernels, simply set
+the add_stages_inspection_hook like so:
+
+```python
+def inspect_stages(_self, stages, options, language, capability):
+    # inspect or modify add_stages here
+triton.knobs.runtime.add_stages_inspection_hook = inspect_stages
+```
+Examples of how to use this for out of tree plugin passes is [here](../examples/plugins/README.md)
 
 # Usage Guide
 
@@ -713,11 +785,38 @@ graph_result = optimized_mod(x)
 
 There are several ways of doing performance analysis.
 We recommend using `torch.profiler` for end-to-end performance analysis and using Intel® VTune™ Profiler for more detailed kernel analysis.
-Note that the user needs to explicitly set `TRITON_XPU_PROFILE=1` when the user needs to enable kernel profiling.
+Kernel profiling with `torch.profiler` requires no extra configuration: pass `ProfilerActivity.XPU` along with `ProfilerActivity.CPU` and read the `xpu_time` column.
 
-```Bash
-export TRITON_XPU_PROFILE=1
+```Python
+from torch.profiler import profile, ProfilerActivity
+
+with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+print(prof.key_averages().table(sort_by='xpu_time'))
 ```
+
+Intra-kernel profiling is also available through [Proton](../third_party/proton/README.md) (`import triton.profiler as proton`).
+See [benchmark_testing.py](../benchmarks/triton_kernels_benchmark/benchmark_testing.py) for both approaches as used by the benchmark suite.
+
+# Development Container (Dev Container)
+
+**Dev Containers** for the Triton project are available from
+the [triton-dev-containers repository](https://github.com/redhat-et/triton-dev-containers).
+
+### Key Benefits:
+- **Consistency**: All developers can work with the same development
+  environment, ensuring uniform behavior across different systems.
+- **Isolation**: The container prevents potential conflicts with software
+  installed on your local machine.
+- **Portability**: Easily share the development environment with team members,
+  minimizing onboarding time and setup issues.
+
+### How to Use the Dev Container:
+
+For detailed instructions on how to use the dev containers, please see
+the [dev container user guide](https://github.com/redhat-et/triton-dev-containers/blob/main/.devcontainer/devcontainer.md).
+
+Note that these dev containers target upstream Triton and do not set up an Intel GPU toolchain.
 
 # Contributing
 

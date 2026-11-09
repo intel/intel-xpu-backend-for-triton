@@ -1111,15 +1111,19 @@ tt.func public @make_tensor_descriptor_rank_mismatch(%arg0: !tt.ptr<f32> {tt.div
 // -----
 
 // CHECK-LABEL: @ptr_offset
-tt.func public @ptr_offset(%arg0: i32, %arg1: tensor<128x1xi32>) {
+tt.func public @ptr_offset(%arg1: tensor<128x1xi32>) {
   // CHECK: contiguity = [1, 1], divisibility = [512, 512], constancy = [128, 1], constant_value = 512
   %cst_0 = arith.constant dense<512> : tensor<128x1xi32>
   // CHECK: contiguity = [1], divisibility = [512], constancy = [128], constant_value = 512
   %cst_1 = arith.constant dense<512> : tensor<128xi32>
   // CHECK: contiguity = [1], divisibility = [128], constancy = [1], constant_value = 128
   %c128_i32 = arith.constant 128 : i32
+  // COM: A program id is non-negative, so the remainder below keeps its
+  // COM: contiguity. The declined case is in axis-info-assume.mlir.
+  // CHECK: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
+  %pid = tt.get_program_id x : i32
   // CHECK: contiguity = [1], divisibility = [128], constancy = [1], constant_value = <none>
-  %0 = arith.muli %arg0, %c128_i32 : i32
+  %0 = arith.muli %pid, %c128_i32 : i32
   // CHECK: contiguity = [1], divisibility = [128], constancy = [128], constant_value = <none>
   %1 = tt.splat %0 : i32 -> tensor<128xi32>
   // CHECK: contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>

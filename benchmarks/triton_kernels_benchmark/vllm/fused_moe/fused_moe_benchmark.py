@@ -298,6 +298,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
     def benchmark(num_tokens, output_hidden_size, hidden_size, num_experts, topk, dtype, has_bias, provider):
         seed = 7
         torch.manual_seed(seed)
+        shape = f'[{num_tokens}-{output_hidden_size}-{hidden_size}-{num_experts}-{topk}-{dtype}-{has_bias}]'
         random.seed(seed)
         np.random.seed(seed)
 
@@ -419,6 +420,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
                 output_ref,
                 rtol=6e-2 if use_fp8 else 2e-2,
                 atol=6e-2 if use_fp8 else 1e-2,
+                msg=lambda m: f'{provider} to torch {shape}\n{m}',
             )
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
@@ -444,7 +446,8 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
                 return output_sycl
 
             sycl_tla_fn()
-            torch.testing.assert_close(output_sycl, output_ref, rtol=2e-2, atol=1e-2)
+            torch.testing.assert_close(output_sycl, output_ref, rtol=2e-2, atol=1e-2,
+                                       msg=lambda m: f'{provider} to torch {shape}\n{m}')
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 sycl_tla_fn,

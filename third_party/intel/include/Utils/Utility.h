@@ -13,6 +13,9 @@
 namespace mlir {
 class FunctionOpInterface;
 class LoopLikeOpInterface;
+namespace scf {
+class ForOp;
+} // namespace scf
 } // namespace mlir
 
 namespace mlir::triton::intel {
@@ -36,14 +39,20 @@ bool isConstant(Value val, int64_t expected);
 // Look through value-preserving operations to the value that ultimately defines
 // `value`, e.g. through casts, broadcasts and adding zero.
 //
-// An scf.for iteration argument resolves to its INIT operand: the yielded
-// update is never inspected. That is intended for callers asking "what is this
-// value outside the loop", but it makes the result UNSOUND for an alignment or
-// divisibility proof, because `off = 0; off += 3` resolves to the constant 0.
-// Issue #7990 was exactly that. For such a proof, query the raw value through
-// ModuleAxisInfoAnalysis, which reaches a fixpoint over the loop, and conjoin
-// this only as a conservative second opinion.
+// An scf.for iteration argument resolves to its INIT operand only when the loop
+// yields the argument unchanged, i.e. when the init describes every iteration
+// and not just the first. An argument the loop updates is returned as-is: a
+// caller that needs to reason about the update (e.g. that it advances like the
+// induction variable, or by a divisible step) must inspect the loop itself.
+// Resolving those too made `off = 0; off += 3` answer "0", which is issue #7990
+// for a divisibility proof and issue #8060 for a bounds mask.
 Value getFinalValue(Value value);
+
+// If `forOp` updates its iteration argument `iterArg` by adding a value to it,
+// i.e. yields `arith.addi(iterArg, x)` with the operands in either order,
+// return `x`; otherwise return a null value. `x` may be defined inside the
+// loop: a caller that needs it to be loop invariant must check that itself.
+Value getIterArgIncrement(scf::ForOp forOp, BlockArgument iterArg);
 
 // Erase the operations in \p operations.
 void eraseOperations(SmallPtrSetImpl<Operation *> &operations);

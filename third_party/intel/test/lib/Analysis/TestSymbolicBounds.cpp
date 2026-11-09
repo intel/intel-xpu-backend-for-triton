@@ -1,0 +1,116 @@
+//===- TestSymbolicBounds.cpp ---------------------------------------------===//
+//
+// Emits the symbolic bounds prover's verdict for every `arith.cmpi` in the
+// module as a remark, so a lit test can pin both the verdict and the runtime
+// conditions a conditional proof depends on. Every `scf.for` gets two more:
+// "trip>=1" and "trip>=2", the verdicts of `tripCountAtLeast` for 1 and 2.
+//
+// The prover's individual rules are unit-tested directly in
+// `unittest/Analysis/SymbolicBoundsTest.cpp`; this pass covers what a gtest
+// string cannot carry conveniently - a real TTGIR module with layout
+// attributes, above all.
+//
+//===----------------------------------------------------------------------===//
+
+#include "intel/include/Analysis/Range.h"
+#include "intel/include/Analysis/SymbolicBounds.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Dominance.h"
+#include "mlir/Pass/Pass.h"
+#include "triton/Analysis/Utility.h"
+
+using namespace mlir;
+using namespace mlir::triton::intel;
+
+namespace {
+
+struct TestSymbolicBoundsPass
+    : public PassWrapper<TestSymbolicBoundsPass, OperationPass<ModuleOp>> {
+
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestSymbolicBoundsPass)
+
+  TestSymbolicBoundsPass() = default;
+  // A pass carrying an Option member is not implicitly copyable, but
+  // PassWrapper::clonePass needs a copy constructor.
+  TestSymbolicBoundsPass(const TestSymbolicBoundsPass &other)
+      : PassWrapper(other) {}
+
+  StringRef getArgument() const final { return "test-intel-symbolic-bounds"; }
+  StringRef getDescription() const final {
+    return "print the symbolic bounds prover's verdict for every arith.cmpi, "
+           "or with splat-leaves its normalized rhs - lhs and obligations";
+  }
+
+  Option<bool> splatLeaves{
+      *this, "splat-leaves",
+      llvm::cl::desc("build a SplatLeaves prover and report each comparison's "
+                     "normalized rhs - lhs and its obligations instead"),
+      llvm::cl::init(false)};
+
+  void runOnOperation() override {
+    ModuleOp mod = getOperation();
+
+    // The prover reads leaf ranges from the range analysis, so the solver is
+    // built and run exactly as a consumer pass does.
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    solver->load<IntegerRangeAnalysis>(mod, getAnalysis<DominanceInfo>());
+
+    if (failed(solver->initializeAndRun(mod)))
+      return signalPassFailure();
+
+    SymbolicBoundsProver prover(*solver, getAnalysis<DominanceInfo>(), mod,
+                                splatLeaves ? ScalarHandling::SplatLeaves
+                                            : ScalarHandling::LookThrough);
+    if (splatLeaves)
+      return reportDifferences(mod, prover);
+
+    // Pre-order, so the remarks appear in program order: the prover's
+    // condition insertion order - and so the rendered condition order - is
+    // deterministic only for a deterministic visit order.
+    mod.walk<WalkOrder::PreOrder>([&](arith::CmpIOp cmpOp) {
+      QueryContext ctx{cmpOp.getOperation(),
+                       cmpOp->getParentOfType<scf::ForOp>()};
+      BoundProof proof = prover.prove(cmpOp.getPredicate(), cmpOp.getLhs(),
+                                      cmpOp.getRhs(), ctx);
+      emitRemark(cmpOp.getLoc(), "verdict: " + toString(proof));
+    });
+    mod.walk<WalkOrder::PreOrder>([&](scf::ForOp forOp) {
+      for (int64_t n : {1, 2})
+        emitRemark(forOp.getLoc(),
+                   "trip>=" + std::to_string(n) + ": " +
+                       toString(prover.tripCountAtLeast(forOp, n)));
+    });
+  }
+
+  /// One remark per comparison, `diff: <rhs - lhs>; wraps: [<ops>]`, plus
+  /// `; nonneg: [<ops>]` when there are NonNegative obligations. Bracketed so
+  /// an expected remark matches the whole list.
+  static void reportDifferences(ModuleOp mod, SymbolicBoundsProver &prover) {
+    mod.walk<WalkOrder::PreOrder>([&](arith::CmpIOp cmpOp) {
+      QueryContext ctx{cmpOp.getOperation(),
+                       cmpOp->getParentOfType<scf::ForOp>()};
+      SmallVector<Obligation, 4> obls;
+      AffineForm rhs = prover.normalize(cmpOp.getRhs(), ctx, obls);
+      AffineForm diff = rhs.sub(prover.normalize(cmpOp.getLhs(), ctx, obls));
+      std::string wraps, nonneg;
+      for (const Obligation &o : obls) {
+        std::string &list = o.kind == Obligation::Wrap ? wraps : nonneg;
+        list +=
+            (list.empty() ? "" : ", ") + o.op->getName().getStringRef().str();
+      }
+      std::string msg = "diff: " + toString(diff) + "; wraps: [" + wraps + "]";
+      if (!nonneg.empty())
+        msg += "; nonneg: [" + nonneg + "]";
+      emitRemark(cmpOp.getLoc(), msg);
+    });
+  }
+};
+
+} // namespace
+
+namespace mlir::test::intel {
+void registerTestSymbolicBoundsPass() {
+  PassRegistration<TestSymbolicBoundsPass>();
+}
+} // namespace mlir::test::intel

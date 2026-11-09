@@ -3,9 +3,11 @@
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
+#include "mlir/Transforms/WalkPatternRewriteDriver.h"
 
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
@@ -87,6 +89,11 @@ struct ConvertTritonGPUToLLVM
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+
+    // Undo the bf16 emulation of {s,u}itofp, which rounds twice through f32.
+    RewritePatternSet truncPatterns(context);
+    arith::TruncFOp::getCanonicalizationPatterns(truncPatterns, context);
+    walkAndApplyPatterns(mod, std::move(truncPatterns));
 
     mlir::triton::intel::TritonGPUToLLVMPipelineManager pipelineManager(
         mod, context);

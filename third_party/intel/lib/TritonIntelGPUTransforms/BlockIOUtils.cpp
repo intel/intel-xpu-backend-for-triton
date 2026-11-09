@@ -4,6 +4,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -18,6 +19,17 @@ Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
   if (triton::intel::StrideInfo *info = strideAnalysis.getStrideInfo(ptr))
     return info->getStrideValue(dim);
   return {};
+}
+
+bool isBlockPitchSupported(std::optional<int64_t> constPitchBytes,
+                           bool hasRuntimeStride, int64_t fullRowBytes) {
+  constexpr int64_t minPitch = 64;
+  // The pitch field is 24 bits (see the `triton_gen.2Dblockload` verifier).
+  constexpr int64_t maxPitch = int64_t(1) << 24;
+  if (constPitchBytes)
+    return *constPitchBytes >= minPitch && *constPitchBytes % 16 == 0 &&
+           *constPitchBytes <= maxPitch;
+  return hasRuntimeStride && fullRowBytes >= minPitch;
 }
 
 Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
@@ -944,6 +956,214 @@ Attribute canonicalCoalescedDescStoreLayout(RankedTensorType type, int numWarps,
       type.getContext(), type.getShape(), sizePerThread, order, numWarps,
       threadsPerWarp, cgaLayout);
   return layout;
+}
+
+namespace {
+
+/// Look through single-operand *widening* integer casts (`extsi`/`extui`) to
+/// find the underlying value. Excludes `trunci`/`index_cast`, since a
+/// narrowing cast can wrap and break contiguity.
+///
+/// NOTE: `MaterializeBlockPointer::lookThroughCasts` (and its
+/// `isCanonicalLinearIndex` matcher) is a near-twin of this and the
+/// `matchBaseAndRange` below, but accepts any `CastOpInterface`. The two are
+/// kept separate because the row-limit rewrite below turns the mask into a
+/// hardware `base_height` clamp, which is only correct if the compared index
+/// provably equals `base + arange`; the permissive variant is only used for
+/// stride/contiguity heuristics. Keep the two in sync when changing either.
+Value lookThroughCasts(Value val) {
+  while (Operation *def = val.getDefiningOp()) {
+    if (!isa<arith::ExtSIOp, arith::ExtUIOp>(def))
+      break;
+    val = def->getOperand(0);
+  }
+  return val;
+}
+
+/// Repeatedly look through `tt.expand_dims` layers to find the value they
+/// wrap, however many are nested (a rank > 2 row-limit comparison can have
+/// degenerate dims inserted on both sides of the bounded dim).
+Value stripExpandDims(Value val) {
+  while (auto expandOp = val.getDefiningOp<triton::ExpandDimsOp>())
+    val = expandOp.getSrc();
+  return val;
+}
+
+/// Match `val` against `base + arange(0, expectedEnd)` (either operand
+/// order), or a bare `arange(0, expectedEnd)`. Returns the base scalar (null
+/// for the bare-arange, zero-base case), or std::nullopt if `val` doesn't
+/// have this shape. Does not check `base` wrapping near INT_MAX/INT_MIN,
+/// which is a theoretical gap only.
+std::optional<Value> matchBaseAndRange(Value val, int64_t expectedEnd) {
+  val = lookThroughCasts(stripExpandDims(lookThroughCasts(val)));
+  if (auto makeRange = val.getDefiningOp<triton::MakeRangeOp>()) {
+    if (makeRange.getStart() == 0 &&
+        static_cast<int64_t>(makeRange.getEnd()) == expectedEnd)
+      return Value();
+    return std::nullopt;
+  }
+  auto addI = val.getDefiningOp<arith::AddIOp>();
+  if (!addI)
+    return std::nullopt;
+  Value lhs = lookThroughCasts(addI.getLhs());
+  Value rhs = lookThroughCasts(addI.getRhs());
+  for (int i = 0; i < 2; ++i) {
+    auto makeRange = lhs.getDefiningOp<triton::MakeRangeOp>();
+    auto splatOp = rhs.getDefiningOp<triton::SplatOp>();
+    if (makeRange && splatOp && makeRange.getStart() == 0 &&
+        static_cast<int64_t>(makeRange.getEnd()) == expectedEnd)
+      return splatOp.getSrc();
+    std::swap(lhs, rhs);
+  }
+  return std::nullopt;
+}
+
+/// True if `v` is a `tt.broadcast` degenerate (size 1) along every dim in
+/// `dims` in its pre-broadcast tensor.
+bool isDegenerateAlongDims(Value v, ArrayRef<int64_t> tensorShape,
+                           ArrayRef<unsigned> dims) {
+  auto broadcastOp = v.getDefiningOp<triton::BroadcastOp>();
+  if (!broadcastOp)
+    return false;
+  auto narrowTy = dyn_cast<RankedTensorType>(broadcastOp.getSrc().getType());
+  if (!narrowTy || narrowTy.getRank() != tensorShape.size())
+    return false;
+  ArrayRef<int64_t> narrowShape = narrowTy.getShape();
+  return llvm::all_of(dims, [&](unsigned d) { return narrowShape[d] == 1; });
+}
+
+} // namespace
+
+bool isZeroFillOther(Value other) {
+  if (!other)
+    return true;
+  DenseElementsAttr constAttr;
+  if (!matchPattern(other, m_Constant(&constAttr)) || !constAttr.isSplat())
+    return false;
+  Type elemTy = constAttr.getElementType();
+  if (isa<FloatType>(elemTy))
+    return constAttr.getSplatValue<APFloat>().isZero() &&
+           !constAttr.getSplatValue<APFloat>().isNegative();
+  if (isa<IntegerType>(elemTy))
+    return constAttr.getSplatValue<APInt>().isZero();
+  return false;
+}
+
+std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
+                                                  ArrayRef<int64_t> tensorShape,
+                                                  unsigned contiguousDim,
+                                                  bool pitchDimIsBroadcast) {
+  if (!mask || tensorShape.size() < 2 || !isZeroFillOther(other) ||
+      pitchDimIsBroadcast)
+    return std::nullopt;
+
+  unsigned rank = tensorShape.size();
+  // Must be bounded along the pitch dim (the 2D tile's non-contiguous dim),
+  // not the memory-contiguous one or a batch dim.
+  unsigned pitchDim = (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+
+  // The mask may be the row-limit comparison alone, or ANDed (either order)
+  // with a batch-dims-only predicate -- degenerate along the pitch and
+  // contiguous dims, so it's uniform per hardware block-load message and
+  // safe to peel off as `extraPred` instead of folding into `base_height`.
+  //
+  // `tt-reorder-broadcast` may have sunk the AND below the final broadcast,
+  // `broadcast(and(broadcast(row), broadcast(batch)))`; look through that
+  // outer broadcast so the AND is matched on its narrow tensor. The operands'
+  // own broadcasts are checked against `tensorShape` below, which only
+  // depends on the dims they are degenerate along. `extraPred` is then
+  // narrow too (see `RowLimitMaskInfo`).
+  Value rowLimitCandidate = mask;
+  Value extraPred;
+  Value andRoot = mask;
+  if (auto outerBroadcast = mask.getDefiningOp<triton::BroadcastOp>())
+    if (outerBroadcast.getSrc().getDefiningOp<arith::AndIOp>())
+      andRoot = outerBroadcast.getSrc();
+  if (auto andOp = andRoot.getDefiningOp<arith::AndIOp>()) {
+    Value lhs = andOp.getLhs(), rhs = andOp.getRhs();
+    if (isDegenerateAlongDims(rhs, tensorShape, {pitchDim, contiguousDim})) {
+      rowLimitCandidate = lhs;
+      extraPred = rhs;
+    } else if (isDegenerateAlongDims(lhs, tensorShape,
+                                     {pitchDim, contiguousDim})) {
+      rowLimitCandidate = rhs;
+      extraPred = lhs;
+    }
+  }
+
+  auto broadcastOp = rowLimitCandidate.getDefiningOp<triton::BroadcastOp>();
+  if (!broadcastOp)
+    return std::nullopt;
+
+  Value narrow = broadcastOp.getSrc();
+  auto narrowTy = dyn_cast<RankedTensorType>(narrow.getType());
+  if (!narrowTy || narrowTy.getRank() != rank)
+    return std::nullopt;
+
+  // Every dim but the pitch dim must be degenerate (size 1) in the
+  // pre-broadcast comparison -- it can only vary along the bounded dim.
+  ArrayRef<int64_t> narrowShape = narrowTy.getShape();
+  for (unsigned d = 0; d < rank; ++d) {
+    int64_t expected = (d == pitchDim) ? tensorShape[d] : 1;
+    if (narrowShape[d] != expected)
+      return std::nullopt;
+  }
+
+  // The comparison may be 2D already, or still 1D with the bool result
+  // expanded afterwards (through however many nested expand_dims) -- strip
+  // them either way.
+  Value cmpCandidate = stripExpandDims(narrow);
+  auto cmpOp = cmpCandidate.getDefiningOp<arith::CmpIOp>();
+  if (!cmpOp)
+    return std::nullopt;
+  // Signed only: the height formula (`max(bound - rowBase, 0)`) assumes it
+  // and disagrees arbitrarily with an unsigned comparison.
+  if (cmpOp.getPredicate() != arith::CmpIPredicate::slt)
+    return std::nullopt;
+
+  auto boundSplat = cmpOp.getRhs().getDefiningOp<triton::SplatOp>();
+  if (!boundSplat)
+    return std::nullopt;
+
+  std::optional<Value> rowBase =
+      matchBaseAndRange(cmpOp.getLhs(), tensorShape[pitchDim]);
+  if (!rowBase)
+    return std::nullopt;
+
+  // base_height lowering requires exactly i32; checked here so every caller
+  // agrees on eligibility.
+  Value boundSrc = boundSplat.getSrc();
+  if (!boundSrc.getType().isInteger(32) ||
+      (*rowBase && !rowBase->getType().isInteger(32)))
+    return std::nullopt;
+
+  return RowLimitMaskInfo{pitchDim, *rowBase, boundSrc, extraPred};
+}
+
+Value materializeExtraPred(OpBuilder &builder, Location loc, Value extraPred,
+                           RankedTensorType maskTy) {
+  if (extraPred.getType() == maskTy)
+    return extraPred;
+  while (auto inner = extraPred.getDefiningOp<triton::BroadcastOp>())
+    extraPred = inner.getSrc();
+  return triton::BroadcastOp::create(builder, loc, maskTy, extraPred);
+}
+
+Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
+                            Value rowBase, int64_t rowExtent) {
+  Type i64Ty = builder.getI64Type();
+  Value diff64 = arith::ExtSIOp::create(builder, loc, i64Ty, bound);
+  if (rowBase) {
+    Value rowBase64 = arith::ExtSIOp::create(builder, loc, i64Ty, rowBase);
+    diff64 = arith::SubIOp::create(builder, loc, diff64, rowBase64);
+  }
+  Value zero64 =
+      arith::ConstantOp::create(builder, loc, builder.getI64IntegerAttr(0));
+  Value extent64 = arith::ConstantOp::create(
+      builder, loc, builder.getI64IntegerAttr(rowExtent));
+  Value clamped = arith::MaxSIOp::create(builder, loc, diff64, zero64);
+  clamped = arith::MinSIOp::create(builder, loc, clamped, extent64);
+  return arith::TruncIOp::create(builder, loc, builder.getI32Type(), clamped);
 }
 
 } // namespace mlir::triton::gpu::intel

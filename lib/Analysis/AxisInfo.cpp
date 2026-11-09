@@ -3,6 +3,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Matchers.h"
+#include "triton/Analysis/Signedness.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -479,12 +480,8 @@ public:
   getAxisInfo(ub::PoisonOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     unsigned rank = 1;
-    if (auto shape = dyn_cast<RankedTensorType>(op.getType())) {
+    if (auto shape = dyn_cast<RankedTensorType>(op.getType()))
       rank = shape.getRank();
-    } else if (auto ptrTy = dyn_cast<PointerType>(op.getType())) {
-      if (auto tensorType = dyn_cast<RankedTensorType>(ptrTy.getPointeeType()))
-        rank = tensorType.getRank();
-    }
 
     // Poison values are never accessed, thus assume optimistic values.
     return AxisInfo(AxisInfo::DimVectorT(rank, kMaxDivisor),
@@ -664,8 +661,13 @@ private:
     // the minimal constancy is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual constancy.
+    //
+    // NOTE: For signed division (DivSIOp), truncation toward zero breaks the
+    // constancy pattern for negative inputs, so the deduction is taken only
+    // where the dividend is provably non-negative.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        triton::dividendIsNonNegative(op)) {
       constancy = std::max(constancy,
                            gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                                rhs.getDivisibility(dim)));
@@ -719,8 +721,13 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
+    //
+    // NOTE: For signed remainder (RemSIOp), srem produces negative results for
+    // negative dividends, breaking the contiguity pattern, so the deduction is
+    // taken only where the dividend is provably non-negative.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        triton::dividendIsNonNegative(op)) {
       contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                        rhs.getDivisibility(dim));
     }
@@ -1223,7 +1230,9 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   visitors.append<IntegerCastOpAxisInfoVisitor<arith::ExtSIOp>,
                   IntegerCastOpAxisInfoVisitor<arith::ExtUIOp>,
                   IntegerCastOpAxisInfoVisitor<arith::TruncIOp>,
+                  IdentityOpAxisInfoVisitor<triton::AnnotateOp>,
                   IdentityOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
+                  IdentityOpAxisInfoVisitor<triton::gpu::ThreadHandoffOp>,
                   BitcastOpAxisInfoVisitor,
                   IdentityOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
@@ -1460,7 +1469,7 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
   if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
     elemTy = ptrTy.getPointeeType();
   }
-  return getContiguity(value, elemTy.getIntOrFloatBitWidth());
+  return getContiguity(value, getIntOrFloatOrPtrBitWidth(elemTy));
 }
 
 unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
@@ -1492,7 +1501,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
     elemTy = ptrTy.getPointeeType();
   }
-  return getAlignment(value, elemTy.getIntOrFloatBitWidth());
+  return getAlignment(value, getIntOrFloatOrPtrBitWidth(elemTy));
 }
 
 unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,

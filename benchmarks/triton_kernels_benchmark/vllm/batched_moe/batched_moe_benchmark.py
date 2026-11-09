@@ -152,6 +152,7 @@ def get_batched_mm_benchmark(
     def benchmark(num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider):
         torch.manual_seed(20)
         n_warmup = 600
+        shape = f'[{num_experts}-{max_tokens_per_expert}-{K}-{N}-{fp8}-{block_quant}]'
 
         dtype = torch.bfloat16
         use_fp8_w8a8 = fp8
@@ -235,7 +236,8 @@ def get_batched_mm_benchmark(
                 return C
 
             # Verify correctness against reference
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol, err_msg='triton to torch')
+            benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol,
+                                         err_msg=f'{provider} to torch {shape}')
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 triton_fn,
                 n_warmup=n_warmup,
@@ -266,7 +268,7 @@ def get_batched_mm_benchmark(
                 return output_sycl
 
             benchmark_suite.assert_close(sycl_tla_fn, lambda: ref_grouped, atol=atol, rtol=rtol,
-                                         err_msg='sycl-tla to torch')
+                                         err_msg=f'{provider} to torch {shape}')
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 sycl_tla_fn,
                 n_warmup=n_warmup,

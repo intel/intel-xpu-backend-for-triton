@@ -24,13 +24,17 @@ def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-intel-rewri
 
 def TritonIntelRemoveMasks
     : Pass<"triton-intel-remove-masks", "mlir::ModuleOp"> {
-  let summary = "Remove masks from tt.load and tt.store operations";
+  let summary = "Remove masks from tt.load and arith.select operations";
 
   let description = [{
-    This pass attempts to remove the mask for tt.load and tt.store operations.
+    This pass attempts to remove the mask of tt.load operations and the
+    condition of arith.select operations. Stores are not handled.
     If the masked operation is in a loop, the pass attempts to find a loop
     invariant condition equivalent to the mask condition, and then use it to
     version the loop.
+    With TRITON_INTEL_SYMBOLIC_MASKS=1, the symbolic bounds prover decides the
+    masks instead, with no fallback to the pattern-based validators; the
+    versioning condition is then sufficient for the mask, not equivalent to it.
   }];
 
   let dependentDialects = [
@@ -42,7 +46,7 @@ def TritonIntelRemoveMasks
 
 def TritonIntelFuseReshape
     : Pass<"triton-intel-fuse-reshape", "mlir::ModuleOp"> {
-  let summary = "Fuse a tt.reshape operation with a tt.load operation (tensor descriptors only)";
+  let summary = "Fuse tt.reshape operations into tensor-descriptor loads and stores";
 
   let description = [{
     This pass attempts to fuse a tt.reshape operation with a tt.descriptor_load operation.
@@ -61,6 +65,22 @@ def TritonIntelFuseReshape
         %A = tt.descriptor_load %desc[%x * %div + %y, %z]
                                 : !tt.tensordesc<512x64xf16> -> tensor<512x64xf16>
         dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
+
+    Before fusing, a reshape that drops the leading unit dimension of a 3-dim tensor is moved
+    up until it uses the tt.descriptor_load result directly, even without a dot user, in which
+    case Combine rank-reduces the load instead. It crosses single-use elementwise operations,
+    retyped in place, whose other tensor operands must be constants or splats, and tt.trans
+    operations that keep dimension 0 in place; those operands and the tt.trans operations are
+    rebuilt at rank 2. Inline asm, multi-result operations, and any operation or load carrying
+    tt.contiguity, tt.divisibility or tt.constancy block the move.
+
+    It also folds a tt.reshape that only prepends unit dimensions to a value of rank 2 or more
+    into the tt.descriptor_store of its result, which then stores the value directly (a
+    rank-reduced store):
+        %r = tt.reshape %x : tensor<128x64xf16> -> tensor<1x128x64xf16>
+        tt.descriptor_store %desc[%b, %y, %z], %r : !tt.tensordesc<1x128x64xf16>, tensor<1x128x64xf16>
+    becomes:
+        tt.descriptor_store %desc[%b, %y, %z], %x : !tt.tensordesc<1x128x64xf16>, tensor<128x64xf16>
   }];
 
   let dependentDialects = [
@@ -167,34 +187,6 @@ def TritonIntelSimplifySignedArithmetic
   ];
 }
 
-def TritonIntelSpeculateSignedDivRem
-    : Pass<"triton-intel-speculate-signed-div-rem", "mlir::ModuleOp"> {
-  let summary = "Convert signed div/rem to unsigned under a runtime assertion";
-
-  let description = [{
-    Converts arith.divsi/arith.remsi to arith.divui/arith.remui under a
-    tt.assert that the dividend is non-negative. This recovers the AxisInfo
-    constancy and contiguity deductions, which are disabled for the signed
-    operations because their floor-division argument only holds for a
-    non-negative dividend. A negative dividend then aborts with a diagnostic
-    instead of silently producing a wrong answer.
-
-    An operation is converted only when the deduction would have fired on it and
-    the check it needs is worth its cost; anything else is left signed, keeping
-    the sound but weaker lattice. SpeculateSignedDivRem.cpp documents each of
-    those conditions at the site that applies it.
-
-    Runs after TritonIntelSimplifySignedArithmetic, whose simpler prover has
-    already converted the operations that need no runtime check to be sound.
-  }];
-
-  let dependentDialects = [
-    "mlir::arith::ArithDialect",
-    "mlir::scf::SCFDialect",
-    "mlir::triton::TritonDialect"
-  ];
-}
-
 def TritonIntelGPUFoldTrueCmpI
     : Pass<"triton-intel-fold-true-cmpi", "mlir::ModuleOp"> {
   let summary = "Fold provably true/false arith.cmpi to constants";
@@ -210,9 +202,18 @@ def TritonIntelGPUPrepareIfCombining
     : Pass<"triton-intel-prepare-if-combining", "mlir::triton::FuncOp"> {
   let summary = "Move ops between scf.if pairs to enable combining";
   let description = [{
-    Moves pure operations from between scf.if pairs that share the same
-    condition, enabling canonicalization to combine them into a single scf.if.
+    Moves operations from between scf.if pairs that share the same condition
+    (the pass first runs CSE on the whole function, so guards computed by
+    identical expressions are the same value), enabling canonicalization to
+    combine them into a single scf.if.
+    Pure operations that do not depend on the first if are moved above it; the
+    others are copied into both of its branches when the condition is uniform
+    across the program. An operation containing an scf.if is never copied.
   }];
+  let options = [
+    Option<"maxClonedOps", "max-cloned-ops", "unsigned", /*default*/"32",
+           "maximum source operations cloned per if pair, including nested ones">,
+  ];
   let dependentDialects = ["mlir::scf::SCFDialect"];
 }
 

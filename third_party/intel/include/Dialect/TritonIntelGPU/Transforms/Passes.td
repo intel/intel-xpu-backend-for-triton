@@ -25,6 +25,11 @@ def TritonIntelGPUAccelerateMatmul
     "mlir::triton::gpu::intel::TritonIntelGPUDialect",
     "mlir::arith::ArithDialect"
   ];
+
+  let options = [
+    Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
+         "GRF mode the kernel is compiled with">,
+  ];
 }
 
 def TritonIntelGPUFoldFpToFp
@@ -104,8 +109,9 @@ def TritonIntelGPUHoistLayoutConversions
     Hoist `ttg.convert_layout` operations out of `scf.for` loops when the
     destination encoding is `DotOperandEncodingAttr` and the source is defined
     outside the loop, so a loop-invariant dot operand is converted once instead
-    of on every iteration. Two vetoes guard a hoist; whichever refuses stamps
-    `tt.no_licm` so later generic LICM does not hoist the conversion anyway.
+    of on every iteration. Two vetoes guard a hoist. A refusal that survives the
+    shared-source phase below stamps `tt.no_licm` so later generic LICM does not
+    hoist the conversion anyway.
 
     ### Loop-level live-in gate
 
@@ -132,11 +138,14 @@ def TritonIntelGPUHoistLayoutConversions
 
     The live-in set cannot show what a hoist costs *outside* the loop: moving a
     conversion up creates a point where source and result are both live. This
-    gate bounds the post-hoist peak without mutating IR, as the maximum of the
-    current peak (a hoist can move it but not remove it), the *corridor* --
-    every operation from the insertion point to the conversion's old position,
-    charged the arriving result and credited the departing source only where it
-    is provably dead -- and the *new program point*, where both are live. The
+    gate bounds a single hoist's post-hoist peak without mutating IR, as the
+    maximum of the current peak (kept even where the hoist would lower it), the
+    *corridor* and the *new program point*, where both are live. The corridor is
+    every operation the hoisted result newly spans: from the insertion point
+    through the loop, the loop-body operations above the conversion, and the
+    body operations after its last use (the back edge keeps a hoisted result
+    live through the whole body). Each is charged the arriving result and
+    credited the departing source only where it is provably dead. The
     hoist is taken when that projection does not exceed
     `max(current peak, threshold)`: below the threshold a rise costs nothing,
     above it the rule is "do not make
@@ -144,56 +153,78 @@ def TritonIntelGPUHoistLayoutConversions
     with `BLOCK_N1=64` and `num_warps=16`, where the eighth hoist does raise the
     peak.
 
-    The bounded figure is the peak as `RegisterPressureAnalysis` reports it, not
-    physical allocator demand (see its header). Projection and comparand are the
-    same metric by construction: the corridor steps over a nested region as one
-    operation rather than descending into it.
+    A region-holding operation on the corridor is priced at its internal peak
+    plus the arriving result. When the conversion's last use is one level down
+    in such an operation, the rest of that block and every sibling block are
+    priced too; a deeper use, uses in several blocks, or a use that holds a
+    region fall back to the operation's whole-region peak.
 
-    Where a term cannot be established -- a corridor spanning two blocks or
-    longer than `corridor-op-cap`, an insertion point at the end of its block --
-    the projection charges the arriving result on top of the current peak, which
-    refuses unless the result costs nothing at all -- an unread conversion is
-    charged zero bytes and still fits. Reaching `peak-rebuild-cap` refuses
-    outright: each accepted hoist
+    Where a term cannot be established (a corridor spanning two blocks or longer
+    than `corridor-op-cap`, or an insertion point at the end of its block) the
+    projection charges the arriving result on top of the current peak, and in the
+    whole-region fallback above on top of that region's peak. Either is still
+    accepted when that charge fits under the ceiling, as it can below the
+    threshold; an unread conversion is charged zero bytes and always fits.
+    Reaching `peak-rebuild-cap` refuses outright: each accepted hoist
     invalidates the analysis, and a projection against a stale peak bounds
-    nothing. Conservative refusals are counted apart from measured ones
-    (`rejected_function_peak_fallback` versus `rejected_function_peak_exact`).
+    nothing. Conservative refusals are counted apart from measured
+    ones (`rejected_function_peak_fallback` versus
+    `rejected_function_peak_exact`).
 
     The departing source's credit has its own fallbacks. It is withheld whenever
     something other than the conversion may still read the source at a corridor
-    operation, which is usually the true answer -- a reader below the loop does
-    hold it live throughout. Four cases withhold it only conservatively, and so
+    operation, which is usually the true answer: a reader below the loop does
+    hold it live throughout. Five cases withhold it only conservatively, and so
     count as fallbacks: a reader unorderable against the loop, a body reader
     *above* the conversion (the source dies mid-corridor, so later corridor
-    operations are overpriced), a CFG cycle around the conversion, and a reader
-    in an enclosing loop, whose back edge re-reads the source after the
-    corridor. That last one can leave the projection above the very peak it
-    gates, since the metric compared against is itself back-edge blind
-    (measured: 1376 projected against a post-hoist 1248).
+    operations are overpriced), a CFG cycle around the conversion, a reader in
+    an enclosing loop, and a source whose only blocking readers are refused
+    twins (see Twin credit), which this gate does not credit past.
 
-    Cost is one whole-function pressure walk per candidate that follows an
-    accepted hoist, plus the initial build, and `RegisterPressureAnalysis`
-    memoizes nothing: on the module above (596 lines of TTGIR, `grf-mode=256`,
-    debug build) the pass takes 2.83s for eight hoists against 0.09s to parse and
-    print it -- eight walks there, one per hoist, only because no candidate was
-    rejected. A rejected candidate pays too. A function with no candidate reaching
-    this gate pays nothing: the analysis is built lazily on the first one.
-    Lowering `peak-rebuild-cap` bounds those rebuilds, i.e. cost, and spends
-    hoists to do it.
+    ### Twin credit
+
+    A twin is a refused conversion of the same source to the same result type.
+    `remove_layout_conversions` replaces a twin the hoisted conversion
+    dominates with its result, so a hoist may take the source credit past a
+    twin reader. Excluded: a dot operand with a `BlockedEncodingAttr` parent
+    (never merged), and a block-argument source's twin in an earlier loop (not
+    dominated). The credit is withheld when the merge would fail the twin's own
+    loop-level gate. The merge is charged to the twin's loop once, at whichever
+    of the hoist and the refusal comes second, and the shared-source phase does
+    not price it again. A `tt.no_licm` stamp means only that this pass did not
+    move the conversion: a twin only the peak gate refused can still be merged,
+    past HLC's ceiling.
+
+    ### Shared-source phase
+
+    Priced one at a time, conversions sharing a source each see the others keep
+    it live, so none earns the credit. After a function's loops are decided,
+    the refusals of each source shared by two or more refusals, or by a refusal
+    and a hoist, are moved together and vetted: the loop-level gate per loop
+    they leave, and the peak gate by measuring the moved IR against the same
+    ceiling. A failing group is moved back exactly; subsets are not tried and
+    groups are not retried. Refusals are then stamped and counted once, under
+    the reason first given.
+
+    Cost. The analysis is built on the first candidate that reaches the peak
+    gate and rebuilt after each accepted hoist; its query caches live for one
+    build. Each group trial that passes the loop-level gate spends one
+    `peak-rebuild-cap` unit.
 
     ### Non-goals, all deliberate
 
     * No retry at a cheaper insertion point; the point is fixed, after the
       source's defining operation or before the loop if it has none.
-    * A block-argument source is never freed for an earlier loop sharing it,
-      since the conversion still lands after that loop.
-    * Conversions sharing a source are not evaluated jointly, so a group can
-      stop partway through even where its completed net effect would have fit.
+    * A block-argument source's hoisted conversion lands just above its own
+      loop, so it never frees a twin in an earlier loop.
+    * Groups are formed per source and tried whole, once.
     * Neither trip count nor conversion cost is weighed against the pressure
       change.
     * `liveInPressure` ignores a value merely spanning the loop to feed code
       below it, so the loop-level baseline measures what a hoist adds, not
       absolute occupancy. The peak gate does see such a value.
+    * A merge charged at a twin's refusal is not seen by candidates of that
+      loop decided before it.
   }];
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 
@@ -201,20 +232,13 @@ def TritonIntelGPUHoistLayoutConversions
     Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
            "GRF mode ('default', 'auto', '128', '256' or '512')">,
     Option<"corridorOpCap", "corridor-op-cap", "unsigned", /*default*/"512",
-           "Maximum number of operations between a hoist's insertion point and "
-           "the conversion's old position that the whole-function peak "
-           "projection prices individually; past this it charges "
-           "conservatively. _attn_bwd's eight hoists at HEAD_DIM=128 walk "
-           "corridors of 24 to 39 operations, so the default leaves better than "
-           "a factor of ten in hand. For pathological input, not a routine "
-           "path.">,
+           "Maximum corridor length (see the description) the peak projection "
+           "prices op by op; past it the hoist is charged conservatively.">,
     Option<"peakRebuildCap", "peak-rebuild-cap", "unsigned", /*default*/"32",
-           "Maximum whole-function pressure analysis rebuilds per function. "
-           "Each accepted hoist invalidates the analysis; the next candidate "
-           "needing it spends one rebuild. Past the cap candidates are "
-           "rejected, since a stale analysis bounds nothing. _attn_bwd's eight "
-           "hoists at HEAD_DIM=128 spend seven rebuilds -- the first build is "
-           "not a rebuild -- so a cap of seven already accepts all eight.">,
+           "Maximum analysis rebuilds per function: one per accepted hoist a "
+           "later candidate needs, and one per shared-source group that "
+           "passes the loop-level gate. Past the cap candidates are rejected "
+           "and groups are not tried.">,
   ];
 }
 
@@ -368,7 +392,7 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
 #blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
 tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>> {
-  %0 = tt.reshape %arg0 allow_reorder efficient_layout : tensor<16x32xf32, #mma> -> tensor<16x8x2x2x1x1x1xf32, #blocked>
+  %0 = tt.reshape %arg0 efficient_layout : tensor<16x32xf32, #mma> -> tensor<16x8x2x2x1x1x1xf32, #blocked>
   %1 = "tt.reduce"(%0) <{axis = 2 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
     %9 = arith.addf %arg1, %arg2 : f32
@@ -380,7 +404,7 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
     tt.reduce.return %9 : f32
   }) : (tensor<16x8x2x1x1x1xf32, #ttg.slice<{dim = 2, parent = #blocked}>>) -> tensor<16x8x2x1x1xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>>
   %3 = ttg.convert_layout %2 : tensor<16x8x2x1x1xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>> -> tensor<16x8x2x1x1xf32, #blocked1>
-  %4 = tt.reshape %3 allow_reorder efficient_layout : tensor<16x8x2x1x1xf32, #blocked1> -> tensor<16x16x1x1xf32, #blocked2>
+  %4 = tt.reshape %3 efficient_layout : tensor<16x8x2x1x1xf32, #blocked1> -> tensor<16x16x1x1xf32, #blocked2>
   %5 = "tt.reduce"(%4) <{axis = 0 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
     %9 = arith.addf %arg1, %arg2 : f32
@@ -391,7 +415,7 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
     %9 = arith.addf %arg1, %arg2 : f32
     tt.reduce.return %9 : f32
   }) : (tensor<16x1x1xf32, #ttg.slice<{dim = 0, parent = #blocked2}>>) -> tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #blocked2}>}>>
-  %7 = tt.reshape %6 allow_reorder efficient_layout : tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #blocked2}>}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked3}>>
+  %7 = tt.reshape %6 efficient_layout : tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #blocked2}>}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked3}>>
   %8 = ttg.convert_layout %7 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked3}>> -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>>
   tt.return %8 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>>
 }
@@ -455,12 +479,15 @@ def TritonIntelGPUReduceVariableLiveness
     hardware thread's GRF size divided by "ttg.threads-per-warp", because the
     analysis weighs each live tensor by its per-work-item element count.
 
-    The decision is per loop, not per load: once a loop is over budget every
-    eligible load in it is sunk. Sinking trades one extra (prefetched, and so
-    normally cache-resident) 2D block load per iteration for a shorter live
-    range, which is only worth doing when the loop would otherwise spill. The
-    pass does not model spill cost against reload cost, and does not take the
-    loop trip count into account.
+    For loads defined outside the loop the decision is per loop: once the loop
+    is over budget every eligible one is sunk. Sinking trades one extra
+    (prefetched, and so normally cache-resident) 2D block load per iteration for
+    a shorter live range, which is only worth doing when the loop would
+    otherwise spill. The pass does not model spill cost against reload cost, and
+    does not take the loop trip count into account.
+
+    A dot operand load inside the loop is sunk to its first use only if the
+    pressure between the two, nested regions included, reaches the budget.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
@@ -505,13 +532,14 @@ def TritonIntelGPUCodeSinking
 
 def TritonIntelGPUAnnotateCacheControl
     : Pass<"tritonintelgpu-annotate-cache-control", "mlir::ModuleOp"> {
-  let summary = "Annotate tt.load ops with .cg cache control unless the load's encoding indicates cross-subgroup L1 reuse";
+  let summary = "Annotate tt.load ops with .cg cache control unless reuse analysis indicates L1 reuse";
   let description = [{
-    Sets `.cg` (L1UC_L3C) cache control on `tt.load` operations whose result
-    does not participate in a matrix multiply. GEMM operand loads benefit from
-    L1 reuse and are left with the default cache modifier; streaming /
-    elementwise loads bypass L1 to avoid thrashing. User-specified cache
-    modifiers are never overridden.
+    Sets `.cg` (L1UC_L3C) cache control on `tt.load` operations for which
+    reuse analysis finds no evidence of L1 reuse: streaming / elementwise
+    loads bypass L1 to avoid thrashing. Loads with reuse (typically GEMM
+    operand loads) keep the default cache modifier, and loads with proven
+    reuse may be promoted to EVICT_LAST. User-specified cache modifiers and
+    eviction policies are never overridden.
 
     `.cg` on loads is always coherence-safe: it reads from the shared coherent
     L3 rather than the incoherent per-core L1. The filters below are
@@ -519,16 +547,16 @@ def TritonIntelGPUAnnotateCacheControl
     from L1 reuse (e.g. matmul operand loads in complex kernels).
 
     The pass runs **after** `remove_layout_conversions`, so load-result
-    encodings are stable. The heuristic inspects each `tt.load`'s result
-    encoding: if it is a `DotOperandEncodingAttr` whose parent implements
-    `MmaEncodingTrait` (DPAS / Subgroup2DBlockEncoding), annotation is
-    suppressed — the HW access pattern already yields cross-subgroup L1 reuse
-    because the K dimension is broadcast across warps. Nested
-    `SliceEncodingAttr` layers are unwrapped before the dot-operand check.
-    The load is also suppressed when its result feeds the `aScale`/`bScale`
-    operand of a `tt.dot_scaled` — a single-hop use-site check suffices
-    because AccelerateMatmul materialises scale encodings immediately before
-    the consumer, with no `scf.for` / `convert_layout` in between.
+    encodings are stable. Reuse is decided by `ReuseAnalysis` on the load's
+    result layout, not by its encoding kind:
+      - spatial (`SpatialReuseAnalysis`): an axis of the result is shared by
+        all warps (zero warp basis in the LinearLayout), e.g. the K axis of a
+        DPAS dot operand broadcast across warps, or a dot_scaled scale
+        operand. A layout with a single warp has no other subgroup to share
+        with, so it reports no spatial reuse;
+      - temporal (`TemporalReuseAnalysis`): an enclosing loop re-reads the
+        same addresses (loop-invariant or overlapping per-iteration tiles).
+    Loads whose lanes broadcast the same address are also left unannotated.
 
     To avoid unnecessary L1 bypass, loads are additionally skipped when their
     pointer root-traces to a kernel argument that falls into any of the

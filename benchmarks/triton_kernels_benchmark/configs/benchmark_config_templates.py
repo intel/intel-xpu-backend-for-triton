@@ -2,66 +2,50 @@ import importlib
 
 from triton_kernels_benchmark.benchmark_testing import BenchmarkCategory, BenchmarkConfig
 
-from triton_kernels_benchmark import (
-    batched_flash_attention_benchmark,
-    fused_softmax,
-    gemm_benchmark,
-    gemm_tensor_of_ptr_benchmark,
-    gemm_streamk_benchmark,
-    gemm_splitk_benchmark,
-    gemm_preop_exp_benchmark,
-    gemm_postop_gelu_benchmark,
-    gemm_postop_addmatrix_benchmark,
-    fused_gemm_benchmark,
-    flash_attention_benchmark,
-    flex_attention_benchmark_causal_mask,
-    flex_attention_benchmark_custom_masks,
-    prefix_sums,
-    launch_overhead_benchmark,
-)
 
+def _lazy_import(module_name, func_name):
+    """Defer importing a benchmark module until the referenced callable is actually invoked.
 
-def _lazy_get_benchmark(module_name):
-    """Defer importing a benchmark module until its benchmark is actually built.
-
-    gemm_grouped_benchmark mutates global Inductor/Dynamo state and monkeypatches
-    torch._inductor on import, and the vLLM modules import vllm on import; those
+    Some modules (e.g. gemm_grouped_benchmark, flex_attention_benchmark_causal_mask)
+    mutate global Inductor/Dynamo state and monkeypatch torch._inductor on import,
+    and the vLLM/SGLang modules import heavy optional dependencies on import; those
     imports must not run merely by loading CONFIGS (which happens for every
-    triton-benchmarks command and test-case collection).
+    triton-benchmarks command and test-case collection), nor leak their side effects
+    into unrelated benchmarks that happen to run in the same process.
     """
 
-    def get_benchmark(**run_opts):
+    def call(**kwargs):
         module = importlib.import_module(f"triton_kernels_benchmark.{module_name}")
-        return module.get_benchmark(**run_opts)
+        return getattr(module, func_name)(**kwargs)
 
-    return get_benchmark
+    return call
 
 
 CONFIGS = [
     BenchmarkConfig(
         key="softmax",
-        get_benchmark=fused_softmax.get_benchmark,
+        get_benchmark=_lazy_import("fused_softmax", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.CORE, BenchmarkCategory.SOFTMAX},
         description="Triton Softmax kernel benchmark",
     ),
     BenchmarkConfig(
         key="gemm",
-        get_benchmark=gemm_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("gemm_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.CORE, BenchmarkCategory.GEMM},
         description="Triton GEMM kernel benchmark",
     ),
     BenchmarkConfig(
         key="gemm-tensor-of-ptr",
-        get_benchmark=gemm_tensor_of_ptr_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("gemm_tensor_of_ptr_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
         description="GEMM kernel benchmark - with tensor of pointer",
     ),
     BenchmarkConfig(
         key="gemm_bt",
-        get_benchmark=gemm_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("gemm_benchmark", "get_benchmark"),
         run_opts={"transpose_b": True},
         categories={BenchmarkCategory.CORE, BenchmarkCategory.GEMM},
         description="Triton GEMM (A@B^t) kernel benchmark",
@@ -69,7 +53,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="gemm_at",
-        get_benchmark=gemm_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("gemm_benchmark", "get_benchmark"),
         run_opts={"transpose_a": True},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.GEMM},
         description="Triton GEMM (A^t@B) kernel benchmark",
@@ -77,35 +61,35 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="gemm-streamk",
-        get_benchmark=gemm_streamk_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("gemm_streamk_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.GEMM},
         description="Triton GEMM (stream-k) kernel benchmark",
     ),
     BenchmarkConfig(
         key="gemm-splitk",
-        get_benchmark=gemm_splitk_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("gemm_splitk_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.GEMM},
         description="Triton GEMM (split-k) kernel benchmark",
     ),
     BenchmarkConfig(
         key="gemm-preop-exp",
-        get_benchmark=gemm_preop_exp_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("gemm_preop_exp_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.GEMM},
         description="Triton GEMM + PreOp (exp) kernel benchmark",
     ),
     BenchmarkConfig(
         key="gemm-postop-gelu",
-        get_benchmark=gemm_postop_gelu_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("gemm_postop_gelu_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.GEMM},
         description="Triton GEMM + PostOp (Gelu) kernel benchmark",
     ),
     BenchmarkConfig(
         key="gemm-postop-addmatrix",
-        get_benchmark=gemm_postop_addmatrix_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("gemm_postop_addmatrix_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.GEMM},
         description="Triton GEMM + PostOp (add matrix) kernel benchmark bfloat16",
@@ -113,21 +97,21 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="gemm-postop-addmatrix-int8",
-        get_benchmark=gemm_postop_addmatrix_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("gemm_postop_addmatrix_benchmark", "get_benchmark"),
         run_opts={"int8_only": True},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.GEMM},
         description="Triton GEMM + PostOp (add matrix) kernel benchmark int8",
     ),
     BenchmarkConfig(
         key="fused-gemm",
-        get_benchmark=fused_gemm_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("fused_gemm_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.GEMM},
         description="Triton Fused GEMM SwiGLU kernel benchmark",
     ),
     BenchmarkConfig(
         key="gemm-grouped",
-        get_benchmark=_lazy_get_benchmark("gemm_grouped_benchmark"),
+        get_benchmark=_lazy_import("gemm_grouped_benchmark", "get_benchmark"),
         run_opts={"variant": "2d3d"},
         categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
         description="Torch Inductor grouped_mm Triton template benchmark (2D x 3D, MoE-style)",
@@ -136,7 +120,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="gemm-grouped-batched",
-        get_benchmark=_lazy_get_benchmark("gemm_grouped_benchmark"),
+        get_benchmark=_lazy_import("gemm_grouped_benchmark", "get_benchmark"),
         run_opts={"variant": "3d3d"},
         categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
         description="Torch Inductor grouped_mm Triton template benchmark (3D x 3D, batched)",
@@ -145,7 +129,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="flash_attention",
-        get_benchmark=flash_attention_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("flash_attention_benchmark", "get_benchmark"),
         run_opts={"fa_kernel_mode": "fwd"},
         categories={BenchmarkCategory.CORE, BenchmarkCategory.FLASH_ATTENTION},
         description="FlashAttention forward kernel benchmark",
@@ -154,7 +138,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="flash_attention_fp8",
-        get_benchmark=flash_attention_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("flash_attention_benchmark", "get_benchmark"),
         run_opts={"fa_kernel_mode": "fwd", "use_fp8": True},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.FLASH_ATTENTION},
         description="FlashAttention FP8 forward kernel benchmark",
@@ -163,7 +147,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="flash_attention_bwd",
-        get_benchmark=flash_attention_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("flash_attention_benchmark", "get_benchmark"),
         run_opts={"fa_kernel_mode": "bwd"},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.FLASH_ATTENTION},
         description="FlashAttention backward kernel benchmark",
@@ -172,7 +156,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="batched-flash-attention",
-        get_benchmark=batched_flash_attention_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("batched_flash_attention_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.FLASH_ATTENTION},
         description="Batched variable-length FlashAttention forward kernel benchmark",
@@ -181,7 +165,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="flex-attention-causal",
-        get_benchmark=flex_attention_benchmark_causal_mask.get_benchmark,
+        get_benchmark=_lazy_import("flex_attention_benchmark_causal_mask", "get_benchmark"),
         run_opts={"fa_kernel_mode": "fwd", "batch_size": 1},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.FLASH_ATTENTION},
         description="FlexAttention Causal Mask fwd kernel benchmark",
@@ -190,7 +174,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="flex-attention-causal-batch4",
-        get_benchmark=flex_attention_benchmark_causal_mask.get_benchmark,
+        get_benchmark=_lazy_import("flex_attention_benchmark_causal_mask", "get_benchmark"),
         run_opts={"fa_kernel_mode": "fwd", "batch_size": 4},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.FLASH_ATTENTION},
         description="FlexAttention (batch_size=4) Causal Mask fwd kernel benchmark",
@@ -199,7 +183,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="flex-attention-causal-batch16",
-        get_benchmark=flex_attention_benchmark_causal_mask.get_benchmark,
+        get_benchmark=_lazy_import("flex_attention_benchmark_causal_mask", "get_benchmark"),
         run_opts={"fa_kernel_mode": "fwd", "batch_size": 16},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.FLASH_ATTENTION},
         description="FlexAttention (batch_size=16) Causal Mask fwd kernel benchmark",
@@ -208,7 +192,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="flex-attention-causal-bwd",
-        get_benchmark=flex_attention_benchmark_causal_mask.get_benchmark,
+        get_benchmark=_lazy_import("flex_attention_benchmark_causal_mask", "get_benchmark"),
         run_opts={"fa_kernel_mode": "bwd", "batch_size": 1},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.FLASH_ATTENTION},
         description="FlexAttention Causal Mask bwd kernel benchmark",
@@ -217,7 +201,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="flex-attention-custom-masks",
-        get_benchmark=flex_attention_benchmark_custom_masks.get_benchmark,
+        get_benchmark=_lazy_import("flex_attention_benchmark_custom_masks", "get_benchmark"),
         run_opts={"fa_kernel_mode": "fwd"},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.FLASH_ATTENTION},
         description="FlexAttention Custom Masks fwd kernel benchmark",
@@ -226,7 +210,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="prefix-sums",
-        get_benchmark=prefix_sums.get_benchmark,
+        get_benchmark=_lazy_import("prefix_sums", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.PREFIX_SUMS},
         description="Prefix Sums kernel benchmark",
@@ -234,29 +218,29 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="launch-overhead",
-        get_benchmark=launch_overhead_benchmark.get_benchmark,
+        get_benchmark=_lazy_import("launch_overhead_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.RUNTIME},
         description="Kernel launch overhead by argument count and type, at the JIT and launcher level",
         report_name="launch-overhead-sweep",
         long_report_group="overhead",
         long_report_param_cols="arg_type,num_args,level",
-        long_report_params=launch_overhead_benchmark.report_params,
+        long_report_params=_lazy_import("launch_overhead_benchmark", "report_params"),
     ),
     BenchmarkConfig(
         key="launch-overhead-cold",
-        get_benchmark=launch_overhead_benchmark.get_first_launch_benchmark,
+        get_benchmark=_lazy_import("launch_overhead_benchmark", "get_first_launch_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.RUNTIME},
         description="First kernel launches in a fresh process, with empty and populated compilation caches",
         report_name="launch-overhead-cold",
         long_report_group="overhead",
         long_report_param_cols="cache,phase",
-        long_report_params=launch_overhead_benchmark.report_params,
+        long_report_params=_lazy_import("launch_overhead_benchmark", "report_params"),
     ),
     BenchmarkConfig(
         key="vllm-unified-attention",
-        get_benchmark=_lazy_get_benchmark("vllm.unified_attention.unified_attention_benchmark"),
+        get_benchmark=_lazy_import("vllm.unified_attention.unified_attention_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.VLLM, BenchmarkCategory.FLASH_ATTENTION},
         description="vLLM unified attention kernel benchmark (bf16)",
@@ -267,7 +251,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="vllm-unified-attention-fp8",
-        get_benchmark=_lazy_get_benchmark("vllm.unified_attention.unified_attention_benchmark"),
+        get_benchmark=_lazy_import("vllm.unified_attention.unified_attention_benchmark", "get_benchmark"),
         run_opts={"is_fp8": True},
         categories={BenchmarkCategory.VLLM, BenchmarkCategory.FLASH_ATTENTION},
         description="vLLM unified attention kernel benchmark (fp8)",
@@ -278,7 +262,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="vllm-batched-moe",
-        get_benchmark=_lazy_get_benchmark("vllm.batched_moe.batched_moe_benchmark"),
+        get_benchmark=_lazy_import("vllm.batched_moe.batched_moe_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.VLLM, BenchmarkCategory.GEMM},
         description="vLLM batched MoE GEMM kernel benchmark (bf16)",
@@ -289,7 +273,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="vllm-batched-moe-fp8",
-        get_benchmark=_lazy_get_benchmark("vllm.batched_moe.batched_moe_benchmark"),
+        get_benchmark=_lazy_import("vllm.batched_moe.batched_moe_benchmark", "get_benchmark"),
         run_opts={"is_fp8": True},
         categories={BenchmarkCategory.VLLM, BenchmarkCategory.GEMM},
         description="vLLM batched MoE GEMM kernel benchmark (fp8)",
@@ -300,7 +284,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="vllm-fused-moe",
-        get_benchmark=_lazy_get_benchmark("vllm.fused_moe.fused_moe_benchmark"),
+        get_benchmark=_lazy_import("vllm.fused_moe.fused_moe_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.VLLM, BenchmarkCategory.GEMM},
         description="vLLM fused MoE GEMM kernel benchmark (bf16)",
@@ -311,7 +295,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="sglang-prefill-attn",
-        get_benchmark=_lazy_get_benchmark("sglang.prefill_attention_benchmark"),
+        get_benchmark=_lazy_import("sglang.prefill_attention_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.SGLANG, BenchmarkCategory.FLASH_ATTENTION},
         description="SGLang prefill (context) attention kernel benchmark",
@@ -322,7 +306,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="sglang-decode-attn",
-        get_benchmark=_lazy_get_benchmark("sglang.decode_attention_benchmark"),
+        get_benchmark=_lazy_import("sglang.decode_attention_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.SGLANG, BenchmarkCategory.FLASH_ATTENTION},
         description="SGLang decode attention kernel benchmark",
@@ -333,7 +317,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="sglang-extended-attn",
-        get_benchmark=_lazy_get_benchmark("sglang.extended_attention_benchmark"),
+        get_benchmark=_lazy_import("sglang.extended_attention_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.SGLANG, BenchmarkCategory.FLASH_ATTENTION},
         description="SGLang extended (append) attention kernel benchmark",
@@ -344,7 +328,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="sglang-block-fp8-gemm",
-        get_benchmark=_lazy_get_benchmark("sglang.block_fp8_gemm_benchmark"),
+        get_benchmark=_lazy_import("sglang.block_fp8_gemm_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.SGLANG, BenchmarkCategory.GEMM},
         description="SGLang block-wise FP8 GEMM kernel benchmark",
@@ -355,7 +339,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="sglang-scaled-mm-int8",
-        get_benchmark=_lazy_get_benchmark("sglang.scaled_mm_benchmark"),
+        get_benchmark=_lazy_import("sglang.scaled_mm_benchmark", "get_benchmark"),
         run_opts={},
         categories={BenchmarkCategory.SGLANG, BenchmarkCategory.GEMM},
         description="SGLang scaled_mm int8 GEMM kernel benchmark",
@@ -368,7 +352,7 @@ CONFIGS = [
     ),
     BenchmarkConfig(
         key="sglang-scaled-mm-fp8",
-        get_benchmark=_lazy_get_benchmark("sglang.scaled_mm_benchmark"),
+        get_benchmark=_lazy_import("sglang.scaled_mm_benchmark", "get_benchmark"),
         run_opts={"is_fp8": True},
         categories={BenchmarkCategory.SGLANG, BenchmarkCategory.GEMM},
         description="SGLang scaled_mm fp8 GEMM kernel benchmark",

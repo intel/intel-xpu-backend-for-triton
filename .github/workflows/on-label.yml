@@ -13,28 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ---- Platform selection for benchmarks ----
-  # FIXME: Temporarily lost max1550 machines, so PVC benchmarks are disabled by default.
-  # Use 'pvc-only' label to explicitly enable them.
-
-  select-benchmark-platforms:
-    runs-on: ubuntu-latest
-    outputs:
-      run-pvc-benchmarks: ${{ steps.determine.outputs.run-pvc-benchmarks }}
-    steps:
-      - name: Determine if PVC benchmarks should run
-        id: determine
-        run: |
-          LABELS='${{ toJSON(github.event.pull_request.labels.*.name) }}'
-          PVC_ONLY=$(echo "$LABELS" | jq 'contains(["pvc-only"])')
-
-          # PVC benchmarks (max1550) only run if pvc-only label is present
-          if [ "$PVC_ONLY" = "true" ]; then
-            echo "run-pvc-benchmarks=true" >> $GITHUB_OUTPUT
-          else
-            echo "run-pvc-benchmarks=false" >> $GITHUB_OUTPUT
-          fi
-
   # ---- vLLM tests ----
 
   vllm-tests-bmg:

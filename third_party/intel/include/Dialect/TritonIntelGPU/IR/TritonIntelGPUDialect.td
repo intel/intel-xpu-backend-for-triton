@@ -8,6 +8,9 @@ def TritonIntelGPU_Dialect : Dialect {
 
   let cppNamespace = "::mlir::triton::gpu::intel";
 
+  // Preserve the existing attr-dict syntax for inherent attributes.
+  let useStrictPropertiesInAssemblyFormat = 0;
+
   let description = [{
     Triton Intel GPU Dialect.
   }];
@@ -102,6 +105,13 @@ def TritonIntelGPU_Dialect : Dialect {
     /// for 2D block IO on stores reshaped from 1D tensor-of-pointers.
     static constexpr llvm::StringRef getBlockIOStrideAttrName() {
       return "ttig.block_io_stride";
+    }
+
+    /// Get the name of the attribute marking a `ttig.2d_block_load_from_ptr`
+    /// (or prefetch) whose `base_height` is a runtime row-limit bound, not a
+    /// fixed per-message tile height (see ttgi::matchRowLimitMask).
+    static constexpr llvm::StringRef getBlockIORuntimeRowLimitAttrName() {
+      return "ttig.block_io_runtime_row_limit";
     }
 
     /// Get the name of the attribute used to specify the target architecture. This

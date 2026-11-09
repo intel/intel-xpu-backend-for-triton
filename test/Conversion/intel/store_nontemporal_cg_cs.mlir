@@ -26,7 +26,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
     tt.store %2, %cst, %4 {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : tensor<128x!tt.ptr<f32>, #blocked>
     // CHECK: llvm.cond_br
     // COM: Fast arm: one wide unannotated store.
-    // CHECK: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store {{.*}} <alignment = 16> : vector<4xi32>, !llvm.ptr<1>
     // COM: Slow arm: one predicated store per element of the group, carrying the
     // COM: control `cg` actually asks for.
     // CHECK-COUNT-4: triton_gen.predicated_store {{.*}} {cache_control = L1UC_L3WB} : (!llvm.ptr<1>, f32, i1) -> ()
@@ -52,7 +52,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
     // COM: Fast arm: one wide unannotated store. Dropping the flag here is an
     // COM: approximation, not an exact lowering -- a plain `llvm.store` has no
     // COM: way to express L1S_L3S. See the NOTE in getNonTemporalFlag().
-    // CHECK: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK: llvm.store {{.*}} <alignment = 16> : vector<4xi32>, !llvm.ptr<1>
     // COM: Slow arm: L1S_L3S is emitted exactly.
     // CHECK-COUNT-4: triton_gen.predicated_store {{.*}} {cache_control = L1S_L3S} : (!llvm.ptr<1>, f32, i1) -> ()
     // CHECK: llvm.return
