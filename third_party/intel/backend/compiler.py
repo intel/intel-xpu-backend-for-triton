@@ -708,6 +708,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm.run(mod, 'make_llir.allocate_memory')
 
         metadata["shared"] = src.get_int_attr("ttg.shared")
+        pipeline_info = intel.get_pipelined_prefetch(src)
+        if pipeline_info is not None:
+            metadata["cooperation_forwarding"] = pipeline_info["barrier"]
         # Shared memory is now allocated statically (see `initSharedMemory` in
         # TritonGPUToLLVM.cpp), so an oversized request fails the SPIR-V module
         # build later (an opaque `ZE_RESULT_ERROR_MODULE_BUILD_FAILURE`) instead

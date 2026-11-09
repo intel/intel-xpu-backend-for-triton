@@ -8,6 +8,58 @@ from triton.language.extra import libdevice
 from triton.runtime.errors import OutOfResources
 
 
+@pytest.mark.parametrize(
+    "annotation, expected",
+    [
+        ("", {}),
+        (", ttig.pipelined_prefetch = {barrier = true, total_bytes = 61440 : i64}", {"cooperation_forwarding": True}),
+        (", ttig.pipelined_prefetch = {barrier = false, total_bytes = 0 : i64}", {"cooperation_forwarding": False}),
+        (", ttig.pipelined_prefetch = {barrier = true}", {"cooperation_forwarding": True}),
+    ],
+)
+def test_pipeline_metadata_make_llir(annotation, expected, tmp_path: pathlib.Path):
+    from triton._C.libtriton import intel, ir
+    from triton.backends.compiler import GPUTarget
+    from triton.backends.intel.compiler import XPUBackend, XPUOptions
+
+    source = tmp_path / "pipeline.ttgir"
+    source.write_text(f'''module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32,
+      ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32{annotation}}} {{
+      tt.func public @kernel() {{
+        tt.return
+      }}
+    }}''')
+    context = ir.context()
+    ir.load_dialects(context)
+    intel.load_dialects(context)
+    module = ir.parse_mlir_module(str(source), context)
+    module.context = context
+    metadata = {"target": GPUTarget("xpu", {}, 16), "enable_fp_fusion": True}
+    XPUBackend.make_llir(module, metadata, XPUOptions(extern_libs={}))
+
+    assert metadata["shared"] == 0
+    assert {key: metadata[key] for key in ("cooperation_forwarding", ) if key in metadata} == expected
+
+
+@pytest.mark.parametrize("annotation", [
+    "42 : i32",
+    "{total_bytes = 1 : i64}",
+    "{barrier = true, total_bytes = -1 : i64}",
+    "{barrier = true, total_bytes = 1 : i32}",
+])
+def test_pipeline_metadata_rejects_invalid_annotation(annotation, tmp_path: pathlib.Path):
+    from triton._C.libtriton import intel, ir
+
+    source = tmp_path / "invalid_pipeline.ttgir"
+    source.write_text(f"module attributes {{ttig.pipelined_prefetch = {annotation}}} {{}}")
+    context = ir.context()
+    ir.load_dialects(context)
+    intel.load_dialects(context)
+    module = ir.parse_mlir_module(str(source), context)
+    with pytest.raises(RuntimeError, match="invalid ttig.pipelined_prefetch annotation"):
+        intel.get_pipelined_prefetch(module)
+
+
 def test_regression_7875(device, tmp_path: pathlib.Path):
     """Shared memory is allocated statically (`global_smem` sized after
     `ttg.shared`, see #7606), so a kernel whose local_alloc exceeds the

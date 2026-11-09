@@ -1,7 +1,11 @@
+import importlib
 import io
+import os
 import re
 import shutil
+import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -18,6 +22,123 @@ from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
 from triton.backends.intel.driver import find_sycl_icpx
 from triton.backends.intel.errors import IntelGPUError
 from triton.runtime.errors import OutOfResources
+
+
+@pytest.mark.parametrize("cooperation_forwarding", [None, False, True])
+def test_load_binary_pipeline_metadata_forwarded(monkeypatch, cooperation_forwarding):
+    from triton.backends.intel.driver import SpirvUtils
+
+    compiler = importlib.import_module("triton.compiler.compiler")
+    calls = []
+    utils = SpirvUtils.__new__(SpirvUtils)
+    utils.shared_library = SimpleNamespace(load_binary=lambda args: calls.append(args) or (None, None, 0, 0, 1024))
+    active = SimpleNamespace(utils=utils, get_current_device=lambda: 0, launcher_cls=lambda src, metadata: object())
+    monkeypatch.setattr(compiler, "driver", SimpleNamespace(active=active))
+    monkeypatch.setattr(compiler, "max_shared_mem", lambda device: 1024)
+    metadata = dict(shared=0, build_flags="", generate_native_code=False, target=SimpleNamespace(arch={}), warp_size=16,
+                    num_warps=1)
+    if cooperation_forwarding is not None:
+        metadata["cooperation_forwarding"] = cooperation_forwarding
+    kernel = compiler.CompiledKernel.__new__(compiler.CompiledKernel)
+    kernel.module = kernel.function = kernel._run = None
+    kernel.src = None
+    kernel.metadata = SimpleNamespace(**metadata)
+    kernel.metadata_group, kernel.hash = {}, "hash"
+    kernel.name, kernel.kernel = "kernel", b"binary"
+    kernel._init_handles()
+    assert calls == [("kernel", b"binary", 0, "", True, 0, None, cooperation_forwarding)]
+
+
+@pytest.mark.skipif(sys.platform != "linux" or shutil.which("cc") is None, reason="requires Linux and a C compiler")
+def test_load_binary_cooperation_forwarding_scheduling_hint(device, tmp_path):
+    from triton.backends.intel.driver import COMPILATION_HELPER
+
+    shim = tmp_path / "hint.c"
+    shim.write_text(r'''
+#define _GNU_SOURCE
+#include <level_zero/ze_api.h>
+#include <dlfcn.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+ze_result_t zeKernelSchedulingHintExp(ze_kernel_handle_t kernel,
+                                     ze_scheduling_hint_exp_desc_t *hint) {
+    fprintf(stderr, "HINT %p %u %u\n", (void *)kernel, hint->stype, hint->flags);
+    return getenv("TEST_HINT_FAILURE") ? ZE_RESULT_ERROR_UNSUPPORTED_FEATURE : ZE_RESULT_SUCCESS;
+}
+
+ze_result_t zeKernelCreate(ze_module_handle_t module, const ze_kernel_desc_t *desc,
+                           ze_kernel_handle_t *kernel) {
+    void *loader = dlopen("libze_loader.so.1", RTLD_LAZY);
+    ze_result_t result = ((ze_result_t (*)(ze_module_handle_t, const ze_kernel_desc_t *,
+                                           ze_kernel_handle_t *))dlsym(loader, "zeKernelCreate"))(module, desc, kernel);
+    if (result == ZE_RESULT_SUCCESS)
+        fprintf(stderr, "CREATE_KERNEL %p\n", (void *)*kernel);
+    return result;
+}
+
+ze_result_t zeKernelDestroy(ze_kernel_handle_t kernel) {
+    fprintf(stderr, "DESTROY_KERNEL %p\n", (void *)kernel);
+    void *loader = dlopen("libze_loader.so.1", RTLD_LAZY);
+    return ((ze_result_t (*)(ze_kernel_handle_t))dlsym(loader, "zeKernelDestroy"))(kernel);
+}
+
+ze_result_t zeModuleDestroy(ze_module_handle_t module) {
+    fprintf(stderr, "DESTROY_MODULE %p\n", (void *)module);
+    void *loader = dlopen("libze_loader.so.1", RTLD_LAZY);
+    return ((ze_result_t (*)(ze_module_handle_t))dlsym(loader, "zeModuleDestroy"))(module);
+}
+''')
+    library = tmp_path / "hint.so"
+    includes = [f"-I{path}" for path in COMPILATION_HELPER.include_dir]
+    subprocess.run(["cc", "-shared", "-fPIC", *includes, str(shim), "-o", str(library), "-ldl"], check=True)
+    ir = tmp_path / "kernel.ttgir"
+    ir.write_text('''module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32,
+      ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32,
+      ttig.target_arch = "spir64"} {
+      tt.func public @kernel() { tt.return }
+    }''')
+    script = r'''
+import os
+import sys
+import triton
+from triton.backends.intel.errors import IntelGPUError
+from triton.runtime.driver import driver
+
+kernel = triton.compile(sys.argv[1])
+device = driver.active.get_current_device()
+args = (kernel.name, kernel.kernel, kernel.metadata.shared, kernel.metadata.build_flags,
+        not kernel.metadata.generate_native_code, device, None)
+for value in (None, False, True):
+    print(f"START {value}", file=sys.stderr, flush=True)
+    module, function, _, _, _ = driver.active.utils.load_binary(*args, value)
+    del function
+    driver.active.utils.unload_module(module)
+print("START failure", file=sys.stderr, flush=True)
+os.environ["TEST_HINT_FAILURE"] = "1"
+try:
+    driver.active.utils.load_binary(*args, True)
+except IntelGPUError as error:
+    assert "ZE_RESULT_ERROR_UNSUPPORTED_FEATURE" in str(error), str(error)
+else:
+    raise AssertionError("scheduling-hint failure was ignored")
+'''
+    env = os.environ.copy()
+    env["LD_PRELOAD"] = str(library) + (" " + env["LD_PRELOAD"] if env.get("LD_PRELOAD") else "")
+    result = subprocess.run([sys.executable, "-c", script, str(ir)], env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    before_hint, true_case = result.stderr.split("START True\n", 1)
+    assert "HINT " not in before_hint
+    success, failure = true_case.split("START failure\n", 1)
+    hints = re.findall(r"HINT (0x[0-9a-f]+) (\d+) (\d+)", success)
+    assert len(hints) == 1
+    assert tuple(map(int, hints[0][1:])) == (0x20004, 2)
+    assert re.findall(r"CREATE_KERNEL (0x[0-9a-f]+)", success)[-1] == hints[0][0]
+    failed_hint = re.search(r"HINT (0x[0-9a-f]+) (\d+) (\d+)", failure)
+    assert failed_hint is not None
+    assert tuple(map(int, failed_hint.groups()[1:])) == (0x20004, 2)
+    assert f"DESTROY_KERNEL {failed_hint.group(1)}" in failure
+    assert "DESTROY_MODULE " in failure
 
 
 def test_auto_grf(device, monkeypatch, capfd, fresh_knobs):
@@ -273,7 +394,8 @@ def test_get_properties_error(device):
         driver.active.utils.get_device_properties(device_count)
 
 
-def test_load_binary_error_device_error(device, tmp_path: pathlib.Path):
+@pytest.mark.parametrize("optional_args", [(), (None, ), (None, None), (None, False), (None, True)])
+def test_load_binary_error_device_error(device, tmp_path: pathlib.Path, optional_args):
     ir = """
     module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64"} {
       tt.func public @empty_func() {
@@ -292,7 +414,12 @@ def test_load_binary_error_device_error(device, tmp_path: pathlib.Path):
         # Expected an exception when loading binary on an invalid device index
         _ = driver.active.utils.load_binary(kernel.name, kernel.kernel, kernel.metadata.shared,
                                             kernel.metadata.build_flags, not kernel.metadata.generate_native_code,
-                                            device_count)
+                                            device_count, *optional_args)
+
+
+def test_load_binary_rejects_invalid_cooperation_forwarding(device):
+    with pytest.raises(TypeError, match="cooperation_forwarding must be a bool or None"):
+        driver.active.utils.load_binary("kernel", b"", 0, "", True, 0, None, "true")
 
 
 def test_load_binary_error_kernel_error(device, tmp_path: pathlib.Path):

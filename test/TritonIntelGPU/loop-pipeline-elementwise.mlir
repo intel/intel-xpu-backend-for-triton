@@ -60,8 +60,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
       %next_b = tt.addptr %arg_b, %cst : tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xi32, #blocked>
       scf.yield %next_a, %next_b : tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32x!tt.ptr<f16>, #blocked>
     }
+    tt.return
+  }
+}
 
-    // -----
+// -----
 
     #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
     // AGGREGATE: module attributes {tt.num_stages = 5 : i32, {{.*}}ttig.pipelined_prefetch = {barrier = true, total_bytes = 775 : i64}
@@ -73,7 +76,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
         %step = arith.constant dense<1> : tensor<16x16xi32, #blocked>
         // CHECK: scf.for
         // CHECK: } {ttig.pipelined_prefetch = {barrier = true, total_bytes = 7 : i64}}
-        scf.for %i = %c0 to %n step %c1 {
+        scf.for %i = %c0 to %n step %c1 : i32 {
           %barrier = triton_gen.split_barrier_arrive
           triton_gen.split_barrier_wait %barrier
         } {ttig.pipelined_prefetch = {barrier = true, total_bytes = 7 : i64}}
@@ -91,15 +94,15 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 
     // -----
 
-    // AGGREGATE: module attributes { {{.*}}ttig.pipelined_prefetch = {barrier = true}
+    // AGGREGATE: module attributes {{{.*}}ttig.pipelined_prefetch = {barrier = true}
     module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
       // CHECK-LABEL: tt.func public @aggregate_unknown_size
       tt.func public @aggregate_unknown_size(%n: i32) {
         %c0 = arith.constant 0 : i32
         %c1 = arith.constant 1 : i32
-        scf.for %i = %c0 to %n step %c1 {
+        scf.for %i = %c0 to %n step %c1 : i32 {
         } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 10 : i64}}
-        scf.for %i = %c0 to %n step %c1 {
+        scf.for %i = %c0 to %n step %c1 : i32 {
         } {ttig.pipelined_prefetch = {barrier = true}}
         tt.return
       }
@@ -107,23 +110,19 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 
     // -----
 
-    // AGGREGATE: module attributes { {{.*}}ttig.pipelined_prefetch = {barrier = false}
+    // AGGREGATE: module attributes {{{.*}}ttig.pipelined_prefetch = {barrier = false}
     module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
       // CHECK-LABEL: tt.func public @aggregate_overflow
       tt.func public @aggregate_overflow(%n: i32) {
         %c0 = arith.constant 0 : i32
         %c1 = arith.constant 1 : i32
-        scf.for %i = %c0 to %n step %c1 {
+        scf.for %i = %c0 to %n step %c1 : i32 {
         } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 9223372036854775807 : i64}}
-        scf.for %i = %c0 to %n step %c1 {
+        scf.for %i = %c0 to %n step %c1 : i32 {
         } {ttig.pipelined_prefetch = {barrier = false, total_bytes = 1 : i64}}
         tt.return
       }
     }
-    tt.return
-  }
-}
-
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>

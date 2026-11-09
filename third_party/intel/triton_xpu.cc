@@ -405,6 +405,25 @@ void init_triton_intel(py::module_ &m) {
     return py::int_(ret);
   });
 
+  m.def("get_pipelined_prefetch", [](mlir::ModuleOp &mod) -> py::object {
+    mlir::Attribute attr = mod->getAttr("ttig.pipelined_prefetch");
+    if (!attr)
+      return py::none();
+    auto info = mlir::dyn_cast<mlir::DictionaryAttr>(attr);
+    auto barrier =
+        info ? info.getAs<mlir::BoolAttr>("barrier") : mlir::BoolAttr();
+    mlir::Attribute bytesAttr = info ? info.get("total_bytes") : nullptr;
+    auto bytes = mlir::dyn_cast_or_null<mlir::IntegerAttr>(bytesAttr);
+    if (!barrier || (bytesAttr && (!bytes || !bytes.getType().isInteger(64) ||
+                                   bytes.getInt() < 0)))
+      throw std::runtime_error("invalid ttig.pipelined_prefetch annotation");
+    py::dict result;
+    result["barrier"] = py::bool_(barrier.getValue());
+    if (bytes)
+      result["total_bytes"] = py::int_(bytes.getInt());
+    return result;
+  });
+
   m.def("has_precise_divide_sqrt", [](mlir::ModuleOp &mod) -> bool {
     using namespace mlir;
     WalkResult result = mod.walk([&](Operation *op) {
