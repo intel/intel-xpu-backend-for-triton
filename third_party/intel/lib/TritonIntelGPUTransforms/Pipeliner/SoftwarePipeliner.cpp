@@ -44,8 +44,9 @@ static void pipelineLoop(scf::ForOp forOp, int numStages, bool useBarrier) {
   if (!preCondition(forOp))
     return;
 
-  bool foundSchedule =
-      ttgi::preProcessLoopAndGetSchedule(forOp, numStages, options);
+  std::optional<int64_t> prefetchBytes;
+  bool foundSchedule = ttgi::preProcessLoopAndGetSchedule(
+      forOp, numStages, options, prefetchBytes);
   if (!foundSchedule)
     return;
 
@@ -67,6 +68,15 @@ static void pipelineLoop(scf::ForOp forOp, int numStages, bool useBarrier) {
     b.setInsertionPoint(yield);
     triton::TritonGEN::SplitBarrierWaitOp::create(b, loc, bData);
   }
+
+  Builder builder(loop.getContext());
+  NamedAttrList prefetchInfo;
+  prefetchInfo.set("barrier", builder.getBoolAttr(useBarrier));
+  prefetchInfo.set("num_stages", builder.getI32IntegerAttr(numStages));
+  if (prefetchBytes)
+    prefetchInfo.set("total_bytes", builder.getI64IntegerAttr(*prefetchBytes));
+  loop->setAttr("ttig.pipelined_prefetch",
+                prefetchInfo.getDictionary(loop.getContext()));
 }
 
 namespace {

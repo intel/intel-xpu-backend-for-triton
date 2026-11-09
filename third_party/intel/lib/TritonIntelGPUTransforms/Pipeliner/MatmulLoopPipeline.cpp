@@ -476,7 +476,8 @@ createSchedule(scf::ForOp forOp, int numStages) {
 }
 
 bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
-                                        mlir::scf::PipeliningOption &options) {
+                                        mlir::scf::PipeliningOption &options,
+                                        std::optional<int64_t> &prefetchBytes) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
   SmallVector<PrefetchCandidate> candidates =
@@ -486,29 +487,35 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
     return false;
   }
 
-  LLVM_DEBUG({
-    DBGS() << "Loads to pipeline:\n";
-    unsigned prefetchBytes = 0;
-    for (const PrefetchCandidate &candidate : candidates) {
-      Operation *op = candidate.op;
-      RankedTensorType tensorType =
-          dyn_cast<RankedTensorType>(op->getResultTypes()[0]);
-      if (tensorType) {
-        ArrayRef<int64_t> shape = tensorType.getShape();
-        auto numElems = product<int64_t>(shape);
-        prefetchBytes +=
-            numElems * tensorType.getElementType().getIntOrFloatBitWidth() / 8;
-      }
-      DBGS() << "  " << *op << "\n";
+  prefetchBytes = 0;
+  LDBG("Loads to pipeline:");
+  for (const PrefetchCandidate &candidate : candidates) {
+    Operation *op = candidate.op;
+    LDBG("  " << *op);
+    auto tensorType = cast<RankedTensorType>(op->getResultTypes()[0]);
+    if (!prefetchBytes || !tensorType.hasStaticShape()) {
+      prefetchBytes.reset();
+      continue;
     }
-    prefetchBytes *= numStages;
-    constexpr unsigned BYTES_PER_KB = 1024;
-    DBGS() << "Total number of bytes to prefetch: "
-           << (prefetchBytes > BYTES_PER_KB
-                   ? std::to_string(prefetchBytes / BYTES_PER_KB) + " KB"
-                   : std::to_string(prefetchBytes) + " B")
-           << " in " << numStages << " stages\n";
-  });
+    int64_t bytes = llvm::divideCeil(
+        tensorType.getElementType().getIntOrFloatBitWidth(), 8u);
+    for (int64_t dim : tensorType.getShape()) {
+      if (llvm::MulOverflow(bytes, dim, bytes)) {
+        prefetchBytes.reset();
+        break;
+      }
+    }
+    if (prefetchBytes &&
+        (llvm::MulOverflow(bytes, static_cast<int64_t>(numStages), bytes) ||
+         llvm::AddOverflow(*prefetchBytes, bytes, *prefetchBytes)))
+      prefetchBytes.reset();
+  }
+  if (prefetchBytes)
+    LDBG("Total number of bytes to prefetch: " << *prefetchBytes << " B in "
+                                               << numStages << " stages");
+  else
+    LDBG("Total number of bytes to prefetch: unknown in " << numStages
+                                                          << " stages");
 
   // When the upstream annotation pipeline has run and covers every
   // candidate, drive the prefetch op's stage from upstream's

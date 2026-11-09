@@ -1,4 +1,6 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3 use-barrier" | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3" | FileCheck %s --check-prefix=NO-BARRIER --implicit-check-not=triton_gen.split_barrier
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3 use-barrier" -canonicalize -triton-licm | FileCheck %s --check-prefix=POST-OPT
 
 // COM: Descriptor equivalent of the removed block-pointer split-barrier test.
 // COM: Checks that descriptor prefetches are emitted around a pipelined dot loop
@@ -20,6 +22,15 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
   // CHECK: ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<64x256xf16>
   // CHECK: tt.dot {{.*}} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$DPAS]], kWidth = 2}>> -> tensor<128x256xf32, #[[$DPAS]]>
   // CHECK: triton_gen.split_barrier_wait %[[BDATA]]
+  // CHECK: scf.yield
+  // CHECK-NEXT: } {ttig.pipelined_prefetch = {barrier = true, num_stages = 3 : i32, total_bytes = 147456 : i64}}
+  // NO-BARRIER-LABEL: tt.func public @matmul_kernel_descriptor_split_barrier
+  // NO-BARRIER: scf.for
+  // NO-BARRIER: } {ttig.pipelined_prefetch = {barrier = false, num_stages = 3 : i32, total_bytes = 147456 : i64}}
+  // POST-OPT-LABEL: tt.func public @matmul_kernel_descriptor_split_barrier
+  // POST-OPT: triton_gen.split_barrier_arrive
+  // POST-OPT: triton_gen.split_barrier_wait
+  // POST-OPT: } {ttig.pipelined_prefetch = {barrier = true, num_stages = 3 : i32, total_bytes = 147456 : i64}}
   tt.func public @matmul_kernel_descriptor_split_barrier(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i64, %arg7: i64) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
     %c64_i32 = arith.constant 64 : i32

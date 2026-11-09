@@ -49,6 +49,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:   arith.addf
     // CHECK:   tt.store
     // CHECK:   scf.yield
+    // CHECK-NEXT: } {ttig.pipelined_prefetch = {barrier = false, num_stages = 3 : i32, total_bytes = 12288 : i64}}
     %9:2 = scf.for %iv = %c0_i32 to %n_steps step %c1_i32 iter_args(%arg_a = %ptr_a, %arg_b = %ptr_b) -> (tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32x!tt.ptr<f16>, #blocked>) : i32 {
       %ld_a = tt.load %arg_a {ttig.block_io = "row_major"} : tensor<32x32x!tt.ptr<f16>, #blocked>
       %ld_b = tt.load %arg_b {ttig.block_io = "row_major"} : tensor<32x32x!tt.ptr<f16>, #blocked>
@@ -57,6 +58,30 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
       %next_a = tt.addptr %arg_a, %cst : tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xi32, #blocked>
       %next_b = tt.addptr %arg_b, %cst : tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xi32, #blocked>
       scf.yield %next_a, %next_b : tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32x!tt.ptr<f16>, #blocked>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io", "ttig.support_prefetch_256b"} {
+  // CHECK-LABEL: tt.func public @subbyte_prefetch_size
+  tt.func public @subbyte_prefetch_size(%input: tensor<16x16x!tt.ptr<i1>, #blocked>, %output: tensor<16x16x!tt.ptr<i1>, #blocked>, %n: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %step = arith.constant dense<1> : tensor<16x16xi32, #blocked>
+    // CHECK: ttig.prefetch
+    // CHECK: scf.for
+    // CHECK: ttig.prefetch
+    // CHECK: scf.yield
+    // CHECK-NEXT: } {ttig.pipelined_prefetch = {barrier = false, num_stages = 3 : i32, total_bytes = 768 : i64}}
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%ptr = %input) -> (tensor<16x16x!tt.ptr<i1>, #blocked>) : i32 {
+      %value = tt.load %ptr {ttig.block_io = "row_major"} : tensor<16x16x!tt.ptr<i1>, #blocked>
+      tt.store %output, %value : tensor<16x16x!tt.ptr<i1>, #blocked>
+      %next = tt.addptr %ptr, %step : tensor<16x16x!tt.ptr<i1>, #blocked>, tensor<16x16xi32, #blocked>
+      scf.yield %next : tensor<16x16x!tt.ptr<i1>, #blocked>
     }
     tt.return
   }
@@ -103,6 +128,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:   tt.load
     // CHECK:   arith.addf
     // CHECK:   scf.yield
+    // CHECK-NOT: ttig.pipelined_prefetch
+    // CHECK: tt.return
     %9:2 = scf.for %iv = %c0_i32 to %n_steps step %c1_i32 iter_args(%arg_a = %ptr_a, %arg_b = %ptr_b) -> (tensor<64x64x!tt.ptr<f16>, #blocked>, tensor<64x64x!tt.ptr<f16>, #blocked>) : i32 {
       %ld_a = tt.load %arg_a : tensor<64x64x!tt.ptr<f16>, #blocked>
       %ld_b = tt.load %arg_b : tensor<64x64x!tt.ptr<f16>, #blocked>
