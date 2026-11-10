@@ -255,6 +255,96 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
+// COM: Loop fusion (tl.range(..., flatten=True)) carries the pointer through an
+// COM: iter-arg with a poison init and rebuilds it under `scf.if` on the first
+// COM: iteration. The poison is never read, so the runtime pitch survives
+// COM: (issue #8687).
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @fused_loop_poison_init_runtime_stride
+  tt.func @fused_loop_poison_init_runtime_stride(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %lda: i32 {tt.divisibility = 16 : i32}, %n: i32) -> tensor<64x32xf16, #dot0> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %poison = ub.poison : tensor<64x32x!tt.ptr<f16>, #dot0>
+    %cst_init = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+    %lda_splat = tt.splat %lda : i32 -> tensor<64x1xi32, #dot0>
+    %row = arith.muli %1, %lda_splat : tensor<64x1xi32, #dot0>
+    %2 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %rowb = tt.broadcast %row : tensor<64x1xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %colb = tt.broadcast %3 : tensor<1x32xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %off = arith.addi %rowb, %colb : tensor<64x32xi32, #dot0>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %ptr0 = tt.addptr %base, %off : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+    %cst32 = arith.constant dense<32> : tensor<64x32xi32, #dot0>
+    // CHECK: scf.for
+    // CHECK: %[[PITCH:.*]] = arith.muli %{{.*}}, %{{.*}} : i32
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]], %{{.*}}, %{{.*}} {row_major}
+    %res:2 = scf.for %i = %c0_i32 to %n step %c1_i32 iter_args(%p = %poison, %acc = %cst_init) -> (tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xf16, #dot0>) : i32 {
+      %first = arith.cmpi eq, %i, %c0_i32 : i32
+      %q = scf.if %first -> (tensor<64x32x!tt.ptr<f16>, #dot0>) {
+        scf.yield %ptr0 : tensor<64x32x!tt.ptr<f16>, #dot0>
+      } else {
+        scf.yield %p : tensor<64x32x!tt.ptr<f16>, #dot0>
+      }
+      %ld = tt.load %q {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+      %pn = tt.addptr %q, %cst32 : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+      scf.yield %pn, %ld : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xf16, #dot0>
+    }
+    tt.return %res#1 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+// COM: Same shape, but the row stride is loaded in every iteration. The pointer
+// COM: is only rebuilt on the first one, so this iteration's stride is not its
+// COM: pitch and the load is left alone.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @fused_loop_loop_variant_stride
+  tt.func @fused_loop_loop_variant_stride(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %ldas: !tt.ptr<i32>, %n: i32) -> tensor<64x32xf16, #dot0> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %poison = ub.poison : tensor<64x32x!tt.ptr<f16>, #dot0>
+    %cst_init = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    // CHECK: scf.for
+    // CHECK: tt.load %{{.*}} : !tt.ptr<i32>
+    // CHECK-NOT: ttig.2d_block_load_from_ptr
+    // CHECK: tt.load %{{.*}} {ttig.block_io = "row_major"}
+    %res:2 = scf.for %i = %c0_i32 to %n step %c1_i32 iter_args(%p = %poison, %acc = %cst_init) -> (tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xf16, #dot0>) : i32 {
+      %ldap = tt.addptr %ldas, %i : !tt.ptr<i32>, i32
+      %lda = tt.load %ldap : !tt.ptr<i32>
+      %first = arith.cmpi eq, %i, %c0_i32 : i32
+      %q = scf.if %first -> (tensor<64x32x!tt.ptr<f16>, #dot0>) {
+        %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+        %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+        %lda_splat = tt.splat %lda : i32 -> tensor<64x1xi32, #dot0>
+        %row = arith.muli %1, %lda_splat : tensor<64x1xi32, #dot0>
+        %2 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+        %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+        %rowb = tt.broadcast %row : tensor<64x1xi32, #dot0> -> tensor<64x32xi32, #dot0>
+        %colb = tt.broadcast %3 : tensor<1x32xi32, #dot0> -> tensor<64x32xi32, #dot0>
+        %off = arith.addi %rowb, %colb : tensor<64x32xi32, #dot0>
+        %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+        %ptr0 = tt.addptr %base, %off : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+        scf.yield %ptr0 : tensor<64x32x!tt.ptr<f16>, #dot0>
+      } else {
+        scf.yield %p : tensor<64x32x!tt.ptr<f16>, #dot0>
+      }
+      %ld = tt.load %q {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+      scf.yield %q, %ld : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xf16, #dot0>
+    }
+    tt.return %res#1 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
 // COM: Regression test for issue #8565. A row-only mask `rows[:, None] <
 // COM: bound` with a runtime bound no longer falls back to a masked gather:
 // COM: this pass drops the mask/other for a dynamic base_height operand

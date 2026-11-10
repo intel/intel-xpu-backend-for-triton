@@ -604,3 +604,180 @@ tt.func @contiguity_hint_partial() {
   %0 = arith.remsi %range, %c8 {tt.contiguity = dense<16> : tensor<1xi32>} : tensor<32xi32>
   tt.return
 }
+
+// -----
+
+// CHECK-LABEL: @poison_init
+// Loop fusion seeds a loop-carried pointer with ub.poison and rebuilds it on
+// the first iteration (scf.if, or arith.select after canonicalize). The poison
+// is never read, so the iter_args take the stride of the rebuilt pointer. The
+// loop starts at 1, so a guard on `%iv == 0` does not hold on the first
+// iteration (%r).
+tt.func @poison_init(%arg0: !tt.ptr<f16>, %n: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %cst = arith.constant dense<64> : tensor<16x1xi32>
+  %poison = ub.poison : tensor<16x16x!tt.ptr<f16>>
+  %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+  %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<16xi32> -> tensor<16x1xi32>
+  %2 = arith.muli %1, %cst : tensor<16x1xi32>
+  %3 = tt.broadcast %2 : tensor<16x1xi32> -> tensor<16x16xi32>
+  %4 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32> -> tensor<1x16xi32>
+  %5 = tt.broadcast %4 : tensor<1x16xi32> -> tensor<16x16xi32>
+  %6 = arith.addi %3, %5 : tensor<16x16xi32>
+  %7 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<16x16x!tt.ptr<f16>>
+  %8 = tt.addptr %7, %6 : tensor<16x16x!tt.ptr<f16>>, tensor<16x16xi32>
+  %9:3 = scf.for %iv = %c1_i32 to %n step %c1_i32 iter_args(%p = %poison, %q = %poison, %r = %poison) -> (tensor<16x16x!tt.ptr<f16>>, tensor<16x16x!tt.ptr<f16>>, tensor<16x16x!tt.ptr<f16>>) : i32 {
+    %first = arith.cmpi eq, %iv, %c1_i32 : i32
+    %zeroth = arith.cmpi eq, %iv, %c0_i32 : i32
+    // CHECK: } => stride = [64, 1]
+    %pn = scf.if %first -> (tensor<16x16x!tt.ptr<f16>>) {
+      scf.yield %8 : tensor<16x16x!tt.ptr<f16>>
+    } else {
+      scf.yield %p : tensor<16x16x!tt.ptr<f16>>
+    }
+    // CHECK: arith.select {{.*}} => stride = [64, 1]
+    %qn = arith.select %first, %8, %q : tensor<16x16x!tt.ptr<f16>>
+    // CHECK: arith.select {{.*}} => stride = [-1, -1]
+    %rn = arith.select %zeroth, %8, %r : tensor<16x16x!tt.ptr<f16>>
+    scf.yield %pn, %qn, %rn : tensor<16x16x!tt.ptr<f16>>, tensor<16x16x!tt.ptr<f16>>, tensor<16x16x!tt.ptr<f16>>
+  }
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @select_contiguity_hint
+// tl.max_contiguous(tl.where(...)): a tt.contiguity hint names the stride of a
+// tensor-condition select.
+tt.func @select_contiguity_hint(%m: i32) {
+  %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  %zero = arith.constant dense<0> : tensor<32xi32>
+  %bound = tt.splat %m : i32 -> tensor<32xi32>
+  %mask = arith.cmpi slt, %range, %bound : tensor<32xi32>
+  // CHECK: arith.select {{.*}} => stride = [-1]
+  %0 = arith.select %mask, %range, %zero : tensor<32xi1>, tensor<32xi32>
+  // CHECK: arith.select {{.*}} => stride = [1]
+  %1 = arith.select %mask, %range, %zero {tt.contiguity = dense<32> : tensor<1xi32>} : tensor<32xi1>, tensor<32xi32>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @select_tensor_cond
+// Both arms have stride [0, 1]; a tensor condition keeps it only along a dim
+// on which the condition is constant over the whole dim.
+tt.func @select_tensor_cond(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %m: i32, %c: i1, %lda: i32) {
+  %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+  %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32> -> tensor<1x16xi32>
+  %2 = tt.broadcast %1 : tensor<1x16xi32> -> tensor<16x16xi32>
+  %3 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<16x16x!tt.ptr<f16>>
+  %a = tt.addptr %3, %2 : tensor<16x16x!tt.ptr<f16>>, tensor<16x16xi32>
+  %4 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<16x16x!tt.ptr<f16>>
+  %b = tt.addptr %4, %2 : tensor<16x16x!tt.ptr<f16>>, tensor<16x16xi32>
+  %5 = tt.expand_dims %0 {axis = 1 : i32} : tensor<16xi32> -> tensor<16x1xi32>
+  %6 = tt.broadcast %5 : tensor<16x1xi32> -> tensor<16x16xi32>
+  %any = arith.cmpi slt, %2, %6 : tensor<16x16xi32>
+  %7 = tt.splat %m : i32 -> tensor<16x1xi32>
+  %8 = arith.cmpi slt, %5, %7 : tensor<16x1xi32>
+  %rows = tt.broadcast %8 : tensor<16x1xi1> -> tensor<16x16xi1>
+  %all = tt.splat %c : i1 -> tensor<16x16xi1>
+  // CHECK: arith.select {{.*}} => stride = [-1, -1]
+  %s0 = arith.select %any, %a, %b : tensor<16x16xi1>, tensor<16x16x!tt.ptr<f16>>
+  // CHECK: arith.select {{.*}} => stride = [-1, 1]
+  %s1 = arith.select %rows, %a, %b : tensor<16x16xi1>, tensor<16x16x!tt.ptr<f16>>
+  // CHECK: arith.select {{.*}} => stride = [0, 1]
+  %s2 = arith.select %all, %a, %b : tensor<16x16xi1>, tensor<16x16x!tt.ptr<f16>>
+  %c8 = arith.constant dense<8> : tensor<16x16xi32>
+  %half = arith.cmpi slt, %2, %c8 : tensor<16x16xi32>
+  // CHECK: arith.select {{.*}} => stride = [0, -1]
+  %s5 = arith.select %half, %a, %b : tensor<16x16xi1>, tensor<16x16x!tt.ptr<f16>>
+  // Arms with runtime pitch %lda: a tensor condition also drops the stride
+  // value, a scalar one keeps it.
+  %9 = tt.splat %lda : i32 -> tensor<16x1xi32>
+  %10 = arith.muli %5, %9 : tensor<16x1xi32>
+  %11 = tt.broadcast %10 : tensor<16x1xi32> -> tensor<16x16xi32>
+  %12 = arith.addi %11, %2 : tensor<16x16xi32>
+  %ra = tt.addptr %3, %12 : tensor<16x16x!tt.ptr<f16>>, tensor<16x16xi32>
+  %rb = tt.addptr %4, %12 : tensor<16x16x!tt.ptr<f16>>, tensor<16x16xi32>
+  // CHECK: arith.select {{.*}} => stride = [-1, 1]{{$}}
+  %s3 = arith.select %rows, %ra, %rb : tensor<16x16xi1>, tensor<16x16x!tt.ptr<f16>>
+  // CHECK: arith.select {{.*}} => stride = [-1, 1], stride_values = {0: {{.*}}}
+  %s4 = arith.select %c, %ra, %rb : tensor<16x16x!tt.ptr<f16>>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @select_struct_arms
+// At LLVM-lowering time a noinline function's tensor argument is a struct of
+// another rank: the select gets the unknown stride of its own rank, which a
+// tt.contiguity hint can still refine.
+tt.func @select_struct_arms(%sa: !llvm.struct<(ptr<1>, ptr<1>)>, %sb: !llvm.struct<(ptr<1>, ptr<1>)>, %base: !tt.ptr<f16>, %c: i1) {
+  %a = builtin.unrealized_conversion_cast %sa : !llvm.struct<(ptr<1>, ptr<1>)> to tensor<2x16x!tt.ptr<f16>>
+  %b = builtin.unrealized_conversion_cast %sb : !llvm.struct<(ptr<1>, ptr<1>)> to tensor<2x16x!tt.ptr<f16>>
+  %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+  %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32> -> tensor<1x16xi32>
+  %2 = tt.broadcast %1 : tensor<1x16xi32> -> tensor<2x16xi32>
+  %3 = tt.splat %base : !tt.ptr<f16> -> tensor<2x16x!tt.ptr<f16>>
+  %4 = tt.addptr %3, %2 : tensor<2x16x!tt.ptr<f16>>, tensor<2x16xi32>
+  // CHECK: arith.select {{.*}} => stride = [-1, -1]
+  %5 = arith.select %c, %4, %a : tensor<2x16x!tt.ptr<f16>>
+  // CHECK: arith.select {{.*}} => stride = [-1, 1]
+  %6 = arith.select %c, %a, %b {tt.contiguity = dense<[1, 16]> : tensor<2xi32>} : tensor<2x16x!tt.ptr<f16>>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @dead_zero_init
+// Loop fusion also seeds a fused iter_arg with a zero it never reads: the
+// guard is an inner counter that starts at 0. The zero's stride is ignored,
+// unless a use can read it (%rd, %live) or the guard does not hold on the
+// first iteration (%late, %ne, %th). IV columns still join with the init's.
+tt.func @dead_zero_init(%n: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %zero = arith.constant dense<0> : tensor<16x16xi32>
+  %cst = arith.constant dense<64> : tensor<16x1xi32>
+  %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+  %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<16xi32> -> tensor<16x1xi32>
+  %2 = arith.muli %1, %cst : tensor<16x1xi32>
+  %3 = tt.broadcast %2 : tensor<16x1xi32> -> tensor<16x16xi32>
+  %4:8 = scf.for %iv = %c0_i32 to %n step %c1_i32 iter_args(%k = %c0_i32, %dif = %zero, %dsel = %zero, %rd = %zero, %late = %zero, %ne = %zero, %th = %zero, %live = %zero) -> (i32, tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>) : i32 {
+    %first = arith.cmpi eq, %k, %c0_i32 : i32
+    %second = arith.cmpi eq, %k, %c1_i32 : i32
+    %notfirst = arith.cmpi ne, %k, %c0_i32 : i32
+    %ivs = tt.splat %iv : i32 -> tensor<16x16xi32>
+    %strided = arith.addi %3, %ivs : tensor<16x16xi32>
+    // CHECK: } => stride = [64, 0]
+    %qif = scf.if %first -> (tensor<16x16xi32>) {
+      scf.yield %3 : tensor<16x16xi32>
+    } else {
+      scf.yield %dif : tensor<16x16xi32>
+    }
+    // CHECK: arith.select {{.*}} => stride = [64, 0], iv_strides = {scf.for@{{.*}}: [-1, -1]}
+    %qsel = arith.select %first, %strided, %dsel : tensor<16x16xi32>
+    // CHECK: arith.select {{.*}} => stride = [-1, 0]
+    %qrd = arith.select %first, %rd, %3 : tensor<16x16xi32>
+    // CHECK: arith.select {{.*}} => stride = [-1, 0]
+    %qlate = arith.select %second, %3, %late : tensor<16x16xi32>
+    // CHECK: arith.select {{.*}} => stride = [-1, 0]
+    %qne = arith.select %notfirst, %3, %ne : tensor<16x16xi32>
+    // CHECK: } => stride = [-1, 0]
+    %qth = scf.if %first -> (tensor<16x16xi32>) {
+      scf.yield %th : tensor<16x16xi32>
+    } else {
+      scf.yield %3 : tensor<16x16xi32>
+    }
+    // CHECK: arith.addi {{.*}} => stride = [-1, 0]
+    %r = arith.addi %live, %3 : tensor<16x16xi32>
+    // CHECK: arith.select {{.*}} => stride = [-1, 0]
+    %qlv = arith.select %first, %3, %live : tensor<16x16xi32>
+    %kn = arith.addi %k, %c1_i32 : i32
+    scf.yield %kn, %qif, %qsel, %qrd, %qlate, %qne, %qth, %r : i32, tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>
+  }
+  // A zero-trip loop returns the zero inits, so the loop results join them.
+  // CHECK-NOT: } => stride = [64, 0]
+  tt.return
+}
