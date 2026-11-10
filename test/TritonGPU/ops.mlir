@@ -547,3 +547,38 @@ module attributes {"ttg.target" = "hip:gfx1260", "ttg.num-ctas" = 1 : i32, "ttg.
     tt.return
   }
 }
+
+// -----
+
+// A broadcast may add register bases that only span the broadcast dimension,
+// wherever they appear in the register list.
+#bcast_src = #ttg.linear<{register = [[1, 0], [2, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#bcast_dst_last = #ttg.linear<{register = [[1, 0], [2, 0], [0, 1]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#bcast_dst_middle = #ttg.linear<{register = [[1, 0], [0, 1], [2, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @broadcast_adds_register_basis
+  tt.func @broadcast_adds_register_basis(%arg: tensor<4x1xi32, #bcast_src>) {
+    // CHECK: tt.broadcast
+    %0 = tt.broadcast %arg : tensor<4x1xi32, #bcast_src> -> tensor<4x2xi32, #bcast_dst_last>
+    // CHECK: tt.broadcast
+    %1 = tt.broadcast %arg : tensor<4x1xi32, #bcast_src> -> tensor<4x2xi32, #bcast_dst_middle>
+    tt.return
+  }
+}
+
+// -----
+
+// Zero bases are only dropped along the register dimension. Broadcasting
+// through a warp basis is fine as long as the number of warp bases matches.
+#bcast_warp_src = #ttg.linear<{register = [[1, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#bcast_warp_dst = #ttg.linear<{register = [[1, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 1], [0, 0]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @broadcast_through_warp_basis
+  tt.func @broadcast_through_warp_basis(%arg: tensor<2x1xi32, #bcast_warp_src>) {
+    // CHECK: tt.broadcast
+    %0 = tt.broadcast %arg : tensor<2x1xi32, #bcast_warp_src> -> tensor<2x2xi32, #bcast_warp_dst>
+    tt.return
+  }
+}

@@ -3120,6 +3120,70 @@ public:
   }
 };
 
+// Checks that `dst` equals `src` up to broadcasting: coordinates of `dst` that
+// fall outside of `src`'s output dimensions are ignored, and register bases
+// that map to nothing are dropped from both. This is equivalent to
+//   dst.resizeOutDim(d, size(src, d)) for every d, followed by comparing
+//   removeZeroBasesAlongDim(kRegister) of both layouts,
+// but it walks the bases once instead of building (and validating) several
+// intermediate layouts, and stops at the first mismatch. The verifier runs
+// after every pass, so this is hot for tensors with many dimensions. Returns
+// std::nullopt if the layouts do not have the same output dimensions, in which
+// case the caller has to use the general path.
+static std::optional<bool> broadcastLayoutsMatch(const LinearLayout &src,
+                                                 const LinearLayout &dst,
+                                                 StringAttr kRegister) {
+  if (src.getNumOutDims() != dst.getNumOutDims())
+    return std::nullopt;
+  SmallVector<int32_t> srcSizes;
+  for (auto [srcDim, dstDim] :
+       llvm::zip(src.getOutDimNames(), dst.getOutDimNames())) {
+    int32_t size = src.getOutDimSize(srcDim);
+    if (srcDim != dstDim || size > dst.getOutDimSize(dstDim))
+      return std::nullopt;
+    srcSizes.push_back(size);
+  }
+  // A coordinate outside of `src`'s output space is ignored. LinearLayout
+  // guarantees bases are smaller than the out-dim sizes, so this only ever
+  // changes `dst`'s bases and every basis has one entry per out dim.
+  auto coord = [&](const std::vector<int32_t> &basis, size_t i) {
+    return basis[i] >= srcSizes[i] ? 0 : basis[i];
+  };
+  auto isZero = [&](const std::vector<int32_t> &basis) {
+    return llvm::all_of(llvm::seq<size_t>(0, srcSizes.size()),
+                        [&](size_t i) { return coord(basis, i) == 0; });
+  };
+
+  const auto &srcBases = src.getBases();
+  const auto &dstBases = dst.getBases();
+  if (srcBases.size() != dstBases.size())
+    return false;
+  for (auto [srcIn, dstIn] : llvm::zip(srcBases, dstBases)) {
+    if (srcIn.first != dstIn.first)
+      return false;
+    bool dropZeros = srcIn.first == kRegister;
+    const auto &srcIdx = srcIn.second;
+    const auto &dstIdx = dstIn.second;
+    size_t s = 0, d = 0;
+    while (true) {
+      while (dropZeros && s < srcIdx.size() && isZero(srcIdx[s]))
+        ++s;
+      while (dropZeros && d < dstIdx.size() && isZero(dstIdx[d]))
+        ++d;
+      if (s == srcIdx.size() || d == dstIdx.size())
+        break;
+      for (size_t i = 0; i < srcSizes.size(); ++i)
+        if (coord(srcIdx[s], i) != coord(dstIdx[d], i))
+          return false;
+      ++s;
+      ++d;
+    }
+    if (s != srcIdx.size() || d != dstIdx.size())
+      return false;
+  }
+  return true;
+}
+
 struct TritonGPUInferLayoutInterface
     : public triton::DialectInferLayoutInterface {
   using DialectInferLayoutInterface::DialectInferLayoutInterface;
@@ -3743,11 +3807,14 @@ struct TritonGPUInferLayoutInterface
       return failure();
     auto src = toLinearLayout(srcType);
     auto dst = toLinearLayout(dstType);
+    auto kRegister = StringAttr::get(srcType.getContext(), "register");
+    if (std::optional<bool> matches =
+            broadcastLayoutsMatch(src, dst, kRegister))
+      return success(*matches);
+
     // Ignore coordinates along the dimensions being broadcast.
     for (auto [dim, size] : src.getOutDims())
       dst = dst.resizeOutDim(dim, size);
-
-    auto kRegister = StringAttr::get(srcType.getContext(), "register");
     return success(src.removeZeroBasesAlongDim(kRegister) ==
                    dst.removeZeroBasesAlongDim(kRegister));
   }
