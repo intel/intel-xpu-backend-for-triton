@@ -555,3 +555,30 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     tt.return %r : tensor<32x32xf32, #dpas>
   }
 }
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // COM: The gapped_long_drops_a loop with A's load at loop.stage 1, as the annotation path can assign:
+  // COM: its prefetch distance is not the one the model prices, so both prefetches stay.
+  // CHECK-LABEL: tt.func public @annotated_stage_keeps_both
+  // CHECK:         scf.for
+  // CHECK-NOT:     scf.yield
+  // CHECK:           ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<256x32xbf16>
+  tt.func public @annotated_stage_keeps_both(%descA: !tt.tensordesc<256x32xbf16>, %descB: !tt.tensordesc<32x256xbf16>) -> tensor<256x256xf32, #dpas> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c28672_i32 = arith.constant 28672 : i32
+    %r = scf.for %k = %c0_i32 to %c28672_i32 step %c128_i32 iter_args(%acc = %cst) -> (tensor<256x256xf32, #dpas>) : i32 {
+      %a = tt.descriptor_load %descA[%c0_i32, %k] {loop.stage = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<256x32xbf16> -> tensor<256x32xbf16, #dot0>
+      %b = tt.descriptor_load %descB[%k, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<32x256xbf16> -> tensor<32x256xbf16, #dot1>
+      %d = tt.dot %a, %b, %acc, inputPrecision = tf32 : tensor<256x32xbf16, #dot0> * tensor<32x256xbf16, #dot1> -> tensor<256x256xf32, #dpas>
+      scf.yield %d : tensor<256x256xf32, #dpas>
+    }
+    tt.return %r : tensor<256x256xf32, #dpas>
+  }
+}

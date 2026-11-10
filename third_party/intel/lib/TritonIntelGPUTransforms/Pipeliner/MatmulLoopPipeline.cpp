@@ -261,6 +261,13 @@ choosePrefetchToDrop(scf::ForOp forOp, int numStages,
     return keep("dot_scaled");
   if (candidates.size() < 2)
     return keep("lone prefetch");
+  // On the annotation path a prefetch is issued at its load's loop.stage, which
+  // shortens the num_stages - 1 distance the model prices.
+  if (llvm::any_of(candidates, [](const PrefetchCandidate &c) {
+        auto stage = c.op->getAttrOfType<IntegerAttr>(tt::kLoopStageAttrName);
+        return stage && stage.getInt() != 0;
+      }))
+    return keep("annotated stage");
   std::optional<APInt> tripCount = forOp.getStaticTripCount();
   int64_t numIters = tripCount && tripCount->getActiveBits() <= 62
                          ? static_cast<int64_t>(tripCount->getZExtValue())
