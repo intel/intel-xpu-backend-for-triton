@@ -2,3 +2,9 @@
 python/test/unit/language/test_matmul.py::test_lhs_in_tmem
 # XPU does not natively support scaled mxfp matmul and tmem
 python/test/unit/language/test_matmul.py::test_lhs_in_tmem_mxfp
+
+# Platform limit on A770: no fp64 support
+python/test/unit/language/test_matmul.py::test_simple_matmul[False-4-1-32-32-32-4-float64-float64]
+python/test/unit/language/test_matmul.py::test_simple_matmul[False-8-1-32-32-32-4-float64-float64]
+python/test/unit/language/test_matmul.py::test_simple_matmul[True-4-1-32-32-32-4-float64-float64]
+python/test/unit/language/test_matmul.py::test_simple_matmul[True-8-1-32-32-32-4-float64-float64]
