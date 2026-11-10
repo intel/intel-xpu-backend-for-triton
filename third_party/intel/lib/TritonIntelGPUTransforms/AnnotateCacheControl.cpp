@@ -193,71 +193,6 @@ static bool aliasesWritingPeer(OpTy load, const tti::AliasAnalysis &alias) {
   return false;
 }
 
-/// Returns true iff `op` reads memory, per `MemoryEffectOpInterface`.
-static bool readsMemory(Operation *op) {
-  auto effectOp = dyn_cast<MemoryEffectOpInterface>(op);
-  if (!effectOp)
-    return false;
-  SmallVector<MemoryEffects::EffectInstance> effects;
-  effectOp.getEffects(effects);
-  return llvm::any_of(effects, [](const MemoryEffects::EffectInstance &e) {
-    return isa<MemoryEffects::Read>(e.getEffect());
-  });
-}
-
-/// Returns true iff the address computation of `ptr` consumes a tensor value
-/// read from memory, i.e. the load is a gather/indirect access such as
-/// `table[idx]` with `idx` loaded by the kernel. The reuse analyses only model
-/// structured address components (program ids, ranges, strides, loop IVs), so
-/// for such loads "no reuse evidence" means "unknown", not "streaming": the
-/// loaded indices can hit the same lines many times. Scalar memory reads (e.g.
-/// a per-program base pointer loaded from a pointer array) do not count, since
-/// the tile's address pattern stays structured. Walks through `scf.for`
-/// loop-carried values and `scf.for`/`scf.if` results.
-static bool addressDependsOnLoadedTensor(Value ptr) {
-  SetVector<Value> worklist;
-  worklist.insert(ptr);
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Value v = worklist[i];
-
-    if (auto arg = dyn_cast<BlockArgument>(v)) {
-      // Function arguments and induction variables are structured; only
-      // loop-carried values need to be followed to their init and yield.
-      if (auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
-        if (OpOperand *init = forOp.getTiedLoopInit(arg)) {
-          worklist.insert(init->get());
-          worklist.insert(forOp.getTiedLoopYieldedValue(arg)->get());
-        }
-      }
-      continue;
-    }
-
-    Operation *def = v.getDefiningOp();
-    unsigned resultIdx = cast<OpResult>(v).getResultNumber();
-    if (auto forOp = dyn_cast<scf::ForOp>(def)) {
-      worklist.insert(forOp.getInitArgs()[resultIdx]);
-      worklist.insert(forOp.getYieldedValues()[resultIdx]);
-      continue;
-    }
-    if (auto ifOp = dyn_cast<scf::IfOp>(def)) {
-      worklist.insert(ifOp.thenYield().getOperand(resultIdx));
-      if (!ifOp.getElseRegion().empty())
-        worklist.insert(ifOp.elseYield().getOperand(resultIdx));
-      continue;
-    }
-
-    if (readsMemory(def)) {
-      if (isa<RankedTensorType>(v.getType()))
-        return true;
-      continue; // Scalar read: uniform across the tile.
-    }
-
-    for (Value operand : def->getOperands())
-      worklist.insert(operand);
-  }
-  return false;
-}
-
 /// Returns true iff the function contains any atomic memory op.
 static bool funcContainsAtomic(tt::FuncOp func) {
   auto result = func.walk([&](Operation *op) {
@@ -672,15 +607,6 @@ private:
         return true;
       }
       return false; // Reuse suspected but not promoted.
-    }
-
-    // Gather gate: for a data-dependent address, the reuse analyses cannot
-    // see reuse even when it is heavy (e.g. a small lookup table indexed by
-    // loaded values), so absence of evidence is not evidence of streaming.
-    // Keep the default policy rather than bypassing L1.
-    if constexpr (std::is_same_v<OpTy, tt::LoadOp>) {
-      if (addressDependsOnLoadedTensor(load.getPtr()))
-        return false;
     }
 
     // No reuse evidence -> op-kind-specific default.

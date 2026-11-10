@@ -216,6 +216,77 @@ TEST_F(ReuseAnalysisTest, UnionFalse) {
   EXPECT_FALSE(analysis.anyReuse(loadOp));
 }
 
+// Same layout and loop-free placement as UnionFalse, but the offset comes from
+// a tensor loaded by the kernel (`table[idx]`): reuse is data-dependent and
+// invisible to both legs, so the suppress-side anyReuse is conservatively
+// true. It is not a proof, so knownReuse stays false.
+TEST_F(ReuseAnalysisTest, GatherAddressIsConservativeReuse) {
+  OwningOpRef<ModuleOp> module = createModule();
+  auto i32Ty = builder->getI32Type();
+  auto ptrType = getPtrType(i32Ty);
+  auto funcOp =
+      createFunctionWithReturn(*module, "test_func", {ptrType, ptrType});
+  auto loc = builder->getUnknownLoc();
+
+  auto blocked = makeBlocked(/*sizePerThread=*/{1}, /*threadsPerWarp=*/{32},
+                             /*warpsPerCTA=*/{4}, /*order=*/{0});
+  auto valTy = RankedTensorType::get({128}, i32Ty, blocked);
+  auto ptrTensorTy = RankedTensorType::get({128}, ptrType, blocked);
+
+  auto range = tt::MakeRangeOp::create(*builder, loc, valTy, 0, 128);
+  auto idxBase =
+      tt::SplatOp::create(*builder, loc, ptrTensorTy, funcOp.getArgument(0));
+  auto idxPtr = tt::AddPtrOp::create(*builder, loc, ptrTensorTy, idxBase,
+                                     range.getResult());
+  auto idxLoad = makeLoad(idxPtr, valTy);
+  auto tableBase =
+      tt::SplatOp::create(*builder, loc, ptrTensorTy, funcOp.getArgument(1));
+  auto tablePtr = tt::AddPtrOp::create(*builder, loc, ptrTensorTy, tableBase,
+                                       idxLoad.getResult());
+  auto tableLoad = makeLoad(tablePtr, valTy);
+
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
+
+  EXPECT_TRUE(analysis.anyReuse(tableLoad));
+  EXPECT_FALSE(analysis.knownReuse(tableLoad));
+  // The index load itself is structured streaming.
+  EXPECT_FALSE(analysis.anyReuse(idxLoad));
+}
+
+// A scalar load feeding the offset (e.g. a per-sequence start) is uniform
+// across the tile, so the address stays structured: anyReuse == false.
+TEST_F(ReuseAnalysisTest, ScalarLoadedOffsetIsNotReuse) {
+  OwningOpRef<ModuleOp> module = createModule();
+  auto i32Ty = builder->getI32Type();
+  auto f16Ty = builder->getF16Type();
+  auto funcOp = createFunctionWithReturn(
+      *module, "test_func", {getPtrType(i32Ty), getPtrType(f16Ty)});
+  auto loc = builder->getUnknownLoc();
+
+  auto blocked = makeBlocked(/*sizePerThread=*/{1}, /*threadsPerWarp=*/{32},
+                             /*warpsPerCTA=*/{4}, /*order=*/{0});
+  auto rangeTy = RankedTensorType::get({128}, i32Ty, blocked);
+  auto resultTy = RankedTensorType::get({128}, f16Ty, blocked);
+  auto ptrTensorTy = RankedTensorType::get({128}, getPtrType(f16Ty), blocked);
+
+  auto start = makeLoad(funcOp.getArgument(0), i32Ty);
+  auto base = tt::AddPtrOp::create(*builder, loc, getPtrType(f16Ty),
+                                   funcOp.getArgument(1), start.getResult());
+  auto splat = tt::SplatOp::create(*builder, loc, ptrTensorTy, base);
+  auto range = tt::MakeRangeOp::create(*builder, loc, rangeTy, 0, 128);
+  auto ptr = tt::AddPtrOp::create(*builder, loc, ptrTensorTy, splat,
+                                  range.getResult());
+  auto loadOp = makeLoad(ptr, resultTy);
+
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
+
+  EXPECT_FALSE(analysis.anyReuse(loadOp));
+}
+
 // Phase 1.6 Tests — knownReuse
 
 TEST_F(ReuseAnalysisTest, Known_TrueFromSpatial) {
