@@ -926,10 +926,19 @@ run_instrumentation_tests() {
 
   cd $TRITON_PROJ/python/test/unit
 
-  # FIXME: `-n 1` is not required, but a workaround for pytest-skip, which does report a false positive skip list item not matching to any test.
-  TRITON_TEST_SUITE=instrumentation \
-    TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_NAME} \
-    run_pytest_command -vvv -n 1 --device xpu instrumentation/test_gpuhello.py
+  # DEBUG (do not merge): run test_gpuhello without xdist, in several configurations, to see how it crashes.
+  local first_rc=""
+  for cfg in "spirv_backend=1 line_info=1 plugin=1" "spirv_backend=1 line_info=0 plugin=1" "spirv_backend=1 line_info=1 plugin=0" "spirv_backend=0 line_info=1 plugin=1"; do
+    local spirv_backend line_info plugin rc=0
+    eval "$cfg"
+    echo "****** test_gpuhello: $cfg ******"
+    env TRITON_USE_SPIRV_BACKEND=$spirv_backend TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=$((1 - line_info)) \
+      $([ "$plugin" = 1 ] && echo "LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_NAME}") \
+      python -X faulthandler -m pytest -p no:xdist -s -vvv --device xpu instrumentation/test_gpuhello.py || rc=$?
+    echo "****** test_gpuhello: $cfg -> exit code $rc ******"
+    first_rc=${first_rc:-$rc}
+  done
+  return $first_rc
 }
 
 run_inductor_tests() {
