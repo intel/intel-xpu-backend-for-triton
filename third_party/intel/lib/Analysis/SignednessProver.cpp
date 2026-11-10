@@ -23,7 +23,7 @@ using tt::intel::RequiredCondition;
 ///
 /// A forward abstract interpreter answers "what is this value's range"; this
 /// answers "what would make this value non-negative", which is the question
-/// speculation needs. It is not a second range analysis: every step consults
+/// its callers ask. It is not a second range analysis: every step consults
 /// the one it is given, and only decomposes where that analysis has no answer.
 class SignednessProver {
 public:
