@@ -14,6 +14,8 @@ import triton.language as tl
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.benchmark_testing import DEVICE, get_xpu_extension
 from triton_kernels_benchmark.gemm_tile_utils import load_matrix_tile, make_matrix_tile_ptr, store_matrix_tile
+from triton_kernels_benchmark.gemm_benchmark import (
+    has_aligned_matrix_bases, make_matrix_tile_ptr, load_matrix_tile, store_matrix_tile)
 
 sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
 
@@ -62,7 +64,9 @@ def mac_loop(
         # Stream-K parameters
         iters_per_tile, start_iter, end_iter,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+        A_BASE_ALIGNED: tl.constexpr = False, B_BASE_ALIGNED: tl.constexpr = False,
+        C_BASE_ALIGNED: tl.constexpr = False):
 
     tile_id = start_iter // iters_per_tile
     remain_iters = start_iter % iters_per_tile
@@ -72,8 +76,8 @@ def mac_loop(
     else:
         pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
 
-    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
-    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
+    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K, A_BASE_ALIGNED)
+    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N, B_BASE_ALIGNED)
     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     # Walk the segment mirrored inside its tile. When each program has at least one tile of iterations, its first
     # segment then starts at k = 0, so programs on tiles that share A rows or B columns read the same k-panels at about
@@ -89,7 +93,7 @@ def mac_loop(
 
     if remain_iters == 0 and end_iter % iters_per_tile == 0:
         store_matrix_tile(c_ptr, acc, M, N, stride_cm, stride_cn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N,
-                          BLOCK_SIZE_M, BLOCK_SIZE_N)
+                          BLOCK_SIZE_M, BLOCK_SIZE_N, C_BASE_ALIGNED)
     else:
         rm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
         rn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
@@ -134,7 +138,9 @@ def first_wave(
         full_tiles,  # pylint: disable=redefined-outer-name
         partial_tiles, iters_per_tile,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+        A_BASE_ALIGNED: tl.constexpr = False, B_BASE_ALIGNED: tl.constexpr = False,
+        C_BASE_ALIGNED: tl.constexpr = False):
 
     pid = tl.program_id(axis=0)
     start_iter = pid * full_tiles + tl.minimum(pid, partial_tiles)
@@ -144,7 +150,8 @@ def first_wave(
         end_iter = start_iter + (iters_per_tile - start_iter % iters_per_tile)
         end_iter = tl.minimum(end_iter, last_iter)
         mac_loop(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
-                 iters_per_tile, start_iter, end_iter, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
+                 iters_per_tile, start_iter, end_iter, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M,
+                 A_BASE_ALIGNED, B_BASE_ALIGNED, C_BASE_ALIGNED)
 
         start_iter = end_iter
 
@@ -172,7 +179,9 @@ def full_tiles(
         # Stream-K parameters
         streamk_tiles,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+        A_BASE_ALIGNED: tl.constexpr = False, B_BASE_ALIGNED: tl.constexpr = False,
+        C_BASE_ALIGNED: tl.constexpr = False):
 
     tile_id = tl.program_id(axis=0) + streamk_tiles
     if GROUP_SIZE_M > 0:
@@ -181,8 +190,8 @@ def full_tiles(
     else:
         pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
 
-    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
-    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
+    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K, A_BASE_ALIGNED)
+    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N, B_BASE_ALIGNED)
     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
     off_k = 0
@@ -195,7 +204,7 @@ def full_tiles(
         off_k += BLOCK_SIZE_K
 
     store_matrix_tile(c_ptr, acc, M, N, stride_cm, stride_cn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_M,
-                      BLOCK_SIZE_N)
+                      BLOCK_SIZE_N, C_BASE_ALIGNED)
 
 
 @triton.jit
@@ -242,6 +251,7 @@ def should_use_streamk(M: int, N: int, K: int) -> bool:
 
 
 def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
+    """Multiply strided matrices without copying or modifying inputs."""
     if DEVICE == 'xpu':
         num_xe_core = torch.xpu.get_device_capability(0)['gpu_subslice_count']
     else:
@@ -253,10 +263,12 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
     BLOCK_SIZE_K = BLOCK_SIZES['BLOCK_SIZE_K']
 
     # Check constraints.
+    assert a.ndim == b.ndim == c.ndim == 2, 'Matrices must be two-dimensional'
     assert a.shape[1] == b.shape[0], 'Incompatible dimensions'
     assert all(x.data_ptr() % 16 == 0 for x in (a, b, c)), 'Matrix base addresses must be 16-byte aligned'
     M, K = a.shape
     K, N = b.shape
+    assert c.shape == (M, N), 'Incompatible output dimensions'
 
     num_block_m = triton.cdiv(M, BLOCK_SIZE_M)
     num_block_n = triton.cdiv(N, BLOCK_SIZE_N)
@@ -289,14 +301,18 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
-        streamk_full_tiles, streamk_partial_tiles, iters_per_tile)
+        streamk_full_tiles, streamk_partial_tiles, iters_per_tile,
+        A_BASE_ALIGNED=has_aligned_matrix_bases(a), B_BASE_ALIGNED=has_aligned_matrix_bases(b),
+        C_BASE_ALIGNED=has_aligned_matrix_bases(c))
     full_tiles[(blocking_tiles, )](
         a, b, c,  #
         M, N, K,  #
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
-        streamk_tiles)
+        streamk_tiles,
+        A_BASE_ALIGNED=has_aligned_matrix_bases(a), B_BASE_ALIGNED=has_aligned_matrix_bases(b),
+        C_BASE_ALIGNED=has_aligned_matrix_bases(c))
 
     return c
 

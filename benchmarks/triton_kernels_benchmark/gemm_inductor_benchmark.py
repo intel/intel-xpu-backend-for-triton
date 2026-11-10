@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Compare TorchInductor ATen/Triton GEMM backends and manual grouped tile-order/Split-K/Stream-K GEMM.
 
 The cases are FP16 GEMMs where Inductor's Triton GEMM was slower than ATen.
@@ -51,6 +52,8 @@ class GemmCase:
     op: str
     shapes: tuple[tuple[int, ...], ...]
     strides: tuple[tuple[int, ...], ...]
+    logged_aten_ms: float
+    logged_triton_ms: float
 
 
 # Shapes and strides where Inductor's Triton GEMM was slower than ATen.
@@ -136,6 +139,12 @@ def make_inputs(case: GemmCase) -> tuple[torch.Tensor, ...]:
         torch.randn(storage_size(shape, stride), device="xpu", dtype=torch.float16).as_strided(shape, stride)
         for shape, stride in zip(case.shapes, case.strides))
 
+    inputs = []
+    for shape, stride in zip(case.shapes, case.strides):
+        storage_size = 1 + sum((dim - 1) * step for dim, step in zip(shape, stride))
+        storage = torch.randn(storage_size, device=DEVICE, dtype=torch.float16)
+        inputs.append(storage.as_strided(shape, stride))
+    return tuple(inputs)
 
 def _register_custom_xpu_mm_heuristic() -> None:
     """Add custom GEMM configs to Inductor's XPU mm/bmm/addmm template search space."""
@@ -219,6 +228,10 @@ def _streamk(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, config: TileConf
         full_tiles.fn[(total_tiles - streamk_tiles, )](a, b, c, m, n, k, *strides, streamk_tiles, **meta, num_stages=2,
                                                        grf_mode="256")
 
+def _perf_rate(bytes_count: float, ms: float) -> float:
+    if ms <= 0:
+        return float("inf")
+    return bytes_count * 1e-9 / (ms * 1e-3)
 
 @functools.cache
 def _addmatrix_kernel():
@@ -300,6 +313,70 @@ def inductor_pick(code: list[str]) -> str:
 
 def get_benchmark(case_ids: list[int], modes: list[str]) -> Mark:
     import triton_kernels_benchmark as benchmark_suite
+
+    do_bench = benchmark_suite.get_do_bench(n_warmup=200, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
+
+    if mode.startswith("manual_"):
+        with torch.no_grad():
+            fn = lambda: _manual_gemm(mode, inputs)
+            torch.testing.assert_close(fn(), operation(*inputs), rtol=1e-2, atol=5e-2)
+            _, min_ms, max_ms, mean_ms, cv = do_bench(fn)
+        return {
+            "mode": mode,
+            "mean_ms": mean_ms,
+            "min_ms": min_ms,
+            "max_ms": max_ms,
+            "cv": cv,
+        }
+
+    if mode in {"aten_only", "triton_aten", "triton_only"}:
+        torch.compiler.reset()
+        backends = {
+            "aten_only": "ATEN",
+            "triton_aten": "TRITON,ATEN",
+            "triton_only": "TRITON",
+        }[mode]
+        with cfg.patch(
+                max_autotune_gemm=True,
+                max_autotune_gemm_backends=backends,
+                force_disable_caches=True,
+                **({"triton.enable_persistent_tma_matmul": True} if inputs[-2].device.type == "xpu" else {}),
+        ):
+            compiled = torch.compile(
+                operation,
+                backend="inductor",
+                mode="max-autotune-no-cudagraphs",
+            )
+            with torch.no_grad():
+                for _ in range(3):
+                    compiled(*inputs)
+                _sync()
+                torch.testing.assert_close(compiled(*inputs), operation(*inputs), rtol=1e-2, atol=5e-2)
+                _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: compiled(*inputs))
+        del compiled
+        torch.compiler.reset()
+        return {
+            "mode": mode,
+            "mean_ms": mean_ms,
+            "min_ms": min_ms,
+            "max_ms": max_ms,
+            "cv": cv,
+        }
+
+    raise ValueError(f"Unsupported benchmark mode: {mode}")
+
+
+def get_benchmark(case_ids: list[int], modes: list[str]):
+    import triton_kernels_benchmark as benchmark_suite
+
+    labels = {
+        "aten_only": "Inductor-ATEN",
+        "triton_aten": "Inductor-TRITON+ATEN",
+        "triton_only": "Inductor-TRITON",
+        "manual_grouped": "Manual-Triton-grouped-tiles",
+        "manual_splitk": "Manual-Triton-Split-K",
+        "manual_streamk": "Manual-Triton-Stream-K",
+    }
 
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
@@ -408,7 +485,14 @@ def main() -> None:
         parser.error(f"--case must be between 1 and {len(GEMM_CASES)}")
     print_cases(case_ids)
     if args.list:
+        for case_id in case_ids:
+            case = GEMM_CASES[case_id - 1]
+            print(f"{case_id}: {case.op}, shapes={case.shapes}, strides={case.strides}")
+            print(f"   log winner: ATen={case.logged_aten_ms:.6f} ms, "
+                  f"best Triton={case.logged_triton_ms:.6f} ms")
         return
+
+    import torch
 
     if not torch.xpu.is_available():
         raise RuntimeError("This benchmark requires an XPU-enabled PyTorch installation and an available Intel GPU")
@@ -424,6 +508,19 @@ def main() -> None:
             return
     if {"triton_aten", "triton_only"} & set(modes):
         _register_custom_xpu_mm_heuristic()
+    print(f"Device: {torch.xpu.get_device_name()}", flush=True)
+    for case_id in case_ids:
+        case = GEMM_CASES[case_id - 1]
+        print(f"\nCase {case_id}: {case.op}, shapes={case.shapes}, strides={case.strides}", flush=True)
+        print(
+            f"  log winner: ATen={case.logged_aten_ms:.6f} ms, "
+            f"best Triton={case.logged_triton_ms:.6f} ms",
+            flush=True,
+        )
+    if args.mode == "all":
+        modes = ["aten_only", "triton_only", "manual_grouped", "manual_splitk", "manual_streamk"]
+    else:
+        modes = [args.mode]
     from triton_kernels_benchmark.benchmark_testing import MarkArgs
 
     get_benchmark(case_ids, modes).run(show_plots=False, print_data=True,
