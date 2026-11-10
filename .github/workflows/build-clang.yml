@@ -1,6 +1,6 @@
 # Builds Triton with clang and lld (TRITON_BUILD_WITH_CLANG_LLD), without running tests. PR CI builds
 # only with GCC, which does not catch errors that only clang reports, such as calls to deprecated
-# APIs. The runner, shell and build command mirror the GCC build in build-test-reusable.yml.
+# APIs.
 name: Build with clang
 
 on:
@@ -23,21 +23,15 @@ env:
 jobs:
   build:
     name: Build
-    timeout-minutes: 720
+    timeout-minutes: 120
     runs-on:
-      - linux
-      - max1100
-      - rolling
+      - cpu
       - runner-0.0.22
-    defaults:
-      run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
       - name: Install clang and lld
-        # Plain bash, as setup-triton's build step uses, so this finds the clang the build will use.
         shell: bash
         run: |
           if ! command -v clang++ >/dev/null 2>&1 || ! command -v ld.lld >/dev/null 2>&1; then
