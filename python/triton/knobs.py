@@ -596,6 +596,7 @@ class intel_knobs(base_knobs):
     dump_shader_info: env_bool = env_bool("TRITON_INTEL_ENABLE_IGC_SHADER_DUMP", False)
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
+    descriptor_block_io_relayout: env_bool = env_bool("TRITON_INTEL_DESCRIPTOR_BLOCK_IO_RELAYOUT", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
     # Disabled on Windows after the regressions tracked in issue #7495. The harmful
     # `cg`-to-`!nontemporal` lowering (an L3 bypass) was removed in issue #7901, so

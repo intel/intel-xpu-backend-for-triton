@@ -94,24 +94,9 @@ runs:
         path: $HOME/.triton/nvidia
         key: triton-nvidia-${{ env.TRITON_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
 
-    - name: Prepare Triton cache for llvm
+    - name: Setup LLVM
       if: inputs.build_llvm == 'false'
-      shell: bash
-      run: |
-        LLVM_HASH="$(sha256sum cmake/llvm-info.json | cut -d\  -f1)"
-        TRITON_LLVM_CACHE_KEY=$(echo $LLVM_HASH ${{ hashFiles('setup.py') }} | sha256sum - | cut -d\  -f1)
-        echo "TRITON_LLVM_CACHE_KEY=$TRITON_LLVM_CACHE_KEY" | tee -a $GITHUB_ENV
-
-    - name: Load llvm from Triton cache
-      if: inputs.build_llvm == 'false'
-      id: triton-cache-llvm
-      uses: ./.github/actions/load
-      env:
-        # Increase this value to reset cache
-        CACHE_NUMBER: 1
-      with:
-        path: $HOME/.triton/llvm
-        key: triton-llvm-${{ env.TRITON_LLVM_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
+      uses: ./.github/actions/setup-llvm
 
     - name: Build Triton
       shell: bash
@@ -127,10 +112,3 @@ runs:
       with:
         path: ${{ steps.triton-cache-nvidia.outputs.path }}
         dest: ${{ steps.triton-cache-nvidia.outputs.dest }}
-
-    - name: Save llvm in Triton cache
-      if: steps.triton-cache-llvm.outputs.status == 'miss' && inputs.build_llvm == 'false'
-      uses: ./.github/actions/save
-      with:
-        path: ${{ steps.triton-cache-llvm.outputs.path }}
-        dest: ${{ steps.triton-cache-llvm.outputs.dest }}
