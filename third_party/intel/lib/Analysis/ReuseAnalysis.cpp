@@ -23,6 +23,12 @@ bool addressDependsOnLoadedTensor(Value ptr) {
   for (unsigned i = 0; i < worklist.size(); ++i) {
     Value v = worklist[i];
 
+    // A scalar is uniform across the tile whatever produced it (a scalar
+    // load, or a tensor read reduced to a scalar), so it cannot make the
+    // address vary per lane. Only tensor values carry a gather.
+    if (!isa<RankedTensorType>(v.getType()))
+      continue;
+
     if (auto arg = dyn_cast<BlockArgument>(v)) {
       // Function arguments and induction variables are structured; only
       // loop-carried values need to be followed to their init and yield.
@@ -43,17 +49,14 @@ bool addressDependsOnLoadedTensor(Value ptr) {
       continue;
     }
     if (auto ifOp = dyn_cast<scf::IfOp>(def)) {
+      // An scf.if with results always has an else region (verifier-enforced).
       worklist.insert(ifOp.thenYield().getOperand(resultIdx));
-      if (!ifOp.getElseRegion().empty())
-        worklist.insert(ifOp.elseYield().getOperand(resultIdx));
+      worklist.insert(ifOp.elseYield().getOperand(resultIdx));
       continue;
     }
 
-    if (readsMemory(def)) {
-      if (isa<RankedTensorType>(v.getType()))
-        return true;
-      continue; // Scalar read: uniform across the tile.
-    }
+    if (readsMemory(def))
+      return true;
 
     for (Value operand : def->getOperands())
       worklist.insert(operand);

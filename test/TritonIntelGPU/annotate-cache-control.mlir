@@ -974,3 +974,31 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return
   }
 }
+
+// -----
+
+// COM: Gather gate must not over-trigger on a tensor read reduced to a scalar
+// COM: (e.g. a `tl.sum` over loaded lengths used as a base offset): the scalar
+// COM: is uniform across the tile, so the streaming load still gets `.cg`.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @reduced_loaded_offset_streaming_gets_cg
+  tt.func public @reduced_loaded_offset_streaming_gets_cg(%lens: tensor<1024x!tt.ptr<i32>, #blocked1d>, %in: !tt.ptr<f32>, %out: tensor<1024x!tt.ptr<f32>, #blocked1d>) {
+    %l = tt.load %lens : tensor<1024x!tt.ptr<i32>, #blocked1d>
+    %sum = "tt.reduce"(%l) <{axis = 0 : i32}> ({
+    ^bb0(%a: i32, %b: i32):
+      %s = arith.addi %a, %b : i32
+      tt.reduce.return %s : i32
+    }) : (tensor<1024xi32, #blocked1d>) -> i32
+    %base = tt.addptr %in, %sum : !tt.ptr<f32>, i32
+    %r = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked1d>
+    %sb = tt.splat %base : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked1d>
+    %p = tt.addptr %sb, %r : tensor<1024x!tt.ptr<f32>, #blocked1d>, tensor<1024xi32, #blocked1d>
+    // CHECK: tt.load {{.*}}cache_modifier = cg
+    // CHECK: tt.load {{.*}}cache_modifier = cg
+    %v = tt.load %p : tensor<1024x!tt.ptr<f32>, #blocked1d>
+    tt.store %out, %v : tensor<1024x!tt.ptr<f32>, #blocked1d>
+    tt.return
+  }
+}
