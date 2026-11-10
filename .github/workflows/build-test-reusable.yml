@@ -419,6 +419,7 @@ jobs:
       - name: Run Tutorials
         if: matrix.loop.suite == 'rest'
         run: |
+          export TRITON_AUTOTUNE_WARMUP_WORKERS="$(( $(nproc) * 60 / 100 ))"
           ${{ env.TRITON_TEST_CMD }} --tutorial --tutorial06-run-mode skip
 
       - name: Warm Flash Attention tutorials compile cache
