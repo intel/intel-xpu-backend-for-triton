@@ -204,7 +204,8 @@ struct RowLimitMaskInfo {
 /// Match `mask` against the row-limit pattern above for a tensor of any
 /// rank >= 2, and check the remaining conditions `base_height` needs:
 /// `other` is zero-fill-compatible, the bounded dim is the pitch dim, it
-/// isn't a broadcast pointer, and `rowBase`/`bound` are i32 or i64.
+/// isn't a broadcast pointer, and `rowBase`/`bound` are both i32 or both
+/// i64 (no extension between the base and the compare).
 std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   ArrayRef<int64_t> tensorShape,
                                                   unsigned contiguousDim,

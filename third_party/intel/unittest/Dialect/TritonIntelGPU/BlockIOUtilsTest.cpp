@@ -541,6 +541,52 @@ TEST_F(MatchRowLimitMaskTest, I64RowIndexFromExtendedI32Accepted) {
   EXPECT_EQ(result->bound, bound64);
 }
 
+// An extension between an i32 base and an i64 compare is rejected: the
+// matcher looks through it, so the height would be computed from the i32 base
+// with the wrong extension (base 0x80000000 under `extui` is +2^31, but
+// computeRowLimitHeight sign-extends it to -2^31 and returns the full tile).
+TEST_F(MatchRowLimitMaskTest, I32BaseExtendedToI64CompareRejected) {
+  SmallVector<int64_t, 2> shape = {64, 32};
+  Type i64Ty = builder.getI64Type();
+  auto i64TensorTy = RankedTensorType::get({64}, i64Ty);
+  Value bound64 = constI(2147483664, 64);
+
+  // extui(base32 + arange) < bound64, extension around the add.
+  {
+    Value rows32 = addI32(splatTo(constI(INT32_MIN, 32), {64}), arange(64));
+    Value rows64 = arith::ExtUIOp::create(builder, loc(), i64TensorTy, rows32);
+    Value mask = buildRowLimitMask(rows64, /*boundedDim=*/0, shape, bound64);
+    EXPECT_FALSE(matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                   /*contiguousDim=*/1,
+                                   /*pitchDimIsBroadcast=*/false)
+                     .has_value());
+  }
+  // extui(splat(base32)) + sext(arange) < bound64, extension on the splat.
+  {
+    Value base64 = arith::ExtUIOp::create(builder, loc(), i64TensorTy,
+                                          splatTo(constI(INT32_MIN, 32), {64}));
+    Value idx64 =
+        arith::ExtSIOp::create(builder, loc(), i64TensorTy, arange(64));
+    Value mask = buildRowLimitMask(addI32(base64, idx64), /*boundedDim=*/0,
+                                   shape, bound64);
+    EXPECT_FALSE(matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                   /*contiguousDim=*/1,
+                                   /*pitchDimIsBroadcast=*/false)
+                     .has_value());
+  }
+  // extsi(base32 + arange) < bound64: conservatively rejected too.
+  {
+    Value rows32 = addI32(splatTo(constI(7, 32), {64}), arange(64));
+    Value rows64 = arith::ExtSIOp::create(builder, loc(), i64TensorTy, rows32);
+    Value mask =
+        buildRowLimitMask(rows64, /*boundedDim=*/0, shape, constI(100, 64));
+    EXPECT_FALSE(matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                   /*contiguousDim=*/1,
+                                   /*pitchDimIsBroadcast=*/false)
+                     .has_value());
+  }
+}
+
 // A rank-3 tensor (batch dim 0, pitch dim 1, contiguous dim 2) with just the
 // row-limit comparison, no batch predicate: generalizes the rank-2 case,
 // `extraPred` stays null.

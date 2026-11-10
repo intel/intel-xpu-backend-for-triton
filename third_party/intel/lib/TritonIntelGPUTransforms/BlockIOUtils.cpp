@@ -1313,11 +1313,14 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
   // by `.to(tl.int64)`, issue #8565); checked here so every caller agrees on
   // eligibility.
   Value boundSrc = boundSplat.getSrc();
-  auto isSupportedIndexType = [](Type ty) {
-    return ty.isInteger(32) || ty.isInteger(64);
-  };
-  if (!isSupportedIndexType(boundSrc.getType()) ||
-      (*rowBase && !isSupportedIndexType(rowBase->getType())))
+  if (!boundSrc.getType().isInteger(32) && !boundSrc.getType().isInteger(64))
+    return std::nullopt;
+  // `rowBase` must have the compare's type: matchBaseAndRange looks through
+  // extsi/extui, and an extension between the base and the compare (around
+  // the add, or on the base splat) would be lost. computeRowLimitHeight would
+  // then sign-extend a zero-extended base (e.g. `extui(base32 + arange) <
+  // bound64` with base 0x80000000), giving the wrong height.
+  if (*rowBase && rowBase->getType() != boundSrc.getType())
     return std::nullopt;
 
   return RowLimitMaskInfo{pitchDim, *rowBase, boundSrc, extraPred};
