@@ -13,6 +13,8 @@ import triton.language as tl
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.benchmark_testing import DEVICE, get_xpu_extension
 from triton_kernels_benchmark.gemm_tile_utils import load_matrix_tile, make_matrix_tile_ptr, store_matrix_tile
+from triton_kernels_benchmark.gemm_benchmark import (
+    has_aligned_matrix_bases, make_matrix_tile_ptr, load_matrix_tile, store_matrix_tile)
 
 sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
 
@@ -46,7 +48,9 @@ def _kernel(A, B, C,  #
             stride_cm: tl.constexpr, stride_cn: tl.constexpr,  #
             acc_dtype: tl.constexpr,  #
             BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-            GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr  #
+            GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr,  #
+            A_BASE_ALIGNED: tl.constexpr = False, B_BASE_ALIGNED: tl.constexpr = False,
+            C_BASE_ALIGNED: tl.constexpr = False,
             ):
     # matrix multiplication
     pid = tl.program_id(0)
@@ -60,8 +64,8 @@ def _kernel(A, B, C,  #
     pid_m = group_id * GROUP_M + (pid % group_size)
     pid_n = (pid % width) // (group_size)
 
-    a_desc = make_matrix_tile_ptr(A, M, K, stride_am, stride_ak, BLOCK_M, BLOCK_K)
-    b_desc = make_matrix_tile_ptr(B, K, N, stride_bk, stride_bn, BLOCK_K, BLOCK_N)
+    a_desc = make_matrix_tile_ptr(A, M, K, stride_am, stride_ak, BLOCK_M, BLOCK_K, A_BASE_ALIGNED)
+    b_desc = make_matrix_tile_ptr(B, K, N, stride_bk, stride_bn, BLOCK_K, BLOCK_N, B_BASE_ALIGNED)
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
     off_k = pid_z * BLOCK_K
     for _ in range(0, K, BLOCK_K * SPLIT_K):
@@ -73,7 +77,8 @@ def _kernel(A, B, C,  #
 
     # handles write-back with reduction-splitting
     if SPLIT_K == 1:
-        store_matrix_tile(C, acc, M, N, stride_cm, stride_cn, pid_m * BLOCK_M, pid_n * BLOCK_N, BLOCK_M, BLOCK_N)
+        store_matrix_tile(C, acc, M, N, stride_cm, stride_cn, pid_m * BLOCK_M, pid_n * BLOCK_N,
+                          BLOCK_M, BLOCK_N, C_BASE_ALIGNED)
     else:
         # rematerialize rm and rn to save registers
         rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -119,7 +124,9 @@ class _matmul(torch.autograd.Function):
             a.stride(0), a.stride(1),  #
             b.stride(0), b.stride(1),  #
             c.stride(0), c.stride(1),  #
-            acc_dtype=acc_dtype)
+            acc_dtype=acc_dtype,
+            A_BASE_ALIGNED=has_aligned_matrix_bases(a), B_BASE_ALIGNED=has_aligned_matrix_bases(b),
+            C_BASE_ALIGNED=has_aligned_matrix_bases(c))
         return c
 
     # pylint: disable=unused-argument
