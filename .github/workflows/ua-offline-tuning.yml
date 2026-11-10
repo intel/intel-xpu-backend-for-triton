@@ -1,5 +1,5 @@
-name: UA explicit GRF mode comparison
-run-name: UA GRF 128 vs 256 (${{ github.ref_name }})
+name: UA default vs forced 256 GRF comparison
+run-name: UA GRF default vs 256 (${{ github.ref_name }})
 
 on:
   workflow_dispatch:
@@ -24,7 +24,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ua-ci-grf-comparison
+  group: ua-ci-grf-default-vs256
   cancel-in-progress: false
 
 env:
@@ -61,12 +61,17 @@ jobs:
       - uses: ./.github/actions/setup-triton
       - uses: ./.github/actions/install-vllm
       - name: Install benchmark import dependencies
-        run: pip install 'pandas<3.0' scipy psutil tabulate matplotlib pyelftools pyyaml
+        run: pip install 'pandas<3.0' scipy psutil tabulate matplotlib pyelftools pyyaml pytest
+      - name: Check comparison logic and tuner patch
+        run: |
+          python scripts/vllm/ua_tuning/tune_ci.py --check-patch
+          python -m pytest -s --tb=short scripts/vllm/ua_tuning/test_compare_grf.py
       - name: Apply offline UA patch
         run: |
           git -C vllm apply --check "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
           git -C vllm apply "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
       - name: Record environment and inputs
+        id: manifests
         run: |
           mkdir -p reports
           ./scripts/capture-hw-details.sh > reports/environment.txt
@@ -86,10 +91,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ua-grf-comparison-part-${{ matrix.part }}-bf16
+          name: ua-grf-default-vs256-part-${{ matrix.part }}-bf16
           path: reports
           if-no-files-found: warn
       - name: Compare independently tuned FP8 modes
+        if: ${{ !cancelled() && steps.manifests.outcome == 'success' }}
         run: |
           export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
           python scripts/vllm/ua_tuning/compare_grf.py \
@@ -100,6 +106,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ua-grf-comparison-part-${{ matrix.part }}-profiles
+          name: ua-grf-default-vs256-part-${{ matrix.part }}-profiles
           path: reports
           if-no-files-found: warn
