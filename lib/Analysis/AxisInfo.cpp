@@ -1220,8 +1220,7 @@ public:
 //===----------------------------------------------------------------------===//
 
 AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
-    : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
-          solver) {
+    : SparseForwardDataFlowAnalysisCompat<dataflow::Lattice<AxisInfo>>(solver) {
   // UnrealizedConversionCast:
   // This is needed by TritonGPUToLLVM, to get AxisInfo when the graph is
   // in the process of a PartialConversion, where UnrealizedConversionCast
@@ -1269,12 +1268,13 @@ void AxisInfoAnalysis::setToEntryState(dataflow::Lattice<AxisInfo> *lattice) {
                                   lattice->getAnchor())));
 }
 
-void AxisInfoAnalysis::visitNonControlFlowArguments(
+void AxisInfoAnalysis::visitNonSuccessorInputs(
     Operation *op, const RegionSuccessor & /*successor*/,
     ValueRange /*nonSuccessorInputs*/,
-    ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
+    ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices,
+    GetLatticeFn getLattice) {
   if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-    visitForOpInductionVar(forOp, argLattices);
+    visitForOpInductionVar(forOp, argLattices, getLattice);
   } else {
     setAllToEntryStates(argLattices);
   }
@@ -1332,10 +1332,10 @@ LogicalResult AxisInfoAnalysis::visitOperation(
 }
 
 void AxisInfoAnalysis::visitForOpInductionVar(
-    scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
-  ProgramPoint *programPoint = getProgramPointAfter(op);
-  auto *lbLattice = getLatticeElementFor(programPoint, op.getLowerBound());
-  auto *stepLattice = getLatticeElementFor(programPoint, op.getStep());
+    scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices,
+    GetLatticeFn getLattice) {
+  auto *lbLattice = getLattice(op.getLowerBound());
+  auto *stepLattice = getLattice(op.getStep());
   // If lb or step is not yet ready, skip this operation for now.
   if (lbLattice->getValue().getRank() == 0 ||
       stepLattice->getValue().getRank() == 0) {
