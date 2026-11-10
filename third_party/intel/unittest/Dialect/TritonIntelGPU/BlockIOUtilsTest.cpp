@@ -495,6 +495,24 @@ TEST_F(MatchRowLimitMaskTest, NonArangeLhsRejected) {
                    .has_value());
 }
 
+// `sext(arange(0, N)) < bound64`, with no explicit base: matches with a null
+// `rowBase` and the i64 bound.
+TEST_F(MatchRowLimitMaskTest, I64BareArangeHasNullRowBase) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  auto i64TensorTy = RankedTensorType::get({256}, builder.getI64Type());
+  Value idx64 =
+      arith::ExtSIOp::create(builder, loc(), i64TensorTy, arange(256));
+  Value bound64 = constI(100, 64);
+  Value mask = buildRowLimitMask(idx64, /*boundedDim=*/0, shape, bound64);
+
+  auto result = matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                  /*contiguousDim=*/1,
+                                  /*pitchDimIsBroadcast=*/false);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_FALSE(result->rowBase);
+  EXPECT_EQ(result->bound, bound64);
+}
+
 // An i64 row index (issue #8565: Helion computes it with `.to(tl.int64)`):
 // `(rowBase64 + sext(arange)) < bound64` matches, with i64 `rowBase`/`bound`.
 TEST_F(MatchRowLimitMaskTest, I64RowIndexAccepted) {
@@ -686,8 +704,10 @@ TEST_F(MatchRowLimitMaskTest, ExtraPredVaryingAlongContiguousDimRejected) {
                    .has_value());
 }
 
-// computeRowLimitHeight: `clamp(bound - rowBase, 0, rowExtent)`, widened to
-// i64 before subtracting to avoid overflow.
+// computeRowLimitHeight: `clamp(bound - rowBase, 0, rowExtent)` as an i32.
+// i32 inputs (or no rowBase) are widened to i64 and clamped with signed
+// min/max; i64 inputs, whose difference can overflow, use
+// `(bound <=s rowBase) ? 0 : minui(bound - rowBase, rowExtent)`.
 class ComputeRowLimitHeightTest : public ::testing::Test {
 public:
   void SetUp() override {
@@ -723,6 +743,24 @@ TEST_F(ComputeRowLimitHeightTest, NullRowBaseSkipsSubtraction) {
   auto maxOp = minOp.getLhs().getDefiningOp<arith::MaxSIOp>();
   ASSERT_TRUE(maxOp);
   EXPECT_TRUE(isa<arith::ExtSIOp>(maxOp.getLhs().getDefiningOp()));
+}
+
+// An i64 bound with no rowBase can't overflow: the bound feeds the signed
+// clamp directly, with no subtraction and no sign extension.
+TEST_F(ComputeRowLimitHeightTest, I64BoundNullRowBase) {
+  Value bound =
+      arith::ConstantIntOp::create(builder, loc(), builder.getI64Type(), 100);
+  Value height = computeRowLimitHeight(builder, loc(), bound, /*rowBase=*/{},
+                                       /*rowExtent=*/64);
+  ASSERT_TRUE(height.getType().isInteger(32));
+
+  auto trunc = height.getDefiningOp<arith::TruncIOp>();
+  ASSERT_TRUE(trunc);
+  auto minOp = trunc.getIn().getDefiningOp<arith::MinSIOp>();
+  ASSERT_TRUE(minOp);
+  auto maxOp = minOp.getLhs().getDefiningOp<arith::MaxSIOp>();
+  ASSERT_TRUE(maxOp);
+  EXPECT_EQ(maxOp.getLhs(), bound);
 }
 
 // i64 inputs can overflow `bound - rowBase`, so the height is

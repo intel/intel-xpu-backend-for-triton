@@ -1351,10 +1351,10 @@ Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
 
   // i32 inputs (or no rowBase): `bound - rowBase` can't overflow once widened
   // to i64, so a signed clamp is exact.
-  bool narrowInputs =
-      bound.getType().getIntOrFloatBitWidth() < 64 &&
-      (!rowBase || rowBase.getType().getIntOrFloatBitWidth() < 64);
-  if (narrowInputs || !rowBase) {
+  bool signedClamp =
+      !rowBase || (bound.getType().getIntOrFloatBitWidth() < 64 &&
+                   rowBase.getType().getIntOrFloatBitWidth() < 64);
+  if (signedClamp) {
     Value diff64 = widen(bound);
     if (rowBase)
       diff64 = arith::SubIOp::create(builder, loc, diff64, widen(rowBase));
