@@ -19,7 +19,7 @@ runs:
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: 3
+        CACHE_NUMBER: 4
       with:
         path: $HOME/packages
         key: packages-${{ env.LLVM_COMMIT_ID }}-${{ env.CACHE_NUMBER }}

@@ -17,16 +17,16 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Setup LLVM
-      uses: ./.github/actions/setup-llvm
-      with:
-        build_llvm: ${{ inputs.build_llvm }}
-
     - name: Use SPIR-V backend
       if: ${{ inputs.use_spirv_backend == 'true' }}
       shell: bash
       run: |
         echo "TRITON_USE_SPIRV_BACKEND=1" | tee -a $GITHUB_ENV
+
+    - name: Setup LLVM
+      uses: ./.github/actions/setup-llvm
+      with:
+        build_llvm: ${{ inputs.build_llvm }}
 
     - name: Prepare Triton cache for nvidia deps
       shell: bash
