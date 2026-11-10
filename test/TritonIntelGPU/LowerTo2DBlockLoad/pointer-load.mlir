@@ -15,7 +15,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
     // CHECK: %[[P:.*]] = arith.constant 128 : i32
     // CHECK: %[[H:.*]] = arith.constant 1 : i32
-    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]], %[[H]] {row_major} {base_width = 32 : i32}
+    // CHECK: %[[W:.*]] = arith.constant 32 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]], %[[H]], %[[W]] {row_major}
     %5 = tt.load %4 {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %5 : tensor<64x32xf16, #dot0>
   }
@@ -37,7 +38,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %4 = tt.broadcast %3 : tensor<1x64x!tt.ptr<f16>, #dot1> -> tensor<32x64x!tt.ptr<f16>, #dot1>
     // CHECK: %[[P:.*]] = arith.constant 128 : i32
     // CHECK: %[[H:.*]] = arith.constant 1 : i32
-    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]], %[[H]] {column_major} {base_width = 32 : i32}
+    // CHECK: %[[W:.*]] = arith.constant 32 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]], %[[H]], %[[W]] {column_major}
     %5 = tt.load %4 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f16>, #dot1>
     tt.return %5 : tensor<32x64xf16, #dot1>
   }
@@ -108,7 +110,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
     // CHECK: %[[P:.*]] = arith.constant 512 : i32
     // CHECK: %[[H:.*]] = arith.constant 64 : i32
-    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]], %[[H]] {row_major} {base_width = 64 : i32, ttig.block_io_stride = 256 : i64}
+    // CHECK: %[[W:.*]] = arith.constant 64 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]], %[[H]], %[[W]] {row_major} {ttig.block_io_stride = 256 : i64}
     %5 = tt.load %4 {ttig.block_io = "row_major", ttig.block_io_stride = 256 : i64} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %5 : tensor<64x32xf16, #dot0>
   }
@@ -175,7 +178,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %8 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x64x!tt.ptr<f16>, #dot1>
     %9 = tt.addptr %8, %7 : tensor<32x64x!tt.ptr<f16>, #dot1>, tensor<32x64xi32, #dot1>
     // CHECK: %[[P:.*]] = arith.constant 256 : i32
-    // CHECK: ttig.2d_block_load_from_ptr %9, %[[P]], %{{.*}} {column_major}
+    // CHECK: ttig.2d_block_load_from_ptr %9, %[[P]], %{{.*}}, %{{.*}} {column_major}
     %10 = tt.load %9 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f16>, #dot1>
     tt.return %10 : tensor<32x64xf16, #dot1>
   }
@@ -207,7 +210,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // CHECK: %[[C2:.*]] = arith.constant 2 : i32
     // CHECK: %[[PITCH:.*]] = arith.muli %{{.*}}, %[[C2]] : i32
     // CHECK: %[[H:.*]] = arith.constant 8 : i32
-    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]], %[[H]] {row_major} {base_width = 32 : i32}
+    // CHECK: %[[W:.*]] = arith.constant 32 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]], %[[H]], %[[W]] {row_major}
     %5 = tt.load %ptr {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %5 : tensor<64x32xf16, #dot0>
   }
@@ -238,7 +242,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %cst32 = arith.constant dense<32> : tensor<64x32xi32, #dot0>
     // CHECK: scf.for
     // CHECK: %[[PITCH:.*]] = arith.muli %{{.*}}, %{{.*}} : i32
-    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]], %{{.*}} {row_major}
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]], %{{.*}}, %{{.*}} {row_major}
     %res = scf.for %i = %lb to %ub step %step iter_args(%p = %ptr0) -> (tensor<64x32x!tt.ptr<f16>, #dot0>) {
       %ld = tt.load %p {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
       %pn = tt.addptr %p, %cst32 : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
@@ -278,7 +282,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %10 = tt.expand_dims %9 {axis = 1 : i32} : tensor<64xi1, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi1, #dot0>
     %11 = tt.broadcast %10 : tensor<64x1xi1, #dot0> -> tensor<64x32xi1, #dot0>
     // CHECK: %[[H:.*]] = arith.trunci %{{.*}} : i64 to i32
-    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]] {row_major}
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]], %{{.*}} {row_major}
     // CHECK-SAME: ttig.block_io_runtime_row_limit
     %12 = tt.load %4, %11, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %12 : tensor<64x32xf16, #dot0>
@@ -479,7 +483,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // Runtime height (not fixed), with the batch predicate forwarded as
     // mask/other instead of folded into or blocking base_height.
     // CHECK: %[[H:.*]] = arith.trunci %{{.*}} : i64 to i32
-    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]], %[[BATCHMASK]], %{{.*}} {row_major}
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]], %{{.*}}, %[[BATCHMASK]], %{{.*}} {row_major}
     // CHECK-SAME: ttig.block_io_runtime_row_limit
     %v = tt.load %ptr, %mask, %zero {ttig.block_io = "row_major"} : tensor<4x64x32x!tt.ptr<f16>, #dot0>
     tt.return %v : tensor<4x64x32xf16, #dot0>
@@ -536,7 +540,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // Runtime height (not fixed), with the batch predicate forwarded as
     // mask/other instead of folded into or blocking base_height.
     // CHECK: %[[H:.*]] = arith.trunci %{{.*}} : i64 to i32
-    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]], %[[BATCHMASK]], %{{.*}} {row_major}
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]], %{{.*}}, %[[BATCHMASK]], %{{.*}} {row_major}
     // CHECK-SAME: ttig.block_io_runtime_row_limit
     %v = tt.load %ptr, %mask, %zero {ttig.block_io = "row_major"} : tensor<4x64x32x!tt.ptr<f16>, #dot0>
     tt.return %v : tensor<4x64x32xf16, #dot0>
@@ -573,7 +577,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // Pitch must still come from `lda`, not get confused with the bound.
     // CHECK: %[[PITCH:.*]] = arith.muli %arg1, %{{.*}} : i32
     // CHECK: %[[H:.*]] = arith.trunci %{{.*}} : i64 to i32
-    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]], %[[H]] {column_major}
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]], %[[H]], %{{.*}} {column_major}
     // CHECK-SAME: ttig.block_io_runtime_row_limit
     %11 = tt.load %4, %10, %cst {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f16>, #dot1>
     tt.return %11 : tensor<32x64xf16, #dot1>
@@ -610,7 +614,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // Confirms the matcher accepts a computed bound and a bare arange.
     // CHECK: %[[KREM:.*]] = arith.subi %arg2, %arg3 : i32
     // CHECK: %[[H:.*]] = arith.trunci %{{.*}} : i64 to i32
-    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]] {row_major}
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]], %{{.*}} {row_major}
     // CHECK-SAME: ttig.block_io_runtime_row_limit
     %10 = tt.load %4, %9, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot1>
     tt.return %10 : tensor<64x32xf16, #dot1>
