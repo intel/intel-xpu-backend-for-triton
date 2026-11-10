@@ -848,8 +848,8 @@ public:
 // StrideAnalysis
 //===----------------------------------------------------------------------===//
 
-class StrideAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
-                           dataflow::Lattice<StrideInfo>> {
+class StrideAnalysis
+    : public SparseForwardDataFlowAnalysisCompat<dataflow::Lattice<StrideInfo>> {
 private:
   StrideInfoVisitorList visitors;
 
@@ -859,10 +859,11 @@ private:
                            lattice->getAnchor())));
   }
 
-  void visitNonControlFlowArguments(
+  void visitNonSuccessorInputs(
       Operation *op, const RegionSuccessor & /*successor*/,
       ValueRange /*nonSuccessorInputs*/,
-      ArrayRef<dataflow::Lattice<StrideInfo> *> argLattices) override {
+      ArrayRef<dataflow::Lattice<StrideInfo> *> argLattices,
+      GetLatticeFn /*getLattice*/) override {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       // Induction variable has spatial stride 0 (scalar) and IV stride 1
       // w.r.t. its own loop's IV; no entries for any other loop
@@ -886,7 +887,7 @@ public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(StrideAnalysis)
 
   StrideAnalysis(DataFlowSolver &solver, AxisInfoLookupFn axisInfoLookup)
-      : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<StrideInfo>>(
+      : SparseForwardDataFlowAnalysisCompat<dataflow::Lattice<StrideInfo>>(
             solver) {
     // PassThrough visitors
     visitors.append<PassThroughStrideVisitor<arith::ExtSIOp>,
