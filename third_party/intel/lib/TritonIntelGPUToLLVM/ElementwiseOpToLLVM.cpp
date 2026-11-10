@@ -1379,6 +1379,34 @@ static bool isDotBInEveryWarp(Operation *op) {
   return warps.back() == 1 && warps[warps.size() - 2] > 1;
 }
 
+// Converts the next 8 f32 elements to bf16 (RTNE) with one vector
+// __spirv_ConvertFToBF16INTEL call; IGC keeps scalar calls scalar, which
+// raises register pressure (#8594). Returns {} when not applicable.
+SmallVector<Value> convertFp32ToBf16x8(Operation *op, Location loc,
+                                       ConversionPatternRewriter &rewriter,
+                                       MultipleOperandsRange operands) {
+  using triton::gpu::intel::TritonIntelGPUDialect;
+  constexpr unsigned width = 8;
+  if (operands.size() < width || !triton::gpu::intel::hasSpirvTargetArch(op) ||
+      !mlir::LLVM::intel::hasModuleAttr(
+          op,
+          TritonIntelGPUDialect::getSupportVectorBF16ConversionAttrName()) ||
+      !mlir::LLVM::intel::hasModuleAttr(
+          op, TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName()))
+    return {};
+  TritonLLVMIRRewriter b(loc, rewriter);
+  Value vec = b.undef(vec_ty(f32_ty, width));
+  for (unsigned i = 0; i < width; ++i)
+    vec = b.insert_element(vec, operands[i][0], b.i32_val(i));
+  Value cvt = intel::convertWithFunctionCall(
+      b, vec, "__spirv_ConvertFToBF16INTEL", f32_ty, i16_ty);
+  SmallVector<Value> results;
+  for (unsigned i = 0; i < width; ++i)
+    results.push_back(
+        b.bitcast(b.extract_element(i16_ty, cvt, b.i32_val(i)), bf16_ty));
+  return results;
+}
+
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<FpToFpOp, FpToFpOpConversion> {
@@ -1612,6 +1640,11 @@ struct FpToFpOpConversion
     if (srcElementType.isF32() && dstElementType.isBF16()) {
       assert(roundingMode.has_value() &&
              "rounding mode must be specified for fp32->bf16 conversion");
+      if (roundingMode.value() == RoundingMode::RTNE)
+        if (SmallVector<Value> vals =
+                convertFp32ToBf16x8(op, loc, rewriter, operands);
+            !vals.empty())
+          return vals;
       SmallVector<Value> outVals;
       for (Value v : operands[0]) {
         outVals.push_back(
@@ -1918,6 +1951,11 @@ struct TruncFOpConversion
       auto inElemTy = getElementType(op.getIn());
       assert((inElemTy.isF32() || inElemTy.isF64()) &&
              "unsupported conversion");
+      if (inElemTy.isF32())
+        if (SmallVector<Value> vals =
+                convertFp32ToBf16x8(op, loc, rewriter, operands);
+            !vals.empty())
+          return vals;
       Value in = operands[0][0];
       if (inElemTy.isF64())
         in = convertToFp32RoundToOdd(loc, rewriter, in);

@@ -2,9 +2,9 @@
 Ground-truth probes for whether a SPIR-V extension is safe to emit, asking
 whichever side actually consumes the compiled module: the installed driver's
 own JIT (via Level Zero) for a regular compile, or `ocloc` for an AOT
-(`generate_native_code`) one. `accepts_long_vector`/`accepts_maximum_registers`
-below are the only entry points callers need; everything else is how each
-probe is actually run.
+(`generate_native_code`) one. `accepts_long_vector`/`accepts_maximum_registers`/
+`accepts_vector_bf16_conversion` below are the only entry points callers need;
+everything else is how each probe is actually run.
 """
 
 import functools
@@ -107,6 +107,36 @@ _MAX_REGISTERS_PROBE_SPV = (
     + _spirv_op(56)  # OpFunctionEnd
 )
 
+# Kernel storing an 8-wide `OpConvertFToBF16INTEL` result: whether the consumer
+# accepts vector operands of that builtin. Enum values from the vendored
+# SPIRV-Headers `unified1/spirv.hpp`.
+_VECTOR_BF16_PROBE_SPV = (
+    _spirv_words(0x07230203, 0x00010400, 0, 13, 0)  # magic, v1.4, generator, bound, schema
+    + _spirv_op(17, 6)  # OpCapability Kernel
+    + _spirv_op(17, 4)  # OpCapability Addresses
+    + _spirv_op(17, 7)  # OpCapability Vector16 (8-component vectors)
+    + _spirv_op(17, 22)  # OpCapability Int16
+    + _spirv_op(17, 6115)  # OpCapability BFloat16ConversionINTEL
+    + _spirv_op(10, *struct.unpack('<8I', b'SPV_INTEL_bfloat16_conversion\0'.ljust(32, b'\0')))  # OpExtension
+    + _spirv_op(14, 2, 2)  # OpMemoryModel Physical64 OpenCL
+    + _spirv_op(15, 6, 9, *struct.unpack('<2I', b'main\0\0\0\0'))  # OpEntryPoint Kernel %9 "main"
+    + _spirv_op(19, 1)  # %1 = OpTypeVoid
+    + _spirv_op(22, 2, 32)  # %2 = OpTypeFloat 32
+    + _spirv_op(23, 3, 2, 8)  # %3 = OpTypeVector %2 8
+    + _spirv_op(21, 4, 16, 0)  # %4 = OpTypeInt 16 0
+    + _spirv_op(23, 5, 4, 8)  # %5 = OpTypeVector %4 8
+    + _spirv_op(32, 6, 5, 5)  # %6 = OpTypePointer CrossWorkgroup %5
+    + _spirv_op(33, 7, 1, 6)  # %7 = OpTypeFunction %1 %6
+    + _spirv_op(46, 3, 8)  # %8 = OpConstantNull %3
+    + _spirv_op(54, 1, 9, 0, 7)  # %9 = OpFunction %1 None %7
+    + _spirv_op(55, 6, 10)  # %10 = OpFunctionParameter %6
+    + _spirv_op(248, 11)  # %11 = OpLabel
+    + _spirv_op(6116, 5, 12, 8)  # %12 = OpConvertFToBF16INTEL %5 %8
+    + _spirv_op(62, 10, 12)  # OpStore %10 %12
+    + _spirv_op(253)  # OpReturn
+    + _spirv_op(56)  # OpFunctionEnd
+)
+
 
 def _ocloc_accepts_extension(device_arch: str, extension: str, probe_spv: bytes) -> bool:
     """Whether the `ocloc` on PATH accepts SPIR-V that declares `extension`.
@@ -145,6 +175,34 @@ def ocloc_accepts_long_vector(device_arch: str) -> bool:
 def ocloc_accepts_maximum_registers(device_arch: str) -> bool:
     """Whether the `ocloc` on PATH accepts SPIR-V that uses `SPV_INTEL_maximum_registers`."""
     return _ocloc_accepts_extension(device_arch, 'SPV_INTEL_maximum_registers', _MAX_REGISTERS_PROBE_SPV)
+
+
+def _ocloc_compiles(device_arch: str, probe_spv: bytes) -> bool:
+    """Whether the `ocloc` on PATH compiles `probe_spv`. Unlike `_ocloc_accepts_extension`, any failure (no `ocloc`,
+    timeout, crash, nonzero exit, no output) counts as rejection."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        spv, out = os.path.join(temp_dir, 'probe.spv'), os.path.join(temp_dir, 'probe.o')
+        with open(spv, 'wb') as f:
+            f.write(probe_spv)
+        try:
+            proc = subprocess.run(['ocloc', 'compile', '-file', spv, '-o', out, '-spirv_input', '-device', device_arch],
+                                  capture_output=True, timeout=_PROBE_TIMEOUT_SECONDS)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return proc.returncode == 0 and os.path.exists(out)
+
+
+@functools.lru_cache(maxsize=None)
+def ocloc_accepts_vector_bf16_conversion(device_arch: str) -> bool:
+    """Whether the `ocloc` on PATH compiles a vector `OpConvertFToBF16INTEL`."""
+    return _ocloc_compiles(device_arch, _VECTOR_BF16_PROBE_SPV)
+
+
+def accepts_vector_bf16_conversion(native: bool, device_arch: str, device_id: int | None) -> bool:
+    """Whether vector operands of the bf16 conversion builtins are safe to emit for this compile; False if unknown."""
+    if native:
+        return ocloc_accepts_vector_bf16_conversion(device_arch)
+    return device_id is not None and has_spirv_capability(device_id, _VECTOR_BF16_PROBE_SPV) is True
 
 
 def accepts_long_vector(native: bool, device_arch: str, device_id: int | None) -> bool:

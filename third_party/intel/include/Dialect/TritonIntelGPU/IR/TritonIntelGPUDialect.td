@@ -59,6 +59,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_bfloat16_conversion";
     }
 
+    /// Get the name of the attribute used to indicate whether the SPIR-V
+    /// consumer accepts vector operands of the bfloat16 conversion builtins.
+    static constexpr llvm::StringRef getSupportVectorBF16ConversionAttrName() {
+      return "ttig.support_vector_bf16_conversion";
+    }
+
     /// Get the name of the attribute used to indicate whether predicated io
     /// is available.
     static constexpr llvm::StringRef getSupportPredicatedIOAttrName() {

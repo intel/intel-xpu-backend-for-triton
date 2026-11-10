@@ -420,6 +420,17 @@ void init_triton_intel(py::module_ &m) {
     }
   });
 
+  // Sets or removes the attribute, so saved TTGIR cannot carry a stale value.
+  m.def("set_vector_bf16_conversion", [](mlir::ModuleOp &mod, bool enabled) {
+    using namespace mlir::triton::gpu::intel;
+    llvm::StringRef name =
+        TritonIntelGPUDialect::getSupportVectorBF16ConversionAttrName();
+    if (enabled)
+      mod->setAttr(name, mlir::UnitAttr::get(mod.getContext()));
+    else
+      mod->removeAttr(name);
+  });
+
   m.def("set_core_clock_rate", [](mlir::ModuleOp &mod, unsigned clockRate) {
     using namespace mlir::triton::gpu::intel;
     if (clockRate &&
