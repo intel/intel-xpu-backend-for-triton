@@ -602,6 +602,9 @@ class intel_knobs(base_knobs):
     # `cg`-to-`!nontemporal` lowering (an L3 bypass) was removed in issue #7901, so
     # the pass is enabled on every OS again. See issue #7945.
     disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", False)
+    # Keeps the driver's default cache policy on narrow-row 2D block stores (see
+    # l1_store_write_bypass in the Intel backend's compiler.py).
+    disable_store_l1_write_back: env_bool = env_bool("TRITON_INTEL_DISABLE_STORE_L1_WRITE_BACK", False)
     enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
     in_loop_sink: env_bool = env_bool("TRITON_INTEL_IN_LOOP_SINK", True)
     disable_optimize_load_masks: env_bool = env_bool("TRITON_INTEL_DISABLE_OPTIMIZE_LOAD_MASKS", False)

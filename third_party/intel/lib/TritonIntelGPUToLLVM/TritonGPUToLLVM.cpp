@@ -13,6 +13,7 @@
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
 
@@ -112,6 +113,28 @@ struct ConvertTritonGPUToLLVM
     ModuleMembarAnalysis membarPass(allocation, ::mlir::intel::membarFilter);
     membarPass.run();
 
+    // A gpu-scope release does not evict L1 lines that a store wrote back on
+    // request, because IGC derives the evict from the default store policy
+    // alone (EmitPass::emitMemoryFence). So 2D block stores are only written
+    // back in modules that cannot hand data to another work-group. The check
+    // is deliberately broad: consumer-side ops count too, which also keeps racy
+    // hand-offs through plain stores working; LowerTo2DBlockLoad leaves the
+    // volatile and `.cv` loads in place for it. It covers the whole module and
+    // runs before this pass converts anything, since a noinline callee is a
+    // separate function here.
+    // TODO: only releases at gpu scope or wider can publish data.
+    bool l1StoreWriteBack =
+        mod->hasAttrOfType<UnitAttr>(triton::gpu::intel::TritonIntelGPUDialect::
+                                         getStoreL1WriteBackAttrName()) &&
+        !mod.walk([](Operation *op) {
+              if (isa<triton::AtomicOpInterface, triton::AtomicPollOp,
+                      triton::ElementwiseInlineAsmOp>(op) ||
+                  triton::gpu::intel::isVolatileOrCVLoad(op))
+                return WalkResult::interrupt();
+              return WalkResult::advance();
+            })
+             .wasInterrupted();
+
     // Lower functions
     {
       mlir::LowerToLLVMOptions option(context);
@@ -151,9 +174,9 @@ struct ConvertTritonGPUToLLVM
 
     RewritePatternSet patterns(context);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
-    pipelineManager.populateConversionPatterns(patterns, axisInfoAnalysis,
-                                               strideAnalysis, typeConverter,
-                                               *targetInfo, benefit);
+    pipelineManager.populateConversionPatterns(
+        patterns, axisInfoAnalysis, strideAnalysis, typeConverter, *targetInfo,
+        l1StoreWriteBack, benefit);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();

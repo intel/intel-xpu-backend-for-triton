@@ -47,6 +47,11 @@ struct CachePolicy {
 // they decode to the hardware default.
 CachePolicy getCachePolicy(Attribute cachePolicy);
 
+// Returns true if `op` is a load that must read memory afresh, as a poll of a
+// flag set by another work-group does: it is volatile or has the `.cv` cache
+// modifier.
+bool isVolatileOrCVLoad(Operation *op);
+
 // Returns true if the tensor type has a dot dpas encoding.
 bool hasDotDpasEncoding(RankedTensorType tensorType);
 

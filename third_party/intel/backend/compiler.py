@@ -334,6 +334,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Defaults to 64; targets with a relaxed requirement (e.g. CRI) override
         # this so the downstream 64-byte alignment compensation is skipped.
         dev_prop['block_io_base_alignment'] = tgt_prop.get('block_io_base_alignment', 64)
+        # The driver's default L1 store policy is write-bypass on BMG (no driver property reports it), so narrow 2D
+        # block-store rows reach L2 as partial writes; such rows are written back through L1 instead. Only measured
+        # parts are listed: LNL and PVC bypass L1 too. Keyed on `device_arch`: Inductor's targets lack the "arch" key.
+        dev_prop['l1_store_write_bypass'] = tgt_prop.get('l1_store_write_bypass', self.device_arch == "bmg")
         dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
         dev_prop['is_lts'] = is_lts
         # Largest GRF mode the backend's automatic escalation will ever select
@@ -519,6 +523,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.threads_per_warp = opt.warp_size
         module_opts.sub_32_dpas = opt.sub_32_dpas
         module_opts.target_arch = cls.target_arch
+        module_opts.store_l1_write_back = (properties["l1_store_write_bypass"]
+                                           and not knobs.intel.disable_store_l1_write_back)
         module_opts.block_io_base_alignment = properties["block_io_base_alignment"]
         module_opts.max_grf_mode = opt.max_grf_mode
 

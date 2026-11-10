@@ -269,7 +269,10 @@ private:
   void convertLoadOp(tt::LoadOp op,
                      tt::intel::ModuleStrideAnalysis &strideAnalysis,
                      tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
-    if (!isBlockIOEligible(op))
+    // Keep loads that must read memory afresh. A 2D block load drops the
+    // volatile flag and the cache policy, and the L1 write-back check in
+    // ConvertTritonGPUToLLVM counts these loads.
+    if (ttgi::isVolatileOrCVLoad(op) || !isBlockIOEligible(op))
       return;
 
     auto tensorTy =

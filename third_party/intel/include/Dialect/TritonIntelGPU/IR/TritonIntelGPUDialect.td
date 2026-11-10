@@ -133,6 +133,14 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.is_lts";
     }
 
+    /// Name of the module attribute that lets narrow 2D block-store rows be
+    /// written back through L1. Set where the driver's default L1 store policy
+    /// is write-bypass (BMG) unless TRITON_INTEL_DISABLE_STORE_L1_WRITE_BACK
+    /// is set.
+    static constexpr llvm::StringRef getStoreL1WriteBackAttrName() {
+      return "ttig.store_l1_write_back";
+    }
+
     /// Get the name of the attribute holding the core clock rate in kHz, used
     /// to convert cycles to nanoseconds.
     static constexpr llvm::StringRef getCoreClockRateAttrName() {
