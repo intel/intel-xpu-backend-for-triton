@@ -6,16 +6,17 @@
 //   2. Fast path when numPtrsPerLoad == threadsPerWarp, which lowers to
 //      per-lane predicated llvm.load operations on lane-mapped addresses. (Could be coalesced)
 //   3. Fast path when numPtrsPerLoad != threadsPerWarp, which lowers to
-//      triton_gen.sub_group_gather_load.
+//      triton_gen.sub_group_gather_load, guarded by a column-window check.
+//   4. A layout whose lanes span rows, which takes the fallback path.
 
 // Test 1: Fallback path
 //
 // A blocked encoding that does not satisfy block-IO tile constraints falls
 // through to the default path which emits one predicated llvm.load per result
 // element.  The test tracks the offset X data flow end-to-end:
-//   %arg1 (x_offsets tensor) → unpack → offsetX i32
-//   → zext i64 → bounds-check icmp against shape0
-//   → and with predY → cond_br → predicated llvm.load
+//   %arg1 (x_offsets tensor) → unpack → offsetX i16
+//   → sext i64 → bounds-check icmp against shape0
+//   → and with predY → cond_br (zero on the false edge) → predicated llvm.load
 //   mul by stride0 → add with y linear offset → gep into base ptr
 
 #blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
@@ -25,7 +26,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
   // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_gather_default_path
   tt.func public @descriptor_gather_default_path(
       %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
-      %arg1: tensor<8xi32, #slice_x>,
+      %arg1: tensor<8xi16, #slice_x>,
       %arg2: i32) -> tensor<8x16xf16, #blocked> {
     %c1_i64 = arith.constant 1 : i64
     %c256_i32 = arith.constant 256 : i32
@@ -36,9 +37,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // Verify descriptor struct is built:
     // CHECK:     llvm.insertvalue {{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
-    // x_offsets tensor argument is unpacked to a scalar i32 per thread
+    // x_offsets tensor argument is unpacked to a scalar i16 per thread
     // (comes before descriptor field extraction in the lowered output):
-    // CHECK:     %[[OFFX_I32:.*]] = llvm.extractvalue {{.*}} : !llvm.struct<(i32, i32)>
+    // CHECK:     %[[OFFX_I16:.*]] = llvm.extractvalue {{.*}} : !llvm.struct<(i16, i16)>
 
     // Descriptor fields are extracted after the x_offsets unpack:
     // CHECK-DAG: %[[SHAPE0:.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
@@ -46,8 +47,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-DAG: %[[BASE:.*]] = llvm.extractvalue {{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // Offset X data flow inside the per-element loop:
-    //   1. Widen offsetX from i32 to i64 for pointer arithmetic.
-    // CHECK:     %[[OFFX64:.*]] = llvm.zext %[[OFFX_I32]] : i32 to i64
+    //   1. Sign-extend offsetX to i64, so a negative offset fails the check.
+    // CHECK:     %[[OFFX64:.*]] = llvm.sext %[[OFFX_I16]] : i16 to i64
     //   2. Bounds check: offsetX < shape0 (predX).
     // CHECK:     %[[PRED_X:.*]] = llvm.icmp "ult" %[[OFFX64]], %[[SHAPE0]] : i64
     //   3. Combine predX with predY (offsetY < shape1) to form the load predicate.
@@ -57,14 +58,15 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     //   5. Combined linear offset (x + y) fed into the final GEP.
     // CHECK:     %[[LIN_OFF:.*]] = llvm.add %[[X_LIN_OFF]], {{.*}} : i64
     // CHECK:     llvm.getelementptr %[[BASE]][%[[LIN_OFF]]] {{.*}} -> !llvm.ptr<1>, f16
-    //   6. Predicated load: branch on the combined predicate.
-    // CHECK:     llvm.cond_br {{.*}}
+    //   6. Predicated load: an out-of-bounds element reads zero.
+    // CHECK:     %[[ZERO:.*]] = llvm.mlir.zero : vector<1xf16>
+    // CHECK:     llvm.cond_br {{.*}}, ^{{.*}}, ^{{.*}}(%[[ZERO]] : vector<1xf16>)
     // CHECK:     llvm.load {{.*}} : !llvm.ptr<1> -> vector<1xf16>
     // Verify the fast path is NOT taken for the blocked encoding.
     // CHECK-NOT: triton_gen.sub_group_gather_load
 
     %result = ttig.descriptor_gather %desc[%arg1, %arg2]
-        : (!tt.tensordesc<1x16xf16>, tensor<8xi32, #slice_x>, i32) -> tensor<8x16xf16, #blocked>
+        : (!tt.tensordesc<1x16xf16>, tensor<8xi16, #slice_x>, i32) -> tensor<8x16xf16, #blocked>
     tt.return %result : tensor<8x16xf16, #blocked>
   }
 }
@@ -79,9 +81,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // on non-uniform per-lane addresses instead of triton_gen.sub_group_gather_load.
 // The test tracks the offset X data flow end-to-end:
 //   %arg1 (x_offsets tensor) → unpack → offsetX i32
-//   → zext i64 → bounds-check icmp against shape0
-//   → and with predY → cond_br → predicated llvm.load
+//   → sext i64 → bounds-check icmp against shape0
+//   → and with predY → cond_br (zero on the false edge) → predicated llvm.load
 //   mul by stride0 → add with y linear offset → gep into base ptr
+// Each lane loads one element, so no column-window guard is needed.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 #slice_x = #ttg.slice<{dim = 1, parent = #blocked}>
@@ -111,8 +114,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-DAG: %[[BASE:.*]] = llvm.extractvalue {{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // Offset X data flow inside the per-element loop:
-    //   1. Widen offsetX from i32 to i64 for pointer arithmetic.
-    // CHECK:     %[[OFFX64:.*]] = llvm.zext %[[OFFX_I32]] : i32 to i64
+    //   1. Sign-extend offsetX to i64, so a negative offset fails the check.
+    // CHECK:     %[[OFFX64:.*]] = llvm.sext %[[OFFX_I32]] : i32 to i64
     //   2. Bounds check: offsetX < shape0 (predX).
     // CHECK:     %[[PRED_X:.*]] = llvm.icmp "ult" %[[OFFX64]], %[[SHAPE0]] : i64
     //   3. Combine predX with predY (offsetY < shape1) to form the load predicate.
@@ -122,8 +125,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     //   5. Combined linear offset (x + y) fed into the final GEP.
     // CHECK:     %[[LIN_OFF:.*]] = llvm.add %[[X_LIN_OFF]], {{.*}} : i64
     // CHECK:     llvm.getelementptr %[[BASE]][%[[LIN_OFF]]] {{.*}} -> !llvm.ptr<1>, f16
-    //   6. Predicated load: branch on the combined predicate.
-    // CHECK:     llvm.cond_br {{.*}}
+    //   6. Predicated load: an out-of-bounds lane reads zero.
+    // CHECK:     %[[ZERO:.*]] = llvm.mlir.zero : vector<1xf16>
+    // CHECK:     llvm.cond_br {{.*}}, ^{{.*}}, ^{{.*}}(%[[ZERO]] : vector<1xf16>)
     // CHECK:     llvm.load {{.*}} : !llvm.ptr<1> -> vector<1xf16>
     // Verify the subgroup gather intrinsic is not used in the per-lane fast path.
     // CHECK-NOT: triton_gen.sub_group_gather_load
@@ -145,7 +149,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // triton_gen.sub_group_gather_load. The test tracks the offset X data flow
 // through the pointer-vector construction.
 //   %arg1 (x_offsets tensor) → unpack → shuffleIdx(lane 0 broadcast)
-//   → zext i64 → bounds-check icmp against shape0
+//   → sext i64 → bounds-check icmp against shape0
 //   → mul against stride0 → second gep to build row-offset address
 //   → address inserted into a vector → sub_group_gather_load
 
@@ -194,12 +198,22 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
     // CHECK:     %[[BASE_OFFSET_Y:.*]] = llvm.add %arg2, {{.*}} : i32
 
+    // Each pointer loads 4 columns but checks only the first, so the fast path
+    // runs only when the whole column window [y, y + 32) is in bounds:
+    // CHECK:     %[[Y64:.*]] = llvm.sext %arg2 : i32 to i64
+    // CHECK:     %[[NCOLS:.*]] = llvm.mlir.constant(32 : i64) : i64
+    // CHECK:     %[[Y_END:.*]] = llvm.add %[[Y64]], %[[NCOLS]] : i64
+    // CHECK:     %[[Y_LO:.*]] = llvm.icmp "sge" %[[Y64]], {{.*}} : i64
+    // CHECK:     %[[Y_HI:.*]] = llvm.icmp "sle" %[[Y_END]], %[[SHAPE_Y]] : i64
+    // CHECK:     %[[COLS_OK:.*]] = llvm.and %[[Y_LO]], %[[Y_HI]] : i1
+    // CHECK:     llvm.cond_br %[[COLS_OK]], ^{{.*}}, ^[[SLOW:bb[0-9]+]]
+
     // Offset X data flow (fast path) inside the per-load inner loop:
     // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_0_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
     // Offset Y 0 for first row of the 8*4 load (sub-offset Y = 0, 4, 8, 12):
     // CHECK:     %[[SUB_OFF_Y_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:     %[[OFF_Y:.*]] = llvm.add %[[BASE_OFFSET_Y]], %[[SUB_OFF_Y_0]] : i32
-    // CHECK:     %[[OFF_X_64:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[OFF_X_64:.*]] = llvm.sext %[[OFFX_UNIF]] : i32 to i64
     // CHECK:     %[[PRED_X:.*]] = llvm.icmp "ult" %[[OFF_X_64]], %[[SHAPE_X]] : i64
     // CHECK:     %[[OFF_Y_64:.*]] = llvm.zext %[[OFF_Y]] : i32 to i64
     // CHECK:     %[[PRED_Y:.*]] = llvm.icmp "ult" %[[OFF_Y_64]], %[[SHAPE_Y]] : i64
@@ -213,7 +227,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // Offset Y 4 for first row of the 8*4 load (sub-offset Y = 0, 4, 8, 12):
     // CHECK:     %[[SUB_OFF_Y_4:.*]] = llvm.mlir.constant(4 : i32) : i32
     // CHECK:     %[[OFF_Y:.*]] = llvm.add %[[BASE_OFFSET_Y]], %[[SUB_OFF_Y_4]] : i32
-    // CHECK:     %[[OFF_X_64:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[OFF_X_64:.*]] = llvm.sext %[[OFFX_UNIF]] : i32 to i64
     // CHECK:     %[[PRED_X:.*]] = llvm.icmp "ult" %[[OFF_X_64]], %[[SHAPE_X]] : i64
     // CHECK:     %[[OFF_Y_64:.*]] = llvm.zext %[[OFF_Y]] : i32 to i64
     // CHECK:     %[[PRED_Y:.*]] = llvm.icmp "ult" %[[OFF_Y_64]], %[[SHAPE_Y]] : i64
@@ -227,7 +241,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // Offset Y 8 for first row of the 8*4 load (sub-offset Y = 0, 4, 8, 12):
     // CHECK:     %[[SUB_OFF_Y_8:.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK:     %[[OFF_Y:.*]] = llvm.add %[[BASE_OFFSET_Y]], %[[SUB_OFF_Y_8]] : i32
-    // CHECK:     %[[OFF_X_64:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[OFF_X_64:.*]] = llvm.sext %[[OFFX_UNIF]] : i32 to i64
     // CHECK:     %[[PRED_X:.*]] = llvm.icmp "ult" %[[OFF_X_64]], %[[SHAPE_X]] : i64
     // CHECK:     %[[OFF_Y_64:.*]] = llvm.zext %[[OFF_Y]] : i32 to i64
     // CHECK:     %[[PRED_Y:.*]] = llvm.icmp "ult" %[[OFF_Y_64]], %[[SHAPE_Y]] : i64
@@ -241,7 +255,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // Offset Y 12 for first row of the 8*4 load (sub-offset Y = 0, 4, 8, 12):
     // CHECK:     %[[SUB_OFF_Y_12:.*]] = llvm.mlir.constant(12 : i32) : i32
     // CHECK:     %[[OFF_Y:.*]] = llvm.add %[[BASE_OFFSET_Y]], %[[SUB_OFF_Y_12]] : i32
-    // CHECK:     %[[OFF_X_64:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[OFF_X_64:.*]] = llvm.sext %[[OFFX_UNIF]] : i32 to i64
     // CHECK:     %[[PRED_X:.*]] = llvm.icmp "ult" %[[OFF_X_64]], %[[SHAPE_X]] : i64
     // CHECK:     %[[OFF_Y_64:.*]] = llvm.zext %[[OFF_Y]] : i32 to i64
     // CHECK:     %[[PRED_Y:.*]] = llvm.icmp "ult" %[[OFF_Y_64]], %[[SHAPE_Y]] : i64
@@ -275,7 +289,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // Offset Y 16 for first row of the 8*4 load (sub-offset Y = 16, 20, 24, 28):
     // CHECK:     %[[SUB_OFF_Y_0:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK:     %[[OFF_Y:.*]] = llvm.add %[[BASE_OFFSET_Y]], %[[SUB_OFF_Y_0]] : i32
-    // CHECK:     %[[OFF_X_64:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[OFF_X_64:.*]] = llvm.sext %[[OFFX_UNIF]] : i32 to i64
     // CHECK:     %[[PRED_X:.*]] = llvm.icmp "ult" %[[OFF_X_64]], %[[SHAPE_X]] : i64
     // CHECK:     %[[OFF_Y_64:.*]] = llvm.zext %[[OFF_Y]] : i32 to i64
     // CHECK:     %[[PRED_Y:.*]] = llvm.icmp "ult" %[[OFF_Y_64]], %[[SHAPE_Y]] : i64
@@ -289,7 +303,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // Offset Y 20 for first row of the 8*4 load (sub-offset Y = 16, 20, 24, 28):
     // CHECK:     %[[SUB_OFF_Y_4:.*]] = llvm.mlir.constant(20 : i32) : i32
     // CHECK:     %[[OFF_Y:.*]] = llvm.add %[[BASE_OFFSET_Y]], %[[SUB_OFF_Y_4]] : i32
-    // CHECK:     %[[OFF_X_64:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[OFF_X_64:.*]] = llvm.sext %[[OFFX_UNIF]] : i32 to i64
     // CHECK:     %[[PRED_X:.*]] = llvm.icmp "ult" %[[OFF_X_64]], %[[SHAPE_X]] : i64
     // CHECK:     %[[OFF_Y_64:.*]] = llvm.zext %[[OFF_Y]] : i32 to i64
     // CHECK:     %[[PRED_Y:.*]] = llvm.icmp "ult" %[[OFF_Y_64]], %[[SHAPE_Y]] : i64
@@ -303,7 +317,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // Offset Y 24 for first row of the 8*4 load (sub-offset Y = 16, 20, 24, 28):
     // CHECK:     %[[SUB_OFF_Y_8:.*]] = llvm.mlir.constant(24 : i32) : i32
     // CHECK:     %[[OFF_Y:.*]] = llvm.add %[[BASE_OFFSET_Y]], %[[SUB_OFF_Y_8]] : i32
-    // CHECK:     %[[OFF_X_64:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[OFF_X_64:.*]] = llvm.sext %[[OFFX_UNIF]] : i32 to i64
     // CHECK:     %[[PRED_X:.*]] = llvm.icmp "ult" %[[OFF_X_64]], %[[SHAPE_X]] : i64
     // CHECK:     %[[OFF_Y_64:.*]] = llvm.zext %[[OFF_Y]] : i32 to i64
     // CHECK:     %[[PRED_Y:.*]] = llvm.icmp "ult" %[[OFF_Y_64]], %[[SHAPE_Y]] : i64
@@ -317,7 +331,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // Offset Y 28 for first row of the 8*4 load (sub-offset Y = 16, 20, 24, 28):
     // CHECK:     %[[SUB_OFF_Y_12:.*]] = llvm.mlir.constant(28 : i32) : i32
     // CHECK:     %[[OFF_Y:.*]] = llvm.add %[[BASE_OFFSET_Y]], %[[SUB_OFF_Y_12]] : i32
-    // CHECK:     %[[OFF_X_64:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[OFF_X_64:.*]] = llvm.sext %[[OFFX_UNIF]] : i32 to i64
     // CHECK:     %[[PRED_X:.*]] = llvm.icmp "ult" %[[OFF_X_64]], %[[SHAPE_X]] : i64
     // CHECK:     %[[OFF_Y_64:.*]] = llvm.zext %[[OFF_Y]] : i32 to i64
     // CHECK:     %[[PRED_Y:.*]] = llvm.icmp "ult" %[[OFF_Y_64]], %[[SHAPE_Y]] : i64
@@ -329,9 +343,49 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:     %[[PTR_3_I64:.*]] = llvm.ptrtoint %[[PTR_3]] : !llvm.ptr<1> to i64
 
     // CHECK:     triton_gen.sub_group_gather_load {{.*}}, {{.*}} :  (vector<32xi64>, vector<32xi1>) -> vector<8xf16>
+    // CHECK:     llvm.br ^[[JOIN:bb[0-9]+]](
+
+    // Otherwise each element is checked and loaded on its own, reading zero
+    // when out of bounds:
+    // CHECK:   ^[[SLOW]]:
+    // CHECK:     %[[ZERO:.*]] = llvm.mlir.zero : vector<1xf16>
+    // CHECK:     llvm.cond_br {{.*}}, ^{{.*}}, ^{{.*}}(%[[ZERO]] : vector<1xf16>)
+    // CHECK-NOT: triton_gen.sub_group_gather_load
+    // CHECK:   ^[[JOIN]](%[[RESULT:[0-9]+]]: !llvm.struct
+    // CHECK:     llvm.return %[[RESULT]]
 
     %result = ttig.descriptor_gather %desc[%arg1, %arg2]
         : (!tt.tensordesc<1x32xf16>, tensor<64xi32, #slice_x>, i32) -> tensor<64x32xf16, #dot0>
     tt.return %result : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+// Test 4: Lanes span rows
+//
+// Both fast paths read each row offset from one lane. Here lanes 8-15 hold the
+// odd rows, so the gather must take the per-element fallback path.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice_x = #ttg.slice<{dim = 1, parent = #blocked}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_gather_lanes_span_rows
+  // CHECK-NOT:   triton_gen.sub_group_gather_load
+  // CHECK:       llvm.load {{.*}} : !llvm.ptr<1> -> vector<1xf16>
+  // CHECK-NOT:   triton_gen.sub_group_gather_load
+  // CHECK:       llvm.return
+  tt.func public @descriptor_gather_lanes_span_rows(
+      %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+      %arg1: tensor<32xi32, #slice_x>,
+      %arg2: i32) -> tensor<32x64xf16, #blocked> {
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i32 = arith.constant 256 : i32
+    %c64_i64 = arith.constant 64 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c64_i64, %c1_i64] : <f16>, <1x64xf16>
+    %result = ttig.descriptor_gather %desc[%arg1, %arg2]
+        : (!tt.tensordesc<1x64xf16>, tensor<32xi32, #slice_x>, i32) -> tensor<32x64xf16, #blocked>
+    tt.return %result : tensor<32x64xf16, #blocked>
   }
 }
