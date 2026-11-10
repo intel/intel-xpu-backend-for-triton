@@ -708,7 +708,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: [[ONE:%.*]] = llvm.mlir.constant(3 : i32) : i32
+    // CHECK: [[EXEC:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK-NEXT: [[MEM:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK-NEXT: [[SEM:%.*]] = llvm.mlir.constant(264 : i32) : i32
     // CHECK-NEXT: llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii([[EXEC]], [[MEM]], [[SEM]]) {{.*}} : (i32, i32, i32) -> ()
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3>

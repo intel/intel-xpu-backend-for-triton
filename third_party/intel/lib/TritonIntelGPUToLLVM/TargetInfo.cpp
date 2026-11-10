@@ -14,6 +14,7 @@
 #include "Utils/Mangling.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include <llvm/Support/ErrorHandling.h>
 
 #include <limits>

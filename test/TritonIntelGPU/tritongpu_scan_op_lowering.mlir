@@ -90,7 +90,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // SCAN-ON-NEXT: [[INCLUSIVE:%.*]] = llvm.mlir.constant(1 : i32) : i32
     // SCAN-ON-NEXT: [[WARPTOTAL:%.*]] = llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij([[SUBGROUP]], [[INCLUSIVE]], %{{.*}}) {{.*}} : (i32, i32, i32) -> i32
     // SCAN-ON:      llvm.store [[WARPTOTAL]], %{{.*}} : i32, !llvm.ptr<3>
-    // SCAN-ON:      llvm.call spir_funccc @_Z7barrierj
+    // SCAN-ON:      triton_gen.barrier {mem_fence = Local}
     // SCAN-ON:      llvm.load %{{.*}} : !llvm.ptr<3> -> i32
     %g = "tt.scan" (%f) ({
     ^bb0(%a: i32, %b: i32):

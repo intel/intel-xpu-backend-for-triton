@@ -24,7 +24,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 64 : i32, "ttg.th
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // get final result
-  // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
+  // CHECK: triton_gen.barrier {mem_fence = Local}
   // CHECK: [[FINAL_RESULT:%.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
 
     %g = "tt.reduce" (%f) ({
@@ -80,7 +80,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // 3rd round: inter-warp reduce with remaining 2 values using ClusteredReduce (4 args)
-  // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
+  // CHECK: triton_gen.barrier {mem_fence = Local}
   // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiijj(%{{.*}}) {{.*}} : (i32, i32, i32, i32) -> i32
 
