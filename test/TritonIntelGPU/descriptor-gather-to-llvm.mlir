@@ -8,6 +8,8 @@
 //   3. Fast path when numPtrsPerLoad != threadsPerWarp, which lowers to
 //      triton_gen.sub_group_gather_load, guarded by a column-window check.
 //   4. A layout whose lanes span rows, which takes the fallback path.
+//   5-7. Fast-path configurations whose byte-to-register mapping does not hold on
+//      hardware, which also take the fallback path.
 
 // Test 1: Fallback path
 //
@@ -387,5 +389,101 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %result = ttig.descriptor_gather %desc[%arg1, %arg2]
         : (!tt.tensordesc<1x64xf16>, tensor<32xi32, #slice_x>, i32) -> tensor<32x64xf16, #blocked>
     tt.return %result : tensor<32x64xf16, #blocked>
+  }
+}
+
+// -----
+
+// Test 5: Packed per-lane loads
+//
+// Each lane would load 4 contiguous columns, but owns one column of 4 rows (the
+// vLLM paged-KV layout at sub-group size 32).
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice_x = #ttg.slice<{dim = 1, parent = #blocked}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_gather_test5
+  // CHECK-NOT:   triton_gen.sub_group_gather_load
+  // CHECK-NOT:   -> vector<4xf16>
+  // CHECK:       llvm.load {{.*}} : !llvm.ptr<1> -> vector<1xf16>
+  // CHECK-NOT:   triton_gen.sub_group_gather_load
+  // CHECK-NOT:   -> vector<4xf16>
+  // CHECK:       llvm.return
+  tt.func public @descriptor_gather_test5(
+      %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+      %arg1: tensor<64xi32, #slice_x>,
+      %arg2: i32) -> tensor<64x128xf16, #blocked> {
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i32 = arith.constant 256 : i32
+    %cols_i64 = arith.constant 128 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%cols_i64, %c1_i64] : <f16>, <1x128xf16>
+    %result = ttig.descriptor_gather %desc[%arg1, %arg2]
+        : (!tt.tensordesc<1x128xf16>, tensor<64xi32, #slice_x>, i32) -> tensor<64x128xf16, #blocked>
+    tt.return %result : tensor<64x128xf16, #blocked>
+  }
+}
+
+// -----
+
+// Test 6: Packed sub-group gather load
+//
+// Each lane owns 2 adjacent columns; the sub-group load would hand lane l columns l
+// and l + 16 instead.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice_x = #ttg.slice<{dim = 1, parent = #blocked}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_gather_test6
+  // CHECK-NOT:   triton_gen.sub_group_gather_load
+  // CHECK-NOT:   -> vector<2xf16>
+  // CHECK:       llvm.load {{.*}} : !llvm.ptr<1> -> vector<1xf16>
+  // CHECK-NOT:   triton_gen.sub_group_gather_load
+  // CHECK-NOT:   -> vector<2xf16>
+  // CHECK:       llvm.return
+  tt.func public @descriptor_gather_test6(
+      %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+      %arg1: tensor<64xi32, #slice_x>,
+      %arg2: i32) -> tensor<64x64xf16, #blocked> {
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i32 = arith.constant 256 : i32
+    %cols_i64 = arith.constant 64 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%cols_i64, %c1_i64] : <f16>, <1x64xf16>
+    %result = ttig.descriptor_gather %desc[%arg1, %arg2]
+        : (!tt.tensordesc<1x64xf16>, tensor<64xi32, #slice_x>, i32) -> tensor<64x64xf16, #blocked>
+    tt.return %result : tensor<64x64xf16, #blocked>
+  }
+}
+
+// -----
+
+// Test 7: Two-byte sub-group gather load
+//
+// Each address would load one 2-byte element, which hangs the sub-group gather
+// load on hardware.
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice_x = #ttg.slice<{dim = 1, parent = #blocked}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_gather_test7
+  // CHECK-NOT:   triton_gen.sub_group_gather_load
+  // CHECK-NOT:   -> vector<2xf16>
+  // CHECK:       llvm.load {{.*}} : !llvm.ptr<1> -> vector<1xf16>
+  // CHECK-NOT:   triton_gen.sub_group_gather_load
+  // CHECK-NOT:   -> vector<2xf16>
+  // CHECK:       llvm.return
+  tt.func public @descriptor_gather_test7(
+      %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+      %arg1: tensor<64xi32, #slice_x>,
+      %arg2: i32) -> tensor<64x64xf16, #blocked> {
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i32 = arith.constant 256 : i32
+    %cols_i64 = arith.constant 64 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%cols_i64, %c1_i64] : <f16>, <1x64xf16>
+    %result = ttig.descriptor_gather %desc[%arg1, %arg2]
+        : (!tt.tensordesc<1x64xf16>, tensor<64xi32, #slice_x>, i32) -> tensor<64x64xf16, #blocked>
+    tt.return %result : tensor<64x64xf16, #blocked>
   }
 }

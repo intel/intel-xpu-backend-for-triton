@@ -2581,6 +2581,13 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
         threadsPerWarp;
     if (cfg.numElemsPerLoad == 0)
       return failure();
+    // Both fast paths map loaded bytes to registers like a 2D block load, which
+    // holds on hardware only for one element per lane load, and for unpacked
+    // sub-group loads of at least 4 bytes per address.
+    if (cfg.numPtrsPerLoad == threadsPerWarp
+            ? cfg.numElemsPerLoad != 1
+            : cfg.numPackedVals != 1 || cfg.bytesPerPtr < 4)
+      return failure();
 
     FailureOr<LinearLayout> offsetMapping = buildDescriptorGatherOffsetMapping(
         ctx, llEncoding, offsetsXLLEncoding, cfg.numPtrsPerLoad, cfg.ptrsPerRow,
