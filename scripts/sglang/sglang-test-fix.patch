@@ -530,7 +530,7 @@ index d4adf872b1..da0a1c7a70 100644
                      output = adapter.run_forward(
                          graph_fixture, capture_batch, capture_inputs
 diff --git a/test/registered/attention/unittests/dense/test_triton.py b/test/registered/attention/unittests/dense/test_triton.py
-index 2d79949829..2e8184b657 100644
+index 2d79949829..b834f3f116 100644
 --- a/test/registered/attention/unittests/dense/test_triton.py
 +++ b/test/registered/attention/unittests/dense/test_triton.py
 @@ -3,8 +3,12 @@ import unittest
@@ -560,6 +560,17 @@ index 2d79949829..2e8184b657 100644
  class TestTritonDenseAttentionBackendCorrectness(CustomTestCase):
      CASES = make_dense_cases("triton")
      CUDA_GRAPH_CASES = (
+@@ -303,6 +308,10 @@ class TestTritonDenseAttentionBackendCorrectness(CustomTestCase):
+         ),
+     )
+ 
++    def setUp(self):
++        super().setUp()
++        self.enterContext(torch.no_grad())
++
+     def test_projected_dense_attention_cases(self):
+         for case in self.CASES:
+             with self.subTest(case=case.name, backend=case.backend):
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
 index 6f7fc405ab..99107ffafd 100644
 --- a/python/sglang/srt/layers/layernorm.py
@@ -675,7 +686,7 @@ index 99523e59fb..2cff915928 100644
  
      def transfer_kv_all_layer_mla(*args, **kwargs):
 diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
-index 3c18f44e0a..a35fca8096 100644
+index 3c18f44e0a..6eb01a618f 100644
 --- a/python/sglang/srt/mem_cache/memory_pool.py
 +++ b/python/sglang/srt/mem_cache/memory_pool.py
 @@ -134,7 +134,11 @@ _is_fp8_fnuz = is_fp8_fnuz()
@@ -700,18 +711,6 @@ index 3c18f44e0a..a35fca8096 100644
          return store_cache_xpu(
              k.view(-1, row_dim),
              v.view(-1, row_dim),
-@@ -220,8 +224,9 @@ def _set_kv_buffer_impl(
-             v_cache[indices] = v
-         current_stream.wait_stream(alt_stream)
-     else:  # fallback to naive implementation
--        k_cache[indices] = k
--        v_cache[indices] = v
-+        with torch.no_grad():
-+            k_cache[indices] = k
-+            v_cache[indices] = v
- 
- 
- def _set_kv_buffer_prefix_valid_impl(
 diff --git a/python/sglang/srt/layers/attention/dsa_backend.py b/python/sglang/srt/layers/attention/dsa_backend.py
 index 0c9e2c01df..256de0081d 100644
 --- a/python/sglang/srt/layers/attention/dsa_backend.py
