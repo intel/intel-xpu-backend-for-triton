@@ -5220,8 +5220,13 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       }
     }
 
+    // A column-limit `base_width` spans the whole tile: not per message, not
+    // per block.
+    bool isColLimitWidth =
+        op->hasAttr(TritonIntelGPUDialect::getBlockIORuntimeColLimitAttrName());
+
     Value baseWidth = adaptor.getBaseWidth();
-    if (cfg.vBlocks > 1)
+    if (!isColLimitWidth && cfg.vBlocks > 1)
       baseWidth = b.mul(baseWidth, b.i32_val(cfg.vBlocks));
     Value baseHeight = adaptor.getBaseHeight();
     Value pitch = adaptor.getBasePitch();
@@ -5244,12 +5249,29 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       Value addrElem =
           targetInfo.shuffleIdx(rewriter, loc, ptrElems[registerIdx], 0);
       Value offsetX = offsets[blockColIdx].second;
+      // A column-limit width may be under the 64-byte minimum, down to zero.
+      // Widening it would admit columns past the bound, so move the surface
+      // origin left by the shortfall instead: the right edge stays on the
+      // bound and the columns gained lie left of the tile, where no message
+      // reads. The width is a whole number of 4-byte granules, so X stays
+      // aligned.
+      Value shortfallBytes;
+      if (isColLimitWidth) {
+        shortfallBytes = b.smax(b.sub(b.i32_val(64), baseWidth), b.i32_val(0));
+        offsetX = b.add(offsetX,
+                        b.udiv(shortfallBytes, b.i32_val(elemSizeInBits / 8)));
+      }
       Value negativeOffsetX = b.sub(b.i32_val(0), offsetX);
       addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
-      Value adjustedBaseWidth =
-          b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
-      // The HW requires a base width of at least 64 bytes.
-      adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
+      Value adjustedBaseWidth;
+      if (isColLimitWidth) {
+        adjustedBaseWidth = b.add(baseWidth, shortfallBytes);
+      } else {
+        adjustedBaseWidth =
+            b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
+        // The HW requires a base width of at least 64 bytes.
+        adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
+      }
 
       Value adjustedBaseHeight = baseHeight;
       Value pred;

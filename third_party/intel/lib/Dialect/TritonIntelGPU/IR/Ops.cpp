@@ -10,6 +10,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
 
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -165,6 +166,24 @@ LogicalResult Subgroup2DBlockLoadFromPtrOp::verify() {
 
   if (getMask() && !getOther())
     return emitOpError("'other' must be present when 'mask' is present");
+
+  // The lowering derives an X shift from a column-limit width, so it must be
+  // a whole number of granules. Only a constant width can be checked here.
+  if ((*this)->hasAttr(
+          TritonIntelGPUDialect::getBlockIORuntimeColLimitAttrName())) {
+    unsigned elemBits = resultType.getElementTypeBitWidth();
+    if (elemBits % 8 != 0)
+      return emitOpError("column-limit width needs byte-sized elements, got ")
+             << elemBits << "-bit elements";
+    APInt width;
+    if (matchPattern(getBaseWidth(), m_ConstantInt(&width))) {
+      int64_t granule = std::max<int64_t>(4, elemBits / 8);
+      if (width.isNegative() || width.getSExtValue() % granule != 0)
+        return emitOpError("column-limit width must be a non-negative "
+                           "multiple of ")
+               << granule << " bytes, got " << width.getSExtValue();
+    }
+  }
 
   return success();
 }
