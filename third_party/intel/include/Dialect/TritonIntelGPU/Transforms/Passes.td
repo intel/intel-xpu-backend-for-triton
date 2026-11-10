@@ -247,7 +247,8 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
     On a device for which the prefetch cost model has constants (`device-arch`) and
     whose facts are given (`core-clock-khz`, `mem-clock-mhz`), the
     prefetch of one dot operand is dropped when the model predicts that demand-loading
-    it is faster.
+    it is faster. The XPU backend passes those facts only when the `prefetch_cost_model`
+    option (default `TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL`, off) is set.
   }];
 
   let dependentDialects = ["mlir::arith::ArithDialect",

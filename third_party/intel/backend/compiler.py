@@ -56,6 +56,8 @@ class XPUOptions:
     sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
     dynamic_shared_memory: bool = knobs.intel.dynamic_shared_memory
     use_barrier: bool = False
+    # Opt-in (TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL when unset); a kernel option, so a triton.Config can autotune it.
+    prefetch_cost_model: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -382,6 +384,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
         if "in_loop_sink" not in args:
             args["in_loop_sink"] = knobs.intel.in_loop_sink
+        if "prefetch_cost_model" not in args:
+            args["prefetch_cost_model"] = knobs.intel.enable_prefetch_cost_model
         options = XPUOptions(**args)
 
         # Ground-truth probe of whichever side actually consumes this
@@ -603,8 +607,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if os.environ.get("TRITON_INTEL_ANNOTATE_LATENCIES", "0") == "1":
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier, cls.device_arch,
-                                          properties['core_clock_rate'], properties['memory_clock_rate'])
+        # Without device facts the pipeliner's prefetch cost model is inert and every prefetch is kept.
+        facts = ((cls.device_arch, properties['core_clock_rate'],
+                  properties['memory_clock_rate']) if opt.prefetch_cost_model else ("", 0, 0))
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier, *facts)
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode, not opt.in_loop_sink)

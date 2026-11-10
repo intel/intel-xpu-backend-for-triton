@@ -607,6 +607,9 @@ class intel_knobs(base_knobs):
     disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", True)
     enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)
     enable_sub_32_dpas: env_bool = env_bool("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32", False)
+    # Default for the `prefetch_cost_model` option: let the pipeliner drop a gapped dot operand's prefetch
+    # (issue #8652). Off by default, since whether that wins depends on the launch and the operand pitches.
+    enable_prefetch_cost_model: env_bool = env_bool("TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL", False)
     fast_math: _env_fast_math = _env_fast_math()
 
     enable_dump_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_KERNEL_ARGS", False)
