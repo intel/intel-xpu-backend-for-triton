@@ -594,27 +594,20 @@ XpuptiProfiler::XpuptiProfiler() {
 
 XpuptiProfiler::~XpuptiProfiler() = default;
 
-// An op entered for a GPU API call becomes pending in the same callback, and a
-// kernel's op is re-entered in the current phase when the call returns, so
-// only ops that enclose a launch (e.g. from a launch hook) are held back here.
+// Protect entries before creating them, including API ops whose correlation
+// IDs are registered later in the callback.
 void XpuptiProfiler::startOp(const Scope &scope) {
-  if (!threadState.isApiExternOp) {
-    // Hold back the current phase before the op's entries are created in it
-    // (or in a later one: phases only grow), so it cannot be completed before
-    // the op's kernels are pending.
-    PendingPhases::Phases phases;
-    for (auto *data : dataSet)
-      phases.emplace_back(data, data->getPhaseInfo().current);
-    dynamic_cast<XpuptiProfilerPimpl &>(*pImpl).pendingOps.add(
-        scope.scopeId, std::move(phases));
-  }
+  PendingPhases::Phases phases;
+  for (auto *data : dataSet)
+    phases.emplace_back(data, data->getPhaseInfo().current);
+  dynamic_cast<XpuptiProfilerPimpl &>(*pImpl).pendingOps.add(
+      scope.scopeId, std::move(phases));
   GPUProfiler<XpuptiProfiler>::startOp(scope);
 }
 
 void XpuptiProfiler::stopOp(const Scope &scope) {
-  if (!threadState.isApiExternOp)
-    dynamic_cast<XpuptiProfilerPimpl &>(*pImpl).pendingOps.remove(
-        threadState.scopeStack.back().scopeId);
+  dynamic_cast<XpuptiProfilerPimpl &>(*pImpl).pendingOps.remove(
+      threadState.scopeStack.back().scopeId);
   GPUProfiler<XpuptiProfiler>::stopOp(scope);
 }
 
