@@ -4,9 +4,6 @@ inputs:
   build_llvm:
     description: Build LLVM
     default: "false"
-  use_spirv_backend:
-    description: Use SPIR-V backend
-    default: "false"
 runs:
   using: "composite"
   steps:
@@ -15,13 +12,6 @@ runs:
       run: |
         LLVM_COMMIT_ID=$(jq -r '.llvm_hash' cmake/llvm-info.json)
         echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" | tee -a $GITHUB_ENV
-
-    - name: Generate LLVM cache key
-      if: ${{ inputs.build_llvm == 'true' }}
-      shell: bash
-      run: |
-        LLVM_CACHE_KEY=$(echo $LLVM_COMMIT_ID ${{ inputs.use_spirv_backend }} | sha256sum - | cut -d\  -f1)
-        echo "LLVM_CACHE_KEY=$LLVM_CACHE_KEY" | tee -a $GITHUB_ENV
 
     - name: Load LLVM cache
       if: ${{ inputs.build_llvm == 'true' }}
@@ -32,7 +22,7 @@ runs:
         CACHE_NUMBER: 3
       with:
         path: $HOME/packages
-        key: packages-${{ env.LLVM_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
+        key: packages-${{ env.LLVM_COMMIT_ID }}-${{ env.CACHE_NUMBER }}
 
     - name: Clone LLVM
       if: ${{ inputs.build_llvm == 'true' && steps.llvm-cache.outputs.status == 'miss' }}
