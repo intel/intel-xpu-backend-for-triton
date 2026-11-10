@@ -1573,7 +1573,7 @@ run_vllm_v1_runner_tests() {
   # Runner V2 rejects (draft_model, parallel drafting)
   VLLM_USE_V2_MODEL_RUNNER=0 TRITON_TEST_SUITE=vllm_v1_runner \
     run_pytest_command -vvv \
-      "tests/v1/e2e/test_hybrid_chunked_prefill.py::test_mtp_speculative_mixed_batch_short_prefill[False-qwen]" \
+      "tests/v1/e2e/test_hybrid_chunked_prefill.py::test_mtp_speculative_mixed_batch_short_prefill[False-qwen]"
 }
 
 
