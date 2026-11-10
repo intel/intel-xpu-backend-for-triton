@@ -28,7 +28,6 @@ from triton._internal_testing import (
     is_hip_cdna4,
     is_hopper_or_newer,
     is_hopper,
-    is_xpu,
     skip_if_unsupported_cluster_size,
 )
 from triton.backends.compiler import GPUTarget
@@ -2808,9 +2807,6 @@ def _check_cd_regclass_pins(llir, cd_regclass):
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("cdna_version", [3, 4])
 def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
-    if is_xpu():
-        pytest.xfail("XPU does not support AMD MFMA")
-
     _run_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version, cd_regclass=None)
 
 

@@ -1,7 +1,9 @@
 import os
 import pytest
 import shutil
+import torch
 import triton
+import triton.language as tl
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from triton._internal_testing import is_hip
@@ -769,3 +771,28 @@ def test_opt_bool(fresh_knobs_including_libraries, monkeypatch):
     assert fresh_knobs.amd.use_block_pingpong
     monkeypatch.delenv("TRITON_HIP_USE_BLOCK_PINGPONG")
     assert fresh_knobs.amd.use_block_pingpong is None
+
+
+@triton.jit
+def _fresh_knobs_kernel(x_ptr):
+    tl.store(x_ptr, 1)
+
+
+def test_fresh_knobs_does_not_reuse_kernel_compiled_outside(device, monkeypatch, fresh_triton_cache) -> None:
+    from triton._internal_testing import _fresh_knobs_impl
+
+    x = torch.zeros(1, dtype=torch.int32, device=device)
+
+    # Outside `fresh_knobs`: compiled with an env var that changes the disk hash.
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+    outside = _fresh_knobs_kernel[(1, )](x)
+
+    # Inside `fresh_knobs`: the env var is deleted, so the disk hash differs. The in-memory key
+    # ignores knobs/env vars, so without a per-context key namespace the outside kernel is reused.
+    fresh, reset = _fresh_knobs_impl()
+    fresh()
+    try:
+        inside = _fresh_knobs_kernel[(1, )](x)
+        assert inside.hash != outside.hash, "kernel compiled outside `fresh_knobs` was reused from the in-memory cache"
+    finally:
+        reset()

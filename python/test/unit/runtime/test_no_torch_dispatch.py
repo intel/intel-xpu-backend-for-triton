@@ -5,12 +5,10 @@ import sys
 import torch
 
 import pytest
-from triton._internal_testing import is_cuda, is_hip, is_xpu
+from triton._internal_testing import is_cuda, is_hip
 
 
 def test_nvidia_kernel_dispatch_without_torch():
-    if is_xpu():
-        pytest.xfail("Requires CUDA and TMAs")
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Requires CUDA and TMAs")
 

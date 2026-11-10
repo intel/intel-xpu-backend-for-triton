@@ -343,3 +343,90 @@ module attributes {ttig.support_subgroup_matrix_multiply_accumulate, ttig.suppor
     tt.return
   }
 }
+
+// -----
+
+// COM: A rank-3 masked pointer load whose mask is a row limit ANDed with a batch
+// COM: predicate, with the AND below the final broadcast (as `tt-reorder-broadcast`
+// COM: leaves it). Both the load and its prefetch keep the narrow mask; the
+// COM: prefetch lowering expands the narrow batch predicate itself.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [1, 8, 16], B = [1, 16, 16], C = [1, 8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+#sK = #ttg.slice<{dim = 2, parent = #dot0}>
+#sM = #ttg.slice<{dim = 1, parent = #dot0}>
+#sKB = #ttg.slice<{dim = 2, parent = #dot1}>
+#sNB = #ttg.slice<{dim = 1, parent = #dot1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @prefetch_rank3_sunk_and
+  tt.func public @prefetch_rank3_sunk_and(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %bound: i32, %batch_bound: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c8 = arith.constant 8 : i32
+    %zero = arith.constant dense<0.000000e+00> : tensor<4x64x32xf16, #dot0>
+    %acc0 = arith.constant dense<0.000000e+00> : tensor<4x64x64xf32, #dpas>
+    %c32 = arith.constant dense<32> : tensor<1x64x1xi32, #dot0>
+    %c64 = arith.constant dense<64> : tensor<1x32x1xi32, #dot1>
+    %stepA = arith.constant dense<32> : tensor<4x64x32xi32, #dot0>
+    %stepB = arith.constant dense<2048> : tensor<4x32x64xi32, #dot1>
+    %rb = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>>
+    %rm = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+    %ema = tt.expand_dims %rm {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>> -> tensor<1x64xi32, #sK>
+    %em = tt.expand_dims %ema {axis = 2 : i32} : tensor<1x64xi32, #sK> -> tensor<1x64x1xi32, #dot0>
+    %om = arith.muli %em, %c32 : tensor<1x64x1xi32, #dot0>
+    %rk = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sM}>>
+    %eka = tt.expand_dims %rk {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sM}>> -> tensor<1x32xi32, #sM>
+    %ek = tt.expand_dims %eka {axis = 1 : i32} : tensor<1x32xi32, #sM> -> tensor<1x1x32xi32, #dot0>
+    %bm = tt.broadcast %om : tensor<1x64x1xi32, #dot0> -> tensor<4x64x32xi32, #dot0>
+    %bk = tt.broadcast %ek : tensor<1x1x32xi32, #dot0> -> tensor<4x64x32xi32, #dot0>
+    %offA = arith.addi %bm, %bk : tensor<4x64x32xi32, #dot0>
+    %psA = tt.splat %arg0 : !tt.ptr<f16> -> tensor<4x64x32x!tt.ptr<f16>, #dot0>
+    %ptrA = tt.addptr %psA, %offA : tensor<4x64x32x!tt.ptr<f16>, #dot0>, tensor<4x64x32xi32, #dot0>
+    %rkb = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sKB}>>
+    %ekba = tt.expand_dims %rkb {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sKB}>> -> tensor<1x32xi32, #sKB>
+    %ekb = tt.expand_dims %ekba {axis = 2 : i32} : tensor<1x32xi32, #sKB> -> tensor<1x32x1xi32, #dot1>
+    %okb = arith.muli %ekb, %c64 : tensor<1x32x1xi32, #dot1>
+    %rn = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sNB}>>
+    %ena = tt.expand_dims %rn {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sNB}>> -> tensor<1x64xi32, #sNB>
+    %en = tt.expand_dims %ena {axis = 1 : i32} : tensor<1x64xi32, #sNB> -> tensor<1x1x64xi32, #dot1>
+    %bkb = tt.broadcast %okb : tensor<1x32x1xi32, #dot1> -> tensor<4x32x64xi32, #dot1>
+    %bnb = tt.broadcast %en : tensor<1x1x64xi32, #dot1> -> tensor<4x32x64xi32, #dot1>
+    %offB = arith.addi %bkb, %bnb : tensor<4x32x64xi32, #dot1>
+    %psB = tt.splat %arg1 : !tt.ptr<f16> -> tensor<4x32x64x!tt.ptr<f16>, #dot1>
+    %ptrB = tt.addptr %psB, %offB : tensor<4x32x64x!tt.ptr<f16>, #dot1>, tensor<4x32x64xi32, #dot1>
+    // COM: The prefetch keeps the load's narrow mask, broadcast(and(..)) with the AND on
+    // COM: [4, 64, 1]: no full-shape AND of the row and batch broadcasts is built.
+    // CHECK: %[[NARROW:.*]] = arith.andi {{.*}} : tensor<4x64x1xi1
+    // CHECK-NEXT: %[[PF_MASK:.*]] = tt.broadcast %[[NARROW]] : tensor<4x64x1xi1, {{.*}}> -> tensor<4x64x32xi1
+    // CHECK: ttig.prefetch {{.*}}, %[[PF_MASK]] {{.*}}ttig.block_io = "row_major"
+    // CHECK-NOT: arith.andi {{.*}} : tensor<4x64x32xi1
+    // CHECK: scf.for
+    // COM: In the loop the loop predicate is ANDed on top of the broadcast narrow mask.
+    // CHECK: %[[NARROW_L:.*]] = arith.andi {{.*}} : tensor<4x64x1xi1
+    // CHECK-NEXT: %[[MASK_L:.*]] = tt.broadcast %[[NARROW_L]] : tensor<4x64x1xi1, {{.*}}> -> tensor<4x64x32xi1
+    // CHECK: %[[PF_MASK_L:.*]] = arith.andi {{.*}} : tensor<4x64x32xi1
+    // CHECK: ttig.prefetch {{.*}}, %[[PF_MASK_L]] {{.*}}ttig.block_io = "row_major"
+    %r:3 = scf.for %i = %c0 to %c8 step %c1 iter_args(%acc = %acc0, %pa = %ptrA, %pb = %ptrB) -> (tensor<4x64x64xf32, #dpas>, tensor<4x64x32x!tt.ptr<f16>, #dot0>, tensor<4x32x64x!tt.ptr<f16>, #dot1>) : i32 {
+      %boundsplat = tt.splat %bound : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+      %rowcmp = arith.cmpi slt, %rm, %boundsplat : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+      %rc1 = tt.expand_dims %rowcmp {axis = 0 : i32} : tensor<64xi1, #ttg.slice<{dim = 0, parent = #sK}>> -> tensor<1x64xi1, #sK>
+      %rc2 = tt.expand_dims %rc1 {axis = 2 : i32} : tensor<1x64xi1, #sK> -> tensor<1x64x1xi1, #dot0>
+      %bboundsplat = tt.splat %batch_bound : i32 -> tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>>
+      %batchcmp = arith.cmpi slt, %rb, %bboundsplat : tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>>
+      %bc1 = tt.expand_dims %batchcmp {axis = 1 : i32} : tensor<4xi1, #ttg.slice<{dim = 1, parent = #sK}>> -> tensor<4x1xi1, #sK>
+      %bc2 = tt.expand_dims %bc1 {axis = 2 : i32} : tensor<4x1xi1, #sK> -> tensor<4x1x1xi1, #dot0>
+      %rowb = tt.broadcast %rc2 : tensor<1x64x1xi1, #dot0> -> tensor<4x64x1xi1, #dot0>
+      %batchb = tt.broadcast %bc2 : tensor<4x1x1xi1, #dot0> -> tensor<4x64x1xi1, #dot0>
+      %and = arith.andi %rowb, %batchb : tensor<4x64x1xi1, #dot0>
+      %mask = tt.broadcast %and : tensor<4x64x1xi1, #dot0> -> tensor<4x64x32xi1, #dot0>
+      %a = tt.load %pa, %mask, %zero {ttig.block_io = "row_major"} : tensor<4x64x32x!tt.ptr<f16>, #dot0>
+      %b = tt.load %pb {ttig.block_io = "row_major"} : tensor<4x32x64x!tt.ptr<f16>, #dot1>
+      %d = tt.dot %a, %b, %acc, inputPrecision = tf32 : tensor<4x64x32xf16, #dot0> * tensor<4x32x64xf16, #dot1> -> tensor<4x64x64xf32, #dpas>
+      %npa = tt.addptr %pa, %stepA : tensor<4x64x32x!tt.ptr<f16>, #dot0>, tensor<4x64x32xi32, #dot0>
+      %npb = tt.addptr %pb, %stepB : tensor<4x32x64x!tt.ptr<f16>, #dot1>, tensor<4x32x64xi32, #dot1>
+      scf.yield %d, %npa, %npb : tensor<4x64x64xf32, #dpas>, tensor<4x64x32x!tt.ptr<f16>, #dot0>, tensor<4x32x64x!tt.ptr<f16>, #dot1>
+    }
+    tt.return
+  }
+}

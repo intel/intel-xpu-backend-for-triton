@@ -998,9 +998,6 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
 @pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
                     reason="Requires compute capability == 10")
 def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, monkeypatch):
-    if is_xpu():
-        pytest.xfail("XPU does not natively support tmem")
-
     M = 1024
     N = 512
     K = 256
@@ -1071,9 +1068,6 @@ def lhs_in_tmem_kernel_mxfp(  #
 @pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
                     reason="Requires compute capability == 10")
 def test_lhs_in_tmem_mxfp(device, monkeypatch):
-    if is_xpu():
-        pytest.xfail("XPU does not natively support scaled mxfp matmul and tmem")
-
     M, N, K = 128, 64, 32
     torch.manual_seed(42)
     a = torch.randint(20, 40, (M, K), dtype=torch.uint8, device=device)
