@@ -263,6 +263,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: tt.func @fused_loop_poison_init_runtime_stride
+  // CHECK-SAME: %[[LDA:[a-z0-9_]+]]: i32 {tt.divisibility = 16 : i32}, %{{[a-z0-9_]+}}: i32)
   tt.func @fused_loop_poison_init_runtime_stride(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %lda: i32 {tt.divisibility = 16 : i32}, %n: i32) -> tensor<64x32xf16, #dot0> {
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
@@ -281,7 +282,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %ptr0 = tt.addptr %base, %off : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
     %cst32 = arith.constant dense<32> : tensor<64x32xi32, #dot0>
     // CHECK: scf.for
-    // CHECK: %[[PITCH:.*]] = arith.muli %{{.*}}, %{{.*}} : i32
+    // CHECK: %[[C2:.*]] = arith.constant 2 : i32
+    // CHECK: %[[PITCH:.*]] = arith.muli %[[LDA]], %[[C2]] : i32
     // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]], %{{.*}}, %{{.*}} {row_major}
     %res:2 = scf.for %i = %c0_i32 to %n step %c1_i32 iter_args(%p = %poison, %acc = %cst_init) -> (tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xf16, #dot0>) : i32 {
       %first = arith.cmpi eq, %i, %c0_i32 : i32

@@ -858,7 +858,8 @@ public:
 /// `select %c, %t, %f`: a scalar condition picks a whole tensor, so the
 /// strides of the arms join (a poison arm is never chosen); a tensor condition
 /// can mix lanes of both arms, which keeps a stride only along a dim where the
-/// condition is constant.
+/// condition is constant. A condition that changes between iterations of a
+/// loop switches arms, so the arms' IV strides do not hold for that loop.
 class SelectOpStrideVisitor final
     : public StrideInfoVisitorImpl<arith::SelectOp> {
 public:
@@ -874,20 +875,27 @@ public:
         rhs.getRank() != pessimistic.getRank())
       return pessimistic;
     StrideInfo joined = StrideInfo::join(lhs, rhs);
-    auto condTy = dyn_cast<RankedTensorType>(op.getCondition().getType());
-    if (!condTy)
-      return joined;
-    AxisInfo *condInfo = axisInfoLookup(op.getCondition());
     StrideInfo::DimVectorT stride = joined.getStride();
     StrideInfo::StrideValueVectorT values = joined.getStrideValues();
-    for (unsigned d = 0, rank = stride.size(); d < rank; ++d) {
-      if (condInfo && condInfo->getConstancy(d) >= condTy.getDimSize(d))
-        continue;
-      stride[d] = -1;
-      if (d < values.size())
-        values[d] = Value();
+    Value cond = op.getCondition();
+    if (auto condTy = dyn_cast<RankedTensorType>(cond.getType())) {
+      AxisInfo *condInfo = axisInfoLookup(cond);
+      for (unsigned d = 0, rank = stride.size(); d < rank; ++d) {
+        if (condInfo && condInfo->getConstancy(d) >= condTy.getDimSize(d))
+          continue;
+        stride[d] = -1;
+        if (d < values.size())
+          values[d] = Value();
+      }
     }
-    return StrideInfo(std::move(stride), joined.getIVStrides(),
+    DenseMap<LoopLikeOpInterface, StrideInfo::DimVectorT> ivStrides =
+        joined.getIVStrides();
+    for (auto loop = op->getParentOfType<LoopLikeOpInterface>(); loop;
+         loop = loop->getParentOfType<LoopLikeOpInterface>())
+      if (!loop.isDefinedOutsideOfLoop(cond))
+        maybeStoreIVStride(ivStrides, loop,
+                           StrideInfo::DimVectorT(stride.size(), -1));
+    return StrideInfo(std::move(stride), std::move(ivStrides),
                       std::move(values));
   }
 };

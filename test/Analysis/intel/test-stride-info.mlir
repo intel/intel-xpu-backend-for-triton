@@ -709,6 +709,43 @@ tt.func @select_tensor_cond(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %m: i32, %
 
 // -----
 
+// CHECK-LABEL: @select_iv_cond
+// Both arms advance by 16 per iteration, one tile apart. A condition that
+// changes between iterations switches arms (the selected offsets go 0, 0, 32,
+// 32, ...), so the select's IV stride is unknown in that loop, also for arms
+// that do not depend on it (%s2); an invariant condition keeps it (%s1, and
+// the inner loop for %s3).
+tt.func @select_iv_cond(%n: i32, %c: i1, %x: tensor<16xi32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %r = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+  scf.for %iv = %c0_i32 to %n step %c1_i32 : i32 {
+    %0 = arith.muli %iv, %c16_i32 : i32
+    %1 = arith.subi %0, %c16_i32 : i32
+    %2 = tt.splat %0 : i32 -> tensor<16xi32>
+    %3 = tt.splat %1 : i32 -> tensor<16xi32>
+    %t = arith.addi %2, %r : tensor<16xi32>
+    %f = arith.addi %3, %r : tensor<16xi32>
+    %4 = arith.remsi %iv, %c2_i32 : i32
+    %even = arith.cmpi eq, %4, %c0_i32 : i32
+    // CHECK: arith.select {{.*}} => stride = [1], iv_strides = {scf.for@{{.*}}: [-1]}
+    %s0 = arith.select %even, %t, %f : tensor<16xi32>
+    // CHECK: arith.select {{.*}} => stride = [1], iv_strides = {scf.for@{{.*}}: [16]}
+    %s1 = arith.select %c, %t, %f : tensor<16xi32>
+    // CHECK: arith.select {{.*}} => stride = [-1], iv_strides = {scf.for@{{.*}}: [-1]}
+    %s2 = arith.select %even, %r, %x : tensor<16xi32>
+    scf.for %j = %c0_i32 to %n step %c1_i32 : i32 {
+      // CHECK: arith.select {{.*}} => stride = [1], iv_strides = {scf.for@{{[^,]*}}: [-1]}{{$}}
+      %s3 = arith.select %even, %t, %f : tensor<16xi32>
+    }
+  }
+  tt.return
+}
+
+// -----
+
 // CHECK-LABEL: @select_struct_arms
 // At LLVM-lowering time a noinline function's tensor argument is a struct of
 // another rank: the select gets the unknown stride of its own rank, which a
