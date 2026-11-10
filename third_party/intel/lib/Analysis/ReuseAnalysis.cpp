@@ -31,11 +31,23 @@ bool addressDependsOnLoadedTensor(Value ptr) {
 
     if (auto arg = dyn_cast<BlockArgument>(v)) {
       // Function arguments and induction variables are structured; only
-      // loop-carried values need to be followed to their init and yield.
-      if (auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
+      // loop-carried values need to be followed to what feeds them.
+      Operation *parent = arg.getOwner()->getParentOp();
+      unsigned argIdx = arg.getArgNumber();
+      if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
         if (OpOperand *init = forOp.getTiedLoopInit(arg)) {
           worklist.insert(init->get());
           worklist.insert(forOp.getTiedLoopYieldedValue(arg)->get());
+        }
+      } else if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
+        if (arg.getOwner() == whileOp.getBeforeBody()) {
+          // Before-region args: the inits on entry, then the after-region
+          // yield on each later iteration.
+          worklist.insert(whileOp.getInits()[argIdx]);
+          worklist.insert(whileOp.getYieldOp().getOperand(argIdx));
+        } else {
+          // After-region args are forwarded by scf.condition.
+          worklist.insert(whileOp.getConditionOp().getArgs()[argIdx]);
         }
       }
       continue;
@@ -46,6 +58,11 @@ bool addressDependsOnLoadedTensor(Value ptr) {
     if (auto forOp = dyn_cast<scf::ForOp>(def)) {
       worklist.insert(forOp.getInitArgs()[resultIdx]);
       worklist.insert(forOp.getYieldedValues()[resultIdx]);
+      continue;
+    }
+    if (auto whileOp = dyn_cast<scf::WhileOp>(def)) {
+      // scf.while results are the values scf.condition forwards on exit.
+      worklist.insert(whileOp.getConditionOp().getArgs()[resultIdx]);
       continue;
     }
     if (auto ifOp = dyn_cast<scf::IfOp>(def)) {

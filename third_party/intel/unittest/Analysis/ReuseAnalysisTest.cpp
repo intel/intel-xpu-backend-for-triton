@@ -467,6 +467,87 @@ TEST_F(AddressDependsOnLoadedTensorTest, StructuredLoopIsNotGather) {
   })"));
 }
 
+// Index loaded inside an scf.while, gather after it: the result comes from
+// scf.condition, whose operand is a before-region arg fed by the after-region
+// yield. The init is structured, so only the loop body exposes the gather.
+TEST_F(AddressDependsOnLoadedTensorTest, WhileResult) {
+  EXPECT_TRUE(probe(R"(
+  tt.func @f(%idx: tensor<32x!tt.ptr<i32>, #b>, %table: !tt.ptr<i32>, %cond: i1) {
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #b>
+    %off = scf.while (%o = %range) : (tensor<32xi32, #b>) -> tensor<32xi32, #b> {
+      scf.condition(%cond) %o : tensor<32xi32, #b>
+    } do {
+    ^bb0(%a: tensor<32xi32, #b>):
+      %tok = tt.load %idx : tensor<32x!tt.ptr<i32>, #b>
+      scf.yield %tok : tensor<32xi32, #b>
+    }
+    %st = tt.splat %table : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p = tt.addptr %st, %off : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %v = tt.load %p {probe} : tensor<32x!tt.ptr<i32>, #b>
+    tt.return
+  })"));
+}
+
+// Gather inside the after region: the after-region arg is forwarded by
+// scf.condition from a pointer built in the before region.
+TEST_F(AddressDependsOnLoadedTensorTest, WhileAfterRegionArg) {
+  EXPECT_TRUE(probe(R"(
+  tt.func @f(%idx: tensor<32x!tt.ptr<i32>, #b>, %table: !tt.ptr<i32>, %cond: i1) {
+    %st = tt.splat %table : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %r = scf.while (%p = %st) : (tensor<32x!tt.ptr<i32>, #b>) -> tensor<32x!tt.ptr<i32>, #b> {
+      %tok = tt.load %idx : tensor<32x!tt.ptr<i32>, #b>
+      %pg = tt.addptr %st, %tok : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+      scf.condition(%cond) %pg : tensor<32x!tt.ptr<i32>, #b>
+    } do {
+    ^bb0(%q: tensor<32x!tt.ptr<i32>, #b>):
+      %v = tt.load %q {probe} : tensor<32x!tt.ptr<i32>, #b>
+      scf.yield %q : tensor<32x!tt.ptr<i32>, #b>
+    }
+    tt.return
+  })"));
+}
+
+// Gathered pointer formed before an scf.while and carried as its init; the
+// yield is structured, so only the init exposes the gather.
+TEST_F(AddressDependsOnLoadedTensorTest, WhileInit) {
+  EXPECT_TRUE(probe(R"(
+  tt.func @f(%idx: tensor<32x!tt.ptr<i32>, #b>, %table: !tt.ptr<i32>, %cond: i1) {
+    %c32 = arith.constant dense<32> : tensor<32xi32, #b>
+    %tok = tt.load %idx : tensor<32x!tt.ptr<i32>, #b>
+    %st = tt.splat %table : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p0 = tt.addptr %st, %tok : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %r = scf.while (%p = %p0) : (tensor<32x!tt.ptr<i32>, #b>) -> tensor<32x!tt.ptr<i32>, #b> {
+      scf.condition(%cond) %p : tensor<32x!tt.ptr<i32>, #b>
+    } do {
+    ^bb0(%q: tensor<32x!tt.ptr<i32>, #b>):
+      %v = tt.load %q {probe} : tensor<32x!tt.ptr<i32>, #b>
+      %pn = tt.addptr %q, %c32 : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+      scf.yield %pn : tensor<32x!tt.ptr<i32>, #b>
+    }
+    tt.return
+  })"));
+}
+
+// Structured scf.while: init, condition and yield are all structured.
+TEST_F(AddressDependsOnLoadedTensorTest, StructuredWhileIsNotGather) {
+  EXPECT_FALSE(probe(R"(
+  tt.func @f(%in: !tt.ptr<i32>, %cond: i1) {
+    %c32 = arith.constant dense<32> : tensor<32xi32, #b>
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #b>
+    %s = tt.splat %in : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p0 = tt.addptr %s, %range : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %r = scf.while (%p = %p0) : (tensor<32x!tt.ptr<i32>, #b>) -> tensor<32x!tt.ptr<i32>, #b> {
+      scf.condition(%cond) %p : tensor<32x!tt.ptr<i32>, #b>
+    } do {
+    ^bb0(%q: tensor<32x!tt.ptr<i32>, #b>):
+      %v = tt.load %q {probe} : tensor<32x!tt.ptr<i32>, #b>
+      %pn = tt.addptr %q, %c32 : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+      scf.yield %pn : tensor<32x!tt.ptr<i32>, #b>
+    }
+    tt.return
+  })"));
+}
+
 // Phase 1.6 Tests — knownReuse
 
 TEST_F(ReuseAnalysisTest, Known_TrueFromSpatial) {

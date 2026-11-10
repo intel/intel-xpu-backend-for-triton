@@ -12,7 +12,8 @@ namespace mlir::triton::gpu::intel {
 /// `table[idx]` with `idx` loaded by the kernel. Scalars do not count, whatever
 /// produced them (a scalar load, or a tensor read reduced to a scalar): they
 /// are uniform across the tile, so its address pattern stays structured.
-/// Follows `scf.for` loop-carried values and `scf.for`/`scf.if` results.
+/// Follows `scf.for` and `scf.while` loop-carried values and the results of
+/// `scf.for`, `scf.while` and `scf.if`.
 bool addressDependsOnLoadedTensor(Value ptr);
 
 /// Thin union of SpatialReuseAnalysis and TemporalReuseAnalysis.
