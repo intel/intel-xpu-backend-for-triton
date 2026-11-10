@@ -580,24 +580,7 @@ diff --git a/tests/v1/kv_connector/unit/test_nixl_connector.py b/tests/v1/kv_con
 index 7e6583adbf..41954c3b57 100644
 --- a/tests/v1/kv_connector/unit/test_nixl_connector.py
 +++ b/tests/v1/kv_connector/unit/test_nixl_connector.py
-@@ -2992,14 +2992,13 @@ def test_register_packed_dsv4_mla_cache_as_single_region(
-             kv_caches.update(zip(layer_names, views))
-         connector.register_kv_caches(kv_caches)
- 
--        # MLA pages transfer as whole rows; a ring page past the row start keeps
--        # its own region.
-+        # MLA pages transfer as whole rows; a ring page keeps its own region,
-+        # since a region is keyed by (base_addr, block_len).
-         ring_pages = [
-             (cache.data_ptr(), spec.page_size_bytes)
-             for layer_names, spec in zip(group_layers, specs)
-             if isinstance(spec, CircularBufferSpec)
-             for cache in (kv_caches[name] for name in layer_names)
--            if cache.data_ptr() != raw.data_ptr()
-         ]
-         _agent, block_runs = wrapper.prep_xfer_dlist.call_args[0]
-         assert connector.connector_worker.kv_caches_base_addr[
-@@ -5219,7 +5218,10 @@ def test_ucx_backend_params(dist_init, extra_config, agent_backends, created_bac
+@@ -5219,7 +5219,10 @@ def test_ucx_backend_params(dist_init, extra_config, agent_backends, created_bac
              num_threads=num_threads,
          )
  
@@ -609,7 +592,7 @@ index 7e6583adbf..41954c3b57 100644
      with (
          patch(
              "vllm.distributed.kv_transfer.kv_connector.v1.nixl.base_worker.NixlWrapper",
-@@ -5232,7 +5234,9 @@ def test_ucx_backend_params(dist_init, extra_config, agent_backends, created_bac
+@@ -5232,7 +5235,9 @@ def test_ucx_backend_params(dist_init, extra_config, agent_backends, created_bac
          set_current_vllm_config(vllm_config),
      ):
          connector = NixlConnector(
@@ -935,6 +918,20 @@ index 5717bd0189..6263ac0b1c 100644
              else:
                  if use_fp8_w8a8:
                      # acc used to enable fp8_fast_accum
+@@ -1245,7 +1253,12 @@ def get_moe_configs(
+                 tuned_config = json.load(f)
+                 # Delete triton_version from tuned_config
+                 tuned_config.pop("triton_version", None)
+-                return {int(key): val for key, val in tuned_config.items()}
++                # Tuned XPU configs (e.g. Arc Pro B60/B70) omit GROUP_SIZE_M, which
++                # fused_moe_kernel requires; default to 1 (no M-grouping).
++                return {
++                    int(key): {"GROUP_SIZE_M": 1, **val}
++                    for key, val in tuned_config.items()
++                }
+ 
+     # If no optimized configuration is available, we will use the default
+     # configuration
 diff --git a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
 index b9098ffdc4..0cfe153e21 100644
 --- a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
