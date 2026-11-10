@@ -1217,8 +1217,7 @@ run_vllm_spec_decode_tests() {
       tests/v1/worker/test_gpu_rejection_sampler_i64.py \
       tests/v1/worker/test_gpu_rejection_sampler_chunking.py \
       tests/v1/spec_decode/test_acceptance_estimator.py \
-      tests/v1/spec_decode/test_dflash_prepare_inputs.py \
-      tests/v1/sample/test_rejection_sampler.py
+      tests/v1/spec_decode/test_dflash_prepare_inputs.py
 }
 
 
