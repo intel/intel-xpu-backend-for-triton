@@ -1288,7 +1288,10 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
     return;
   auto emitBarrier = [&] {
     if (triton::gpu::lookupNumCTAs(op) == 1)
-      targetInfo.barrier(op->getLoc(), rewriter, triton::gpu::AddrSpace::Local);
+      targetInfo.barrier(op->getLoc(), rewriter,
+                         triton::gpu::AddrSpace::Local |
+                             triton::gpu::AddrSpace::GlobalRead |
+                             triton::gpu::AddrSpace::GlobalWrite);
     else
       targetInfo.clusterBarrier(op->getLoc(), rewriter, op);
   };
@@ -1332,7 +1335,12 @@ Value broadcastScalarResult(Operation *op, Value resultVal,
   Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
   targetInfo.storeShared(rewriter, loc, smemBase, resultVal, threadPred);
   if (!triton::hasCrossCTAScratch(op)) {
-    targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+    // The result transport also transfers the publisher's global-memory
+    // ordering to the other work-items.
+    targetInfo.barrier(loc, rewriter,
+                       triton::gpu::AddrSpace::Local |
+                           triton::gpu::AddrSpace::GlobalRead |
+                           triton::gpu::AddrSpace::GlobalWrite);
     return targetInfo.loadShared(rewriter, loc, smemBase, valueElemTy,
                                  b.true_val());
   }
@@ -2269,7 +2277,10 @@ SmallVector<Value> broadcastTensorResult(Operation *op,
   if (crossCTA)
     targetInfo.clusterBarrier(loc, rewriter, op);
   else
-    targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+    targetInfo.barrier(loc, rewriter,
+                       triton::gpu::AddrSpace::Local |
+                           triton::gpu::AddrSpace::GlobalRead |
+                           triton::gpu::AddrSpace::GlobalWrite);
 
   return lowerLdSt(loc, ctx, loadCvt, /*valsArray=*/{}, valueElemTy, smemBases,
                    /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
