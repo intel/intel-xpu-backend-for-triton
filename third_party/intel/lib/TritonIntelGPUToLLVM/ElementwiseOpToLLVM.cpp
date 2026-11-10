@@ -2060,12 +2060,31 @@ struct FmaOpConversion
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     Value a = operands[0][0], b = operands[0][1], c = operands[0][2];
+    // Compute bf16 in f32, like the other bf16 arith ops
+    // (`arith-emulate-unsupported-floats`). `llvm.fma.bf16` needs
+    // SPV_INTEL_bfloat16_arithmetic, which LTS drivers lack, and IGC rounds it
+    // toward zero. The bf16 product is exact in f32, so this matches an f32
+    // fma rounded to bf16.
+    if (elemTy.isBF16()) {
+      a = intel::convertBf16ToFp32(loc, rewriter, a);
+      b = intel::convertBf16ToFp32(loc, rewriter, b);
+      c = intel::convertBf16ToFp32(loc, rewriter, c);
+      return {intel::convertFp32ToBf16(loc, rewriter,
+                                       createF32Fma(rewriter, loc, a, b, c),
+                                       RoundingMode::RTNE)};
+    }
     if (!elemTy.isF32())
       return {LLVM::FMAOp::create(rewriter, loc, elemTy, a, b, c)};
+    return {createF32Fma(rewriter, loc, a, b, c)};
+  }
+
+private:
+  static Value createF32Fma(ConversionPatternRewriter &rewriter, Location loc,
+                            Value a, Value b, Value c) {
     auto fmf = LLVM::FastmathFlagsAttr::get(rewriter.getContext(),
                                             LLVM::FastmathFlags::contract);
-    Value mul = LLVM::FMulOp::create(rewriter, loc, elemTy, a, b, fmf);
-    return {LLVM::FAddOp::create(rewriter, loc, elemTy, mul, c, fmf)};
+    Value mul = LLVM::FMulOp::create(rewriter, loc, f32_ty, a, b, fmf);
+    return LLVM::FAddOp::create(rewriter, loc, f32_ty, mul, c, fmf);
   }
 };
 
