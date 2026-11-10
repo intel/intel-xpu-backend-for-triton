@@ -54,8 +54,6 @@ Validates GPU Model Runner V2 Triton kernels on XPU.
 | `_apply_grammar_bitmask_kernel` | `vllm/v1/worker/gpu/structured_outputs.py` | (via structured output e2e) |
 | `_num_nans_kernel` | `vllm/v1/worker/gpu/metrics/logits.py` | `tests/v1/worker/test_gpu_model_runner.py` |
 
-Both suites run with `VLLM_USE_V2_MODEL_RUNNER=1` to activate the V2 code paths.
-
 ### `--vllm-moe` (TRITON_TEST_SUITE=vllm_moe)
 
 Validates MOE (Mixture of Experts) Triton kernels on XPU. Covers batched MOE,
