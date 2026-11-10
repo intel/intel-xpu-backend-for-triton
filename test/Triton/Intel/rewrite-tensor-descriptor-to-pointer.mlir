@@ -1,10 +1,11 @@
-// RUN: triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --canonicalize --cse --split-input-file | FileCheck %s --implicit-check-not=unrealized_conversion_cast
-// RUN: triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --split-input-file | FileCheck %s --check-prefix=RAW --implicit-check-not=unrealized_conversion_cast
-// RUN: triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --cse --canonicalize --cse --split-input-file > %t.cse
+// RUN: env TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1 triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --canonicalize --cse --split-input-file | FileCheck %s --implicit-check-not=unrealized_conversion_cast
+// RUN: env TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1 triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --split-input-file | FileCheck %s --check-prefix=RAW --implicit-check-not=unrealized_conversion_cast
+// RUN: env TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1 triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --cse --canonicalize --cse --split-input-file > %t.cse
 // RUN: FileCheck %s --implicit-check-not=unrealized_conversion_cast < %t.cse
-// RUN: triton-opt %t.cse --triton-intel-rewrite-tensor-descriptor-to-pointer --split-input-file > %t.twice
+// RUN: env TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1 triton-opt %t.cse --triton-intel-rewrite-tensor-descriptor-to-pointer --split-input-file > %t.twice
 // RUN: FileCheck %s --check-prefix=TWICE < %t.twice
 
+// COM: Gathers would stay native by default; the switch keeps them on the pointer path tested here.
 // COM: RAW checks bound maker/access counts before cleanup can hide extra clones.
 // COM: Immediate CSE must run after fallback conversion, not between splitting
 // COM: and conversion. TWICE checks ensure a second pass does not duplicate the

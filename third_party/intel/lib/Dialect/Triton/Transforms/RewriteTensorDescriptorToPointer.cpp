@@ -16,6 +16,7 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
@@ -1332,6 +1333,8 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
 
 static llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
 collectCandidateMakeTensorDescOps(Operation *op) {
+  const bool keepNativeGathers =
+      !tools::getBoolEnv("TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER");
   llvm::SmallSetVector<triton::MakeTensorDescOp, 4> candidateMakeTensorDescOps;
   llvm::SmallSetVector<triton::MakeTensorDescOp, 4> unhandledMakeTensorDescOps;
   SmallVector<llvm::SmallSetVector<triton::MakeTensorDescOp, 4>> descGroups;
@@ -1360,12 +1363,30 @@ collectCandidateMakeTensorDescOps(Operation *op) {
                triton::intel::findDescriptorDefinitions(op.getDesc()))
             candidateMakeTensorDescOps.insert(d);
         })
-        .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
-              triton::DescriptorReduceOp>([&](auto op) {
-          for (triton::MakeTensorDescOp d :
-               triton::intel::findDescriptorDefinitions(op.getDesc()))
-            unhandledMakeTensorDescOps.insert(d);
+        .Case<triton::DescriptorGatherOp>([&](triton::DescriptorGatherOp op) {
+          // A gather stays native (lowered as ttig.descriptor_gather) only
+          // where that lowering matches the pointer expansion: zero padding,
+          // no i1 elements, and a unit last stride.
+          triton::intel::DescriptorDefinitions defs =
+              triton::intel::findDescriptorDefinitions(op.getDesc());
+          bool keepNative =
+              keepNativeGathers &&
+              defs.consistentPadding() == triton::PaddingOption::PAD_ZERO &&
+              !getElementTypeOrSelf(op.getType()).isInteger(1) &&
+              defs.allSatisfy([](triton::MakeTensorDescOp d) {
+                return matchPattern(d.getStrides().back(), m_One());
+              });
+          for (triton::MakeTensorDescOp d : defs)
+            (keepNative ? candidateMakeTensorDescOps
+                        : unhandledMakeTensorDescOps)
+                .insert(d);
         })
+        .Case<triton::DescriptorScatterOp, triton::DescriptorReduceOp>(
+            [&](auto op) {
+              for (triton::MakeTensorDescOp d :
+                   triton::intel::findDescriptorDefinitions(op.getDesc()))
+                unhandledMakeTensorDescOps.insert(d);
+            })
         .Case<triton::CallOp, triton::ReturnOp>([&](auto op) {
           // A descriptor in a function signature is unconditionally illegal
           // (see the `FuncOp` legality below), so a descriptor crossing a
