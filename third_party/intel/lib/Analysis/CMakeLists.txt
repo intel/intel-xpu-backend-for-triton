@@ -6,6 +6,7 @@ add_triton_library(TritonIntelAnalysis
     RegisterPressure.cpp
     SignednessProver.cpp
     SymbolicBounds.cpp
+    ReuseAnalysis.cpp
     SpatialReuseAnalysis.cpp
     StrideInfo.cpp
     TemporalReuseAnalysis.cpp
