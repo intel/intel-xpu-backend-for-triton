@@ -495,22 +495,50 @@ TEST_F(MatchRowLimitMaskTest, NonArangeLhsRejected) {
                    .has_value());
 }
 
-// sext to i64 still matches the arange, but base_height requires i32.
-TEST_F(MatchRowLimitMaskTest, NonI32BoundRejected) {
+// An i64 row index (issue #8565: Helion computes it with `.to(tl.int64)`):
+// `(rowBase64 + sext(arange)) < bound64` matches, with i64 `rowBase`/`bound`.
+TEST_F(MatchRowLimitMaskTest, I64RowIndexAccepted) {
   SmallVector<int64_t, 2> shape = {256, 32};
-  Value idx64 = arith::ExtSIOp::create(
-      builder, loc(), RankedTensorType::get({256}, builder.getI64Type()),
-      arange(256));
-  Value idx64_2D = expandDims(idx64, /*axis=*/1, {256, 1});
+  auto i64TensorTy = RankedTensorType::get({256}, builder.getI64Type());
+  Value idx64 =
+      arith::ExtSIOp::create(builder, loc(), i64TensorTy, arange(256));
+  Value rowBase64 = constI(7, 64);
+  Value rows64 = addI32(splatTo(rowBase64, {256}), idx64);
   Value bound64 = constI(100, 64);
-  Value boundSplat2D = splatTo(bound64, {256, 1});
-  Value cmp = cmpSlt(idx64_2D, boundSplat2D);
-  Value mask = broadcastTo(cmp, shape);
+  Value mask = buildRowLimitMask(rows64, /*boundedDim=*/0, shape, bound64);
 
-  EXPECT_FALSE(matchRowLimitMask(mask, /*other=*/Value(), shape,
-                                 /*contiguousDim=*/1,
-                                 /*pitchDimIsBroadcast=*/false)
-                   .has_value());
+  auto result = matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                  /*contiguousDim=*/1,
+                                  /*pitchDimIsBroadcast=*/false);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBase, rowBase64);
+  EXPECT_EQ(result->bound, bound64);
+}
+
+// The shape Helion's grouped GEMM emits: an i64 base summed from
+// sign-extended i32 scalars, and an i32 bound sign-extended before the splat.
+TEST_F(MatchRowLimitMaskTest, I64RowIndexFromExtendedI32Accepted) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Type i64Ty = builder.getI64Type();
+  auto i64TensorTy = RankedTensorType::get({256}, i64Ty);
+  Value groupStart =
+      arith::ExtSIOp::create(builder, loc(), i64Ty, constI(4096, 32));
+  Value tileOffset =
+      arith::ExtSIOp::create(builder, loc(), i64Ty, constI(256, 32));
+  Value rowBase64 = addI32(groupStart, tileOffset);
+  Value idx64 =
+      arith::ExtSIOp::create(builder, loc(), i64TensorTy, arange(256));
+  Value rows64 = addI32(splatTo(rowBase64, {256}), idx64);
+  Value bound64 =
+      arith::ExtSIOp::create(builder, loc(), i64Ty, constI(8192, 32));
+  Value mask = buildRowLimitMask(rows64, /*boundedDim=*/0, shape, bound64);
+
+  auto result = matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                  /*contiguousDim=*/1,
+                                  /*pitchDimIsBroadcast=*/false);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBase, rowBase64);
+  EXPECT_EQ(result->bound, bound64);
 }
 
 // A rank-3 tensor (batch dim 0, pitch dim 1, contiguous dim 2) with just the
@@ -649,6 +677,35 @@ TEST_F(ComputeRowLimitHeightTest, NullRowBaseSkipsSubtraction) {
   auto maxOp = minOp.getLhs().getDefiningOp<arith::MaxSIOp>();
   ASSERT_TRUE(maxOp);
   EXPECT_TRUE(isa<arith::ExtSIOp>(maxOp.getLhs().getDefiningOp()));
+}
+
+// i64 inputs can overflow `bound - rowBase`, so the height is
+// `(bound <=s rowBase) ? 0 : minui(bound - rowBase, rowExtent)`, with no
+// sign extension of the already-i64 operands.
+TEST_F(ComputeRowLimitHeightTest, I64InputsUseOverflowSafeClamp) {
+  Value bound =
+      arith::ConstantIntOp::create(builder, loc(), builder.getI64Type(), 100);
+  Value rowBase =
+      arith::ConstantIntOp::create(builder, loc(), builder.getI64Type(), 7);
+  Value height = computeRowLimitHeight(builder, loc(), bound, rowBase,
+                                       /*rowExtent=*/64);
+  ASSERT_TRUE(height.getType().isInteger(32));
+
+  auto trunc = height.getDefiningOp<arith::TruncIOp>();
+  ASSERT_TRUE(trunc);
+  auto select = trunc.getIn().getDefiningOp<arith::SelectOp>();
+  ASSERT_TRUE(select);
+  auto cmp = select.getCondition().getDefiningOp<arith::CmpIOp>();
+  ASSERT_TRUE(cmp);
+  EXPECT_EQ(cmp.getPredicate(), arith::CmpIPredicate::sle);
+  EXPECT_EQ(cmp.getLhs(), bound);
+  EXPECT_EQ(cmp.getRhs(), rowBase);
+  auto minOp = select.getFalseValue().getDefiningOp<arith::MinUIOp>();
+  ASSERT_TRUE(minOp);
+  auto sub = minOp.getLhs().getDefiningOp<arith::SubIOp>();
+  ASSERT_TRUE(sub);
+  EXPECT_EQ(sub.getLhs(), bound);
+  EXPECT_EQ(sub.getRhs(), rowBase);
 }
 
 // The pitch policy shared by MaterializeBlockPointer and LowerTo2DBlockLoad.

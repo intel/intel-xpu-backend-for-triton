@@ -204,7 +204,7 @@ struct RowLimitMaskInfo {
 /// Match `mask` against the row-limit pattern above for a tensor of any
 /// rank >= 2, and check the remaining conditions `base_height` needs:
 /// `other` is zero-fill-compatible, the bounded dim is the pitch dim, it
-/// isn't a broadcast pointer, and `rowBase`/`bound` are i32.
+/// isn't a broadcast pointer, and `rowBase`/`bound` are i32 or i64.
 std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   ArrayRef<int64_t> tensorShape,
                                                   unsigned contiguousDim,
@@ -216,8 +216,9 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
 Value materializeExtraPred(OpBuilder &builder, Location loc, Value extraPred,
                            RankedTensorType maskTy);
 
-/// Compute `clamp(bound - rowBase, 0, rowExtent)` as an i32, widening to i64
-/// first to avoid overflow. `rowBase` may be null.
+/// Compute `clamp(bound - rowBase, 0, rowExtent)` as an i32. `bound` and
+/// `rowBase` are i32 or i64; the result is exact for any value, including i64
+/// inputs whose difference overflows. `rowBase` may be null.
 Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
                             Value rowBase, int64_t rowExtent);
 

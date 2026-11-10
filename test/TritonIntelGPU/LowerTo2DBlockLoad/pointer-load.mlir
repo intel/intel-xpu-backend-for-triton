@@ -291,6 +291,84 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
+// COM: i64 counterpart of @row_limit_mask (issue #8565, Helion computes the
+// COM: row index in int64). `bound - rowBase` may overflow i64, so the height
+// COM: is `(bound <=s rowBase) ? 0 : minui(bound - rowBase, 64)`, with no
+// COM: sign extension of the already-i64 operands.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @row_limit_mask_i64
+  // CHECK-SAME: %[[ROW_BASE:[^:]*]]: i64, %[[BOUND:[^:]*]]: i64
+  tt.func @row_limit_mask_i64(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %row_base: i64, %bound: i64) -> tensor<64x32xf16, #dot0> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    %cst_stride = arith.constant dense<32> : tensor<64x1xi32, #dot0>
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+    %row = arith.muli %1, %cst_stride : tensor<64x1xi32, #dot0>
+    %rowb = tt.broadcast %row : tensor<64x1xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %4 = tt.addptr %base, %rowb : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+    // rows = row_base + sext(arange(0, 64)); rows_valid = rows < bound.
+    %r0_64 = arith.extsi %0 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> to tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %5 = tt.splat %row_base : i64 -> tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %6 = arith.addi %5, %r0_64 : tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %8 = tt.splat %bound : i64 -> tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %9 = arith.cmpi slt, %6, %8 : tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %10 = tt.expand_dims %9 {axis = 1 : i32} : tensor<64xi1, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi1, #dot0>
+    %11 = tt.broadcast %10 : tensor<64x1xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    // CHECK-NOT: arith.extsi %[[BOUND]]
+    // CHECK-NOT: arith.extsi %[[ROW_BASE]]
+    // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0 : i64
+    // CHECK-DAG: %[[EXTENT:.*]] = arith.constant 64 : i64
+    // CHECK-DAG: %[[EMPTY:.*]] = arith.cmpi sle, %[[BOUND]], %[[ROW_BASE]] : i64
+    // CHECK-DAG: %[[DIFF:.*]] = arith.subi %[[BOUND]], %[[ROW_BASE]] : i64
+    // CHECK: %[[MIN:.*]] = arith.minui %[[DIFF]], %[[EXTENT]] : i64
+    // CHECK: %[[SEL:.*]] = arith.select %[[EMPTY]], %[[ZERO]], %[[MIN]] : i64
+    // CHECK: %[[H:.*]] = arith.trunci %[[SEL]] : i64 to i32
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]], %{{.*}} {row_major}
+    // CHECK-SAME: ttig.block_io_runtime_row_limit
+    %12 = tt.load %4, %11, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+    tt.return %12 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+// COM: An unsigned compare on an i64 row index is still not a row-limit
+// COM: pattern: no runtime base_height, the mask and `other` are forwarded to
+// COM: a per-row (base_height = 1) block load instead.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @row_limit_mask_i64_unsigned
+  tt.func @row_limit_mask_i64_unsigned(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %row_base: i64, %bound: i64) -> tensor<64x32xf16, #dot0> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    %cst_stride = arith.constant dense<32> : tensor<64x1xi32, #dot0>
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+    %row = arith.muli %1, %cst_stride : tensor<64x1xi32, #dot0>
+    %rowb = tt.broadcast %row : tensor<64x1xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %4 = tt.addptr %base, %rowb : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+    %r0_64 = arith.extsi %0 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> to tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %5 = tt.splat %row_base : i64 -> tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %6 = arith.addi %5, %r0_64 : tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %8 = tt.splat %bound : i64 -> tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %9 = arith.cmpi ult, %6, %8 : tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %10 = tt.expand_dims %9 {axis = 1 : i32} : tensor<64xi1, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi1, #dot0>
+    %11 = tt.broadcast %10 : tensor<64x1xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    // CHECK-NOT: arith.minui
+    // CHECK: %[[ONE:.*]] = arith.constant 1 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[ONE]], %{{.*}}, %{{.*}}, %{{.*}} {row_major}
+    // CHECK-NOT: ttig.block_io_runtime_row_limit
+    %12 = tt.load %4, %11, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+    tt.return %12 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
 // COM: Companion negative case for the row-limit mask test above: a mask
 // COM: that varies along BOTH dims (also bounded along K) is not a row-limit
 // COM: pattern, so it still falls back to a masked tt.load.
