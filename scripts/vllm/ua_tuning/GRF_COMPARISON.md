@@ -65,12 +65,13 @@ python scripts/vllm/ua_tuning/tune_ci.py --check-patch
 python -m pytest -s --tb=short scripts/vllm/ua_tuning/test_compare_grf.py
 ```
 
-The workflow is manual and report-only, with read permissions and no config
-publication or PR job. After the local branch has been reviewed and publication
+The workflow uses the standard `vLLM benchmarks` entry and run title on this
+experiment branch. It is manual and report-only, with read permissions and no
+config publication or PR job. After the local branch has been reviewed and publication
 and CI dispatch have been explicitly authorized, its dispatch command is:
 
 ```sh
-gh workflow run ua-offline-tuning.yml \
+gh workflow run vllm-benchmarks.yml \
   --repo intel/intel-xpu-backend-for-triton \
   --ref test/ua-grf-default-vs256-20261110 \
   -f runner_label=b580 -f device=xpu:0 -f part=all
