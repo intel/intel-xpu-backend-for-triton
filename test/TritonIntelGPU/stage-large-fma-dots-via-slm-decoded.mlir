@@ -6,9 +6,10 @@
 // fp8 operands that AccelerateMatmul decoded to fp16 before the layout
 // conversion (an fp32 dot: the fp16 -> fp32 cast is after the conversion).
 // The decoded fp16 values (16 KB + 32 KB) fit in the 56 KB cap, so they are
-// staged and only fp16 -> fp32 is replayed per K tile, with the K tile halved
-// (32 -> 16) for the decoded values. With stage-decoded=false the fp8 values
-// are staged with K tiles of 32 and the decode is replayed per K tile.
+// staged and only fp16 -> fp32 is replayed per K tile. With
+// stage-decoded=false the fp8 values are staged and the decode is replayed per
+// K tile. Either way the K tile is 8, the largest that keeps a tile's operand
+// values within the pass's per-thread register budget.
 
 #blocked  = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 4], order = [0, 1]}>
@@ -21,8 +22,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
   // CHECK-DAG: ttg.local_alloc [[AD]] : (tensor<64x128xf16
   // CHECK-DAG: ttg.local_alloc [[BD]] : (tensor<128x128xf16
   // CHECK-NOT: ttg.convert_layout
-  // CHECK: ttg.local_load {{.*}} -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 0
-  // CHECK: ttg.local_load {{.*}} -> tensor<16x128xf16, #ttg.dot_op<{opIdx = 1
+  // CHECK: ttg.local_load {{.*}} -> tensor<64x8xf16, #ttg.dot_op<{opIdx = 0
+  // CHECK: ttg.local_load {{.*}} -> tensor<8x128xf16, #ttg.dot_op<{opIdx = 1
   // CHECK-NOT: f8E
   // CHECK: tt.fp_to_fp {{.*}}xf16, #ttg.dot_op<{opIdx = 0{{.*}}xf32
   // CHECK: tt.fp_to_fp {{.*}}xf16, #ttg.dot_op<{opIdx = 1{{.*}}xf32
@@ -33,8 +34,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
   // FP8-LABEL: @fp8_decoded_staged
   // FP8-DAG: ttg.local_alloc {{%[0-9]+}} : (tensor<64x128xf8E4M3FN
   // FP8-DAG: ttg.local_alloc {{%[0-9]+}} : (tensor<128x128xf8E5M2
-  // FP8: ttg.local_load {{.*}} -> tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 0
-  // FP8: ttg.local_load {{.*}} -> tensor<32x128xf8E5M2, #ttg.dot_op<{opIdx = 1
+  // FP8: ttg.local_load {{.*}} -> tensor<64x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0
+  // FP8: ttg.local_load {{.*}} -> tensor<8x128xf8E5M2, #ttg.dot_op<{opIdx = 1
   // FP8: tt.fp_to_fp {{.*}}xf8E4M3FN, #ttg.dot_op<{opIdx = 0{{.*}}xf16
   // FP8: tt.fp_to_fp {{.*}}xf16, #ttg.dot_op<{opIdx = 0{{.*}}xf32
   // FP8: tt.fp_to_fp {{.*}}xf8E5M2, #ttg.dot_op<{opIdx = 1{{.*}}xf16
@@ -72,8 +73,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
   // CHECK-DAG: [[AD:%.*]] = tt.fp_to_fp {{%[0-9]+}} : tensor<128x128xf8E4M3FN, #{{.*}}> -> tensor<128x128xbf16, #{{.*}}>
   // CHECK-DAG: ttg.local_alloc [[AD]] : (tensor<128x128xbf16
   // CHECK-DAG: ttg.local_alloc {{%[0-9]+}} : (tensor<128x128xf8E4M3FN
-  // CHECK: ttg.local_load {{.*}}xbf16, #ttg.dot_op<{opIdx = 0
-  // CHECK: ttg.local_load {{.*}}xf8E4M3FN, #ttg.dot_op<{opIdx = 1
+  // CHECK: ttg.local_load {{.*}} -> tensor<128x8xbf16, #ttg.dot_op<{opIdx = 0
+  // CHECK: ttg.local_load {{.*}} -> tensor<8x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1
   // CHECK-NOT: tt.fp_to_fp {{.*}}xf8E4M3FN, #ttg.dot_op<{opIdx = 0
   // CHECK: tt.fp_to_fp {{.*}}xf8E4M3FN, #ttg.dot_op<{opIdx = 1{{.*}}xbf16
   // CHECK: tt.dot
@@ -288,6 +289,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
 // though they stage 96 KB together. The second dot's A operand is the result
 // of the first; staging the first replaces it, so the second dot's operand
 // chain has to be found again afterwards.
+// The K tile follows the per-thread register budget: 16 for the fp16 dot,
+// 8 for the fp32 one.
 
 #blocked  = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 4], order = [0, 1]}>
@@ -296,11 +299,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @chained_dots_floor
   // CHECK-COUNT-2: ttg.local_alloc
-  // CHECK: tt.dot {{.*}} : tensor<64x64xf16
-  // CHECK: [[Z:%.*]] = tt.dot {{.*}} : tensor<64x64xf16
+  // CHECK-COUNT-7: tt.dot {{.*}} : tensor<64x16xf16
+  // CHECK: [[Z:%.*]] = tt.dot {{.*}} : tensor<64x16xf16
   // CHECK-DAG: ttg.local_alloc [[Z]] : (tensor<64x128xf32
   // CHECK-DAG: ttg.local_alloc {{%[0-9]+}} : (tensor<128x32xf32
-  // CHECK-COUNT-4: tt.dot {{.*}} : tensor<64x32xf32
+  // CHECK-COUNT-16: tt.dot {{.*}} : tensor<64x8xf32
   // CHECK: tt.return
 
   // SLM128K-LABEL: @chained_dots_floor
@@ -344,7 +347,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
 
   // SLM128K-LABEL: @chained_dots_over_budget
   // SLM128K-COUNT-2: ttg.local_alloc
-  // SLM128K-COUNT-4: tt.dot {{.*}} : tensor<64x32xf32
+  // SLM128K-COUNT-16: tt.dot {{.*}} : tensor<64x8xf32
   // SLM128K-NOT: ttg.local_alloc
   // SLM128K: tt.dot {{.*}} : tensor<64x128xf32, #ttg.dot_op<{opIdx = 0
   // SLM128K: tt.return

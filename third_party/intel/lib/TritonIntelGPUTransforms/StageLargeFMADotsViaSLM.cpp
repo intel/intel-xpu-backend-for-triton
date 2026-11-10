@@ -33,9 +33,14 @@ constexpr unsigned kPressureThresholdBytes = 4096;
 // to derive K_TILE adaptively rather than picking from a hardcoded set.
 constexpr unsigned kTargetBytesPerOp = 1024;
 
-// Smallest K tile when an operand is staged decoded (see stageDot). The dot is
-// lowered to FMA, which has no kWidth constraint.
-constexpr uint64_t kMinDecodedKTile = 8;
+// Per-thread bytes that the operand slices of one K tile may take (see
+// selectStagedKTile), and the smallest K tile the staged dots may use: they
+// are lowered to FMA, which has no kWidth constraint. Measured on BMG over
+// fp8, fp16, bf16 and fp32 FMA GEMM tiles, 512 was the fastest budget: 256
+// gained nothing more, while 2048 and up brought back the spills of the
+// original K tile.
+constexpr uint64_t kKTileBudgetBytes = 512;
+constexpr uint64_t kMinStagedKTile = 8;
 
 // SLM safety margin (bytes). Leaves headroom for other passes (RDD,
 // RemoveLayoutConversions) that also stage through SLM. The staging may use
@@ -86,8 +91,9 @@ static uint64_t slmStagingBytes(Value v) {
   return uint64_t(n) * eb;
 }
 
-// Pick a K_TILE that's a power of 2, divides K, and fits the per-op byte
-// budget. Returns 0 if no viable tile.
+// The original K_TILE rule: a power of 2 that divides K and fits the per-op
+// byte budget for A. Returns 0 if no viable tile. The pass now uses it only to
+// decide which dots are staged; the tile itself comes from selectStagedKTile.
 //
 // The minimum tile is 16 (matches the smallest kWidth supported across
 // our DPAS/non-DPAS layouts). We deliberately do not require alignment
@@ -347,6 +353,51 @@ static RankedTensorType sliceTensorK(RankedTensorType src, unsigned kDim,
                                src.getEncoding());
 }
 
+// Per-thread bytes that the operand slices of one K tile of `dotOp` take in
+// registers: for each operand, its elements per thread in the partial-K
+// dot_op layout, times the bytes of the staged value plus, if casts are
+// replayed after the local_load, the bytes of the value they produce.
+static uint64_t kTileOperandBytes(tt::DotOp dotOp, const OperandChain &aChain,
+                                  const OperandChain &bChain, uint64_t kTile) {
+  auto bytes = [&](const OperandChain &chain, Value operand, unsigned kDim) {
+    auto operandTy = cast<RankedTensorType>(operand.getType());
+    SmallVector<int64_t> shape(operandTy.getShape());
+    shape[kDim] = kTile;
+    Type stagedTy = getElementTypeOrSelf(chain.stagedSource().getType());
+    auto sliceTy = RankedTensorType::get(shape, stagedTy, chain.loadEnc);
+    uint64_t perElem = std::max(1u, stagedTy.getIntOrFloatBitWidth() / 8);
+    if (!chain.stagedReplay().empty())
+      perElem += std::max(1u, chain.postLoadElemTy.getIntOrFloatBitWidth() / 8);
+    return uint64_t(ttg::getTotalElemsPerThread(sliceTy)) * perElem;
+  };
+  unsigned rank = cast<RankedTensorType>(dotOp.getA().getType()).getRank();
+  return bytes(aChain, dotOp.getA(), rank - 1) +
+         bytes(bChain, dotOp.getB(), rank - 2);
+}
+
+// The K tile of a staged dot: the largest power of 2 that divides K, is below
+// K and keeps the operand slices of one tile within kKTileBudgetBytes per
+// thread, down to kMinStagedKTile. The FMA lowering keeps a whole tile's
+// slices of A and B live in registers, so a larger tile spills. A decoded
+// operand takes more bytes per element than the fp8 one, so it gets a smaller
+// tile. Returns 0 if no tile of at least kMinStagedKTile fits K.
+static uint64_t selectStagedKTile(tt::DotOp dotOp, const OperandChain &aChain,
+                                  const OperandChain &bChain) {
+  unsigned rank = cast<RankedTensorType>(dotOp.getA().getType()).getRank();
+  uint64_t k =
+      cast<RankedTensorType>(dotOp.getA().getType()).getShape()[rank - 1];
+  uint64_t chosen = 0;
+  for (uint64_t tile = k > 1 ? llvm::bit_floor(k - 1) : 0;
+       tile >= kMinStagedKTile; tile /= 2) {
+    if (k % tile != 0)
+      continue;
+    chosen = tile;
+    if (kTileOperandBytes(dotOp, aChain, bChain, tile) <= kKTileBudgetBytes)
+      break;
+  }
+  return chosen;
+}
+
 static LogicalResult stageDot(tt::DotOp dotOp, const OperandChain &aChain,
                               const OperandChain &bChain) {
   Location loc = dotOp.getLoc();
@@ -357,19 +408,11 @@ static LogicalResult stageDot(tt::DotOp dotOp, const OperandChain &aChain,
   unsigned kDimA = rank - 1;
   unsigned kDimB = rank - 2;
   int64_t K = aType.getShape()[kDimA];
-  uint64_t kTile = selectKTile(dotOp);
+  uint64_t kTile = selectStagedKTile(dotOp, aChain, bChain);
   if (kTile == 0) {
     LDBG("no viable kTile for dot " << dotOp);
     return failure();
   }
-  // A decoded operand is read back from SLM as 16-bit values instead of fp8,
-  // which needs more registers per K tile. On BMG that made IGC spill more on
-  // some tiles, enough to make the dot slower than staging fp8. With the K
-  // tile halved, those spills went away and the decoded staging was no slower
-  // than staging fp8 on any tile measured.
-  if ((aChain.useDecoded || bChain.useDecoded) &&
-      kTile / 2 >= kMinDecodedKTile && uint64_t(K) % (kTile / 2) == 0)
-    kTile /= 2;
   uint64_t numTiles = uint64_t(K) / kTile;
   LDBG("staging dot K=" << K << " kTile=" << kTile << " numTiles=" << numTiles);
 
