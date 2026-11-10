@@ -274,7 +274,7 @@ index d914e574f2..63cb07e638 100644
      # original (causal AND SW) OR mm_prefix behavior for all other models.
      MM_PREFIX_CLAMP_SW: tl.constexpr = False,
 +    HEADS_PER_PROGRAM: tl.constexpr = 0,
-+    TD_QO_ELIGIBLE: tl.constexpr = False,
++    TD_QO_ELIGIBLE: int = 0,
 +    Q_LEN_BUCKET: int = 0,
 +    KV_LEN_BUCKET: int = 0,
 +    QUERY_WORK: int = 0,
