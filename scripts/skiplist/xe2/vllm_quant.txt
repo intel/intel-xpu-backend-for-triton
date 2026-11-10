@@ -1,3 +1,6 @@
 # fp8 per-tensor scale not bit-exact vs reference for bf16: https://github.com/intel/intel-xpu-backend-for-triton/issues/8342
 tests/kernels/quantization/test_fp8_quant.py::test_dynamic_per_tensor_fp8_quant_strided_input[0-dtype0-8]
 tests/kernels/quantization/test_fp8_quant.py::test_dynamic_per_tensor_fp8_quant_strided_input[0-dtype0-16]
+
+# SYCL dynamic_scaled_fp8_quant (vllm-xpu-kernels) turns an all-zero input's zero scale into NaN, so the output saturates to 448 instead of 0: https://github.com/intel/intel-xpu-backend-for-triton/issues/8680
+tests/kernels/quantization/test_fp8_quant.py::test_dynamic_per_tensor_fp8_quant_all_zero

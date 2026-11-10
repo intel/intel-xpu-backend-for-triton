@@ -276,6 +276,10 @@ def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes
     """Load one JIT function and populate the shared disk cache."""
     previous_capture_worker = os.environ.get("PYTEST_XDIST_WORKER")
     os.environ["PYTEST_XDIST_WORKER"] = capture_worker
+    stage = "load"
+    # The failure is re-raised from `finish()` at session end, where pytest would blame
+    # whichever test ran last, so the message has to name the test that launched the kernel.
+    origin = f" (launched by {test})" if test else ""
     _silence_worker_shutdown_diagnostics()
     worker = os.getpid()
     os.environ["TRITON_WARMUP_COMPILER_WORKER"] = str(worker)
@@ -299,6 +303,7 @@ def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes
 
                 triton.knobs.compilation.listener = CompilationTrace(trace_directory, phase, test)
             start = time.monotonic()
+            stage = "compile"
             _preload_with_compile_context(function, *compile_context)
             return worker, time.monotonic() - start
     except triton.compiler.errors.CompilationError as error:
@@ -309,10 +314,14 @@ def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes
             cause = cause.__cause__
         if os.environ.get("TRITON_WARMUP_DEBUG"):
             details += f"\nCompile context: {compile_context!r}"
-        raise _CompilationFailedError(f"Compilation failed for {kernel_repr}: {details}") from error
+        raise _CompilationFailedError(f"Compilation failed for {kernel_repr}{origin}: {details}") from error
     except Exception as error:
+        if stage == "compile":
+            # e.g. a backend failure (`IntelGPUError` from `ocloc`) rather than a Triton frontend error
+            raise _CompilationFailedError(
+                f"Compilation failed for {kernel_repr}{origin}: {type(error).__name__}: {error}") from error
         raise _UnsupportedPreloadError(
-            f"Failed to load or preload {kernel_repr}: {type(error).__name__}: {error}") from error
+            f"Failed to load {kernel_repr}{origin}: {type(error).__name__}: {error}") from error
     finally:
         if previous_capture_worker is None:
             os.environ.pop("PYTEST_XDIST_WORKER", None)
@@ -539,12 +548,16 @@ class ProcessPoolWarmupDispatcher:
             self._connection = None
             return
         worker_results = []
+        failures = []
         submitted = len(self._pending)
         try:
             for future in self._pending:
                 if future in self._tolerated_failures:
                     continue
-                worker_results.append(future.result())
+                try:
+                    worker_results.append(future.result())
+                except _UnsupportedPreloadError as error:
+                    failures.append(error)
         finally:
             self._executor.shutdown(wait=True)
             end = time.monotonic()
@@ -579,6 +592,11 @@ class ProcessPoolWarmupDispatcher:
             self._serialized_functions.clear()
             self._serialized_function_payloads.clear()
             self._submitted_keys.clear()
+        if len(failures) == 1:
+            raise failures[0]
+        if failures:
+            raise _UnsupportedPreloadError(f"{len(failures)} warmup compilations failed:\n" +
+                                           "\n".join(f"- {failure}" for failure in failures)) from failures[0]
 
 
 class SharedWarmupCoordinator:

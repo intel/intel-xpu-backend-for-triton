@@ -1053,9 +1053,6 @@ def _reduce_cases():
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
 @pytest.mark.enable_warmup(min_capability=9)
 def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, sanitize_overflow, reduce_op, device):
-    if is_xpu() and isinstance(src_layout,
-                               (ttgl.amd.AMDMFMALayout, ttgl.amd.AMDWMMALayout, ttgl.NVMMADistributedLayout)):
-        pytest.xfail("AMD and NVIDIA MMA layouts are not supported on Intel GPUs")
 
     @gluon.jit
     def _add(a, b):
@@ -1712,9 +1709,6 @@ _mma_pairs = [
                          [pair for pair in _mma_pairs if all(_is_layout_applicable(layout) for layout in pair)])
 def test_convert_mma2mma_layouts(M, N, mma_pair, dtype, device):
     src_layout, dst_layout = mma_pair
-    if is_xpu() and isinstance(src_layout,
-                               (ttgl.amd.AMDMFMALayout, ttgl.amd.AMDWMMALayout, ttgl.NVMMADistributedLayout)):
-        pytest.xfail("AMD and NVIDIA MMA layouts are not supported on Intel GPUs")
 
     @gluon.jit
     def kernel(x_ptr, y_ptr, M: ttgl.constexpr, N: ttgl.constexpr, src_layout: ttgl.constexpr,
@@ -1807,7 +1801,6 @@ def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device)
 
 
 @pytest.mark.skipif(is_hip(), reason="Assumes 32 threads per warp")
-@pytest.mark.xfail(not is_cuda(), reason="Requires CUDA", run=False)
 def test_regress_warp_shuffle_convert_layout(tmp_path):
     rows = 2
     cols = 8

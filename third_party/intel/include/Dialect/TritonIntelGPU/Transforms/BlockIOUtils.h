@@ -13,6 +13,7 @@
 #include <optional>
 
 namespace mlir::triton::intel {
+class ModuleAxisInfoAnalysis;
 class ModuleStrideAnalysis;
 } // namespace mlir::triton::intel
 
@@ -111,6 +112,16 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
                               AxisInfo *maskAxisInfo,
                               BlockIOTileSizeInfo &sizeInfoOut);
 
+/// Return a blocked layout under which a row-major rank-2 load of \p type
+/// passes validate2DBlockLoadTile, or std::nullopt. Lanes span at most 64
+/// bytes of a row, and warps split the dim other than \p reducedDim (the
+/// columns if none) first, to keep a reduction in a warp. \p type must have an
+/// encoding, whose CGA layout is kept.
+std::optional<triton::gpu::BlockedEncodingAttr>
+pickBlockIOLoadEncoding(RankedTensorType type, unsigned numWarps,
+                        unsigned threadsPerWarp,
+                        std::optional<unsigned> reducedDim);
+
 /// Determine whether memory layout is row-major from the block_io attribute.
 bool isMemoryRowMajor(Operation *op);
 
@@ -128,6 +139,14 @@ template <typename OpTy,
 bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
   return isBlockIOEligible(loadOp.getOperation(), tensorTy);
 }
+
+/// Return true if LowerTo2DBlockLoad would rewrite \p op to ttig.2d_block_load
+/// with result type \p tensorTy, which may differ from op.getType(). Emits no
+/// diagnostics and skips the 16-byte pitch check, which the pass reports as an
+/// error, so true means "eligible", not "safe to emit" for hand-tagged IR.
+bool isDescriptorLoadLowerableTo2DBlock(
+    triton::DescriptorLoadOp op, RankedTensorType tensorTy,
+    triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis);
 
 /// Estimate the hardware message count for a load with the given type and
 /// encoding. Higher values indicate more HW cost. Used for cost modeling in
@@ -148,6 +167,13 @@ Attribute canonicalCoalescedDescStoreLayout(RankedTensorType type, int numWarps,
 Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
                             Value ptr, unsigned dim);
 
+/// Whether a 2D block surface supports this row pitch. Shared by
+/// MaterializeBlockPointer and LowerTo2DBlockLoad so they cannot drift.
+/// A constant pitch must be >= 64 bytes, a multiple of 16 and fit in 24 bits.
+/// A runtime pitch needs a stride value and a full row of >= 64 bytes.
+bool isBlockPitchSupported(std::optional<int64_t> constPitchBytes,
+                           bool hasRuntimeStride, int64_t fullRowBytes);
+
 /// Build `stride * elemSizeInBytes` as an i32; null for non-integer stride.
 Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
                             unsigned elemSizeInBytes);
@@ -164,7 +190,10 @@ bool isZeroFillOther(Value other);
 /// `extraPred`, if non-null, is a batch-dims-only predicate ANDed into the
 /// original mask (degenerate along the pitch and contiguous dims, so it's
 /// uniform per hardware block-load message); the caller ANDs it into its
-/// own per-message select instead of folding it into `base_height`.
+/// own per-message select instead of folding it into `base_height`. When the
+/// AND sits below the final broadcast (`tt-reorder-broadcast`), `extraPred`
+/// has that narrower shape rather than the mask's; use
+/// `materializeExtraPred` to get a full-shape value.
 struct RowLimitMaskInfo {
   unsigned boundedDim;
   Value rowBase;
@@ -180,6 +209,12 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   ArrayRef<int64_t> tensorShape,
                                                   unsigned contiguousDim,
                                                   bool pitchDimIsBroadcast);
+
+/// Return `extraPred` as a value of type \p maskTy: unchanged if it already has
+/// that shape, else broadcast to it straight from its innermost source (so
+/// no broadcast-of-broadcast is left behind).
+Value materializeExtraPred(OpBuilder &builder, Location loc, Value extraPred,
+                           RankedTensorType maskTy);
 
 /// Compute `clamp(bound - rowBase, 0, rowExtent)` as an i32, widening to i64
 /// first to avoid overflow. `rowBase` may be null.

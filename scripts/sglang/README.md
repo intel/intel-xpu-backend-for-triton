@@ -185,7 +185,7 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
   rather than deferred import errors.
 
   `install-sglang.sh` strips the `sglang-kernel-xpu` requirement together with
-  the `torch==2.13.0+xpu` pin next to it: the requirement is a prebuilt wheel
+  the `torch==2.14.0+xpu` pin next to it: the requirement is a prebuilt wheel
   linked against that torch, and the pin would replace ours. The out-of-band
   build avoids both (`--no-isolation`, and `dependencies = []` upstream, so
   nothing can replace torch or Triton).
@@ -194,7 +194,7 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
   architecture-gated in 79 places with no Xe-HPC branch, so there is nothing to
   target. vllm-xpu-kernels serves `max1100` and `b580` from one wheel
   (`SYCL_SUPPORTED_ARCHS` includes `intel_gpu_pvc`); this cannot.
-  Upstream's only artifact is that wheel (`v0.3.0+xpu` in `sgl-project/whl`): it
+  Upstream's only artifact is that wheel (`v0.4.0+xpu` in `sgl-project/whl`): it
   is not on PyPI (PyPI `sgl-kernel` is the unrelated CUDA package, the XPU
   distribution is `sglang-kernel-xpu`) and the `sgl-kernel-xpu` releases have no
   assets.
@@ -205,11 +205,12 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
   `flash_attn_varlen_func` call ran 19m44s in the JIT without finishing. So
   installing it there would trade a loud `ImportError` for a hang.
 
-  The build is slow - 871 ninja targets, 61m41s wall and 34 CPU-hours at `-j32`,
-  7.5 GB of output, 83 `libsgl-ops-sycl-*.so`, dominated by the AOT CUTLASS-SYCL
-  FMHA/MLA instantiations. `USE_SYCL_JIT=ON` is upstream's lever for that; it
-  moves the cost to the first call per configuration and needs `icpx` at test
-  time, which the CI shell already provides via `setvars.sh`.
+  The build is slow - at `ada8a03`, 871 ninja targets, 61m41s wall and 34
+  CPU-hours at `-j32`, 7.5 GB of output, 83 `libsgl-ops-sycl-*.so`, dominated by
+  the AOT CUTLASS-SYCL FMHA/MLA instantiations. `USE_SYCL_JIT=ON` is upstream's
+  lever for that; it moves the cost to the first call per configuration and
+  needs `icpx` at test time, which the CI shell already provides via
+  `setvars.sh`.
 - **Block pointers.** SGLang's fla kernels still call `tl.make_block_ptr`,
   removed from this Triton
   ([#7781](https://github.com/intel/intel-xpu-backend-for-triton/issues/7781)).
