@@ -113,7 +113,7 @@ def loop_tile_sum_2d_desc_kernel(out_ptr, x_ptr, M, N: tl.constexpr, BM: tl.cons
 @perf_report(
     Benchmark(
         x_names=['K', 'P'],
-        x_vals=[(K, 4096 // K) for K in (8, 16, 32, 64, 128)],
+        x_vals=[(K, 16384 // K) for K in (8, 16, 32, 64, 128)],
         line_arg='provider',
         line_vals=['load', 'descriptor'],
         line_names=['tl.load', 'Tensor Descriptor'],
