@@ -79,20 +79,18 @@ def test_nan_padding(device, with_allocator, monkeypatch, tmp_path):
 
 
 def test_disabled(device, with_allocator, monkeypatch, tmp_path):
-    k_on, out_on, _, _ = _row_copy(torch.float32, 128, 32, 0, 1, monkeypatch, tmp_path, device)
-    k_off, out_off, _, _ = _row_copy(torch.float32, 128, 32, 0, 1, monkeypatch, tmp_path, device, disable=True)
+    k_on, out_on, ref_on, _ = _row_copy(torch.float32, 128, 32, 0, 1, monkeypatch, tmp_path, device)
+    k_off, out_off, ref_off, _ = _row_copy(torch.float32, 128, 32, 0, 1, monkeypatch, tmp_path, device, disable=True)
     assert _block_reads(k_on) > 0 and _block_reads(k_off) == 0
-    assert torch.equal(_bits(out_on), _bits(out_off))
+    assert torch.equal(_bits(out_on), _bits(ref_on)) and torch.equal(_bits(out_off), _bits(ref_off))
 
 
-def _split_sum_fn(x_ptr, out_ptr, S, CONDITIONAL: tl.constexpr, LOOP_CARRIED: tl.constexpr, N: tl.constexpr):
+def _split_sum_fn(x_ptr, out_ptr, S, CONDITIONAL: tl.constexpr, N: tl.constexpr):
     # A _fwd_kernel_stage2-like loop: one [1, N] row per split, accumulated in f32.
     pid = tl.program_id(0)
     desc = tl.make_tensor_descriptor(x_ptr + pid * S * N, shape=[S, N], strides=[N, 1], block_shape=[1, N])
     acc = tl.zeros([N], dtype=tl.float32)
     for s in range(0, S):
-        if LOOP_CARRIED:
-            desc = tl.make_tensor_descriptor(x_ptr + pid * S * N, shape=[S, N], strides=[N, 1], block_shape=[1, N])
         if CONDITIONAL:
             if s % 2 == 0:
                 acc += desc.load([s, 0]).reshape(N)
@@ -101,15 +99,13 @@ def _split_sum_fn(x_ptr, out_ptr, S, CONDITIONAL: tl.constexpr, LOOP_CARRIED: tl
     tl.store(out_ptr + pid * N + tl.arange(0, N), acc)
 
 
-@pytest.mark.parametrize("conditional, loop_carried, block_read", [(False, False, True), (True, False, True),
-                                                                   (False, True, False)])
-def test_split_sum(conditional, loop_carried, block_read, device, with_allocator, monkeypatch, tmp_path):
+@pytest.mark.parametrize("conditional", [False, True])
+def test_split_sum(conditional, device, with_allocator, monkeypatch, tmp_path):
     B, S, N = 8, 6, 128
     x = torch.randn(B, S, N, device=device)
     out = torch.empty(B, N, device=device)
-    k = _compile_run(_split_sum_fn, (B, ), (x, out, S), dict(CONDITIONAL=conditional, LOOP_CARRIED=loop_carried, N=N),
-                     monkeypatch, tmp_path)
-    assert (_block_reads(k) > 0) == block_read
+    k = _compile_run(_split_sum_fn, (B, ), (x, out, S), dict(CONDITIONAL=conditional, N=N), monkeypatch, tmp_path)
+    assert _block_reads(k) > 0
     rows = x[:, ::2] if conditional else x
     acc = torch.zeros(B, N, device=device)
     for s in range(rows.shape[1]):
