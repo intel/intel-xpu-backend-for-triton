@@ -577,9 +577,9 @@ module {
 
 // -----
 
-// COM: Listed ops with memory effects, and effect-free math and ub ops, finish.
-// COM: The earlier assume is on %m, so the fact on %n can only come from the
-// COM: last assume.
+// COM: Listed ops with memory effects, effect-free math and ub ops, and pure
+// COM: extern and inline-asm ops finish. The earlier assume is on %m, so the
+// COM: fact on %n can only come from the last assume.
 // CHECK-LABEL: tt.func @listed_effectful_ops_do_not_block
 module {
   tt.func @listed_effectful_ops_do_not_block(%n: i32, %m: i32, %p: !tt.ptr<i32>, %d: !tt.tensordesc<8x32xi32>, %g: !tt.tensordesc<1x32xi32>, %rows: tensor<8xi32>) {
@@ -608,6 +608,8 @@ module {
     proton.event start %e : i32
     %abs = math.absi %m : i32
     %poison = ub.poison : i32
+    %pe = tt.extern_elementwise %m {libname = "l", libpath = "p", symbol = "s", pure = true} : (i32) -> i32
+    %pa = tt.elementwise_inline_asm "nop" {constraints = "=r,r", packed_element = 1 : i32, pure = true} %m : i32 -> i32
     %cmp = arith.cmpi sge, %n, %c64 : i32
     llvm.intr.assume %cmp : i1
     tt.return
