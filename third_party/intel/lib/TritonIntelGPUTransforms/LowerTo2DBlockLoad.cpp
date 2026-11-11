@@ -378,7 +378,7 @@ private:
       pitchDim = isTranspose ? colDim : rowDim;
     }
 
-    // After the fallback above, which can change the tile and so its packing.
+    // Check the final tile, after any row-limit fallback.
     tt::AxisInfo *ptrInfo = axisInfoAnalysis.getAxisInfo(op.getPtr());
     if (elemSizeInBits * numPackedVals > 32 &&
         (!ptrInfo || ptrInfo->getDivisibility(contiguousDim) % 8))
