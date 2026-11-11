@@ -304,9 +304,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: %[[SHORTB:.*]] = llvm.intr.smax(%[[SHORT]], %{{.*}}) : (i32, i32) -> i32
     // CHECK: %[[SHORTE:.*]] = llvm.udiv %[[SHORTB]], %{{.*}} : i32
     // CHECK: %[[X:.*]] = llvm.add %{{.*}}, %[[SHORTE]] : i32
+    // CHECK: %[[W:.*]] = llvm.add %arg1, %[[SHORTB]] : i32
     // CHECK: %[[NEGX:.*]] = llvm.sub %{{.*}}, %[[X]] : i32
     // CHECK: llvm.getelementptr %{{.*}}[%[[NEGX]]]
-    // CHECK: %[[W:.*]] = llvm.add %arg1, %[[SHORTB]] : i32
     // CHECK-NOT: llvm.intr.umax
     // CHECK: triton_gen.2Dblockload %{{.*}}, %[[W]], %{{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
     %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height, %width {row_major} {ttig.block_io_runtime_col_limit} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32, i32) -> tensor<64x32xf16, #dot0>

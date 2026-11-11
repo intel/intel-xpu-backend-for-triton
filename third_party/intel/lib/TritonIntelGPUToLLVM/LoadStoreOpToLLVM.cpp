@@ -5255,16 +5255,12 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       // bound and the columns gained lie left of the tile, where no message
       // reads. The width is a whole number of 4-byte granules, so X stays
       // aligned.
-      Value shortfallBytes;
-      if (isColLimitWidth) {
-        shortfallBytes = b.smax(b.sub(b.i32_val(64), baseWidth), b.i32_val(0));
-        offsetX = b.add(offsetX,
-                        b.udiv(shortfallBytes, b.i32_val(elemSizeInBits / 8)));
-      }
-      Value negativeOffsetX = b.sub(b.i32_val(0), offsetX);
-      addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
       Value adjustedBaseWidth;
       if (isColLimitWidth) {
+        Value shortfallBytes =
+            b.smax(b.sub(b.i32_val(64), baseWidth), b.i32_val(0));
+        offsetX = b.add(offsetX,
+                        b.udiv(shortfallBytes, b.i32_val(elemSizeInBits / 8)));
         adjustedBaseWidth = b.add(baseWidth, shortfallBytes);
       } else {
         adjustedBaseWidth =
@@ -5272,6 +5268,8 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
         // The HW requires a base width of at least 64 bytes.
         adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
       }
+      Value negativeOffsetX = b.sub(b.i32_val(0), offsetX);
+      addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
 
       Value adjustedBaseHeight = baseHeight;
       Value pred;
