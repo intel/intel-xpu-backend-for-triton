@@ -52,6 +52,14 @@ static bool isBlockIOForAllLayoutsExplicitlyDisabled() {
          !enableBlockIOForAllLayout.value();
 }
 
+/// True if \p op is tagged for row-major 2D block reads.
+static bool isRowMajorTagged(tt::DescriptorLoadOp op) {
+  auto attr = op->getAttrOfType<StringAttr>(
+      ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+  return attr && attr.getValue() ==
+                     ttgi::stringifyBlockIOMode(ttgi::BlockIOMode::RowMajor);
+}
+
 /// True if \p root may depend on a program id. Looks through loop iter_args
 /// (init and yield) and the IV's bounds; any other region value, an op with
 /// regions, or running out of budget answers true.
@@ -91,64 +99,65 @@ static bool dependsOnProgramId(Value root) {
 }
 
 /// Byte distance between the tiles that \p op reads in programs pid and pid+1
-/// of each grid axis, at the same iteration. std::nullopt unless every
-/// pid-dependent term of the descriptor base and of the indices is a constant
-/// multiple of a program id, with a constant stride for the indices.
+/// of each grid axis, at the same iteration. std::nullopt unless the descriptor
+/// has one definition with pid-independent strides, and every pid-dependent
+/// term of its base and of the indices is a constant multiple of a program id,
+/// with a constant stride for the indices.
 static std::optional<std::array<int64_t, 3>>
 programIdByteSteps(tt::DescriptorLoadOp op,
                    tt::intel::SymbolicBoundsProver &prover) {
-  tt::intel::DescriptorDefinitions defs =
-      tt::intel::findDescriptorDefinitions(op.getDesc());
-  if (defs.empty())
+  // Which of several definitions a program uses may itself depend on its id.
+  std::optional<tt::MakeTensorDescOp> def =
+      tt::intel::findMakeTensorDescOp(op.getDesc());
+  if (!def)
+    return std::nullopt;
+  tt::MakeTensorDescOp d = *def;
+  // A pid-dependent pitch moves each row of the tile by a different amount.
+  if (llvm::any_of(d.getStrides(), dependsOnProgramId))
     return std::nullopt;
   tt::intel::QueryContext ctx{op, op->getParentOfType<scf::ForOp>()};
-  int64_t elemBytes = op.getType().getElementTypeBitWidth() / 8;
-  std::optional<std::array<int64_t, 3>> steps;
-  for (tt::MakeTensorDescOp d : defs) {
-    std::array<int64_t, 3> elems{0, 0, 0};
-    auto accumulate = [&](Value v, int64_t scale) {
-      SmallVector<tt::intel::Obligation, 0> obligations;
-      tt::intel::AffineForm form = prover.normalize(v, ctx, obligations);
-      for (auto [sym, coeff] : form.terms()) {
-        if (sym.kind() != tt::intel::SymbolKind::ProgramId) {
-          if (dependsOnProgramId(sym.value()))
-            return false;
-          continue;
-        }
-        int32_t axis =
-            sym.value().getDefiningOp<tt::GetProgramIdOp>().getAxisAsInt();
-        int64_t term;
-        if (llvm::MulOverflow(coeff, scale, term) ||
-            llvm::AddOverflow(elems[axis], term, elems[axis]))
+  int64_t elemBytes =
+      llvm::divideCeil(op.getType().getElementTypeBitWidth(), 8);
+  std::array<int64_t, 3> elems{0, 0, 0};
+  auto accumulate = [&](Value v, int64_t scale) {
+    SmallVector<tt::intel::Obligation, 0> obligations;
+    tt::intel::AffineForm form = prover.normalize(v, ctx, obligations);
+    for (auto [sym, coeff] : form.terms()) {
+      if (sym.kind() != tt::intel::SymbolKind::ProgramId) {
+        if (dependsOnProgramId(sym.value()))
           return false;
-      }
-      return true;
-    };
-    Value base = d.getBase();
-    for (auto add = base.getDefiningOp<tt::AddPtrOp>(); add;
-         add = base.getDefiningOp<tt::AddPtrOp>()) {
-      if (!accumulate(add.getOffset(), 1))
-        return std::nullopt;
-      base = add.getPtr();
-    }
-    if (dependsOnProgramId(base))
-      return std::nullopt;
-    for (auto [i, idx] : llvm::enumerate(op.getIndices())) {
-      if (!dependsOnProgramId(idx))
         continue;
-      std::optional<int64_t> stride =
-          tt::intel::getFoldedConstantValue(d.getStrides()[i]);
-      if (!stride || !accumulate(idx, *stride))
-        return std::nullopt;
+      }
+      int32_t axis =
+          sym.value().getDefiningOp<tt::GetProgramIdOp>().getAxisAsInt();
+      int64_t term;
+      if (llvm::MulOverflow(coeff, scale, term) ||
+          llvm::AddOverflow(elems[axis], term, elems[axis]))
+        return false;
     }
-    for (int64_t &e : elems)
-      if (llvm::MulOverflow(e, elemBytes, e))
-        return std::nullopt;
-    if (steps && *steps != elems)
+    return true;
+  };
+  Value base = d.getBase();
+  for (auto add = base.getDefiningOp<tt::AddPtrOp>(); add;
+       add = base.getDefiningOp<tt::AddPtrOp>()) {
+    if (!accumulate(add.getOffset(), 1))
       return std::nullopt;
-    steps = elems;
+    base = add.getPtr();
   }
-  return steps;
+  if (dependsOnProgramId(base))
+    return std::nullopt;
+  for (auto [i, idx] : llvm::enumerate(op.getIndices())) {
+    if (!dependsOnProgramId(idx))
+      continue;
+    std::optional<int64_t> stride =
+        tt::intel::getFoldedConstantValue(d.getStrides()[i]);
+    if (!stride || !accumulate(idx, *stride))
+      return std::nullopt;
+  }
+  for (int64_t &e : elems)
+    if (llvm::MulOverflow(e, elemBytes, e))
+      return std::nullopt;
+  return elems;
 }
 
 /// Issue #8458 (B580): 2D reads by many programs whose tiles are a power of
@@ -326,7 +335,12 @@ public:
       }
       if (!satisfiesRelayoutGates(func, loads, reduces, threadsPerWarp))
         return;
+      SmallVector<tt::DescriptorLoadOp> candidates(
+          llvm::make_filter_range(loads, isRowMajorTagged));
+      if (candidates.empty())
+        return;
       if (!prover && !proverFailed) {
+        LDBG("Building the range analysis for the relayout stride guard");
         solver = createDataFlowSolver();
         solver->load<tt::intel::IntegerRangeAnalysis>(
             mod, getAnalysis<DominanceInfo>());
@@ -339,11 +353,13 @@ public:
         LDBG("Range analysis failed; skip relayout");
         return;
       }
-      SmallVector<tt::DescriptorLoadOp> allowed(
-          llvm::make_filter_range(loads, [&](tt::DescriptorLoadOp load) {
+      // A refused load keeps ttig.block_io, so RemoveLayoutConversions could
+      // move it into an allowed sibling's layout: all candidates or none.
+      if (!llvm::all_of(candidates, [&](tt::DescriptorLoadOp load) {
             return programIdStepsAllowRelayout(load, *prover);
-          }));
-      for (tt::DescriptorLoadOp load : allowed)
+          }))
+        return;
+      for (tt::DescriptorLoadOp load : candidates)
         relayoutDescriptorLoadForBlockIO(load, axisInfoAnalysis);
     });
   }
@@ -1610,11 +1626,7 @@ private:
       return;
     }
 
-    auto blockIOAttr = op->getAttrOfType<StringAttr>(
-        ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
-    if (!blockIOAttr ||
-        blockIOAttr.getValue() !=
-            ttgi::stringifyBlockIOMode(ttgi::BlockIOMode::RowMajor)) {
+    if (!isRowMajorTagged(op)) {
       LDBG("Not tagged ttig.block_io = row_major; skip relayout");
       return;
     }
