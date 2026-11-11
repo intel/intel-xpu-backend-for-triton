@@ -15,6 +15,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark import gemm_streamk_benchmark
 from triton_kernels_benchmark.benchmark_testing import (DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY, get_xpu_extension)
 
 sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
@@ -466,6 +467,12 @@ def get_benchmark(
                 transpose_a=transpose_a,
                 transpose_b=transpose_b,
             )
+            # Shapes whose last wave of tiles is mostly empty run faster as stream-K (#8445); only measured on a B580.
+            if ('B580' in DEVICE_NAME and matmul_kernel is matmul_kernel_with_tensor_descriptors
+                    and not (transpose_a or transpose_b) and len(a.shape) == 2
+                    and gemm_streamk_benchmark.should_use_streamk(M, N, K)):
+                c.fill_(float('nan'))  # the check below then fails for an unwritten or unzeroed shared tile
+                triton_fn = lambda: gemm_streamk_benchmark.matmul(a, b, c)
             torch_fn = lambda: torch_mm(torch_a, torch_b, out_dtype=torch.float32)
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
             _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
