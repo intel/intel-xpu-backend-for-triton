@@ -282,11 +282,11 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton', 'onednn'] + (['sycl-tla', 'sycl-tla-streamk'] if sycl_tla_kernel is not None else []),
+        line_vals=['triton', 'onednn'] + (['sycl-tla'] if sycl_tla_kernel is not None else []),
         # label name for the lines
-        line_names=['Triton', 'OneDNN'] + (['SYCL-TLA', 'SYCL-TLA Stream-K'] if sycl_tla_kernel is not None else []),
+        line_names=['Triton', 'OneDNN'] + (['SYCL-TLA'] if sycl_tla_kernel is not None else []),
         # line styles
-        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+        styles=[('green', '-'), ('green', '--'), ('blue', '-')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
         plot_name='matmul-streamk-performance',
         # name for the plot. Used also as a file name for saving the plot.
@@ -307,17 +307,18 @@ def benchmark(M, N, K, provider):
         torch_fn = lambda: torch.mm(a, b, out_dtype=torch.float32)
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
-    elif provider in ('sycl-tla', 'sycl-tla-streamk'):
-        # 'sycl-tla' is SYCL-TLA's data-parallel GEMM, the faster SYCL-TLA kernel on these shapes and the
-        # line Triton's stream-K is tracked against. 'sycl-tla-streamk' is SYCL-TLA's own stream-K
-        # decomposition, kept as a separate line for a like-for-like reference.
+    elif provider == 'sycl-tla':
+        # SYCL-TLA's own stream-K decomposition, so that this benchmark compares stream-K with stream-K.
+        # It is slower than SYCL-TLA's data-parallel GEMM on these shapes; gemm_benchmark.py is where
+        # Triton is compared against SYCL-TLA's best kernel.
         c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
-        if provider == 'sycl-tla':
-            sycl_tla_fn = lambda: (sycl_tla_kernel.gemm(a, b, c, M, N, K, 1), c)[1]
-        else:
-            sycl_tla_fn = lambda: (sycl_tla_kernel.gemm_streamk(a, b, c, M, N, K), c)[1]
+
+        def sycl_tla_fn():
+            sycl_tla_kernel.gemm_streamk(a, b, c, M, N, K)
+            return c
+
         torch_fn = lambda: torch.mm(a, b, out_dtype=torch.float32)
-        benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg=f'{provider} to torch')
+        benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='sycl-tla to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(sycl_tla_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
