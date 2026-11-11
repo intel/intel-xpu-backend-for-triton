@@ -35,3 +35,6 @@ apply_patch() {
 echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
+# Split scan: atomic-ticket block index (look-back deadlock, #8261) and larger XPU
+# split-scan blocks.
+apply_patch pytorch-split-scan.patch

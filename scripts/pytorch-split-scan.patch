@@ -1,0 +1,114 @@
+diff --git a/torch/_inductor/codegen/triton_split_scan.py b/torch/_inductor/codegen/triton_split_scan.py
+index 87f0c5e..9005cef 100644
+--- a/torch/_inductor/codegen/triton_split_scan.py
++++ b/torch/_inductor/codegen/triton_split_scan.py
+@@ -44,6 +44,7 @@ class TritonSplitScanKernel(TritonKernel):
+             raise AssertionError("not supported")
+         if fixed_config is not None:
+             raise AssertionError("not supported")
++        self._block_ticket: str | None = None
+         super().__init__(
+             tiling,
+             **kwargs,
+@@ -56,6 +57,53 @@ class TritonSplitScanKernel(TritonKernel):
+     def should_use_cooperative_reduction(self) -> bool:
+         return False
+ 
++    def iteration_ranges_get_pid(self, entry: IterationRangesRoot) -> str:
++        """Use an atomic ticket instead of ``tl.program_id`` as the scan block index.
++
++        Decoupled look-back spins on the previous block, which without
++        forward-progress guarantees may not have started yet. A ticket taken at block
++        start ensures it has. The ticket indexes both the data block and the look-back.
++        """
++        if not prefix_is_reduction(entry.prefix):
++            return super().iteration_ranges_get_pid(entry)
++        if self._block_ticket is None:
++            if entry.grid_dim is None:
++                raise AssertionError("entry.grid_dim must not be None")
++            pointwise_numel = sympy_product(
++                numel
++                for prefix, numel in self.numels.items()
++                if not prefix_is_reduction(prefix)
++            )
++            # One int64 counter per row, indexed like the look-back scratch.
++            counters, _, offset = self.args.workspace(
++                nelem=8 * pointwise_numel, zero_fill=True
++            )
++            # Must be the first workspace allocation (made from codegen_range_tree in
++            # __init__, before scan()) so the int64 atomic is 8-byte aligned.
++            if offset != 0:
++                raise AssertionError(
++                    "split-scan ticket counters must be the first workspace "
++                    f"allocation, got offset {offset}"
++                )
++            pointwise_trees = [
++                tree
++                for tree in self.range_trees
++                if not prefix_is_reduction(tree.prefix)
++            ]
++            row = f"{pointwise_trees[-1].prefix}offset" if pointwise_trees else "0"
++            ticket = f"{entry.prefix}ticket"
++            # The counter keeps growing if a harness reruns without re-zeroing the
++            # workspace; each launch takes num_programs tickets, hence the modulo.
++            self.body.writeline(
++                f"{ticket} = (tl.atomic_add({counters}.to(tl.pointer_type(tl.int64)) "
++                f'+ {row}, 1, sem="relaxed") % tl.num_programs({entry.grid_dim}))'
++                ".to(tl.int32)"
++            )
++            self._block_ticket = ticket
++        if self.index_dtype != "tl.int32":
++            return f"{self._block_ticket}.to({self.index_dtype})"
++        return self._block_ticket
++
+     def initialize_range_tree(self, pid_cache):
+         prefixes = ["y", "x", "r0_"]
+         if len(self.numels) > len(prefixes):
+diff --git a/torch/_inductor/heuristics/triton_codegen/reduction.py b/torch/_inductor/heuristics/triton_codegen/reduction.py
+index 17b966c..39b5d9f 100644
+--- a/torch/_inductor/heuristics/triton_codegen/reduction.py
++++ b/torch/_inductor/heuristics/triton_codegen/reduction.py
+@@ -800,6 +800,43 @@ class ROCmReductionHeuristic(ReductionHeuristic):
+ class XPUReductionHeuristic(ReductionHeuristic):
+     """Reduction configs for XPU devices."""
+ 
++    # Larger R0_BLOCK candidates than the generic reduction configs (<= 2048);
++    # long split scans are much faster with them. Autotuning picks per shape.
++    _SPLIT_SCAN_EXTRA_BLOCKS = ((4096, 8), (8192, 16), (16384, 8))
++
++    def get_split_scan_configs(
++        self,
++        *,
++        size_hints: dict[str, int],
++        inductor_meta: dict[str, Any],
++        triton_meta: dict[str, Any],
++    ) -> list[Config]:
++        configs = super().get_split_scan_configs(
++            size_hints=size_hints,
++            inductor_meta=inductor_meta,
++            triton_meta=triton_meta,
++        )
++        if not configs:
++            return configs
++        import copy
++
++        rnumel = size_hints.get("r0_", 0)
++        min_rblock = inductor_meta.get("min_split_scan_rblock", 256)
++        seen = {
++            (cfg.kwargs.get("R0_BLOCK"), cfg.num_warps)  # type: ignore[union-attr]
++            for cfg in configs
++        }
++        for r0_block, num_warps in self._SPLIT_SCAN_EXTRA_BLOCKS:
++            if r0_block > rnumel or r0_block < min_rblock:
++                continue
++            if (r0_block, num_warps) in seen:
++                continue
++            cfg = copy.deepcopy(configs[0])
++            cfg.kwargs["R0_BLOCK"] = r0_block  # type: ignore[union-attr]
++            cfg.num_warps = num_warps  # type: ignore[union-attr]
++            configs.append(cfg)
++        return configs
++
+     def _get_inner_extra_configs(self, make_config, register_intensive):
+         # We see performance regression on xpu in some models because the
+         # default INNER config lacks a high-num_warps candidate. Add one back
