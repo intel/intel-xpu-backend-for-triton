@@ -10,6 +10,8 @@ on:
       - .github/workflows/sglang-tests*.yml
       - scripts/sglang/**
       - .github/pins/pytorch.txt
+      - scripts/patch-pytorch.sh
+      - scripts/pytorch-*.patch
   schedule:
     # Thursday/Sunday 6:05AM PST (UTC-8) or 7:05AM PDT (UTC-7). Staggered a few hours
     # after the vLLM test runs (10:05 UTC) so sglang does not queue behind them for the

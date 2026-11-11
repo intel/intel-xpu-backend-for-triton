@@ -14,6 +14,8 @@ on:
       - benchmarks/triton_kernels_benchmark/vllm/**
       - scripts/vllm/**
       - .github/pins/pytorch.txt
+      - scripts/patch-pytorch.sh
+      - scripts/pytorch-*.patch
   schedule:
     - cron: "0 8 * * *"
 
