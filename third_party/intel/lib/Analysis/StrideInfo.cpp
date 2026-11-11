@@ -1,9 +1,11 @@
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Analysis/AxisInfoExt.h"
+#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "triton/Analysis/Signedness.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -80,7 +82,11 @@ StrideInfo StrideInfo::join(const StrideInfo &lhs, const StrideInfo &rhs) {
   }
   assert(lhs.getRank() == rhs.getRank() && "Mismatched ranks");
 
-  DimVectorT spatial = joinColumn(lhs.stride, rhs.stride);
+  // A poison side constrains neither the spatial stride nor the stride values.
+  const StrideInfo *spatialSrc =
+      lhs.poison ? &rhs : (rhs.poison ? &lhs : nullptr);
+  DimVectorT spatial =
+      spatialSrc ? spatialSrc->stride : joinColumn(lhs.stride, rhs.stride);
 
   // Union the set of tracked loops.  A missing entry is treated as an
   // all-zero vector of the shared rank, then joined with `joinColumn`'s
@@ -116,7 +122,9 @@ StrideInfo StrideInfo::join(const StrideInfo &lhs, const StrideInfo &rhs) {
   StrideValueVectorT strideValues;
   const StrideValueVectorT &lv = lhs.getStrideValues();
   const StrideValueVectorT &rv = rhs.getStrideValues();
-  if (!lv.empty() || !rv.empty()) {
+  if (spatialSrc) {
+    strideValues = spatialSrc->getStrideValues();
+  } else if (!lv.empty() || !rv.empty()) {
     strideValues.resize(lhs.getRank());
     for (unsigned d = 0, rank = lhs.getRank(); d < rank; ++d) {
       Value a = d < lv.size() ? lv[d] : Value();
@@ -125,8 +133,10 @@ StrideInfo StrideInfo::join(const StrideInfo &lhs, const StrideInfo &rhs) {
     }
   }
 
-  return StrideInfo(std::move(spatial), std::move(ivStrides),
+  StrideInfo result(std::move(spatial), std::move(ivStrides),
                     std::move(strideValues));
+  result.poison = lhs.poison && rhs.poison;
+  return result;
 }
 
 int64_t StrideInfo::getIVStride(LoopLikeOpInterface loop, size_t dim) const {
@@ -177,6 +187,8 @@ void StrideInfo::print(raw_ostream &os) const {
   os << "stride = [";
   llvm::interleaveComma(stride, os);
   os << "]";
+  if (poison)
+    os << ", poison";
   if (!ivStrides.empty()) {
     os << ", iv_strides = {";
     bool first = true;
@@ -843,6 +855,51 @@ public:
   }
 };
 
+/// `select %c, %t, %f`: a scalar condition picks a whole tensor, so the
+/// strides of the arms join (a poison arm is never chosen); a tensor condition
+/// can mix lanes of both arms, which keeps a stride only along a dim where the
+/// condition is constant. A condition that changes between iterations of a
+/// loop switches arms, so the arms' IV strides do not hold for that loop.
+class SelectOpStrideVisitor final
+    : public StrideInfoVisitorImpl<arith::SelectOp> {
+public:
+  StrideInfo getStrideInfo(
+      arith::SelectOp op,
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
+    const StrideInfo &lhs = operands[1]->getValue();
+    const StrideInfo &rhs = operands[2]->getValue();
+    // At LLVM-lowering time an arm can be a struct carrying another rank.
+    StrideInfo pessimistic =
+        StrideInfo::getPessimisticValueState(op.getResult());
+    if (lhs.getRank() != pessimistic.getRank() ||
+        rhs.getRank() != pessimistic.getRank())
+      return pessimistic;
+    StrideInfo joined = StrideInfo::join(lhs, rhs);
+    StrideInfo::DimVectorT stride = joined.getStride();
+    StrideInfo::StrideValueVectorT values = joined.getStrideValues();
+    Value cond = op.getCondition();
+    if (auto condTy = dyn_cast<RankedTensorType>(cond.getType())) {
+      AxisInfo *condInfo = axisInfoLookup(cond);
+      for (unsigned d = 0, rank = stride.size(); d < rank; ++d) {
+        if (condInfo && condInfo->getConstancy(d) >= condTy.getDimSize(d))
+          continue;
+        stride[d] = -1;
+        if (d < values.size())
+          values[d] = Value();
+      }
+    }
+    DenseMap<LoopLikeOpInterface, StrideInfo::DimVectorT> ivStrides =
+        joined.getIVStrides();
+    for (auto loop = op->getParentOfType<LoopLikeOpInterface>(); loop;
+         loop = loop->getParentOfType<LoopLikeOpInterface>())
+      if (!loop.isDefinedOutsideOfLoop(cond))
+        maybeStoreIVStride(ivStrides, loop,
+                           StrideInfo::DimVectorT(stride.size(), -1));
+    return StrideInfo(std::move(stride), std::move(ivStrides),
+                      std::move(values));
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // StrideAnalysis
 //===----------------------------------------------------------------------===//
@@ -856,6 +913,130 @@ private:
     propagateIfChanged(lattice,
                        lattice->join(StrideInfo::getPessimisticValueState(
                            lattice->getAnchor())));
+  }
+
+  /// True if no use of `iterArg` can read its init. Loop fusion carries
+  /// prologue values through such iter_args, rebuilding them under a guard
+  /// that holds on the first iteration: every use must be the not-taken side
+  /// of such a guard located directly in the loop body (the else-yield of an
+  /// `scf.if`, or the false operand of an `arith.select`). The init is then a
+  /// placeholder (`ub.poison` or a zero constant) whose stride must not
+  /// constrain the join.
+  static bool isInitNeverRead(scf::ForOp forOp, BlockArgument iterArg) {
+    // The constant value `v` has on the first iteration, if any.
+    auto firstValue = [&](Value v) -> std::optional<int64_t> {
+      if (v == forOp.getInductionVar())
+        return getConstantIntValue(forOp.getLowerBound());
+      auto arg = dyn_cast<BlockArgument>(v);
+      if (!arg || arg.getOwner() != forOp.getBody())
+        return std::nullopt;
+      if (OpOperand *init = forOp.getTiedLoopInit(arg))
+        return getConstantIntValue(init->get());
+      return std::nullopt;
+    };
+    auto isTrueOnFirstIteration = [&](Value cond) {
+      auto cmp = cond.getDefiningOp<arith::CmpIOp>();
+      if (!cmp || !cmp.getType().isInteger(1) ||
+          cmp.getPredicate() != arith::CmpIPredicate::eq)
+        return false;
+      auto matches = [&](Value x, Value c) {
+        std::optional<int64_t> first = firstValue(x);
+        std::optional<int64_t> cst = getConstantIntValue(c);
+        return first && cst && *first == *cst;
+      };
+      return matches(cmp.getLhs(), cmp.getRhs()) ||
+             matches(cmp.getRhs(), cmp.getLhs());
+    };
+
+    Block *body = forOp.getBody();
+    for (OpOperand &use : iterArg.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto select = dyn_cast<arith::SelectOp>(user)) {
+        if (select->getBlock() != body || use.getOperandNumber() != 2 ||
+            !isTrueOnFirstIteration(select.getCondition()))
+          return false;
+        continue;
+      }
+      auto yield = dyn_cast<scf::YieldOp>(user);
+      auto ifOp = yield ? dyn_cast<scf::IfOp>(yield->getParentOp()) : nullptr;
+      if (!ifOp || ifOp->getBlock() != body ||
+          yield->getParentRegion() != &ifOp.getElseRegion() ||
+          !isTrueOnFirstIteration(ifOp.getCondition()))
+        return false;
+    }
+    return true;
+  }
+
+  /// A copy of AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors
+  /// (mlir/lib/Analysis/DataFlow/SparseAnalysis.cpp, LLVM 18f9e623), except
+  /// for the edges into an scf.for body: an init that is never read
+  /// (`isInitNeverRead`) is joined in as poison, and the back edge drops a
+  /// stride value defined in the loop, since an iter_arg holds a value from an
+  /// earlier iteration. With a real init the join drops such a value anyway.
+  void visitRegionSuccessors(
+      ProgramPoint *point, RegionBranchOpInterface branch,
+      RegionSuccessor successor,
+      ArrayRef<dataflow::AbstractSparseLattice *> abstractLattices) override {
+    auto lattices = llvm::map_to_vector(
+        abstractLattices, [](dataflow::AbstractSparseLattice *lattice) {
+          return static_cast<dataflow::Lattice<StrideInfo> *>(lattice);
+        });
+    const auto *predecessors =
+        getOrCreateFor<dataflow::PredecessorState>(point, point);
+    assert(predecessors->allPredecessorsKnown() &&
+           "unexpected unresolved region successors");
+    auto forOp = dyn_cast<scf::ForOp>(branch.getOperation());
+
+    for (Operation *op : predecessors->getKnownPredecessors()) {
+      std::optional<OperandRange> operands;
+      if (op == branch)
+        operands = branch.getEntrySuccessorOperands(successor);
+      else if (auto terminator =
+                   dyn_cast<RegionBranchTerminatorOpInterface>(op))
+        operands = terminator.getSuccessorOperands(successor);
+      if (!operands)
+        return setAllToEntryStates(lattices);
+
+      ValueRange inputs = predecessors->getSuccessorInputs(op);
+      assert(inputs.size() == operands->size() &&
+             "expected the same number of successor inputs as operands");
+
+      auto valueToLattice = [&](Value v) { return getLatticeElement(v); };
+      unsigned firstIndex = 0;
+      if (inputs.size() != lattices.size()) {
+        RegionSuccessor nonSuccessor =
+            point->isBlockStart()
+                ? RegionSuccessor(point->getBlock()->getParent())
+                : successor;
+        if (!inputs.empty())
+          firstIndex = point->isBlockStart()
+                           ? cast<BlockArgument>(inputs.front()).getArgNumber()
+                           : cast<OpResult>(inputs.front()).getResultNumber();
+        SmallVector<Value> nonSuccessorInputs =
+            branch.getNonSuccessorInputs(nonSuccessor);
+        visitNonControlFlowArguments(
+            branch, nonSuccessor, nonSuccessorInputs,
+            llvm::map_to_vector(nonSuccessorInputs, valueToLattice));
+      }
+
+      bool intoLoopBody = forOp && point->isBlockStart();
+      for (auto [lattice, operand, input] : llvm::zip(
+               ArrayRef(lattices).drop_front(firstIndex), *operands, inputs)) {
+        StrideInfo incoming = getLatticeElementFor(point, operand)->getValue();
+        if (intoLoopBody && op == branch &&
+            isInitNeverRead(forOp, cast<BlockArgument>(input))) {
+          incoming = incoming.asPoison();
+        } else if (intoLoopBody && op != branch) {
+          StrideInfo::StrideValueVectorT values = incoming.getStrideValues();
+          for (Value &value : values)
+            if (value && !forOp.isDefinedOutsideOfLoop(value))
+              value = Value();
+          incoming = StrideInfo(incoming.getStride(), incoming.getIVStrides(),
+                                std::move(values));
+        }
+        propagateIfChanged(lattice, lattice->join(incoming));
+      }
+    }
   }
 
   void visitNonControlFlowArguments(
@@ -874,8 +1055,8 @@ private:
     } else {
       // scf.while IV-stride seeding is intentionally deferred.  Its
       // before-region args are control-flow-fed from the init operands, which
-      // bypasses this hook.  Handling it requires overriding the solver's
-      // region-successor propagation; that is out of scope here and will be
+      // bypasses this hook.  Handling it requires extending
+      // visitRegionSuccessors above; that is out of scope here and will be
       // revisited when a consumer (PR-B TemporalReuseAnalysis) needs it.
       setAllToEntryStates(argLattices);
     }
@@ -915,6 +1096,7 @@ public:
     visitors.append<TransOpStrideVisitor>();
     visitors.append<MakeTensorDescOpStrideVisitor>();
     visitors.append<DescriptorLoadOpStrideVisitor>();
+    visitors.append<SelectOpStrideVisitor>();
     visitors.setAxisInfoLookup(std::move(axisInfoLookup));
   }
 

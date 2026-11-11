@@ -29,6 +29,10 @@ class ModuleAxisInfoAnalysis;
 /// keeps the column meaningful even when the step is not a compile-time
 /// constant, and mirrors the spatial column (which is also in native
 /// element units).
+///
+/// A *poison* state stands for an scf.for init that no use can read: its
+/// spatial stride and stride values are unconstrained, so the join takes them
+/// from the other side. Its IV columns join as usual.
 class StrideInfo {
 public:
   using DimVectorT = SmallVector<int64_t>;
@@ -72,7 +76,7 @@ public:
 
   bool operator==(const StrideInfo &other) const {
     return stride == other.stride && ivStrides == other.ivStrides &&
-           strideValues == other.strideValues;
+           strideValues == other.strideValues && poison == other.poison;
   }
 
   /// Collapse an all-null vector to empty, so "no runtime stride" compares
@@ -85,6 +89,15 @@ public:
   }
 
   static StrideInfo getPessimisticValueState(Value value);
+
+  /// This state marked poison: the spatial stride becomes unknown and the
+  /// stride values are dropped, so poison states of a rank agree on both; the
+  /// IV columns are kept.
+  StrideInfo asPoison() const {
+    StrideInfo info(DimVectorT(getRank(), -1), ivStrides);
+    info.poison = true;
+    return info;
+  }
   static StrideInfo join(const StrideInfo &lhs, const StrideInfo &rhs);
 
   void print(raw_ostream &os) const;
@@ -122,6 +135,7 @@ private:
   DimVectorT stride;                                   // spatial
   DenseMap<LoopLikeOpInterface, DimVectorT> ivStrides; // per-loop IV
   StrideValueVectorT strideValues; // symbolic spatial-stride source per axis
+  bool poison = false; // spatial stride and stride values are unconstrained
 };
 
 using StrideInfoMapT = DenseMap<Value, StrideInfo>;
