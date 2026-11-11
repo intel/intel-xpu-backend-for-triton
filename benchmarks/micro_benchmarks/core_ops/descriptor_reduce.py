@@ -9,11 +9,13 @@ DEVICE = 'xpu'
 # reduce_segments_2d
 # ---------------------------------------------------------------------------
 
-# vLLM's reduce_segments: a [S, D] fp32 tile, weighted per row and summed over the rows.
+# vLLM's reduce_segments: a [S, D] fp32 tile, weighted per row and summed over the rows. H is constexpr, as
+# num_query_heads is in vLLM.
 
 
 @triton.jit
-def reduce_segments_2d_load_kernel(out_ptr, x_ptr, m_ptr, nseg, H, D: tl.constexpr, DP: tl.constexpr, S: tl.constexpr):
+def reduce_segments_2d_load_kernel(out_ptr, x_ptr, m_ptr, nseg, H: tl.constexpr, D: tl.constexpr, DP: tl.constexpr,
+                                   S: tl.constexpr):
     t = tl.program_id(0)
     h = tl.program_id(1)
     seg = tl.arange(0, S)
@@ -27,7 +29,8 @@ def reduce_segments_2d_load_kernel(out_ptr, x_ptr, m_ptr, nseg, H, D: tl.constex
 
 
 @triton.jit
-def reduce_segments_2d_desc_kernel(out_ptr, x_ptr, m_ptr, nseg, H, D: tl.constexpr, DP: tl.constexpr, S: tl.constexpr):
+def reduce_segments_2d_desc_kernel(out_ptr, x_ptr, m_ptr, nseg, H: tl.constexpr, D: tl.constexpr, DP: tl.constexpr,
+                                   S: tl.constexpr):
     t = tl.program_id(0)
     h = tl.program_id(1)
     seg = tl.arange(0, S)

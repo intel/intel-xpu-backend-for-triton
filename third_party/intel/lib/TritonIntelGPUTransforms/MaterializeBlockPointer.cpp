@@ -1,6 +1,8 @@
 #include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Analysis/AxisInfoExt.h"
+#include "intel/include/Analysis/Range.h"
 #include "intel/include/Analysis/StrideInfo.h"
+#include "intel/include/Analysis/SymbolicBounds.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
@@ -9,10 +11,12 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/CastInterfaces.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
@@ -46,6 +50,128 @@ static bool isBlockIOForAllLayoutsExplicitlyDisabled() {
       tt::tools::getStrEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
   return enableBlockIOForAllLayout.has_value() &&
          !enableBlockIOForAllLayout.value();
+}
+
+/// True if \p root may depend on a program id. Looks through loop iter_args
+/// (init and yield) and the IV's bounds; any other region value, an op with
+/// regions, or running out of budget answers true.
+static bool dependsOnProgramId(Value root) {
+  SmallVector<Value> work{root};
+  DenseSet<Value> seen;
+  while (!work.empty()) {
+    Value v = work.pop_back_val();
+    if (!seen.insert(v).second)
+      continue;
+    if (seen.size() > 256)
+      return true;
+    if (auto arg = dyn_cast<BlockArgument>(v)) {
+      Operation *owner = arg.getOwner()->getParentOp();
+      if (isa<tt::FuncOp>(owner))
+        continue;
+      auto forOp = dyn_cast<scf::ForOp>(owner);
+      if (!forOp)
+        return true;
+      if (arg == forOp.getInductionVar()) {
+        work.append({forOp.getLowerBound(), forOp.getStep()});
+        continue;
+      }
+      OpOperand *init = forOp.getTiedLoopInit(arg);
+      OpOperand *yielded = forOp.getTiedLoopYieldedValue(arg);
+      if (!init || !yielded)
+        return true;
+      work.append({init->get(), yielded->get()});
+      continue;
+    }
+    Operation *def = v.getDefiningOp();
+    if (isa<tt::GetProgramIdOp>(def) || def->getNumRegions() > 0)
+      return true;
+    llvm::append_range(work, def->getOperands());
+  }
+  return false;
+}
+
+/// Byte distance between the tiles that \p op reads in programs pid and pid+1
+/// of each grid axis, at the same iteration. std::nullopt unless every
+/// pid-dependent term of the descriptor base and of the indices is a constant
+/// multiple of a program id, with a constant stride for the indices.
+static std::optional<std::array<int64_t, 3>>
+programIdByteSteps(tt::DescriptorLoadOp op,
+                   tt::intel::SymbolicBoundsProver &prover) {
+  tt::intel::DescriptorDefinitions defs =
+      tt::intel::findDescriptorDefinitions(op.getDesc());
+  if (defs.empty())
+    return std::nullopt;
+  tt::intel::QueryContext ctx{op, op->getParentOfType<scf::ForOp>()};
+  int64_t elemBytes = op.getType().getElementTypeBitWidth() / 8;
+  std::optional<std::array<int64_t, 3>> steps;
+  for (tt::MakeTensorDescOp d : defs) {
+    std::array<int64_t, 3> elems{0, 0, 0};
+    auto accumulate = [&](Value v, int64_t scale) {
+      SmallVector<tt::intel::Obligation, 0> obligations;
+      tt::intel::AffineForm form = prover.normalize(v, ctx, obligations);
+      for (auto [sym, coeff] : form.terms()) {
+        if (sym.kind() != tt::intel::SymbolKind::ProgramId) {
+          if (dependsOnProgramId(sym.value()))
+            return false;
+          continue;
+        }
+        int32_t axis =
+            sym.value().getDefiningOp<tt::GetProgramIdOp>().getAxisAsInt();
+        int64_t term;
+        if (llvm::MulOverflow(coeff, scale, term) ||
+            llvm::AddOverflow(elems[axis], term, elems[axis]))
+          return false;
+      }
+      return true;
+    };
+    Value base = d.getBase();
+    for (auto add = base.getDefiningOp<tt::AddPtrOp>(); add;
+         add = base.getDefiningOp<tt::AddPtrOp>()) {
+      if (!accumulate(add.getOffset(), 1))
+        return std::nullopt;
+      base = add.getPtr();
+    }
+    if (dependsOnProgramId(base))
+      return std::nullopt;
+    for (auto [i, idx] : llvm::enumerate(op.getIndices())) {
+      if (!dependsOnProgramId(idx))
+        continue;
+      std::optional<int64_t> stride =
+          tt::intel::getFoldedConstantValue(d.getStrides()[i]);
+      if (!stride || !accumulate(idx, *stride))
+        return std::nullopt;
+    }
+    for (int64_t &e : elems)
+      if (llvm::MulOverflow(e, elemBytes, e))
+        return std::nullopt;
+    if (steps && *steps != elems)
+      return std::nullopt;
+    steps = elems;
+  }
+  return steps;
+}
+
+/// Issue #8458 (B580): 2D reads by many programs whose tiles are a power of
+/// two above 256 KiB apart ran up to 1.42x slower than gathers; smaller and
+/// non-power-of-two strides did not. Unknown steps are refused too.
+static bool
+programIdStepsAllowRelayout(tt::DescriptorLoadOp op,
+                            tt::intel::SymbolicBoundsProver &prover) {
+  std::optional<std::array<int64_t, 3>> steps = programIdByteSteps(op, prover);
+  if (!steps) {
+    LDBG("Program-id address step is not a known constant; skip relayout");
+    return false;
+  }
+  for (int64_t step : *steps) {
+    uint64_t mag = step < 0 ? 0 - uint64_t(step) : uint64_t(step);
+    if (mag > (uint64_t(256) << 10) && llvm::isPowerOf2_64(mag)) {
+      LDBG("Program-id address step " << step
+                                      << " B is a power of two above 256 KiB; "
+                                         "skip relayout");
+      return false;
+    }
+  }
+  return true;
 }
 
 // Check a descriptor base pointer or pitch against an alignment requirement.
@@ -175,6 +301,11 @@ public:
       return;
     }
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+    // Built on first use, before any relayout. A function's stride verdicts
+    // are taken before its loads are retyped, and only scalars are queried.
+    std::unique_ptr<DataFlowSolver> solver;
+    std::unique_ptr<tt::intel::SymbolicBoundsProver> prover;
+    bool proverFailed = false;
     mod.walk([&](tt::FuncOp func) {
       bool funcHasDot = false;
       SmallVector<tt::DescriptorLoadOp> loads;
@@ -195,7 +326,24 @@ public:
       }
       if (!satisfiesRelayoutGates(func, loads, reduces, threadsPerWarp))
         return;
-      for (tt::DescriptorLoadOp load : loads)
+      if (!prover && !proverFailed) {
+        solver = createDataFlowSolver();
+        solver->load<tt::intel::IntegerRangeAnalysis>(
+            mod, getAnalysis<DominanceInfo>());
+        proverFailed = failed(solver->initializeAndRun(mod));
+        if (!proverFailed)
+          prover = std::make_unique<tt::intel::SymbolicBoundsProver>(
+              *solver, getAnalysis<DominanceInfo>(), mod);
+      }
+      if (proverFailed) {
+        LDBG("Range analysis failed; skip relayout");
+        return;
+      }
+      SmallVector<tt::DescriptorLoadOp> allowed(
+          llvm::make_filter_range(loads, [&](tt::DescriptorLoadOp load) {
+            return programIdStepsAllowRelayout(load, *prover);
+          }));
+      for (tt::DescriptorLoadOp load : allowed)
         relayoutDescriptorLoadForBlockIO(load, axisInfoAnalysis);
     });
   }
