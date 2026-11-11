@@ -2060,7 +2060,9 @@ struct FmaOpConversion
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     Value a = operands[0][0], b = operands[0][1], c = operands[0][2];
-    if (!elemTy.isF32())
+    // IGC would also fold an addend that is a separately rounded `fmul` into
+    // the mad, skipping that rounding. Keep `llvm.fma` in that case.
+    if (!elemTy.isF32() || op.getC().getDefiningOp<arith::MulFOp>())
       return {LLVM::FMAOp::create(rewriter, loc, elemTy, a, b, c)};
     auto fmf = LLVM::FastmathFlagsAttr::get(rewriter.getContext(),
                                             LLVM::FastmathFlags::contract);
