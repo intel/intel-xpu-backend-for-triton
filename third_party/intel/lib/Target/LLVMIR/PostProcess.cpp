@@ -419,6 +419,13 @@ void expandFmaToContractPair(Module &module) {
             calls.push_back(call);
 
   for (IntrinsicInst *call : calls) {
+    // `IRBuilder` (and IGC) fold a multiply of two constants, rounding the
+    // product to f32 and leaving nothing to fuse. That changes the result of
+    // an exact fma, so keep `llvm.fma` when both multiplicands are constants.
+    if (isa<Constant>(call->getArgOperand(0)) &&
+        isa<Constant>(call->getArgOperand(1)))
+      continue;
+
     IRBuilder<> builder(call);
     builder.SetCurrentDebugLocation(call->getDebugLoc());
     FastMathFlags fmf = call->getFastMathFlags();

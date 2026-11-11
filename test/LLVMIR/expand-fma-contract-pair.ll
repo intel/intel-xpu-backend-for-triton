@@ -22,6 +22,25 @@ define float @fma_f32_mulf_addend(float %a, float %b, float %x) {
   ret float %r
 }
 
+; Both multiplicands constant: folding the product would round it to f32 and
+; change the result of an exact fma, so llvm.fma is kept.
+; CHECK-LABEL: @fma_f32_const_multiplicands
+define float @fma_f32_const_multiplicands(float %c) {
+; CHECK: call float @llvm.fma.f32(float f0x3F800001, float f0x3F800001, float %c)
+; CHECK-NOT: fmul contract
+  %r = call float @llvm.fma.f32(float f0x3F800001, float f0x3F800001, float %c)
+  ret float %r
+}
+
+; One constant multiplicand is still rewritten.
+; CHECK-LABEL: @fma_f32_one_const_multiplicand
+define float @fma_f32_one_const_multiplicand(float %a, float %c) {
+; CHECK:     [[MUL:%.*]] = fmul contract float %a, {{.*}}
+; CHECK-NEXT:fadd contract float [[MUL]], %c
+  %r = call float @llvm.fma.f32(float %a, float f0x3F800001, float %c)
+  ret float %r
+}
+
 ; Only scalar f32 is rewritten.
 ; CHECK-LABEL: @fma_f64
 define double @fma_f64(double %a, double %b, double %c) {
