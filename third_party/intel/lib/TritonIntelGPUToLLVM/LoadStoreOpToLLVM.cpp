@@ -55,20 +55,22 @@ static constexpr unsigned kCacheLineBytes = 64;
 
 /// Cache control for a 2D block store with rows of \p rowBytes, part of a
 /// work-group tile with rows of \p tileRowBytes (the whole tile, also where a
-/// mask cuts it at the tensor edge). \p l1StoreWriteBack is set where the
-/// driver's default store policy bypasses L1 and the module cannot hand data
-/// to another work-group (see ConvertTritonGPUToLLVM). There a row narrower
-/// than a line goes to L2 as a partial write. The rest of the line comes from
-/// the same tile, so writing back through L1 lets the two halves merge first.
+/// mask cuts it at the tensor edge), stored by \p op. The module of \p op keeps
+/// the write-back attribute where the driver's default store policy bypasses L1
+/// and the module cannot hand data to another work-group (see
+/// ConvertTritonGPUToLLVM). There a row narrower than a line goes to L2 as a
+/// partial write. The rest of the line comes from the same tile, so writing
+/// back through L1 lets the two halves merge first.
 ///
 /// Keep the default if the tile's rows are narrower than a line: the rest of
 /// each line then usually belongs to another work-group's tile. A tile edge
 /// that covers part of a line is still correct, it just merges less.
 static TritonGEN::StoreCacheControl
-get2DBlockStoreCacheControl(bool l1StoreWriteBack, unsigned rowBytes,
+get2DBlockStoreCacheControl(Operation *op, unsigned rowBytes,
                             unsigned tileRowBytes) {
-  if (!l1StoreWriteBack || rowBytes >= kCacheLineBytes ||
-      tileRowBytes < kCacheLineBytes)
+  if (!mlir::LLVM::intel::hasModuleAttr(
+          op, TritonIntelGPUDialect::getStoreL1WriteBackAttrName()) ||
+      rowBytes >= kCacheLineBytes || tileRowBytes < kCacheLineBytes)
     return TritonGEN::StoreCacheControl::DEFAULT;
   return TritonGEN::StoreCacheControl::L1WB_L3WB;
 }
@@ -3529,11 +3531,10 @@ struct DescriptorStoreOpToBlockIOConversion
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
-      bool l1StoreWriteBack, PatternBenefit benefit)
+      PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::DescriptorStoreOp>(converter,
                                                                    benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis),
-        l1StoreWriteBack(l1StoreWriteBack) {}
+        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::DescriptorStoreOp op, OpAdaptor adaptor,
@@ -3743,7 +3744,7 @@ struct DescriptorStoreOpToBlockIOConversion
     }
 
     TritonGEN::StoreCacheControl cacheControl = get2DBlockStoreCacheControl(
-        l1StoreWriteBack, tileWidth * packedElemSizeInBits / 8,
+        op, tileWidth * packedElemSizeInBits / 8,
         tensorType.getDimSize(colDim) * elemSizeInBits / 8);
 
     // --- Emit 2D block stores ---
@@ -3814,9 +3815,6 @@ struct DescriptorStoreOpToBlockIOConversion
     rewriter.eraseOp(op);
     return success();
   }
-
-private:
-  bool l1StoreWriteBack;
 };
 
 struct StoreOpToBlockIOConversion
@@ -3829,10 +3827,9 @@ struct StoreOpToBlockIOConversion
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
-      bool l1StoreWriteBack, PatternBenefit benefit)
+      PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis),
-        l1StoreWriteBack(l1StoreWriteBack) {}
+        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
@@ -4001,7 +3998,7 @@ struct StoreOpToBlockIOConversion
         getCachePolicy(op.getCachePolicyAttr()).cacheModifier ==
                 CacheModifier::NONE
             ? get2DBlockStoreCacheControl(
-                  l1StoreWriteBack, tileWidth * packedElemSizeInBits / 8,
+                  op, tileWidth * packedElemSizeInBits / 8,
                   tensorType.getDimSize(colDim) * elemSizeInBits / 8)
             : TritonGEN::StoreCacheControl::DEFAULT;
 
@@ -4091,9 +4088,6 @@ struct StoreOpToBlockIOConversion
     rewriter.eraseOp(op);
     return success();
   }
-
-private:
-  bool l1StoreWriteBack;
 };
 
 struct StoreOpConversion
@@ -5512,8 +5506,7 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns,
     const intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    intel::ModuleStrideAnalysis &strideAnalysis, bool l1StoreWriteBack,
-    PatternBenefit benefit) {
+    intel::ModuleStrideAnalysis &strideAnalysis, PatternBenefit benefit) {
 
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                DescriptorLoadOpConversion, StoreOpConversion,
@@ -5524,11 +5517,8 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
   patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
                                                   benefit);
   // Block IO store patterns (loads are handled via ttig.2d_block_load path).
-  patterns
-      .add<StoreOpToBlockIOConversion, DescriptorStoreOpToBlockIOConversion>(
-          typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis,
-          l1StoreWriteBack, benefit.getBenefit() + 2);
-  patterns.add<DescriptorGatherOpConversion>(typeConverter, targetInfo,
+  patterns.add<StoreOpToBlockIOConversion, DescriptorStoreOpToBlockIOConversion,
+               DescriptorGatherOpConversion>(typeConverter, targetInfo,
                                              axisInfoAnalysis, strideAnalysis,
                                              benefit.getBenefit() + 2);
   // TTIG ops from LowerTo2DBlockLoad TTGIR pass.

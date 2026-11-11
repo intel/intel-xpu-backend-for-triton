@@ -121,19 +121,21 @@ struct ConvertTritonGPUToLLVM
     // hand-offs through plain stores working; LowerTo2DBlockLoad leaves the
     // volatile and `.cv` loads in place for it. It covers the whole module and
     // runs before this pass converts anything, since a noinline callee is a
-    // separate function here.
+    // separate function here. Where write-back is not allowed this strips the
+    // module attribute, which the 2D block-store patterns read.
     // TODO: only releases at gpu scope or wider can publish data.
-    bool l1StoreWriteBack =
-        mod->hasAttrOfType<UnitAttr>(triton::gpu::intel::TritonIntelGPUDialect::
-                                         getStoreL1WriteBackAttrName()) &&
-        !mod.walk([](Operation *op) {
-              if (isa<triton::AtomicOpInterface, triton::AtomicPollOp,
-                      triton::ElementwiseInlineAsmOp>(op) ||
-                  triton::gpu::intel::isVolatileOrCVLoad(op))
-                return WalkResult::interrupt();
-              return WalkResult::advance();
-            })
-             .wasInterrupted();
+    StringRef l1WriteBackAttr = triton::gpu::intel::TritonIntelGPUDialect::
+        getStoreL1WriteBackAttrName();
+    if (!mod->hasAttrOfType<UnitAttr>(l1WriteBackAttr) ||
+        mod.walk([](Operation *op) {
+             if (isa<triton::AtomicOpInterface, triton::AtomicPollOp,
+                     triton::ElementwiseInlineAsmOp>(op) ||
+                 triton::gpu::intel::isVolatileOrCVLoad(op))
+               return WalkResult::interrupt();
+             return WalkResult::advance();
+           })
+            .wasInterrupted())
+      mod->removeAttr(l1WriteBackAttr);
 
     // Lower functions
     {
@@ -174,9 +176,9 @@ struct ConvertTritonGPUToLLVM
 
     RewritePatternSet patterns(context);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
-    pipelineManager.populateConversionPatterns(
-        patterns, axisInfoAnalysis, strideAnalysis, typeConverter, *targetInfo,
-        l1StoreWriteBack, benefit);
+    pipelineManager.populateConversionPatterns(patterns, axisInfoAnalysis,
+                                               strideAnalysis, typeConverter,
+                                               *targetInfo, benefit);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();

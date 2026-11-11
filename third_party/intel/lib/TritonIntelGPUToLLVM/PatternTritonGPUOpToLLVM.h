@@ -68,13 +68,10 @@ void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
                                    PatternBenefit benefit);
 
-/// \p l1StoreWriteBack lets narrow-row 2D block stores be written back through
-/// L1 (see ConvertTritonGPUToLLVM).
 void populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, const ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleStrideAnalysis &strideAnalysis, bool l1StoreWriteBack,
-    PatternBenefit benefit);
+    ModuleStrideAnalysis &strideAnalysis, PatternBenefit benefit);
 
 void populateTensorDescOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                          RewritePatternSet &patterns,

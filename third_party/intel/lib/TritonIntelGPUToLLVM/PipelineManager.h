@@ -203,11 +203,12 @@ public:
   }
 
   /// Populate the conversion pipeline for various operations.
-  void populateConversionPatterns(
-      RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-      ModuleStrideAnalysis &strideAnalysis,
-      TritonIntelGPUToLLVMTypeConverter &typeConverter, TargetInfo &targetInfo,
-      bool l1StoreWriteBack, int benefit) const {
+  void
+  populateConversionPatterns(RewritePatternSet &patterns,
+                             ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                             ModuleStrideAnalysis &strideAnalysis,
+                             TritonIntelGPUToLLVMTypeConverter &typeConverter,
+                             TargetInfo &targetInfo, int benefit) const {
     using namespace mlir;
     using namespace mlir::triton;
 
@@ -216,9 +217,9 @@ public:
     intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
     intel::populateElementwiseOpToLLVMPatterns(
         typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-    intel::populateLoadStoreOpToLLVMPatterns(
-        typeConverter, targetInfo, patterns, axisInfoAnalysis, strideAnalysis,
-        l1StoreWriteBack, benefit);
+    intel::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
+                                             patterns, axisInfoAnalysis,
+                                             strideAnalysis, benefit);
     intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                           benefit);
     mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,

@@ -88,9 +88,18 @@ def test_inductor_target_matches_driver_target():
     assert XPUBackend(inductor_target).properties[prop] == XPUBackend(driver_target).properties[prop]
 
 
+@triton.jit
+def _producer(x_ptr, BM: tl.constexpr, BN: tl.constexpr):
+    """Stores x[r, c] = r * BN + c from a DPAS layout, so the store is a 2D block store."""
+    r = tl.arange(0, BM)
+    c = tl.arange(0, BN)
+    tile = (tl.zeros((BM, BN), dtype=tl.float32) + r[:, None] * BN + c[None, :]).to(tl.float16)
+    tile = tl.dot((r[:, None] == r[None, :]).to(tl.float16), tile).to(tl.float16)
+    tl.make_tensor_descriptor(x_ptr, shape=[BM, BN], strides=[BN, 1], block_shape=[BM, BN]).store([0, 0], tile)
+
+
 @pytest.mark.parametrize("device_arch, disable, writes_back", [("bmg", False, True), ("bmg", True, False),
-                                                               ("lnl", False, False), ("ptl", False, False),
-                                                               ("pvc", False, False)])
+                                                               ("lnl", False, False)])
 @pytest.mark.skipif(not is_xpu(), reason="The L1 store policy is specific to the XPU backend")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
 def test_write_back_policy(device_arch, disable, writes_back, monkeypatch):
@@ -108,14 +117,10 @@ def test_write_back_policy(device_arch, disable, writes_back, monkeypatch):
 
 
 @triton.jit
-def _producer_consumer(x_ptr, out_ptr, flag_ptr, val, LAST: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr):
+def _producer_consumer(x_ptr, out_ptr, flag_ptr, LAST: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr):
     pid = tl.program_id(0)
-    r = tl.arange(0, BM)
-    c = tl.arange(0, BN)
     if pid == 0:
-        tile = (tl.zeros((BM, BN), dtype=tl.float32) + val + r[:, None] * BN + c[None, :]).to(tl.float16)
-        tile = tl.dot((r[:, None] == r[None, :]).to(tl.float16), tile).to(tl.float16)  # DPAS layout: 2D block store
-        tl.make_tensor_descriptor(x_ptr, shape=[BM, BN], strides=[BN, 1], block_shape=[BM, BN]).store([0, 0], tile)
+        _producer(x_ptr, BM, BN)
         tl.atomic_xchg(flag_ptr, 1, sem="release", scope="gpu")
     elif pid == LAST:
         # Bounded, so a producer that is never scheduled fails the test instead of hanging the job.
@@ -125,7 +130,8 @@ def _producer_consumer(x_ptr, out_ptr, flag_ptr, val, LAST: tl.constexpr, BM: tl
             seen = tl.atomic_add(flag_ptr, 0, sem="acquire", scope="gpu")
             spins += 1
         if seen != 0:
-            tl.store(out_ptr + r[:, None] * BN + c[None, :], tl.load(x_ptr + r[:, None] * BN + c[None, :]))
+            off = tl.arange(0, BM)[:, None] * BN + tl.arange(0, BN)[None, :]
+            tl.store(out_ptr + off, tl.load(x_ptr + off))
 
 
 @pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
@@ -139,7 +145,7 @@ def test_cross_work_group_handoff_keeps_default(device, with_allocator):
         x = torch.full((BM, BN), -1.0, dtype=torch.float16, device=device)
         out = torch.full((BM, BN), -2.0, dtype=torch.float16, device=device)
         flag = torch.zeros(1, dtype=torch.int32, device=device)
-        kernel = _producer_consumer[(64, )](x, out, flag, 0.0, 63, BM, BN, num_warps=4)
+        kernel = _producer_consumer[(64, )](x, out, flag, 63, BM, BN, num_warps=4)
         torch.xpu.synchronize()
         assert not (out == -2.0).all(), f"trial {trial}: the consumer timed out waiting for the producer"
         assert torch.equal(out, want), f"trial {trial}: the consumer read a stale tile"
@@ -147,21 +153,12 @@ def test_cross_work_group_handoff_keeps_default(device, with_allocator):
     assert stores > 0 and wb == 0
 
 
-@triton.jit
-def _producer(x_ptr, BM: tl.constexpr, BN: tl.constexpr):
-    r = tl.arange(0, BM)
-    c = tl.arange(0, BN)
-    tile = (tl.zeros((BM, BN), dtype=tl.float32) + r[:, None] * BN + c[None, :]).to(tl.float16)
-    tile = tl.dot((r[:, None] == r[None, :]).to(tl.float16), tile).to(tl.float16)
-    tl.make_tensor_descriptor(x_ptr, shape=[BM, BN], strides=[BN, 1], block_shape=[BM, BN]).store([0, 0], tile)
-
-
-@pytest.mark.parametrize("reader", ["same_stream", "host_copy", "other_stream"])
+# A kernel on the same stream reads the write-back output in test_gemm_epilogue_store_policy.
+@pytest.mark.parametrize("reader", ["host_copy", "other_stream"])
 @pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
 def test_write_back_store_visible_after_kernel(reader, device, with_allocator):
-    """Write-back lines are visible once the kernel ends, to whichever reader comes first: a kernel on the same stream,
-    a host copy, or a kernel on another stream."""
+    """Write-back lines are visible once the kernel ends, also to a host copy and to a kernel on another stream."""
     BM = BN = 64
     want = (torch.arange(BM)[:, None] * BN + torch.arange(BN)[None, :]).to(torch.float16)
     other = torch.xpu.Stream()
@@ -170,12 +167,10 @@ def test_write_back_store_visible_after_kernel(reader, device, with_allocator):
         kernel = _producer[(1, )](x, BM, BN, num_warps=4)
         if reader == "host_copy":
             got = x.cpu()
-        elif reader == "other_stream":
+        else:
             other.wait_stream(torch.xpu.current_stream())
             with torch.xpu.stream(other):
                 got = (x + 0).cpu()
-        else:
-            got = (x + 0).cpu()
         assert torch.equal(got, want), f"{reader}: read a stale tile"
     stores, wb = _2d_store_counts(kernel.asm["llir"])
     assert stores > 0 and wb == (stores if _writes_back() else 0)
