@@ -19,10 +19,6 @@ python/test/unit/language/test_core.py::test_dot[r".*-float64-1-None"]@regexp
 python/test/unit/language/test_core.py::test_dot[r"1-64-128-128-2-.*"]@regexp
 python/test/unit/language/test_core.py::test_dot[r"1-128-128-64-2-.*"]@regexp
 python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-False-none-tf32-int8-int8-1-None1]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-False-none-tf32-float16-float32-1-None0]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-False-none-tf32-float16-float32-1-None1]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-False-none-tf32-float32-float32-1-None0]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-False-none-tf32-float32-float32-1-None1]
 python/test/unit/language/test_core.py::test_dot[1-128-128-64-4-True-True-none-tf32-int8-int8-1-None0]
 python/test/unit/language/test_core.py::test_dot[1-128-128-64-4-True-True-none-tf32-int8-int8-1-None1]
 python/test/unit/language/test_core.py::test_dot[1-128-128-64-4-True-True-none-tf32-float16-float32-1-None0]
@@ -49,32 +45,14 @@ python/test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-none
 python/test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-none-tf32-float32-float32-1-None1]
 python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-True-none-tf32-int8-int8-1-None0]
 python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-True-none-tf32-int8-int8-1-None1]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-True-none-tf32-float16-float32-1-None0]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-True-none-tf32-float16-float32-1-None1]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-True-none-tf32-float32-float32-1-None0]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-True-none-tf32-float32-float32-1-None1]
 python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-False-none-tf32-int8-int8-1-None0]
 python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-False-none-tf32-int8-int8-1-None1]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-False-none-tf32-float16-float32-1-None0]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-False-none-tf32-float16-float32-1-None1]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-False-none-tf32-float32-float32-1-None0]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-False-none-tf32-float32-float32-1-None1]
 python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-True-none-tf32-int8-int8-1-None0]
 python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-True-none-tf32-int8-int8-1-None1]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-True-none-tf32-float16-float32-1-None0]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-True-none-tf32-float16-float32-1-None1]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-True-none-tf32-float32-float32-1-None0]
-python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-True-none-tf32-float32-float32-1-None1]
 python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-False-none-tf32-int8-int8-1-None0]
 python/test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-chain-dot-ieee-float8e5-float32-1-None]
 python/test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-chain-dot-ieee-float8e4nv-float32-1-None]
-python/test/unit/language/test_core.py::test_dot[1-32-128-64-4-False-False-none-tf32-int8-int8-1-None0]
-python/test/unit/language/test_core.py::test_dot[1-32-128-64-4-False-False-none-tf32-int8-int8-1-None1]
-# test_dot_max_num_imprecise_acc
-python/test/unit/language/test_core.py::test_dot_max_num_imprecise_acc[r".*-128-128-256-256"]@regexp
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/2005
-python/test/unit/language/test_core.py::test_abs_fp8[r"in_dtype[0-2]"]@regexp
-python/test/unit/language/test_core.py::test_precise_math[1-tl.math.sqrt_rn(x)-tl.math.sqrt(x.to(tl.float64)).to(tl.float32)]
 python/test/unit/language/test_core.py::test_cast[1-int32-int64-False-1024]
 python/test/unit/language/test_core.py::test_cast[1-int32-uint64-False-1024]
 python/test/unit/language/test_core.py::test_cast[1-uint32-int64-False-1024]
@@ -83,22 +61,13 @@ python/test/unit/language/test_pipeliner.py::test_pipeline_matmul[True]
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/3388
 # test_indirect_matmul
 python/test/unit/language/test_pipeliner.py::test_indirect_matmul
-python/test/unit/language/test_core.py::test_atomic_cas[int32-1-acquire]
-python/test/unit/language/test_core.py::test_atomic_cas[int64-1-acquire]
 python/test/unit/language/test_core.py::test_indirect_load[float64]
 python/test/unit/language/test_core.py::test_indirect_store[float64]
 python/test/unit/language/test_core.py::test_strided_load[float64]
 python/test/unit/language/test_core.py::test_strided_store[float64]
-python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_store
-python/test/unit/language/test_tensor_descriptor.py::test_make_tensor_descriptor_matmul
-python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_rank_reducing_matmul
 # test_float_annotation
 python/test/unit/language/test_annotations.py::test_float_annotation[r"dtype(12-0\.0|13-42\.0|14-inf|15-nan)"]@regexp
-# test_gather
-python/test/unit/language/test_core.py::test_gather[src_shape2-indices_shape2-0]
 # test_tensor_descriptor_batched_gemm_2d_tma
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batched_gemm_2d_tma
 # test_tensor_descriptor_batched_gemm_3d_tma
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batched_gemm_3d_tma
-# test_tensor_atomic_add_access_patterns
-python/test/unit/language/test_core.py::test_tensor_atomic_add_access_patterns[shape128-random_no_duplication-3-1-float32]

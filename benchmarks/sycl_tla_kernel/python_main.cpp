@@ -119,5 +119,6 @@ auto attention_08(const at::Tensor &Q, const at::Tensor &K, const at::Tensor &V,
 PYBIND11_MODULE(sycl_tla_kernel, m) {
   m.def("gemm", &gemm_kernel, "gemm (SYCL-TLA)");
   m.def("gemm_splitk", &gemm_splitk_kernel, "gemm split-K (SYCL-TLA)");
+  m.def("gemm_streamk", &gemm_streamk_kernel, "gemm stream-K (SYCL-TLA)");
   m.def("attention", &attention_08, "attention (SYCL-TLA)");
 }

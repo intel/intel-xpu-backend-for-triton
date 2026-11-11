@@ -440,16 +440,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def min_dot_size(device_props: dict):
-        execution_size = min(device_props["sub_group_sizes"])
 
         def get_min_dot_size(lhs_type, rhs_type):
-            lhs_type = lhs_type.scalar
-            rhs_type = rhs_type.scalar
-
-            # FMA path currently has accuracy errors for INT8 dots.
-            if lhs_type.is_int8() and rhs_type.is_int8():
-                return (1, execution_size, 32)
-
             # Fallback to use FMA if size configurations not supported/performant for DPAS.
             return (1, 1, 1)
 
@@ -599,7 +591,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             passes.common.add_canonicalizer(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm, opt.grf_mode)
-        intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm)
+        intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm, metadata["target"].arch.get("local_mem_size") or 0,
+                                                              True)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm, knobs.intel.descriptor_block_io_relayout)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_fold_fp_to_fp(pm)

@@ -23,7 +23,10 @@ def TritonIntelGPUAccelerateMatmul
   let dependentDialects = [
     "mlir::triton::TritonDialect",
     "mlir::triton::gpu::intel::TritonIntelGPUDialect",
-    "mlir::arith::ArithDialect"
+    "mlir::arith::ArithDialect",
+    // DecomposeScaledBlocked emits `math.fma` to turn the +inf that the E8M0
+    // NaN encoding (byte 0xFF) decodes to into NaN.
+    "mlir::math::MathDialect"
   ];
 
   let options = [
@@ -78,8 +81,27 @@ def TritonIntelGPUStageLargeFMADotsViaSLM
     preserves global-memory coalescing and composes with software
     pipelining (which already stages SLM).
 
-    Pass is a no-op on DPAS-capable hardware (PVC, BMG, ARL-H Xe2).
+    On DPAS-capable hardware (PVC, BMG, ARL-H Xe2) the pass only applies to
+    dots that keep a `BlockedEncoding`, i.e. that are lowered to FMA (e.g.
+    fp32 dots with `inputPrecision = ieee`, fp64 dots, or fp8 dots without
+    DPAS support).
+
+    An fp8 operand that AccelerateMatmul decoded before its layout conversion
+    can be staged either as fp8, with the decode replayed per K tile in the
+    replicated dot operand layout, or already decoded, at twice the shared
+    memory. Dots whose operands fit 56 KB as they are are staged as before;
+    decoded operands, and operands beyond 56 KB, are staged while all the
+    dots staged in the function fit in the target's shared memory.
   }];
+
+  let options = [
+    Option<"slmSize", "slm-size", "unsigned", /*default*/"0",
+           "Shared local memory per work-group, in bytes; the pass leaves "
+           "8 KB of it for other passes. 0 means 64 KB">,
+    Option<"stageDecoded", "stage-decoded", "bool", /*default*/"true",
+           "Stage fp8 operands decoded before their layout conversion as "
+           "decoded values when they fit">
+  ];
 
   let dependentDialects = [
     "mlir::arith::ArithDialect",
