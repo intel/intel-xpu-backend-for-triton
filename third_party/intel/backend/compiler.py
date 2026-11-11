@@ -4,11 +4,14 @@ from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.errors import IntelGPUError, WorkGroupSizeOutOfResources
 from triton.backends.intel.extension_utils import query_device_extensions
-from triton.backends.intel.spirv_probes import accepts_long_vector, accepts_maximum_registers
+from triton.backends.intel.spirv_probes import (accepts_16bit_atomics, accepts_256b_prefetch, accepts_bf8_dpas,
+                                                accepts_long_vector, accepts_maximum_registers, accepts_scaled_dpas,
+                                                accepts_sigmoid)
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import OutOfResources
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import functools
 from typing import Any, Dict, Tuple, Union
@@ -299,6 +302,42 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
+
+        # Capabilities the target doesn't report are probed against whichever side consumes the SPIR-V: `ocloc` when
+        # AOT compilation is requested via knobs, otherwise the driver's JIT. (A per-kernel `generate_native_code`
+        # option isn't known at this point.)
+        native = bool(knobs.intel.gen_native_code or knobs.intel.dump_shader_info)
+        is_lts = self.is_lts(tgt_prop.get('driver_version'))
+
+        # These extensions are only enabled by the SPIR-V translator on non-LTS drivers, so LTS is never probed (and
+        # reports them unsupported) even if the driver or `ocloc` would accept the probe module.
+        # Each probe runs in its own subprocess (a rejected capability can crash it), so run them concurrently.
+        probes = {
+            'has_16bit_atomics': accepts_16bit_atomics,
+            'has_sigmoid': accepts_sigmoid,
+            'has_subgroup_scaled_matrix_multiply_accumulate': accepts_scaled_dpas,
+            'has_subgroup_matrix_multiply_accumulate_bfloat8': accepts_bf8_dpas,
+            'has_256b_prefetch': accepts_256b_prefetch,
+        }
+        with ThreadPoolExecutor(max_workers=len(probes)) as pool:
+            futures = {
+                name:
+                pool.submit(probe, native, self.device_arch, tgt_prop.get('device_id'), tgt_prop.get('driver_version'))
+                for name, probe in probes.items()
+                if name not in tgt_prop and not is_lts
+            }
+
+        def probed(name):
+            if name in tgt_prop:
+                return tgt_prop[name]
+            if is_lts:
+                return False
+            try:
+                return futures[name].result()
+            except Exception as e:  # A failed probe must not break backend construction: treat as unsupported.
+                warnings.warn(f"Probing {name} failed ({e!r}); assuming it is unsupported.")
+                return False
+
         dev_prop['name'] = tgt_prop.get('name', 'xpu')
         dev_prop['platform_name'] = tgt_prop.get('platform_name', None)
         dev_prop['vendor'] = tgt_prop.get('vendor', None)
@@ -309,27 +348,26 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
-        dev_prop['has_subgroup_matrix_multiply_accumulate_bfloat8'] = tgt_prop.get(
-            'has_subgroup_matrix_multiply_accumulate_bfloat8', False)
+        dev_prop['has_subgroup_matrix_multiply_accumulate_bfloat8'] = probed(
+            'has_subgroup_matrix_multiply_accumulate_bfloat8')
         dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
-        dev_prop['has_16bit_atomics'] = tgt_prop.get('has_16bit_atomics', False)
+        dev_prop['has_16bit_atomics'] = probed('has_16bit_atomics')
         dev_prop['has_2d_block_io'] = tgt_prop.get('has_2d_block_io', False)
-        is_lts = self.is_lts(tgt_prop.get('driver_version'))
         dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', not is_lts)
         dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', False)
         dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io', not is_lts)
         dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
                                                                            False)
-        dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = tgt_prop.get(
-            'has_subgroup_scaled_matrix_multiply_accumulate', False)
+        dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = probed(
+            'has_subgroup_scaled_matrix_multiply_accumulate')
         dev_prop['has_f4_conversions'] = tgt_prop.get('has_f4_conversions', False)
         dev_prop['has_f8_conversions'] = tgt_prop.get('has_f8_conversions', False)
-        dev_prop['has_256b_prefetch'] = tgt_prop.get('has_256b_prefetch', False)
+        dev_prop['has_256b_prefetch'] = probed('has_256b_prefetch')
         # Same Xe3P+ gate as 256B prefetch pending separate driver prop.
-        dev_prop['has_256b_load_store'] = tgt_prop.get('has_256b_prefetch', False)
+        dev_prop['has_256b_load_store'] = dev_prop['has_256b_prefetch']
         dev_prop['has_rounded_divide_sqrt'] = tgt_prop.get('has_rounded_divide_sqrt', not is_lts)
-        dev_prop['has_sigmoid'] = tgt_prop.get('has_sigmoid', False)
+        dev_prop['has_sigmoid'] = probed('has_sigmoid')
         # HW base-address alignment requirement (in bytes) for 2D block IO.
         # Defaults to 64; targets with a relaxed requirement (e.g. CRI) override
         # this so the downstream 64-byte alignment compensation is skipped.
@@ -386,10 +424,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # otherwise the installed driver's own JIT via Level Zero.
         native = options.generate_native_code
         device_id = self.target.arch.get("device_id")
-        options.allow_long_vector = accepts_long_vector(native, self.device_arch, device_id)
-        # `accepts_maximum_registers` returns True for LTS (but should return False)
-        options.allow_maximum_registers = (not options.is_lts
-                                           and accepts_maximum_registers(native, self.device_arch, device_id))
+        driver_version = self.target.arch.get("driver_version")
+        # Like the capabilities probed in `parse_target`, these extensions are only enabled by the SPIR-V translator
+        # on non-LTS drivers, so LTS is never probed.
+        options.allow_long_vector = (not options.is_lts
+                                     and accepts_long_vector(native, self.device_arch, device_id, driver_version))
+        options.allow_maximum_registers = (not options.is_lts and accepts_maximum_registers(
+            native, self.device_arch, device_id, driver_version))
         return options
 
     @staticmethod
