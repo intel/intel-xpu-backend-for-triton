@@ -22,4 +22,12 @@ using PvcGemmSplitKBF16BF16FP32_RRR_1 =
     Gemm_Bench_SplitK_BF16FP32_RRR<Shape<_256, _256, _32>, SplitKTile_1,
                                    XE_2D_U16x32x32_LD_N, XE_2D_U16x32x32_LD_V>;
 
+// The stream-K reference runs the same kernel (the Xe stream-K tile scheduler
+// serves both decompositions; the mode is a runtime argument), but has its own
+// config name and shape table so that it can be tuned independently of split-K.
+using PvcGemmStreamKBF16BF16FP32_RRR_1 =
+    Gemm_Bench_SplitK_BF16FP32_RRR<Shape<_256, _256, _32>, SplitKTile_1,
+                                   XE_2D_U16x32x32_LD_N, XE_2D_U16x32x32_LD_V>;
+
 CUTLASS_CREATE_GEMM_BENCHMARK(PvcGemmSplitKBF16BF16FP32_RRR_1);
+CUTLASS_CREATE_GEMM_BENCHMARK(PvcGemmStreamKBF16BF16FP32_RRR_1);

@@ -308,10 +308,15 @@ def benchmark(M, N, K, provider):
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     elif provider == 'sycl-tla':
-        # NOTE: SYCL-TLA doesn't have a stream-k matmul op
+        # SYCL-TLA's own stream-K decomposition, so that this benchmark compares stream-K with stream-K.
+        # It is slower than SYCL-TLA's data-parallel GEMM on these shapes; gemm_benchmark.py is where
+        # Triton is compared against SYCL-TLA's best kernel.
         c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
-        func = getattr(sycl_tla_kernel, 'gemm')
-        sycl_tla_fn = lambda: (func(a, b, c, M, N, K, 1), c)[1]
+
+        def sycl_tla_fn():
+            sycl_tla_kernel.gemm_streamk(a, b, c, M, N, K)
+            return c
+
         torch_fn = lambda: torch.mm(a, b, out_dtype=torch.float32)
         benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='sycl-tla to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(sycl_tla_fn)
