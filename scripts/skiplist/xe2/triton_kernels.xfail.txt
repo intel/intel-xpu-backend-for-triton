@@ -20,6 +20,7 @@ python/triton_kernels/tests/test_matmul.py::test_gather_inactive_rows
 # requires Blackwell
 python/triton_kernels/tests/test_matmul.py::test_k_ragged_tiled_values
 python/triton_kernels/tests/test_matmul.py::test_nvfp4_acts_mxfp4_weights
+python/triton_kernels/tests/test_matmul.py::test_nvfp4_acts_mxfp4_weights_nonpersistent
 python/triton_kernels/tests/test_matmul.py::test_nvfp4_requantization_matches_mxfp8
 # requires Blackwell or newer
 python/triton_kernels/tests/test_matmul.py::test_gathered_ragged_act_scale_indexing
