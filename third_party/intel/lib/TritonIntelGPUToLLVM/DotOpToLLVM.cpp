@@ -13,10 +13,6 @@ template <typename OpTy>
 LogicalResult convertDPAS(OpTy op, typename OpTy::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
-LogicalResult convertIntegerFMADot(triton::DotOp op,
-                                   triton::DotOp::Adaptor adaptor,
-                                   const LLVMTypeConverter *typeConverter,
-                                   ConversionPatternRewriter &rewriter);
 } // namespace fma_details
 
 namespace {
@@ -50,15 +46,8 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
                                       rewriter);
     }
 
-    if (isa<BlockedEncodingAttr>(DTensorTy.getEncoding())) {
-      // Lower integer dots to dp4a rather than to a mul/add chain: IGC folds
-      // such a chain back into a dp4a and mis-pairs its two operands
-      // (intel/intel-xpu-backend-for-triton#7854).
-      if (isa<IntegerType>(DTensorTy.getElementType()))
-        return fma_details::convertIntegerFMADot(op, adaptor,
-                                                 getTypeConverter(), rewriter);
+    if (isa<BlockedEncodingAttr>(DTensorTy.getEncoding()))
       return convertFMADot(op, adaptor, getTypeConverter(), rewriter);
-    }
 
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
