@@ -352,8 +352,8 @@ void LayoutRematerialization::cleanup() { eraseUnusedOps(opToDelete); }
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
 bool isLayoutAnchor(Operation *op) {
-  if (isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
-          op))
+  if (isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp,
+          tt::DescriptorGatherOp, ttgi::DescriptorGatherOp>(op))
     return ttgi::isExpensiveLoadOrStore(op);
   // TODO: we should estimate the cost of the not propagating layout for
   // AtomicCAS for further performance consideration.
@@ -1060,8 +1060,8 @@ void LayoutPropagation::rewriteOp(Operation *op) {
 bool canBeRemat(Operation *op) {
   if (hasEffect<MemoryEffects::Write>(op))
     return false;
-  if (isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
-          op))
+  if (isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp,
+          tt::DescriptorGatherOp, ttgi::DescriptorGatherOp>(op))
     return !ttgi::isExpensiveLoadOrStore(op);
   if (isa<tt::AtomicRMWOp, tt::AtomicCASOp, tt::DotOp>(op))
     return false;
@@ -1107,8 +1107,9 @@ bool isExpensiveLoadRematCandidate(Operation *op) {
   if (hasEffect<MemoryEffects::Write>(op))
     return false;
 
-  // 1. Must be a Load or DescriptorLoad
-  if (!isa<tt::LoadOp, tt::DescriptorLoadOp>(op))
+  // 1. Must be a Load, DescriptorLoad or DescriptorGather
+  if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp,
+           ttgi::DescriptorGatherOp>(op))
     return false;
 
   // 2. Must be expensive (only expensive loads need the bypass; cheap loads
@@ -2021,8 +2022,8 @@ static bool isRematBeneficial(
     if (!isOpUsedOutsideSlice)
       continue;
 
-    if (isa<tt::LoadOp, tt::DescriptorLoadOp>(op) ||
-        isa<ttg::LocalLoadOp>(op)) {
+    if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp,
+            ttgi::DescriptorGatherOp, ttg::LocalLoadOp>(op)) {
       for (Value result : op->getResults())
         rematerialisationCost += 8 * getByteCount(result);
     } else if (isa<tt::ReduceOp>(op)) {
