@@ -1,0 +1,68 @@
+diff --git a/torch/_inductor/async_compile.py b/torch/_inductor/async_compile.py
+index b6900226693..4872613d75b 100644
+--- a/torch/_inductor/async_compile.py
++++ b/torch/_inductor/async_compile.py
+@@ -509,7 +509,13 @@ class AsyncCompile:
+         if isinstance(pool, SubprocPool):
+             pool.wakeup()
+ 
+-    def triton(self, kernel_name: str, source_code: str, device_str: str = "cuda"):
++    def triton(
++        self,
++        kernel_name: str,
++        source_code: str,
++        device_str: str = "cuda",
++        module_path: str | None = None,
++    ):
+         """
+         Async_compile.triton is more complicated than the other backends because
+         we're trying to optimize compile time as much as possible for this hot callsite.
+@@ -532,7 +538,7 @@ class AsyncCompile:
+           and pickled to us via `CachingAutotuner.save_cache_hook`.
+         """
+         load_kernel = functools.partial(
+-            _load_triton_kernel_from_source, kernel_name, source_code
++            _load_triton_kernel_from_source, kernel_name, source_code, module_path
+         )
+ 
+         def reload_kernel_in_parent():
+diff --git a/torch/_inductor/codecache.py b/torch/_inductor/codecache.py
+index 7917565ea92..9fd93fac13a 100644
+--- a/torch/_inductor/codecache.py
++++ b/torch/_inductor/codecache.py
+@@ -5209,8 +5209,19 @@ def _load_with_compiled_kernels(
+ 
+ 
+ def _load_triton_kernel_from_source(
+-    kernel_name: str, source_code: str
++    kernel_name: str, source_code: str, module_path: str | None = None
+ ) -> CachingAutotuner:
++    if module_path is not None and os.path.exists(module_path):
++        # Triton's cache key hashes the kernel's source file path. The caller has
++        # already written this source to PyCodeCache (possibly with a non-empty
++        # ``extra``, which changes the file name), so compile from that very file:
++        # re-writing it with ``extra=""`` would yield a second copy under another
++        # path and the compilation done here would miss in the parent. Load a fresh
++        # module rather than the cached one so the result is not shared with
++        # modules the parent already holds for this path.
++        key = os.path.splitext(os.path.basename(module_path))[0]
++        mod = _reload_python_module(key, module_path, set_sys_modules=False)
++        return getattr(mod, kernel_name)
+     return getattr(PyCodeCache.load(source_code), kernel_name)
+ 
+ 
+diff --git a/torch/_inductor/select_algorithm.py b/torch/_inductor/select_algorithm.py
+index a16b4ee8ec3..34651fddea2 100644
+--- a/torch/_inductor/select_algorithm.py
++++ b/torch/_inductor/select_algorithm.py
+@@ -5185,7 +5185,9 @@ class AlgorithmSelectorCache(PersistentCache):
+                     with open(c.bmreq.module_path) as file:
+                         source_code = file.read()
+                     future = async_compile.triton(
+-                        kernel_name=c.bmreq.kernel_name, source_code=source_code
++                        kernel_name=c.bmreq.kernel_name,
++                        source_code=source_code,
++                        module_path=c.bmreq.module_path,
+                     ).future
+                     log.debug("Submitted triton async compile for choice: %s", c)
+                 elif nvgemm_choice and use_nvgemm_subprocess:
