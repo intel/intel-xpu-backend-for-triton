@@ -6,7 +6,6 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 
@@ -409,16 +408,17 @@ void legalizeI1VectorMemory(Module &module) {
 // rounding of `x * 0.1` is lost (1 ulp off eager). Emitting the pair here keeps
 // the contract multiply as the first operand.
 void expandFmaToContractPair(Module &module) {
-  SmallVector<IntrinsicInst *> calls;
-  for (auto &func : module)
-    for (auto &block : func)
-      for (auto &inst : block)
-        if (auto *call = dyn_cast<IntrinsicInst>(&inst))
-          if (call->getIntrinsicID() == Intrinsic::fma &&
-              call->getType()->isFloatTy())
-            calls.push_back(call);
+  // Only the scalar f32 overload: other types have different declarations.
+  Function *fma = Intrinsic::getDeclarationIfExists(
+      &module, Intrinsic::fma, {Type::getFloatTy(module.getContext())});
+  if (!fma)
+    return;
 
-  for (IntrinsicInst *call : calls) {
+  for (User *user : make_early_inc_range(fma->users())) {
+    auto *call = dyn_cast<CallInst>(user);
+    if (!call || call->getCalledFunction() != fma)
+      continue;
+
     // `IRBuilder` (and IGC) fold a multiply of two constants, rounding the
     // product to f32 and leaving nothing to fuse. That changes the result of
     // an exact fma, so keep `llvm.fma` when both multiplicands are constants.
