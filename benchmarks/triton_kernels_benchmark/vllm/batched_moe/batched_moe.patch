@@ -200,7 +200,7 @@ index 79649b1e6d..4fce3eafd9 100644
  
      A_scale = normalize_batched_scales_shape(A_scale, expert_num_tokens.shape[0])
  
-@@ -706,10 +782,6 @@ def invoke_moe_batched_triton_kernel(
+@@ -706,10 +782,5 @@ def invoke_moe_batched_triton_kernel(
          use_fp8_w8a8,
          use_int8_w8a16,
          per_act_token_quant,
@@ -209,5 +209,5 @@ index 79649b1e6d..4fce3eafd9 100644
 -        BLOCK_N=BLOCK_N,
 -        BLOCK_K=BLOCK_K,
          USE_TD=use_td,
-         **launch_options,
+-        **launch_options,
      )
