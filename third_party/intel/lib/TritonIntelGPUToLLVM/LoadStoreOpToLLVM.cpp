@@ -552,10 +552,10 @@ struct LoadStoreConversionBase {
 
   // Ensure the operation doesn't have attributes that the IGC predicated
   // instruction cannot handle.
-  template <
-      typename OpType,
-      typename = std::enable_if_t<llvm::is_one_of<
-          OpType, LoadOp, StoreOp, DescriptorLoadOp, DescriptorStoreOp>::value>>
+  template <typename OpType,
+            typename = std::enable_if_t<llvm::is_one_of<
+                OpType, LoadOp, StoreOp, DescriptorLoadOp, DescriptorStoreOp,
+                mlir::triton::gpu::intel::DescriptorGatherOp>::value>>
   bool canUsePredicatedInstructions(OpType op) const {
     if (!mlir::LLVM::intel::hasModuleAttr(
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
@@ -583,7 +583,9 @@ struct LoadStoreConversionBase {
              !op.getIsVolatile();
     } else if constexpr (std::is_same_v<OpType, StoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
-    } else if constexpr (std::is_same_v<OpType, DescriptorLoadOp>) {
+    } else if constexpr (llvm::is_one_of<OpType, DescriptorLoadOp,
+                                         mlir::triton::gpu::intel::
+                                             DescriptorGatherOp>::value) {
       return !usePredicatedLoad.has_value() || usePredicatedLoad.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorStoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
@@ -2960,9 +2962,13 @@ private:
     RankedTensorType descTensorType = descType.getBlockType();
     size_t descRank = descTensorType.getRank();
 
-    GatherLayoutConfig layoutConfig =
-        buildLayoutConfig(*llEncoding, resultType, *offsetsXLLEncoding,
-                          valueElemTy, mod, /*allowFastPath=*/true);
+    // The per-lane and sub-group fast paths are disabled; their code is kept
+    // for a later, measured re-enable. Every gather takes the vectorized path
+    // below.
+    constexpr bool kEnableGatherFastPaths = false;
+    GatherLayoutConfig layoutConfig = buildLayoutConfig(
+        *llEncoding, resultType, *offsetsXLLEncoding, valueElemTy, mod,
+        /*allowFastPath=*/kEnableGatherFastPaths);
     // All validity checks passed; now generate IR.
     SmallVector<Value> offsetsX =
         unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
@@ -2983,6 +2989,73 @@ private:
     // Add sub-offset Y from warp Id.
     Value basicOffsetY = b.add(offsetY, getNamedOffset(offsets, kDim1));
     Type llvmResultStructTy = typeConverter->convertType(op.getType());
+
+    // Each lane loads `vec` registers that are adjacent columns of one row with
+    // one predicated vector load, as tt.load does. `vec` divides shape[1] and
+    // is aligned with y, so a chunk is either wholly in or wholly out of bounds
+    // and its first column's predicate covers it.
+    auto emitVectorized = [&]() -> Value {
+      SmallVector<Value> fastDimIndex{op.getYOffset(), op.getYOffset()};
+      unsigned vec =
+          getDescriptorVecSize(hasSupport256bLoadStore(op), op.getDesc(),
+                               fastDimIndex, resultType, valueElemTy, nullptr);
+      if (triton::gpu::toGenericLinearEncoding(resultType).getOrder()[0] != 1)
+        vec = 1;
+      unsigned elemBits = std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+      unsigned totalWidth = elemBits * vec;
+      unsigned width = std::min(totalWidth, std::max(32u, elemBits));
+      unsigned nWords = std::max(1u, totalWidth / width);
+      Type wordTy = IntegerType::get(ctx, width);
+      Type retTy = nWords > 1 ? vec_ty(wordTy, nWords) : wordTy;
+      Value zero = LLVM::ZeroOp::create(rewriter, loc, retTy);
+      bool predicated = canUsePredicatedInstructions(op);
+      unsigned regMask = getFreeVariableMasks(resultType)[kRegister];
+
+      SmallVector<Value> loadedVals;
+      for (unsigned vecStart = 0; vecStart < numElems; vecStart += vec) {
+        if (unsigned canonical = getCanonicalIndex(vecStart, regMask);
+            canonical != vecStart) {
+          for (unsigned i = 0; i < vec; ++i)
+            loadedVals.push_back(loadedVals[canonical + i]);
+          continue;
+        }
+        auto offsetXIdx = layoutConfig.offMapping.apply(
+            {{kRegister, vecStart}, {kLane, 0}})[0];
+        assert(offsetXIdx.first == kOffIdx);
+        auto offsetsForY = applyLinearLayout(
+            loc, rewriter, layoutConfig.offMapping,
+            {{kRegister, b.i32_val(vecStart)}, {kLane, laneId}});
+        Value colY = b.add(basicOffsetY, getNamedOffset(offsetsForY, kDim1));
+        GatherAddressAndPred gatherAddr = buildGatherAddressAndPred(
+            b, ctx, valueElemTy, desc, offsetsX[offsetXIdx.second], colY);
+
+        Value ret;
+        if (predicated) {
+          ret = TritonGEN::PredicatedLoadOp::create(
+              rewriter, loc, retTy, gatherAddr.addr, gatherAddr.pred, zero,
+              TritonGEN::LoadCacheControl::DEFAULT);
+        } else {
+          auto createLoad = [&]() {
+            return SmallVector<Value>{
+                b.load(retTy, gatherAddr.addr, nWords * width / 8)};
+          };
+          ret = *LLVM::intel::createPredicatedBlock(
+                     rewriter, loc, gatherAddr.pred,
+                     SmallVector<Value, 1>{zero}, createLoad)
+                     .args_begin();
+        }
+        Value elems = b.bitcast(ret, vec_ty(valueElemTy, vec));
+        for (unsigned i = 0; i < vec; ++i)
+          loadedVals.push_back(
+              b.extract_element(valueElemTy, elems, b.i32_val(i)));
+      }
+      return packTensorElements(loc, typeConverter, loadedVals, rewriter,
+                                op.getType());
+    };
+    if (!kEnableGatherFastPaths) {
+      rewriter.replaceOp(op, {emitVectorized()});
+      return success();
+    }
 
     auto emitGather = [&](const GatherLayoutConfig &cfg) -> Value {
       LinearLayout shuffleMapping =
