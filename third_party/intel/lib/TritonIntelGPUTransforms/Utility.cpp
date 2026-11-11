@@ -143,9 +143,8 @@ bool isDivisible(Value value, int64_t divisor) {
 }
 
 // Only the x offsets take an encoding: the slice of the result along dim 1.
-static Attribute inferGatherSrcEncoding(Operation *op, Attribute dstEnc) {
-  return SliceEncodingAttr::get(op->getContext(), 1,
-                                cast<DistributedEncodingTrait>(dstEnc));
+static Attribute inferGatherSrcEncoding(MLIRContext *ctx, Attribute dstEnc) {
+  return SliceEncodingAttr::get(ctx, 1, cast<DistributedEncodingTrait>(dstEnc));
 }
 
 Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
@@ -168,9 +167,18 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
   }
 
   if (isa<tt::DescriptorGatherOp, ttgi::DescriptorGatherOp>(op))
-    return inferGatherSrcEncoding(op, encoding);
+    return inferGatherSrcEncoding(op->getContext(), encoding);
 
   return mlir::inferSrcEncoding(op, encoding);
+}
+
+Value buildConvertedXOffsets(OpBuilder &builder, Location loc, Value xOffsets,
+                             RankedTensorType valueType) {
+  auto xOffsetsType = cast<RankedTensorType>(xOffsets.getType());
+  Attribute enc =
+      inferGatherSrcEncoding(builder.getContext(), valueType.getEncoding());
+  return ConvertLayoutOp::create(builder, loc,
+                                 xOffsetsType.cloneWithEncoding(enc), xOffsets);
 }
 
 CachePolicy getCachePolicy(Attribute cachePolicy) {

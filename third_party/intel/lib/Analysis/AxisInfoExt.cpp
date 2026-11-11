@@ -524,4 +524,25 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
+unsigned ModuleAxisInfoAnalysis::getDescriptorAlignment(Value desc,
+                                                        unsigned dim,
+                                                        Value index,
+                                                        unsigned elemBits) {
+  AxisInfo *descInfo = getAxisInfo(desc);
+  if (!descInfo || dim >= static_cast<unsigned>(descInfo->getRank()))
+    return 1;
+  auto pow2Floor = [](int64_t v) -> int64_t {
+    return v <= 1 ? 1 : int64_t(1) << llvm::Log2_64(v);
+  };
+  // Divisibility is in bytes; other dims are already folded into it.
+  int64_t elemBytes = std::max(1u, elemBits / 8);
+  int64_t ptrAlign = descInfo->getDivisibility(dim) / elemBytes;
+  // The index shifts the base by index * elemBytes, so only its power-of-two
+  // divisor keeps the access aligned (#7990); a constant 0 reports kMaxDivisor.
+  AxisInfo *idxInfo = getAxisInfo(index);
+  int64_t idxDiv = idxInfo ? idxInfo->getDivisibility(0) : 1;
+  return std::min({pow2Floor(descInfo->getContiguity(dim)), pow2Floor(ptrAlign),
+                   idxDiv & -idxDiv});
+}
+
 } // namespace mlir::triton::intel

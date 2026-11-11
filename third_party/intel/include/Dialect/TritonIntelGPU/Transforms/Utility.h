@@ -33,6 +33,10 @@ bool isDivisible(Value value, int64_t divisor);
 // Infers the encoding of the source of op given the result encoding.
 Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 
+/// Convert gather/scatter x offsets to the dim-1 slice of `valueType`.
+Value buildConvertedXOffsets(OpBuilder &builder, Location loc, Value xOffsets,
+                             RankedTensorType valueType);
+
 // Retuns true if the operation is an expensive load or store operation.
 bool isExpensiveLoadOrStore(Operation *op);
 

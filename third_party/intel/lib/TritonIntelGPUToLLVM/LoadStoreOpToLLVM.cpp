@@ -289,45 +289,21 @@ struct LoadStoreConversionBase {
     }
     descDim += rankDelta;
 
-    unsigned descContiguity = descAxisInfo->getContiguity(descDim);
-    if (descContiguity <= 1)
-      return 1; // Stride is not 1 on this dimension
-
     unsigned pointeeBitWidth = valueElemTy.getIntOrFloatBitWidth();
     unsigned maxVec = getMaxVecWidth(support256bLoadStore, pointeeBitWidth);
+    // threadContig is in result-layout space (order[0]); descDim is the same
+    // logical dim in descriptor space (remapped for column-major).
     unsigned threadContig = contigPerThread[order[0]];
-    // Note: descContiguity and threadContig refer to the same logical dimension
-    // but are indexed in different coordinate spaces. descContiguity uses
-    // descDim (descriptor space, remapped for column-major), while
-    // threadContig uses order[0] (result layout space). The min() below
-    // correctly intersects address-level and layout-level constraints.
-
-    // Use descriptor's divisibility (bytes) for pointer alignment.
-    unsigned descDivisibility = descAxisInfo->getDivisibility(descDim);
-    unsigned elemBytes = std::max(1u, pointeeBitWidth / 8);
-    unsigned ptrAlignElems = std::max(1u, descDivisibility / elemBytes);
-
-    unsigned vec =
-        std::min({maxVec, threadContig, descContiguity, ptrAlignElems});
+    unsigned vec = std::min(maxVec, threadContig);
     assert(vec > 0 && "vec must be positive for Log2_32");
     vec = std::max(1u, 1u << llvm::Log2_32(vec));
 
-    // The index shifts the base by index * elemBytes on the stride-one
-    // dimension, so a `vec`-element access is aligned only when the index is
-    // itself a multiple of `vec` (#7990). Other dimensions are already folded
-    // into descDivisibility by makeTensorDescAxisInfo; an unprovable index is
-    // assumed unaligned.
     assert(descDim < indices.size() && "expected one index per descriptor dim");
-    AxisInfo *idxAxisInfo =
+    return std::min(
+        vec,
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-            .getAxisInfo(indices[descDim]);
-    // A `tt.divisibility` hint is floored at 1 but never rounded, so a hint of
-    // 6 proves only a 2-element alignment: clamp to the greatest power-of-two
-    // divisor instead of rounding the min, which leaves both operands of the
-    // min powers of two. int64_t: a constant 0 index reports kMaxDivisor.
-    int64_t idxDiv = idxAxisInfo ? idxAxisInfo->getDivisibility(0) : 1;
-    int64_t idxAlign = idxDiv & -idxDiv;
-    return static_cast<unsigned>(std::min<int64_t>(vec, idxAlign));
+            .getDescriptorAlignment(desc, descDim, indices[descDim],
+                                    pointeeBitWidth));
   }
 
   std::tuple<SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
