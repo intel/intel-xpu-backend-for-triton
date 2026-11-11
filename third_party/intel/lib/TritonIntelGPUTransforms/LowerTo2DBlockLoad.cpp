@@ -340,11 +340,6 @@ private:
     isTranspose = sizeInfo.transpose;
     numPackedVals = sizeInfo.numElemPerPackedVal;
 
-    tt::AxisInfo *ptrInfo = axisInfoAnalysis.getAxisInfo(op.getPtr());
-    if (elemSizeInBits * numPackedVals > 32 &&
-        (!ptrInfo || ptrInfo->getDivisibility(contiguousDim) % 8))
-      return;
-
     // For the 2D block load surface, the pitch dimension is always the
     // non-contiguous memory direction. For transposed loads, rowDim is the
     // memory-contiguous dim and colDim is non-contiguous, so pitch uses colDim.
@@ -382,6 +377,12 @@ private:
       numPackedVals = sizeInfo.numElemPerPackedVal;
       pitchDim = isTranspose ? colDim : rowDim;
     }
+
+    // Check the final tile, after any row-limit fallback.
+    tt::AxisInfo *ptrInfo = axisInfoAnalysis.getAxisInfo(op.getPtr());
+    if (elemSizeInBits * numPackedVals > 32 &&
+        (!ptrInfo || ptrInfo->getDivisibility(contiguousDim) % 8))
+      return;
 
     // Compute pitch from stride analysis or the 1D->2D reshape attribute.
     // For the HW surface: width is along memory-contiguous direction, height
@@ -537,9 +538,13 @@ private:
           builder.getI32IntegerAttr(static_cast<int32_t>(baseHeightRows)));
     }
 
+    Value widthOperand = arith::ConstantOp::create(
+        builder, loc,
+        builder.getI32IntegerAttr(static_cast<int32_t>(baseWidthBytes)));
+
     auto blockPtrLoadOp = ttgi::Subgroup2DBlockLoadFromPtrOp::create(
         builder, loc, op.getType(), op.getPtr(), pitchOperand, heightOperand,
-        mask, other, builder.getI32IntegerAttr(baseWidthBytes),
+        widthOperand, mask, other,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate attributes if present.

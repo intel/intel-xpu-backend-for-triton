@@ -51,10 +51,13 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     }
 
     if (isa<BlockedEncodingAttr>(DTensorTy.getEncoding())) {
-      // Lower integer dots to dp4a rather than to a mul/add chain: IGC folds
-      // such a chain back into a dp4a and mis-pairs its two operands
-      // (intel/intel-xpu-backend-for-triton#7854).
-      if (isa<IntegerType>(DTensorTy.getElementType()))
+      // On the LTS driver, lower integer dots to dp4a rather than to a mul/add
+      // chain: LTS IGC folds such a chain back into a dp4a and mis-pairs its
+      // two operands (intel/intel-xpu-backend-for-triton#7854). Rolling IGC
+      // (2.42+) fixes the fold, so the generic lowering is used there.
+      bool isLTS = op->getParentOfType<ModuleOp>()->hasAttr(
+          triton::gpu::intel::TritonIntelGPUDialect::getIsLTSAttrName());
+      if (isLTS && isa<IntegerType>(DTensorTy.getElementType()))
         return fma_details::convertIntegerFMADot(op, adaptor,
                                                  getTypeConverter(), rewriter);
       return convertFMADot(op, adaptor, getTypeConverter(), rewriter);
