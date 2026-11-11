@@ -792,6 +792,30 @@ TEST_F(ComputeRowLimitHeightTest, I64InputsUseOverflowSafeClamp) {
   EXPECT_EQ(sub.getRhs(), rowBase);
 }
 
+// matchBoundaryCheckMask, reusing MatchRowLimitMaskTest's builders.
+class MatchBoundaryCheckMaskTest : public MatchRowLimitMaskTest {};
+
+// Unlike matchRowLimitMask, which keeps at most one, every conjunct uniform
+// along both surface dims is kept, splats included: the pipeliner's loop
+// guard and a batch-dim predicate can both reach one mask.
+TEST_F(MatchBoundaryCheckMaskTest, SeveralUniformConjunctsKept) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value rowBound = constI(100, 32);
+  Value rowMask = buildBoundedMask(arange(256), /*varyDim=*/0, shape, rowBound);
+  Value guardA = splatTo(constI(1, 1), shape);
+  Value guardB = splatTo(constI(1, 1), shape);
+
+  auto result = matchBoundaryCheckMask(andI(guardA, andI(rowMask, guardB)),
+                                       /*other=*/Value(), shape,
+                                       /*contiguousDim=*/1,
+                                       /*pitchDimIsBroadcast=*/false);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, rowBound);
+  ASSERT_EQ(result->extraPreds.size(), 2u);
+  EXPECT_EQ(result->extraPreds[0], guardA);
+  EXPECT_EQ(result->extraPreds[1], guardB);
+}
+
 // The pitch policy shared by MaterializeBlockPointer and LowerTo2DBlockLoad.
 // The runtime cases are not reachable from lit: a runtime row stride does not
 // pass MaterializeBlockPointer's alignment check there.

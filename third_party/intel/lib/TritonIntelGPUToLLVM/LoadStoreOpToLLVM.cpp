@@ -5280,7 +5280,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
         adjustedBaseHeight = b.smax(localHeight, b.i32_val(1));
       }
       // The row-limit height and a mask aren't mutually exclusive: the mask
-      // is matchRowLimitMask's leftover batch-dim extraPred, uniform per
+      // is matchBoundaryCheckMask's leftover batch-dim extraPred, uniform per
       // message, so it's ANDed into the same `pred`.
       if (maskElems.size()) {
         Value maskPred =

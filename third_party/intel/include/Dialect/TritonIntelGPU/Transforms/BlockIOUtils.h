@@ -211,6 +211,29 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   unsigned contiguousDim,
                                                   bool pitchDimIsBroadcast);
 
+/// A row-limit mask (see `RowLimitMaskInfo`) matched conjunct by conjunct:
+/// an AND of a pitch-dim bound `(base + arange(0, extent)) < bound` and any
+/// number of predicates uniform along both surface dims. The bound maps onto
+/// the 2D block message's own `base_height` clamp, `clamp(bound - base, 0,
+/// extent)` (see `computeRowLimitHeight`), so the mask needs no per-element
+/// predication at all. `rowBase` is null when the index is a bare `arange`.
+///
+/// `extraPreds` are the uniform conjuncts (batch-dim predicates, or the
+/// pipeliner's loop guard), each as `extraPred` in `RowLimitMaskInfo`: the
+/// caller ANDs them into its own per-message select.
+struct BoundaryMaskInfo {
+  Value rowBase, rowBound;
+  SmallVector<Value> extraPreds;
+};
+
+/// Match `mask` against the pattern above for a tensor of any rank >= 2.
+/// Fails unless every conjunct is recognised, `other` is
+/// zero-fill-compatible, and the pitch dim is not broadcast. Accepts the same
+/// bounds as `matchRowLimitMask`; over it, any number of uniform conjuncts.
+std::optional<BoundaryMaskInfo>
+matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
+                       unsigned contiguousDim, bool pitchDimIsBroadcast);
+
 /// Return `extraPred` as a value of type \p maskTy: unchanged if it already has
 /// that shape, else broadcast to it straight from its innermost source (so
 /// no broadcast-of-broadcast is left behind).
