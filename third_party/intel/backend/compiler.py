@@ -4,8 +4,7 @@ from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.errors import IntelGPUError, WorkGroupSizeOutOfResources
 from triton.backends.intel.extension_utils import query_device_extensions
-from triton.backends.intel.spirv_probes import (accepts_long_vector, accepts_maximum_registers,
-                                                accepts_vector_bf16_conversion)
+from triton.backends.intel.spirv_probes import accepts_long_vector, accepts_maximum_registers
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import OutOfResources
@@ -72,10 +71,6 @@ class XPUOptions:
     # ground-truth probe result in `parse_options`.
     allow_long_vector: bool = True
     allow_maximum_registers: bool = True
-    # Vector operands for the bf16 conversion builtins: "auto" probes the
-    # consumer, "on"/"off" force it. Resolved into `allow_vector_bf16_conversion`.
-    vector_bf16_conversion: str = "auto"
-    allow_vector_bf16_conversion: bool = False
     # Largest GRF mode the backend's automatic escalation will ever select
     # for this target ("256" everywhere except "cri", which gets "512"); see
     # `get_max_grf_mode`, the single source of truth for this policy.
@@ -395,10 +390,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # `accepts_maximum_registers` returns True for LTS (but should return False)
         options.allow_maximum_registers = (not options.is_lts
                                            and accepts_maximum_registers(native, self.device_arch, device_id))
-        if (mode := options.vector_bf16_conversion) not in ("auto", "on", "off"):
-            raise ValueError(f"vector_bf16_conversion must be 'auto', 'on' or 'off', got {mode!r}")
-        options.allow_vector_bf16_conversion = mode == "on" or (mode == "auto" and accepts_vector_bf16_conversion(
-            native, self.device_arch, device_id))
         return options
 
     @staticmethod
@@ -698,8 +689,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         driver_version = metadata["target"].arch.get("driver_version")
         if cls.is_lts(driver_version):
             intel.set_is_lts(mod)
-        # From the hashed option, also for saved TTGIR, so lowering matches the cache key.
-        intel.set_vector_bf16_conversion(mod, options.allow_vector_bf16_conversion)
 
         # `getGlobalTimer` counts core clock cycles and needs the rate to report
         # nanoseconds.

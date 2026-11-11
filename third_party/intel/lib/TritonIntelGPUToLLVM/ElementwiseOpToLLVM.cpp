@@ -1226,6 +1226,8 @@ constexpr const auto SUPPORT_F8_CONV =
     triton::gpu::intel::TritonIntelGPUDialect::getSupportF8ConversionAttrName;
 constexpr const auto SUPPORT_BF16_ARITH = triton::gpu::intel::
     TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName;
+constexpr const auto SUPPORT_BF16_CONV = triton::gpu::intel::
+    TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName;
 constexpr const auto IS_LTS =
     triton::gpu::intel::TritonIntelGPUDialect::getIsLTSAttrName;
 constexpr const char BUILTIN_HFTOHF8[] =
@@ -1385,14 +1387,8 @@ static bool isDotBInEveryWarp(Operation *op) {
 SmallVector<Value> convertFp32ToBf16x8(Operation *op, Location loc,
                                        ConversionPatternRewriter &rewriter,
                                        MultipleOperandsRange operands) {
-  using triton::gpu::intel::TritonIntelGPUDialect;
   constexpr unsigned width = 8;
-  if (operands.size() < width || !triton::gpu::intel::hasSpirvTargetArch(op) ||
-      !mlir::LLVM::intel::hasModuleAttr(
-          op,
-          TritonIntelGPUDialect::getSupportVectorBF16ConversionAttrName()) ||
-      !mlir::LLVM::intel::hasModuleAttr(
-          op, TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName()))
+  if (operands.size() < width || !HasAttr<SUPPORT_BF16_CONV>(op))
     return {};
   TritonLLVMIRRewriter b(loc, rewriter);
   Value vec = b.undef(vec_ty(f32_ty, width));
