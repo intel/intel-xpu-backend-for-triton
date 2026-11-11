@@ -17,65 +17,16 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Get LLVM commit id
-      shell: bash
-      run: |
-        LLVM_COMMIT_ID=$(jq -r '.llvm_hash' cmake/llvm-info.json)
-        echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" | tee -a $GITHUB_ENV
-
-    - name: Generate LLVM cache key
-      if: ${{ inputs.build_llvm == 'true' }}
-      shell: bash
-      run: |
-        LLVM_CACHE_KEY=$(echo $LLVM_COMMIT_ID ${{ inputs.use_spirv_backend }} | sha256sum - | cut -d\  -f1)
-        echo "LLVM_CACHE_KEY=$LLVM_CACHE_KEY" | tee -a $GITHUB_ENV
-
-    - name: Load LLVM cache
-      if: ${{ inputs.build_llvm == 'true' }}
-      id: llvm-cache
-      uses: ./.github/actions/load
-      env:
-        # Increase this value to reset cache
-        CACHE_NUMBER: 3
-      with:
-        path: $HOME/packages
-        key: packages-${{ env.LLVM_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
-
-    - name: Clone LLVM
-      if: ${{ inputs.build_llvm == 'true' && steps.llvm-cache.outputs.status == 'miss' }}
-      uses: actions/checkout@v5
-      with:
-        repository: llvm/llvm-project
-        ref: ${{ env.LLVM_COMMIT_ID }}
-        path: llvm
-        submodules: recursive
-
     - name: Use SPIR-V backend
       if: ${{ inputs.use_spirv_backend == 'true' }}
       shell: bash
       run: |
         echo "TRITON_USE_SPIRV_BACKEND=1" | tee -a $GITHUB_ENV
 
-    - name: Build LLVM
-      if: ${{ inputs.build_llvm == 'true' && steps.llvm-cache.outputs.status == 'miss' }}
-      shell: bash
-      run: |
-        export BASE=$HOME
-        ln -s $PWD/llvm $BASE/llvm
-        ./scripts/compile-triton.sh --llvm
-
-    - name: Set LLVM_SYSPATH
-      if: ${{ inputs.build_llvm == 'true' }}
-      shell: bash
-      run: |
-        echo "LLVM_SYSPATH=$HOME/packages/llvm" | tee -a $GITHUB_ENV
-
-    - name: Save LLVM cache
-      if: ${{ inputs.build_llvm == 'true' && steps.llvm-cache.outputs.status == 'miss' }}
-      uses: ./.github/actions/save
+    - name: Setup LLVM
+      uses: ./.github/actions/setup-llvm
       with:
-        path: ${{ steps.llvm-cache.outputs.path }}
-        dest: ${{ steps.llvm-cache.outputs.dest }}
+        build_llvm: ${{ inputs.build_llvm }}
 
     - name: Prepare Triton cache for nvidia deps
       shell: bash
@@ -93,10 +44,6 @@ runs:
       with:
         path: $HOME/.triton/nvidia
         key: triton-nvidia-${{ env.TRITON_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
-
-    - name: Setup LLVM
-      if: inputs.build_llvm == 'false'
-      uses: ./.github/actions/setup-llvm
 
     - name: Build Triton
       shell: bash

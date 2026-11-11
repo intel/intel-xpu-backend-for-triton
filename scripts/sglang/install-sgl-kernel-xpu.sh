@@ -2,10 +2,10 @@
 
 # Build and install sgl-kernel-xpu, which SGLang imports as `sgl_kernel`.
 #
-# SGLang requires it as a git direct reference next to `torch==2.13.0+xpu`, and
-# install-sglang.sh strips both: resolving it through pip builds in an isolated
-# environment without our torch, and pulls the upstream torch pin over it. So it
-# is built here instead, with --no-isolation, and installed as its own wheel.
+# SGLang requires it as a prebuilt wheel next to `torch==2.14.0+xpu`, and
+# install-sglang.sh strips both: the wheel is linked against that torch, and the
+# torch pin would replace ours. So it is built here instead, with --no-isolation,
+# and installed as its own wheel.
 #
 # BMG runners only: upstream has no PVC code path at all. See
 # scripts/sglang/README.md.
@@ -50,6 +50,9 @@ Environment:
   DPCPP_SYCL_TARGET   AOT target device. Default: bmg.
   ONEAPI_ROOT         oneAPI prefix, used to find setvars.sh when the DPC++
                       compiler is not already on PATH.
+  CMAKE_BUILD_PARALLEL_LEVEL
+                      Build jobs. Default: one per 12 GiB of available
+                      memory, at most nproc.
 EOF
       exit 0
       ;;
@@ -219,10 +222,24 @@ install_build_dependencies
 # A stale wheel would make the `dist/*.whl` glob below ambiguous.
 rm -f "$KERNEL_DIR"/dist/*.whl
 
+# One build job per 12 GiB of available memory, capped at nproc: a CUTLASS-SYCL
+# device compile peaks at about 10 GiB RSS. The CI runners have memory to spare,
+# so they get one job per CPU; a 30 GiB machine gets 2.
+NPROC="$(nproc)"
+MEM_AVAIL_GIB="$(awk '/^MemAvailable:/ {printf "%d", $2 / 1048576}' /proc/meminfo)"
+BUILD_JOBS=$((MEM_AVAIL_GIB / 12))
+if [ "$BUILD_JOBS" -gt "$NPROC" ]; then
+  BUILD_JOBS="$NPROC"
+fi
+if [ "$BUILD_JOBS" -lt 1 ]; then
+  BUILD_JOBS=1
+fi
+BUILD_JOBS="${CMAKE_BUILD_PARALLEL_LEVEL:-$BUILD_JOBS}"
+
 echo "**** Building the sgl-kernel-xpu wheel (slow: AOT SYCL kernels). ****"
-echo "**** nproc: $(nproc), CMAKE_BUILD_PARALLEL_LEVEL in the environment: ${CMAKE_BUILD_PARALLEL_LEVEL-unset}, $(awk '/^MemAvailable:/ {printf "%.0f", $2 / 1048576}' /proc/meminfo) GiB available ****"
+echo "**** nproc: $NPROC, $MEM_AVAIL_GIB GiB available, build jobs: $BUILD_JOBS (CMAKE_BUILD_PARALLEL_LEVEL in the environment: ${CMAKE_BUILD_PARALLEL_LEVEL-unset}) ****"
 DPCPP_SYCL_TARGET="$SYCL_TARGET" \
-  CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$(($(nproc) / 2))}" \
+  CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS" \
   python -m build --wheel --no-isolation "$KERNEL_DIR"
 
 printf '%s %s\n' "$(git -C "$KERNEL_DIR" rev-parse HEAD)" "$SYCL_TARGET" > "$COMMIT_STAMP"

@@ -342,13 +342,17 @@ def test_block_tdesc_column_major_load(threads_per_warp, device, tmp_path: pathl
 # Row-limit mask (runtime bound) lowered to a 2D block load's base_height
 # ---------------------------------------------------------------------------
 @triton.jit
-def row_limit_dot_kernel(a_ptr, eye_ptr, out_ptr, bound, K: tl.constexpr, BM: tl.constexpr):
+def row_limit_dot_kernel(a_ptr, eye_ptr, out_ptr, bound, K: tl.constexpr, BM: tl.constexpr, I64: tl.constexpr):
     # `bound` is only known at run time, so `rows < bound` is a row-limit mask
     # that can become the 2D block load's base_height. A is multiplied by the
     # identity and the result is stored unmasked, so any row past `bound` that
     # the load did not zero-fill shows up in the output.
     pid = tl.program_id(0)
-    rows = pid * BM + tl.arange(0, BM)
+    if I64:
+        # An int64 row index, as Helion's grouped GEMM computes it (issue #8565).
+        rows = (pid * BM).to(tl.int64) + tl.arange(0, BM)
+    else:
+        rows = pid * BM + tl.arange(0, BM)
     cols = tl.arange(0, K)
     a = tl.load(a_ptr + rows[:, None] * K + cols[None, :], mask=(rows < bound)[:, None], other=0.0)
     # Element stride 2 keeps this load off the 2D block path, so any 2D block
@@ -357,7 +361,7 @@ def row_limit_dot_kernel(a_ptr, eye_ptr, out_ptr, bound, K: tl.constexpr, BM: tl
     tl.store(out_ptr + rows[:, None] * K + cols[None, :], tl.dot(a, eye))
 
 
-@pytest.mark.parametrize("bound", [
+ROW_LIMIT_BOUNDS = [
     70,  # inside tile 2; tile 3 starts below the bound
     69,  # inside tile 2 (odd)
     65,  # a single valid row in tile 2
@@ -366,11 +370,18 @@ def row_limit_dot_kernel(a_ptr, eye_ptr, out_ptr, bound, K: tl.constexpr, BM: tl
     3,  # inside tile 0 (Triton specializes an int argument equal to 1 to a constexpr)
     0,  # at the start of tile 0: everything is zero
     128,  # every tile is fully valid
-])
+]
+
+
+@pytest.mark.parametrize(
+    "bound, i64", [(bound, False) for bound in ROW_LIMIT_BOUNDS] + [(bound, True) for bound in ROW_LIMIT_BOUNDS] +
+    # Past int32, so `bound` is passed as an i64 and the
+    # overflow-safe i64 height runs; every row is valid.
+    [(2**33, True)])
 @pytest.mark.skipif(not is_xpu(), reason="Row-limit zero fill is specific to the XPU backend")
 @pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io'],
                    reason="Block loads not supported on this architecture", run=False)
-def test_row_limit_zero_fill(bound, device):
+def test_row_limit_zero_fill(bound, i64, device):
     BM, BK, num_tiles = 32, 64, 4
     rows = BM * num_tiles
     # Non-zero everywhere, so rows past `bound` are only zero if the load zero-fills them.
@@ -379,7 +390,7 @@ def test_row_limit_zero_fill(bound, device):
     eye[:, ::2] = torch.eye(BK, device=device, dtype=torch.float16)
     out = torch.full((rows, BK), -1, device=device, dtype=torch.float32)
 
-    kernel = row_limit_dot_kernel[(num_tiles, )](x, eye, out, bound, BK, BM, num_warps=4)
+    kernel = row_limit_dot_kernel[(num_tiles, )](x, eye, out, bound, BK, BM, i64, num_warps=4)
 
     # Guard against the test silently exercising the per-element path.
     # The masked A load must get block IO (MaterializeBlockPointer) and be

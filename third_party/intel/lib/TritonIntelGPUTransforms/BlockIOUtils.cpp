@@ -1309,11 +1309,18 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
   if (!rowBase)
     return std::nullopt;
 
-  // base_height lowering requires exactly i32; checked here so every caller
-  // agrees on eligibility.
+  // computeRowLimitHeight handles i32 and i64 (e.g. an index promoted to i64
+  // by `.to(tl.int64)`, issue #8565); checked here so every caller agrees on
+  // eligibility.
   Value boundSrc = boundSplat.getSrc();
-  if (!boundSrc.getType().isInteger(32) ||
-      (*rowBase && !rowBase->getType().isInteger(32)))
+  if (!boundSrc.getType().isInteger(32) && !boundSrc.getType().isInteger(64))
+    return std::nullopt;
+  // `rowBase` must have the compare's type: matchBaseAndRange looks through
+  // extsi/extui, and an extension between the base and the compare (around
+  // the add, or on the base splat) would be lost. computeRowLimitHeight would
+  // then sign-extend a zero-extended base (e.g. `extui(base32 + arange) <
+  // bound64` with base 0x80000000), giving the wrong height.
+  if (*rowBase && rowBase->getType() != boundSrc.getType())
     return std::nullopt;
 
   return RowLimitMaskInfo{pitchDim, *rowBase, boundSrc, extraPred};
@@ -1331,18 +1338,41 @@ Value materializeExtraPred(OpBuilder &builder, Location loc, Value extraPred,
 Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
                             Value rowBase, int64_t rowExtent) {
   Type i64Ty = builder.getI64Type();
-  Value diff64 = arith::ExtSIOp::create(builder, loc, i64Ty, bound);
-  if (rowBase) {
-    Value rowBase64 = arith::ExtSIOp::create(builder, loc, i64Ty, rowBase);
-    diff64 = arith::SubIOp::create(builder, loc, diff64, rowBase64);
-  }
+  auto widen = [&](Value v) -> Value {
+    if (v.getType() == i64Ty)
+      return v;
+    return arith::ExtSIOp::create(builder, loc, i64Ty, v);
+  };
   Value zero64 =
       arith::ConstantOp::create(builder, loc, builder.getI64IntegerAttr(0));
   Value extent64 = arith::ConstantOp::create(
       builder, loc, builder.getI64IntegerAttr(rowExtent));
-  Value clamped = arith::MaxSIOp::create(builder, loc, diff64, zero64);
-  clamped = arith::MinSIOp::create(builder, loc, clamped, extent64);
-  return arith::TruncIOp::create(builder, loc, builder.getI32Type(), clamped);
+  Type i32Ty = builder.getI32Type();
+
+  // i32 inputs (or no rowBase): `bound - rowBase` can't overflow once widened
+  // to i64, so a signed clamp is exact.
+  bool signedClamp =
+      !rowBase || (bound.getType().getIntOrFloatBitWidth() < 64 &&
+                   rowBase.getType().getIntOrFloatBitWidth() < 64);
+  if (signedClamp) {
+    Value diff64 = widen(bound);
+    if (rowBase)
+      diff64 = arith::SubIOp::create(builder, loc, diff64, widen(rowBase));
+    Value clamped = arith::MaxSIOp::create(builder, loc, diff64, zero64);
+    clamped = arith::MinSIOp::create(builder, loc, clamped, extent64);
+    return arith::TruncIOp::create(builder, loc, i32Ty, clamped);
+  }
+
+  // i64 inputs: `bound - rowBase` may overflow i64. Compare first; when
+  // `bound >s rowBase` the difference is exact as an unsigned value, so
+  // `(bound <=s rowBase) ? 0 : minui(bound - rowBase, rowExtent)`.
+  Value bound64 = widen(bound), rowBase64 = widen(rowBase);
+  Value empty = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sle,
+                                      bound64, rowBase64);
+  Value diff64 = arith::SubIOp::create(builder, loc, bound64, rowBase64);
+  Value clamped = arith::MinUIOp::create(builder, loc, diff64, extent64);
+  clamped = arith::SelectOp::create(builder, loc, empty, zero64, clamped);
+  return arith::TruncIOp::create(builder, loc, i32Ty, clamped);
 }
 
 } // namespace mlir::triton::gpu::intel
