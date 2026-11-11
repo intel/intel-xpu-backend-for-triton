@@ -1223,13 +1223,19 @@ Value peelBroadcasts(Value v) {
 /// is distributed over it (`broadcast(and(a, b))` == `and(broadcast(a),
 /// broadcast(b))`), since `tt-reorder-broadcast` may have sunk the AND below
 /// the broadcast; the conjuncts are then matched on their own narrow tensors.
-void collectConjuncts(Value v, SmallVectorImpl<Value> &conjuncts) {
+/// The tree is a DAG, so each value is visited once: a shared AND would
+/// otherwise be expanded once per path to it. AND being idempotent, that also
+/// drops a repeated conjunct.
+void collectConjuncts(Value v, SmallPtrSetImpl<Value> &visited,
+                      SmallVectorImpl<Value> &conjuncts) {
+  if (!visited.insert(v).second)
+    return;
   if (auto broadcastOp = v.getDefiningOp<triton::BroadcastOp>())
     if (broadcastOp.getSrc().getDefiningOp<arith::AndIOp>())
-      return collectConjuncts(broadcastOp.getSrc(), conjuncts);
+      return collectConjuncts(broadcastOp.getSrc(), visited, conjuncts);
   if (auto andOp = v.getDefiningOp<arith::AndIOp>()) {
-    collectConjuncts(andOp.getLhs(), conjuncts);
-    collectConjuncts(andOp.getRhs(), conjuncts);
+    collectConjuncts(andOp.getLhs(), visited, conjuncts);
+    collectConjuncts(andOp.getRhs(), visited, conjuncts);
     return;
   }
   conjuncts.push_back(v);
@@ -1414,8 +1420,9 @@ matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
   unsigned rank = tensorShape.size();
   unsigned pitchDim = (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
 
+  SmallPtrSet<Value, 8> visited;
   SmallVector<Value> conjuncts;
-  collectConjuncts(mask, conjuncts);
+  collectConjuncts(mask, visited, conjuncts);
 
   BoundaryMaskInfo info;
   for (Value conjunct : conjuncts) {

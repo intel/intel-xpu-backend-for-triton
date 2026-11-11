@@ -793,7 +793,14 @@ TEST_F(ComputeRowLimitHeightTest, I64InputsUseOverflowSafeClamp) {
 }
 
 // matchBoundaryCheckMask, reusing MatchRowLimitMaskTest's builders.
-class MatchBoundaryCheckMaskTest : public MatchRowLimitMaskTest {};
+class MatchBoundaryCheckMaskTest : public MatchRowLimitMaskTest {
+protected:
+  std::optional<BoundaryMaskInfo> match(Value mask, ArrayRef<int64_t> shape,
+                                        Value other = Value()) {
+    return matchBoundaryCheckMask(mask, other, shape, /*contiguousDim=*/1,
+                                  /*pitchDimIsBroadcast=*/false);
+  }
+};
 
 // Unlike matchRowLimitMask, which keeps at most one, every conjunct uniform
 // along both surface dims is kept, splats included: the pipeliner's loop
@@ -805,15 +812,49 @@ TEST_F(MatchBoundaryCheckMaskTest, SeveralUniformConjunctsKept) {
   Value guardA = splatTo(constI(1, 1), shape);
   Value guardB = splatTo(constI(1, 1), shape);
 
-  auto result = matchBoundaryCheckMask(andI(guardA, andI(rowMask, guardB)),
-                                       /*other=*/Value(), shape,
-                                       /*contiguousDim=*/1,
-                                       /*pitchDimIsBroadcast=*/false);
+  auto result = match(andI(guardA, andI(rowMask, guardB)), shape);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->rowBound, rowBound);
   ASSERT_EQ(result->extraPreds.size(), 2u);
   EXPECT_EQ(result->extraPreds[0], guardA);
   EXPECT_EQ(result->extraPreds[1], guardB);
+}
+
+// Two pitch-dim bounds are two clamps, and base_height holds only one.
+TEST_F(MatchBoundaryCheckMaskTest, SecondRowBoundRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value first =
+      buildBoundedMask(arange(256), /*varyDim=*/0, shape, constI(100, 32));
+  Value second =
+      buildBoundedMask(arange(256), /*varyDim=*/0, shape, constI(90, 32));
+  EXPECT_FALSE(match(andI(first, second), shape).has_value());
+}
+
+// Only a zero `other` matches the hardware's zero fill.
+TEST_F(MatchBoundaryCheckMaskTest, NonZeroFillOtherRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value mask =
+      buildBoundedMask(arange(256), /*varyDim=*/0, shape, constI(100, 32));
+  EXPECT_FALSE(
+      match(mask, shape, denseIntSplat(shape, /*value=*/1)).has_value());
+}
+
+// An AND reused on both sides at every level is a DAG of 2^depth paths; it is
+// walked once per value, and the repeated conjuncts collapse into one each.
+TEST_F(MatchBoundaryCheckMaskTest, SharedAndVisitedOnce) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value rowBound = constI(100, 32);
+  Value guard = splatTo(constI(1, 1), shape);
+  Value mask = andI(
+      buildBoundedMask(arange(256), /*varyDim=*/0, shape, rowBound), guard);
+  for (int i = 0; i < 64; ++i)
+    mask = andI(mask, mask);
+
+  auto result = match(mask, shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, rowBound);
+  ASSERT_EQ(result->extraPreds.size(), 1u);
+  EXPECT_EQ(result->extraPreds.front(), guard);
 }
 
 // The pitch policy shared by MaterializeBlockPointer and LowerTo2DBlockLoad.
