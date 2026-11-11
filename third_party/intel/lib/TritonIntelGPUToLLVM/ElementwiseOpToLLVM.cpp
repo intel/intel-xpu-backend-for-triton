@@ -2049,6 +2049,14 @@ struct AbsFOpConversion
 };
 
 // FIXME: Remove this IGC W/A (#8626).
+//
+// Without native bf16 arithmetic (LTS drivers), a bf16 `math.fma` is computed
+// in f32 and rounded back once. `arith-emulate-unsupported-floats` only widens
+// arith ops, so it never reaches `math.fma`. This is exact for the
+// `fma(s, 0, s)` that DecomposeScaledBlocked emits to turn an infinite scale
+// into NaN, since the result is `s` or NaN, but a general bf16 fma is not
+// correctly rounded this way: the f32 add rounds once and the bf16 conversion
+// rounds again.
 struct FmaOpConversion
     : ElementwiseOpConversionBase<math::FmaOp, FmaOpConversion> {
   using Base = ElementwiseOpConversionBase<math::FmaOp, FmaOpConversion>;
@@ -2060,12 +2068,23 @@ struct FmaOpConversion
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     Value a = operands[0][0], b = operands[0][1], c = operands[0][2];
+    bool widenBf16 = elemTy.isBF16() && !mlir::LLVM::intel::hasModuleAttr(
+                                            op, SUPPORT_BF16_ARITH());
+    if (widenBf16) {
+      a = intel::convertBf16ToFp32(loc, rewriter, a);
+      b = intel::convertBf16ToFp32(loc, rewriter, b);
+      c = intel::convertBf16ToFp32(loc, rewriter, c);
+      elemTy = f32_ty;
+    }
     if (!elemTy.isF32())
       return {LLVM::FMAOp::create(rewriter, loc, elemTy, a, b, c)};
     auto fmf = LLVM::FastmathFlagsAttr::get(rewriter.getContext(),
                                             LLVM::FastmathFlags::contract);
     Value mul = LLVM::FMulOp::create(rewriter, loc, elemTy, a, b, fmf);
-    return {LLVM::FAddOp::create(rewriter, loc, elemTy, mul, c, fmf)};
+    Value res = LLVM::FAddOp::create(rewriter, loc, elemTy, mul, c, fmf);
+    if (widenBf16)
+      res = intel::convertFp32ToBf16(loc, rewriter, res, RoundingMode::RTNE);
+    return {res};
   }
 };
 
