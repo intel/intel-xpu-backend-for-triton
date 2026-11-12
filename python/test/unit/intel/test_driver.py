@@ -605,6 +605,7 @@ def test_benchmarker_concurrent_threads(device, monkeypatch):
 
     monkeypatch.setattr(drv, "clear_cache", recording_clear_cache)
     barrier = threading.Barrier(2)
+    errors = []
 
     def benchmark(grf_mode):
         first_run = True
@@ -616,13 +617,18 @@ def test_benchmarker_concurrent_threads(device, monkeypatch):
                 barrier.wait(timeout=60)  # both threads are recording by now
             add_one[(1, )](xs[grf_mode], BLOCK=1024, grf_mode=grf_mode)
 
-        drv.get_benchmarker()(run)
+        try:
+            drv.get_benchmarker()(run)
+        except Exception as e:
+            errors.append(e)
+            barrier.abort()  # do not leave the other thread waiting for this one
 
     threads = [threading.Thread(target=benchmark, args=(grf_mode, ), name=grf_mode) for grf_mode in xs]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
+    assert not errors, errors
     assert dict(used) == {"default": {"default"}, "256": {"256"}}
 
 
