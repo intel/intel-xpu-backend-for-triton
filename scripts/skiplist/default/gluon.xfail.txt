@@ -1,7 +1,5 @@
 # AMD and NVIDIA MMA layouts are not supported on Intel GPUs
 python/test/gluon/test_lowerings.py::test_convert_mma2mma_layouts
-# Requires CUDA
-python/test/gluon/test_lowerings.py::test_regress_warp_shuffle_convert_layout
 # regression is specific to NVPTX fabs lowering
 python/test/gluon/test_fpsan.py::test_f32_loop_preserves_snan_payload
 # requires Ampere or newer
