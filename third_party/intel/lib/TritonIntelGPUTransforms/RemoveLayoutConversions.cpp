@@ -2510,10 +2510,6 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   RankedTensorType targetType = convertOp.getType();
   if (isa<ttg::DotOperandEncodingAttr>(targetType.getEncoding()))
     return;
-  // Hoisting an anchored store convert lets the next RLC run re-layout the
-  // store (#8555).
-  if (isLayoutAnchor(convertOp))
-    return;
 
   auto isExtOrBroadcastOp = [](Operation *op) {
     if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, tt::BroadcastOp,
@@ -2536,8 +2532,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   if (result.failed())
     return;
 
-  SmallVector<std::pair<Operation *, Attribute>> extOrBroadcastOps;
-  int64_t newCvtCost = 0;
+  Operation *extOrBroadcastOp = nullptr;
   unsigned sliceSize = slice.size();
   for (unsigned i = 0; i < sliceSize; i++) {
     Value v = slice[i];
@@ -2553,13 +2548,19 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
       if (succeeded(getRematerializableSlice(op->getOpOperand(0), srcEncoding,
                                              slice, layout)))
         continue;
-      extOrBroadcastOps.emplace_back(op, srcEncoding);
-      newCvtCost +=
-          getConvertCost(op->getOperand(0), srcEncoding, convertCostCache);
+      // Only apply it if there is a single ext op otherwise we would have to
+      // duplicate the convert.
+      if (extOrBroadcastOp != nullptr)
+        return;
+      extOrBroadcastOp = op;
     }
   }
 
-  if (extOrBroadcastOps.empty())
+  if (extOrBroadcastOp == nullptr)
+    return;
+  Attribute dstEncoding = layout[extOrBroadcastOp->getResult(0)];
+  Attribute srcEncoding = ttgi::inferSrcEncoding(extOrBroadcastOp, dstEncoding);
+  if (!srcEncoding)
     return;
   // Check that hoisting the convert is actually beneficial.
   // Always apply the cost gate (matching upstream) — isRematBeneficial
@@ -2569,26 +2570,29 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     LDBG("  skip remat: would degrade a load encoding");
     return;
   }
+  int64_t newCvtCost = getConvertCost(extOrBroadcastOp->getOperand(0),
+                                      srcEncoding, convertCostCache);
   if (!isRematBeneficial(convertOp, slice, layout, newCvtCost,
                          convertCostCache))
     return;
 
-  // Move the convert before each ext op and rewrite the slice.
+  // Move the convert before the ext op and rewrite the slice.
+  OpBuilder builder(extOrBroadcastOp);
+  auto tensorType =
+      cast<RankedTensorType>(extOrBroadcastOp->getOperand(0).getType());
+  auto newType = tensorType.cloneWithEncoding(srcEncoding);
+  auto newConvertOp = ttg::ConvertLayoutOp::create(
+      builder, convertOp.getLoc(), newType, extOrBroadcastOp->getOperand(0));
+  Operation *newExtOrBroadcast = builder.clone(*extOrBroadcastOp);
+  newExtOrBroadcast->setOperand(0, newConvertOp.getResult());
+  auto oldExtOrBroadcastType =
+      cast<RankedTensorType>(extOrBroadcastOp->getResult(0).getType());
+  Type newExtOrBroadcastType =
+      oldExtOrBroadcastType.cloneWithEncoding(dstEncoding);
+  newExtOrBroadcast->getResult(0).setType(newExtOrBroadcastType);
   IRMapping mapping;
-  for (auto [op, srcEncoding] : extOrBroadcastOps) {
-    OpBuilder builder(op);
-    auto tensorType = cast<RankedTensorType>(op->getOperand(0).getType());
-    auto newType = tensorType.cloneWithEncoding(srcEncoding);
-    auto newConvertOp = ttg::ConvertLayoutOp::create(
-        builder, convertOp.getLoc(), newType, op->getOperand(0));
-    Operation *newOp = builder.clone(*op);
-    newOp->setOperand(0, newConvertOp.getResult());
-    auto oldType = cast<RankedTensorType>(op->getResult(0).getType());
-    newOp->getResult(0).setType(
-        oldType.cloneWithEncoding(layout[op->getResult(0)]));
-    mapping.map(op->getResult(0), newOp->getResult(0));
-    slice.remove(op->getResult(0));
-  }
+  mapping.map(extOrBroadcastOp->getResult(0), newExtOrBroadcast->getResult(0));
+  slice.remove(extOrBroadcastOp->getResult(0));
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp, mapping);
 }

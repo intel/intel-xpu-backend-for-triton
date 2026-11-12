@@ -164,38 +164,6 @@ tt.func @hoist_above_broadcast(%arg0: tensor<1024x1xf32, #layout2>, %arg1: f32) 
   tt.return %3 : tensor<1024x128xf32, #layout3>
 }
 
-// Hoist the convert on top of each ext when the new converts cost less in total.
-// CHECK-LABEL: hoist_above_multiple_ext
-tt.func @hoist_above_multiple_ext(%arg0: tensor<1024xi16, #layout0>, %arg1: tensor<1024xi16, #layout0>) -> tensor<1024xi64, #layout1> {
-// CHECK: %[[CVT0:.+]] = ttg.convert_layout %arg0
-// CHECK: arith.extsi %[[CVT0]]
-// CHECK: %[[CVT1:.+]] = ttg.convert_layout %arg1
-// CHECK: arith.extui %[[CVT1]]
-// CHECK-NOT: ttg.convert_layout
-// CHECK: tt.return
-  %0 = arith.extsi %arg0 : tensor<1024xi16, #layout0> to tensor<1024xi64, #layout0>
-  %1 = arith.extui %arg1 : tensor<1024xi16, #layout0> to tensor<1024xi64, #layout0>
-  %2 = arith.addi %0, %1 : tensor<1024xi64, #layout0>
-  %3 = ttg.convert_layout %2 : tensor<1024xi64, #layout0> -> tensor<1024xi64, #layout1>
-  tt.return %3 : tensor<1024xi64, #layout1>
-}
-
-// CHECK-LABEL: dont_hoist_above_multiple_ext
-tt.func @dont_hoist_above_multiple_ext(%arg0: tensor<1024xi16, #layout0>, %arg1: tensor<1024xi16, #layout0>, %arg2: tensor<1024xi16, #layout0>) -> tensor<1024xi64, #layout1> {
-// CHECK-NOT: ttg.convert_layout
-// CHECK: %[[SUM:.+]] = arith.addi %{{.+}}, %{{.+}} : tensor<1024xi64, #{{.+}}>
-// CHECK: %[[SUM2:.+]] = arith.addi %[[SUM]], %{{.+}} : tensor<1024xi64, #{{.+}}>
-// CHECK: %[[CVT:.+]] = ttg.convert_layout %[[SUM2]]
-// CHECK: tt.return %[[CVT]]
-  %0 = arith.extsi %arg0 : tensor<1024xi16, #layout0> to tensor<1024xi64, #layout0>
-  %1 = arith.extui %arg1 : tensor<1024xi16, #layout0> to tensor<1024xi64, #layout0>
-  %2 = arith.extsi %arg2 : tensor<1024xi16, #layout0> to tensor<1024xi64, #layout0>
-  %3 = arith.addi %0, %1 : tensor<1024xi64, #layout0>
-  %4 = arith.addi %3, %2 : tensor<1024xi64, #layout0>
-  %5 = ttg.convert_layout %4 : tensor<1024xi64, #layout0> -> tensor<1024xi64, #layout1>
-  tt.return %5 : tensor<1024xi64, #layout1>
-}
-
 
 // CHECK-LABEL: if
 tt.func @if(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
