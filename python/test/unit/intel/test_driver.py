@@ -3,6 +3,7 @@ import io
 import re
 import shutil
 import sys
+import threading
 
 import pytest
 import torch
@@ -472,11 +473,12 @@ def test_clear_cache_grf_mode(device, grf_mode):
     drv = driver.active
     cache = drv.get_empty_cache_for_benchmark()
     cache.fill_(1)
-    drv._flush_grf_mode = grf_mode
+    state = drv._benchmark_state
+    state.flush_grf_mode = grf_mode
     try:
         drv.clear_cache(cache)
     finally:
-        drv._flush_grf_mode = "default"
+        state.flush_grf_mode = "default"
     assert int(torch.count_nonzero(cache)) == 0
 
 
@@ -494,7 +496,7 @@ def _flush_grf_modes_used(monkeypatch, fn):
     clear_cache = drv.clear_cache
 
     def recording_clear_cache(cache):
-        used.add(drv._flush_grf_mode)
+        used.add(drv._benchmark_state.flush_grf_mode)
         clear_cache(cache)
 
     monkeypatch.setattr(drv, "clear_cache", recording_clear_cache)
@@ -574,3 +576,83 @@ def test_benchmarker_warms_up_flush_before_estimate(device, monkeypatch, grf_mod
 def test_grf_mode_of(grf_mode, build_flags, expected):
     metadata = collections.namedtuple("Metadata", ["grf_mode", "build_flags"])(grf_mode, build_flags)
     assert _grf_mode_of(metadata) == expected
+
+
+def test_benchmarker_concurrent_threads(device, monkeypatch):
+    # Two threads benchmark kernels in different GRF modes at the same time; each has to flush in its own mode.
+
+    @triton.jit
+    def add_one(x_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(x_ptr + offs, tl.load(x_ptr + offs) + 1)
+
+    drv = driver.active
+    xs = {grf_mode: torch.zeros(1024, device=device) for grf_mode in ("default", "256")}
+    for grf_mode, x in xs.items():
+        add_one[(1, )](x, BLOCK=1024, grf_mode=grf_mode)  # compile before the threads start
+
+    used = collections.defaultdict(set)
+    clear_cache = drv.clear_cache
+
+    def recording_clear_cache(cache):
+        used[threading.current_thread().name].add(drv._benchmark_state.flush_grf_mode)
+        clear_cache(cache)
+
+    monkeypatch.setattr(drv, "clear_cache", recording_clear_cache)
+    barrier = threading.Barrier(2)
+
+    def benchmark(grf_mode):
+        first_run = True
+
+        def run():
+            nonlocal first_run
+            if first_run:
+                first_run = False
+                barrier.wait(timeout=60)  # both threads are recording by now
+            add_one[(1, )](xs[grf_mode], BLOCK=1024, grf_mode=grf_mode)
+
+        drv.get_benchmarker()(run)
+
+    threads = [threading.Thread(target=benchmark, args=(grf_mode, ), name=grf_mode) for grf_mode in xs]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert dict(used) == {"default": {"default"}, "256": {"256"}}
+
+
+def test_benchmarker_nested(device, monkeypatch):
+    # A benchmark started inside another one must neither change what the outer one flushes in nor leave state behind.
+
+    @triton.jit
+    def add_one(x_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(x_ptr + offs, tl.load(x_ptr + offs) + 1)
+
+    drv = driver.active
+    x = torch.zeros(1024, device=device)
+    add_one[(1, )](x, BLOCK=1024)
+    add_one[(1, )](x, BLOCK=1024, grf_mode="256")
+
+    used = []
+    clear_cache = drv.clear_cache
+
+    def recording_clear_cache(cache):
+        used.append(drv._benchmark_state.flush_grf_mode)
+        clear_cache(cache)
+
+    monkeypatch.setattr(drv, "clear_cache", recording_clear_cache)
+    inner_done = False
+
+    def run():
+        nonlocal inner_done
+        if not inner_done:
+            inner_done = True
+            drv.get_benchmarker()(lambda: add_one[(1, )](x, BLOCK=1024))
+        add_one[(1, )](x, BLOCK=1024, grf_mode="256")
+
+    drv.get_benchmarker()(run)
+    assert used[0] == "default"  # the inner benchmark
+    assert used[-1] == "256"  # the outer one
+    assert drv._benchmark_state.flush_grf_mode == "default"
+    assert drv._benchmark_state.launched_grf_modes is None

@@ -9,6 +9,7 @@ import ctypes
 import subprocess
 import sysconfig
 import tempfile
+import threading
 import warnings
 from pathlib import Path
 from functools import cached_property, lru_cache
@@ -763,8 +764,9 @@ class XPULauncher(object):
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
         active_driver = triton.runtime.driver.active
-        if active_driver.launched_grf_modes is not None:
-            active_driver.launched_grf_modes.append(_grf_mode_of(kernel_metadata))
+        launched_grf_modes = active_driver._benchmark_state.launched_grf_modes
+        if launched_grf_modes is not None:
+            launched_grf_modes.append(_grf_mode_of(kernel_metadata))
 
         def allocate_scratch(size, align, allocator):
             if size > 0:
@@ -831,13 +833,19 @@ def _grf_mode_of(metadata):
     return "default"
 
 
+class _BenchmarkState(threading.local):
+    """State of the autotune benchmarker, one copy per thread so that concurrent benchmarks do not share it."""
+    # GRF mode of the L2 flush kernel.
+    flush_grf_mode = "default"
+    # GRF modes of the kernels launched while the benchmark waits to learn the mode of its kernel, else None.
+    launched_grf_modes = None
+
+
 class XPUDriver(DriverBase):
 
     def __init__(self):
         self.launcher_cls = XPULauncher
-        # GRF mode of the L2 flush kernel, and the GRF modes of launched kernels while they are being recorded.
-        self._flush_grf_mode = "default"
-        self.launched_grf_modes = None
+        self._benchmark_state = _BenchmarkState()
         try:
             from torch._C import _xpu_getCurrentRawStream, _xpu_getDevice
             self.get_current_device = _xpu_getDevice
@@ -931,35 +939,38 @@ class XPUDriver(DriverBase):
         """Flush L2 in the GRF mode of the first timed kernel, so its runs pay no GRF-mode switch (#8465)."""
         from triton.testing import do_bench
 
-        self.launched_grf_modes = []
+        state = self._benchmark_state
+        saved = state.flush_grf_mode, state.launched_grf_modes  # a benchmark can run inside another one
+        state.launched_grf_modes = []
         try:
             return do_bench(fn, *args, **kwargs)
         finally:
-            self.launched_grf_modes = None
-            self._flush_grf_mode = "default"
+            state.flush_grf_mode, state.launched_grf_modes = saved
 
     def get_empty_cache_for_benchmark(self):
         import torch
 
-        if self.launched_grf_modes is not None:
+        state = self._benchmark_state
+        if state.launched_grf_modes is not None:
             # `do_bench` gets here once, after its first run of the kernel and before it estimates the run time.
-            launched, self.launched_grf_modes = self.launched_grf_modes, None
-            self._flush_grf_mode = launched[0] if launched else "default"
+            launched, state.launched_grf_modes = state.launched_grf_modes, None
+            state.flush_grf_mode = launched[0] if launched else "default"
 
         # We maintain a buffer of 256 MB that we clear
         # before each kernel call to make sure that the L2 cache
         # doesn't contain any input data before the run
         cache_size = 256 * 1024 * 1024
         cache = torch.empty(int(cache_size // 4), dtype=torch.int, device='xpu')
-        if self._flush_grf_mode != "default":
+        if state.flush_grf_mode != "default":
             # Compile the flush kernel now, so that its compile time does not end up in that estimate.
             self.clear_cache(cache)
         return cache
 
     def clear_cache(self, cache):
-        if self._flush_grf_mode == "default":
+        grf_mode = self._benchmark_state.flush_grf_mode
+        if grf_mode == "default":
             cache.zero_()
         else:
             block = 1024
             _zero_fill_kernel()[(triton.cdiv(cache.numel(), block), )](cache, cache.numel(), BLOCK=block,
-                                                                       grf_mode=self._flush_grf_mode)
+                                                                       grf_mode=grf_mode)
