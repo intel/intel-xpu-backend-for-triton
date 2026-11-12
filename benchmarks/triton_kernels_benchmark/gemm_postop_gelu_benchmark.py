@@ -20,7 +20,7 @@ kAlpha = tl.constexpr(math.sqrt(2.0 / math.pi))
 
 @triton.jit
 def tanh(x):
-    return tl.fma(2.0, tl.sigmoid(2 * x), -1.0)
+    return 2 * tl.sigmoid(2 * x) - 1
 
 
 @triton.jit
@@ -30,8 +30,7 @@ def gelu(x):
 
     .. _GeLU: https://arxiv.org/pdf/1606.08415.pdf
     """
-    half_x = 0.5 * x
-    return tl.fma(half_x, tanh(kAlpha * tl.fma(0.044715 * x * x, x, x)), half_x)
+    return 0.5 * x * (1 + tanh(kAlpha * (x + 0.044715 * x * x * x)))
 
 
 @triton.autotune(
