@@ -8,8 +8,8 @@
 // The decoded fp16 values (16 KB + 32 KB) fit in the 56 KB cap, so they are
 // staged and only fp16 -> fp32 is replayed per K tile. With
 // stage-decoded=false the fp8 values are staged and the decode is replayed per
-// K tile. Either way the K tile is 8, the largest that keeps a tile's operand
-// values within the pass's per-thread register budget.
+// K tile. Either way the K tile is 8, the smallest one: even that takes more
+// than the pass's 512-byte per-thread budget (768 bytes decoded, 640 as fp8).
 
 #blocked  = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 4], order = [0, 1]}>
@@ -430,5 +430,39 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
     %d1 = tt.dot %aw1, %bw1, %d0 {inputPrecision = 2 : i32, maxNumImpreciseAcc = 0 : i32}
          : tensor<64x128xf32, #dot0> * tensor<128x128xf32, #dot1> -> tensor<64x128xf32, #blocked>
     tt.return %d1 : tensor<64x128xf32, #blocked>
+  }
+}
+
+// -----
+
+// The staged element width, not the dot operand's, sets the K tile. A and B
+// are staged as f16 and cast to f32 after the local_load, so a K tile of 16
+// takes 4 x 16 + 16 elements per thread at 2 + 4 bytes, 480 bytes, within the
+// 512-byte budget. Counting the f32 operand width (4 + 4 bytes) would give 640
+// bytes and a tile of 8.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dot0    = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot1    = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @staged_width_sets_k_tile
+  // CHECK-DAG: ttg.local_alloc {{%[0-9]+}} : (tensor<32x256xf16
+  // CHECK-DAG: ttg.local_alloc {{%[0-9]+}} : (tensor<256x16xf16
+  // CHECK: ttg.local_load {{.*}} -> tensor<32x16xf16, #ttg.dot_op<{opIdx = 0
+  // CHECK: ttg.local_load {{.*}} -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1
+  // CHECK-COUNT-16: tt.dot {{.*}} : tensor<32x16xf32
+  // CHECK: tt.return
+  tt.func public @staged_width_sets_k_tile(%parg0: tensor<32x256x!tt.ptr<f16>, #blocked>,
+                                           %parg1: tensor<256x16x!tt.ptr<f16>, #blocked>) -> tensor<32x16xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x16xf32, #blocked>
+    %a = tt.load %parg0 : tensor<32x256x!tt.ptr<f16>, #blocked>
+    %b = tt.load %parg1 : tensor<256x16x!tt.ptr<f16>, #blocked>
+    %ac = ttg.convert_layout %a : tensor<32x256xf16, #blocked> -> tensor<32x256xf16, #dot0>
+    %bc = ttg.convert_layout %b : tensor<256x16xf16, #blocked> -> tensor<256x16xf16, #dot1>
+    %ae = arith.extf %ac : tensor<32x256xf16, #dot0> to tensor<32x256xf32, #dot0>
+    %be = arith.extf %bc : tensor<256x16xf16, #dot1> to tensor<256x16xf32, #dot1>
+    %r = tt.dot %ae, %be, %cst {inputPrecision = 2 : i32, maxNumImpreciseAcc = 0 : i32}
+         : tensor<32x256xf32, #dot0> * tensor<256x16xf32, #dot1> -> tensor<32x16xf32, #blocked>
+    tt.return %r : tensor<32x16xf32, #blocked>
   }
 }

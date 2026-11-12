@@ -29,16 +29,23 @@ namespace {
 // fully-unrolled K accumulations on a non-DPAS Intel GPU.
 constexpr unsigned kPressureThresholdBytes = 4096;
 
-// Conservative target post-decompose live-bytes per K-tile per thread. Used
-// to derive K_TILE adaptively rather than picking from a hardcoded set.
+// Conservative target post-decompose live-bytes per K-tile per thread, used
+// by the original K-tile rule (selectKTile). It no longer sets the K tile: a
+// dot is staged only if that rule finds a tile.
 constexpr unsigned kTargetBytesPerOp = 1024;
 
 // Per-thread bytes that the operand slices of one K tile may take (see
 // selectStagedKTile), and the smallest K tile the staged dots may use: they
-// are lowered to FMA, which has no kWidth constraint. Measured on BMG over
-// fp8, fp16, bf16 and fp32 FMA GEMM tiles, 512 was the fastest budget: 256
-// gained nothing more, while 2048 and up brought back the spills of the
-// original K tile.
+// are lowered to FMA, which has no kWidth constraint. The budget is an
+// empirical value, not a register count. It was tuned on BMG over fp8, fp16,
+// bf16 and fp32 FMA GEMM tiles: 512 was the fastest, 256 gained nothing more,
+// and 2048 and up brought back the spills of the original K tile. 512 was also
+// the fastest, or tied, with grf_mode 128 and 256 and with 16 threads per warp,
+// so the budget is not scaled with the register file per lane: that would
+// give 256 at 128 GRFs, no faster, and 1024 at 16 threads per warp, slower.
+// Only A and B are counted: the accumulator does not depend on the K tile, so
+// it cannot change the choice under a fixed budget. Other targets may need
+// another value.
 constexpr uint64_t kKTileBudgetBytes = 512;
 constexpr uint64_t kMinStagedKTile = 8;
 
@@ -377,10 +384,12 @@ static uint64_t kTileOperandBytes(tt::DotOp dotOp, const OperandChain &aChain,
 
 // The K tile of a staged dot: the largest power of 2 that divides K, is below
 // K and keeps the operand slices of one tile within kKTileBudgetBytes per
-// thread, down to kMinStagedKTile. The FMA lowering keeps a whole tile's
-// slices of A and B live in registers, so a larger tile spills. A decoded
-// operand takes more bytes per element than the fp8 one, so it gets a smaller
-// tile. Returns 0 if no tile of at least kMinStagedKTile fits K.
+// thread. A larger tile raises the register pressure of the tile's FMA
+// lowering; on BMG it spilled. Staging fp8 and replaying the decode counts the
+// fp8 and the decoded bytes, so staging the decoded value instead gets the
+// same or a larger tile, unless a cast is still replayed after it. If no tile
+// fits the budget, returns the smallest power of 2 of at least
+// kMinStagedKTile that divides K and is below K, or 0 if there is none.
 static uint64_t selectStagedKTile(tt::DotOp dotOp, const OperandChain &aChain,
                                   const OperandChain &bChain) {
   unsigned rank = cast<RankedTensorType>(dotOp.getA().getType()).getRank();
