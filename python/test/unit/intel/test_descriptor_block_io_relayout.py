@@ -167,14 +167,14 @@ def _row_sum_kernel_fn(out_ptr, x_ptr, R: tl.constexpr, C: tl.constexpr, ACC: tl
     tl.store(out_ptr + tl.arange(0, R), sums.to(out_ptr.dtype.element_ty))
 
 
-@pytest.mark.parametrize("launch", [{}, TUNED], ids=["default", "tuned"])
-def test_relayout_knob_off(launch, device, monkeypatch, tmp_path):
+def test_relayout_knob_off(device, monkeypatch, tmp_path):
+    # D=128 with the default launch and a bf16 output is relaid out with the knob on (test_relayout_correctness).
     _set_compile_env(monkeypatch, tmp_path, knob=False)
-    S, H, T, D = 16, 32, 1, 256
+    S, H, T, D = 16, 32, 1, 128
     x = torch.randn(T, H, S, D, device=device)
     m = torch.randn(T, H, S, device=device)
-    out = torch.empty(T, H, D, device=device)
-    k = triton.jit(_reduce_kernel_fn)[(T, H)](out, x, m, S, H, D=D, DP=D, S=S, **launch)
+    out = torch.empty(T, H, D, device=device, dtype=torch.bfloat16)
+    k = triton.jit(_reduce_kernel_fn)[(T, H)](out, x, m, S, H, D=D, DP=D, S=S)
     _assert_relaid_out(k, False, "knob off")
 
 
