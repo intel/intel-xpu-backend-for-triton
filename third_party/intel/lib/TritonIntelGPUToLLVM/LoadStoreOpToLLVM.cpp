@@ -53,6 +53,30 @@ static Value packedOffsetX(TritonLLVMOpBuilder &b, Value offsetX,
   return b.sdiv(offsetX, b.i32_val(numPackedVals));
 }
 
+static constexpr unsigned kCacheLineBytes = 64;
+
+/// Cache control for a 2D block store with rows of \p rowBytes, part of a
+/// work-group tile with rows of \p tileRowBytes (the whole tile, also where a
+/// mask cuts it at the tensor edge), stored by \p op. The module of \p op keeps
+/// the write-back attribute where the driver's default store policy bypasses L1
+/// and the module cannot hand data to another work-group (see
+/// ConvertTritonGPUToLLVM). There a row narrower than a line goes to L2 as a
+/// partial write. The rest of the line comes from the same tile, so writing
+/// back through L1 lets the two halves merge first.
+///
+/// Keep the default if the tile's rows are narrower than a line: the rest of
+/// each line then usually belongs to another work-group's tile. A tile edge
+/// that covers part of a line is still correct, it just merges less.
+static TritonGEN::StoreCacheControl
+get2DBlockStoreCacheControl(Operation *op, unsigned rowBytes,
+                            unsigned tileRowBytes) {
+  if (!mlir::LLVM::intel::hasModuleAttr(
+          op, TritonIntelGPUDialect::getStoreL1WriteBackAttrName()) ||
+      rowBytes >= kCacheLineBytes || tileRowBytes < kCacheLineBytes)
+    return TritonGEN::StoreCacheControl::DEFAULT;
+  return TritonGEN::StoreCacheControl::L1WB_L3WB;
+}
+
 /// Unpacked tensor descriptor fields: { shape[rank], stride[rank], base }.
 struct DescriptorFields {
   SmallVector<Value, 4> shapes;  // shapes[0..rank-1]
@@ -3738,6 +3762,10 @@ struct DescriptorStoreOpToBlockIOConversion
       }
     }
 
+    TritonGEN::StoreCacheControl cacheControl = get2DBlockStoreCacheControl(
+        op, tileWidth * packedElemSizeInBits / 8,
+        tensorType.getDimSize(colDim) * elemSizeInBits / 8);
+
     // --- Emit 2D block stores ---
     for (size_t valIdx = 0; valIdx < numElems; valIdx += numElemsPerStore) {
       unsigned registerIdx = regMapping.apply({{kRegister, valIdx}})[0].second;
@@ -3792,7 +3820,7 @@ struct DescriptorStoreOpToBlockIOConversion
           // offsetX to be in terms of packed elements.
           packedOffsetX(b, offsetX, numPackedVals, redirectNegCol), offsetY,
           packedElemSizeInBits, tileWidth, tileHeight,
-          /*v_blocks, only 1 supported*/ 1, storeVal);
+          /*v_blocks, only 1 supported*/ 1, storeVal, cacheControl);
 
       if (failed(newOp.verify())) {
         // Delete the op so that the verifier will not abort the pass
@@ -3983,6 +4011,16 @@ struct StoreOpToBlockIOConversion
                             {{kRegister, llEncoding->getInDimSize(kRegister)}},
                             /*requireSurjective=*/true);
 
+    // 2D block stores still ignore an explicit cache modifier, as before; only
+    // make sure write-back does not override it.
+    TritonGEN::StoreCacheControl cacheControl =
+        getCachePolicy(op.getCachePolicyAttr()).cacheModifier ==
+                CacheModifier::NONE
+            ? get2DBlockStoreCacheControl(
+                  op, tileWidth * packedElemSizeInBits / 8,
+                  tensorType.getDimSize(colDim) * elemSizeInBits / 8)
+            : TritonGEN::StoreCacheControl::DEFAULT;
+
     // Right now only support to stack the values into a vector in sequential
     // order.
     for (size_t valIdx = 0; valIdx < numElems; valIdx += numElemsPerStore) {
@@ -4055,7 +4093,7 @@ struct StoreOpToBlockIOConversion
           // offsetX to be in terms of packed elements.
           b.udiv(offsetX, b.i32_val(numPackedVals)), offsetY,
           packedElemSizeInBits, tileWidth, tileHeight,
-          /*v_blocks, only 1 supported*/ 1, storeVal);
+          /*v_blocks, only 1 supported*/ 1, storeVal, cacheControl);
 
       if (failed(newOp.verify())) {
         // delete the op so that the verifier will not abort the pass

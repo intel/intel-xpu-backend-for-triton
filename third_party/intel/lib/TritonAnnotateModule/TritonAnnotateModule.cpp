@@ -61,6 +61,10 @@ struct TritonAnnotateModule
     mod->setAttr(ttgi::TritonIntelGPUDialect::getTargetArchAttrName(),
                  builder.getStringAttr(targetArch));
 
+    if (storeL1WriteBack)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getStoreL1WriteBackAttrName(),
+                   builder.getUnitAttr());
+
     mod->setAttr(
         ttgi::TritonIntelGPUDialect::get2DBlockIOBaseAlignmentAttrName(),
         builder.getI32IntegerAttr(blockIOBaseAlignment));
