@@ -1,3 +1,4 @@
+import collections
 import io
 import re
 import shutil
@@ -17,7 +18,7 @@ from triton.backends.intel import extension_utils
 from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
 from triton.backends.compiler import GPUTarget
 from triton.backends.intel import compiler as intel_compiler
-from triton.backends.intel.driver import find_sycl_icpx, has_spirv_2d_block_io
+from triton.backends.intel.driver import _grf_mode_of, find_sycl_icpx, has_spirv_2d_block_io
 from triton.backends.intel.errors import IntelGPUError
 from triton.runtime.errors import OutOfResources
 
@@ -638,3 +639,21 @@ def test_benchmarker_warms_up_flush_before_estimate(device, monkeypatch, grf_mod
     monkeypatch.setattr(drv, "clear_cache", recording_clear_cache)
     drv.get_benchmarker()(run)
     assert events[:4] == ["run", "flush", "flush", "run"] if warm else events[:3] == ["run", "flush", "run"]
+
+
+@pytest.mark.parametrize("grf_mode, build_flags, expected", [
+    ("default", "", "default"),
+    ("default", " -cl-intel-256-GRF-per-thread", "256"),
+    ("default", " -cl-intel-512-GRF-per-thread", "512"),
+    ("auto", "", "default"),
+    ("auto", " -cl-intel-enable-auto-large-GRF-mode", "default"),
+    ("128", "", "128"),
+    ("160", "", "160"),
+    ("192", "", "192"),
+    ("256", "", "256"),
+    ("256", " -cl-intel-256-GRF-per-thread", "256"),
+    ("512", "", "512"),
+])
+def test_grf_mode_of(grf_mode, build_flags, expected):
+    metadata = collections.namedtuple("Metadata", ["grf_mode", "build_flags"])(grf_mode, build_flags)
+    assert _grf_mode_of(metadata) == expected
