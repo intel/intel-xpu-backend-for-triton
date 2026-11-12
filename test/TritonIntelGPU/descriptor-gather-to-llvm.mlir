@@ -22,7 +22,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // CHECK-LABEL: llvm.func spir_kernelcc @per_element
 // CHECK:     %[[ZERO:.*]] = llvm.mlir.zero : i16
 // CHECK:     %[[X64:.*]] = llvm.sext %{{.*}} : i16 to i64
-// CHECK:     %[[ROW_OK:.*]] = llvm.icmp "ult" %[[X64]], %{{.*}} : i64
+// COM: The shape is zero-extended, as in the pointer expansion, so LLVM keeps the check in i64.
+// CHECK-NEXT: %[[SHAPE32:.*]] = llvm.trunc %{{.*}} : i64 to i32
+// CHECK-NEXT: %[[SHAPE:.*]] = llvm.zext %[[SHAPE32]] : i32 to i64
+// CHECK-NEXT: %[[ROW_OK:.*]] = llvm.icmp "ult" %[[X64]], %[[SHAPE]] : i64
 // CHECK:     %[[COL_OK:.*]] = llvm.icmp "ult" %{{.*}}, %{{.*}} : i64
 // CHECK:     %[[PRED:.*]] = llvm.and %[[ROW_OK]], %[[COL_OK]] : i1
 // CHECK:     llvm.cond_br %[[PRED]], ^{{.*}}, ^{{.*}}(%[[ZERO]] : i16)
