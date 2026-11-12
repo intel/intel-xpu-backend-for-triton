@@ -3400,7 +3400,7 @@ def test_reduction_matches_loop(device, fresh_knobs):
 def test_f32_loop_preserves_snan_payload(device, fresh_knobs):
     _require_backend(device)
     if not is_cuda():
-        pytest.xfail("regression is specific to NVPTX fabs lowering")
+        pytest.skip("regression is specific to NVPTX fabs lowering")
 
     @triton.jit
     def sum_kernel(x_ptr, out_ptr, BLOCK: tl.constexpr):
