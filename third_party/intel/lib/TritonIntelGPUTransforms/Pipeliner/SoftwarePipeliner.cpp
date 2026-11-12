@@ -39,13 +39,14 @@ static bool preCondition(scf::ForOp forOp) {
   return true;
 }
 
-static void pipelineLoop(scf::ForOp forOp, int numStages, bool useBarrier) {
+static void pipelineLoop(scf::ForOp forOp, int numStages,
+                         const ttgi::PipelineTarget &target) {
   mlir::scf::PipeliningOption options;
   if (!preCondition(forOp))
     return;
 
   bool foundSchedule =
-      ttgi::preProcessLoopAndGetSchedule(forOp, numStages, options);
+      ttgi::preProcessLoopAndGetSchedule(forOp, numStages, target, options);
   if (!foundSchedule)
     return;
 
@@ -58,7 +59,7 @@ static void pipelineLoop(scf::ForOp forOp, int numStages, bool useBarrier) {
     return;
 
   scf::ForOp loop = (*newForOp);
-  if (useBarrier) {
+  if (target.useBarrier) {
     OpBuilder b(loop);
     Location loc = loop.getLoc();
     b.setInsertionPointToStart(loop.getBody());
@@ -89,8 +90,10 @@ struct IntelGPUPipelinePass
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
+    ttgi::PipelineTarget target{deviceArch, coreClockKhz, memClockMhz,
+                                useBarrier};
     for (scf::ForOp forOp : loops)
-      pipelineLoop(forOp, numStages, useBarrier);
+      pipelineLoop(forOp, numStages, target);
   }
 };
 } // anonymous namespace

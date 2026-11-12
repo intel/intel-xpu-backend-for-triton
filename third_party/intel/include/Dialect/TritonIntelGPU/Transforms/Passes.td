@@ -23,7 +23,10 @@ def TritonIntelGPUAccelerateMatmul
   let dependentDialects = [
     "mlir::triton::TritonDialect",
     "mlir::triton::gpu::intel::TritonIntelGPUDialect",
-    "mlir::arith::ArithDialect"
+    "mlir::arith::ArithDialect",
+    // DecomposeScaledBlocked emits `math.fma` to turn the +inf that the E8M0
+    // NaN encoding (byte 0xFF) decodes to into NaN.
+    "mlir::math::MathDialect"
   ];
 
   let options = [
@@ -78,8 +81,27 @@ def TritonIntelGPUStageLargeFMADotsViaSLM
     preserves global-memory coalescing and composes with software
     pipelining (which already stages SLM).
 
-    Pass is a no-op on DPAS-capable hardware (PVC, BMG, ARL-H Xe2).
+    On DPAS-capable hardware (PVC, BMG, ARL-H Xe2) the pass only applies to
+    dots that keep a `BlockedEncoding`, i.e. that are lowered to FMA (e.g.
+    fp32 dots with `inputPrecision = ieee`, fp64 dots, or fp8 dots without
+    DPAS support).
+
+    An fp8 operand that AccelerateMatmul decoded before its layout conversion
+    can be staged either as fp8, with the decode replayed per K tile in the
+    replicated dot operand layout, or already decoded, at twice the shared
+    memory. Dots whose operands fit 56 KB as they are are staged as before;
+    decoded operands, and operands beyond 56 KB, are staged while all the
+    dots staged in the function fit in the target's shared memory.
   }];
+
+  let options = [
+    Option<"slmSize", "slm-size", "unsigned", /*default*/"0",
+           "Shared local memory per work-group, in bytes; the pass leaves "
+           "8 KB of it for other passes. 0 means 64 KB">,
+    Option<"stageDecoded", "stage-decoded", "bool", /*default*/"true",
+           "Stage fp8 operands decoded before their layout conversion as "
+           "decoded values when they fit">
+  ];
 
   let dependentDialects = [
     "mlir::arith::ArithDialect",
@@ -249,6 +271,11 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
     Apply software pipelinining to loops containing `tt.dot` operations.
     The pass supports prefetching `tt.dot` operands. The `num-stages` argument controls
     the prefetching and distance (i.e. the number of iterations to prefetch in advance).
+    On a device for which the prefetch cost model has constants (`device-arch`) and
+    whose facts are given (`core-clock-khz`, `mem-clock-mhz`), the
+    prefetch of one dot operand is dropped when the model predicts that demand-loading
+    it is faster. The XPU backend passes those facts only when the `prefetch_cost_model`
+    option (default `TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL`, off) is set.
   }];
 
   let dependentDialects = ["mlir::arith::ArithDialect",
@@ -263,6 +290,12 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
            "number of pipeline stages">,
     Option<"useBarrier", "use-barrier", "bool", /*default*/"false",
            "generate barriers">,
+    Option<"deviceArch", "device-arch", "std::string", /*default*/"\"\"",
+           "device architecture, e.g. 'bmg' (empty if unknown)">,
+    Option<"coreClockKhz", "core-clock-khz", "unsigned", /*default*/"0",
+           "core clock in kHz (0 if unknown)">,
+    Option<"memClockMhz", "mem-clock-mhz", "unsigned", /*default*/"0",
+           "memory clock in MHz, as the device reports it (0 if unknown)">,
   ];
 }
 

@@ -56,6 +56,8 @@ class XPUOptions:
     sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
     dynamic_shared_memory: bool = knobs.intel.dynamic_shared_memory
     use_barrier: bool = False
+    # Opt-in (TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL when unset); a kernel option, so a triton.Config can autotune it.
+    prefetch_cost_model: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -335,6 +337,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # this so the downstream 64-byte alignment compensation is skipped.
         dev_prop['block_io_base_alignment'] = tgt_prop.get('block_io_base_alignment', 64)
         dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
+        # MHz from torch.xpu.get_device_capability(). A missing key (0) leaves the prefetch cost model inert,
+        # so loops keep every prefetch; kXe2Discrete is calibrated against the reported value (19000 on the B580).
+        dev_prop['memory_clock_rate'] = tgt_prop.get('memory_clock_rate') or 0
         dev_prop['is_lts'] = is_lts
         # Largest GRF mode the backend's automatic escalation will ever select
         # for this target; see `get_max_grf_mode`. A driver- or out-of-tree
@@ -379,6 +384,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
         if "in_loop_sink" not in args:
             args["in_loop_sink"] = knobs.intel.in_loop_sink
+        if "prefetch_cost_model" not in args:
+            args["prefetch_cost_model"] = knobs.intel.enable_prefetch_cost_model
         options = XPUOptions(**args)
 
         # Ground-truth probe of whichever side actually consumes this
@@ -440,16 +447,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def min_dot_size(device_props: dict):
-        execution_size = min(device_props["sub_group_sizes"])
 
         def get_min_dot_size(lhs_type, rhs_type):
-            lhs_type = lhs_type.scalar
-            rhs_type = rhs_type.scalar
-
-            # FMA path currently has accuracy errors for INT8 dots.
-            if lhs_type.is_int8() and rhs_type.is_int8():
-                return (1, execution_size, 32)
-
             # Fallback to use FMA if size configurations not supported/performant for DPAS.
             return (1, 1, 1)
 
@@ -599,7 +598,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             passes.common.add_canonicalizer(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm, opt.grf_mode)
-        intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm)
+        intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm, metadata["target"].arch.get("local_mem_size") or 0,
+                                                              True)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm, knobs.intel.descriptor_block_io_relayout)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_fold_fp_to_fp(pm)
@@ -608,7 +608,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if os.environ.get("TRITON_INTEL_ANNOTATE_LATENCIES", "0") == "1":
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
+        # Without device facts the pipeliner's prefetch cost model is inert and every prefetch is kept.
+        facts = ((cls.device_arch, properties['core_clock_rate'],
+                  properties['memory_clock_rate']) if opt.prefetch_cost_model else ("", 0, 0))
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier, *facts)
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode, not opt.in_loop_sink)

@@ -120,6 +120,13 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.block_io_runtime_row_limit";
     }
 
+    /// Get the name of the attribute marking a `ttig.2d_block_load_from_ptr`
+    /// whose `base_width` is a runtime column bound relative to the tensor's
+    /// first column, not the per-message tile width.
+    static constexpr llvm::StringRef getBlockIORuntimeColLimitAttrName() {
+      return "ttig.block_io_runtime_col_limit";
+    }
+
     /// Get the name of the attribute used to specify the target architecture. This
     /// attribute matches architecture in a target triple used for the resulting LLVM
     /// IR module.
