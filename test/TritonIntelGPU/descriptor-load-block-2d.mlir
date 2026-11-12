@@ -60,8 +60,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
     %c1_i64 = arith.constant 1 : i64
+    %c32_i64 = arith.constant 32 : i64
 
-    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <1x64x32xf16>
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c32_i64, %c1_i64] : <f16>, <1x64x32xf16>
     %load = tt.descriptor_load %desc[%c0_i32, %arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<1x64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return
   }
@@ -182,7 +183,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
   tt.func public @descriptor_load_no_2d_block_io_attr(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x32xf16>
-    %load = tt.descriptor_load %desc[%arg4, %arg5] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return
   }
 }
@@ -200,7 +201,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
   tt.func public @descriptor_load_blocked_no_block_io(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x32xf16>
-    %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
     tt.return
   }
 }
@@ -218,7 +219,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
   tt.func public @descriptor_load_non_unit_inner_stride(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
     %c2_i64 = arith.constant 2 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c2_i64] : <f16>, <64x32xf16>
-    %load = tt.descriptor_load %desc[%arg4, %arg5] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return
   }
 }
@@ -235,7 +236,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
   // CHECK-NOT: triton_gen.2Dblockload
   tt.func public @descriptor_load_dynamic_inner_stride(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i64, %arg5: i32, %arg6: i32) {
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %arg4] : <f16>, <64x32xf16>
-    %load = tt.descriptor_load %desc[%arg5, %arg6] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    %load = tt.descriptor_load %desc[%arg5, %arg6] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return
   }
 }
@@ -462,7 +463,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
   tt.func public @descriptor_load_rank3_column_major(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64, %arg6: i32, %arg7: i32, %arg8: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <2x64x32xf16>
-    %load = tt.descriptor_load %desc[%arg6, %arg7, %arg8] {ttig.block_io = "column_major"} : !tt.tensordesc<2x64x32xf16> -> tensor<2x32x64xf16, #blocked3d>
+    %load = tt.descriptor_load %desc[%arg6, %arg7, %arg8] {ttig.block_io = "column_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<2x64x32xf16> -> tensor<2x32x64xf16, #blocked3d>
     tt.return
   }
 }

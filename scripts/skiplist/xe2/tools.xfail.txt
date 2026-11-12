@@ -1,0 +1,5 @@
+# Requires Hopper, Blackwell, CDNA3+, or CDNA5
+python/test/unit/tools/test_triton_to_gluon.py::test_triton_to_gluon_dot_minimal
+# Requires Hopper, Blackwell, CDNA4, or CDNA5
+python/test/unit/tools/test_triton_to_gluon.py::test_simple_matmul
+python/test/unit/tools/test_triton_to_gluon.py::test_triton_to_gluon_dot_scaled_minimum_scale

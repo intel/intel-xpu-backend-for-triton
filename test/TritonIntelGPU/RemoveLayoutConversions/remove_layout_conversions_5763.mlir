@@ -19,7 +19,7 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 32 : i32
     // COM: by the load operation is backward propagated, and the resulting
     // COM: layout should be used by tt.assert.
     %5 = ttg.convert_layout %4 : tensor<1x2048x!tt.ptr<f16>, #blocked> -> tensor<1x2048x!tt.ptr<f16>, #blocked1>
-    %6 = tt.load %5 evictionPolicy = evict_last : tensor<1x2048x!tt.ptr<f16>, #blocked1>
+    %6 = tt.load %5 {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<1x2048x!tt.ptr<f16>, #blocked1>
     tt.print " " {hex = false, isSigned = array<i32: 0>} : %6 : tensor<1x2048xf16, #blocked1>
     tt.return
   }

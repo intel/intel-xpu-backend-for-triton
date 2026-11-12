@@ -4,9 +4,10 @@ Tests the FP8E5M2 -> BF16 converter across all 256 possible fp8 byte values
 and asserts bit-exact equality with the ground truth derived from the current
 converter implementation (Fp8E5M2_to_Bf16 in ElementwiseOpToLLVM.cpp).
 
-Note: The current converter does NOT preserve IEEE NaN or infinity encodings
-for bytes 0x7C-0x7F and 0xFC-0xFF — it returns finite values. This is the
-existing behavior and is preserved bit-exactly.
+The reserved fp8e5m2 encodings now propagate to IEEE special values instead of
+decoding to finite bf16: bytes 0x7C/0xFC (exponent all-ones, mantissa 0) map to
++-Inf (0x7F80/0xFF80), and bytes 0x7D-0x7F / 0xFD-0xFF (mantissa != 0) map to a
+quiet NaN (its sign and payload are not checked).
 """
 import torch
 import pytest
@@ -31,8 +32,8 @@ EXPECTED_BF16_BITS = [
     0x43c0, 0x43e0,  # 0x50-0x5f
     0x4400, 0x4420, 0x4440, 0x4460, 0x4480, 0x44a0, 0x44c0, 0x44e0, 0x4500, 0x4520, 0x4540, 0x4560, 0x4580, 0x45a0,
     0x45c0, 0x45e0,  # 0x60-0x6f
-    0x4600, 0x4620, 0x4640, 0x4660, 0x4680, 0x46a0, 0x46c0, 0x46e0, 0x4700, 0x4720, 0x4740, 0x4760, 0x4780, 0x47a0,
-    0x47c0, 0x47e0,  # 0x70-0x7f
+    0x4600, 0x4620, 0x4640, 0x4660, 0x4680, 0x46a0, 0x46c0, 0x46e0, 0x4700, 0x4720, 0x4740, 0x4760, 0x7f80, 0x7fc0,
+    0x7fc0, 0x7fc0,  # 0x70-0x7f (0x7c=+Inf, 0x7d-0x7f=NaN)
     0x8000, 0xb780, 0xb800, 0xb840, 0xb880, 0xb8a0, 0xb8c0, 0xb8e0, 0xb900, 0xb920, 0xb940, 0xb960, 0xb980, 0xb9a0,
     0xb9c0, 0xb9e0,  # 0x80-0x8f
     0xba00, 0xba20, 0xba40, 0xba60, 0xba80, 0xbaa0, 0xbac0, 0xbae0, 0xbb00, 0xbb20, 0xbb40, 0xbb60, 0xbb80, 0xbba0,
@@ -47,9 +48,15 @@ EXPECTED_BF16_BITS = [
     0xc3c0, 0xc3e0,  # 0xd0-0xdf
     0xc400, 0xc420, 0xc440, 0xc460, 0xc480, 0xc4a0, 0xc4c0, 0xc4e0, 0xc500, 0xc520, 0xc540, 0xc560, 0xc580, 0xc5a0,
     0xc5c0, 0xc5e0,  # 0xe0-0xef
-    0xc600, 0xc620, 0xc640, 0xc660, 0xc680, 0xc6a0, 0xc6c0, 0xc6e0, 0xc700, 0xc720, 0xc740, 0xc760, 0xc780, 0xc7a0,
-    0xc7c0, 0xc7e0,  # 0xf0-0xff
+    0xc600, 0xc620, 0xc640, 0xc660, 0xc680, 0xc6a0, 0xc6c0, 0xc6e0, 0xc700, 0xc720, 0xc740, 0xc760, 0xff80, 0xffc0,
+    0xffc0, 0xffc0,  # 0xf0-0xff (0xfc=-Inf, 0xfd-0xff=NaN)
 ]
+
+# The reserved NaN encodings, which are only checked for decoding to a quiet NaN.
+RESERVED_NAN_BYTES = (0x7D, 0x7E, 0x7F, 0xFD, 0xFE, 0xFF)
+
+# The quiet bit (top mantissa bit) of a bf16 NaN.
+BF16_QUIET_BIT = 0x0040
 
 
 @triton.jit
@@ -68,9 +75,9 @@ def test_fp8e5m2_to_bf16_bit_exact(device):
     Validates bit-exact equality with the ground truth from the current
     converter implementation (Fp8E5M2_to_Bf16 in ElementwiseOpToLLVM.cpp).
 
-    This includes the subnormal table (bytes 0x01-0x03, 0x81-0x83), infinity
-    encodings (0x7C, 0xFC), and NaN encodings (0x7D-0x7F, 0xFD-0xFF) which the
-    current converter collapses to finite values.
+    This includes the subnormal table (bytes 0x01-0x03, 0x81-0x83), the infinity
+    encodings (0x7C, 0xFC) which map to +-Inf, and the NaN encodings
+    (0x7D-0x7F, 0xFD-0xFF) which map to a quiet NaN.
     """
     SIZE = 256
     BLOCK_SIZE = 256
@@ -83,23 +90,26 @@ def test_fp8e5m2_to_bf16_bit_exact(device):
     # Launch kernel
     type_convert[(SIZE // BLOCK_SIZE, )](src_fp8, dst, BLOCK_SIZE)
 
-    # Primary assertion: bit-exact equality for all 256 bytes
+    # Primary assertion: bit-exact equality for all bytes except the reserved
+    # NaN bytes, which only have to decode to a quiet NaN
     expected_uint16 = torch.tensor(EXPECTED_BF16_BITS, dtype=torch.uint16, device=device)
     dst_uint16 = dst.view(torch.uint16)
 
-    if not torch.equal(dst_uint16, expected_uint16):
-        # Detailed failure report
-        mismatch_mask = dst_uint16 != expected_uint16
-        mismatch_indices = torch.nonzero(mismatch_mask, as_tuple=False).squeeze(1)
-        failures = []
-        for idx in mismatch_indices[:20]:  # Report up to 20 failures
-            byte = idx.item()
-            expected = expected_uint16[byte].item()
-            actual = dst_uint16[byte].item()
+    is_nan = torch.isnan(dst).cpu().tolist()
+    failures = []
+    for byte, actual in enumerate(dst_uint16.cpu().tolist()):
+        if byte in RESERVED_NAN_BYTES:
+            if not (is_nan[byte] and actual & BF16_QUIET_BIT):
+                failures.append(f"byte=0x{byte:02x} expected=quiet NaN actual=0x{actual:04x}")
+            continue
+        expected = EXPECTED_BF16_BITS[byte]
+        if actual != expected:
             failures.append(f"byte=0x{byte:02x} expected=0x{expected:04x} actual=0x{actual:04x}")
-        msg = f"{len(mismatch_indices)} byte(s) mismatch:\n  " + "\n  ".join(failures)
-        if len(mismatch_indices) > 20:
-            msg += f"\n  ... and {len(mismatch_indices) - 20} more"
+    if failures:
+        # Report up to 20 failures
+        msg = f"{len(failures)} byte(s) mismatch:\n  " + "\n  ".join(failures[:20])
+        if len(failures) > 20:
+            msg += f"\n  ... and {len(failures) - 20} more"
         pytest.fail(msg)
 
     # Subnormal-table sub-asserts: validate each subnormal byte individually
@@ -112,24 +122,12 @@ def test_fp8e5m2_to_bf16_bit_exact(device):
         assert actual == expected, \
             f"Subnormal byte 0x{byte:02x}: expected=0x{expected:04x} actual=0x{actual:04x}"
 
-    # NaN sub-asserts: E5M2 has multiple NaN encodings (0x7D-0x7F, 0xFD-0xFF).
-    # The current converter does NOT preserve IEEE NaN — it produces finite values.
-    # We assert against the actual converter output, not the ideal IEEE NaN.
-    nan_bytes = [0x7D, 0x7E, 0x7F, 0xFD, 0xFE, 0xFF]
-    for byte in nan_bytes:
-        expected = expected_uint16[byte].item()
+    # Infinity sub-asserts: E5M2 inf encodings (0x7C, 0xFC) decode to +-Inf.
+    inf_bytes = {0x7C: 0x7F80, 0xFC: 0xFF80}
+    for byte, want in inf_bytes.items():
         actual = dst_uint16[byte].item()
-        assert actual == expected, \
-            f"NaN byte 0x{byte:02x}: expected=0x{expected:04x} actual=0x{actual:04x}"
-
-    # Infinity sub-asserts: E5M2 has inf encodings (0x7C, 0xFC).
-    # The current converter does NOT preserve IEEE infinity — it produces finite values.
-    inf_bytes = [0x7C, 0xFC]
-    for byte in inf_bytes:
-        expected = expected_uint16[byte].item()
-        actual = dst_uint16[byte].item()
-        assert actual == expected, \
-            f"Inf byte 0x{byte:02x}: expected=0x{expected:04x} actual=0x{actual:04x}"
+        assert actual == want, \
+            f"Inf byte 0x{byte:02x}: expected=0x{want:04x} actual=0x{actual:04x}"
 
     # Sanity check: validate a few normal values explicitly
     normal_samples = [0x04, 0x40, 0x60, 0x84, 0xC0, 0xE0]

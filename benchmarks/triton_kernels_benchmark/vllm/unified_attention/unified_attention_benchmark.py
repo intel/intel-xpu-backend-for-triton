@@ -15,9 +15,11 @@ from itertools import product
 from typing import Optional
 
 import torch
+import triton
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark.benchmark_testing import BENCHMARKING_CONFIG
+from triton_kernels_benchmark.benchmark_testing import BENCHMARKING_CONFIG, DEVICE
+from triton_kernels_benchmark.vllm import import_xpu_only
 
 # This supports both current upstream and pinned version
 try:
@@ -28,7 +30,9 @@ except ImportError as e:
     raise ImportError(
         "Could not import unified_attention from vLLM. Please ensure vLLM is installed and accessible.") from e
 from vllm.platforms import current_platform
-from vllm_xpu_kernels.flash_attn_interface import flash_attn_varlen_func as sycl_tla_attention
+
+# SYCL-TLA attention ships with vllm-xpu-kernels, so it is only available on XPU.
+sycl_tla_attention = import_xpu_only('vllm_xpu_kernels.flash_attn_interface.flash_attn_varlen_func')
 
 float8_info = torch.finfo(current_platform.fp8_dtype())
 
@@ -80,7 +84,7 @@ def ref_paged_attn(
         if soft_cap is not None and soft_cap > 0:
             attn = soft_cap * torch.tanh(attn / soft_cap)
         attn.masked_fill_(mask, float("-inf"))
-        attn = torch.softmax(attn, dim=-1)  # expected peak memory usage is here
+        torch.softmax(attn, dim=-1, out=attn)
         attn = attn.to(v.dtype)  # cast in a second step to reduce peak memory usage
         out = torch.einsum("hqk,khd->qhd", attn, v)
 
@@ -184,37 +188,47 @@ def is_enough_memory(x_val, safety_factor=0.80):
 # Input shapes should have M >= 1, N >= 16 and K >= 32
 MMAP_BLOCK_SIZES = [64] if IS_FP8 else [16, 64]
 NUM_BLOCKS = [32768, 2048]
-SEQ_LENS = [
+# Heavy seq_lens skip the block_size=16 cells to keep CI runtime bounded.
+# block_size=64 still exercises both num_blocks values (2048 and 32768).
+SEQ_LENS_LIGHT = [
     # One 4k input prefill
     [(4096, 4096)],
-    # Chunked prefill: 4 batches
-    [(512, 512), (512, 512), (512, 512), (512, 512)],
-    # End of chunked prefill and some decoding
-    [(1, 1328), (5, 178), (129, 463)],
     # Pure decoding, 8 batches
-    [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]]
+    [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]],
+    # Long-context pure decoding
+    [(1, k) for k in [7168, 8192, 12288, 16384]],
 ]
+SEQ_LENS_HEAVY = [
+    # One 7k input prefill
+    [(7168, 7168)],
+    # Chunked prefill: 4 batches of 2k tokens
+    [(2048, 2048)] * 4,
+    # Chunked prefill: 2 batches of 8k tokens
+    [(8192, 8192)] * 2,
+    # High-concurrency continuous batching: 248 decode steps with kv_len mix
+    # + 8 small (256-token) prefill chunks
+    [(1, k)
+     for k in ([1513, 4100, 530, 123, 4803, 434, 3015, 34, 256, 1024, 768, 2048, 192, 384, 1280, 96] * 16)[:248]] +
+    [(256, 256)] * 8,
+]
+SEQ_LENS = SEQ_LENS_LIGHT + SEQ_LENS_HEAVY
 # Models: (q_heads, k_heads, head_size, qdtype, sliding_window, soft_cap)
 # sliding_window: None = full attention, int = sliding window size.
 # soft_cap: None = disabled, float = soft_cap value.
 # Models that use both attention types appear twice (one entry each).
 MODELS_BF16 = [
-    # llama3.1-8B - full attention
+    # llama3.1-8B / Qwen3-4B-thinking - full attention
     (32, 8, 128, None, None, None),
-    # llama3.1-8B - just to test soft caps kernel path, real model doesn't use it, it's relevant for gemma2
-    (32, 8, 128, None, None, 50.0),
     # llama3.3-70B - full attention
     (64, 8, 128, None, None, None),
     # llama4 Scout - sliding window attention (window size 8192)
     (64, 8, 128, None, 8192, None),
+    # Qwen2-7B - full attention
+    (28, 4, 128, None, None, None),
     # Qwen2.5-235B - full attention
     (64, 4, 128, None, None, None),
     # Qwen2.5-235B - sliding window attention (window size 256)
     (64, 4, 128, None, 256, None),
-    # gpt-oss-120b - full attention
-    # (64, 8, 64, None, None, None),
-    # gpt-oss-120b - sliding window attention (window size 128)
-    # (64, 8, 64, None, 128, None),
 ]
 
 MODELS_FP8 = [
@@ -226,10 +240,14 @@ MODELS_FP8 = [
 
 
 def _build_attention_configs(model_configs):
+    heavy = {id(s) for s in SEQ_LENS_HEAVY}
     configs = []
     for model_config in model_configs:
         *base_config, sliding_window, soft_cap = model_config
         for seq_lens, num_blocks, block_size in product(SEQ_LENS, NUM_BLOCKS, MMAP_BLOCK_SIZES):
+            # Heavy seq_lens only run with block_size=64 to bound CI time.
+            if id(seq_lens) in heavy and block_size != 64:
+                continue
             x_val = (*base_config, seq_lens, sliding_window, soft_cap, num_blocks, block_size)
             qdtype = x_val[3]
             if qdtype is not None and qdtype.itemsize < 2 and x_val[-1] < 32:
@@ -264,7 +282,7 @@ def get_unified_attention_benchmark(
         # Skip triton providers if interpreter is used because if fails
         del supported_providers['triton']
 
-    if not is_fp8:
+    if DEVICE == 'xpu' and not is_fp8:
         supported_providers['sycl-tla'] = 'sycl-tla'
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -282,24 +300,21 @@ def get_unified_attention_benchmark(
             line_names=list(providers.values()),
             styles=[('green', '-'), ('blue', '--'), ('orange', ':')],
             ylabel=['GB/s', 'TFlops'],
-            plot_name='unified-attention-performance' + ('-td' if is_td_patched else ''),
+            plot_name='unified-attention-performance' + ('-fp8' if is_fp8 else '') + ('-td' if is_td_patched else ''),
             args={},
         ))
     def benchmark(q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size,
                   provider):
         print("Config:", q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks,
               block_size, provider)
+        shape = (f'[{q_heads}-{k_heads}-{head_size}-{qdtype}-{seq_lens}-{sliding_window}-{soft_cap}-'
+                 f'{num_blocks}-{block_size}]')
         dtype = torch.bfloat16
         torch.manual_seed(20)
         n_warmup = 100
         quantiles = [0.5, 0.0, 1.0]
 
-        torch.set_default_device("xpu")
-        # Workaround for #6759 (BMG OOM after Agama 1222 -> 1249). Pairs with
-        # PYTORCH_ALLOC_CONF=expandable_segments:True from run_benchmark.sh: the
-        # explicit fraction call materializes the virtual segment via the init
-        # path that does not trigger UR_RESULT_ERROR_DEVICE_LOST.
-        torch.xpu.set_per_process_memory_fraction(1.0)
+        torch.set_default_device(DEVICE)
 
         num_seqs = len(seq_lens)
         query_lens = [x[0] for x in seq_lens]
@@ -362,6 +377,20 @@ def get_unified_attention_benchmark(
                 k_descale = torch.rand(scale_shape, dtype=torch.float32)
                 v_descale = torch.rand(scale_shape, dtype=torch.float32)
 
+            # Set the 3D kernel specific arguments to allow the kernel wrapper
+            # to optionally select the 3D kernel based on its analysis.
+            seq_threshold_3D = 32
+            num_par_softmax_segments = 16
+            softmax_segm_output = torch.empty(seq_threshold_3D,
+                                              maybe_quantized_query.shape[1], num_par_softmax_segments,
+                                              triton.next_power_of_2(head_size), dtype=torch.float32,
+                                              device=maybe_quantized_query.device)
+            softmax_segm_max = torch.empty(seq_threshold_3D, maybe_quantized_query.shape[1], num_par_softmax_segments,
+                                           dtype=torch.float32, device=maybe_quantized_query.device)
+            softmax_segm_expsum = torch.empty(seq_threshold_3D, maybe_quantized_query.shape[1],
+                                              num_par_softmax_segments, dtype=torch.float32,
+                                              device=maybe_quantized_query.device)
+
             def triton_fn():
                 unified_attention(
                     q=maybe_quantized_query,
@@ -380,6 +409,11 @@ def get_unified_attention_benchmark(
                     q_descale=q_descale,
                     k_descale=k_descale,
                     v_descale=v_descale,
+                    seq_threshold_3D=seq_threshold_3D,
+                    num_par_softmax_segments=num_par_softmax_segments,
+                    softmax_segm_output=softmax_segm_output,
+                    softmax_segm_max=softmax_segm_max,
+                    softmax_segm_expsum=softmax_segm_expsum,
                     use_td=is_td_patched,
                 )
                 return output
@@ -388,7 +422,7 @@ def get_unified_attention_benchmark(
             if qdtype is not None:
                 atol, rtol = 3 / 8 + 1e-6, 1.5e-1
             benchmark_suite.assert_close(triton_fn, lambda: expected_output, atol=atol, rtol=rtol,
-                                         err_msg='triton to torch')
+                                         err_msg=f'{provider} to torch {shape}')
             del expected_output
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
@@ -420,7 +454,7 @@ def get_unified_attention_benchmark(
                 )
 
             benchmark_suite.assert_close(sycl_tla_fn, lambda: expected_output, atol=2.5e-2, rtol=1e-2,
-                                         err_msg='sycl-tla to torch')
+                                         err_msg=f'{provider} to torch {shape}')
             del expected_output
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
@@ -461,6 +495,16 @@ def get_unified_attention_benchmark(
         return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
     return benchmark
+
+
+def get_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False, is_td_patched=None):
+    if is_td_patched is None:
+        is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
+    return get_unified_attention_benchmark(
+        providers_filter=providers_filter,
+        is_fp8=is_fp8,
+        is_td_patched=is_td_patched,
+    )
 
 
 if __name__ == '__main__':

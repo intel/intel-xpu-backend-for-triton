@@ -1,0 +1,48 @@
+# A770 can't do a single allocation >4GB; not applicable on this HW.
+python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[src-dp_to_ep]
+python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[src-ep_to_dp]
+python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[dst-dp_to_ep]
+python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[dst-ep_to_dp]
+python/triton_kernels/tests/test_roofline.py::test_get_memset_tbps
+
+# Only supported on CUDA
+python/triton_kernels/tests/test_tensor.py::test_layout_conversion_compile_warmup
+python/triton_kernels/tests/test_tensor_details/test_layout_blackwell.py::test_act_scale_convert_layout_ragged_padding
+python/triton_kernels/tests/test_tensor_details/test_layout_blackwell.py::test_act_scale_convert_layout_roundtrip_2d_without_ragged_metadata
+python/triton_kernels/tests/test_tensor_details/test_layout_blackwell.py::test_act_scale_roundtrip_2d_without_ragged_metadata
+python/triton_kernels/tests/test_tensor_details/test_layout_blackwell.py::test_act_scale_roundtrip_batched
+python/triton_kernels/tests/test_tensor_details/test_layout_blackwell.py::test_act_scale_roundtrip_ragged
+python/triton_kernels/tests/test_tensor_details/test_layout_blackwell.py::test_act_scale_zero_sized_ragged_roundtrip
+python/triton_kernels/tests/test_tensor_details/test_layout_blackwell.py::test_blackwell_fp4_shuffle_peak_allocation
+python/triton_kernels/tests/test_tensor_details/test_layout_blackwell.py::test_scale_convert_layout_dtype
+python/triton_kernels/tests/test_tensor_details/test_layout_blackwell.py::test_scale_convert_layout_fake
+python/triton_kernels/tests/test_tensor_details/test_layout_blackwell.py::test_scale_convert_layout_peak_allocation
+python/triton_kernels/tests/test_tensor_details/test_layout_blackwell.py::test_scale_convert_layout_strided_storage
+python/triton_kernels/tests/test_tensor_details/test_layout_blackwell.py::test_scale_zero_sized_roundtrip
+python/triton_kernels/tests/test_tensor_details/test_layout_blackwell.py::test_value_zero_sized_roundtrip
+# Requires Hopper or newer
+python/triton_kernels/tests/test_matmul.py::test_gather_inactive_scales
+# Requires Hopper or newer for persistent matmul
+python/triton_kernels/tests/test_matmul.py::test_gather_inactive_rows
+# requires Blackwell
+python/triton_kernels/tests/test_matmul.py::test_k_ragged_tiled_values
+python/triton_kernels/tests/test_matmul.py::test_nvfp4_acts_mxfp4_weights
+python/triton_kernels/tests/test_matmul.py::test_nvfp4_acts_mxfp4_weights_nonpersistent
+python/triton_kernels/tests/test_matmul.py::test_nvfp4_requantization_matches_mxfp8
+# requires Blackwell or newer
+python/triton_kernels/tests/test_matmul.py::test_gathered_ragged_act_scale_indexing
+python/triton_kernels/tests/test_matmul.py::test_k_ragged_mxfp8_act_scale_swizzling
+# requires CUDA
+python/triton_kernels/tests/test_matmul_details/test_opt_flags_nvidia.py::test_matmul_blackwell_scale_small_n
+python/triton_kernels/tests/test_matmul_details/test_opt_flags_nvidia.py::test_matmul_blackwell_shuffled_mxfp4_weight
+python/triton_kernels/tests/test_matmul_details/test_opt_flags_nvidia.py::test_matmul_clc
+python/triton_kernels/tests/test_matmul_details/test_opt_flags_nvidia.py::test_matmul_clc_rejects_ragged_m_grid
+python/triton_kernels/tests/test_matmul_details/test_opt_flags_nvidia.py::test_matmul_hopper_mxfp4_rhs_packed_n_padding
+python/triton_kernels/tests/test_matmul_details/test_opt_flags_nvidia.py::test_matmul_hopper_mxfp4_rhs_scale_padding_is_masked
+# requires Hopper
+python/triton_kernels/tests/test_matmul_details/test_opt_flags_nvidia.py::test_hopper_mxfp4_compiled_occupancy_budget
+# requires Hopper or newer
+python/triton_kernels/tests/test_matmul.py::test_persistent_matmul_residual_scale_rounding
+python/triton_kernels/tests/test_matmul.py::test_persistent_matmul_scale_bias_rounding
+# rowidxs path requires CUDA
+python/triton_kernels/tests/test_reduce.py::test_unpadded_batch_size_rowidxs_subtile

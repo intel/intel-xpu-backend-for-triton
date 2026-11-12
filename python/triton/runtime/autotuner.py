@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import atexit
 import builtins
+import copy
 import time
 import inspect
 import hashlib
 import json
 from functools import cached_property
-from typing import Dict, Tuple, List, Optional
+from typing import Any, Dict, Tuple, List, Optional
 
 from .. import knobs
 from .jit import KernelInterface, JITFunction
@@ -14,6 +16,20 @@ from .errors import OutOfResources, PTXASError, AutotunerError
 from .driver import driver
 from .cache import get_cache_manager, triton_key
 from triton._C.libtriton import get_cache_invalidating_env_vars
+
+_warmup_dispatcher = None
+
+
+def _get_warmup_dispatcher(workers: int):
+    global _warmup_dispatcher
+    if _warmup_dispatcher is None:
+        from .._compile_warmup_pool import ProcessPoolWarmupDispatcher
+
+        _warmup_dispatcher = ProcessPoolWarmupDispatcher(max_workers=workers, trace_directory=None,
+                                                         phase="autotune-warmup")
+        # To print TRITON_CI_WARMUP_POOL diagnostic messages
+        atexit.register(_warmup_dispatcher.finish)
+    return _warmup_dispatcher
 
 
 class Autotuner(KernelInterface):
@@ -45,6 +61,21 @@ class Autotuner(KernelInterface):
         self.restore_value = []
         if restore_value is not None:
             self.restore_value = list(restore_value)
+
+        # `key`, `reset_to_zero` and `restore_value` are all documented as lists of
+        # argument names. A name that is not one is silently dropped from the tuning
+        # key by `run()`, so a typo makes the kernel tune once and never re-tune.
+        for param, names in (("key", self.keys), ("reset_to_zero", self.reset_to_zero), ("restore_value",
+                                                                                         self.restore_value)):
+            unknown = [name for name in names if name not in self.arg_names]
+            if unknown:
+                raise ValueError(f"{param} contains names that are not kernel arguments: "
+                                 f"{', '.join(unknown)}. Valid argument names are: {', '.join(self.arg_names)}.")
+
+        # Populated by the default pre_hook when `restore_value` is set. Initialized here
+        # because a user-supplied pre_hook replaces that default while the default
+        # post_hook, which reads this, stays installed.
+        self.restore_copies: Dict[str, Any] = {}
 
         # Hook to reset or restore for required tensors
         self.pre_hook = lambda kwargs, reset_only=False: 0
@@ -172,6 +203,41 @@ class Autotuner(KernelInterface):
                 print(f"Autotuning failed with {e}")
             return [float("inf"), float("inf"), float("inf")]
 
+    def _parallel_warmup(self, args, kwargs, configs):
+        """Pre-compile `configs` across a process pool so the serial benchmarking
+        loop below hits a warm disk cache instead of compiling each config in turn.
+
+        Not thread-safe: `dispatch()` temporarily overrides the process-global
+        `knobs.runtime.jit_cache_hook` to capture compilation instead of running it.
+        A kernel launched from another thread while that override is active will
+        silently skip compilation/launch. Safe as long as no other thread launches
+        a Triton kernel concurrently with autotuning."""
+        workers = knobs.autotuning.warmup_workers
+        if workers <= 0:
+            return
+        dispatcher = _get_warmup_dispatcher(workers)
+        grid = kwargs["grid"]
+
+        # `ProcessPoolWarmupDispatcher` handles `warmup` on it's own
+        rest = {k: v for k, v in kwargs.items() if k not in ("grid", "warmup")}
+
+        kernel = copy.copy(self)
+        # There is no point in redoing it in subprocesses.
+        kernel.prune_configs = lambda kwargs: configs
+
+        from .._compile_warmup_pool import _UnsupportedPreloadError
+
+        # FIXME: it's not good to touch internal fields - update dispatcher API.
+        pending_before = len(dispatcher._pending)
+        dispatcher.dispatch(*args, kernel=kernel, grid=grid, test=None, **rest)
+        for future in dispatcher._pending[pending_before:]:
+            try:
+                future.result()
+            except _UnsupportedPreloadError:
+                # Mark the future so `finish()`'s later drain (at process exit)
+                # doesn't raise this same, already-handled failure a second time.
+                dispatcher.tolerate_failure(future)
+
     def check_disk_cache(self, tuning_key, configs, bench_fn):
         # We can't serialize prehooks, so just give up and run the benchmarks.
         if not tuning_key or any(cfg.pre_hook for cfg in configs):
@@ -229,33 +295,40 @@ class Autotuner(KernelInterface):
                 used_cached_result = False
                 pruned_configs = self.prune_configs(kwargs)
 
-                def benchmark():
-                    bench_start = time.time()
-                    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
-                    bench_end = time.time()
-                    self.bench_time = bench_end - bench_start
-                    self.cache[key] = builtins.min(timings, key=timings.get)
-                    full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
-                    self.pre_hook(full_nargs, reset_only=True)
-                    self.configs_timings = timings
-
-                if self.cache_results:
-                    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                if len(pruned_configs) == 1:
+                    # Match single-config autotune behavior: no benchmarking is needed.
+                    self.cache[key] = pruned_configs[0]
+                    used_cached_result = True
                 else:
-                    benchmark()
 
-                if knobs.autotuning.listener is not None:
-                    jit_fn = self.fn
-                    while not isinstance(jit_fn, JITFunction):
-                        jit_fn = jit_fn.fn
-                    knobs.autotuning.listener(
-                        fn=jit_fn,
-                        key=key,
-                        best_config=self.cache[key],
-                        configs_timings=self.configs_timings,
-                        duration=getattr(self, 'bench_time', None) if not used_cached_result else None,
-                        cache_hit=used_cached_result,
-                    )
+                    def benchmark():
+                        bench_start = time.time()
+                        self._parallel_warmup(args, kwargs, pruned_configs)
+                        timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                        bench_end = time.time()
+                        self.bench_time = bench_end - bench_start
+                        self.cache[key] = builtins.min(timings, key=timings.get)
+                        full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
+                        self.pre_hook(full_nargs, reset_only=True)
+                        self.configs_timings = timings
+
+                    if self.cache_results:
+                        used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                    else:
+                        benchmark()
+
+                    if knobs.autotuning.listener is not None:
+                        jit_fn = self.fn
+                        while not inspect.isfunction(jit_fn.fn):
+                            jit_fn = jit_fn.fn
+                        knobs.autotuning.listener(
+                            fn=jit_fn,
+                            key=key,
+                            best_config=self.cache[key],
+                            configs_timings=self.configs_timings,
+                            duration=getattr(self, 'bench_time', None) if not used_cached_result else None,
+                            cache_hit=used_cached_result,
+                        )
 
             config = self.cache[key]
         else:
@@ -285,7 +358,11 @@ class Autotuner(KernelInterface):
         if self.perf_model:
             top_k = self.configs_top_k
             if isinstance(top_k, float) and top_k <= 1.0:
-                top_k = int(len(self.configs) * top_k)
+                # Keep at least one config: a small fraction over a small config
+                # set rounds down to zero, which would prune everything and crash
+                # the later min() on an empty set. early_config_prune already
+                # guarantees at least one config; mirror that here.
+                top_k = max(1, int(len(pruned_configs) * top_k))
             elif not isinstance(top_k, int):
                 # Slice index must be an integer
                 raise TypeError("Error while pruning configs, top_k must be either 1) a float <= 1.0 or 2) an int")
@@ -378,6 +455,7 @@ class Config:
         res.append(f"num_ctas: {self.num_ctas}")
         res.append(f"num_stages: {self.num_stages}")
         res.append(f"maxnreg: {self.maxnreg}")
+        res.append(f"ir_override: {self.ir_override}")
         return ", ".join(res)
 
     def __hash__(self):
@@ -421,6 +499,15 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     If the environment variable :code:`TRITON_PRINT_AUTOTUNING` is set to
     :code:`"1"`, Triton will print a message to stdout after autotuning each
     kernel, including the time spent autotuning and the best configuration.
+
+    If the environment variable :code:`TRITON_AUTOTUNE_WARMUP_WORKERS` is set
+    to a positive integer, Triton compiles all of a kernel's pruned configs in
+    a shared process pool of that many workers before benchmarking them, so
+    IR generation for different configs happens in parallel instead of
+    serially. The pool is created once and reused across every autotuned
+    kernel/shape for the life of the process. Benchmarking (timing each
+    config on the GPU) still runs serially afterward. This mode requires the
+    :code:`cloudpickle` package to be installed (:code:`pip install cloudpickle`).
 
     :param configs: a list of :code:`triton.Config` objects
     :type configs: list[triton.Config]
@@ -491,7 +578,7 @@ def heuristics(values):
         def kernel(x_ptr, x_size, BLOCK_SIZE: tl.constexpr):
             ...
     :param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
-                   each such function takes a list of positional arguments as input.
+                   each such function takes a dict of all the arguments passed to the kernel, keyed by argument name, as input.
     :type values: dict[str, Callable[[dict[str, Any]], Any]]
     """
 

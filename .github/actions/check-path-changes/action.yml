@@ -1,5 +1,5 @@
 name: check-path-changes
-description: Check if specified paths have changed in a pull request
+description: Check if specified paths have changed relative to the base branch
 inputs:
   patterns:
     description: Regex pattern to match changed file paths (uses grep -E)
@@ -15,7 +15,7 @@ runs:
       id: check
       shell: bash
       run: |
-        CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -E '${{ inputs.patterns }}' || true)
+        CHANGED=$(git diff --name-only "origin/${{ github.base_ref || 'main' }}...HEAD" | grep -E '${{ inputs.patterns }}' || true)
         if [ -n "$CHANGED" ]; then
           echo "changed=true" >> $GITHUB_OUTPUT
           echo "Changed files matching pattern:"

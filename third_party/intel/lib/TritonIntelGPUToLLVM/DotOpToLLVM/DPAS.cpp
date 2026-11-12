@@ -5,9 +5,11 @@
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <numeric>
 #include <optional>
 
 using namespace mlir;
@@ -95,16 +97,36 @@ public:
     Type aTy, bTy, cTy, dTy;
     std::tie(dTy, cTy, aTy, bTy) = getDPASOperandsType<DPASEngineType>(
         dpasType, op.getContext(), dpasEncoding);
-    ValueTable ha = getValuesFromDotOperandLayoutStruct(
-        loadedA, repBatch, repM, repK,
-        typeConverter->convertType(ATensorTy.getElementType()),
-        DpasEncodingAttr::OpIdx::OperandA);
-    ValueTable hb = getValuesFromDotOperandLayoutStruct(
-        loadedB, repBatch, repN, repK,
-        typeConverter->convertType(BTensorTy.getElementType()),
-        DpasEncodingAttr::OpIdx::OperandB);
+    // An fp8 operand that is extended to fp16 for DPAS (see
+    // decomposeMixedModeDotOp) is converted here, one DPAS operand at a time,
+    // instead of in full by the `tt.fp_to_fp` lowering ahead of the dot.
+    std::optional<LazyFp8Operand> lazyA, lazyB;
+    if constexpr (std::is_same<OpTy, DotOp>::value) {
+      lazyA = getLazyFp8Operand(A, loadedA, repBatch, repM, repK,
+                                DpasEncodingAttr::OpIdx::OperandA);
+      lazyB = getLazyFp8Operand(B, loadedB, repBatch, repN, repK,
+                                DpasEncodingAttr::OpIdx::OperandB);
+    }
+    ValueTable ha =
+        lazyA ? ValueTable()
+              : getValuesFromDotOperandLayoutStruct(
+                    loadedA, ATensorTy, repBatch, repM, repK,
+                    typeConverter->convertType(ATensorTy.getElementType()),
+                    DpasEncodingAttr::OpIdx::OperandA);
+    ValueTable hb =
+        lazyB ? ValueTable()
+              : getValuesFromDotOperandLayoutStruct(
+                    loadedB, BTensorTy, repBatch, repN, repK,
+                    typeConverter->convertType(BTensorTy.getElementType()),
+                    DpasEncodingAttr::OpIdx::OperandB);
+    auto getA = [&](unsigned b, unsigned m, unsigned k) {
+      return lazyA ? lazyA->get({b, m, k}, rewriter, loc) : ha.at({b, m, k});
+    };
+    auto getB = [&](unsigned b, unsigned n, unsigned k) {
+      return lazyB ? lazyB->get({b, n, k}, rewriter, loc) : hb.at({b, n, k});
+    };
     ValueTable fc = getValuesFromDotOperandLayoutStruct(
-        loadedC, repBatch, repM, repN,
+        loadedC, CTensorTy, repBatch, repM, repN,
         typeConverter->convertType(CTensorTy.getElementType()),
         DpasEncodingAttr::OpIdx::OperandC);
 
@@ -114,14 +136,14 @@ public:
       if (scaleAVal) {
         scaleA = getScaleValuesFromDotOperandLayoutStruct(
             scaleAVal, repBatch, repM, repK, 3 /*opIdx*/,
-            ATensorTy.getElementType().getIntOrFloatBitWidth() == 16);
+            getIntOrFloatOrPtrBitWidth(ATensorTy.getElementType()) == 16);
       }
 
       auto scaleBVal = adaptor.getBScale();
       if (scaleBVal) {
         scaleB = getScaleValuesFromDotOperandLayoutStruct(
             scaleBVal, repBatch, repN, repK, 4 /*opIdx*/,
-            BTensorTy.getElementType().getIntOrFloatBitWidth() == 16);
+            getIntOrFloatOrPtrBitWidth(BTensorTy.getElementType()) == 16);
       }
     }
 
@@ -160,8 +182,8 @@ public:
 
     auto generateDPASOp = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
       auto tb = TritonLLVMOpBuilder(loc, rewriter);
-      Value valA = ha.at({b, m, k});
-      Value valB = hb.at({b, n, k});
+      Value valA = getA(b, m, k);
+      Value valB = getB(b, n, k);
       Value valc = fc.at({b, m, n});
 
       TritonGEN::PrecisionTypeAttr pA =
@@ -191,14 +213,18 @@ public:
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
     unsigned rank = repCluster.size();
 
+    // The DPAS calls in order, as (b, m, n, k).
+    SmallVector<std::array<unsigned, 4>> dpasOrder;
     auto innerLoop = [&](int b, int k, int outer, unsigned repNumM,
                          unsigned repNumN, unsigned repInner,
                          bool reverseLoop = false) {
       auto body = [&](int b, int k, int outer, int inner) {
         if (repNumM > repNumN)
-          generateDPASOp(b, inner, outer, k);
+          dpasOrder.push_back(
+              {unsigned(b), unsigned(inner), unsigned(outer), unsigned(k)});
         else
-          generateDPASOp(b, outer, inner, k);
+          dpasOrder.push_back(
+              {unsigned(b), unsigned(outer), unsigned(inner), unsigned(k)});
       };
 
       if (reverseLoop) {
@@ -228,15 +254,105 @@ public:
           innerLoop(b, k, outer, repNumM, repNumN, repInner, reverseLoop);
         }
 
-    Value res = composeValuesToDotOperandLayoutStruct(fc, repBatch, repM, repN,
-                                                      resElemTy);
+    // A converted operand is created one DPAS call ahead of its first use, so
+    // that its conversion overlaps with that call. Right before its own call,
+    // each call waits for its conversion; further ahead, the converted
+    // operands of more calls are live at once, and the GEMMs closest to the
+    // register limit spill again.
+    for (size_t i = 0; i < dpasOrder.size(); ++i) {
+      for (size_t j = i; j < std::min(i + 2, dpasOrder.size()); ++j) {
+        auto [b, m, n, k] = dpasOrder[j];
+        getA(b, m, k);
+        getB(b, n, k);
+      }
+      auto [b, m, n, k] = dpasOrder[i];
+      generateDPASOp(b, m, n, k);
+    }
+
+    Value res = composeValuesToDotOperandLayoutStruct(fc, DTensorTy, repBatch,
+                                                      repM, repN, resElemTy);
 
     rewriter.replaceOp(op, res);
+    for (std::optional<LazyFp8Operand> *lazy : {&lazyA, &lazyB})
+      if (*lazy && (*lazy)->cast->use_empty())
+        rewriter.eraseOp((*lazy)->cast);
 
     return success();
   }
 
 private:
+  /// An fp8 DPAS operand whose fp8 -> fp16 conversion is created on demand,
+  /// one DPAS operand (a run of consecutive elements) at a time.
+  struct LazyFp8Operand {
+    triton::intel::Fp8ToFp16Lowering lowering;
+    // The cast that stands for the conversion; erased once the dot is lowered.
+    Operation *cast;
+    // Range [first, first + count) of the elements of each DPAS operand.
+    std::map<std::array<unsigned, 3>, std::pair<unsigned, unsigned>> ranges;
+    ValueTable converted;
+
+    Value get(std::array<unsigned, 3> key, ConversionPatternRewriter &rewriter,
+              Location loc) {
+      if (auto it = converted.find(key); it != converted.end())
+        return it->second;
+      auto [first, count] = ranges.at(key);
+      SmallVector<unsigned> indices(count);
+      std::iota(indices.begin(), indices.end(), first);
+      SmallVector<Value> elems = lowering.convert(indices, rewriter);
+      Value val = elems[0];
+      if (count != 1) {
+        auto tb = TritonLLVMOpBuilder(loc, rewriter);
+        VectorType vecTy = vec_ty(f16_ty, count);
+        val = LLVM::UndefOp::create(rewriter, loc, vecTy);
+        for (unsigned i = 0; i < count; ++i)
+          val = tb.insert_element(vecTy, val, elems[i], tb.i32_val(i));
+      }
+      return converted[key] = val;
+    }
+  };
+
+  /// Returns the fp8 source of `operand` if the dot converts it itself (see
+  /// isDPASOperandConvertedByDot). `lowered` is the operand's lowered value:
+  /// the cast of the fp8 source that the `tt.fp_to_fp` lowering left in place
+  /// of the conversion.
+  std::optional<LazyFp8Operand>
+  getLazyFp8Operand(Value operand, Value lowered, int64_t batch, int64_t outer,
+                    int64_t inner, DpasEncodingAttr::OpIdx opIdx) const {
+    auto cvt = operand.getDefiningOp<FpToFpOp>();
+    if (!cvt || !triton::intel::isDPASOperandConvertedByDot(cvt))
+      return std::nullopt;
+    // The `tt.fp_to_fp` lowering emitted no conversion for `cvt`, so this must
+    // not fail from here on.
+    auto cast = lowered.getDefiningOp<UnrealizedConversionCastOp>();
+    assert(cast && cast->getNumOperands() == 1 &&
+           isa<LLVM::LLVMStructType>(cast->getOperand(0).getType()) &&
+           "expected the cast of the lowered fp8 operand");
+    Value llSrc = cast->getOperand(0);
+    std::optional<triton::intel::Fp8ToFp16Lowering> lowering =
+        triton::intel::Fp8ToFp16Lowering::get(cvt, llSrc, rewriter);
+    assert(lowering && "expected an fp8 -> fp16 conversion");
+
+    // The element order of getValuesFromDotOperandLayoutStruct.
+    ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+    size_t rank = repCluster.size();
+    unsigned repClusterOuter = opIdx == DpasEncodingAttr::OpIdx::OperandA
+                                   ? repCluster[rank - 2]
+                                   : repCluster[rank - 1];
+    size_t numElemsPerOperand =
+        lowering->size() / ((batch * outer * inner) * repClusterOuter);
+    LazyFp8Operand lazy{std::move(*lowering), cast, {}, {}};
+    unsigned offset = 0;
+    for (unsigned b = 0; b < batch; ++b)
+      for (int i = 0; i < outer; ++i)
+        for (int j = 0; j < inner; ++j)
+          for (unsigned repOuter = 0; repOuter < repClusterOuter; ++repOuter) {
+            lazy.ranges[{b, unsigned(i * repClusterOuter + repOuter),
+                         unsigned(j)}] = {offset, numElemsPerOperand};
+            offset += numElemsPerOperand;
+          }
+    return lazy;
+  }
+
   std::tuple<Type, Type, Type, Type> static getDPASOperandsType(
       ttgi::DPASEngineTypeXe2 dpasType, MLIRContext *ctx,
       DpasEncodingAttr layout) {
@@ -406,6 +522,7 @@ private:
   }
 
   Value composeValuesToDotOperandLayoutStruct(const ValueTable &vals,
+                                              RankedTensorType tensorTy,
                                               int64_t dimBatch, int64_t dimRow,
                                               int64_t dimCol,
                                               Type elemTy) const {
@@ -435,16 +552,16 @@ private:
     assert(!elems.empty() &&
            "unexpected empty result in composing the DPAS result.");
 
-    Type structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(elems.size(), elemTy));
-    return packLLElements(loc, typeConverter, elems, rewriter, structTy);
+    SmallVector<Value> resultVals(elems.begin(), elems.end());
+    return packTensorElements(loc, typeConverter, resultVals, rewriter,
+                              tensorTy);
   }
 
-  ValueTable
-  getValuesFromDotOperandLayoutStruct(Value val, int64_t batch, int64_t outer,
-                                      int64_t inner, Type elemTy,
-                                      DpasEncodingAttr::OpIdx opIdx) const {
-    SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
+  ValueTable getValuesFromDotOperandLayoutStruct(
+      Value val, RankedTensorType tensorTy, int64_t batch, int64_t outer,
+      int64_t inner, Type elemTy, DpasEncodingAttr::OpIdx opIdx) const {
+    SmallVector<Value> elems =
+        unpackTensorElements(loc, val, rewriter, tensorTy);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     size_t rank = repCluster.size();
     unsigned repClusterOuter = 0u;
@@ -635,6 +752,81 @@ private:
 };
 
 } // namespace
+
+namespace mlir::triton::intel {
+
+bool isDPASOperandConvertedByDot(FpToFpOp op) {
+  if (tools::getBoolEnv("TRITON_INTEL_DISABLE_LAZY_FP8_DPAS_OPERANDS"))
+    return false;
+  // A scalar conversion (e.g. of a loaded scalar) is never a dot operand.
+  auto srcTy = dyn_cast<RankedTensorType>(op.getSrc().getType());
+  auto dstTy = dyn_cast<RankedTensorType>(op.getType());
+  if (!srcTy || !dstTy ||
+      !isa<Float8E4M3FNType, Float8E5M2Type>(srcTy.getElementType()) ||
+      !dstTy.getElementType().isF16() || op.getRounding() || !op->hasOneUse())
+    return false;
+  // A single use as A or B of a dot lowered to DPAS (see DotOpToLLVM.cpp), in
+  // the same block: a conversion hoisted out of a loop (e.g. of the Q operand
+  // of attention) must stay there, not be redone in every iteration.
+  OpOperand &use = *op->use_begin();
+  auto dot = dyn_cast<DotOp>(use.getOwner());
+  if (!dot || dot->getBlock() != op->getBlock() || use.getOperandNumber() > 1 ||
+      !isa<DpasEncodingAttr>(dot.getType().getEncoding()) ||
+      gpu::getShapePerCTA(dot.getA().getType())[1] == 1)
+    return false;
+  auto enc = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  auto dpas = enc ? dyn_cast<DpasEncodingAttr>(enc.getParent()) : nullptr;
+  if (!dpas || dpas != dot.getType().getEncoding() || dstTy.getRank() != 2)
+    return false;
+  // The lowered operand must hold every element once (no register broadcast),
+  // and each DPAS operand must be a multiple of 4 elements, so that the
+  // converter's groups of elements start where they do when the whole operand
+  // is converted.
+  if (gpu::getUniqueElemsPerThread(srcTy) != gpu::getTotalElemsPerThread(srcTy))
+    return false;
+  auto opIdx = DpasEncodingAttr::OpIdx(enc.getOpIdx());
+  SmallVector<int64_t> reps = dpas.getDPASRepetitions(dstTy.getShape(), opIdx);
+  ArrayRef<unsigned> repCluster = dpas.getRepCluster();
+  int64_t repClusterOuter = opIdx == DpasEncodingAttr::OpIdx::OperandA
+                                ? repCluster[0]
+                                : repCluster[1];
+  int64_t numOperands = reps[0] * reps[1] * reps[2] * repClusterOuter;
+  int64_t totalElems = gpu::getTotalElemsPerThread(srcTy);
+  if (numOperands <= 0 || totalElems % numOperands != 0 ||
+      (totalElems / numOperands) % 4 != 0)
+    return false;
+  // Only for a dot with at least 4 DPAS calls per K slice: with fewer, there
+  // is too little DPAS work to overlap a conversion with, and each call waits
+  // for the conversion of its operands.
+  auto aTy = cast<RankedTensorType>(dot.getA().getType());
+  auto bTy = cast<RankedTensorType>(dot.getB().getType());
+  int64_t dpasPerKSlice =
+      dpas.getDPASRepetitions(aTy.getShape(),
+                              DpasEncodingAttr::OpIdx::OperandA)[1] *
+      repCluster[0] *
+      dpas.getDPASRepetitions(bTy.getShape(),
+                              DpasEncodingAttr::OpIdx::OperandB)[2] *
+      repCluster[1];
+  if (dpasPerKSlice < 4)
+    return false;
+  // Only for a dot whose operands and accumulator take at least half of the
+  // registers of a lane in 256-GRF mode: there, converting all of an operand up
+  // front spills, while a dot well within the registers runs faster with the
+  // conversion up front. With 4 DPAS calls per K slice and an fp32
+  // accumulator, this only rejects dots with K < 64, such as the P * V dot of
+  // decode attention (BLOCK_M = 16, BLOCK_N = 32).
+  constexpr int64_t minBytesPerLane = 512;
+  auto bytesPerLane = [](Value v) {
+    auto ty = cast<RankedTensorType>(v.getType());
+    return int64_t(gpu::getTotalElemsPerThread(ty)) *
+           ty.getElementTypeBitWidth() / 8;
+  };
+  return bytesPerLane(dot.getA()) + bytesPerLane(dot.getB()) +
+             bytesPerLane(dot.getC()) >=
+         minBytesPerLane;
+}
+
+} // namespace mlir::triton::intel
 
 namespace fma_details {
 template <typename OpTy>

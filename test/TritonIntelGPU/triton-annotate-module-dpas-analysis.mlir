@@ -111,3 +111,73 @@ module {
     tt.return
   }
 }
+
+// -----
+
+// Test that fp8 dots with a bf16 accumulator, which use fp32-accumulator DPAS without fp8 DPAS, get the DPAS warp size
+// CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.min_sg_size = 16{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
+module {
+  tt.func @kernel_fp8_bf16_acc_dot(%arg0: tensor<128x128x!tt.ptr<bf16>>) {
+    %a = arith.constant dense<1.00e+00> : tensor<128x64xf8E5M2>
+    %b = arith.constant dense<2.00e+00> : tensor<64x128xf8E5M2>
+    %c = arith.constant dense<3.00e+00> : tensor<128x128xbf16>
+    %d = tt.dot %a, %b, %c : tensor<128x64xf8E5M2> * tensor<64x128xf8E5M2> -> tensor<128x128xbf16>
+    tt.store %arg0, %d : tensor<128x128x!tt.ptr<bf16>>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.min_sg_size = 16{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
+module {
+  tt.func @kernel_mixed_fp8_bf16_acc_dot(%arg0: tensor<128x128x!tt.ptr<bf16>>) {
+    %a = arith.constant dense<1.00e+00> : tensor<128x64xf8E4M3FN>
+    %b = arith.constant dense<2.00e+00> : tensor<64x128xf8E5M2>
+    %c = arith.constant dense<3.00e+00> : tensor<128x128xbf16>
+    %d = tt.dot %a, %b, %c : tensor<128x64xf8E4M3FN> * tensor<64x128xf8E5M2> -> tensor<128x128xbf16>
+    tt.store %arg0, %d : tensor<128x128x!tt.ptr<bf16>>
+    tt.return
+  }
+}
+
+// -----
+
+// Test that mixed fp8 dots with an fp32 accumulator, which use fp16 DPAS without fp8 DPAS, get the DPAS warp size
+// CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.min_sg_size = 16{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
+module {
+  tt.func @kernel_mixed_fp8_f32_acc_dot(%arg0: tensor<128x128x!tt.ptr<f32>>) {
+    %a = arith.constant dense<1.00e+00> : tensor<128x64xf8E4M3FN>
+    %b = arith.constant dense<2.00e+00> : tensor<64x128xf8E5M2>
+    %c = arith.constant dense<3.00e+00> : tensor<128x128xf32>
+    %d = tt.dot %a, %b, %c : tensor<128x64xf8E4M3FN> * tensor<64x128xf8E5M2> -> tensor<128x128xf32>
+    tt.store %arg0, %d : tensor<128x128x!tt.ptr<f32>>
+    tt.return
+  }
+}
+
+// -----
+
+// Test that dot_scaled with e2m1 operands packed as i8 gets the DPAS warp size
+// CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.min_sg_size = 16{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
+module {
+  tt.func @kernel_dot_scaled_e2m1_i8(%a: tensor<128x64xi8>, %scale: tensor<128x4xi8>, %b: tensor<128x128xbf16>, %arg0: tensor<128x128x!tt.ptr<f32>>) {
+    %c = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+    %d = tt.dot_scaled %a scale %scale, %b, %c lhs = e2m1 rhs = bf16 {fastMath = false} : tensor<128x64xi8>, tensor<128x4xi8> * tensor<128x128xbf16> -> tensor<128x128xf32>
+    tt.store %arg0, %d : tensor<128x128x!tt.ptr<f32>>
+    tt.return
+  }
+}
+
+// -----
+
+// Test that dot_scaled with e2m1 operands packed as !tt.fp4e2m1x2 gets the DPAS warp size, like i8
+// CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.min_sg_size = 16{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
+module {
+  tt.func @kernel_dot_scaled_e2m1_fp4x2(%a: tensor<128x64x!tt.fp4e2m1x2>, %scale: tensor<128x4xi8>, %b: tensor<128x128xbf16>, %arg0: tensor<128x128x!tt.ptr<f32>>) {
+    %c = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+    %d = tt.dot_scaled %a scale %scale, %b, %c lhs = e2m1 rhs = bf16 {fastMath = false} : tensor<128x64x!tt.fp4e2m1x2>, tensor<128x4xi8> * tensor<128x128xbf16> -> tensor<128x128xf32>
+    tt.store %arg0, %d : tensor<128x128x!tt.ptr<f32>>
+    tt.return
+  }
+}

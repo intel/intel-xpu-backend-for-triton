@@ -17,12 +17,17 @@ import torch
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_MODULE
+from triton_kernels_benchmark.vllm import import_xpu_only
 
 from vllm.model_executor.layers.fused_moe.experts.fused_batched_moe import invoke_moe_batched_triton_kernel
 
 # Import utility functions from vLLM tests
 from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
 from tests.kernels.quant_utils import native_batched_masked_quant_matmul
+
+# The SYCL-TLA grouped GEMM ships with vllm-xpu-kernels, so it is only available on XPU.
+sycl_tla_grouped_gemm = import_xpu_only('vllm_xpu_kernels.fused_moe_interface.cutlass_grouped_gemm_xe2')
 
 # Benchmark shapes for batched MoE
 # (E: num_experts, M: max_tokens_per_expert, K: hidden_dim, N: intermediate_dim, fp8, block_quant)
@@ -126,6 +131,9 @@ def get_batched_mm_benchmark(
         # pytorch is very slow with fp8 case, for (8, 64, 1024, 2048) case it has ~0.15 TFlops vs 1.5 for triton
         del supported_providers['pytorch']
 
+    if DEVICE == 'xpu' and not is_fp8:
+        supported_providers['sycl-tla'] = 'sycl-tla'
+
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
     configs = MM_CONFIGS_FP8 if is_fp8 else MM_CONFIGS_BF16
 
@@ -138,12 +146,13 @@ def get_batched_mm_benchmark(
             line_names=list(providers.values()),
             styles=[('green', '-'), ('blue', '--'), ('red', ':')],
             ylabel=['GB/s', 'TFlops'],
-            plot_name='moe-gemm-performance' + ('-td' if is_td_patched else ''),
+            plot_name='moe-gemm-performance' + ('-fp8' if is_fp8 else '') + ('-td' if is_td_patched else ''),
             args={},
         ))
     def benchmark(num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider):
         torch.manual_seed(20)
         n_warmup = 600
+        shape = f'[{num_experts}-{max_tokens_per_expert}-{K}-{N}-{fp8}-{block_quant}]'
 
         dtype = torch.bfloat16
         use_fp8_w8a8 = fp8
@@ -152,7 +161,7 @@ def get_batched_mm_benchmark(
         block_shape = (128, 128) if block_quant else None
 
         # Create random number of expert tokens
-        num_expert_tokens = torch.randint(low=0, high=max_tokens_per_expert + 1, size=(num_experts, ), device='xpu',
+        num_expert_tokens = torch.randint(low=0, high=max_tokens_per_expert + 1, size=(num_experts, ), device=DEVICE,
                                           dtype=torch.int32)
         out_shape = (num_experts, max_tokens_per_expert, N)
 
@@ -183,11 +192,11 @@ def get_batched_mm_benchmark(
             del A, B
         quantiles = [0.5, 0.0, 1.0]
 
-        C = torch.zeros(out_shape, device='xpu', dtype=dtype)
+        C = torch.zeros(out_shape, device=DEVICE, dtype=dtype)
         compute_tl_dtype = {torch.float16: tl.float16, torch.bfloat16: tl.bfloat16, torch.float32: tl.float32}[C.dtype]
         rtol = 6e-2 if dtype == torch.bfloat16 else 1e-2
         atol = 6e-2 if dtype == torch.bfloat16 else 1e-2
-        ref = torch.zeros(out_shape, device='xpu', dtype=dtype)
+        ref = torch.zeros(out_shape, device=DEVICE, dtype=dtype)
 
         def torch_fn():
             native_batched_masked_quant_matmul(A_q, B_q, ref, num_expert_tokens, A_scale, B_scale, block_shape,
@@ -204,6 +213,7 @@ def get_batched_mm_benchmark(
             )
 
         elif provider.startswith('triton'):
+            os.environ['VLLM_TRITON_USE_TD'] = '1' if is_td_patched else '0'
 
             def triton_fn():
                 invoke_moe_batched_triton_kernel(
@@ -226,9 +236,41 @@ def get_batched_mm_benchmark(
                 return C
 
             # Verify correctness against reference
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol, err_msg='triton to torch')
+            benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol,
+                                         err_msg=f'{provider} to torch {shape}')
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 triton_fn,
+                n_warmup=n_warmup,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
+        elif provider == 'sycl-tla':
+            counts = num_expert_tokens.tolist()
+
+            # Free batched-format tensors unused by the grouped path, then empty_cache():
+            # del alone keeps them reserved, so input_B_grouped stacks on top and OOMs BMG.
+            del B, B_q, B_scale, C, ref
+            DEVICE_MODULE.empty_cache()
+
+            input_B_grouped = torch.empty((num_experts, K, N), device=DEVICE, dtype=dtype)
+            input_B_grouped.normal_().div_(15)
+            total_tokens = sum(counts)
+            ref_grouped = torch.cat([A_q[e, :counts[e], :] @ input_B_grouped[e] for e in range(num_experts)], dim=0)
+            output_sycl = torch.empty((total_tokens, N), device=DEVICE, dtype=dtype)
+
+            # Drop per-expert padding inside the timed region so this compaction is
+            # measured with the GEMM, matching Triton's in-kernel masking.
+            def sycl_tla_fn():
+                input_A_grouped = torch.cat([A_q[e, :counts[e], :] for e in range(num_experts)], dim=0).contiguous()
+                sycl_tla_grouped_gemm(input_A_grouped, input_B_grouped, scales=None, bias=None, output=output_sycl,
+                                      num_rows_per_expert=num_expert_tokens, n=N, k=K, num_experts=num_experts)
+                return output_sycl
+
+            benchmark_suite.assert_close(sycl_tla_fn, lambda: ref_grouped, atol=atol, rtol=rtol,
+                                         err_msg=f'{provider} to torch {shape}')
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                sycl_tla_fn,
                 n_warmup=n_warmup,
                 n_repeat=10,
                 quantiles=quantiles,
@@ -263,6 +305,16 @@ def get_batched_mm_benchmark(
         return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
     return benchmark
+
+
+def get_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False, is_td_patched=None):
+    if is_td_patched is None:
+        is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
+    return get_batched_mm_benchmark(
+        providers_filter=providers_filter,
+        is_fp8=is_fp8,
+        is_td_patched=is_td_patched,
+    )
 
 
 if __name__ == '__main__':

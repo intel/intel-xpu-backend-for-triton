@@ -25,22 +25,23 @@ on:
 permissions: read-all
 
 env:
-  PYTHON_VERSION: '3.10'
+  PYTHON_VERSION: '3.11'
   TRITON_TEST_CMD: scripts/test-triton.sh --skip-pytorch-install
 
 jobs:
   tests:
     name: Tests
+    timeout-minutes: 480
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on:
       - rolling
       - runner-0.0.22
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -60,6 +61,7 @@ jobs:
           curl -sSLO --retry 10 https://raw.githubusercontent.com/pytorch/pytorch/$(<.github/pins/pytorch.txt)/.github/scripts/generate_binary_build_matrix.py
           sed -i 's/^\(\s*\)validate_nccl_dep_consistency(arch_version)/\1pass/' generate_binary_build_matrix.py
           sed -i 's/^\(\s*\)validate_cudnn_version_consistency(arch_version)/\1pass/' generate_binary_build_matrix.py
+          sed -i 's/^validate_runtime_release_table_consistency()/pass/' generate_binary_build_matrix.py
           python -c "from generate_binary_build_matrix import PYTORCH_EXTRA_INSTALL_REQUIREMENTS; print('\n'.join(PYTORCH_EXTRA_INSTALL_REQUIREMENTS['xpu'].split(' | ')))" | tee /tmp/requirements.txt
           pip install -r /tmp/requirements.txt
           pip install transformers==4.54.0

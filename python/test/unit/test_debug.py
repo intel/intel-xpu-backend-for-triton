@@ -6,7 +6,17 @@ import triton
 import sys
 import subprocess
 import os
-from triton._internal_testing import run_in_process
+from triton._internal_testing import is_interpreter, run_in_process
+from triton.runtime.errors import InterpreterError
+
+pytestmark = pytest.mark.usefixtures("process_pool")
+
+# XPU device-side asserts abort the process: SIGABRT on POSIX, STATUS_STACK_BUFFER_OVERRUN on Windows.
+XPU_ASSERT_EXIT_CODES = (0xC0000409, ) if sys.platform == "win32" else (-signal.SIGABRT, )
+XPU_ASSERT_EXIT_CODE_RE = "|".join(map(str, XPU_ASSERT_EXIT_CODES))
+# On Windows, some executed asserts (observed in two test_device_assert cases on A770 and B580)
+# terminate the process with STATUS_BREAKPOINT instead.
+XPU_DEVICE_ASSERT_EXIT_CODES = XPU_ASSERT_EXIT_CODES + ((0x80000003, ) if sys.platform == "win32" else ())
 
 
 def _run_expect_zero_device_assert(device):
@@ -22,20 +32,28 @@ def _run_expect_zero_device_assert(device):
         tl.store(out_ptr + offsets, y)
 
     _kernel[(1, )](x, out, BLOCK_SIZE=16)
-    getattr(torch, device).synchronize()
+    if device == 'xpu':
+        # Wait on the stream: since pytorch/pytorch#191900 `torch.xpu.synchronize()` is a
+        # device-wide `ext_oneapi_wait_and_throw()`, which does not report the assert.
+        torch.xpu.current_stream().synchronize()
+    else:
+        getattr(torch, device).synchronize()
 
 
+@pytest.mark.interpreter
 def test_expect_zero_device_assert(device):
     if device == 'xpu':
         # XPU device-side asserts abort the process via SIGABRT, not a RuntimeError (issue #2755).
-        with pytest.raises(RuntimeError, match=str(-signal.SIGABRT)):
+        with pytest.raises(RuntimeError, match=rf"exited with code ({XPU_ASSERT_EXIT_CODE_RE}) "):
             run_in_process(_run_expect_zero_device_assert, (device, ), env={"TRITON_DEBUG": "1"})
         return
 
     result = run_in_process(_run_expect_zero_device_assert, (device, ), env={"TRITON_DEBUG": "1"})
-    assert isinstance(result.exc, RuntimeError)
+    expected_error = InterpreterError if is_interpreter() else RuntimeError
+    assert isinstance(result.exc, expected_error)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize('cond', [True, False])
 @pytest.mark.parametrize('mask', [True, False, None])
 @pytest.mark.parametrize('opt_flag', [True, False, None])
@@ -62,8 +80,9 @@ def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
 
     if should_fail:
         if device == 'xpu':
-            assert result.returncode == -6, (f"Expected SIGABRT but got exit code {result.returncode}. "
-                                             f"stdout: {result.stdout}, stderr: {result.stderr}")
+            assert result.returncode in XPU_DEVICE_ASSERT_EXIT_CODES, (
+                f"Expected abort exit code in {XPU_DEVICE_ASSERT_EXIT_CODES} but got {result.returncode}. "
+                f"stdout: {result.stdout}, stderr: {result.stderr}")
         else:
             assert result.returncode == 1, (f"Expected runtime error but got unexpected exit code {result.returncode}. "
                                             f"stdout: {result.stdout}, stderr: {result.stderr}")
@@ -72,6 +91,7 @@ def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
                                         f"stdout: {result.stdout}, stderr: {result.stderr}")
 
 
+@pytest.mark.interpreter
 def test_device_assert_barrier(device):
     """Subprocess solution to handle XPU SIGABRT from device_assert infrastructure.
     See: https://github.com/pytorch/pytorch/issues/142135"""
@@ -102,31 +122,62 @@ def test_static_assert(cond):
     _kernel[(1, )](cond)
 
 
-def _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, tri_func, ref_func, device):
-    # On XPU, __devicelib_assert_fail fires SIGABRT instead of RuntimeError.
-    # Use subprocess to catch the signal. See https://github.com/intel/intel-xpu-backend-for-triton/issues/2755
-    if should_overflow and debug and device == 'xpu':
-        kernel_file = os.path.join(os.path.dirname(__file__), "test_debug_kernels.py")
-        op = tri_func.fn.__name__.removeprefix("_kernel_")
-        result = subprocess.run(
-            [sys.executable, kernel_file, "overflow", op,
-             str(x), str(y), x_dtype, y_dtype,
-             str(debug), device], capture_output=True, text=True)
-        assert result.returncode == -6, (f"Expected SIGABRT but got exit code {result.returncode}. "
-                                         f"stdout: {result.stdout}, stderr: {result.stderr}")
-        return
+def _run_overflow(x, y, x_dtype, y_dtype, debug, op, device):
+    if op == "add":
+
+        @triton.jit
+        def tri_func(X, Y, Z):
+            tl.store(Z, tl.load(X) + tl.load(Y))
+
+        ref_func = lambda lhs, rhs: lhs + rhs
+    elif op == "mul":
+
+        @triton.jit
+        def tri_func(X, Y, Z):
+            tl.store(Z, tl.load(X) * tl.load(Y))
+
+        ref_func = lambda lhs, rhs: lhs * rhs
+    else:
+        assert op == "sub"
+
+        @triton.jit
+        def tri_func(X, Y, Z):
+            tl.store(Z, tl.load(X) - tl.load(Y))
+
+        ref_func = lambda lhs, rhs: lhs - rhs
+
     x = torch.tensor([x], dtype=getattr(torch, x_dtype), device=device)
     y = torch.tensor([y], dtype=getattr(torch, y_dtype), device=device)
     z = torch.empty_like(x)
+    tri_func[(1, )](x, y, z, debug=debug)
+    getattr(torch, device).synchronize()
+    assert int(z) == int(ref_func(x, y))
+
+
+def _assert_overflow_result(result, debug, should_overflow, dtype, op):
     if should_overflow and debug:
-        with pytest.raises(RuntimeError) as exc_info:
-            tri_func[(1, )](x, y, z, debug=debug)
-            getattr(torch, device).synchronize()
-        assert "device-side assert" in str(exc_info.value)
-    else:
-        tri_func[(1, )](x, y, z, debug=debug)
-        getattr(torch, device).synchronize()
-        assert int(z) == int(ref_func(x, y))
+        assert isinstance(result.exc, RuntimeError)
+        # CUDA can report a device assertion as an unspecified launch failure.
+        # Check the diagnostic as well so unrelated launch failures cannot pass.
+        assert any(msg in str(result.exc)
+                   for msg in ["device-side assert", "unspecified launch failure"]), str(result.exc)
+        assert f"{dtype} overflow detected for operation {op}" in result.driver_stderr_output, result.driver_stderr_output
+        return
+
+    assert result.exc is None, result.exc
+
+
+def _check_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, op, device):
+    args = (x, y, x_dtype, y_dtype, debug, op, device)
+    if should_overflow and debug and device == 'xpu':
+        # XPU device-side asserts abort the child via SIGABRT, so it dies without
+        # returning a result (issue #2755).
+        with pytest.raises(RuntimeError, match=rf"exited with code ({XPU_ASSERT_EXIT_CODE_RE}) "):
+            run_in_process(_run_overflow, args)
+        return
+
+    result = run_in_process(_run_overflow, args)
+    _assert_overflow_result(result, debug, should_overflow, x_dtype, op)
 
 
 # integer overflow sanitization
@@ -144,12 +195,7 @@ def _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, tri_func, ref
     (2**15 - 1, 1, 'int16', 'int16', True, True),
 ])
 def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
-
-    @triton.jit
-    def _kernel_add(X, Y, Z):
-        tl.store(Z, tl.load(X) + tl.load(Y))
-
-    _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, _kernel_add, lambda x, y: x + y, device)
+    _check_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, "add", device)
 
 
 # mul overflow
@@ -164,12 +210,7 @@ def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
     (-2**30, 2, 'int32', 'int32', True, False),
 ])
 def test_sanitize_int_mul_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
-
-    @triton.jit
-    def _kernel_mul(X, Y, Z):
-        tl.store(Z, tl.load(X) * tl.load(Y))
-
-    _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, _kernel_mul, lambda x, y: x * y, device)
+    _check_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, "mul", device)
 
 
 # sub overflow
@@ -183,9 +224,4 @@ def test_sanitize_int_mul_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
     (-2**31, -1, 'int32', 'int32', True, False),
 ])
 def test_sanitize_int_sub_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
-
-    @triton.jit
-    def _kernel_sub(X, Y, Z):
-        tl.store(Z, tl.load(X) - tl.load(Y))
-
-    _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, _kernel_sub, lambda x, y: x - y, device)
+    _check_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, "sub", device)

@@ -96,18 +96,18 @@ def parse_pytorch_benchmark_data(config: str, df: pd.DataFrame, file: Path) -> p
     return pd.concat([df, raw_data], ignore_index=True)
 
 
-def merge_triton_xetla_reports_data(config: str, triton_file: Path, xetla_file: Path) -> pd.DataFrame:
-    """Merge triton and xetla raw data."""
+def merge_triton_sycl_tla_reports_data(config: str, triton_file: Path, sycl_tla_file: Path) -> pd.DataFrame:
+    """Merge triton and sycl-tla raw data."""
     try:
-        triton_raw_data, xetla_raw_data = [
+        triton_raw_data, sycl_tla_raw_data = [
             pd.read_csv(file, header=0, usecols=["params", "tflops", "benchmark"])
-            for file in [triton_file, xetla_file]
+            for file in [triton_file, sycl_tla_file]
         ]
         triton_raw_data.rename(columns={"tflops": f"Triton-TFlops-{config}"}, inplace=True)
-        xetla_raw_data.rename(columns={"tflops": f"XeTLA-TFlops-{config}"}, inplace=True)
-        return triton_raw_data.merge(xetla_raw_data, how="outer", on=["params", "benchmark"])
+        sycl_tla_raw_data.rename(columns={"tflops": f"SYCL-TLA-TFlops-{config}"}, inplace=True)
+        return triton_raw_data.merge(sycl_tla_raw_data, how="outer", on=["params", "benchmark"])
     except FileNotFoundError:
-        print(f"Warning: One or both files not found: {triton_file} or {xetla_file}")
+        print(f"Warning: One or both files not found: {triton_file} or {sycl_tla_file}")
         return pd.DataFrame()
 
 
@@ -119,17 +119,17 @@ def build_triton_benchmark_reports_path(directory: Path, report_name: str) -> Pa
 def parse_triton_benchmark_data(config: str, directory: Path) -> pd.DataFrame:
     """Parse triton benchmark data from a merged dataframe into the dataframe.
         Now focus on dft path for softmax, gemm and attention
-        which include both xetla and triton data with regular name."""
+        which include both sycl-tla and triton data with regular name."""
 
     reports = ["softmax", "gemm", "attn"]
 
     reports_list = []
     for report in reports:
         triton_file = f"{report}-triton"
-        xetla_file = f"{report}-xetla"
+        sycl_tla_file = f"{report}-sycl-tla"
         triton_path = build_triton_benchmark_reports_path(directory, triton_file)
-        xetla_path = build_triton_benchmark_reports_path(directory, xetla_file)
-        reports_list.append(merge_triton_xetla_reports_data(config, triton_path, xetla_path))
+        sycl_tla_path = build_triton_benchmark_reports_path(directory, sycl_tla_file)
+        reports_list.append(merge_triton_sycl_tla_reports_data(config, triton_path, sycl_tla_path))
 
     return pd.concat(reports_list, ignore_index=True)
 
@@ -246,7 +246,7 @@ def plot_diff_df(df, triton_benchmark: bool, perf_index: str, numerator: str, de
 def eval_data(triton_benchmark: bool, plot: bool, df: pd.DataFrame, numerator: str, denominator: str):
     """Evaluate the data, print a summary and plot if enabled."""
     if triton_benchmark:
-        perf_index = "Tri2Xe"
+        perf_index = "Tri2SyclTla"
         num_col, denom_col = get_column_names(perf_index, numerator, denominator)
         df_ratio = df[["params", "benchmark", num_col, denom_col]]
         diff_df = summarize_diff(perf_index, df_ratio, numerator, denominator)
@@ -303,8 +303,8 @@ def main():
 
         if args.triton_benchmark:
             cols = [
-                "params", "benchmark", f"Triton-TFlops-{num_cfg}", f"XeTLA-TFlops-{num_cfg}",
-                f"Triton-TFlops-{denom_cfg}", f"XeTLA-TFlops-{denom_cfg}"
+                "params", "benchmark", f"Triton-TFlops-{num_cfg}", f"SYCL-TLA-TFlops-{num_cfg}",
+                f"Triton-TFlops-{denom_cfg}", f"SYCL-TLA-TFlops-{denom_cfg}"
             ]
         else:
             cols = [
@@ -314,8 +314,8 @@ def main():
 
         df = df[cols]
         if args.triton_benchmark:
-            df[f"Tri2Xe-{num_cfg}"] = df[f"Triton-TFlops-{num_cfg}"] / df[f"XeTLA-TFlops-{num_cfg}"]
-            df[f"Tri2Xe-{denom_cfg}"] = df[f"Triton-TFlops-{denom_cfg}"] / df[f"XeTLA-TFlops-{denom_cfg}"]
+            df[f"Tri2SyclTla-{num_cfg}"] = df[f"Triton-TFlops-{num_cfg}"] / df[f"SYCL-TLA-TFlops-{num_cfg}"]
+            df[f"Tri2SyclTla-{denom_cfg}"] = df[f"Triton-TFlops-{denom_cfg}"] / df[f"SYCL-TLA-TFlops-{denom_cfg}"]
 
         print(f"Storing preprocessed data to {csv_file}")
         df.to_csv(csv_file, index=False)

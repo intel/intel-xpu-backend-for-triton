@@ -1,14 +1,13 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Types.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
 
 Value tt::getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
                       Value pred) {
-  Type maskType = tt::getI1SameShape(tt::getPointeeType(typeLike));
+  Type maskType = tt::getI1SameShape(typeLike);
   Location loc = pred.getLoc();
   Value mask = pred;
   if (isa<RankedTensorType>(maskType)) {
@@ -49,8 +48,7 @@ bool tt::isHostSideDescriptor(Value v) {
 }
 
 unsigned tt::getBitwidth(RankedTensorType ty) {
-  auto isPtr = isa<PointerType>(ty.getElementType());
-  return isPtr ? kPtrBitWidth : std::max(ty.getElementTypeBitWidth(), 8u);
+  return std::max(getIntOrFloatOrPtrBitWidth(ty.getElementType()), 8);
 }
 
 std::optional<ConstantIntRanges> tt::getBoundFromCmpOp(arith::CmpIOp cmpOp,

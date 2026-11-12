@@ -24,6 +24,7 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -244,7 +245,7 @@ bool isTensorIntZero(Value v) {
     return false;
   if (auto splatOp = v.getDefiningOp<tt::SplatOp>())
     return isScalarIntZero(splatOp.getSrc());
-  return isZeroConst(v);
+  return isZeroFillConst(v);
 }
 
 bool isIntZero(Value v) { return isTensorIntZero(v) || isScalarIntZero(v); }
@@ -416,6 +417,14 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
             auto expandNonUniform = tt::ExpandDimsOp::create(
                 rewriter, loc, nonUniform, expandOp.getAxis());
             return std::make_pair(uniform, expandNonUniform);
+          })
+          .Case<tt::ReshapeOp>([&](auto reshapeOp) {
+            auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
+                rewriter, loc, reshapeOp.getSrc(), bitness, scalarToSplatMap);
+            Value reshapeNonUniform = tt::ReshapeOp::create(
+                rewriter, loc, reshapeOp.getType(), nonUniform,
+                reshapeOp.getEfficientLayout());
+            return std::make_pair(uniform, reshapeNonUniform);
           })
           .Case<arith::AddIOp>([&](Operation *op) {
             return createDecomposeOffsetFromAdd(rewriter, loc, expr, bitness,
@@ -608,7 +617,6 @@ static Value getSingleValue(ValueRange values) {
 /// matchAndRewrite_ just as that would for conventional OpConversionPatterns.
 template <typename SourceOp>
 struct PointerCanonicalizationPattern : ConversionPattern {
-  using OpAdaptor = typename SourceOp::Adaptor;
   using OneToNOpAdaptor =
       typename SourceOp::template GenericAdaptor<ArrayRef<ValueRange>>;
 
@@ -849,7 +857,7 @@ private:
     ValueRange nonRemappedOffset = adaptor.getOffset();
 
     assert(remappedPtr.size() == 2 && nonRemappedOffset.size() == 1 &&
-           "expected to be satisified in caller "
+           "expected to be satisfied in caller "
            "ConvertAddPtrOp::matchAndRewrite_");
 
     Value fatPtrBase = remappedPtr[0];
@@ -1369,22 +1377,20 @@ public:
     if (fatPtrTrue.size() == 1 && fatPtrFalse.size() == 1)
       return success();
     if (fatPtrTrue.size() != 2 || fatPtrFalse.size() != 2) {
-      Value trueOp;
-      Value falseOp;
-      if (fatPtrTrue.size() == 2) {
-        trueOp = tt::AddPtrOp::create(rewriter, selectOp.getLoc(),
-                                      selectOp.getType(), fatPtrTrue[0],
-                                      fatPtrTrue[1]);
-      } else {
-        trueOp = fatPtrTrue[0];
-      }
-      if (fatPtrFalse.size() == 2) {
-        falseOp = tt::AddPtrOp::create(rewriter, selectOp.getLoc(),
-                                       selectOp.getType(), fatPtrFalse[0],
-                                       fatPtrFalse[1]);
-      } else {
-        falseOp = fatPtrFalse[0];
-      }
+      // Asymmetric case: one arm is already a materialized pointer, the other
+      // is still a (base, offset) pair. Route the (base, offset) side through
+      // createTensorPointer so the scalar base is splatted before combining
+      // with a tensor offset; a raw tt.addptr would fail TT_AddPtrOp's
+      // TypesMatchWith verifier here.
+      auto materialize = [&](ValueRange fatPtr) -> Value {
+        if (fatPtr.size() == 1)
+          return getSingleValue(fatPtr);
+        return createTensorPointer(rewriter, fatPtr[0], fatPtr[1],
+                                   selectOp.getLoc(),
+                                   fatPtrs.at({fatPtr[0], fatPtr[1]}));
+      };
+      Value trueOp = materialize(fatPtrTrue);
+      Value falseOp = materialize(fatPtrFalse);
       auto newSelectOp = arith::SelectOp::create(
           rewriter, selectOp.getLoc(), selectOp.getType(),
           selectOp.getCondition(), trueOp, falseOp);
@@ -1587,6 +1593,42 @@ public:
   }
 };
 
+/// Rewrite reshape(base, offset) -> base, reshape(offset).
+class ConvertReshape : public PointerCanonicalizationPattern<tt::ReshapeOp> {
+public:
+  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+  LogicalResult
+  matchAndRewrite_(tt::ReshapeOp reshapeOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
+    ValueRange remappedOperands = adaptor.getSrc();
+    if (remappedOperands.size() != 2)
+      return success();
+    Value fatPtrBase = remappedOperands[0];
+    if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
+      return rewriter.notifyMatchFailure(
+          reshapeOp, "only scalar base currently supported");
+    Value fatPtrOffset = remappedOperands[1];
+
+    RankedTensorType result =
+        llvm::cast<RankedTensorType>(reshapeOp->getResultTypes().front());
+    if (!llvm::isa<tt::PointerType>(result.getElementType()))
+      return rewriter.notifyMatchFailure(
+          reshapeOp, "expected reshape result to be tensor of tt.ptr");
+
+    RankedTensorType newResult = RankedTensorType::get(
+        result.getShape(),
+        llvm::cast<RankedTensorType>(fatPtrOffset.getType()).getElementType(),
+        result.getEncoding());
+    auto newOffset =
+        tt::ReshapeOp::create(rewriter, reshapeOp.getLoc(), newResult,
+                              fatPtrOffset, reshapeOp.getEfficientLayout());
+    rewriter.replaceOpWithMultiple(reshapeOp, {{fatPtrBase, newOffset}});
+    fatPtrs[{fatPtrBase, newOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
+
+    return success();
+  }
+};
+
 /// convert integer offset, keep base
 class ConvertConvertLayoutOp
     : public PointerCanonicalizationPattern<tt::gpu::ConvertLayoutOp> {
@@ -1663,10 +1705,12 @@ public:
 
     if (op->getNumResults())
       rewriter.replaceOpWithNewOp<SourceOp>(
-          op, op->getResultTypes(), ValueRange{operands}, op->getAttrs());
+          op, op->getResultTypes(), ValueRange{operands}, op.getProperties(),
+          op->getDiscardableAttrDictionary().getValue());
     else
       rewriter.replaceOpWithNewOp<SourceOp>(
-          op, TypeRange{}, ValueRange{operands}, op->getAttrs());
+          op, TypeRange{}, ValueRange{operands}, op.getProperties(),
+          op->getDiscardableAttrDictionary().getValue());
     return success();
   }
 };
@@ -1698,8 +1742,9 @@ public:
       operands[i] = newPtr;
     }
 
-    rewriter.replaceOpWithNewOp<SourceOp>(op, op->getResultTypes(),
-                                          ValueRange{operands}, op->getAttrs());
+    rewriter.replaceOpWithNewOp<SourceOp>(
+        op, op->getResultTypes(), ValueRange{operands}, op.getProperties(),
+        op->getDiscardableAttrDictionary().getValue());
     return success();
   }
 };
@@ -1787,7 +1832,7 @@ public:
       return success();
     }
     // Exhaustive checking we're converting ONLY unrealized_casts inserted (by
-    // the 1:N conversion) in ConvertFuncOp.
+    // the 1:N conversion) in InitFuncPtrArgs.
     ArrayRef<ValueRange> remappedOperands = adaptor.getOperands();
     if (remappedOperands.size() != 2 || remappedOperands[0].size() != 1 ||
         remappedOperands[1].size() != 1)
@@ -1880,12 +1925,11 @@ public:
 /// 3. Clean up remaining `unrealized_casts` (currently only handling one
 /// category of such remaining casts but can be extended to handle all; see
 /// bullet 1 in TODOs).
-class TritonAMDGPUCanonicalizePointersPass
-    : public impl::TritonAMDGPUCanonicalizePointersBase<
+struct TritonAMDGPUCanonicalizePointersPass
+    : impl::TritonAMDGPUCanonicalizePointersBase<
           TritonAMDGPUCanonicalizePointersPass> {
   using Base::Base;
 
-public:
   void runOnOperation() override;
 };
 
@@ -1893,18 +1937,26 @@ public:
 /// This is a port/adaptation of upstream's getForwardSliceImpl
 /// that operates on values instead of ops so that we can track tt.ptr through
 /// the operands/args of region ops like scf.for/scf.while.
-/// It also handles scf.if in a special way beacuse scf.if does not have
+/// It also handles scf.if in a special way because scf.if does not have
 /// operands.
 ///
 /// TODO(max): this is still just a heuristic approximation to a "dataflow
 /// analysis" that "understands" the relationship between each operands and
 /// results for each op (i.e., whether fat ptrs are actually propagated).
-static void getForwardSliceImpl(OpOperand *use, Operation *op,
-                                SetVector<Operation *> *forwardSlice) {
+static void
+getForwardSliceImpl(OpOperand *use, Operation *op,
+                    SetVector<Operation *> *forwardSlice,
+                    llvm::SmallPtrSetImpl<OpOperand *> &visitedUses) {
   assert(use && op && "expected both use and op to be valid pointers");
   assert(use->getOwner() == op && "expected use's owner to be op");
 
   if (!llvm::isa<tt::PointerType>(getElementTypeOrSelf(use->get().getType())))
+    return;
+
+  // Merged pointer paths can reach the same use exponentially many times.
+  // Track uses rather than operations: different operands of a loop or branch
+  // lead to different block arguments whose uses must all be visited.
+  if (!visitedUses.insert(use).second)
     return;
 
   // verbose because you can't construct <OpOperand*> from <OpOperand&>
@@ -1915,7 +1967,7 @@ static void getForwardSliceImpl(OpOperand *use, Operation *op,
   };
 
   // all of this is necessary because both the LoopLikeInterface and
-  // BrancOpInterface are bad...
+  // BranchOpInterface are bad...
   auto addBlockArgUses = [&use, &addUses](
                              const Block::BlockArgListType &blockArgs,
                              unsigned argOffset = 0, unsigned useOffset = 0) {
@@ -1950,7 +2002,7 @@ static void getForwardSliceImpl(OpOperand *use, Operation *op,
 
   for (OpOperand *nextUse : nextUses) {
     auto owner = nextUse->getOwner();
-    getForwardSliceImpl(nextUse, owner, forwardSlice);
+    getForwardSliceImpl(nextUse, owner, forwardSlice, visitedUses);
   }
 
   forwardSlice->insert(op);
@@ -1979,6 +2031,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     return signalPassFailure();
 
   llvm::SetVector<Operation *> opsToRewrite;
+  llvm::SmallPtrSet<OpOperand *, 32> visitedUses;
   for (auto [idx, arg] : llvm::enumerate(func.getArguments())) {
     if (!llvm::isa<tt::PointerType>(arg.getType()))
       continue;
@@ -1996,7 +2049,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     // NB: reusing the same SetVector invalidates the topo order implied by
     // getForwardSlice
     for (auto &use : arg.getUses())
-      getForwardSliceImpl(&use, use.getOwner(), &opsToRewrite);
+      getForwardSliceImpl(&use, use.getOwner(), &opsToRewrite, visitedUses);
   }
 
   ConversionConfig config;
@@ -2042,8 +2095,11 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   patterns.add<
       ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
       ConvertConvertLayoutOp, ConvertAddPtrOp, ConvertExtractSliceOp,
+      MaterializeFatPointer<tt::AtomicLoadOp>,
       MaterializeFatPointer<tt::AtomicCASOp>,
+      MaterializeFatPointer<tt::AtomicPollOp>,
       MaterializeFatPointer<tt::AtomicRMWOp>,
+      MaterializeFatPointer<tt::AtomicStoreOp>,
       MaterializeFatPointer<tt::BitcastOp>, MaterializeFatPointer<tt::LoadOp>,
       MaterializeFatPointer<triton::gpu::AsyncCopyGlobalToLocalOp>,
       MaterializeFatPointer<tt::PtrToIntOp>, MaterializeFatPointer<tt::StoreOp>,
@@ -2052,7 +2108,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       MaterializeFatPointerVariadic<tt::ExternElementwiseOp>,
       MaterializeFatPointerVariadic<tt::ElementwiseInlineAsmOp>,
       MaterializeFatPointerVariadic<tt::PrintOp>, ConvertSCFForOp,
-      ConvertExpandDims, ConvertSCFYieldOp, ConvertSCFIfOp,
+      ConvertExpandDims, ConvertReshape, ConvertSCFYieldOp, ConvertSCFIfOp,
       ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
       ConvertCFBranch, ConvertArithSelectOp, ConvertReturnOp>(
       patterns.getContext(), opsToRewrite, fatPrs, convertedBlocks);

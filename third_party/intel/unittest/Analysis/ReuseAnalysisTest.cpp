@@ -8,6 +8,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/Parser/Parser.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <gmock/gmock.h>
@@ -34,11 +35,13 @@ public:
     builder = std::make_unique<OpBuilder>(&ctx);
   }
 
-  ModuleOp createModule() {
+  // Returns an owning handle so the caller controls the module's lifetime.
+  OwningOpRef<ModuleOp> createModule() {
     auto loc = builder->getUnknownLoc();
-    auto module = ModuleOp::create(loc);
-    module->setAttr(ttg::AttrNumWarpsName, builder->getI32IntegerAttr(4));
-    module->setAttr(ttg::AttrNumThreadsPerWarp, builder->getI32IntegerAttr(16));
+    OwningOpRef<ModuleOp> module = ModuleOp::create(loc);
+    (*module)->setAttr(ttg::AttrNumWarpsName, builder->getI32IntegerAttr(4));
+    (*module)->setAttr(ttg::AttrNumThreadsPerWarp,
+                       builder->getI32IntegerAttr(16));
     return module;
   }
 
@@ -73,7 +76,7 @@ public:
     return funcOp;
   }
 
-  Type getPtrType(Type elemType) { return tt::PointerType::get(elemType, 1); }
+  Type getPtrType(Type elemType) { return tt::PointerType::get(elemType); }
 
   /// Builds a BlockedEncodingAttr with a 1-CTA layout.
   ttg::BlockedEncodingAttr makeBlocked(ArrayRef<unsigned> sizePerThread,
@@ -95,12 +98,12 @@ public:
         warpsPerCTA, repCluster, threadsPerWarp, std::nullopt);
   }
 
-  /// Creates a tt.load with default cache/eviction attributes.
+  /// Creates a tt.load with the default cache policy.
   tt::LoadOp makeLoad(Value ptr, Type resultType) {
-    return tt::LoadOp::create(
-        *builder, builder->getUnknownLoc(), resultType, ptr, /*mask=*/Value(),
-        /*other=*/Value(), tt::CacheModifier::NONE, tt::EvictionPolicy::NORMAL,
-        /*isVolatile=*/false);
+    return tt::LoadOp::create(*builder, builder->getUnknownLoc(), resultType,
+                              ptr, /*mask=*/Value(), /*other=*/Value(),
+                              /*cachePolicy=*/Attribute(),
+                              /*isVolatile=*/false);
   }
 
 protected:
@@ -115,10 +118,10 @@ protected:
 // Spatial analysis reports reuse (warp-invariant dim) while temporal reports
 // none (load outside any loop). Union: anyReuse == true.
 TEST_F(ReuseAnalysisTest, UnionTrueFromSpatial) {
-  auto module = createModule();
+  OwningOpRef<ModuleOp> module = createModule();
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -137,9 +140,9 @@ TEST_F(ReuseAnalysisTest, UnionTrueFromSpatial) {
   auto splatPtr = tt::SplatOp::create(*builder, loc, ptrTensorTy, basePtr);
   auto loadOp = makeLoad(splatPtr, resultTy);
 
-  tti::ModuleAxisInfoAnalysis axisInfo(module);
-  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
 
   EXPECT_TRUE(analysis.anyReuse(loadOp));
 }
@@ -148,10 +151,10 @@ TEST_F(ReuseAnalysisTest, UnionTrueFromSpatial) {
 // axis) while temporal reports reuse (loop-invariant pointer).
 // Union: anyReuse == true.
 TEST_F(ReuseAnalysisTest, UnionTrueFromTemporal) {
-  auto module = createModule();
+  OwningOpRef<ModuleOp> module = createModule();
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -182,9 +185,9 @@ TEST_F(ReuseAnalysisTest, UnionTrueFromTemporal) {
     loadOp = makeLoad(splatPtr, resultTy);
   }
 
-  tti::ModuleAxisInfoAnalysis axisInfo(module);
-  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
 
   EXPECT_TRUE(analysis.anyReuse(loadOp));
 }
@@ -192,10 +195,10 @@ TEST_F(ReuseAnalysisTest, UnionTrueFromTemporal) {
 // Neither analysis reports reuse: 1-D streaming load outside any loop with
 // warps tiling the only axis. Union: anyReuse == false.
 TEST_F(ReuseAnalysisTest, UnionFalse) {
-  auto module = createModule();
+  OwningOpRef<ModuleOp> module = createModule();
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -207,11 +210,342 @@ TEST_F(ReuseAnalysisTest, UnionFalse) {
   auto splatPtr = tt::SplatOp::create(*builder, loc, ptrTensorTy, basePtr);
   auto loadOp = makeLoad(splatPtr, resultTy);
 
-  tti::ModuleAxisInfoAnalysis axisInfo(module);
-  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
 
   EXPECT_FALSE(analysis.anyReuse(loadOp));
+}
+
+// Same layout and loop-free placement as UnionFalse, but the offset comes from
+// a tensor loaded by the kernel (`table[idx]`): reuse is data-dependent and
+// invisible to both legs, so the suppress-side anyReuse is conservatively
+// true. It is not a proof, so knownReuse stays false.
+TEST_F(ReuseAnalysisTest, GatherAddressIsConservativeReuse) {
+  OwningOpRef<ModuleOp> module = createModule();
+  auto i32Ty = builder->getI32Type();
+  auto ptrType = getPtrType(i32Ty);
+  auto funcOp =
+      createFunctionWithReturn(*module, "test_func", {ptrType, ptrType});
+  auto loc = builder->getUnknownLoc();
+
+  auto blocked = makeBlocked(/*sizePerThread=*/{1}, /*threadsPerWarp=*/{32},
+                             /*warpsPerCTA=*/{4}, /*order=*/{0});
+  auto valTy = RankedTensorType::get({128}, i32Ty, blocked);
+  auto ptrTensorTy = RankedTensorType::get({128}, ptrType, blocked);
+
+  auto range = tt::MakeRangeOp::create(*builder, loc, valTy, 0, 128);
+  auto idxBase =
+      tt::SplatOp::create(*builder, loc, ptrTensorTy, funcOp.getArgument(0));
+  auto idxPtr = tt::AddPtrOp::create(*builder, loc, ptrTensorTy, idxBase,
+                                     range.getResult());
+  auto idxLoad = makeLoad(idxPtr, valTy);
+  auto tableBase =
+      tt::SplatOp::create(*builder, loc, ptrTensorTy, funcOp.getArgument(1));
+  auto tablePtr = tt::AddPtrOp::create(*builder, loc, ptrTensorTy, tableBase,
+                                       idxLoad.getResult());
+  auto tableLoad = makeLoad(tablePtr, valTy);
+
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
+
+  EXPECT_TRUE(analysis.anyReuse(tableLoad));
+  EXPECT_FALSE(analysis.knownReuse(tableLoad));
+  // The index load itself is structured streaming.
+  EXPECT_FALSE(analysis.anyReuse(idxLoad));
+}
+
+// A scalar load feeding the offset (e.g. a per-sequence start) is uniform
+// across the tile, so the address stays structured: anyReuse == false.
+TEST_F(ReuseAnalysisTest, ScalarLoadedOffsetIsNotReuse) {
+  OwningOpRef<ModuleOp> module = createModule();
+  auto i32Ty = builder->getI32Type();
+  auto f16Ty = builder->getF16Type();
+  auto funcOp = createFunctionWithReturn(
+      *module, "test_func", {getPtrType(i32Ty), getPtrType(f16Ty)});
+  auto loc = builder->getUnknownLoc();
+
+  auto blocked = makeBlocked(/*sizePerThread=*/{1}, /*threadsPerWarp=*/{32},
+                             /*warpsPerCTA=*/{4}, /*order=*/{0});
+  auto rangeTy = RankedTensorType::get({128}, i32Ty, blocked);
+  auto resultTy = RankedTensorType::get({128}, f16Ty, blocked);
+  auto ptrTensorTy = RankedTensorType::get({128}, getPtrType(f16Ty), blocked);
+
+  auto start = makeLoad(funcOp.getArgument(0), i32Ty);
+  auto base = tt::AddPtrOp::create(*builder, loc, getPtrType(f16Ty),
+                                   funcOp.getArgument(1), start.getResult());
+  auto splat = tt::SplatOp::create(*builder, loc, ptrTensorTy, base);
+  auto range = tt::MakeRangeOp::create(*builder, loc, rangeTy, 0, 128);
+  auto ptr = tt::AddPtrOp::create(*builder, loc, ptrTensorTy, splat,
+                                  range.getResult());
+  auto loadOp = makeLoad(ptr, resultTy);
+
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
+
+  EXPECT_FALSE(analysis.anyReuse(loadOp));
+}
+
+// ===----------------------------------------------------------------------===//
+// addressDependsOnLoadedTensor: one case per branch of the def-chain walk.
+// Each kernel tags the queried load with `{probe}`. The helper is queried
+// directly because, inside loops, the temporal leg alone already makes
+// anyReuse true and would hide a broken walk.
+// ===----------------------------------------------------------------------===//
+
+class AddressDependsOnLoadedTensorTest : public ReuseAnalysisTest {
+public:
+  /// Parses `body` as a single `tt.func` and returns the walk's verdict for
+  /// the load tagged `{probe}`.
+  bool probe(StringRef body) {
+    std::string ir = R"(
+#b = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+)" + body.str() + "\n}\n";
+    module = parseSourceString<ModuleOp>(ir, &ctx);
+    EXPECT_TRUE(module) << "failed to parse:\n" << ir;
+    if (!module)
+      return false;
+    tt::LoadOp probed;
+    module->walk([&](tt::LoadOp load) {
+      if (load->hasAttr("probe"))
+        probed = load;
+    });
+    EXPECT_TRUE(probed) << "no load tagged {probe}";
+    return probed && ttgi::addressDependsOnLoadedTensor(probed.getPtr());
+  }
+
+private:
+  OwningOpRef<ModuleOp> module;
+};
+
+// Gathered pointer formed outside the loop, reached via the iter_arg's init.
+TEST_F(AddressDependsOnLoadedTensorTest, ForIterArgInit) {
+  EXPECT_TRUE(probe(R"(
+  tt.func @f(%idx: tensor<32x!tt.ptr<i32>, #b>, %table: !tt.ptr<i32>, %lb: i32, %ub: i32) {
+    %c1 = arith.constant 1 : i32
+    %c32 = arith.constant dense<32> : tensor<32xi32, #b>
+    %tok = tt.load %idx : tensor<32x!tt.ptr<i32>, #b>
+    %st = tt.splat %table : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p0 = tt.addptr %st, %tok : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %r = scf.for %i = %lb to %ub step %c1 iter_args(%p = %p0) -> (tensor<32x!tt.ptr<i32>, #b>) : i32 {
+      %v = tt.load %p {probe} : tensor<32x!tt.ptr<i32>, #b>
+      %pn = tt.addptr %p, %c32 : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+      scf.yield %pn : tensor<32x!tt.ptr<i32>, #b>
+    }
+    tt.return
+  })"));
+}
+
+// Structured init; the gather enters only through the yielded value.
+TEST_F(AddressDependsOnLoadedTensorTest, ForIterArgYield) {
+  EXPECT_TRUE(probe(R"(
+  tt.func @f(%idx: tensor<32x!tt.ptr<i32>, #b>, %table: !tt.ptr<i32>, %lb: i32, %ub: i32) {
+    %c1 = arith.constant 1 : i32
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #b>
+    %st = tt.splat %table : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p0 = tt.addptr %st, %range : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %r = scf.for %i = %lb to %ub step %c1 iter_args(%p = %p0) -> (tensor<32x!tt.ptr<i32>, #b>) : i32 {
+      %v = tt.load %p {probe} : tensor<32x!tt.ptr<i32>, #b>
+      %tok = tt.load %idx : tensor<32x!tt.ptr<i32>, #b>
+      %pn = tt.addptr %p, %tok : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+      scf.yield %pn : tensor<32x!tt.ptr<i32>, #b>
+    }
+    tt.return
+  })"));
+}
+
+// The offset is an scf.for result whose yielded value is a loaded tensor.
+TEST_F(AddressDependsOnLoadedTensorTest, ForResult) {
+  EXPECT_TRUE(probe(R"(
+  tt.func @f(%idx: tensor<32x!tt.ptr<i32>, #b>, %table: !tt.ptr<i32>, %lb: i32, %ub: i32) {
+    %c1 = arith.constant 1 : i32
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #b>
+    %off = scf.for %i = %lb to %ub step %c1 iter_args(%o = %range) -> (tensor<32xi32, #b>) : i32 {
+      %tok = tt.load %idx : tensor<32x!tt.ptr<i32>, #b>
+      scf.yield %tok : tensor<32xi32, #b>
+    }
+    %st = tt.splat %table : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p = tt.addptr %st, %off : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %v = tt.load %p {probe} : tensor<32x!tt.ptr<i32>, #b>
+    tt.return
+  })"));
+}
+
+// The offset is an scf.if result; the gather is only on the else branch.
+TEST_F(AddressDependsOnLoadedTensorTest, IfElseResult) {
+  EXPECT_TRUE(probe(R"(
+  tt.func @f(%idx: tensor<32x!tt.ptr<i32>, #b>, %table: !tt.ptr<i32>, %cond: i1) {
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #b>
+    %off = scf.if %cond -> (tensor<32xi32, #b>) {
+      scf.yield %range : tensor<32xi32, #b>
+    } else {
+      %tok = tt.load %idx : tensor<32x!tt.ptr<i32>, #b>
+      scf.yield %tok : tensor<32xi32, #b>
+    }
+    %st = tt.splat %table : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p = tt.addptr %st, %off : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %v = tt.load %p {probe} : tensor<32x!tt.ptr<i32>, #b>
+    tt.return
+  })"));
+}
+
+// The loaded tensor reaches the offset through several elementwise ops.
+TEST_F(AddressDependsOnLoadedTensorTest, TransitiveThroughOps) {
+  EXPECT_TRUE(probe(R"(
+  tt.func @f(%idx: tensor<32x!tt.ptr<i32>, #b>, %table: !tt.ptr<i32>) {
+    %c64 = arith.constant dense<64> : tensor<32xi32, #b>
+    %c4 = arith.constant dense<4> : tensor<32xi32, #b>
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #b>
+    %tok = tt.load %idx : tensor<32x!tt.ptr<i32>, #b>
+    %blk = arith.divsi %tok, %c64 : tensor<32xi32, #b>
+    %row = arith.muli %blk, %c4 : tensor<32xi32, #b>
+    %off = arith.addi %row, %range : tensor<32xi32, #b>
+    %st = tt.splat %table : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p = tt.addptr %st, %off : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %v = tt.load %p {probe} : tensor<32x!tt.ptr<i32>, #b>
+    tt.return
+  })"));
+}
+
+// A non-load memory reader (atomic_rmw returns the old values) also counts.
+TEST_F(AddressDependsOnLoadedTensorTest, NonLoadReader) {
+  EXPECT_TRUE(probe(R"(
+  tt.func @f(%ctr: tensor<32x!tt.ptr<i32>, #b>, %table: !tt.ptr<i32>, %mask: tensor<32xi1, #b>) {
+    %one = arith.constant dense<1> : tensor<32xi32, #b>
+    %old = tt.atomic_rmw add, acq_rel, gpu, %ctr, %one, %mask : (tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>, tensor<32xi1, #b>) -> tensor<32xi32, #b>
+    %st = tt.splat %table : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p = tt.addptr %st, %old : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %v = tt.load %p {probe} : tensor<32x!tt.ptr<i32>, #b>
+    tt.return
+  })"));
+}
+
+// A tensor read reduced to a scalar is uniform across the tile: the address
+// stays structured, so this is not a gather.
+TEST_F(AddressDependsOnLoadedTensorTest, TensorReducedToScalarIsUniform) {
+  EXPECT_FALSE(probe(R"(
+  tt.func @f(%lens: tensor<32x!tt.ptr<i32>, #b>, %in: !tt.ptr<i32>) {
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #b>
+    %l = tt.load %lens : tensor<32x!tt.ptr<i32>, #b>
+    %sum = "tt.reduce"(%l) <{axis = 0 : i32}> ({
+    ^bb0(%a: i32, %c: i32):
+      %s = arith.addi %a, %c : i32
+      tt.reduce.return %s : i32
+    }) : (tensor<32xi32, #b>) -> i32
+    %base = tt.addptr %in, %sum : !tt.ptr<i32>, i32
+    %sb = tt.splat %base : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p = tt.addptr %sb, %range : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %v = tt.load %p {probe} : tensor<32x!tt.ptr<i32>, #b>
+    tt.return
+  })"));
+}
+
+// Structured loop-carried pointer: init and yield are both structured.
+TEST_F(AddressDependsOnLoadedTensorTest, StructuredLoopIsNotGather) {
+  EXPECT_FALSE(probe(R"(
+  tt.func @f(%in: !tt.ptr<i32>, %lb: i32, %ub: i32, %cond: i1) {
+    %c1 = arith.constant 1 : i32
+    %c32 = arith.constant dense<32> : tensor<32xi32, #b>
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #b>
+    %s = tt.splat %in : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p0 = tt.addptr %s, %range : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %r = scf.for %i = %lb to %ub step %c1 iter_args(%p = %p0) -> (tensor<32x!tt.ptr<i32>, #b>) : i32 {
+      %q = scf.if %cond -> (tensor<32x!tt.ptr<i32>, #b>) {
+        scf.yield %p : tensor<32x!tt.ptr<i32>, #b>
+      } else {
+        %pa = tt.addptr %p, %c32 : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+        scf.yield %pa : tensor<32x!tt.ptr<i32>, #b>
+      }
+      %v = tt.load %q {probe} : tensor<32x!tt.ptr<i32>, #b>
+      %pn = tt.addptr %p, %c32 : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+      scf.yield %pn : tensor<32x!tt.ptr<i32>, #b>
+    }
+    tt.return
+  })"));
+}
+
+// Index loaded inside an scf.while, gather after it: the result comes from
+// scf.condition, whose operand is a before-region arg fed by the after-region
+// yield. The init is structured, so only the loop body exposes the gather.
+TEST_F(AddressDependsOnLoadedTensorTest, WhileResult) {
+  EXPECT_TRUE(probe(R"(
+  tt.func @f(%idx: tensor<32x!tt.ptr<i32>, #b>, %table: !tt.ptr<i32>, %cond: i1) {
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #b>
+    %off = scf.while (%o = %range) : (tensor<32xi32, #b>) -> tensor<32xi32, #b> {
+      scf.condition(%cond) %o : tensor<32xi32, #b>
+    } do {
+    ^bb0(%a: tensor<32xi32, #b>):
+      %tok = tt.load %idx : tensor<32x!tt.ptr<i32>, #b>
+      scf.yield %tok : tensor<32xi32, #b>
+    }
+    %st = tt.splat %table : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p = tt.addptr %st, %off : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %v = tt.load %p {probe} : tensor<32x!tt.ptr<i32>, #b>
+    tt.return
+  })"));
+}
+
+// Gather inside the after region: the after-region arg is forwarded by
+// scf.condition from a pointer built in the before region.
+TEST_F(AddressDependsOnLoadedTensorTest, WhileAfterRegionArg) {
+  EXPECT_TRUE(probe(R"(
+  tt.func @f(%idx: tensor<32x!tt.ptr<i32>, #b>, %table: !tt.ptr<i32>, %cond: i1) {
+    %st = tt.splat %table : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %r = scf.while (%p = %st) : (tensor<32x!tt.ptr<i32>, #b>) -> tensor<32x!tt.ptr<i32>, #b> {
+      %tok = tt.load %idx : tensor<32x!tt.ptr<i32>, #b>
+      %pg = tt.addptr %st, %tok : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+      scf.condition(%cond) %pg : tensor<32x!tt.ptr<i32>, #b>
+    } do {
+    ^bb0(%q: tensor<32x!tt.ptr<i32>, #b>):
+      %v = tt.load %q {probe} : tensor<32x!tt.ptr<i32>, #b>
+      scf.yield %q : tensor<32x!tt.ptr<i32>, #b>
+    }
+    tt.return
+  })"));
+}
+
+// Gathered pointer formed before an scf.while and carried as its init; the
+// yield is structured, so only the init exposes the gather.
+TEST_F(AddressDependsOnLoadedTensorTest, WhileInit) {
+  EXPECT_TRUE(probe(R"(
+  tt.func @f(%idx: tensor<32x!tt.ptr<i32>, #b>, %table: !tt.ptr<i32>, %cond: i1) {
+    %c32 = arith.constant dense<32> : tensor<32xi32, #b>
+    %tok = tt.load %idx : tensor<32x!tt.ptr<i32>, #b>
+    %st = tt.splat %table : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p0 = tt.addptr %st, %tok : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %r = scf.while (%p = %p0) : (tensor<32x!tt.ptr<i32>, #b>) -> tensor<32x!tt.ptr<i32>, #b> {
+      scf.condition(%cond) %p : tensor<32x!tt.ptr<i32>, #b>
+    } do {
+    ^bb0(%q: tensor<32x!tt.ptr<i32>, #b>):
+      %v = tt.load %q {probe} : tensor<32x!tt.ptr<i32>, #b>
+      %pn = tt.addptr %q, %c32 : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+      scf.yield %pn : tensor<32x!tt.ptr<i32>, #b>
+    }
+    tt.return
+  })"));
+}
+
+// Structured scf.while: init, condition and yield are all structured.
+TEST_F(AddressDependsOnLoadedTensorTest, StructuredWhileIsNotGather) {
+  EXPECT_FALSE(probe(R"(
+  tt.func @f(%in: !tt.ptr<i32>, %cond: i1) {
+    %c32 = arith.constant dense<32> : tensor<32xi32, #b>
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #b>
+    %s = tt.splat %in : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #b>
+    %p0 = tt.addptr %s, %range : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+    %r = scf.while (%p = %p0) : (tensor<32x!tt.ptr<i32>, #b>) -> tensor<32x!tt.ptr<i32>, #b> {
+      scf.condition(%cond) %p : tensor<32x!tt.ptr<i32>, #b>
+    } do {
+    ^bb0(%q: tensor<32x!tt.ptr<i32>, #b>):
+      %v = tt.load %q {probe} : tensor<32x!tt.ptr<i32>, #b>
+      %pn = tt.addptr %q, %c32 : tensor<32x!tt.ptr<i32>, #b>, tensor<32xi32, #b>
+      scf.yield %pn : tensor<32x!tt.ptr<i32>, #b>
+    }
+    tt.return
+  })"));
 }
 
 // Phase 1.6 Tests — knownReuse
@@ -220,10 +554,10 @@ TEST_F(ReuseAnalysisTest, Known_TrueFromSpatial) {
   // Mirror UnionTrueFromSpatial (line 116): DPAS dot-operand A with warp-
   // invariant K (dim 1), load outside any loop. Spatial known reuse fires,
   // temporal does not. Expected: knownReuse == true.
-  auto module = createModule();
+  OwningOpRef<ModuleOp> module = createModule();
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -239,9 +573,9 @@ TEST_F(ReuseAnalysisTest, Known_TrueFromSpatial) {
   auto splatPtr = tt::SplatOp::create(*builder, loc, ptrTensorTy, basePtr);
   auto loadOp = makeLoad(splatPtr, resultTy);
 
-  tti::ModuleAxisInfoAnalysis axisInfo(module);
-  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
 
   EXPECT_TRUE(analysis.knownReuse(loadOp));
   // Regression guard: anyReuse still true.
@@ -252,10 +586,10 @@ TEST_F(ReuseAnalysisTest, Known_TrueFromTemporal) {
   // Mirror UnionTrueFromTemporal (line 149): 1-D blocked encoding with warps
   // tiling the only axis (no spatial reuse), but pointer is loop-invariant
   // inside scf.for (temporal proven reuse). Expected: knownReuse == true.
-  auto module = createModule();
+  OwningOpRef<ModuleOp> module = createModule();
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -282,9 +616,9 @@ TEST_F(ReuseAnalysisTest, Known_TrueFromTemporal) {
     loadOp = makeLoad(splatPtr, resultTy);
   }
 
-  tti::ModuleAxisInfoAnalysis axisInfo(module);
-  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
 
   EXPECT_TRUE(analysis.knownReuse(loadOp));
   EXPECT_TRUE(analysis.anyReuse(loadOp));
@@ -298,10 +632,10 @@ TEST_F(ReuseAnalysisTest, Known_FalseFromConservativeFallback_NonPow2) {
   //   - getSpatial().knownCrossSubgroupReuse(ty) == false
   //   - knownReuse(loadOp) == false
   //   - anyReuse(loadOp) == true (conservative positive preserved)
-  auto module = createModule();
+  OwningOpRef<ModuleOp> module = createModule();
   auto f32Ty = builder->getF32Type();
   auto ptrType = getPtrType(f32Ty);
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -317,9 +651,9 @@ TEST_F(ReuseAnalysisTest, Known_FalseFromConservativeFallback_NonPow2) {
   auto splatPtr = tt::SplatOp::create(*builder, loc, ptrTensorTy, basePtr);
   auto loadOp = makeLoad(splatPtr, resultTy);
 
-  tti::ModuleAxisInfoAnalysis axisInfo(module);
-  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
 
   // Existing accessor returns fallback full axis set.
   EXPECT_THAT(analysis.getSpatial().getWarpInvariantOutDims(resultTy),

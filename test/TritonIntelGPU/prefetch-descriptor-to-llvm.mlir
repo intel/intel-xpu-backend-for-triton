@@ -53,8 +53,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:     %[[OFFSET_X:.*]] = llvm.add {{.*}}, %{{.*}} : i32
     // CHECK:     %[[OFFSET_Y:.*]] = llvm.add {{.*}}, %{{.*}} : i32
 
-    // COM: 16x32xf16 with 8 warps: tile_height=2, tile_width=32 → vBlocks=2, tile_width=16.
-    // CHECK:     triton_gen.2Dblockprefetch %[[BASE_PTR]], %[[BASE_WIDTH_I32]], %[[BASE_HEIGHT_I32]], %[[PITCH]], %[[OFFSET_X]], %[[OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 2, v_blocks = 2, cache_control = L1C_L3C}
+    // COM: 16x32xf16 with 8 warps: tile_height=2, tile_width=32, vBlocks=1.
+    // CHECK:     triton_gen.2Dblockprefetch %[[BASE_PTR]], %[[BASE_WIDTH_I32]], %[[BASE_HEIGHT_I32]], %[[PITCH]], %[[OFFSET_X]], %[[OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 2, v_blocks = 1, cache_control = L1C_L3C}
     ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<16x32xf16>
 
     tt.return
@@ -127,8 +127,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:     %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
-    // COM: 128 bytes per row falls back to 64 bytes prefetch → tile_width=16, tile_height=4, v_blocks=2.
-    // CHECK:     triton_gen.2Dblockprefetch %[[BASE_PTR]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 2, cache_control = L1C_L3C}
+    // COM: 128 bytes per row falls back to 64 bytes prefetch → tile_width=32, tile_height=4, v_blocks=1.
+    // CHECK:     triton_gen.2Dblockprefetch %[[BASE_PTR]], {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 4, v_blocks = 1, cache_control = L1C_L3C}
     ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<16x64xf16>
 
     tt.return
@@ -159,9 +159,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
     // COM: Verify batch dimension folded via GEP and 2D prefetch ops emitted.
     // CHECK:     llvm.getelementptr
-    // CHECK:     triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK:     triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 4, v_blocks = 1, cache_control = L1C_L3C}
     // CHECK:     llvm.getelementptr
-    // CHECK:     triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK:     triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 4, v_blocks = 1, cache_control = L1C_L3C}
     ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<2x16x32xf16>
 
     tt.return

@@ -1,0 +1,14 @@
+name: install-build-toolchain
+description: Install a C compiler and libffi (needed by pyenv to build Python from source)
+runs:
+  using: "composite"
+  steps:
+    - name: Install build toolchain
+      shell: bash
+      run: |
+        if command -v gcc >/dev/null 2>&1; then
+          echo "gcc already present: $(gcc --version | head -n1)"
+        else
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential libffi-dev
+        fi

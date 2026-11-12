@@ -1,22 +1,26 @@
 import importlib.metadata
 import os
 import json
+import re
 import sys
 import hashlib
 import shutil
 import ctypes
+import subprocess
 import sysconfig
 import tempfile
+import warnings
 from pathlib import Path
 from functools import cached_property, lru_cache
 
 from triton import knobs
 import triton
+from triton.runtime import _allocation
 from triton.runtime.build import _build, platform_key, _load_module_from_path
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import DriverBase, decompose_descriptor
-from triton.backends.driver import expand_signature, wrap_handle_tensordesc_impl
+from triton.backends.driver import DriverBase, TensorDescABI, decompose_descriptor
+from triton.backends.driver import expand_signature, get_kernel_argument_layout, wrap_handle_tensordesc_impl
 
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
@@ -30,47 +34,44 @@ ARG_KERNEL = None
 ARG_TUPLE = None
 
 
-def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
-    """
-    Looks for the sycl library in known places.
-
-    Arguments:
-      include_dir: list of include directories to pass to compiler.
-
-    Returns:
-      enriched include_dir and libsycl.so location.
-
-    Raises:
-      AssertionError: if library was not found.
-    """
+def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
     include_dir = include_dir.copy()
-    assertion_message = ("sycl headers not found, please install `icpx` compiler, "
-                         "or provide `ONEAPI_ROOT` environment "
-                         "or install `intel-sycl-rt>=2025.0.0` wheel")
     icpx_path = shutil.which("icpx")
     if icpx_path:
         # only `icpx` compiler knows where sycl runtime binaries and header files are
         compiler_root = os.path.abspath(f"{icpx_path}/../..")
-        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
+        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
         sycl_dir = os.path.join(compiler_root, "lib")
         return include_dir, [sycl_dir]
 
     oneapi_root = os.getenv("ONEAPI_ROOT")
     if oneapi_root:
-        include_dir += [
-            os.path.join(oneapi_root, "compiler/latest/include"),
-            os.path.join(oneapi_root, "compiler/latest/include/sycl")
-        ]
-        sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib")
-        return include_dir, [sycl_dir]
+        # Any oneAPI component's `setvars.sh` sets `ONEAPI_ROOT`, so it does not mean a compiler is
+        # installed here (a VTune-only install has no `compiler` directory at all). Check that both
+        # paths exist before returning them.
+        # See https://github.com/intel/intel-xpu-backend-for-triton/issues/7977.
+        compiler_root = os.path.join(oneapi_root, "compiler", "latest")
+        sycl_dir = os.path.join(compiler_root, "lib")
+        if os.path.isfile(os.path.join(compiler_root, "include", "sycl", "sycl.hpp")) and os.path.isdir(sycl_dir):
+            include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
+            return include_dir, [sycl_dir]
+        if os.path.isdir(compiler_root):
+            # A compiler directory with only half of SYCL in it is not something a normal install
+            # leaves behind, and the SYCL found below may be a different version than the one
+            # meant to be used, so do not skip it silently.
+            warnings.warn(
+                f"{compiler_root} does not provide SYCL (need include/sycl/sycl.hpp and lib); "
+                "ignoring ONEAPI_ROOT and looking for SYCL elsewhere.",
+                stacklevel=2,
+            )
 
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
     except importlib.metadata.PackageNotFoundError:
-        raise AssertionError(assertion_message)
+        return include_dir, []
 
     if sycl_rt.get("version", "0.0.0").startswith("2024"):
-        raise AssertionError(assertion_message)
+        return include_dir, []
 
     sycl_dirs = []
     for f in importlib.metadata.files("intel-sycl-rt"):
@@ -87,7 +88,84 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
                 _ = os.add_dll_directory(str(dll_path))
             sycl_dirs.append(str(sycl_dir))
 
-    assert len(sycl_dirs) != 0
+    return include_dir, sycl_dirs
+
+
+def find_sycl_dpclang(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    include_dir = include_dir.copy()
+
+    if not shutil.which("pkg-config"):
+        return include_dir, []
+
+    dpclang = shutil.which(knobs.intel.sycl_compiler if knobs.intel.sycl_compiler else "dpclang++")
+    cmd = [dpclang, "-E", "-dM", "-"]
+
+    major = None
+    try:
+        result = subprocess.run(cmd, input="", capture_output=True, text=True, check=True)
+        for line in result.stdout.splitlines():
+            if "__dpcpp_major__" in line:
+                # The line looks like: "#define __dpcpp_major__ 7"
+                parts = line.split()
+                if len(parts) >= 3:
+                    major = int(parts[-1])
+                    break
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        return include_dir, []
+
+    if major is None:
+        return include_dir, []
+
+    package_name = f"sycl-dpcpp-{major}"
+    sycl_dirs = []
+    try:
+        cflags_I_res = subprocess.run(
+            ["pkg-config", "--cflags-only-I", package_name],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip().split()
+        include_dir += [flag[2:] for flag in cflags_I_res if flag.startswith("-I") and len(flag) > 2]
+
+        libs_L_res = subprocess.run(
+            ["pkg-config", "--libs-only-L", package_name],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip().split()
+        sycl_dirs = [flag[2:] for flag in libs_L_res if flag.startswith("-L") and len(flag) > 2]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    return include_dir, sycl_dirs
+
+
+def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    """
+    Looks for the sycl library in known places.
+
+    Arguments:
+      include_dir: list of include directories to pass to compiler.
+
+    Returns:
+      enriched include_dir and libsycl.so location.
+
+    Raises:
+      AssertionError: if library was not found.
+    """
+
+    sycl_dirs = []
+    csycl = knobs.intel.sycl_compiler
+    if not csycl or csycl == "icpx":
+        include_dir, sycl_dirs = find_sycl_icpx(include_dir)
+    if len(sycl_dirs) == 0 and (not csycl or csycl.startswith("dpclang")):
+        include_dir, sycl_dirs = find_sycl_dpclang(include_dir)
+    if len(sycl_dirs) == 0:
+        raise AssertionError("sycl headers not found, please install `icpx` compiler, "
+                             "or provide `ONEAPI_ROOT` environment "
+                             "or install `intel-sycl-rt>=2025.0.0` wheel"
+                             "or instal `dpclang` compiler (experimental)")
+
     return include_dir, sycl_dirs
 
 
@@ -226,31 +304,55 @@ class SpirvUtils:
     def load_binary(self, *args):
         # if we don't use parameter passing in this way,
         # we will need to rewrite the line in the general part of the code:
-        # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
-        # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
+        # driver.active.utils.load_binary(
+        #     self.name, self.kernel, self.metadata.shared,
+        #     self.metadata.build_flags, is_spv, device, max_grf_mode) ->
+        # driver.active.utils.load_binary(
+        #     (self.name, self.kernel, self.metadata.shared,
+        #      self.metadata.build_flags, is_spv, device, max_grf_mode))
+        # PTSS-overflow detection happens at the C level (driver.c
+        # tryRaisePTSSOutOfResources): when zeModuleCreate fails and the
+        # IGC build log carries a PTSS marker, OutOfResources is raised
+        # directly so triton.runtime.autotuner can skip the offending tile.
+        # No per-launch overhead on the success path.
         try:
             return self.shared_library.load_binary(args)
         except Exception as e:
+            from triton.backends.intel.errors import IntelGPUError
+            from triton.runtime.errors import OutOfResources
+            if isinstance(e, OutOfResources):
+                raise
             if str(e).startswith("ZE_"):
-                from triton.runtime.errors import IntelGPUError
                 raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
             else:
                 raise e
 
-    if os.name != 'nt':
-
-        def __del__(self):
-            if hasattr(self, "shared_library"):
-                handle = self.shared_library._handle
-                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-                self.shared_library.dlclose(handle)
-    else:
-
-        def __del__(self):
-            if hasattr(self, "shared_library"):
-                handle = self.shared_library._handle
-                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-                ctypes.windll.kernel32.FreeLibrary(handle)
+    # Deliberately no `__del__`: `spirv_utils` must never be unloaded.
+    #
+    # `driver.c` defines the statically allocated `PyKernelArgType`, and instances of it
+    # are cached for the lifetime of every compiled kernel (`XPULauncher.arg_annotations`).
+    # Unloading the module frees the storage of that type object while those instances are
+    # still reachable, so the next cyclic-GC pass dereferences a dangling `ob_type` and the
+    # interpreter dies with `Fatal Python error: Segmentation fault`
+    # (`tupletraverse` -> `visit_decref` -> `_PyObject_IS_GC` -> `Py_TYPE`).
+    # See https://github.com/intel/intel-xpu-backend-for-triton/issues/7682 and
+    # https://github.com/python/cpython/issues/114538.
+    #
+    # The type is not the only thing here that outlives an unload, so do not "fix" this by
+    # moving `PyKernelArgType` into Python and restoring the unload: `load_binary` returns
+    # capsules whose destructors (`freeKernel`, `freeKernelBundle`) and whose name strings
+    # live in this module, and every `XPULauncher` holds callables from it. Unloading is safe
+    # only once nothing reachable from Python can reference this module's code or storage.
+    #
+    # Windows is why this unload existed (#3090: a mapped `.pyd` cannot be deleted), so do not
+    # restore it for that reason either. Nothing here needs it any more: `runtime/cache.py`
+    # tolerates the `PermissionError` from `os.replace` on `nt`, and the `fresh_triton_cache`
+    # fixtures defer cache deletion past process exit (#7312).
+    #
+    # `ArchParser` and `ExtensionUtils` keep their unload because they are out of scope here,
+    # not because they are proven safe. `ArchParser.__getattribute__` returns a closure over
+    # the raw ctypes function that does not keep its owner alive, so a caller outliving the
+    # parser would call into an unloaded library.
 
 
 class ExtensionUtils:
@@ -285,9 +387,70 @@ class ExtensionUtils:
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
-def compile_module_from_src(src: str, name: str):
-    hasher = hashlib.sha256(__CACHE_VERSION.encode("utf-8"))
-    hasher.update((src + platform_key()).encode("utf-8"))
+class SpirvProbeUtils:
+    """Ground-truth probe for whether a SPIR-V capability is accepted by the driver's own JIT."""
+
+    def __init__(self, cache_path: str):
+        self.shared_library = ctypes.PyDLL(cache_path)
+        self.shared_library.probe_spirv_module.restype = ctypes.py_object
+        self.shared_library.probe_spirv_module.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_size_t)
+
+    def probe_spirv_module(self, device_id: int, spirv: bytes) -> bool | None:
+        return self.shared_library.probe_spirv_module(device_id, spirv, len(spirv))
+
+    if os.name != 'nt':
+
+        def __del__(self):
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
+    else:
+
+        def __del__(self):
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
+
+
+_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?')
+
+
+def is_lts(ver) -> bool:
+    if not ver:
+        return True
+    m = _VERSION_PATTERN.match(ver)
+    if not m:
+        return True
+    return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
+
+
+@lru_cache
+def get_hasher_common(eventless_submit: bool = True):
+    hasher = hashlib.sha256((__CACHE_VERSION + platform_key()).encode("utf-8"))
+    # Include libsycl_dir in the hash to prevent cache collisions across
+    # environments with different oneAPI versions (e.g. 2025.3 vs 2026.0).
+    # The compiled .so has libsycl_dir baked in as RPATH; without this,
+    # two envs with identical extension_utils.c but different oneAPI stacks
+    # share the same cache entry and load an incompatible .so.
+    if COMPILATION_HELPER.libsycl_dir:
+        hasher.update(str(COMPILATION_HELPER.libsycl_dir).encode("utf-8"))
+    if eventless_submit:
+        hasher.update("eventless_submit=True".encode("utf-8"))
+    return hasher
+
+
+def compile_module_from_src(src: str, name: str, eventless_submit: bool = True):
+    hasher = get_hasher_common(eventless_submit).copy()
+    hasher.update(src.encode("utf-8"))
+    # `spirv_utils` is compiled with `-DTRITON_INTEL_INJECT_PYTORCH=1` when
+    # `INJECT_PYTORCH=True` (see below), which wraps kernel launches in a
+    # `RECORD_FUNCTION` scope. That flag is not part of `src`, so without it in the key
+    # an uninstrumented .so cached by an earlier run (e.g. the unit tests, which never
+    # set `INJECT_PYTORCH`) is reused and the profiler scope silently disappears.
+    if name == "spirv_utils" and COMPILATION_HELPER.inject_pytorch_dep:
+        hasher.update("inject_pytorch=True".encode("utf-8"))
     key = hasher.hexdigest()
     cache = get_cache_manager(key)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
@@ -306,9 +469,15 @@ def compile_module_from_src(src: str, name: str):
 
             if COMPILATION_HELPER.inject_pytorch_dep and name == "spirv_utils":
                 if os.name == "nt":
-                    extra_compiler_args += ["/DTRITON_INTEL_INJECT_PYTORCH=1"]
+                    extra_compiler_args += ["/DTRITON_INTEL_INJECT_PYTORCH=1", "/std:c++20"]
                 else:
-                    extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1"]
+                    extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1", "-std=c++20"]
+
+            if name == "spirv_utils" and eventless_submit:
+                if os.name == "nt":
+                    extra_compiler_args += ["/DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
+                else:
+                    extra_compiler_args += ["-DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
 
             so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
                         COMPILATION_HELPER.libraries, ccflags=extra_compiler_args)
@@ -321,6 +490,8 @@ def compile_module_from_src(src: str, name: str):
         return SpirvUtils(cache_path)
     if name == 'extension_utils_impl':
         return ExtensionUtils(cache_path)
+    if name == 'spirv_probes_impl':
+        return SpirvProbeUtils(cache_path)
     if name == 'proton_utils':
         return cache_path
 
@@ -355,7 +526,8 @@ class XPUUtils(object):
         dirname = os.path.dirname(os.path.realpath(__file__))
         # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
         # and can cause `Fatal Python error: Segmentation fault`
-        mod = compile_module_from_src(src=Path(os.path.join(dirname, "driver.c")).read_text(), name="spirv_utils")
+        mod = compile_module_from_src(src=Path(os.path.join(dirname, "driver.c")).read_text(), name="spirv_utils",
+                                      eventless_submit=self._use_eventless_submit())
         global PyKernelArg
         global ARG_CONSTEXPR
         global ARG_KERNEL
@@ -378,17 +550,16 @@ class XPUUtils(object):
         self.build_signature_metadata = mod.build_signature_metadata
         self._initialized = True
 
-    def get_current_device(self):
-        try:
-            from torch._C import _xpu_getDevice
-            return _xpu_getDevice()
-        except ImportError:
-            import torch
-            return torch.xpu.current_device()
-
     def get_sycl_queue(self):
         import torch
         return torch.xpu.current_stream().sycl_queue
+
+    def _use_eventless_submit(self):
+        import torch
+        properties = torch.xpu.get_device_capability(torch.xpu.current_device())
+        # Event-less submission only saves time on the Level Zero v2 adapter, whose platform name ends in "V2". On v1
+        # (PVC's default) it does not, and PTI's default collection mode then reports zero kernel times or hangs.
+        return not is_lts(properties.get('driver_version')) and properties.get('platform_name', '').endswith(' V2')
 
     def wait(self):
         self.wait_on_sycl_queue(self.get_sycl_queue())
@@ -421,34 +592,13 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "double",
-        "bf16": "double",
-        "fp32": "double",
-        "f32": "double",
+        # Pass 16-bit floating-point scalars as raw bit patterns.
+        "fp16": "uint16_t",
+        "bf16": "uint16_t",
+        "fp32": "float",
+        "f32": "float",
         "fp64": "double",
     }[ty]
-
-
-def make_kernel_signature(signature):
-    """
-    Creates a kernel signature in C to be able to efficiently extract
-    arguments in the launcher.
-    """
-
-    def _flatten_signature(sig, output):
-        # Flatten tuples
-        if isinstance(sig, tuple):
-            for x in sig:
-                _flatten_signature(x, output)
-        else:
-            output.append(sig)
-
-    flat_signature = []
-    for sig in signature:
-        _flatten_signature(sig, flat_signature)
-    kernel_signature = [x for x in flat_signature if x != "constexpr"]
-
-    return triton.runtime.driver.active.utils.build_signature_metadata((kernel_signature, ))
 
 
 def annotate_arguments(signature):
@@ -488,7 +638,10 @@ def serialize_args(args, constants, signature, dir_path):
         args_dict['threads_per_warp'] = arg.threads_per_warp
         args_dict['shared_memory'] = arg.shared
         args_dict['kernel_name'] = arg.name
-        args_dict['spv_name'] = f"{arg.name}.spv"
+        is_native_binary = bool(getattr(arg, "generate_native_code", False))
+        binary_ext = "zebin" if is_native_binary else "spv"
+        args_dict['binary_name'] = f"{arg.name}.{binary_ext}"
+        args_dict['is_native_binary'] = is_native_binary
         args_dict['build_flags'] = arg.build_flags
 
     cnt = 0
@@ -541,22 +694,28 @@ class XPULauncher(object):
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
-        launcher = triton.runtime.driver.active.utils.launch
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta=None, descriptor_type="*i8")
+        utils = triton.runtime.driver.active.utils
+        expanded_signature = expand_signature(signature.values(), TensorDescABI.DECOMPOSED)
         self.arg_annotations = annotate_arguments(expanded_signature)
-        self.kernel_signature = make_kernel_signature(expanded_signature)
-        self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta=[])
+        self.kernel_signature = utils.build_signature_metadata(
+            ([ty for _, ty in get_kernel_argument_layout(signature.values(), TensorDescABI.DECOMPOSED)], ))
+        self.launch = wrap_handle_tensordesc(utils.launch, signature, tensordesc_meta=[])
 
-        # Serialize KernelArguments for SPIR-V Runner
-        self.serialize_kernel_args = knobs.intel.enable_dump_spirv_kernel_args
+        # Serialize KernelArguments for TritonKernelRunner
+        self.serialize_kernel_args = knobs.intel.enable_dump_kernel_args
         self.cache_dir = metadata.cache_dir
         self.dump_dir = self._resolve_dump_dir(metadata.cache_dir)
-        self.print_dump_spirv_kernel_args_info = knobs.intel.print_dump_spirv_kernel_args_info
+        self.print_dump_kernel_args_info = knobs.intel.print_dump_kernel_args_info
         self.constants = constants
         self.signature = signature
+        self.dump_launch_params = os.environ.get("TRITON_DUMP_LAUNCH_PARAMS") == "1"
+        self.global_scratch_size = metadata.global_scratch_size
+        self.global_scratch_align = metadata.global_scratch_align
+        self.profile_scratch_size = metadata.profile_scratch_size
+        self.profile_scratch_align = metadata.profile_scratch_align
 
     def _resolve_dump_dir(self, cache_dir):
-        dump_dir_root = knobs.intel.dump_spirv_kernel_args_dir
+        dump_dir_root = knobs.intel.dump_kernel_args_dir
         if not dump_dir_root:
             return cache_dir
         cache_dir_name = os.path.basename(os.path.normpath(cache_dir))
@@ -603,28 +762,59 @@ class XPULauncher(object):
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
+        active_driver = triton.runtime.driver.active
+
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_fn = allocator.get()
+                return alloc_fn(grid_size * size, align, stream)
+            return None
+
+        def allocate_default_profile_scratch(size, align):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                return active_driver.allocate_default_profile_scratch(grid_size * size, align, stream)
+            return None
+
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        if _allocation.has_profile_allocator():
+            profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                               _allocation._profile_allocator)
+        else:
+            profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
+
         if self.serialize_kernel_args:
-            if self.print_dump_spirv_kernel_args_info:
+            if self.print_dump_kernel_args_info:
                 print(
                     f"Triton kernel dump info: kernel_name={kernel_metadata.name}, cache_dir={self.cache_dir}, dump_dir={self.dump_dir}"
                 )
             serialize_args((gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                             launch_exit_hook, *args), self.constants, self.signature, self.dump_dir)
 
-        if os.environ.get("TRITON_DUMP_LAUNCH_PARAMS") == "1":
+        if self.dump_launch_params:
             # This function does not cover all cases, for example when the arguments are tuple,
             # but it is sufficient for llama 3.1 kernels
             self._dump_launch_params((gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata,
                                       launch_enter_hook, launch_exit_hook, *args), self.constants, self.signature)
 
         self.launch(gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
-                    launch_exit_hook, self.arg_annotations, self.kernel_signature, args)
+                    launch_exit_hook, global_scratch, profile_scratch, self.arg_annotations, self.kernel_signature,
+                    args)
 
 
 class XPUDriver(DriverBase):
 
     def __init__(self):
         self.launcher_cls = XPULauncher
+        try:
+            from torch._C import _xpu_getCurrentRawStream, _xpu_getDevice
+            self.get_current_device = _xpu_getDevice
+            self.get_current_stream = _xpu_getCurrentRawStream
+        except ImportError:
+            import torch
+            self.get_current_device = torch.xpu.current_device
+            self.get_current_stream = lambda idx: torch.xpu.current_stream(idx).sycl_queue
         super().__init__()
 
     def __getattr__(self, name):
@@ -635,17 +825,6 @@ class XPUDriver(DriverBase):
             return self.utils
         else:
             raise AttributeError
-
-    def get_current_device(self):
-        return self.utils.get_current_device()
-
-    def get_current_stream(self, device):
-        try:
-            from torch._C import _xpu_getCurrentRawStream
-            return _xpu_getCurrentRawStream(device)
-        except ImportError:
-            import torch
-            return torch.xpu.current_stream().sycl_queue
 
     @lru_cache
     def _construct_target(self, device):
@@ -668,6 +847,7 @@ class XPUDriver(DriverBase):
         extensions = query_device_extensions(device_id)
         dev_property.update(extensions)
         dev_property["__intel_already_queried_extensions__"] = True
+        dev_property["core_clock_rate"] = self.utils.get_device_properties(device).get("sm_clock_rate", 0)
         update_device_arch(dev_property)
 
         return GPUTarget("xpu", dev_property, warp_size=32)
@@ -689,6 +869,18 @@ class XPUDriver(DriverBase):
     def get_device_interface(self):
         import torch
         return torch.xpu
+
+    def allocate_default_profile_scratch(self, size: int, alignment: int, stream):
+        import torch
+        device = self.get_active_torch_device()
+        if not stream:
+            with torch.xpu.stream(torch.xpu.current_stream(device)):
+                return torch.zeros(size, dtype=torch.int8, device=device)
+        launch_stream = torch.xpu.get_stream_from_external(stream, device=device)
+        with torch.xpu.stream(launch_stream):
+            scratch = torch.zeros(size, dtype=torch.int8, device=device)
+        scratch.record_stream(launch_stream)
+        return scratch
 
     @staticmethod
     def is_active():

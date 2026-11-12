@@ -34,6 +34,8 @@ namespace LLVM {
 namespace NVIDIA {
 class TargetInfo;
 
+constexpr unsigned kWarpSpecializeCTABarrierId = 1;
+
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);
@@ -63,7 +65,7 @@ LogicalResult lowerLdStMatrix(
 // where for ctaId, it sets as 1's the positions that are in the same broadcast
 // group
 Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
-                             uint16_t broadcastBits);
+                             uint16_t broadcastBits, Value ctaId = {});
 
 uint32_t getCGABroadcastMask(mlir::triton::gpu::MemDescType barrierTy);
 

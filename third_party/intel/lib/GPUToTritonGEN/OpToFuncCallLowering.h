@@ -17,7 +17,7 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
-namespace mlir {
+namespace mlir::triton::intel {
 
 /// Rewriting that replace SourceOp with a CallOp to `f32Func` or `f64Func`
 /// depending on the element type that Op operates upon. The function
@@ -102,6 +102,6 @@ private:
   const std::string f64Func;
 };
 
-} // namespace mlir
+} // namespace mlir::triton::intel
 
 #endif // TRITON_CONVERSION_GPUTOGEN_OPTOFUNCCALLLOWERING_H

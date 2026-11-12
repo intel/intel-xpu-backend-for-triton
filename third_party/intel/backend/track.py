@@ -85,7 +85,14 @@ class TrackImpl:
         self.parent = TrackImpl._stack
         TrackImpl._stack = self
         if self.parent:
-            self.parent[self.name] = self.metrics
+            # The same name can be tracked more than once within a parent (e.g.
+            # `make_llir` runs several pass managers), so suffix duplicates
+            # rather than overwriting the earlier metrics.
+            name, cnt = self.name, 1
+            while name in self.parent:
+                name = f"{self.name}_{cnt}"
+                cnt += 1
+            self.parent[name] = self.metrics
         self["time"] = time.time()
         return self
 
@@ -326,7 +333,7 @@ def _tr_import_hook(name, *args, orig_import=__builtins__["__import__"], decorat
         @functools.wraps(fn := module.ir.pass_manager.run)
         def pm_run(*args, **kwargs):
             with track("pm.run") as tr:
-                args[0].enable_timing(tr.callback("passes"))
+                module.intel.enable_pm_timing(args[0], tr.callback("passes"))
                 fn(*args, **kwargs)
 
         module.ir.pass_manager.run = pm_run

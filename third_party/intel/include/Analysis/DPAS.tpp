@@ -86,12 +86,10 @@ DPASAnalysisResult DPASAnalysis<DPASEngineType, Enable>::canUseDPAS(
     return DPASAnalysisResult::False;
 
   unsigned minSGSize = minSGSizeAttr.getInt();
-  bool enableWarp32 =
-      tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32");
   assert((minSGSize == 8 || minSGSize == 16 || minSGSize == 32) &&
          "Unexpected minimum subgroup size");
 
-  if (enableWarp32 && minSGSize != 8)
+  if (minSGSize != 8)
     // We can support threads_per_warp=16 or 32 on Xe+ and later architectures.
     return (threadsPerWarp == 16 || threadsPerWarp == 32)
                ? DPASAnalysisResult::True
@@ -136,7 +134,19 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
     aElemTy = aTy.getElementType();
     bElemTy = bTy.getElementType();
 
-    if (aElemTy != bElemTy)
+    // Without fp8 DPAS, AccelerateMatmul extends fp8 operands with an fp32 or
+    // a bf16 accumulator to fp16 (exactly), accumulating in fp32, so mixed fp8
+    // formats become the same type there.
+    auto isFP8 = [](Type ty) {
+      return isa<Float8E5M2Type, Float8E4M3FNType>(ty);
+    };
+    auto mod = op->template getParentOfType<ModuleOp>();
+    bool fp8ToF16 =
+        (dElemTy.isF32() || dElemTy.isBF16()) && isFP8(aElemTy) &&
+        isFP8(bElemTy) && mod &&
+        !mod->hasAttr(TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
+
+    if (aElemTy != bElemTy && !fp8ToF16)
       return DPASEngineType::NOT_APPLICABLE;
 
     if (dElemTy.isIntOrIndex()) {
@@ -175,6 +185,8 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
       } else if (dElemTy.isBF16()) {
         if (aElemTy.isBF16())
           return DPASEngineType::BF16_BF16_BF16_BF16;
+        if (fp8ToF16)
+          return DPASEngineType::FP32_FP32_FP16_FP16;
         if constexpr (std::is_same<DPASEngineType, DPASEngineTypeXe3P>::value)
           if (isFp8Supported && isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy))
             return DPASEngineType::BF16_BF16_FP8_FP8;
@@ -188,13 +200,18 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
     aElemTy = aTy.getElementType();
     bElemTy = bTy.getElementType();
 
+    // e2m1 operands are packed in pairs, either as i8 or as !tt.fp4e2m1x2.
+    auto isPackedFP4 = [](Type ty) {
+      return ty.isInteger(8) || isa<PackedFloat4E2M1Type>(ty);
+    };
+
     if (isa<FloatType>(dElemTy)) {
       if (dElemTy.isF32()) {
         if (aElemTy.isBF16() && bElemTy.isBF16())
           return DPASEngineType::FP32_FP32_BF16_BF16;
         if (aElemTy.isBF16() && isa<Float8E4M3FNType, Float8E5M2Type>(bElemTy))
           return DPASEngineType::FP32_FP32_BF16_FP8;
-        if (aElemTy.isBF16() && bElemTy.isInteger(8))
+        if (aElemTy.isBF16() && isPackedFP4(bElemTy))
           return DPASEngineType::FP32_FP32_BF16_FP4;
         if (isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy) && bElemTy.isBF16())
           return DPASEngineType::FP32_FP32_FP8_BF16;
@@ -202,7 +219,7 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
           return DPASEngineType::FP32_FP32_FP16_FP16;
         if (aElemTy.isF16() && isa<Float8E4M3FNType, Float8E5M2Type>(bElemTy))
           return DPASEngineType::FP32_FP32_FP16_FP8;
-        if (aElemTy.isF16() && bElemTy.isInteger(8))
+        if (aElemTy.isF16() && isPackedFP4(bElemTy))
           return DPASEngineType::FP32_FP32_FP16_FP4;
         if (isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy) && bElemTy.isF16())
           return DPASEngineType::FP32_FP32_FP8_FP16;
@@ -210,16 +227,16 @@ DPASAnalysis<DPASEngineType, Enable>::getDPASType(OpTy op) {
             isa<Float8E4M3FNType, Float8E5M2Type>(bElemTy))
           return DPASEngineType::FP32_FP32_FP8_FP8;
         if (isa<Float8E4M3FNType, Float8E5M2Type>(aElemTy) &&
-            bElemTy.isInteger(8))
+            isPackedFP4(bElemTy))
           return DPASEngineType::FP32_FP32_FP8_FP4;
-        if (aElemTy.isInteger(8) && bElemTy.isBF16())
+        if (isPackedFP4(aElemTy) && bElemTy.isBF16())
           return DPASEngineType::FP32_FP32_FP4_BF16;
-        if (aElemTy.isInteger(8) && bElemTy.isF16())
+        if (isPackedFP4(aElemTy) && bElemTy.isF16())
           return DPASEngineType::FP32_FP32_FP4_FP16;
-        if (aElemTy.isInteger(8) &&
+        if (isPackedFP4(aElemTy) &&
             isa<Float8E4M3FNType, Float8E5M2Type>(bElemTy))
           return DPASEngineType::FP32_FP32_FP4_FP8;
-        if (aElemTy.isInteger(8) && bElemTy.isInteger(8))
+        if (isPackedFP4(aElemTy) && isPackedFP4(bElemTy))
           return DPASEngineType::FP32_FP32_FP4_FP4;
       }
     }

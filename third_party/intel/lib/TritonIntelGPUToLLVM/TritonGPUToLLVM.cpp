@@ -3,9 +3,11 @@
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
+#include "mlir/Transforms/WalkPatternRewriteDriver.h"
 
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
@@ -29,6 +31,23 @@ namespace mlir::triton::gpu::intel {
 using namespace mlir;
 
 namespace {
+
+/// Returns true if the module allocates shared memory with a partitioned
+/// layout, i.e. one base pointer per physical shared memory partition.
+bool hasPartitionedSharedMemory(ModuleOp mod) {
+  auto isPartitioned = [](Type ty) {
+    auto memDescTy = dyn_cast<triton::gpu::MemDescType>(ty);
+    return memDescTy && isa<triton::gpu::PartitionedSharedEncodingAttr>(
+                            memDescTy.getEncoding());
+  };
+  WalkResult res = mod.walk([&](Operation *op) {
+    if (llvm::any_of(op->getResultTypes(), isPartitioned) ||
+        llvm::any_of(op->getOperandTypes(), isPartitioned))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  return res.wasInterrupted();
+}
 
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
@@ -71,6 +90,11 @@ struct ConvertTritonGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
+    // Undo the bf16 emulation of {s,u}itofp, which rounds twice through f32.
+    RewritePatternSet truncPatterns(context);
+    arith::TruncFOp::getCanonicalizationPatterns(truncPatterns, context);
+    walkAndApplyPatterns(mod, std::move(truncPatterns));
+
     mlir::triton::intel::TritonGPUToLLVMPipelineManager pipelineManager(
         mod, context);
     mlir::LowerToLLVMOptions option(context);
@@ -85,7 +109,7 @@ struct ConvertTritonGPUToLLVM
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(
         mod, ::mlir::triton::intel::allocationAnalysisScratchSizeFn);
-    ModuleMembarAnalysis membarPass(&allocation, ::mlir::intel::membarFilter);
+    ModuleMembarAnalysis membarPass(allocation, ::mlir::intel::membarFilter);
     membarPass.run();
 
     // Lower functions
@@ -152,14 +176,33 @@ private:
     auto ctx = mod.getContext();
     auto loc = mod.getLoc();
     auto elemTy = typeConverter.convertType(b.getIntegerType(8));
-    // Set array size 0 and external linkage indicates that we use dynamic
-    // shared allocation to allow a larger shared memory size for each kernel.
+
+    // Shared memory is allocated statically: `global_smem` is an internal
+    // array sized after `ttg.shared` (a compile time constant computed by the
+    // `intel-allocate-shared-memory` pass), which the Level Zero runtime
+    // allocates directly from the module. No kernel argument is needed.
     //
+    // Fall back to a dynamic allocation (size 0, external linkage, base passed
+    // in as a kernel argument by `tritonintelgpu-rewrite-stack-ptr`) when:
+    //  - requested explicitly via `dynamic-shared-memory`,
+    //  - `ttg.shared` is missing, so the size is unknown - in the compilation
+    //    pipeline `intel-allocate-shared-memory` always sets it, so this only
+    //    happens when this pass is run standalone (e.g. in lit tests),
+    //  - the module uses partitioned shared memory: its per-partition bases
+    //    would become constants, which LLVM folds into an `extractelement` from
+    //    a constant vector of pointers - not expressible in SPIR-V without the
+    //    SPV_INTEL_masked_gather_scatter extension (rejected by the driver).
+    auto sharedAttr = mod->getAttrOfType<IntegerAttr>("ttg.shared");
+    bool useDynamic =
+        dynamicSharedMemory || !sharedAttr || hasPartitionedSharedMemory(mod);
+    int64_t sharedMemSize = useDynamic ? 0 : sharedAttr.getInt();
+
     // Ask for 16B alignment on global_smem because that's the largest we should
     // ever need (4xi32).
-    auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
+    auto arrayTy = LLVM::LLVMArrayType::get(elemTy, sharedMemSize);
     auto global = LLVM::GlobalOp::create(
-        b, loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
+        b, loc, arrayTy, /*isConstant=*/false,
+        useDynamic ? LLVM::Linkage::External : LLVM::Linkage::Internal,
         "global_smem", /*value=*/Attribute(), /*alignment=*/16,
         // Add ROCm support.
         static_cast<unsigned>(TritonGEN::TritonGENMemorySpace::kWorkgroup));

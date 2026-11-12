@@ -3,6 +3,10 @@ add_triton_library(TritonIntelAnalysis
     Allocation.cpp
     AxisInfoExt.cpp
     Liveness.cpp
+    RegisterPressure.cpp
+    SignednessProver.cpp
+    SymbolicBounds.cpp
+    ReuseAnalysis.cpp
     SpatialReuseAnalysis.cpp
     StrideInfo.cpp
     TemporalReuseAnalysis.cpp
@@ -17,4 +21,5 @@ add_triton_library(TritonIntelAnalysis
 
     LINK_LIBS PUBLIC
     TritonIR
+    TritonIntelGPUIR
 )

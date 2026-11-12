@@ -1,9 +1,11 @@
 # Keep in sync with extra_require.tests from setup.py
 lit
 autopep8
+cloudpickle
 isort
 numpy
 pytest
+pytest-instafail
 pytest-xdist
 scipy>=1.7.1
 llnl-hatchet
@@ -18,7 +20,7 @@ tabulate
 # Used by test-triton.sh
 pytest-xdist
 pytest-rerunfailures
-pytest-skip>=0.2.0
+pytest-skip>=0.3.0
 pytest-timeout
 
 # To set the process title to the name of the test

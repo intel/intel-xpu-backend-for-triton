@@ -6,7 +6,7 @@ import torch
 import csv
 from dataclasses import dataclass
 import inspect
-from .target_info import is_hip, is_xpu, is_cuda, get_cdna_version, is_xpu_cri
+from .target_info import is_hip, is_xpu, is_cuda, get_cdna_version
 
 
 @dataclass
@@ -86,12 +86,6 @@ def compute_roofline(*args, \
 
 def get_memset_tbps(device="cuda"):
     n_bytes = 1 << 32
-    # FIXME: XPU CRI requires explicit device index, otherwise tensor memory
-    # is not recognized as USM device memory and memset fails. Also use smaller
-    # buffer size (1<<16 vs 1<<32) to avoid hangs/segfaults
-    if is_xpu_cri():
-        n_bytes = 1 << 16
-        device = f'xpu:{torch.xpu.current_device()}'
     buf = torch.empty(n_bytes, device=device, dtype=torch.uint8)
     stream0 = ctypes.c_void_p(0)
 
@@ -103,7 +97,9 @@ def get_memset_tbps(device="cuda"):
         dptr = ctypes.c_uint64(buf.data_ptr())
         value = ctypes.c_ubyte(0)
     elif is_hip():
-        libname = "libamdhip64.so"
+        from triton.backends.amd.driver import _get_path_to_hip_runtime_dylib
+
+        libname = _get_path_to_hip_runtime_dylib()
         init_name = "hipInit"
         memset_name = "hipMemsetAsync"
         memset_argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p]
@@ -259,12 +255,13 @@ def plot_roofline(series, flops_dtype, out_path, max_tbps="memset", max_tflops="
     xs, flops_ref, bytes_ref, _ = perfs[0]
     n = len(xs)
 
+    device = triton.runtime.driver.active.get_active_torch_device()
     if not isinstance(max_tbps, int):
         assert max_tbps == "memset"
-        max_tbps = get_memset_tbps()
+        max_tbps = get_memset_tbps(device=device)
     if not isinstance(max_tflops, int):
         assert max_tflops == "cublas"
-        max_tflops = get_blas_tflops(flops_dtype)
+        max_tflops = get_blas_tflops(flops_dtype, device=device)
 
     grey = "#7f7f7f"
     opints = [f / b for f, b in zip(flops_ref, bytes_ref)]  # arithmetic intensity per sample

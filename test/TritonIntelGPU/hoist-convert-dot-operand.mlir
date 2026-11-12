@@ -169,9 +169,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // COM:   B operand (%y) — splat/expand_dims/broadcast/addptr chain + load: the
 // COM:     entire chain is rewritten to dot_op<opIdx=1, kWidth=4>.
 // COM:   B operand (%w) — pointer arithmetic chain starts in a different
-// COM:     blocked layout (different splat shape), so the hoist cannot collapse
-// COM:     the chain all the way; it leaves a single convert_layout next to the
-// COM:     splat/broadcast and rewrites the downstream addptr/load in dot_op.
+// COM:     blocked layout (different splat shape) and is still collapsed all the
+// COM:     way to dot_op<opIdx=1, kWidth=4>.
 // COM:
 // COM: Between the two dots, tt.fp_to_fp downcasts the f32 mma result to
 // COM: f8E4M3FN. The convert_layout from #mma to dot_op<opIdx=0> must NOT hoist
@@ -214,13 +213,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %Ys_27 = tt.addptr %Ys_25, %Ys_26 : tensor<64x128x!tt.ptr<f8E4M3FN>, #blocked3>, tensor<64x128xi32, #blocked3>
     %y = tt.load %Ys_27 {ttig.block_io = "row_major"} : tensor<64x128x!tt.ptr<f8E4M3FN>, #blocked3>
 
-    // B operand (W): splat starts in a different blocked layout so the hoist
-    // cannot collapse the chain entirely. One convert_layout remains — between
-    // the broadcast and the addptr — with all downstream ops in dot_op.
+    // B operand (W): the splat starts in a different blocked layout, yet the
+    // whole chain is rewritten to dot_op and the convert_layout is absorbed.
     //
-    // CHECK: %[[SPW:.*]] = tt.splat %arg2 : !tt.ptr<f8E4M3FN> -> tensor<128x1x!tt.ptr<f8E4M3FN>, #blocked>
-    // CHECK: %[[BW:.*]] = tt.broadcast %[[SPW]] : tensor<128x1x!tt.ptr<f8E4M3FN>, #blocked> -> tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked>
-    // CHECK: ttg.convert_layout %[[BW]] : tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked> -> tensor<128x128x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    // CHECK: %[[SPW:.*]] = tt.splat %arg2 : !tt.ptr<f8E4M3FN> -> tensor<128x1x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    // CHECK: tt.broadcast %[[SPW]] : tensor<128x1x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<128x128x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
     // CHECK: tt.addptr {{.*}} : tensor<128x128x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
     // CHECK: %[[W:.*]] = tt.load {{.*}} {ttig.block_io = "row_major"} : tensor<128x128x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
     %Ws_29 = tt.splat %W : !tt.ptr<f8E4M3FN> -> tensor<128x1x!tt.ptr<f8E4M3FN>, #blocked2>

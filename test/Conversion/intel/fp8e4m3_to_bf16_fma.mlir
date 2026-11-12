@@ -7,18 +7,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: @convert_fp8e4m3_to_bf16_fmul
   tt.func public @convert_fp8e4m3_to_bf16_fmul(%src: tensor<16xf8E4M3FN, #blocked>) -> tensor<16xbf16, #blocked> {
     %dst = tt.fp_to_fp %src : tensor<16xf8E4M3FN, #blocked> -> tensor<16xbf16, #blocked>
-    // CHECK-DAG: llvm.mlir.constant(2032 : i16) : i16
+    // CHECK-DAG: %[[MASK:.*]] = llvm.mlir.constant(2032 : i16) : i16
     // CHECK-DAG: llvm.mlir.constant(4 : i16) : i16
-    // CHECK-DAG: llvm.mlir.constant(1.329230e+36 : bf16) : bf16
+    // CHECK-DAG: %[[NAN:.*]] = llvm.mlir.constant(0x7FC0 : bf16) : bf16
+    // CHECK-DAG: %[[MUL:.*]] = llvm.mlir.constant(1.329230e+36 : bf16) : bf16
     // CHECK: llvm.trunc {{.*}} : i32 to i16
     // CHECK: llvm.lshr {{.*}} : i16
-    // CHECK: llvm.and {{.*}} : i16
-    // CHECK: llvm.fmul {{.*}} : bf16
+    // COM: NaN fixup for the fmul path: reserved-exponent bytes (0x7F/0xFF) select the
+    // COM: bf16 quiet-NaN constant (0x7FC0) instead of the fmul result. The masked value
+    // COM: is pinned to feed BOTH the icmp comparand and the bitcast->fmul chain, and the
+    // COM: select's condition/operand order is pinned so an operand swap cannot silently
+    // COM: pass.
+    // CHECK: %[[MASKED:.*]] = llvm.and {{.*}}, %[[MASK]] : i16
+    // CHECK: %[[ISNAN:.*]] = llvm.icmp "eq" %[[MASKED]], %[[MASK]] : i16
+    // CHECK: %[[BF:.*]] = llvm.bitcast %[[MASKED]] : i16 to bf16
+    // CHECK: %[[FMUL:.*]] = llvm.fmul %[[BF]], %[[MUL]] : bf16
+    // CHECK: llvm.select %[[ISNAN]], %[[NAN]], %[[FMUL]] : i1, bf16
     // CHECK-NOT: llvm.mlir.constant(260046848 : i32)
     // CHECK-NOT: llvm.mlir.constant(1006632960 : i32)
     // CHECK-NOT: llvm.mlir.constant(989855744 : i32)
     // CHECK-NOT: llvm.extractelement {{.*}}vector<8xi32>
-    // CHECK-NOT: llvm.icmp "eq"
     tt.return %dst : tensor<16xbf16, #blocked>
   }
 }
@@ -35,9 +43,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-DAG: llvm.mlir.constant(260046848 : i32)
     // CHECK-DAG: llvm.mlir.constant(1006632960 : i32)
     // CHECK-DAG: llvm.mlir.constant(989855744 : i32)
+    // CHECK-DAG: %[[NANMASK:.*]] = llvm.mlir.constant(133169152 : i32)
+    // COM: NaN fixup for the table path: bf16 quiet-NaN bit pattern 0x7FC00000, pinned
+    // COM: so a future change cannot silently drop the reserved-exponent fixup. The masked
+    // COM: value is pinned to feed both the icmp comparand and the select's condition, and
+    // COM: the select's operand order (NaN-const first) is pinned so an operand swap or a
+    // COM: mask off-by-one cannot silently pass.
+    // CHECK-DAG: %[[NANCONST:.*]] = llvm.mlir.constant(2143289344 : i32)
     // CHECK: llvm.icmp "eq" {{.*}} : i32
     // CHECK: llvm.extractelement {{.*}}vector<8xi32>
     // CHECK: llvm.add {{.*}} : i32
+    // CHECK: %[[NANMASKED:.*]] = llvm.and {{.*}}, %[[NANMASK]] : i32
+    // CHECK: %[[ISNAN:.*]] = llvm.icmp "eq" %[[NANMASKED]], %[[NANMASK]] : i32
+    // CHECK: llvm.select %[[ISNAN]], %[[NANCONST]], {{.*}} : i1, i32
     // CHECK-NOT: llvm.mlir.constant(2032 : i16)
     // CHECK-NOT: llvm.mlir.constant(4 : i16)
     // CHECK-NOT: llvm.mlir.constant(1.329230e+36 : bf16)

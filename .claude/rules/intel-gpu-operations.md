@@ -1,6 +1,12 @@
 ---
 description: 'Intel GPU TritonGEN dialect operations: DPAS, 2D block I/O, barriers, predicated I/O, format conversion — semantics and hardware constraints'
-applyTo: '**/Dialect/TritonGEN/**/*.cpp, **/Dialect/TritonGEN/**/*.h, **/Dialect/TritonGEN/**/*.td, **/TritonGENToLLVM/**/*.cpp, **/TritonGENToLLVM/**/*.h, **/TritonGENToSPIRV/**/*.cpp'
+paths:
+  - "**/Dialect/TritonGEN/**/*.cpp"
+  - "**/Dialect/TritonGEN/**/*.h"
+  - "**/Dialect/TritonGEN/**/*.td"
+  - "**/TritonGENToLLVM/**/*.cpp"
+  - "**/TritonGENToLLVM/**/*.h"
+  - "**/TritonGENToSPIRV/**/*.cpp"
 ---
 
 # Intel GPU TritonGEN Dialect Operations

@@ -2,6 +2,7 @@
 #define TRITON_INTEL_ANALYSIS_STRIDEINFO_H
 
 #include "mlir/Interfaces/LoopLikeInterface.h"
+#include "triton/Analysis/CallGraph.h"
 #include "triton/Analysis/Utility.h"
 
 namespace mlir::triton::intel {

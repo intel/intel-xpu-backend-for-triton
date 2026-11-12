@@ -1,0 +1,3 @@
+# checks NVIDIA-only output
+python/test/unit/test_perf_warning.py::test_mma_remark
+python/test/unit/test_perf_warning.py::test_remark_vectorization

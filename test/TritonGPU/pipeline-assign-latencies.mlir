@@ -381,6 +381,28 @@ tt.func @intermediate_use_cust_stages(%lb : index, %ub : index, %step : index,
 
 // -----
 
+#tiny_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#tiny_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32, rank = 1}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @unaligned_tma_stage_size
+  // CHECK: scf.for
+  // CHECK: tt.descriptor_load
+  // CHECK-NOT: tt.latency
+  // CHECK: "use"
+  tt.func @unaligned_tma_stage_size(%desc: !tt.tensordesc<4xf32, #tiny_shared>,
+                                    %lb: index, %ub: index, %step: index) {
+    %c0 = arith.constant 0 : i32
+    scf.for %iv = %lb to %ub step %step {
+      %load = tt.descriptor_load %desc[%c0] : !tt.tensordesc<4xf32, #tiny_shared> -> tensor<4xf32, #tiny_blocked>
+      "use"(%load) : (tensor<4xf32, #tiny_blocked>) -> ()
+    } {tt.num_stages = 3 : i32}
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
@@ -468,7 +490,7 @@ tt.func @tc_gen5_mma_acc_use_false(%lb : index, %ub : index, %step : index,
     %A_sh = ttg.local_alloc %A : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
     %B_sh = ttg.local_alloc %B : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
     %acc_use = arith.xori %acc_use_init, %true : i1
-    // CHECK: ttng.tc_gen5_mma {{.*}} {tt.latency = 1 : i32, tt.self_latency = 1 : i32}
+    // CHECK: ttng.tc_gen5_mma {{.*}} {tt.self_latency = 1 : i32}
     ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm, %acc_use, %true : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     %acc_res = ttng.tmem_load %acc_tm : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
     "use"(%acc_res) : (tensor<128x128xf32, #blocked1>) -> ()
@@ -501,7 +523,7 @@ tt.func @tc_gen5_mma_acc_use_false_dist_1(%lb : index, %ub : index, %step : inde
     %B = tt.load %B_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
     %A_sh = ttg.local_alloc %A : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
     %B_sh = ttg.local_alloc %B : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
-    // CHECK: ttng.tc_gen5_mma {{.*}} {tt.latency = 1 : i32, tt.self_latency = 1 : i32}
+    // CHECK: ttng.tc_gen5_mma {{.*}} {tt.self_latency = 1 : i32}
     ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm, %acc_use, %true : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     %acc_res = ttng.tmem_load %acc_tm : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
     "use"(%acc_res) : (tensor<128x128xf32, #blocked1>) -> ()
@@ -1149,6 +1171,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 }
 
 // -----
+
 // Test that ub.poison producing a memdesc does not get treated like a tensor
 // value in AxisInfo analysis.
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
@@ -1166,6 +1189,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 }
 
 // -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
@@ -1198,4 +1222,115 @@ tt.func @tc_gen5_mma_alloc_block_arg(%lb : index, %ub : index, %step : index,
   }
   tt.return
 }
+}
+
+
+// -----
+
+#cycle_blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#cycle_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#cycle_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @cyclic_accumulators
+  tt.func @cyclic_accumulators(%lb: index, %ub: index, %step: index,
+      %ptr_a: tensor<128x128x!tt.ptr<f16>, #cycle_blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
+      %ptr_b: tensor<128x128x!tt.ptr<f16>, #cycle_blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>}) {
+    %true = arith.constant true
+    %acc0, %init0 = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %acc1, %init1 = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %last:2 = scf.for %iv = %lb to %ub step %step iter_args(%tok0 = %init0, %tok1 = %init1) -> (!ttg.async.token, !ttg.async.token) : index {
+      // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
+      %a = tt.load %ptr_a : tensor<128x128x!tt.ptr<f16>, #cycle_blocked>
+      %a_sh = ttg.local_alloc %a : (tensor<128x128xf16, #cycle_blocked>) -> !ttg.memdesc<128x128xf16, #cycle_shared, #ttg.shared_memory>
+      %b = tt.load %ptr_b : tensor<128x128x!tt.ptr<f16>, #cycle_blocked>
+      %b_sh = ttg.local_alloc %b : (tensor<128x128xf16, #cycle_blocked>) -> !ttg.memdesc<128x128xf16, #cycle_shared, #ttg.shared_memory>
+      // CHECK: ttng.tc_gen5_mma {{.*}} {tt.self_latency = 1 : i32}
+      %mma0 = ttng.tc_gen5_mma %a_sh, %b_sh, %acc0[%tok0], %true, %true : !ttg.memdesc<128x128xf16, #cycle_shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf16, #cycle_shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable>
+      %v0, %load0 = ttng.tmem_load %acc0[%mma0] : !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #cycle_blocked>
+      %store1 = ttng.tmem_store %v0, %acc1[%tok1], %true : tensor<128x128xf32, #cycle_blocked> -> !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable>
+      // CHECK: ttng.tc_gen5_mma {{.*}} {tt.self_latency = 1 : i32}
+      %mma1 = ttng.tc_gen5_mma %a_sh, %b_sh, %acc1[%store1], %true, %true : !ttg.memdesc<128x128xf16, #cycle_shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf16, #cycle_shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable>
+      %v1, %load1 = ttng.tmem_load %acc1[%mma1] : !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #cycle_blocked>
+      %store0 = ttng.tmem_store %v1, %acc0[%load0], %true : tensor<128x128xf32, #cycle_blocked> -> !ttg.memdesc<128x128xf32, #cycle_tmem, #ttng.tensor_memory, mutable>
+      scf.yield %store0, %load1 : !ttg.async.token, !ttg.async.token
+    }
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // A tl.where-style reset before the MMA does not protect its delayed read.
+  // CHECK-LABEL: @tc_gen5_mma_periodic_reset
+  tt.func @tc_gen5_mma_periodic_reset(%a: !ttg.memdesc<128x128xf16, #shared, #smem>, %b: !ttg.memdesc<128x128xf16, #shared, #smem>, %out: tensor<128x128x!tt.ptr<f32>, #blocked>, %n: i32) {
+    %true = arith.constant true
+    %false = arith.constant false
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c3 = arith.constant 3 : i32
+    %acc, %init = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %last:2 = scf.for %i = %c0 to %n step %c1 iter_args(%tok = %init, %use_acc = %false) -> (!ttg.async.token, i1) : i32 {
+      %mod = arith.andi %i, %c3 : i32
+      %keep = arith.cmpi ne, %mod, %c0 : i32
+      %use = arith.select %keep, %use_acc, %false : i1
+      // CHECK: ttng.tc_gen5_mma {{.*}} {tt.self_latency = 1 : i32}
+      %mma = ttng.tc_gen5_mma %a, %b, %acc[%tok], %use, %true : !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %v, %v_tok = ttng.tmem_load %acc[%mma] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+      tt.store %out, %v : tensor<128x128x!tt.ptr<f32>, #blocked>
+      scf.yield %v_tok, %true : !ttg.async.token, i1
+    }
+    tt.return
+  }
+
+  // A read followed by a reset in the next iteration remains pipelineable.
+  // CHECK-LABEL: @tc_gen5_mma_read_resets_select
+  tt.func @tc_gen5_mma_read_resets_select(%a: !ttg.memdesc<128x128xf16, #shared, #smem>, %b: !ttg.memdesc<128x128xf16, #shared, #smem>, %out: tensor<128x128x!tt.ptr<f32>, #blocked>, %n: i32) {
+    %true = arith.constant true
+    %false = arith.constant false
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c3 = arith.constant 3 : i32
+    %acc, %init = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %last:2 = scf.for %i = %c0 to %n step %c1 iter_args(%tok = %init, %use_acc = %false) -> (!ttg.async.token, i1) : i32 {
+      // CHECK: ttng.tc_gen5_mma {{.*}} {tt.latency = 1 : i32, tt.self_latency = 1 : i32}
+      %mma = ttng.tc_gen5_mma %a, %b, %acc[%tok], %use_acc, %true : !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %mod = arith.andi %i, %c3 : i32
+      %read = arith.cmpi eq, %mod, %c3 : i32
+      %done = scf.if %read -> !ttg.async.token {
+        %v, %v_tok = ttng.tmem_load %acc[%mma] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+        tt.store %out, %v : tensor<128x128x!tt.ptr<f32>, #blocked>
+        scf.yield %v_tok : !ttg.async.token
+      } else {
+        scf.yield %mma : !ttg.async.token
+      }
+      %next_use = arith.select %read, %false, %true : i1
+      scf.yield %done, %next_use : !ttg.async.token, i1
+    }
+    tt.return
+  }
+
+  // A predicated store does not guarantee a switch before the next MMA.
+  // CHECK-LABEL: @tc_gen5_mma_predicated_reset_store
+  tt.func @tc_gen5_mma_predicated_reset_store(%a: !ttg.memdesc<128x128xf16, #shared, #smem>, %b: !ttg.memdesc<128x128xf16, #shared, #smem>, %out: tensor<128x128x!tt.ptr<f32>, #blocked>, %n: i32, %read: i1) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32, #blocked>
+    %acc, %init = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %init_store = ttng.tmem_store %zero, %acc[%init], %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %last = scf.for %i = %c0 to %n step %c1 iter_args(%tok = %init_store) -> !ttg.async.token : i32 {
+      %store = ttng.tmem_store %zero, %acc[%tok], %read : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      // CHECK: ttng.tc_gen5_mma {{.*}} {tt.self_latency = 1 : i32}
+      %mma = ttng.tc_gen5_mma %a, %b, %acc[%store], %true, %true : !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %v, %v_tok = ttng.tmem_load %acc[%mma] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+      tt.store %out, %v : tensor<128x128x!tt.ptr<f32>, #blocked>
+      scf.yield %v_tok : !ttg.async.token
+    }
+    tt.return
+  }
 }

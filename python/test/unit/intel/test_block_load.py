@@ -1,3 +1,5 @@
+import re
+
 import pytest
 import torch
 import pathlib
@@ -61,7 +63,7 @@ def test_block_tdesc_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib
             %src_a = tt.make_tensor_descriptor %arg0, [%cM_i32, %cN_i32], [%N_i64, %c1_i64]
                      : !tt.ptr<{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
 
-            %a = tt.descriptor_load %src_a [%0, %c0_i32]
+            %a = tt.descriptor_load %src_a [%0, %c0_i32] {{ttig.desc_padding = 1 : i32}}
                  : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
                  -> tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
 
@@ -76,7 +78,7 @@ def test_block_tdesc_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib
             %src_b = tt.make_tensor_descriptor %arg2, [%cN_i32, %cM_i32], [%M_i64, %c1_i64]
                      : !tt.ptr<{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
 
-            %b = tt.descriptor_load %src_b [%c0_i32, %0]
+            %b = tt.descriptor_load %src_b [%c0_i32, %0] {{ttig.desc_padding = 1 : i32}}
                  : !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
                  -> tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
 
@@ -252,7 +254,8 @@ def test_block_tdesc_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP
     not (triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io']
          and triton.runtime.driver.active.get_current_target().arch['has_subgroup_matrix_multiply_accumulate']),
     reason="Block loads and/or DPAS not supported on this architecture", run=False)
-def test_block_tdesc_column_major_load(device, tmp_path: pathlib.Path):
+@pytest.mark.parametrize("threads_per_warp", [16, 32])
+def test_block_tdesc_column_major_load(threads_per_warp, device, tmp_path: pathlib.Path):
     """Verify that a column_major descriptor load correctly loads a transposed matrix.
 
     B is stored in physical memory as [N, K] row-major (N rows, K contiguous
@@ -268,13 +271,13 @@ def test_block_tdesc_column_major_load(device, tmp_path: pathlib.Path):
     M, K, N = 64, 32, 64
 
     ir = f"""
-    #dpas = #ttig.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}}>
+    #dpas = #ttig.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = {threads_per_warp}, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}}>
     #dot0 = #ttg.dot_op<{{opIdx = 0, parent = #dpas, kWidth=1}}>
     #dot1 = #ttg.dot_op<{{opIdx = 1, parent = #dpas, kWidth=2}}>
-    module attributes {{ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
-        tt.func public @column_major_load(%a_ptr: !tt.ptr<f16> {{tt.divisibility = 16 : i32}},
-                                          %b_ptr: !tt.ptr<f16> {{tt.divisibility = 16 : i32}},
-                                          %c_ptr: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
+    module attributes {{ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = {threads_per_warp} : i32}} {{
+        tt.func public @column_major_load_tpw{threads_per_warp}(%a_ptr: !tt.ptr<f16> {{tt.divisibility = 16 : i32}},
+                                                                %b_ptr: !tt.ptr<f16> {{tt.divisibility = 16 : i32}},
+                                                                %c_ptr: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
             %c0_i32 = arith.constant 0 : i32
             %c1_i64 = arith.constant 1 : i64
             %cM_i32 = arith.constant {M} : i32
@@ -320,12 +323,128 @@ def test_block_tdesc_column_major_load(device, tmp_path: pathlib.Path):
     B_stored = torch.randn((N, K), dtype=torch.float16, device=device)
     C = torch.empty((M, N), dtype=torch.float32, device=device)
 
-    temp_file = tmp_path / "test_block_tdesc_column_major_load.ttgir"
+    temp_file = tmp_path / f"test_block_tdesc_column_major_load_tpw{threads_per_warp}.ttgir"
     temp_file.write_text(ir)
     kernel = triton.compile(str(temp_file))
+    llir = kernel.asm["llir"]
 
     kernel[(1, 1, 1)](A, B_stored, C)
 
     # C should equal A x B_stored.T  (since B was loaded via column_major).
     expected = torch.mm(A.to(torch.float32), B_stored.to(torch.float32).T)
     torch.testing.assert_close(C, expected, atol=1e-1, rtol=1e-2)
+    assert 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
+    load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
+    assert load_count >= 2
+
+
+# ---------------------------------------------------------------------------
+# Row-limit mask (runtime bound) lowered to a 2D block load's base_height
+# ---------------------------------------------------------------------------
+@triton.jit
+def row_limit_dot_kernel(a_ptr, eye_ptr, out_ptr, bound, K: tl.constexpr, BM: tl.constexpr, I64: tl.constexpr):
+    # `bound` is only known at run time, so `rows < bound` is a row-limit mask
+    # that can become the 2D block load's base_height. A is multiplied by the
+    # identity and the result is stored unmasked, so any row past `bound` that
+    # the load did not zero-fill shows up in the output.
+    pid = tl.program_id(0)
+    if I64:
+        # An int64 row index, as Helion's grouped GEMM computes it (issue #8565).
+        rows = (pid * BM).to(tl.int64) + tl.arange(0, BM)
+    else:
+        rows = pid * BM + tl.arange(0, BM)
+    cols = tl.arange(0, K)
+    a = tl.load(a_ptr + rows[:, None] * K + cols[None, :], mask=(rows < bound)[:, None], other=0.0)
+    # Element stride 2 keeps this load off the 2D block path, so any 2D block
+    # load in the kernel comes from A.
+    eye = tl.load(eye_ptr + cols[:, None] * (2 * K) + cols[None, :] * 2)
+    tl.store(out_ptr + rows[:, None] * K + cols[None, :], tl.dot(a, eye))
+
+
+ROW_LIMIT_BOUNDS = [
+    70,  # inside tile 2; tile 3 starts below the bound
+    69,  # inside tile 2 (odd)
+    65,  # a single valid row in tile 2
+    64,  # at the start of tile 2: tiles 2 and 3 are entirely zero
+    33,  # inside tile 1
+    3,  # inside tile 0 (Triton specializes an int argument equal to 1 to a constexpr)
+    0,  # at the start of tile 0: everything is zero
+    128,  # every tile is fully valid
+]
+
+
+@pytest.mark.parametrize(
+    "bound, i64", [(bound, False) for bound in ROW_LIMIT_BOUNDS] + [(bound, True) for bound in ROW_LIMIT_BOUNDS] +
+    # Past int32, so `bound` is passed as an i64 and the
+    # overflow-safe i64 height runs; every row is valid.
+    [(2**33, True)])
+@pytest.mark.skipif(not is_xpu(), reason="Row-limit zero fill is specific to the XPU backend")
+@pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io'],
+                   reason="Block loads not supported on this architecture", run=False)
+def test_row_limit_zero_fill(bound, i64, device):
+    BM, BK, num_tiles = 32, 64, 4
+    rows = BM * num_tiles
+    # Non-zero everywhere, so rows past `bound` are only zero if the load zero-fills them.
+    x = torch.arange(1, rows * BK + 1, device=device, dtype=torch.float32).reshape(rows, BK).to(torch.float16)
+    eye = torch.zeros(BK, 2 * BK, device=device, dtype=torch.float16)
+    eye[:, ::2] = torch.eye(BK, device=device, dtype=torch.float16)
+    out = torch.full((rows, BK), -1, device=device, dtype=torch.float32)
+
+    kernel = row_limit_dot_kernel[(num_tiles, )](x, eye, out, bound, BK, BM, i64, num_warps=4)
+
+    # Guard against the test silently exercising the per-element path.
+    # The masked A load must get block IO (MaterializeBlockPointer) and be
+    # lowered to a hardware 2D block load; B is the only other load and uses
+    # no block IO, so the call below can only come from A.
+    assert re.search(r"tt\.load %\w+, %\w+, %\w+ \{ttig\.block_io", kernel.asm["ttgir"])
+    llir = kernel.asm["llir"]
+    assert 'spirv_Subgroup2DBlockLoad' in llir or 'GenISA.LSC2DBlockRead' in llir
+
+    ref = x.float()
+    ref[bound:] = 0
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+@triton.jit
+def row_limit_dot_rank3_kernel(a_ptr, eye_ptr, out_ptr, bound, batch_bound, K: tl.constexpr, BB: tl.constexpr,
+                               BM: tl.constexpr, A_BSTRIDE: tl.constexpr):
+    # Rank-3 variant: a row limit along dim 1, ANDed with a batch-only
+    # predicate. `tt-reorder-broadcast` leaves the AND below the final
+    # broadcast, which MaterializeBlockPointer must still recognize.
+    pid = tl.program_id(0)
+    batch = tl.arange(0, BB)
+    rows = pid * BM + tl.arange(0, BM)
+    cols = tl.arange(0, K)
+    offs = batch[:, None, None] * A_BSTRIDE + rows[None, :, None] * K + cols[None, None, :]
+    mask = (rows < bound)[None, :, None] & (batch < batch_bound)[:, None, None]
+    a = tl.load(a_ptr + offs, mask=mask, other=0.0)
+    # Element stride 2 keeps this load off the 2D block path.
+    eye = tl.load(eye_ptr + batch[:, None, None] * (K * 2 * K) + cols[None, :, None] * (2 * K) +
+                  cols[None, None, :] * 2)
+    tl.store(out_ptr + offs, tl.dot(a, eye))
+
+
+@pytest.mark.parametrize("bound", [70, 64, 33, 3, 0, 128])
+@pytest.mark.parametrize("batch_bound", [2, 1, 0])
+@pytest.mark.skipif(not is_xpu(), reason="Row-limit zero fill is specific to the XPU backend")
+@pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io'],
+                   reason="Block loads not supported on this architecture", run=False)
+def test_row_limit_zero_fill_rank3(bound, batch_bound, device):
+    BB, BM, BK, num_tiles = 2, 32, 64, 4
+    rows = BM * num_tiles
+    x = torch.arange(1, BB * rows * BK + 1, device=device, dtype=torch.float32).reshape(BB, rows, BK).to(torch.float16)
+    eye = torch.zeros(BB, BK, 2 * BK, device=device, dtype=torch.float16)
+    eye[:, :, ::2] = torch.eye(BK, device=device, dtype=torch.float16)
+    out = torch.full((BB, rows, BK), -1, device=device, dtype=torch.float32)
+
+    kernel = row_limit_dot_rank3_kernel[(num_tiles, )](x, eye, out, bound, batch_bound, BK, BB, BM, rows * BK,
+                                                       num_warps=4)
+
+    # The masked A load must get block IO, with the batch predicate and row
+    # limit both recognized.
+    assert re.search(r"tt\.load %\w+, %\w+, %\w+ \{ttig\.block_io", kernel.asm["ttgir"])
+
+    ref = x.float()
+    ref[:, bound:] = 0
+    ref[batch_bound:] = 0
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)

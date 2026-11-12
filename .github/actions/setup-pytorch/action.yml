@@ -22,6 +22,9 @@ inputs:
   cache:
     description: Cache enabled or disabled
     default: enabled
+  lts:
+    description: Build for LTS driver (limits TORCH_XPU_ARCH_LIST to pvc only)
+    default: "false"
 outputs:
   pytorch_cache_key:
     description: "PyTorch cache key"
@@ -82,7 +85,7 @@ runs:
       run: |
         ONEAPI_LINK=$(readlink /opt/intel/oneapi || true)
         ONEAPI_KEY=$(sha256sum /opt/intel/installed.txt 2> /dev/null | cut -d\  -f1 || true)
-        PYTORCH_CACHE_KEY=$(echo $PYTHON_VERSION $PYTORCH_COMMIT_ID ${{ hashFiles('scripts/patch-pytorch.sh') }} ${{ inputs.mode }}${ONEAPI_KEY}${ONEAPI_LINK} | sha256sum - | cut -d\  -f1)
+        PYTORCH_CACHE_KEY=$(echo $PYTHON_VERSION $PYTORCH_COMMIT_ID ${{ hashFiles('scripts/patch-pytorch.sh') }} ${{ inputs.mode }}${ONEAPI_KEY}${ONEAPI_LINK} ${{ inputs.lts }} | sha256sum - | cut -d\  -f1)
         echo "PYTORCH_CACHE_KEY=$PYTORCH_CACHE_KEY" | tee -a "$GITHUB_ENV"
         echo "pytorch_cache_key=pytorch-$PYTORCH_CACHE_KEY-$CACHE_NUMBER" >> "$GITHUB_OUTPUT"
 
@@ -117,8 +120,12 @@ runs:
       run: |
         source ${{ inputs.oneapi }}/setvars.sh
 
-        # Limit AOT
-        export TORCH_XPU_ARCH_LIST="pvc,bmg,dg2,arl-h,mtl-h"
+        # Limit AOT; LTS drivers only support pvc
+        if [[ "${{ inputs.lts }}" == "true" ]]; then
+          export TORCH_XPU_ARCH_LIST="pvc"
+        else
+          export TORCH_XPU_ARCH_LIST="pvc,bmg,dg2,arl-h,mtl-h"
+        fi
 
         cd pytorch
         # FIXME: Compatibility with versions of CMake older than 3.5 has been removed, this brakes compilation of third_party/protobuf:

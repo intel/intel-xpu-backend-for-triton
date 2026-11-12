@@ -30,7 +30,7 @@ struct MLIRPluginPass : public impl::TritonGPUMLIRPluginBase<MLIRPluginPass> {
 
     mod.walk([&](FunctionOpInterface funcOp) {
       StringAttr funcNameAttr = funcOp.getNameAttr();
-      funcOp.setName(name);
+      funcOp.setSymbolName(name);
     });
   }
 };
@@ -58,7 +58,7 @@ static void registerTritonPluginPass() {
 }
 
 static const char *PLUGIN_NAME = "TritonPlugin";
-static const char *PASS_NAME = "add_plugin";
+static const char *PASS_NAME = "plugin";
 static const char *VERSION = "0.1.0";
 
 using namespace mlir::triton;

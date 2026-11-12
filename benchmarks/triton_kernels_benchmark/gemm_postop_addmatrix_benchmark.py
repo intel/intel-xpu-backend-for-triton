@@ -12,6 +12,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY, DEVICE_MODULE
 import psutil
 
 INT8_ONLY_OPTION = os.getenv('INT8_ONLY', '0') == '1'
@@ -53,7 +54,9 @@ def suffix():
             num_stages=2, num_warps=32),
     ],
     key=['M', 'N', 'K'],
-    restore_value=['c_ptr'],
+    # The kernel never reads c, so zeroing it in place keeps a previous config's output out of c without the
+    # extra copy of c that restore_value allocates.
+    reset_to_zero=['c_ptr'],
 )
 @triton.jit
 def matmul_kernel_with_tensor_descriptors(
@@ -125,7 +128,7 @@ def matmul_kernel_with_tensor_descriptors(
             num_stages=2, num_warps=4),
     ],
     key=['M', 'N', 'K'],
-    restore_value=['c_ptr'],
+    reset_to_zero=['c_ptr'],
 )
 @triton.jit
 def matmul_kernel_with_tensor_descriptors_batched(
@@ -250,8 +253,6 @@ X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i, dtype]
               [4096, 8, 16384, 128]
           ] for dtype in dtypes()]
 
-DEVICE_NAME = torch.xpu.get_device_name()
-DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
 RAM_TOTAL = psutil.virtual_memory().total
 
 # keep in sync with `def dtypes`
@@ -313,16 +314,16 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         args={},
     ))
 def benchmark(B, M, N, K, dtype, provider):
-    torch.xpu.empty_cache()
+    DEVICE_MODULE.empty_cache()
     # Maximum across onednn=600, triton=1000
     # For onednn and triton: Some configs increase performance with warmup as a step function, but some
     # slowly decrease with saturation. Performance is best at 150-200ms range, but we want stable, not just best
     do_bench = benchmark_suite.get_do_bench(n_warmup=1000, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     res_dtype = torch.float32 if dtype.is_floating_point else torch.int32
     if dtype.is_floating_point:
-        rand = lambda shape, dtype: torch.rand(shape, device='xpu', dtype=dtype)
+        rand = lambda shape, dtype: torch.rand(shape, device=DEVICE, dtype=dtype)
     else:
-        rand = lambda shape, dtype: torch.randint(low=-127, high=128, size=shape, device='xpu', dtype=dtype)
+        rand = lambda shape, dtype: torch.randint(low=-127, high=128, size=shape, device=DEVICE, dtype=dtype)
     if B == 1:
         a = rand((M, K), dtype)
         b = rand((K, N), dtype)
@@ -333,26 +334,29 @@ def benchmark(B, M, N, K, dtype, provider):
         d = rand((B, M, N), res_dtype)
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(a, b) + d)
+        # bf16 x bf16 -> fp32 natively in oneDNN. addmm/baddbmm take d as the GEMM's C term, so the add
+        # is part of the same op, matching what the Triton kernel fuses into its epilogue.
+        addmm = torch.baddbmm if a.dim() == 3 else torch.addmm
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: addmm(d, a, b, out_dtype=res_dtype))
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
-            c = torch.empty((B, M, N), device='xpu', dtype=res_dtype)
+            c = torch.empty((B, M, N), device=DEVICE, dtype=res_dtype)
         else:
             assert len(a.shape) == 2, 'Expecting shape of length 2'
-            c = torch.empty((M, N), device='xpu', dtype=res_dtype)
+            c = torch.empty((M, N), device=DEVICE, dtype=res_dtype)
         triton_fn = lambda: matmul(a, b, d, c)
         if not dtype.is_floating_point:
             # Torch does not support integer calculation in matmul
             torch_fn = lambda: torch.matmul(a.to(device='cpu', dtype=res_dtype), b.to(device='cpu', dtype=res_dtype)
-                                            ).to(device='xpu', dtype=res_dtype).add_(d)
+                                            ).to(device=DEVICE, dtype=res_dtype).add_(d)
         else:
-            torch_fn = lambda: torch.matmul(a, b).add_(d)
-        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+            addmm = torch.baddbmm if a.dim() == 3 else torch.addmm
+            torch_fn = lambda: addmm(d, a, b, out_dtype=res_dtype)
         if dtype.is_floating_point or [B, M, N, K] in [[1, 1024, 1024, 1024], [1, 2048, 2048, 2048],
                                                        [1, 512, 8192, 32768], [4, 32768, 4096, 128]]:
             # torch int8 matmul on GPU is not supported. only check a few int8 shapes to reduce runtime
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

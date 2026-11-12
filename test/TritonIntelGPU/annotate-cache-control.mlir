@@ -9,10 +9,10 @@
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @streaming_load_gets_cg
   tt.func public @streaming_load_gets_cg(%ptr: tensor<1024x!tt.ptr<f32>, #blocked1d>, %out: tensor<1024x!tt.ptr<f32>, #blocked1d>) {
-    // CHECK: tt.load {{.*}} cacheModifier = cg
+    // CHECK: tt.load {{.*}}cache_modifier = cg
     %0 = tt.load %ptr : tensor<1024x!tt.ptr<f32>, #blocked1d>
     // CHECK: tt.store
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     tt.store %out, %0 : tensor<1024x!tt.ptr<f32>, #blocked1d>
     tt.return
   }
@@ -31,7 +31,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   // CHECK-LABEL: @lane_broadcast_slice_blocked1_no_cg
   tt.func public @lane_broadcast_slice_blocked1_no_cg(%ptr: tensor<16x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>) -> tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %0 = tt.load %ptr : tensor<16x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>
     tt.return %0 : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
   }
@@ -50,7 +50,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   // CHECK-LABEL: @lane_broadcast_slice_blocked2_no_cg
   tt.func public @lane_broadcast_slice_blocked2_no_cg(%ptr: tensor<16x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked2}>>) -> tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked2}>> {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %0 = tt.load %ptr : tensor<16x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked2}>>
     tt.return %0 : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
   }
@@ -78,12 +78,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: scf.for
     %r = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<32x32xf32, #dpas> {
       // CHECK: tt.load
-      // CHECK-NOT: cacheModifier = cg
-      // CHECK-SAME: evictionPolicy = evict_last
+      // CHECK-NOT: cache_modifier = cg
+      // CHECK-SAME: eviction_policy = evict_last
       %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a>
       // CHECK: tt.load
-      // CHECK-NOT: cacheModifier = cg
-      // CHECK-SAME: evictionPolicy = evict_last
+      // CHECK-NOT: cache_modifier = cg
+      // CHECK-SAME: eviction_policy = evict_last
       %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b>
       %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a> * tensor<32x32xf16, #dot_b> -> tensor<32x32xf32, #dpas>
       scf.yield %d : tensor<32x32xf32, #dpas>
@@ -125,13 +125,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: scf.for
     %r = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<32x32xf32, #dpas> {
       // CHECK: tt.load
-      // CHECK-NOT: cacheModifier = cg
-      // CHECK-SAME: evictionPolicy = evict_last
+      // CHECK-NOT: cache_modifier = cg
+      // CHECK-SAME: eviction_policy = evict_last
       %a_blk = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #blocked>
       %a = ttg.convert_layout %a_blk : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #dot_a>
       // CHECK: tt.load
-      // CHECK-NOT: cacheModifier = cg
-      // CHECK-SAME: evictionPolicy = evict_last
+      // CHECK-NOT: cache_modifier = cg
+      // CHECK-SAME: eviction_policy = evict_last
       %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b>
       %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a> * tensor<32x32xf16, #dot_b> -> tensor<32x32xf32, #dpas>
       scf.yield %d : tensor<32x32xf32, #dpas>
@@ -157,7 +157,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b>
     %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a> * tensor<32x32xf16, #dot_b> -> tensor<32x32xf32, #dpas>
     // CHECK: tt.store
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     tt.store %cptr, %d : tensor<32x32x!tt.ptr<f32>, #dpas>
     tt.return
   }
@@ -174,7 +174,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   tt.func public @streaming_store_unchanged(%ptr: tensor<1024x!tt.ptr<f32>, #blocked1d>,
                                             %val: tensor<1024xf32, #blocked1d>) {
     // CHECK: tt.store
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     tt.store %ptr, %val : tensor<1024x!tt.ptr<f32>, #blocked1d>
     tt.return
   }
@@ -188,7 +188,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @pure_input_load_gets_cg
   tt.func public @pure_input_load_gets_cg(%ptr: tensor<32x!tt.ptr<f32>>) -> tensor<32xf32> {
-    // CHECK: tt.load {{.*}} cacheModifier = cg
+    // CHECK: tt.load {{.*}}cache_modifier = cg
     %0 = tt.load %ptr : tensor<32x!tt.ptr<f32>>
     tt.return %0 : tensor<32xf32>
   }
@@ -207,7 +207,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
                                         %val: tensor<32xf32, #blocked1d>) {
     %p0 = tt.addptr %base, %offs : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %0 = tt.load %p0 : tensor<32x!tt.ptr<f32>, #blocked1d>
     %p1 = tt.addptr %base, %offs : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
     tt.store %p1, %val : tensor<32x!tt.ptr<f32>, #blocked1d>
@@ -229,7 +229,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
                                                %v: tensor<32xf32, #blocked1d>,
                                                %mask: tensor<32xi1, #blocked1d>) -> tensor<32xf32, #blocked1d> {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %0 = tt.load %in : tensor<32x!tt.ptr<f32>, #blocked1d>
     %1 = tt.atomic_rmw fadd, acq_rel, gpu, %acc, %v, %mask : (tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xf32, #blocked1d>, tensor<32xi1, #blocked1d>) -> tensor<32xf32, #blocked1d>
     tt.return %0 : tensor<32xf32, #blocked1d>
@@ -253,7 +253,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %init = arith.constant dense<0.0> : tensor<32xf32>
     %res = scf.for %i = %lb to %ub step %step iter_args(%p = %base) -> tensor<32x!tt.ptr<f32>, #blocked1d> {
       // CHECK: tt.load
-      // CHECK-NOT: cacheModifier = cg
+      // CHECK-NOT: cache_modifier = cg
       %0 = tt.load %p : tensor<32x!tt.ptr<f32>, #blocked1d>
       scf.yield %p : tensor<32x!tt.ptr<f32>, #blocked1d>
     }
@@ -277,9 +277,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
                                           %val: tensor<32xf32, #blocked1d>) -> (tensor<32xf32, #blocked1d>, tensor<32xf32, #blocked1d>) {
     %pd = tt.addptr %DW, %offs : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %dw = tt.load %pd : tensor<32x!tt.ptr<f32>, #blocked1d>
-    // CHECK: tt.load {{.*}} cacheModifier = cg
+    // CHECK: tt.load {{.*}}cache_modifier = cg
     %x = tt.load %X : tensor<32x!tt.ptr<f32>, #blocked1d>
     %sp = tt.addptr %DW, %offs : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
     tt.store %sp, %val : tensor<32x!tt.ptr<f32>, #blocked1d>
@@ -302,7 +302,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %splat_l = tt.splat %base : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>, #blocked1d>
     %lp = tt.addptr %splat_l, %offs : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %0 = tt.load %lp : tensor<32x!tt.ptr<f32>, #blocked1d>
     %splat_s = tt.splat %base : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>, #blocked1d>
     %sp = tt.addptr %splat_s, %offs : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
@@ -320,9 +320,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @user_modifier_ca_preserved
   tt.func public @user_modifier_ca_preserved(%ptr: tensor<32x!tt.ptr<f32>>) -> tensor<32xf32> {
-    // CHECK: tt.load {{.*}} cacheModifier = ca
-    // CHECK-NOT: cacheModifier = cg
-    %0 = tt.load %ptr cacheModifier = ca : tensor<32x!tt.ptr<f32>>
+    // CHECK: tt.load {{.*}}cache_modifier = ca
+    // CHECK-NOT: cache_modifier = cg
+    %0 = tt.load %ptr {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : tensor<32x!tt.ptr<f32>>
     tt.return %0 : tensor<32xf32>
   }
 }
@@ -330,16 +330,16 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 // COM: Test l2 — user-specified eviction policy (evict_first / evict_last)
-// COM: must NOT be overridden. The lowering maps these to precise LSC cache
-// COM: modes; stamping .cg here would lose the user's intent.
+// COM: must NOT be overridden. Stamping .cg here would take precedence over the
+// COM: lowering (evict_last -> L1C_L3C, evict_first -> Default).
 
 #blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @user_evict_first_preserved
   tt.func public @user_evict_first_preserved(%ptr: tensor<1024x!tt.ptr<f32>, #blocked1d>) -> tensor<1024xf32, #blocked1d> {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    %0 = tt.load %ptr evictionPolicy = evict_first : tensor<1024x!tt.ptr<f32>, #blocked1d>
+    // CHECK-NOT: cache_modifier = cg
+    %0 = tt.load %ptr {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>} : tensor<1024x!tt.ptr<f32>, #blocked1d>
     tt.return %0 : tensor<1024xf32, #blocked1d>
   }
 }
@@ -353,8 +353,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   // CHECK-LABEL: @user_evict_last_preserved
   tt.func public @user_evict_last_preserved(%ptr: tensor<1024x!tt.ptr<f32>, #blocked1d>) -> tensor<1024xf32, #blocked1d> {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    %0 = tt.load %ptr evictionPolicy = evict_last : tensor<1024x!tt.ptr<f32>, #blocked1d>
+    // CHECK-NOT: cache_modifier = cg
+    %0 = tt.load %ptr {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<1024x!tt.ptr<f32>, #blocked1d>
     tt.return %0 : tensor<1024xf32, #blocked1d>
   }
 }
@@ -374,11 +374,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
                                           %DW: tensor<32x!tt.ptr<f32>, #blocked1d>,
                                           %offs: tensor<32xi32, #blocked1d>) {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %x = tt.load %X : tensor<32x!tt.ptr<f32>, #blocked1d>
     %lp = tt.addptr %DW, %offs : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %cur = tt.load %lp : tensor<32x!tt.ptr<f32>, #blocked1d>
     %sum = arith.addf %x, %cur : tensor<32xf32, #blocked1d>
     %sp = tt.addptr %DW, %offs : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
@@ -401,7 +401,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
                                              %cond: i1) -> tensor<32xf32, #blocked1d> {
     %p = arith.select %cond, %a, %b : tensor<32x!tt.ptr<f32>, #blocked1d>
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %0 = tt.load %p : tensor<32x!tt.ptr<f32>, #blocked1d>
     tt.return %0 : tensor<32xf32, #blocked1d>
   }
@@ -423,7 +423,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
                                                  %cond: i1,
                                                  %val: tensor<32xf32, #blocked1d>) -> tensor<32xf32, #blocked1d> {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %0 = tt.load %X : tensor<32x!tt.ptr<f32>, #blocked1d>
     %sp = arith.select %cond, %a, %b : tensor<32x!tt.ptr<f32>, #blocked1d>
     tt.store %sp, %val : tensor<32x!tt.ptr<f32>, #blocked1d>
@@ -446,7 +446,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
                                              %cond: i1) {
     %cst = arith.constant dense<0.0> : tensor<32xf32, #blocked1d>
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %x = tt.load %X : tensor<32x!tt.ptr<f32>, #blocked1d>
     %res = scf.if %cond -> tensor<32xf32, #blocked1d> {
       scf.yield %x : tensor<32xf32, #blocked1d>
@@ -479,7 +479,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
                                                    %cmp: i32,
                                                    %val: i32) -> tensor<32xf32, #blocked1d> {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %0 = tt.load %X : tensor<32x!tt.ptr<f32>, #blocked1d>
     %1 = tt.atomic_cas acq_rel, gpu, %lock, %cmp, %val : (!tt.ptr<i32>, i32, i32) -> i32
     tt.return %0 : tensor<32xf32, #blocked1d>
@@ -502,7 +502,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
                                                 %offs: tensor<32xi32, #blocked1d>,
                                                 %n: i32) {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %x = tt.load %X : tensor<32x!tt.ptr<f32>, #blocked1d>
     %c0 = arith.constant 0 : i32
     %c1 = arith.constant 1 : i32
@@ -543,7 +543,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
                                                 %n: i32)
       -> tensor<32x32xf32, #dpas> {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a>
     %c0 = arith.constant 0 : i32
     %c1 = arith.constant 1 : i32
@@ -576,7 +576,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
   // CHECK-LABEL: @nested_slice_over_dot_operand
   tt.func public @nested_slice_over_dot_operand(%p: tensor<16x!tt.ptr<f16>, #slice_1d>) {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %0 = tt.load %p : tensor<16x!tt.ptr<f16>, #slice_1d>
     tt.return
   }
@@ -597,7 +597,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
                                                  %lb: i32, %ub: i32, %step: i32) {
     scf.for %q = %lb to %ub step %step : i32 {
       // CHECK: tt.load
-      // CHECK-NOT: cacheModifier = cg
+      // CHECK-NOT: cache_modifier = cg
       %v = tt.load %kv : tensor<32x!tt.ptr<f32>, #blocked1d>
       tt.store %out, %v : tensor<32x!tt.ptr<f32>, #blocked1d>
     }
@@ -628,7 +628,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
       %iv = tt.splat %i : i32 -> tensor<32xi32, #blocked1d>
       %pp = tt.addptr %p0, %iv : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
       %poo = tt.addptr %po0, %iv : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
-      // CHECK: tt.load {{.*}} cacheModifier = cg
+      // CHECK: tt.load {{.*}}cache_modifier = cg
       %v = tt.load %pp : tensor<32x!tt.ptr<f32>, #blocked1d>
       tt.store %poo, %v : tensor<32x!tt.ptr<f32>, #blocked1d>
     }
@@ -652,9 +652,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
       -> (tensor<32xf32, #blocked1d>, tensor<32xf32, #blocked1d>) {
     %p0 = tt.addptr %X, %off0 : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
     %p1 = tt.addptr %X, %off1 : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
-    // CHECK: tt.load {{.*}} cacheModifier = cg
+    // CHECK: tt.load {{.*}}cache_modifier = cg
     %a = tt.load %p0 : tensor<32x!tt.ptr<f32>, #blocked1d>
-    // CHECK: tt.load {{.*}} cacheModifier = cg
+    // CHECK: tt.load {{.*}}cache_modifier = cg
     %b = tt.load %p1 : tensor<32x!tt.ptr<f32>, #blocked1d>
     tt.return %a, %b : tensor<32xf32, #blocked1d>, tensor<32xf32, #blocked1d>
   }
@@ -680,7 +680,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   tt.func public @scale_encoding_load_unchanged(%sptr: tensor<16x8x!tt.ptr<i8>, #ll_scale>)
       -> tensor<16x8xi8, #ll_scale> {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: cache_modifier = cg
     %s = tt.load %sptr : tensor<16x8x!tt.ptr<i8>, #ll_scale>
     tt.return %s : tensor<16x8xi8, #ll_scale>
   }
@@ -698,8 +698,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   tt.func public @known_reuse_no_dot_consumer(%ptr: tensor<32x32x!tt.ptr<f32>, #blocked2d_h>,
                                               %out: tensor<32x32x!tt.ptr<f32>, #blocked2d_h>) {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    // CHECK-NOT: evictionPolicy = evict_last
+    // CHECK-NOT: cache_modifier = cg
+    // CHECK-NOT: eviction_policy = evict_last
     %0 = tt.load %ptr : tensor<32x32x!tt.ptr<f32>, #blocked2d_h>
     tt.store %out, %0 : tensor<32x32x!tt.ptr<f32>, #blocked2d_h>
     tt.return
@@ -729,8 +729,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
                                                     %lb: index, %ub: index, %step: index) -> tensor<32x32xf32, #dpas_i> {
     %result = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<32x32xf32, #dpas_i> {
       // CHECK: tt.load
-      // CHECK-NOT: cacheModifier = cg
-      // CHECK-NOT: evictionPolicy = evict_last
+      // CHECK-NOT: cache_modifier = cg
+      // CHECK-NOT: eviction_policy = evict_last
       %a_blk = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #blocked2d_i>
       %a = ttg.convert_layout %a_blk : tensor<32x32xf16, #blocked2d_i> -> tensor<32x32xf16, #dot_a_i>
       %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_i> * tensor<32x32xf16, #dot_b_i> -> tensor<32x32xf32, #dpas_i>
@@ -761,12 +761,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: scf.for
     %r = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<128x128xf32, #dpas_j> {
       // CHECK: tt.load
-      // CHECK-NOT: cacheModifier = cg
-      // CHECK-SAME: evictionPolicy = evict_last
+      // CHECK-NOT: cache_modifier = cg
+      // CHECK-SAME: eviction_policy = evict_last
       %a = tt.load %aptr : tensor<128x128x!tt.ptr<f16>, #dot_a_j>
       // CHECK: tt.load
-      // CHECK-NOT: cacheModifier = cg
-      // CHECK-NOT: evictionPolicy = evict_last
+      // CHECK-NOT: cache_modifier = cg
+      // CHECK-NOT: eviction_policy = evict_last
       %b = tt.load %bptr : tensor<128x128x!tt.ptr<f16>, #dot_b_j>
       %d = tt.dot %a, %b, %c : tensor<128x128xf16, #dot_a_j> * tensor<128x128xf16, #dot_b_j> -> tensor<128x128xf32, #dpas_j>
       scf.yield %d : tensor<128x128xf32, #dpas_j>
@@ -788,8 +788,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
                                            %bptr: tensor<256x128x!tt.ptr<f16>, #dot_b_k>,
                                            %c: tensor<128x128xf32, #dpas_k>) -> tensor<128x128xf32, #dpas_k> {
     // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    // CHECK-NOT: evictionPolicy = evict_last
+    // CHECK-NOT: cache_modifier = cg
+    // CHECK-NOT: eviction_policy = evict_last
     %a = tt.load %aptr : tensor<128x256x!tt.ptr<f16>, #dot_a_k>
     %b = tt.load %bptr : tensor<256x128x!tt.ptr<f16>, #dot_b_k>
     %d = tt.dot %a, %b, %c : tensor<128x256xf16, #dot_a_k> * tensor<256x128xf16, #dot_b_k> -> tensor<128x128xf32, #dpas_k>
@@ -823,12 +823,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: scf.for
     %r = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<32x32xf32, #dpas_l> {
       // CHECK: tt.load
-      // CHECK-NOT: cacheModifier = cg
-      // CHECK-SAME: evictionPolicy = evict_last
+      // CHECK-NOT: cache_modifier = cg
+      // CHECK-SAME: eviction_policy = evict_last
       %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a_l>
       // CHECK: tt.load
-      // CHECK-NOT: cacheModifier = cg
-      // CHECK-SAME: evictionPolicy = evict_last
+      // CHECK-NOT: cache_modifier = cg
+      // CHECK-SAME: eviction_policy = evict_last
       %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b_l>
       %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_l> * tensor<32x32xf16, #dot_b_l> -> tensor<32x32xf32, #dpas_l>
       scf.yield %d : tensor<32x32xf32, #dpas_l>
@@ -862,17 +862,143 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
       // A operand: factor = 1 → rejected. Reuse-suspected branch returns
       // false → no annotation set; load stays at default cache + default eviction.
       // CHECK: tt.load
-      // CHECK-NOT: cacheModifier = cg
-      // CHECK-NOT: evictionPolicy = evict_last
+      // CHECK-NOT: cache_modifier = cg
+      // CHECK-NOT: eviction_policy = evict_last
       %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a_m>
       // B operand: factor = 4 → accepted, promoted to evict_last.
       // CHECK: tt.load
-      // CHECK-NOT: cacheModifier = cg
-      // CHECK-SAME: evictionPolicy = evict_last
+      // CHECK-NOT: cache_modifier = cg
+      // CHECK-SAME: eviction_policy = evict_last
       %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b_m>
       %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_m> * tensor<32x32xf16, #dot_b_m> -> tensor<32x32xf32, #dpas_m>
       scf.yield %d : tensor<32x32xf32, #dpas_m>
     }
     tt.return %r : tensor<32x32xf32, #dpas_m>
+  }
+}
+
+// -----
+
+// COM: Single-warp streaming load must still get CG. With one warp the
+// COM: LinearLayout's warp in-dim has no bases, so there is no other warp to
+// COM: share lines with; a degenerate "every axis is warp-invariant" answer
+// COM: must not be mistaken for cross-subgroup reuse.
+
+#blocked1d_1w = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @single_warp_streaming_load_gets_cg
+  tt.func public @single_warp_streaming_load_gets_cg(%ptr: tensor<1024x!tt.ptr<f32>, #blocked1d_1w>, %out: tensor<1024x!tt.ptr<f32>, #blocked1d_1w>) {
+    // CHECK: tt.load {{.*}}cache_modifier = cg
+    %0 = tt.load %ptr : tensor<1024x!tt.ptr<f32>, #blocked1d_1w>
+    // CHECK: tt.store
+    // CHECK-NOT: cache_modifier = cg
+    tt.store %out, %0 : tensor<1024x!tt.ptr<f32>, #blocked1d_1w>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The single-warp rule is layout-independent: single-warp GEMM operand
+// COM: loads have no other warp to share their tiles with, so without temporal
+// COM: reuse they get CG like any other load.
+
+#dpas_1w = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a_1w = #ttg.dot_op<{opIdx = 0, parent = #dpas_1w, kWidth = 1}>
+#dot_b_1w = #ttg.dot_op<{opIdx = 1, parent = #dpas_1w, kWidth = 2}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @single_warp_dot_operand_load_gets_cg
+  tt.func public @single_warp_dot_operand_load_gets_cg(%aptr: tensor<32x32x!tt.ptr<f16>, #dot_a_1w>,
+                                                    %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b_1w>,
+                                                    %c: tensor<32x32xf32, #dpas_1w>) -> tensor<32x32xf32, #dpas_1w> {
+    // CHECK: tt.load {{.*}}cache_modifier = cg
+    // CHECK: tt.load {{.*}}cache_modifier = cg
+    %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a_1w>
+    %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b_1w>
+    %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_1w> * tensor<32x32xf16, #dot_b_1w> -> tensor<32x32xf32, #dpas_1w>
+    tt.return %d : tensor<32x32xf32, #dpas_1w>
+  }
+}
+
+// -----
+
+// COM: Gather gate. The table load's offset is computed from a tensor the
+// COM: kernel loaded (`table[idx[i] / 64]`), so its reuse is data-dependent and
+// COM: invisible to the reuse analyses: a small table can be hit by every lane.
+// COM: The load must keep the default policy instead of falling through to
+// COM: `.cg`. The index load itself is a plain streaming load and still gets `.cg`.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @gather_via_loaded_indices_no_cg
+  tt.func public @gather_via_loaded_indices_no_cg(%idx: !tt.ptr<i32>, %table: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
+    %c64 = arith.constant dense<64> : tensor<1024xi32, #blocked1d>
+    %r = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked1d>
+    %si = tt.splat %idx : !tt.ptr<i32> -> tensor<1024x!tt.ptr<i32>, #blocked1d>
+    %pi = tt.addptr %si, %r : tensor<1024x!tt.ptr<i32>, #blocked1d>, tensor<1024xi32, #blocked1d>
+    // CHECK: tt.load {{.*}}cache_modifier = cg
+    %tok = tt.load %pi : tensor<1024x!tt.ptr<i32>, #blocked1d>
+    %blk = arith.divsi %tok, %c64 : tensor<1024xi32, #blocked1d>
+    %st = tt.splat %table : !tt.ptr<i32> -> tensor<1024x!tt.ptr<i32>, #blocked1d>
+    %pt = tt.addptr %st, %blk : tensor<1024x!tt.ptr<i32>, #blocked1d>, tensor<1024xi32, #blocked1d>
+    // CHECK: tt.load
+    // CHECK-NOT: cache_modifier = cg
+    %v = tt.load %pt : tensor<1024x!tt.ptr<i32>, #blocked1d>
+    %so = tt.splat %out : !tt.ptr<i32> -> tensor<1024x!tt.ptr<i32>, #blocked1d>
+    %po = tt.addptr %so, %r : tensor<1024x!tt.ptr<i32>, #blocked1d>, tensor<1024xi32, #blocked1d>
+    // CHECK: tt.store
+    tt.store %po, %v : tensor<1024x!tt.ptr<i32>, #blocked1d>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Gather gate must not over-trigger: a base offset read by a *scalar*
+// COM: load (e.g. a variable-length kernel's per-sequence start) is uniform across the
+// COM: tile, so the tile address stays structured and the streaming load
+// COM: still gets `.cg`.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @scalar_loaded_offset_streaming_gets_cg
+  tt.func public @scalar_loaded_offset_streaming_gets_cg(%seqstart: !tt.ptr<i32>, %in: !tt.ptr<f32>, %out: tensor<1024x!tt.ptr<f32>, #blocked1d>) {
+    %start = tt.load %seqstart : !tt.ptr<i32>
+    %r = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked1d>
+    %base = tt.addptr %in, %start : !tt.ptr<f32>, i32
+    %s = tt.splat %base : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked1d>
+    %p = tt.addptr %s, %r : tensor<1024x!tt.ptr<f32>, #blocked1d>, tensor<1024xi32, #blocked1d>
+    // CHECK: tt.load {{.*}}cache_modifier = cg
+    %v = tt.load %p : tensor<1024x!tt.ptr<f32>, #blocked1d>
+    tt.store %out, %v : tensor<1024x!tt.ptr<f32>, #blocked1d>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Gather gate must not over-trigger on a tensor read reduced to a scalar
+// COM: (e.g. a `tl.sum` over loaded lengths used as a base offset): the scalar
+// COM: is uniform across the tile, so the streaming load still gets `.cg`.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @reduced_loaded_offset_streaming_gets_cg
+  tt.func public @reduced_loaded_offset_streaming_gets_cg(%lens: tensor<1024x!tt.ptr<i32>, #blocked1d>, %in: !tt.ptr<f32>, %out: tensor<1024x!tt.ptr<f32>, #blocked1d>) {
+    %l = tt.load %lens : tensor<1024x!tt.ptr<i32>, #blocked1d>
+    %sum = "tt.reduce"(%l) <{axis = 0 : i32}> ({
+    ^bb0(%a: i32, %b: i32):
+      %s = arith.addi %a, %b : i32
+      tt.reduce.return %s : i32
+    }) : (tensor<1024xi32, #blocked1d>) -> i32
+    %base = tt.addptr %in, %sum : !tt.ptr<f32>, i32
+    %r = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked1d>
+    %sb = tt.splat %base : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked1d>
+    %p = tt.addptr %sb, %r : tensor<1024x!tt.ptr<f32>, #blocked1d>, tensor<1024xi32, #blocked1d>
+    // CHECK: tt.load {{.*}}cache_modifier = cg
+    // CHECK: tt.load {{.*}}cache_modifier = cg
+    %v = tt.load %p : tensor<1024x!tt.ptr<f32>, #blocked1d>
+    tt.store %out, %v : tensor<1024x!tt.ptr<f32>, #blocked1d>
+    tt.return
   }
 }

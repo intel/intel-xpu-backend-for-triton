@@ -1,0 +1,4 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/5991
+python/test/unit/test_debug.py::test_sanitize_int_add_overflow
+python/test/unit/test_debug.py::test_sanitize_int_mul_overflow
+python/test/unit/test_debug.py::test_sanitize_int_sub_overflow

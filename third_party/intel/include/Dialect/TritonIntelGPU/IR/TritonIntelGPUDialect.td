@@ -8,6 +8,9 @@ def TritonIntelGPU_Dialect : Dialect {
 
   let cppNamespace = "::mlir::triton::gpu::intel";
 
+  // Preserve the existing attr-dict syntax for inherent attributes.
+  let useStrictPropertiesInAssemblyFormat = 0;
+
   let description = [{
     Triton Intel GPU Dialect.
   }];
@@ -104,6 +107,26 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.block_io_stride";
     }
 
+    /// Get the name of the attribute used to indicate that a load relaid out
+    /// for 2D block IO is a layout anchor for RemoveLayoutConversions.
+    static constexpr llvm::StringRef getBlockIOAnchorAttrName() {
+      return "ttig.block_io_anchor";
+    }
+
+    /// Get the name of the attribute marking a `ttig.2d_block_load_from_ptr`
+    /// (or prefetch) whose `base_height` is a runtime row-limit bound, not a
+    /// fixed per-message tile height (see ttgi::matchRowLimitMask).
+    static constexpr llvm::StringRef getBlockIORuntimeRowLimitAttrName() {
+      return "ttig.block_io_runtime_row_limit";
+    }
+
+    /// Get the name of the attribute marking a `ttig.2d_block_load_from_ptr`
+    /// whose `base_width` is a runtime column bound relative to the tensor's
+    /// first column, not the per-message tile width.
+    static constexpr llvm::StringRef getBlockIORuntimeColLimitAttrName() {
+      return "ttig.block_io_runtime_col_limit";
+    }
+
     /// Get the name of the attribute used to specify the target architecture. This
     /// attribute matches architecture in a target triple used for the resulting LLVM
     /// IR module.
@@ -115,6 +138,12 @@ def TritonIntelGPU_Dialect : Dialect {
     /// Please use this attribute with caution, this is intended for temporary use.
     static constexpr llvm::StringRef getIsLTSAttrName() {
       return "ttig.is_lts";
+    }
+
+    /// Get the name of the attribute holding the core clock rate in kHz, used
+    /// to convert cycles to nanoseconds.
+    static constexpr llvm::StringRef getCoreClockRateAttrName() {
+      return "ttig.core_clock_rate_khz";
     }
 
     /// Get the name of the attribute used to indicate whether prefetching 256
@@ -156,10 +185,39 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.one_matrix_per_load";
     }
 
+    /// Get the name of the attribute used to record chained dot
+    /// classification for warp-tiling decisions.
+    static constexpr llvm::StringRef getChainedDotKindAttrName() {
+      return "ttig.chained_dot_kind";
+    }
+
     /// Get the name of the attribute used to propagate the padding option
     /// from MakeTensorDescOp to descriptor load/store operations.
     static constexpr llvm::StringRef getDescPaddingAttrName() {
       return "ttig.desc_padding";
+    }
+
+    /// Get the name of the attribute holding the largest GRF mode ("128",
+    /// "256" or "512") the backend's automatic escalation paths target for
+    /// the device, i.e. the register-mode ceiling `ReduceVariableLiveness`'s
+    /// "default" and "auto" GRF budget resolution should assume. Mirrors the
+    /// same per-target policy compiler.py's `get_max_grf_mode()` computes
+    /// (only "cri" gets 512-register mode; every other target caps at
+    /// 256). Absent
+    /// when unknown (e.g. a hand-written test module, or a
+    /// `-triton-annotate-module` invocation that didn't set `max-grf-mode`).
+    static constexpr llvm::StringRef getMaxGRFModeAttrName() {
+      return "ttig.max_grf_mode";
+    }
+
+    /// Get the name of the attribute conveying the HW base-address alignment
+    /// requirement (in bytes) for 2D block IO operations. MaterializeBlockPointer
+    /// guarantees a 4-byte aligned base, so when this value is <= 4 the base
+    /// address is already known to satisfy the HW requirement and the downstream
+    /// alignment compensation is skipped; otherwise (e.g. the 64-byte requirement
+    /// on BMG) the base address is compensated.
+    static constexpr llvm::StringRef get2DBlockIOBaseAlignmentAttrName() {
+      return "ttig.2d_block_io_base_alignment";
     }
   }];
 

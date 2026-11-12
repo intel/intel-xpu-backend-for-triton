@@ -10,13 +10,24 @@
 //
 // After this pass, %2 is moved before %1, making %1 and %3 adjacent so that
 // they can be combined by the canonicalizer.
+//
+// Eligible ops that cannot move above the first if are copied into both of its
+// branches; see Passes.td.
 //===----------------------------------------------------------------------===//
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/IRMapping.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/CSE.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 
@@ -32,56 +43,196 @@ namespace mlir::triton::intel {
 
 namespace {
 
-static void handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
-                         DominanceInfo &domInfo) {
-  // Skip if they have different conditions.
-  if (currentIf.getCondition() != nextIf.getCondition())
-    return;
-
-  // Collect ops between the two ifs and check if they are all
-  // pure (speculatable, does not touch memory) ops.
-  SetVector<Operation *> opsBetween;
-  for (Operation *op = currentIf->getNextNode(); op != nextIf.getOperation();
-       op = op->getNextNode()) {
-    if (!isPure(op))
-      return;
-    opsBetween.insert(op);
+/// True if `cond` has the same value in every thread of the program: it is
+/// built by arith/math ops from constants, program ids and arguments of the
+/// public kernel entry. Effect-free is not enough (`ttg.warp_id`, inline asm),
+/// and copied collectives such as reductions lower to work-group barriers.
+static bool isUniformCondition(Value cond, tt::FuncOp funcOp) {
+  SmallVector<Value> worklist{cond};
+  DenseSet<Value> seen;
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (!seen.insert(value).second)
+      continue;
+    if (auto arg = dyn_cast<BlockArgument>(value)) {
+      // Arguments of a private helper may come from a per-warp caller.
+      if (!funcOp.isPublic() || arg.getOwner() != &funcOp.getBody().front())
+        return false;
+      continue;
+    }
+    Operation *def = value.getDefiningOp();
+    if (isa<tt::GetProgramIdOp, tt::GetNumProgramsOp>(def))
+      continue;
+    if (!isa_and_nonnull<arith::ArithDialect, math::MathDialect>(
+            def->getDialect()) ||
+        def->getNumRegions())
+      return false;
+    worklist.append(def->operand_begin(), def->operand_end());
   }
-  if (opsBetween.empty())
+  return true;
+}
+
+/// True if `value` is defined before `head`, in its block or an enclosing one.
+static bool isAvailableBefore(Value value, Operation *head) {
+  Block *block = head->getBlock();
+  if (auto arg = dyn_cast<BlockArgument>(value))
+    return arg.getOwner() == block ||
+           arg.getOwner()->findAncestorOpInBlock(*head);
+  Operation *ancestor = block->findAncestorOpInBlock(*value.getDefiningOp());
+  return !ancestor || ancestor->isBeforeInBlock(head);
+}
+
+/// Values that may leave an scf.if as results. Descriptors and block pointers
+/// are excluded: their users trace them to a single definition.
+static bool isEscapableType(Type type) {
+  if (auto ptr = dyn_cast<tt::PointerType>(type))
+    return !isa<RankedTensorType>(ptr.getPointeeType());
+  if (auto tensor = dyn_cast<RankedTensorType>(type))
+    type = tensor.getElementType();
+  return type.isIntOrIndexOrFloat();
+}
+
+/// The first of the adjacent scf.if ops ending at `ifOp` that test its
+/// condition.
+static Operation *getRunHead(scf::IfOp ifOp) {
+  Operation *head = ifOp;
+  while (auto prev = dyn_cast_or_null<scf::IfOp>(head->getPrevNode())) {
+    if (prev.getCondition() != ifOp.getCondition())
+      break;
+    head = prev;
+  }
+  return head;
+}
+
+/// Copies `ops` to the end of both branches of `ifOp` and erases them. Values
+/// in `escaping` (used after `ops`) become extra results of a rebuilt `ifOp`.
+static void sinkInto(scf::IfOp ifOp, ArrayRef<Operation *> ops,
+                     ArrayRef<Value> escaping) {
+  OpBuilder builder(ifOp);
+  for (Region *region : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
+    auto yield = cast<scf::YieldOp>(region->front().getTerminator());
+    IRMapping mapping;
+    mapping.map(ifOp.getResults(), yield.getOperands());
+    builder.setInsertionPoint(yield);
+    for (Operation *op : ops)
+      builder.clone(*op, mapping);
+    for (Value value : escaping)
+      yield.getResultsMutable().append(mapping.lookup(value));
+  }
+
+  if (!escaping.empty()) {
+    // Same steps as replaceIfOpWithNewSignature (TritonGPU transforms).
+    SmallVector<Type> types(ifOp.getResultTypes());
+    for (Value value : escaping)
+      types.push_back(value.getType());
+    builder.setInsertionPoint(ifOp);
+    auto result =
+        scf::IfOp::create(builder, ifOp.getLoc(), types, ifOp.getCondition());
+    result->setAttrs(ifOp->getAttrs());
+    result.getThenRegion().takeBody(ifOp.getThenRegion());
+    result.getElseRegion().takeBody(ifOp.getElseRegion());
+    unsigned numOld = ifOp.getNumResults();
+    ifOp.replaceAllUsesWith(result.getResults().take_front(numOld));
+    for (auto [i, value] : llvm::enumerate(escaping))
+      Value(value).replaceAllUsesWith(result.getResult(numOld + i));
+    ifOp.erase();
+  }
+  for (Operation *op : llvm::reverse(ops))
+    op->erase();
+}
+
+/// Makes `currentIf` and `nextIf` adjacent if they test the same condition.
+/// Changes nothing unless that succeeds. `currentIf` may be replaced.
+static void handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
+                         tt::FuncOp funcOp, unsigned maxClonedOps) {
+  Value cond = currentIf.getCondition();
+  if (cond != nextIf.getCondition())
     return;
 
-  // Check that all operands are either in opsBetween or dominate currentIf.
-  for (Operation *op : opsBetween) {
-    for (Value operand : op->getOperands()) {
-      auto *defOp = operand.getDefiningOp();
-      if (!defOp || opsBetween.contains(defOp))
-        continue;
-      if (!domInfo.properlyDominates(defOp, currentIf))
-        return;
+  SmallVector<Operation *> between;
+  for (Operation *op = currentIf->getNextNode(); op != nextIf.getOperation();
+       op = op->getNextNode())
+    between.push_back(op);
+
+  // Pure ops whose inputs, including those used inside their regions, exist
+  // before the run head are hoisted; everything else is sunk into currentIf.
+  Operation *head = getRunHead(currentIf);
+  DenseSet<Operation *> hoisted;
+  SmallVector<Operation *> toHoist, toSink;
+  for (Operation *op : between) {
+    SetVector<Value> used(op->operand_begin(), op->operand_end());
+    getUsedValuesDefinedAbove(op->getRegions(), used);
+    bool hoistable = isPure(op) && llvm::all_of(used, [&](Value value) {
+                       Operation *def = value.getDefiningOp();
+                       return (def && hoisted.contains(def)) ||
+                              isAvailableBefore(value, head);
+                     });
+    if (hoistable) {
+      hoisted.insert(op);
+      toHoist.push_back(op);
+    } else {
+      toSink.push_back(op);
     }
   }
 
-  // Move all ops before the current if.
-  for (Operation *op : opsBetween)
-    op->moveBefore(currentIf);
+  SmallVector<Value> escaping;
+  if (!toSink.empty()) {
+    if (currentIf.getElseRegion().empty() || !isUniformCondition(cond, funcOp))
+      return;
+    DenseSet<Operation *> sinking(toSink.begin(), toSink.end());
+    unsigned numOps = 0;
+    for (Operation *op : toSink) {
+      bool hasNestedIf = false;
+      op->walk([&](Operation *inner) {
+        ++numOps;
+        hasNestedIf |= isa<scf::IfOp>(inner);
+      });
+      // Needed for memory safety: runOnOperation queues every if up front, and
+      // sinkInto erases `op`, which would free the nested ifs still queued.
+      if (hasNestedIf)
+        return;
+      for (Value value : op->getResults()) {
+        bool usedOutsideSink =
+            llvm::any_of(value.getUsers(), [&](Operation *user) {
+              return !sinking.contains(
+                  op->getBlock()->findAncestorOpInBlock(*user));
+            });
+        if (!usedOutsideSink)
+          continue;
+        if (!isEscapableType(value.getType()))
+          return;
+        escaping.push_back(value);
+      }
+    }
+    if (numOps > maxClonedOps)
+      return;
+  }
+
+  for (Operation *op : toHoist)
+    op->moveBefore(head);
+  if (!toSink.empty())
+    sinkInto(currentIf, toSink, escaping);
 }
 
 struct PrepareIfCombiningPass
     : public mlir::triton::intel::impl::TritonIntelGPUPrepareIfCombiningBase<
           PrepareIfCombiningPass> {
+  using Base::Base;
 
   void runOnOperation() override {
     triton::FuncOp funcOp = getOperation();
+    // Unifies guards computed by identical expressions. Must run before the
+    // ifs are collected: CSE can erase duplicate or dead ifs.
+    IRRewriter rewriter(funcOp.getContext());
     DominanceInfo domInfo(funcOp);
-    DenseMap<Block *, SmallVector<scf::IfOp>> ifsByBlock;
+    eliminateCommonSubExpressions(rewriter, domInfo, funcOp);
+
+    llvm::MapVector<Block *, SmallVector<scf::IfOp>> ifsByBlock;
     funcOp.walk(
         [&](scf::IfOp ifOp) { ifsByBlock[ifOp->getBlock()].push_back(ifOp); });
-    for (auto &[block, ifOps] : ifsByBlock) {
-      for (auto [currentIf, nextIf] :
-           llvm::zip(ifOps, llvm::drop_begin(ifOps))) {
-        handleIfPair(currentIf, nextIf, domInfo);
-      }
-    }
+    for (auto &[block, ifOps] : ifsByBlock)
+      for (size_t i = 0; i + 1 < ifOps.size(); ++i)
+        handleIfPair(ifOps[i], ifOps[i + 1], funcOp, maxClonedOps);
   }
 };
 

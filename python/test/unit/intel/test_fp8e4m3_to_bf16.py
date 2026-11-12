@@ -4,9 +4,10 @@ Tests the FP8E4M3FN -> BF16 converter across all 256 possible fp8 byte values
 and asserts bit-exact equality with the ground truth derived from the current
 converter implementation (Fp8E4M3Nv_to_Bf16 in ElementwiseOpToLLVM.cpp).
 
-Note: The current converter does NOT preserve NaN on bytes 0x7F and 0xFF —
-it returns finite values. This is the existing behavior and is preserved
-bit-exactly.
+The two reserved fp8e4m3 NaN encodings (bytes 0x7F, 0xFF) now propagate to NaN
+rather than decoding to +-480.0. The converter builds that NaN from integer bit
+operations only -- a `select` of 0x7FC0 with the sign OR'd back in. These two
+bytes are only checked for decoding to a quiet NaN.
 """
 import torch
 import pytest
@@ -32,7 +33,7 @@ EXPECTED_BF16_BITS = [
     0x4200, 0x4210, 0x4220, 0x4230, 0x4240, 0x4250, 0x4260, 0x4270, 0x4280, 0x4290, 0x42a0, 0x42b0, 0x42c0, 0x42d0,
     0x42e0, 0x42f0,  # 0x60-0x6f
     0x4300, 0x4310, 0x4320, 0x4330, 0x4340, 0x4350, 0x4360, 0x4370, 0x4380, 0x4390, 0x43a0, 0x43b0, 0x43c0, 0x43d0,
-    0x43e0, 0x43f0,  # 0x70-0x7f
+    0x43e0, 0x7fc0,  # 0x70-0x7f (0x7f = reserved NaN)
     0x8000, 0xbb00, 0xbb80, 0xbbc0, 0xbc00, 0xbc20, 0xbc40, 0xbc60, 0xbc80, 0xbc90, 0xbca0, 0xbcb0, 0xbcc0, 0xbcd0,
     0xbce0, 0xbcf0,  # 0x80-0x8f
     0xbd00, 0xbd10, 0xbd20, 0xbd30, 0xbd40, 0xbd50, 0xbd60, 0xbd70, 0xbd80, 0xbd90, 0xbda0, 0xbdb0, 0xbdc0, 0xbdd0,
@@ -48,8 +49,14 @@ EXPECTED_BF16_BITS = [
     0xc200, 0xc210, 0xc220, 0xc230, 0xc240, 0xc250, 0xc260, 0xc270, 0xc280, 0xc290, 0xc2a0, 0xc2b0, 0xc2c0, 0xc2d0,
     0xc2e0, 0xc2f0,  # 0xe0-0xef
     0xc300, 0xc310, 0xc320, 0xc330, 0xc340, 0xc350, 0xc360, 0xc370, 0xc380, 0xc390, 0xc3a0, 0xc3b0, 0xc3c0, 0xc3d0,
-    0xc3e0, 0xc3f0,  # 0xf0-0xff
+    0xc3e0, 0xffc0,  # 0xf0-0xff (0xff = reserved NaN)
 ]
+
+# The reserved NaN encodings, which are only checked for decoding to a quiet NaN.
+RESERVED_NAN_BYTES = (0x7F, 0xFF)
+
+# The quiet bit (top mantissa bit) of a bf16 NaN.
+BF16_QUIET_BIT = 0x0040
 
 
 @triton.jit
@@ -68,9 +75,8 @@ def test_fp8e4m3_to_bf16_bit_exact(device):
     Validates bit-exact equality with the ground truth from the current
     converter implementation (Fp8E4M3Nv_to_Bf16 in ElementwiseOpToLLVM.cpp).
 
-    This includes the subnormal table (bytes 0x01-0x07, 0x81-0x87) and the
-    NaN bytes (0x7F, 0xFF) which the current converter collapses to finite
-    values.
+    This includes the subnormal table (bytes 0x01-0x07, 0x81-0x87) and the two
+    reserved NaN bytes (0x7F, 0xFF), which map to a quiet NaN.
     """
     SIZE = 256
     BLOCK_SIZE = 256
@@ -83,23 +89,26 @@ def test_fp8e4m3_to_bf16_bit_exact(device):
     # Launch kernel
     type_convert[(SIZE // BLOCK_SIZE, )](src_fp8, dst, BLOCK_SIZE)
 
-    # Primary assertion: bit-exact equality for all 256 bytes
+    # Primary assertion: bit-exact equality for all bytes except the reserved
+    # NaN bytes, which only have to decode to a quiet NaN
     expected_uint16 = torch.tensor(EXPECTED_BF16_BITS, dtype=torch.uint16, device=device)
     dst_uint16 = dst.view(torch.uint16)
 
-    if not torch.equal(dst_uint16, expected_uint16):
-        # Detailed failure report
-        mismatch_mask = dst_uint16 != expected_uint16
-        mismatch_indices = torch.nonzero(mismatch_mask, as_tuple=False).squeeze(1)
-        failures = []
-        for idx in mismatch_indices[:20]:  # Report up to 20 failures
-            byte = idx.item()
-            expected = expected_uint16[byte].item()
-            actual = dst_uint16[byte].item()
+    is_nan = torch.isnan(dst).cpu().tolist()
+    failures = []
+    for byte, actual in enumerate(dst_uint16.cpu().tolist()):
+        if byte in RESERVED_NAN_BYTES:
+            if not (is_nan[byte] and actual & BF16_QUIET_BIT):
+                failures.append(f"byte=0x{byte:02x} expected=quiet NaN actual=0x{actual:04x}")
+            continue
+        expected = EXPECTED_BF16_BITS[byte]
+        if actual != expected:
             failures.append(f"byte=0x{byte:02x} expected=0x{expected:04x} actual=0x{actual:04x}")
-        msg = f"{len(mismatch_indices)} byte(s) mismatch:\n  " + "\n  ".join(failures)
-        if len(mismatch_indices) > 20:
-            msg += f"\n  ... and {len(mismatch_indices) - 20} more"
+    if failures:
+        # Report up to 20 failures
+        msg = f"{len(failures)} byte(s) mismatch:\n  " + "\n  ".join(failures[:20])
+        if len(failures) > 20:
+            msg += f"\n  ... and {len(failures) - 20} more"
         pytest.fail(msg)
 
     # Subnormal-table sub-asserts: validate each subnormal byte individually

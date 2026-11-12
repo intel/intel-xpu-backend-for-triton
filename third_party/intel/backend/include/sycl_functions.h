@@ -12,6 +12,8 @@
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
 
+namespace syclex = sycl::ext::oneapi::experimental;
+
 // Create an exception handler for asynchronous SYCL exceptions
 auto exception_handler = [](sycl::exception_list e_list) {
   for (std::exception_ptr const &e : e_list) {
@@ -143,12 +145,47 @@ inline std::optional<bool> isEnvValueBool(std::string str) {
   return std::nullopt;
 }
 
+// Last build log captured by create_module() on failure, exposed so the
+// caller (driver.c) can inspect it to classify the error (e.g. raise
+// OutOfResources on PTSS overflow). Thread-local: each call clears it.
+inline thread_local std::string g_last_module_build_log;
+
+inline sycl::context get_default_context(const sycl::device &sycl_device) {
+  const auto &platform = sycl_device.get_platform();
+#if defined(_WIN32)
+  sycl::context ctx;
+  try {
+#if __SYCL_COMPILER_VERSION >= 20250604
+    ctx = platform.khr_get_default_context();
+#else
+    ctx = platform.ext_oneapi_get_default_context();
+#endif
+  } catch (const std::runtime_error &ex) {
+    // This exception is thrown on Windows because
+    // khr_get_default_context is not implemented. But it can be safely
+    // ignored it seems.
+#if _DEBUG
+    std::cout << "ERROR: " << ex.what() << std::endl;
+#endif
+  }
+  return ctx;
+#else
+#if __SYCL_COMPILER_VERSION >= 20250604
+  return platform.khr_get_default_context();
+#else
+  return platform.ext_oneapi_get_default_context();
+#endif
+#endif
+}
+
 std::tuple<ze_module_handle_t, ze_result_t>
 create_module(ze_context_handle_t context, ze_device_handle_t device,
               uint8_t *binary_ptr, size_t binary_size, const char *build_flags,
               const bool is_spv = true) {
   assert(binary_ptr != nullptr && "binary_ptr should not be NULL");
   assert(build_flags != nullptr && "build_flags should not be NULL");
+
+  g_last_module_build_log.clear();
 
   const ze_module_format_t format =
       is_spv ? ZE_MODULE_FORMAT_IL_SPIRV : ZE_MODULE_FORMAT_NATIVE;
@@ -158,11 +195,14 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
   module_description.inputSize = static_cast<uint32_t>(binary_size);
   module_description.pInputModule = binary_ptr;
   module_description.pBuildFlags = build_flags;
-  ze_module_build_log_handle_t buildlog;
+  ze_module_build_log_handle_t buildlog = nullptr;
   ze_module_handle_t module;
   auto error_no =
       zeModuleCreate(context, device, &module_description, &module, &buildlog);
-  if (error_no != ZE_RESULT_SUCCESS) {
+  // A failing zeModuleCreate() is not required to write *phBuildLog: the loader
+  // and the validation layer can return early. Only read the handle if the
+  // stack actually produced one, otherwise error_no is reported as-is.
+  if (error_no != ZE_RESULT_SUCCESS && buildlog != nullptr) {
     size_t szLog = 0;
     ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr));
     char *strLog = (char *)malloc(szLog);
@@ -172,11 +212,14 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
       free(strLog);
       ZE_CHECK(error_no_build_log);
     }
+    g_last_module_build_log.assign(strLog, szLog ? szLog - 1 : 0);
     std::cerr << "L0 build module failed. Log: " << strLog << std::endl;
     free(strLog);
     ZE_CHECK(zeModuleBuildLogDestroy(buildlog));
   }
   ZE_CHECK(error_no);
+  if (buildlog != nullptr)
+    zeModuleBuildLogDestroy(buildlog);
   return std::make_tuple(module, error_no);
 }
 

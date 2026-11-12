@@ -23,8 +23,11 @@ def parse_args():
     return parser.parse_args()
 
 
-def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols):
-    """Parse the benchmark CSV and extract performance metrics."""
+def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols, extra_params=None):
+    """Parse the benchmark CSV and extract performance metrics.
+
+    `extra_params` (a dict) are added to the params of every row.
+    """
 
     df = pd.read_csv(csv_file_path)
 
@@ -38,6 +41,7 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols):
                 param2val[p] = int(row[p])
             except ValueError:
                 param2val[p] = str(row[p])
+        param2val.update(extra_params or {})
         return json.dumps(param2val)
 
     df['params'] = df.apply(serialize_params, axis=1)
@@ -46,7 +50,7 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols):
 
     dfs = []
     for compiler_name in compilers:
-        for value_name in ['TFlops', 'GB/s', 'time_us']:
+        for value_name in ['TFlops', 'GB/s', 'time_us', 'time_ms', 'ns_per_arg', 'cpu_mhz']:
             col = f'{compiler_name}-{value_name}'
             if col not in df.columns:
                 continue

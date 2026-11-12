@@ -3,20 +3,20 @@
 |-------------------- | -------------------- |
 | [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
 
-# Triton Conference 2025
+# Triton Conference 2026
 
-![Triton Banner](https://github.com/user-attachments/assets/b4b6972a-857c-417f-bf2c-f16f38a358c0)
+![Triton Banner](https://github.com/user-attachments/assets/e35be818-ddd4-4cb2-81dd-461add31ab41)
 
-The 3rd Triton Developer Conference took place on October 21, 2025 at the Microsoft Silicon Valley Campus in Mountain View, California.
+Triton Developer Conference registration is open: https://tritonconference2026.splashthat.com/
 
-### Conference Materials
+Folks, please join us at the Triton Developer Conference on October 19th at the San Jose Convention Center, just before PTC at the same venue!  We are finalizing an agenda with keynotes, technical talks, lightning talks, and posters.
 
-Conference recordings and materials are now available online:
+Registration and attendance are free.  Breakfast, lunch, as well as a happy hour organized by our Nvidia colleagues, are included!  Learn something new, share your experience, mingle with colleagues, and make new friends!
 
-- **Conference Videos:** [YouTube Playlist](https://www.youtube.com/playlist?list=PLc_vA1r0qoiQqCdWFDUDqI90oY5EjfGuO)
-- **Conference Slides:** [Google Drive Folder](https://drive.google.com/drive/folders/1KB6tD3UM1J0_eUp-F-JSlGrargLBawIr)
+To allow us to prepare correctly, please register and reserve your spot at your earliest convenience: https://tritonconference2026.splashthat.com/  You will see more info, including a draft agenda there soon, as well.
 
 For previous conference materials, see:
+- [2025 Conference Materials](docs/meetups/dev_conference_2025.md)
 - [2024 Conference Materials](docs/meetups/dev_conference_2024.md)
 - [2023 Conference Materials](docs/meetups/dev-meetup-2023.md)
 
@@ -72,7 +72,9 @@ arbitrary LLVM version.
 For convenience, use the following command to build LLVM and install Triton with the custom LLVM:
 
 ```shell
-make dev-install-llvm
+make dev-install-llvm                 # Core LLVM (default)
+make dev-install-llvm LLVM_BUILD=amd  # AMD LLVM only
+make dev-install-llvm LLVM_BUILD=all
 ```
 
 <details>
@@ -226,7 +228,17 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_ALWAYS_COMPILE=1` forces to compile kernels regardless of cache hit.
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
-- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
+- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of disabling fp fusion (mul+add->fma).
+- `TRITON_ALLOW_FP_FUSION=1` allows kernels to control implicit fp fusion through
+  `enable_fp_fusion`. Without this opt-in, implicit fusion is disabled. Explicit
+  fused operations such as `tl.fma` are unchanged.
+- `TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL=1` (Intel XPU) lets the software pipeliner
+  drop the prefetch of a dot operand whose loads skip most of each fetched cache line
+  (for example A in a split-K GEMM) when its cost model predicts a gain. Off by default:
+  on the B580 it speeds up long split-K loops launched over many waves, but it can be
+  slower on small grids and at some operand row pitches. It is also a kernel option
+  (`prefetch_cost_model=True`, usable as a `triton.Config` key), so the autotuner can
+  try both settings.
 - `MLIR_ENABLE_DIAGNOSTICS=<comma-separated>` controls diagnostic emission in MLIR.
   Options are: `warnings`, `remarks`, `stacktraces`, `operations`.
   Use comma-separated values to customize output. For example,
@@ -273,7 +285,7 @@ def inspect_stages(_self, stages, options, language, capability):
     # inspect or modify add_stages here
 triton.knobs.runtime.add_stages_inspection_hook = inspect_stages
 ```
-Examples of how to use this for out of tree plugin passes is [here](lib/Plugins/README.md)
+Examples of how to use this for out of tree plugin passes is [here](examples/plugins/README.md)
 # Changelog
 
 Version 2.0 is out! New features include:

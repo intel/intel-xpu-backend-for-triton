@@ -8,7 +8,11 @@ namespace xpupti {
 
 struct ExternLibXpupti : public ExternLibBase {
   using RetType = pti_result;
+#if defined(_WIN32)
+  static constexpr const char *name = "pti_view-0.dll";
+#else
   static constexpr const char *name = "libpti_view.so";
+#endif
   static constexpr const char *defaultDir = "";
   static constexpr const char *pathEnv = "TRITON_XPUPTI_LIB_PATH";
   static constexpr RetType success = PTI_SUCCESS;

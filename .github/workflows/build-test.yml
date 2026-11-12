@@ -63,10 +63,10 @@ permissions: read-all
 jobs:
   pre-commit:
     name: Pre-commit checks
-    runs-on: Linux
+    runs-on: intel-ubuntu-24.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Load pip cache
         id: pip-cache
@@ -76,13 +76,13 @@ jobs:
           CACHE_NUMBER: 2
         with:
           path: $HOME/.cache/pip
-          key: pip-3.10-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}
+          key: pip-3.11-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}
 
       - name: Install Python
         uses: ./.github/actions/setup-python
         with:
-          python_version: "3.10"
-          use_pyenv: true
+          python_version: "3.11"
+          use_pyenv: false
 
       - name: Run pre-commit checks
         run: |
@@ -109,7 +109,7 @@ jobs:
       fail-fast: false
       matrix:
         python:
-          - "3.10"
+          - "3.11"
         driver: >-
           ${{
             fromJson(

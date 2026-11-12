@@ -19,7 +19,7 @@ on:
       python_version:
         description: Python version
         type: string
-        default: "3.10"
+        default: "3.11"
       run_name:
         description: Custom run name
         type: string
@@ -29,7 +29,7 @@ permissions: read-all
 
 env:
   PYTHONIOENCODING: utf-8
-  PYTHON_VERSION: "${{ inputs.python_version || '3.10' }}"
+  PYTHON_VERSION: "${{ inputs.python_version || '3.11' }}"
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
 
 jobs:
@@ -49,10 +49,10 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -115,7 +115,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           pip install -U pybind11 cmake
-          pip install -v '.[build,tests,tutorials]'
+          pip install -v .
 
       - name: Triton version
         run: |

@@ -2,6 +2,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/raw_ostream.h"
 #include <sstream>
 
@@ -105,6 +106,7 @@ mlir::Value XeBuilder::launch(OpBuilder &rewriter, Location loc, Type resTy,
       hasSideEffect,                          // has_side_effects
       isAlignStack,                           // is_align_stack
       LLVM::TailCallKind::None,
+      /*convergent=*/false,
       LLVM::AsmDialectAttr::get(ctx,
                                 LLVM::AsmDialect::AD_ATT), // asm_dialect
       ArrayAttr::get(ctx, attrs)                           // operand_attrs
@@ -229,6 +231,35 @@ XeInstr &XeInstr::v(int vecWidth, bool predicate) {
 XeInstr &XeInstr::b(int width) {
   o("b" + std::to_string(width));
   return *this;
+}
+
+std::optional<std::string> XeVISAInstr::getTypeName(Type scalarTy) {
+  std::string typeSyntax;
+  TypeSwitch<Type>(scalarTy)
+      .Case<Float32Type>([&](auto) { typeSyntax = "f"; })
+      .Case<Float16Type>([&](auto) { typeSyntax = "hf"; })
+      .Case<IntegerType>([&](auto type) {
+        unsigned bitWidth = type.getIntOrFloatBitWidth();
+        switch (bitWidth) {
+        case 8:
+          typeSyntax = "ub";
+          break;
+        case 16:
+          typeSyntax = "uw";
+          break;
+        case 32:
+          typeSyntax = "ud";
+          break;
+        case 64:
+          typeSyntax = "uq";
+          break;
+        }
+      })
+      .Default([&](auto) { typeSyntax = ""; });
+
+  if (!typeSyntax.empty())
+    return typeSyntax;
+  return std::nullopt;
 }
 
 } // namespace triton

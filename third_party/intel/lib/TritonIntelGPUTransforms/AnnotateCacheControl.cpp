@@ -4,9 +4,11 @@
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -332,7 +334,7 @@ static int64_t computeTileBytes(Value result) {
   auto ty = dyn_cast<RankedTensorType>(result.getType());
   if (!ty)
     return 0;
-  unsigned bits = ty.getElementTypeBitWidth();
+  unsigned bits = getIntOrFloatOrPtrBitWidth(ty.getElementType());
   if (bits == 0 || bits % 8 != 0)
     return 0;
   int64_t numElements = ty.getNumElements();
@@ -510,8 +512,11 @@ private:
                                OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
   static bool applyNoReuseDefault(OpTy load) {
     if constexpr (std::is_same_v<OpTy, tt::LoadOp>) {
-      load.setCacheAttr(
-          tt::CacheModifierAttr::get(load.getContext(), tt::CacheModifier::CG));
+      // Only reached for loads left at the default policy by `tryAnnotate`, so
+      // the eviction policy is still NORMAL.
+      load.setCachePolicyAttr(
+          tt::CachePolicyAttr::get(load.getContext(), tt::CacheModifier::CG,
+                                   tt::EvictionPolicy::NORMAL));
       return true;
     }
     return false;
@@ -536,19 +541,23 @@ private:
   ///   - additionally, when reuse is *known* AND `shouldUseEvictLast` accepts
   ///     the candidate, promote to `EVICT_LAST`;
   ///   - any other reuse-branch hit stays at the default policy.
-  /// Mutual exclusion: only one of `setEvictAttr` or `setCacheAttr` is ever
-  /// called per load — guaranteed by the early-return structure.
+  /// Mutual exclusion: the cache policy is set at most once per load —
+  /// guaranteed by the early-return structure.
   template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
                                OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
   static bool tryAnnotate(OpTy load, FuncContext &ctx) {
+    CachePolicy cachePolicy = getCachePolicy(load.getCachePolicyAttr());
+
     // Frontend cache override — never overwrite an explicitly-set modifier.
-    if (load.getCache() != tt::CacheModifier::NONE)
+    if (cachePolicy.cacheModifier != tt::CacheModifier::NONE)
       return false;
 
-    // Gate 1b: user-specified eviction policy (e.g. evict_first/evict_last
-    // from inductor) is honored at lowering time via LSC cache modes — do
-    // not override it here.
-    if (load.getEvict() != tt::EvictionPolicy::NORMAL)
+    // Frontend eviction-policy override — leave evict_first / evict_last
+    // loads to the LoadStoreOpToLLVM lowering (EVICT_LAST -> L1C_L3C;
+    // EVICT_FIRST -> DEFAULT). Stamping `.cg` (CG -> L1UC_L3C) would drop the
+    // evict_last hint, and for evict_first it bypasses an L1 line that other
+    // lanes often re-read: measured as slow as L1IAR_L3C (#8109).
+    if (cachePolicy.evictionPolicy != tt::EvictionPolicy::NORMAL)
       return false;
 
     // Gate 2: scalar loads don't get encoding-based annotation.
@@ -592,8 +601,9 @@ private:
     // Reuse-driven decision.
     if (loadTy.getEncoding() && ctx.reuse.anyReuse(load)) {
       if (ctx.reuse.knownReuse(load) && shouldUseEvictLast(load, ctx)) {
-        load.setEvictAttr(tt::EvictionPolicyAttr::get(
-            load.getContext(), tt::EvictionPolicy::EVICT_LAST));
+        load.setCachePolicyAttr(
+            tt::CachePolicyAttr::get(load.getContext(), tt::CacheModifier::NONE,
+                                     tt::EvictionPolicy::EVICT_LAST));
         ctx.evictLastBudget.account(load);
         return true;
       }

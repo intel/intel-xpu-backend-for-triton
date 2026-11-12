@@ -104,7 +104,7 @@ def start(
                                                Defaults to None.
                                                For "cupti", available options are [None, "pcsampling", "periodic_flushing"].
                                                For "xpupti", available options are [None].
-                                               For "rocprofiler", available options are [None, "periodic_flushing"].
+                                               For "rocprofiler", available options are [None, "pcsampling", "periodic_flushing"].
                                                For "roctracer", available options are [None, "periodic_flushing"].
                                                For "instrumentation", available options are [None].
                                                Each mode has a set of control knobs following with the mode name.
@@ -134,6 +134,12 @@ def start(
     utils_cache_path = ""
     if hasattr(triton.runtime.driver.active.utils, "get_sycl_queue"):
         sycl_queue = triton.runtime.driver.active.utils.get_sycl_queue()
+        # `_select_backend()` normally lazily builds this, but it's only called when
+        # `backend` is left to auto-select; callers that pass an explicit `backend=`
+        # (e.g. `backend="instrumentation"`) would otherwise see this still as `None`.
+        global UTILS_CACHE_PATH
+        if UTILS_CACHE_PATH is None:
+            UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib()
         utils_cache_path = UTILS_CACHE_PATH
 
     _check_env(backend)

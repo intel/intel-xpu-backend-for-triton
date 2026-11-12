@@ -3,7 +3,6 @@ Gemm benchmark (tensor descriptor)
 ============================
 
 This benchmark uses the modern tl.make_tensor_descriptor API.
-For the legacy block pointer API, see gemm_block_ptr_benchmark.py.
 
 This benchmark is come from the Triton tutorial 03a-matrix-multiplication-tensor-descriptor.py
 
@@ -16,10 +15,28 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark import sycl_tla_kernel
+from triton_kernels_benchmark import gemm_streamk_benchmark
+from triton_kernels_benchmark.benchmark_testing import (DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY, get_xpu_extension)
+
+sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
+
+
+def get_cuda_matmul_autotune_configs() -> List[triton.Config]:
+    return [
+        triton.Config({'BLOCK_SIZE_M': m, 'BLOCK_SIZE_N': n, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=s,
+                      num_warps=w)  #
+        for (m, n) in [(128, 256), (256, 128), (128, 128), (64, 128)]  #
+        for s in [3, 4]  #
+        for w in [8, 16]
+    ] + [
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=s,
+                      num_warps=4) for s in [3, 4]
+    ]
 
 
 def get_matmul_autotune_configs() -> List[triton.Config]:
+    if DEVICE == 'cuda':
+        return get_cuda_matmul_autotune_configs()
     configs = [
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
@@ -35,6 +52,19 @@ def get_matmul_autotune_configs() -> List[triton.Config]:
         triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': m},
                       num_stages=s, num_warps=w) for s in [2, 3] for (m, w) in ([('256', 32), ('128', 64)])
     ]
+
+    # 2 new configs from analytical-model picks that beat the autotune-best, improves 2/37 shapes.
+    configs += [
+        # B1_M8_N1024_K4096 2.26x
+        triton.Config(
+            {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 1, 'grf_mode': '128'},
+            num_stages=2, num_warps=4),
+        # B1_M1_N1024_K4096 2.17x
+        triton.Config(
+            {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 256, 'GROUP_SIZE_M': 1, 'grf_mode': '256'},
+            num_stages=2, num_warps=4),
+    ]
+
     return configs
 
 
@@ -67,8 +97,13 @@ def matmul_kernel_with_tensor_descriptors(
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     if transpose_a:
-        a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(K, M), strides=(stride_ak, stride_am),
-                                           block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_M))
+        # Tensor descriptors require every non-innermost stride to be 16-byte aligned. For A^T the
+        # (K, M) row stride is M elements, which is misaligned for small M (e.g. M=1, M=4 in bf16),
+        # so load A through a tensor of pointers in that case.
+        A_DESC_ALIGNED: tl.constexpr = (stride_ak * (a_ptr.dtype.element_ty.primitive_bitwidth // 8)) % 16 == 0
+        if A_DESC_ALIGNED:
+            a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(K, M), strides=(stride_ak, stride_am),
+                                               block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_M))
     else:
         a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
                                            block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
@@ -79,11 +114,20 @@ def matmul_kernel_with_tensor_descriptors(
         b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
                                            block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
+    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
         if transpose_a:
-            a = a_desc.load([off_k, pid_m * BLOCK_SIZE_M]).T
+            if A_DESC_ALIGNED:
+                a = a_desc.load([off_k, pid_m * BLOCK_SIZE_M]).T
+            else:
+                # Load in the descriptor's (K, M) orientation and transpose, like the aligned path,
+                # so the load is contiguous along M rather than strided as an (M, K) load would be.
+                a_ptrs = a_ptr + (off_k + offs_k)[:, None] * stride_ak + offs_am[None, :] * stride_am
+                a_mask = ((off_k + offs_k)[:, None] < K) & (offs_am[None, :] < M)
+                a = tl.load(a_ptrs, mask=a_mask, other=0.0).T
         else:
             a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         if transpose_b:
@@ -100,6 +144,8 @@ def matmul_kernel_with_tensor_descriptors(
 
 
 def get_matmul_batched_autotune_configs() -> List[triton.Config]:
+    if DEVICE == 'cuda':
+        return get_cuda_matmul_autotune_configs()
     configs = [
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
@@ -127,9 +173,23 @@ def get_matmul_batched_autotune_configs() -> List[triton.Config]:
     return configs
 
 
+def is_xpu_cri() -> bool:
+    return DEVICE == 'xpu' and triton.runtime.driver.active.get_current_target().arch.get('arch') == 'cri'
+
+
+def get_cri_matmul_batched_autotune_configs() -> List[triton.Config]:
+    if not is_xpu_cri():
+        return []
+    return [
+        triton.Config(
+            {'BLOCK_SIZE_M': m, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '512'},
+            num_stages=2, num_warps=32) for m in [256, 64]
+    ]
+
+
 # pylint: disable=unused-argument
 @triton.autotune(
-    configs=get_matmul_batched_autotune_configs(),
+    configs=get_matmul_batched_autotune_configs() + get_cri_matmul_batched_autotune_configs(),
     key=['M', 'N', 'K'],
     restore_value=['c_ptr'],
 )
@@ -304,9 +364,6 @@ X_VALS = [  #
     [4096, 8, 16384, 128],
 ]
 
-DEVICE_NAME = torch.xpu.get_device_name()
-DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
-
 
 def is_enough_memory(x_val):
     # x_val: (B, M, N, K)
@@ -342,8 +399,8 @@ def get_benchmark(
         'onednn': 'OneDNN',
     }
     # use_sycl-tla
-    if not (transpose_a or transpose_b):
-        if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics':
+    if sycl_tla_kernel is not None and not (transpose_a or transpose_b):
+        if DEVICE_NAME != 'Intel(R) Arc(TM) Graphics':
             # SYCL-TLA only targets PVC/BMG; LNL (Arc iGPU) is not in its target list
             supported_providers['sycl-tla'] = 'SYCL-TLA'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -375,8 +432,8 @@ def get_benchmark(
         a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=transpose_a, transpose_b=transpose_b)
 
         torch.manual_seed(0)
-        a = torch.rand(a_shape, device='xpu', dtype=torch.bfloat16)
-        b = torch.rand(b_shape, device='xpu', dtype=torch.bfloat16)
+        a = torch.rand(a_shape, device=DEVICE, dtype=torch.bfloat16)
+        b = torch.rand(b_shape, device=DEVICE, dtype=torch.bfloat16)
 
         torch_a = a
         if transpose_a:
@@ -386,16 +443,19 @@ def get_benchmark(
         if transpose_b:
             torch_b = torch.transpose(torch_b, -2, -1)
 
+        # bf16 x bf16 -> fp32 natively in oneDNN; torch.matmul has no out_dtype, so use mm/bmm.
+        torch_mm = torch.bmm if torch_a.dim() == 3 else torch.mm
+
         if provider == 'onednn':
-            _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b))
+            _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch_mm(torch_a, torch_b, out_dtype=torch.float32))
 
         elif provider == 'triton':
             if len(a.shape) != len(b.shape):
                 raise AssertionError(f'Incompatible sizes {len(a.shape)} and {len(b.shape)}', )
             if len(a.shape) == 3:
-                c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+                c = torch.zeros((B, M, N), device=DEVICE, dtype=torch.float32)
             elif len(a.shape) == 2:
-                c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+                c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
             else:
                 raise AssertionError(f'Unexpected shape of length {len(a.shape)}')
             triton_fn = lambda: matmul(
@@ -407,9 +467,14 @@ def get_benchmark(
                 transpose_a=transpose_a,
                 transpose_b=transpose_b,
             )
-            torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
-            rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+            # Shapes whose last wave of tiles is mostly empty run faster as stream-K (#8445); only measured on a B580.
+            if ('B580' in DEVICE_NAME and matmul_kernel is matmul_kernel_with_tensor_descriptors
+                    and not (transpose_a or transpose_b) and len(a.shape) == 2
+                    and gemm_streamk_benchmark.should_use_streamk(M, N, K)):
+                c.fill_(float('nan'))  # the check below then fails for an unwritten or unzeroed shared tile
+                triton_fn = lambda: gemm_streamk_benchmark.matmul(a, b, c)
+            torch_fn = lambda: torch_mm(torch_a, torch_b, out_dtype=torch.float32)
+            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
             _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
 
         elif provider == 'sycl-tla':
@@ -418,17 +483,16 @@ def get_benchmark(
 
             def sycl_tla_invoker():
                 if B == 1:
-                    c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+                    c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
                 else:
-                    c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+                    c = torch.zeros((B, M, N), device=DEVICE, dtype=torch.float32)
                 func(a, b, c, M, N, K, B)
                 return c
 
             sycl_tla_fn = sycl_tla_invoker
-            torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
+            torch_fn = lambda: torch_mm(torch_a, torch_b, out_dtype=torch.float32)
 
-            rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-            benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='sycl-tla to torch')
+            benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='sycl-tla to torch')
             _, min_ms, max_ms, mean_ms, cv = do_bench(sycl_tla_fn)
 
         else:

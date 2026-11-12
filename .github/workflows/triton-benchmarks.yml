@@ -62,24 +62,30 @@ on:
 
 # Cancels in-progress PR runs when the PR is updated. Manual runs are never cancelled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'keep-going') && github.run_id || github.event.pull_request.number) || github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.runner_label }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'keep-going') && github.run_id || github.event.pull_request.number) || github.ref }}
   cancel-in-progress: true
 
 permissions: read-all
 
 env:
-  PYTHON_VERSION: "3.10"
+  PYTHON_VERSION: "3.12"
   BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'UPSTREAM_PYTORCH_PROFILER' }}
+  # FIXME: When https://github.com/pytorch/pytorch/issues/189144 will be addressed
+  TORCHINDUCTOR_USE_EXPERIMENTAL_BENCHMARKER: '0'
   VERIFY: ${{ (github.event_name == 'pull_request' || github.event_name == 'schedule' || inputs.verify) && '1' || '0' }}
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   N_RUNS: ${{ inputs.n_runs || '1' }}
+  TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+  TRITON_XPU_GEN_NATIVE_CODE: '1'
+  # FIXME: Remove once CI has PTI 1.3 (expected in oneAPI 2026.3); older PTI hangs on PVC with PyTorch's event-less kernels
+  PTI_COLLECTION_MODE: ${{ startsWith(inputs.runner_label, 'max') && '0' || '' }}
 
 jobs:
   build:
     name: Triton benchmarks
     runs-on:
       - linux
-      - ${{ inputs.runner_label || 'max1550' }}
+      - ${{ inputs.runner_label || 'b580' }}
     timeout-minutes: 720
     defaults:
       run:
@@ -111,7 +117,9 @@ jobs:
           done
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
         uses: ./.github/actions/setup-pyenv-python
@@ -127,8 +135,14 @@ jobs:
         run: |
           pip install cmake
 
+      - name: Install Python dependencies for TRITON_AUTOTUNE_WARMUP_WORKERS mode
+        run: |
+          pip install cloudpickle
+
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
+        with:
+          lts: ${{ inputs.runner_label == 'lts' }}
 
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
@@ -168,12 +182,6 @@ jobs:
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run gemm-tensor-of-ptr --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton GEMM kernel benchmark - with legacy block pointer
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-block-ptr')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-block-ptr') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run gemm-block-ptr --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
       - name: Run Triton GEMM (A@B^t) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_bt')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_bt') }}
@@ -229,6 +237,18 @@ jobs:
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run fused-gemm --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
+      - name: Run Torch Inductor grouped GEMM (2Dx3D) kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-grouped')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-grouped') }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+          GROUPED_MM_TRITON_ONLY=1 TRITON_RELAX_PROFILING_CHECK=1 triton-benchmarks run gemm-grouped --reports $REPORTS --n_runs $N_RUNS --tag $TAG
+
+      - name: Run Torch Inductor grouped GEMM (3Dx3D) kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm-grouped-batched')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm-grouped-batched') }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+          GROUPED_MM_TRITON_ONLY=1 TRITON_RELAX_PROFILING_CHECK=1 triton-benchmarks run gemm-grouped-batched --reports $REPORTS --n_runs $N_RUNS --tag $TAG
+
       - name: Run Triton FA fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention') }}
         run: |
@@ -247,6 +267,12 @@ jobs:
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run flash_attention_bwd --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
+      - name: Run Triton batched variable-length FA fwd kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'batched-flash-attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'batched-flash-attention') }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+          TRITON_PRINT_AUTOTUNING=1 triton-benchmarks run batched-flash-attention --reports $REPORTS --n_runs $N_RUNS --tag $TAG
+
       - name: Run Triton FlexAttention Causal Mask fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex-attention-causal')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex-attention-causal') }}
         run: |
@@ -258,12 +284,6 @@ jobs:
         run: |
           source ./scripts/capture-hw-details.sh
           triton-benchmarks run flex-attention-causal-batch4 --reports $REPORTS --n_runs $N_RUNS --tag $TAG
-
-      - name: Run Triton FlexAttention (batch_size=16) Causal Mask fwd kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex-attention-causal-batch16')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex-attention-causal-batch16') }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-          triton-benchmarks run flex-attention-causal-batch16 --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
       - name: Run Triton FlexAttention Causal Mask bwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex-attention-causal-bwd')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex-attention-causal-bwd') }}
@@ -293,5 +313,5 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: benchmark-reports
+          name: benchmark-reports-triton
           path: reports

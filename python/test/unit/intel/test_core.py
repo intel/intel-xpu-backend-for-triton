@@ -1146,3 +1146,20 @@ def test_silu_sigmoid_optimization(device, monkeypatch):
         assert "__spirv_FSigmoidINTEL" not in llir, f"Not expected __spirv_FSigmoidINTEL in llir output, got:\n{llir}"
 
     torch.testing.assert_close(y_gpu.cpu(), torch.nn.functional.silu(x_cpu), rtol=1e-5, atol=1e-5)
+
+
+def test_issue7491(device):
+
+    @triton.jit
+    def roundtrip_kernel(X, Y, N: tl.constexpr):
+        off = tl.arange(0, N)
+        x = tl.load(X + off)
+        y = x.to(tl.float16).to(tl.float32)  # explicit fp16 round-trip
+        tl.store(Y + off, y)
+
+    # A value whose nearest fp16 is different from its fp32 representation.
+    x = torch.tensor([-2.643845], device=device, dtype=torch.float32)
+    y = torch.empty_like(x)
+    roundtrip_kernel[(1, )](x, y, 1)
+
+    assert y.item() == x.to(torch.float16).float().item()

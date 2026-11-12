@@ -4,6 +4,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "triton/Analysis/Signedness.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SetVector.h"
@@ -268,7 +269,9 @@ protected:
     if (auto c = getScalarIntConstant(v))
       return c;
     if (auto *ai = axisInfoLookup(v))
-      return ai->getConstantValue();
+      if (const std::optional<APInt> &c = ai->getConstantValue();
+          c && c->getBitWidth() <= 64)
+        return c->getSExtValue();
     return std::nullopt;
   }
 
@@ -612,8 +615,13 @@ protected:
     StrideInfo::DimVectorT stride;
     stride.reserve(lhs.size());
     for (unsigned d = 0, rank = lhs.size(); d < rank; ++d) {
+      // NOTE: For DivSIOp, truncation toward zero breaks the stride pattern
+      // when the input window crosses zero:
+      //   divsi([-2,-1,0,1], 2) = [-1,0,0,0] (not evenly strided)
+      // so the deduction is taken only for a provably non-negative dividend.
       if (lhs[d] > 0 && rhsConst.has_value() && rhsConst.value() > 0 &&
-          lhs[d] % rhsConst.value() == 0)
+          lhs[d] % rhsConst.value() == 0 &&
+          mlir::triton::dividendIsNonNegative(op))
         stride.push_back(lhs[d] / rhsConst.value());
       else if (lhs[d] == 0 && rhsConst.has_value() && rhsConst.value() != 0)
         stride.push_back(0);
@@ -640,10 +648,17 @@ protected:
       if (lhs[d] == 0 && (*rhs)[d] == 0) {
         // Both sides are uniform/constant — result is uniform.
         stride.push_back(0);
-      } else if (lhs[d] > 0 && rhsConst.has_value() && rhsConst.value() > 0) {
+      } else if (lhs[d] > 0 && rhsConst.has_value() && rhsConst.value() > 0 &&
+                 mlir::triton::dividendIsNonNegative(op)) {
         // Stride preserved when range span doesn't cross a modulus boundary.
         // Effective period is gcd(divisibility, modulus) when AxisInfo is
         // available; falls back to modulus otherwise.
+        //
+        // NOTE: For RemSIOp this only holds when the input window starts at
+        // a non-negative value. For negative starts at multiples of M,
+        // truncation-toward-zero creates a discontinuity between x=kM and
+        // x=kM+1 (k<0), breaking stride - hence the dividend check in the
+        // condition.
         auto resTy = dyn_cast<RankedTensorType>(op.getType());
         if (resTy) {
           int64_t dimSize = resTy.getDimSize(d);

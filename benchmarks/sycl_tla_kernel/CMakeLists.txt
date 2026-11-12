@@ -78,8 +78,23 @@ add_custom_command(
     VERBATIM
 )
 
+# Stream-K GEMM configuration. It shares the split-K runner but has its own shape
+# table, so that a split-K tuning entry never silently retargets stream-K.
+set(GEMM_STREAMK_CONFIG_INPUT ${CMAKE_CURRENT_SOURCE_DIR}/gemm_splitk/input_gemm_streamk.in)
+set(GEMM_STREAMK_CONFIG_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gemm_streamk_table.hpp)
+set(GEMM_STREAMK_CONFIG_NAME "gemm_streamk_config")
+
+add_custom_command(
+    OUTPUT ${GEMM_STREAMK_CONFIG_OUTPUT}
+    COMMAND ${CMAKE_COMMAND} -E echo "Generating Stream-K GEMM config header..."
+    COMMAND ${Python3_EXECUTABLE} ${CONFIG_TOOL} ${GEMM_STREAMK_CONFIG_INPUT} -o ${GEMM_STREAMK_CONFIG_OUTPUT} --name ${GEMM_STREAMK_CONFIG_NAME} --dims mnk
+    DEPENDS ${GEMM_STREAMK_CONFIG_INPUT} ${CONFIG_TOOL}
+    COMMENT "Generate Stream-K GEMM configuration"
+    VERBATIM
+)
+
 # Create a target that other targets can depend on
-add_custom_target(generate_gemm_config DEPENDS ${GEMM_CONFIG_OUTPUT} ${GEMM_SPLITK_CONFIG_OUTPUT})
+add_custom_target(generate_gemm_config DEPENDS ${GEMM_CONFIG_OUTPUT} ${GEMM_SPLITK_CONFIG_OUTPUT} ${GEMM_STREAMK_CONFIG_OUTPUT})
 
 Python3_add_library(sycl_tla_kernel MODULE WITH_SOABI python_main.cpp)
 
@@ -89,6 +104,7 @@ target_compile_options(sycl_tla_kernel PRIVATE "-DSYCL_INTEL_TARGET")
 target_compile_definitions(sycl_tla_kernel PRIVATE GEMM_CONFIG_HEADER=\"${GEMM_CONFIG_OUTPUT}\")
 target_compile_definitions(sycl_tla_kernel PRIVATE GEMM_CONFIG_NAME=\"${GEMM_CONFIG_NAME}\")
 target_compile_definitions(sycl_tla_kernel PRIVATE GEMM_SPLITK_CONFIG_HEADER=\"${GEMM_SPLITK_CONFIG_OUTPUT}\")
+target_compile_definitions(sycl_tla_kernel PRIVATE GEMM_STREAMK_CONFIG_HEADER=\"${GEMM_STREAMK_CONFIG_OUTPUT}\")
 
 target_link_options(sycl_tla_kernel PRIVATE ${SYCL_TLA_KERNEL_FLAGS})
 target_link_libraries(sycl_tla_kernel PUBLIC ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})

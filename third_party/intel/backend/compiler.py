@@ -1,10 +1,13 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import compile_module_from_src
+from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
+from triton.backends.intel.errors import IntelGPUError, WorkGroupSizeOutOfResources
 from triton.backends.intel.extension_utils import query_device_extensions
+from triton.backends.intel.spirv_probes import accepts_long_vector, accepts_maximum_registers
 from triton import knobs
-from triton.runtime.errors import IntelGPUError
+from triton._instrumentation import instrument as _instrument, is_enabled
+from triton.runtime.errors import OutOfResources
 
 from dataclasses import dataclass
 import functools
@@ -25,7 +28,7 @@ try:  # XPUBackend allows metaclasses injection
 except ImportError:
     XPUBackendMeta = type(BaseBackend)
 
-_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?')
+instrument = functools.partial(_instrument, backend="intel")
 
 
 @dataclass
@@ -39,6 +42,7 @@ class XPUOptions:
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
     reduce_variable_liveness: bool = True
+    in_loop_sink: bool = True
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4nv", "fp8e4b15")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -46,15 +50,33 @@ class XPUOptions:
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
     grf_mode: str = 'default'
+    loop_distribute: bool = knobs.intel.enable_loop_distribution
+    optimize_load_masks: bool = not knobs.intel.disable_optimize_load_masks
+    code_sinking: bool = knobs.intel.enable_code_sinking
+    sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
+    dynamic_shared_memory: bool = knobs.intel.dynamic_shared_memory
     use_barrier: bool = False
+    # Opt-in (TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL when unset); a kernel option, so a triton.Config can autotune it.
+    prefetch_cost_model: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'intel'
     sanitize_overflow: bool = True
     generate_native_code: bool = False
-    arch: str = None
+    arch: str = ""
     instrumentation_mode: str = ""
+    fpsan_homomorphic_casts: bool = False
+    core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
+    is_lts: bool = True
+    # Whether these SPIR-V extensions are allowed; overwritten with the
+    # ground-truth probe result in `parse_options`.
+    allow_long_vector: bool = True
+    allow_maximum_registers: bool = True
+    # Largest GRF mode the backend's automatic escalation will ever select
+    # for this target ("256" everywhere except "cri", which gets "512"); see
+    # `get_max_grf_mode`, the single source of truth for this policy.
+    max_grf_mode: str = "256"
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -74,7 +96,42 @@ class XPUOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
+# The largest rebuild threshold that keeps every *accepted* kernel strictly below
+# PyTorch inductor's `spill_threshold` -- 16 dword-equivalents per lane by default off
+# HIP -- at every sub-group width the backend can compile at. SIMD16 is the binding
+# case, being the narrowest (`warp_size` defaults to 32 and `setThreadsPerWarp` only
+# ever lowers it to 16): 16 slots/lane is 16 * 4 * 16 = 1024 B there, so 1025 would
+# already let a SIMD16 kernel reach inductor's threshold on the default-GRF build.
+# Inductor prunes strictly above 16, so this leaves a slot of margin at SIMD16.
+#
+# Bytes, not slots, is what makes that bound hold: the same 16 slots/lane is 2048 B at
+# SIMD32, so comparing slots at the *compiled* width lets the byte budget float up with
+# it. #7959 did exactly that and the gate went silent from 1024 B all the way to 2175 B
+# at SIMD32 -- the band issue #8077 regressed in. Taking the minimum over widths means
+# the wider width fires early (8 slots/lane at SIMD32), which is the safe direction: a
+# rebuild costs compile time, while declining leaves inductor timing a spilling binary.
+#
+# Kept in sync with driver.c, except on the LTS driver line -- see
+# `accepts_default_grf`.
+REBUILD_SPILL_BYTES_PER_THREAD = 1024
+
+# IGC build flag for each explicit `grf_mode` that has one. Only LTS passes these; elsewhere the mode is
+# requested through the kernel's SPV_INTEL_maximum_registers execution mode (see `make_llir`). '160' and '192'
+# have no such flag, so they require the execution mode.
+GRF_MODE_BUILD_FLAGS = {
+    '128': '-cl-intel-128-GRF-per-thread',
+    '256': '-cl-intel-256-GRF-per-thread',
+    '512': '-cl-intel-512-GRF-per-thread',
+    'auto': '-cl-intel-enable-auto-large-GRF-mode',
+}
+
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
+PTSS_OVERFLOW_RE = re.compile(
+    r'total scratch space.*?(\d+)\s*bytes.*?max permitted PTSS\s*(\d+)\s*bytes'
+    r'|scratch space exceeds.*?limit'
+    r'|per.thread scratch space.*?exceed',
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def extract_spill_size_from_zebin(file):
@@ -105,6 +162,87 @@ def extract_spill_size_from_zebin(file):
     return 0
 
 
+def get_max_grf_mode(arch: dict) -> str:
+    """
+    Returns the largest GRF mode the backend's automatic escalation paths
+    will ever select for a target ("automatic" is load-bearing: an explicit
+    `grf_mode='512'` bypasses this, and a `num_warps > 32` kernel on
+    `grf_mode='default'` gets no automatic escalation at all, see
+    `make_spv`/`make_zebin`).
+
+    This is the single source of truth for the "cri" vs. everything-else GRF
+    policy. `parse_target` calls this once per target to populate
+    `dev_prop['max_grf_mode']` (see the `tgt_prop.get('max_grf_mode', ...)`
+    call there for how a driver- or out-of-tree-arch-module-supplied override
+    participates, the same mechanism every other per-target capability in
+    this file uses), from which it reaches every consumer as
+    `opt.max_grf_mode`: `annotate_module`'s `ttig.max_grf_mode` module
+    attribute (read by `RegisterPressureAnalysis::getGRFBytesPerHardwareThread`
+    to resolve its `UnknownGRFSizeAssumption::Largest` case for both
+    `grf_mode='default'` and `grf_mode='auto'`), `metadata["max_grf_mode"]` (via
+    `options.__dict__`, handed to `driver.c`'s `load_binary` so the JIT
+    large-GRF retry escalates to the same mode), and `make_zebin`'s ocloc
+    auto-large-GRF retry flag.
+
+    Arguments:
+      arch: the `target.arch` dict for the current device.
+
+    Returns:
+      "512" if the target is "cri", otherwise "256".
+    """
+    return "512" if arch.get("arch") == "cri" else "256"
+
+
+def get_grf_modes(arch: dict) -> tuple[str, ...]:
+    """
+    Returns the explicit `grf_mode` register counts a target accepts, besides
+    'default' and 'auto'. "cri" additionally accepts 160, 192 and 512, which
+    every other target (PVC, BMG, ...) rejects.
+
+    Arguments:
+      arch: the `target.arch` dict for the current device.
+
+    Returns:
+      ("128", "160", "192", "256", "512") if the target is "cri", otherwise ("128", "256").
+    """
+    return ("128", "160", "192", "256", "512") if arch.get("arch") == "cri" else ("128", "256")
+
+
+def accepts_default_grf(spill_size, is_lts):
+    """Whether the default-GRF build is good enough to skip the large-GRF rebuild.
+
+    Rolling rebuilds once the spill reaches `REBUILD_SPILL_BYTES_PER_THREAD` bytes per
+    hardware thread -- the level that keeps an accepted kernel under inductor's
+    `spill_threshold` at the narrowest width we compile at. Fixing a byte count rather
+    than a per-lane slot count is what makes that hold at every width: #7959's rule
+    compared slots at the compiled width, so the effective budget doubled with the
+    sub-group size -- 2176 B at SIMD32 -- and the gate stayed silent across a band where
+    rebuilding measurably paid (issue #8077).
+
+    Inductor's threshold sets the level but grants no licence below it: it only prunes
+    configs from inductor's timing contest, so a spill under it is not one inductor has
+    approved. Declining the rebuild leaves inductor timing the spilling default-GRF
+    binary with no faster rival to pick.
+
+    LTS IGC prices the resulting binaries differently: declining the rebuild costs
+    +21% end to end on `pyhpc_isoneutral_mixing` (Max 1100, 12 of 165 configs
+    affected, issue #8106), while the same 12 configs measure neutral on rolling. So
+    LTS keeps the older rule of rebuilding on any spill.
+
+    Both branches compare bytes, the unit both spill probes report. Neither needs the
+    compiled sub-group size: routing the spill and the threshold through the same
+    truncating bytes-to-dword-equivalents conversion cancels the divisor, so the
+    per-lane form of this gate decided exactly
+    `spill_size >= REBUILD_SPILL_BYTES_PER_THREAD` at every width a power-of-two
+    4 * threads_per_warp divides -- every width the backend can reach, plus the
+    unknown-width fallback. That conversion lives in `Spills::slotsPerLane` in
+    driver.c, which is the only producer of `n_spills` on either path.
+    """
+    if is_lts:
+        return spill_size <= 0
+    return spill_size < REBUILD_SPILL_BYTES_PER_THREAD
+
+
 def min_dot_size(device_props: Union[Dict, GPUTarget]):
     if isinstance(device_props, GPUTarget):
         backend = XPUBackend(device_props)
@@ -119,7 +257,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     arch_to_impl = {}  # Architecture id to backend implementation class mapping
     binary_ext = "spv"
     target_arch = "spir64"
-    instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -154,14 +291,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def get_target_name(self, options) -> str:
         return f"xpu:{self.device_arch}"
 
-    @classmethod
-    def is_lts(cls, ver) -> bool:
-        if not ver:
-            return True
-        m = _VERSION_PATTERN.match(ver)
-        if not m:
-            return True
-        return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
+    @staticmethod
+    def is_lts(ver) -> bool:
+        return is_lts(ver)
+
+    @staticmethod
+    def core_clock_rate(tgt_prop) -> int:
+        return tgt_prop.get('core_clock_rate') or 0
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
@@ -196,6 +332,34 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_256b_load_store'] = tgt_prop.get('has_256b_prefetch', False)
         dev_prop['has_rounded_divide_sqrt'] = tgt_prop.get('has_rounded_divide_sqrt', not is_lts)
         dev_prop['has_sigmoid'] = tgt_prop.get('has_sigmoid', False)
+        # HW base-address alignment requirement (in bytes) for 2D block IO.
+        # Defaults to 64; targets with a relaxed requirement (e.g. CRI) override
+        # this so the downstream 64-byte alignment compensation is skipped.
+        dev_prop['block_io_base_alignment'] = tgt_prop.get('block_io_base_alignment', 64)
+        dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
+        # MHz from torch.xpu.get_device_capability(). A missing key (0) leaves the prefetch cost model inert,
+        # so loops keep every prefetch; kXe2Discrete is calibrated against the reported value (19000 on the B580).
+        dev_prop['memory_clock_rate'] = tgt_prop.get('memory_clock_rate') or 0
+        dev_prop['is_lts'] = is_lts
+        # Largest GRF mode the backend's automatic escalation will ever select
+        # for this target; see `get_max_grf_mode`. A driver- or out-of-tree
+        # arch-module-supplied override wins, same as every other capability
+        # above. Unlike its siblings, an invalid value here is not merely
+        # cosmetic: `make_zebin` interpolates it directly into an `ocloc`
+        # flag (hard failure on a typo), `driver.c`'s JIT retry silently
+        # falls back to 256 for anything that isn't exactly "512"/"128", and
+        # `RegisterPressureAnalysis` silently falls back to 512 for anything
+        # that isn't exactly "128"/"256": three different interpretations of
+        # the same bad value, with the worst combination (a permissive
+        # 512-byte pressure budget paired with a 256-GRF hardware ceiling)
+        # silently reproducing a register-pressure undercount.
+        # Validate here, once, so every downstream consumer agrees, against
+        # `get_grf_modes` rather than a fixed list so an override cannot name a
+        # mode an explicit `grf_mode` request would reject as unknown.
+        dev_prop['max_grf_mode'] = tgt_prop.get('max_grf_mode', get_max_grf_mode(tgt_prop))
+        if dev_prop['max_grf_mode'] not in (grf_modes := get_grf_modes(tgt_prop)):
+            raise AssertionError(f"invalid max_grf_mode override {dev_prop['max_grf_mode']!r}: must be one of "
+                                 f"{grf_modes} on {tgt_prop.get('arch')}")
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -210,30 +374,85 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def parse_options(self, opts) -> Any:
         args = {k: v for k, v in opts.items() if k in XPUOptions.__dataclass_fields__}
         args["allow_fp8e4nv"] = True
-        if "enable_fp_fusion" not in args:
-            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
-        return XPUOptions(**args)
+        args["core_clock_rate"] = self.properties['core_clock_rate']
+        args["is_lts"] = self.properties['is_lts']
+        args["max_grf_mode"] = self.properties['max_grf_mode']
+        grf_mode = args.get("grf_mode", XPUOptions.grf_mode)
+        if grf_mode not in ("default", "auto") and grf_mode not in (grf_modes := get_grf_modes(self.target.arch)):
+            raise RuntimeError(f"Unknown grf_mode: {grf_mode}; expected 'default', 'auto' or one of {grf_modes} "
+                               f"on {self.target.arch.get('arch')}")
+        args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
+        if "in_loop_sink" not in args:
+            args["in_loop_sink"] = knobs.intel.in_loop_sink
+        if "prefetch_cost_model" not in args:
+            args["prefetch_cost_model"] = knobs.intel.enable_prefetch_cost_model
+        options = XPUOptions(**args)
+
+        # Ground-truth probe of whichever side actually consumes this
+        # SPIR-V -- `ocloc` for an AOT (`generate_native_code`) compile,
+        # otherwise the installed driver's own JIT via Level Zero.
+        native = options.generate_native_code
+        device_id = self.target.arch.get("device_id")
+        options.allow_long_vector = accepts_long_vector(native, self.device_arch, device_id)
+        # `accepts_maximum_registers` returns True for LTS (but should return False)
+        options.allow_maximum_registers = (not options.is_lts
+                                           and accepts_maximum_registers(native, self.device_arch, device_id))
+        return options
+
+    @staticmethod
+    def parse_attr(desc):
+        ret = BaseBackend.parse_attr(desc)
+        if "N" in desc:
+            ret += [["tt.padding", 1]]
+        if "T" in desc:
+            ret += [["tt.round_f32_to_tf32", 1]]
+        # Shape divisibility: S<dim>D<divisor> (e.g., S0D128)
+        import re
+        for match in re.finditer(r'S(\d+)D(\d+)', desc):
+            dim = int(match.group(1))
+            divisor = int(match.group(2))
+            ret += [[f"tt.shape.{dim}.divisibility", divisor]]
+        return ret
+
+    @staticmethod
+    def _get_max_divisibility(value, cap=4):
+        """Get the highest power-of-2 divisor of value, capped at `cap`."""
+        if value == 0:
+            return 1
+        div = 1
+        while div < cap and value % (div * 2) == 0:
+            div *= 2
+        return div
+
+    @staticmethod
+    def get_tensordesc_specialization(arg, **kwargs):
+        # Format: "N" (padding) + "T" (tf32 rounding) + "S<dim>D<divisor>" (shape divisibility)
+        key = ""
+        if getattr(arg, "padding", None) == "nan":
+            key += "N"
+        if getattr(arg, "round_f32_to_tf32", False):
+            key += "T"
+        # A cap of 4 is enough for the 2D block I/O alignment check, but collapsing a
+        # unit dim of a rank-3 descriptor needs shape[i] % block_shape[i] == 0, so for
+        # that shape cap at the block extent instead (issues/7679).
+        block_shape = getattr(arg, "block_shape", None)
+        collapsible = block_shape is not None and len(block_shape) == 3 and 1 in block_shape[:2]
+        for i, shape_val in enumerate(arg.shape):
+            cap = max(4, block_shape[i]) if collapsible else 4
+            key += f"S{i}D{XPUBackend._get_max_divisibility(shape_val, cap)}"
+        return key
 
     def pack_metadata(self, metadata):
         return metadata
 
     @staticmethod
     def min_dot_size(device_props: dict):
-        # (M, N, K)
-        # M: repeatCount. 1,2,4,8
-        # N: executionSize. 16 for PVC, 8 for ATS
-        # K: systolicDepth x opsPerChan. systolicDepth must be 8
-        repeat_count = 1
-        sdepth = 8
-        exec_size = min(device_props["sub_group_sizes"])
 
-        def get_ops_per_channel(lhs_type, rhs_type):
-            l_bitwidth = lhs_type.scalar.primitive_bitwidth
-            r_bitwidth = rhs_type.scalar.primitive_bitwidth
-            max_ops_per_chan = 32 / max(l_bitwidth, r_bitwidth)
-            return min(8, max_ops_per_chan)
+        def get_min_dot_size(lhs_type, rhs_type):
+            # Fallback to use FMA if size configurations not supported/performant for DPAS.
+            return (1, 1, 1)
 
-        return lambda lhs_type, rhs_type: (repeat_count, exec_size, sdepth * get_ops_per_channel(lhs_type, rhs_type))
+        return get_min_dot_size
 
     def get_codegen_implementation(self, options):
         from triton.language.extra.intel import convert_custom_float8
@@ -248,8 +467,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     def load_dialects(self, ctx):
         intel.load_dialects(ctx)
-        if self.instrumentation:
-            self.instrumentation.load_dialects(ctx)
+        instrument(ctx, point="load-dialects")
 
     @staticmethod
     def validate_options(opt, properties):
@@ -262,6 +480,20 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             raise ValueError(
                 f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
             )
+        # `max_num_sub_groups` assumes the smallest sub-group size, so 32-lane kernels can pass it
+        # and still exceed `max_work_group_size`; raise `OutOfResources` so the autotuner skips them.
+        max_work_group_size = properties.get('max_work_group_size')
+        if max_work_group_size and opt.num_warps * opt.warp_size > max_work_group_size:
+            fitting = [s for s in properties['sub_group_sizes'] if opt.num_warps * s <= max_work_group_size]
+            smaller_warp_size = max(fitting) if fitting else None
+            raise WorkGroupSizeOutOfResources(opt.num_warps, opt.warp_size, max_work_group_size, smaller_warp_size,
+                                              opt.sub_32_dpas)
+        # The backend has no CTA cluster support: getClusterCTAId is hardwired to
+        # 0, clusterBarrier is a plain workgroup barrier, and loadDShared /
+        # storeDShared ignore the ctaId they are given. Accepting num_ctas > 1
+        # would silently miscompile any cross-CTA communication.
+        if opt.num_ctas != 1:
+            raise ValueError(f"num_ctas={opt.num_ctas} is unsupported for the target (only num_ctas=1 is supported)")
 
     @classmethod
     def annotate_module(cls, module_opts, properties, opt):
@@ -284,7 +516,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             "has_subgroup_matrix_multiply_accumulate_bfloat8"]
         module_opts.support_rounded_divide_sqrt = properties["has_rounded_divide_sqrt"]
         module_opts.threads_per_warp = opt.warp_size
+        module_opts.sub_32_dpas = opt.sub_32_dpas
         module_opts.target_arch = cls.target_arch
+        module_opts.block_io_base_alignment = properties["block_io_base_alignment"]
+        module_opts.max_grf_mode = opt.max_grf_mode
 
     @classmethod
     @track
@@ -294,9 +529,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
+        intel.passes.ttir.add_reassociate_dot_scale(pm, knobs.intel.fast_math)
         passes.ttir.add_triton_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_stride_versioning(pm)
+        intel.passes.ttir.add_descriptor_versioning(pm)
         intel.passes.ttir.add_fuse_reshape(pm)
         intel.passes.ttir.add_fold_true_cmpi(pm)
         intel.passes.ttir.add_prepare_if_combining(pm)
@@ -305,7 +542,17 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttir.add_simplify_signed_arithmetic(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
+        if opt.optimize_load_masks:
+            # Runs after CSE, which unifies the `tt.addptr` chains the pass
+            # matches redundant loads on. The pass only makes the two arms of a
+            # select equal; CSE unifies the values it duplicated and the
+            # canonicalizer folds `select %c, %v, %v` and drops what dies.
+            intel.passes.ttir.add_optimize_load_masks(pm)
+            passes.common.add_cse(pm)
+            passes.common.add_canonicalizer(pm)
         passes.common.add_symbol_dce(pm)
+        if opt.loop_distribute:
+            intel.passes.ttgpuir.add_loop_distribute(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
 
@@ -341,19 +588,39 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if properties["has_256b_load_store"]:
             intel.passes.ttgpuir.add_widen_load_store_encoding(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        # CanonicalizePointers must run BEFORE accelerate_matmul: once DPAS
+        # (dot_op) encodings are applied to the pointer tensors, the pass's
+        # rewrites produce IR that crashes LowerTo2DBlockLoad's AxisInfoAnalysis.
+        # The trailing canonicalizer folds the zero offsets / identity arithmetic
+        # and removes the unrealized_conversion_casts the pass leaves behind.
+        if not knobs.intel.disable_canonicalize_pointers:
+            intel.passes.ttgpuir.add_canonicalize_pointers(pm, True)
+            passes.common.add_canonicalizer(pm)
 
-        intel.passes.ttgpuir.add_accelerate_matmul(pm)
-        intel.passes.ttgpuir.add_materialize_block_pointer(pm)
+        intel.passes.ttgpuir.add_accelerate_matmul(pm, opt.grf_mode)
+        intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm, metadata["target"].arch.get("local_mem_size") or 0,
+                                                              True)
+        intel.passes.ttgpuir.add_materialize_block_pointer(pm, knobs.intel.descriptor_block_io_relayout)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        intel.passes.ttgpuir.add_fold_fp_to_fp(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
         intel.passes.ttgpuir.add_hoist_layout_conversions(pm, opt.grf_mode)
         if os.environ.get("TRITON_INTEL_ANNOTATE_LATENCIES", "0") == "1":
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
+        # Without device facts the pipeliner's prefetch cost model is inert and every prefetch is kept.
+        facts = ((cls.device_arch, properties['core_clock_rate'],
+                  properties['memory_clock_rate']) if opt.prefetch_cost_model else ("", 0, 0))
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier, *facts)
 
         if (opt.reduce_variable_liveness):
-            intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
+            intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode, not opt.in_loop_sink)
+
+        # Off by default: code sinking is perf-neutral on measured kernels (it
+        # reliably reduces register spills, but the relieved traffic is not on
+        # the critical path on current HW). Opt in via the env var for A/B work.
+        if opt.code_sinking:
+            intel.passes.ttgpuir.add_code_sinking(pm)
 
         passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_fuse_nested_loops(pm)
@@ -380,8 +647,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
-        if opt.instrumentation_mode == "fpsan":
-            passes.ttgpuir.add_fp_sanitizer(pm)
+        if is_enabled(opt, "fpsan"):
+            passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
+            intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
         pm.run(mod, 'make_ttgir')
         return mod
 
@@ -396,8 +666,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-        if options.instrumentation_mode == "fpsan":
-            passes.ttgpuir.add_fp_sanitizer(pm)
+        if is_enabled(options, "fpsan"):
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
+            intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -413,6 +686,17 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_llir(cls, src, metadata, options):
         mod = src
+
+        # Ensure ttig.is_lts is set on the module when the driver is LTS.
+        # This is needed for hand-written TTGIR that bypasses annotate_module.
+        driver_version = metadata["target"].arch.get("driver_version")
+        if cls.is_lts(driver_version):
+            intel.set_is_lts(mod)
+
+        # `getGlobalTimer` counts core clock cycles and needs the rate to report
+        # nanoseconds.
+        intel.set_core_clock_rate(mod, cls.core_clock_rate(metadata["target"].arch))
+
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -422,11 +706,32 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
+        # Instrumentation point here so we can override IRs above (e.g., ttir and ttgir).
+        instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
-        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
-        if cls.instrumentation:
-            cls.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
-        intel.passes.ttgpuir.add_to_llvmir(pm)
+        pm.run(mod, 'make_llir.allocate_memory')
+
+        metadata["shared"] = src.get_int_attr("ttg.shared")
+        # Shared memory is now allocated statically (see `initSharedMemory` in
+        # TritonGPUToLLVM.cpp), so an oversized request fails the SPIR-V module
+        # build later (an opaque `ZE_RESULT_ERROR_MODULE_BUILD_FAILURE`) instead
+        # of failing at kernel launch. Raise `OutOfResources` here instead, so
+        # `triton.runtime.autotuner.Autotuner` (and callers that bypass
+        # `CompiledKernel._init_handles`, e.g. torch Inductor's static XPU
+        # launcher) can skip the offending config instead of crashing. The check
+        # is done as soon as `ttg.shared` is final, because lowering an oversized
+        # allocation to LLVM is slow enough to dominate the compile time of a
+        # config that cannot run anyway. The `ttgpuir-to-llvmir` instrumentation
+        # passes have to run first: Proton's `allocate_proton_shared_memory`
+        # grows `ttg.shared` to make room for its profiling buffer.
+        max_shared_mem = metadata["target"].arch.get("local_mem_size")
+        if max_shared_mem is not None and metadata["shared"] > max_shared_mem:
+            raise OutOfResources(metadata["shared"], max_shared_mem, "shared memory")
+
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+
+        intel.passes.ttgpuir.add_to_llvmir(pm, options.dynamic_shared_memory)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
@@ -439,8 +744,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
 
-        if cls.instrumentation:
-            cls.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
+        instrument(pm, point="llvmir-to-llvm", context=mod.context)
         pm.run(mod, 'make_llir')
 
         if knobs.compilation.dump_ir_extract_di_local_variables:
@@ -472,17 +776,26 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         cls.optimize_llvm_mod(llvm_mod, options)
         intel.post_process_llir(llvm_mod)
+        # An explicit GRF mode is requested on the kernel itself (SPV_INTEL_maximum_registers)
+        # whenever the consumer is known to understand it; otherwise `make_spv` keeps passing
+        # it as a build flag instead (see `options.allow_maximum_registers`).
+        if options.grf_mode != 'default' and options.allow_maximum_registers:
+            intel.set_maximum_registers(llvm_mod, options.grf_mode)
 
         # Get some metadata
         total_num_warps = src.get_int_attr("ttg.total-num-warps")
         if total_num_warps is not None:
             metadata["num_warps"] = total_num_warps
         metadata["threads_per_warp"] = intel.get_threads_per_warp(src)
-        metadata["shared"] = src.get_int_attr("ttg.shared")
-        metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
-        metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
+        metadata["warp_size"] = metadata["threads_per_warp"]
+        metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size") or 0
+        metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment") or 1
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
+
+        # Add Triton and LLVM versions to the dumped IR.
+        if knobs.compilation.dump_ir:
+            llvm.add_version_info(llvm_mod)
         ret = str(llvm_mod)
         del llvm_mod
         del context
@@ -492,24 +805,31 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
-        os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if cls.is_lts(driver_version) else "0"
-        spirv, name = intel.translate_to_spirv(src)
+        is_lts = cls.is_lts(driver_version)
+        probed_extensions = {
+            'SPV_EXT_long_vector': options.allow_long_vector,
+            'SPV_INTEL_maximum_registers': options.allow_maximum_registers,
+        }
+        spirv, name = intel.translate_to_spirv(src, is_lts, probed_extensions)
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
-        if options.grf_mode == '128':
-            metadata["build_flags"] += " -cl-intel-128-GRF-per-thread"
-        elif options.grf_mode == '256':
-            if options.num_warps > 32:
-                raise RuntimeError("grf_mode = 256 cannot be used with num_warps > 32")
-            metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-        elif options.grf_mode == '512':
-            if options.num_warps > 32:
-                raise RuntimeError("grf_mode = 512 cannot be used with num_warps > 32")
-            metadata["build_flags"] += " -cl-intel-512-GRF-per-thread"
-        elif options.grf_mode == 'auto':
-            metadata["build_flags"] += " -cl-intel-enable-auto-large-GRF-mode"
-        elif options.grf_mode != 'default':
-            raise RuntimeError(f"Unknown grf_mode: {options.grf_mode}")
+        # `metadata["max_grf_mode"]` is already populated from `options.__dict__`
+        # at compile-metadata init time (see `XPUOptions.max_grf_mode`, sourced
+        # from `parse_target`'s `get_max_grf_mode` call), covering both the
+        # Triton and the Gluon stage lists uniformly. Carried downstream to
+        # `make_zebin`'s retry below and to `driver.c`'s JIT retry via the
+        # `load_binary` metadata argument.
+        # Any mode above 128 GRFs lowers thread occupancy, so num_warps > 32 becomes unlaunchable.
+        if options.grf_mode in ('160', '192', '256', '512') and options.num_warps > 32:
+            raise RuntimeError(f"grf_mode = {options.grf_mode} cannot be used with num_warps > 32")
+        # When the consumer doesn't understand SPV_INTEL_maximum_registers, a non-default mode
+        # must instead be carried as a build flag (see `options.allow_maximum_registers`); '160'
+        # and '192' have no such flag, so they require the execution mode set in `make_llir`.
+        if options.grf_mode != 'default' and not options.allow_maximum_registers:
+            if options.grf_mode not in GRF_MODE_BUILD_FLAGS:
+                raise RuntimeError(f"grf_mode = {options.grf_mode} requires the SPV_INTEL_maximum_registers "
+                                   "extension, which this driver does not support")
+            metadata["build_flags"] += f" {GRF_MODE_BUILD_FLAGS[options.grf_mode]}"
 
         if knobs.intel.disable_igc_opt:
             metadata["build_flags"] += " -cl-opt-disable"
@@ -538,49 +858,60 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                 '-options', metadata['build_flags'] + shader_dump_opt
             ]
 
-            try:
-                subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-                if options.grf_mode == 'default':
-                    spill_size = extract_spill_size_from_zebin(fbin)
-                    # The threshold of 1000 for spill_size is chosen based on empirical observations
-                    # and aligned with triton/backends/intel/driver.c
-                    if spill_size > 1000:
-                        metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-                        # re-run with double GRF mode
-                        ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
-                        subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-            except (subprocess.CalledProcessError, IntelGPUError) as e:
-                # If GRF mode was not explicitly set, retry with large GRF mode
-                # before giving up. This handles cases where the default GRF mode
-                # doesn't provide enough registers (e.g., scratch space exceeds
-                # HW PTSS limit). Also covers degenerate zebin (no .text/.symtab)
-                # detected by extract_spill_size_from_zebin (LTS2 IGC silent
-                # PTSS overflow).
-                retry_succeeded = False
-                if options.grf_mode == 'default' and \
-                        "-cl-intel-256-GRF-per-thread" not in metadata.get("build_flags", ""):
-                    metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-                    ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
-                    try:
-                        subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-                        retry_succeeded = True
-                    except subprocess.CalledProcessError:
-                        # Retry also failed — raise the original error below.
-                        pass
+            # A larger GRF mode doubles the registers per hardware thread and thereby
+            # halves the maximum work-group size, so `num_warps > 32` becomes
+            # unlaunchable. The explicit `grf_mode='256'`/`'512'` paths already refuse
+            # that combination in `make_spv`; skip the *automatic* upgrade for the same
+            # reason and keep the working (if slower, spilling) default-GRF binary
+            # rather than producing a kernel that fails at launch.
+            if options.grf_mode == 'default' and options.num_warps <= 32:
+                # Try rebuilding with larger GRF modes (default first, then larger).
+                retry_grf_mode_list = [""]  # default GRF mode by omitting the flag
+                retry_grf_mode_list.append(f"-cl-intel-{metadata['max_grf_mode']}-GRF-per-thread")
+            else:
+                # Non-default GRF mode (including "auto") is already encoded in the SPIR-V, or in
+                # metadata["build_flags"] on LTS.
+                retry_grf_mode_list = [""]
 
-                if not retry_succeeded:
-                    if isinstance(e, IntelGPUError):
-                        raise
-                    if e.returncode == 255:
-                        error = 'Internal Triton ZEBIN codegen error'
-                    elif e.returncode == 128 + signal.SIGSEGV:
-                        error = '`ocloc` raised SIGSEGV'
-                    else:
-                        error = f'`ocloc` failed with error code {e.returncode}'
+            base_build_flags = metadata["build_flags"]
+            for grf_flag in retry_grf_mode_list:
+                metadata["build_flags"] = f"{base_build_flags} {grf_flag}".strip()
+                ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
+                try:
+                    subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+                    if options.grf_mode == "default":
+                        spill_size = extract_spill_size_from_zebin(fbin)
+                        if accepts_default_grf(spill_size, options.is_lts):
+                            break
+                except (subprocess.CalledProcessError, IntelGPUError) as e:
+                    # If GRF mode was not last yet, retry with different GRF mode
+                    # before giving up. This handles cases where the default GRF mode
+                    # doesn't provide enough registers (e.g., scratch space exceeds
+                    # HW PTSS limit). Also covers degenerate zebin (no .text/.symtab)
+                    # detected by extract_spill_size_from_zebin (LTS2 IGC silent
+                    # PTSS overflow).
+                    if grf_flag == retry_grf_mode_list[-1]:
+                        # Only reclassify as OutOfResources when ocloc's stderr explicitly
+                        # reports a PTSS overflow. Other IntelGPUErrors (e.g. degenerate
+                        # zebin from extract_spill_size_from_zebin, ocloc SIGSEGV) keep
+                        # their original error class so the user sees the real cause.
+                        output = getattr(e, 'output', '') or ''
+                        if ptss_match := PTSS_OVERFLOW_RE.search(output):
+                            required = int(ptss_match.group(1)) if ptss_match.group(1) else 0
+                            limit = int(ptss_match.group(2)) if ptss_match.group(2) else 0
+                            raise OutOfResources(required, limit, "per-thread scratch space (PTSS)") from e
+                        if isinstance(e, IntelGPUError):
+                            raise
+                        if e.returncode == 255:
+                            error = 'Internal Triton ZEBIN codegen error'
+                        elif e.returncode == 128 + signal.SIGSEGV:
+                            error = '`ocloc` raised SIGSEGV'
+                        else:
+                            error = f'`ocloc` failed with error code {e.returncode}'
 
-                    raise IntelGPUError(f'{error}\n'
-                                        f'`ocloc` stderr:\n{e.output}\n'
-                                        f'Repro command: {ocloc_cmd}\n') from e
+                        raise IntelGPUError(f'{error}\n'
+                                            f'`ocloc` stderr:\n{e.output}\n'
+                                            f'Repro command: {ocloc_cmd}\n') from e
 
             with open(fbin, 'rb') as f:
                 zebin = f.read()
@@ -591,6 +922,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         elif language == Language.GLUON:
+            stages["glir"] = lambda src, metadata: src
             stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options)

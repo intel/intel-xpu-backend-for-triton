@@ -27,6 +27,7 @@ public:
   virtual ~WarpSpecializeBarrierHelper() = default;
 
   virtual bool isBarrierOp(Operation *op) const = 0;
+  virtual bool isBarrierHandleOp(Operation *op) const { return false; }
   virtual Type getBarrierHandleType(MLIRContext *ctx) const = 0;
   virtual FailureOr<Value>
   getBarrierHandle(TritonLLVMIRRewriter &b,
@@ -86,17 +87,24 @@ struct WarpSpecializeCallbacks {
   std::function<void(TritonLLVMIRRewriter &, gpu::WarpSpecializeOp,
                      RegisterReallocPhase, unsigned regionNumber)>
       reallocRegisters;
+
+  /// For direct dispatch, each partition uses the register adjustment of its
+  /// representative. An empty map or a -1 entry requires no adjustment.
+  SmallVector<int32_t> workerRegisterPartitions;
 };
+
+/// A single site can dispatch directly if every returning path executes it
+/// once.
+bool canDirectDispatch(ArrayRef<gpu::WarpSpecializeOp> wsOps);
 
 /// Common implementation of warp specialize lowering.
 /// Uses callbacks for backend-specific barrier and register reallocation
 /// operations.
 LogicalResult lowerWarpSpecializeCommon(
-    LLVM::LLVMFuncOp func, ArrayRef<gpu::WarpSpecializeOp> wsOps, Block *entry,
-    Block *header, Block *switchLoop, Value wid, MLIRContext *ctx,
-    unsigned defaultNumWarps, unsigned totalNumWarps,
-    const TargetInfoBase &targetInfo, const WarpSpecializeCallbacks &callbacks,
-    unsigned switchLoopBarrierIdx);
+    LLVM::LLVMFuncOp func, ArrayRef<gpu::WarpSpecializeOp> wsOps, bool direct,
+    Block *switchLoop, Value wid, unsigned defaultNumWarps,
+    unsigned totalNumWarps, const TargetInfoBase &targetInfo,
+    const WarpSpecializeCallbacks &callbacks, unsigned switchLoopBarrierIdx);
 
 } // namespace triton
 } // namespace mlir

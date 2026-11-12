@@ -10,20 +10,20 @@ tt.func @ttig.prefetch(%arg0: tensor<2x32x!tt.ptr<f32>>, %arg1: tensor<4x32xi1>)
 
 // -----
 
-#warp = #ttig.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 8], order = [1, 0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io} {
-  tt.func @ttig.sub_group_transpose.encoding(%local_buffer : !tt.ptr<f16, 3>, %src : tensor<16x16xf16, #warp>) -> tensor<16x16xf16, #warp> {
+  tt.func @ttig.sub_group_transpose.encoding(%local_buffer : !tt.ptr<f16>, %src : tensor<16x16xf16, #blocked>) -> tensor<16x16xf16, #blocked> {
     // expected-error @below {{'ttig.sub_group_transpose' op can only be used on tensors of shape <sub_group_size x sub_group_size> with no encoding}}
-    %res = ttig.sub_group_transpose %local_buffer, %src : tensor<16x16xf16, #warp>
-    tt.return %res : tensor<16x16xf16, #warp>
+    %res = ttig.sub_group_transpose %local_buffer, %src : tensor<16x16xf16, #blocked>
+    tt.return %res : tensor<16x16xf16, #blocked>
   }
 }
 
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io} {
-  tt.func @ttig.sub_group_transpose.shape(%local_buffer : !tt.ptr<f16, 3>, %src : tensor<8x16xf16>) -> tensor<8x16xf16> {
+  tt.func @ttig.sub_group_transpose.shape(%local_buffer : !tt.ptr<f16>, %src : tensor<8x16xf16>) -> tensor<8x16xf16> {
     // expected-error @below {{'ttig.sub_group_transpose' op can only be used on tensors of shape <sub_group_size x sub_group_size> with no encoding}}
     %res = ttig.sub_group_transpose %local_buffer, %src : tensor<8x16xf16>
     tt.return %res : tensor<8x16xf16>
@@ -111,12 +111,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
+// COM: Every leading (batch) dim needs its own stride: the 2D surface params
+// COM: describe a single tile plane and cannot express the batch step (#7882).
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @ttig.2d_block_load.missing_batch_stride(%base_ptr: !tt.ptr<f16>, %width: i32, %height: i32, %pitch: i32, %x: i32, %y: i32) -> tensor<2x64x32xf16, #dot0> {
+    // expected-error @below {{'ttig.2d_block_load' op expected 1 batch stride(s) for a rank-3 result, got 0}}
+    %0 = ttig.2d_block_load %base_ptr, %width, %height, %pitch[%x, %y] {row_major} : !tt.ptr<f16> -> tensor<2x64x32xf16, #dot0>
+    tt.return %0 : tensor<2x64x32xf16, #dot0>
+  }
+}
+
+// -----
+
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  tt.func @ttig.2d_block_load_from_ptr.rank1(%ptr: tensor<32x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #dot0}>>, %pitch: i32) -> tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>> {
+  tt.func @ttig.2d_block_load_from_ptr.rank1(%ptr: tensor<32x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #dot0}>>, %pitch: i32, %height: i32, %width: i32) -> tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>> {
     // expected-error @below {{'ttig.2d_block_load_from_ptr' op result tensor must have rank >= 2, got 1}}
-    %0 = ttig.2d_block_load_from_ptr %ptr, %pitch {row_major} {base_width = 64 : i32, base_height = 8 : i32} : (tensor<32x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #dot0}>>, i32) -> (tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>>)
+    %0 = ttig.2d_block_load_from_ptr %ptr, %pitch, %height, %width {row_major} : (tensor<32x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #dot0}>>, i32, i32, i32) -> (tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>>)
     tt.return %0 : tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>>
   }
 }
@@ -128,9 +142,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  tt.func @ttig.2d_block_load_from_ptr.mask_without_other(%ptr: tensor<64x32x!tt.ptr<f16>, #dot0>, %mask: tensor<64x32xi1, #dot0>, %pitch: i32) -> tensor<64x32xf16, #dot0> {
+  tt.func @ttig.2d_block_load_from_ptr.mask_without_other(%ptr: tensor<64x32x!tt.ptr<f16>, #dot0>, %mask: tensor<64x32xi1, #dot0>, %pitch: i32, %height: i32, %width: i32) -> tensor<64x32xf16, #dot0> {
     // expected-error @below {{'ttig.2d_block_load_from_ptr' op 'other' must be present when 'mask' is present}}
-    %0 = "ttig.2d_block_load_from_ptr"(%ptr, %pitch, %mask) <{base_width = 64 : i32, base_height = 8 : i32, memory_layout = 0 : i32, operandSegmentSizes = array<i32: 1, 1, 1, 0>}> : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, tensor<64x32xi1, #dot0>) -> tensor<64x32xf16, #dot0>
+    %0 = "ttig.2d_block_load_from_ptr"(%ptr, %pitch, %height, %width, %mask) <{memory_layout = 0 : i32, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 0>}> : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32, i32, tensor<64x32xi1, #dot0>) -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
@@ -141,4 +155,119 @@ tt.func @ttig.descriptor_prefetch.indices_mismatch(%desc: !tt.tensordesc<256x32x
   // expected-error @below {{'ttig.descriptor_prefetch' op expected 2 indices, but got 1}}
   ttig.descriptor_prefetch %desc[%x] : !tt.tensordesc<256x32xf16>
   tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{block must be a 2D tensor}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<128xbf16>, tensor<32xi32>, i32) -> tensor<32xbf16>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<2x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{block must have exactly 1 row}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<2x128xbf16>, tensor<32xi32>, i32) -> tensor<32x128xbf16>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<1x32xi32>, %arg2: i32) {
+  // expected-error @below {{x offsets must be a 1D tensor}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<1x32xi32>, i32) -> tensor<32x128xbf16>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{result must be a 2D tensor}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<128xbf16>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{result tensor number of columns must match block (128)}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<32x64xbf16>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{result tensor must have as many rows as indices (32)}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<64x128xbf16>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{result tensor element type must match block ('bf16')}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<32x128xf32>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather_i64_too_few_cols(%arg0: !tt.tensordesc<1x2xi64>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{must have at least 4 columns}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x2xi64>, tensor<32xi32>, i32) -> tensor<32x2xi64>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_scatter_src_rank(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32, %arg3: tensor<128xbf16>) {
+  // expected-error @below {{result must be a 2D tensor}}
+  ttig.descriptor_scatter %arg0[%arg1, %arg2], %arg3 : !tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32, tensor<128xbf16>
+  tt.return
+}
+
+// -----
+
+// COM: `batch_offsets` and `batch_shapes` are the descriptor index and its
+// COM: declared extent for the same batch dim, so they only bounds-check when
+// COM: they come in pairs.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @mismatched_batch_offsets_shapes(%base_ptr: !tt.ptr<f16>, %width: i32, %height: i32, %pitch: i32, %x: i32, %y: i32, %batch_stride: i64, %batch_offset: i32, %batch_shape0: i32, %batch_shape1: i32) -> tensor<2x64x32xf16, #dot0> {
+    // expected-error @below {{'ttig.2d_block_load' op expected the same number of batch offsets and batch shapes, got 1 and 2}}
+    %0 = ttig.2d_block_load %base_ptr, %width, %height, %pitch[%x, %y] batch_strides[%batch_stride] batch_offsets[%batch_offset] batch_shapes[%batch_shape0, %batch_shape1] {row_major} : !tt.ptr<f16> -> tensor<2x64x32xf16, #dot0>
+    tt.return %0 : tensor<2x64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+// COM: Every descriptor batch dim escapes the hardware surface clamp once its
+// COM: offset is folded into the base pointer, so the descriptor must supply at
+// COM: least as many batch offsets as the result has batch strides.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @too_few_batch_offsets(%base_ptr: !tt.ptr<f16>, %width: i32, %height: i32, %pitch: i32, %x: i32, %y: i32, %batch_stride: i64) -> tensor<2x64x32xf16, #dot0> {
+    // expected-error @below {{'ttig.2d_block_load' op expected at least 1 batch offset(s), one per descriptor batch dimension, got 0}}
+    %0 = ttig.2d_block_load %base_ptr, %width, %height, %pitch[%x, %y] batch_strides[%batch_stride] {row_major} : !tt.ptr<f16> -> tensor<2x64x32xf16, #dot0>
+    tt.return %0 : tensor<2x64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @ttig.2d_block_load_from_ptr.unaligned_col_limit(%ptr: tensor<64x32x!tt.ptr<f16>, #dot0>, %pitch: i32, %height: i32) -> tensor<64x32xf16, #dot0> {
+    %width = arith.constant 6 : i32
+    // expected-error @below {{'ttig.2d_block_load_from_ptr' op column-limit width must be a non-negative multiple of 4 bytes, got 6}}
+    %0 = ttig.2d_block_load_from_ptr %ptr, %pitch, %height, %width {row_major} {ttig.block_io_runtime_col_limit} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32, i32) -> tensor<64x32xf16, #dot0>
+    tt.return %0 : tensor<64x32xf16, #dot0>
+  }
 }

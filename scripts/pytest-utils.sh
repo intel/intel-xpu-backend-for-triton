@@ -11,6 +11,15 @@ TRITON_TEST_IGNORE_ERRORS="${TRITON_TEST_IGNORE_ERRORS:-false}"
 TRITON_TEST_RUN_ALL="${TRITON_TEST_RUN_ALL:-false}"
 TRITON_TEST_EXIT_CODE=0
 
+# When a test suite is split into shards, every shard writes a report for the same
+# test suite, so reports must go to different directories, otherwise they overwrite
+# each other when report artifacts of all shards are merged. The directory name must
+# start with `test-report`, because only such report subdirectories are taken into
+# account by `triton-utils` by default.
+if [[ -v TRITON_TEST_SHARDS && -v TRITON_TEST_SHARD_NUMBER ]]; then
+    TRITON_TEST_REPORTS_DIR="$TRITON_TEST_REPORTS_DIR/test-reports-shard-$TRITON_TEST_SHARD_NUMBER"
+fi
+
 if [[ $TEST_UNSKIP = true ]]; then
     TRITON_TEST_IGNORE_ERRORS=true
 fi
@@ -74,7 +83,6 @@ pytest() {
             fi
             pytest_extra_args+=(
                 "--skip-from-file=$SKIPFILES"
-                "--select-fail-on-missing"
             )
         else
             pytest_extra_args+=(
@@ -84,8 +92,54 @@ pytest() {
         fi
     fi
 
+    # Expected-failure lists, next to the skip list of the suite:
+    #   <suite>.xfail.txt:     reported as XFAIL without running. For a platform limitation, not a bug.
+    #   <suite>.xfail-run.txt: runs, expected to fail, fails the run if it passes (strict). Currently unused.
+    # Everything else, including bugs owned by other teams, goes in the skip list.
+    if [[ ! -f $TRITON_TEST_SELECTFILE && -v TRITON_TEST_SUITE && $TEST_UNSKIP = false ]]; then
+        XFAILFILE="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail.txt"
+        XFAILRUNFILE="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail-run.txt"
+        if [[ -f $XFAILFILE ]]; then
+            pytest_extra_args+=(
+                "--xfail-norun-from-file=$XFAILFILE"
+            )
+        fi
+        if [[ -f $XFAILRUNFILE ]]; then
+            pytest_extra_args+=(
+                "--xfail-from-file=$XFAILRUNFILE"
+                "--xfail-strict"
+            )
+        fi
+    fi
+
+    if [[ " ${pytest_extra_args[*]} " =~ \ --(skip|xfail|xfail-norun)-from-file= ]]; then
+        pytest_extra_args+=(
+            "--select-fail-on-missing"
+        )
+    fi
+
+    if [[ -v TRITON_TEST_SHARDS && -v TRITON_TEST_SHARD_NUMBER ]]; then
+        pytest_extra_args+=(
+            "--shard-id=$TRITON_TEST_SHARD_NUMBER"
+            "--num-shards=$TRITON_TEST_SHARDS"
+            "--sharding-mode=round-robin"
+        )
+        USING_SHARDS=true
+    else
+        USING_SHARDS=false
+    fi
+
+    # Tag this run's compile events with its suite name, matching the "warmup-<name>"
+    # phase the corresponding warm-compile-cache step records, so
+    # `triton._test_runner report --require-complete` can pair them up.
+    if [[ -v TRITON_TEST_SUITE && -n "${TRITON_CI_COMPILE_TRACE_DIR:-}" ]]; then
+        export TRITON_CI_CACHE_PHASE="$TRITON_TEST_SUITE"
+    fi
+
     export TEST_UNSKIP
-    python -u -m pytest "${pytest_extra_args[@]}" "$@" || handle_test_error
+    # Exit code 5 means no tests were collected, which is not an error for a shard:
+    # a shard may get no tests at all if the suite has fewer tests than shards.
+    python -u -m pytest "${pytest_extra_args[@]}" "$@" || [[ $? -eq 5 && $USING_SHARDS = true ]] || handle_test_error
 }
 
 capture_runtime_env() {
@@ -137,25 +191,123 @@ capture_runtime_env() {
     python -c 'import torch; print(torch.__version__)' > $TRITON_TEST_REPORTS_DIR/pytorch_version.txt
 }
 
+# Hex-encoded SPIR-V module declaring OpCapability PredicatedIOINTEL (6257) and
+# using OpPredicatedLoad/StoreINTEL. spirv-dis disassembles it (exit 0) only when
+# it understands SPV_INTEL_predicated_io; older builds fail with
+# "Invalid capability operand: 6257". spirv-dis reads this hex text from stdin,
+# so no binary fixture is needed. Never pass --handle-unknown-opcodes: it would
+# re-emit unknown ops and exit 0, hiding the missing support.
+PREDICATED_IO_PROBE="\
+07230203 00010000 00000000 0000000c 00000000 00020011 00000004 00020011 00000006 \
+00020011 00001871 0007000a 5f565053 45544e49 72705f4c 63696465 64657461 006f695f \
+0003000e 00000001 00000002 0005000f 00000006 00000008 626f7270 00000065 00020013 \
+00000001 00030021 00000002 00000001 00020014 00000003 00040015 00000004 00000020 \
+00000000 00040020 00000005 00000007 00000004 00030029 00000003 00000006 0004002b \
+00000004 00000007 00000000 00050036 00000001 00000008 00000000 00000002 000200f8 \
+00000009 0004003b 00000005 0000000a 00000007 00061872 00000004 0000000b 0000000a \
+00000006 00000007 00041873 0000000a 0000000b 00000006 000100fd 00010038"
+
+# spirv-dis is named spirv-dis.exe on Windows (msys/cygwin bash). Python resolves
+# the tool via shutil.which("spirv-dis.exe"), so the probe/search/build must use
+# the same platform-specific basename or the capable binary won't win PATH order.
+spirv_dis_binary_name() {
+    if [[ $OSTYPE = msys* || $OSTYPE = cygwin* ]]; then
+        echo "spirv-dis.exe"
+    else
+        echo "spirv-dis"
+    fi
+}
+
+spirv_dis_supports_predicated_io() {
+    local spirv_dis="$1"
+    [[ -x "$spirv_dis" ]] || command -v -- "$spirv_dis" >/dev/null 2>&1 || return 1
+    printf '%s' "$PREDICATED_IO_PROBE" | "$spirv_dis" - >/dev/null 2>&1
+}
+
+find_spirv_dis_with_predicated_io() {
+    local path_dir candidate_dir candidate
+    local binary
+    binary="$(spirv_dis_binary_name)"
+    local IFS=:
+    for path_dir in $PATH; do
+        [[ -n "$path_dir" ]] || path_dir=.
+        candidate_dir="$(cd -- "$path_dir" 2>/dev/null && pwd -P)" || continue
+        candidate="$candidate_dir/$binary"
+        if spirv_dis_supports_predicated_io "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Number of available CPUs. nproc is unavailable under Git-for-Windows bash.
+available_cpu_count() {
+    nproc 2>/dev/null || python -c 'import os; print(os.cpu_count() or 1)' 2>/dev/null || echo 4
+}
+
+# Number of parallel build jobs.
+spirv_dis_build_jobs() {
+    available_cpu_count
+}
+
 ensure_spirv_dis() {
-    # Does not work on Windows
-    if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
+    export PATH="$HOME/.local/bin:$PATH"
+
+    # Make a capable spirv-dis the first one on PATH: triton.knobs.intel.spirv_dis
+    # resolves via shutil.which (spirv-dis, or spirv-dis.exe on Windows) and does
+    # not check the extension, so the probed binary must win PATH order. A user may
+    # point at one explicitly via TRITON_SPIRV_DIS_PATH.
+    if [[ -n "${TRITON_SPIRV_DIS_PATH:-}" ]]; then
+        if spirv_dis_supports_predicated_io "$TRITON_SPIRV_DIS_PATH"; then
+            export PATH="$(cd -- "$(dirname -- "$TRITON_SPIRV_DIS_PATH")" && pwd -P):$PATH"
+            echo "Using spirv-dis from TRITON_SPIRV_DIS_PATH: $TRITON_SPIRV_DIS_PATH"
+            return
+        fi
+        echo "TRITON_SPIRV_DIS_PATH does not support SPV_INTEL_predicated_io: $TRITON_SPIRV_DIS_PATH" >&2
+        return 1
+    fi
+
+    local capable_spirv_dis
+    if capable_spirv_dis="$(find_spirv_dis_with_predicated_io)"; then
+        export PATH="$(cd -- "$(dirname -- "$capable_spirv_dis")" && pwd -P):$PATH"
+        echo "Using existing spirv-dis with SPV_INTEL_predicated_io support: $capable_spirv_dis"
         return
     fi
-    export PATH="$HOME/.local/bin:$PATH"
-    # Build spirv-dis from source with SPV_INTEL_predicated_io support.
-    # FIXME: Switch back to Vulkan SDK tarball once the next SDK release includes
-    # SPV_INTEL_predicated_io support (KhronosGroup/SPIRV-Tools#6665).
-    # curl -sSL https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz | tar Jxf - -C $HOME/.local/bin --strip-components 3 --no-anchored spirv-dis
+
+    # No capable spirv-dis on PATH: build from source.
+    # The commit is pinned because SPV_INTEL_predicated_io support is not in any
+    # tagged SPIRV-Tools release yet (post-v2026.2, KhronosGroup/SPIRV-Tools#6665).
+    # FIXME: Switch back to Vulkan SDK tarball once a released SDK includes it.
+    local binary
+    binary="$(spirv_dis_binary_name)"
     echo "Building spirv-dis from source to $HOME/.local/bin"
-    mkdir -p ~/.local/bin
-    local build_dir
-    build_dir="$(mktemp -d)"
-    git clone https://github.com/KhronosGroup/SPIRV-Tools.git "$build_dir/SPIRV-Tools"
-    git -C "$build_dir/SPIRV-Tools" checkout 4c2ec2a09b7fbeff1dc64cb9f857d77403a3c25f
-    python3 "$build_dir/SPIRV-Tools/utils/git-sync-deps"
-    cmake -B "$build_dir/build" -S "$build_dir/SPIRV-Tools" -DCMAKE_BUILD_TYPE=Release -DSPIRV_SKIP_TESTS=ON
-    cmake --build "$build_dir/build" -j"$(nproc)" --target spirv-dis
-    cp "$build_dir/build/tools/spirv-dis" "$HOME/.local/bin/"
-    rm -rf "$build_dir"
+    mkdir -p "$HOME/.local/bin"
+    (
+        set -e
+        build_dir="$(mktemp -d)"
+        trap 'rm -rf "$build_dir"' EXIT
+        git clone https://github.com/KhronosGroup/SPIRV-Tools.git "$build_dir/SPIRV-Tools"
+        git -C "$build_dir/SPIRV-Tools" checkout 4c2ec2a09b7fbeff1dc64cb9f857d77403a3c25f
+        python "$build_dir/SPIRV-Tools/utils/git-sync-deps"
+        cmake -B "$build_dir/build" -S "$build_dir/SPIRV-Tools" -DCMAKE_BUILD_TYPE=Release -DSPIRV_SKIP_TESTS=ON
+        cmake --build "$build_dir/build" --config Release --parallel "$(spirv_dis_build_jobs)" --target spirv-dis
+        # Multi-config generators (MSVC) emit tools/Release/spirv-dis.exe; single-config
+        # generators emit tools/spirv-dis. Take the first built binary that exists.
+        built=""
+        for candidate in \
+            "$build_dir/build/tools/Release/$binary" \
+            "$build_dir/build/tools/$binary"; do
+            [[ -f "$candidate" ]] && { built="$candidate"; break; }
+        done
+        [[ -n "$built" ]] || built="$(find "$build_dir/build" -type f -name "$binary" -print -quit)"
+        [[ -n "$built" ]] || { echo "spirv-dis build produced no $binary" >&2; exit 1; }
+        cp "$built" "$HOME/.local/bin/$binary"
+    ) || return 1
+
+    local built_spirv_dis="$HOME/.local/bin/$binary"
+    if ! spirv_dis_supports_predicated_io "$built_spirv_dis"; then
+        echo "Built spirv-dis does not support SPV_INTEL_predicated_io: $built_spirv_dis" >&2
+        return 1
+    fi
 }

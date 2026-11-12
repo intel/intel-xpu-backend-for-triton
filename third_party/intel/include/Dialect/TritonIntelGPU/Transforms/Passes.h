@@ -9,6 +9,7 @@
 #ifndef TRITON_DIALECT_TRITON_INTEL_GPU_TRANSFORMS_PASSES_H
 #define TRITON_DIALECT_TRITON_INTEL_GPU_TRANSFORMS_PASSES_H
 
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir::triton::gpu::intel {

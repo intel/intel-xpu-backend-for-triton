@@ -12,7 +12,7 @@ from triton_kernels_benchmark.benchmark_utils import BenchmarkCategory, Benchmar
 ALL_CATEGORIES = {cat.value for cat in BenchmarkCategory}
 
 SOFTMAX_PERFORMANCE_CSV = """
-N,Triton-GB/s,XeTLA-GB/s,Triton-GB/s-min,XeTLA-GB/s-min,Triton-GB/s-max,XeTLA-GB/s-max,Triton-TFlops,XeTLA-TFlops,Triton-TFlops-min,XeTLA-TFlops-min,Triton-TFlops-max,XeTLA-TFlops-max,Triton-CV,XeTLA-CV,datetime,run_counter
+N,Triton-GB/s,oneDNN-GB/s,Triton-GB/s-min,oneDNN-GB/s-min,Triton-GB/s-max,oneDNN-GB/s-max,Triton-TFlops,oneDNN-TFlops,Triton-TFlops-min,oneDNN-TFlops-min,Triton-TFlops-max,oneDNN-TFlops-max,Triton-CV,oneDNN-CV,datetime,run_counter
 256.000000,473.397771,568.333815,90.083848,514.007860,494.611303,582.542232,0.473398,0.568334,0.090084,0.514008,0.494611,0.582542,0.019154,0.018093,2025-05-05 21:45:29.943213,1
 1024.000000,683.111432,541.549931,672.164101,537.731297,689.852609,548.992673,0.683111,0.541550,0.672164,0.537731,0.689853,0.548993,0.006031,0.004731,2025-05-05 21:45:29.943213,1
 2048.000000,677.320009,726.915809,672.164101,708.497308,683.111380,825.650389,0.677320,0.726916,0.672164,0.708497,0.683111,0.825650,0.003426,0.018620,2025-05-05 21:45:29.943213,1

@@ -16,7 +16,7 @@
 
 namespace mlir::triton::NVIDIA {
 
-enum class PtxAtomicAddrSpace { Global, Shared };
+enum class PtxAtomicAddrSpace { Global, Shared, SharedCluster };
 enum class PtxAtomicInstr { Atom, Red };
 
 inline std::string getPtxRegisterSizeCode(int size, bool isFloat) {
@@ -37,18 +37,18 @@ inline std::string getPtxRegisterSizeCode(int size, bool isFloat) {
 }
 
 inline FailureOr<Value>
-emitPtxAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
-                 Type valueElemTy, Value ptr, ArrayRef<Value> vals,
-                 RMWOp rmwOpAttr, MemSemantic sem, MemSyncScope scope,
-                 Value pred, unsigned vec = 1, unsigned packed = 1,
-                 PtxAtomicAddrSpace addrSpace = PtxAtomicAddrSpace::Global,
-                 PtxAtomicInstr instr = PtxAtomicInstr::Atom) {
+emitPtxAtomicRMWImpl(ConversionPatternRewriter &rewriter, Location loc,
+                     Type valueElemTy, Value ptr, ArrayRef<Value> vals,
+                     RMWOp rmwOpAttr, MemSemantic sem, std::string scope,
+                     Value pred, unsigned vec, unsigned packed,
+                     PtxAtomicAddrSpace addrSpace, PtxAtomicInstr instr) {
   assert((vec == 1 || packed == 1) && "packed or vec must be 1");
   assert(vals.size() == (vec > 1 ? vec : packed) &&
          "Expected atomic RMW operand count to match vectorization");
 
   bool isRed = instr == PtxAtomicInstr::Red;
   bool isGlobal = addrSpace == PtxAtomicAddrSpace::Global;
+  bool isSharedCluster = addrSpace == PtxAtomicAddrSpace::SharedCluster;
   assert((isGlobal || (vec == 1 && packed == 1)) &&
          "shared atomic RMW does not support vectorized lowering");
 
@@ -93,9 +93,11 @@ emitPtxAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
                                                         : std::string("atom"));
   if (isGlobal)
     atomicInstr.global();
+  else if (isSharedCluster)
+    atomicInstr.o("shared::cluster");
   else
     atomicInstr.shared();
-  atomicInstr.o(stringifyMemSyncScope(scope).str());
+  atomicInstr.o(scope);
 
   std::string rmwOp = stringifyRMWOp(rmwOpAttr).str();
   std::string suffix;
@@ -159,6 +161,37 @@ emitPtxAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
   return ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
 }
 
+inline bool usePtxForHalfAdd(RMWOp op, Type type,
+                             const TargetInfoBase &targetInfo) {
+  // NVPTX can widen a 16-bit add of NaN to a 32-bit CAS.
+  return op == RMWOp::FADD &&
+         (type.isF16() ||
+          (type.isBF16() && targetInfo.supportNativeBF16AtomicAdd()));
+}
+
+inline FailureOr<Value>
+emitAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
+              Type valueElemTy, Value ptr, ArrayRef<Value> vals,
+              RMWOp rmwOpAttr, MemSemantic sem, MemSyncScope scope, Value pred,
+              const TargetInfoBase &targetInfo, unsigned vec = 1,
+              unsigned packed = 1, bool returnOld = true) {
+  if (pred || vec != 1 || packed != 1 ||
+      usePtxForHalfAdd(rmwOpAttr, valueElemTy, targetInfo))
+    return emitPtxAtomicRMWImpl(
+        rewriter, loc, valueElemTy, ptr, vals, rmwOpAttr, sem,
+        stringifyMemSyncScope(scope).str(), pred, vec, packed,
+        PtxAtomicAddrSpace::Global,
+        returnOld ? PtxAtomicInstr::Atom : PtxAtomicInstr::Red);
+  auto binOp = matchAtomicOp(rmwOpAttr);
+  auto ordering = getMemoryOrdering(sem);
+  if (!binOp || !ordering)
+    return failure();
+  return LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, vals.front(),
+                                   *ordering,
+                                   targetInfo.getAtomicSyncScope(scope))
+      .getResult();
+}
+
 inline Value emitPtxAtomicCAS(ConversionPatternRewriter &rewriter, Location loc,
                               Type valueElemTy, Value ptr, Value cmp, Value val,
                               MemSemantic sem, MemSyncScope scope, Value pred) {
@@ -177,6 +210,34 @@ inline Value emitPtxAtomicCAS(ConversionPatternRewriter &rewriter, Location loc,
   atom.global().o(semStr).o(stringifyMemSyncScope(scope).str()).o("cas").o(sTy);
   atom(dstOpr, ptrOpr, cmpOpr, valOpr).maybePredicate(pred);
   return ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
+}
+
+inline Value emitAtomicCAS(ConversionPatternRewriter &rewriter, Location loc,
+                           Type valueElemTy, Value ptr, Value cmp, Value val,
+                           MemSemantic sem, MemSyncScope scope, Value pred,
+                           const TargetInfoBase &targetInfo) {
+  // LLVM widens 16-bit cmpxchg to a 32-bit CAS, touching adjacent storage.
+  if (pred || valueElemTy.getIntOrFloatBitWidth() == 16)
+    return emitPtxAtomicCAS(rewriter, loc, valueElemTy, ptr, cmp, val, sem,
+                            scope, pred);
+  TritonLLVMOpBuilder b(loc, rewriter);
+  bool bitcast = isa<FloatType>(valueElemTy);
+  if (bitcast) {
+    auto intTy = int_ty(valueElemTy.getIntOrFloatBitWidth());
+    cmp = b.bitcast(cmp, intTy);
+    val = b.bitcast(val, intTy);
+  }
+  auto ordering = *getMemoryOrdering(sem);
+  // PTX acquire also applies when the comparison fails.
+  auto failureOrdering =
+      sem == MemSemantic::ACQUIRE || sem == MemSemantic::ACQUIRE_RELEASE
+          ? LLVM::AtomicOrdering::acquire
+          : LLVM::AtomicOrdering::monotonic;
+  Value result = LLVM::AtomicCmpXchgOp::create(
+      rewriter, loc, ptr, cmp, val, ordering, failureOrdering,
+      targetInfo.getAtomicSyncScope(scope));
+  Value old = b.extract_val(result, 0);
+  return bitcast ? b.bitcast(old, valueElemTy) : old;
 }
 
 } // namespace mlir::triton::NVIDIA
