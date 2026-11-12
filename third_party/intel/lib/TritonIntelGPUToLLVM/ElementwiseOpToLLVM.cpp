@@ -1237,10 +1237,8 @@ constexpr const char BUILTIN_BFTOHF8[] =
     "__builtin_spirv_ClampConvertBF16ToE4M3INTEL";
 constexpr const char BUILTIN_BFTOBF8[] =
     "__builtin_spirv_ClampConvertBF16ToE5M2INTEL";
-constexpr const char BUILTIN_HF8TOHF[] =
-    "__builtin_spirv_ConvertE4M3ToFP16INTEL";
-constexpr const char BUILTIN_BF8TOHF[] =
-    "__builtin_spirv_ConvertE5M2ToFP16INTEL";
+constexpr const char BUILTIN_HF8TOHF[] = "__builtin_spirv_ConvertE4M3ToFP16EXT";
+constexpr const char BUILTIN_BF8TOHF[] = "__builtin_spirv_ConvertE5M2ToFP16EXT";
 
 // Call the builtin function BaseName. If the
 // input size > 1, pack the values in vectors of size pow 2 <= MaxVecSize.
