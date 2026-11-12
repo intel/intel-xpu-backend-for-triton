@@ -931,23 +931,28 @@ class XPUDriver(DriverBase):
 
         self.launched_grf_modes = []
         try:
-            fn()
-        finally:
-            launched, self.launched_grf_modes = self.launched_grf_modes, None
-        self._flush_grf_mode = launched[0] if launched else "default"
-        try:
             return do_bench(fn, *args, **kwargs)
         finally:
+            self.launched_grf_modes = None
             self._flush_grf_mode = "default"
 
     def get_empty_cache_for_benchmark(self):
         import torch
 
+        if self.launched_grf_modes is not None:
+            # `do_bench` gets here once, after its first run of the kernel and before it estimates the run time.
+            launched, self.launched_grf_modes = self.launched_grf_modes, None
+            self._flush_grf_mode = launched[0] if launched else "default"
+
         # We maintain a buffer of 256 MB that we clear
         # before each kernel call to make sure that the L2 cache
         # doesn't contain any input data before the run
         cache_size = 256 * 1024 * 1024
-        return torch.empty(int(cache_size // 4), dtype=torch.int, device='xpu')
+        cache = torch.empty(int(cache_size // 4), dtype=torch.int, device='xpu')
+        if self._flush_grf_mode != "default":
+            # Compile the flush kernel now, so that its compile time does not end up in that estimate.
+            self.clear_cache(cache)
+        return cache
 
     def clear_cache(self, cache):
         if self._flush_grf_mode == "default":

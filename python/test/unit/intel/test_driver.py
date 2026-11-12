@@ -528,3 +528,30 @@ def test_benchmarker_flushes_in_auto_upgraded_grf_mode(device, monkeypatch):
 
     used = _flush_grf_modes_used(monkeypatch, lambda: _kernel[(1, )](z, BLOCK=BLOCK, num_warps=2))
     assert used == {"512" if is_xpu_cri() else "256"}
+
+
+@pytest.mark.parametrize("grf_mode, warm", [("default", False), ("256", True)])
+def test_benchmarker_warms_up_flush_before_estimate(device, monkeypatch, grf_mode, warm):
+    # Compiling the flush kernel inside the run time estimate of `do_bench` would make it time the kernel once.
+
+    @triton.jit
+    def add_one(x_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(x_ptr + offs, tl.load(x_ptr + offs) + 1)
+
+    drv = driver.active
+    x = torch.zeros(1024, device=device)
+    events = []
+    clear_cache = drv.clear_cache
+
+    def run():
+        events.append("run")
+        add_one[(1, )](x, BLOCK=1024, grf_mode=grf_mode)
+
+    def recording_clear_cache(cache):
+        events.append("flush")
+        clear_cache(cache)
+
+    monkeypatch.setattr(drv, "clear_cache", recording_clear_cache)
+    drv.get_benchmarker()(run)
+    assert events[:4] == ["run", "flush", "flush", "run"] if warm else events[:3] == ["run", "flush", "run"]
