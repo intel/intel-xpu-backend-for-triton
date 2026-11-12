@@ -35,3 +35,5 @@ apply_patch() {
 echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
+# XPU: larger split-scan R0_BLOCK autotune candidates (#8794).
+apply_patch patch/pytorch-xpu-split-scan-configs.patch
