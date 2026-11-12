@@ -171,6 +171,88 @@ def test_error_on_failures_flag(tmp_path):
         assert e.code == 1
 
 
+def _multi_child_report(children: str) -> str:
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" tests="2">
+        <testcase classname="python.test.unit.language.test_core" name="test_ok" time="0.1" />
+        <testcase classname="python.test.unit.language.test_core" name="test_multi" time="1.5">{children}</testcase>
+    </testsuite>
+</testsuites>
+'''
+
+
+# A worker crash during teardown of a failed test makes pytest write several outcome tags into ONE <testcase>.
+@pytest.mark.parametrize(
+    ('children', 'reason', 'message', 'text'),
+    [
+        ('<failure message="call">call tb</failure><error message="teardown">teardown tb</error>', 'failure',
+         '[failure] call\n[error] teardown', '[failure] call tb\n[error] teardown tb'),
+        ('<error message="teardown">teardown tb</error><failure message="call">call tb</failure>', 'error',
+         '[error] teardown\n[failure] call', '[error] teardown tb\n[failure] call tb'),
+        ('<skipped type="pytest.xfail" message="xfail"/><failure message="call">call tb</failure>', 'failure',
+         '[failure] call', '[failure] call tb'),
+        ('<failure message="call">call tb</failure><skipped type="pytest.skip" message="skip"/>', 'failure',
+         '[failure] call', '[failure] call tb'),
+        ('<error message="a">a tb</error><error message="b">b tb</error>', 'error', '[error] a\n[error] b',
+         '[error] a tb\n[error] b tb'),
+    ],
+)
+def test_testcase_with_multiple_outcome_tags_is_failed(  # pylint: disable=R0913, R0917
+    tmp_path, capsys, children, reason, message, text
+):
+    (tmp_path / 'language.xml').write_text(_multi_child_report(children), encoding='utf-8')
+    config = triton_utils.Config(action='pass_rate', reports=str(tmp_path), allow_multiple_outcome_tags=True)
+
+    out, _ = triton_utils.PassRateActionRunner(config)()
+
+    pass_rate_dict = extract_pass_rate_dict(out)
+    assert (pass_rate_dict['passed'], pass_rate_dict['failed'], pass_rate_dict['total']) == (1, 1, 2)
+    report = triton_utils.TestReport.from_reports_folder(str(tmp_path), False, [], allow_multiple_outcome_tags=True)
+    case = next(tc for t in report.tests.values() for tc in t.test_cases if tc.name == 'test_multi')
+    assert case.result == triton_utils.RunResult.FAILED
+    assert case.result_reason == reason
+    assert case.time == 1.5
+    assert case.error_message == message
+    assert case.error_text == text
+    err = capsys.readouterr().err
+    assert 'language::python.test.unit.language.test_core::test_multi' in err
+
+
+def test_testcase_with_multiple_outcome_tags_is_failed_in_tests_stats(tmp_path):
+    children = '<failure message="call">call tb</failure><error message="teardown">teardown tb</error>'
+    (tmp_path / 'language.xml').write_text(_multi_child_report(children), encoding='utf-8')
+    config = triton_utils.Config(action='tests_stats', reports=str(tmp_path), merge_test_results=True,
+                                 allow_multiple_outcome_tags=True)
+
+    stats = {}
+    for line in triton_utils.TestsStatsActionRunner(config)().splitlines():
+        stats.update(json.loads(line))
+
+    assert stats['language::python/test/unit/language/test_core.py::test_multi']['failed'] == 1
+
+
+@pytest.mark.parametrize('children', [
+    '<failure message="call">call tb</failure><error message="teardown">teardown tb</error>',
+    '<skipped type="pytest.skip" message="a"/><skipped type="pytest.xfail" message="b"/>',
+])
+def test_testcase_with_multiple_outcome_tags_raises_by_default(tmp_path, children):
+    (tmp_path / 'language.xml').write_text(_multi_child_report(children), encoding='utf-8')
+    config = triton_utils.Config(action='pass_rate', reports=str(tmp_path))
+
+    with pytest.raises(ValueError, match='test_multi.*--allow-multiple-outcome-tags'):
+        triton_utils.PassRateActionRunner(config)()
+
+
+def test_testcase_with_only_skipped_tags_raises_with_identity(tmp_path):
+    children = '<skipped type="pytest.skip" message="a"/><skipped type="pytest.xfail" message="b"/>'
+    (tmp_path / 'language.xml').write_text(_multi_child_report(children), encoding='utf-8')
+    config = triton_utils.Config(action='pass_rate', reports=str(tmp_path), allow_multiple_outcome_tags=True)
+
+    with pytest.raises(ValueError, match='test_multi'):
+        triton_utils.PassRateActionRunner(config)()
+
+
 def test_export_to_csv(tmp_path):
     rep1 = tmp_path / 'language.xml'
     rep1.write_text(TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
@@ -697,6 +779,14 @@ def test_tests_with_multiple_results(  # pylint: disable=R0913, R0914, R0917
                 action='compare_reports',
                 reports='/path/to/reports',
                 reports_2='/path/to/reports2'
+            )
+        ),
+        (
+            'pass_rate --reports /path/to/reports --allow-multiple-outcome-tags',
+            triton_utils.Config(
+                action='pass_rate',
+                reports='/path/to/reports',
+                allow_multiple_outcome_tags=True,
             )
         ),
     ]
