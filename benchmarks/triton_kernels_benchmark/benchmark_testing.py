@@ -4,7 +4,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import gc
 import importlib
-import importlib.util
 import re
 from typing import Callable, ClassVar, Dict, Optional, List, Tuple, Union, Set
 from collections.abc import Iterable
@@ -53,14 +52,8 @@ DEVICE_PROFILER_TIME_KEY = f"{DEVICE}_time"
 
 
 def get_xpu_extension(name: str):
-    """Import an optional XPU benchmark extension, if installed."""
-    if DEVICE != "xpu":
-        return None
-    module_name = f"triton_kernels_benchmark.{name}"
-    if importlib.util.find_spec(module_name) is None:
-        warnings.warn(f"Optional benchmark extension {module_name} is not installed", stacklevel=2)
-        return None
-    return importlib.import_module(module_name)
+    """Import an XPU-only extension module of `triton_kernels_benchmark`, or return None on CUDA."""
+    return importlib.import_module(f"triton_kernels_benchmark.{name}") if DEVICE == "xpu" else None
 
 
 # On CUDA: strip the XPU-only kernel config keys that the CUDA backend rejects, so that the XPU-tuned
