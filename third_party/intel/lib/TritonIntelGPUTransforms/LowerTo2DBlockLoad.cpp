@@ -296,15 +296,15 @@ private:
     // A row-limit mask can become `base_height` instead of per-element
     // masking (hardware zero-fill). Decided up front so tile-size
     // computation below can treat this load as unmasked.
-    std::optional<ttgi::RowLimitMaskInfo> rowLimitMask;
+    std::optional<ttgi::BoundaryMaskInfo> rowLimitMask;
     if (op.getMask() && rank >= 2) {
       unsigned pitchTensorDim =
           (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
       bool pitchDimIsBroadcast =
           getStride(strideAnalysis, op.getPtr(), pitchTensorDim) == 0;
-      if (auto m = ttgi::matchRowLimitMask(op.getMask(), op.getOther(),
-                                           tensorTy.getShape(), contiguousDim,
-                                           pitchDimIsBroadcast))
+      if (auto m = ttgi::matchBoundaryCheckMask(
+              op.getMask(), op.getOther(), tensorTy.getShape(), contiguousDim,
+              pitchDimIsBroadcast))
         rowLimitMask = m;
     }
 
@@ -355,7 +355,7 @@ private:
     // memory-contiguous dim and colDim is non-contiguous, so pitch uses colDim.
     unsigned pitchDim = isTranspose ? colDim : rowDim;
 
-    // matchRowLimitMask assumed the pitch dim is the conventional rank-2/
+    // matchBoundaryCheckMask assumed the pitch dim is the conventional rank-2/
     // rank-1 dim, but for rank > 2 the tile's actual pitch dim (above) can
     // land on a batch dim instead (e.g. a layout with no register packing).
     // base_height only predicates `pitchDim`, so a mismatch here would
@@ -523,19 +523,20 @@ private:
     Value other = op.getOther();
     Value heightOperand;
     if (rowLimitMask) {
-      // Drop the row-limit component: base_height replaces it. Keep any
-      // batch-dim extraPred as the mask operand for the LLVM lowering to
+      // Drop the row-limit component: base_height replaces it. Keep the
+      // uniform conjuncts, ANDed, as the mask operand for the LLVM lowering to
       // AND into its per-message select.
-      mask = rowLimitMask->extraPred;
-      if (mask)
-        mask = ttgi::materializeExtraPred(
-            builder, op.getLoc(), mask,
-            cast<RankedTensorType>(op.getMask().getType()));
+      auto maskTy = cast<RankedTensorType>(op.getMask().getType());
+      mask = Value();
+      for (Value pred : rowLimitMask->extraPreds) {
+        pred = ttgi::materializeExtraPred(builder, loc, pred, maskTy);
+        mask = mask ? arith::AndIOp::create(builder, loc, mask, pred) : pred;
+      }
       other = mask ? createZeroSplat(builder, loc, tensorTy) : Value();
       // Relative to the tile's first row and may be <= 0; the LLVM lowering
       // adjusts per message and never forwards a non-positive base_height.
       heightOperand = ttgi::computeRowLimitHeight(
-          builder, loc, rowLimitMask->bound, rowLimitMask->rowBase,
+          builder, loc, rowLimitMask->rowBound, rowLimitMask->rowBase,
           tensorTy.getShape()[rowLimitMask->boundedDim]);
     } else {
       // If mask is present but other is absent, create a zero splat as the
