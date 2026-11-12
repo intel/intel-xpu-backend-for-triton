@@ -2707,7 +2707,11 @@ private:
                             Value offsetX, Value offsetY) const {
     // Sign-extend so a negative (e.g. i16) row offset fails the unsigned check.
     Value offsetX64 = b.sext(IntegerType::get(ctx, 64), offsetX);
-    Value predX = b.icmp_ult(offsetX64, desc.shapes[0]);
+    // Compare against the zero-extended i32 shape, as the pointer expansion
+    // does: against the sign-extended one, LLVM narrows the check to i32.
+    Value shapeX = b.zext(IntegerType::get(ctx, 64),
+                          b.trunc(IntegerType::get(ctx, 32), desc.shapes[0]));
+    Value predX = b.icmp_ult(offsetX64, shapeX);
 
     Value yOffset64 = b.zext(IntegerType::get(ctx, 64), offsetY);
     Value predY = b.icmp_ult(yOffset64, desc.shapes[1]);
@@ -2987,6 +2991,10 @@ private:
       bool predicated = canUsePredicatedInstructions(op);
       unsigned regMask = getFreeVariableMasks(resultType)[kRegister];
 
+      // Index columns through the full layout with the shared lane and warp
+      // IDs, as other ops do, so LLVM CSEs the i32 column with theirs. A lone
+      // copy gets widened to i64, which IGC emulates and schedules worse.
+      auto [threadLaneId, threadWarpId] = getLaneAndWarpId(rewriter, loc);
       SmallVector<Value> loadedVals;
       for (unsigned vecStart = 0; vecStart < numElems; vecStart += vec) {
         if (unsigned canonical = getCanonicalIndex(vecStart, regMask);
@@ -2998,10 +3006,12 @@ private:
         auto offsetXIdx = layoutConfig.offMapping.apply(
             {{kRegister, vecStart}, {kLane, 0}})[0];
         assert(offsetXIdx.first == kOffIdx);
-        auto offsetsForY = applyLinearLayout(
-            loc, rewriter, layoutConfig.offMapping,
-            {{kRegister, b.i32_val(vecStart)}, {kLane, laneId}});
-        Value colY = b.add(basicOffsetY, getNamedOffset(offsetsForY, kDim1));
+        auto idx = applyLinearLayout(loc, rewriter, *llEncoding,
+                                     {{kRegister, b.i32_val(vecStart)},
+                                      {kLane, threadLaneId},
+                                      {kWarp, threadWarpId},
+                                      {kBlock, b.i32_val(0)}});
+        Value colY = b.add(offsetY, getNamedOffset(idx, kDim1));
         GatherAddressAndPred gatherAddr = buildGatherAddressAndPred(
             b, ctx, valueElemTy, desc, offsetsX[offsetXIdx.second], colY);
 
