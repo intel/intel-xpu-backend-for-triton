@@ -9,6 +9,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -62,6 +63,13 @@ static int64_t getStride(tt::intel::ModuleStrideAnalysis &strideAnalysis,
 static Value createZeroSplat(OpBuilder &builder, Location loc,
                              RankedTensorType tensorTy) {
   Type elemType = tensorTy.getElementType();
+  // Packed fp4 has no scalar constants and e8m0 cannot represent 0: splat
+  // zero bits as i8 and bitcast, like upstream's descriptor zero padding.
+  if (isa<tt::PackedFloat4E2M1Type, Float8E8M0FNUType>(elemType)) {
+    auto bitsTy = tensorTy.clone(builder.getI8Type());
+    Value zeroBits = createZeroSplat(builder, loc, bitsTy);
+    return tt::BitcastOp::create(builder, loc, tensorTy, zeroBits);
+  }
   Attribute zeroAttr;
   if (isa<FloatType>(elemType))
     zeroAttr = builder.getFloatAttr(elemType, 0.0);
@@ -131,7 +139,8 @@ private:
       return;
 
     unsigned rank = tensorTy.getRank();
-    unsigned elemSizeInBits = tensorTy.getElementTypeBitWidth();
+    unsigned elemSizeInBits =
+        getIntOrFloatOrPtrBitWidth(tensorTy.getElementType());
 
     // Find all MakeTensorDescOps that could define this descriptor.
     Value desc = op.getDesc();
@@ -275,7 +284,8 @@ private:
     auto tensorTy =
         cast<RankedTensorType>(tt::getPointeeType(op.getPtr().getType()));
     unsigned rank = tensorTy.getRank();
-    unsigned elemSizeInBits = tensorTy.getElementTypeBitWidth();
+    unsigned elemSizeInBits =
+        getIntOrFloatOrPtrBitWidth(tensorTy.getElementType());
 
     bool memoryRowMajor = ttgi::isMemoryRowMajor(op);
     unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
@@ -340,11 +350,6 @@ private:
     isTranspose = sizeInfo.transpose;
     numPackedVals = sizeInfo.numElemPerPackedVal;
 
-    tt::AxisInfo *ptrInfo = axisInfoAnalysis.getAxisInfo(op.getPtr());
-    if (elemSizeInBits * numPackedVals > 32 &&
-        (!ptrInfo || ptrInfo->getDivisibility(contiguousDim) % 8))
-      return;
-
     // For the 2D block load surface, the pitch dimension is always the
     // non-contiguous memory direction. For transposed loads, rowDim is the
     // memory-contiguous dim and colDim is non-contiguous, so pitch uses colDim.
@@ -382,6 +387,12 @@ private:
       numPackedVals = sizeInfo.numElemPerPackedVal;
       pitchDim = isTranspose ? colDim : rowDim;
     }
+
+    // Check the final tile, after any row-limit fallback.
+    tt::AxisInfo *ptrInfo = axisInfoAnalysis.getAxisInfo(op.getPtr());
+    if (elemSizeInBits * numPackedVals > 32 &&
+        (!ptrInfo || ptrInfo->getDivisibility(contiguousDim) % 8))
+      return;
 
     // Compute pitch from stride analysis or the 1D->2D reshape attribute.
     // For the HW surface: width is along memory-contiguous direction, height

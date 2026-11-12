@@ -1,0 +1,2 @@
+# Platform limit on A770: shared memory over the hardware limit
+python/test/unit/intel/test_core.py::test_gather_warp_shuffle[r"src_shape1-indices_shape1-0-.*"]@regexp

@@ -7,6 +7,8 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -103,9 +105,13 @@ static Value emitDroppedDimsInBoundsPred(TritonLLVMOpBuilder &b,
 }
 
 /// The out-of-bounds fill value of a descriptor load.
-static Value paddingConstant(RewriterBase &rewriter, Location loc, Type elemTy,
+static Value paddingConstant(RewriterBase &rewriter, Location loc,
+                             Type tensorElemTy, Type elemTy,
                              PaddingOption padding) {
-  if (padding == PaddingOption::PAD_NAN) {
+  // e2m1 has no NaN encoding, and e8m0 is padded with zero bits like on the
+  // host-descriptor path: both are integers once converted.
+  if (padding == PaddingOption::PAD_NAN &&
+      !isa<PackedFloat4E2M1Type, Float8E8M0FNUType>(tensorElemTy)) {
     assert(!elemTy.isIntOrIndex() &&
            "Expect element type to be non-integer type");
     auto nan =
@@ -491,7 +497,8 @@ struct LoadStoreConversionBase {
     // Get the LLVM values for `other`
     SmallVector<Value> otherElems;
     if (padding) {
-      Value other = paddingConstant(rewriter, loc, valueElemTy, *padding);
+      Value other = paddingConstant(rewriter, loc, tensorType.getElementType(),
+                                    valueElemTy, *padding);
       for (unsigned i = 0; i < numElems; ++i)
         otherElems.push_back(other);
     }
@@ -3154,7 +3161,8 @@ struct DescriptorLoadOpConversion
       return vals;
     };
     SmallVector<Value> fill(
-        numElems, paddingConstant(rewriter, loc, valueElemTy, padding));
+        numElems, paddingConstant(rewriter, loc, resultType.getElementType(),
+                                  valueElemTy, padding));
     Block &end = LLVM::intel::createPredicatedBlock(rewriter, loc, inBounds,
                                                     fill, emitReads);
     return SmallVector<Value>(end.args_begin(), end.args_end());
@@ -4669,7 +4677,7 @@ struct AtomicRMWOpConversion
     if (tensorTy) {
       auto valTy = cast<RankedTensorType>(val.getType());
       auto maxVecSize =
-          valueElemNBits / valTy.getElementType().getIntOrFloatBitWidth();
+          valueElemNBits / getIntOrFloatOrPtrBitWidth(valTy.getElementType());
       vec = std::min<unsigned>(vec,
                                valTy.getElementType().isF16() ? maxVecSize : 1);
       // mask
@@ -5262,10 +5270,15 @@ struct Subgroup2DBlockLoadOpConversion
               baseHeight, pred,    redirectNegCol};
     };
 
+    // NaN padding of e2m1 / e8m0 fills zero bits, as on the host-descriptor
+    // path: e2m1 has no NaN encoding and both are integers once converted.
+    bool padWithZero =
+        maskNegCol || isa<PackedFloat4E2M1Type, Float8E8M0FNUType>(
+                          tensorType.getElementType());
     return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
                             /*otherElems=*/{}, nanMaskElems,
                             /*staticBaseHeight=*/std::nullopt, targetInfo,
-                            getTypeConverter(), loc, rewriter, maskNegCol);
+                            getTypeConverter(), loc, rewriter, padWithZero);
   }
 };
 
@@ -5350,7 +5363,12 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
     if (llOther && llMask) {
       Value other = op.getOther();
       DenseElementsAttr constAttr;
-      if (matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
+      if (isZeroFillConst(other)) {
+        // The 2D block load fills masked-off elements with zeros. This also
+        // matches a zero bitcast to the element type, e.g. the zero padding
+        // of packed fp4, which has no constants of its own.
+      } else if (matchPattern(other, m_Constant(&constAttr)) &&
+                 constAttr.isSplat()) {
         Type elemTy = constAttr.getElementType();
         auto handleSplatValue = [&](auto splatVal) {
           if (!splatVal.isZero() || splatVal.isNegative()) {
@@ -5372,8 +5390,13 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       }
     }
 
+    // A column-limit `base_width` spans the whole tile: not per message, not
+    // per block.
+    bool isColLimitWidth =
+        op->hasAttr(TritonIntelGPUDialect::getBlockIORuntimeColLimitAttrName());
+
     Value baseWidth = adaptor.getBaseWidth();
-    if (cfg.vBlocks > 1)
+    if (!isColLimitWidth && cfg.vBlocks > 1)
       baseWidth = b.mul(baseWidth, b.i32_val(cfg.vBlocks));
     Value baseHeight = adaptor.getBaseHeight();
     Value pitch = adaptor.getBasePitch();
@@ -5396,12 +5419,27 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       Value addrElem =
           targetInfo.shuffleIdx(rewriter, loc, ptrElems[registerIdx], 0);
       Value offsetX = offsets[blockColIdx].second;
+      // A column-limit width may be under the 64-byte minimum, down to zero.
+      // Widening it would admit columns past the bound, so move the surface
+      // origin left by the shortfall instead: the right edge stays on the
+      // bound and the columns gained lie left of the tile, where no message
+      // reads. The width is a whole number of 4-byte granules, so X stays
+      // aligned.
+      Value adjustedBaseWidth;
+      if (isColLimitWidth) {
+        Value shortfallBytes =
+            b.smax(b.sub(b.i32_val(64), baseWidth), b.i32_val(0));
+        offsetX = b.add(offsetX,
+                        b.udiv(shortfallBytes, b.i32_val(elemSizeInBits / 8)));
+        adjustedBaseWidth = b.add(baseWidth, shortfallBytes);
+      } else {
+        adjustedBaseWidth =
+            b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
+        // The HW requires a base width of at least 64 bytes.
+        adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
+      }
       Value negativeOffsetX = b.sub(b.i32_val(0), offsetX);
       addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
-      Value adjustedBaseWidth =
-          b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
-      // The HW requires a base width of at least 64 bytes.
-      adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
 
       Value adjustedBaseHeight = baseHeight;
       Value pred;
