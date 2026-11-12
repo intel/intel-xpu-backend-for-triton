@@ -12,8 +12,10 @@ export
 
 test_cmd="python test/run_test.py --keep-going --include "
 if [[ "${1:-all}" = "all" ]]; then
-    for test in $(ls test/inductor | grep test); do
-        test_cmd="${test_cmd} inductor/$test"
+    # Use run_test.py's own test discovery: listing test/inductor also picks up
+    # non-test entries and blocklisted files, which --include rejects.
+    for test in $(python -c 'from tools.testing.discover_tests import TESTS; print(" ".join(t for t in TESTS if t.startswith("inductor/")))'); do
+        test_cmd="${test_cmd} $test"
     done
 else
     for test in "$@"; do
