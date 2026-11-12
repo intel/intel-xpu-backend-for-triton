@@ -820,8 +820,10 @@ def _zero_fill_kernel():
 
 def _grf_mode_of(metadata):
     """GRF mode a kernel runs in, as a `grf_mode` launch option."""
-    if metadata.grf_mode.isdigit():
-        return metadata.grf_mode
+    if metadata.grf_mode == "auto":
+        return "default"  # IGC picks the mode, which is not visible here
+    if metadata.grf_mode != "default":
+        return metadata.grf_mode  # explicit: 128, 160, 192, 256 or 512
     # The mode of a `default` kernel can still be raised by the large-GRF retry, which sets a build flag.
     for mode in ("128", "256", "512"):
         if f"-cl-intel-{mode}-GRF-per-thread" in metadata.build_flags:
