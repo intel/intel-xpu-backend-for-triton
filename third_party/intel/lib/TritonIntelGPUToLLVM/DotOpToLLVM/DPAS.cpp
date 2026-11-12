@@ -318,15 +318,17 @@ private:
   std::optional<LazyFp8Operand>
   getLazyFp8Operand(Value operand, Value lowered, int64_t batch, int64_t outer,
                     int64_t inner, DpasEncodingAttr::OpIdx opIdx) const {
+    // Follow the `tt.fp_to_fp` lowering, which left a cast of the fp8 source
+    // if the dot converts it, rather than calling isDPASOperandConvertedByDot
+    // again: lowering the ops in between can split their block (e.g. the
+    // predicated stores of a `ttg.local_alloc`), and it requires one block.
     auto cvt = operand.getDefiningOp<FpToFpOp>();
-    if (!cvt || !triton::intel::isDPASOperandConvertedByDot(cvt))
+    auto cast = lowered.getDefiningOp<UnrealizedConversionCastOp>();
+    if (!cvt || !cast || cast->getNumOperands() != 1 ||
+        !isa<LLVM::LLVMStructType>(cast->getOperand(0).getType()))
       return std::nullopt;
     // The `tt.fp_to_fp` lowering emitted no conversion for `cvt`, so this must
     // not fail from here on.
-    auto cast = lowered.getDefiningOp<UnrealizedConversionCastOp>();
-    assert(cast && cast->getNumOperands() == 1 &&
-           isa<LLVM::LLVMStructType>(cast->getOperand(0).getType()) &&
-           "expected the cast of the lowered fp8 operand");
     Value llSrc = cast->getOperand(0);
     std::optional<triton::intel::Fp8ToFp16Lowering> lowering =
         triton::intel::Fp8ToFp16Lowering::get(cvt, llSrc, rewriter);
