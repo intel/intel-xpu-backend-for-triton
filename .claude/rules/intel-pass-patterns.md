@@ -277,10 +277,11 @@ Python: `intel.passes.ttgpuir.add_coalesce(pm)`
 
 ### Pass with Scalar Options
 ```cpp
-ADD_PASS_OPTION_WRAPPER_2("add_pipeline",
-                          gpu::intel::createTritonIntelGPUPipeline, int, bool);
+ADD_PASS_OPTION_WRAPPER_5("add_pipeline",
+                          gpu::intel::createTritonIntelGPUPipeline, int, bool,
+                          std::string, unsigned, unsigned);
 ```
-Python: `intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)`
+Python: `intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier, cls.device_arch, properties['core_clock_rate'], properties['memory_clock_rate'])`
 
 ### Pass with Struct Options
 ```cpp

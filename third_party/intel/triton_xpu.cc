@@ -98,8 +98,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
       gpu::intel::createTritonIntelGPUStageLargeFMADotsViaSLM, unsigned, bool);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
-  ADD_PASS_OPTION_WRAPPER_2(
-      "add_pipeline", gpu::intel::createTritonIntelGPUPipeline, int, bool);
+  ADD_PASS_OPTION_WRAPPER_5("add_pipeline",
+                            gpu::intel::createTritonIntelGPUPipeline, int, bool,
+                            std::string, unsigned, unsigned);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      gpu::intel::createIntelAllocateSharedMemory);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
