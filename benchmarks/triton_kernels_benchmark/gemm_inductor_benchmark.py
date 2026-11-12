@@ -214,12 +214,11 @@ def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...]):
 
     if mode == "manual_grouped":
         from triton_kernels_benchmark.gemm_benchmark import (
-            has_aligned_matrix_bases,
             matmul_kernel_with_tensor_descriptors,
             matmul_kernel_with_tensor_descriptors_batched,
         )
 
-        transpose_a, transpose_b = a.stride(-2) == 1, b.stride(-2) == 1
+        assert all(x.data_ptr() % 16 == 0 for x in (a, b, output)), "Matrix base addresses must be 16-byte aligned"
         grid = lambda meta: (
             triton.cdiv(m, meta["BLOCK_SIZE_M"]) * triton.cdiv(n, meta["BLOCK_SIZE_N"]),
             a.shape[0] if a.ndim == 3 else 1,
@@ -236,11 +235,6 @@ def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...]):
                 *a.stride(),
                 *b.stride(),
                 *output.stride(),
-                transpose_a=transpose_a,
-                transpose_b=transpose_b,
-                A_BASE_ALIGNED=has_aligned_matrix_bases(a),
-                B_BASE_ALIGNED=has_aligned_matrix_bases(b),
-                C_BASE_ALIGNED=has_aligned_matrix_bases(output),
             )
         else:
             matmul_kernel_with_tensor_descriptors[grid](
@@ -253,11 +247,6 @@ def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...]):
                 *a.stride(),
                 *b.stride(),
                 *output.stride(),
-                transpose_a=transpose_a,
-                transpose_b=transpose_b,
-                A_BASE_ALIGNED=has_aligned_matrix_bases(a),
-                B_BASE_ALIGNED=has_aligned_matrix_bases(b),
-                C_BASE_ALIGNED=has_aligned_matrix_bases(output),
             )
     else:
         if mode == "manual_splitk":

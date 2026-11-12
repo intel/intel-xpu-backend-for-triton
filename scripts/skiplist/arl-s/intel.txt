@@ -1,0 +1,8 @@
+# tt.dot_scaled decodes e2m1 to bf16, and the driver rejects the bf16
+# conversions although the device reports bf16 conversion support (MTL:
+# SPV_KHR_bfloat16 is disabled, ARL-S: "bf conversion instruction not
+# supported"); uint8 operands fail the same way. Same as
+# test_core.py::test_scaled_dot in scaled_dot.txt.
+python/test/unit/intel/test_dot_scaled_fp4x2.py::test_dot_scaled_fp4x2_matches_uint8
+python/test/unit/intel/test_dot_scaled_fp4x2.py::test_dot_scaled_fp4x2_masked_operand
+python/test/unit/intel/test_dot_scaled_fp4x2.py::test_dot_scaled_fp4x2_tensor_descriptor_loop

@@ -347,7 +347,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 @pytest.mark.parametrize("BLOCK_SIZE", [128, 1024])
 def test_typeconvert_e5m2_bf16_all_encodings(BLOCK_SIZE, device):
     if not is_cuda():
-        pytest.xfail("tests NVIDIA E5M2 conversion")
+        pytest.skip("tests NVIDIA E5M2 conversion")
 
     # Cover every encoding and mix signs and magnitudes in packed conversions.
     bits = (torch.arange(1024) * 73 + 19).to(torch.uint8)
@@ -396,7 +396,7 @@ def test_typeconvert_e4m3_upcast_all_encodings(dst_dtype, dst_type, BLOCK_SIZE, 
 @pytest.mark.parametrize("BLOCK_SIZE", [128, 1024])
 def test_typeconvert_fp8_rounding_edges(src_dtype, src_type, dst_dtype, dst_type, max_code, BLOCK_SIZE, device):
     if not is_cuda():
-        pytest.xfail("tests NVIDIA saturating FP8 conversion")
+        pytest.skip("tests NVIDIA saturating FP8 conversion")
     if dst_type == tl.float8e4nv and torch.cuda.get_device_capability() < (8, 9):
         pytest.skip("E4M3 conversion requires SM89")
     if src_type.primitive_bitwidth == 16:
@@ -551,7 +551,7 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device):
 def test_typeconvert_upcast_fnuz_nan(src_dtype, dst_dtype, device):
     # 0x80 is the single NaN encoding in the fnuz fp8 formats; upcasting it must yield NaN.
     if not is_hip():
-        pytest.xfail("fnuz fp8 is an AMD format")
+        pytest.skip("fnuz fp8 is an AMD format")
     if is_hip_rdna3():
         pytest.skip(f"{src_dtype} is not supported on AMDGPU RDNA3")
     if is_hip_cdna2():
@@ -578,7 +578,7 @@ def test_typeconvert_upcast_fnuz_nan(src_dtype, dst_dtype, device):
 @pytest.mark.parametrize("rounding", ["rtne", "rtz"])
 def test_typeconvert_rounding_edges(src_dtype, dst_dtype, rounding, device):
     if not is_cuda():
-        pytest.xfail("Tests NVIDIA explicit-rounding conversion lowering")
+        pytest.skip("Tests NVIDIA explicit-rounding conversion lowering")
     if dst_dtype == "bfloat16":
         min_capability = 9 if src_dtype == "float64" else 8
         if torch.cuda.get_device_capability()[0] < min_capability:
@@ -644,7 +644,7 @@ def test_typeconvert_rounding_edges(src_dtype, dst_dtype, rounding, device):
 ])
 def test_typeconvert_fp16_bf16_direct(src_dtype, dst_dtype, device):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
-        pytest.xfail("Direct f16/bf16 conversions require SM90")
+        pytest.skip("Direct f16/bf16 conversions require SM90")
     # Cover every 16-bit input, including signed zero, subnormals and NaNs.
     values = torch.arange(65536, dtype=torch.int32).to(torch.int16)
     values = values.view(getattr(torch, src_dtype))

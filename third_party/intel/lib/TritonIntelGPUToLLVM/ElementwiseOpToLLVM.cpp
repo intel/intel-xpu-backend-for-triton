@@ -12,6 +12,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include <cmath>
+#include <numeric>
 
 using mlir::triton::gpu::ElementwiseOpConversionBase;
 using mlir::triton::gpu::MultipleOperandsRange;
@@ -1236,10 +1237,8 @@ constexpr const char BUILTIN_BFTOHF8[] =
     "__builtin_spirv_ClampConvertBF16ToE4M3INTEL";
 constexpr const char BUILTIN_BFTOBF8[] =
     "__builtin_spirv_ClampConvertBF16ToE5M2INTEL";
-constexpr const char BUILTIN_HF8TOHF[] =
-    "__builtin_spirv_ConvertE4M3ToFP16INTEL";
-constexpr const char BUILTIN_BF8TOHF[] =
-    "__builtin_spirv_ConvertE5M2ToFP16INTEL";
+constexpr const char BUILTIN_HF8TOHF[] = "__builtin_spirv_ConvertE4M3ToFP16EXT";
+constexpr const char BUILTIN_BF8TOHF[] = "__builtin_spirv_ConvertE5M2ToFP16EXT";
 
 // Call the builtin function BaseName. If the
 // input size > 1, pack the values in vectors of size pow 2 <= MaxVecSize.
@@ -1408,8 +1407,8 @@ struct FpToFpOpConversion
         arith::getLLVMDefaultFPExceptionBehavior(*ctx));
   }
 
-  Converter &getConverter(Operation *op, Type srcTy, Type dstTy,
-                          std::optional<RoundingMode> roundingMode) const {
+  static Converter &getConverter(Operation *op, Type srcTy, Type dstTy,
+                                 std::optional<RoundingMode> roundingMode) {
     auto F8E4M3B15TyID = TypeID::get<Float8E4M3FNUZType>();
     auto F8E4M3TyID = TypeID::get<Float8E4M3FNType>();
     auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
@@ -1701,6 +1700,29 @@ getBytesOfI32Vectors(Value src) {
   return bytes;
 }
 
+// A dot operand that the DPAS lowering converts itself, one DPAS operand at a
+// time (see isDPASOperandConvertedByDot). Converting it here as well would put
+// the whole conversion ahead of the dot, where CSE then keeps it. The op is
+// replaced by a cast of its fp8 source, which the DPAS lowering reads and
+// erases: if the dot lowering ever used the cast as a converted value instead,
+// the leftover cast would fail the conversion rather than feed undef to DPAS.
+struct FpToFpOpConvertedByDotConversion
+    : public ConvertOpToLLVMPattern<FpToFpOp> {
+  using ConvertOpToLLVMPattern<FpToFpOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(FpToFpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!intel::isDPASOperandConvertedByDot(op))
+      return failure();
+    rewriter.replaceOp(op, UnrealizedConversionCastOp::create(
+                               rewriter, op.getLoc(),
+                               getTypeConverter()->convertType(op.getType()),
+                               adaptor.getSrc()));
+    return success();
+  }
+};
+
 // fp8e4m3 -> fp16 of bytes that come packed in dwords, as 32-bit 2D block loads
 // return them. The block load lowering unpacks them with a bitcast that IGC
 // turns into a mov per byte; this reads each byte from its dword instead, as
@@ -1711,20 +1733,55 @@ struct FpToFpOpFromDwordsConversion : public ConvertOpToLLVMPattern<FpToFpOp> {
   LogicalResult
   matchAndRewrite(FpToFpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!isa<Float8E4M3FNType>(getElementTypeOrSelf(op.getSrc().getType())) ||
-        !getElementTypeOrSelf(op.getType()).isF16() ||
-        HasAttr<SUPPORT_F8_CONV>(op) || HasAttr<IS_LTS>(op) ||
-        isDotBInEveryWarp(op))
+    std::optional<intel::Fp8ToFp16Lowering> lowering =
+        intel::Fp8ToFp16Lowering::get(op, adaptor.getSrc(), rewriter);
+    if (!lowering || !lowering->readsDwords())
       return failure();
-    std::optional<SmallVector<std::pair<Value, int64_t>>> bytes =
-        getBytesOfI32Vectors(adaptor.getSrc());
-    if (!bytes)
-      return failure();
+    SmallVector<unsigned> indices(lowering->size());
+    std::iota(indices.begin(), indices.end(), 0);
+    rewriter.replaceOp(
+        op, packUniqueTensorElements(op.getLoc(), getTypeConverter(),
+                                     lowering->convert(indices, rewriter),
+                                     rewriter, op.getType()));
+    return success();
+  }
+};
 
-    Location loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    SmallVector<Value> results;
-    for (auto [vec, idx] : *bytes) {
+} // namespace
+
+namespace mlir::triton::intel {
+
+std::optional<Fp8ToFp16Lowering>
+Fp8ToFp16Lowering::get(FpToFpOp op, Value llSrc,
+                       ConversionPatternRewriter &rewriter) {
+  Type srcTy = getElementTypeOrSelf(op.getSrc().getType());
+  if (!isa<Float8E4M3FNType, Float8E5M2Type>(srcTy) ||
+      !getElementTypeOrSelf(op.getType()).isF16() || op.getRounding())
+    return std::nullopt;
+  Fp8ToFp16Lowering lowering;
+  lowering.op = op;
+  // The choice of FpToFpOpFromDwordsConversion, which has the higher benefit.
+  if (isa<Float8E4M3FNType>(srcTy) && !HasAttr<SUPPORT_F8_CONV>(op) &&
+      !HasAttr<IS_LTS>(op) && !isDotBInEveryWarp(op))
+    if (std::optional<SmallVector<std::pair<Value, int64_t>>> bytes =
+            getBytesOfI32Vectors(llSrc))
+      lowering.bytes = std::move(*bytes);
+  if (lowering.bytes.empty())
+    lowering.elems = unpackLLElements(op.getLoc(), llSrc, rewriter);
+  return lowering;
+}
+
+SmallVector<Value>
+Fp8ToFp16Lowering::convert(ArrayRef<unsigned> indices,
+                           ConversionPatternRewriter &rewriter) const {
+  FpToFpOp op = this->op; // Its accessors are not const.
+  Location loc = op.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  SmallVector<Value> results;
+  if (readsDwords()) {
+    // Each byte is read from its dword as the high byte of a 16-bit window.
+    for (unsigned i : indices) {
+      auto [vec, idx] = bytes[i];
       Value dword = b.extract_element(i32_ty, vec, b.i32_val(idx / 4));
       if (idx % 4 >= 2)
         dword = b.lshr(i32_ty, dword, b.i32_val(16));
@@ -1733,12 +1790,32 @@ struct FpToFpOpFromDwordsConversion : public ConvertOpToLLVMPattern<FpToFpOp> {
         window = b.shl(i16_ty, window, b.i16_val(8));
       results.push_back(Fp8E4M3Nv_to_Fp16FromHighByte(loc, rewriter, window));
     }
-    rewriter.replaceOp(op, packUniqueTensorElements(loc, getTypeConverter(),
-                                                    results, rewriter,
-                                                    op.getType()));
-    return success();
+    return results;
   }
-};
+
+  // The choice of FpToFpOpConversion, in the same groups of elements when
+  // `indices` is a run of consecutive elements aligned to the group size.
+  Converter &converter = FpToFpOpConversion::getConverter(
+      op.getOperation(), getElementTypeOrSelf(op.getSrc().getType()), f16_ty,
+      op.getRounding());
+  for (size_t i = 0; i < indices.size();) {
+    size_t numConsume = std::min(converter.maxElements, indices.size() - i);
+    size_t numProduce = std::max(converter.minElements, numConsume);
+    SmallVector<Value> in;
+    for (size_t j = 0; j < numConsume; ++j)
+      in.push_back(elems[indices[i + j]]);
+    in.resize(numProduce, b.undef(i8_ty));
+    SmallVector<Value> out = converter.func(loc, rewriter, in);
+    out.resize(numConsume);
+    results.append(out.begin(), out.end());
+    i += numConsume;
+  }
+  return results;
+}
+
+} // namespace mlir::triton::intel
+
+namespace {
 
 template <typename SourceOp, typename DestOp>
 struct ElementwiseOpConversion
@@ -2048,7 +2125,13 @@ struct AbsFOpConversion
   }
 };
 
-// FIXME: Remove this IGC W/A (#8626).
+// Without native bf16 arithmetic (LTS drivers), a bf16 `math.fma` is computed
+// in f32 and rounded back once. `arith-emulate-unsupported-floats` only widens
+// arith ops, so it never reaches `math.fma`. This is exact for the
+// `fma(s, 0, s)` that DecomposeScaledBlocked emits to turn an infinite scale
+// into NaN, since the result is `s` or NaN, but a general bf16 fma is not
+// correctly rounded this way: the f32 add rounds once and the bf16 conversion
+// rounds again.
 struct FmaOpConversion
     : ElementwiseOpConversionBase<math::FmaOp, FmaOpConversion> {
   using Base = ElementwiseOpConversionBase<math::FmaOp, FmaOpConversion>;
@@ -2060,12 +2143,18 @@ struct FmaOpConversion
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     Value a = operands[0][0], b = operands[0][1], c = operands[0][2];
-    if (!elemTy.isF32())
-      return {LLVM::FMAOp::create(rewriter, loc, elemTy, a, b, c)};
-    auto fmf = LLVM::FastmathFlagsAttr::get(rewriter.getContext(),
-                                            LLVM::FastmathFlags::contract);
-    Value mul = LLVM::FMulOp::create(rewriter, loc, elemTy, a, b, fmf);
-    return {LLVM::FAddOp::create(rewriter, loc, elemTy, mul, c, fmf)};
+    bool widenBf16 = elemTy.isBF16() && !mlir::LLVM::intel::hasModuleAttr(
+                                            op, SUPPORT_BF16_ARITH());
+    if (widenBf16) {
+      a = intel::convertBf16ToFp32(loc, rewriter, a);
+      b = intel::convertBf16ToFp32(loc, rewriter, b);
+      c = intel::convertBf16ToFp32(loc, rewriter, c);
+      elemTy = f32_ty;
+    }
+    Value res = LLVM::FMAOp::create(rewriter, loc, elemTy, a, b, c);
+    if (widenBf16)
+      res = intel::convertFp32ToBf16(loc, rewriter, res, RoundingMode::RTNE);
+    return {res};
   }
 };
 
@@ -2398,6 +2487,8 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FpToFpOpFromDwordsConversion>(typeConverter,
                                              benefit.getBenefit() + 1);
+  patterns.add<FpToFpOpConvertedByDotConversion>(typeConverter,
+                                                 benefit.getBenefit() + 2);
 
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and

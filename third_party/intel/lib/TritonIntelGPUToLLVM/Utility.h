@@ -138,6 +138,35 @@ Value convertWithFunctionCall(TritonLLVMIRRewriter &rewriter, Value value,
                               StringRef baseName, Type inType, Type outType,
                               StringRef hasAttrName = {});
 
+/// The fp8 -> fp16 lowering of a `tt.fp_to_fp`, for any subset of its
+/// elements, with the instruction sequence of the `tt.fp_to_fp` lowering. Each
+/// element converts independently, so the results are those of that lowering
+/// for any `indices`; runs of consecutive elements aligned to the converter's
+/// group size also keep its instruction grouping.
+class Fp8ToFp16Lowering {
+public:
+  /// std::nullopt unless `op` is an fp8 -> fp16 conversion without a rounding
+  /// mode. `llSrc` is the lowered source; it is unpacked once here.
+  static std::optional<Fp8ToFp16Lowering>
+  get(FpToFpOp op, Value llSrc, ConversionPatternRewriter &rewriter);
+
+  /// Whether the bytes are read from the dwords of a 32-bit 2D block load.
+  bool readsDwords() const { return !bytes.empty(); }
+  size_t size() const { return readsDwords() ? bytes.size() : elems.size(); }
+  SmallVector<Value> convert(ArrayRef<unsigned> indices,
+                             ConversionPatternRewriter &rewriter) const;
+
+private:
+  FpToFpOp op;
+  SmallVector<std::pair<Value, int64_t>> bytes;
+  SmallVector<Value> elems;
+};
+
+/// Whether the DPAS lowering of the dot that uses `op` converts `op`'s fp8
+/// operand to fp16 itself, one DPAS operand at a time; the `tt.fp_to_fp`
+/// lowering then emits nothing for `op`.
+bool isDPASOperandConvertedByDot(FpToFpOp op);
+
 } // namespace mlir::triton::intel
 
 #endif // TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H

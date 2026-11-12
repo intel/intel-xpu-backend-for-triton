@@ -15,99 +15,11 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark import gemm_streamk_benchmark
 from triton_kernels_benchmark.benchmark_testing import (DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY, get_xpu_extension)
+from triton_kernels_benchmark.gemm_tile_utils import load_matrix_tile, make_matrix_tile_ptr, store_matrix_tile
 
 sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
-
-
-def has_aligned_matrix_bases(tensor: torch.Tensor) -> bool:
-    """Return whether every matrix origin is 16-byte aligned, without copying."""
-    return (tensor.data_ptr() % 16 == 0
-            and (tensor.ndim == 2 or tensor.stride(0) * tensor.element_size() % 16 == 0))
-
-
-@triton.jit
-def make_matrix_tile_ptr(ptr, M: tl.constexpr, N: tl.constexpr, stride_m: tl.constexpr, stride_n: tl.constexpr,
-                         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BASE_ALIGNED: tl.constexpr = False):
-    """Build a descriptor or pointer tensor before the reduction loop."""
-    TRANSPOSE: tl.constexpr = stride_m == 1 and stride_n != 1
-    if TRANSPOSE:
-        ROWS: tl.constexpr = N
-        COLS: tl.constexpr = M
-        STRIDE_ROW: tl.constexpr = stride_n
-        STRIDE_COL: tl.constexpr = stride_m
-        BLOCK_ROWS: tl.constexpr = BLOCK_N
-        BLOCK_COLS: tl.constexpr = BLOCK_M
-    else:
-        ROWS: tl.constexpr = M
-        COLS: tl.constexpr = N
-        STRIDE_ROW: tl.constexpr = stride_m
-        STRIDE_COL: tl.constexpr = stride_n
-        BLOCK_ROWS: tl.constexpr = BLOCK_M
-        BLOCK_COLS: tl.constexpr = BLOCK_N
-    ITEMSIZE: tl.constexpr = ptr.dtype.element_ty.primitive_bitwidth // 8
-    USE_DESCRIPTOR: tl.constexpr = (BASE_ALIGNED and STRIDE_COL == 1 and STRIDE_ROW >= COLS and STRIDE_ROW * ITEMSIZE % 16 == 0
-                                    and BLOCK_COLS * ITEMSIZE >= 16)
-    if USE_DESCRIPTOR:
-        handle = tl.make_tensor_descriptor(ptr, (ROWS, COLS), (STRIDE_ROW, STRIDE_COL), (BLOCK_ROWS, BLOCK_COLS))
-    else:
-        rr = tl.arange(0, BLOCK_ROWS).to(tl.int64)
-        cc = tl.arange(0, BLOCK_COLS).to(tl.int64)
-        handle = ptr + rr[:, None] * STRIDE_ROW + cc[None, :] * STRIDE_COL
-    return handle
-
-
-@triton.jit
-def load_matrix_tile(matrix_ptr, M: tl.constexpr, N: tl.constexpr,
-                     stride_m: tl.constexpr, stride_n: tl.constexpr, row, col,
-                     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
-    """Load a tile from a prebuilt descriptor or pointer tensor."""
-    handle = matrix_ptr
-    TRANSPOSE: tl.constexpr = stride_m == 1 and stride_n != 1
-    if TRANSPOSE:
-        ROWS: tl.constexpr = N
-        COLS: tl.constexpr = M
-        STRIDE_ROW: tl.constexpr = stride_n
-        STRIDE_COL: tl.constexpr = stride_m
-        BLOCK_ROWS: tl.constexpr = BLOCK_N
-        BLOCK_COLS: tl.constexpr = BLOCK_M
-        off_row, off_col = col, row
-    else:
-        ROWS: tl.constexpr = M
-        COLS: tl.constexpr = N
-        STRIDE_ROW: tl.constexpr = stride_m
-        STRIDE_COL: tl.constexpr = stride_n
-        BLOCK_ROWS: tl.constexpr = BLOCK_M
-        BLOCK_COLS: tl.constexpr = BLOCK_N
-        off_row, off_col = row, col
-    if isinstance(handle, tl.tensor_descriptor):
-        tile = handle.load([off_row, off_col])
-    else:
-        rr = (off_row + tl.arange(0, BLOCK_ROWS)).to(tl.int64)
-        cc = (off_col + tl.arange(0, BLOCK_COLS)).to(tl.int64)
-        tile = tl.load(handle + tl.cast(off_row, tl.int64) * STRIDE_ROW + tl.cast(off_col, tl.int64) * STRIDE_COL,
-                       mask=(rr < ROWS)[:, None] & (cc < COLS)[None, :], other=0)
-    if TRANSPOSE:
-        return tile.T
-    else:
-        return tile
-
-
-@triton.jit
-def store_matrix_tile(ptr, tile, M: tl.constexpr, N: tl.constexpr, stride_m: tl.constexpr, stride_n: tl.constexpr, row,
-                      col, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BASE_ALIGNED: tl.constexpr = False):
-    """Store a tile without requiring aligned output rows or padded storage."""
-    ITEMSIZE: tl.constexpr = ptr.dtype.element_ty.primitive_bitwidth // 8
-    USE_DESCRIPTOR: tl.constexpr = (BASE_ALIGNED and stride_n == 1 and stride_m >= N and stride_m * ITEMSIZE % 16 == 0
-                                    and BLOCK_N * ITEMSIZE >= 16)
-    if USE_DESCRIPTOR:
-        desc = tl.make_tensor_descriptor(ptr, (M, N), (stride_m, stride_n), (BLOCK_M, BLOCK_N))
-        desc.store([row, col], tile)
-    else:
-        rr = (row + tl.arange(0, BLOCK_M)).to(tl.int64)
-        cc = (col + tl.arange(0, BLOCK_N)).to(tl.int64)
-        tl.store(ptr + rr[:, None] * stride_m + cc[None, :] * stride_n, tile,
-                 mask=(rr < M)[:, None] & (cc < N)[None, :])
 
 
 def get_cuda_matmul_autotune_configs() -> List[triton.Config]:
@@ -173,10 +85,7 @@ def matmul_kernel_with_tensor_descriptors(
         stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
-        transpose_a: tl.constexpr, transpose_b: tl.constexpr,
-        A_BASE_ALIGNED: tl.constexpr = False, B_BASE_ALIGNED: tl.constexpr = False,
-        C_BASE_ALIGNED: tl.constexpr = False):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -187,19 +96,21 @@ def matmul_kernel_with_tensor_descriptors(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K, A_BASE_ALIGNED)
-    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N, B_BASE_ALIGNED)
+    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
+    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
-        a = load_matrix_tile(a_desc, M, K, stride_am, stride_ak, pid_m * BLOCK_SIZE_M, off_k, BLOCK_SIZE_M, BLOCK_SIZE_K)
-        b = load_matrix_tile(b_desc, K, N, stride_bk, stride_bn, off_k, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_K, BLOCK_SIZE_N)
+        a = load_matrix_tile(a_desc, M, K, stride_am, stride_ak, pid_m * BLOCK_SIZE_M, off_k, BLOCK_SIZE_M,
+                             BLOCK_SIZE_K)
+        b = load_matrix_tile(b_desc, K, N, stride_bk, stride_bn, off_k, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_K,
+                             BLOCK_SIZE_N)
         accumulator = tl.dot(a, b, accumulator)
         off_k += BLOCK_SIZE_K
     c = accumulator.to(tl.float32)
 
     store_matrix_tile(c_ptr, c, M, N, stride_cm, stride_cn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_M,
-                      BLOCK_SIZE_N, C_BASE_ALIGNED)
+                      BLOCK_SIZE_N)
 
 
 def get_matmul_batched_autotune_configs() -> List[triton.Config]:
@@ -263,10 +174,7 @@ def matmul_kernel_with_tensor_descriptors_batched(
         stride_bz: tl.constexpr, stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cz: tl.constexpr, stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
-        transpose_a: tl.constexpr, transpose_b: tl.constexpr,
-        A_BASE_ALIGNED: tl.constexpr = False, B_BASE_ALIGNED: tl.constexpr = False,
-        C_BASE_ALIGNED: tl.constexpr = False):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
     bid = tl.program_id(axis=1)
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -281,8 +189,8 @@ def matmul_kernel_with_tensor_descriptors_batched(
     offset_a = bid.to(tl.int64) * stride_az
     offset_b = bid.to(tl.int64) * stride_bz
 
-    a_desc = make_matrix_tile_ptr(a_ptr + offset_a, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K, A_BASE_ALIGNED)
-    b_desc = make_matrix_tile_ptr(b_ptr + offset_b, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N, B_BASE_ALIGNED)
+    a_desc = make_matrix_tile_ptr(a_ptr + offset_a, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
+    b_desc = make_matrix_tile_ptr(b_ptr + offset_b, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
@@ -296,7 +204,7 @@ def matmul_kernel_with_tensor_descriptors_batched(
 
     offset_c = bid.to(tl.int64) * stride_cz
     store_matrix_tile(c_ptr + offset_c, c, M, N, stride_cm, stride_cn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N,
-                      BLOCK_SIZE_M, BLOCK_SIZE_N, C_BASE_ALIGNED)
+                      BLOCK_SIZE_M, BLOCK_SIZE_N)
 
 
 # We can now create a convenience wrapper function that only takes two input tensors,
@@ -335,10 +243,7 @@ def matmul(
             B, M, N, K,  #
             a.stride(0), a.stride(a_major), a.stride(a_minor),  #
             b.stride(0), b.stride(b_minor), b.stride(b_major),  #
-            c.stride(0), c.stride(1), c.stride(2),  #
-            transpose_a=transpose_a, transpose_b=transpose_b,
-            A_BASE_ALIGNED=has_aligned_matrix_bases(a), B_BASE_ALIGNED=has_aligned_matrix_bases(b),
-            C_BASE_ALIGNED=has_aligned_matrix_bases(c))
+            c.stride(0), c.stride(1), c.stride(2))
     elif len(a.shape) == 2 and len(b.shape) == 2:
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
         matmul_kernel[grid](
@@ -346,10 +251,7 @@ def matmul(
             M, N, K,  #
             a.stride(a_major), a.stride(a_minor),  #
             b.stride(b_minor), b.stride(b_major),  #
-            c.stride(0), c.stride(1),  #
-            transpose_a=transpose_a, transpose_b=transpose_b,
-            A_BASE_ALIGNED=has_aligned_matrix_bases(a), B_BASE_ALIGNED=has_aligned_matrix_bases(b),
-            C_BASE_ALIGNED=has_aligned_matrix_bases(c))
+            c.stride(0), c.stride(1))
     else:
         assert False, 'Input matrixs dimensions mismatch'
     return c
@@ -515,6 +417,12 @@ def get_benchmark(
                 transpose_a=transpose_a,
                 transpose_b=transpose_b,
             )
+            # Shapes whose last wave of tiles is mostly empty run faster as stream-K (#8445); only measured on a B580.
+            if ('B580' in DEVICE_NAME and matmul_kernel is matmul_kernel_with_tensor_descriptors
+                    and not (transpose_a or transpose_b) and len(a.shape) == 2
+                    and gemm_streamk_benchmark.should_use_streamk(M, N, K)):
+                c.fill_(float('nan'))  # the check below then fails for an unwritten or unzeroed shared tile
+                triton_fn = lambda: gemm_streamk_benchmark.matmul(a, b, c)
             torch_fn = lambda: torch_mm(torch_a, torch_b, out_dtype=torch.float32)
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
             _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)

@@ -29,8 +29,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.target_arch = "spir64" } {
   tt.func public @convert(%src: tensor<4xf8E5M2, #blocked>) -> tensor<4xf16, #blocked> {
     %dst = tt.fp_to_fp %src : tensor<4xf8E5M2, #blocked> -> tensor<4xf16, #blocked>
-    // CHECK-FP8-CONV: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE5M2ToFP16INTELDv4_c
-    // CHECK-NOT: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE5M2ToFP16INTEL
+    // CHECK-FP8-CONV: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE5M2ToFP16EXTDv4_c
+    // CHECK-NOT: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE5M2ToFP16EXT
     tt.return %dst : tensor<4xf16, #blocked>
   }
 }
@@ -41,8 +41,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.target_arch = "spir64" } {
   tt.func public @convert(%src: tensor<2xf8E4M3FN, #blocked>) -> tensor<2xf16, #blocked> {
     %dst = tt.fp_to_fp %src : tensor<2xf8E4M3FN, #blocked> -> tensor<2xf16, #blocked>
-    // CHECK-FP8-CONV: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE4M3ToFP16INTELDv2_c
-    // CHECK-NOT: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE4M3ToFP16INTEL
+    // CHECK-FP8-CONV: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE4M3ToFP16EXTDv2_c
+    // CHECK-NOT: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE4M3ToFP16EXT
     tt.return %dst : tensor<2xf16, #blocked>
   }
 }
@@ -53,8 +53,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.target_arch = "spir64" } {
   tt.func public @convert(%src: tensor<1xf8E4M3FN, #blocked>) -> tensor<1xf16, #blocked> {
     %dst = tt.fp_to_fp %src : tensor<1xf8E4M3FN, #blocked> -> tensor<1xf16, #blocked>
-    // CHECK-FP8-CONV: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE4M3ToFP16INTELc
-    // CHECK-NOT: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE4M3ToFP16INTEL
+    // CHECK-FP8-CONV: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE4M3ToFP16EXTc
+    // CHECK-NOT: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE4M3ToFP16EXT
     tt.return %dst : tensor<1xf16, #blocked>
   }
 }
@@ -65,9 +65,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.target_arch = "spir64" } {
   tt.func public @convert(%src: tensor<32xf8E4M3FN, #blocked>) -> tensor<32xf16, #blocked> {
     %dst = tt.fp_to_fp %src : tensor<32xf8E4M3FN, #blocked> -> tensor<32xf16, #blocked>
-    // CHECK-FP8-CONV: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE4M3ToFP16INTELDv16_c
-    // CHECK-FP8-CONV: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE4M3ToFP16INTELDv16_c
-    // CHECK-NOT: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE4M3ToFP16INTEL
+    // CHECK-FP8-CONV: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE4M3ToFP16EXTDv16_c
+    // CHECK-FP8-CONV: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE4M3ToFP16EXTDv16_c
+    // CHECK-NOT: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE4M3ToFP16EXT
     tt.return %dst : tensor<32xf16, #blocked>
   }
 }
