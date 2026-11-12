@@ -468,15 +468,16 @@ private:
   /// constancy from the divisibility of both sides.
   ///
   /// For a `tt::LoadOp`, such a mask may still be a
-  /// `ttgi::matchBoundaryCheckMask` row-limit pattern, so permit block IO here
-  /// too. It is the matcher LowerTo2DBlockLoad uses, so a mask with several
-  /// uniform conjuncts is permitted exactly when it will become `base_height`.
+  /// `ttgi::matchBoundaryCheckMask` pattern, whose bounds LowerTo2DBlockLoad
+  /// turns into the message's own `base_height`/`base_width` clamps, so permit
+  /// block IO here too.
   /// `contiguousDim`/`strideInfo` must match what LowerTo2DBlockLoad later
   /// uses, or stamping `ttig.block_io` here de-anchors the load without it
   /// gaining a real 2D block read. For the same reason the bypass is skipped
   /// when LowerTo2DBlockLoad would reject the row pitch
-  /// (`ttgi::isBlockPitchSupported`). Stores aren't covered: nothing
-  /// downstream consumes a store-side row limit.
+  /// (`ttgi::isBlockPitchSupported`) or the column bound's granularity
+  /// (`ttgi::colLimitIsHWCompatible`). Stores aren't covered: nothing
+  /// downstream consumes a store-side bound.
   template <typename OpType>
   bool maskPermitsBlockTile(OpType op,
                             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -492,9 +493,10 @@ private:
         unsigned pitchDim = (*contiguousDim == rank - 1) ? rank - 2 : rank - 1;
         bool pitchDimIsBroadcast =
             strideInfo && strideInfo->getStride(pitchDim) == 0;
-        if (ttgi::matchBoundaryCheckMask(mask, op.getOther(), maskTy.getShape(),
-                                         *contiguousDim, pitchDimIsBroadcast,
-                                         op)) {
+        if (std::optional<ttgi::BoundaryMaskInfo> boundary =
+                ttgi::matchBoundaryCheckMask(mask, op.getOther(),
+                                             maskTy.getShape(), *contiguousDim,
+                                             pitchDimIsBroadcast, op)) {
           // Skip the bypass if LowerTo2DBlockLoad would reject the pitch.
           unsigned elemBits = getIntOrFloatOrPtrBitWidth(
               cast<tt::PointerType>(
@@ -507,14 +509,16 @@ private:
                           : std::nullopt,
               strideInfo && strideInfo->getStrideValue(pitchDim),
               maskTy.getDimSize(*contiguousDim) * elemBits / 8);
-          if (pitchOk) {
-            LDBG(
-                "Mask is a row-limit pattern; permitting block IO for: " << op);
+          bool colOk = ttgi::colLimitIsHWCompatible(*boundary, axisInfoAnalysis,
+                                                    elemBits);
+          if (pitchOk && colOk) {
+            LDBG("Mask is a boundary-check pattern; permitting block IO for: "
+                 << op);
             return true;
           }
-          LDBG("Row-limit mask, but LowerTo2DBlockLoad would reject the "
-               "pitch; skip the bypass for: "
-               << op);
+          LDBG("Boundary-check mask, but LowerTo2DBlockLoad would reject the "
+               << (pitchOk ? "column bound" : "pitch")
+               << "; skip the bypass for: " << op);
         }
       }
     }

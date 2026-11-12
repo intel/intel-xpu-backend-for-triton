@@ -820,6 +820,61 @@ protected:
   }
 };
 
+TEST_F(MatchBoundaryCheckMaskTest, BothDimsBoundedAccepted) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value rowBound = constI(100, 32), colBound = constI(24, 32);
+  Value colBase = constI(64, 32);
+  Value rowMask = buildBoundedMask(arange(256), /*varyDim=*/0, shape, rowBound);
+  Value colIndex = addI32(splatTo(colBase, {32}), arange(32));
+  Value colMask = buildBoundedMask(colIndex, /*varyDim=*/1, shape, colBound);
+
+  auto result = match(andI(rowMask, colMask), shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, rowBound);
+  EXPECT_FALSE(result->rowBase); // bare arange
+  EXPECT_EQ(result->colBound, colBound);
+  EXPECT_EQ(result->colBase, colBase);
+  EXPECT_TRUE(result->extraPreds.empty());
+}
+
+TEST_F(MatchBoundaryCheckMaskTest, ColBoundAloneAccepted) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value colBound = constI(24, 32);
+  Value colMask = buildBoundedMask(arange(32), /*varyDim=*/1, shape, colBound);
+
+  auto result = match(colMask, shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_FALSE(result->rowBound);
+  EXPECT_EQ(result->colBound, colBound);
+}
+
+// Both surfaces start at the tensor, so a column before it is read like any
+// other: an upper bound alone agrees with the mask whatever the base's sign.
+TEST_F(MatchBoundaryCheckMaskTest, ColBoundWithSignedBaseAccepted) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value colBase = constI(-8, 32);
+  Value colIndex = addI32(splatTo(colBase, {32}), arange(32));
+  Value colMask =
+      buildBoundedMask(colIndex, /*varyDim=*/1, shape, constI(24, 32));
+
+  auto result = match(colMask, shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->colBase, colBase);
+}
+
+// ... but a `>= 0` conjunct can then only be dropped where it is vacuous.
+TEST_F(MatchBoundaryCheckMaskTest, ColLowerBoundWithSignedBaseRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value colIndex = addI32(splatTo(constI(-8, 32), {32}), arange(32));
+  SmallVector<int64_t, 2> narrow = {1, 32};
+  Value index2D = expandDims(colIndex, /*axis=*/0, narrow);
+  Value lower =
+      broadcastTo(cmpSge(index2D, splatTo(constI(0, 32), narrow)), shape);
+  Value upper =
+      buildBoundedMask(colIndex, /*varyDim=*/1, shape, constI(24, 32));
+  EXPECT_FALSE(match(andI(lower, upper), shape).has_value());
+}
+
 // Unlike matchRowLimitMask, which keeps at most one, every conjunct uniform
 // along both surface dims is kept, splats included: a batch-dim predicate and
 // a scalar flag can both reach one mask.

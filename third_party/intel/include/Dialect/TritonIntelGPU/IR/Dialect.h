@@ -10,6 +10,7 @@
 #define TRITON_DIALECT_TRITON_INTEL_GPU_IR_DIALECT_H
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include <algorithm>
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h.inc"
@@ -21,6 +22,13 @@ namespace mlir::triton::gpu::intel {
 struct L2Cache : public SideEffects::Resource::Base<L2Cache> {
   StringRef getName() const final { return "<intel::L2Cache>"; }
 };
+
+/// The granule, in bytes, that a 2D block message's surface width and X
+/// coordinate must be a multiple of for \p elemSizeInBits-bit elements:
+/// 4 bytes, or one element when elements are wider.
+inline unsigned get2DBlockIOWidthGranuleBytes(unsigned elemSizeInBits) {
+  return std::max(4u, elemSizeInBits / 8);
+}
 
 /// Return true when the base address of a 2D block IO operation must be
 /// compensated to satisfy the HW base-address alignment requirement.
