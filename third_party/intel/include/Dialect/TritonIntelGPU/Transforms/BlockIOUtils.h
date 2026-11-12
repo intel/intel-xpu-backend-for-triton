@@ -229,10 +229,15 @@ struct BoundaryMaskInfo {
 /// Fails unless every conjunct is recognised, `other` is
 /// zero-fill-compatible, the pitch dim is not broadcast, and the bound is i32
 /// or i64 with the base of the compare's own type (no extension between them).
-/// The bound may have the index on either side (`bound > index`).
+/// The bound may have the index on either side (`bound > index`), and may be
+/// ANDed with `index >= 0`, which is dropped only where it is vacuous: the
+/// surface starts at the tensor's first row, so a row before it is read like
+/// any other. \p loadOp is where the index base's sign is asked (see
+/// `triton::valueIsNonNegative`); without it only a bare `arange` qualifies.
 std::optional<BoundaryMaskInfo>
 matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
-                       unsigned contiguousDim, bool pitchDimIsBroadcast);
+                       unsigned contiguousDim, bool pitchDimIsBroadcast,
+                       Operation *loadOp);
 
 /// Return `extraPred` as a value of type \p maskTy: unchanged if it already has
 /// that shape, else broadcast to it straight from its innermost source (so

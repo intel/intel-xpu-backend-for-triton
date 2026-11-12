@@ -797,8 +797,26 @@ class MatchBoundaryCheckMaskTest : public MatchRowLimitMaskTest {
 protected:
   std::optional<BoundaryMaskInfo> match(Value mask, ArrayRef<int64_t> shape,
                                         Value other = Value()) {
+    // The mask's own op stands in for the load: the sign query only needs a
+    // use point, and these tests carry no `llvm.intr.assume`.
     return matchBoundaryCheckMask(mask, other, shape, /*contiguousDim=*/1,
-                                  /*pitchDimIsBroadcast=*/false);
+                                  /*pitchDimIsBroadcast=*/false,
+                                  mask.getDefiningOp());
+  }
+
+  Value cmpSge(Value lhs, Value rhs) {
+    return arith::CmpIOp::create(builder, loc(), arith::CmpIPredicate::sge, lhs,
+                                 rhs);
+  }
+
+  // `arange(0, extent) >= 0` along `varyDim`, broadcast to `tensorShape`.
+  Value buildLowerBound(unsigned varyDim, ArrayRef<int64_t> tensorShape) {
+    SmallVector<int64_t> narrowShape(tensorShape.size(), 1);
+    narrowShape[varyDim] = tensorShape[varyDim];
+    Value indexND =
+        expandToShape(arange(tensorShape[varyDim]), varyDim, narrowShape);
+    Value zero = splatTo(constI(0, 32), narrowShape);
+    return broadcastTo(cmpSge(indexND, zero), tensorShape);
   }
 };
 
@@ -846,7 +864,8 @@ TEST_F(MatchBoundaryCheckMaskTest, PitchDimBroadcastRejected) {
       buildBoundedMask(arange(256), /*varyDim=*/0, shape, constI(100, 32));
   EXPECT_FALSE(matchBoundaryCheckMask(mask, /*other=*/Value(), shape,
                                       /*contiguousDim=*/1,
-                                      /*pitchDimIsBroadcast=*/true)
+                                      /*pitchDimIsBroadcast=*/true,
+                                      mask.getDefiningOp())
                    .has_value());
 }
 
@@ -883,6 +902,88 @@ TEST_F(MatchBoundaryCheckMaskTest, SwappedComparisonAccepted) {
   auto result = match(upper, shape);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->rowBound, rowBound);
+}
+
+// A lower bound next to an upper bound on the same dim is dropped: it only
+// fires for a negative index, which the match assumes away.
+TEST_F(MatchBoundaryCheckMaskTest, LowerBoundDroppedNextToUpperBound) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value rowBound = constI(100, 32);
+  Value rowMask = andI(buildLowerBound(/*varyDim=*/0, shape),
+                       buildBoundedMask(arange(256), 0, shape, rowBound));
+
+  auto result = match(rowMask, shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, rowBound);
+  EXPECT_TRUE(result->extraPreds.empty());
+}
+
+// Alone it is the whole mask, and dropping it would make the load unmasked.
+TEST_F(MatchBoundaryCheckMaskTest, LowerBoundAloneRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  EXPECT_FALSE(match(buildLowerBound(/*varyDim=*/0, shape), shape).has_value());
+}
+
+// Two bounds on one dim that start the index at different places are not the
+// two halves of one boundary check.
+TEST_F(MatchBoundaryCheckMaskTest, MismatchedBasesOnOneDimRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value based = addI32(splatTo(constI(8, 32), {256}), arange(256));
+  Value withBase = buildBoundedMask(based, 0, shape, constI(100, 32));
+  Value withoutBase = buildBoundedMask(arange(256), 0, shape, constI(90, 32));
+  EXPECT_FALSE(match(andI(withBase, withoutBase), shape).has_value());
+}
+
+// A negative row is read like any other, so a row bound with a `>= 0`
+// conjunct is only absorbed when the base cannot be negative.
+TEST_F(MatchBoundaryCheckMaskTest, RowLowerBoundWithSignedBaseRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value rowIndex = addI32(splatTo(constI(-8, 32), {256}), arange(256));
+  SmallVector<int64_t, 2> narrow = {256, 1};
+  Value index2D = expandDims(rowIndex, /*axis=*/1, narrow);
+  Value lower =
+      broadcastTo(cmpSge(index2D, splatTo(constI(0, 32), narrow)), shape);
+  Value upper =
+      buildBoundedMask(rowIndex, /*varyDim=*/0, shape, constI(100, 32));
+  EXPECT_FALSE(match(andI(lower, upper), shape).has_value());
+}
+
+// `0 <= index` is the lower bound with the index on the right.
+TEST_F(MatchBoundaryCheckMaskTest, SwappedLowerBoundAccepted) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  SmallVector<int64_t, 2> narrow = {256, 1};
+  Value rowBound = constI(100, 32);
+  Value index2D = expandDims(arange(256), /*axis=*/1, narrow);
+  Value lower = broadcastTo(
+      arith::CmpIOp::create(builder, loc(), arith::CmpIPredicate::sle,
+                            splatTo(constI(0, 32), narrow), index2D),
+      shape);
+  Value upper = buildBoundedMask(arange(256), /*varyDim=*/0, shape, rowBound);
+
+  auto result = match(andI(lower, upper), shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, rowBound);
+}
+
+// matchRowLimitMask has no load to ask the sign at, so it drops a lower
+// bound only for a bare `arange`, even where the load-aware match proves the
+// base non-negative.
+TEST_F(MatchBoundaryCheckMaskTest, LowerBoundNeedsLoadOpForSignedBase) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value rowIndex = addI32(splatTo(constI(8, 32), {256}), arange(256));
+  SmallVector<int64_t, 2> narrow = {256, 1};
+  Value index2D = expandDims(rowIndex, /*axis=*/1, narrow);
+  Value lower =
+      broadcastTo(cmpSge(index2D, splatTo(constI(0, 32), narrow)), shape);
+  Value upper =
+      buildBoundedMask(rowIndex, /*varyDim=*/0, shape, constI(100, 32));
+  Value mask = andI(lower, upper);
+
+  EXPECT_TRUE(match(mask, shape).has_value());
+  EXPECT_FALSE(matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                 /*contiguousDim=*/1,
+                                 /*pitchDimIsBroadcast=*/false)
+                   .has_value());
 }
 
 // The pitch policy shared by MaterializeBlockPointer and LowerTo2DBlockLoad.

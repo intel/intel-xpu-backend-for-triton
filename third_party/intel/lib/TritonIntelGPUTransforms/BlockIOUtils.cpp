@@ -7,6 +7,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Matchers.h"
+#include "triton/Analysis/Signedness.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -1251,30 +1252,34 @@ varyingDims(Value v, ArrayRef<int64_t> tensorShape) {
   return dims;
 }
 
-/// A pitch-dim upper bound: `index < splat(bound)`.
+/// One side of a pitch-dim boundary check.
 struct LimitCmp {
-  Value base; // null for a bare `arange`
-  Value bound;
+  bool isUpperBound; // `index < bound` rather than `index >= 0`
+  Value base;        // null for a bare `arange`
+  Value bound;       // null for a lower bound
 };
 
 /// Match a single boundary-check conjunct along a dim of extent \p extent:
-/// `index < splat(bound)` or `splat(bound) > index`, where `index` is
-/// `base + arange(0, extent)` (see `matchBaseAndRange`). Signed only: the
-/// height formula assumes it.
+/// `index < splat(bound)` or `index >= 0`, either with the index on the
+/// left or swapped, where `index` is `base + arange(0, extent)` (see
+/// `matchBaseAndRange`). Signed only: an unsigned comparison means something
+/// else for a negative index, which is the case the lower bound covers.
 std::optional<LimitCmp> matchLimitCmp(Value conjunct, int64_t extent) {
   Value cmpCandidate = stripExpandDims(peelBroadcasts(conjunct));
   auto cmpOp = cmpCandidate.getDefiningOp<arith::CmpIOp>();
   if (!cmpOp)
     return std::nullopt;
 
-  // `K > offs` reaches the IR as `sgt(bound, index)`.
+  // `K > offs` reaches the IR as `sgt(bound, index)`, `0 <= offs` as
+  // `sle(0, index)`.
   Value index = cmpOp.getLhs(), other = cmpOp.getRhs();
   arith::CmpIPredicate pred = cmpOp.getPredicate();
-  if (pred == arith::CmpIPredicate::sgt) {
-    pred = arith::CmpIPredicate::slt;
+  if (pred == arith::CmpIPredicate::sgt || pred == arith::CmpIPredicate::sle) {
+    pred = pred == arith::CmpIPredicate::sgt ? arith::CmpIPredicate::slt
+                                             : arith::CmpIPredicate::sge;
     std::swap(index, other);
   }
-  if (pred != arith::CmpIPredicate::slt)
+  if (pred != arith::CmpIPredicate::slt && pred != arith::CmpIPredicate::sge)
     return std::nullopt;
 
   std::optional<Value> base = matchBaseAndRange(index, extent);
@@ -1288,13 +1293,24 @@ std::optional<LimitCmp> matchLimitCmp(Value conjunct, int64_t extent) {
   if (*base && base->getType() != getElementTypeOrSelf(index.getType()))
     return std::nullopt;
 
+  if (pred == arith::CmpIPredicate::sge) {
+    // A lower bound is only recognised against zero: a non-zero one bounds a
+    // sub-range the hardware clamp cannot express.
+    Value zero = other;
+    if (auto splatOp = zero.getDefiningOp<triton::SplatOp>())
+      zero = splatOp.getSrc();
+    if (!matchPattern(zero, m_Zero()))
+      return std::nullopt;
+    return LimitCmp{/*isUpperBound=*/false, *base, Value()};
+  }
+
   // computeRowLimitHeight handles i32 and i64 (e.g. an index promoted to i64
   // by `.to(tl.int64)`, issue #8565).
   auto boundSplat = other.getDefiningOp<triton::SplatOp>();
   if (!boundSplat || !boundSplat.getSrc().getType().isInteger(32) &&
                          !boundSplat.getSrc().getType().isInteger(64))
     return std::nullopt;
-  return LimitCmp{*base, boundSplat.getSrc()};
+  return LimitCmp{/*isUpperBound=*/true, *base, boundSplat.getSrc()};
 }
 
 } // namespace
@@ -1316,7 +1332,8 @@ bool isZeroFillOther(Value other) {
 
 std::optional<BoundaryMaskInfo>
 matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
-                       unsigned contiguousDim, bool pitchDimIsBroadcast) {
+                       unsigned contiguousDim, bool pitchDimIsBroadcast,
+                       Operation *loadOp) {
   if (!mask || tensorShape.size() < 2 || !isZeroFillOther(other))
     return std::nullopt;
 
@@ -1328,6 +1345,7 @@ matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
   collectConjuncts(mask, visited, conjuncts);
 
   BoundaryMaskInfo info{pitchDim, {}, {}, {}};
+  bool seenLower = false;
   for (Value conjunct : conjuncts) {
     std::optional<SmallVector<unsigned>> varying =
         varyingDims(conjunct, tensorShape);
@@ -1342,20 +1360,42 @@ matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
       continue;
     }
 
-    // Anything else has to be the bound along the pitch dim alone, the one
-    // the hardware clamps, and there can only be one.
-    if (dims.size() != 1 || dims.front() != pitchDim || info.rowBound)
+    // Anything else has to be a bound along the pitch dim alone, the one the
+    // hardware clamps.
+    if (dims.size() != 1 || dims.front() != pitchDim)
       return std::nullopt;
     std::optional<LimitCmp> limit =
         matchLimitCmp(conjunct, tensorShape[pitchDim]);
     if (!limit)
       return std::nullopt;
+
+    // The two bounds must agree on where the index starts, or they are not
+    // the two halves of one boundary check.
+    if ((info.rowBound || seenLower) && info.rowBase != limit->base)
+      return std::nullopt;
     info.rowBase = limit->base;
-    info.rowBound = limit->bound;
+    if (limit->isUpperBound) {
+      if (info.rowBound)
+        return std::nullopt;
+      info.rowBound = limit->bound;
+    } else {
+      if (seenLower)
+        return std::nullopt;
+      seenLower = true;
+    }
   }
 
+  // A lone lower bound has nothing for the surface to clamp to, and
   // `base_height` cannot express a bound when every row is the same row.
   if (!info.rowBound || pitchDimIsBroadcast)
+    return std::nullopt;
+
+  // The surface starts at the tensor's first row, so a row before it is read
+  // like any other. A lower bound is therefore only dropped where it is
+  // vacuous, i.e. where the index provably cannot be negative at the load. A
+  // null base is a bare `arange`, which starts at zero.
+  if (seenLower && info.rowBase &&
+      (!loadOp || !valueIsNonNegative(info.rowBase, loadOp)))
     return std::nullopt;
 
   return info;
@@ -1366,7 +1406,8 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   unsigned contiguousDim,
                                                   bool pitchDimIsBroadcast) {
   std::optional<BoundaryMaskInfo> m = matchBoundaryCheckMask(
-      mask, other, tensorShape, contiguousDim, pitchDimIsBroadcast);
+      mask, other, tensorShape, contiguousDim, pitchDimIsBroadcast,
+      /*loadOp=*/nullptr);
   if (!m || m->extraPreds.size() > 1)
     return std::nullopt;
   return RowLimitMaskInfo{m->boundedDim, m->rowBase, m->rowBound,

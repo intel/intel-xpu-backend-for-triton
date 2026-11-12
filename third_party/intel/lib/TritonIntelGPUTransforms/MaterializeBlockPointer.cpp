@@ -493,7 +493,8 @@ private:
         bool pitchDimIsBroadcast =
             strideInfo && strideInfo->getStride(pitchDim) == 0;
         if (ttgi::matchBoundaryCheckMask(mask, op.getOther(), maskTy.getShape(),
-                                         *contiguousDim, pitchDimIsBroadcast)) {
+                                         *contiguousDim, pitchDimIsBroadcast,
+                                         op)) {
           // Skip the bypass if LowerTo2DBlockLoad would reject the pitch.
           unsigned elemBits = getIntOrFloatOrPtrBitWidth(
               cast<tt::PointerType>(

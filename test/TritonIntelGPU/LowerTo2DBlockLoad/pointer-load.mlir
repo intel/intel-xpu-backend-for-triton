@@ -477,6 +477,85 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
+// COM: A row-limit mask that also carries the lower bound
+// COM: `RewriteTensorDescriptorToPointer` emits, `rows >= 0`. The base is a
+// COM: program-id multiple, so it cannot be negative and the lower bound is
+// COM: vacuous: the mask becomes base_height, with no mask operand left.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @row_limit_mask_lower_bound
+  tt.func @row_limit_mask_lower_bound(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %bound: i32) -> tensor<64x32xf16, #dot0> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    %zero = arith.constant dense<0> : tensor<64x1xi32, #dot0>
+    %cst_stride = arith.constant dense<32> : tensor<64x1xi32, #dot0>
+    %pid = tt.get_program_id x : i32
+    %c64_i32 = arith.constant 64 : i32
+    %row_base = arith.muli %pid, %c64_i32 : i32
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+    %row = arith.muli %1, %cst_stride : tensor<64x1xi32, #dot0>
+    %rowb = tt.broadcast %row : tensor<64x1xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %4 = tt.addptr %base, %rowb : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+    // rows = row_base + arange(0, 64), with the AND on the expanded rows as
+    // RewriteTensorDescriptorToPointer emits it; mask = rows >= 0 && rows < bound.
+    %5 = tt.splat %row_base : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %6 = arith.addi %5, %0 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %rows = tt.expand_dims %6 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+    %lo = arith.cmpi sge, %rows, %zero : tensor<64x1xi32, #dot0>
+    %8 = tt.splat %bound : i32 -> tensor<64x1xi32, #dot0>
+    %hi = arith.cmpi slt, %rows, %8 : tensor<64x1xi32, #dot0>
+    %10 = arith.andi %lo, %hi : tensor<64x1xi1, #dot0>
+    %11 = tt.broadcast %10 : tensor<64x1xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    // COM: No mask operand is left.
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}} {row_major} {ttig.block_io_runtime_row_limit}
+    %12 = tt.load %4, %11, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+    tt.return %12 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+// COM: Same mask, but the row base is an opaque argument. A row before the
+// COM: tensor is read like any other by the message (its base pointer is on
+// COM: its own first row), so the `rows >= 0` conjunct can only be dropped
+// COM: when the base is provably non-negative; here it is not and the mask
+// COM: stays.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @row_limit_mask_lower_bound_signed_base
+  tt.func @row_limit_mask_lower_bound_signed_base(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %bound: i32, %row_base: i32) -> tensor<64x32xf16, #dot0> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    %zero = arith.constant dense<0> : tensor<64x1xi32, #dot0>
+    %cst_stride = arith.constant dense<32> : tensor<64x1xi32, #dot0>
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+    %row = arith.muli %1, %cst_stride : tensor<64x1xi32, #dot0>
+    %rowb = tt.broadcast %row : tensor<64x1xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %4 = tt.addptr %base, %rowb : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+    // rows = row_base + arange(0, 64), with the AND on the expanded rows as
+    // RewriteTensorDescriptorToPointer emits it; mask = rows >= 0 && rows < bound.
+    %5 = tt.splat %row_base : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %6 = arith.addi %5, %0 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %rows = tt.expand_dims %6 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+    %lo = arith.cmpi sge, %rows, %zero : tensor<64x1xi32, #dot0>
+    %8 = tt.splat %bound : i32 -> tensor<64x1xi32, #dot0>
+    %hi = arith.cmpi slt, %rows, %8 : tensor<64x1xi32, #dot0>
+    %10 = arith.andi %lo, %hi : tensor<64x1xi1, #dot0>
+    %11 = tt.broadcast %10 : tensor<64x1xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    // COM: The mask is kept as an operand (the last two operands are mask and
+    // COM: other) and no runtime-limit attribute is set.
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}} {row_major} :
+    %12 = tt.load %4, %11, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+    tt.return %12 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
 // COM: Rank-3 row-limit mask ANDed with a batch-only predicate (degenerate
 // COM: along M and K): the row half still becomes `base_height`, and the
 // COM: batch half survives as `extraPred`, forwarded as mask/other.

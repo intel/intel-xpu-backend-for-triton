@@ -304,7 +304,7 @@ private:
           getStride(strideAnalysis, op.getPtr(), pitchTensorDim) == 0;
       if (auto m = ttgi::matchBoundaryCheckMask(
               op.getMask(), op.getOther(), tensorTy.getShape(), contiguousDim,
-              pitchDimIsBroadcast))
+              pitchDimIsBroadcast, op))
         rowLimitMask = m;
     }
 
