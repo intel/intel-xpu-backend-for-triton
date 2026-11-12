@@ -13,6 +13,8 @@ on:
       - scripts/sglang/**
       - benchmarks/triton_kernels_benchmark/sglang/**
       - .github/pins/pytorch.txt
+      - scripts/patch-pytorch.sh
+      - scripts/patch/**
   schedule:
     - cron: "0 11 * * *"
 
