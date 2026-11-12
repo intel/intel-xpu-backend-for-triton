@@ -391,6 +391,54 @@ void legalizeI1VectorMemory(Module &module) {
     legalizeI1VectorStore(store, dl);
 }
 
+// W/A for IGC register allocation of `llvm.fma` (#8626) that keeps `tl.fma`
+// bitwise-identical to a separately rounded multiply followed by an fma.
+//
+// Rewrite every scalar f32 `llvm.fma(a, b, c)` into
+//   %m = fmul contract a, b
+//   %r = fadd contract %m, c
+// so IGC allocates registers as it does for the implicitly fused `a * b + c`
+// (an `llvm.fma` call costs up to ~35% more spill on the vLLM fp8 unified
+// attention kernels).
+//
+// This must run after the LLVM optimizer: InstCombine canonicalizes the
+// operand order of a commutative `fadd`, which would put a separately rounded
+// addend (`x * 0.1` in `tl.fma(0.9, g * g, x * 0.1)`) before the contract
+// multiply. IGC then fuses that addend multiply instead of ours, and the
+// rounding of `x * 0.1` is lost (1 ulp off eager). Emitting the pair here keeps
+// the contract multiply as the first operand.
+void expandFmaToContractPair(Module &module) {
+  // Only the scalar f32 overload: other types have different declarations.
+  Function *fma = Intrinsic::getDeclarationIfExists(
+      &module, Intrinsic::fma, {Type::getFloatTy(module.getContext())});
+  if (!fma)
+    return;
+
+  for (User *user : make_early_inc_range(fma->users())) {
+    auto *call = dyn_cast<CallInst>(user);
+    if (!call || call->getCalledFunction() != fma)
+      continue;
+
+    // `IRBuilder` (and IGC) fold a multiply of two constants, rounding the
+    // product to f32 and leaving nothing to fuse. That changes the result of
+    // an exact fma, so keep `llvm.fma` when both multiplicands are constants.
+    if (isa<Constant>(call->getArgOperand(0)) &&
+        isa<Constant>(call->getArgOperand(1)))
+      continue;
+
+    IRBuilder<> builder(call);
+    builder.SetCurrentDebugLocation(call->getDebugLoc());
+    FastMathFlags fmf = call->getFastMathFlags();
+    fmf.setAllowContract(true);
+    builder.setFastMathFlags(fmf);
+    Value *mul =
+        builder.CreateFMul(call->getArgOperand(0), call->getArgOperand(1));
+    Value *add = builder.CreateFAdd(mul, call->getArgOperand(2));
+    call->replaceAllUsesWith(add);
+    call->eraseFromParent();
+  }
+}
+
 void postProcessLLVMIR(llvm::Module &mod) {
   // __devicelib_assert_fail must be a declaration so that
   // IGC can replace it with a runtime assert function.
@@ -415,6 +463,9 @@ void postProcessLLVMIR(llvm::Module &mod) {
 
   // IGC and LLVM disagree on the memory layout of `<N x i1>`.
   legalizeI1VectorMemory(mod);
+
+  // IGC register allocation W/A for `llvm.fma` (#8626).
+  expandFmaToContractPair(mod);
 }
 
 } // namespace mlir::triton::intel
@@ -446,5 +497,11 @@ PreservedAnalyses ExpandSubByteVectorBitcastPass::run(Module &M,
 PreservedAnalyses LegalizeI1VectorMemoryPass::run(Module &M,
                                                   ModuleAnalysisManager &) {
   mlir::triton::intel::legalizeI1VectorMemory(M);
+  return PreservedAnalyses::none();
+}
+
+PreservedAnalyses ExpandFmaToContractPairPass::run(Module &M,
+                                                   ModuleAnalysisManager &) {
+  mlir::triton::intel::expandFmaToContractPair(M);
   return PreservedAnalyses::none();
 }
