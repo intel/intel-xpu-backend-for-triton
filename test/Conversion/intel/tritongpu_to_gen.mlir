@@ -2186,14 +2186,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_bfloat16_conversion} {
   // CHECK-LABEL: @fma_bf16_no_bf16_arithmetic
   tt.func @fma_bf16_no_bf16_arithmetic(%a: tensor<128xbf16, #blocked>, %b: tensor<128xbf16, #blocked>, %c: tensor<128xbf16, #blocked>) {
-    // CHECK-NOT: llvm.intr.fma
+    // CHECK-NOT: (bf16, bf16, bf16) -> bf16
     // CHECK: [[A:%.*]] = llvm.call spir_funccc @_Z27__spirv_ConvertBF16ToFINTELs(%{{.*}})
     // CHECK: [[B:%.*]] = llvm.call spir_funccc @_Z27__spirv_ConvertBF16ToFINTELs(%{{.*}})
     // CHECK: [[C:%.*]] = llvm.call spir_funccc @_Z27__spirv_ConvertBF16ToFINTELs(%{{.*}})
-    // CHECK: [[MUL:%.*]] = llvm.fmul [[A]], [[B]] {{.*}} : f32
-    // CHECK: [[ADD:%.*]] = llvm.fadd [[MUL]], [[C]] {{.*}} : f32
-    // CHECK: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf([[ADD]])
-    // CHECK-NOT: llvm.intr.fma
+    // CHECK: [[FMA:%.*]] = llvm.intr.fma([[A]], [[B]], [[C]]) : (f32, f32, f32) -> f32
+    // CHECK: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf([[FMA]])
+    // CHECK-NOT: (bf16, bf16, bf16) -> bf16
     %0 = math.fma %a, %b, %c : tensor<128xbf16, #blocked>
     tt.return
   }

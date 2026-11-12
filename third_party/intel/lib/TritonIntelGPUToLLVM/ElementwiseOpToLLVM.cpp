@@ -2125,8 +2125,6 @@ struct AbsFOpConversion
   }
 };
 
-// FIXME: Remove this IGC W/A (#8626).
-//
 // Without native bf16 arithmetic (LTS drivers), a bf16 `math.fma` is computed
 // in f32 and rounded back once. `arith-emulate-unsupported-floats` only widens
 // arith ops, so it never reaches `math.fma`. This is exact for the
@@ -2153,12 +2151,7 @@ struct FmaOpConversion
       c = intel::convertBf16ToFp32(loc, rewriter, c);
       elemTy = f32_ty;
     }
-    if (!elemTy.isF32())
-      return {LLVM::FMAOp::create(rewriter, loc, elemTy, a, b, c)};
-    auto fmf = LLVM::FastmathFlagsAttr::get(rewriter.getContext(),
-                                            LLVM::FastmathFlags::contract);
-    Value mul = LLVM::FMulOp::create(rewriter, loc, elemTy, a, b, fmf);
-    Value res = LLVM::FAddOp::create(rewriter, loc, elemTy, mul, c, fmf);
+    Value res = LLVM::FMAOp::create(rewriter, loc, elemTy, a, b, c);
     if (widenBf16)
       res = intel::convertFp32ToBf16(loc, rewriter, res, RoundingMode::RTNE);
     return {res};
