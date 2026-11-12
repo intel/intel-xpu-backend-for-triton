@@ -43,6 +43,7 @@ class XPUOptions:
     launch_cooperative_grid: bool = False
     reduce_variable_liveness: bool = True
     in_loop_sink: bool = True
+    fold_trans: bool = True
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4nv", "fp8e4b15")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -597,7 +598,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.passes.ttgpuir.add_canonicalize_pointers(pm, True)
             passes.common.add_canonicalizer(pm)
 
-        intel.passes.ttgpuir.add_accelerate_matmul(pm, opt.grf_mode)
+        intel.passes.ttgpuir.add_accelerate_matmul(pm, opt.grf_mode, opt.fold_trans)
         intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm, metadata["target"].arch.get("local_mem_size") or 0,
                                                               True)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm, knobs.intel.descriptor_block_io_relayout)
