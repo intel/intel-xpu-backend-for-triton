@@ -1,0 +1,364 @@
+From 135da2b1be24758db45c1c84e2ee49f3f28893f5 Mon Sep 17 00:00:00 2001
+From: Warren Deng <warrdeng@meta.com>
+Date: Sat, 31 Oct 2026 21:20:32 -0700
+Subject: [PATCH 1/2] [Inductor] Preserve Triton cache-group formats during
+ runtime transport
+
+Triton #12001 replaced absolute child-path mappings with filename lists.
+Runtime cache export rejected the new format, and recreating a mapping on
+import changes the manifest bytes checked by strict Inductor reload.
+Normalize both formats for validation and retain the producer representation
+when hydrating cache groups. Legacy bundles default to path mappings.
+Add direct roundtrip coverage for filename bytes and member order.
+
+Authored with AI assistance (Codex) at Warren's request.
+
+Test Plan:
+```bash
+podman exec triton-pin-202417 bash -c 'source /data/users/warrdeng/triton-pin/ci-202417/container_env.sh
+python /data/users/warrdeng/triton-pin/pytorch-cache-transport/agent_space/verify_cache_transport.py'
+spin quicklint
+lintrunner -a
+```
+63 cases pass with each full native old/candidate Triton pin on H100 CUDA13.2,
+using the changed transport source on the existing e6fb976 PyTorch wheel.
+Full spin lint also attempted; the executorch C++ compatibility linter requires
+a build directory absent from this Python-only worktree.
+---
+ test/test_precompile.py                 | 86 +++++++++++++++++++++++--
+ torch/compiler/_triton_runtime_cache.py | 40 ++++++++++--
+ 2 files changed, 116 insertions(+), 10 deletions(-)
+
+diff --git a/test/test_precompile.py b/test/test_precompile.py
+index a41b0b2bd6f38..8526c3c226f6f 100644
+--- a/test/test_precompile.py
++++ b/test/test_precompile.py
+@@ -6622,10 +6622,14 @@ def _bundle(self, directory, **kwargs):
+             return export_runtime_cache(context=self.CONTEXT, **kwargs), key, native
+ 
+     @parametrize("consumer_exists", (False, True))
+-    def test_roundtrip_hydrates_a_fresh_cache(self, consumer_exists):
++    @parametrize("group_format", ("paths", "filenames"))
++    def test_roundtrip_hydrates_a_fresh_cache(self, consumer_exists, group_format):
+         from triton.runtime.cache import get_cache_manager
+ 
+-        from torch.compiler._triton_runtime_cache import import_runtime_cache
++        from torch.compiler._triton_runtime_cache import (
++            export_runtime_cache,
++            import_runtime_cache,
++        )
+ 
+         with tempfile.TemporaryDirectory() as tmp:
+             producer = pathlib.Path(tmp, "producer")
+@@ -6640,8 +6644,19 @@ def test_roundtrip_hydrates_a_fresh_cache(self, consumer_exists):
+                 mode = stat.S_IMODE(probe.stat().st_mode)
+             # Triton writes group paths with the directory as spelled.
+             spelled = f"{tmp}//producer"
+-            bundle, key, native = self._bundle(spelled)
+             with _triton_cache_namespace(spelled):
++                key, native = _write_triton_runtime_entries()
++                # Preserve filename order as well as the producer's format.
++                members = ["kernel.json", "kernel.cubin"]
++                children = (
++                    members
++                    if group_format == "filenames"
++                    else {name: f"{spelled}/{key}/{name}" for name in members}
++                )
++                group = producer / key / "__grp__kernel.json"
++                native_children = json.loads(group.read_text())["child_paths"]
++                group.write_text(json.dumps({"child_paths": children}))
++                bundle = export_runtime_cache(context=self.CONTEXT)
+                 import_runtime_cache(bundle, context=self.CONTEXT)
+             inode = consumer.stat().st_ino if consumer_exists else None
+             with _triton_cache_namespace(consumer):
+@@ -6655,6 +6670,41 @@ def test_roundtrip_hydrates_a_fresh_cache(self, consumer_exists):
+                         (consumer / key / name).read_bytes(),
+                         (producer / key / name).read_bytes(),
+                     )
++                imported_group = consumer / key / group.name
++                expected_children = (
++                    members
++                    if group_format == "filenames"
++                    else {name: str(consumer / key / name) for name in members}
++                )
++                self.assertEqual(
++                    json.loads(imported_group.read_text()),
++                    {"child_paths": expected_children},
++                )
++                if group_format == "filenames":
++                    self.assertEqual(imported_group.read_bytes(), group.read_bytes())
++                # Older Triton cannot read a filename-list fixture itself.
++                if group_format == "paths" or isinstance(native_children, list):
++                    self.assertEqual(
++                        get_cache_manager("ab" * 32).get_group("kernel.json"),
++                        {name: str(consumer / key / name) for name in members},
++                    )
++
++    def test_import_accepts_a_legacy_kernel_record(self):
++        from triton.runtime.cache import get_cache_manager
++
++        from torch.compiler._triton_runtime_cache import import_runtime_cache
++
++        with tempfile.TemporaryDirectory() as tmp:
++            bundle, key, _ = self._bundle(pathlib.Path(tmp, "producer"))
++
++            def legacy_record(header):
++                for record in header["records"]:
++                    record.pop("group_format", None)
++
++            bundle = _replace_bundle_header(bundle, legacy_record)
++            consumer = pathlib.Path(tmp, "consumer")
++            with _triton_cache_namespace(consumer):
++                import_runtime_cache(bundle, context=self.CONTEXT)
+                 self.assertEqual(
+                     get_cache_manager("ab" * 32).get_group("kernel.json"),
+                     {
+@@ -6709,6 +6759,7 @@ def test_export_leaves_out_excluded_keys(self):
+             "duplicate_record",
+             "member_path",
+             "group_member",
++            "group_format",
+             "native_suffix",
+             "no_binary",
+             "incomplete_group",
+@@ -6727,6 +6778,7 @@ def test_import_rejects_a_damaged_bundle_without_writing(self, damage):
+             "duplicate_record": "Duplicate Triton runtime-cache record",
+             "member_path": "Invalid Triton runtime-cache member name",
+             "group_member": "Invalid Triton runtime-cache member name",
++            "group_format": "Invalid Triton runtime-cache group format",
+             "native_suffix": "Invalid Triton runtime-cache native member",
+             "no_binary": "has no binary",
+             "incomplete_group": "Incomplete or unreferenced",
+@@ -6761,6 +6813,7 @@ def duplicate_file(header):
+                 "group_member": lambda h: rename(
+                     h, "kernel.autotune.json", "__grp__kernel.autotune.json"
+                 ),
++                "group_format": lambda h: kernel(h).update(group_format="unknown"),
+                 "native_suffix": lambda h: rename(h, native, "launcher.txt"),
+                 "no_binary": lambda h: kernel(h)["members"].remove("kernel.cubin"),
+                 "incomplete_group": lambda h: kernel(h)["members"].append("kernel.ptx"),
+@@ -7031,6 +7084,8 @@ def add(x, y, out, n, BLOCK: tl.constexpr):
+             "foreign_group",
+             "group_outside_entry",
+             "group_without_binary",
++            "group_duplicate_member",
++            "group_invalid_member",
+             "unrecognized_file",
+             "foreign_native",
+             "invalid_key",
+@@ -7044,6 +7099,8 @@ def test_export_rejects_an_incomplete_cache(self, damage):
+             entry = pathlib.Path(tmp, key)
+             group = entry / "__grp__kernel.json"
+             children = json.loads(group.read_text())["child_paths"]
++            if isinstance(children, list):
++                children = {name: str(entry / name) for name in children}
+             if damage == "missing_binary":
+                 (entry / "kernel.cubin").unlink()
+                 error = "Incomplete Triton runtime-cache entry"
+@@ -7071,6 +7128,13 @@ def test_export_rejects_an_incomplete_cache(self, damage):
+                 del children["kernel.cubin"]
+                 group.write_text(json.dumps({"child_paths": children}))
+                 error = "no compiled binary"
++            elif damage in ("group_duplicate_member", "group_invalid_member"):
++                members = list(children)
++                members.append(
++                    members[0] if damage == "group_duplicate_member" else None
++                )
++                group.write_text(json.dumps({"child_paths": members}))
++                error = "Incomplete Triton runtime-cache group"
+             elif damage == "unrecognized_file":
+                 (entry / "kernel.new_format").write_bytes(b"")
+                 error = "Unrecognized Triton runtime-cache files"
+@@ -7100,14 +7164,26 @@ def test_export_skips_what_triton_never_reads(self):
+             header, _ = _bundle_header(export_runtime_cache(context=self.CONTEXT))
+             self.assertEqual(header, expected)
+ 
+-    def test_export_accepts_an_unnormalized_cache_dir(self):
++    @parametrize("group_format", ("native", "paths", "filenames"))
++    def test_export_accepts_an_unnormalized_cache_dir(self, group_format):
+         import triton
+ 
+         from torch.compiler._triton_runtime_cache import export_runtime_cache
+ 
+         with tempfile.TemporaryDirectory() as tmp, _triton_cache_namespace(tmp):
+             triton.knobs.cache.dir = os.path.join(tmp, "..", os.path.basename(tmp))
+-            _write_triton_runtime_entries()
++            key, _ = _write_triton_runtime_entries()
++            if group_format != "native":
++                entry = pathlib.Path(tmp, key)
++                children = ("kernel.json", "kernel.cubin")
++                manifest = (
++                    {name: str(entry / name) for name in children}
++                    if group_format == "paths"
++                    else list(children)
++                )
++                (entry / "__grp__kernel.json").write_text(
++                    json.dumps({"child_paths": manifest})
++                )
+             header, _ = _bundle_header(export_runtime_cache(context=self.CONTEXT))
+             self.assertEqual(len(header["records"]), 3)
+ 
+diff --git a/torch/compiler/_triton_runtime_cache.py b/torch/compiler/_triton_runtime_cache.py
+index 4d1f28795f3ac..96570c1fc5d82 100644
+--- a/torch/compiler/_triton_runtime_cache.py
++++ b/torch/compiler/_triton_runtime_cache.py
+@@ -138,6 +138,19 @@ def _read_json(path: Path, data: bytes) -> Any:
+         raise RuntimeError(f"Unreadable Triton runtime-cache entry: {path}") from exc
+ 
+ 
++def _group_child_paths(entry: Any, directory: Path) -> dict[str, Any] | None:
++    children = entry.get("child_paths") if isinstance(entry, dict) else None
++    # Newer Triton stores filenames; older releases store absolute paths.
++    # Resolve filenames against this entry, preserving validation of legacy paths.
++    if isinstance(children, list):
++        if not all(isinstance(name, str) for name in children) or len(children) != len(
++            set(children)
++        ):
++            return None
++        return {name: str(directory / name) for name in children}
++    return children if isinstance(children, dict) else None
++
++
+ def export_runtime_cache(*, context: Any = None, exclude: Iterable[str] = ()) -> bytes:
+     """Snapshot the committed entries of a capture-private Triton cache.
+ 
+@@ -191,8 +204,8 @@ def add_file(key: str, name: str) -> bytes:
+                     raise RuntimeError(f"Invalid Triton runtime-cache group: {path}")
+                 group = _member_name(name.removeprefix("__grp__"))
+                 entry = _read_json(path, path.read_bytes())
+-                children = entry.get("child_paths") if isinstance(entry, dict) else None
+-                if not isinstance(children, dict) or group not in children:
++                children = _group_child_paths(entry, directory)
++                if children is None or group not in children:
+                     raise RuntimeError(f"Incomplete Triton runtime-cache group: {path}")
+                 members = list(children)
+                 if not any(member.endswith(_BINARY_SUFFIXES) for member in members):
+@@ -214,7 +227,17 @@ def add_file(key: str, name: str) -> bytes:
+                 consumed.update(members)
+                 consumed.add(name)
+                 records.append(
+-                    {"kind": "kernel", "key": key, "group": group, "members": members}
++                    {
++                        "kind": "kernel",
++                        "key": key,
++                        "group": group,
++                        "members": members,
++                        "group_format": (
++                            "filenames"
++                            if isinstance(entry["child_paths"], list)
++                            else "paths"
++                        ),
++                    }
+                 )
+             elif name.endswith(suffix):
+                 add_file(key, name)
+@@ -338,6 +361,8 @@ def _decode(
+         if kind == "kernel":
+             group = _member_name(record["group"])
+             members = record["members"]
++            if record.get("group_format", "paths") not in ("paths", "filenames"):
++                raise RuntimeError("Invalid Triton runtime-cache group format")
+             if group not in members or len(members) != len(set(members)):
+                 raise RuntimeError("Incomplete Triton runtime-cache kernel group")
+             if not any(name.endswith(_BINARY_SUFFIXES) for name in members):
+@@ -370,7 +395,7 @@ def _group_matches(path: Path, root: Path, record: dict[str, Any]) -> bool:
+     if path.is_symlink() or not path.is_file():
+         return False
+     group = _read_json(path, path.read_bytes())
+-    children = group.get("child_paths") if isinstance(group, dict) else None
++    children = _group_child_paths(group, root / record["key"])
+     expected = {name: root / record["key"] / name for name in record["members"]}
+     # Triton records paths under knobs.cache.dir, which may spell the same
+     # directory differently.
+@@ -386,7 +411,12 @@ def _group_matches(path: Path, root: Path, record: dict[str, Any]) -> bool:
+ 
+ 
+ def _group_contents(root: Path, record: dict[str, Any]) -> str:
+-    # The layout FileCacheManager.put_group writes; get_group checks each path.
++    # Preserve the producer's representation: Inductor's strict bundle reload
++    # checks these bytes against its separately captured kernel artifacts.
++    if record.get("group_format", "paths") == "filenames":
++        return json.dumps({"child_paths": record["members"]})
++    # Legacy bundles omit group_format. Paths refer to the final directory,
++    # not the staging directory where this group is assembled.
+     key = record["key"]
+     return json.dumps(
+         {"child_paths": {name: str(root / key / name) for name in record["members"]}}
+
+From e5f825e00df233d8a90c1a27e695f855b1c5bfb8 Mon Sep 17 00:00:00 2001
+From: Warren Deng <warrdeng@meta.com>
+Date: Sat, 31 Oct 2026 22:12:55 -0700
+Subject: [PATCH 2/2] Validate Triton runtime-cache member lists before
+ hydration
+
+A malformed kernel record could provide a dictionary for members. Header
+validation checked its keys, but filename-format serialization wrote its
+unchecked values. Import promoted that invalid group before rejecting it,
+leaving an entry that blocked a corrected retry.
+
+Reject non-list members during decoding, before cache directories are
+created or populated. Existing member validation still checks every filename.
+Add the mapping-members case to the damaged-bundle/no-write regression.
+
+Authored with AI assistance (Codex).
+
+Test Plan:
+```bash
+podman exec triton-pin-202417 bash -c 'source /data/users/warrdeng/triton-pin/ci-202417/container_env.sh
+python /data/users/warrdeng/triton-pin/pytorch-cache-transport/agent_space/verify_cache_transport.py'
+spin quicklint
+lintrunner -a
+```
+64 focused cases pass with each full native old/candidate Triton pin on
+H100/CUDA13.2 using the changed Python module/tests on the e6fb976 native
+PyTorch wheel. Independent source controls verify rejection without writes
+and successful corrected retry. Fresh-build CI remains pending.
+---
+ test/test_precompile.py                 | 6 ++++++
+ torch/compiler/_triton_runtime_cache.py | 2 ++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/test/test_precompile.py b/test/test_precompile.py
+index 8526c3c226f6f..86d15db4396d5 100644
+--- a/test/test_precompile.py
++++ b/test/test_precompile.py
+@@ -6760,6 +6760,7 @@ def test_export_leaves_out_excluded_keys(self):
+             "member_path",
+             "group_member",
+             "group_format",
++            "group_members_mapping",
+             "native_suffix",
+             "no_binary",
+             "incomplete_group",
+@@ -6779,6 +6780,7 @@ def test_import_rejects_a_damaged_bundle_without_writing(self, damage):
+             "member_path": "Invalid Triton runtime-cache member name",
+             "group_member": "Invalid Triton runtime-cache member name",
+             "group_format": "Invalid Triton runtime-cache group format",
++            "group_members_mapping": "Invalid Triton runtime-cache kernel members",
+             "native_suffix": "Invalid Triton runtime-cache native member",
+             "no_binary": "has no binary",
+             "incomplete_group": "Incomplete or unreferenced",
+@@ -6814,6 +6816,10 @@ def duplicate_file(header):
+                     h, "kernel.autotune.json", "__grp__kernel.autotune.json"
+                 ),
+                 "group_format": lambda h: kernel(h).update(group_format="unknown"),
++                "group_members_mapping": lambda h: kernel(h).update(
++                    group_format="filenames",
++                    members=dict.fromkeys(kernel(h)["members"]),
++                ),
+                 "native_suffix": lambda h: rename(h, native, "launcher.txt"),
+                 "no_binary": lambda h: kernel(h)["members"].remove("kernel.cubin"),
+                 "incomplete_group": lambda h: kernel(h)["members"].append("kernel.ptx"),
+diff --git a/torch/compiler/_triton_runtime_cache.py b/torch/compiler/_triton_runtime_cache.py
+index 96570c1fc5d82..47318e96ed45c 100644
+--- a/torch/compiler/_triton_runtime_cache.py
++++ b/torch/compiler/_triton_runtime_cache.py
+@@ -363,6 +363,8 @@ def _decode(
+             members = record["members"]
+             if record.get("group_format", "paths") not in ("paths", "filenames"):
+                 raise RuntimeError("Invalid Triton runtime-cache group format")
++            if not isinstance(members, list):
++                raise RuntimeError("Invalid Triton runtime-cache kernel members")
+             if group not in members or len(members) != len(set(members)):
+                 raise RuntimeError("Incomplete Triton runtime-cache kernel group")
+             if not any(name.endswith(_BINARY_SUFFIXES) for name in members):
