@@ -475,10 +475,15 @@ def test_clear_cache_grf_mode(device, grf_mode):
     cache.fill_(1)
     state = drv._benchmark_state
     state.flush_grf_mode = grf_mode
+    state.launched_grf_modes = []
     try:
         drv.clear_cache(cache)
+        launched = state.launched_grf_modes
     finally:
         state.flush_grf_mode = "default"
+        state.launched_grf_modes = None
+    # The default flush is not a Triton kernel; any other one has to be launched in the requested mode.
+    assert launched == ([] if grf_mode == "default" else [grf_mode])
     assert int(torch.count_nonzero(cache)) == 0
 
 
