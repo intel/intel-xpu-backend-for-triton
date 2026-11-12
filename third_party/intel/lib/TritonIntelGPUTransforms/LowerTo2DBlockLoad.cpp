@@ -9,6 +9,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -62,6 +63,13 @@ static int64_t getStride(tt::intel::ModuleStrideAnalysis &strideAnalysis,
 static Value createZeroSplat(OpBuilder &builder, Location loc,
                              RankedTensorType tensorTy) {
   Type elemType = tensorTy.getElementType();
+  // Packed fp4 has no scalar constants and e8m0 cannot represent 0: splat
+  // zero bits as i8 and bitcast, like upstream's descriptor zero padding.
+  if (isa<tt::PackedFloat4E2M1Type, Float8E8M0FNUType>(elemType)) {
+    auto bitsTy = tensorTy.clone(builder.getI8Type());
+    Value zeroBits = createZeroSplat(builder, loc, bitsTy);
+    return tt::BitcastOp::create(builder, loc, tensorTy, zeroBits);
+  }
   Attribute zeroAttr;
   if (isa<FloatType>(elemType))
     zeroAttr = builder.getFloatAttr(elemType, 0.0);
@@ -131,7 +139,8 @@ private:
       return;
 
     unsigned rank = tensorTy.getRank();
-    unsigned elemSizeInBits = tensorTy.getElementTypeBitWidth();
+    unsigned elemSizeInBits =
+        getIntOrFloatOrPtrBitWidth(tensorTy.getElementType());
 
     // Find all MakeTensorDescOps that could define this descriptor.
     Value desc = op.getDesc();
@@ -275,7 +284,8 @@ private:
     auto tensorTy =
         cast<RankedTensorType>(tt::getPointeeType(op.getPtr().getType()));
     unsigned rank = tensorTy.getRank();
-    unsigned elemSizeInBits = tensorTy.getElementTypeBitWidth();
+    unsigned elemSizeInBits =
+        getIntOrFloatOrPtrBitWidth(tensorTy.getElementType());
 
     bool memoryRowMajor = ttgi::isMemoryRowMajor(op);
     unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
@@ -286,15 +296,15 @@ private:
     // A row-limit mask can become `base_height` instead of per-element
     // masking (hardware zero-fill). Decided up front so tile-size
     // computation below can treat this load as unmasked.
-    std::optional<ttgi::RowLimitMaskInfo> rowLimitMask;
+    std::optional<ttgi::BoundaryMaskInfo> rowLimitMask;
     if (op.getMask() && rank >= 2) {
       unsigned pitchTensorDim =
           (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
       bool pitchDimIsBroadcast =
           getStride(strideAnalysis, op.getPtr(), pitchTensorDim) == 0;
-      if (auto m = ttgi::matchRowLimitMask(op.getMask(), op.getOther(),
-                                           tensorTy.getShape(), contiguousDim,
-                                           pitchDimIsBroadcast))
+      if (auto m = ttgi::matchBoundaryCheckMask(
+              op.getMask(), op.getOther(), tensorTy.getShape(), contiguousDim,
+              pitchDimIsBroadcast))
         rowLimitMask = m;
     }
 
@@ -345,7 +355,7 @@ private:
     // memory-contiguous dim and colDim is non-contiguous, so pitch uses colDim.
     unsigned pitchDim = isTranspose ? colDim : rowDim;
 
-    // matchRowLimitMask assumed the pitch dim is the conventional rank-2/
+    // matchBoundaryCheckMask assumed the pitch dim is the conventional rank-2/
     // rank-1 dim, but for rank > 2 the tile's actual pitch dim (above) can
     // land on a batch dim instead (e.g. a layout with no register packing).
     // base_height only predicates `pitchDim`, so a mismatch here would
@@ -513,19 +523,20 @@ private:
     Value other = op.getOther();
     Value heightOperand;
     if (rowLimitMask) {
-      // Drop the row-limit component: base_height replaces it. Keep any
-      // batch-dim extraPred as the mask operand for the LLVM lowering to
+      // Drop the row-limit component: base_height replaces it. Keep the
+      // uniform conjuncts, ANDed, as the mask operand for the LLVM lowering to
       // AND into its per-message select.
-      mask = rowLimitMask->extraPred;
-      if (mask)
-        mask = ttgi::materializeExtraPred(
-            builder, op.getLoc(), mask,
-            cast<RankedTensorType>(op.getMask().getType()));
+      auto maskTy = cast<RankedTensorType>(op.getMask().getType());
+      mask = Value();
+      for (Value pred : rowLimitMask->extraPreds) {
+        pred = ttgi::materializeExtraPred(builder, loc, pred, maskTy);
+        mask = mask ? arith::AndIOp::create(builder, loc, mask, pred) : pred;
+      }
       other = mask ? createZeroSplat(builder, loc, tensorTy) : Value();
       // Relative to the tile's first row and may be <= 0; the LLVM lowering
       // adjusts per message and never forwards a non-positive base_height.
       heightOperand = ttgi::computeRowLimitHeight(
-          builder, loc, rowLimitMask->bound, rowLimitMask->rowBase,
+          builder, loc, rowLimitMask->rowBound, rowLimitMask->rowBase,
           tensorTy.getShape()[rowLimitMask->boundedDim]);
     } else {
       // If mask is present but other is absent, create a zero splat as the

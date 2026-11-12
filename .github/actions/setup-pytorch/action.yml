@@ -20,7 +20,7 @@ inputs:
     description: Source or wheels
     default: source
   cache:
-    description: Cache enabled or disabled
+    description: "enabled, read-only (load from cache, never save) or disabled"
     default: enabled
   lts:
     description: Build for LTS driver (limits TORCH_XPU_ARCH_LIST to pvc only)
@@ -85,7 +85,7 @@ runs:
       run: |
         ONEAPI_LINK=$(readlink /opt/intel/oneapi || true)
         ONEAPI_KEY=$(sha256sum /opt/intel/installed.txt 2> /dev/null | cut -d\  -f1 || true)
-        PYTORCH_CACHE_KEY=$(echo $PYTHON_VERSION $PYTORCH_COMMIT_ID ${{ hashFiles('scripts/patch-pytorch.sh') }} ${{ inputs.mode }}${ONEAPI_KEY}${ONEAPI_LINK} ${{ inputs.lts }} | sha256sum - | cut -d\  -f1)
+        PYTORCH_CACHE_KEY=$(echo $PYTHON_VERSION $PYTORCH_COMMIT_ID ${{ hashFiles('scripts/patch-pytorch.sh', 'scripts/patch/**') }} ${{ inputs.mode }}${ONEAPI_KEY}${ONEAPI_LINK} ${{ inputs.lts }} | sha256sum - | cut -d\  -f1)
         echo "PYTORCH_CACHE_KEY=$PYTORCH_CACHE_KEY" | tee -a "$GITHUB_ENV"
         echo "pytorch_cache_key=pytorch-$PYTORCH_CACHE_KEY-$CACHE_NUMBER" >> "$GITHUB_OUTPUT"
 
@@ -95,7 +95,7 @@ runs:
       with:
         path: pytorch
         key: ${{ steps.generate-pytorch-cache-key.outputs.pytorch_cache_key }}
-        enabled: ${{ inputs.cache == 'enabled' }}
+        enabled: ${{ inputs.cache != 'disabled' }}
 
     - name: Clone PyTorch repository
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}

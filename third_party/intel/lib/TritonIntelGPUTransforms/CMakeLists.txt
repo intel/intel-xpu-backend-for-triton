@@ -13,6 +13,7 @@ add_triton_library(TritonIntelGPUTransforms
   OptimizeDotOperands.cpp
   OptimizeReductionLocality.cpp
   Pipeliner/MatmulLoopPipeline.cpp
+  Pipeliner/PrefetchCostModel.cpp
   Pipeliner/SoftwarePipeliner.cpp
   ReduceDataDuplication.cpp
   ReduceVariableLiveness.cpp

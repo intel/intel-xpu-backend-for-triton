@@ -5,6 +5,7 @@
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/Triton/Transforms/ArithTypeConversion.h"
 #include "triton/Dialect/Triton/Transforms/FunctionTypeConversion.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -229,6 +230,13 @@ Value generateOther(OpBuilder &builder, Location loc, Type scalarTy,
                     ArrayRef<int64_t> blockShape,
                     Value paddingOption = nullptr) {
   auto blockTy = RankedTensorType::get(blockShape, scalarTy);
+  if (isa<triton::PackedFloat4E2M1Type, Float8E8M0FNUType>(scalarTy)) {
+    // Descriptor zero padding fills the encoded bytes with zero bits.
+    auto bitsTy = blockTy.clone(builder.getI8Type());
+    auto zero =
+        arith::ConstantOp::create(builder, loc, builder.getZeroAttr(bitsTy));
+    return triton::BitcastOp::create(builder, loc, blockTy, zero);
+  }
   if (paddingOption && mlir::isa<FloatType>(scalarTy)) {
     auto floatTy = mlir::cast<FloatType>(scalarTy);
     auto nan = llvm::APFloat::getNaN(floatTy.getFloatSemantics());
@@ -1286,7 +1294,7 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       // Set tt.divisibility based on host TensorDescriptor guarantees:
       //   base: always 16-byte aligned
       //   non-last strides: stride * elem_bytes % 16 == 0
-      unsigned elemBytes = elemType.getIntOrFloatBitWidth() / 8;
+      unsigned elemBytes = getIntOrFloatOrPtrBitWidth(elemType) / 8;
       unsigned strideDivisibility = 16 / std::max(1u, elemBytes);
 
       pendingAttrs.push_back({basePtr, 16});

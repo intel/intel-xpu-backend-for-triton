@@ -1237,10 +1237,8 @@ constexpr const char BUILTIN_BFTOHF8[] =
     "__builtin_spirv_ClampConvertBF16ToE4M3INTEL";
 constexpr const char BUILTIN_BFTOBF8[] =
     "__builtin_spirv_ClampConvertBF16ToE5M2INTEL";
-constexpr const char BUILTIN_HF8TOHF[] =
-    "__builtin_spirv_ConvertE4M3ToFP16INTEL";
-constexpr const char BUILTIN_BF8TOHF[] =
-    "__builtin_spirv_ConvertE5M2ToFP16INTEL";
+constexpr const char BUILTIN_HF8TOHF[] = "__builtin_spirv_ConvertE4M3ToFP16EXT";
+constexpr const char BUILTIN_BF8TOHF[] = "__builtin_spirv_ConvertE5M2ToFP16EXT";
 
 // Call the builtin function BaseName. If the
 // input size > 1, pack the values in vectors of size pow 2 <= MaxVecSize.
@@ -2127,8 +2125,6 @@ struct AbsFOpConversion
   }
 };
 
-// FIXME: Remove this IGC W/A (#8626).
-//
 // Without native bf16 arithmetic (LTS drivers), a bf16 `math.fma` is computed
 // in f32 and rounded back once. `arith-emulate-unsupported-floats` only widens
 // arith ops, so it never reaches `math.fma`. This is exact for the
@@ -2155,12 +2151,7 @@ struct FmaOpConversion
       c = intel::convertBf16ToFp32(loc, rewriter, c);
       elemTy = f32_ty;
     }
-    if (!elemTy.isF32())
-      return {LLVM::FMAOp::create(rewriter, loc, elemTy, a, b, c)};
-    auto fmf = LLVM::FastmathFlagsAttr::get(rewriter.getContext(),
-                                            LLVM::FastmathFlags::contract);
-    Value mul = LLVM::FMulOp::create(rewriter, loc, elemTy, a, b, fmf);
-    Value res = LLVM::FAddOp::create(rewriter, loc, elemTy, mul, c, fmf);
+    Value res = LLVM::FMAOp::create(rewriter, loc, elemTy, a, b, c);
     if (widenBf16)
       res = intel::convertFp32ToBf16(loc, rewriter, res, RoundingMode::RTNE);
     return {res};

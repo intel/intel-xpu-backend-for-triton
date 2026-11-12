@@ -232,6 +232,13 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_ALLOW_FP_FUSION=1` allows kernels to control implicit fp fusion through
   `enable_fp_fusion`. Without this opt-in, implicit fusion is disabled. Explicit
   fused operations such as `tl.fma` are unchanged.
+- `TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL=1` (Intel XPU) lets the software pipeliner
+  drop the prefetch of a dot operand whose loads skip most of each fetched cache line
+  (for example A in a split-K GEMM) when its cost model predicts a gain. Off by default:
+  on the B580 it speeds up long split-K loops launched over many waves, but it can be
+  slower on small grids and at some operand row pitches. It is also a kernel option
+  (`prefetch_cost_model=True`, usable as a `triton.Config` key), so the autotuner can
+  try both settings.
 - `MLIR_ENABLE_DIAGNOSTICS=<comma-separated>` controls diagnostic emission in MLIR.
   Options are: `warnings`, `remarks`, `stacktraces`, `operations`.
   Use comma-separated values to customize output. For example,
