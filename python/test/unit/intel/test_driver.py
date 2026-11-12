@@ -569,6 +569,8 @@ def test_benchmarker_warms_up_flush_before_estimate(device, monkeypatch, grf_mod
     ("default", "", "default"),
     ("default", " -cl-intel-256-GRF-per-thread", "256"),
     ("default", " -cl-intel-512-GRF-per-thread", "512"),
+    ("default", " -cl-intel-192-GRF-per-thread", "192"),
+    ("default", " -cl-opt-disable -cl-intel-256-GRF-per-thread", "256"),
     ("auto", "", "default"),
     ("auto", " -cl-intel-enable-auto-large-GRF-mode", "default"),
     ("128", "", "128"),

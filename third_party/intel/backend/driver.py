@@ -827,10 +827,8 @@ def _grf_mode_of(metadata):
     if metadata.grf_mode != "default":
         return metadata.grf_mode  # explicit: 128, 160, 192, 256 or 512
     # The mode of a `default` kernel can still be raised by the large-GRF retry, which sets a build flag.
-    for mode in ("128", "256", "512"):
-        if f"-cl-intel-{mode}-GRF-per-thread" in metadata.build_flags:
-            return mode
-    return "default"
+    match = re.search(r"-cl-intel-(\d+)-GRF-per-thread", metadata.build_flags)
+    return match.group(1) if match else "default"
 
 
 class _BenchmarkState(threading.local):
