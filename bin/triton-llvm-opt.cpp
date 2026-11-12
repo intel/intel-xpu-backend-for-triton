@@ -79,6 +79,12 @@ static cl::opt<bool> LegalizeI1VectorMemory(
     llvm::cl::desc("rewrite `<N x i1>` loads and stores as integer accesses"),
     cl::init(false));
 
+static cl::opt<bool> ExpandFmaToContractPair(
+    "expand-fma-contract-pair",
+    llvm::cl::desc("rewrite scalar f32 llvm.fma into a contractable "
+                   "fmul/fadd pair (multiply first)"),
+    cl::init(false));
+
 static cl::opt<bool> NVPTXVectorize(
     "nvptx-vectorize",
     llvm::cl::desc("run hardware-aware NVPTX arithmetic vectorization"),
@@ -116,6 +122,8 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
       mpm.addPass(ExpandSubByteVectorBitcastPass());
     if (LegalizeI1VectorMemory)
       mpm.addPass(LegalizeI1VectorMemoryPass());
+    if (ExpandFmaToContractPair)
+      mpm.addPass(ExpandFmaToContractPairPass());
     llvm::FunctionPassManager fpm;
     if (BreakStructPhiNodes)
       fpm.addPass(BreakStructPhiNodesPass());
