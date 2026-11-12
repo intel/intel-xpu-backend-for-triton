@@ -222,6 +222,7 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
 /// pipeliner's loop guard), each as `extraPred` in `RowLimitMaskInfo`: the
 /// caller ANDs them into its own per-message select.
 struct BoundaryMaskInfo {
+  unsigned boundedDim; // the pitch dim, as in `RowLimitMaskInfo`
   Value rowBase, rowBound;
   SmallVector<Value> extraPreds;
 };

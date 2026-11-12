@@ -352,9 +352,8 @@ private:
     // silently apply the bound to the wrong dimension; fall back to the
     // per-element masked path, redoing tile selection with the mask's real
     // axis info now that it is no longer absorbed into base_height.
-    unsigned maskPitchDim = (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
-    if (rowLimitMask && pitchDim != maskPitchDim) {
-      LDBG("Row-limit mask bounds dim " << maskPitchDim
+    if (rowLimitMask && rowLimitMask->boundedDim != pitchDim) {
+      LDBG("Row-limit mask bounds dim " << rowLimitMask->boundedDim
                                         << " but tile pitch dim is " << pitchDim
                                         << "; falling back to "
                                            "masked load: "
@@ -528,7 +527,7 @@ private:
       // adjusts per message and never forwards a non-positive base_height.
       heightOperand = ttgi::computeRowLimitHeight(
           builder, loc, rowLimitMask->rowBound, rowLimitMask->rowBase,
-          tensorTy.getShape()[maskPitchDim]);
+          tensorTy.getShape()[rowLimitMask->boundedDim]);
     } else {
       // If mask is present but other is absent, create a zero splat as the
       // default padding value (the verifier requires 'other' when 'mask' is

@@ -1424,7 +1424,7 @@ matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
   SmallVector<Value> conjuncts;
   collectConjuncts(mask, visited, conjuncts);
 
-  BoundaryMaskInfo info;
+  BoundaryMaskInfo info{pitchDim, {}, {}, {}};
   for (Value conjunct : conjuncts) {
     std::optional<SmallVector<unsigned>> varying =
         varyingDims(conjunct, tensorShape);
