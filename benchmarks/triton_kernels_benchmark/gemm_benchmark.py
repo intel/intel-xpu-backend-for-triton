@@ -17,6 +17,7 @@ import triton.language as tl
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import gemm_streamk_benchmark
 from triton_kernels_benchmark.benchmark_testing import (DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY, get_xpu_extension)
+from triton_kernels_benchmark.gemm_tile_utils import load_matrix_tile, make_matrix_tile_ptr, store_matrix_tile
 
 sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
 
@@ -85,7 +86,7 @@ def matmul_kernel_with_tensor_descriptors(
         stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
-        transpose_a: tl.constexpr, transpose_b: tl.constexpr):
+        transpose_a: tl.constexpr, transpose_b: tl.constexpr):  # pylint: disable=unused-argument
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -96,51 +97,21 @@ def matmul_kernel_with_tensor_descriptors(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    if transpose_a:
-        # Tensor descriptors require every non-innermost stride to be 16-byte aligned. For A^T the
-        # (K, M) row stride is M elements, which is misaligned for small M (e.g. M=1, M=4 in bf16),
-        # so load A through a tensor of pointers in that case.
-        A_DESC_ALIGNED: tl.constexpr = (stride_ak * (a_ptr.dtype.element_ty.primitive_bitwidth // 8)) % 16 == 0
-        if A_DESC_ALIGNED:
-            a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(K, M), strides=(stride_ak, stride_am),
-                                               block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_M))
-    else:
-        a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                           block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
-    if transpose_b:
-        b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(N, K), strides=(stride_bn, stride_bk),
-                                           block_shape=(BLOCK_SIZE_N, BLOCK_SIZE_K))
-    else:
-        b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                           block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
-
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_k = tl.arange(0, BLOCK_SIZE_K)
+    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
+    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
-        if transpose_a:
-            if A_DESC_ALIGNED:
-                a = a_desc.load([off_k, pid_m * BLOCK_SIZE_M]).T
-            else:
-                # Load in the descriptor's (K, M) orientation and transpose, like the aligned path,
-                # so the load is contiguous along M rather than strided as an (M, K) load would be.
-                a_ptrs = a_ptr + (off_k + offs_k)[:, None] * stride_ak + offs_am[None, :] * stride_am
-                a_mask = ((off_k + offs_k)[:, None] < K) & (offs_am[None, :] < M)
-                a = tl.load(a_ptrs, mask=a_mask, other=0.0).T
-        else:
-            a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        if transpose_b:
-            b = b_desc.load([pid_n * BLOCK_SIZE_N, off_k]).T
-        else:
-            b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+        a = load_matrix_tile(a_desc, M, K, stride_am, stride_ak, pid_m * BLOCK_SIZE_M, off_k, BLOCK_SIZE_M,
+                             BLOCK_SIZE_K)
+        b = load_matrix_tile(b_desc, K, N, stride_bk, stride_bn, off_k, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_K,
+                             BLOCK_SIZE_N)
         accumulator = tl.dot(a, b, accumulator)
         off_k += BLOCK_SIZE_K
     c = accumulator.to(tl.float32)
 
-    c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
-    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
+    store_matrix_tile(c_ptr, c, M, N, stride_cm, stride_cn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_M,
+                      BLOCK_SIZE_N)
 
 
 def get_matmul_batched_autotune_configs() -> List[triton.Config]:
@@ -220,39 +191,22 @@ def matmul_kernel_with_tensor_descriptors_batched(
     offset_a = bid.to(tl.int64) * stride_az
     offset_b = bid.to(tl.int64) * stride_bz
 
-    if transpose_a:
-        a_desc = tl.make_tensor_descriptor(base=a_ptr + offset_a, shape=(K, M), strides=(stride_ak, stride_am),
-                                           block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_M))
-    else:
-        a_desc = tl.make_tensor_descriptor(base=a_ptr + offset_a, shape=(M, K), strides=(stride_am, stride_ak),
-                                           block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
-    if transpose_b:
-        b_desc = tl.make_tensor_descriptor(base=b_ptr + offset_b, shape=(N, K), strides=(stride_bn, stride_bk),
-                                           block_shape=(BLOCK_SIZE_N, BLOCK_SIZE_K))
-    else:
-        b_desc = tl.make_tensor_descriptor(base=b_ptr + offset_b, shape=(K, N), strides=(stride_bk, stride_bn),
-                                           block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
-
+    a_desc = make_matrix_tile_ptr(a_ptr + offset_a, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
+    b_desc = make_matrix_tile_ptr(b_ptr + offset_b, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
-        if transpose_a:
-            a = a_desc.load([off_k, pid_m * BLOCK_SIZE_M]).T
-        else:
-            a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        if transpose_b:
-            b = b_desc.load([pid_n * BLOCK_SIZE_N, off_k]).T
-        else:
-            b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+        a = load_matrix_tile(a_desc, M, K, stride_am, stride_ak, pid_m * BLOCK_SIZE_M, off_k, BLOCK_SIZE_M,
+                             BLOCK_SIZE_K)
+        b = load_matrix_tile(b_desc, K, N, stride_bk, stride_bn, off_k, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_K,
+                             BLOCK_SIZE_N)
         accumulator = tl.dot(a, b, accumulator)
         off_k += BLOCK_SIZE_K
     c = accumulator.to(tl.float32)
 
     offset_c = bid.to(tl.int64) * stride_cz
-    c_desc = tl.make_tensor_descriptor(base=c_ptr + offset_c, shape=(M, N), strides=(stride_cm, stride_cn),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
-
-    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
+    store_matrix_tile(c_ptr + offset_c, c, M, N, stride_cm, stride_cn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N,
+                      BLOCK_SIZE_M, BLOCK_SIZE_N)
 
 
 # We can now create a convenience wrapper function that only takes two input tensors,
