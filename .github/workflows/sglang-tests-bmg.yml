@@ -11,7 +11,7 @@ on:
       - scripts/sglang/**
       - .github/pins/pytorch.txt
       - scripts/patch-pytorch.sh
-      - scripts/pytorch-*.patch
+      - scripts/patch/**
   schedule:
     # Thursday/Sunday 6:05AM PST (UTC-8) or 7:05AM PDT (UTC-7).
     - cron: "5 14 * * THU"

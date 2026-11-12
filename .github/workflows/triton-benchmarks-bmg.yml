@@ -15,7 +15,7 @@ on:
       - '!benchmarks/triton_kernels_benchmark/sglang/**'
       - .github/pins/pytorch.txt
       - scripts/patch-pytorch.sh
-      - scripts/pytorch-*.patch
+      - scripts/patch/**
 
 jobs:
   build-wheel:

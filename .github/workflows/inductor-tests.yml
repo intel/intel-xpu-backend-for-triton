@@ -35,7 +35,7 @@ on:
     paths:
       - .github/pins/pytorch.txt
       - scripts/patch-pytorch.sh
-      - scripts/pytorch-*.patch
+      - scripts/patch/**
       - .github/workflows/inductor-tests.yml
       - .github/workflows/inductor-tests-reusable.yml
 

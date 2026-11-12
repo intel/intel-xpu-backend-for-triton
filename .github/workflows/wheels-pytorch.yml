@@ -8,7 +8,7 @@ on:
     paths:
       - .github/pins/pytorch.txt
       - scripts/patch-pytorch.sh
-      - scripts/pytorch-*.patch
+      - scripts/patch/**
 
 permissions: read-all
 

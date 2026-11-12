@@ -21,7 +21,7 @@ on:
       - .github/workflows/nightly-wheels.yml
       - .github/pins/pytorch.txt
       - scripts/patch-pytorch.sh
-      - scripts/pytorch-*.patch
+      - scripts/patch/**
   pull_request:
     branches:
       - main
@@ -29,7 +29,7 @@ on:
       - .github/workflows/nightly-wheels.yml
       - .github/pins/pytorch.txt
       - scripts/patch-pytorch.sh
-      - scripts/pytorch-*.patch
+      - scripts/patch/**
 
 permissions: read-all
 
