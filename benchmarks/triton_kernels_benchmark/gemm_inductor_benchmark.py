@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Compare TorchInductor ATen/Triton GEMM backends and manual grouped tile-order/Split-K/Stream-K GEMM.
 
 The cases are the FP16 GEMMs for which ATen beat Triton in disassembles/log.txt.
@@ -14,22 +13,17 @@ one GEMM per batch; their timings include zeroing and all launches. All manual
 providers accumulate in FP32, add any addmm bias, and return FP16 outputs.
 """
 
-from __future__ import annotations
-
 import argparse
 import dataclasses
-import logging
-import math
-import sys
 from dataclasses import dataclass
-from pathlib import Path
-from typing import TYPE_CHECKING
 
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import torch
+import torch._inductor.config as inductor_config
+import triton
 
-if TYPE_CHECKING:
-    import torch
+# triton_kernels_benchmark is imported where it is used, because importing it fails without a GPU and --list must work
+# without one.
+# pylint: disable=import-outside-toplevel
 
 
 @dataclass(frozen=True)
@@ -79,36 +73,38 @@ GEMM_CASES = (
     GemmCase("addmm", ((256, 257), (256, 4544), (4544, 257)), ((0, 1), (4544, 1), (257, 1)), 0.039896, 0.071354),
 )
 
+# Benchmark mode -> report label.
+MODES = {
+    "aten_only": "Inductor ATEN",
+    "triton_aten": "Inductor TRITON+ATEN",
+    "triton_only": "Inductor TRITON",
+    "manual_grouped": "Manual Triton grouped tiles",
+    "manual_splitk": "Manual Triton Split-K",
+    "manual_streamk": "Manual Triton Stream-K",
+}
+# Inductor mode -> max_autotune_gemm_backends.
+INDUCTOR_BACKENDS = {"aten_only": "ATEN", "triton_aten": "TRITON,ATEN", "triton_only": "TRITON"}
 
-def _sync():
-    import torch
 
-    if torch.xpu.is_available():
-        torch.xpu.synchronize()
-    elif torch.cuda.is_available():
-        torch.cuda.synchronize()
+def storage_size(shape: tuple[int, ...], stride: tuple[int, ...]) -> int:
+    """Number of elements a strided tensor spans."""
+    return 1 + sum((dim - 1) * step for dim, step in zip(shape, stride))
 
 
 def make_inputs(case: GemmCase) -> tuple[torch.Tensor, ...]:
-    import torch
-    from triton_kernels_benchmark.benchmark_testing import DEVICE
-
-    inputs = []
-    for shape, stride in zip(case.shapes, case.strides):
-        storage_size = 1 + sum((dim - 1) * step for dim, step in zip(shape, stride))
-        storage = torch.randn(storage_size, device=DEVICE, dtype=torch.float16)
-        inputs.append(storage.as_strided(shape, stride))
-    return tuple(inputs)
+    return tuple(
+        torch.randn(storage_size(shape, stride), device="xpu", dtype=torch.float16).as_strided(shape, stride)
+        for shape, stride in zip(case.shapes, case.strides))
 
 
 def _dedup_gemm_configs(configs):
-    out = []
     seen = set()
-    for cfg_item in configs:
-        key = tuple(dataclasses.asdict(cfg_item).items())
+    out = []
+    for config in configs:
+        key = tuple(dataclasses.asdict(config).items())
         if key not in seen:
             seen.add(key)
-            out.append(cfg_item)
+            out.append(config)
     return out
 
 
@@ -118,227 +114,86 @@ def _register_custom_xpu_mm_heuristic():
     This matches the logic in `gemm_bmm_80x256x640.py` so the compiled path still
     exercises the same autotune search space and settings as the source reproducer.
     """
-    try:
-        from torch._inductor.template_heuristics.triton import (
-            BaseConfig,
-            GemmConfig,
-            MMTemplateConfigMixin,
-            XPUConfigHeuristic,
-        )
-        from torch._inductor.template_heuristics.triton_addmm import AddMMConfigMixin
-        from torch._inductor.kernel.bmm import bmm_template
-        from torch._inductor.kernel.mm import mm_template
-        from torch._inductor.template_heuristics.registry import _HEURISTIC_CACHE, register_template_heuristic
+    from torch._inductor.heuristics.template.registry import _HEURISTIC_CACHE, register_template_heuristic
+    from torch._inductor.heuristics.template.triton import GemmConfig, MMTemplateConfigMixin, XPUConfigHeuristic
+    from torch._inductor.heuristics.template.triton_addmm import AddMMConfigMixin
+    from torch._inductor.kernel.bmm import bmm_template
+    from torch._inductor.kernel.mm import mm_template
 
-        custom_mm_configs: list[BaseConfig] = [
-            GemmConfig(128, 128, 64, 2, 32),
-            GemmConfig(128, 128, 32, 2, 16),
-            GemmConfig(16, 512, 64, 2, 8),
-            GemmConfig(32, 256, 32, 2, 16),
-            GemmConfig(32, 256, 128, 3, 32),
-            GemmConfig(128, 128, 64, 2, 16),
-            GemmConfig(128, 128, 64, 3, 16),
-            GemmConfig(128, 128, 64, 3, 32),
-            GemmConfig(128, 128, 128, 2, 16),
-            GemmConfig(128, 256, 16, 4, 32),
-            GemmConfig(128, 256, 32, 3, 32),
-            GemmConfig(128, 256, 64, 2, 32),
-            GemmConfig(128, 512, 32, 2, 32),
-            GemmConfig(128, 512, 32, 3, 32),
-            GemmConfig(128, 512, 32, 4, 32),
-            GemmConfig(256, 128, 64, 2, 32),
-            GemmConfig(256, 256, 32, 5, 32),
-            GemmConfig(512, 128, 32, 1, 32),
-        ]
+    custom_mm_configs = [
+        GemmConfig(128, 128, 64, 2, 32),
+        GemmConfig(128, 128, 32, 2, 16),
+        GemmConfig(16, 512, 64, 2, 8),
+        GemmConfig(32, 256, 32, 2, 16),
+        GemmConfig(32, 256, 128, 3, 32),
+        GemmConfig(128, 128, 64, 2, 16),
+        GemmConfig(128, 128, 64, 3, 16),
+        GemmConfig(128, 128, 64, 3, 32),
+        GemmConfig(128, 128, 128, 2, 16),
+        GemmConfig(128, 256, 16, 4, 32),
+        GemmConfig(128, 256, 32, 3, 32),
+        GemmConfig(128, 256, 64, 2, 32),
+        GemmConfig(128, 512, 32, 2, 32),
+        GemmConfig(128, 512, 32, 3, 32),
+        GemmConfig(128, 512, 32, 4, 32),
+        GemmConfig(256, 128, 64, 2, 32),
+        GemmConfig(256, 256, 32, 5, 32),
+        GemmConfig(512, 128, 32, 1, 32),
+    ]
 
-        @register_template_heuristic(mm_template.uid, "xpu")
-        @register_template_heuristic(bmm_template.uid, "xpu")
-        class MyXPUMMTemplateConfigHeuristic(MMTemplateConfigMixin, XPUConfigHeuristic):
+    @register_template_heuristic(mm_template.uid, "xpu")
+    @register_template_heuristic(bmm_template.uid, "xpu")
+    class MyXPUMMTemplateConfigHeuristic(MMTemplateConfigMixin, XPUConfigHeuristic):
 
-            def __init__(self) -> None:
-                super().__init__()
-                self.mm_configs.extend(custom_mm_configs)
-                self.mm_configs = _dedup_gemm_configs(self.mm_configs)
-                self.exhaustive_configs = self.mm_configs
+        def __init__(self) -> None:
+            super().__init__()
+            self.mm_configs = _dedup_gemm_configs([*self.mm_configs, *custom_mm_configs])
+            self.exhaustive_configs = self.mm_configs
 
-        @register_template_heuristic(mm_template.uid, "xpu", op_name="addmm")
-        @register_template_heuristic(bmm_template.uid, "xpu", op_name="baddbmm")
-        class MyXPUAddmmTemplateConfigHeuristic(AddMMConfigMixin, MyXPUMMTemplateConfigHeuristic):
-            pass
+    @register_template_heuristic(mm_template.uid, "xpu", op_name="addmm")
+    @register_template_heuristic(bmm_template.uid, "xpu", op_name="baddbmm")
+    class MyXPUAddmmTemplateConfigHeuristic(AddMMConfigMixin, MyXPUMMTemplateConfigHeuristic):  # pylint: disable=unused-variable
+        pass
 
-        _HEURISTIC_CACHE.clear()
-    except Exception as exc:  # noqa: BLE001
-        logging.warning("Failed to register custom XPU MM heuristic: %s", exc)
+    _HEURISTIC_CACHE.clear()
 
 
-def _gemm_dimensions(case: GemmCase) -> tuple[int, int, int, int]:
-    if case.op == "bmm":
-        (batch, m, k), (_, _, n) = case.shapes
-        return batch, m, n, k
-    if case.op == "mm":
-        (m, k), (_, n) = case.shapes
-        return 1, m, n, k
-    (m, n), (_, k), (_, _) = case.shapes
-    return 1, m, n, k
-
-
-def _memory_bytes(case: GemmCase) -> int:
-    batch, m, n, _ = _gemm_dimensions(case)
-    input_elements = sum(math.prod(shape) for shape in case.shapes)
-    output_elements = batch * m * n
-    return 2 * (input_elements + output_elements)
-
-
-def _perf_rate(bytes_count: float, ms: float) -> float:
-    if ms <= 0:
-        return float("inf")
-    return bytes_count * 1e-9 / (ms * 1e-3)
-
-
-def _tflops(batch: int, m: int, n: int, k: int, ms: float) -> float:
-    if ms <= 0:
-        return float("inf")
-    flops = 2.0 * batch * m * n * k
-    return flops * 1e-12 / (ms * 1e-3)
-
-
-def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...]):
-    import torch
-    import triton
+def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...]) -> torch.Tensor:
+    from triton_kernels_benchmark import gemm_splitk_benchmark, gemm_streamk_benchmark
+    from triton_kernels_benchmark.gemm_benchmark import (matmul_kernel_with_tensor_descriptors,
+                                                         matmul_kernel_with_tensor_descriptors_batched)
 
     bias = inputs[0] if len(inputs) == 3 else None
     a, b = inputs[-2:]
     m, k = a.shape[-2:]
     n = b.shape[-1]
-    output = torch.empty((*a.shape[:-2], m, n), device=a.device, dtype=torch.float32)
+    # Split-K accumulates with atomics, so its output must start at zero.
+    alloc = torch.zeros if mode == "manual_splitk" else torch.empty
+    output = alloc((*a.shape[:-2], m, n), device=a.device, dtype=torch.float32)
 
     if mode == "manual_grouped":
-        from triton_kernels_benchmark.gemm_benchmark import (
-            matmul_kernel_with_tensor_descriptors,
-            matmul_kernel_with_tensor_descriptors_batched,
-        )
-
         assert all(x.data_ptr() % 16 == 0 for x in (a, b, output)), "Matrix base addresses must be 16-byte aligned"
-        grid = lambda meta: (
-            triton.cdiv(m, meta["BLOCK_SIZE_M"]) * triton.cdiv(n, meta["BLOCK_SIZE_N"]),
-            a.shape[0] if a.ndim == 3 else 1,
-        )
+        grid = lambda meta: (triton.cdiv(m, meta["BLOCK_SIZE_M"]) * triton.cdiv(n, meta["BLOCK_SIZE_N"]), a.shape[0]
+                             if a.ndim == 3 else 1)
         if a.ndim == 3:
-            matmul_kernel_with_tensor_descriptors_batched[grid](
-                a,
-                b,
-                output,
-                a.shape[0],
-                m,
-                n,
-                k,
-                *a.stride(),
-                *b.stride(),
-                *output.stride(),
-            )
+            matmul_kernel_with_tensor_descriptors_batched[grid](a, b, output, a.shape[0], m, n, k, *a.stride(),
+                                                                *b.stride(), *output.stride())
         else:
-            matmul_kernel_with_tensor_descriptors[grid](
-                a,
-                b,
-                output,
-                m,
-                n,
-                k,
-                *a.stride(),
-                *b.stride(),
-                *output.stride(),
-            )
+            matmul_kernel_with_tensor_descriptors[grid](a, b, output, m, n, k, *a.stride(), *b.stride(),
+                                                        *output.stride())
     else:
-        if mode == "manual_splitk":
-            from triton_kernels_benchmark.gemm_splitk_benchmark import matmul
-        elif mode == "manual_streamk":
-            from triton_kernels_benchmark.gemm_streamk_benchmark import matmul
-        else:
-            raise ValueError(f"Unsupported manual GEMM mode: {mode}")
-        if a.ndim == 3:
-            for batch in range(a.shape[0]):
-                c_batch = output[batch]
-                if mode == "manual_splitk":
-                    c_batch.zero_()
-                matmul(a[batch], b[batch], c_batch)
-        else:
-            if mode == "manual_splitk":
-                output.zero_()
-            matmul(a, b, output)
+        matmul = {"manual_splitk": gemm_splitk_benchmark.matmul, "manual_streamk": gemm_streamk_benchmark.matmul}[mode]
+        # Both kernels are 2D only, so a bmm runs one GEMM per batch.
+        for a_i, b_i, c_i in zip(a, b, output) if a.ndim == 3 else [(a, b, output)]:
+            matmul(a_i, b_i, c_i)
 
-    result = output
     if bias is not None:
-        result = result + bias
-    return result.to(a.dtype)
-
-
-def _benchmark_mode(mode: str, operation, inputs: tuple[torch.Tensor, ...]):
-    import torch
-    import torch._inductor.config as cfg
-    import triton_kernels_benchmark as benchmark_suite
-
-    do_bench = benchmark_suite.get_do_bench(n_warmup=200, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
-
-    if mode.startswith("manual_"):
-        with torch.no_grad():
-            fn = lambda: _manual_gemm(mode, inputs)
-            torch.testing.assert_close(fn(), operation(*inputs), rtol=1e-2, atol=5e-2)
-            _, min_ms, max_ms, mean_ms, cv = do_bench(fn)
-        return {
-            "mode": mode,
-            "mean_ms": mean_ms,
-            "min_ms": min_ms,
-            "max_ms": max_ms,
-            "cv": cv,
-        }
-
-    if mode in {"aten_only", "triton_aten", "triton_only"}:
-        torch.compiler.reset()
-        backends = {
-            "aten_only": "ATEN",
-            "triton_aten": "TRITON,ATEN",
-            "triton_only": "TRITON",
-        }[mode]
-        with cfg.patch(
-                max_autotune_gemm=True,
-                max_autotune_gemm_backends=backends,
-                force_disable_caches=True,
-        ):
-            compiled = torch.compile(
-                operation,
-                backend="inductor",
-                mode="max-autotune-no-cudagraphs",
-            )
-            with torch.no_grad():
-                for _ in range(3):
-                    compiled(*inputs)
-                _sync()
-                torch.testing.assert_close(compiled(*inputs), operation(*inputs), rtol=1e-2, atol=5e-2)
-                _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: compiled(*inputs))
-        del compiled
-        torch.compiler.reset()
-        return {
-            "mode": mode,
-            "mean_ms": mean_ms,
-            "min_ms": min_ms,
-            "max_ms": max_ms,
-            "cv": cv,
-        }
-
-    raise ValueError(f"Unsupported benchmark mode: {mode}")
+        output = output + bias
+    return output.to(a.dtype)
 
 
 def get_benchmark(case_ids: list[int], modes: list[str]):
     import triton_kernels_benchmark as benchmark_suite
-
-    labels = {
-        "aten_only": "Inductor ATEN",
-        "triton_aten": "Inductor TRITON+ATEN",
-        "triton_only": "Inductor TRITON",
-        "manual_grouped": "Manual Triton grouped tiles",
-        "manual_splitk": "Manual Triton Split-K",
-        "manual_streamk": "Manual Triton Stream-K",
-    }
 
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
@@ -346,7 +201,7 @@ def get_benchmark(case_ids: list[int], modes: list[str]):
             x_vals=case_ids,
             line_arg="mode",
             line_vals=modes,
-            line_names=[labels[mode] for mode in modes],
+            line_names=[MODES[mode] for mode in modes],
             styles=[("blue", "-"), ("green", "-"), ("green", "--"), ("orange", "-"), ("red", "-"),
                     ("purple", "-")][:len(modes)],
             ylabel=["GB/s", "TFlops"],
@@ -354,88 +209,76 @@ def get_benchmark(case_ids: list[int], modes: list[str]):
             args={},
         ))
     def benchmark(case: int, mode: str):
-        import torch
-
+        do_bench = benchmark_suite.get_do_bench(n_warmup=200, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         gemm_case = GEMM_CASES[case - 1]
         inputs = make_inputs(gemm_case)
         operation = getattr(torch, gemm_case.op)
-        result = _benchmark_mode(mode, operation, inputs)
-        batch, m, n, k = _gemm_dimensions(gemm_case)
-        bytes_count = _memory_bytes(gemm_case)
+        torch_fn = lambda: operation(*inputs)
 
-        gbps = lambda ms: _perf_rate(bytes_count, ms)
-        tflops = lambda ms: _tflops(batch, m, n, k, ms)
-        return (
-            (gbps(result["mean_ms"]), gbps(result["max_ms"]), gbps(result["min_ms"])),
-            (tflops(result["mean_ms"]), tflops(result["max_ms"]), tflops(result["min_ms"])),
-            result["cv"],
-        )
+        if mode.startswith("manual_"):
+            manual_fn = lambda: _manual_gemm(mode, inputs)
+            benchmark_suite.assert_close(manual_fn, torch_fn, atol=5e-2, rtol=1e-2, err_msg=f"{mode} to torch")
+            _, min_ms, max_ms, mean_ms, cv = do_bench(manual_fn)
+        else:
+            torch.compiler.reset()
+            with inductor_config.patch(max_autotune_gemm=True, max_autotune_gemm_backends=INDUCTOR_BACKENDS[mode],
+                                       force_disable_caches=True):
+                compiled = torch.compile(operation, mode="max-autotune-no-cudagraphs")
+                compiled_fn = lambda: compiled(*inputs)
+                compiled_fn()  # Compile and autotune outside the timed region.
+                benchmark_suite.assert_close(compiled_fn, torch_fn, atol=5e-2, rtol=1e-2, err_msg=f"{mode} to torch")
+                _, min_ms, max_ms, mean_ms, cv = do_bench(compiled_fn)
+            torch.compiler.reset()
+
+        a, b = inputs[-2:]
+        batch = a.shape[0] if a.ndim == 3 else 1
+        m, k = a.shape[-2:]
+        n = b.shape[-1]
+        # FP16 elements the inputs span (an addmm bias with stride 0 reads only one row), plus the FP16 output.
+        num_bytes = 2 * (sum(storage_size(x.shape, x.stride()) for x in inputs) + batch * m * n)
+        gbps = lambda ms: num_bytes * 1e-9 / (ms * 1e-3)
+        tflops = lambda ms: 2 * batch * m * n * k * 1e-12 / (ms * 1e-3)
+        return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
     return benchmark
 
 
+def print_cases(case_ids: list[int]):
+    for case_id in case_ids:
+        case = GEMM_CASES[case_id - 1]
+        print(f"{case_id}: {case.op}, shapes={case.shapes}, strides={case.strides}")
+        print(f"   log winner: ATen={case.logged_aten_ms:.6f} ms, best Triton={case.logged_triton_ms:.6f} ms",
+              flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "--mode", choices=[
-            "aten_only",
-            "triton_aten",
-            "triton_only",
-            "manual_grouped",
-            "manual_splitk",
-            "manual_streamk",
-            "all",
-        ], default="all")
-    parser.add_argument(
-        "--case",
-        type=int,
-        action="append",
-        dest="case_ids",
-        help="one-based case number; repeat to select multiple",
-    )
+    parser.add_argument("--mode", choices=[*MODES, "all"], default="all")
+    parser.add_argument("--case", type=int, action="append", dest="case_ids",
+                        help="one-based case number; repeat to select multiple")
     parser.add_argument("--reports", default="", help="directory for benchmark-suite CSV/plot reports")
     parser.add_argument("--n-runs", type=int, default=1, help="number of benchmark-suite report repetitions")
-    parser.add_argument("--list", action="store_true", help="list cases without requiring an XPU")
+    parser.add_argument("--list", action="store_true", help="list cases and exit")
     args = parser.parse_args()
 
     case_ids = args.case_ids or list(range(1, len(GEMM_CASES) + 1))
     if any(case_id <= 0 or case_id > len(GEMM_CASES) for case_id in case_ids):
         parser.error(f"--case must be between 1 and {len(GEMM_CASES)}")
+    print_cases(case_ids)
     if args.list:
-        for case_id in case_ids:
-            case = GEMM_CASES[case_id - 1]
-            print(f"{case_id}: {case.op}, shapes={case.shapes}, strides={case.strides}")
-            print(f"   log winner: ATen={case.logged_aten_ms:.6f} ms, "
-                  f"best Triton={case.logged_triton_ms:.6f} ms")
         return
-
-    import torch
 
     if not torch.xpu.is_available():
         raise RuntimeError("This benchmark requires an XPU-enabled PyTorch installation and an available Intel GPU")
     torch.manual_seed(0)
-    if args.mode in {"all", "triton_aten", "triton_only"}:
+    modes = list(MODES) if args.mode == "all" else [args.mode]
+    if {"triton_aten", "triton_only"} & set(modes):
         _register_custom_xpu_mm_heuristic()
     print(f"Device: {torch.xpu.get_device_name()}", flush=True)
-    for case_id in case_ids:
-        case = GEMM_CASES[case_id - 1]
-        print(f"\nCase {case_id}: {case.op}, shapes={case.shapes}, strides={case.strides}", flush=True)
-        print(
-            f"  log winner: ATen={case.logged_aten_ms:.6f} ms, "
-            f"best Triton={case.logged_triton_ms:.6f} ms",
-            flush=True,
-        )
-    if args.mode == "all":
-        modes = ["aten_only", "triton_aten", "triton_only", "manual_grouped", "manual_splitk", "manual_streamk"]
-    else:
-        modes = [args.mode]
     from triton_kernels_benchmark.benchmark_testing import MarkArgs
 
-    get_benchmark(case_ids, modes).run(
-        show_plots=False,
-        print_data=True,
-        mark_args=MarkArgs(reports=args.reports, n_runs=args.n_runs),
-    )
+    get_benchmark(case_ids, modes).run(show_plots=False, print_data=True,
+                                       mark_args=MarkArgs(reports=args.reports, n_runs=args.n_runs))
 
 
 if __name__ == "__main__":
