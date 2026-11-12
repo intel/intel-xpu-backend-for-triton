@@ -67,3 +67,39 @@ module {
 // CHECK-LABEL: @base_ptr_divisibility
 // Base pointer always gets 16-byte divisibility.
 // CHECK-SAME: %[[PTR:[^:]*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+
+// -----
+
+// Test that a host descriptor of packed fp4 counts one byte per element: the
+// non-last stride gets divisibility 16, as for i8.
+module {
+  tt.func public @shape_divisibility_fp4x2(
+      %arg0: !tt.tensordesc<128x64x!tt.fp4e2m1x2>
+             {tt.shape.0.divisibility = 128 : i32, tt.shape.1.divisibility = 64 : i32},
+      %arg1: i32, %arg2: i32,
+      %arg3: i64, %arg4: i64) -> tensor<128x64x!tt.fp4e2m1x2> {
+    %c0 = arith.constant 0 : i32
+    %0 = tt.descriptor_load %arg0[%c0, %c0] : !tt.tensordesc<128x64x!tt.fp4e2m1x2> -> tensor<128x64x!tt.fp4e2m1x2>
+    tt.return %0 : tensor<128x64x!tt.fp4e2m1x2>
+  }
+}
+
+// CHECK-LABEL: @shape_divisibility_fp4x2
+// CHECK-SAME: %{{[^:]*}}: !tt.ptr<!tt.fp4e2m1x2> {tt.divisibility = 16 : i32}
+// CHECK-SAME: %{{[^:]*}}: i32 {tt.divisibility = 128 : i32}
+// CHECK-SAME: %{{[^:]*}}: i32 {tt.divisibility = 64 : i32}
+// CHECK-SAME: %{{[^:]*}}: i64 {tt.divisibility = 16 : i32}
+
+// -----
+
+// Test that a rank-1 host descriptor of packed fp4 (frontend layout: descriptor,
+// shape, stride) is rewritten without asserting on the element bit width.
+module {
+  tt.func public @host_desc_fp4x2_rank1(%d: !tt.tensordesc<16x!tt.fp4e2m1x2>, %s: i32, %t: i64) {
+    %x = tt.descriptor_load %d[%s] : !tt.tensordesc<16x!tt.fp4e2m1x2> -> tensor<16x!tt.fp4e2m1x2>
+    tt.return
+  }
+}
+
+// CHECK-LABEL: @host_desc_fp4x2_rank1
+// CHECK-SAME: %{{[^:]*}}: !tt.ptr<!tt.fp4e2m1x2> {tt.divisibility = 16 : i32}

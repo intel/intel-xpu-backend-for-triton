@@ -2,6 +2,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <numeric>
@@ -146,7 +147,7 @@ makeTensorDescAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
     return strideVal;
   };
 
-  unsigned elemBytes = ceil<unsigned>(elemTy.getIntOrFloatBitWidth(), 8);
+  unsigned elemBytes = ceil<unsigned>(getIntOrFloatOrPtrBitWidth(elemTy), 8);
   for (unsigned dim = 0; dim < rank; ++dim) {
     // The maximum contiguity is the divisibility of boundary shape, which is
     // the case when stride is 1. Take an example of !tt.ptr<tensor<4x4xi8>>: if
@@ -480,7 +481,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   // Get the pointee type if we have a tensor of ptrs to compute contiguity for
   if (auto ptrTy = dyn_cast<PointerType>(elemTy))
     elemTy = ptrTy.getPointeeType();
-  auto elemNumBits = elemTy.getIntOrFloatBitWidth();
+  auto elemNumBits = getIntOrFloatOrPtrBitWidth(elemTy);
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);

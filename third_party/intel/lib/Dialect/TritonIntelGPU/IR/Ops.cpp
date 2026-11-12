@@ -171,7 +171,7 @@ LogicalResult Subgroup2DBlockLoadFromPtrOp::verify() {
   // a whole number of granules. Only a constant width can be checked here.
   if ((*this)->hasAttr(
           TritonIntelGPUDialect::getBlockIORuntimeColLimitAttrName())) {
-    unsigned elemBits = resultType.getElementTypeBitWidth();
+    unsigned elemBits = getIntOrFloatOrPtrBitWidth(resultType.getElementType());
     if (elemBits % 8 != 0)
       return emitOpError("column-limit width needs byte-sized elements, got ")
              << elemBits << "-bit elements";
@@ -200,7 +200,7 @@ static LogicalResult verifyGatherScatterResultType(Operation *op,
            << resultType;
 
   Type dtype = resultType.getElementType();
-  unsigned bitWidth = dtype.getIntOrFloatBitWidth();
+  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(dtype);
   if (bitWidth > 64)
     return op->emitOpError("dtype cannot be greater than 64 bits");
 

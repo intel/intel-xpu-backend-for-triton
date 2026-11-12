@@ -7,6 +7,8 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -434,6 +436,14 @@ struct LoadStoreConversionBase {
 
         break;
       case PaddingOption::PAD_NAN: {
+        // e2m1 has no NaN encoding, and e8m0 is padded with zero bits like on
+        // the host-descriptor path: both are integers once converted.
+        if (isa<PackedFloat4E2M1Type, Float8E8M0FNUType>(
+                tensorType.getElementType())) {
+          other = LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
+                                           rewriter.getZeroAttr(valueElemTy));
+          break;
+        }
         assert(!valueElemTy.isIntOrIndex() &&
                "Expect element type to be non-integer type");
         auto apNaN = llvm::APFloat::getNaN(
@@ -4517,7 +4527,7 @@ struct AtomicRMWOpConversion
     if (tensorTy) {
       auto valTy = cast<RankedTensorType>(val.getType());
       auto maxVecSize =
-          valueElemNBits / valTy.getElementType().getIntOrFloatBitWidth();
+          valueElemNBits / getIntOrFloatOrPtrBitWidth(valTy.getElementType());
       vec = std::min<unsigned>(vec,
                                valTy.getElementType().isF16() ? maxVecSize : 1);
       // mask
@@ -5110,10 +5120,15 @@ struct Subgroup2DBlockLoadOpConversion
               baseHeight, pred,    redirectNegCol};
     };
 
+    // NaN padding of e2m1 / e8m0 fills zero bits, as on the host-descriptor
+    // path: e2m1 has no NaN encoding and both are integers once converted.
+    bool padWithZero =
+        maskNegCol || isa<PackedFloat4E2M1Type, Float8E8M0FNUType>(
+                          tensorType.getElementType());
     return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
                             /*otherElems=*/{}, nanMaskElems,
                             /*staticBaseHeight=*/std::nullopt, targetInfo,
-                            getTypeConverter(), loc, rewriter, maskNegCol);
+                            getTypeConverter(), loc, rewriter, padWithZero);
   }
 };
 
@@ -5198,7 +5213,12 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
     if (llOther && llMask) {
       Value other = op.getOther();
       DenseElementsAttr constAttr;
-      if (matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
+      if (isZeroFillConst(other)) {
+        // The 2D block load fills masked-off elements with zeros. This also
+        // matches a zero bitcast to the element type, e.g. the zero padding
+        // of packed fp4, which has no constants of its own.
+      } else if (matchPattern(other, m_Constant(&constAttr)) &&
+                 constAttr.isSplat()) {
         Type elemTy = constAttr.getElementType();
         auto handleSplatValue = [&](auto splatVal) {
           if (!splatVal.isZero() || splatVal.isNegative()) {
