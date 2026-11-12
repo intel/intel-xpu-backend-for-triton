@@ -85,8 +85,7 @@ def matmul_kernel_with_tensor_descriptors(
         stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
-        transpose_a: tl.constexpr, transpose_b: tl.constexpr):  # pylint: disable=unused-argument
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -175,8 +174,7 @@ def matmul_kernel_with_tensor_descriptors_batched(
         stride_bz: tl.constexpr, stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cz: tl.constexpr, stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
-        transpose_a: tl.constexpr, transpose_b: tl.constexpr):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
     bid = tl.program_id(axis=1)
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -245,8 +243,7 @@ def matmul(
             B, M, N, K,  #
             a.stride(0), a.stride(a_major), a.stride(a_minor),  #
             b.stride(0), b.stride(b_minor), b.stride(b_major),  #
-            c.stride(0), c.stride(1), c.stride(2),  #
-            transpose_a=transpose_a, transpose_b=transpose_b)
+            c.stride(0), c.stride(1), c.stride(2))
     elif len(a.shape) == 2 and len(b.shape) == 2:
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
         matmul_kernel[grid](
@@ -254,8 +251,7 @@ def matmul(
             M, N, K,  #
             a.stride(a_major), a.stride(a_minor),  #
             b.stride(b_minor), b.stride(b_major),  #
-            c.stride(0), c.stride(1),  #
-            transpose_a=transpose_a, transpose_b=transpose_b)
+            c.stride(0), c.stride(1))
     else:
         assert False, 'Input matrixs dimensions mismatch'
     return c
