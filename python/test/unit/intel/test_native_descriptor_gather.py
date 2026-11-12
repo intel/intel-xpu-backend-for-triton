@@ -1,13 +1,11 @@
 """Native descriptor gathers (#8666) on XPU: a gather on a zero-padded device-side descriptor stays a
-ttig.descriptor_gather, and every lowering regime must read zero out of bounds, as the pointer expansion does.
-
-The regimes are per-element loads (R1), per-lane loads (R2) and the sub-group gather load (R3). Each kernel pins its
-regime from the LLIR, so a layout change cannot silently move a case to another regime. The reduction kernel has the
-vLLM paged-KV layout at sub-group size 32, where packed per-lane loads used to read the wrong columns.
+ttig.descriptor_gather, reads zero out of bounds, and emits the same global loads as the pointer expansion
+(TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1). The reduction kernel has the vLLM paged-KV layout.
 """
 
 import os
 import re
+from collections import Counter
 
 import pytest
 import torch
@@ -16,11 +14,10 @@ import triton
 import triton.language as tl
 from triton._internal_testing import is_xpu
 
+ENV = "TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER"
 pytestmark = [
     pytest.mark.skipif(not is_xpu(), reason="XPU-specific lowering"),
-    pytest.mark.skipif(
-        os.environ.get("TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER") == "1",
-        reason="native descriptor gathers disabled"),
+    pytest.mark.skipif(os.environ.get(ENV) == "1", reason="native descriptor gathers disabled"),
 ]
 
 
@@ -67,10 +64,12 @@ def _gather_ref(src, idx, y, block_y):
 def _make_case(case, n_rows, block_y, dtype, device):
     """Source rows, gather indices and y offset for one out-of-bounds rule."""
     torch.manual_seed(0)
-    x, idx_dtype, y = 128, torch.int32, 0
+    x, idx_dtype, y, cols = 128, torch.int32, 0, block_y
     if case == "i16_negative":
         x, idx_dtype = 33000, torch.int16  # zero-extending -32768.. would land inside the 33000 rows
-    src = torch.randn(x, block_y, device=device).to(dtype)
+    elif case == "cols_partial":
+        cols = block_y * 5 // 8  # e.g. 80 columns in a 128-wide block: whole chunks fall past the row
+    src = torch.randn(x, cols, device=device).to(dtype)
     idx = torch.randperm(x, device=device)[:n_rows]
     if case == "rows":  # valid, above and negative rows interleaved within one load
         idx[1::4] = x + torch.arange(len(idx[1::4]), device=device)
@@ -81,12 +80,43 @@ def _make_case(case, n_rows, block_y, dtype, device):
         y = 6  # unaligned window [6, 6 + BLOCK_Y) runs past the last column
     elif case == "cols_negative":
         y = -3
+    elif case == "cols_negative_aligned":
+        y = -16  # aligned, so whole chunks fall before the row
     return src, idx.to(idx_dtype), y
 
 
-def _data_loads(llir, dtype):
-    ty = {torch.float16: "half", torch.bfloat16: "bfloat"}[dtype]
-    return [int(n) for n in re.findall(rf"load <(\d+) x {ty}>, ptr addrspace\(1\)", llir)]
+_BITS = {"half": 16, "bfloat": 16, "float": 32, "double": 64}
+
+
+def _load_widths(llir):
+    """Byte width of every global load and predicated-load call."""
+    tys = re.findall(r"= load (<\d+ x \w+>|\w+), ptr addrspace\(1\)", llir)
+    tys += re.findall(r"= (?:tail )?call spir_func (<\d+ x \w+>|\w+) @_Z\d+__spirv_PredicatedLoadINTEL", llir)
+    widths = Counter()
+    for t in tys:
+        n, e = re.fullmatch(r"<(\d+) x (\w+)>", t).groups() if t.startswith("<") else (1, t)
+        if e in _BITS or re.fullmatch(r"i\d+", e):
+            widths[int(n) * (_BITS.get(e) or int(e[1:])) // 8] += 1
+    return widths
+
+
+def _launch_arms(kernel, monkeypatch, aligned, *args, **kwargs):
+    """Launch `kernel` natively and, if the gather is `aligned`, check it emits the same multiset of global load
+    widths as a separate JITFunction compiled, not launched, with the pointer expansion. Coalesce sizes a
+    descriptor's layout without the alignment proof the pointer form gets, so the two only match when aligned."""
+    monkeypatch.setenv(ENV, "1")
+    pointer = triton.jit(kernel.fn).warmup(*args, grid=(1, ), **kwargs)
+    monkeypatch.delenv(ENV)
+    native = kernel[(1, )](*args, **kwargs)
+    assert "ttig.descriptor_gather" not in pointer.asm["ttgir"]
+    if aligned:
+        assert _load_widths(native.asm["llir"]) == _load_widths(pointer.asm["llir"])
+    return native
+
+
+def _aligned(y, src):
+    """Launch specialization proves alignment only for a y and a row pitch that are multiples of 16."""
+    return y % 16 == 0 and src.shape[1] % 16 == 0
 
 
 def _check_native(kernel):
@@ -100,48 +130,50 @@ def _check_native(kernel):
     assert offsets_enc == f"#ttg.slice<{{dim = 1, parent = {result_enc}}}>"
 
 
-CASES = ["in_bounds", "rows", "i16_negative", "cols_straddle", "cols_negative"]
+CASES = ["in_bounds", "rows", "i16_negative", "cols_straddle", "cols_negative", "cols_negative_aligned", "cols_partial"]
 
 
 @pytest.mark.parametrize("case", CASES)
-def test_gather_store_per_element(case, device):
-    src, idx, y = _make_case(case, 32, 64, torch.float16, device)
-    out = torch.full((32, 64), 7.0, device=device, dtype=src.dtype)
-    k = _gather_store[(1, )](out, src, idx, y, src.shape[0], src.shape[1], 32, 64, num_warps=4)
+def test_gather_store(case, device, monkeypatch):
+    src, idx, y = _make_case(case, 32, 128, torch.float16, device)
+    out = torch.full((32, 128), 7.0, device=device, dtype=src.dtype)
+    k = _launch_arms(_gather_store, monkeypatch, _aligned(y, src), out, src, idx, y, src.shape[0], src.shape[1], 32,
+                     128, num_warps=4)
     _check_native(k)
-    assert "lsc_load.ugm" not in k.asm["llir"] and max(_data_loads(k.asm["llir"], src.dtype), default=1) == 1
-    torch.testing.assert_close(out, _gather_ref(src, idx, y, 64), atol=0, rtol=0)
+    assert (16 in _load_widths(k.asm["llir"])) == _aligned(y, src)
+    torch.testing.assert_close(out, _gather_ref(src, idx, y, 128), atol=0, rtol=0)
 
 
 @pytest.mark.parametrize("case", CASES)
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-def test_gather_reduce_vllm_layout(case, dtype, device):
+def test_gather_reduce_vllm_layout(case, dtype, device, monkeypatch):
     src, idx, y = _make_case(case, 64, 128, dtype, device)
     w = torch.randn(128, device=device)
     out = torch.empty(64, device=device)
-    k = _gather_reduce[(1, )](out, src, idx, w, y, src.shape[0], src.shape[1], 64, 128, num_warps=4)
+    k = _launch_arms(_gather_reduce, monkeypatch, _aligned(y, src), out, src, idx, w, y, src.shape[0], src.shape[1], 64,
+                     128, num_warps=4)
     _check_native(k)
-    assert "lsc_load.ugm" not in k.asm["llir"] and max(_data_loads(k.asm["llir"], dtype), default=1) == 1
     ref = (_gather_ref(src, idx, y, 128).float() * w[None, :]).sum(1)
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-3)
 
 
 @pytest.mark.parametrize("case", CASES)
-def test_gather_dot_sub_group(case, device):
+def test_gather_dot(case, device, monkeypatch):
     a, idx, y = _make_case(case, 64, 32, torch.float16, device)
     b = torch.randn(32, 64, device=device, dtype=torch.float16)
     out = torch.empty(64, 64, device=device)
-    k = _gather_dot[(1, )](out, a, b, idx, y, a.shape[0], a.shape[1], 64, 64, 32, num_warps=4)
+    k = _launch_arms(_gather_dot, monkeypatch, _aligned(y, a), out, a, b, idx, y, a.shape[0], a.shape[1], 64, 64, 32,
+                     num_warps=4)
     _check_native(k)
-    assert "lsc_load.ugm" in k.asm["llir"]
+    assert "lsc_load.ugm" not in k.asm["llir"]
     ref = _gather_ref(a, idx, y, 32).float() @ b.float()
     torch.testing.assert_close(out, ref, atol=1e-2, rtol=1e-2)
 
 
-# Hand-written TTGIR pins layouts the frontend does not reliably produce: lanes spanning rows must leave the fast
-# paths, and R3's predicated-off channels must read zero even when the registers hold an earlier iteration's rows.
+# Hand-written TTGIR pins layouts the frontend does not reliably produce: vectorized lanes spanning rows, and a loop
+# whose out-of-bounds lanes must read zero even when the registers hold an earlier iteration's rows.
 _TTGIR = """
-#blocked = #ttg.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [{tr}, {tc}], warpsPerCTA = [1, 4], order = [1, 0]}}>
+#blocked = #ttg.blocked<{{sizePerThread = [1, {spt}], threadsPerWarp = [{tr}, {tc}], warpsPerCTA = [1, 4], order = [1, 0]}}>
 #sx = #ttg.slice<{{dim = 1, parent = #blocked}}>
 #sy = #ttg.slice<{{dim = 0, parent = #blocked}}>
 module attributes {{{attrs}}} {{
@@ -196,10 +228,11 @@ def test_gather_ttgir_layouts(lanes_on_rows, iters, device, tmp_path):
     attrs = re.search(r"^module attributes \{(.*)\} \{$", _copy16[(1, )](x, x).asm["ttgir"], re.M).group(1)
     attrs = re.sub(r'"ttg.threads-per-warp" = \d+', '"ttg.threads-per-warp" = 16', attrs)
     path = tmp_path / "gather.ttgir"
-    path.write_text(_TTGIR.format(tr=2 if lanes_on_rows else 1, tc=8 if lanes_on_rows else 16, iters=iters,
-                                  attrs=attrs))
+    path.write_text(
+        _TTGIR.format(spt=4 if lanes_on_rows else 1, tr=2 if lanes_on_rows else 1, tc=8 if lanes_on_rows else 16,
+                      iters=iters, attrs=attrs))
     k = triton.compile(str(path), options={"warp_size": 16, "num_warps": 4})
-    assert ("lsc_load.ugm" in k.asm["llir"]) == (not lanes_on_rows)
+    assert "lsc_load.ugm" not in k.asm["llir"] and (8 in _load_widths(k.asm["llir"])) == lanes_on_rows
     torch.manual_seed(0)
     src = torch.randn(256, 64, device=device, dtype=torch.float16)
     idx = torch.randperm(256, device=device)[:32 * iters].to(torch.int32)
