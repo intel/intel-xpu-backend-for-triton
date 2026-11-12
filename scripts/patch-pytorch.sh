@@ -35,3 +35,6 @@ apply_patch() {
 echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
+# Run test_auto_chunker on its own: its large inputs oversubscribe GPU memory on
+# 12 GB GPUs when run in parallel with other files (#8792).
+apply_patch patch/run-test-serial-auto-chunker.patch
