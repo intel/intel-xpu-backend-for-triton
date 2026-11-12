@@ -307,7 +307,7 @@ inferDotScaleCGALayoutFromOperand(CGAEncodingAttr operandCGALayout, int opIdx);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 
-SmallVector<unsigned> getCTASplitNum(Attribute layout, ArrayRef<int64_t> shape);
+SmallVector<unsigned> getCTASplitNum(Attribute layout);
 
 // Returns the "logical" shape per CTA.
 // When shape and CTASplitNum have different number of dimensions, we assume

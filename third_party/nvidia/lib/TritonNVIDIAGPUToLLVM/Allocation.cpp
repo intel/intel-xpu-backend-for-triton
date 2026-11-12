@@ -63,8 +63,7 @@ static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
   auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
   // The smem has the same CGA layout as srcLayout, so use that instead.
   // Remove the number of elements duplicated in the CGA layout.
-  auto nBlocks = product(
-      triton::gpu::getCTASplitNum(srcTy.getEncoding(), srcTy.getShape()));
+  auto nBlocks = product(triton::gpu::getCTASplitNum(srcTy.getEncoding()));
   return smem.getTotalOutDimSize() / (reps * nBlocks);
 }
 

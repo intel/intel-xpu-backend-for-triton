@@ -470,11 +470,25 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   llvm_unreachable("Unimplemented usage of getCTAsPerCGA");
 }
 
-SmallVector<unsigned> getCTASplitNum(Attribute layout,
-                                     ArrayRef<int64_t> shape) {
+SmallVector<unsigned> getCTASplitNum(Attribute layout) {
+  // A generic linear encoding may not have a CGA layout
+  // as having a CGA layout implies being of the form cta_layout * cga_layout
   auto kBlock = StringAttr::get(layout.getContext(), "block");
-  auto ll = toLinearLayoutIgnoringPadding(shape, layout);
-  return basesPerDimImpl(ll.getBases(), kBlock, ll.getNumOutDims());
+  if (auto linearEnc = dyn_cast<LinearEncodingTrait>(layout)) {
+    return linearEnc.basesPerDim(kBlock, /*skipBroadcast=*/true);
+  } else if (auto sharedLinearLayout =
+                 dyn_cast<SharedLinearEncodingAttr>(layout)) {
+    return sharedLinearLayout.basesPerDim(kBlock);
+  } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
+    if (auto slicedLinear = getSlicedLinearEncoding(sliceLayout))
+      return slicedLinear.basesPerDim(kBlock, /*skipBroadcast=*/true);
+    return cast<LayoutEncodingTrait>(sliceLayout)
+        .getCGALayout()
+        .getCTASplitNum();
+  } else if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout)) {
+    return ttgLayout.getCGALayout().getCTASplitNum();
+  }
+  llvm_unreachable("Unimplemented usage of getCTASplitNum");
 }
 
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
@@ -495,7 +509,7 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
 }
 
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
-  return getShapePerCTA(getCGALayout(layout).getCTASplitNum(), shape);
+  return getShapePerCTA(getCTASplitNum(layout), shape);
 }
 
 SmallVector<int64_t> getShapePerCTA(Type type) {
