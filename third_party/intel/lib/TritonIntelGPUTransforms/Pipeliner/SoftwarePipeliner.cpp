@@ -6,8 +6,10 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir;
 namespace ttgi = mlir::triton::gpu::intel;
@@ -39,6 +41,40 @@ static bool preCondition(scf::ForOp forOp) {
   return true;
 }
 
+// Re-align the warps of a work-group at the top of the loop enclosing the
+// pipelined `loop`, as a grid launch does at every tile: their own L1
+// prefetches otherwise let them drift apart across a persistent kernel's tiles
+// (#8719).
+static void insertTileBarrier(scf::ForOp loop) {
+  auto outer = loop->getParentOfType<scf::ForOp>();
+  auto funcOp = loop->getParentOfType<triton::FuncOp>();
+  if (!outer || !funcOp)
+    return;
+  // Every warp must reach the barrier equally often.
+  auto isUniform = [&](Value v) {
+    return triton::intel::isProgramUniform(v, funcOp, /*allowLoopIVs=*/true);
+  };
+  for (Operation *op = outer; op != funcOp; op = op->getParentOp()) {
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      if (!isUniform(forOp.getLowerBound()) ||
+          !isUniform(forOp.getUpperBound()) || !isUniform(forOp.getStep()))
+        return;
+    } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      if (!isUniform(ifOp.getCondition()))
+        return;
+    } else {
+      return;
+    }
+  }
+  Block *body = outer.getBody();
+  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(body->front());
+      barrier && !barrier.isWarp())
+    return;
+  OpBuilder b = OpBuilder::atBlockBegin(body);
+  triton::gpu::BarrierOp::create(b, loop.getLoc(),
+                                 triton::gpu::AddrSpace::None);
+}
+
 static void pipelineLoop(scf::ForOp forOp, int numStages,
                          const ttgi::PipelineTarget &target) {
   mlir::scf::PipeliningOption options;
@@ -67,6 +103,8 @@ static void pipelineLoop(scf::ForOp forOp, int numStages,
     auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
     b.setInsertionPoint(yield);
     triton::TritonGEN::SplitBarrierWaitOp::create(b, loc, bData);
+  } else if (target.tileBarrier) {
+    insertTileBarrier(loop);
   }
 }
 
@@ -91,7 +129,7 @@ struct IntelGPUPipelinePass
     getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
     ttgi::PipelineTarget target{deviceArch, coreClockKhz, memClockMhz,
-                                useBarrier};
+                                useBarrier, tileBarrier};
     for (scf::ForOp forOp : loops)
       pipelineLoop(forOp, numStages, target);
   }

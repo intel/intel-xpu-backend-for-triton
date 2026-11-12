@@ -15,6 +15,7 @@
 // branches; see Passes.td.
 //===----------------------------------------------------------------------===//
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -42,35 +43,6 @@ namespace mlir::triton::intel {
 } // namespace mlir::triton::intel
 
 namespace {
-
-/// True if `cond` has the same value in every thread of the program: it is
-/// built by arith/math ops from constants, program ids and arguments of the
-/// public kernel entry. Effect-free is not enough (`ttg.warp_id`, inline asm),
-/// and copied collectives such as reductions lower to work-group barriers.
-static bool isUniformCondition(Value cond, tt::FuncOp funcOp) {
-  SmallVector<Value> worklist{cond};
-  DenseSet<Value> seen;
-  while (!worklist.empty()) {
-    Value value = worklist.pop_back_val();
-    if (!seen.insert(value).second)
-      continue;
-    if (auto arg = dyn_cast<BlockArgument>(value)) {
-      // Arguments of a private helper may come from a per-warp caller.
-      if (!funcOp.isPublic() || arg.getOwner() != &funcOp.getBody().front())
-        return false;
-      continue;
-    }
-    Operation *def = value.getDefiningOp();
-    if (isa<tt::GetProgramIdOp, tt::GetNumProgramsOp>(def))
-      continue;
-    if (!isa_and_nonnull<arith::ArithDialect, math::MathDialect>(
-            def->getDialect()) ||
-        def->getNumRegions())
-      return false;
-    worklist.append(def->operand_begin(), def->operand_end());
-  }
-  return true;
-}
 
 /// True if `value` is defined before `head`, in its block or an enclosing one.
 static bool isAvailableBefore(Value value, Operation *head) {
@@ -177,7 +149,8 @@ static void handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
 
   SmallVector<Value> escaping;
   if (!toSink.empty()) {
-    if (currentIf.getElseRegion().empty() || !isUniformCondition(cond, funcOp))
+    if (currentIf.getElseRegion().empty() ||
+        !tt::intel::isProgramUniform(cond, funcOp))
       return;
     DenseSet<Operation *> sinking(toSink.begin(), toSink.end());
     unsigned numOps = 0;

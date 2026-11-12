@@ -57,6 +57,15 @@ Value getIterArgIncrement(scf::ForOp forOp, BlockArgument iterArg);
 // Erase the operations in \p operations.
 void eraseOperations(SmallPtrSetImpl<Operation *> &operations);
 
+// True if `value` has the same value in every thread of the program: it is
+// built by arith/math ops from constants, program ids and arguments of the
+// public kernel entry. Effect-free is not enough (`ttg.warp_id`, inline asm),
+// and copied collectives such as reductions lower to work-group barriers. With
+// `allowLoopIVs`, an scf.for induction variable counts when its bounds do; the
+// caller must still check that every thread reaches that loop.
+bool isProgramUniform(Value value, triton::FuncOp funcOp,
+                      bool allowLoopIVs = false);
+
 // The set of MakeTensorDescOps that may define a descriptor value.
 //
 // With more than one candidate the per-descriptor properties can disagree, so a
