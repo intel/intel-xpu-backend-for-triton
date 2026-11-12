@@ -1,4 +1,5 @@
 #include "intel/include/Analysis/AxisInfoExt.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -253,6 +254,56 @@ public:
   }
 };
 
+/// A field of a descriptor read with ttig.extract_desc. The descriptor's
+/// address-level AxisInfo bounds its fields: divisibility[d] (bytes) divides
+/// the base and every stride other than stride[d] (scaled to bytes), and a
+/// contiguous dim has stride 1 and a shape divisible by its contiguity.
+class ExtractDescOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<gpu::intel::ExtractDescOp> {
+public:
+  using AxisInfoVisitorImpl<gpu::intel::ExtractDescOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(gpu::intel::ExtractDescOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    auto descType = cast<TensorDescType>(op.getDesc().getType());
+    RankedTensorType blockType = descType.getBlockType();
+    const AxisInfo &desc = operands[0]->getValue();
+    unsigned rank = blockType.getRank();
+    if (static_cast<unsigned>(desc.getRank()) != rank)
+      return AxisInfo::getPessimisticValueState(op.getResult());
+
+    int64_t elemBytes =
+        ceil<int64_t>(blockType.getElementType().getIntOrFloatBitWidth(), 8);
+    Type resultTy = op.getResult().getType();
+    auto scalar = [&](int64_t divisibility, bool isOne = false) {
+      std::optional<APInt> constant;
+      if (isOne)
+        constant = APInt(resultTy.getIntOrFloatBitWidth(), 1);
+      return AxisInfo({1}, {std::max<int64_t>(divisibility, 1)}, {1}, constant);
+    };
+    auto maxDivisibility = [&](std::optional<unsigned> exclude) {
+      int64_t div = 1;
+      for (unsigned d = 0; d < rank; ++d)
+        if (d != exclude && desc.getContiguity(d) > 1)
+          div = std::max(div, desc.getDivisibility(d));
+      return div;
+    };
+
+    unsigned field = op.getIndex();
+    if (field == 2 * rank)
+      return scalar(maxDivisibility(std::nullopt));
+    if (field >= rank) {
+      unsigned dim = field - rank;
+      if (desc.getContiguity(dim) > 1)
+        return scalar(1, /*isOne=*/true);
+      int64_t div = maxDivisibility(dim);
+      return scalar(div / std::gcd(div, elemBytes));
+    }
+    return scalar(desc.getContiguity(field));
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // LLVM dialect and IndexCast visitors
 //===----------------------------------------------------------------------===//
@@ -368,6 +419,7 @@ AxisInfoAnalysisExt::AxisInfoAnalysisExt(DataFlowSolver &solver)
     : triton::AxisInfoAnalysis(solver) {
   visitors.append<MakeTensorDescOpAxisInfoVisitor>();
   visitors.append<DescriptorLoadOpAxisInfoVisitor>();
+  visitors.append<ExtractDescOpAxisInfoVisitor>();
   visitors.append<CastOpAxisInfoVisitor<arith::IndexCastOp>>();
   // TODO: Remove rules for LLVM::ConstantOp, LLVM::AddOp
   // when scf.for supports integer induction variables
