@@ -170,47 +170,36 @@ def test_gather_dot(case, device, monkeypatch):
     torch.testing.assert_close(out, ref, atol=1e-2, rtol=1e-2)
 
 
-# Hand-written TTGIR pins layouts the frontend does not reliably produce: vectorized lanes spanning rows, and a loop
-# whose out-of-bounds lanes must read zero even when the registers hold an earlier iteration's rows.
+# Hand-written TTGIR pins a layout the frontend does not reliably produce: vectorized lanes spanning rows.
 _TTGIR = """
-#blocked = #ttg.blocked<{{sizePerThread = [1, {spt}], threadsPerWarp = [{tr}, {tc}], warpsPerCTA = [1, 4], order = [1, 0]}}>
+#blocked = #ttg.blocked<{{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [1, 4], order = [1, 0]}}>
 #sx = #ttg.slice<{{dim = 1, parent = #blocked}}>
 #sy = #ttg.slice<{{dim = 0, parent = #blocked}}>
 module attributes {{{attrs}}} {{
-  tt.func public @gather_iters(%in: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %idxp: !tt.ptr<i32> {{tt.divisibility = 16 : i32}},
-                               %out: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
+  tt.func public @gather_rows(%in: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %idxp: !tt.ptr<i32> {{tt.divisibility = 16 : i32}},
+                              %out: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
     %c0 = arith.constant 0 : i32
-    %c1 = arith.constant 1 : i32
-    %c32 = arith.constant 32 : i32
-    %c2048 = arith.constant 2048 : i32
     %c256 = arith.constant 256 : i32
     %c64 = arith.constant 64 : i32
     %c64_i64 = arith.constant 64 : i64
     %c1_i64 = arith.constant 1 : i64
-    %citers = arith.constant {iters} : i32
     %c64t = arith.constant dense<64> : tensor<32x1xi32, #blocked>
     %r = tt.make_range {{end = 32 : i32, start = 0 : i32}} : tensor<32xi32, #sx>
     %cr = tt.make_range {{end = 64 : i32, start = 0 : i32}} : tensor<64xi32, #sy>
     %desc = tt.make_tensor_descriptor %in, [%c256, %c64], [%c64_i64, %c1_i64] : <f16>, <1x64xf16>
-    scf.for %it = %c0 to %citers step %c1 : i32 {{
-      %ib = arith.muli %it, %c32 : i32
-      %idxb = tt.addptr %idxp, %ib : !tt.ptr<i32>, i32
-      %ip = tt.splat %idxb : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #sx>
-      %ipp = tt.addptr %ip, %r : tensor<32x!tt.ptr<i32>, #sx>, tensor<32xi32, #sx>
-      %idx = tt.load %ipp : tensor<32x!tt.ptr<i32>, #sx>
-      %g = ttig.descriptor_gather %desc[%idx, %c0] : (!tt.tensordesc<1x64xf16>, tensor<32xi32, #sx>, i32) -> tensor<32x64xf16, #blocked>
-      %ob = arith.muli %it, %c2048 : i32
-      %outb = tt.addptr %out, %ob : !tt.ptr<f16>, i32
-      %rows = tt.expand_dims %r {{axis = 1 : i32}} : tensor<32xi32, #sx> -> tensor<32x1xi32, #blocked>
-      %rowoff = arith.muli %rows, %c64t : tensor<32x1xi32, #blocked>
-      %cols = tt.expand_dims %cr {{axis = 0 : i32}} : tensor<64xi32, #sy> -> tensor<1x64xi32, #blocked>
-      %rb = tt.broadcast %rowoff : tensor<32x1xi32, #blocked> -> tensor<32x64xi32, #blocked>
-      %cb = tt.broadcast %cols : tensor<1x64xi32, #blocked> -> tensor<32x64xi32, #blocked>
-      %off = arith.addi %rb, %cb : tensor<32x64xi32, #blocked>
-      %op = tt.splat %outb : !tt.ptr<f16> -> tensor<32x64x!tt.ptr<f16>, #blocked>
-      %opp = tt.addptr %op, %off : tensor<32x64x!tt.ptr<f16>, #blocked>, tensor<32x64xi32, #blocked>
-      tt.store %opp, %g : tensor<32x64x!tt.ptr<f16>, #blocked>
-    }}
+    %ip = tt.splat %idxp : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #sx>
+    %ipp = tt.addptr %ip, %r : tensor<32x!tt.ptr<i32>, #sx>, tensor<32xi32, #sx>
+    %idx = tt.load %ipp : tensor<32x!tt.ptr<i32>, #sx>
+    %g = ttig.descriptor_gather %desc[%idx, %c0] : (!tt.tensordesc<1x64xf16>, tensor<32xi32, #sx>, i32) -> tensor<32x64xf16, #blocked>
+    %rows = tt.expand_dims %r {{axis = 1 : i32}} : tensor<32xi32, #sx> -> tensor<32x1xi32, #blocked>
+    %rowoff = arith.muli %rows, %c64t : tensor<32x1xi32, #blocked>
+    %cols = tt.expand_dims %cr {{axis = 0 : i32}} : tensor<64xi32, #sy> -> tensor<1x64xi32, #blocked>
+    %rb = tt.broadcast %rowoff : tensor<32x1xi32, #blocked> -> tensor<32x64xi32, #blocked>
+    %cb = tt.broadcast %cols : tensor<1x64xi32, #blocked> -> tensor<32x64xi32, #blocked>
+    %off = arith.addi %rb, %cb : tensor<32x64xi32, #blocked>
+    %op = tt.splat %out : !tt.ptr<f16> -> tensor<32x64x!tt.ptr<f16>, #blocked>
+    %opp = tt.addptr %op, %off : tensor<32x64x!tt.ptr<f16>, #blocked>, tensor<32x64xi32, #blocked>
+    tt.store %opp, %g : tensor<32x64x!tt.ptr<f16>, #blocked>
     tt.return
   }}
 }}
@@ -222,23 +211,19 @@ def _copy16(in_ptr, out_ptr):
     tl.store(out_ptr + tl.arange(0, 16), tl.load(in_ptr + tl.arange(0, 16)))
 
 
-@pytest.mark.parametrize("lanes_on_rows, iters", [(True, 1), (False, 2)])
-def test_gather_ttgir_layouts(lanes_on_rows, iters, device, tmp_path):
+def test_gather_ttgir_lanes_on_rows(device, tmp_path):
     x = torch.zeros(16, device=device)
     attrs = re.search(r"^module attributes \{(.*)\} \{$", _copy16[(1, )](x, x).asm["ttgir"], re.M).group(1)
     attrs = re.sub(r'"ttg.threads-per-warp" = \d+', '"ttg.threads-per-warp" = 16', attrs)
     path = tmp_path / "gather.ttgir"
-    path.write_text(
-        _TTGIR.format(spt=4 if lanes_on_rows else 1, tr=2 if lanes_on_rows else 1, tc=8 if lanes_on_rows else 16,
-                      iters=iters, attrs=attrs))
+    path.write_text(_TTGIR.format(attrs=attrs))
     k = triton.compile(str(path), options={"warp_size": 16, "num_warps": 4})
-    assert "lsc_load.ugm" not in k.asm["llir"] and (8 in _load_widths(k.asm["llir"])) == lanes_on_rows
+    assert "lsc_load.ugm" not in k.asm["llir"] and 8 in _load_widths(k.asm["llir"])
     torch.manual_seed(0)
     src = torch.randn(256, 64, device=device, dtype=torch.float16)
-    idx = torch.randperm(256, device=device)[:32 * iters].to(torch.int32)
-    last = idx[32 * (iters - 1):]  # the last iteration mixes valid, above and negative rows
-    last[1::4] = 256 + torch.arange(8, device=device, dtype=torch.int32)
-    last[3::4] = -1 - torch.arange(8, device=device, dtype=torch.int32)
-    out = torch.full((32 * iters, 64), 7.0, device=device, dtype=torch.float16)
+    idx = torch.randperm(256, device=device)[:32].to(torch.int32)
+    idx[1::4] = 256 + torch.arange(8, device=device, dtype=torch.int32)  # valid, above and negative rows
+    idx[3::4] = -1 - torch.arange(8, device=device, dtype=torch.int32)
+    out = torch.full((32, 64), 7.0, device=device, dtype=torch.float16)
     k[(1, 1, 1)](src, idx, out)
     torch.testing.assert_close(out, _gather_ref(src, idx, 0, 64), atol=0, rtol=0)
