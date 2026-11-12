@@ -283,7 +283,12 @@ class TestCaseWithResult(
         return collapsed
 
     @classmethod
-    def from_xml(cls, testsuite: str, xml_element: XMLElement) -> TestCaseWithResult:
+    def from_xml(
+        cls,
+        testsuite: str,
+        xml_element: XMLElement,
+        allow_multiple_outcome_tags: bool = False,
+    ) -> TestCaseWithResult:
         raw_name = xml_element.get("name", "")
         classname = xml_element.get("classname", "")
 
@@ -295,7 +300,13 @@ class TestCaseWithResult(
         child_tags = [child_tag for child_tag in list(xml_element) if child_tag.tag in ["failure", "skipped", "error"]]
         run_result = RunResult.PASSED
         if len(child_tags) > 1:
-            child_tags = [cls._collapse_outcome_tags(f"{testsuite}::{classname}::{raw_name}", child_tags)]
+            identity = f"{testsuite}::{classname}::{raw_name}"
+            if not allow_multiple_outcome_tags:
+                raise ValueError(
+                    f"Unexpected number of child tags for the test {identity}: {[tag.tag for tag in child_tags]}. "
+                    "Use '--allow-multiple-outcome-tags' flag to allow multiple failure/error tags."
+                )
+            child_tags = [cls._collapse_outcome_tags(identity, child_tags)]
         if len(child_tags) == 1:
             child_element = child_tags[0]
             child_tag = child_element.tag
@@ -460,12 +471,13 @@ class TestReport:
     testname_filter: str = ""
 
     @classmethod
-    def _extract_test_reports(  # pylint: disable=too-many-locals
+    def _extract_test_reports(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
         cls,
         search_folder: str,
         tests_with_multiple_testsuites: bool,
         ignore_testsuites_filter: list[str],
         pattern_matcher: PatternMatcher | None = None,
+        allow_multiple_outcome_tags: bool = False,
     ) -> dict[str, Test]:
         search_folder_path = pathlib.Path(search_folder)
         if not search_folder_path.exists():
@@ -503,6 +515,7 @@ class TestReport:
                 test_case = TestCaseWithResult.from_xml(
                     testsuite=test_suite,
                     xml_element=test_case_xml,
+                    allow_multiple_outcome_tags=allow_multiple_outcome_tags,
                 )
                 if tests_with_multiple_testsuites:
                     key = f"{test_suite}::{test_case.path_without_variant}"
@@ -997,12 +1010,13 @@ class TestReport:
         return comparison_result
 
     @classmethod
-    def from_reports_folder(
+    def from_reports_folder(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         cls,
         folder: str,
         tests_with_multiple_testsuites: bool,
         ignore_testsuites_filter: list[str],
         pattern_matcher: PatternMatcher | None = None,
+        allow_multiple_outcome_tags: bool = False,
     ) -> TestReport:
         return TestReport(
             cls._extract_test_reports(
@@ -1010,5 +1024,6 @@ class TestReport:
                 tests_with_multiple_testsuites,
                 ignore_testsuites_filter,
                 pattern_matcher=pattern_matcher,
+                allow_multiple_outcome_tags=allow_multiple_outcome_tags,
             )
         )
