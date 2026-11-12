@@ -200,3 +200,97 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// COM: Descriptor load at 256 KiB per program (allowed) beside a row_major pointer load at 512 KiB per
+// COM: program, which the guard cannot see and RemoveLayoutConversions could move into the new layout: refused.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @ptr_load_unchanged(
+  // CHECK: tt.descriptor_load
+  // CHECK-SAME: ttig.block_io = "row_major"
+  // CHECK-NOT: ttig.block_io_anchor
+  tt.func public @ptr_load_unchanged(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %y_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<256x!tt.ptr<f32>, #blocked1>, %m: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %c131072_i32 = arith.constant 131072 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %pid = tt.get_program_id x : i32
+    %desc = tt.make_tensor_descriptor %x_ptr, [%m, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <16x256xf32>
+    %row = arith.muli %pid, %c256_i32 : i32
+    %x = tt.descriptor_load %desc[%row, %c0_i32] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
+    %off = arith.muli %pid, %c131072_i32 : i32
+    %base = tt.addptr %y_ptr, %off : !tt.ptr<f32>, i32
+    %bs = tt.splat %base : !tt.ptr<f32> -> tensor<16x256x!tt.ptr<f32>, #blocked>
+    %r = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %c = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %r2 = tt.expand_dims %r {axis = 1 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16x1xi32, #blocked>
+    %c2 = tt.expand_dims %c {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x256xi32, #blocked>
+    %k256 = arith.constant dense<256> : tensor<16x1xi32, #blocked>
+    %rs = arith.muli %r2, %k256 : tensor<16x1xi32, #blocked>
+    %rb = tt.broadcast %rs : tensor<16x1xi32, #blocked> -> tensor<16x256xi32, #blocked>
+    %cb = tt.broadcast %c2 : tensor<1x256xi32, #blocked> -> tensor<16x256xi32, #blocked>
+    %o = arith.addi %rb, %cb : tensor<16x256xi32, #blocked>
+    %p = tt.addptr %bs, %o : tensor<16x256x!tt.ptr<f32>, #blocked>, tensor<16x256xi32, #blocked>
+    %y = tt.load %p : tensor<16x256x!tt.ptr<f32>, #blocked>
+    %s = arith.addf %x, %y : tensor<16x256xf32, #blocked>
+    %5 = "tt.reduce"(%s) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %7 = arith.addf %a, %b : f32
+      tt.reduce.return %7 : f32
+    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %6 = ttg.convert_layout %5 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xf32, #blocked1>
+    tt.store %out_ptrs, %6 : tensor<256x!tt.ptr<f32>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Descriptor load at 256 KiB per program (allowed) beside a row_major pointer load at 512 KiB per
+// COM: program, which the guard cannot see and RemoveLayoutConversions could move into the new layout: refused.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @ptr_load_unchanged(
+  // CHECK: tt.descriptor_load
+  // CHECK-SAME: ttig.block_io = "row_major"
+  // CHECK-NOT: ttig.block_io_anchor
+  tt.func public @ptr_load_unchanged(%x_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %y_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<256x!tt.ptr<f32>, #blocked1>, %m: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %c131072_i32 = arith.constant 131072 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %pid = tt.get_program_id x : i32
+    %desc = tt.make_tensor_descriptor %x_ptr, [%m, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <16x256xf32>
+    %row = arith.muli %pid, %c256_i32 : i32
+    %x = tt.descriptor_load %desc[%row, %c0_i32] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
+    %off = arith.muli %pid, %c131072_i32 : i32
+    %base = tt.addptr %y_ptr, %off : !tt.ptr<f32>, i32
+    %bs = tt.splat %base : !tt.ptr<f32> -> tensor<16x256x!tt.ptr<f32>, #blocked>
+    %r = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %c = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %r2 = tt.expand_dims %r {axis = 1 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16x1xi32, #blocked>
+    %c2 = tt.expand_dims %c {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x256xi32, #blocked>
+    %k256 = arith.constant dense<256> : tensor<16x1xi32, #blocked>
+    %rs = arith.muli %r2, %k256 : tensor<16x1xi32, #blocked>
+    %rb = tt.broadcast %rs : tensor<16x1xi32, #blocked> -> tensor<16x256xi32, #blocked>
+    %cb = tt.broadcast %c2 : tensor<1x256xi32, #blocked> -> tensor<16x256xi32, #blocked>
+    %o = arith.addi %rb, %cb : tensor<16x256xi32, #blocked>
+    %p = tt.addptr %bs, %o : tensor<16x256x!tt.ptr<f32>, #blocked>, tensor<16x256xi32, #blocked>
+    %y = tt.load %p : tensor<16x256x!tt.ptr<f32>, #blocked>
+    %s = arith.addf %x, %y : tensor<16x256xf32, #blocked>
+    %5 = "tt.reduce"(%s) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %7 = arith.addf %a, %b : f32
+      tt.reduce.return %7 : f32
+    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %6 = ttg.convert_layout %5 : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xf32, #blocked1>
+    tt.store %out_ptrs, %6 : tensor<256x!tt.ptr<f32>, #blocked1>
+    tt.return
+  }
+}

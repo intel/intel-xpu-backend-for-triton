@@ -53,7 +53,7 @@ static bool isBlockIOForAllLayoutsExplicitlyDisabled() {
 }
 
 /// True if \p op is tagged for row-major 2D block reads.
-static bool isRowMajorTagged(tt::DescriptorLoadOp op) {
+static bool isRowMajorTagged(Operation *op) {
   auto attr = op->getAttrOfType<StringAttr>(
       ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
   return attr && attr.getValue() ==
@@ -317,11 +317,14 @@ public:
     bool proverFailed = false;
     mod.walk([&](tt::FuncOp func) {
       bool funcHasDot = false;
+      bool hasRowMajorPtrLoad = false;
       SmallVector<tt::DescriptorLoadOp> loads;
       SmallVector<tt::ReduceOp> reduces;
       func.walk([&](Operation *op) {
         if (isa<tt::DotOp, tt::DotScaledOp>(op))
           funcHasDot = true;
+        else if (isa<tt::LoadOp>(op))
+          hasRowMajorPtrLoad |= isRowMajorTagged(op);
         else if (auto load = dyn_cast<tt::DescriptorLoadOp>(op))
           loads.push_back(load);
         else if (auto reduce = dyn_cast<tt::ReduceOp>(op))
@@ -339,6 +342,13 @@ public:
           llvm::make_filter_range(loads, isRowMajorTagged));
       if (candidates.empty())
         return;
+      // The stride guard only sees descriptor loads; RemoveLayoutConversions
+      // can move an unanchored tagged pointer load into a relaid-out layout.
+      if (hasRowMajorPtrLoad) {
+        LDBG("Function " << func.getName()
+                         << " has a row_major pointer load; skip relayout");
+        return;
+      }
       if (!prover && !proverFailed) {
         LDBG("Building the range analysis for the relayout stride guard");
         solver = createDataFlowSolver();
