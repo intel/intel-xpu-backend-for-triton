@@ -202,10 +202,8 @@ struct RowLimitMaskInfo {
 };
 
 /// Match `mask` against the row-limit pattern above for a tensor of any
-/// rank >= 2, and check the remaining conditions `base_height` needs:
-/// `other` is zero-fill-compatible, the bounded dim is the pitch dim, it
-/// isn't a broadcast pointer, and `rowBase`/`bound` are both i32 or both
-/// i64 (no extension between the base and the compare).
+/// rank >= 2: `matchBoundaryCheckMask` with at most one uniform conjunct, the
+/// one `extraPred` holds.
 std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   ArrayRef<int64_t> tensorShape,
                                                   unsigned contiguousDim,
@@ -229,8 +227,8 @@ struct BoundaryMaskInfo {
 
 /// Match `mask` against the pattern above for a tensor of any rank >= 2.
 /// Fails unless every conjunct is recognised, `other` is
-/// zero-fill-compatible, and the pitch dim is not broadcast. Accepts the same
-/// bounds as `matchRowLimitMask`; over it, any number of uniform conjuncts.
+/// zero-fill-compatible, the pitch dim is not broadcast, and the bound is i32
+/// or i64 with the base of the compare's own type (no extension between them).
 std::optional<BoundaryMaskInfo>
 matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
                        unsigned contiguousDim, bool pitchDimIsBroadcast);
