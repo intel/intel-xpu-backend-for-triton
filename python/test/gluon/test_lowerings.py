@@ -1524,7 +1524,12 @@ _multi_cta_cga_layout_pairs = [([1, 4], [2, 2]), ([4, 1], [2, 2])]
 _multi_cta_convert2d_layout_cases = [(src_ctas_per_cga, dst_ctas_per_cga, None, src_layout, dst_layout)
                                      for src_ctas_per_cga, dst_ctas_per_cga in _multi_cta_cga_layout_pairs
                                      for src_layout, dst_layout in _multi_cta_2d_layout_pairs]
-_convert2d_layout_cases = _single_cta_convert2d_layout_cases + _multi_cta_convert2d_layout_cases
+_multi_cta_small_convert2d_layout_cases = [
+    pytest.param([2, 1], [2, 1], None, ttgl.BlockedLayout([1, 1], [4, 8], [1, 4], [1, 0]),
+                 ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0]), id="multi-cta-small-shape")
+]
+_convert2d_layout_cases = (_single_cta_convert2d_layout_cases + _multi_cta_convert2d_layout_cases +
+                           _multi_cta_small_convert2d_layout_cases)
 # Warp-dependent broadcast with two f16 elements sharing a shuffle.
 _convert2d_layout_cases.append((None, None, None, ttgl.BlockedLayout([1, 16], [THREADS_PER_WARP, 1], [1, 4], [1, 0]),
                                 ttgl.BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0])))
@@ -1541,9 +1546,9 @@ def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layo
     if src_ctas_per_cga is not None:
         if not is_cuda() or not is_hopper_or_newer():
             pytest.xfail("num_ctas > 1 requires NVIDIA Hopper or newer")
-        if M % src_ctas_per_cga[0] != 0 or N % src_ctas_per_cga[1] != 0:
+        if M % min(M, src_ctas_per_cga[0]) != 0 or N % min(N, src_ctas_per_cga[1]) != 0:
             pytest.xfail("Shape must be divisible by the source CGA shape")
-        if M % dst_ctas_per_cga[0] != 0 or N % dst_ctas_per_cga[1] != 0:
+        if M % min(M, dst_ctas_per_cga[0]) != 0 or N % min(N, dst_ctas_per_cga[1]) != 0:
             pytest.xfail("Shape must be divisible by the destination CGA shape")
         if src_ctas_per_cga[0] * src_ctas_per_cga[1] != dst_ctas_per_cga[0] * dst_ctas_per_cga[1]:
             pytest.xfail("Source and destination CGA shapes must have the same number of CTAs")
@@ -1801,7 +1806,7 @@ def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device)
 
 
 @pytest.mark.skipif(is_hip(), reason="Assumes 32 threads per warp")
-def test_regress_warp_shuffle_convert_layout(tmp_path):
+def test_regress_warp_shuffle_convert_layout(tmp_path, device):
     rows = 2
     cols = 8
     # We have previously incorrectly lowered a layout conversion between these
@@ -1840,7 +1845,7 @@ def test_regress_warp_shuffle_convert_layout(tmp_path):
         ttgl.store(out_ptr + out_offsets, y)
 
     torch.manual_seed(0)
-    x = torch.randint(-128, 128, (rows, cols), dtype=torch.int16, device="cuda")
+    x = torch.randint(-128, 128, (rows, cols), dtype=torch.int16, device=device)
     ref = torch.zeros_like(x)
     out = torch.zeros_like(x)
 

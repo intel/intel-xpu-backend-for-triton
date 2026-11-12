@@ -10,7 +10,6 @@ python/test/gluon/test_core.py::test_thread_regions_map_elementwise_callees
 # requires CUDA shared memory or Blackwell tensor memory
 python/test/gluon/test_core.py::test_inline_asm_memdesc_view
 # requires NVIDIA thread region lowering
-python/test/gluon/test_core.py::test_thread_regions_combiner_callees
 python/test/gluon/test_core.py::test_thread_regions_multi_cta_loop
 # uses PTX
 python/test/gluon/test_core.py::test_inline_asm_many_elements
