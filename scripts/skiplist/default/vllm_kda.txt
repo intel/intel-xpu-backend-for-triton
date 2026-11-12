@@ -1,4 +1,4 @@
 # SIGFPE (Fatal Python error: Floating-point exception) in Intel driver load_binary
 # while autotuning chunk_kda_fwd_intra; it kills the whole pytest process.
-# Regression bisected to 0ab43cf07 (#8727): https://github.com/intel/intel-xpu-backend-for-triton/issues/8788
+# Seen on PVC and BMG (B60); bisected on PVC to 0ab43cf07 (#8727): https://github.com/intel/intel-xpu-backend-for-triton/issues/8788
 tests/models/kimi_k3/test_kda.py::test_chunk_kda_fused_gate_cumsum_matches_unfused[cu_seqlens2-dtype2--3.0]
