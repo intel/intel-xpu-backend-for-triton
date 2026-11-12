@@ -1231,9 +1231,8 @@ void collectConjuncts(Value v, SmallPtrSetImpl<Value> &visited,
 /// tensor it is built from. `std::nullopt` if `v` is not a tensor of the same
 /// rank as the mask, which leaves its per-dim behaviour unknown.
 ///
-/// A splat varies along nothing, whatever its shape. The pipeliner's loop
-/// guard reaches a masked load that way -- `and(splat(i > 0), boundaryMask)` --
-/// so missing this would leave every pipelined load unmatched.
+/// A splat varies along nothing, whatever its shape: a scalar flag in a user
+/// mask, `(offs < M) & flag`, reaches here as a `tt.splat` of an i1.
 std::optional<SmallVector<unsigned>>
 varyingDims(Value v, ArrayRef<int64_t> tensorShape) {
   Value narrow = peelBroadcasts(v);
@@ -1327,7 +1326,7 @@ matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
       return std::nullopt;
     ArrayRef<unsigned> dims = *varying;
     // Uniform along the pitch and contiguous dims: a batch-dims-only
-    // predicate (or a splat guard), which stays a mask.
+    // predicate (or a splatted scalar flag), which stays a mask.
     if (!llvm::is_contained(dims, pitchDim) &&
         !llvm::is_contained(dims, contiguousDim)) {
       info.extraPreds.push_back(conjunct);

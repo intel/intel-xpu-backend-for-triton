@@ -216,9 +216,9 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
 /// extent)` (see `computeRowLimitHeight`), so the mask needs no per-element
 /// predication at all. `rowBase` is null when the index is a bare `arange`.
 ///
-/// `extraPreds` are the uniform conjuncts (batch-dim predicates, or the
-/// pipeliner's loop guard), each as `extraPred` in `RowLimitMaskInfo`: the
-/// caller ANDs them into its own per-message select.
+/// `extraPreds` are the uniform conjuncts (batch-dim predicates, or scalar
+/// flags splatted to the mask's shape), each as `extraPred` in
+/// `RowLimitMaskInfo`: the caller ANDs them into its own per-message select.
 struct BoundaryMaskInfo {
   unsigned boundedDim; // the pitch dim, as in `RowLimitMaskInfo`
   Value rowBase, rowBound;
