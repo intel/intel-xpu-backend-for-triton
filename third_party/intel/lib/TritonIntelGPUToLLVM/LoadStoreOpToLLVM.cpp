@@ -131,8 +131,8 @@ struct SubGroupBlockRead {
 };
 
 /// Matches a layout whose lanes hold consecutive 32- or 64-bit words of the
-/// row. 8/16-bit words stay on the gather path: on bf16 rows they measured
-/// slower than gathers (#8667).
+/// row. 16-bit words measured slower than the gathers on bf16 rows (see the PR
+/// description), and 8-bit words were not measured: both stay on the gathers.
 static std::optional<SubGroupBlockRead>
 matchSubGroupBlockRead(RankedTensorType type, unsigned subGroupSize) {
   if (llvm::any_of(type.getShape().drop_back(),
@@ -623,10 +623,10 @@ struct LoadStoreConversionBase {
     //
     // Note that DescriptorLoadOp always emits a boundary-check mask, even for
     // provably in-bounds tiles, so this choice applies to all of its masked
-    // fallback loads (2D block loads bypass this path entirely). Predicating
-    // them costs IGC's folding of the uniformly-true predicates that the
-    // control-flow form exposes; that trade measured favorable on Xe2, see
-    // issue #7090.
+    // fallback loads (2D block loads and single-row sub-group block reads
+    // bypass this path entirely). Predicating them costs IGC's folding of the
+    // uniformly-true predicates that the control-flow form exposes; that trade
+    // measured favorable on Xe2, see issue #7090.
     static const std::optional<bool> usePredicatedLoad =
         tools::isEnvValueBool(tools::getStrEnv("TRITON_INTEL_PREDICATED_LOAD"));
     static const std::optional<bool> usePredicatedStore = tools::isEnvValueBool(
