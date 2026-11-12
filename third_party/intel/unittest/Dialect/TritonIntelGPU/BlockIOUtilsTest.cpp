@@ -868,6 +868,23 @@ TEST_F(MatchBoundaryCheckMaskTest, SharedAndVisitedOnce) {
   EXPECT_EQ(result->extraPreds.front(), flag);
 }
 
+// `bound > index` is the same bound with the index on the right, as
+// `K > offs_k` reaches the IR.
+TEST_F(MatchBoundaryCheckMaskTest, SwappedComparisonAccepted) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  SmallVector<int64_t, 2> narrow = {256, 1};
+  Value rowBound = constI(100, 32);
+  Value index2D = expandDims(arange(256), /*axis=*/1, narrow);
+  Value upper = broadcastTo(
+      arith::CmpIOp::create(builder, loc(), arith::CmpIPredicate::sgt,
+                            splatTo(rowBound, narrow), index2D),
+      shape);
+
+  auto result = match(upper, shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, rowBound);
+}
+
 // The pitch policy shared by MaterializeBlockPointer and LowerTo2DBlockLoad.
 // The runtime cases are not reachable from lit: a runtime row stride does not
 // pass MaterializeBlockPointer's alignment check there.

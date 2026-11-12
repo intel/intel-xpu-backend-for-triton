@@ -229,6 +229,7 @@ struct BoundaryMaskInfo {
 /// Fails unless every conjunct is recognised, `other` is
 /// zero-fill-compatible, the pitch dim is not broadcast, and the bound is i32
 /// or i64 with the base of the compare's own type (no extension between them).
+/// The bound may have the index on either side (`bound > index`).
 std::optional<BoundaryMaskInfo>
 matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
                        unsigned contiguousDim, bool pitchDimIsBroadcast);
