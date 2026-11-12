@@ -242,7 +242,6 @@ def should_use_streamk(M: int, N: int, K: int) -> bool:
 
 
 def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
-    """Multiply strided matrices without copying or modifying inputs."""
     if DEVICE == 'xpu':
         num_xe_core = torch.xpu.get_device_capability(0)['gpu_subslice_count']
     else:
@@ -254,12 +253,10 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
     BLOCK_SIZE_K = BLOCK_SIZES['BLOCK_SIZE_K']
 
     # Check constraints.
-    assert a.ndim == b.ndim == c.ndim == 2, 'Matrices must be two-dimensional'
     assert a.shape[1] == b.shape[0], 'Incompatible dimensions'
     assert all(x.data_ptr() % 16 == 0 for x in (a, b, c)), 'Matrix base addresses must be 16-byte aligned'
     M, K = a.shape
     K, N = b.shape
-    assert c.shape == (M, N), 'Incompatible output dimensions'
 
     num_block_m = triton.cdiv(M, BLOCK_SIZE_M)
     num_block_n = triton.cdiv(N, BLOCK_SIZE_N)
