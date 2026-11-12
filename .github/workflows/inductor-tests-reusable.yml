@@ -8,9 +8,9 @@ on:
         type: string
         default: ""
       suite:
-        description: Space separated lists of test suites or "all"
+        description: Space separated list of test files
         type: string
-        default: "all"
+        required: true
       runner_label:
         description: Runner label, keep empty for default
         type: string
