@@ -254,6 +254,7 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
 
     # Check constraints.
     assert a.shape[1] == b.shape[0], 'Incompatible dimensions'
+    assert all(x.data_ptr() % 16 == 0 for x in (a, b, c)), 'Matrix base addresses must be 16-byte aligned'
     M, K = a.shape
     K, N = b.shape
 

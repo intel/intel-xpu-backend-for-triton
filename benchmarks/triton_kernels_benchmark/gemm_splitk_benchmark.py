@@ -90,6 +90,7 @@ class _matmul(torch.autograd.Function):
     def _call(a, b, c, acc_dtype):
         # checks constraints
         assert a.shape[1] == b.shape[0], 'incompatible dimensions'
+        assert all(x.data_ptr() % 16 == 0 for x in (a, b, c)), 'matrix base addresses must be 16-byte aligned'
         M, K = a.shape
         _, N = b.shape
 
