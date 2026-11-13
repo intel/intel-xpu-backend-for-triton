@@ -29,19 +29,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // -----
 
-// COM: `reverse = true` flips the lane order before and after the in-warp phase.
-// COM: A forward inclusive scan between the two flips is the reverse scan.
+// COM: `reverse = true` scans the lanes from the end with shuffles down. The
+// COM: builtin scans in lane order, and mirroring the lanes around it is slower.
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @scan_1d_f32_add_reverse
   tt.func public @scan_1d_f32_add_reverse(%f : tensor<32xf32, #blocked>) -> tensor<32xf32, #blocked> {
-    // SCAN-ON:      [[FLIP:%.*]] = llvm.call spir_funccc @_Z21sub_group_shuffle_xorfj
-    // SCAN-ON:      [[SUBGROUP:%.*]] = llvm.mlir.constant(3 : i32) : i32
-    // SCAN-ON-NEXT: [[INCLUSIVE:%.*]] = llvm.mlir.constant(1 : i32) : i32
-    // SCAN-ON-NEXT: [[SCANNED:%.*]] = llvm.call spir_funccc @_Z27__spirv_GroupNonUniformFAddiif([[SUBGROUP]], [[INCLUSIVE]], [[FLIP]]) {{.*}} : (i32, i32, f32) -> f32
-    // SCAN-ON:      llvm.call spir_funccc @_Z21sub_group_shuffle_xorfj([[SCANNED]], %{{.*}})
-    // SCAN-ON-NOT:  sub_group_shuffle_up
+    // CHECK-NOT:     GroupNonUniform
+    // CHECK-NOT:     sub_group_shuffle_xor
+    // CHECK-COUNT-5: llvm.call spir_funccc @_Z22sub_group_shuffle_downfj
+    // CHECK-NOT:     GroupNonUniform
+    // CHECK-NOT:     sub_group_shuffle_xor
+    // CHECK-NOT:     sub_group_shuffle_up
     %g = "tt.scan" (%f) ({
     ^bb0(%a: f32, %b: f32):
       %r = arith.addf %a, %b : f32
@@ -404,5 +404,64 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     }) {axis = 0 : i32, reverse = false} : (tensor<32xf32, #blocked>) -> tensor<32xf32, #blocked>
     // CHECK: llvm.return
     tt.return %g : tensor<32xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: The CI `prefix_sums` 32x64 tile scanned along the rows: two lanes, four
+// COM: warps and four register blocks hold the axis. The in-warp phase only shifts
+// COM: lanes by a fixed distance, and one shared-memory round with a single barrier
+// COM: combines the warps and the blocks: no shuffle with a computed lane index
+// COM: and no butterfly exchange of the totals.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @scan_2d_axis0_warps_and_blocks
+  tt.func public @scan_2d_axis0_warps_and_blocks(%f : tensor<32x64xf32, #blocked>) -> tensor<32x64xf32, #blocked> {
+    // CHECK-NOT: sub_group_shuffle_xor
+    // CHECK-NOT: @_Z17sub_group_shufflefj
+    // CHECK:     llvm.call spir_funccc @_Z20sub_group_shuffle_upfj
+    // CHECK-NOT: sub_group_shuffle_xor
+    // CHECK-NOT: @_Z17sub_group_shufflefj
+    // CHECK:     llvm.call spir_funccc @_Z7barrierj
+    // CHECK-NOT: sub_group_shuffle_xor
+    // CHECK-NOT: @_Z17sub_group_shufflefj
+    // CHECK-NOT: @_Z7barrierj
+    %g = "tt.scan" (%f) ({
+    ^bb0(%a: f32, %b: f32):
+      %r = arith.addf %a, %b : f32
+      tt.scan.return %r : f32
+    }) {axis = 0 : i32, reverse = false} : (tensor<32x64xf32, #blocked>) -> tensor<32x64xf32, #blocked>
+    // CHECK: llvm.return
+    tt.return %g : tensor<32x64xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: A reverse scan with four elements per thread scans the one per-thread
+// COM: total with five shuffles down, and the other elements take the total of
+// COM: the next lane with a sixth: no lane is mirrored and no element reversed.
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @scan_1d_reverse_multi_elem_per_thread
+  tt.func public @scan_1d_reverse_multi_elem_per_thread(%f : tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked> {
+    // CHECK-NOT:     GroupNonUniform
+    // CHECK-NOT:     sub_group_shuffle_xor
+    // CHECK-NOT:     @_Z17sub_group_shuffleij
+    // CHECK-COUNT-6: llvm.call spir_funccc @_Z22sub_group_shuffle_downij
+    // CHECK-NOT:     GroupNonUniform
+    // CHECK-NOT:     sub_group_shuffle_xor
+    // CHECK-NOT:     @_Z17sub_group_shuffleij
+    // CHECK-NOT:     sub_group_shuffle_down
+    %g = "tt.scan" (%f) ({
+    ^bb0(%a: i32, %b: i32):
+      %r = arith.addi %a, %b : i32
+      tt.scan.return %r : i32
+    }) {axis = 0 : i32, reverse = true} : (tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked>
+    // CHECK: llvm.return
+    tt.return %g : tensor<128xi32, #blocked>
   }
 }
