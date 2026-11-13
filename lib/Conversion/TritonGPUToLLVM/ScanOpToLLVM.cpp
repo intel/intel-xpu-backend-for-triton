@@ -575,23 +575,20 @@ private:
     return llvm::to_vector(candidates);
   }
 
-  SmallVector<Value> gatherCarry(Location loc, const ScanValues &totals,
-                                 ArrayRef<unsigned> candidates, Value srcReg,
-                                 Value srcLane,
-                                 ConversionPatternRewriter &rewriter,
-                                 std::optional<unsigned> upDistance,
-                                 bool laneLocal) const {
+  SmallVector<Value> shuffleCarry(Location loc, const ScanValues &totals,
+                                  ArrayRef<unsigned> candidates, Value srcReg,
+                                  Value srcLane,
+                                  ConversionPatternRewriter &rewriter,
+                                  std::optional<unsigned> upDistance) const {
     assert(!candidates.empty() && "each segment has a warp-local carry");
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto fetch = [&](unsigned reg) {
-      return laneLocal ? totals[reg]
-                       : shuffleValues(loc, totals[reg], srcLane, rewriter,
-                                       upDistance)
-                             .first;
-    };
-    auto carry = fetch(candidates.front());
+    auto carry = shuffleValues(loc, totals[candidates.front()], srcLane,
+                               rewriter, upDistance)
+                     .first;
     for (unsigned candidate : candidates.drop_front()) {
-      auto incoming = fetch(candidate);
+      auto incoming =
+          shuffleValues(loc, totals[candidate], srcLane, rewriter, upDistance)
+              .first;
       Value select = b.icmp_eq(srcReg, b.i32_val(candidate));
       for (auto [value, source] : llvm::zip(carry, incoming))
         value = b.select(select, source, value);
@@ -616,7 +613,6 @@ private:
     bool reverse = op.getReverse();
     auto inverse = totalsLayout.pseudoinvert().sublayout(
         llvm::to_vector(totalsLayout.getOutDimNames()), {kReg, kLane});
-    bool laneLocal = inverse.sublayoutIsZero({axis}, {kLane});
     unsigned numSegments = segmentLayout.getOutDimSize(axis);
     SmallVector<ScanCarry> carries;
     auto upDistance = getShuffleUpDistance(segmentLayout, inverse, op.getAxis(),
@@ -641,8 +637,8 @@ private:
       auto candidates =
           getScanRegisters(segmentLayout, inverse, r, op.getAxis(),
                            segmentsPerScan, reverse ? 1 : -1);
-      auto carry = gatherCarry(loc, totals, candidates, srcReg, srcLane,
-                               rewriter, upDistance, laneLocal);
+      auto carry = shuffleCarry(loc, totals, candidates, srcReg, srcLane,
+                                rewriter, upDistance);
       carries.push_back({std::move(carry), pred});
     }
     return carries;
