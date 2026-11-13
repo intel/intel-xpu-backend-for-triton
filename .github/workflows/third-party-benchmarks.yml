@@ -8,6 +8,7 @@ on:
       - .github/workflows/third-party-benchmarks.yml
       - scripts/sglang/sglang-pin.txt
       - benchmarks/third_party/liger/liger-pin.txt
+      - benchmarks/third_party/liger/liger-fix.patch
   workflow_dispatch:
     inputs:
       runner_label:
