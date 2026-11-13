@@ -7,7 +7,7 @@ from functools import partial
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu
+from triton._internal_testing import is_compile_warmup, is_xpu
 
 
 # ---------------------------------------------------------------------------
@@ -19,6 +19,7 @@ from triton._internal_testing import is_xpu
 @pytest.mark.skipif(not is_xpu(), reason="Block descriptor tests are specific to the XPU backend")
 @pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io'],
                    reason="Block loads not supported on this architecture", run=False)
+@pytest.mark.enable_warmup
 def test_block_tdesc_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib.Path):
     """Load A and B matrices through tensor descriptors with DPAS dot_op encoding.
 
@@ -127,6 +128,7 @@ def test_block_tdesc_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib
     not (triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io']
          and triton.runtime.driver.active.get_current_target().arch['has_subgroup_matrix_multiply_accumulate']),
     reason="Block loads and/or DPAS not supported on this architecture", run=False)
+@pytest.mark.enable_warmup
 def test_block_tdesc_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, TRANSPOSE_A, TRANSPOSE_B,
                                  device):
     if GROUP_SIZE_M == 1 and (BLOCK_SIZE_M > 64 or BLOCK_SIZE_N > 64):
@@ -381,6 +383,7 @@ ROW_LIMIT_BOUNDS = [
 @pytest.mark.skipif(not is_xpu(), reason="Row-limit zero fill is specific to the XPU backend")
 @pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io'],
                    reason="Block loads not supported on this architecture", run=False)
+@pytest.mark.enable_warmup
 def test_row_limit_zero_fill(bound, i64, device):
     BM, BK, num_tiles = 32, 64, 4
     rows = BM * num_tiles
@@ -392,6 +395,8 @@ def test_row_limit_zero_fill(bound, i64, device):
 
     kernel = row_limit_dot_kernel[(num_tiles, )](x, eye, out, bound, BK, BM, i64, num_warps=4)
 
+    if is_compile_warmup():
+        return
     # Guard against the test silently exercising the per-element path.
     # The masked A load must get block IO (MaterializeBlockPointer) and be
     # lowered to a hardware 2D block load; B is the only other load and uses
@@ -429,6 +434,7 @@ def row_limit_dot_rank3_kernel(a_ptr, eye_ptr, out_ptr, bound, batch_bound, K: t
 @pytest.mark.skipif(not is_xpu(), reason="Row-limit zero fill is specific to the XPU backend")
 @pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io'],
                    reason="Block loads not supported on this architecture", run=False)
+@pytest.mark.enable_warmup
 def test_row_limit_zero_fill_rank3(bound, batch_bound, device):
     BB, BM, BK, num_tiles = 2, 32, 64, 4
     rows = BM * num_tiles
@@ -440,6 +446,8 @@ def test_row_limit_zero_fill_rank3(bound, batch_bound, device):
     kernel = row_limit_dot_rank3_kernel[(num_tiles, )](x, eye, out, bound, batch_bound, BK, BB, BM, rows * BK,
                                                        num_warps=4)
 
+    if is_compile_warmup():
+        return
     # The masked A load must get block IO, with the batch predicate and row
     # limit both recognized.
     assert re.search(r"tt\.load %\w+, %\w+, %\w+ \{ttig\.block_io", kernel.asm["ttgir"])

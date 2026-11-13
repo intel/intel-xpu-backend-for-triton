@@ -71,6 +71,16 @@ class _FakeCudaTensorMode(TorchFunctionMode):
         return func(*args, **(kwargs or {}))
 
 
+class _WarmupCompiledKernel:
+    """Stand-in for the `CompiledKernel` of a textual IR kernel compiled by the warmup pool.
+
+    Launching is a no-op and there is no `asm`/`metadata`: tests must skip such checks under `is_compile_warmup()`.
+    """
+
+    def __getitem__(self, grid):
+        return lambda *args, **kwargs: None
+
+
 @contextmanager
 def compile_warmup_only(dispatcher=None):
     """Capture launch specializations without GPU allocations or kernel execution."""
@@ -86,6 +96,18 @@ def compile_warmup_only(dispatcher=None):
             return kernel.warmup(*args, grid=grid, **kwargs)
         return dispatcher.dispatch(*args, kernel=kernel, grid=grid, test=dispatcher.current_test, **kwargs)
 
+    def warmup_compile(src, target=None, options=None, _env_vars=None):
+        # Textual IR kernels (`triton.compile(path)`) are compiled here rather than at launch, so route them
+        # to the pool; the returned stand-in ignores launches. AST sources never reach this function: they are
+        # compiled from `kernel[grid](...)`.
+        if not isinstance(src, str) or target is not None or _env_vars is not None:
+            return previous_compile(src, target=target, options=options, _env_vars=_env_vars)
+        if dispatcher is None:
+            previous_compile(src, options=options)
+        else:
+            dispatcher.dispatch_ir(src, options=options, test=dispatcher.current_test)
+        return _WarmupCompiledKernel()
+
     with triton.knobs.runtime.scope(), warnings.catch_warnings():
         warnings.filterwarnings("ignore", message="Accessing the data pointer of FakeTensor.*")
         with _FakeCudaTensorMode():
@@ -94,11 +116,14 @@ def compile_warmup_only(dispatcher=None):
             triton.KernelInterface.__getitem__ = lambda kernel, grid: lambda *args, **kwargs: dispatch(
                 kernel, grid, *args, **kwargs)
             torch.testing.assert_close = fake_assert_close
+            previous_compile = triton.compiler.compile
+            triton.compile = triton.compiler.compile = warmup_compile
             active_token = _COMPILE_WARMUP_ACTIVE.set(True)
             try:
                 yield
             finally:
                 _COMPILE_WARMUP_ACTIVE.reset(active_token)
+                triton.compile = triton.compiler.compile = previous_compile
                 triton.KernelInterface.__getitem__ = previous_getitem
                 torch.testing.assert_close = previous_assert_close
 

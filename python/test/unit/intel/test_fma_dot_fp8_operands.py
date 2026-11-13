@@ -9,7 +9,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu
+from triton._internal_testing import is_compile_warmup, is_xpu
 
 
 @triton.jit
@@ -44,6 +44,7 @@ def _fma_dot_fp8(a_ptr, b_ptr, c_ptr, ieee_ptr, M: tl.constexpr, N: tl.constexpr
 ])
 @pytest.mark.parametrize("acc_dtype", [torch.float32, torch.bfloat16, torch.float16])
 @pytest.mark.parametrize("BM, BN, num_warps", [(128, 128, 8), (64, 64, 4)])
+@pytest.mark.enable_warmup
 def test_fma_dot_fp8_operands(a_dtype, b_dtype, acc_dtype, BM, BN, num_warps, device):
     M = N = K = 512
     BK = 32
@@ -59,7 +60,8 @@ def test_fma_dot_fp8_operands(a_dtype, b_dtype, acc_dtype, BM, BN, num_warps, de
         return out, kernel
 
     out, kernel = run(source_cast=False)
-    assert "#ttig.dpas" not in kernel.asm["ttgir"], "kernel no longer exercises the FMA path"
+    if not is_compile_warmup():
+        assert "#ttig.dpas" not in kernel.asm["ttgir"], "kernel no longer exercises the FMA path"
     ref_out, _ = run(source_cast=True)
     assert torch.equal(out, ref_out), "compiler-widened fp8 operands differ from explicit casts"
     if acc_dtype == torch.float32:

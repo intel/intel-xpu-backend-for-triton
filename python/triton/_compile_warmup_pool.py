@@ -329,6 +329,48 @@ def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes
             os.environ["PYTEST_XDIST_WORKER"] = previous_capture_worker
 
 
+class _IRCompileTask(tuple):
+    """Arguments of `_ir_preload_worker`; the type tells `_submit` which worker to run."""
+
+
+def _ir_preload_worker(ir_text, extension, options, environment, cache_dir, trace_directory, phase, test,
+                       capture_worker):
+    """Compile one textual IR kernel (`triton.compile(path)`) to populate the shared disk cache."""
+    previous_capture_worker = os.environ.get("PYTEST_XDIST_WORKER")
+    os.environ["PYTEST_XDIST_WORKER"] = capture_worker
+    origin = f" (launched by {test})" if test else ""
+    _silence_worker_shutdown_diagnostics()
+    worker = os.getpid()
+    os.environ["TRITON_WARMUP_COMPILER_WORKER"] = str(worker)
+    try:
+        with (
+                triton.knobs.compilation.scope(),
+                _cache_invalidating_environment(environment),
+                triton.knobs.cache.scope(),
+                tempfile.TemporaryDirectory(prefix="triton-warmup-ir-") as directory,
+        ):
+            triton.knobs.cache.dir = cache_dir
+            if trace_directory is not None:
+                from triton._compile_warmup import CompilationTrace
+
+                triton.knobs.compilation.listener = CompilationTrace(trace_directory, phase, test)
+            # The cache key hashes the extension and the text, never the path.
+            path = os.path.join(directory, f"kernel.{extension}")
+            with open(path, "w", encoding="utf-8") as output:
+                output.write(ir_text)
+            start = time.monotonic()
+            triton.compiler.compile(path, options=options)
+            return worker, time.monotonic() - start
+    except Exception as error:
+        raise _CompilationFailedError(
+            f"Compilation failed for IR kernel{origin}: {type(error).__name__}: {error}") from error
+    finally:
+        if previous_capture_worker is None:
+            os.environ.pop("PYTEST_XDIST_WORKER", None)
+        else:
+            os.environ["PYTEST_XDIST_WORKER"] = previous_capture_worker
+
+
 @dataclass(frozen=True)
 class _CapturedPreload:
     module_name: str | None
@@ -430,13 +472,49 @@ class ProcessPoolWarmupDispatcher:
                     self._submitted_keys.add(digest)
                     self._connection.send((digest, task))
 
+    def dispatch_ir(self, path, *, options, test):
+        """Queue the compilation of a textual IR kernel file, as `triton.compile(path)` would do."""
+        from triton._C.libtriton import get_cache_invalidating_env_vars
+
+        with open(path, encoding="utf-8") as input_file:
+            ir_text = input_file.read()
+        extension = os.path.splitext(path)[1][1:]
+        options = dict(options or {})
+        with self._capture_lock:
+            environment = get_cache_invalidating_env_vars()
+            instrumentation_mode = triton.knobs.compilation.instrumentation_mode
+            digest = hashlib.sha256(
+                json.dumps(["ir", instrumentation_mode, extension, ir_text, options, environment], sort_keys=True,
+                           default=repr).encode()).hexdigest()
+            if digest in self._submitted_keys:
+                return
+            phase = self.current_phase
+            self.record_test(test, phase)
+            task = _IRCompileTask((
+                ir_text,
+                extension,
+                options,
+                environment,
+                self._cache_dir,
+                self._trace_directory,
+                phase,
+                test,
+                os.environ.get("PYTEST_XDIST_WORKER", "main"),
+            ))
+            if self._connection is None:
+                self._submit(digest, task)
+            else:
+                self._submitted_keys.add(digest)
+                self._connection.send((digest, task))
+
     def _submit(self, digest, task):
         if digest in self._submitted_keys:
             return
         self._submitted_keys.add(digest)
         if self._first_submit is None:
             self._first_submit = time.monotonic()
-        self._pending.append(self._executor.submit(_preload_worker, *task))
+        worker = _ir_preload_worker if isinstance(task, _IRCompileTask) else _preload_worker
+        self._pending.append(self._executor.submit(worker, *task))
 
     def _capture_preloads(self, instrumentation_mode, environment, kernel, args, grid, kwargs, test):
         from triton.runtime import jit

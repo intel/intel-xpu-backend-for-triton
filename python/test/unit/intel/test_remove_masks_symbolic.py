@@ -34,7 +34,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu
+from triton._internal_testing import is_compile_warmup, is_xpu
 
 
 @triton.jit
@@ -144,6 +144,7 @@ def test_masked_k_sum_no_oob(K, symbolic, monkeypatch, device):
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.parametrize("K", [64, 768, 770])
 @pytest.mark.parametrize("symbolic", ["0", "1"])
+@pytest.mark.enable_warmup
 def test_masked_k_matmul_no_oob(K, symbolic, monkeypatch, device):
     monkeypatch.setenv("TRITON_INTEL_SYMBOLIC_MASKS", symbolic)
     BLOCK_K = 64
@@ -160,6 +161,8 @@ def test_masked_k_matmul_no_oob(K, symbolic, monkeypatch, device):
 
     compiled = _fresh(masked_k_matmul_kernel)[(1, )](a_buf, b_buf, c, K, BLOCK_K=BLOCK_K)
 
+    if is_compile_warmup():
+        return
     # The legacy canonical validator versions this shape too, so both modes must.
     ttir = compiled.asm["ttir"]
     assert _versioned(ttir), ttir
