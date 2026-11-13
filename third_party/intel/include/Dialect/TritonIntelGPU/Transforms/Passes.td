@@ -382,6 +382,8 @@ def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-blo
     A load is not re-encoded when its reductions and the conversion of their results to a `tt.store` (reached
     through elementwise ops and at most one convert) need no shared memory in the current layout but would in
     the new one.
+    Nor is it re-encoded when, along any grid axis, the tiles read by programs pid and pid+1 are a power of two
+    above 256 KiB apart, or that distance is not a compile-time constant.
     Every tagged descriptor load in the function also needs zero padding, and with 16 lanes every value computed from a reduction must be f32 or i32 (an op the check
     does not recognize refuses too), since such kernels miscompile. These gates are function-wide: a function
     relays out all its eligible loads or none.
