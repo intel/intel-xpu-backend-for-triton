@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --check-prefix=LLVM
 
 // Test basic 32-bit atomic CAS, result broadcast by sub-group shuffle
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
@@ -279,12 +280,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_acq_rel_multi_warp
+  // LLVM-LABEL: llvm.func spir_kernelcc @test_atomic_cas_acq_rel_multi_warp
   tt.func @test_atomic_cas_acq_rel_multi_warp(%ptr: !tt.ptr<i32>, %cmp: i32, %val: i32) -> i32 {
-    // CHECK: llvm.call spir_funccc @_Z7barrierj
+    // CHECK: triton_gen.barrier {mem_fence = LocalAndGlobal}
+    // LLVM: [[RELEASE_SEM:%.*]] = llvm.mlir.constant(784 : i32) : i32
+    // LLVM-NEXT: llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii(%{{.*}}, %{{.*}}, [[RELEASE_SEM]])
     // CHECK: llvm.cmpxchg %arg0, %{{.*}}, %{{.*}} acq_rel monotonic : !llvm.ptr<1>, i32
+    // LLVM: llvm.cmpxchg
     // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
-    // CHECK: llvm.call spir_funccc @_Z7barrierj
+    // CHECK: triton_gen.barrier {mem_fence = LocalAndGlobal}
+    // LLVM: [[ACQUIRE_SEM:%.*]] = llvm.mlir.constant(784 : i32) : i32
+    // LLVM-NEXT: llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii(%{{.*}}, %{{.*}}, [[ACQUIRE_SEM]])
     // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
+    // LLVM: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
     %0 = tt.atomic_cas acq_rel, gpu, %ptr, %cmp, %val : (!tt.ptr<i32>, i32, i32) -> i32
     tt.return %0 : i32
   }

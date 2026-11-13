@@ -12,7 +12,10 @@
 #include "Utility.h"
 #include "Utils/LLVMIntr.h"
 #include "Utils/Mangling.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <limits>
 #include <numeric>
@@ -135,19 +138,35 @@ void TargetInfo::storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
 
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  b.barrier(targets);
+  using triton::gpu::AddrSpace;
+  bool local = bitEnumContainsAll(targets, AddrSpace::Local);
+  bool global = bitEnumContainsAll(targets, AddrSpace::GlobalRead) ||
+                bitEnumContainsAll(targets, AddrSpace::GlobalWrite);
+  // "All" fences every supported Intel memory domain. Dedicated tensor
+  // memory domains have no Intel equivalent.
+  if (targets != AddrSpace::All &&
+      (bitEnumContainsAll(targets, AddrSpace::TensorRead) ||
+       bitEnumContainsAll(targets, AddrSpace::TensorWrite)))
+    llvm::report_fatal_error(
+        "Tensor memory barriers are not supported on Intel GPU");
+  TritonGEN::MemFence fence =
+      local
+          ? (global ? TritonGEN::MemFence::LOCAL_AND_GLOBAL
+                    : TritonGEN::MemFence::LOCAL)
+          : (global ? TritonGEN::MemFence::GLOBAL : TritonGEN::MemFence::NONE);
+  TritonGEN::BarrierOp::create(rewriter, loc, fence);
 }
 
 void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter,
                                 Operation * /*sourceOp*/) const {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  b.barrier(triton::gpu::AddrSpace::Local);
+  llvm::report_fatal_error("Cluster barriers are not supported on Intel GPU");
 }
 
 void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  b.barrier(triton::gpu::AddrSpace::Local);
+  spirv::ControlBarrierOp::create(rewriter, loc, spirv::Scope::Subgroup,
+                                  spirv::Scope::Subgroup,
+                                  spirv::MemorySemantics::AcquireRelease |
+                                      spirv::MemorySemantics::WorkgroupMemory);
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {

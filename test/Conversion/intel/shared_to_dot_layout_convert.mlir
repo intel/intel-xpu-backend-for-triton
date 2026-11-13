@@ -20,7 +20,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     // CHECK-DAG:     %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     %AA = ttg.local_alloc %A : (tensor<128x64xf16, #blocked0>) -> !ttg.memdesc<128x64xf16, #shared, #ttg.shared_memory>
 
-    // CHECK:         llvm.call spir_funccc @_Z7barrierj
+    // CHECK:         triton_gen.barrier {mem_fence = Local}
     // COM:   Start of ttg.local_load. Load the value from SLM to register.
     // CHECK:         %[[WORK_ITEM_ID_:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]])
     // CHECK:         %[[WORK_ITEM_ID:.*]] = llvm.trunc %[[WORK_ITEM_ID_]] : i64 to i32
@@ -58,7 +58,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     // CHECK-DAG:     %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     %AA = ttg.local_alloc %A : (tensor<128x64xf16, #blocked0>) -> !ttg.memdesc<128x64xf16, #shared, #ttg.shared_memory>
 
-    // CHECK:         llvm.call spir_funccc @_Z7barrierj
+    // CHECK:         triton_gen.barrier {mem_fence = Local}
     // COM:   Start of ttg.local_load. Load the value from SLM to register.
     // CHECK:         %[[WORK_ITEM_ID_:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]])
     // CHECK:         %[[WORK_ITEM_ID:.*]] = llvm.trunc %[[WORK_ITEM_ID_]] : i64 to i32
@@ -97,7 +97,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     // CHECK-DAG:     %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     %BB = ttg.local_alloc %B : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #ttg.shared_memory>
 
-    // CHECK:         llvm.call spir_funccc @_Z7barrierj
+    // CHECK:         triton_gen.barrier {mem_fence = Local}
     // COM:   Start of ttg.local_load. Load the value from SLM to register.
     // CHECK:         %[[WORK_ITEM_ID_:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]])
     // CHECK:         %[[WORK_ITEM_ID:.*]] = llvm.trunc %[[WORK_ITEM_ID_]] : i64 to i32

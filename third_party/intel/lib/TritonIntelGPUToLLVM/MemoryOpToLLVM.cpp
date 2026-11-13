@@ -3,7 +3,8 @@
 // Intel GPUs have no usable sub-word atomic: 8-bit ones have no SPIR-V builtin
 // and 16-bit integer ones need SPV_INTEL_16bit_atomics, which not every target
 // supports (issues #7390, #8027). Emulate them over the containing 4-byte word;
-// anything else defers to the upstream patterns via a lower PatternBenefit.
+// other atomics defer to the upstream patterns via a lower PatternBenefit.
+// Barrier lowering preserves the requested memory domains and execution scope.
 //
 //===----------------------------------------------------------------------===//
 
@@ -25,6 +26,28 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
+
+struct BarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::BarrierOp> {
+  BarrierOpConversion(LLVMTypeConverter &converter,
+                      const TargetInfoBase &targetInfo, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::BarrierOp>(converter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (op.isWarp())
+      targetInfo.warpSync(op.getLoc(), rewriter);
+    else
+      targetInfo.barrier(op.getLoc(), rewriter, op.getAddrSpace());
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
 
 // 16-bit floats map onto the OpenCL half/bfloat atomic builtins, so only
 // integers need emulating.
@@ -217,7 +240,9 @@ struct AtomicPollOpConversion
     rewriter.setInsertionPointToStart(doneBlock);
     if (!adaptor.getTimeout()) {
       if (numCTAs == 1)
-        targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+        targetInfo.barrier(loc, rewriter,
+                           AddrSpace::Local | AddrSpace::GlobalRead |
+                               AddrSpace::GlobalWrite);
       else
         targetInfo.clusterBarrier(loc, rewriter, op);
       rewriter.replaceOp(op, b.true_val());
@@ -226,7 +251,9 @@ struct AtomicPollOpConversion
 
     if (op.getResult().use_empty()) {
       if (numCTAs == 1)
-        targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+        targetInfo.barrier(loc, rewriter,
+                           AddrSpace::Local | AddrSpace::GlobalRead |
+                               AddrSpace::GlobalWrite);
       else
         targetInfo.clusterBarrier(loc, rewriter, op);
       rewriter.eraseOp(op);
@@ -239,7 +266,9 @@ struct AtomicPollOpConversion
                                         targetInfo.getSharedAddressSpace()));
     targetInfo.storeShared(rewriter, loc, atomPtr, matched, threadPred);
     if (numCTAs == 1)
-      targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+      targetInfo.barrier(loc, rewriter,
+                         AddrSpace::Local | AddrSpace::GlobalRead |
+                             AddrSpace::GlobalWrite);
     else
       targetInfo.clusterBarrier(loc, rewriter, op);
 
@@ -367,7 +396,7 @@ private:
 void mlir::triton::intel::populateMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<AtomicLoadOpConversion, AtomicPollOpConversion,
-               AtomicStoreOpConversion>(typeConverter, targetInfo,
-                                        benefit.getBenefit() + 1);
+  patterns.add<BarrierOpConversion, AtomicLoadOpConversion,
+               AtomicPollOpConversion, AtomicStoreOpConversion>(
+      typeConverter, targetInfo, benefit.getBenefit() + 1);
 }

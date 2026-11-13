@@ -489,7 +489,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             raise WorkGroupSizeOutOfResources(opt.num_warps, opt.warp_size, max_work_group_size, smaller_warp_size,
                                               opt.sub_32_dpas)
         # The backend has no CTA cluster support: getClusterCTAId is hardwired to
-        # 0, clusterBarrier is a plain workgroup barrier, and loadDShared /
+        # 0, clusterBarrier rejects cluster synchronization, and loadDShared /
         # storeDShared ignore the ctaId they are given. Accepting num_ctas > 1
         # would silently miscompile any cross-CTA communication.
         if opt.num_ctas != 1:
