@@ -1339,10 +1339,37 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
   });
 }
 
+// A gather stays native only in the class measured at parity with the pointer
+// expansion: column offset 0 and a row access proven 16-byte aligned. Power-of-
+// two divisors, not floors, keep non-power-of-two hints from overclaiming.
+static bool isAlignedNativeGather(triton::DescriptorGatherOp op,
+                                  intel::ModuleAxisInfoAnalysis &axisInfo) {
+  if (!matchPattern(op.getYOffset(), m_Zero()))
+    return false;
+  Type elemTy = getElementTypeOrSelf(op.getType());
+  if (!elemTy.isIntOrFloat() || elemTy.getIntOrFloatBitWidth() < 8)
+    return false;
+  AxisInfo *info = axisInfo.getAxisInfo(op.getDesc());
+  if (!info || info->getRank() < 2)
+    return false;
+  constexpr int64_t kAlignBytes = 16;
+  auto pow2Divisor = [](int64_t v) { return v & -v; };
+  int64_t elemBytes = elemTy.getIntOrFloatBitWidth() / 8;
+  return pow2Divisor(info->getDivisibility(1)) >= kAlignBytes &&
+         pow2Divisor(info->getContiguity(1)) * elemBytes >= kAlignBytes;
+}
+
 static llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
 collectCandidateMakeTensorDescOps(Operation *op) {
   const bool keepNativeGathers =
       !tools::getBoolEnv("TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER");
+  // Built on the IR as it is now (after the greedy pre-rewrites), and only if
+  // a gather may stay native.
+  std::optional<intel::ModuleAxisInfoAnalysis> axisInfo;
+  if (keepNativeGathers && op->walk([](triton::DescriptorGatherOp) {
+                               return WalkResult::interrupt();
+                             }).wasInterrupted())
+    axisInfo.emplace(cast<ModuleOp>(op));
   llvm::SmallSetVector<triton::MakeTensorDescOp, 4> candidateMakeTensorDescOps;
   llvm::SmallSetVector<triton::MakeTensorDescOp, 4> unhandledMakeTensorDescOps;
   SmallVector<llvm::SmallSetVector<triton::MakeTensorDescOp, 4>> descGroups;
@@ -1374,7 +1401,7 @@ collectCandidateMakeTensorDescOps(Operation *op) {
         .Case<triton::DescriptorGatherOp>([&](triton::DescriptorGatherOp op) {
           // A gather stays native (lowered as ttig.descriptor_gather) only
           // where that lowering matches the pointer expansion: zero padding,
-          // no i1 elements, and a unit last stride.
+          // no i1 elements, a unit last stride, and isAlignedNativeGather.
           triton::intel::DescriptorDefinitions defs =
               triton::intel::findDescriptorDefinitions(op.getDesc());
           bool keepNative =
@@ -1383,7 +1410,8 @@ collectCandidateMakeTensorDescOps(Operation *op) {
               !getElementTypeOrSelf(op.getType()).isInteger(1) &&
               defs.allSatisfy([](triton::MakeTensorDescOp d) {
                 return matchPattern(d.getStrides().back(), m_One());
-              });
+              }) &&
+              isAlignedNativeGather(op, *axisInfo);
           for (triton::MakeTensorDescOp d : defs)
             (keepNative ? candidateMakeTensorDescOps
                         : unhandledMakeTensorDescOps)
