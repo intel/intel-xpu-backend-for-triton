@@ -488,7 +488,7 @@ TEST_F(MatchRowLimitMaskTest, NonSplatBoundRejected) {
 }
 
 // 2 * arange is neither a bare arange nor base + arange.
-TEST_F(MatchRowLimitMaskTest, NonArangeLhsRejected) {
+TEST_F(MatchRowLimitMaskTest, NonArangeIndexRejected) {
   SmallVector<int64_t, 2> shape = {256, 32};
   Value scaled = mulI32(arange(256), splatTo(constI(2, 32), {256}));
   Value mask =
