@@ -452,6 +452,46 @@ def get_unified_attention_benchmark(
                         f"cpu32={_h01(ref_cpu)}", flush=True)
                 except Exception as diag_err:  # pylint: disable=broad-except
                     print(f"DIAG8742 failed: {type(diag_err).__name__}: {diag_err}", flush=True)
+                try:
+                    # Stage-by-stage re-run of ref_paged_attn for sequence 0, each op compared with the CPU
+                    # on the identical (XPU-produced) inputs, to find which torch XPU op returns wrong values.
+                    qlen, kvlen = query_lens[0], kv_lens[0]
+                    bsz = key_cache.shape[1]
+                    idx = block_tables[0, :(kvlen + bsz - 1) // bsz].cpu().numpy()
+                    q0 = query[:qlen] * scale
+                    k0 = key_cache[idx].view(-1, key_cache.shape[2], key_cache.shape[3])[:kvlen]
+                    v0 = value_cache[idx].view(-1, value_cache.shape[2], value_cache.shape[3])[:kvlen]
+                    if q0.shape[1] != k0.shape[1]:
+                        k0 = torch.repeat_interleave(k0, q0.shape[1] // k0.shape[1], dim=1)
+                        v0 = torch.repeat_interleave(v0, q0.shape[1] // v0.shape[1], dim=1)
+
+                    def _cmp(name, x, y, atol_, rtol_):
+                        bad = ~torch.isclose(x.float().cpu(), y.float().cpu(), atol=atol_, rtol=rtol_, equal_nan=True)
+                        n_bad = int(bad.sum())
+                        where = ""
+                        if n_bad:
+                            nz = bad.nonzero()
+                            where = (f" first_bad={nz[0].tolist()} dim0_values={sorted(set(nz[:, 0].tolist()))[:10]}"
+                                     f" dim1_range=({int(nz[:, 1].min())},{int(nz[:, 1].max())})")
+                        print(f"DIAG8742 stage {name}: bad={n_bad}/{bad.numel()}{where}", flush=True)
+
+                    a_x = torch.einsum("qhd,khd->hqk", q0, k0).float()
+                    a_c = torch.einsum("qhd,khd->hqk", q0.float().cpu(), k0.float().cpu())
+                    _cmp("A qk-einsum xpu-vs-cpu32", a_x, a_c, 3e-2, 3e-2)
+                    msk = torch.triu(torch.ones(qlen, kvlen), diagonal=kvlen - qlen + 1).bool()
+                    b_x = a_x.masked_fill(msk, float("-inf"))
+                    s_in = b_x.clone()
+                    torch.softmax(s_in, dim=-1, out=s_in)
+                    s_out = torch.softmax(b_x, dim=-1)
+                    s_cpu = torch.softmax(b_x.cpu(), dim=-1)
+                    _cmp("C softmax in-place (as reference) xpu-vs-cpu", s_in, s_cpu, 1e-5, 1e-3)
+                    _cmp("C' softmax out-of-place xpu-vs-cpu", s_out, s_cpu, 1e-5, 1e-3)
+                    p_bf = s_cpu.to(v0.dtype).to(v0.device)
+                    e_x = torch.einsum("hqk,khd->qhd", p_bf, v0)
+                    e_c = torch.einsum("hqk,khd->qhd", p_bf.float().cpu(), v0.float().cpu())
+                    _cmp("E pv-einsum xpu-vs-cpu32 (identical inputs)", e_x, e_c, 3e-2, 3e-2)
+                except Exception as diag_err2:  # pylint: disable=broad-except
+                    print(f"DIAG8742 stages failed: {type(diag_err2).__name__}: {diag_err2}", flush=True)
                 raise
             del expected_output
 
