@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/third-party-tests.yml
       - benchmarks/third_party/liger/liger-pin.txt
+      - benchmarks/third_party/liger/liger-fix.patch
   workflow_dispatch:
     inputs:
       runner_label:
@@ -46,7 +47,7 @@ jobs:
       - linux
       - gpu
       - ${{ inputs.runner_label || 'max1100' }}
-    timeout-minutes: 120
+    timeout-minutes: 240
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"

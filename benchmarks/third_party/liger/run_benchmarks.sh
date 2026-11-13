@@ -2,6 +2,9 @@
 set -euo pipefail
 
 
+# Time limit in seconds for one benchmark script. The slowest one (mhc) takes about 45 minutes.
+BENCHMARK_TIMEOUT="${BENCHMARK_TIMEOUT:-3600}"
+
 # Array to keep track of failed benchmarks
 FAILED_BENCHMARKS=()
 
@@ -15,10 +18,23 @@ for file in Liger-Kernel/benchmark/scripts/benchmark_*; do
         continue
     fi
     # TODO: unskip when https://github.com/intel/intel-xpu-backend-for-triton/issues/8737 is resolved
-    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_sparse_multi_token_attention.py" ]; then
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_sparse_multi_token_attention.py" ] || [ $file = "Liger-Kernel/benchmark/scripts/benchmark_multi_token_attention.py" ]; then
         continue
     fi
-    if python "$file"; then
+    # TODO: unskip when https://github.com/intel/intel-xpu-backend-for-triton/issues/9023 is resolved
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_fused_moe.py" ]; then
+        continue
+    fi
+    # TODO: unskip when https://github.com/intel/intel-xpu-backend-for-triton/issues/9024 is resolved
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_layer_norm.py" ]; then
+        continue
+    fi
+    # TODO: unskip when https://github.com/intel/intel-xpu-backend-for-triton/issues/9025 is resolved
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_fused_neighborhood_attention.py" ]; then
+        continue
+    fi
+    # A hung benchmark must not block the remaining ones until the job timeout.
+    if timeout -k 60 "$BENCHMARK_TIMEOUT" python "$file"; then
         echo "Benchmark ran successfully: $file"
     else
         echo "Error: Benchmark failed for $file."

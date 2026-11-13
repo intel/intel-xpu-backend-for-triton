@@ -1138,6 +1138,7 @@ run_liger_install() {
     cd Liger-Kernel
     git checkout "$(<../benchmarks/third_party/liger/liger-pin.txt)"
     echo "Liger-Kernels commit: '$(git rev-parse HEAD)'"
+    # liger-fix.patch is anchored to the commit in liger-pin.txt; regenerate it when the pin changes
     git apply ../benchmarks/third_party/liger/liger-fix.patch --allow-empty
     cd ..
   fi
@@ -1157,6 +1158,8 @@ run_liger_tests() {
 
   run_liger_install
   run_test_deps_install
+  # Needed for --skip-from-file with scripts/skiplist/*/liger.txt
+  pip install 'pytest-skip>=0.3.0'
   TRITON_TEST_SUITE=liger \
     run_pytest_command -vvv Liger-Kernel/test/
 }
