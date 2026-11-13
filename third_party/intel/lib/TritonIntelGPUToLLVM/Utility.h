@@ -22,6 +22,15 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i);
 Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
               Value selector);
 
+/// Return the shared memory bases of the operands of a reduction or a scan,
+/// whose element types are `elemTypes`, `elems` elements apart and ordered by
+/// decreasing bit width, which keeps each one aligned.
+SmallVector<Value> getSmemBases(Operation *op, TypeRange elemTypes,
+                                unsigned elems,
+                                const TypeConverter &typeConverter,
+                                RewriterBase &rewriter,
+                                const TargetInfoBase &targetInfo);
+
 /// Create a predicated block, using \p cond as the condition and \p ops for the
 /// values supplied by the conditional branch to the exit block. The \p
 /// thenOpsFn function is used to inject operations in the 'then' branch:

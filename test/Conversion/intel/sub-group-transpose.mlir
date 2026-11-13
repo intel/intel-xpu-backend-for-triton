@@ -687,3 +687,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return %0, %1 : tensor<64x64xf32, #blocked1>, tensor<64x64xf32, #blocked1>
   }
 }
+
+// -----
+
+// COM: A conversion marked `force_warp_shuffle` stays in registers even when it
+// COM: is a sub-group transpose. Lowerings create such conversions after the
+// COM: shared memory allocation ran, so none was allocated for them.
+
+#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @test_force_warp_shuffle(
+  tt.func @test_force_warp_shuffle(%arg0: tensor<16x16xf32, #blocked>) -> tensor<16x16xf32, #blocked1> {
+    // CHECK-NOT: !llvm.ptr<3>
+    // CHECK:     sub_group_shuffle
+    // CHECK-NOT: !llvm.ptr<3>
+    %0 = ttg.convert_layout %arg0 {force_warp_shuffle} : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #blocked1>
+    // CHECK:     llvm.return
+    tt.return %0 : tensor<16x16xf32, #blocked1>
+  }
+}
