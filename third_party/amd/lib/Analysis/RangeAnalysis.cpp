@@ -746,6 +746,7 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
            "expected the same number of successor inputs as operands");
 
     auto valueToLattices = [&](Value v) { return getLatticeElement(v); };
+    auto getLattice = [&](Value v) { return getLatticeElementFor(point, v); };
     unsigned firstIndex = 0;
     if (inputs.size() != lattices.size()) {
       if (!point->isBlockStart()) {
@@ -759,7 +760,7 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
                 llvm::map_to_vector(nonSuccessorInputs, valueToLattices);
         visitNonControlFlowArguments(branch, parentSuccessor,
                                      nonSuccessorInputs,
-                                     nonSuccessorInputLattices);
+                                     nonSuccessorInputLattices, getLattice);
       } else {
         if (!inputs.empty())
           firstIndex = cast<BlockArgument>(inputs.front()).getArgNumber();
@@ -771,7 +772,7 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
                 llvm::map_to_vector(nonSuccessorInputs, valueToLattices);
         visitNonControlFlowArguments(branch, RegionSuccessor(region),
                                      nonSuccessorInputs,
-                                     nonSuccessorInputLattices);
+                                     nonSuccessorInputLattices, getLattice);
       }
     }
 
