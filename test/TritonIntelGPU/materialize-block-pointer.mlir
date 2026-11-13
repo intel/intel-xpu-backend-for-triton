@@ -243,6 +243,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
+// COM: Both dims bounded, as `RewriteTensorDescriptorToPointer` emits: the
+// COM: column bound's granularity is provable (`tt.divisibility` on the bound,
+// COM: a program-id multiple for the base), and so is the base's sign, so
+// COM: ttgi::matchBoundaryCheckMask permits block IO and the lowering
+// COM: expresses the bounds as base_height/base_width.
+#blocked8 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @masked_both_dims_bounded_load
+  tt.func public @masked_both_dims_bounded_load(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %rows: i32, %cols: i32 {tt.divisibility = 16 : i32}) {
+    %pid = tt.get_program_id x : i32
+    %c32_i32 = arith.constant 32 : i32
+    %offk = arith.muli %pid, %c32_i32 : i32
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked8}>>
+    %col_base = tt.splat %offk : i32 -> tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked8}>>
+    %col_idx = arith.addi %col_base, %0 : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked8}>>
+    %1 = tt.expand_dims %col_idx {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked8}>> -> tensor<1x32xi32, #blocked8>
+    %5 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked8}>>
+    %6 = tt.expand_dims %5 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked8}>> -> tensor<256x1xi32, #blocked8>
+    %cst_stride = arith.constant dense<64> : tensor<256x1xi32, #blocked8>
+    %row_off = arith.muli %6, %cst_stride : tensor<256x1xi32, #blocked8>
+    %row_off_bc = tt.broadcast %row_off : tensor<256x1xi32, #blocked8> -> tensor<256x32xi32, #blocked8>
+    %col_off_bc = tt.broadcast %1 : tensor<1x32xi32, #blocked8> -> tensor<256x32xi32, #blocked8>
+    %off = arith.addi %row_off_bc, %col_off_bc : tensor<256x32xi32, #blocked8>
+    %base = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<256x32x!tt.ptr<bf16>, #blocked8>
+    %4 = tt.addptr %base, %off : tensor<256x32x!tt.ptr<bf16>, #blocked8>, tensor<256x32xi32, #blocked8>
+    %7 = tt.splat %rows : i32 -> tensor<256x1xi32, #blocked8>
+    %8 = arith.cmpi slt, %6, %7 : tensor<256x1xi32, #blocked8>
+    %row_mask = tt.broadcast %8 : tensor<256x1xi1, #blocked8> -> tensor<256x32xi1, #blocked8>
+    %9 = tt.splat %cols : i32 -> tensor<1x32xi32, #blocked8>
+    %10 = arith.cmpi slt, %1, %9 : tensor<1x32xi32, #blocked8>
+    %col_mask = tt.broadcast %10 : tensor<1x32xi1, #blocked8> -> tensor<256x32xi1, #blocked8>
+    %mask = arith.andi %row_mask, %col_mask : tensor<256x32xi1, #blocked8>
+    // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
+    tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked8>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: (Opaque bound, so only the exclusion in matchRowLimitMask keeps
 // COM: block IO off; if the plumbing broke, this would start matching.)
 // COM: Same mask shape, but the pointer is broadcast (stride zero) along the

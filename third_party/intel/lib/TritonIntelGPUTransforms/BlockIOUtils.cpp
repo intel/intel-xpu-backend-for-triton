@@ -7,6 +7,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Matchers.h"
+#include "triton/Analysis/Signedness.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -1251,23 +1252,36 @@ varyingDims(Value v, ArrayRef<int64_t> tensorShape) {
   return dims;
 }
 
-/// A pitch-dim upper bound: `index < splat(bound)`.
+/// One side of a per-dimension boundary check.
 struct LimitCmp {
-  Value base; // null for a bare `arange`
-  Value bound;
+  bool isUpperBound; // `index < bound` rather than `index >= 0`
+  Value base;        // null for a bare `arange`
+  Value bound;       // null for a lower bound
 };
 
 /// Match a single boundary-check conjunct along a dim of extent \p extent:
-/// `index < splat(bound)`, where `index` is `base + arange(0, extent)` (see
-/// `matchBaseAndRange`). Signed only, as in matchRowLimitMask: the height
-/// formula assumes it.
+/// `index < splat(bound)` or `index >= 0`, either with the index on the
+/// left or swapped, where `index` is `base + arange(0, extent)` (see
+/// `matchBaseAndRange`). Signed only: an unsigned comparison means something
+/// else for a negative index, which is the case the lower bound covers.
 std::optional<LimitCmp> matchLimitCmp(Value conjunct, int64_t extent) {
   Value cmpCandidate = stripExpandDims(peelBroadcasts(conjunct));
   auto cmpOp = cmpCandidate.getDefiningOp<arith::CmpIOp>();
-  if (!cmpOp || cmpOp.getPredicate() != arith::CmpIPredicate::slt)
+  if (!cmpOp)
     return std::nullopt;
 
-  Value index = cmpOp.getLhs();
+  // `K > offs` reaches the IR as `sgt(bound, index)`, `0 <= offs` as
+  // `sle(0, index)`.
+  Value index = cmpOp.getLhs(), other = cmpOp.getRhs();
+  arith::CmpIPredicate pred = cmpOp.getPredicate();
+  if (pred == arith::CmpIPredicate::sgt || pred == arith::CmpIPredicate::sle) {
+    pred = pred == arith::CmpIPredicate::sgt ? arith::CmpIPredicate::slt
+                                             : arith::CmpIPredicate::sge;
+    std::swap(index, other);
+  }
+  if (pred != arith::CmpIPredicate::slt && pred != arith::CmpIPredicate::sge)
+    return std::nullopt;
+
   std::optional<Value> base = matchBaseAndRange(index, extent);
   if (!base)
     return std::nullopt;
@@ -1279,13 +1293,24 @@ std::optional<LimitCmp> matchLimitCmp(Value conjunct, int64_t extent) {
   if (*base && base->getType() != getElementTypeOrSelf(index.getType()))
     return std::nullopt;
 
+  if (pred == arith::CmpIPredicate::sge) {
+    // A lower bound is only recognised against zero: a non-zero one bounds a
+    // sub-range the hardware clamp cannot express.
+    Value zero = other;
+    if (auto splatOp = zero.getDefiningOp<triton::SplatOp>())
+      zero = splatOp.getSrc();
+    if (!matchPattern(zero, m_Zero()))
+      return std::nullopt;
+    return LimitCmp{/*isUpperBound=*/false, *base, Value()};
+  }
+
   // computeRowLimitHeight handles i32 and i64 (e.g. an index promoted to i64
   // by `.to(tl.int64)`, issue #8565).
-  auto boundSplat = cmpOp.getRhs().getDefiningOp<triton::SplatOp>();
+  auto boundSplat = other.getDefiningOp<triton::SplatOp>();
   if (!boundSplat || !boundSplat.getSrc().getType().isInteger(32) &&
                          !boundSplat.getSrc().getType().isInteger(64))
     return std::nullopt;
-  return LimitCmp{*base, boundSplat.getSrc()};
+  return LimitCmp{/*isUpperBound=*/true, *base, boundSplat.getSrc()};
 }
 
 } // namespace
@@ -1307,7 +1332,8 @@ bool isZeroFillOther(Value other) {
 
 std::optional<BoundaryMaskInfo>
 matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
-                       unsigned contiguousDim, bool pitchDimIsBroadcast) {
+                       unsigned contiguousDim, bool pitchDimIsBroadcast,
+                       Operation *loadOp) {
   if (!mask || tensorShape.size() < 2 || !isZeroFillOther(other))
     return std::nullopt;
 
@@ -1318,7 +1344,8 @@ matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
   SmallVector<Value> conjuncts;
   collectConjuncts(mask, visited, conjuncts);
 
-  BoundaryMaskInfo info{pitchDim, {}, {}, {}};
+  BoundaryMaskInfo info{pitchDim, {}, {}, {}, {}, {}};
+  bool seenRowLower = false, seenColLower = false;
   for (Value conjunct : conjuncts) {
     std::optional<SmallVector<unsigned>> varying =
         varyingDims(conjunct, tensorShape);
@@ -1333,20 +1360,52 @@ matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
       continue;
     }
 
-    // Anything else has to be the bound along the pitch dim alone, the one
-    // the hardware clamps, and there can only be one.
-    if (dims.size() != 1 || dims.front() != pitchDim || info.rowBound)
+    // Anything else has to be a bound along exactly one of the two dims the
+    // hardware clamps.
+    if (dims.size() != 1)
       return std::nullopt;
-    std::optional<LimitCmp> limit =
-        matchLimitCmp(conjunct, tensorShape[pitchDim]);
+    unsigned dim = dims.front();
+    std::optional<LimitCmp> limit = matchLimitCmp(conjunct, tensorShape[dim]);
     if (!limit)
       return std::nullopt;
-    info.rowBase = limit->base;
-    info.rowBound = limit->bound;
+
+    Value &base = (dim == pitchDim) ? info.rowBase : info.colBase;
+    Value &bound = (dim == pitchDim) ? info.rowBound : info.colBound;
+    bool &seenLower = (dim == pitchDim) ? seenRowLower : seenColLower;
+    // A dim's two bounds must agree on where the index starts, or they are
+    // not the two halves of one boundary check.
+    if ((bound || seenLower) && base != limit->base)
+      return std::nullopt;
+    base = limit->base;
+    if (limit->isUpperBound) {
+      if (bound)
+        return std::nullopt;
+      bound = limit->bound;
+    } else {
+      if (seenLower)
+        return std::nullopt;
+      seenLower = true;
+    }
   }
 
-  // `base_height` cannot express a bound when every row is the same row.
-  if (!info.rowBound || pitchDimIsBroadcast)
+  // A lone lower bound has nothing for the surface to clamp to.
+  if ((seenRowLower && !info.rowBound) || (seenColLower && !info.colBound))
+    return std::nullopt;
+  if (!info.rowBound && !info.colBound)
+    return std::nullopt;
+  // `base_height` cannot express a row bound when every row is the same row.
+  if (info.rowBound && pitchDimIsBroadcast)
+    return std::nullopt;
+
+  // Both surfaces start at the tensor, so an index before it is read like any
+  // other. A lower bound is therefore only dropped where it is vacuous, i.e.
+  // where the index provably cannot be negative at the load. A null base is a
+  // bare `arange`, which starts at zero.
+  auto isNonNegative = [&](Value base) {
+    return !base || (loadOp && valueIsNonNegative(base, loadOp));
+  };
+  if ((seenRowLower && !isNonNegative(info.rowBase)) ||
+      (seenColLower && !isNonNegative(info.colBase)))
     return std::nullopt;
 
   return info;
@@ -1357,12 +1416,38 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   unsigned contiguousDim,
                                                   bool pitchDimIsBroadcast) {
   std::optional<BoundaryMaskInfo> m = matchBoundaryCheckMask(
-      mask, other, tensorShape, contiguousDim, pitchDimIsBroadcast);
-  if (!m || m->extraPreds.size() > 1)
+      mask, other, tensorShape, contiguousDim, pitchDimIsBroadcast,
+      /*loadOp=*/nullptr);
+  if (!m || m->colBound || m->extraPreds.size() > 1)
     return std::nullopt;
   return RowLimitMaskInfo{m->boundedDim, m->rowBase, m->rowBound,
                           m->extraPreds.empty() ? Value()
                                                 : m->extraPreds.front()};
+}
+
+bool colLimitIsHWCompatible(const BoundaryMaskInfo &info,
+                            triton::intel::ModuleAxisInfoAnalysis &axisInfo,
+                            unsigned elemSizeInBits) {
+  if (!info.colBound)
+    return true;
+  // The width is counted in bytes, so a sub-byte element has no exact one.
+  if (elemSizeInBits < 8 || elemSizeInBits % 8 != 0)
+    return false;
+  unsigned divisor =
+      get2DBlockIOWidthGranuleBytes(elemSizeInBits) / (elemSizeInBits / 8);
+  // Both checks are needed, as in `isDescriptorIndexAligned`: the dataflow
+  // analysis trusts `tt.divisibility` hints, and `isDivisible` refuses some
+  // induction variables the analysis admits, so the conjunction only refuses
+  // more than either alone.
+  auto isAligned = [&](Value v) {
+    if (!v)
+      return true; // a bare `arange` starts at zero
+    const AxisInfo *axis = axisInfo.getAxisInfo(v);
+    int64_t div = axis ? axis->getDivisibility(0) : 1;
+    return div % divisor == 0 &&
+           isDivisible(triton::intel::getFinalValue(v), divisor);
+  };
+  return isAligned(info.colBound) && isAligned(info.colBase);
 }
 
 Value materializeExtraPred(OpBuilder &builder, Location loc, Value extraPred,
@@ -1412,6 +1497,15 @@ Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
   Value clamped = arith::MinUIOp::create(builder, loc, diff64, extent64);
   clamped = arith::SelectOp::create(builder, loc, empty, zero64, clamped);
   return arith::TruncIOp::create(builder, loc, i32Ty, clamped);
+}
+
+Value computeColLimitWidth(OpBuilder &builder, Location loc, Value bound,
+                           Value colBase, int64_t colExtent,
+                           unsigned elemSizeInBytes) {
+  Value elems = computeRowLimitHeight(builder, loc, bound, colBase, colExtent);
+  Value elemBytes = arith::ConstantOp::create(
+      builder, loc, builder.getI32IntegerAttr(elemSizeInBytes));
+  return arith::MulIOp::create(builder, loc, elems, elemBytes);
 }
 
 } // namespace mlir::triton::gpu::intel

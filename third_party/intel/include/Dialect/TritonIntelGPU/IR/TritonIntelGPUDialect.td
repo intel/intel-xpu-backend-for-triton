@@ -122,7 +122,8 @@ def TritonIntelGPU_Dialect : Dialect {
 
     /// Get the name of the attribute marking a `ttig.2d_block_load_from_ptr`
     /// whose `base_width` is a runtime column bound relative to the tensor's
-    /// first column, not the per-message tile width.
+    /// first column, not the per-message tile width (see
+    /// ttgi::matchBoundaryCheckMask).
     static constexpr llvm::StringRef getBlockIORuntimeColLimitAttrName() {
       return "ttig.block_io_runtime_col_limit";
     }
