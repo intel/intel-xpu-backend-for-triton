@@ -1,0 +1,79 @@
+diff --git a/torch/_inductor/codegen/triton_split_scan.py b/torch/_inductor/codegen/triton_split_scan.py
+index 87f0c5e..ccb712a 100644
+--- a/torch/_inductor/codegen/triton_split_scan.py
++++ b/torch/_inductor/codegen/triton_split_scan.py
+@@ -15,6 +15,7 @@ from torch.utils._ordered_set import OrderedSet
+ from torch.utils._sympy.functions import CeilDiv
+ 
+ from ..utils import sympy_product, upcast_compute_type
++from ..virtualized import V
+ 
+ 
+ class TritonSplitScanKernel(TritonKernel):
+@@ -44,6 +45,7 @@ class TritonSplitScanKernel(TritonKernel):
+             raise AssertionError("not supported")
+         if fixed_config is not None:
+             raise AssertionError("not supported")
++        self._block_ticket: str | None = None
+         super().__init__(
+             tiling,
+             **kwargs,
+@@ -56,6 +58,58 @@ class TritonSplitScanKernel(TritonKernel):
+     def should_use_cooperative_reduction(self) -> bool:
+         return False
+ 
++    def iteration_ranges_get_pid(self, entry: IterationRangesRoot) -> str:
++        """Use an atomic ticket instead of ``tl.program_id`` as the scan block index.
++
++        Decoupled look-back spins on the previous block, which without
++        forward-progress guarantees may not have started yet. A ticket taken at block
++        start ensures it has. The ticket indexes both the data block and the look-back.
++        """
++        # Only XPU for now: the hang has been observed (and the ticket's cost
++        # measured) only there. Other backends keep using tl.program_id.
++        if (
++            not prefix_is_reduction(entry.prefix)
++            or V.graph.get_current_device_or_throw().type != "xpu"
++        ):
++            return super().iteration_ranges_get_pid(entry)
++        if self._block_ticket is None:
++            if entry.grid_dim is None:
++                raise AssertionError("entry.grid_dim must not be None")
++            pointwise_numel = sympy_product(
++                numel
++                for prefix, numel in self.numels.items()
++                if not prefix_is_reduction(prefix)
++            )
++            # One int64 counter per row, indexed like the look-back scratch.
++            counters, _, offset = self.args.workspace(
++                nelem=8 * pointwise_numel, zero_fill=True
++            )
++            # Must be the first workspace allocation (made from codegen_range_tree in
++            # __init__, before scan()) so the int64 atomic is 8-byte aligned.
++            if offset != 0:
++                raise AssertionError(
++                    "split-scan ticket counters must be the first workspace "
++                    f"allocation, got offset {offset}"
++                )
++            pointwise_trees = [
++                tree
++                for tree in self.range_trees
++                if not prefix_is_reduction(tree.prefix)
++            ]
++            row = f"{pointwise_trees[-1].prefix}offset" if pointwise_trees else "0"
++            ticket = f"{entry.prefix}ticket"
++            # The counter keeps growing if a harness reruns without re-zeroing the
++            # workspace; each launch takes num_programs tickets, hence the modulo.
++            self.body.writeline(
++                f"{ticket} = (tl.atomic_add({counters}.to(tl.pointer_type(tl.int64)) "
++                f'+ {row}, 1, sem="relaxed") % tl.num_programs({entry.grid_dim}))'
++                ".to(tl.int32)"
++            )
++            self._block_ticket = ticket
++        if self.index_dtype != "tl.int32":
++            return f"{self._block_ticket}.to({self.index_dtype})"
++        return self._block_ticket
++
+     def initialize_range_tree(self, pid_cache):
+         prefixes = ["y", "x", "r0_"]
+         if len(self.numels) > len(prefixes):
