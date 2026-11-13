@@ -4,7 +4,24 @@ from typing import Sequence, Union
 
 from dataclasses import dataclass
 
-from triton._internal_testing import is_cuda, is_xpu
+# Backend named by the `tt-linker-backend` line of the headers ("intel", "cuda" or "hip"), set by `main()`.
+# This keeps the CLI from importing torch and initialising the driver (~1.7s) just to ask the device.
+# In-process callers that leave it unset get the current device's backend.
+_BACKEND = None
+
+
+def is_cuda():
+    if _BACKEND is not None:
+        return _BACKEND == "cuda"
+    from triton._internal_testing import is_cuda as device_is_cuda
+    return device_is_cuda()
+
+
+def is_xpu():
+    if _BACKEND is not None:
+        return _BACKEND == "intel"
+    from triton._internal_testing import is_xpu as device_is_xpu
+    return device_is_xpu()
 
 
 def _exists(x):
@@ -314,6 +331,8 @@ if __name__ == "__main__":
         h_str = h_path.read_text()
         includes.append(h_path.name)
         parser.extract_linker_meta(h_str)
+
+    _BACKEND = parser.backend_name
 
     # generate headers
     algo_decls = [make_algo_decls(name, meta) for name, meta in parser.kernels.items()]
