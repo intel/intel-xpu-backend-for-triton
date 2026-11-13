@@ -261,6 +261,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @ttig.2d_block_load_from_ptr.unaligned_col_limit(%ptr: tensor<64x32x!tt.ptr<f16>, #dot0>, %pitch: i32, %height: i32) -> tensor<64x32xf16, #dot0> {
+    %width = arith.constant 6 : i32
+    // expected-error @below {{'ttig.2d_block_load_from_ptr' op column-limit width must be a non-negative multiple of 4 bytes, got 6}}
+    %0 = ttig.2d_block_load_from_ptr %ptr, %pitch, %height, %width {row_major} {ttig.block_io_runtime_col_limit} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32, i32) -> tensor<64x32xf16, #dot0>
+    tt.return %0 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {

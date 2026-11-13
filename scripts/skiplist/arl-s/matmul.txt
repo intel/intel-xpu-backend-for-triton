@@ -1,2 +1,0 @@
-python/test/unit/language/test_matmul.py::test_blocked_scale_mxfp[r"[^-]*-[^-]*-[^-]*-128-[^-]*-[^-]*-[^-]*-512"]@regexp
-python/test/unit/language/test_matmul.py::test_blocked_scale_mxfp[r"[^-]*-[^-]*-[^-]*-[^-]*-128-[^-]*-[^-]*-512"]@regexp

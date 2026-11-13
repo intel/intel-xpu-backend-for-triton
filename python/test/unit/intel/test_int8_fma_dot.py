@@ -34,9 +34,7 @@ def _int8_dot_with_ieee_dot(a_ptr, b_ptr, c_ptr, ieee_ptr, BLOCK: tl.constexpr):
 
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
-# K < 32 is rejected outright for INT8 by the `min_dot_size` guard in
-# `third_party/intel/backend/compiler.py`, so 32 is the smallest usable block.
-@pytest.mark.parametrize("BLOCK", [32, 64])
+@pytest.mark.parametrize("BLOCK", [16, 32, 64])
 def test_int8_dot_demoted_to_fma(BLOCK, device):
     generator = torch.Generator(device="cpu").manual_seed(17)
     a = torch.randint(-4, 5, (BLOCK, BLOCK), dtype=torch.int8, generator=generator)

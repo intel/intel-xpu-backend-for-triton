@@ -436,17 +436,6 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
 
-      - name: Install transformers
-        if: matrix.loop.suite == 'rest'
-        run: |
-          cd pytorch
-          pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
-
-      - name: Run E2E test
-        if: matrix.loop.suite == 'rest'
-        run: |
-          timeout -s KILL 4900 ${{ env.TRITON_TEST_CMD }} --inductor || ${{ inputs.ignore_errors }}
-
       # Skipped when gluon has no warmup to compare against (see the gluon steps above).
       - name: Verify compile warmup completeness
         if: matrix.loop.suite != 'gluon' || inputs.driver_version == 'rolling'

@@ -106,7 +106,7 @@ def matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.c
 
 def test_triton_to_gluon_dot_minimal(tmp_path):
     if not (is_hopper_or_newer() or is_hip_cdna3_or_newer() or is_hip_cdna5()):
-        pytest.xfail("Requires Hopper, Blackwell, CDNA3+, or CDNA5")
+        pytest.skip("Requires Hopper, Blackwell, CDNA3+, or CDNA5")
     kernel = convert_kernel(matmul_tile_kernel, "matmul_tile_kernel", tmp_path)
     M, N, K = 128, 128, 128
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
@@ -282,7 +282,7 @@ def test_triton_to_gluon_dot_scaled(
 @pytest.mark.parametrize("scale_storage", ["uint8", "int8", "float"])
 def test_triton_to_gluon_dot_scaled_minimum_scale(rhs_scale, normal_type, scale_factor, scale_storage, tmp_path):
     if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_cdna5()):
-        pytest.xfail("Requires Hopper, Blackwell, CDNA4, or CDNA5")
+        pytest.skip("Requires Hopper, Blackwell, CDNA4, or CDNA5")
     float_scale = scale_storage == "float"
     if float_scale and not is_cuda():
         pytest.xfail("Floating-point scale controls require CUDA")
@@ -424,7 +424,7 @@ def matmul_kernel(  #
 @pytest.mark.parametrize("NUM_WARPS", [4])
 def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, NUM_WARPS, tmp_path):
     if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_cdna5()):
-        pytest.xfail("Requires Hopper, Blackwell, CDNA4, or CDNA5")
+        pytest.skip("Requires Hopper, Blackwell, CDNA4, or CDNA5")
     device = "cuda"
     M, N, K = 1024, 512, 256
     torch.manual_seed(42)

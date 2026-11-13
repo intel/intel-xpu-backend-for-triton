@@ -11,6 +11,8 @@ on:
       - .github/actions/install-vllm/**
       - scripts/vllm/**
       - .github/pins/pytorch.txt
+      - scripts/patch-pytorch.sh
+      - scripts/patch/**
   schedule:
     # Daily 9:05PM PST (UTC-8) or 10:05PM PDT (UTC-7)
     - cron: "5 5 * * *"

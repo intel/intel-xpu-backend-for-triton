@@ -1550,3 +1550,39 @@ module {
 // TWICE-LABEL: @split_return_operand
 // TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
 // TWICE: tt.load
+
+// -----
+
+// COM: A host-side descriptor of packed fp4 is rewritten to pointer loads. The
+// COM: zero padding is built as i8 zero bits and bitcast, since fp4e2m1x2 has no
+// COM: constants of its own.
+module {
+  // CHECK-LABEL: tt.func public @host_desc_load_fp4x2
+  // CHECK: %[[ZERO:.*]] = arith.constant dense<0> : tensor<64x64xi8>
+  // CHECK: %[[OTHER:.*]] = tt.bitcast %[[ZERO]] : tensor<64x64xi8> -> tensor<64x64x!tt.fp4e2m1x2>
+  // CHECK: tt.load %{{.*}}, %{{.*}}, %[[OTHER]] : tensor<64x64x!tt.ptr<!tt.fp4e2m1x2>>
+  // RAW-LABEL: tt.func public @host_desc_load_fp4x2
+  // RAW: tt.bitcast %{{.*}} : tensor<64x64xi8> -> tensor<64x64x!tt.fp4e2m1x2>
+  tt.func public @host_desc_load_fp4x2(%arg0: !tt.tensordesc<64x64x!tt.fp4e2m1x2>, %arg1: i32) -> tensor<64x64x!tt.fp4e2m1x2> {
+    %0 = tt.descriptor_load %arg0[%arg1, %arg1] : !tt.tensordesc<64x64x!tt.fp4e2m1x2> -> tensor<64x64x!tt.fp4e2m1x2>
+    tt.return %0 : tensor<64x64x!tt.fp4e2m1x2>
+  }
+}
+
+// -----
+
+// COM: A descriptor passed to a private function is rewritten to pointer loads
+// COM: there; the packed fp4 zero padding is i8 zero bits bitcast to the element
+// COM: type.
+module {
+  // CHECK-LABEL: tt.func private @private_desc_load_fp4x2
+  // CHECK: %[[ZERO:.*]] = arith.constant dense<0> : tensor<16xi8>
+  // CHECK: %[[OTHER:.*]] = tt.bitcast %[[ZERO]] : tensor<16xi8> -> tensor<16x!tt.fp4e2m1x2>
+  // CHECK: tt.load %{{.*}}, %{{.*}}, %[[OTHER]] : tensor<16x!tt.ptr<!tt.fp4e2m1x2>>
+  // RAW-LABEL: tt.func private @private_desc_load_fp4x2
+  // RAW: tt.bitcast %{{.*}} : tensor<16xi8> -> tensor<16x!tt.fp4e2m1x2>
+  tt.func private @private_desc_load_fp4x2(%d: !tt.tensordesc<16x!tt.fp4e2m1x2>, %s: i32) -> tensor<16x!tt.fp4e2m1x2> {
+    %x = tt.descriptor_load %d[%s] : !tt.tensordesc<16x!tt.fp4e2m1x2> -> tensor<16x!tt.fp4e2m1x2>
+    tt.return %x : tensor<16x!tt.fp4e2m1x2>
+  }
+}

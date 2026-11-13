@@ -1,2 +1,7 @@
 # Requires CUDA and TMAs
 python/test/unit/runtime/test_no_torch_dispatch.py::test_nvidia_kernel_dispatch_without_torch
+# Requires an AMD GPU
+python/test/unit/runtime/test_no_torch_dispatch.py::test_hip_backend_discovery_without_torch
+# block_scaled_matmul is only supported on CUDA
+python/test/unit/runtime/test_blaslt.py::test_block_scaled_matmul_mxfp8
+python/test/unit/runtime/test_blaslt.py::test_block_scaled_matmul_nvfp4

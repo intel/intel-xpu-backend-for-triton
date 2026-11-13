@@ -376,8 +376,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if b_dtype.has_mx_scale and a_dtype.has_global_scale and device_capability < 10:
             pytest.skip("float8 x mx not supported with cuda capability < 10")
-        if swiglu_opts is not None and do_gamma:
-            pytest.skip("NYI: swiglu and gamma not supported together")
 
     elif is_hip():
         if a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4:
@@ -392,9 +390,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("NYI: MXFP4 x dense FP16/BF16 not tested on AMD GPU")
         if is_persistent:
             pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
-        # FIXME: this works on nvidia; looks like some sort of bug on AMD?
-        if do_gamma and swiglu_opts is not None:
-            pytest.skip("NYI: gamma and swiglu not supported together on AMD GPU")
         if split_k is not None and split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
         if act_dtype_str in ("float32", "float64"):
@@ -413,6 +408,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.xfail("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
+
+    if do_gamma and swiglu_opts is not None and split_k is not None and split_k > 1:
+        # split-K moves the activation into the reduction, after gammas were applied
+        pytest.skip("NYI: split-K applies gammas before the fused activation")
 
     if b_hbm_swizzling:
         if is_hip():
@@ -655,12 +654,20 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             gather_indx,
             scatter_indx,
             reference_precision,
-            gammas=gammas,
+            # with a fused activation, the kernel applies gammas after it, so apply them after swiglu below
+            gammas=gammas if swiglu_opts is None else None,
         )
     if c_dtype.is_nvfp4:
         assert ref_y.dtype == torch.float32
     if swiglu_opts is not None:
         ref_y = swiglu(ref_y, alpha=swiglu_opts[0], precision_config=SwiGLUPrecisionConfig(swiglu_opts[1]))
+        if gammas is not None:
+            out_gammas = gammas
+            if scatter_indx is not None:
+                # scatter_indx is a full permutation here, so fixed-shape indexing works under compile warmup
+                out_gammas = torch.empty_like(gammas)
+                out_gammas[scatter_indx] = gammas
+            ref_y = (ref_y.float() * out_gammas[:, None]).to(ref_y.dtype)
     if c_dtype.has_global_scale:
         ref_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
 
@@ -704,7 +711,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 @pytest.mark.parametrize("with_bias", [False, True])
 def test_gather_inactive_rows(is_persistent, split_k, k, all_inactive, tensor_scale, with_bias, device):
     if not is_hopper_or_newer():
-        pytest.xfail("Requires Hopper or newer for persistent matmul")
+        pytest.skip("Requires Hopper or newer for persistent matmul")
     m, n = 33, 64
     # Keep the negative-row address inside our allocation and make any read visible.
     storage = torch.full((m + 1, k), float("nan"), dtype=torch.bfloat16, device=device)
@@ -744,7 +751,7 @@ def test_gather_inactive_rows(is_persistent, split_k, k, all_inactive, tensor_sc
 @pytest.mark.parametrize("requantize", [False, True])
 def test_gather_inactive_scales(is_persistent, all_inactive, requantize, device):
     if not is_hopper_or_newer():
-        pytest.xfail("Requires Hopper or newer")
+        pytest.skip("Requires Hopper or newer")
     if requantize and torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("NVFP4 requantization requires Blackwell")
     m, n, k = 33, 64, 128
@@ -786,7 +793,7 @@ def test_gather_inactive_scales(is_persistent, all_inactive, requantize, device)
 @pytest.mark.parametrize("tensor_scale", ["none", "row", "column", "both", "wide_row"])
 def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, k, tensor_scale, out_dtype, device, opt_flags_scope):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
-        pytest.xfail("requires Blackwell")
+        pytest.skip("requires Blackwell")
     torch.manual_seed(42)
     m, n = 73, 256
     source_m = 97 if mode == "gather" else m
@@ -858,7 +865,7 @@ def test_nvfp4_acts_mxfp4_weights_nonpersistent(k, mode, device, opt_flags_scope
 @pytest.mark.parametrize("output", ["fp32", "swiglu", "swiglu_mxfp8"])
 def test_nvfp4_requantization_matches_mxfp8(is_persistent, mode, output, device, opt_flags_scope):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
-        pytest.xfail("requires Blackwell")
+        pytest.skip("requires Blackwell")
     torch.manual_seed(42)
     m, n, k = 129, 256, 256
     ragged = mode == "ragged_gather"
@@ -1010,7 +1017,7 @@ def test_matmul_mixed_fp8_preserves_fp16_precision(fp8_lhs, is_persistent, devic
 ])
 def test_persistent_matmul_scale_bias_rounding(block_m, scale_source, epilogue_subtile, has_beta, expected, device, opt_flags_scope):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
-        pytest.xfail("requires Hopper or newer")
+        pytest.skip("requires Hopper or newer")
 
     a = torch.zeros((128, 128), device=device)
     b = torch.zeros((256, 128), device=device)
@@ -1046,7 +1053,7 @@ def test_persistent_matmul_scale_bias_rounding(block_m, scale_source, epilogue_s
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_persistent_matmul_residual_scale_rounding(dtype, device, opt_flags_scope):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
-        pytest.xfail("requires Hopper or newer")
+        pytest.skip("requires Hopper or newer")
 
     a = torch.ones((128, 128), device=device).to(torch.float8_e4m3fn)
     b = torch.full((256, 128), 3 / 128, device=device).to(torch.float8_e4m3fn).T
@@ -1121,7 +1128,7 @@ def test_mxfp8_act_scale_store_zeroes_partial_group(n, is_persistent, device):
                          ids=["shared", "different-block-offsets", "different-slice-offsets", "equal-copy"])
 def test_gathered_ragged_act_scale_indexing(device, scale_slice_sizes):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
-        pytest.xfail("requires Blackwell or newer")
+        pytest.skip("requires Blackwell or newer")
 
     m, k = 256, 128
     values = (torch.arange(m * k, device=device).reshape(m, k) % 7 - 3).to(torch.float8_e4m3fn)
@@ -1164,7 +1171,7 @@ def test_gathered_ragged_act_scale_indexing(device, scale_slice_sizes):
 
 def test_k_ragged_mxfp8_act_scale_swizzling(device):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
-        pytest.xfail("requires Blackwell or newer")
+        pytest.skip("requires Blackwell or newer")
 
     m, n, k = 64, 128, 96
     a_dtype = DType("mxfloat8_e4m3fn")
@@ -1393,7 +1400,7 @@ def test_fused_comm_no_local_output(dtype, n_peers, ragged, is_persistent):
 @pytest.mark.parametrize("accumulate", [False, True])
 def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
     if not is_cuda() or torch.cuda.get_device_capability()[0] != 10:
-        pytest.xfail("requires Blackwell")
+        pytest.skip("requires Blackwell")
     torch.manual_seed(17)
     m, n, k = 256, 512, 1024
     a = wrap_torch_tensor(torch.randn(m, k, device=device).to(torch.float8_e4m3fn))

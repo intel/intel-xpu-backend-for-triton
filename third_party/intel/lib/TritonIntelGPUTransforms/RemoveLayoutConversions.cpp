@@ -24,6 +24,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
@@ -1865,8 +1866,8 @@ static int64_t getByteCount(Value result, int64_t minElementCount = 0,
   if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
     elementCount = tensorTy.getNumElements();
     auto elemType = tensorTy.getElementType();
-    if (elemType.isIntOrFloat()) {
-      dtypeBitWidth = elemType.getIntOrFloatBitWidth();
+    if (!isa<tt::PointerType>(elemType)) {
+      dtypeBitWidth = getIntOrFloatOrPtrBitWidth(elemType);
     }
   }
   if (elementCount < minElementCount) {
@@ -2450,17 +2451,19 @@ void LayoutRematerialization::hoistConvertDotOperand(
   // sub-group-transpose-through-SLM fallback and disabling block I/O on the
   // load. See issue #6737.
   Type elemType = targetType.getElementType();
-  if (elemType.isIntOrFloat()) {
-    unsigned targetBitwidth = elemType.getIntOrFloatBitWidth();
+  if (!isa<tt::PointerType>(elemType)) {
+    unsigned targetBitwidth = getIntOrFloatOrPtrBitWidth(elemType);
     for (Value v : slice) {
       Operation *def = v.getDefiningOp();
       if (!def || !isa<tt::LoadOp, tt::DescriptorLoadOp>(def))
         continue;
       auto loadTy = cast<RankedTensorType>(v.getType());
-      if (loadTy.getElementType().getIntOrFloatBitWidth() != targetBitwidth) {
+      unsigned loadBitwidth =
+          getIntOrFloatOrPtrBitWidth(loadTy.getElementType());
+      if (loadBitwidth != targetBitwidth) {
         LDBG("  Leaf load element bitwidth ("
-             << loadTy.getElementType().getIntOrFloatBitWidth()
-             << ") differs from convert target bitwidth (" << targetBitwidth
+             << loadBitwidth << ") differs from convert target bitwidth ("
+             << targetBitwidth
              << "); skipping hoist to avoid degrading dot-operand encoding");
         return;
       }

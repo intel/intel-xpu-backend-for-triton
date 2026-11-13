@@ -14,6 +14,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -525,7 +526,8 @@ private:
     // Collapsing the middle dimension makes it the surface width, which must be
     // at least `MinSurfaceBytes` wide. Every operand of the two `divideCeil`s
     // is positive, so the unsigned overload they resolve to is exact.
-    unsigned elemBitWidth = tensorTy.getElementTypeBitWidth();
+    unsigned elemBitWidth =
+        getIntOrFloatOrPtrBitWidth(tensorTy.getElementType());
     if (elemBitWidth < 8)
       return std::nullopt;
     int64_t elemBytes = elemBitWidth / 8;
@@ -678,7 +680,8 @@ private:
     // A sub-byte element type has no byte-granular width this can validate:
     // `elemBitWidth / 8` is 0, which is how `LowerTo2DBlockLoad` would size the
     // surface too. Decline rather than declare a field nothing checked.
-    unsigned elemBitWidth = tensorTy.getElementTypeBitWidth();
+    unsigned elemBitWidth =
+        getIntOrFloatOrPtrBitWidth(tensorTy.getElementType());
     if (elemBitWidth < 8)
       return decline("sub-byte element type has no checkable surface width");
     const int64_t elemBytes = elemBitWidth / 8;

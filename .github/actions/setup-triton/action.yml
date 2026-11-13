@@ -50,6 +50,9 @@ runs:
       env:
         TRITON_EXT_ENABLED: ON
       run: |
+        # setup.py defaults to 2 * cpu_count build jobs, which oversubscribes the CPUs and makes the build much
+        # slower (#8599). An explicit MAX_JOBS from the caller or the job environment still wins.
+        export MAX_JOBS="${MAX_JOBS:-$(nproc)}"
         pip install -r python/requirements.txt
         ${{ inputs.command }}
 
