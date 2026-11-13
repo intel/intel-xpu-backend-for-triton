@@ -183,9 +183,10 @@ Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
 /// to avoid flipping masked-out elements' sign bit.
 bool isZeroFillOther(Value other);
 
-/// A mask of the form `(rowBase + arange(0, N)) < bound`, broadcast along
-/// every other dim (contiguous dim and any batch dims). Expressible as a
-/// 2D block load's `base_height` instead of per-element predication.
+/// A mask of the form `(rowBase + arange(0, N)) < bound`, or the same compare
+/// written `bound > (rowBase + arange(0, N))`, broadcast along every other dim
+/// (contiguous dim and any batch dims). Expressible as a 2D block load's
+/// `base_height` instead of per-element predication.
 ///
 /// `extraPred`, if non-null, is a batch-dims-only predicate ANDed into the
 /// original mask (degenerate along the pitch and contiguous dims, so it's
@@ -210,8 +211,9 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   bool pitchDimIsBroadcast);
 
 /// A row-limit mask (see `RowLimitMaskInfo`) matched conjunct by conjunct:
-/// an AND of a pitch-dim bound `(base + arange(0, extent)) < bound` and any
-/// number of predicates uniform along both surface dims. The bound maps onto
+/// an AND of a pitch-dim bound `(base + arange(0, extent)) < bound`, or the
+/// same compare written `bound > (base + arange(0, extent))`, and any number
+/// of predicates uniform along both surface dims. The bound maps onto
 /// the 2D block message's own `base_height` clamp, `clamp(bound - base, 0,
 /// extent)` (see `computeRowLimitHeight`), so the mask needs no per-element
 /// predication at all. `rowBase` is null when the index is a bare `arange`.
@@ -229,7 +231,6 @@ struct BoundaryMaskInfo {
 /// Fails unless every conjunct is recognised, `other` is
 /// zero-fill-compatible, the pitch dim is not broadcast, and the bound is i32
 /// or i64 with the base of the compare's own type (no extension between them).
-/// The bound may have the index on either side (`bound > index`).
 std::optional<BoundaryMaskInfo>
 matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
                        unsigned contiguousDim, bool pitchDimIsBroadcast);
