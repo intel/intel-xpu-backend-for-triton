@@ -723,6 +723,7 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
     assert(inputs.size() == operands->size() &&
            "expected the same number of successor inputs as operands");
 
+    auto getLattice = [&](Value v) { return getLatticeElementFor(point, v); };
     unsigned firstIndex = 0u;
     if (inputs.size() != lattices.size()) {
       auto appendNonSuccessorInputs = [&](ValueRange allInputs) {
@@ -740,7 +741,7 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
 
         if (!nonSuccessorInputs.empty())
           visitNonControlFlowArguments(branch, successor, nonSuccessorInputs,
-                                       nonSuccessorLattices);
+                                       nonSuccessorLattices, getLattice);
       };
 
       if (successor.isOperation()) {

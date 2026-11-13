@@ -861,7 +861,8 @@ private:
   void visitNonControlFlowArguments(
       Operation *op, const RegionSuccessor & /*successor*/,
       ValueRange /*nonSuccessorInputs*/,
-      ArrayRef<dataflow::Lattice<StrideInfo> *> argLattices) override {
+      ArrayRef<dataflow::Lattice<StrideInfo> *> argLattices,
+      GetLatticeFn /*getLattice*/) override {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       // Induction variable has spatial stride 0 (scalar) and IV stride 1
       // w.r.t. its own loop's IV; no entries for any other loop
