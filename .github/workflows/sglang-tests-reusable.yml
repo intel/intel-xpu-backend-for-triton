@@ -177,12 +177,14 @@ jobs:
           - sglang-mamba
           - sglang-rest
           - sglang-e2e
+          - sglang-deepseek
         # sglang-e2e starts a real server, so it needs a usable model registry.
         # Without sgl-kernel-xpu SGLang drops most model modules, including the one
         # the test needs, so run it only where install_sgl_kernel_xpu built the
         # kernels. See scripts/sglang/README.md.
         exclude:
           - suite: ${{ !inputs.install_sgl_kernel_xpu && 'sglang-e2e' || '' }}
+          - suite: ${{ !inputs.install_sgl_kernel_xpu && 'sglang-deepseek' || '' }}
     runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 240
     defaults:
@@ -319,6 +321,26 @@ jobs:
         if: ${{ matrix.suite == 'sglang-e2e' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --sglang-e2e
+
+      - name: Run deepseek tests
+        if: ${{ matrix.suite == 'sglang-deepseek' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-deepseek
+
+      - name: Run deepseek latency
+        if: ${{ matrix.suite == 'sglang-deepseek' && steps.install.outcome == 'success' && !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 60
+        run: |
+          python scripts/sglang/deepseek_latency.py --out deepseek-latency
+
+      - name: Upload deepseek latency
+        if: ${{ matrix.suite == 'sglang-deepseek' && steps.install.outcome == 'success' && !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: sglang-deepseek-latency
+          path: deepseek-latency
+          if-no-files-found: ignore
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}

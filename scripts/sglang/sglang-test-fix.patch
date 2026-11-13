@@ -1370,3 +1370,17 @@ index 9ff45cda53..4f7efaf71b 100644
  else:
      from sglang.kernels.ops.attention.flash_attention import (
          flash_attn_varlen_func,
+diff --git a/test/registered/xpu/llm_models/test_xpu_deepseek_v2_lite_chat_fp8_gsm8k_eval.py b/test/registered/xpu/llm_models/test_xpu_deepseek_v2_lite_chat_fp8_gsm8k_eval.py
+index ef45a589b9..c9258229c2 100644
+--- a/test/registered/xpu/llm_models/test_xpu_deepseek_v2_lite_chat_fp8_gsm8k_eval.py
++++ b/test/registered/xpu/llm_models/test_xpu_deepseek_v2_lite_chat_fp8_gsm8k_eval.py
+@@ -219,9 +219,6 @@ class TestDeepSeekV2LiteChatFP8EvalXPU(unittest.TestCase):
+                             }
+                         )
+                         summary += f"| {config.model_path} | {config.variant or 'N/A'} | {config.tp_size} | {config.pp_size} | {acc:.3f} | {config.accuracy_threshold} | {status} |\n"
+-                    except Exception as e:
+-                        print(e)
+-
+                     finally:
+                         kill_process_tree(process.pid)
+ 

@@ -15,6 +15,9 @@ Install SGLang and run its Triton kernel tests on Intel XPU.
   `sgl-kernel-xpu-pin.txt` and installs the wheel, providing the `sgl_kernel`
   module. **BMG/Xe2 only**; see `sgl_kernel` below.
 - `sgl-kernel-xpu-pin.txt` - upstream `sgl-project/sgl-kernel-xpu` commit.
+- `deepseek_latency.py` - DeepSeek prefill and decode latency and the top
+  kernels, Triton next to SYCL, as a markdown table. Report only, see
+  `--sglang-deepseek` below.
 
 `import sglang` needs torchvision, which `install-sglang.sh` does not install.
 CI builds it from `pytorch/.github/ci_commit_pins/vision.txt`.
@@ -22,7 +25,8 @@ CI builds it from `pytorch/.github/ci_commit_pins/vision.txt`.
 ## Suites
 
 One flag per kernel family, each with its own `TRITON_TEST_SUITE` and skip list
-`scripts/skiplist/<arch>/sglang_<family>.txt`. `--sglang` runs all of them.
+`scripts/skiplist/<arch>/sglang_<family>.txt`. `--sglang` runs all of them
+except `--sglang-deepseek`.
 
 | Flag | Test files, relative to `sglang/test/` |
 |---|---|
@@ -34,6 +38,7 @@ One flag per kernel family, each with its own `TRITON_TEST_SUITE` and skip list
 | `--sglang-kda` | `registered/attention/test_kda_kernels.py` |
 | `--sglang-spec` | `registered/spec/dspark/test_dspark_kernel_parity.py` |
 | `--sglang-e2e` | `registered/xpu/test_xpu_basic.py` |
+| `--sglang-deepseek` | `registered/xpu/llm_models/test_xpu_deepseek_v2_lite_chat_fp8_gsm8k_eval.py`, `registered/xpu/test_deepseek_ocr_triton.py` |
 
 Two things to know before editing this:
 
@@ -152,6 +157,44 @@ model weights (`Qwen/Qwen2.5-1.5B-Instruct`, ungated) plus a server launch, so i
 is slower and less hermetic than the kernel suites - hence its own CI entry rather
 than joining `sglang-rest`.
 
+`--sglang-deepseek`, issue
+[#8453](https://github.com/intel/intel-xpu-backend-for-triton/issues/8453). Two
+upstream XPU tests that run a real model on the Triton backend:
+
+| Test | Model | Backends | Checks |
+|---|---|---|---|
+| `test_xpu_deepseek_v2_lite_chat_fp8_gsm8k_eval.py` | `gaunernst/DeepSeek-V2-Lite-Chat-FP8` | Triton attention (MLA), Triton fused MoE (fp8 w8a8, block 128x128) | GSM8K 5-shot, all 1319 questions, accuracy >= 0.62 |
+| `test_deepseek_ocr_triton.py` | `deepseek-ai/DeepSeek-OCR` | `intel_xpu` attention, Triton fused MoE (bf16) | one image request decodes to EOS or `max_new_tokens` |
+
+So it reaches `fused_moe_kernel` in both the fp8 block-quant and the bf16 form,
+`_fwd_kernel` (extend), `_fwd_grouped_kernel_stage1` and `_fwd_kernel_stage2`
+(MLA decode) and `_per_token_group_quant_8bit` with real shapes and real
+weights, and checks the answers, not only that they come back. It runs all 1319
+GSM8K questions instead of the default 200: on those 200 sgl-kernel-xpu itself
+scores 0.620 and Triton 0.610-0.645 depending on the MoE config, so the 0.62
+threshold would fail on noise.
+`sglang-test-fix.patch` makes the GSM8K test fail on an error during the
+benchmark: upstream prints it and passes. The suite needs `sgl_kernel` and
+~23 GB of weights, which it downloads first, because the GSM8K test gives the
+server only 300 s to start. V2-Lite needs a 24 GB GPU, so it runs on `b60`, not
+`b580`.
+
+In CI the entry then runs `deepseek_latency.py`, `sglang.benchmark.one_batch`
+for both models with `--attention-backend triton --moe-runner-backend triton`
+and with `--attention-backend intel_xpu` (sgl-kernel-xpu), batch 1 and 16, 1024
+input tokens, three times, interleaved, and keeps the best of each metric. Then
+it runs once more under the XPU profiler. Per model and
+metric it lists the latency of each backend, its kernels with the time and
+calls per prefill or decode step, most time first until the rest is under 5% of
+the kernel time, and the host side: the latency no kernel covers, i.e. the time
+the GPU waits for the host. The table goes to the job
+summary, the table and the Kineto traces to the `sglang-deepseek-latency`
+artifact. It does not fail the job: it is there to track the gap to
+sgl-kernel-xpu, not to gate on it.
+
+On Arc Pro B60 with the CI wheels, weights cached: 2 passed in 609 s (GSM8K
+543 s, OCR 60 s), then 666 s for `deepseek_latency.py`.
+
 ## Results on Max 1550
 
 Local run at the current pin, one suite at a time. The skip lists come from it.
@@ -257,9 +300,11 @@ Matrix entries, one report artifact each, aggregated by the `reports` job:
 | `sglang-mamba` | `--sglang-mamba` |
 | `sglang-rest` | `--sglang-gdn`, `--sglang-kda`, `--sglang-spec` |
 | `sglang-e2e` | `--sglang-e2e` |
+| `sglang-deepseek` | `--sglang-deepseek`, then `deepseek_latency.py` (report only) |
 
-The short suites share `sglang-rest`, like `vllm-rest`. `sglang-e2e` gets its own
-entry instead, because it launches a server and downloads model weights. Each
+The short suites share `sglang-rest`, like `vllm-rest`. `sglang-e2e` and
+`sglang-deepseek` get their own entries instead, because they launch a server and
+download model weights. Each
 entry installs SGLang itself, because `run_sglang_tests` calls
 `install-sglang.sh` - there is no install step in the workflow as there is for
 vLLM.
@@ -288,6 +333,10 @@ bash scripts/test-triton.sh --sglang-gdn --skip-pip-install --skip-pytorch-insta
 bash scripts/test-triton.sh --sglang-kda --skip-pip-install --skip-pytorch-install
 bash scripts/test-triton.sh --sglang-spec --skip-pip-install --skip-pytorch-install
 bash scripts/test-triton.sh --sglang-e2e --skip-pip-install --skip-pytorch-install
+
+# needs sgl_kernel and a 24 GB GPU
+bash scripts/test-triton.sh --sglang-deepseek --skip-pip-install --skip-pytorch-install
+python scripts/sglang/deepseek_latency.py --out deepseek-latency
 ```
 
 ## Reference
