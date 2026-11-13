@@ -29,21 +29,19 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-DAG: %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // Verify pointer arithmetic uses the base pointer from the descriptor
-    // CHECK: llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f32
+    // CHECK: llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f32
 
     // Verify boundary checking: index0 >= 0 AND index0 < shape0
-    // CHECK: %[[ZERO0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[IDX0_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[ZERO0]] : i32
-    // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK: %[[IDX0_LT_SHAPE0:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE0_I32]] : i32
+    // CHECK: %[[ZERO0:.*]] = llvm.mlir.constant(0 : i64) : i64
+    // CHECK: %[[IDX0_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[ZERO0]] : i64
+    // CHECK: %[[IDX0_LT_SHAPE0:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE0]] : i64
     // CHECK: %[[DIM0_INBOUNDS:.*]] = llvm.and %[[IDX0_LT_SHAPE0]], %{{.*}} : i1
     // CHECK: %[[DIM0_PRED:.*]] = llvm.and %[[DIM0_INBOUNDS]], %[[IDX0_GE_ZERO]] : i1
 
     // Verify boundary checking: index1 >= 0 AND index1 < shape1
-    // CHECK: %[[ZERO1:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[IDX1_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[ZERO1]] : i32
-    // CHECK: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // CHECK: %[[IDX1_LT_SHAPE1:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE1_I32]] : i32
+    // CHECK: %[[ZERO1:.*]] = llvm.mlir.constant(0 : i64) : i64
+    // CHECK: %[[IDX1_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[ZERO1]] : i64
+    // CHECK: %[[IDX1_LT_SHAPE1:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE1]] : i64
 
     // CHECK: %[[DIM1_INBOUNDS:.*]] = llvm.and %[[IDX1_LT_SHAPE1]], %[[DIM0_PRED]] : i1
     // CHECK: %[[PRED:.*]] = llvm.and %[[DIM1_INBOUNDS]], %[[IDX1_GE_ZERO]] : i1
@@ -91,21 +89,19 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-DAG: %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // Verify pointer arithmetic uses the base pointer from the descriptor
-    // CHECK: %[[GEP:.*]] = llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f32
+    // CHECK: %[[GEP:.*]] = llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f32
 
     // Verify boundary checking: index0 >= 0 AND index0 < shape0
-    // CHECK: %[[ZERO0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[IDX0_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[ZERO0]] : i32
-    // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK: %[[IDX0_LT_SHAPE0:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE0_I32]] : i32
+    // CHECK: %[[ZERO0:.*]] = llvm.mlir.constant(0 : i64) : i64
+    // CHECK: %[[IDX0_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[ZERO0]] : i64
+    // CHECK: %[[IDX0_LT_SHAPE0:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE0]] : i64
     // CHECK: %[[DIM0_INBOUNDS:.*]] = llvm.and %[[IDX0_LT_SHAPE0]], %{{.*}} : i1
     // CHECK: %[[DIM0_PRED:.*]] = llvm.and %[[DIM0_INBOUNDS]], %[[IDX0_GE_ZERO]] : i1
 
     // Verify boundary checking: index1 >= 0 AND index1 < shape1
-    // CHECK: %[[ZERO1:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[IDX1_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[ZERO1]] : i32
-    // CHECK: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // CHECK: %[[IDX1_LT_SHAPE1:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE1_I32]] : i32
+    // CHECK: %[[ZERO1:.*]] = llvm.mlir.constant(0 : i64) : i64
+    // CHECK: %[[IDX1_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[ZERO1]] : i64
+    // CHECK: %[[IDX1_LT_SHAPE1:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE1]] : i64
 
     // CHECK: %[[DIM1_INBOUNDS:.*]] = llvm.and %[[IDX1_LT_SHAPE1]], %[[DIM0_PRED]] : i1
     // CHECK: %[[PRED:.*]] = llvm.and %[[DIM1_INBOUNDS]], %[[IDX1_GE_ZERO]] : i1
@@ -145,21 +141,19 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-DAG: %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // Verify pointer arithmetic uses the base pointer
-    // CHECK: llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f32
+    // CHECK: llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f32
 
     // Verify boundary checking: index0 >= 0 AND index0 < shape0
-    // CHECK: %[[S_ZERO0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[S_IDX0_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[S_ZERO0]] : i32
-    // CHECK: %[[S_SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK: %[[S_IDX0_LT_SHAPE0:.*]] = llvm.icmp "slt" %{{.*}}, %[[S_SHAPE0_I32]] : i32
+    // CHECK: %[[S_ZERO0:.*]] = llvm.mlir.constant(0 : i64) : i64
+    // CHECK: %[[S_IDX0_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[S_ZERO0]] : i64
+    // CHECK: %[[S_IDX0_LT_SHAPE0:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE0]] : i64
     // CHECK: %[[S_DIM0_INBOUNDS:.*]] = llvm.and %[[S_IDX0_LT_SHAPE0]], %{{.*}} : i1
     // CHECK: %[[S_DIM0_PRED:.*]] = llvm.and %[[S_DIM0_INBOUNDS]], %[[S_IDX0_GE_ZERO]] : i1
 
     // Verify boundary checking: index1 >= 0 AND index1 < shape1
-    // CHECK: %[[S_ZERO1:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[S_IDX1_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[S_ZERO1]] : i32
-    // CHECK: %[[S_SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // CHECK: %[[S_IDX1_LT_SHAPE1:.*]] = llvm.icmp "slt" %{{.*}}, %[[S_SHAPE1_I32]] : i32
+    // CHECK: %[[S_ZERO1:.*]] = llvm.mlir.constant(0 : i64) : i64
+    // CHECK: %[[S_IDX1_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[S_ZERO1]] : i64
+    // CHECK: %[[S_IDX1_LT_SHAPE1:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE1]] : i64
 
     // CHECK: %[[S_DIM1_INBOUNDS:.*]] = llvm.and %[[S_IDX1_LT_SHAPE1]], %[[S_DIM0_PRED]] : i1
     // CHECK: %[[S_PRED:.*]] = llvm.and %[[S_DIM1_INBOUNDS]], %[[S_IDX1_GE_ZERO]] : i1
@@ -212,21 +206,19 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-DAG: %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // Verify pointer arithmetic uses the base pointer
-    // CHECK: %[[S_GEP:.*]] = llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f32
+    // CHECK: %[[S_GEP:.*]] = llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f32
 
     // Verify boundary checking: index0 >= 0 AND index0 < shape0
-    // CHECK: %[[S_ZERO0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[S_IDX0_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[S_ZERO0]] : i32
-    // CHECK: %[[S_SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK: %[[S_IDX0_LT_SHAPE0:.*]] = llvm.icmp "slt" %{{.*}}, %[[S_SHAPE0_I32]] : i32
+    // CHECK: %[[S_ZERO0:.*]] = llvm.mlir.constant(0 : i64) : i64
+    // CHECK: %[[S_IDX0_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[S_ZERO0]] : i64
+    // CHECK: %[[S_IDX0_LT_SHAPE0:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE0]] : i64
     // CHECK: %[[S_DIM0_INBOUNDS:.*]] = llvm.and %[[S_IDX0_LT_SHAPE0]], %{{.*}} : i1
     // CHECK: %[[S_DIM0_PRED:.*]] = llvm.and %[[S_DIM0_INBOUNDS]], %[[S_IDX0_GE_ZERO]] : i1
 
     // Verify boundary checking: index1 >= 0 AND index1 < shape1
-    // CHECK: %[[S_ZERO1:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[S_IDX1_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[S_ZERO1]] : i32
-    // CHECK: %[[S_SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // CHECK: %[[S_IDX1_LT_SHAPE1:.*]] = llvm.icmp "slt" %{{.*}}, %[[S_SHAPE1_I32]] : i32
+    // CHECK: %[[S_ZERO1:.*]] = llvm.mlir.constant(0 : i64) : i64
+    // CHECK: %[[S_IDX1_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[S_ZERO1]] : i64
+    // CHECK: %[[S_IDX1_LT_SHAPE1:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE1]] : i64
 
     // CHECK: %[[S_DIM1_INBOUNDS:.*]] = llvm.and %[[S_IDX1_LT_SHAPE1]], %[[S_DIM0_PRED]] : i1
     // CHECK: %[[S_PRED:.*]] = llvm.and %[[S_DIM1_INBOUNDS]], %[[S_IDX1_GE_ZERO]] : i1
@@ -364,11 +356,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // COM: (The decisive base-offset-vs-base+index distinction is pinned precisely in
     // COM: the rank_reducing_load test, where offsets are function arguments.)
 
-    // Verify icmp operations use shape0 and shape1 truncated from descriptor
-    // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE0_I32]] : i32
-    // CHECK: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE1_I32]] : i32
+    // Verify icmp operations compare against shape0 and shape1 from the descriptor
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE0]] : i64
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE1]] : i64
 
     // Verify predicated load: conditional branch (NOT unconditional)
     // CHECK: llvm.cond_br %{{.*}}, ^[[BB_LOAD:bb[0-9]+]], ^[[BB_MERGE:bb[0-9]+]](%{{.*}} : i32)
@@ -404,11 +394,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-DAG: %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // COM: Verify block-level boundary checks against shapes for both dimensions
-    // Verify icmp operations use shape0 and shape1 truncated from descriptor
-    // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE0_I32]] : i32
-    // CHECK: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE1_I32]] : i32
+    // Verify icmp operations compare against shape0 and shape1 from the descriptor
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE0]] : i64
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE1]] : i64
 
     // Verify predicated load intrinsic with block-level predicate
     // CHECK: triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
@@ -441,11 +429,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-DAG: %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // COM: Verify block-level boundary checks against shapes for both dimensions
-    // Verify icmp operations use shape0 and shape1 truncated from descriptor
-    // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE0_I32]] : i32
-    // CHECK: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE1_I32]] : i32
+    // Verify icmp operations compare against shape0 and shape1 from the descriptor
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE0]] : i64
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE1]] : i64
 
     // Verify predicated store: conditional branch based on combined predicate
     // CHECK: llvm.cond_br %{{.*}}, ^[[BB_STORE:bb[0-9]+]], ^[[BB_MERGE:bb[0-9]+]]
@@ -493,8 +479,10 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-DAG: %[[SHAPE2:.*]] = llvm.extractvalue %[[DESC]][2] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK-DAG: %[[SHAPE3:.*]] = llvm.extractvalue %[[DESC]][3] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
 
-    // CHECK-DAG: %[[LINEAR_OFF2:.*]] = llvm.add {{.*}}, %[[OFFSET2]] : i32
-    // CHECK-DAG: %[[LINEAR_OFF3:.*]] = llvm.add {{.*}}, %[[OFFSET3]] : i32
+    // CHECK-DAG: %[[OFFSET2_I64:.*]] = llvm.sext %[[OFFSET2]] : i32 to i64
+    // CHECK-DAG: %[[OFFSET3_I64:.*]] = llvm.sext %[[OFFSET3]] : i32 to i64
+    // CHECK-DAG: %[[LINEAR_OFF2:.*]] = llvm.add {{.*}}, %[[OFFSET2_I64]] : i64
+    // CHECK-DAG: %[[LINEAR_OFF3:.*]] = llvm.add {{.*}}, %[[OFFSET3_I64]] : i64
 
     // COM: Dims 0 and 1 have block_shape=1 (divisible), so they get BLOCK-LEVEL checks:
     // COM: the base offset (OFFSET0/OFFSET1) is compared directly against the shape,
@@ -502,14 +490,14 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // COM: get per-element checks against LINEAR_OFF (base + index).
 
     // Block-level checks for the singleton dims 0 and 1 (base offset used directly):
-    // CHECK-DAG: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK-DAG: llvm.icmp "slt" %[[OFFSET0]], %[[SHAPE0_I32]] : i32
-    // CHECK-DAG: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // CHECK-DAG: llvm.icmp "slt" %[[OFFSET1]], %[[SHAPE1_I32]] : i32
+    // CHECK-DAG: %[[OFFSET0_I64:.*]] = llvm.sext %[[OFFSET0]] : i32 to i64
+    // CHECK-DAG: %[[OFFSET1_I64:.*]] = llvm.sext %[[OFFSET1]] : i32 to i64
+    // CHECK-DAG: llvm.icmp "slt" %[[OFFSET0_I64]], %[[SHAPE0]] : i64
+    // CHECK-DAG: llvm.icmp "slt" %[[OFFSET1_I64]], %[[SHAPE1]] : i64
 
     // Per-element checks for dims 2 and 3 (base + index):
-    // CHECK-DAG: llvm.icmp "slt" %[[LINEAR_OFF2]], %{{.*}} : i32
-    // CHECK-DAG: llvm.icmp "slt" %[[LINEAR_OFF3]], %{{.*}} : i32
+    // CHECK-DAG: llvm.icmp "slt" %[[LINEAR_OFF2]], %{{.*}} : i64
+    // CHECK-DAG: llvm.icmp "slt" %[[LINEAR_OFF3]], %{{.*}} : i64
     %load = tt.descriptor_load %desc[%arg1, %arg2, %arg3, %arg4] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x1x4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %load : tensor<4x4xf32, #blocked>
   }
@@ -550,8 +538,10 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-DAG: %[[SHAPE2:.*]] = llvm.extractvalue %[[DESC]][2] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK-DAG: %[[SHAPE3:.*]] = llvm.extractvalue %[[DESC]][3] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
 
-    // CHECK-DAG: %[[LINEAR_OFF2:.*]] = llvm.add {{.*}}, %[[OFFSET2]] : i32
-    // CHECK-DAG: %[[LINEAR_OFF3:.*]] = llvm.add {{.*}}, %[[OFFSET3]] : i32
+    // CHECK-DAG: %[[OFFSET2_I64:.*]] = llvm.sext %[[OFFSET2]] : i32 to i64
+    // CHECK-DAG: %[[OFFSET3_I64:.*]] = llvm.sext %[[OFFSET3]] : i32 to i64
+    // CHECK-DAG: %[[LINEAR_OFF2:.*]] = llvm.add {{.*}}, %[[OFFSET2_I64]] : i64
+    // CHECK-DAG: %[[LINEAR_OFF3:.*]] = llvm.add {{.*}}, %[[OFFSET3_I64]] : i64
 
     // COM: Dims 0 and 1 have block_shape=1 (divisible), so they get BLOCK-LEVEL checks:
     // COM: the base offset (OFFSET0/OFFSET1) is compared directly against the shape,
@@ -559,14 +549,14 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // COM: get per-element checks against LINEAR_OFF (base + index).
 
     // Block-level checks for the singleton dims 0 and 1 (base offset used directly):
-    // CHECK-DAG: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK-DAG: llvm.icmp "slt" %[[OFFSET0]], %[[SHAPE0_I32]] : i32
-    // CHECK-DAG: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // CHECK-DAG: llvm.icmp "slt" %[[OFFSET1]], %[[SHAPE1_I32]] : i32
+    // CHECK-DAG: %[[OFFSET0_I64:.*]] = llvm.sext %[[OFFSET0]] : i32 to i64
+    // CHECK-DAG: %[[OFFSET1_I64:.*]] = llvm.sext %[[OFFSET1]] : i32 to i64
+    // CHECK-DAG: llvm.icmp "slt" %[[OFFSET0_I64]], %[[SHAPE0]] : i64
+    // CHECK-DAG: llvm.icmp "slt" %[[OFFSET1_I64]], %[[SHAPE1]] : i64
 
     // Per-element checks for dims 2 and 3 (base + index):
-    // CHECK-DAG: llvm.icmp "slt" %[[LINEAR_OFF2]], %{{.*}} : i32
-    // CHECK-DAG: llvm.icmp "slt" %[[LINEAR_OFF3]], %{{.*}} : i32
+    // CHECK-DAG: llvm.icmp "slt" %[[LINEAR_OFF2]], %{{.*}} : i64
+    // CHECK-DAG: llvm.icmp "slt" %[[LINEAR_OFF3]], %{{.*}} : i64
     tt.descriptor_store %desc[%arg1, %arg2, %arg3, %arg4], %arg7 : !tt.tensordesc<1x1x4x4xf32>, tensor<4x4xf32, #blocked>
     tt.return
   }
@@ -652,12 +642,12 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: %[[SHP1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // Verify block-level checks for both dims: constant offset 4 used directly
-    // CHECK: llvm.icmp "sge" %[[OFF4]], %{{.*}} : i32
-    // CHECK: %[[SHP0_I32:.*]] = llvm.trunc %[[SHP0]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %[[OFF4]], %[[SHP0_I32]] : i32
-    // CHECK: llvm.icmp "sge" %[[OFF4]], %{{.*}} : i32
-    // CHECK: %[[SHP1_I32:.*]] = llvm.trunc %[[SHP1]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %[[OFF4]], %[[SHP1_I32]] : i32
+    // CHECK: %[[OFF4_D0:.*]] = llvm.sext %[[OFF4]] : i32 to i64
+    // CHECK: %[[OFF4_D1:.*]] = llvm.sext %[[OFF4]] : i32 to i64
+    // CHECK: llvm.icmp "sge" %[[OFF4_D0]], %{{.*}} : i64
+    // CHECK: llvm.icmp "slt" %[[OFF4_D0]], %[[SHP0]] : i64
+    // CHECK: llvm.icmp "sge" %[[OFF4_D1]], %{{.*}} : i64
+    // CHECK: llvm.icmp "slt" %[[OFF4_D1]], %[[SHP1]] : i64
 
     // CHECK: triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
 
@@ -699,11 +689,12 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
       // No per-thread index is added to %[[IV]] in the icmps — only in the GEP.
 
       // Verify GEP adds the IV to per-thread index for pointer arithmetic
-      // CHECK: llvm.add %{{.*}}, %[[IV]] : i32
+      // CHECK: %[[IV_I64:.*]] = llvm.sext %[[IV]] : i32 to i64
+      // CHECK: llvm.add %{{.*}}, %[[IV_I64]] : i64
 
       // Verify block-level check for dim0: IV used directly in icmp (not IV+per_thread)
-      // CHECK: llvm.icmp "sge" %[[IV]], %{{.*}} : i32
-      // CHECK: llvm.icmp "slt" %[[IV]], %{{.*}} : i32
+      // CHECK: llvm.icmp "sge" %[[IV_I64]], %{{.*}} : i64
+      // CHECK: llvm.icmp "slt" %[[IV_I64]], %{{.*}} : i64
 
       // Verify predicated load inside loop
       // CHECK: triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
@@ -933,19 +924,15 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-DAG: %[[STRIDE1:.*]] = llvm.extractvalue %arg0[3] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // COM: Bind the per-element indices from the GEP offset computation.
-    // CHECK: %[[STRIDE0_I32:.*]] = llvm.trunc %[[STRIDE0]] : i64 to i32
-    // CHECK: llvm.mul %[[IDX0:[0-9]+]], %[[STRIDE0_I32]] : i32
-    // CHECK: %[[STRIDE1_I32:.*]] = llvm.trunc %[[STRIDE1]] : i64 to i32
-    // CHECK: llvm.mul %[[IDX1:[0-9]+]], %[[STRIDE1_I32]] : i32
+    // CHECK: llvm.mul %[[IDX0:[0-9]+]], %[[STRIDE0]] : i64
+    // CHECK: llvm.mul %[[IDX1:[0-9]+]], %[[STRIDE1]] : i64
 
     // COM: The same per-element indices -- not offsets[dim] -- are what the mask
     // COM: compares. This is the assertion that a vacuous allSatisfy would break.
-    // CHECK: llvm.icmp "sge" %[[IDX0]], %{{.*}} : i32
-    // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %[[IDX0]], %[[SHAPE0_I32]] : i32
-    // CHECK: llvm.icmp "sge" %[[IDX1]], %{{.*}} : i32
-    // CHECK: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %[[IDX1]], %[[SHAPE1_I32]] : i32
+    // CHECK: llvm.icmp "sge" %[[IDX0]], %{{.*}} : i64
+    // CHECK: llvm.icmp "slt" %[[IDX0]], %[[SHAPE0]] : i64
+    // CHECK: llvm.icmp "sge" %[[IDX1]], %{{.*}} : i64
+    // CHECK: llvm.icmp "slt" %[[IDX1]], %[[SHAPE1]] : i64
 
     %3 = tt.descriptor_load %arg0[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
@@ -970,17 +957,13 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-DAG: %[[STRIDE0:.*]] = llvm.extractvalue %arg0[2] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
     // CHECK-DAG: %[[STRIDE1:.*]] = llvm.extractvalue %arg0[3] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
-    // CHECK: %[[STRIDE0_I32:.*]] = llvm.trunc %[[STRIDE0]] : i64 to i32
-    // CHECK: llvm.mul %[[IDX0:[0-9]+]], %[[STRIDE0_I32]] : i32
-    // CHECK: %[[STRIDE1_I32:.*]] = llvm.trunc %[[STRIDE1]] : i64 to i32
-    // CHECK: llvm.mul %[[IDX1:[0-9]+]], %[[STRIDE1_I32]] : i32
+    // CHECK: llvm.mul %[[IDX0:[0-9]+]], %[[STRIDE0]] : i64
+    // CHECK: llvm.mul %[[IDX1:[0-9]+]], %[[STRIDE1]] : i64
 
-    // CHECK: llvm.icmp "sge" %[[IDX0]], %{{.*}} : i32
-    // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %[[IDX0]], %[[SHAPE0_I32]] : i32
-    // CHECK: llvm.icmp "sge" %[[IDX1]], %{{.*}} : i32
-    // CHECK: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %[[IDX1]], %[[SHAPE1_I32]] : i32
+    // CHECK: llvm.icmp "sge" %[[IDX0]], %{{.*}} : i64
+    // CHECK: llvm.icmp "slt" %[[IDX0]], %[[SHAPE0]] : i64
+    // CHECK: llvm.icmp "sge" %[[IDX1]], %{{.*}} : i64
+    // CHECK: llvm.icmp "slt" %[[IDX1]], %[[SHAPE1]] : i64
 
     tt.descriptor_store %arg0[%c0_i32, %c0_i32], %arg1 : !tt.tensordesc<4x4xf32>, tensor<4x4xf32, #blocked>
     tt.return
