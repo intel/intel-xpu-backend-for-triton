@@ -1,5 +1,39 @@
 // RUN: triton-opt -split-input-file -verify-diagnostics %s
 
+module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.2d_block_io_pitch_alignment = 4 : i32} {
+llvm.func @xe3p_pitch(%ptr: !llvm.ptr<1>, %width: i32, %height: i32, %x: i32, %y: i32) {
+  %pitch = llvm.mlir.constant(5080 : i32) : i32
+  %v = triton_gen.2Dblockload %ptr, %width, %height, %pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<8xi16>
+  triton_gen.2Dblockstore %ptr, %width, %height, %pitch, %x, %y, %v {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
+  triton_gen.2Dblockprefetch %ptr, %width, %height, %pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
+  llvm.return
+}
+}
+
+// -----
+
+module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.2d_block_io_pitch_alignment = 4 : i32} {
+llvm.func @xe3p_unaligned_pitch(%ptr: !llvm.ptr<1>, %width: i32, %height: i32, %x: i32, %y: i32) {
+  %pitch = llvm.mlir.constant(5082 : i32) : i32
+  // expected-error @+1 {{4th operand (base pitch) should be a multiple of 4 bytes}}
+  %v = triton_gen.2Dblockload %ptr, %width, %height, %pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<8xi16>
+  llvm.return
+}
+}
+
+// -----
+
+module attributes {"ttg.threads-per-warp" = 16 : i32} {
+llvm.func @legacy_pitch(%ptr: !llvm.ptr<1>, %width: i32, %height: i32, %x: i32, %y: i32) {
+  %pitch = llvm.mlir.constant(5080 : i32) : i32
+  // expected-error @+1 {{4th operand (base pitch) should be a multiple of 16 bytes}}
+  %v = triton_gen.2Dblockload %ptr, %width, %height, %pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<8xi16>
+  llvm.return
+}
+}
+
+// -----
+
 llvm.func @triton_gen.duplicated_cache_controls(%arg0: !llvm.ptr) {
   // expected-error @+1 {{'triton_gen.decoration_cache_controls' cannot specify more than one cache control decoration of the same nature for the same cache level}}
   %0 = llvm.load %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<0, Cached, 0>>} : !llvm.ptr -> i32

@@ -1,5 +1,28 @@
 // RUN: triton-opt %s -split-input-file -triton-intel-fuse-reshape | FileCheck %s
 
+module attributes {ttig.2d_block_io_pitch_alignment = 4 : i32} {
+  // CHECK-LABEL: @fuse_xe3p_pitch
+  tt.func @fuse_xe3p_pitch(%base: !tt.ptr<f16>, %b: tensor<32x32xf16>) -> tensor<32x32xf32> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c256 = arith.constant 256 : i32
+    %c2528 = arith.constant 2528 : i32
+    %c2540_i64 = arith.constant 2540 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%c256, %c1, %c2528], [%c2540_i64, %c2540_i64, %c1_i64] : <f16>, <32x1x32xf16>
+    // CHECK: tt.make_tensor_descriptor {{.*}} : <f16>, <32x32xf16>
+    // CHECK: tt.descriptor_load {{.*}} -> tensor<32x32xf16>
+    // CHECK-NOT: tt.reshape
+    %v = tt.descriptor_load %desc[%c0, %c0, %c0] : !tt.tensordesc<32x1x32xf16> -> tensor<32x1x32xf16>
+    %r = tt.reshape %v : tensor<32x1x32xf16> -> tensor<32x32xf16>
+    %zero = arith.constant dense<0.0> : tensor<32x32xf32>
+    %result = tt.dot %r, %b, %zero : tensor<32x32xf16> * tensor<32x32xf16> -> tensor<32x32xf32>
+    tt.return %result : tensor<32x32xf32>
+  }
+}
+
+// -----
+
 // COM: Unit outermost dimension. The merged extent is per *load*: the collapsed
 // COM: index 2 clamps to max(1,1)-1 == 0, so the extent is 0*(1024/4) + 64 == 64.
 // COM: That index is out of range (off_0 == 2 >= s_0 == 1), so the guard forces

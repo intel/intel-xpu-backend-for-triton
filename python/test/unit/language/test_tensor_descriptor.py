@@ -1886,7 +1886,16 @@ def test_tensor_descriptor_stride_alignment(dtype_str, misaligned_stride, aligne
 
     a = torch.empty((32, aligned_stride), dtype=dtype, device=device)
 
-    with pytest.raises(CompilationError, match="16-byte aligned"):
+    alignment = 16
+    if is_xpu():
+        from triton.compiler.compiler import make_backend
+        backend = make_backend(triton.runtime.driver.active.get_current_target())
+        alignment = backend.properties["block_io_pitch_alignment"]
+
+    if misaligned_stride * a.element_size() % alignment:
+        with pytest.raises(CompilationError, match=f"{alignment}-byte aligned"):
+            kernel[(1, )](a, 32, misaligned_stride, stride_m=misaligned_stride, M_BLOCK=8, N_BLOCK=64)
+    else:
         kernel[(1, )](a, 32, misaligned_stride, stride_m=misaligned_stride, M_BLOCK=8, N_BLOCK=64)
 
     kernel[(1, )](a, 32, aligned_stride, stride_m=aligned_stride, M_BLOCK=8, N_BLOCK=64)

@@ -151,13 +151,14 @@ private:
     // A misaligned pitch is an error whatever the layout, so this check is not
     // part of isDescriptorLoadLowerableTo2DBlock.
     int64_t elemBytesConst = elemSizeInBits / 8;
+    unsigned pitchAlignment = ttgi::get2DBlockIOPitchAlignment(op);
     for (tt::MakeTensorDescOp d : defs) {
       std::optional<int64_t> stride = tt::intel::getFoldedConstantValue(
           d->getOperand(/*pitch stride*/ 1 + descRank + (descRank - 2)));
-      if (stride && (*stride * elemBytesConst) % 16 != 0) {
+      if (stride && (*stride * elemBytesConst) % pitchAlignment != 0) {
         op->emitOpError("descriptor pitch of ")
-            << *stride * elemBytesConst
-            << " bytes is not a multiple of 16 bytes";
+            << *stride * elemBytesConst << " bytes is not a multiple of "
+            << pitchAlignment << " bytes";
         signalPassFailure();
         return;
       }
@@ -437,7 +438,7 @@ private:
         int64_t pitchStride = getStride(strideAnalysis, op.getPtr(), pitchDim);
         if (pitchStride < 0) {
           // No constant stride: use the runtime stride that StrideAnalysis
-          // recovered. MaterializeBlockPointer already checked its 16-byte
+          // recovered. MaterializeBlockPointer already checked its target pitch
           // alignment.
           Value lda = ttgi::getRuntimeStrideValue(strideAnalysis, op.getPtr(),
                                                   pitchDim);
@@ -459,11 +460,12 @@ private:
     }
 
     // A runtime pitch can't be range-checked here; MaterializeBlockPointer
-    // proved it 16-byte aligned and the row-width check covers the minimum.
+    // proved its target alignment and the row-width check covers the minimum.
     if (!ttgi::isBlockPitchSupported(
             pitchValue ? std::nullopt : std::optional<int64_t>(pitch),
             /*hasRuntimeStride=*/pitchValue != nullptr,
-            tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8)) {
+            tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8,
+            ttgi::get2DBlockIOPitchAlignment(op))) {
       LDBG("Unsupported pitch for load: " << *op);
       return;
     }

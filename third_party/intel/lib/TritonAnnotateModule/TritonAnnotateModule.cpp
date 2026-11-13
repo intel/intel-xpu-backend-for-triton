@@ -113,6 +113,14 @@ struct TritonAnnotateModule
         ttgi::TritonIntelGPUDialect::get2DBlockIOBaseAlignmentAttrName(),
         builder.getI32IntegerAttr(blockIOBaseAlignment));
 
+    if (blockIOPitchAlignment != 4 && blockIOPitchAlignment != 16) {
+      mod.emitError("2D block IO pitch alignment must be 4 or 16 bytes");
+      return signalPassFailure();
+    }
+    mod->setAttr(
+        ttgi::TritonIntelGPUDialect::get2DBlockIOPitchAlignmentAttrName(),
+        builder.getI32IntegerAttr(blockIOPitchAlignment));
+
     if (!maxGRFMode.empty())
       mod->setAttr(ttgi::TritonIntelGPUDialect::getMaxGRFModeAttrName(),
                    builder.getStringAttr(maxGRFMode));

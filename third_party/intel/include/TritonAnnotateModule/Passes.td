@@ -70,6 +70,8 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "whether to enable DPAS for 32 subgroup size kernels">,
     Option<"blockIOBaseAlignment", "2d-block-io-base-alignment", "unsigned", /*default*/"64",
            "HW base-address alignment requirement (in bytes) for 2D block IO">,
+    Option<"blockIOPitchAlignment", "2d-block-io-pitch-alignment", "unsigned", /*default*/"16",
+           "HW surface-pitch alignment in bytes for 2D block IO (4 or 16)">,
     Option<"maxGRFMode", "max-grf-mode", "std::string", /*default*/"\"\"",
            "largest GRF mode (\"128\", \"256\" or \"512\") the backend's automatic escalation "
            "paths target for the device; empty (the default) means unknown, so the module "

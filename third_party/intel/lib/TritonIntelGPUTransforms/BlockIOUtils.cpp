@@ -29,12 +29,14 @@ Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
 }
 
 bool isBlockPitchSupported(std::optional<int64_t> constPitchBytes,
-                           bool hasRuntimeStride, int64_t fullRowBytes) {
+                           bool hasRuntimeStride, int64_t fullRowBytes,
+                           unsigned pitchAlignment) {
   constexpr int64_t minPitch = 64;
   // The pitch field is 24 bits (see the `triton_gen.2Dblockload` verifier).
   constexpr int64_t maxPitch = int64_t(1) << 24;
   if (constPitchBytes)
-    return *constPitchBytes >= minPitch && *constPitchBytes % 16 == 0 &&
+    return *constPitchBytes >= minPitch &&
+           *constPitchBytes % pitchAlignment == 0 &&
            *constPitchBytes <= maxPitch;
   return hasRuntimeStride && fullRowBytes >= minPitch;
 }
@@ -1008,7 +1010,7 @@ bool isDescriptorLoadLowerableTo2DBlock(
   //  - Alignment (base 4B, width multiple of 4B):
   //    in the normal pipeline MaterializeBlockPointer checks it before it
   //    tags the load (runtime values rely on the tt.make_tensor_descriptor
-  //    16-byte contract); hand-tagged IR is not re-checked here.
+  //    target alignment contract); hand-tagged IR is not re-checked here.
   //  - The HW 64-byte minimum for width/pitch is deliberately not enforced;
   //    it would move narrow descriptors off 2D block I/O.
   //  - pitch >= width (a TritonGEN verifier rule) is not a range check and

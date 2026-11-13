@@ -2566,7 +2566,8 @@ def make_tensor_descriptor(
     :param base: the base pointer of the tensor, must be 16-byte aligned
     :param shape: A list of non-negative integers representing the tensor shape
     :param strides: A list of tensor strides. Leading dimensions must be multiples
-        of 16-byte strides and the last dimension must be contiguous.
+        of 16-byte strides (4-byte strides on Intel Xe3p) and the last dimension
+        must be contiguous.
     :param block_shape: The shape of block to be loaded/stored from global memory
     :param fp6_format: For packed FP6 TMA stores, use "e2m3" or "e3m2" with a uint8 base.
         Shape and offsets count logical values. Outer strides count bytes. Each source uint8 holds one FP6 code.

@@ -1,5 +1,26 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-materialize-block-pointer | FileCheck %s
 
+#blocked1d = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io, ttig.2d_block_io_pitch_alignment = 4 : i32} {
+  // CHECK-LABEL: @xe3p_reshape_pitch
+  tt.func @xe3p_reshape_pitch(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64xf16, #blocked1d>) {
+    %idx = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32, #blocked1d>
+    %width = arith.constant dense<32> : tensor<64xi32, #blocked1d>
+    %stride = arith.constant dense<2540> : tensor<64xi32, #blocked1d>
+    %col = arith.remui %idx, %width : tensor<64xi32, #blocked1d>
+    %row = arith.divui %idx, %width : tensor<64xi32, #blocked1d>
+    %r = arith.muli %row, %stride : tensor<64xi32, #blocked1d>
+    %off = arith.addi %col, %r : tensor<64xi32, #blocked1d>
+    %ptr = tt.splat %base : !tt.ptr<f16> -> tensor<64x!tt.ptr<f16>, #blocked1d>
+    %ptrs = tt.addptr %ptr, %off : tensor<64x!tt.ptr<f16>, #blocked1d>, tensor<64xi32, #blocked1d>
+    // CHECK: tt.store {{.*}}ttig.block_io = "row_major", ttig.block_io_stride = 2540 : i64
+    tt.store %ptrs, %v : tensor<64x!tt.ptr<f16>, #blocked1d>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Test 1: Single-row tile (H == 1) — reshape optimization fires.
 // COM: numElements=32, W=32, S=96, f16, numWarps=1.
 // COM: H = 32/32 = 1 → the pass should reshape [32] -> [1, 32] and set

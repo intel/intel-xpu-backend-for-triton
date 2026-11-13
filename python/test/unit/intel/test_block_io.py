@@ -5,10 +5,71 @@ import numpy as np
 import pytest
 import torch
 import pathlib
+from types import SimpleNamespace
 
 import triton
 import triton.language as tl
 from triton._internal_testing import is_xpu
+from triton._C.libtriton import ir, intel
+from triton.backends.intel.compiler import XPUBackend, XPUOptions
+from triton.language.semantic import TritonSemantic
+
+
+@pytest.mark.parametrize("arch, expected", [("cri", 4), ("ptl_h", 16), ("bmg", 16), ("pvc", 16), ("unknown", 16)])
+@pytest.mark.parametrize("override", [None, 4, 16])
+def test_block_io_pitch_alignment_target(arch, expected, override):
+    backend = object.__new__(XPUBackend)
+    backend.device_arch = arch
+    target = {"arch": arch, "__intel_already_queried_extensions__": True}
+    if override is not None:
+        target["block_io_pitch_alignment"] = override
+        expected = override
+    backend.properties = backend.parse_target(target)
+    assert backend.properties["block_io_pitch_alignment"] == expected
+    assert backend.get_codegen_implementation(None)["tensor_descriptor_pitch_alignment"]() == expected
+
+
+@pytest.mark.parametrize("alignment", [0, 3, 8, 32])
+def test_block_io_pitch_alignment_invalid(alignment):
+    backend = object.__new__(XPUBackend)
+    backend.device_arch = "cri"
+    with pytest.raises(ValueError, match="block_io_pitch_alignment must be 4 or 16 bytes"):
+        backend.parse_target({"block_io_pitch_alignment": alignment})
+
+
+@pytest.mark.parametrize("alignment", [None, 4, 16])
+@pytest.mark.parametrize("stride", [2540, 2541, 2544])
+def test_block_io_pitch_alignment_frontend(alignment, stride):
+    codegen_fns = {} if alignment is None else {"tensor_descriptor_pitch_alignment": lambda: alignment}
+    semantic = TritonSemantic(SimpleNamespace(codegen_fns=codegen_fns))
+    expected_alignment = alignment or 16
+    if stride * 2 % expected_alignment == 0:
+        semantic._check_tensor_descriptor_alignment_static([tl.constexpr(stride), tl.constexpr(1)], 2)
+    else:
+        with pytest.raises(ValueError, match=f"strides must be {expected_alignment}-byte aligned"):
+            semantic._check_tensor_descriptor_alignment_static([tl.constexpr(stride), tl.constexpr(1)], 2)
+
+
+@pytest.mark.parametrize("alignment", [4, 16])
+def test_block_io_pitch_alignment_ttir(alignment, tmp_path):
+    backend = object.__new__(XPUBackend)
+    context = ir.context()
+    ir.load_dialects(context)
+    backend.load_dialects(context)
+    source = tmp_path / "empty.mlir"
+    source.write_text("module { tt.func @empty() { tt.return } }")
+    module = ir.parse_mlir_module(str(source), context)
+    module.context = context
+    backend.make_ttir(module, {"target": SimpleNamespace(arch={})}, XPUOptions(),
+                      {"block_io_pitch_alignment": alignment})
+    assert f"ttig.2d_block_io_pitch_alignment = {alignment} : i32" in str(module)
+
+    options = intel.passes.ttgpuir.AnnotateModuleOptions()
+    options.block_io_pitch_alignment = alignment
+    pm = ir.pass_manager(context)
+    intel.passes.ttgpuir.add_triton_annotate_module(pm, options)
+    pm.run(module, "test_pitch_alignment")
+    assert f"ttig.2d_block_io_pitch_alignment = {alignment} : i32" in str(module)
 
 
 @pytest.fixture(autouse=True)

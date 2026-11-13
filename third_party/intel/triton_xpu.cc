@@ -157,6 +157,8 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
               &gpu::intel::TritonAnnotateModuleOptions::sub32DPAS)
       .def_rw("block_io_base_alignment",
               &gpu::intel::TritonAnnotateModuleOptions::blockIOBaseAlignment)
+      .def_rw("block_io_pitch_alignment",
+              &gpu::intel::TritonAnnotateModuleOptions::blockIOPitchAlignment)
       .def_rw("max_grf_mode",
               &gpu::intel::TritonAnnotateModuleOptions::maxGRFMode);
   ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",

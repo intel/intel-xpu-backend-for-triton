@@ -142,7 +142,7 @@ bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
 
 /// Return true if LowerTo2DBlockLoad would rewrite \p op to ttig.2d_block_load
 /// with result type \p tensorTy, which may differ from op.getType(). Emits no
-/// diagnostics and skips the 16-byte pitch check, which the pass reports as an
+/// diagnostics and skips the target pitch check, which the pass reports as an
 /// error, so true means "eligible", not "safe to emit" for hand-tagged IR.
 bool isDescriptorLoadLowerableTo2DBlock(
     triton::DescriptorLoadOp op, RankedTensorType tensorTy,
@@ -169,10 +169,12 @@ Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
 
 /// Whether a 2D block surface supports this row pitch. Shared by
 /// MaterializeBlockPointer and LowerTo2DBlockLoad so they cannot drift.
-/// A constant pitch must be >= 64 bytes, a multiple of 16 and fit in 24 bits.
+/// A constant pitch must be >= 64 bytes, meet the target alignment and fit in
+/// 24 bits. The default alignment preserves pre-Xe3p behavior.
 /// A runtime pitch needs a stride value and a full row of >= 64 bytes.
 bool isBlockPitchSupported(std::optional<int64_t> constPitchBytes,
-                           bool hasRuntimeStride, int64_t fullRowBytes);
+                           bool hasRuntimeStride, int64_t fullRowBytes,
+                           unsigned pitchAlignment = 16);
 
 /// Build `stride * elemSizeInBytes` as an i32; null for non-integer stride.
 Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,

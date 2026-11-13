@@ -1,9 +1,25 @@
 // RUN: env TRITON_INTEL_2DBLOCK_ASSERT=1 triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s --check-prefix=ASSERT
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s --check-prefix=NOASSERT
 
+module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.2d_block_io_pitch_alignment = 4 : i32} {
+llvm.func @xe3p_pitch_assert(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // ASSERT-LABEL: llvm.func @xe3p_pitch_assert
+  // ASSERT: [[ALIGN:%.*]] = llvm.mlir.constant(4 : i32)
+  // ASSERT: llvm.urem %arg3, [[ALIGN]] : i32
+  // NOASSERT-LABEL: llvm.func @xe3p_pitch_assert
+  // NOASSERT-NOT: __assert_fail
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<2xi16>
+  llvm.return
+}
+}
+
+// -----
+
 module attributes {"ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // ASSERT: [[ALIGN16:%.*]] = llvm.mlir.constant(16 : i32)
   // ASSERT: llvm.call spir_funccc @__assert_fail
+  // ASSERT: llvm.urem %arg3, [[ALIGN16]] : i32
   // NOASSERT-NOT: __assert_fail
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<2xi16>
   llvm.return

@@ -1999,12 +1999,13 @@ class TritonSemantic(Generic[TensorTy]):
         return [self._convert_elem_to_ir_value(list_like, require_i64)]
 
     def _check_tensor_descriptor_alignment_static(self, strides: List[TensorTy], elem_size: int) -> None:
-        # Reject statically-known strides that aren't 16-byte aligned per TMA requirement.
+        # TMA requires 16 bytes; backends may advertise a different pitch alignment.
         # Shared by the `tl` and `gluon` `make_tensor_descriptor` builders.
+        alignment = self.builder.codegen_fns.get("tensor_descriptor_pitch_alignment", lambda: 16)()
         for stride in strides[:-1]:
             static_stride = tl._unwrap_if_constexpr(stride)
-            if isinstance(static_stride, int) and (static_stride * elem_size) % 16 != 0:
-                raise ValueError(f"Tensor descriptor strides must be 16-byte aligned, but got a stride of "
+            if isinstance(static_stride, int) and (static_stride * elem_size) % alignment != 0:
+                raise ValueError(f"Tensor descriptor strides must be {alignment}-byte aligned, but got a stride of "
                                  f"{static_stride} * {elem_size} = {static_stride * elem_size} bytes")
 
     def _iisan_check_tensor_descriptor_alignment(self, base: TensorTy, strides: List[TensorTy], elem_size: int,
@@ -2019,12 +2020,15 @@ class TritonSemantic(Generic[TensorTy]):
         base_rem = self.mod(base_addr, align_bytes)
         self.device_assert(self.equal(base_rem, zero), "Tensor descriptor base pointer must be 16-byte aligned", None)
 
+        pitch_alignment = self.builder.codegen_fns.get("tensor_descriptor_pitch_alignment", lambda: 16)()
+        pitch_align_bytes = self.make_scalar(pitch_alignment, tl.int64)
         for source, stride in zip(stride_sources[:-1], strides[:-1]):
             if isinstance(tl._unwrap_if_constexpr(source), int):
                 continue
             byte_stride = self.mul(stride, elem_bytes, sanitize_overflow=False)
-            rem = self.mod(byte_stride, align_bytes)
-            self.device_assert(self.equal(rem, zero), "Tensor descriptor strides must be 16-byte aligned", None)
+            rem = self.mod(byte_stride, pitch_align_bytes)
+            self.device_assert(self.equal(rem, zero),
+                               f"Tensor descriptor strides must be {pitch_alignment}-byte aligned", None)
 
     def make_tensor_descriptor(self, base: TensorTy, shape: List[TensorTy], strides: List[TensorTy],
                                block_shape: List[tl.constexpr], padding_option: str = "zero",

@@ -219,6 +219,11 @@ def TritonIntelGPU_Dialect : Dialect {
     static constexpr llvm::StringRef get2DBlockIOBaseAlignmentAttrName() {
       return "ttig.2d_block_io_base_alignment";
     }
+
+    /// Surface-pitch alignment in bytes: 4 on Xe3p, 16 on older targets.
+    static constexpr llvm::StringRef get2DBlockIOPitchAlignmentAttrName() {
+      return "ttig.2d_block_io_pitch_alignment";
+    }
   }];
 
   let useDefaultAttributePrinterParser = 1;

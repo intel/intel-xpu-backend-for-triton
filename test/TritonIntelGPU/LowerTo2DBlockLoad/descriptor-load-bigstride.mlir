@@ -1,5 +1,25 @@
 // RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s
 
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io, ttig.2d_block_io_pitch_alignment = 4 : i32} {
+  // CHECK-LABEL: @descriptor_load_xe3p_pitch
+  tt.func @descriptor_load_xe3p_pitch(%base: !tt.ptr<f16>) -> tensor<64x32xf16, #dot0> {
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %c256 = arith.constant 256 : i32
+    %c2540 = arith.constant 2540 : i32
+    %stride = arith.constant 2540 : i64
+    %desc = tt.make_tensor_descriptor %base, [%c256, %c2540], [%stride, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK: ttig.2d_block_load
+    // CHECK-NOT: tt.descriptor_load
+    %v = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    tt.return %v : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
 // Regression tests for the surface-parameter bounds check in the
 // descriptor→2Dblockload lowering (companion to
 // test/TritonIntelGPU/prefetch-bigstride.mlir; see

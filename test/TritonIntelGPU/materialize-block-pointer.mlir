@@ -1,5 +1,82 @@
 // RUN: triton-opt %s -split-input-file --tritonintelgpu-materialize-block-pointer | FileCheck %s
 
+// COM: Case 29 has an unpadded FP16 row pitch of 5080 bytes.
+#pitch_blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io, ttig.2d_block_io_pitch_alignment = 4 : i32} {
+  // CHECK-LABEL: @xe3p_pitch
+  tt.func @xe3p_pitch(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %c0 = arith.constant 0 : i32
+    %c256 = arith.constant 256 : i32
+    %c2540 = arith.constant 2540 : i32
+    %c2540_i64 = arith.constant 2540 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%c256, %c2540], [%c2540_i64, %c1_i64] : <f16>, <32x64xf16>
+    // CHECK: tt.descriptor_load {{.*}}ttig.block_io = "row_major"
+    %v = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<32x64xf16> -> tensor<32x64xf16, #pitch_blocked>
+    // CHECK: tt.descriptor_store {{.*}}ttig.block_io = "row_major"
+    tt.descriptor_store %desc[%c0, %c0], %v : !tt.tensordesc<32x64xf16>, tensor<32x64xf16, #pitch_blocked>
+
+    %rows = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #pitch_blocked}>>
+    %cols = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #pitch_blocked}>>
+    %stride = tt.splat %c2540 : i32 -> tensor<32xi32, #ttg.slice<{dim = 1, parent = #pitch_blocked}>>
+    %offsets = arith.muli %rows, %stride : tensor<32xi32, #ttg.slice<{dim = 1, parent = #pitch_blocked}>>
+    %r = tt.expand_dims %offsets {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #pitch_blocked}>> -> tensor<32x1xi32, #pitch_blocked>
+    %c = tt.expand_dims %cols {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #pitch_blocked}>> -> tensor<1x64xi32, #pitch_blocked>
+    %rb = tt.broadcast %r : tensor<32x1xi32, #pitch_blocked> -> tensor<32x64xi32, #pitch_blocked>
+    %cb = tt.broadcast %c : tensor<1x64xi32, #pitch_blocked> -> tensor<32x64xi32, #pitch_blocked>
+    %off = arith.addi %rb, %cb : tensor<32x64xi32, #pitch_blocked>
+    %ptr = tt.splat %base : !tt.ptr<f16> -> tensor<32x64x!tt.ptr<f16>, #pitch_blocked>
+    %ptrs = tt.addptr %ptr, %off : tensor<32x64x!tt.ptr<f16>, #pitch_blocked>, tensor<32x64xi32, #pitch_blocked>
+    // CHECK: tt.load {{.*}}ttig.block_io = "row_major"
+    %p = tt.load %ptrs : tensor<32x64x!tt.ptr<f16>, #pitch_blocked>
+    // CHECK: tt.store {{.*}}ttig.block_io = "row_major"
+    tt.store %ptrs, %p : tensor<32x64x!tt.ptr<f16>, #pitch_blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#pitch_blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: @legacy_pitch
+  tt.func @legacy_pitch(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %c0 = arith.constant 0 : i32
+    %c256 = arith.constant 256 : i32
+    %c2540 = arith.constant 2540 : i32
+    %c2540_i64 = arith.constant 2540 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%c256, %c2540], [%c2540_i64, %c1_i64] : <f16>, <32x64xf16>
+    // CHECK: tt.descriptor_load
+    // CHECK-NOT: ttig.block_io
+    // CHECK: tt.return
+    %v = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<32x64xf16> -> tensor<32x64xf16, #pitch_blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#pitch_blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io, ttig.2d_block_io_pitch_alignment = 4 : i32} {
+  // CHECK-LABEL: @xe3p_unaligned_pitch
+  tt.func @xe3p_unaligned_pitch(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %c0 = arith.constant 0 : i32
+    %c256 = arith.constant 256 : i32
+    %c2541 = arith.constant 2541 : i32
+    %c2541_i64 = arith.constant 2541 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%c256, %c2541], [%c2541_i64, %c1_i64] : <f16>, <32x64xf16>
+    // CHECK: tt.descriptor_load
+    // CHECK-NOT: ttig.block_io
+    // CHECK: tt.return
+    %v = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<32x64xf16> -> tensor<32x64xf16, #pitch_blocked>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Ensure pointers with strides [0, 1]/[1, 0] are considered row/column major respectively.
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {

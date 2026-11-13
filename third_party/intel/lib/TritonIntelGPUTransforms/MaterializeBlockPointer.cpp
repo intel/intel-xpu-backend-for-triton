@@ -50,7 +50,7 @@ static bool isBlockIOForAllLayoutsExplicitlyDisabled() {
 
 // Check a descriptor base pointer or pitch against an alignment requirement.
 // A constant must be provably divisible. For a runtime value, divisibility 1
-// means the alignment is unknown; we trust the 16-byte make_tensor_descriptor
+// means the alignment is unknown; we trust the target's make_tensor_descriptor
 // contract rather than reject the 2D block IO path. This silently miscompiles
 // if a caller breaks that contract, so the LDBG traces when we rely on it.
 // For values the contract says nothing about - the load/store index - use
@@ -62,7 +62,7 @@ static bool isDescriptorAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo,
   const tt::AxisInfo *info = axisInfo.getAxisInfo(v);
   int64_t div = info ? info->getDivisibility(0) : 1;
   if (div == 1) {
-    LDBG("Divisibility unknown; trusting the 16-byte make_tensor_descriptor "
+    LDBG("Divisibility unknown; trusting the target make_tensor_descriptor "
          "alignment contract for runtime value (divisor="
          << divisor << "): " << v);
     return true;
@@ -293,9 +293,8 @@ private:
       return;
     }
 
-    // Across Intel platforms, the strictest pitch restriction is to be a
-    // multiple of OWord(128 bits). All candidates must satisfy this.
-    unsigned pitchDivisor = llvm::divideCeil(128, elementWidth);
+    unsigned pitchDivisor = llvm::divideCeil(
+        ttgi::get2DBlockIOPitchAlignment(op) * 8, elementWidth);
     if (!defs.allSatisfy([&](tt::MakeTensorDescOp d) {
           return isDescriptorAligned(axisInfoAnalysis, d.getStrides()[rank - 2],
                                      pitchDivisor);
@@ -374,9 +373,10 @@ private:
 
     // Determine if LoadOp is row-major or column-major.
     tt::intel::StrideInfo *strideInfo = strideAnalysis.getStrideInfo(ptr);
-    auto isMajor = [rank, &strideInfo](RankedTensorType tensorTy,
-                                       unsigned fastChangeDim,
-                                       const tt::AxisInfo &axisInfo) {
+    unsigned pitchAlignment = ttgi::get2DBlockIOPitchAlignment(op);
+    auto isMajor = [rank, &strideInfo, pitchAlignment](
+                       RankedTensorType tensorTy, unsigned fastChangeDim,
+                       const tt::AxisInfo &axisInfo) {
       assert((fastChangeDim == rank - 1 || fastChangeDim == rank - 2) &&
              "fastChangeDim is expected to be rank - 1 or rank - 2");
       const unsigned otherDim =
@@ -389,20 +389,22 @@ private:
         return false;
       }
 
-      // Runtime stride (-1) is OK if AxisInfo proves 16-byte alignment.
+      // Runtime stride (-1) is OK if AxisInfo proves target pitch alignment.
       int64_t otherDimStride =
           strideInfo ? strideInfo->getStride(otherDim) : -1;
       Type elemTy =
           cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
       unsigned elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
       if (otherDimStride >= 0) {
-        if ((otherDimStride * elemSizeInBytes) % 16 != 0) {
-          LDBG("Non 16-byte aligned stride: " << otherDimStride);
+        if ((otherDimStride * elemSizeInBytes) % pitchAlignment != 0) {
+          LDBG("Stride fails " << pitchAlignment
+                               << "-byte pitch alignment: " << otherDimStride);
           return false;
         }
-      } else if (axisInfo.getDivisibility(otherDim) % 16 != 0) {
+      } else if (axisInfo.getDivisibility(otherDim) % pitchAlignment != 0) {
         LDBG("Runtime stride: divisibility "
-             << axisInfo.getDivisibility(otherDim) << " < 16 bytes");
+             << axisInfo.getDivisibility(otherDim) << ", need "
+             << pitchAlignment << " bytes");
         return false;
       }
 
@@ -501,7 +503,8 @@ private:
               stride >= 0 ? std::optional<int64_t>(stride * elemBits / 8)
                           : std::nullopt,
               strideInfo && strideInfo->getStrideValue(pitchDim),
-              maskTy.getDimSize(*contiguousDim) * elemBits / 8);
+              maskTy.getDimSize(*contiguousDim) * elemBits / 8,
+              ttgi::get2DBlockIOPitchAlignment(op));
           if (pitchOk) {
             LDBG(
                 "Mask is a row-limit pattern; permitting block IO for: " << op);
@@ -758,10 +761,10 @@ private:
       return std::nullopt;
     }
 
-    // Pitch must be 16-byte aligned (surface pitch HW requirement).
-    if ((S * elemBytes) % 16 != 0) {
-      LDBG("Pitch " << S * elemBytes
-                    << " bytes not 16-byte aligned, skip 1D reshape");
+    unsigned pitchAlignment = ttgi::get2DBlockIOPitchAlignment(op);
+    if ((S * elemBytes) % pitchAlignment != 0) {
+      LDBG("Pitch " << S * elemBytes << " bytes not " << pitchAlignment
+                    << "-byte aligned, skip 1D reshape");
       return std::nullopt;
     }
 

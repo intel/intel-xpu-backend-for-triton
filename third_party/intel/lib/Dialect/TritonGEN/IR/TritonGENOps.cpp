@@ -54,9 +54,11 @@ static LogicalResult verify2DBlockAddressPayloadRestriction(OpTy op) {
       return op->emitOpError("4th operand (base pitch) should be <= 24 bits");
     if (*pitch < 64)
       return op->emitOpError("4th operand (base pitch) should be >= 64");
-    if (*pitch % 16 != 0)
+    unsigned pitchAlignment = ttgi::get2DBlockIOPitchAlignment(op);
+    if (*pitch % pitchAlignment != 0)
       return op->emitOpError(
-          "4th operand (base pitch) should be a multiple of 16 bytes");
+                 "4th operand (base pitch) should be a multiple of ")
+             << pitchAlignment << " bytes";
   }
 
   if (pitch && width && *pitch < *width)

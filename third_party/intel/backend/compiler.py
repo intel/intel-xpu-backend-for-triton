@@ -334,6 +334,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Defaults to 64; targets with a relaxed requirement (e.g. CRI) override
         # this so the downstream 64-byte alignment compensation is skipped.
         dev_prop['block_io_base_alignment'] = tgt_prop.get('block_io_base_alignment', 64)
+        dev_prop['block_io_pitch_alignment'] = tgt_prop.get('block_io_pitch_alignment',
+                                                            4 if self.device_arch == "cri" else 16)
+        if dev_prop['block_io_pitch_alignment'] not in (4, 16):
+            raise ValueError("block_io_pitch_alignment must be 4 or 16 bytes")
         dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
         dev_prop['is_lts'] = is_lts
         # Largest GRF mode the backend's automatic escalation will ever select
@@ -452,6 +456,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         codegen_fns = {}
         codegen_fns["convert_custom_types"] = convert_custom_float8
         codegen_fns["min_dot_size"] = self.min_dot_size(self.properties)
+        codegen_fns["tensor_descriptor_pitch_alignment"] = lambda: self.properties["block_io_pitch_alignment"]
         return codegen_fns
 
     def get_module_map(self) -> Dict[str, ModuleType]:
@@ -512,11 +517,15 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.sub_32_dpas = opt.sub_32_dpas
         module_opts.target_arch = cls.target_arch
         module_opts.block_io_base_alignment = properties["block_io_base_alignment"]
+        module_opts.block_io_pitch_alignment = properties["block_io_pitch_alignment"]
         module_opts.max_grf_mode = opt.max_grf_mode
 
     @classmethod
     @track
-    def make_ttir(cls, mod, metadata, opt):
+    def make_ttir(cls, mod, metadata, opt, properties):
+        # FuseReshape checks surface pitches before the TTGIR annotation pass.
+        mod.set_attr("ttig.2d_block_io_pitch_alignment",
+                     ir.builder(mod.context).get_int32_attr(properties["block_io_pitch_alignment"]))
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
@@ -918,7 +927,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     def add_stages(self, stages, options, language):
         if language == Language.TRITON:
-            stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
+            stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options, self.properties)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         elif language == Language.GLUON:
             stages["glir"] = lambda src, metadata: src

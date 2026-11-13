@@ -1,4 +1,5 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/DefUseChain.h"
 #include "intel/include/Utils/Utility.h"
@@ -734,7 +735,9 @@ private:
       return decline("empty-dimension width floor is not legal");
     if (havePitchBytes &&
         (pitchBytes < MinSurfaceBytes || pitchBytes > MaxSurfaceExtent ||
-         pitchBytes % 16 != 0))
+         pitchBytes %
+                 triton::gpu::intel::get2DBlockIOPitchAlignment(descLoadOp) !=
+             0))
       return decline("promoted surface pitch is not legal");
     if (havePitchBytes && floorBytes > pitchBytes)
       return decline("empty-dimension width floor exceeds its pitch");

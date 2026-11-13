@@ -809,4 +809,13 @@ TEST(IsBlockPitchSupportedTest, RuntimePitch) {
   EXPECT_FALSE(isBlockPitchSupported(std::nullopt, false, 128)); // no stride
 }
 
+TEST(IsBlockPitchSupportedTest, Xe3pPitch) {
+  EXPECT_TRUE(isBlockPitchSupported(72, false, 0, 4));
+  EXPECT_TRUE(isBlockPitchSupported(5080, false, 0, 4));
+  EXPECT_FALSE(isBlockPitchSupported(5080, false, 0, 16));
+  EXPECT_FALSE(isBlockPitchSupported(70, false, 0, 4));
+  EXPECT_FALSE(isBlockPitchSupported(60, false, 0, 4));
+  EXPECT_FALSE(isBlockPitchSupported((int64_t(1) << 24) + 4, false, 0, 4));
+}
+
 } // namespace
