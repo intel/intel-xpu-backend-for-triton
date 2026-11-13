@@ -577,7 +577,7 @@ index d8d3952aae..98c5f08a9b 100644
  if not is_flashmla_dense_supported()[0]:
      BACKENDS_TO_TEST.remove(AttentionBackendEnum.FLASHMLA)
 diff --git a/tests/v1/kv_connector/unit/test_nixl_connector.py b/tests/v1/kv_connector/unit/test_nixl_connector.py
-index 7e6583adbf..41954c3b57 100644
+index 7e6583adbf..3a8ebd2a79 100644
 --- a/tests/v1/kv_connector/unit/test_nixl_connector.py
 +++ b/tests/v1/kv_connector/unit/test_nixl_connector.py
 @@ -5219,7 +5219,10 @@ def test_ucx_backend_params(dist_init, extra_config, agent_backends, created_bac
@@ -894,7 +894,7 @@ index ecb215efd5..4f7eb9d06e 100644
      reduced_precision_val = (
          (False, False) if is_torch_equal_or_newer("2.10.0") else False
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
-index 5717bd0189..6263ac0b1c 100644
+index 5717bd0189..f636186fb6 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
 @@ -572,10 +572,18 @@ def fused_moe_kernel(
@@ -918,20 +918,26 @@ index 5717bd0189..6263ac0b1c 100644
              else:
                  if use_fp8_w8a8:
                      # acc used to enable fp8_fast_accum
-@@ -1245,7 +1253,12 @@ def get_moe_configs(
-                 tuned_config = json.load(f)
-                 # Delete triton_version from tuned_config
-                 tuned_config.pop("triton_version", None)
--                return {int(key): val for key, val in tuned_config.items()}
-+                # Tuned XPU configs (e.g. Arc Pro B60/B70) omit GROUP_SIZE_M, which
-+                # fused_moe_kernel requires; default to 1 (no M-grouping).
-+                return {
-+                    int(key): {"GROUP_SIZE_M": 1, **val}
-+                    for key, val in tuned_config.items()
-+                }
+@@ -739,6 +747,9 @@ def invoke_fused_moe_wna16_triton_kernel(
+         * triton.cdiv(B.size(1), META["BLOCK_SIZE_N"]),
+     )
+     config = config.copy()
++    # Tuned XPU configs (e.g. Arc Pro B60/B70) omit GROUP_SIZE_M, which the
++    # kernel requires; 1 means no M-grouping.
++    config.setdefault("GROUP_SIZE_M", 1)
+     config.update(
+         get_moe_wna16_block_config(
+             config=config,
+@@ -877,6 +888,9 @@ def invoke_fused_moe_triton_kernel(
  
-     # If no optimized configuration is available, we will use the default
-     # configuration
+     config = config.copy()
+     config["SPLIT_K"] = 1
++    # Tuned XPU configs (e.g. Arc Pro B60/B70) omit GROUP_SIZE_M, which the
++    # kernel requires; 1 means no M-grouping.
++    config.setdefault("GROUP_SIZE_M", 1)
+     BLOCK_SIZE_K = config.pop("BLOCK_SIZE_K")
+     if block_shape is not None:
+         BLOCK_SIZE_K = min(BLOCK_SIZE_K, min(block_shape[0], block_shape[1]))
 diff --git a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
 index b9098ffdc4..0cfe153e21 100644
 --- a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
