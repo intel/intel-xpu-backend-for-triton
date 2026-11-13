@@ -48,7 +48,6 @@ TEST:
     --vllm-lora
     --vllm-batch-invariant
     --vllm-model-ops
-    --vllm-v1-runner
     --install-vllm
     --sglang
     --sglang-attention
@@ -144,7 +143,6 @@ TEST_VLLM_TDESC=false
 TEST_VLLM_LORA=false
 TEST_VLLM_BATCH_INVARIANT=false
 TEST_VLLM_MODEL_OPS=false
-TEST_VLLM_V1_RUNNER=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
@@ -443,11 +441,6 @@ while (( $# != 0 )); do
       ;;
     --vllm-model-ops)
       TEST_VLLM_MODEL_OPS=true
-      TEST_DEFAULT=false
-      shift
-      ;;
-    --vllm-v1-runner)
-      TEST_VLLM_V1_RUNNER=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -1203,7 +1196,6 @@ run_vllm_tests() {
   run_vllm_lora_tests
   run_vllm_batch_invariant_tests
   run_vllm_model_ops_tests
-  run_vllm_v1_runner_tests
 }
 
 
@@ -1215,9 +1207,8 @@ run_vllm_spec_decode_tests() {
   enter_vllm_test_env
   # Include test_max_len.py fully (small file, extra tests won't hurt) to keep
   # everything in a single pytest command and avoid overwriting the junit report.
-  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_spec_decode \
+  TRITON_TEST_SUITE=vllm_spec_decode \
     run_pytest_command -vvv \
-      tests/v1/spec_decode/test_eagle.py \
       tests/v1/spec_decode/test_mtp.py \
       tests/v1/spec_decode/test_max_len.py \
       tests/v1/spec_decode/test_speculators_eagle3.py \
@@ -1226,8 +1217,7 @@ run_vllm_spec_decode_tests() {
       tests/v1/worker/test_gpu_rejection_sampler_i64.py \
       tests/v1/worker/test_gpu_rejection_sampler_chunking.py \
       tests/v1/spec_decode/test_acceptance_estimator.py \
-      tests/v1/spec_decode/test_dflash_prepare_inputs.py \
-      tests/v1/sample/test_rejection_sampler.py
+      tests/v1/spec_decode/test_dflash_prepare_inputs.py
 }
 
 
@@ -1240,13 +1230,11 @@ run_vllm_mrv2_tests() {
   # test_hybrid_chunked_prefill.py is end-to-end (loads a model) and is the only
   # test reaching the MRv2 rope/mrope position and spec-decode bookkeeping kernels.
   # It runs its engine in-process and leaves device memory allocated, so keep it last.
-  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_mrv2 \
+  TRITON_TEST_SUITE=vllm_mrv2 \
     run_pytest_command -vvv \
       tests/v1/worker/test_gpu_model_runner.py \
-      tests/v1/worker/test_gpu_input_batch.py \
       tests/v1/worker/test_gpu_input_batch_v2.py \
       tests/v1/worker/test_gpu_model_runner_v2_eplb.py \
-      tests/v1/sample/test_sampler.py \
       tests/v1/sample/test_logprobs.py \
       tests/v1/worker/test_gpu_gumbel_sample.py \
       tests/v1/worker/test_gpu_logits_processors.py \
@@ -1305,7 +1293,7 @@ run_vllm_triton_attn_tests() {
   # _fwd_grouped_kernel_stage1, _fwd_kernel_stage2, kernel_unified_attention_2d,
   # kernel_unified_attention_3d, reduce_segments, reshape_and_cache_kernel_flash,
   # plus the DeepSeek-V4 sparse MLA / compressor / KV cache, DCP and DiffKV kernels.
-  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_triton_attn \
+  TRITON_TEST_SUITE=vllm_triton_attn \
     run_pytest_command -vvv \
       tests/v1/attention/test_mla_backends.py \
       tests/v1/attention/test_attention_backends.py \
@@ -1565,24 +1553,6 @@ run_vllm_model_ops_tests() {
 }
 
 
-run_vllm_v1_runner_tests() {
-  echo "********************************************************"
-  echo "******  Running vLLM V1 model runner tests       *******"
-  echo "********************************************************"
-
-  enter_vllm_test_env
-  # Kernels only reached on the V1 model runner: ComputeSlotMappingKernel (V1 block
-  # table), and copy_and_expand_eagle_inputs_kernel from speculative methods Model
-  # Runner V2 rejects (draft_model, parallel drafting)
-  VLLM_USE_V2_MODEL_RUNNER=0 TRITON_TEST_SUITE=vllm_v1_runner \
-    run_pytest_command -vvv \
-      "tests/v1/e2e/test_hybrid_chunked_prefill.py::test_mtp_speculative_mixed_batch_short_prefill[False-qwen]" \
-      tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_draft_model \
-      tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_parallel_drafting \
-      tests/v1/spec_decode/test_eagle.py::test_propose_stores_probabilistic_draft_probs
-}
-
-
 run_triton_kernels_tests() {
   echo "***************************************************"
   echo "******    Running Triton Kernels tests      *******"
@@ -1768,9 +1738,6 @@ test_triton() {
   fi
   if [ "$TEST_VLLM_MODEL_OPS" == true ]; then
     run_vllm_model_ops_tests
-  fi
-  if [ "$TEST_VLLM_V1_RUNNER" == true ]; then
-    run_vllm_v1_runner_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests
