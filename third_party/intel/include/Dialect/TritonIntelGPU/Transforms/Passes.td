@@ -276,6 +276,9 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
     prefetch of one dot operand is dropped when the model predicts that demand-loading
     it is faster. The XPU backend passes those facts only when the `prefetch_cost_model`
     option (default `TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL`, off) is set.
+    With `tile-barrier`, a pipelined loop nested in a work-group-uniform `scf.for` puts a
+    `ttg.barrier none` at the top of that loop's body, so the warps of a persistent kernel
+    re-align at every tile instead of drifting apart.
   }];
 
   let dependentDialects = ["mlir::arith::ArithDialect",
@@ -290,6 +293,8 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
            "number of pipeline stages">,
     Option<"useBarrier", "use-barrier", "bool", /*default*/"false",
            "generate barriers">,
+    Option<"tileBarrier", "tile-barrier", "bool", /*default*/"true",
+           "re-align the warps at each iteration of a loop enclosing a pipelined loop">,
     Option<"deviceArch", "device-arch", "std::string", /*default*/"\"\"",
            "device architecture, e.g. 'bmg' (empty if unknown)">,
     Option<"coreClockKhz", "core-clock-khz", "unsigned", /*default*/"0",
