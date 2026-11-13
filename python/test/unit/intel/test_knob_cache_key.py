@@ -59,6 +59,8 @@ INVALIDATING_RAW_ENV_VARS = (
     # Gates `add_assign_latencies` / `add_schedule_loops` in `make_ttgir`, and
     # `annotationsAreUsable` in MatmulLoopPipeline.cpp.
     "TRITON_INTEL_ANNOTATE_LATENCIES",
+    # Turns off sub-group block reads in DescriptorLoadOpConversion.
+    "TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ",
     # Picks `runSpirvBackend` over `writeSpirv` in SPIRVTranslation.cpp.
     "TRITON_USE_SPIRV_BACKEND",
 )

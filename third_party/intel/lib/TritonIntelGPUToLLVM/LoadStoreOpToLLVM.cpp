@@ -104,6 +104,75 @@ static Value emitDroppedDimsInBoundsPred(TritonLLVMOpBuilder &b,
   return pred;
 }
 
+/// The out-of-bounds fill value of a descriptor load.
+static Value paddingConstant(RewriterBase &rewriter, Location loc,
+                             Type tensorElemTy, Type elemTy,
+                             PaddingOption padding) {
+  // e2m1 has no NaN encoding, and e8m0 is padded with zero bits like on the
+  // host-descriptor path: both are integers once converted.
+  if (padding == PaddingOption::PAD_NAN &&
+      !isa<PackedFloat4E2M1Type, Float8E8M0FNUType>(tensorElemTy)) {
+    assert(!elemTy.isIntOrIndex() &&
+           "Expect element type to be non-integer type");
+    auto nan =
+        llvm::APFloat::getNaN(cast<FloatType>(elemTy).getFloatSemantics());
+    return LLVM::ConstantOp::create(rewriter, loc, elemTy,
+                                    rewriter.getFloatAttr(elemTy, nan));
+  }
+  return LLVM::ConstantOp::create(rewriter, loc, elemTy,
+                                  rewriter.getZeroAttr(elemTy));
+}
+
+/// A 1-D sub-group block read of a single-row tile: in each read group, lane
+/// `l` register `s + j * chunkElems` holds element `s` of word `l + j * SG`.
+struct SubGroupBlockRead {
+  unsigned chunkElems, vec, groupShift, numGroups;
+  IntegerType wordTy;
+};
+
+/// Matches a layout whose lanes hold consecutive 32- or 64-bit words of the
+/// row. 16-bit words measured slower than the gathers on bf16 rows (see the PR
+/// description), and 8-bit words were not measured: both stay on the gathers.
+static std::optional<SubGroupBlockRead>
+matchSubGroupBlockRead(RankedTensorType type, unsigned subGroupSize) {
+  if (llvm::any_of(type.getShape().drop_back(),
+                   [](int64_t d) { return d != 1; }))
+    return std::nullopt;
+  MLIRContext *ctx = type.getContext();
+  StringAttr kReg = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+  LinearLayout flat = triton::gpu::toLinearLayout(type).flattenOuts();
+  StringAttr kOut = *flat.getOutDimNames().begin();
+  unsigned elemBits = type.getElementType().getIntOrFloatBitWidth();
+  auto isZero = [](ArrayRef<int32_t> basis) {
+    return llvm::all_of(basis, [](int32_t v) { return v == 0; });
+  };
+  for (unsigned wordBits : {64u, 32u}) {
+    if (wordBits % elemBits != 0)
+      continue;
+    unsigned chunkElems = wordBits / elemBits;
+    for (unsigned vec : {8u, 4u, 2u, 1u}) {
+      LinearLayout tile = LinearLayout::identity1D(chunkElems, kReg, kOut) *
+                          LinearLayout::identity1D(subGroupSize, kLane, kOut) *
+                          LinearLayout::identity1D(vec, kReg, kOut);
+      std::optional<LinearLayout> quot = divideLeft(flat, tile);
+      if (!quot)
+        continue;
+      // Broadcast registers and multi-CTA layouts stay on the gather path.
+      if (llvm::any_of(quot->getBases().lookup(kReg), isZero) ||
+          !llvm::all_of(quot->getBases().lookup(kBlock), isZero))
+        return std::nullopt;
+      unsigned groupShift = llvm::Log2_32(chunkElems * vec);
+      unsigned numRegs = flat.getInDimSize(kReg);
+      return SubGroupBlockRead{chunkElems, vec, groupShift,
+                               numRegs >> groupShift,
+                               IntegerType::get(ctx, wordBits)};
+    }
+  }
+  return std::nullopt;
+}
+
 /// Verify that a rank-reducing tensor descriptor load/store is
 /// shape-compatible.
 ///
@@ -428,32 +497,8 @@ struct LoadStoreConversionBase {
     // Get the LLVM values for `other`
     SmallVector<Value> otherElems;
     if (padding) {
-      Value other;
-      switch (*padding) {
-      case PaddingOption::PAD_ZERO:
-        other = LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
-                                         rewriter.getZeroAttr(valueElemTy));
-
-        break;
-      case PaddingOption::PAD_NAN: {
-        // e2m1 has no NaN encoding, and e8m0 is padded with zero bits like on
-        // the host-descriptor path: both are integers once converted.
-        if (isa<PackedFloat4E2M1Type, Float8E8M0FNUType>(
-                tensorType.getElementType())) {
-          other = LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
-                                           rewriter.getZeroAttr(valueElemTy));
-          break;
-        }
-        assert(!valueElemTy.isIntOrIndex() &&
-               "Expect element type to be non-integer type");
-        auto apNaN = llvm::APFloat::getNaN(
-            cast<FloatType>(valueElemTy).getFloatSemantics());
-        other =
-            LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
-                                     rewriter.getFloatAttr(valueElemTy, apNaN));
-      } break;
-      }
-
+      Value other = paddingConstant(rewriter, loc, tensorType.getElementType(),
+                                    valueElemTy, *padding);
       for (unsigned i = 0; i < numElems; ++i)
         otherElems.push_back(other);
     }
@@ -578,10 +623,10 @@ struct LoadStoreConversionBase {
     //
     // Note that DescriptorLoadOp always emits a boundary-check mask, even for
     // provably in-bounds tiles, so this choice applies to all of its masked
-    // fallback loads (2D block loads bypass this path entirely). Predicating
-    // them costs IGC's folding of the uniformly-true predicates that the
-    // control-flow form exposes; that trade measured favorable on Xe2, see
-    // issue #7090.
+    // fallback loads (2D block loads and single-row sub-group block reads
+    // bypass this path entirely). Predicating them costs IGC's folding of the
+    // uniformly-true predicates that the control-flow form exposes; that trade
+    // measured favorable on Xe2, see issue #7090.
     static const std::optional<bool> usePredicatedLoad =
         tools::isEnvValueBool(tools::getStrEnv("TRITON_INTEL_PREDICATED_LOAD"));
     static const std::optional<bool> usePredicatedStore = tools::isEnvValueBool(
@@ -3028,6 +3073,101 @@ struct DescriptorLoadOpConversion
       : ConvertOpToLLVMPattern<triton::DescriptorLoadOp>(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
+  /// Loads a single-row tile whose bounds checks are all block-level with
+  /// sub-group block reads under one uniform branch. Returns the loaded
+  /// elements, or std::nullopt when the load must take the gather path.
+  std::optional<SmallVector<Value>>
+  lowerToSubGroupBlockRead(triton::DescriptorLoadOp op, OpAdaptor adaptor,
+                           ConversionPatternRewriter &rewriter,
+                           RankedTensorType resultType, Type valueElemTy,
+                           unsigned descRank, ArrayRef<int32_t> blockLevelDims,
+                           PaddingOption padding) const {
+    if (tools::getBoolEnv("TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ"))
+      return std::nullopt;
+    std::optional<SubGroupBlockRead> read = matchSubGroupBlockRead(
+        resultType,
+        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>()));
+    if (!read)
+      return std::nullopt;
+    // Every read base must be aligned to the word size. The descriptor's
+    // divisibility is 1 unless its innermost stride is 1 (AxisInfoExt), so this
+    // also rejects non-contiguous rows. The fast-dim index is a multiple of the
+    // block width, hence of the word, on this path.
+    AxisInfo *descInfo =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(op.getDesc());
+    int64_t descDiv =
+        descInfo && descInfo->getRank() == static_cast<int>(descRank)
+            ? descInfo->getDivisibility(descRank - 1)
+            : 1;
+    if ((descDiv & -descDiv) < read->wordTy.getWidth() / 8)
+      return std::nullopt;
+
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    ValueRange indices = adaptor.getIndices();
+    DescriptorFields desc =
+        unpackDescriptor(adaptor.getDesc(), descRank, loc, rewriter);
+    Value inBounds;
+    for (int32_t d : blockLevelDims)
+      inBounds = maybeAnd(rewriter, loc, inBounds,
+                          emitInDescBounds(b, indices[d], desc.shapes[d]));
+    assert(inBounds && "a uniform-mask load checks at least one dimension");
+
+    LinearLayout ll = triton::gpu::toLinearLayout(resultType);
+    StringAttr kReg = str_attr("register"), kLane = str_attr("lane"),
+               kWarp = str_attr("warp"), kBlock = str_attr("block");
+    unsigned numElems = ll.getInDimSize(kReg);
+    unsigned rankDelta = descRank - resultType.getRank();
+    Type readTy = read->vec == 1 ? Type(read->wordTy)
+                                 : Type(vec_ty(read->wordTy, read->vec));
+    Type chunkTy = read->chunkElems == 1
+                       ? valueElemTy
+                       : Type(vec_ty(valueElemTy, read->chunkElems));
+    auto emitReads = [&]() {
+      Value warpId = getLaneAndWarpId(rewriter, loc).second;
+      SmallVector<Value> vals(numElems);
+      for (unsigned g = 0; g < read->numGroups; ++g) {
+        auto coords =
+            applyLinearLayout(loc, rewriter, ll,
+                              {{kReg, b.i32_val(g << read->groupShift)},
+                               {kLane, b.i32_val(0)},
+                               {kWarp, warpId},
+                               {kBlock, b.i32_val(0)}});
+        Value offset = b.i32_val(0);
+        for (unsigned i = 0; i < descRank; ++i) {
+          Value idx = i < rankDelta
+                          ? indices[i]
+                          : b.add(indices[i], coords[i - rankDelta].second);
+          offset = b.add(offset, b.mul(idx, b.trunc(i32_ty, desc.strides[i])));
+        }
+        Value ptr = b.gep(ptr_ty(ctx, 1), valueElemTy, desc.base, offset);
+        Value words =
+            TritonGEN::SubGroupBlockReadOp::create(rewriter, loc, readTy, ptr);
+        for (unsigned j = 0; j < read->vec; ++j) {
+          Value word = read->vec == 1 ? words
+                                      : b.extract_element(read->wordTy, words,
+                                                          b.i32_val(j));
+          Value chunk = b.bitcast(word, chunkTy);
+          unsigned reg = (g << read->groupShift) + j * read->chunkElems;
+          for (unsigned s = 0; s < read->chunkElems; ++s)
+            vals[reg + s] =
+                read->chunkElems == 1
+                    ? chunk
+                    : b.extract_element(valueElemTy, chunk, b.i32_val(s));
+        }
+      }
+      return vals;
+    };
+    SmallVector<Value> fill(
+        numElems, paddingConstant(rewriter, loc, resultType.getElementType(),
+                                  valueElemTy, padding));
+    Block &end = LLVM::intel::createPredicatedBlock(rewriter, loc, inBounds,
+                                                    fill, emitReads);
+    return SmallVector<Value>(end.args_begin(), end.args_end());
+  }
+
   LogicalResult
   matchAndRewrite(triton::DescriptorLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -3146,6 +3286,16 @@ struct DescriptorLoadOpConversion
         blockLevelDims.push_back(i);
       } else {
         perElementDims.push_back(i);
+      }
+    }
+
+    if (perElementDims.empty() && !permuteDescDim && !isBool) {
+      if (std::optional<SmallVector<Value>> vals = lowerToSubGroupBlockRead(
+              op, adaptor, rewriter, resultType, valueElemTy, descRank,
+              blockLevelDims, padding)) {
+        rewriter.replaceOp(op, packTensorElements(loc, typeConverter, *vals,
+                                                  rewriter, op.getType()));
+        return success();
       }
     }
 
