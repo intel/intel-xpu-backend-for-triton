@@ -38,6 +38,15 @@ inline bool needs2DBlockIOAlignmentCompensation(Operation *op) {
       TritonIntelGPUDialect::get2DBlockIOBaseAlignmentAttrName());
   return !alignment || alignment.getInt() > 4;
 }
+
+/// Only an explicit 4-byte target capability relaxes the legacy 16-byte rule.
+inline unsigned get2DBlockIOPitchAlignment(Operation *op) {
+  if (!isa<ModuleOp>(op))
+    op = op->getParentOfType<ModuleOp>();
+  auto alignment = op->getAttrOfType<IntegerAttr>(
+      TritonIntelGPUDialect::get2DBlockIOPitchAlignmentAttrName());
+  return alignment && alignment.getInt() == 4 ? 4 : 16;
+}
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_DIALECT_TRITON_INTEL_GPU_IR_DIALECT_H

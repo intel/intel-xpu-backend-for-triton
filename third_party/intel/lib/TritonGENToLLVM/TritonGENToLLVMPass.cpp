@@ -501,7 +501,8 @@ createAssertNot(ConversionPatternRewriter &rewriter,
 static void create2DBlockAssertsImpl(
     const mlir::Value &baseWidth, const mlir::Value &baseHeight,
     const mlir::Value &basePitch, const mlir::Value &x, unsigned int elemSize,
-    const mlir::Location &loc, mlir::ConversionPatternRewriter &rewriter,
+    unsigned pitchAlignment, const mlir::Location &loc,
+    mlir::ConversionPatternRewriter &rewriter,
     const mlir::triton::gpu::intel::LibCallEmitter &emitter) {
   using namespace mlir;
   using namespace mlir::LLVM;
@@ -511,7 +512,7 @@ static void create2DBlockAssertsImpl(
   Value c0 = b.i32_val(0);
   Value c4 = b.i32_val(4);
   Value c64 = b.i32_val(64);
-  Value c16 = b.i32_val(16);
+  Value cPitchAlignment = pitchAlignment == 4 ? c4 : b.i32_val(pitchAlignment);
   Value c24m1 = b.i32_val((1u << 24) - 1);
   Value cElemSize = b.i32_val(elemSize);
   Value cMaxAlign = b.i32_val(std::max(4u, elemSize));
@@ -548,11 +549,14 @@ static void create2DBlockAssertsImpl(
   createAssertNot(rewriter, emitter, pTooSmall,
                   "4th operand (base pitch) should be >= 64");
 
-  Value pRem = URemOp::create(rewriter, loc, basePitch, c16);
+  Value pRem = URemOp::create(rewriter, loc, basePitch, cPitchAlignment);
   Value pNotAligned =
       ICmpOp::create(rewriter, loc, ICmpPredicate::ne, pRem, c0);
-  createAssertNot(rewriter, emitter, pNotAligned,
-                  "4th operand (base pitch) should be a multiple of 16 bytes");
+  createAssertNot(
+      rewriter, emitter, pNotAligned,
+      pitchAlignment == 4
+          ? "4th operand (base pitch) should be a multiple of 4 bytes"
+          : "4th operand (base pitch) should be a multiple of 16 bytes");
 
   Value pLessThanWidth =
       ICmpOp::create(rewriter, loc, ICmpPredicate::ult, basePitch, baseWidth);
@@ -579,9 +583,11 @@ create2DBlockAsserts(OpTy op, mlir::ConversionPatternRewriter &rewriter,
   }
 
   // put implementation in a separate function to avoid template bloat
-  create2DBlockAssertsImpl(
-      op.getBaseWidth(), op.getBaseHeight(), op.getBasePitch(), op.getX(),
-      op.getElemSizeInBits() / 8, op->getLoc(), rewriter, emitter);
+  create2DBlockAssertsImpl(op.getBaseWidth(), op.getBaseHeight(),
+                           op.getBasePitch(), op.getX(),
+                           op.getElemSizeInBits() / 8,
+                           triton::gpu::intel::get2DBlockIOPitchAlignment(op),
+                           op->getLoc(), rewriter, emitter);
 }
 
 namespace {
