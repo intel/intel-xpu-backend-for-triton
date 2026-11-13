@@ -248,6 +248,16 @@ static LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
 }
 
 LogicalResult DescriptorGatherOp::verify() {
+  // The lowering reads each row's offset from the lane that owns the row.
+  if (Attribute resultEnc = getResult().getType().getEncoding()) {
+    auto offsetsEnc = dyn_cast_or_null<SliceEncodingAttr>(
+        getXOffsets().getType().getEncoding());
+    if (!offsetsEnc || offsetsEnc.getDim() != 1 ||
+        offsetsEnc.getParent() != resultEnc)
+      return emitOpError("x offsets must be sliced along dim 1 from the result "
+                         "encoding, but got ")
+             << getXOffsets().getType();
+  }
   return intel::verifyGatherScatterOp(
       *this, getDesc().getType().getSignlessBlockType(), getResult().getType(),
       getXOffsets().getType());

@@ -291,45 +291,21 @@ struct LoadStoreConversionBase {
     }
     descDim += rankDelta;
 
-    unsigned descContiguity = descAxisInfo->getContiguity(descDim);
-    if (descContiguity <= 1)
-      return 1; // Stride is not 1 on this dimension
-
     unsigned pointeeBitWidth = valueElemTy.getIntOrFloatBitWidth();
     unsigned maxVec = getMaxVecWidth(support256bLoadStore, pointeeBitWidth);
+    // threadContig is in result-layout space (order[0]); descDim is the same
+    // logical dim in descriptor space (remapped for column-major).
     unsigned threadContig = contigPerThread[order[0]];
-    // Note: descContiguity and threadContig refer to the same logical dimension
-    // but are indexed in different coordinate spaces. descContiguity uses
-    // descDim (descriptor space, remapped for column-major), while
-    // threadContig uses order[0] (result layout space). The min() below
-    // correctly intersects address-level and layout-level constraints.
-
-    // Use descriptor's divisibility (bytes) for pointer alignment.
-    unsigned descDivisibility = descAxisInfo->getDivisibility(descDim);
-    unsigned elemBytes = std::max(1u, pointeeBitWidth / 8);
-    unsigned ptrAlignElems = std::max(1u, descDivisibility / elemBytes);
-
-    unsigned vec =
-        std::min({maxVec, threadContig, descContiguity, ptrAlignElems});
+    unsigned vec = std::min(maxVec, threadContig);
     assert(vec > 0 && "vec must be positive for Log2_32");
     vec = std::max(1u, 1u << llvm::Log2_32(vec));
 
-    // The index shifts the base by index * elemBytes on the stride-one
-    // dimension, so a `vec`-element access is aligned only when the index is
-    // itself a multiple of `vec` (#7990). Other dimensions are already folded
-    // into descDivisibility by makeTensorDescAxisInfo; an unprovable index is
-    // assumed unaligned.
     assert(descDim < indices.size() && "expected one index per descriptor dim");
-    AxisInfo *idxAxisInfo =
+    return std::min(
+        vec,
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-            .getAxisInfo(indices[descDim]);
-    // A `tt.divisibility` hint is floored at 1 but never rounded, so a hint of
-    // 6 proves only a 2-element alignment: clamp to the greatest power-of-two
-    // divisor instead of rounding the min, which leaves both operands of the
-    // min powers of two. int64_t: a constant 0 index reports kMaxDivisor.
-    int64_t idxDiv = idxAxisInfo ? idxAxisInfo->getDivisibility(0) : 1;
-    int64_t idxAlign = idxDiv & -idxDiv;
-    return static_cast<unsigned>(std::min<int64_t>(vec, idxAlign));
+            .getDescriptorAlignment(desc, descDim, indices[descDim],
+                                    pointeeBitWidth));
   }
 
   std::tuple<SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
@@ -562,10 +538,10 @@ struct LoadStoreConversionBase {
 
   // Ensure the operation doesn't have attributes that the IGC predicated
   // instruction cannot handle.
-  template <
-      typename OpType,
-      typename = std::enable_if_t<llvm::is_one_of<
-          OpType, LoadOp, StoreOp, DescriptorLoadOp, DescriptorStoreOp>::value>>
+  template <typename OpType,
+            typename = std::enable_if_t<llvm::is_one_of<
+                OpType, LoadOp, StoreOp, DescriptorLoadOp, DescriptorStoreOp,
+                mlir::triton::gpu::intel::DescriptorGatherOp>::value>>
   bool canUsePredicatedInstructions(OpType op) const {
     if (!mlir::LLVM::intel::hasModuleAttr(
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
@@ -593,7 +569,9 @@ struct LoadStoreConversionBase {
              !op.getIsVolatile();
     } else if constexpr (std::is_same_v<OpType, StoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
-    } else if constexpr (std::is_same_v<OpType, DescriptorLoadOp>) {
+    } else if constexpr (llvm::is_one_of<OpType, DescriptorLoadOp,
+                                         mlir::triton::gpu::intel::
+                                             DescriptorGatherOp>::value) {
       return !usePredicatedLoad.has_value() || usePredicatedLoad.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorStoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
@@ -2548,6 +2526,10 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
                                   const LinearLayout &llEncoding,
                                   const LinearLayout &offsetsXLLEncoding,
                                   Type valueElemTy, unsigned threadsPerWarp) {
+    // Both fast paths read each row offset from one lane, so rows must not vary
+    // across lanes.
+    if (!llEncoding.sublayoutIsZero({S("lane")}, {S("dim0")}))
+      return failure();
     size_t resultRank = llEncoding.getNumOutDims();
     unsigned elemSizeInBits = std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     BlockIOTileSizeInfo sizeInfo = getBlockIOLoadTileSize(
@@ -2586,6 +2568,13 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
         (sizeInfo.tileHeight * sizeInfo.tileWidth * cfg.numPackedVals) /
         threadsPerWarp;
     if (cfg.numElemsPerLoad == 0)
+      return failure();
+    // Both fast paths map loaded bytes to registers like a 2D block load, which
+    // holds on hardware only for one element per lane load, and for unpacked
+    // sub-group loads of at least 4 bytes per address.
+    if (cfg.numPtrsPerLoad == threadsPerWarp
+            ? cfg.numElemsPerLoad != 1
+            : cfg.numPackedVals != 1 || cfg.bytesPerPtr < 4)
       return failure();
 
     FailureOr<LinearLayout> offsetMapping = buildDescriptorGatherOffsetMapping(
@@ -2691,6 +2680,8 @@ private:
     unsigned numPackedVals = 1;
     unsigned numPtrsPerLoad = 1;
     unsigned numElemsPerLoad = 1;
+    // A load predicated only on its first column also reads the next ones.
+    bool chunksSpanColumns = false;
     LinearLayout regMapping;
     LinearLayout offMapping;
   };
@@ -2724,8 +2715,13 @@ private:
   buildGatherAddressAndPred(TritonLLVMOpBuilder &b, MLIRContext *ctx,
                             Type valueElemTy, const DescriptorFields &desc,
                             Value offsetX, Value offsetY) const {
-    Value offsetX64 = b.zext(IntegerType::get(ctx, 64), offsetX);
-    Value predX = b.icmp_ult(offsetX64, desc.shapes[0]);
+    // Sign-extend so a negative (e.g. i16) row offset fails the unsigned check.
+    Value offsetX64 = b.sext(IntegerType::get(ctx, 64), offsetX);
+    // Compare against the zero-extended i32 shape, as the pointer expansion
+    // does: against the sign-extended one, LLVM narrows the check to i32.
+    Value shapeX = b.zext(IntegerType::get(ctx, 64),
+                          b.trunc(IntegerType::get(ctx, 32), desc.shapes[0]));
+    Value predX = b.icmp_ult(offsetX64, shapeX);
 
     Value yOffset64 = b.zext(IntegerType::get(ctx, 64), offsetY);
     Value predY = b.icmp_ult(yOffset64, desc.shapes[1]);
@@ -2741,7 +2737,7 @@ private:
   static GatherLayoutConfig
   buildLayoutConfig(const LinearLayout &llEncoding, RankedTensorType resultType,
                     const LinearLayout &offsetsXLLEncoding, Type valueElemTy,
-                    ModuleOp moduleOp) {
+                    ModuleOp moduleOp, bool allowFastPath) {
     MLIRContext *ctx = resultType.getContext();
     StringAttr kRegister = S("register");
     StringAttr kLane = S("lane");
@@ -2755,9 +2751,10 @@ private:
     GatherLayoutConfig config;
     config.numPtrsPerLoad = threadsPerWarp;
 
-    FailureOr<DescriptorGatherLoadConfig> gatherLoadCfgOr =
-        buildDescriptorGatherLoadConfig(ctx, llEncoding, offsetsXLLEncoding,
-                                        valueElemTy, threadsPerWarp);
+    FailureOr<DescriptorGatherLoadConfig> gatherLoadCfgOr = failure();
+    if (allowFastPath)
+      gatherLoadCfgOr = buildDescriptorGatherLoadConfig(
+          ctx, llEncoding, offsetsXLLEncoding, valueElemTy, threadsPerWarp);
     if (succeeded(gatherLoadCfgOr)) {
       DescriptorGatherLoadConfig &gatherLoadCfg = *gatherLoadCfgOr;
       config.numPackedVals = gatherLoadCfg.numPackedVals;
@@ -2766,6 +2763,11 @@ private:
       config.numPtrsPerLoad = gatherLoadCfg.numPtrsPerLoad;
       config.numElemsPerLoad = gatherLoadCfg.numElemsPerLoad;
       config.offMapping = std::move(gatherLoadCfg.offsetMapping);
+      unsigned elemBytes =
+          std::max(8u, valueElemTy.getIntOrFloatBitWidth()) / 8;
+      config.chunksSpanColumns = config.numPtrsPerLoad == threadsPerWarp
+                                     ? config.numElemsPerLoad > 1
+                                     : gatherLoadCfg.bytesPerPtr > elemBytes;
 
       // Validate ptr decomposition on the original ptr-based mapping.
       auto ptrToOffX = config.offMapping.sublayout({kPtrs}, {kOffIdx});
@@ -2843,9 +2845,12 @@ private:
                                        /*isVolatile=*/false,
                                        /*isNonTemporal=*/false)};
     };
+    // Out-of-bounds lanes read zero, as in the pointer-based expansion.
     Block &endBlock = LLVM::intel::createPredicatedBlock(
         rewriter, loc, gatherAddr.pred,
-        SmallVector<Value, 1>{b.undef(common.unpackedType)}, createLoad);
+        SmallVector<Value, 1>{
+            LLVM::ZeroOp::create(rewriter, loc, common.unpackedType)},
+        createLoad);
     return *endBlock.args_begin();
   }
 
@@ -2947,21 +2952,24 @@ private:
     RankedTensorType descTensorType = descType.getBlockType();
     size_t descRank = descTensorType.getRank();
 
+    // The per-lane and sub-group fast paths are disabled; their code is kept
+    // for a later, measured re-enable. Every gather takes the vectorized path
+    // below.
+    constexpr bool kEnableGatherFastPaths = false;
     GatherLayoutConfig layoutConfig = buildLayoutConfig(
-        *llEncoding, resultType, *offsetsXLLEncoding, valueElemTy, mod);
+        *llEncoding, resultType, *offsetsXLLEncoding, valueElemTy, mod,
+        /*allowFastPath=*/kEnableGatherFastPaths);
     // All validity checks passed; now generate IR.
     SmallVector<Value> offsetsX =
         unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
     DescriptorFields desc = unpackDescriptor(llDesc, descRank, loc, rewriter);
 
-    LinearLayout shuffleMapping = LinearLayout::identity1D(
-        layoutConfig.numElemsPerLoad, kRegister, kRegister);
-    Type unpackedType =
-        LLVM::getVectorType(valueElemTy, layoutConfig.numElemsPerLoad);
-
-    SmallVector<Value> loadedVals(numElems);
-
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    Value laneId = getLaneAndWarpId(rewriter, loc).first;
+    // IGC must see the warp ID as uniform: it feeds the `rw.u` address operand
+    // of the sub-group gather load, which IGC rejects if it cannot prove it.
+    Value warpId = arith::IndexCastOp::create(
+        rewriter, loc, i32_ty,
+        mlir::gpu::SubgroupIdOp::create(rewriter, loc, /*upperBound=*/nullptr));
     // Get the sub offset Y from the warp ID.
     auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
                                      {{kRegister, b.i32_val(0)},
@@ -2970,46 +2978,155 @@ private:
                                       {kBlock, b.i32_val(0)}});
     // Add sub-offset Y from warp Id.
     Value basicOffsetY = b.add(offsetY, getNamedOffset(offsets, kDim1));
-    GatherLoadCommon common{desc, offsetsX, basicOffsetY, valueElemTy,
-                            unpackedType};
-    unsigned numPtrToOffX = 0;
-    unsigned numPtrToOffY = 0;
-    if (layoutConfig.numPtrsPerLoad != threadsPerWarp) {
-      auto ptrToOffX = layoutConfig.offMapping.sublayout({kPtrs}, {kOffIdx});
-      auto ptrToOffY = layoutConfig.offMapping.sublayout({kPtrs}, {kDim1});
-      numPtrToOffY =
-          ptrToOffY.removeZeroBasesAlongDim(kPtrs).getInDimSize(kPtrs);
-      numPtrToOffX =
-          ptrToOffX.removeZeroBasesAlongDim(kPtrs).getInDimSize(kPtrs);
-      assert(numPtrToOffX * numPtrToOffY == layoutConfig.numPtrsPerLoad &&
-             "invalid ptrToOffMapping");
+    Type llvmResultStructTy = typeConverter->convertType(op.getType());
+
+    // Each lane loads `vec` registers that are adjacent columns of one row with
+    // one predicated vector load, as tt.load does. `vec` divides shape[1] and
+    // is aligned with y, so a chunk is either wholly in or wholly out of bounds
+    // and its first column's predicate covers it.
+    auto emitVectorized = [&]() -> Value {
+      SmallVector<Value> fastDimIndex{op.getYOffset(), op.getYOffset()};
+      unsigned vec =
+          getDescriptorVecSize(hasSupport256bLoadStore(op), op.getDesc(),
+                               fastDimIndex, resultType, valueElemTy, nullptr);
+      if (triton::gpu::toGenericLinearEncoding(resultType).getOrder()[0] != 1)
+        vec = 1;
+      unsigned elemBits = std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+      unsigned totalWidth = elemBits * vec;
+      unsigned width = std::min(totalWidth, std::max(32u, elemBits));
+      unsigned nWords = std::max(1u, totalWidth / width);
+      Type wordTy = IntegerType::get(ctx, width);
+      Type retTy = nWords > 1 ? vec_ty(wordTy, nWords) : wordTy;
+      Value zero = LLVM::ZeroOp::create(rewriter, loc, retTy);
+      bool predicated = canUsePredicatedInstructions(op);
+      unsigned regMask = getFreeVariableMasks(resultType)[kRegister];
+
+      // Index columns through the full layout with the shared lane and warp
+      // IDs, as other ops do, so LLVM CSEs the i32 column with theirs. A lone
+      // copy gets widened to i64, which IGC emulates and schedules worse.
+      auto [threadLaneId, threadWarpId] = getLaneAndWarpId(rewriter, loc);
+      SmallVector<Value> loadedVals;
+      for (unsigned vecStart = 0; vecStart < numElems; vecStart += vec) {
+        if (unsigned canonical = getCanonicalIndex(vecStart, regMask);
+            canonical != vecStart) {
+          for (unsigned i = 0; i < vec; ++i)
+            loadedVals.push_back(loadedVals[canonical + i]);
+          continue;
+        }
+        auto offsetXIdx = layoutConfig.offMapping.apply(
+            {{kRegister, vecStart}, {kLane, 0}})[0];
+        assert(offsetXIdx.first == kOffIdx);
+        auto idx = applyLinearLayout(loc, rewriter, *llEncoding,
+                                     {{kRegister, b.i32_val(vecStart)},
+                                      {kLane, threadLaneId},
+                                      {kWarp, threadWarpId},
+                                      {kBlock, b.i32_val(0)}});
+        Value colY = b.add(offsetY, getNamedOffset(idx, kDim1));
+        GatherAddressAndPred gatherAddr = buildGatherAddressAndPred(
+            b, ctx, valueElemTy, desc, offsetsX[offsetXIdx.second], colY);
+
+        Value ret;
+        if (predicated) {
+          ret = TritonGEN::PredicatedLoadOp::create(
+              rewriter, loc, retTy, gatherAddr.addr, gatherAddr.pred, zero,
+              TritonGEN::LoadCacheControl::DEFAULT);
+        } else {
+          auto createLoad = [&]() {
+            return SmallVector<Value>{
+                b.load(retTy, gatherAddr.addr, nWords * width / 8)};
+          };
+          ret = *LLVM::intel::createPredicatedBlock(
+                     rewriter, loc, gatherAddr.pred,
+                     SmallVector<Value, 1>{zero}, createLoad)
+                     .args_begin();
+        }
+        Value elems = b.bitcast(ret, vec_ty(valueElemTy, vec));
+        for (unsigned i = 0; i < vec; ++i)
+          loadedVals.push_back(
+              b.extract_element(valueElemTy, elems, b.i32_val(i)));
+      }
+      return packTensorElements(loc, typeConverter, loadedVals, rewriter,
+                                op.getType());
+    };
+    if (!kEnableGatherFastPaths) {
+      rewriter.replaceOp(op, {emitVectorized()});
+      return success();
     }
 
-    for (size_t elemIdx = 0; elemIdx < numElems;
-         elemIdx += layoutConfig.numElemsPerLoad) {
-      unsigned registerIdx =
-          layoutConfig.regMapping.apply({{kRegister, elemIdx}})[0].second;
-
-      Value ret;
-      if (layoutConfig.numPtrsPerLoad == threadsPerWarp) {
-        ret = generatePerLaneLoad(loc, rewriter, common, gatherAttrs, laneId,
-                                  registerIdx, layoutConfig.offMapping);
-      } else {
-        ret = generateSubgroupGatherLoad(loc, rewriter, common, gatherAttrs,
-                                         registerIdx, layoutConfig.offMapping,
-                                         numPtrToOffX, numPtrToOffY);
+    auto emitGather = [&](const GatherLayoutConfig &cfg) -> Value {
+      LinearLayout shuffleMapping =
+          LinearLayout::identity1D(cfg.numElemsPerLoad, kRegister, kRegister);
+      Type unpackedType = LLVM::getVectorType(valueElemTy, cfg.numElemsPerLoad);
+      GatherLoadCommon common{desc, offsetsX, basicOffsetY, valueElemTy,
+                              unpackedType};
+      unsigned numPtrToOffX = 0;
+      unsigned numPtrToOffY = 0;
+      if (cfg.numPtrsPerLoad != threadsPerWarp) {
+        auto ptrToOffX = cfg.offMapping.sublayout({kPtrs}, {kOffIdx});
+        auto ptrToOffY = cfg.offMapping.sublayout({kPtrs}, {kDim1});
+        numPtrToOffY =
+            ptrToOffY.removeZeroBasesAlongDim(kPtrs).getInDimSize(kPtrs);
+        numPtrToOffX =
+            ptrToOffX.removeZeroBasesAlongDim(kPtrs).getInDimSize(kPtrs);
+        assert(numPtrToOffX * numPtrToOffY == cfg.numPtrsPerLoad &&
+               "invalid ptrToOffMapping");
       }
 
-      unpackBlockLoadResult(ret, loadedVals, elemIdx, layoutConfig.regMapping,
-                            shuffleMapping, {}, unpackedType,
-                            layoutConfig.numElemsPerLoad,
-                            layoutConfig.numPackedVals, {}, {},
-                            /*nanMaskElems=*/{}, loc, rewriter, ctx);
+      SmallVector<Value> loadedVals(numElems);
+      for (size_t elemIdx = 0; elemIdx < numElems;
+           elemIdx += cfg.numElemsPerLoad) {
+        unsigned registerIdx =
+            cfg.regMapping.apply({{kRegister, elemIdx}})[0].second;
+
+        Value ret;
+        if (cfg.numPtrsPerLoad == threadsPerWarp) {
+          ret = generatePerLaneLoad(loc, rewriter, common, gatherAttrs, laneId,
+                                    registerIdx, cfg.offMapping);
+        } else {
+          ret = generateSubgroupGatherLoad(loc, rewriter, common, gatherAttrs,
+                                           registerIdx, cfg.offMapping,
+                                           numPtrToOffX, numPtrToOffY);
+        }
+
+        unpackBlockLoadResult(ret, loadedVals, elemIdx, cfg.regMapping,
+                              shuffleMapping, {}, unpackedType,
+                              cfg.numElemsPerLoad, cfg.numPackedVals, {}, {},
+                              /*nanMaskElems=*/{}, loc, rewriter, ctx);
+      }
+      return packLLElements(loc, typeConverter, loadedVals, rewriter,
+                            llvmResultStructTy);
+    };
+
+    if (!layoutConfig.chunksSpanColumns) {
+      rewriter.replaceOp(op, {emitGather(layoutConfig)});
+      return success();
     }
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
-    Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
-                                        rewriter, llvmResultStructTy);
-    rewriter.replaceOp(op, {resultStruct});
+
+    // The fast path checks bounds once per chunk, so take it only when the
+    // whole column window is in bounds; otherwise check every element.
+    Value y64 = b.sext(i64_ty, offsetY);
+    Value yEnd = b.add(y64, b.i64_val(resultType.getShape()[1]));
+    Value colsInBounds =
+        b.and_(b.icmp_sge(y64, b.i64_val(0)), b.icmp_sle(yEnd, desc.shapes[1]));
+    GatherLayoutConfig perElemConfig =
+        buildLayoutConfig(*llEncoding, resultType, *offsetsXLLEncoding,
+                          valueElemTy, mod, /*allowFastPath=*/false);
+
+    Block *curBlock = rewriter.getInsertionBlock();
+    Block *fastBlock =
+        rewriter.splitBlock(curBlock, rewriter.getInsertionPoint());
+    Block *slowBlock = rewriter.splitBlock(fastBlock, fastBlock->begin());
+    Block *endBlock = rewriter.splitBlock(slowBlock, slowBlock->begin());
+    rewriter.setInsertionPointToEnd(curBlock);
+    cf::CondBranchOp::create(rewriter, loc, colsInBounds, fastBlock, slowBlock);
+    for (auto [block, cfg] : {std::pair{fastBlock, &layoutConfig},
+                              std::pair{slowBlock, &perElemConfig}}) {
+      rewriter.setInsertionPointToStart(block);
+      Value armResult = emitGather(*cfg);
+      cf::BranchOp::create(rewriter, loc, endBlock, armResult);
+    }
+    rewriter.setInsertionPointToStart(endBlock);
+    rewriter.replaceOp(op, endBlock->addArgument(llvmResultStructTy, loc));
     return success();
   }
 };

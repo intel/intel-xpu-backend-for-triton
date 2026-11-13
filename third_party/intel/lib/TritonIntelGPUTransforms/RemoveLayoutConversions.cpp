@@ -353,8 +353,8 @@ void LayoutRematerialization::cleanup() { eraseUnusedOps(opToDelete); }
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
 bool isLayoutAnchor(Operation *op) {
-  if (isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
-          op))
+  if (isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp,
+          tt::DescriptorGatherOp, ttgi::DescriptorGatherOp>(op))
     return ttgi::isExpensiveLoadOrStore(op);
   // TODO: we should estimate the cost of the not propagating layout for
   // AtomicCAS for further performance consideration.
@@ -1061,8 +1061,8 @@ void LayoutPropagation::rewriteOp(Operation *op) {
 bool canBeRemat(Operation *op) {
   if (hasEffect<MemoryEffects::Write>(op))
     return false;
-  if (isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
-          op))
+  if (isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp,
+          tt::DescriptorGatherOp, ttgi::DescriptorGatherOp>(op))
     return !ttgi::isExpensiveLoadOrStore(op);
   if (isa<tt::AtomicRMWOp, tt::AtomicCASOp, tt::DotOp>(op))
     return false;
@@ -1086,11 +1086,21 @@ static bool isUnconstrainedShapeOp(Operation *op) {
   return isa<tt::ExpandDimsOp, tt::TransOp, tt::BroadcastOp>(op);
 }
 
+// Returns true if \p v is the x offsets of the descriptor gather \p op, which
+// takes them in the dim-1 slice of its result as expand_dims takes its source.
+static bool isGatherXOffsets(Operation *op, Value v) {
+  if (auto gather = dyn_cast<tt::DescriptorGatherOp>(op))
+    return gather.getXOffsets() == v;
+  if (auto gather = dyn_cast<ttgi::DescriptorGatherOp>(op))
+    return gather.getXOffsets() == v;
+  return false;
+}
+
 // Return true if the op is an expensive load that is a candidate for
 // rematerialization in the specific safe pattern below. The load has exactly
 // one use (a ttg::ConvertLayoutOp), and that convert feeds a linear
 // single-use chain of unconstrained shape ops (see isUnconstrainedShapeOp)
-// before reaching the real compute consumer. Example:
+// before reaching the real compute consumer, or a gather's x offsets. Example:
 //
 //   %0 = tt.descriptor_load %desc[%c0] : ... -> tensor<1024xf16, #src>
 //   %1 = ttg.convert_layout %0 : tensor<1024xf16, #src>
@@ -1108,8 +1118,9 @@ bool isExpensiveLoadRematCandidate(Operation *op) {
   if (hasEffect<MemoryEffects::Write>(op))
     return false;
 
-  // 1. Must be a Load or DescriptorLoad
-  if (!isa<tt::LoadOp, tt::DescriptorLoadOp>(op))
+  // 1. Must be a Load, DescriptorLoad or DescriptorGather
+  if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp,
+           ttgi::DescriptorGatherOp>(op))
     return false;
 
   // 2. Must be expensive (only expensive loads need the bypass; cheap loads
@@ -1131,6 +1142,9 @@ bool isExpensiveLoadRematCandidate(Operation *op) {
   //    shape ops (see isUnconstrainedShapeOp), not a real-layout consumer such
   //    as a dot or store. A fork in the chain would duplicate the load; reject.
   Value current = user->getResult(0);
+  if (current.hasOneUse() &&
+      isGatherXOffsets(*current.getUsers().begin(), current))
+    return true;
   if (!current.hasOneUse() ||
       !isUnconstrainedShapeOp(*current.getUsers().begin()))
     return false;
@@ -2022,8 +2036,8 @@ static bool isRematBeneficial(
     if (!isOpUsedOutsideSlice)
       continue;
 
-    if (isa<tt::LoadOp, tt::DescriptorLoadOp>(op) ||
-        isa<ttg::LocalLoadOp>(op)) {
+    if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp,
+            ttgi::DescriptorGatherOp, ttg::LocalLoadOp>(op)) {
       for (Value result : op->getResults())
         rematerialisationCost += 8 * getByteCount(result);
     } else if (isa<tt::ReduceOp>(op)) {
