@@ -14,6 +14,7 @@ import triton.language as tl
 from triton._internal_testing import (
     integral_dtypes,
     uint_dtypes,
+    is_compile_warmup,
     is_xpu,
     numpy_random,
     to_triton,
@@ -174,6 +175,7 @@ layouts = [
 
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
 @pytest.mark.parametrize("src_layout", filter_layouts(layouts))
+@pytest.mark.enable_warmup
 def test_store_op(M, src_layout, device, tmp_path: pathlib.Path):
 
     ir = f"""
@@ -206,6 +208,8 @@ def test_store_op(M, src_layout, device, tmp_path: pathlib.Path):
     y_tri = torch.tensor(y, device=device)
 
     store_kernel[(1, 1, 1)](x_tri, y_tri)
+    if is_compile_warmup():
+        return
     y_ref = x
     np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
@@ -223,6 +227,7 @@ layouts = [
 @pytest.mark.parametrize("dst_layout", filter_layouts(layouts))
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
+@pytest.mark.enable_warmup
 def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device, tmp_path: pathlib.Path):
 
     ir = f"""
@@ -253,6 +258,8 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device, tmp_path
     x_tri = torch.tensor(x, device=device)
     y_tri = torch.tensor(y, device=device)
     kernel[(1, 1, 1)](x_tri, y_tri)
+    if is_compile_warmup():
+        return
     y_ref = x
     np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
@@ -262,6 +269,7 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device, tmp_path
 @pytest.mark.parametrize("dst_layout", filter_layouts(layouts))
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
+@pytest.mark.enable_warmup
 def test_convert1d_bool(M, src_layout, dst_layout, src_dim, dst_dim, device, tmp_path: pathlib.Path):
 
     ir = f"""
@@ -295,6 +303,8 @@ def test_convert1d_bool(M, src_layout, dst_layout, src_dim, dst_dim, device, tmp
     x_tri = torch.tensor(x, device=device)
     y_tri = torch.tensor(y, device=device)
     kernel[(1, 1, 1)](x_tri, y_tri)
+    if is_compile_warmup():
+        return
     y_ref = x
     np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0, atol=0)
 
@@ -311,6 +321,7 @@ layouts = [
 @pytest.mark.parametrize("src_layout", layouts)
 @pytest.mark.parametrize("op", ["sum", "max"])
 @pytest.mark.parametrize("first_axis", [0, 1])
+@pytest.mark.enable_warmup
 def test_chain_reduce(M, N, src_layout, op, device, first_axis, tmp_path: pathlib.Path):
 
     op_str = ""
@@ -370,7 +381,8 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis, tmp_path: pathli
     elif op == "max":
         z_ref = np.max(x)
 
-    np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
+    if not is_compile_warmup():
+        np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
 # -----------------------
@@ -423,6 +435,7 @@ def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 @pytest.mark.parametrize("src_layout", filter_layouts(layouts))
 @pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", filter_layouts(layouts))
+@pytest.mark.enable_warmup
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, tmp_path: pathlib.Path):
     if str(src_layout) == str(dst_layout):
         pytest.xfail("Do not convert same layout")
@@ -519,6 +532,7 @@ shared_layouts_3d = [
 @pytest.mark.parametrize("M, N, K", [[8, 16, 32]])
 @pytest.mark.parametrize("shared_layout", shared_layouts_3d)
 @pytest.mark.parametrize("dist_layout", filter_layouts(layouts_3d))
+@pytest.mark.enable_warmup
 def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path: pathlib.Path):
     layouts = f"""
     #dist = {dist_layout}
@@ -698,6 +712,7 @@ def test_split_subview(M, N, M_tile_size, N_tile_size, device, tmp_path: pathlib
 @pytest.mark.parametrize("dtype", ['float16', 'float8e5', 'float32'])
 @pytest.mark.parametrize("shared_layout", shared_layouts)
 @pytest.mark.parametrize("dist_layout", filter_layouts(dot_layouts))
+@pytest.mark.enable_warmup
 def test_local_load_store_dot(M, N, dtype, dist_layout, shared_layout, device, tmp_path: pathlib.Path):
     if dtype == "float32":
         mlir_dtype = "f32"
@@ -825,6 +840,7 @@ mma_pairs = [
 @pytest.mark.parametrize("M, N", [[16, 16], [64, 1], [1, 64], [64, 64], [128, 128], [256, 256]])
 @pytest.mark.parametrize("dtype", ['float16'])
 @pytest.mark.parametrize("mma_pair", filter_layout_pairs(mma_pairs))
+@pytest.mark.enable_warmup
 def test_convert_mma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
     src_layout, _ = mma_pair
     num_warps = np.prod(src_layout.warps_per_cta)
@@ -898,6 +914,7 @@ single_warp_layouts = [
 @pytest.mark.parametrize("dtype", ['float16'])
 @pytest.mark.parametrize("src_layout", single_warp_layouts)
 @pytest.mark.parametrize("dst_layout", single_warp_layouts)
+@pytest.mark.enable_warmup
 def test_convert_warp_local(M, N, src_layout, dst_layout, dtype, device, tmp_path: pathlib.Path):
     if str(src_layout) == str(dst_layout):
         pytest.xfail()
@@ -1004,6 +1021,7 @@ def gen_gather_warp_shuffle_cases():
 
 # These layouts are specially chosen to trigger the warp shuffle codegen.
 @pytest.mark.parametrize("src_shape, indices_shape, axis, src_layout, indices_layout", gen_gather_warp_shuffle_cases())
+@pytest.mark.enable_warmup
 def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices_layout, tmp_path: pathlib.Path,
                              device):
 
@@ -1059,6 +1077,8 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
     temp_file.write_text(ir)
 
     kernel = triton.compile(str(temp_file))
+    if is_compile_warmup():
+        return
     assert ("nvvm.shfl.sync.idx" in kernel.asm["llir"]) or ("llvm.amdgcn.ds.bpermute"
                                                             in kernel.asm["llir"]) or ("_Z17sub_group_shufflefj"
                                                                                        in kernel.asm["llir"])
@@ -1130,16 +1150,23 @@ def test_silu_sigmoid_optimization(device, monkeypatch):
         old_func = torch.xpu.get_device_capability
 
         def mock_func(*args, **kwargs):
-            cap = old_func(*args, **kwargs)
+            # Copy: the dict returned by torch is shared, and mutating it leaks into later tests.
+            cap = dict(old_func(*args, **kwargs))
             cap['has_sigmoid'] = True
             return cap
 
-        triton.backends.backends['intel'].driver._construct_target.cache_clear()
-        with mock.patch('torch.xpu.get_device_capability', new=mock_func):
-            meta = silu_kernel[(2, )](x_gpu, y_gpu, n, BLOCK=512)
-            llir = meta.asm.get('llir')
-            assert "__spirv_FSigmoidINTEL" in llir, f"Expected __spirv_FSigmoidINTEL in llir output, got:\n{llir}"
-            assert "fmul" in llir, f"Expected fmul (x * sigmoid) in llir output, got:\n{llir}"
+        construct_target = triton.backends.backends['intel'].driver._construct_target
+        construct_target.cache_clear()
+        try:
+            with mock.patch('torch.xpu.get_device_capability', new=mock_func):
+                meta = silu_kernel[(2, )](x_gpu, y_gpu, n, BLOCK=512)
+                llir = meta.asm.get('llir')
+                assert "__spirv_FSigmoidINTEL" in llir, f"Expected __spirv_FSigmoidINTEL in llir output, got:\n{llir}"
+                assert "fmul" in llir, f"Expected fmul (x * sigmoid) in llir output, got:\n{llir}"
+        finally:
+            # Do not leak the mocked target (has_sigmoid=True) into later tests of this process: it changes
+            # their compile-cache keys.
+            construct_target.cache_clear()
     else:
         meta = silu_kernel[(2, )](x_gpu, y_gpu, n, BLOCK=512)
         llir = meta.asm.get('llir')

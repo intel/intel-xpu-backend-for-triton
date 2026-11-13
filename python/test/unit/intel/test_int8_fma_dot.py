@@ -16,7 +16,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu
+from triton._internal_testing import is_compile_warmup, is_xpu
 
 
 @triton.jit
@@ -35,6 +35,7 @@ def _int8_dot_with_ieee_dot(a_ptr, b_ptr, c_ptr, ieee_ptr, BLOCK: tl.constexpr):
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
+@pytest.mark.enable_warmup
 def test_int8_dot_demoted_to_fma(BLOCK, device):
     generator = torch.Generator(device="cpu").manual_seed(17)
     a = torch.randint(-4, 5, (BLOCK, BLOCK), dtype=torch.int8, generator=generator)
@@ -48,5 +49,6 @@ def test_int8_dot_demoted_to_fma(BLOCK, device):
 
     # The point of the test is the FMA path, so fail loudly if a pipeline change
     # makes this shape use DPAS instead and the coverage silently disappears.
-    assert "#ttig.dpas" not in kernel.asm["ttgir"], "kernel no longer exercises the FMA path"
+    if not is_compile_warmup():
+        assert "#ttig.dpas" not in kernel.asm["ttgir"], "kernel no longer exercises the FMA path"
     torch.testing.assert_close(acc.cpu(), expected)

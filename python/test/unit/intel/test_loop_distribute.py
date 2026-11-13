@@ -30,7 +30,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu
+from triton._internal_testing import is_compile_warmup, is_xpu
 
 
 def _has_2d_block_io():
@@ -175,6 +175,7 @@ def _dual_dot_carry_reads_acc_kernel(
 
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.enable_warmup
 def test_dual_dot_ptr_gemm_loop_distribute(device):
     """Regression test for the loop-carried-iter_arg-replication fix: A, W_g
     and W_fc pointers are all loop-carried (advanced via `+=`, i.e. tt.addptr
@@ -216,6 +217,8 @@ def test_dual_dot_ptr_gemm_loop_distribute(device):
             loop_distribute=loop_distribute,
         )
 
+        if is_compile_warmup():
+            continue
         ttir = kernel.asm["ttir"]
         expected_loops = 2 if loop_distribute else 1
         assert ttir.count("scf.for") == expected_loops, (
@@ -229,6 +232,8 @@ def test_dual_dot_ptr_gemm_loop_distribute(device):
 
         results[loop_distribute] = (c_g.clone(), c_fc.clone())
 
+    if is_compile_warmup():
+        return
     # loop_distribute=False and loop_distribute=True must agree with each other.
     torch.testing.assert_close(results[False][0].float(), results[True][0].float(), rtol=1e-2, atol=1e-2)
     torch.testing.assert_close(results[False][1].float(), results[True][1].float(), rtol=1e-2, atol=1e-2)
@@ -236,6 +241,7 @@ def test_dual_dot_ptr_gemm_loop_distribute(device):
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+@pytest.mark.enable_warmup
 def test_dual_dot_desc_gemm_loop_distribute(device):
     """Descriptor-based dual-dot GEMM (mirrors fused_gemm_swiglu_kernel's loop
     body) -- guards that the already-supported descriptor fast path stays
@@ -271,6 +277,8 @@ def test_dual_dot_desc_gemm_loop_distribute(device):
             loop_distribute=loop_distribute,
         )
 
+        if is_compile_warmup():
+            continue
         ttir = kernel.asm["ttir"]
         expected_loops = 2 if loop_distribute else 1
         assert ttir.count("scf.for") == expected_loops, (
@@ -286,12 +294,15 @@ def test_dual_dot_desc_gemm_loop_distribute(device):
 
         results[loop_distribute] = (y_g.clone(), y_fc.clone())
 
+    if is_compile_warmup():
+        return
     # loop_distribute=False and loop_distribute=True must agree with each other.
     torch.testing.assert_close(results[False][0].float(), results[True][0].float(), rtol=1e-2, atol=5e-2)
     torch.testing.assert_close(results[False][1].float(), results[True][1].float(), rtol=1e-2, atol=5e-2)
 
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.enable_warmup
 def test_dual_dot_carry_reads_acc_loop_distribute(device):
     """A loop-carried, non-accumulator value (`carry`) reads acc_g's iter_arg, so
     it can only be computed in the loop that keeps acc_g live.
@@ -349,6 +360,8 @@ def test_dual_dot_carry_reads_acc_loop_distribute(device):
             loop_distribute=loop_distribute,
         )
 
+        if is_compile_warmup():
+            continue
         ttir = kernel.asm["ttir"]
         expected_loops = 2 if loop_distribute else 1
         assert ttir.count("scf.for") == expected_loops, (
@@ -364,6 +377,8 @@ def test_dual_dot_carry_reads_acc_loop_distribute(device):
 
         results[loop_distribute] = (c_g.clone(), c_fc.clone(), c_carry.clone())
 
+    if is_compile_warmup():
+        return
     # loop_distribute=False and loop_distribute=True must agree with each other.
     for i in range(3):
         torch.testing.assert_close(results[False][i].float(), results[True][i].float(), rtol=1e-2, atol=1e-2)
