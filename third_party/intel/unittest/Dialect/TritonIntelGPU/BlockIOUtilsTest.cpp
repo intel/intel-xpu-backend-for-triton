@@ -278,6 +278,11 @@ public:
                                  rhs);
   }
 
+  Value cmpSgt(Value lhs, Value rhs) {
+    return arith::CmpIOp::create(builder, loc(), arith::CmpIPredicate::sgt, lhs,
+                                 rhs);
+  }
+
   Value addI32(Value lhs, Value rhs) {
     return arith::AddIOp::create(builder, loc(), lhs, rhs);
   }
@@ -483,7 +488,7 @@ TEST_F(MatchRowLimitMaskTest, NonSplatBoundRejected) {
 }
 
 // 2 * arange is neither a bare arange nor base + arange.
-TEST_F(MatchRowLimitMaskTest, NonArangeLhsRejected) {
+TEST_F(MatchRowLimitMaskTest, NonArangeIndexRejected) {
   SmallVector<int64_t, 2> shape = {256, 32};
   Value scaled = mulI32(arange(256), splatTo(constI(2, 32), {256}));
   Value mask =
@@ -866,6 +871,30 @@ TEST_F(MatchBoundaryCheckMaskTest, SharedAndVisitedOnce) {
   EXPECT_EQ(result->rowBound, rowBound);
   ASSERT_EQ(result->extraPreds.size(), 1u);
   EXPECT_EQ(result->extraPreds.front(), flag);
+}
+
+// `bound > index` is the same bound with the index on the right (the form
+// `K > offs_k` takes in the IR).
+TEST_F(MatchBoundaryCheckMaskTest, SwappedComparisonAccepted) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  SmallVector<int64_t, 2> narrow = {256, 1};
+  Value rowBound = constI(100, 32);
+  Value index2D = expandDims(arange(256), /*axis=*/1, narrow);
+  Value mask = broadcastTo(cmpSgt(splatTo(rowBound, narrow), index2D), shape);
+
+  auto result = match(mask, shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, rowBound);
+}
+
+// `index > bound` is a lower bound, which base_height cannot express.
+TEST_F(MatchBoundaryCheckMaskTest, IndexGreaterThanBoundRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  SmallVector<int64_t, 2> narrow = {256, 1};
+  Value index2D = expandDims(arange(256), /*axis=*/1, narrow);
+  Value bound2D = splatTo(constI(100, 32), narrow);
+  Value mask = broadcastTo(cmpSgt(index2D, bound2D), shape);
+  EXPECT_FALSE(match(mask, shape).has_value());
 }
 
 // The pitch policy shared by MaterializeBlockPointer and LowerTo2DBlockLoad.
