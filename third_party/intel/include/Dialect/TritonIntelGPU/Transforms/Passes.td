@@ -647,14 +647,17 @@ def TritonIntelGPUAnnotateCacheControl
 
 def TritonIntelGPULowerTo2DBlockLoad
     : Pass<"tritonintelgpu-lower-to-2d-block-load", "mlir::ModuleOp"> {
-  let summary = "Lower eligible loads to ttig.2d_block_load ops";
+  let summary = "Lower loads to ttig.2d_block_load ops or tt.load";
 
   let description = [{
     Converts eligible `tt.load` and `tt.descriptor_load` operations into
     `ttig.2d_block_load` operations with decomposed surface parameters. This
     separates the decision to use 2D block I/O from the LLVM lowering mechanics.
-    Loads that cannot be converted remain unchanged and are handled by existing
-    LLVM lowering patterns.
+    A `tt.load` that cannot be converted remains unchanged. A
+    `tt.descriptor_load` that cannot be converted, or every one when the module
+    lacks 2D block IO support, is lowered to a masked `tt.load` of a tensor of
+    pointers; one with no valid lowering (e.g. divergent padding) is an error.
+    After this pass every load is a 2D block load or a `tt.load`.
   }];
 
   let dependentDialects = [

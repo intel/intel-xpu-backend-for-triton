@@ -46,7 +46,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %desc = tt.make_tensor_descriptor %arg0, [%sh0, %sh1], [%st0, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT: ttig.2d_block_load
     // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load {{.*}}ttig.block_io = "row_major"
+    // CHECK: tt.load
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }

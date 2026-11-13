@@ -48,8 +48,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%big_stride, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT: ttig.2d_block_load
     // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    // CHECK: tt.load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
@@ -179,8 +179,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %desc = tt.make_tensor_descriptor %arg0, [%height, %argW], [%argP, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT: ttig.2d_block_load
     // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    // CHECK: tt.load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
@@ -199,8 +199,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %desc = tt.make_tensor_descriptor %arg0, [%argH, %width], [%argP, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT: ttig.2d_block_load
     // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    // CHECK: tt.load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
@@ -219,8 +219,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %desc = tt.make_tensor_descriptor %arg0, [%argH, %argW], [%stride, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT: ttig.2d_block_load
     // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    // CHECK: tt.load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
@@ -239,8 +239,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %desc = tt.make_tensor_descriptor %arg0, [%argH, %argW], [%stride, %c1_i64] : <f32>, <64x32xf32>
     // CHECK-NOT: ttig.2d_block_load
     // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf32> -> tensor<64x32xf32, #dot0>
+    // CHECK: tt.load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf32> -> tensor<64x32xf32, #dot0>
     tt.return %0 : tensor<64x32xf32, #dot0>
   }
 }
@@ -259,8 +259,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %desc = tt.make_tensor_descriptor %arg0, [%argH, %argW], [%stride, %c1_i64] : <f32>, <64x32xf32>
     // CHECK-NOT: ttig.2d_block_load
     // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf32> -> tensor<64x32xf32, #dot0>
+    // CHECK: tt.load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf32> -> tensor<64x32xf32, #dot0>
     tt.return %0 : tensor<64x32xf32, #dot0>
   }
 }
@@ -280,8 +280,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %c16777217_i32, %argW], [%argB, %argP, %c1_i64] : <f16>, <1x64x32xf16>
     // CHECK-NOT: ttig.2d_block_load
     // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%b, %c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<1x64x32xf16> -> tensor<64x32xf16, #dot0>
+    // CHECK: tt.load
+    %0 = tt.descriptor_load %desc[%b, %c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<1x64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
@@ -306,9 +306,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
       scf.yield %d2 : !tt.tensordesc<64x32xf16>
     }
     // CHECK-NOT: ttig.2d_block_load
-    // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    // CHECK: tt.load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
@@ -331,9 +330,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
       scf.yield %d2 : !tt.tensordesc<64x32xf16>
     }
     // CHECK-NOT: ttig.2d_block_load
-    // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    // CHECK: tt.load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
@@ -383,9 +381,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
       scf.yield %d2 : !tt.tensordesc<64x32xf16>
     }
     // CHECK-NOT: ttig.2d_block_load
-    // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    // CHECK: tt.load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
@@ -409,9 +406,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
       scf.yield %d2 : !tt.tensordesc<64x32xf16>
     }
     // CHECK-NOT: ttig.2d_block_load
-    // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    // CHECK: tt.load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
@@ -430,10 +426,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c1_i64 = arith.constant 1 : i64
     %desc_init = tt.make_tensor_descriptor %arg0, [%argH, %argW], [%argP, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT: ttig.2d_block_load
-    // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
+    // CHECK: tt.load
     %result = scf.for %i = %c0_i32 to %N step %c1_i32 iter_args(%desc = %desc_init) -> (!tt.tensordesc<64x32xf16>) : i32 {
-      %load = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+      %load = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
       %new_desc = tt.make_tensor_descriptor %arg0, [%c0_i32, %argW], [%argP, %c1_i64] : <f16>, <64x32xf16>
       scf.yield %new_desc : !tt.tensordesc<64x32xf16>
     }
@@ -459,9 +454,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
       scf.yield %new_desc : !tt.tensordesc<64x32xf16>
     }
     // CHECK-NOT: ttig.2d_block_load
-    // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %result[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    // CHECK: tt.load
+    %0 = tt.descriptor_load %result[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
@@ -480,13 +474,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c0_i32 = arith.constant 0 : i32
     %desc_init = tt.make_tensor_descriptor %arg0, [%argH, %argW], [%argP, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT: ttig.2d_block_load
-    // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
+    // CHECK: tt.load
     %res = scf.while (%d = %desc_init) : (!tt.tensordesc<64x32xf16>) -> !tt.tensordesc<64x32xf16> {
       scf.condition(%cond) %d : !tt.tensordesc<64x32xf16>
     } do {
     ^bb0(%d2: !tt.tensordesc<64x32xf16>):
-      %load = tt.descriptor_load %d2[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+      %load = tt.descriptor_load %d2[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
       %new_desc = tt.make_tensor_descriptor %arg0, [%argH, %argW], [%c0_i64, %c1_i64] : <f16>, <64x32xf16>
       scf.yield %new_desc : !tt.tensordesc<64x32xf16>
     }
@@ -509,8 +502,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %desc = tt.make_tensor_descriptor %arg0, [%argH, %width], [%argP, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT: ttig.2d_block_load
     // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    // CHECK: tt.load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32, ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
