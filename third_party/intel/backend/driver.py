@@ -511,6 +511,26 @@ PEAK_DRAM_GBPS = {
 }
 
 
+@lru_cache
+def _load_offline_target():
+    with open(knobs.intel.target_json) as f:
+        offline = json.load(f)
+    props = offline["device_properties"]
+    if "sub_group_sizes" in props:
+        props["sub_group_sizes"] = tuple(props["sub_group_sizes"])
+    return offline
+
+
+class OfflineXPUUtils:
+    """Stands in for `XPUUtils` when `TRITON_INTEL_TARGET_JSON` is set: no device, no SYCL queue."""
+
+    device_count = 1
+
+    @staticmethod
+    def get_device_properties(device):
+        return _load_offline_target()["device_properties"]
+
+
 class XPUUtils(object):
     _instance = None
 
@@ -807,27 +827,35 @@ class XPUDriver(DriverBase):
 
     def __init__(self):
         self.launcher_cls = XPULauncher
-        try:
-            from torch._C import _xpu_getCurrentRawStream, _xpu_getDevice
-            self.get_current_device = _xpu_getDevice
-            self.get_current_stream = _xpu_getCurrentRawStream
-        except ImportError:
-            import torch
-            self.get_current_device = torch.xpu.current_device
-            self.get_current_stream = lambda idx: torch.xpu.current_stream(idx).sycl_queue
+        if knobs.intel.target_json:
+            self.get_current_device = lambda: 0
+            self.get_current_stream = lambda idx: 0
+        else:
+            try:
+                from torch._C import _xpu_getCurrentRawStream, _xpu_getDevice
+                self.get_current_device = _xpu_getDevice
+                self.get_current_stream = _xpu_getCurrentRawStream
+            except ImportError:
+                import torch
+                self.get_current_device = torch.xpu.current_device
+                self.get_current_stream = lambda idx: torch.xpu.current_stream(idx).sycl_queue
         super().__init__()
 
     def __getattr__(self, name):
         # Lazily initialize utils to avoid unnecessary XPU runtime invocations.
         # See https://github.com/intel/intel-xpu-backend-for-triton/issues/624
         if name == "utils":
-            self.utils = XPUUtils()
+            self.utils = OfflineXPUUtils() if knobs.intel.target_json else XPUUtils()
             return self.utils
         else:
             raise AttributeError
 
     @lru_cache
     def _construct_target(self, device):
+        if knobs.intel.target_json:
+            offline = _load_offline_target()
+            return GPUTarget("xpu", offline["arch"], warp_size=offline["warp_size"])
+
         import torch
         from triton.backends.intel.extension_utils import query_device_extensions
 
@@ -884,6 +912,8 @@ class XPUDriver(DriverBase):
 
     @staticmethod
     def is_active():
+        if knobs.intel.target_json:
+            return True
         try:
             import torch
             return torch.xpu.is_available()
