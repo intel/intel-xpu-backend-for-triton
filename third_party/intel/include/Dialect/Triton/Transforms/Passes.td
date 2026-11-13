@@ -18,6 +18,12 @@ def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-intel-rewri
     this pass, `tt.make_tensor_descriptor`  will disappear, and it generates logics to compute the pointer/mask/other
     for each load/store.
   }];
+  let options = [
+    Option<"numWarps", "num-warps", "int32_t", /*default*/"4",
+           "number of warps, which sizes a native descriptor gather's per-warp tile">,
+    Option<"nativeGatherClasses", "native-gather-classes", "bool", /*default*/"true",
+           "keep native descriptor gathers only in the measured tile classes">,
+  ];
 
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }

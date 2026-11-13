@@ -1,7 +1,8 @@
-"""Native descriptor gathers (#8666) on XPU: a gather with a constant zero column offset and a 16-byte-aligned
-row access stays a ttig.descriptor_gather, reads zero out of bounds, and emits the same global loads as the pointer
-expansion (TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1); any other gather is expanded exactly as with that
-switch. The reduction kernel has the vLLM paged-KV layout.
+"""Native descriptor gathers (#8666) on XPU: a gather with a constant zero column offset, a 16-byte-aligned row
+access and a measured tile class (here 16-bit tt.dot A operands and an fp8 reduction) stays a ttig.descriptor_gather,
+reads zero out of bounds, and emits the same global loads as the pointer expansion
+(TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1); any other gather, including the 16-bit stores and reductions here,
+is expanded exactly as with that switch.
 """
 
 import os
@@ -57,13 +58,15 @@ def _gather_dot(out_ptr, a_ptr, b_ptr, idx_ptr, y, X, K, BLOCK_M: tl.constexpr, 
 
 
 @triton.jit
-def _gather_hint(out_ptr, in_ptr, idx_ptr, X, w_ptr, P, HINT: tl.constexpr, BLOCK_X: tl.constexpr,
+def _gather_hint(out_ptr, in_ptr, idx_ptr, b_ptr, X, w_ptr, P, HINT: tl.constexpr, BLOCK_X: tl.constexpr,
                  BLOCK_Y: tl.constexpr):
-    # multiple_of drops a hint on a kernel argument, so the hinted extent is a loaded scalar.
+    # multiple_of drops a hint on a kernel argument, so the hinted extent is a loaded scalar. The gather feeds a
+    # tt.dot so that it stays native.
     idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
     desc = tl.make_tensor_descriptor(in_ptr, [X, tl.multiple_of(tl.load(w_ptr), HINT)], [P, 1], [1, BLOCK_Y])
-    out = desc.gather(idx, 0)
-    tl.store(out_ptr + tl.arange(0, BLOCK_X)[:, None] * BLOCK_Y + tl.arange(0, BLOCK_Y)[None, :], out)
+    b = tl.load(b_ptr + tl.arange(0, BLOCK_Y)[:, None] * 16 + tl.arange(0, 16)[None, :])
+    out = tl.dot(desc.gather(idx, 0), b)
+    tl.store(out_ptr + tl.arange(0, BLOCK_X)[:, None] * 16 + tl.arange(0, 16)[None, :], out)
 
 
 def _gather_ref(src, idx, y, block_y):
@@ -101,9 +104,9 @@ def _make_case(case, n_rows, block_y, dtype, device):
 _BITS = {"half": 16, "bfloat": 16, "float": 32, "double": 64}
 
 
-def _load_widths(llir):
-    """Byte width of every global load and predicated-load call."""
-    tys = re.findall(r"= load (<\d+ x \w+>|\w+), ptr addrspace\(1\)", llir)
+def _load_widths(llir, predicated_only=False):
+    """Byte width of every global load and predicated-load call (only the latter with predicated_only)."""
+    tys = [] if predicated_only else re.findall(r"= load (<\d+ x \w+>|\w+), ptr addrspace\(1\)", llir)
     tys += re.findall(r"= (?:tail )?call spir_func (<\d+ x \w+>|\w+) @_Z\d+__spirv_PredicatedLoadINTEL", llir)
     widths = Counter()
     for t in tys:
@@ -136,8 +139,8 @@ def _aligned(y, src):
 
 
 def _admitted(y0, src):
-    """The admission rule for these 16-bit kernels: a constexpr y = 0 and a pitch and shape (both src.shape[1])
-    that launch specialization proves are multiples of 16 elements."""
+    """The admission rule for these 16-bit tt.dot operands at 4 warps (their tile classes are native): a constexpr
+    y = 0 and a pitch and shape (both src.shape[1]) that launch specialization proves are multiples of 16 elements."""
     return y0 and src.shape[1] % 16 == 0
 
 
@@ -161,8 +164,8 @@ ARMS = [(c, False) for c in CASES] + [(c, True) for c in ["in_bounds", "rows", "
 def test_gather_store(case, y0, device, monkeypatch):
     src, idx, y = _make_case(case, 32, 128, torch.float16, device)
     out = torch.full((32, 128), 7.0, device=device, dtype=src.dtype)
-    k = _launch_arms(_gather_store, monkeypatch, _admitted(y0, src), out, src, idx, y, src.shape[0], src.shape[1], 32,
-                     128, Y0=y0, num_warps=4)
+    k = _launch_arms(_gather_store, monkeypatch, False, out, src, idx, y, src.shape[0], src.shape[1], 32, 128, Y0=y0,
+                     num_warps=4)
     assert (16 in _load_widths(k.asm["llir"])) == _aligned(y, src)
     assert torch.equal(out.view(torch.int16), _gather_ref(src, idx, y, 128).view(torch.int16))
 
@@ -173,8 +176,8 @@ def test_gather_reduce_vllm_layout(case, y0, dtype, device, monkeypatch):
     src, idx, y = _make_case(case, 64, 128, dtype, device)
     w = torch.randn(128, device=device)
     out = torch.empty(64, device=device)
-    _launch_arms(_gather_reduce, monkeypatch, _admitted(y0, src), out, src, idx, w, y, src.shape[0], src.shape[1], 64,
-                 128, Y0=y0, num_warps=4)
+    _launch_arms(_gather_reduce, monkeypatch, False, out, src, idx, w, y, src.shape[0], src.shape[1], 64, 128, Y0=y0,
+                 num_warps=4)
     ref = (_gather_ref(src, idx, y, 128).float() * w[None, :]).sum(1)
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-3)
 
@@ -191,6 +194,31 @@ def test_gather_dot(case, y0, device, monkeypatch):
     torch.testing.assert_close(out, ref, atol=1e-2, rtol=1e-2)
 
 
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_gather_dot_class_num_warps(num_warps, device, monkeypatch):
+    """The class gate sizes the tile per warp from the kernel's num_warps: a 2 KiB fp16 dot operand stays native at
+    4 warps and, at 1 KiB with 8 warps, takes the pointer expansion."""
+    a, idx, y = _make_case("in_bounds", 64, 64, torch.float16, device)
+    b = torch.randn(64, 64, device=device, dtype=torch.float16)
+    out = torch.empty(64, 64, device=device)
+    _launch_arms(_gather_dot, monkeypatch, num_warps == 4, out, a, b, idx, y, a.shape[0], a.shape[1], 64, 64, 64,
+                 Y0=True, num_warps=num_warps)
+    torch.testing.assert_close(out, _gather_ref(a, idx, y, 64).float() @ b.float(), atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize("y0", [True, False])
+def test_gather_reduce_fp8(y0, device, monkeypatch):
+    """An fp8 tile converted by tt.fp_to_fp, at 2 KiB per warp on 4 warps, stays native with a constexpr y = 0 and
+    takes the pointer expansion with a runtime y."""
+    src, idx, y = _make_case("rows", 64, 128, torch.float8_e4m3fn, device)
+    w = torch.randn(128, device=device)
+    out = torch.empty(64, device=device)
+    _launch_arms(_gather_reduce, monkeypatch, y0, out, src, idx, w, y, src.shape[0], src.shape[1], 64, 128, Y0=y0,
+                 num_warps=4)
+    ref = (_gather_ref(src.float(), idx, y, 128) * w[None, :]).sum(1)
+    torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-3)
+
+
 @pytest.mark.parametrize("width, hint, block_y", [(24, 24, 64), (20, 20, 16), (0, 16, 64)])
 def test_gather_shape_hint(width, hint, block_y, device):
     """Admitted shapes whose divisor is not a power of two (24), is clamped by the block (20 in 16), or is maximal
@@ -198,13 +226,15 @@ def test_gather_shape_hint(width, hint, block_y, device):
     torch.manual_seed(0)
     src = torch.randn(128, 64, device=device, dtype=torch.bfloat16)
     idx = torch.randperm(128, device=device)[:64].to(torch.int32)
-    out = torch.full((64, block_y), 7.0, device=device, dtype=src.dtype)
+    b = torch.randn(block_y, 16, device=device, dtype=src.dtype)
+    out = torch.full((64, 16), 7.0, device=device)
     w = torch.tensor([width], device=device, dtype=torch.int32)
-    k = _gather_hint[(1, )](out, src, idx, 128, w, 64, hint, 64, block_y, num_warps=4)
+    k = _gather_hint[(1, )](out, src, idx, b, 128, w, 64, hint, 64, block_y, num_warps=4)
     _check_native(k)
-    assert 16 in _load_widths(k.asm["llir"])
-    ref = _gather_ref(src[:, :width], idx, 0, block_y) if width else torch.zeros_like(out)
-    assert torch.equal(out.view(torch.int16), ref.view(torch.int16))
+    assert set(_load_widths(k.asm["llir"], predicated_only=True)) == {16}
+    g = _gather_ref(src[:, :width], idx, 0, block_y) if width else torch.zeros(64, block_y, device=device,
+                                                                               dtype=src.dtype)
+    torch.testing.assert_close(out, g.float() @ b.float(), atol=1e-2, rtol=1e-2)
 
 
 # Hand-written TTGIR pins a layout the frontend does not reliably produce: vectorized lanes spanning rows.

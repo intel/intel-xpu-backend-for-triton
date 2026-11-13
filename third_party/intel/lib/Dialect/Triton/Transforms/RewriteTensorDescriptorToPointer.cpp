@@ -1359,8 +1359,36 @@ static bool isAlignedNativeGather(triton::DescriptorGatherOp op,
          pow2Divisor(info->getContiguity(1)) * elemBytes >= kAlignBytes;
 }
 
+// The two classes where IGC was shown to schedule the native lowering better
+// than the pointer expansion (B580), within their measured ranges: f16/bf16
+// tiles used only as tt.dot A operands, whose loads reach SLM unconverted, up
+// to 8 KiB per warp on 2 or 4 warps; and f8E4M3FN tiles converted by
+// tt.fp_to_fp at 2-4 KiB per warp on 4 warps.
+static bool isMeasuredNativeGatherClass(triton::DescriptorGatherOp op,
+                                        int numWarps) {
+  auto type = cast<RankedTensorType>(op.getType());
+  Type elemTy = type.getElementType();
+  int64_t bytesPerWarp = type.getNumElements() *
+                         elemTy.getIntOrFloatBitWidth() / 8 /
+                         std::max(numWarps, 1);
+  Value result = op.getResult();
+  if (elemTy.isF16() || elemTy.isBF16())
+    return (numWarps == 2 || numWarps == 4) && bytesPerWarp <= 8192 &&
+           !result.use_empty() &&
+           llvm::all_of(result.getUses(), [](OpOperand &use) {
+             return isa<triton::DotOp>(use.getOwner()) &&
+                    use.getOperandNumber() == 0;
+           });
+  return isa<Float8E4M3FNType>(elemTy) && numWarps == 4 &&
+         bytesPerWarp >= 2048 && bytesPerWarp <= 4096 &&
+         llvm::any_of(result.getUsers(), [](Operation *user) {
+           return isa<triton::FpToFpOp>(user);
+         });
+}
+
 static llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
-collectCandidateMakeTensorDescOps(Operation *op) {
+collectCandidateMakeTensorDescOps(Operation *op, int numWarps,
+                                  bool nativeGatherClasses) {
   const bool keepNativeGathers =
       !tools::getBoolEnv("TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER");
   // Built on the IR as it is now (after the greedy pre-rewrites), and only if
@@ -1401,7 +1429,8 @@ collectCandidateMakeTensorDescOps(Operation *op) {
         .Case<triton::DescriptorGatherOp>([&](triton::DescriptorGatherOp op) {
           // A gather stays native (lowered as ttig.descriptor_gather) only
           // where that lowering matches the pointer expansion: zero padding,
-          // no i1 elements, a unit last stride, and isAlignedNativeGather.
+          // no i1 elements, a unit last stride, isAlignedNativeGather and
+          // isMeasuredNativeGatherClass.
           triton::intel::DescriptorDefinitions defs =
               triton::intel::findDescriptorDefinitions(op.getDesc());
           bool keepNative =
@@ -1411,7 +1440,9 @@ collectCandidateMakeTensorDescOps(Operation *op) {
               defs.allSatisfy([](triton::MakeTensorDescOp d) {
                 return matchPattern(d.getStrides().back(), m_One());
               }) &&
-              isAlignedNativeGather(op, *axisInfo);
+              isAlignedNativeGather(op, *axisInfo) &&
+              (!nativeGatherClasses ||
+               isMeasuredNativeGatherClass(op, numWarps));
           for (triton::MakeTensorDescOp d : defs)
             (keepNative ? candidateMakeTensorDescOps
                         : unhandledMakeTensorDescOps)
@@ -1569,6 +1600,9 @@ static bool splitDirectDescriptorUses(
 class TritonRewriteTensorDescriptorToPointerPass
     : public triton::intel::impl::TritonRewriteTensorDescriptorToPointerBase<
           TritonRewriteTensorDescriptorToPointerPass> {
+public:
+  using Base::Base;
+
   void runOnOperation() override {
     Operation *op = getOperation();
 
@@ -1608,9 +1642,11 @@ class TritonRewriteTensorDescriptorToPointerPass
     // Split after the greedy pre-rewrites: they replace gathers/scatters with
     // new direct descriptor loads/stores, which the split must see.
     llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
-        candidateMakeTensorDescOps = collectCandidateMakeTensorDescOps(op);
+        candidateMakeTensorDescOps = collectCandidateMakeTensorDescOps(
+            op, numWarps, nativeGatherClasses);
     if (splitDirectDescriptorUses(op, candidateMakeTensorDescOps))
-      candidateMakeTensorDescOps = collectCandidateMakeTensorDescOps(op);
+      candidateMakeTensorDescOps =
+          collectCandidateMakeTensorDescOps(op, numWarps, nativeGatherClasses);
 
     mlir::ConversionTarget target(getContext());
     target.addDynamicallyLegalDialect<mlir::arith::ArithDialect,

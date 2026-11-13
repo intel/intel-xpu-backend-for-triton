@@ -1,11 +1,16 @@
-// RUN: triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --split-input-file | FileCheck %s
+// RUN: triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer=native-gather-classes=false --split-input-file | FileCheck %s
 // RUN: env TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1 triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --split-input-file | FileCheck %s --check-prefix=OFF
+// RUN: triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --split-input-file | FileCheck %s --check-prefix=CLS
+// RUN: triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer=num-warps=8 --split-input-file | FileCheck %s --check-prefix=NW8
+// RUN: triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer=num-warps=2 --split-input-file | FileCheck %s --check-prefix=NW2
 
 // COM: A gather on a device-side descriptor stays native (later lowered as
 // COM: ttig.descriptor_gather) when the descriptor uses zero padding, the elements
 // COM: are at least 8 bits wide (not i1), the last stride is 1, the column offset is
 // COM: the constant 0 and the row access is proven 16-byte aligned. Otherwise its
 // COM: makers are expanded and the gather becomes a masked tt.load, as before.
+// COM: The first RUN line checks these rules with the tile-class rule off; CLS, NW2 and NW8
+// COM: check the class rule (last section) at 4, 2 and 8 warps.
 
 // COM: The vLLM paged-KV shape: the maker sits in an scf.if, the gather in an
 // COM: scf.for inside it.
@@ -272,3 +277,226 @@ module {
 // CHECK-LABEL: @joined_loop
 // CHECK-NOT:   tt.descriptor_gather
 // CHECK:       tt.load
+
+// -----
+
+// COM: One function per class rule; bytes are per warp (num-warps 4 by default, 2 and 8 under NW2 and NW8).
+module {
+  // COM: An f16/bf16 tile used only as a tt.dot A operand is native on 2 or 4 warps ...
+  tt.func public @dot16_1k(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %idx: tensor<32xi32>, %b: tensor<128x64xbf16>) -> tensor<32x64xf32> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cw_i64 = arith.constant 128 : i64
+    %cw_i32 = arith.constant 128 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %cw_i32], [%cw_i64, %c1_i64] : <bf16>, <1x128xbf16>
+    %g = tt.descriptor_gather %desc[%idx, %c0_i32] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<32x128xbf16>
+    %acc = arith.constant dense<0.000000e+00> : tensor<32x64xf32>
+    %d = tt.dot %g, %b, %acc : tensor<32x128xbf16> * tensor<128x64xbf16> -> tensor<32x64xf32>
+    tt.return %d : tensor<32x64xf32>
+  }
+
+  // COM: ... up to 8 KiB per warp ...
+  tt.func public @dot16_8k(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %idx: tensor<128xi32>, %b: tensor<128x16xbf16>) -> tensor<128x16xf32> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cw_i64 = arith.constant 128 : i64
+    %cw_i32 = arith.constant 128 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %cw_i32], [%cw_i64, %c1_i64] : <bf16>, <1x128xbf16>
+    %g = tt.descriptor_gather %desc[%idx, %c0_i32] : (!tt.tensordesc<1x128xbf16>, tensor<128xi32>, i32) -> tensor<128x128xbf16>
+    %acc = arith.constant dense<0.000000e+00> : tensor<128x16xf32>
+    %d = tt.dot %g, %b, %acc : tensor<128x128xbf16> * tensor<128x16xbf16> -> tensor<128x16xf32>
+    tt.return %d : tensor<128x16xf32>
+  }
+
+  // COM: A B operand is not native ...
+  tt.func public @dotB16(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %idx: tensor<64xi32>, %p: tensor<16x64xbf16>) -> tensor<16x64xf32> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cw_i64 = arith.constant 64 : i64
+    %cw_i32 = arith.constant 64 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %cw_i32], [%cw_i64, %c1_i64] : <bf16>, <1x64xbf16>
+    %g = tt.descriptor_gather %desc[%idx, %c0_i32] : (!tt.tensordesc<1x64xbf16>, tensor<64xi32>, i32) -> tensor<64x64xbf16>
+    %acc = arith.constant dense<0.000000e+00> : tensor<16x64xf32>
+    %d = tt.dot %p, %g, %acc : tensor<16x64xbf16> * tensor<64x64xbf16> -> tensor<16x64xf32>
+    tt.return %d : tensor<16x64xf32>
+  }
+
+  // COM: ... nor an A operand that is also stored.
+  tt.func public @dotA_and_store16(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %idx: tensor<32xi32>, %b: tensor<64x16xbf16>, %out: !tt.ptr<bf16>) -> tensor<32x16xf32> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cw_i64 = arith.constant 64 : i64
+    %cw_i32 = arith.constant 64 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %cw_i32], [%cw_i64, %c1_i64] : <bf16>, <1x64xbf16>
+    %g = tt.descriptor_gather %desc[%idx, %c0_i32] : (!tt.tensordesc<1x64xbf16>, tensor<32xi32>, i32) -> tensor<32x64xbf16>
+    %p = tt.splat %out : !tt.ptr<bf16> -> tensor<32x64x!tt.ptr<bf16>>
+    tt.store %p, %g : tensor<32x64x!tt.ptr<bf16>>
+    %acc = arith.constant dense<0.000000e+00> : tensor<32x16xf32>
+    %d = tt.dot %g, %b, %acc : tensor<32x64xbf16> * tensor<64x16xbf16> -> tensor<32x16xf32>
+    tt.return %d : tensor<32x16xf32>
+  }
+
+  // COM: Only f16/bf16 dot operands were measured.
+  tt.func public @f32_dot(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %idx: tensor<32xi32>, %b: tensor<64x16xf32>) -> tensor<32x16xf32> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cw_i64 = arith.constant 64 : i64
+    %cw_i32 = arith.constant 64 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %cw_i32], [%cw_i64, %c1_i64] : <f32>, <1x64xf32>
+    %g = tt.descriptor_gather %desc[%idx, %c0_i32] : (!tt.tensordesc<1x64xf32>, tensor<32xi32>, i32) -> tensor<32x64xf32>
+    %acc = arith.constant dense<0.000000e+00> : tensor<32x16xf32>
+    %d = tt.dot %g, %b, %acc : tensor<32x64xf32> * tensor<64x16xf32> -> tensor<32x16xf32>
+    tt.return %d : tensor<32x16xf32>
+  }
+
+  // COM: An f8E4M3FN tile converted by tt.fp_to_fp is native on 4 warps at 2-4 KiB per warp: not at 1 KiB ...
+  tt.func public @fp8_cvt_1k(%arg0: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %idx: tensor<32xi32>) -> tensor<32x128xf32> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cw_i64 = arith.constant 128 : i64
+    %cw_i32 = arith.constant 128 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %cw_i32], [%cw_i64, %c1_i64] : <f8E4M3FN>, <1x128xf8E4M3FN>
+    %g = tt.descriptor_gather %desc[%idx, %c0_i32] : (!tt.tensordesc<1x128xf8E4M3FN>, tensor<32xi32>, i32) -> tensor<32x128xf8E4M3FN>
+    %f = tt.fp_to_fp %g : tensor<32x128xf8E4M3FN> -> tensor<32x128xf32>
+    tt.return %f : tensor<32x128xf32>
+  }
+
+  // COM: ... at 2 KiB ...
+  tt.func public @fp8_cvt_2k(%arg0: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %idx: tensor<64xi32>) -> tensor<64x128xf32> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cw_i64 = arith.constant 128 : i64
+    %cw_i32 = arith.constant 128 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %cw_i32], [%cw_i64, %c1_i64] : <f8E4M3FN>, <1x128xf8E4M3FN>
+    %g = tt.descriptor_gather %desc[%idx, %c0_i32] : (!tt.tensordesc<1x128xf8E4M3FN>, tensor<64xi32>, i32) -> tensor<64x128xf8E4M3FN>
+    %f = tt.fp_to_fp %g : tensor<64x128xf8E4M3FN> -> tensor<64x128xf32>
+    tt.return %f : tensor<64x128xf32>
+  }
+
+  // COM: ... and 4 KiB ...
+  tt.func public @fp8_cvt_4k(%arg0: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %idx: tensor<128xi32>) -> tensor<128x128xf32> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cw_i64 = arith.constant 128 : i64
+    %cw_i32 = arith.constant 128 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %cw_i32], [%cw_i64, %c1_i64] : <f8E4M3FN>, <1x128xf8E4M3FN>
+    %g = tt.descriptor_gather %desc[%idx, %c0_i32] : (!tt.tensordesc<1x128xf8E4M3FN>, tensor<128xi32>, i32) -> tensor<128x128xf8E4M3FN>
+    %f = tt.fp_to_fp %g : tensor<128x128xf8E4M3FN> -> tensor<128x128xf32>
+    tt.return %f : tensor<128x128xf32>
+  }
+
+  // COM: ... and not at 8 KiB.
+  tt.func public @fp8_cvt_8k(%arg0: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %idx: tensor<128xi32>) -> tensor<128x256xf32> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cw_i64 = arith.constant 256 : i64
+    %cw_i32 = arith.constant 256 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %cw_i32], [%cw_i64, %c1_i64] : <f8E4M3FN>, <1x256xf8E4M3FN>
+    %g = tt.descriptor_gather %desc[%idx, %c0_i32] : (!tt.tensordesc<1x256xf8E4M3FN>, tensor<128xi32>, i32) -> tensor<128x256xf8E4M3FN>
+    %f = tt.fp_to_fp %g : tensor<128x256xf8E4M3FN> -> tensor<128x256xf32>
+    tt.return %f : tensor<128x256xf32>
+  }
+
+  // COM: An f8E4M3FN tile used only by a dot is not native.
+  tt.func public @fp8_dot(%arg0: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %idx: tensor<64xi32>, %b: tensor<128x16xf8E4M3FN>) -> tensor<64x16xf32> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cw_i64 = arith.constant 128 : i64
+    %cw_i32 = arith.constant 128 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %cw_i32], [%cw_i64, %c1_i64] : <f8E4M3FN>, <1x128xf8E4M3FN>
+    %g = tt.descriptor_gather %desc[%idx, %c0_i32] : (!tt.tensordesc<1x128xf8E4M3FN>, tensor<64xi32>, i32) -> tensor<64x128xf8E4M3FN>
+    %acc = arith.constant dense<0.000000e+00> : tensor<64x16xf32>
+    %d = tt.dot %g, %b, %acc : tensor<64x128xf8E4M3FN> * tensor<128x16xf8E4M3FN> -> tensor<64x16xf32>
+    tt.return %d : tensor<64x16xf32>
+  }
+
+  // COM: Only f8E4M3FN was measured.
+  tt.func public @fp8e5_cvt(%arg0: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %idx: tensor<64xi32>) -> tensor<64x128xf32> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cw_i64 = arith.constant 128 : i64
+    %cw_i32 = arith.constant 128 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %cw_i32], [%cw_i64, %c1_i64] : <f8E5M2>, <1x128xf8E5M2>
+    %g = tt.descriptor_gather %desc[%idx, %c0_i32] : (!tt.tensordesc<1x128xf8E5M2>, tensor<64xi32>, i32) -> tensor<64x128xf8E5M2>
+    %f = tt.fp_to_fp %g : tensor<64x128xf8E5M2> -> tensor<64x128xf32>
+    tt.return %f : tensor<64x128xf32>
+  }
+}
+
+// CLS-LABEL: @dot16_1k
+// CLS:       tt.descriptor_gather
+// CLS-LABEL: @dot16_8k
+// CLS:       tt.descriptor_gather
+// CLS-LABEL: @dotB16
+// CLS-NOT:   tt.descriptor_gather
+// CLS-LABEL: @dotA_and_store16
+// CLS-NOT:   tt.descriptor_gather
+// CLS-LABEL: @f32_dot
+// CLS-NOT:   tt.descriptor_gather
+// CLS-LABEL: @fp8_cvt_1k
+// CLS-NOT:   tt.descriptor_gather
+// CLS-LABEL: @fp8_cvt_2k
+// CLS:       tt.descriptor_gather
+// CLS-LABEL: @fp8_cvt_4k
+// CLS:       tt.descriptor_gather
+// CLS-LABEL: @fp8_cvt_8k
+// CLS-NOT:   tt.descriptor_gather
+// CLS-LABEL: @fp8_dot
+// CLS-NOT:   tt.descriptor_gather
+// CLS-LABEL: @fp8e5_cvt
+// CLS-NOT:   tt.descriptor_gather
+// NW2-LABEL: @dot16_1k
+// NW2:       tt.descriptor_gather
+// NW2-LABEL: @dot16_8k
+// NW2-NOT:   tt.descriptor_gather
+// NW2-LABEL: @dotB16
+// NW2-NOT:   tt.descriptor_gather
+// NW2-LABEL: @dotA_and_store16
+// NW2-NOT:   tt.descriptor_gather
+// NW2-LABEL: @f32_dot
+// NW2-NOT:   tt.descriptor_gather
+// NW2-LABEL: @fp8_cvt_1k
+// NW2-NOT:   tt.descriptor_gather
+// NW2-LABEL: @fp8_cvt_2k
+// NW2-NOT:   tt.descriptor_gather
+// NW2-LABEL: @fp8_cvt_4k
+// NW2-NOT:   tt.descriptor_gather
+// NW2-LABEL: @fp8_cvt_8k
+// NW2-NOT:   tt.descriptor_gather
+// NW2-LABEL: @fp8_dot
+// NW2-NOT:   tt.descriptor_gather
+// NW2-LABEL: @fp8e5_cvt
+// NW2-NOT:   tt.descriptor_gather
+// NW8-LABEL: @dot16_1k
+// NW8-NOT:   tt.descriptor_gather
+// NW8-LABEL: @dot16_8k
+// NW8-NOT:   tt.descriptor_gather
+// NW8-LABEL: @dotB16
+// NW8-NOT:   tt.descriptor_gather
+// NW8-LABEL: @dotA_and_store16
+// NW8-NOT:   tt.descriptor_gather
+// NW8-LABEL: @f32_dot
+// NW8-NOT:   tt.descriptor_gather
+// NW8-LABEL: @fp8_cvt_1k
+// NW8-NOT:   tt.descriptor_gather
+// NW8-LABEL: @fp8_cvt_2k
+// NW8-NOT:   tt.descriptor_gather
+// NW8-LABEL: @fp8_cvt_4k
+// NW8-NOT:   tt.descriptor_gather
+// NW8-LABEL: @fp8_cvt_8k
+// NW8-NOT:   tt.descriptor_gather
+// NW8-LABEL: @fp8_dot
+// NW8-NOT:   tt.descriptor_gather
+// NW8-LABEL: @fp8e5_cvt
+// NW8-NOT:   tt.descriptor_gather
