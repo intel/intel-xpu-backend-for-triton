@@ -1,8 +1,16 @@
 diff --git a/torch/_inductor/codegen/triton_split_scan.py b/torch/_inductor/codegen/triton_split_scan.py
-index 87f0c5e..9005cef 100644
+index 87f0c5e..ccb712a 100644
 --- a/torch/_inductor/codegen/triton_split_scan.py
 +++ b/torch/_inductor/codegen/triton_split_scan.py
-@@ -44,6 +44,7 @@ class TritonSplitScanKernel(TritonKernel):
+@@ -15,6 +15,7 @@ from torch.utils._ordered_set import OrderedSet
+ from torch.utils._sympy.functions import CeilDiv
+ 
+ from ..utils import sympy_product, upcast_compute_type
++from ..virtualized import V
+ 
+ 
+ class TritonSplitScanKernel(TritonKernel):
+@@ -44,6 +45,7 @@ class TritonSplitScanKernel(TritonKernel):
              raise AssertionError("not supported")
          if fixed_config is not None:
              raise AssertionError("not supported")
@@ -10,7 +18,7 @@ index 87f0c5e..9005cef 100644
          super().__init__(
              tiling,
              **kwargs,
-@@ -56,6 +57,53 @@ class TritonSplitScanKernel(TritonKernel):
+@@ -56,6 +58,58 @@ class TritonSplitScanKernel(TritonKernel):
      def should_use_cooperative_reduction(self) -> bool:
          return False
  
@@ -21,7 +29,12 @@ index 87f0c5e..9005cef 100644
 +        forward-progress guarantees may not have started yet. A ticket taken at block
 +        start ensures it has. The ticket indexes both the data block and the look-back.
 +        """
-+        if not prefix_is_reduction(entry.prefix):
++        # Only XPU for now: the hang has been observed (and the ticket's cost
++        # measured) only there. Other backends keep using tl.program_id.
++        if (
++            not prefix_is_reduction(entry.prefix)
++            or V.graph.get_current_device_or_throw().type != "xpu"
++        ):
 +            return super().iteration_ranges_get_pid(entry)
 +        if self._block_ticket is None:
 +            if entry.grid_dim is None:
