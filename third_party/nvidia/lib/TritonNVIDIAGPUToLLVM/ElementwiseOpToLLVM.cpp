@@ -186,6 +186,16 @@ static ConverterT makeNativeFp8Converter(Type srcTy, Type dstTy, bool useFp32) {
                    const SmallVector<Value> &values) -> SmallVector<Value> {
     assert(values.size() == 2 && "expected a packed conversion");
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    Type i8x2Ty = vec_ty(i8_ty, 2);
+    // Build Convert<Float>ToF8x2Op from Properties to keep the API cross-LLVM
+    // compatible after the addition of an optional scale-factor argument.
+    // TODO(akhilgoe): Revert this in the next hook update.
+    auto setRoundAndSat = [&](auto &props) {
+      props.rnd = NVVM::FPRoundingModeAttr::get(ctx, NVVM::FPRoundingMode::RN);
+      props.sat =
+          NVVM::SaturationModeAttr::get(ctx, NVVM::SaturationMode::SATFINITE);
+    };
     Value result;
     if (useFp32) {
       Value lo = values[0];
@@ -194,19 +204,28 @@ static ConverterT makeNativeFp8Converter(Type srcTy, Type dstTy, bool useFp32) {
         lo = b.fpext(f32_ty, lo);
         hi = b.fpext(f32_ty, hi);
       }
+      NVVM::ConvertF32x2ToF8x2Op::Properties props;
+      setRoundAndSat(props);
+      props.relu = rewriter.getBoolAttr(false);
+      props.dstTy = TypeAttr::get(dstTy);
       // The first scalar operand fills the high half of the packed result.
       result = NVVM::ConvertF32x2ToF8x2Op::create(
-          rewriter, loc, vec_ty(i8_ty, 2), hi, lo, NVVM::FPRoundingMode::RN,
-          NVVM::SaturationMode::SATFINITE, false, dstTy);
+          rewriter, loc, TypeRange{i8x2Ty}, ValueRange{hi, lo}, props);
     } else {
       Value packed = packLLVector(loc, values, rewriter);
       if (srcTy.isF16()) {
+        NVVM::ConvertF16x2ToF8x2Op::Properties props;
+        props.relu = rewriter.getBoolAttr(false);
+        props.dstTy = TypeAttr::get(dstTy);
         result = NVVM::ConvertF16x2ToF8x2Op::create(
-            rewriter, loc, vec_ty(i8_ty, 2), packed, false, dstTy);
+            rewriter, loc, TypeRange{i8x2Ty}, ValueRange{packed}, props);
       } else if (srcTy.isBF16()) {
+        NVVM::ConvertBF16x2ToF8x2Op::Properties props;
+        setRoundAndSat(props);
+        props.relu = rewriter.getBoolAttr(false);
+        props.dstTy = TypeAttr::get(dstTy);
         result = NVVM::ConvertBF16x2ToF8x2Op::create(
-            rewriter, loc, vec_ty(i8_ty, 2), packed, NVVM::FPRoundingMode::RN,
-            NVVM::SaturationMode::SATFINITE, false, dstTy);
+            rewriter, loc, TypeRange{i8x2Ty}, ValueRange{packed}, props);
       } else {
         result = NVVM::ConvertF8x2ToF16x2Op::create(
             rewriter, loc, vec_ty(f16_ty, 2), packed, srcTy, false);
