@@ -17,7 +17,9 @@ def TritonIntelGPUAccelerateMatmul
 
   let description = [{
     Optimize the input/output layout of the `tl.dot` operation to make them
-    compatible with the Intel DPAS instruction requirements.
+    compatible with the Intel DPAS instruction requirements. With `fold-trans`,
+    first fold a `tt.trans` of a computed tile that feeds a dot as operand A
+    into its producers, so the tile is computed transposed.
   }];
 
   let dependentDialects = [
@@ -32,6 +34,9 @@ def TritonIntelGPUAccelerateMatmul
   let options = [
     Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
          "GRF mode the kernel is compiled with">,
+    Option<"foldTrans", "fold-trans", "bool", /*default*/"false",
+         "Fold a tt.trans of a computed tile that feeds a dot as operand A "
+         "into its producers">,
   ];
 }
 
