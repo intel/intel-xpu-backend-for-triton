@@ -223,7 +223,8 @@ protected:
   void visitNonControlFlowArguments(
       Operation *op, const RegionSuccessor & /*successor*/,
       ValueRange /*nonSuccessorInputs*/,
-      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) override;
+      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices,
+      GetLatticeFn /*getLattice*/) override;
 
   void
   visitForOpInductionVar(scf::ForOp op,
