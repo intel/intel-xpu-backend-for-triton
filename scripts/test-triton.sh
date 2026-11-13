@@ -1145,6 +1145,7 @@ run_liger_install() {
     cd Liger-Kernel
     git checkout "$(<../benchmarks/third_party/liger/liger-pin.txt)"
     echo "Liger-Kernels commit: '$(git rev-parse HEAD)'"
+    # liger-fix.patch is anchored to the commit in liger-pin.txt; regenerate it when the pin changes
     git apply ../benchmarks/third_party/liger/liger-fix.patch --allow-empty
     cd ..
   fi

@@ -1,0 +1,35 @@
+diff --git a/src/liger_kernel/transformers/model/nemotron.py b/src/liger_kernel/transformers/model/nemotron.py
+index 39b10b0..da54e45 100644
+--- a/src/liger_kernel/transformers/model/nemotron.py
++++ b/src/liger_kernel/transformers/model/nemotron.py
+@@ -1,3 +1,5 @@
++import inspect
++
+ from typing import TYPE_CHECKING
+ from typing import Optional
+ from typing import Tuple
+@@ -69,6 +71,15 @@ def lce_forward(
+     )
+     return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+ 
++    # NemotronModel.forward() takes no **kwargs in transformers<5, so loss-only kwargs
++    # must not be passed to it there. Only these known loss kwargs are dropped, so any
++    # other unexpected kwarg still raises a TypeError instead of being silently ignored.
++    model_accepts_kwargs = any(
++        p.kind is inspect.Parameter.VAR_KEYWORD for p in inspect.signature(self.model.forward).parameters.values()
++    )
++    loss_only_kwargs = {"shift_labels", "accum_dtype", "num_items_in_batch", "ignore_index", "final_logit_softcapping"}
++    model_kwargs = kwargs if model_accepts_kwargs else {k: v for k, v in kwargs.items() if k not in loss_only_kwargs}
++
+     # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+     outputs = self.model(
+         input_ids=input_ids,
+@@ -80,7 +91,7 @@ def lce_forward(
+         output_attentions=output_attentions,
+         output_hidden_states=output_hidden_states,
+         cache_position=cache_position,
+-        **kwargs,
++        **model_kwargs,
+     )
+ 
+     hidden_states = outputs.last_hidden_state
