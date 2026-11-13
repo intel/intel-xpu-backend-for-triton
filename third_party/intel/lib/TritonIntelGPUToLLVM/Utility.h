@@ -167,6 +167,14 @@ private:
 /// lowering then emits nothing for `op`.
 bool isDPASOperandConvertedByDot(FpToFpOp op);
 
+/// What the `tt.fp_to_fp` lowering leaves in place of a conversion that the
+/// DPAS lowering does (see isDPASOperandConvertedByDot): a cast of the lowered
+/// fp8 source `llSrc` to `type`, tagged so that getLazyFp8Cast finds it.
+Value createLazyFp8Operand(OpBuilder &b, Location loc, Type type, Value llSrc);
+
+/// The cast created by createLazyFp8Operand that defines `lowered`, if any.
+UnrealizedConversionCastOp getLazyFp8Cast(Value lowered);
+
 } // namespace mlir::triton::intel
 
 #endif // TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
