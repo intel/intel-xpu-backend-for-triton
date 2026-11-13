@@ -96,9 +96,29 @@ class _FakeCudaTensorMode(TorchFunctionMode):
             result = _basic_getitem(args[0], args[1])
             if result is not None:
                 return result
+        # Writes into a fake tensor cannot matter, as the values are never read, and these two take a device guard.
+        if name in ("__setitem__", "copy_") and isinstance(args[0], self.fake_tensor_type):
+            return args[0] if name == "copy_" else None
+        # Moving to an accelerator copies under a device guard too; a no-op move returns the tensor itself.
+        if name == "to" and isinstance(args[0], torch.Tensor):
+            device, dtype = (kwargs or {}).get("device"), (kwargs or {}).get("dtype")
+            for argument in args[1:]:
+                if isinstance(argument, torch.dtype):
+                    dtype = argument
+                elif isinstance(argument, (str, torch.device)):
+                    device = argument
+                elif isinstance(argument, torch.Tensor):
+                    device, dtype = argument.device, argument.dtype
+            if device is not None and torch.device(device).type != "cpu":
+                device = torch.device(device)
+                tensor = args[0]
+                if (tensor.device.type == device.type and device.index in (None, tensor.device.index)
+                        and dtype in (None, tensor.dtype)):
+                    return tensor
+                return torch.empty_strided(tensor.shape, tensor.stride(), dtype=dtype or tensor.dtype, device=device)
         # Same device guard problem: a non-contiguous tensor is copied under one.
         if name == "contiguous" and isinstance(args[0], self.fake_tensor_type) and not args[0].is_contiguous():
-            return args[0].clone(memory_format=kwargs.get("memory_format", torch.contiguous_format))
+            return args[0].clone(memory_format=(kwargs or {}).get("memory_format", torch.contiguous_format))
         if name == "data_ptr":
             tensor = args[0]
             storage = tensor.untyped_storage()
