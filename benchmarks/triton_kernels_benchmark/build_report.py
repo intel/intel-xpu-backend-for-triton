@@ -10,6 +10,8 @@ import datetime
 
 import pandas as pd
 
+import triton_benchmarks_pins
+
 
 @dataclass
 class PassedArgs:  # pylint: disable=too-many-instance-attributes
@@ -117,6 +119,9 @@ def build_report(args: PassedArgs, results_df: Optional[pd.DataFrame] = None):
 
     for name, val in asdict(HostInfo.from_env()).items():
         df_results[name] = val
+    autotune_pins = triton_benchmarks_pins.report_value()
+    if autotune_pins is not None:
+        df_results["autotune_pins"] = autotune_pins
 
     df_results.to_csv(args.target, index=False)
 

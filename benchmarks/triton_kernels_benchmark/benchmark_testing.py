@@ -32,6 +32,7 @@ from torch.profiler import profile, ProfilerActivity, record_function
 from triton.testing import assert_close as triton_assert_close, Benchmark, do_bench as triton_do_bench
 
 import transform_results
+import triton_benchmarks_pins
 from triton_kernels_benchmark import build_report
 from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 
@@ -549,7 +550,8 @@ class Mark:
                 row_vals[label] = ([], [], [])
             for y in bench.line_vals:
                 cleanup_memory()
-                ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
+                with triton_benchmarks_pins.benchmark_point(x_args, y):
+                    ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
                 for i, label in enumerate(itertools.chain(bench.ylabel, ["CV"])):
                     try:
                         y_mean, y_min, y_max = ret[i]
