@@ -86,7 +86,7 @@ template <unsigned MAX_TILE_HEIGHT, unsigned MAX_BITS_WIDTH_TRANSPOSE>
 BlockIOTileSizeInfo
 getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
                    unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
-                   bool oneMatrixPerLoadForBT) {
+                   bool oneMatrixPerLoadForBT, bool innerRowDimOnly) {
   if (elemSizeInBits > 64)
     return BlockIOTileSizeInfo::unknown();
 
@@ -379,17 +379,32 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
       // throw away a tile the transpose path can express.
       rowDim = memContiguousDim;
     } else {
-      // The row dim is the non-fastChange dim that owns an unconsumed
-      // unit-stride register base, i.e. the start of a row-growth doubling
-      // chain. Scan inner-to-outer (highest dim index first) so an outer/batch
-      // dim is only chosen when no inner dim qualifies. This matches the
-      // rowDim < 0 fallback below, which prefers the last dim.
-      for (int dim = static_cast<int>(rank) - 1; dim >= 0; --dim) {
+      // The row dim is the non-fastChange dim along which the row-growth loop
+      // below gets furthest, i.e. the one that gives the tallest tile and so
+      // the fewest messages. A dim whose mask constancy is not a power of 2
+      // would reject the tile, so it is not a candidate. Ties go to the inner
+      // (higher index) dim. If no dim grows past one row, rowDim is left to
+      // the fallback below, which picks the inner one as well.
+      int firstCandidateDim =
+          innerRowDimOnly ? std::max(0, static_cast<int>(rank) - 2) : 0;
+      unsigned bestHeight = 1;
+      for (int dim = static_cast<int>(rank) - 1; dim >= firstCandidateDim;
+           --dim) {
         if (dim == fastChangeDim)
           continue;
-        if (findRegBase(dim, /*stride=*/1)) {
+        unsigned heightLimit = maxTileHeight;
+        if (maskAxisInfo) {
+          int64_t constancy = maskAxisInfo->getConstancy(dim);
+          if (!llvm::isPowerOf2_64(constancy))
+            continue;
+          heightLimit = std::min<int64_t>(heightLimit, constancy);
+        }
+        unsigned height = 1;
+        while ((height << 1) <= heightLimit && findRegBase(dim, height))
+          height <<= 1;
+        if (height > bestHeight) {
+          bestHeight = height;
           rowDim = dim;
-          break;
         }
       }
     }
@@ -474,17 +489,16 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
                              std::move(regPackBases));
 }
 
-BlockIOTileSizeInfo getBlockIOLoadTileSize(const LinearLayout &ll,
-                                           unsigned memContiguousDim,
-                                           unsigned elemSizeInBits,
-                                           AxisInfo *maskAxisInfo,
-                                           bool oneMatrixPerLoadForBT) {
+BlockIOTileSizeInfo
+getBlockIOLoadTileSize(const LinearLayout &ll, unsigned memContiguousDim,
+                       unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
+                       bool oneMatrixPerLoadForBT, bool innerRowDimOnly) {
   constexpr unsigned MAX_TILE_HEIGHT_LOAD = 32;
   constexpr unsigned MAX_BITS_WIDTH_TRANSPOSE = 8 * 4 * 8; // 8xd32. (and 4xd64)
   auto sizeInfo =
       getBlockIOTileSize<MAX_TILE_HEIGHT_LOAD, MAX_BITS_WIDTH_TRANSPOSE>(
           ll, memContiguousDim, elemSizeInBits, maskAxisInfo,
-          oneMatrixPerLoadForBT);
+          oneMatrixPerLoadForBT, innerRowDimOnly);
 
   // Cap vBlocks for loads based on HW constraints.
   unsigned vBlocks = sizeInfo.vBlocks;
@@ -519,7 +533,8 @@ BlockIOTileSizeInfo getBlockIOStoreTileSize(const LinearLayout &ll,
   constexpr unsigned MAX_BITS_WIDTH_TRANSPOSE =
       8 * 4 * 8; // the transpose store is not supported. This is a dummy input
   return getBlockIOTileSize<MAX_TILE_HEIGHT_STORE, MAX_BITS_WIDTH_TRANSPOSE>(
-      ll, memContiguousDim, elemSizeInBits, maskAxisInfo, false);
+      ll, memContiguousDim, elemSizeInBits, maskAxisInfo,
+      /*oneMatrixPerLoadForBT=*/false, /*innerRowDimOnly=*/false);
 }
 
 BlockIOTileSizeInfo getBlockIOPrefetchTileSize(const LinearLayout &ll,
@@ -532,7 +547,8 @@ BlockIOTileSizeInfo getBlockIOPrefetchTileSize(const LinearLayout &ll,
       64 * 8; // for prefetching, still 64 bytes for transpose case.
   auto sizeInfo =
       getBlockIOTileSize<MAX_TILE_HEIGHT_LOAD, MAX_BITS_WIDTH_TRANSPOSE>(
-          ll, memContiguousDim, elemSizeInBits, maskAxisInfo, false);
+          ll, memContiguousDim, elemSizeInBits, maskAxisInfo,
+          /*oneMatrixPerLoadForBT=*/false, /*innerRowDimOnly=*/false);
 
   // Cap vBlocks for prefetches based on HW constraints.
   unsigned vBlocks = sizeInfo.vBlocks;
@@ -785,10 +801,11 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
 bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
                              unsigned elemSizeInBits,
                              RankedTensorType tensorType,
-                             bool oneMatrixPerLoadForBT,
-                             AxisInfo *maskAxisInfo) {
-  auto sizeInfo = getBlockIOLoadTileSize(ll, memContiguousDim, elemSizeInBits,
-                                         maskAxisInfo, oneMatrixPerLoadForBT);
+                             bool oneMatrixPerLoadForBT, AxisInfo *maskAxisInfo,
+                             bool innerRowDimOnly) {
+  auto sizeInfo =
+      getBlockIOLoadTileSize(ll, memContiguousDim, elemSizeInBits, maskAxisInfo,
+                             oneMatrixPerLoadForBT, innerRowDimOnly);
   if (!sizeInfo.isValid())
     return false;
 
@@ -998,14 +1015,17 @@ bool isDescriptorLoadLowerableTo2DBlock(
   }
   LinearLayout llEncoding = encoding.toLinearLayout(tensorTy.getShape());
   if (!validate2DBlockLoadTile(llEncoding, contiguousDim, elemSizeInBits,
-                               tensorTy, oneMatrixPerLoadForBT)) {
+                               tensorTy, oneMatrixPerLoadForBT,
+                               /*maskAxisInfo=*/nullptr,
+                               /*innerRowDimOnly=*/true)) {
     LDBG("Tile validation failed for descriptor load: " << *op);
     return false;
   }
 
   BlockIOTileSizeInfo sizeInfo =
       getBlockIOLoadTileSize(llEncoding, contiguousDim, elemSizeInBits,
-                             /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
+                             /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT,
+                             /*innerRowDimOnly=*/true);
 
   // For descriptor loads, the 2D block I/O tile must use only the inner 2
   // dims. Reject if rowDim or colDim falls in a batch dimension.
@@ -1112,15 +1132,18 @@ unsigned estimateLoadHWCost(RankedTensorType type, Operation *loadOp) {
 
   bool oneMatrixPerLoadForBT =
       loadOp->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
+  // Size the tile the way the lowering will: a descriptor load can only tile
+  // its inner two dims.
+  bool innerRowDimOnly = isa<triton::DescriptorLoadOp>(loadOp);
 
   if (!validate2DBlockLoadTile(ll, contiguousDim, elemSizeInBits, type,
                                oneMatrixPerLoadForBT,
-                               /*maskAxisInfo=*/nullptr))
+                               /*maskAxisInfo=*/nullptr, innerRowDimOnly))
     return estimateGatherCost(type);
 
-  BlockIOTileSizeInfo info =
-      getBlockIOLoadTileSize(ll, contiguousDim, elemSizeInBits,
-                             /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
+  BlockIOTileSizeInfo info = getBlockIOLoadTileSize(
+      ll, contiguousDim, elemSizeInBits,
+      /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT, innerRowDimOnly);
   if (!info.isValid())
     return estimateGatherCost(type);
 

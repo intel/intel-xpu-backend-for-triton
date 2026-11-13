@@ -467,3 +467,46 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: Rank-3 descriptor load whose lanes leave the row dim open. The two warps
+// COM: split dim 1, so its only register base has stride 2, while the batch dim
+// COM: owns a unit-stride one. A descriptor can only tile its inner two dims, so
+// COM: the row dim stays on dim 1 (one row per message) instead of moving to the
+// COM: batch dim, which would drop the load to the gather path.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 16], warpsPerCTA = [1, 2, 1], order = [2, 1, 0]}>
+module attributes {"ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_rank3_inner_row_dim
+  tt.func public @descriptor_load_rank3_inner_row_dim(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64, %arg6: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <2x4x16xf16>
+    // DPAS-LAYOUT-NOT: triton_gen.2Dblockload
+    // ALL-LAYOUT-COUNT-4: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 1, v_blocks = 1, transpose = false, vnni_transform = false, cache_control = Default}
+    // ALL-LAYOUT-NOT: triton_gen.2Dblockload
+    %load = tt.descriptor_load %desc[%arg6, %c0_i32, %c0_i32] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<2x4x16xf16> -> tensor<2x4x16xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Rank-3 descriptor load whose batch dim would give a taller tile (32
+// COM: rows) than the inner dim 1 (2 rows). A pointer load takes the batch dim;
+// COM: a descriptor can only tile its inner two dims, so it takes dim 1 and
+// COM: still lowers to 2D block reads.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 1, 16], warpsPerCTA = [1, 1, 4], order = [2, 0, 1]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @descriptor_load_rank3_taller_batch_dim
+  tt.func public @descriptor_load_rank3_taller_batch_dim(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64, %arg6: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <32x2x128xf16>
+    // DPAS-LAYOUT-NOT: triton_gen.2Dblockload
+    // ALL-LAYOUT-COUNT-32: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, tile_width = 16, tile_height = 2, v_blocks = 1, transpose = false, vnni_transform = false, cache_control = Default}
+    // ALL-LAYOUT-NOT: triton_gen.2Dblockload
+    %load = tt.descriptor_load %desc[%arg6, %c0_i32, %c0_i32] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<32x2x128xf16> -> tensor<32x2x128xf16, #blocked>
+    tt.return
+  }
+}

@@ -20,6 +20,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/Parser/Parser.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -379,6 +380,144 @@ TEST_F(BlockIOUtilsTest, TransposeRowDimIsMemContiguousDim_Rank3Blocked) {
   EXPECT_EQ(info2.rowDim, 1);
   EXPECT_EQ(info2.tileHeight, 16);
   EXPECT_EQ(info2.tileWidth, 1);
+}
+
+// When the lanes leave the row dimension open, it is the dimension whose
+// register bases give the tallest tile, not the innermost one that has a
+// unit-stride register base. Here dim 1 has one (height 2) and dim 0 has five
+// (height 32): preferring the inner dim needs 16x the messages.
+TEST_F(BlockIOUtilsTest, RowDimIsTallest_Rank3Blocked) {
+  auto cga = CGAEncodingAttr::get1CTALayout(&ctx, 3);
+  SmallVector<int64_t> shape = {32, 2, 128};
+  auto blocked = BlockedEncodingAttr::get(&ctx, /*sizePerThread=*/{1, 1, 2},
+                                          /*threadsPerWarp=*/{1, 1, 16},
+                                          /*warpsPerCTA=*/{1, 1, 4},
+                                          /*order=*/{2, 0, 1}, cga);
+  auto ll = cast<DistributedEncodingTrait>(blocked).toLinearLayout(shape);
+  auto info = getBlockIOLoadTileSize(ll, /*memContiguousDim=*/2,
+                                     /*elemSizeInBits=*/16, nullptr, false);
+  ASSERT_TRUE(info.isValid());
+  EXPECT_FALSE(info.transpose);
+  EXPECT_EQ(info.rowDim, 0);
+  EXPECT_EQ(info.colDim, 2);
+  EXPECT_EQ(info.tileHeight, 32);
+
+  // The choice is by geometry, so listing the register bases differently does
+  // not change it.
+  auto reversed = getBlockIOLoadTileSize(reverseRegisterBases(ll),
+                                         /*memContiguousDim=*/2,
+                                         /*elemSizeInBits=*/16, nullptr, false);
+  ASSERT_TRUE(reversed.isValid());
+  EXPECT_EQ(reversed.rowDim, 0);
+  EXPECT_EQ(reversed.tileHeight, 32);
+
+  // A descriptor load can only tile its inner two dims, so it gets dim 1.
+  auto inner = getBlockIOLoadTileSize(ll, /*memContiguousDim=*/2,
+                                      /*elemSizeInBits=*/16, nullptr, false,
+                                      /*innerRowDimOnly=*/true);
+  ASSERT_TRUE(inner.isValid());
+  EXPECT_EQ(inner.rowDim, 1);
+  EXPECT_EQ(inner.tileHeight, 2);
+}
+
+// innerRowDimOnly keeps the row dimension off the batch dim even when the
+// inner dim cannot grow at all. The warps split dim 1, so its only register
+// base has stride 2, and the batch dim owns the unit-stride one.
+TEST_F(BlockIOUtilsTest, InnerRowDimOnly_Rank3Blocked) {
+  auto cga = CGAEncodingAttr::get1CTALayout(&ctx, 3);
+  SmallVector<int64_t> shape = {2, 4, 16};
+  auto blocked = BlockedEncodingAttr::get(&ctx, /*sizePerThread=*/{1, 1, 1},
+                                          /*threadsPerWarp=*/{1, 1, 16},
+                                          /*warpsPerCTA=*/{1, 2, 1},
+                                          /*order=*/{2, 1, 0}, cga);
+  auto ll = cast<DistributedEncodingTrait>(blocked).toLinearLayout(shape);
+  auto f16 = Float16Type::get(&ctx);
+  auto tensorType = RankedTensorType::get(shape, f16, blocked);
+
+  // A pointer load can tile across the batch dim.
+  auto info = getBlockIOLoadTileSize(ll, /*memContiguousDim=*/2,
+                                     /*elemSizeInBits=*/16, nullptr, false);
+  ASSERT_TRUE(info.isValid());
+  EXPECT_EQ(info.rowDim, 0);
+  EXPECT_EQ(info.tileHeight, 2);
+
+  auto inner = getBlockIOLoadTileSize(ll, /*memContiguousDim=*/2,
+                                      /*elemSizeInBits=*/16, nullptr, false,
+                                      /*innerRowDimOnly=*/true);
+  ASSERT_TRUE(inner.isValid());
+  EXPECT_EQ(inner.rowDim, 1);
+  EXPECT_EQ(inner.tileHeight, 1);
+  EXPECT_TRUE(validate2DBlockLoadTile(ll, /*memContiguousDim=*/2,
+                                      /*elemSizeInBits=*/16, tensorType,
+                                      /*oneMatrixPerLoadForBT=*/false,
+                                      /*maskAxisInfo=*/nullptr,
+                                      /*innerRowDimOnly=*/true));
+}
+
+// The mask bounds how tall each candidate row dim can grow, so it takes part
+// in the choice. Same layout as RowDimIsTallest_Rank3Blocked, where dim 0
+// wins without a mask.
+TEST_F(BlockIOUtilsTest, RowDimIsTallestUnderMask_Rank3Blocked) {
+  auto cga = CGAEncodingAttr::get1CTALayout(&ctx, 3);
+  SmallVector<int64_t> shape = {32, 2, 128};
+  auto blocked = BlockedEncodingAttr::get(&ctx, /*sizePerThread=*/{1, 1, 2},
+                                          /*threadsPerWarp=*/{1, 1, 16},
+                                          /*warpsPerCTA=*/{1, 1, 4},
+                                          /*order=*/{2, 0, 1}, cga);
+  auto ll = cast<DistributedEncodingTrait>(blocked).toLinearLayout(shape);
+
+  // A mask constant over only 2 rows of dim 0 caps it at dim 1's height, and
+  // on a tie the inner dim wins.
+  AxisInfo capped(/*contiguity=*/{1, 1, 1}, /*divisibility=*/{1, 1, 1},
+                  /*constancy=*/{2, 2, 128});
+  auto info = getBlockIOLoadTileSize(ll, /*memContiguousDim=*/2,
+                                     /*elemSizeInBits=*/16, &capped, false);
+  ASSERT_TRUE(info.isValid());
+  EXPECT_EQ(info.rowDim, 1);
+  EXPECT_EQ(info.tileHeight, 2);
+
+  // A dim whose mask constancy is not a power of 2 cannot be the row dim, so
+  // it is passed over rather than rejecting the whole tile. Here no other dim
+  // grows either, and the tile is one row tall.
+  AxisInfo nonPow2(/*contiguity=*/{1, 1, 1}, /*divisibility=*/{1, 1, 1},
+                   /*constancy=*/{3, 1, 128});
+  auto info2 = getBlockIOLoadTileSize(ll, /*memContiguousDim=*/2,
+                                      /*elemSizeInBits=*/16, &nonPow2, false);
+  ASSERT_TRUE(info2.isValid());
+  EXPECT_EQ(info2.rowDim, 1);
+  EXPECT_EQ(info2.tileHeight, 1);
+}
+
+// The cost model sizes a descriptor load's tile on the inner two dims, as its
+// lowering does, while a pointer load of the same type tiles across the batch
+// dim. Layout as in InnerRowDimOnly_Rank3Blocked.
+TEST_F(BlockIOUtilsTest, EstimateLoadHWCost_DescriptorTilesInnerDims) {
+  ctx.getOrLoadDialect<TritonDialect>();
+  const char *ir = R"mlir(
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 16], warpsPerCTA = [1, 2, 1], order = [2, 1, 0]}>
+module attributes {"ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @f(%desc: !tt.tensordesc<2x4x16xf16>, %ptrs: tensor<2x4x16x!tt.ptr<f16>, #blocked>, %i: i32) {
+    %0 = tt.descriptor_load %desc[%i, %i, %i] {ttig.block_io = "row_major"} : !tt.tensordesc<2x4x16xf16> -> tensor<2x4x16xf16, #blocked>
+    %1 = tt.load %ptrs {ttig.block_io = "row_major"} : tensor<2x4x16x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+})mlir";
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(ir, &ctx);
+  ASSERT_TRUE(module);
+  DescriptorLoadOp descLoad;
+  LoadOp ptrLoad;
+  module->walk([&](DescriptorLoadOp op) { descLoad = op; });
+  module->walk([&](LoadOp op) { ptrLoad = op; });
+  ASSERT_TRUE(descLoad && ptrLoad);
+
+  // The 4 rows of dim 1, one per message.
+  EXPECT_EQ(
+      estimateLoadHWCost(cast<RankedTensorType>(descLoad.getType()), descLoad),
+      4u);
+  // The 2 rows of the batch dim in one message.
+  EXPECT_EQ(
+      estimateLoadHWCost(cast<RankedTensorType>(ptrLoad.getType()), ptrLoad),
+      1u);
 }
 
 // Test that validate2DBlockLoadTile accepts a column-major B matrix load with
