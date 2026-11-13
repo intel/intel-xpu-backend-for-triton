@@ -7,7 +7,6 @@
 
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/CallGraph.h"
-#include "triton/Analysis/DataFlowCompat.h"
 #include "triton/Analysis/Utility.h"
 
 #include <algorithm>
@@ -214,23 +213,21 @@ private:
   std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
 };
 
-class AxisInfoAnalysis
-    : public SparseForwardDataFlowAnalysisCompat<dataflow::Lattice<AxisInfo>> {
+class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
+                             dataflow::Lattice<AxisInfo>> {
 protected:
   AxisInfoVisitorList visitors;
 
   void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override;
 
-  void visitNonSuccessorInputs(
+  void visitNonControlFlowArguments(
       Operation *op, const RegionSuccessor & /*successor*/,
       ValueRange /*nonSuccessorInputs*/,
-      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices,
-      GetLatticeFn getLattice) override;
+      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) override;
 
   void
   visitForOpInductionVar(scf::ForOp op,
-                         ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices,
-                         GetLatticeFn getLattice);
+                         ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
 
 public:
   AxisInfoAnalysis(DataFlowSolver &solver);
