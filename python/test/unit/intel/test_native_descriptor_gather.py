@@ -1,6 +1,7 @@
-"""Native descriptor gathers (#8666) on XPU: a gather on a zero-padded device-side descriptor stays a
-ttig.descriptor_gather, reads zero out of bounds, and emits the same global loads as the pointer expansion
-(TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1). The reduction kernel has the vLLM paged-KV layout.
+"""Native descriptor gathers (#8666) on XPU: a gather with a constant zero column offset and a 16-byte-aligned
+row access stays a ttig.descriptor_gather, reads zero out of bounds, and emits the same global loads as the pointer
+expansion (TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1); any other gather is expanded exactly as with that
+switch. The reduction kernel has the vLLM paged-KV layout.
 """
 
 import os
@@ -27,30 +28,42 @@ def _allocator(device):
 
 
 @triton.jit
-def _gather_store(out_ptr, in_ptr, idx_ptr, y, X, Y, BLOCK_X: tl.constexpr, BLOCK_Y: tl.constexpr):
+def _gather_store(out_ptr, in_ptr, idx_ptr, y, X, Y, BLOCK_X: tl.constexpr, BLOCK_Y: tl.constexpr,
+                  Y0: tl.constexpr = False):
     idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
     desc = tl.make_tensor_descriptor(in_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
-    out = desc.gather(idx, y)
+    out = desc.gather(idx, 0 if Y0 else y)
     tl.store(out_ptr + tl.arange(0, BLOCK_X)[:, None] * BLOCK_Y + tl.arange(0, BLOCK_Y)[None, :], out)
 
 
 @triton.jit
-def _gather_reduce(out_ptr, in_ptr, idx_ptr, w_ptr, y, X, Y, BLOCK_X: tl.constexpr, BLOCK_Y: tl.constexpr):
+def _gather_reduce(out_ptr, in_ptr, idx_ptr, w_ptr, y, X, Y, BLOCK_X: tl.constexpr, BLOCK_Y: tl.constexpr,
+                   Y0: tl.constexpr = False):
     idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
     w = tl.load(w_ptr + tl.arange(0, BLOCK_Y))
     desc = tl.make_tensor_descriptor(in_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
-    g = desc.gather(idx, y)
+    g = desc.gather(idx, 0 if Y0 else y)
     tl.store(out_ptr + tl.arange(0, BLOCK_X), tl.sum(g.to(tl.float32) * w[None, :], 1))
 
 
 @triton.jit
 def _gather_dot(out_ptr, a_ptr, b_ptr, idx_ptr, y, X, K, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
-                BLOCK_K: tl.constexpr):
+                BLOCK_K: tl.constexpr, Y0: tl.constexpr = False):
     idx = tl.load(idx_ptr + tl.arange(0, BLOCK_M))
     a_desc = tl.make_tensor_descriptor(a_ptr, [X, K], [K, 1], [1, BLOCK_K])
-    a = a_desc.gather(idx, y)
+    a = a_desc.gather(idx, 0 if Y0 else y)
     b = tl.load(b_ptr + tl.arange(0, BLOCK_K)[:, None] * BLOCK_N + tl.arange(0, BLOCK_N)[None, :])
     tl.store(out_ptr + tl.arange(0, BLOCK_M)[:, None] * BLOCK_N + tl.arange(0, BLOCK_N)[None, :], tl.dot(a, b))
+
+
+@triton.jit
+def _gather_hint(out_ptr, in_ptr, idx_ptr, X, w_ptr, P, HINT: tl.constexpr, BLOCK_X: tl.constexpr,
+                 BLOCK_Y: tl.constexpr):
+    # multiple_of drops a hint on a kernel argument, so the hinted extent is a loaded scalar.
+    idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
+    desc = tl.make_tensor_descriptor(in_ptr, [X, tl.multiple_of(tl.load(w_ptr), HINT)], [P, 1], [1, BLOCK_Y])
+    out = desc.gather(idx, 0)
+    tl.store(out_ptr + tl.arange(0, BLOCK_X)[:, None] * BLOCK_Y + tl.arange(0, BLOCK_Y)[None, :], out)
 
 
 def _gather_ref(src, idx, y, block_y):
@@ -100,23 +113,32 @@ def _load_widths(llir):
     return widths
 
 
-def _launch_arms(kernel, monkeypatch, aligned, *args, **kwargs):
-    """Launch `kernel` natively and, if the gather is `aligned`, check it emits the same multiset of global load
-    widths as a separate JITFunction compiled, not launched, with the pointer expansion. Coalesce sizes a
-    descriptor's layout without the alignment proof the pointer form gets, so the two only match when aligned."""
+def _launch_arms(kernel, monkeypatch, admitted, *args, **kwargs):
+    """Launch `kernel` natively and compare it with a separate JITFunction compiled, not launched, with the pointer
+    expansion: an admitted gather stays native with the same multiset of global load widths, and a rejected one
+    compiles to the pointer arm's TTGIR."""
     monkeypatch.setenv(ENV, "1")
     pointer = triton.jit(kernel.fn).warmup(*args, grid=(1, ), **kwargs)
     monkeypatch.delenv(ENV)
     native = kernel[(1, )](*args, **kwargs)
     assert "ttig.descriptor_gather" not in pointer.asm["ttgir"]
-    if aligned:
+    if admitted:
+        _check_native(native)
         assert _load_widths(native.asm["llir"]) == _load_widths(pointer.asm["llir"])
+    else:
+        assert native.asm["ttgir"] == pointer.asm["ttgir"]
     return native
 
 
 def _aligned(y, src):
     """Launch specialization proves alignment only for a y and a row pitch that are multiples of 16."""
     return y % 16 == 0 and src.shape[1] % 16 == 0
+
+
+def _admitted(y0, src):
+    """The admission rule for these 16-bit kernels: a constexpr y = 0 and a pitch and shape (both src.shape[1])
+    that launch specialization proves are multiples of 16 elements."""
+    return y0 and src.shape[1] % 16 == 0
 
 
 def _check_native(kernel):
@@ -131,43 +153,58 @@ def _check_native(kernel):
 
 
 CASES = ["in_bounds", "rows", "i16_negative", "cols_straddle", "cols_negative", "cols_negative_aligned", "cols_partial"]
+# Every case with a runtime y, and the y = 0 cases again with a constexpr y.
+ARMS = [(c, False) for c in CASES] + [(c, True) for c in ["in_bounds", "rows", "i16_negative", "cols_partial"]]
 
 
-@pytest.mark.parametrize("case", CASES)
-def test_gather_store(case, device, monkeypatch):
+@pytest.mark.parametrize("case, y0", ARMS)
+def test_gather_store(case, y0, device, monkeypatch):
     src, idx, y = _make_case(case, 32, 128, torch.float16, device)
     out = torch.full((32, 128), 7.0, device=device, dtype=src.dtype)
-    k = _launch_arms(_gather_store, monkeypatch, _aligned(y, src), out, src, idx, y, src.shape[0], src.shape[1], 32,
-                     128, num_warps=4)
-    _check_native(k)
+    k = _launch_arms(_gather_store, monkeypatch, _admitted(y0, src), out, src, idx, y, src.shape[0], src.shape[1], 32,
+                     128, Y0=y0, num_warps=4)
     assert (16 in _load_widths(k.asm["llir"])) == _aligned(y, src)
-    torch.testing.assert_close(out, _gather_ref(src, idx, y, 128), atol=0, rtol=0)
+    assert torch.equal(out.view(torch.int16), _gather_ref(src, idx, y, 128).view(torch.int16))
 
 
-@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("case, y0", ARMS)
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-def test_gather_reduce_vllm_layout(case, dtype, device, monkeypatch):
+def test_gather_reduce_vllm_layout(case, y0, dtype, device, monkeypatch):
     src, idx, y = _make_case(case, 64, 128, dtype, device)
     w = torch.randn(128, device=device)
     out = torch.empty(64, device=device)
-    k = _launch_arms(_gather_reduce, monkeypatch, _aligned(y, src), out, src, idx, w, y, src.shape[0], src.shape[1], 64,
-                     128, num_warps=4)
-    _check_native(k)
+    _launch_arms(_gather_reduce, monkeypatch, _admitted(y0, src), out, src, idx, w, y, src.shape[0], src.shape[1], 64,
+                 128, Y0=y0, num_warps=4)
     ref = (_gather_ref(src, idx, y, 128).float() * w[None, :]).sum(1)
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-3)
 
 
-@pytest.mark.parametrize("case", CASES)
-def test_gather_dot(case, device, monkeypatch):
+@pytest.mark.parametrize("case, y0", ARMS)
+def test_gather_dot(case, y0, device, monkeypatch):
     a, idx, y = _make_case(case, 64, 32, torch.float16, device)
     b = torch.randn(32, 64, device=device, dtype=torch.float16)
     out = torch.empty(64, 64, device=device)
-    k = _launch_arms(_gather_dot, monkeypatch, _aligned(y, a), out, a, b, idx, y, a.shape[0], a.shape[1], 64, 64, 32,
-                     num_warps=4)
-    _check_native(k)
+    k = _launch_arms(_gather_dot, monkeypatch, _admitted(y0, a), out, a, b, idx, y, a.shape[0], a.shape[1], 64, 64, 32,
+                     Y0=y0, num_warps=4)
     assert "lsc_load.ugm" not in k.asm["llir"]
     ref = _gather_ref(a, idx, y, 32).float() @ b.float()
     torch.testing.assert_close(out, ref, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize("width, hint, block_y", [(24, 24, 64), (20, 20, 16), (0, 16, 64)])
+def test_gather_shape_hint(width, hint, block_y, device):
+    """Admitted shapes whose divisor is not a power of two (24), is clamped by the block (20 in 16), or is maximal
+    (an empty row): rows load as 16-byte chunks, none of which straddles the extent."""
+    torch.manual_seed(0)
+    src = torch.randn(128, 64, device=device, dtype=torch.bfloat16)
+    idx = torch.randperm(128, device=device)[:64].to(torch.int32)
+    out = torch.full((64, block_y), 7.0, device=device, dtype=src.dtype)
+    w = torch.tensor([width], device=device, dtype=torch.int32)
+    k = _gather_hint[(1, )](out, src, idx, 128, w, 64, hint, 64, block_y, num_warps=4)
+    _check_native(k)
+    assert 16 in _load_widths(k.asm["llir"])
+    ref = _gather_ref(src[:, :width], idx, 0, block_y) if width else torch.zeros_like(out)
+    assert torch.equal(out.view(torch.int16), ref.view(torch.int16))
 
 
 # Hand-written TTGIR pins a layout the frontend does not reliably produce: vectorized lanes spanning rows.
@@ -177,7 +214,7 @@ _TTGIR = """
 #sy = #ttg.slice<{{dim = 0, parent = #blocked}}>
 module attributes {{{attrs}}} {{
   tt.func public @gather_rows(%in: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %idxp: !tt.ptr<i32> {{tt.divisibility = 16 : i32}},
-                              %out: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
+                              %out: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}{yarg}) {{
     %c0 = arith.constant 0 : i32
     %c256 = arith.constant 256 : i32
     %c64 = arith.constant 64 : i32
@@ -190,7 +227,7 @@ module attributes {{{attrs}}} {{
     %ip = tt.splat %idxp : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #sx>
     %ipp = tt.addptr %ip, %r : tensor<32x!tt.ptr<i32>, #sx>, tensor<32xi32, #sx>
     %idx = tt.load %ipp : tensor<32x!tt.ptr<i32>, #sx>
-    %g = ttig.descriptor_gather %desc[%idx, %c0] : (!tt.tensordesc<1x64xf16>, tensor<32xi32, #sx>, i32) -> tensor<32x64xf16, #blocked>
+    %g = ttig.descriptor_gather %desc[%idx, {y}] : (!tt.tensordesc<1x64xf16>, tensor<32xi32, #sx>, i32) -> tensor<32x64xf16, #blocked>
     %rows = tt.expand_dims %r {{axis = 1 : i32}} : tensor<32xi32, #sx> -> tensor<32x1xi32, #blocked>
     %rowoff = arith.muli %rows, %c64t : tensor<32x1xi32, #blocked>
     %cols = tt.expand_dims %cr {{axis = 0 : i32}} : tensor<64xi32, #sy> -> tensor<1x64xi32, #blocked>
@@ -211,19 +248,23 @@ def _copy16(in_ptr, out_ptr):
     tl.store(out_ptr + tl.arange(0, 16), tl.load(in_ptr + tl.arange(0, 16)))
 
 
-def test_gather_ttgir_lanes_on_rows(device, tmp_path):
+@pytest.mark.parametrize("y", [None, 6, -3])
+def test_gather_ttgir_lanes_on_rows(y, device, tmp_path):
+    """A constant y = 0 loads 4-element chunks; a runtime y, here straddling the row end or starting before it,
+    loads one element at a time."""
     x = torch.zeros(16, device=device)
     attrs = re.search(r"^module attributes \{(.*)\} \{$", _copy16[(1, )](x, x).asm["ttgir"], re.M).group(1)
     attrs = re.sub(r'"ttg.threads-per-warp" = \d+', '"ttg.threads-per-warp" = 16', attrs)
     path = tmp_path / "gather.ttgir"
-    path.write_text(_TTGIR.format(attrs=attrs))
+    path.write_text(_TTGIR.format(attrs=attrs, yarg="" if y is None else ", %y: i32", y="%c0" if y is None else "%y"))
     k = triton.compile(str(path), options={"warp_size": 16, "num_warps": 4})
-    assert "lsc_load.ugm" not in k.asm["llir"] and 8 in _load_widths(k.asm["llir"])
+    widths = _load_widths(k.asm["llir"])
+    assert "lsc_load.ugm" not in k.asm["llir"] and (8 if y is None else 2) in widths and (8 in widths) == (y is None)
     torch.manual_seed(0)
     src = torch.randn(256, 64, device=device, dtype=torch.float16)
     idx = torch.randperm(256, device=device)[:32].to(torch.int32)
     idx[1::4] = 256 + torch.arange(8, device=device, dtype=torch.int32)  # valid, above and negative rows
     idx[3::4] = -1 - torch.arange(8, device=device, dtype=torch.int32)
     out = torch.full((32, 64), 7.0, device=device, dtype=torch.float16)
-    k[(1, 1, 1)](src, idx, out)
-    torch.testing.assert_close(out, _gather_ref(src, idx, 0, 64), atol=0, rtol=0)
+    k[(1, 1, 1)](src, idx, out, *([] if y is None else [y]))
+    assert torch.equal(out.view(torch.int16), _gather_ref(src, idx, y or 0, 64).view(torch.int16))
