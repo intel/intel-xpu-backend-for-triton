@@ -12,7 +12,6 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "mlir/Support/LLVM.h"
-#include "triton/Analysis/DataFlowCompat.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -754,11 +753,8 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
         appendRange(firstIndex + inputs.size(), allInputs.size());
 
         if (!nonSuccessorInputs.empty())
-          triton::callVisitNonControlFlowArguments<
-              dataflow::IntegerValueRangeLattice>(
-              *this, branch, successor, nonSuccessorInputs,
-              nonSuccessorLattices,
-              [&](Value value) { return getLatticeElementFor(point, value); });
+          visitNonControlFlowArguments(branch, successor, nonSuccessorInputs,
+                                       nonSuccessorLattices);
       };
 
       if (successor.isOperation()) {
