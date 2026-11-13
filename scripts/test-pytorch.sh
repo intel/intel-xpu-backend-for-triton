@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+if [[ $# -eq 0 ]]; then
+    echo "Usage: $0 TEST_FILE..." >&2
+    exit 1
+fi
+
 # Provides the `pip` wrapper (pip or `uv pip`).
 source "$(dirname "$0")/pip-utils.sh"
 
@@ -11,14 +16,8 @@ pip install -r .ci/docker/requirements-ci.txt
 export
 
 test_cmd="python test/run_test.py --keep-going --include "
-if [[ "${1:-all}" = "all" ]]; then
-    for test in $(ls test/inductor | grep test); do
-        test_cmd="${test_cmd} inductor/$test"
-    done
-else
-    for test in "$@"; do
-        test_cmd="${test_cmd} $test"
-    done
-fi
+for test in "$@"; do
+    test_cmd="${test_cmd} $test"
+done
 
 eval $test_cmd
