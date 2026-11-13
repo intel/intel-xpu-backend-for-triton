@@ -421,8 +421,38 @@ def get_unified_attention_benchmark(
             atol, rtol = 2.5e-2, 1e-2
             if qdtype is not None:
                 atol, rtol = 3 / 8 + 1e-6, 1.5e-1
-            benchmark_suite.assert_close(triton_fn, lambda: expected_output, atol=atol, rtol=rtol,
-                                         err_msg=f'{provider} to torch {shape}')
+            try:
+                benchmark_suite.assert_close(triton_fn, lambda: expected_output, atol=atol, rtol=rtol,
+                                             err_msg=f'{provider} to torch {shape}')
+            except AssertionError:
+                # DIAGNOSTICS for #8742 (throwaway, not for merge): which side is wrong?
+                try:
+
+                    def _nbad(a, b):
+                        return int((~torch.isclose(a.float().cpu(), b.float().cpu(), atol=atol, rtol=rtol,
+                                                   equal_nan=True)).sum())
+
+                    def _h01(t):
+                        return float((t[0, 0].float() - t[0, 1].float()).abs().max())
+
+                    triton_out = output.clone()
+                    ref_again = torch_fn()
+                    with torch.device('cpu'):
+                        ref_cpu = ref_paged_attn(query=query.float().cpu(), key_cache=key_cache.float().cpu(),
+                                                 value_cache=value_cache.float().cpu(), query_lens=query_lens,
+                                                 kv_lens=kv_lens, block_tables=block_tables.cpu(), scale=scale,
+                                                 sliding_window=sliding_window, soft_cap=soft_cap)
+                    print(
+                        f"DIAG8742 {provider} {shape}: triton_vs_xpuref={_nbad(triton_out, expected_output)} "
+                        f"triton_vs_xpuref2={_nbad(triton_out, ref_again)} "
+                        f"xpuref_vs_xpuref2={_nbad(expected_output, ref_again)} "
+                        f"triton_vs_cpu32={_nbad(triton_out, ref_cpu)} xpuref_vs_cpu32={_nbad(expected_output, ref_cpu)} "
+                        f"xpuref2_vs_cpu32={_nbad(ref_again, ref_cpu)} token0_head0_vs_head1: "
+                        f"triton={_h01(triton_out)} xpuref={_h01(expected_output)} xpuref2={_h01(ref_again)} "
+                        f"cpu32={_h01(ref_cpu)}", flush=True)
+                except Exception as diag_err:  # pylint: disable=broad-except
+                    print(f"DIAG8742 failed: {type(diag_err).__name__}: {diag_err}", flush=True)
+                raise
             del expected_output
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
