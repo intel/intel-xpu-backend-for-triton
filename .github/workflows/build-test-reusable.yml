@@ -290,6 +290,7 @@ jobs:
           skiplist-name: regression
           pytest-targets: . --ignore=test_performance.py
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+          capture-workers: 4
 
       - name: Warm language compile cache
         uses: ./.github/actions/warm-compile-cache
@@ -302,6 +303,7 @@ jobs:
             --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py
             -k "not test_mxfp and not test_scaled_dot"
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+          capture-workers: 4
 
       - name: Warm matmul compile cache
         uses: ./.github/actions/warm-compile-cache
@@ -312,6 +314,7 @@ jobs:
             language/test_matmul.py
             -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 or test_mxfp8_mxfp4_matmul"
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+          capture-workers: 4
 
       - name: Warm scaled_dot compile cache
         uses: ./.github/actions/warm-compile-cache
@@ -320,6 +323,7 @@ jobs:
           skiplist-name: scaled_dot
           pytest-targets: language/test_core.py -k "test_scaled_dot"
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+          capture-workers: 4
 
       - name: Warm gluon compile cache
         if: inputs.driver_version == 'rolling'
@@ -329,6 +333,7 @@ jobs:
           skiplist-name: gluon
           pytest-targets: .
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+          capture-workers: 4
 
       - name: Warm Triton Kernels compile cache
         uses: ./.github/actions/warm-compile-cache
@@ -337,6 +342,7 @@ jobs:
           skiplist-name: triton_kernels
           pytest-targets: tests -k 'not test_mxfp'
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+          capture-workers: 4
 
       - name: Warm Flash Attention tutorials compile cache
         uses: ./.github/actions/warm-compile-cache
@@ -345,6 +351,7 @@ jobs:
           skiplist-name: tutorials
           pytest-targets: test_tutorials.py --tutorial06-mode fa_only
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+          capture-workers: 4
 
       # The cache directory is recorded in the compile trace, the test jobs rewrite it to their own.
       - name: Collect compile cache
