@@ -349,6 +349,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # block-store rows reach L2 as partial writes; such rows are written back through L1 instead. Only measured
         # parts are listed: LNL and PVC bypass L1 too. Keyed on `device_arch`: Inductor's targets lack the "arch" key.
         dev_prop['l1_store_write_bypass'] = tgt_prop.get('l1_store_write_bypass', self.device_arch == "bmg")
+        dev_prop['block_io_pitch_alignment'] = tgt_prop.get('block_io_pitch_alignment',
+                                                            4 if self.device_arch == "cri" else 16)
+        if dev_prop['block_io_pitch_alignment'] not in (4, 16):
+            raise ValueError("block_io_pitch_alignment must be 4 or 16 bytes")
         dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
         # MHz from torch.xpu.get_device_capability(). A missing key (0) leaves the prefetch cost model inert,
         # so loops keep every prefetch; kXe2Discrete is calibrated against the reported value (19000 on the B580).
@@ -479,6 +483,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         codegen_fns = {}
         codegen_fns["convert_custom_types"] = convert_custom_float8
         codegen_fns["min_dot_size"] = self.min_dot_size(self.properties)
+        codegen_fns["tensor_descriptor_pitch_alignment"] = lambda: self.properties["block_io_pitch_alignment"]
         return codegen_fns
 
     def get_module_map(self) -> Dict[str, ModuleType]:
@@ -544,11 +549,15 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.store_l1_write_back = (properties["l1_store_write_bypass"]
                                            and not knobs.intel.disable_store_l1_write_back)
         module_opts.block_io_base_alignment = properties["block_io_base_alignment"]
+        module_opts.block_io_pitch_alignment = properties["block_io_pitch_alignment"]
         module_opts.max_grf_mode = opt.max_grf_mode
 
     @classmethod
     @track
-    def make_ttir(cls, mod, metadata, opt):
+    def make_ttir(cls, mod, metadata, opt, properties):
+        # FuseReshape checks surface pitches before the TTGIR annotation pass.
+        mod.set_attr("ttig.2d_block_io_pitch_alignment",
+                     ir.builder(mod.context).get_int32_attr(properties["block_io_pitch_alignment"]))
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
@@ -962,7 +971,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     def add_stages(self, stages, options, language):
         if language == Language.TRITON:
-            stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
+            stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options, self.properties)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         elif language == Language.GLUON:
             stages["glir"] = lambda src, metadata: src
