@@ -137,3 +137,5 @@ jobs:
       run_name: ${{ inputs.run_name }}
       enable_unskip: ${{ inputs.enable_unskip || false }}
       use_pyenv_python: ${{ inputs.use_pyenv_python || false }}
+      # PVC only for now: the default runner is Max 1100
+      warmup_on_cpu: ${{ inputs.runner_label == '' }}

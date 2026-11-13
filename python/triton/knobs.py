@@ -624,6 +624,10 @@ class intel_knobs(base_knobs):
     # the actual device extensions.
     device_extensions: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_EXTENSIONS")
     device_arch: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_ARCH")
+    # Path to a JSON file written by `scripts/dump_xpu_target.py` on a machine with the GPU. When set, the
+    # driver reports that device without touching any hardware, so kernels can be compiled (e.g. to pre-warm
+    # the compile cache) on a runner that has no GPU. Launching kernels is not supported in this mode.
+    target_json: env_opt_str = env_opt_str("TRITON_INTEL_TARGET_JSON")
     # SYCL compiler Triton needs to be compatible with when generating kernel launchers
     sycl_compiler: env_opt_str = env_opt_str("TRITON_INTEL_SYCL_COMPILER")
     # Allocate shared (work-group) memory dynamically, as an extra kernel argument bound

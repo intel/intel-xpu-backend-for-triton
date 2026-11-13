@@ -19,6 +19,41 @@ _AMBIENT_GEN_NATIVE_CODE = triton.knobs.intel.gen_native_code
 _NO_OVERRIDE = object()
 
 
+def _basic_getitem(tensor, index):
+    """`tensor[index]` for ints, slices, `None` and `...` built from views, or None for any other index.
+
+    `Tensor.__getitem__` takes a device guard in C++ that fails when no device is visible, even for a fake
+    tensor, while `select`/`narrow`/`unsqueeze` do not.
+    """
+    index = index if isinstance(index, tuple) else (index, )
+    is_int = lambda item: isinstance(item, int) and not isinstance(item, bool)
+    if not all(item is None or item is Ellipsis or isinstance(item, slice) or is_int(item) for item in index):
+        return None
+    if sum(item is Ellipsis for item in index) > 1:
+        return None
+    consumed = sum(isinstance(item, slice) or is_int(item) for item in index)
+    if consumed > tensor.dim():
+        return None
+    result, dim = tensor, 0
+    for item in index:
+        if item is None:
+            result = result.unsqueeze(dim)
+            dim += 1
+        elif item is Ellipsis:
+            dim += tensor.dim() - consumed
+        elif isinstance(item, slice):
+            start, stop, step = item.indices(result.shape[dim])
+            if step < 1:
+                return None
+            result = result.narrow(dim, start, max(0, stop - start))
+            if step > 1:
+                result = result.unfold(dim, 1, step).squeeze(-1)
+            dim += 1
+        else:
+            result = result.select(dim, item)
+    return result
+
+
 class _FakeCudaTensorMode(TorchFunctionMode):
     """Preserve CUDA allocation alignment and view offsets in fake pointers."""
 
@@ -49,6 +84,41 @@ class _FakeCudaTensorMode(TorchFunctionMode):
 
     def __torch_function__(self, func, types, args=(), kwargs=None):
         name = getattr(func, "__name__", "")
+        # `torch.tensor(data, device=...)` takes a device guard in C++ before the fake mode can intercept it, which
+        # allocates on (or, without a GPU, aborts for) the real device, and so does copying a real tensor there.
+        # Warmup never reads the values, so build only the metadata on the CPU and return an empty fake tensor.
+        if name in ("tensor", "as_tensor") and kwargs and kwargs.get("device") is not None:
+            device = kwargs["device"]
+            if torch.device(device).type != "cpu":
+                host = func(*args, **{**kwargs, "device": None})
+                return torch.empty(host.shape, dtype=host.dtype, device=device)
+        if name == "__getitem__" and len(args) == 2 and isinstance(args[0], self.fake_tensor_type):
+            result = _basic_getitem(args[0], args[1])
+            if result is not None:
+                return result
+        # Writes into a fake tensor cannot matter, as the values are never read, and these two take a device guard.
+        if name in ("__setitem__", "copy_") and isinstance(args[0], self.fake_tensor_type):
+            return args[0] if name == "copy_" else None
+        # Moving to an accelerator copies under a device guard too; a no-op move returns the tensor itself.
+        if name == "to" and isinstance(args[0], torch.Tensor):
+            device, dtype = (kwargs or {}).get("device"), (kwargs or {}).get("dtype")
+            for argument in args[1:]:
+                if isinstance(argument, torch.dtype):
+                    dtype = argument
+                elif isinstance(argument, (str, torch.device)):
+                    device = argument
+                elif isinstance(argument, torch.Tensor):
+                    device, dtype = argument.device, argument.dtype
+            if device is not None and torch.device(device).type != "cpu":
+                device = torch.device(device)
+                tensor = args[0]
+                if (tensor.device.type == device.type and device.index in (None, tensor.device.index)
+                        and dtype in (None, tensor.dtype)):
+                    return tensor
+                return torch.empty_strided(tensor.shape, tensor.stride(), dtype=dtype or tensor.dtype, device=device)
+        # Same device guard problem: a non-contiguous tensor is copied under one.
+        if name == "contiguous" and isinstance(args[0], self.fake_tensor_type) and not args[0].is_contiguous():
+            return args[0].clone(memory_format=(kwargs or {}).get("memory_format", torch.contiguous_format))
         if name == "data_ptr":
             tensor = args[0]
             storage = tensor.untyped_storage()
