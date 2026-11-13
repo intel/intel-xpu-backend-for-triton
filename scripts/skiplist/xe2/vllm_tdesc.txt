@@ -560,6 +560,6 @@ tests/kernels/moe/test_moe_layer.py::test_moe_layer[True-allgather_reducescatter
 # Upstream source-sync test compares kernel.fn sources, but batched_moe.patch autotunes/constexpr-ifies only the swapped kernel (.fn is a JITFunction): https://github.com/intel/intel-xpu-backend-for-triton/issues/8591
 tests/kernels/moe/test_batched_moe.py::test_swapped_kernel_matches_original_source
 
-# Wrong results (~0.0-1.2% of elements) on B60 CI at the largest M with the tuned Arc Pro B60 config (BLOCK_SIZE_M=256) added by the pin (#46871); same cases as in vllm_moe.txt, passes on B580 locally, same wrong-results pattern as https://github.com/intel/intel-xpu-backend-for-triton/issues/8742
+# Wrong results on B60 for the two largest-M test_fused_moe cases: https://github.com/intel/intel-xpu-backend-for-triton/issues/8811
 tests/kernels/moe/test_moe.py::test_fused_moe[True-False-dtype0-4-6-8-32768-2048-511]
 tests/kernels/moe/test_moe.py::test_fused_moe[True-False-dtype0-4-6-8-40000-1024-1024]
