@@ -7,7 +7,6 @@
 #include "mlir/IR/Iterators.h"
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "triton/Analysis/DataFlowCompat.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -758,11 +757,9 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
         SmallVector<dataflow::IntegerValueRangeLattice *>
             nonSuccessorInputLattices =
                 llvm::map_to_vector(nonSuccessorInputs, valueToLattices);
-        triton::callVisitNonControlFlowArguments<
-            dataflow::IntegerValueRangeLattice>(
-            *this, branch, parentSuccessor, nonSuccessorInputs,
-            nonSuccessorInputLattices,
-            [&](Value value) { return getLatticeElementFor(point, value); });
+        visitNonControlFlowArguments(branch, parentSuccessor,
+                                     nonSuccessorInputs,
+                                     nonSuccessorInputLattices);
       } else {
         if (!inputs.empty())
           firstIndex = cast<BlockArgument>(inputs.front()).getArgNumber();
@@ -772,11 +769,9 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
         SmallVector<dataflow::IntegerValueRangeLattice *>
             nonSuccessorInputLattices =
                 llvm::map_to_vector(nonSuccessorInputs, valueToLattices);
-        triton::callVisitNonControlFlowArguments<
-            dataflow::IntegerValueRangeLattice>(
-            *this, branch, RegionSuccessor(region), nonSuccessorInputs,
-            nonSuccessorInputLattices,
-            [&](Value value) { return getLatticeElementFor(point, value); });
+        visitNonControlFlowArguments(branch, RegionSuccessor(region),
+                                     nonSuccessorInputs,
+                                     nonSuccessorInputLattices);
       }
     }
 
