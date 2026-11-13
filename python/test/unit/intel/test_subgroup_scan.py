@@ -2,9 +2,9 @@
 
 `TargetInfo::warpScan` replaces upstream's log2(scanDim)-deep `shuffle_up` +
 select chain with a single `spirv.GroupNonUniform*` `InclusiveScan` op when the
-scan axis fills the sub-group. `test/TritonIntelGPU/tritongpu_scan_op_lowering.mlir`
-pins the emitted IR; these tests pin the semantics on hardware, for each seam the
-builtin has to compose with.
+scan axis fills the sub-group and the scan runs forward.
+`test/TritonIntelGPU/tritongpu_scan_op_lowering.mlir` pins the emitted IR; these
+tests pin the semantics on hardware, for each seam the builtin has to compose with.
 """
 import json
 import os
@@ -60,7 +60,13 @@ def test_cumsum_i32(M, num_warps, reverse, device):
     torch.manual_seed(17)
     x = torch.randint(-100, 100, (M, ), dtype=torch.int32, device=device)
     out = torch.empty_like(x)
-    _assert_builtin(kernel[(1, )](out, x, M, reverse, num_warps=num_warps), M, num_warps, "IAdd")
+    kernel_handle = kernel[(1, )](out, x, M, reverse, num_warps=num_warps)
+    if reverse:
+        # The builtin scans in lane order; a reverse scan shuffles from the end instead.
+        ops = sorted(set(_GROUP_OP.findall(kernel_handle.asm["llir"])))
+        assert not ops, f"expected no GroupNonUniform scan in a reverse scan, got {ops}"
+    else:
+        _assert_builtin(kernel_handle, M, num_warps, "IAdd")
 
     ref = torch.cumsum(x.flip(0) if reverse else x, 0)
     torch.testing.assert_close((ref.flip(0) if reverse else ref).to(torch.int32), out, atol=0, rtol=0)

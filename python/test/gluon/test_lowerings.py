@@ -214,6 +214,8 @@ def _scan_tuple_combine(a1, b1, a2, b2):
 @pytest.mark.parametrize("layout, M, N, axis, dtype", _scan_layouts())
 @pytest.mark.parametrize("reverse", [False, True])
 def test_scan_distributed_layouts(layout, M, N, axis, dtype, reverse, device):
+    if is_xpu() and isinstance(layout, ttgl.amd.AMDMFMALayout):
+        pytest.xfail("AMD MFMA layouts need 64 threads per warp")
 
     @gluon.jit
     def kernel(A, B, OutA, OutB, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
