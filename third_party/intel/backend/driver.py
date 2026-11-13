@@ -9,6 +9,7 @@ import ctypes
 import subprocess
 import sysconfig
 import tempfile
+import threading
 import warnings
 from pathlib import Path
 from functools import cached_property, lru_cache
@@ -763,6 +764,9 @@ class XPULauncher(object):
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
         active_driver = triton.runtime.driver.active
+        launched_grf_modes = active_driver._benchmark_state.launched_grf_modes
+        if launched_grf_modes is not None:
+            launched_grf_modes.append(_grf_mode_of(kernel_metadata))
 
         def allocate_scratch(size, align, allocator):
             if size > 0:
@@ -803,10 +807,43 @@ class XPULauncher(object):
                     args)
 
 
+@lru_cache
+def _zero_fill_kernel():
+    """L2 flush kernel that can be compiled in any GRF mode."""
+    import triton.language as tl
+
+    @triton.jit
+    def _zero_fill(ptr, n, BLOCK: tl.constexpr):
+        offs = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)
+        tl.store(ptr + offs, tl.zeros([BLOCK], dtype=ptr.dtype.element_ty), mask=offs < n)
+
+    return _zero_fill
+
+
+def _grf_mode_of(metadata):
+    """GRF mode a kernel runs in, as a `grf_mode` launch option."""
+    if metadata.grf_mode == "auto":
+        return "default"  # IGC picks the mode, which is not visible here
+    if metadata.grf_mode != "default":
+        return metadata.grf_mode  # explicit: 128, 160, 192, 256 or 512
+    # The mode of a `default` kernel can still be raised by the large-GRF retry, which sets a build flag.
+    match = re.search(r"-cl-intel-(\d+)-GRF-per-thread", metadata.build_flags)
+    return match.group(1) if match else "default"
+
+
+class _BenchmarkState(threading.local):
+    """State of the autotune benchmarker, one copy per thread so that concurrent benchmarks do not share it."""
+    # GRF mode of the L2 flush kernel.
+    flush_grf_mode = "default"
+    # GRF modes of the kernels launched while the benchmark waits to learn the mode of its kernel, else None.
+    launched_grf_modes = None
+
+
 class XPUDriver(DriverBase):
 
     def __init__(self):
         self.launcher_cls = XPULauncher
+        self._benchmark_state = _BenchmarkState()
         try:
             from torch._C import _xpu_getCurrentRawStream, _xpu_getDevice
             self.get_current_device = _xpu_getDevice
@@ -894,17 +931,44 @@ class XPUDriver(DriverBase):
         return ty_to_cpp(ty)
 
     def get_benchmarker(self):
+        return self._grf_matched_do_bench
+
+    def _grf_matched_do_bench(self, fn, *args, **kwargs):
+        """Flush L2 in the GRF mode of the first timed kernel, so its runs pay no GRF-mode switch (#8465)."""
         from triton.testing import do_bench
-        return do_bench
+
+        state = self._benchmark_state
+        saved = state.flush_grf_mode, state.launched_grf_modes  # a benchmark can run inside another one
+        state.launched_grf_modes = []
+        try:
+            return do_bench(fn, *args, **kwargs)
+        finally:
+            state.flush_grf_mode, state.launched_grf_modes = saved
 
     def get_empty_cache_for_benchmark(self):
         import torch
+
+        state = self._benchmark_state
+        if state.launched_grf_modes is not None:
+            # `do_bench` gets here once, after its first run of the kernel and before it estimates the run time.
+            launched, state.launched_grf_modes = state.launched_grf_modes, None
+            state.flush_grf_mode = launched[0] if launched else "default"
 
         # We maintain a buffer of 256 MB that we clear
         # before each kernel call to make sure that the L2 cache
         # doesn't contain any input data before the run
         cache_size = 256 * 1024 * 1024
-        return torch.empty(int(cache_size // 4), dtype=torch.int, device='xpu')
+        cache = torch.empty(int(cache_size // 4), dtype=torch.int, device='xpu')
+        if state.flush_grf_mode != "default":
+            # Compile the flush kernel now, so that its compile time does not end up in that estimate.
+            self.clear_cache(cache)
+        return cache
 
     def clear_cache(self, cache):
-        cache.zero_()
+        grf_mode = self._benchmark_state.flush_grf_mode
+        if grf_mode == "default":
+            cache.zero_()
+        else:
+            block = 1024
+            _zero_fill_kernel()[(triton.cdiv(cache.numel(), block), )](cache, cache.numel(), BLOCK=block,
+                                                                       grf_mode=grf_mode)

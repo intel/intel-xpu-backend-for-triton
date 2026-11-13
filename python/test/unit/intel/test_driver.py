@@ -1,7 +1,9 @@
+import collections
 import io
 import re
 import shutil
 import sys
+import threading
 
 import pytest
 import torch
@@ -15,7 +17,7 @@ from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
 from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
-from triton.backends.intel.driver import find_sycl_icpx
+from triton.backends.intel.driver import _grf_mode_of, find_sycl_icpx
 from triton.backends.intel.errors import IntelGPUError
 from triton.runtime.errors import OutOfResources
 
@@ -470,3 +472,206 @@ def test_sycl_global_range_overflow(device):
     add_kernel[grid](x, x, output, n_elements, 16)
 
     torch.testing.assert_close(output.cpu(), (x + x).cpu(), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("grf_mode", ["default", "256"])
+def test_clear_cache_grf_mode(device, grf_mode):
+    drv = driver.active
+    cache = drv.get_empty_cache_for_benchmark()
+    cache.fill_(1)
+    state = drv._benchmark_state
+    state.flush_grf_mode = grf_mode
+    state.launched_grf_modes = []
+    try:
+        drv.clear_cache(cache)
+        launched = state.launched_grf_modes
+    finally:
+        state.flush_grf_mode = "default"
+        state.launched_grf_modes = None
+    # The default flush is not a Triton kernel; any other one has to be launched in the requested mode.
+    assert launched == ([] if grf_mode == "default" else [grf_mode])
+    assert int(torch.count_nonzero(cache)) == 0
+
+
+def test_benchmarker_return_types(device):
+    x = torch.zeros(1024, device=device)
+    bench = driver.active.get_benchmarker()
+    assert len(bench(lambda: x.add_(1), quantiles=(0.5, 0.2, 0.8))) == 3
+    assert isinstance(bench(lambda: x.add_(1)), float)
+    assert isinstance(bench(lambda: x.add_(1), return_mode="all"), list)
+
+
+def _flush_grf_modes_used(monkeypatch, fn):
+    drv = driver.active
+    used = set()
+    clear_cache = drv.clear_cache
+
+    def recording_clear_cache(cache):
+        used.add(drv._benchmark_state.flush_grf_mode)
+        clear_cache(cache)
+
+    monkeypatch.setattr(drv, "clear_cache", recording_clear_cache)
+    drv.get_benchmarker()(fn)
+    return used
+
+
+@pytest.mark.parametrize("grf_mode", ["default", "256"])
+def test_benchmarker_flushes_in_kernel_grf_mode(device, monkeypatch, grf_mode):
+    # A flush in another GRF mode would charge every timed run a GRF-mode switch (#8465).
+
+    @triton.jit
+    def add_one(x_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(x_ptr + offs, tl.load(x_ptr + offs) + 1)
+
+    x = torch.zeros(1024, device=device)
+    assert _flush_grf_modes_used(monkeypatch, lambda: add_one[(1, )](x, BLOCK=1024, grf_mode=grf_mode)) == {grf_mode}
+
+
+def test_benchmarker_flushes_in_auto_upgraded_grf_mode(device, monkeypatch):
+    # The kernel of test_auto_grf spills on the default GRF mode and is rebuilt with more GRF.
+    BLOCK = 1024 * 32 if is_xpu_cri() else 1024 * 8
+    z = torch.zeros(BLOCK, dtype=torch.int32, device=device)
+
+    @triton.jit
+    def _kernel(z, BLOCK: tl.constexpr):
+        off = tl.arange(0, BLOCK)
+        a = tl.load(z + off)
+        result = tl.sum(a, axis=0, keep_dims=True)
+        tl.store(z + off, a + result)
+
+    used = _flush_grf_modes_used(monkeypatch, lambda: _kernel[(1, )](z, BLOCK=BLOCK, num_warps=2))
+    assert used == {"512" if is_xpu_cri() else "256"}
+
+
+@pytest.mark.parametrize("grf_mode, warm", [("default", False), ("256", True)])
+def test_benchmarker_warms_up_flush_before_estimate(device, monkeypatch, grf_mode, warm):
+    # Compiling the flush kernel inside the run time estimate of `do_bench` would make it time the kernel once.
+
+    @triton.jit
+    def add_one(x_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(x_ptr + offs, tl.load(x_ptr + offs) + 1)
+
+    drv = driver.active
+    x = torch.zeros(1024, device=device)
+    events = []
+    clear_cache = drv.clear_cache
+
+    def run():
+        events.append("run")
+        add_one[(1, )](x, BLOCK=1024, grf_mode=grf_mode)
+
+    def recording_clear_cache(cache):
+        events.append("flush")
+        clear_cache(cache)
+
+    monkeypatch.setattr(drv, "clear_cache", recording_clear_cache)
+    drv.get_benchmarker()(run)
+    assert events[:4] == ["run", "flush", "flush", "run"] if warm else events[:3] == ["run", "flush", "run"]
+
+
+@pytest.mark.parametrize("grf_mode, build_flags, expected", [
+    ("default", "", "default"),
+    ("default", " -cl-intel-256-GRF-per-thread", "256"),
+    ("default", " -cl-intel-512-GRF-per-thread", "512"),
+    ("default", " -cl-intel-192-GRF-per-thread", "192"),
+    ("default", " -cl-opt-disable -cl-intel-256-GRF-per-thread", "256"),
+    ("auto", "", "default"),
+    ("auto", " -cl-intel-enable-auto-large-GRF-mode", "default"),
+    ("128", "", "128"),
+    ("160", "", "160"),
+    ("192", "", "192"),
+    ("256", "", "256"),
+    ("256", " -cl-intel-256-GRF-per-thread", "256"),
+    ("512", "", "512"),
+])
+def test_grf_mode_of(grf_mode, build_flags, expected):
+    metadata = collections.namedtuple("Metadata", ["grf_mode", "build_flags"])(grf_mode, build_flags)
+    assert _grf_mode_of(metadata) == expected
+
+
+def test_benchmarker_concurrent_threads(device, monkeypatch):
+    # Two threads benchmark kernels in different GRF modes at the same time; each has to flush in its own mode.
+
+    @triton.jit
+    def add_one(x_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(x_ptr + offs, tl.load(x_ptr + offs) + 1)
+
+    drv = driver.active
+    xs = {grf_mode: torch.zeros(1024, device=device) for grf_mode in ("default", "256")}
+    for grf_mode, x in xs.items():
+        add_one[(1, )](x, BLOCK=1024, grf_mode=grf_mode)  # compile before the threads start
+
+    used = collections.defaultdict(set)
+    clear_cache = drv.clear_cache
+
+    def recording_clear_cache(cache):
+        used[threading.current_thread().name].add(drv._benchmark_state.flush_grf_mode)
+        clear_cache(cache)
+
+    monkeypatch.setattr(drv, "clear_cache", recording_clear_cache)
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def benchmark(grf_mode):
+        first_run = True
+
+        def run():
+            nonlocal first_run
+            if first_run:
+                first_run = False
+                barrier.wait(timeout=60)  # both threads are recording by now
+            add_one[(1, )](xs[grf_mode], BLOCK=1024, grf_mode=grf_mode)
+
+        try:
+            drv.get_benchmarker()(run)
+        except Exception as e:
+            errors.append(e)
+            barrier.abort()  # do not leave the other thread waiting for this one
+
+    threads = [threading.Thread(target=benchmark, args=(grf_mode, ), name=grf_mode) for grf_mode in xs]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert not errors, errors
+    assert dict(used) == {"default": {"default"}, "256": {"256"}}
+
+
+def test_benchmarker_nested(device, monkeypatch):
+    # A benchmark started inside another one must neither change what the outer one flushes in nor leave state behind.
+
+    @triton.jit
+    def add_one(x_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(x_ptr + offs, tl.load(x_ptr + offs) + 1)
+
+    drv = driver.active
+    x = torch.zeros(1024, device=device)
+    add_one[(1, )](x, BLOCK=1024)
+    add_one[(1, )](x, BLOCK=1024, grf_mode="256")
+
+    used = []
+    clear_cache = drv.clear_cache
+
+    def recording_clear_cache(cache):
+        used.append(drv._benchmark_state.flush_grf_mode)
+        clear_cache(cache)
+
+    monkeypatch.setattr(drv, "clear_cache", recording_clear_cache)
+    inner_done = False
+
+    def run():
+        nonlocal inner_done
+        if not inner_done:
+            inner_done = True
+            drv.get_benchmarker()(lambda: add_one[(1, )](x, BLOCK=1024))
+        add_one[(1, )](x, BLOCK=1024, grf_mode="256")
+
+    drv.get_benchmarker()(run)
+    assert used[0] == "default"  # the inner benchmark
+    assert used[-1] == "256"  # the outer one
+    assert drv._benchmark_state.flush_grf_mode == "default"
+    assert drv._benchmark_state.launched_grf_modes is None
