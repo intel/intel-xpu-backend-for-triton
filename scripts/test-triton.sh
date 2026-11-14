@@ -59,6 +59,7 @@ TEST:
     --sglang-kda
     --sglang-spec
     --sglang-e2e
+    --sglang-deepseek
     --install-sglang
     --install-sgl-kernel-xpu
     --liger
@@ -124,6 +125,7 @@ TEST_SGLANG_GDN=false
 TEST_SGLANG_KDA=false
 TEST_SGLANG_SPEC=false
 TEST_SGLANG_E2E=false
+TEST_SGLANG_DEEPSEEK=false
 INSTALL_SGLANG=false
 INSTALL_SGL_KERNEL_XPU=false
 TEST_LIGER=false
@@ -338,6 +340,11 @@ while (( $# != 0 )); do
       ;;
     --sglang-e2e)
       TEST_SGLANG_E2E=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-deepseek)
+      TEST_SGLANG_DEEPSEEK=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -1135,6 +1142,23 @@ run_sglang_e2e_tests() {
       test/registered/xpu/test_xpu_basic.py
 }
 
+run_sglang_deepseek_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang DeepSeek tests            *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # Needs sgl_kernel and a 24 GB GPU, so not part of --sglang.
+  # The GSM8K test gives the server 300 s to start, so fetch the weights first.
+  python -c 'from huggingface_hub import snapshot_download as d; d("gaunernst/DeepSeek-V2-Lite-Chat-FP8"); d("deepseek-ai/DeepSeek-OCR")'
+  # All 1319 GSM8K questions: on the default 200 even sgl-kernel-xpu scores 0.620,
+  # right at the 0.62 threshold.
+  GSM8K_NUM_QUESTIONS=1319 TRITON_TEST_SUITE=sglang_deepseek \
+    run_pytest_command -vvv \
+      test/registered/xpu/llm_models/test_xpu_deepseek_v2_lite_chat_fp8_gsm8k_eval.py \
+      test/registered/xpu/test_deepseek_ocr_triton.py
+}
+
 run_liger_install() {
   echo "************************************************"
   echo "******    Installing Liger-Kernel         ******"
@@ -1711,6 +1735,9 @@ test_triton() {
   fi
   if [ "$TEST_SGLANG_E2E" == true ]; then
     run_sglang_e2e_tests
+  fi
+  if [ "$TEST_SGLANG_DEEPSEEK" == true ]; then
+    run_sglang_deepseek_tests
   fi
   if [ "$INSTALL_LIGER" == true ]; then
     run_liger_install
