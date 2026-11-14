@@ -305,8 +305,9 @@ std::string simdReduceAsm(std::string binOp, unsigned warpSize,
 
   unsigned logicalReduceWidth = std::max(1u, warpSize / interleave);
   unsigned numLogicalResults = logicalReduceWidth / numLaneToReduce;
-  unsigned pairDistance =
-      std::max(1u, logicalReduceWidth / ((1 << numLogicalResults)));
+  // Pair opposite halves of each reduction group, independent of how many
+  // groups share the subgroup.
+  unsigned pairDistance = numLaneToReduce / 2;
   unsigned numResultPerInput = interleave * numLogicalResults;
   unsigned numResult = accSize * numResultPerInput;
 
