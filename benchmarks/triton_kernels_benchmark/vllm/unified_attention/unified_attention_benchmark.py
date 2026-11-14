@@ -94,6 +94,41 @@ def ref_paged_attn(
     return torch.cat(outputs, dim=0)
 
 
+def ref_paged_attn_fp32_cpu(
+    query: torch.Tensor,
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
+    query_lens: list[int],
+    kv_lens: list[int],
+    block_tables: torch.Tensor,
+    scale: float,
+    sliding_window: int | None = None,
+    soft_cap: float | None = None,
+) -> torch.Tensor:
+    """
+    Verification reference: ``ref_paged_attn`` computed in float32 on the CPU.
+
+    The bf16 einsum/softmax on the XPU intermittently return wrong values for some rows in CI
+    (https://github.com/intel/intel-xpu-backend-for-triton/issues/8742), so they are not used to verify the
+    Triton kernel. Only the cache blocks that are referenced by ``block_tables`` are copied to the host.
+    """
+    block_tables = block_tables.cpu()
+    used_blocks = torch.unique(block_tables)
+    used_blocks_dev = used_blocks.to(key_cache.device).long()
+    with torch.device("cpu"):
+        return ref_paged_attn(
+            query=query.float().cpu(),
+            key_cache=key_cache[used_blocks_dev].float().cpu(),
+            value_cache=value_cache[used_blocks_dev].float().cpu(),
+            query_lens=query_lens,
+            kv_lens=kv_lens,
+            block_tables=torch.searchsorted(used_blocks, block_tables),
+            scale=scale,
+            sliding_window=sliding_window,
+            soft_cap=soft_cap,
+        )
+
+
 def _dtype_size(dtype):
     """Return element size in bytes for a torch dtype."""
     if dtype is None:
@@ -248,10 +283,6 @@ def _build_attention_configs(model_configs):
             # Heavy seq_lens only run with block_size=64 to bound CI time.
             if id(seq_lens) in heavy and block_size != 64:
                 continue
-            # FIXME: mismatch against the torch reference on this shape, remove once the cause is
-            # found: https://github.com/intel/intel-xpu-backend-for-triton/issues/8742
-            if seq_lens == [(2048, 2048)] * 4:
-                continue
             x_val = (*base_config, seq_lens, sliding_window, soft_cap, num_blocks, block_size)
             qdtype = x_val[3]
             if qdtype is not None and qdtype.itemsize < 2 and x_val[-1] < 32:
@@ -349,6 +380,20 @@ def get_unified_attention_benchmark(
                 soft_cap=soft_cap,
             )
 
+        def verify_ref_fn():
+            # float32 CPU reference used only for verification, see ref_paged_attn_fp32_cpu.
+            return ref_paged_attn_fp32_cpu(
+                query=query,
+                key_cache=key_cache,
+                value_cache=value_cache,
+                query_lens=query_lens,
+                kv_lens=kv_lens,
+                block_tables=block_tables,
+                scale=scale,
+                sliding_window=sliding_window,
+                soft_cap=soft_cap,
+            )
+
         if provider == 'pytorch':
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 torch_fn,
@@ -358,7 +403,7 @@ def get_unified_attention_benchmark(
             )
 
         elif provider.startswith('triton'):
-            expected_output = torch_fn() if BENCHMARKING_CONFIG["verify"] else None
+            expected_output = verify_ref_fn() if BENCHMARKING_CONFIG["verify"] else None
 
             cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(dim=0, dtype=torch.int32)
             kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
@@ -436,7 +481,7 @@ def get_unified_attention_benchmark(
                 quantiles=quantiles,
             )
         elif provider == 'sycl-tla':
-            expected_output = torch_fn() if BENCHMARKING_CONFIG["verify"] else None
+            expected_output = verify_ref_fn() if BENCHMARKING_CONFIG["verify"] else None
 
             cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(dim=0, dtype=torch.int32)
             kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
