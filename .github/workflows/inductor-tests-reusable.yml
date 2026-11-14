@@ -101,6 +101,7 @@ jobs:
       - name: Run inductor tests
         run: |
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
+          # PTI's default local collection mode loses kernel timestamps and hangs test_analysis.py on Agama 40196.8 (#8789).
           export PTI_COLLECTION_MODE=0
           bash scripts/test-pytorch.sh ${{ inputs.suite }}
 
