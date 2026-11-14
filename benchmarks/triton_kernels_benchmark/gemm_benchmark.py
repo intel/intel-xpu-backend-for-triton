@@ -226,7 +226,7 @@ def get_grouped_kernel_with_inductor_configs(batched: bool = False):
     """Tune the existing GEMM body with the Inductor benchmark's shared XPU configurations."""
     from triton_kernels_benchmark.gemm_inductor_benchmark import _register_custom_xpu_mm_heuristic
 
-    shared_configs = _register_custom_xpu_mm_heuristic()
+    shared_configs = _register_custom_xpu_mm_heuristic(batched=batched)
     if shared_configs is None:
         raise RuntimeError("Cannot align Grouped tuning without the XPU Inductor descriptor template")
     configs = [

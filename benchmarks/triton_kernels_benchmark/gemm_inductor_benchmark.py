@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Compare TorchInductor ATen/Triton GEMM backends and manual grouped tile-order/Split-K/Stream-K GEMM.
 
-The cases are the FP16 GEMMs for which ATen beat Triton in disassembles/log.txt.
+The cases are the FP16 GEMMs for which ATen beat Triton in disassembles/log.txt,
+plus new cases from results/qc_aten_selected_20261113/shapes.json.
 Pass --case repeatedly to benchmark selected one-based cases, or --list to inspect
 their shapes and strides without requiring an XPU. Results use the
 triton_kernels_benchmark report format.
 
 On XPU, Inductor enables persistent tensor-descriptor GEMM candidates alongside
 the ordinary Triton templates; autotuning selects among eligible candidates.
+The XPU search spaces match the pruned QC model configurations from November 13:
+13 ordinary MM, 12 BMM, 14 descriptor MM, and 3 persistent MM seeds.
 
 Manual providers reuse the kernels in gemm_benchmark, gemm_splitk_benchmark,
 and gemm_streamk_benchmark (not Inductor's grouped_mm). All manual providers use
@@ -23,7 +26,6 @@ manual GEMM callers retain their original configurations and output behavior.
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import logging
 import math
 import sys
@@ -84,6 +86,18 @@ GEMM_CASES = (
     GemmCase("addmm", ((8704, 512), (8704, 512), (512, 512)), ((0, 1), (512, 1), (512, 1)), 0.039271, 0.072292),
     GemmCase("addmm", ((8704, 512), (8704, 1024), (1024, 512)), ((0, 1), (1024, 1), (512, 1)), 0.061458, 0.124271),
     GemmCase("addmm", ((256, 257), (256, 4544), (4544, 257)), ((0, 1), (4544, 1), (257, 1)), 0.039896, 0.071354),
+    # Additional ATen-selected cases from the QC split-K-fixed log (before config pruning).
+    GemmCase("addmm", ((20480, 256), (20480, 128), (128, 256)), ((0, 1), (128, 1), (256, 1)), 0.026980, 0.028750),
+    GemmCase("addmm", ((16384, 256), (16384, 128), (128, 256)), ((0, 1), (128, 1), (256, 1)), 0.021667, 0.021979),
+    GemmCase("addmm", ((8192, 256), (8192, 128), (128, 256)), ((0, 1), (128, 1), (256, 1)), 0.011563, 0.012604),
+    GemmCase("addmm", ((256, 256), (256, 688), (688, 256)), ((0, 1), (688, 1), (256, 1)), 0.005000, 0.005312),
+    GemmCase("mm", ((1228800, 64), (64, 256)), ((65, 1), (256, 1)), 1.271250, 1.318334),
+    GemmCase("mm", ((176128, 32), (32, 64)), ((33, 1), (64, 1)), 0.070729, 0.071979),
+    GemmCase("addmm", ((256, 256), (256, 2572), (2572, 256)), ((0, 1), (2572, 1), (256, 1)), 0.013229, 0.048646),
+    GemmCase("addmm", ((256, 256), (256, 560), (560, 256)), ((0, 1), (560, 1), (256, 1)), 0.005000, 0.005208),
+    GemmCase("addmm", ((256, 640), (256, 490), (490, 640)), ((0, 1), (490, 1), (640, 1)), 0.008958, 0.014687),
+    GemmCase("addmm", ((256, 640), (256, 5052), (5052, 640)), ((0, 1), (5056, 1), (640, 1)), 0.047604, 0.125208),
+    GemmCase("addmm", ((256, 64), (256, 204), (204, 64)), ((0, 1), (204, 1), (64, 1)), 0.005000, 0.007395),
 )
 
 
@@ -108,19 +122,8 @@ def make_inputs(case: GemmCase) -> tuple[torch.Tensor, ...]:
     return tuple(inputs)
 
 
-def _dedup_gemm_configs(configs):
-    out = []
-    seen = set()
-    for cfg_item in configs:
-        key = tuple(dataclasses.asdict(cfg_item).items())
-        if key not in seen:
-            seen.add(key)
-            out.append(cfg_item)
-    return out
-
-
 @cache
-def _register_custom_xpu_mm_heuristic():
+def _register_custom_xpu_mm_heuristic(batched: bool = False):
     """Register and return the shared ordinary GEMM tuning space for XPU providers."""
     try:
         from torch._inductor.template_heuristics.triton import (
@@ -128,54 +131,115 @@ def _register_custom_xpu_mm_heuristic():
             GemmConfig,
             MMTemplateConfigMixin,
             XPUConfigHeuristic,
+            XPUDescriptorMMTemplateConfigHeuristic,
+            XPUPersistentTMATemplateConfigHeuristic,
         )
         from torch._inductor.template_heuristics.triton_addmm import AddMMConfigMixin
         from torch._inductor.kernel.bmm import bmm_template
-        from torch._inductor.kernel.mm import mm_template, xpu_descriptor_mm_template
+        from torch._inductor.kernel.mm import mm_template, persistent_tma_mm_template, xpu_descriptor_mm_template
         from torch._inductor.template_heuristics.registry import _HEURISTIC_CACHE, register_template_heuristic
 
-        custom_mm_configs: list[BaseConfig] = [
-            GemmConfig(128, 128, 64, 2, 32),
-            GemmConfig(128, 128, 32, 2, 16),
+        mm_configs: list[BaseConfig] = [
             GemmConfig(16, 512, 64, 2, 8),
-            GemmConfig(32, 256, 32, 2, 16),
+            GemmConfig(64, 64, 64, 3, 8),
+            GemmConfig(64, 128, 32, 4, 8),
             GemmConfig(32, 256, 128, 3, 32),
-            GemmConfig(128, 128, 64, 2, 16),
-            GemmConfig(128, 128, 64, 3, 16),
-            GemmConfig(128, 128, 64, 3, 32),
-            GemmConfig(128, 128, 128, 2, 16),
-            GemmConfig(128, 256, 16, 4, 32),
-            GemmConfig(128, 256, 32, 3, 32),
+            GemmConfig(32, 32, 128, 2, 4),
+            GemmConfig(32, 64, 32, 5, 8),
+            GemmConfig(64, 64, 32, 2, 4),
+            GemmConfig(128, 128, 32, 3, 4),
+            GemmConfig(64, 32, 32, 5, 8),
+            GemmConfig(64, 128, 128, 4, 4),
+            GemmConfig(64, 64, 32, 2, 8),
+            GemmConfig(128, 128, 64, 2, 32),
+            GemmConfig(32, 256, 32, 2, 16),
+        ]
+        bmm_configs: list[BaseConfig] = [
             GemmConfig(128, 256, 64, 2, 32),
             GemmConfig(128, 512, 32, 2, 32),
-            GemmConfig(128, 512, 32, 3, 32),
-            GemmConfig(128, 512, 32, 4, 32),
-            GemmConfig(256, 128, 64, 2, 32),
-            GemmConfig(256, 256, 32, 5, 32),
+            GemmConfig(32, 32, 16, 1, 2),
+            GemmConfig(128, 128, 64, 2, 16),
+            GemmConfig(64, 64, 16, 2, 4),
+            GemmConfig(64, 64, 128, 5, 4),
+            GemmConfig(128, 128, 32, 2, 8),
+            GemmConfig(128, 128, 32, 3, 4),
+            GemmConfig(64, 64, 32, 2, 8),
+            GemmConfig(128, 128, 64, 3, 16),
             GemmConfig(512, 128, 32, 1, 32),
-            GemmConfig(256, 128, 32, 1, 32),
-            GemmConfig(256, 128, 32, 3, 32),
+            GemmConfig(128, 512, 32, 4, 32, group_m=4),
         ]
-        aligned_configs = _dedup_gemm_configs(XPUConfigHeuristic().mm_configs + custom_mm_configs)
+        descriptor_configs: list[BaseConfig] = [
+            GemmConfig(64, 32, 128, 5, 4),
+            GemmConfig(32, 32, 128, 2, 4),
+            GemmConfig(64, 32, 32, 5, 8),
+            GemmConfig(64, 64, 64, 3, 8),
+            GemmConfig(64, 128, 128, 4, 4),
+            GemmConfig(32, 64, 32, 5, 8),
+            GemmConfig(256, 128, 32, 3, 32),
+            GemmConfig(64, 64, 32, 2, 4),
+            GemmConfig(64, 128, 32, 3, 4),
+            GemmConfig(64, 128, 32, 4, 8),
+            GemmConfig(128, 64, 32, 4, 8),
+            GemmConfig(32, 64, 128, 2, 2),
+            GemmConfig(128, 64, 32, 3, 4),
+            GemmConfig(256, 128, 32, 1, 32),
+        ]
+        persistent_configs: list[BaseConfig] = [
+            GemmConfig(128, 128, 64, 3, 8),
+            GemmConfig(128, 128, 64, 4, 8),
+            GemmConfig(128, 128, 64, 5, 8),
+        ]
 
         @register_template_heuristic(mm_template.uid, "xpu")
-        @register_template_heuristic(bmm_template.uid, "xpu")
-        @register_template_heuristic(xpu_descriptor_mm_template.uid, "xpu")
         class MyXPUMMTemplateConfigHeuristic(MMTemplateConfigMixin, XPUConfigHeuristic):
 
             def __init__(self) -> None:
                 super().__init__()
-                self.mm_configs = list(aligned_configs)
+                self.mm_configs = list(mm_configs)
+                self.exhaustive_configs = self.mm_configs
+
+        @register_template_heuristic(bmm_template.uid, "xpu")
+        class MyXPUBMMTemplateConfigHeuristic(MyXPUMMTemplateConfigHeuristic):
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.mm_configs = list(bmm_configs)
                 self.exhaustive_configs = self.mm_configs
 
         @register_template_heuristic(mm_template.uid, "xpu", op_name="addmm")
-        @register_template_heuristic(bmm_template.uid, "xpu", op_name="baddbmm")
-        @register_template_heuristic(xpu_descriptor_mm_template.uid, "xpu", op_name="addmm")
         class MyXPUAddmmTemplateConfigHeuristic(AddMMConfigMixin, MyXPUMMTemplateConfigHeuristic):
             pass
 
+        @register_template_heuristic(bmm_template.uid, "xpu", op_name="baddbmm")
+        class MyXPUBaddbmmTemplateConfigHeuristic(AddMMConfigMixin, MyXPUBMMTemplateConfigHeuristic):
+            pass
+
+        @register_template_heuristic(xpu_descriptor_mm_template.uid, "xpu")
+        class MyXPUDescriptorMMTemplateConfigHeuristic(XPUDescriptorMMTemplateConfigHeuristic):
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.mm_configs = list(descriptor_configs)
+                self.exhaustive_configs = self.mm_configs
+
+        @register_template_heuristic(xpu_descriptor_mm_template.uid, "xpu", op_name="addmm")
+        class MyXPUDescriptorAddmmTemplateConfigHeuristic(AddMMConfigMixin, MyXPUDescriptorMMTemplateConfigHeuristic):
+            pass
+
+        @register_template_heuristic(persistent_tma_mm_template.uid, "xpu")
+        class MyXPUPersistentMMTemplateConfigHeuristic(XPUPersistentTMATemplateConfigHeuristic):
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.mm_configs = list(persistent_configs)
+                self.exhaustive_configs = self.mm_configs
+
+        @register_template_heuristic(persistent_tma_mm_template.uid, "xpu", op_name="addmm")
+        class MyXPUPersistentAddmmTemplateConfigHeuristic(AddMMConfigMixin, MyXPUPersistentMMTemplateConfigHeuristic):
+            pass
+
         _HEURISTIC_CACHE.clear()
-        return aligned_configs
+        return bmm_configs if batched else mm_configs
     except Exception as exc:  # noqa: BLE001
         logging.warning("Failed to register custom XPU MM heuristic: %s", exc)
 
@@ -371,12 +435,12 @@ def get_benchmark(case_ids: list[int], modes: list[str]):
     import triton_kernels_benchmark as benchmark_suite
 
     labels = {
-        "aten_only": "Inductor ATEN",
-        "triton_aten": "Inductor TRITON+ATEN",
-        "triton_only": "Inductor TRITON",
-        "manual_grouped": "Manual Triton grouped tiles",
-        "manual_splitk": "Manual Triton Split-K",
-        "manual_streamk": "Manual Triton Stream-K",
+        "aten_only": "Inductor-ATEN",
+        "triton_aten": "Inductor-TRITON+ATEN",
+        "triton_only": "Inductor-TRITON",
+        "manual_grouped": "Manual-Triton-grouped-tiles",
+        "manual_splitk": "Manual-Triton-Split-K",
+        "manual_streamk": "Manual-Triton-Stream-K",
     }
 
     @benchmark_suite.perf_report(
@@ -465,7 +529,7 @@ def main():
             flush=True,
         )
     if args.mode == "all":
-        modes = ["aten_only", "triton_aten", "triton_only", "manual_grouped", "manual_splitk", "manual_streamk"]
+        modes = ["aten_only", "triton_only", "manual_grouped", "manual_splitk", "manual_streamk"]
     else:
         modes = [args.mode]
     from triton_kernels_benchmark.benchmark_testing import MarkArgs
