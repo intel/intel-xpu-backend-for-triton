@@ -123,6 +123,11 @@ jobs:
         with:
           kernels-hash: ${{ inputs.kernels_hash }}
 
+      - name: Override vllm-xpu-kernels (experiment for #8742, not for merge)
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          pip install --no-deps --force-reinstall "https://github.com/vllm-project/vllm-xpu-kernels/releases/download/v0.1.16.3/vllm_xpu_kernels-0.1.16.3-cp38-abi3-manylinux_2_28_x86_64.whl"
+
       - name: Report environment details
         timeout-minutes: 1
         run: |
