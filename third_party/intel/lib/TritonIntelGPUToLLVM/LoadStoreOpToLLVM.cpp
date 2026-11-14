@@ -371,33 +371,29 @@ struct LoadStoreConversionBase {
                                         boundaryCheck.end());
     SetVector<unsigned> blockLevelProtect(blockLevelCheck.begin(),
                                           blockLevelCheck.end());
-    // Element offsets and bounds are computed in i64: an offset past 2^31
-    // elements must not wrap.
+    // Element offsets are computed in i64 so an element 2^31 or more elements
+    // past the base does not wrap.
     auto toI64 = [&](Value v) -> Value {
       return v.getType().isInteger(64) ? v : b.sext(i64_ty, v);
     };
-    SmallVector<Value> offsets64 = llvm::map_to_vector(offsets, toI64);
-    SmallVector<Value> shapes64 = llvm::map_to_vector(shapes, toI64);
-    SmallVector<Value> strides64 = llvm::map_to_vector(strides, toI64);
-
     SmallVector<Value> ptrElems(numElems);
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
       SmallVector<Value> index = indices[i];
       SmallVector<Value> indicesInTensor(pointerRank);
       for (unsigned j = 0; j < pointerRank - tensorRank; ++j) {
-        indicesInTensor[j] = offsets64[j];
+        indicesInTensor[j] = offsets[j];
       }
       for (unsigned j = 0; j < tensorRank; ++j)
         indicesInTensor[j + (pointerRank - tensorRank)] =
-            b.add(toI64(index[j]), offsets64[j + (pointerRank - tensorRank)]);
+            b.add(index[j], offsets[j + (pointerRank - tensorRank)]);
 
       // Get the LLVM values for pointers
       Value offset = linearize(
-          indicesInTensor, strides64, b.i64_val(0),
+          indicesInTensor, strides, b.i64_val(0),
           [&](const Value &index, const Value &stride, const Value &off) {
             // off = off + index * stride
-            return b.add(b.mul(index, stride), off);
+            return b.add(b.mul(toI64(index), toI64(stride)), off);
           });
 
       ptrElems[i] = b.gep(ptr_ty(rewriter.getContext(), 1 /*global*/),
@@ -407,20 +403,24 @@ struct LoadStoreConversionBase {
         // Get the LLVM values for mask
         unsigned dim = 0;
         maskElems.push_back(linearize(
-            indicesInTensor, shapes64, b.int_val(1, 1),
+            indicesInTensor, shapes, b.int_val(1, 1),
             [&](const Value &index, const Value &shape, const Value &mask) {
               Value result = mask;
               if (boundaryProtect.contains(dim)) {
                 // Per-element check: mask = mask && (index < shape) && idx >= 0
-                auto is_pos_idx = b.icmp_sge(index, b.i64_val(0));
+                auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
                 result =
-                    b.and_(b.and_(b.icmp_slt(index, shape), result), is_pos_idx)
+                    b.and_(b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)),
+                                  result),
+                           is_pos_idx)
                         .getResult();
               } else if (blockLevelProtect.contains(dim)) {
                 // Block-level check: use base offset only (no per-thread index)
-                Value baseOffset = offsets64[dim];
-                auto is_pos_offset = b.icmp_sge(baseOffset, b.i64_val(0));
-                result = b.and_(b.and_(b.icmp_slt(baseOffset, shape), result),
+                Value baseOffset = offsets[dim];
+                auto is_pos_offset = b.icmp_sge(baseOffset, b.i32_val(0));
+                result = b.and_(b.and_(b.icmp_slt(baseOffset,
+                                                  b.trunc(i32_ty, shape)),
+                                       result),
                                 is_pos_offset)
                              .getResult();
               }
