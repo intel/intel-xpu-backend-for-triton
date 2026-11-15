@@ -333,8 +333,8 @@ class _IRCompileTask(tuple):
     """Arguments of `_ir_preload_worker`; the type tells `_submit` which worker to run."""
 
 
-def _ir_preload_worker(ir_text, extension, options, environment, cache_dir, trace_directory, phase, test,
-                       capture_worker):
+def _ir_preload_worker(ir_text, extension, options, instrumentation_mode, environment, cache_dir, trace_directory,
+                       phase, test, capture_worker):
     """Compile one textual IR kernel (`triton.compile(path)`) to populate the shared disk cache."""
     previous_capture_worker = os.environ.get("PYTEST_XDIST_WORKER")
     os.environ["PYTEST_XDIST_WORKER"] = capture_worker
@@ -349,6 +349,7 @@ def _ir_preload_worker(ir_text, extension, options, environment, cache_dir, trac
                 triton.knobs.cache.scope(),
                 tempfile.TemporaryDirectory(prefix="triton-warmup-ir-") as directory,
         ):
+            triton.knobs.compilation.instrumentation_mode = instrumentation_mode
             triton.knobs.cache.dir = cache_dir
             if trace_directory is not None:
                 from triton._compile_warmup import CompilationTrace
@@ -483,17 +484,20 @@ class ProcessPoolWarmupDispatcher:
         with self._capture_lock:
             environment = get_cache_invalidating_env_vars()
             instrumentation_mode = triton.knobs.compilation.instrumentation_mode
+            phase = self.current_phase
+            # Record before the dedupe check, as `dispatch` does: a test reusing an already
+            # submitted IR file must still count as attempted.
+            self.record_test(test, phase)
             digest = hashlib.sha256(
                 json.dumps(["ir", instrumentation_mode, extension, ir_text, options, environment], sort_keys=True,
                            default=repr).encode()).hexdigest()
             if digest in self._submitted_keys:
                 return
-            phase = self.current_phase
-            self.record_test(test, phase)
             task = _IRCompileTask((
                 ir_text,
                 extension,
                 options,
+                instrumentation_mode,
                 environment,
                 self._cache_dir,
                 self._trace_directory,
