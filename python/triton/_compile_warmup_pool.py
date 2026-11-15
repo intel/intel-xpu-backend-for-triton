@@ -271,56 +271,26 @@ def _initialize_preload_worker(triton_key):
     triton.runtime.cache.triton_key = lambda: triton_key
 
 
-@dataclass(frozen=True)
-class _WorkerSession:
-    """Per-task context shared by every pool worker: knobs, environment and tracing."""
-
-    environment: dict
-    instrumentation_mode: str
-    cache_dir: str
-    trace_directory: str | None
-    phase: str
-    test: str | None
-    capture_worker: str
-
-    @property
-    def origin(self):
-        # The failure is re-raised from `finish()` at session end, where pytest would blame
-        # whichever test ran last, so the message has to name the test that launched the kernel.
-        return f" (launched by {self.test})" if self.test else ""
-
-    @contextmanager
-    def activate(self):
-        previous_capture_worker = os.environ.get("PYTEST_XDIST_WORKER")
-        os.environ["PYTEST_XDIST_WORKER"] = self.capture_worker
-        _silence_worker_shutdown_diagnostics()
-        os.environ["TRITON_WARMUP_COMPILER_WORKER"] = str(os.getpid())
-        try:
-            with (
-                    triton.knobs.compilation.scope(),
-                    _cache_invalidating_environment(self.environment),
-                    triton.knobs.cache.scope(),
-            ):
-                triton.knobs.compilation.instrumentation_mode = self.instrumentation_mode
-                triton.knobs.cache.dir = self.cache_dir
-                if self.trace_directory is not None:
-                    from triton._compile_warmup import CompilationTrace
-
-                    triton.knobs.compilation.listener = CompilationTrace(self.trace_directory, self.phase, self.test)
-                yield
-        finally:
-            if previous_capture_worker is None:
-                os.environ.pop("PYTEST_XDIST_WORKER", None)
-            else:
-                os.environ["PYTEST_XDIST_WORKER"] = previous_capture_worker
-
-
-def _preload_worker(session, module_name, qualified_name, fn_bytes, compile_context_bytes, kernel_repr):
+def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes, kernel_repr, instrumentation_mode,
+                    environment, cache_dir, trace_directory, phase, test, capture_worker):
     """Load one JIT function and populate the shared disk cache."""
+    previous_capture_worker = os.environ.get("PYTEST_XDIST_WORKER")
+    os.environ["PYTEST_XDIST_WORKER"] = capture_worker
     stage = "load"
-    origin = session.origin
+    # The failure is re-raised from `finish()` at session end, where pytest would blame
+    # whichever test ran last, so the message has to name the test that launched the kernel.
+    origin = f" (launched by {test})" if test else ""
+    _silence_worker_shutdown_diagnostics()
+    worker = os.getpid()
+    os.environ["TRITON_WARMUP_COMPILER_WORKER"] = str(worker)
     try:
-        with session.activate():
+        with (
+                triton.knobs.compilation.scope(),
+                _cache_invalidating_environment(environment),
+                triton.knobs.cache.scope(),
+        ):
+            triton.knobs.compilation.instrumentation_mode = instrumentation_mode
+            triton.knobs.cache.dir = cache_dir
             if module_name is not None and qualified_name is not None:
                 function = _load_jit_callable(module_name, qualified_name)
             elif fn_bytes is not None:
@@ -328,10 +298,14 @@ def _preload_worker(session, module_name, qualified_name, fn_bytes, compile_cont
             else:
                 raise AssertionError("missing JIT function import and serialized payload")
             compile_context = cloudpickle.loads(compile_context_bytes)
+            if trace_directory is not None:
+                from triton._compile_warmup import CompilationTrace
+
+                triton.knobs.compilation.listener = CompilationTrace(trace_directory, phase, test)
             start = time.monotonic()
             stage = "compile"
             _preload_with_compile_context(function, *compile_context)
-            return os.getpid(), time.monotonic() - start
+            return worker, time.monotonic() - start
     except triton.compiler.errors.CompilationError as error:
         details = f"{type(error).__name__}: {error}"
         cause = error.__cause__
@@ -348,22 +322,53 @@ def _preload_worker(session, module_name, qualified_name, fn_bytes, compile_cont
                 f"Compilation failed for {kernel_repr}{origin}: {type(error).__name__}: {error}") from error
         raise _UnsupportedPreloadError(
             f"Failed to load {kernel_repr}{origin}: {type(error).__name__}: {error}") from error
+    finally:
+        if previous_capture_worker is None:
+            os.environ.pop("PYTEST_XDIST_WORKER", None)
+        else:
+            os.environ["PYTEST_XDIST_WORKER"] = previous_capture_worker
 
 
-def _ir_preload_worker(session, ir_text, extension, options):
+class _IRCompileTask(tuple):
+    """Arguments of `_ir_preload_worker`; the type tells `_submit` which worker to run."""
+
+
+def _ir_preload_worker(ir_text, extension, options, environment, cache_dir, trace_directory, phase, test,
+                       capture_worker):
     """Compile one textual IR kernel (`triton.compile(path)`) to populate the shared disk cache."""
+    previous_capture_worker = os.environ.get("PYTEST_XDIST_WORKER")
+    os.environ["PYTEST_XDIST_WORKER"] = capture_worker
+    origin = f" (launched by {test})" if test else ""
+    _silence_worker_shutdown_diagnostics()
+    worker = os.getpid()
+    os.environ["TRITON_WARMUP_COMPILER_WORKER"] = str(worker)
     try:
-        with session.activate(), tempfile.TemporaryDirectory(prefix="triton-warmup-ir-") as directory:
+        with (
+                triton.knobs.compilation.scope(),
+                _cache_invalidating_environment(environment),
+                triton.knobs.cache.scope(),
+                tempfile.TemporaryDirectory(prefix="triton-warmup-ir-") as directory,
+        ):
+            triton.knobs.cache.dir = cache_dir
+            if trace_directory is not None:
+                from triton._compile_warmup import CompilationTrace
+
+                triton.knobs.compilation.listener = CompilationTrace(trace_directory, phase, test)
             # The cache key hashes the extension and the text, never the path.
             path = os.path.join(directory, f"kernel.{extension}")
             with open(path, "w", encoding="utf-8") as output:
                 output.write(ir_text)
             start = time.monotonic()
             triton.compiler.compile(path, options=options)
-            return os.getpid(), time.monotonic() - start
+            return worker, time.monotonic() - start
     except Exception as error:
         raise _CompilationFailedError(
-            f"Compilation failed for IR kernel{session.origin}: {type(error).__name__}: {error}") from error
+            f"Compilation failed for IR kernel{origin}: {type(error).__name__}: {error}") from error
+    finally:
+        if previous_capture_worker is None:
+            os.environ.pop("PYTEST_XDIST_WORKER", None)
+        else:
+            os.environ["PYTEST_XDIST_WORKER"] = previous_capture_worker
 
 
 @dataclass(frozen=True)
@@ -445,9 +450,27 @@ class ProcessPoolWarmupDispatcher:
             self.record_test(test, phase)
             for capture in captures:
                 digest = hashlib.sha256(instrumentation_mode.encode() + b"\0" + capture.digest_payload()).hexdigest()
-                session = self._session(capture.environment, instrumentation_mode, phase, capture.test)
-                self._enqueue(digest, _preload_worker, (session, capture.module_name, capture.qualified_name,
-                                                        capture.fn_bytes, capture.compile_context_bytes, repr(kernel)))
+                if digest in self._submitted_keys:
+                    continue
+                task = (
+                    capture.module_name,
+                    capture.qualified_name,
+                    capture.fn_bytes,
+                    capture.compile_context_bytes,
+                    repr(kernel),
+                    instrumentation_mode,
+                    capture.environment,
+                    self._cache_dir,
+                    self._trace_directory,
+                    phase,
+                    capture.test,
+                    os.environ.get("PYTEST_XDIST_WORKER", "main"),
+                )
+                if self._connection is None:
+                    self._submit(digest, task)
+                else:
+                    self._submitted_keys.add(digest)
+                    self._connection.send((digest, task))
 
     def dispatch_ir(self, path, *, options, test):
         """Queue the compilation of a textual IR kernel file, as `triton.compile(path)` would do."""
@@ -460,34 +483,38 @@ class ProcessPoolWarmupDispatcher:
         with self._capture_lock:
             environment = get_cache_invalidating_env_vars()
             instrumentation_mode = triton.knobs.compilation.instrumentation_mode
-            phase = self.current_phase
-            self.record_test(test, phase)
-            # `default=repr` keeps the digest deterministic for options that are not JSON-serializable.
             digest = hashlib.sha256(
                 json.dumps(["ir", instrumentation_mode, extension, ir_text, options, environment], sort_keys=True,
                            default=repr).encode()).hexdigest()
-            session = self._session(environment, instrumentation_mode, phase, test)
-            self._enqueue(digest, _ir_preload_worker, (session, ir_text, extension, options))
+            if digest in self._submitted_keys:
+                return
+            phase = self.current_phase
+            self.record_test(test, phase)
+            task = _IRCompileTask((
+                ir_text,
+                extension,
+                options,
+                environment,
+                self._cache_dir,
+                self._trace_directory,
+                phase,
+                test,
+                os.environ.get("PYTEST_XDIST_WORKER", "main"),
+            ))
+            if self._connection is None:
+                self._submit(digest, task)
+            else:
+                self._submitted_keys.add(digest)
+                self._connection.send((digest, task))
 
-    def _session(self, environment, instrumentation_mode, phase, test):
-        return _WorkerSession(environment, instrumentation_mode, self._cache_dir, self._trace_directory, phase, test,
-                              os.environ.get("PYTEST_XDIST_WORKER", "main"))
-
-    def _enqueue(self, digest, worker_fn, args):
-        """Run the task in the local pool, or forward it to the shared coordinator."""
-        if self._connection is None:
-            self._submit(digest, worker_fn, args)
-        elif digest not in self._submitted_keys:
-            self._submitted_keys.add(digest)
-            self._connection.send((digest, worker_fn, args))
-
-    def _submit(self, digest, worker_fn, args):
+    def _submit(self, digest, task):
         if digest in self._submitted_keys:
             return
         self._submitted_keys.add(digest)
         if self._first_submit is None:
             self._first_submit = time.monotonic()
-        self._pending.append(self._executor.submit(worker_fn, *args))
+        worker = _ir_preload_worker if isinstance(task, _IRCompileTask) else _preload_worker
+        self._pending.append(self._executor.submit(worker, *task))
 
     def _capture_preloads(self, instrumentation_mode, environment, kernel, args, grid, kwargs, test):
         from triton.runtime import jit
@@ -681,9 +708,9 @@ class SharedWarmupCoordinator:
     def _consume(self, connection, message):
         try:
             while True:
-                digest, worker_fn, args = message
+                digest, task = message
                 with self._dispatcher._capture_lock:
-                    self._dispatcher._submit(digest, worker_fn, args)
+                    self._dispatcher._submit(digest, task)
                 message = connection.recv()
         except EOFError:
             connection.close()
