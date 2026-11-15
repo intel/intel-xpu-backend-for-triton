@@ -102,8 +102,9 @@ def compile_warmup_only(dispatcher=None):
 
     def warmup_compile(src, target=None, options=None, _env_vars=None):
         # Textual IR kernels (`triton.compile(path)`) are compiled here rather than at launch, so route them
-        # to the pool; the returned stand-in ignores launches. AST sources never reach this function: they are
-        # compiled from `kernel[grid](...)`.
+        # to the pool; the returned stand-in ignores launches. Anything else, e.g. an `ASTSource` passed
+        # directly (`test_regression_7925`) or a call with an explicit target, passes through to the real
+        # `compile`. Kernels launched as `kernel[grid](...)` are captured by `dispatch` instead.
         if not isinstance(src, str) or target is not None or _env_vars is not None:
             return previous_compile(src, target=target, options=options, _env_vars=_env_vars)
         if dispatcher is None:
