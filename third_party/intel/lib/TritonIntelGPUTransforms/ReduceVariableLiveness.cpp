@@ -106,6 +106,22 @@ bool crossesAliasingWrite(Operation *start, Operation *end) {
   return false;
 }
 
+/// Return true if a copy of \p loadOp, which is defined outside \p forOp,
+/// placed inside \p forOp or right after it may read memory written after \p
+/// loadOp. The op of the load's block that holds \p forOp (\p forOp itself when
+/// they share a block) is checked whole, nested regions included: when it is an
+/// enclosing loop, the ops that follow \p forOp in its body also run between
+/// the load and the copy.
+bool movedLoadCrossesAliasingWrite(tt::DescriptorLoadOp loadOp,
+                                   scf::ForOp forOp) {
+  Operation *loopAncestor =
+      loadOp->getBlock()->findAncestorOpInBlock(*forOp.getOperation());
+  if (!loopAncestor)
+    return true;
+  return crossesAliasingWrite(loadOp, loopAncestor) ||
+         ttgi::mayWriteMemory(loopAncestor, /*ignoreSharedMemory=*/true);
+}
+
 /// Sink 2D dot-operand loads that already sit in \p forOp's body down to just
 /// before the first operation that uses them. Returns `true` if any load moved.
 ///
@@ -364,6 +380,13 @@ bool optimizeDotOperands(scf::ForOp forOp,
     auto tensorType = cast<RankedTensorType>(operand.getType());
     if (!isLoadCandidate(loadOp, tensorType.getElementType(), forOp))
       return;
+    // A write before the loop or in it may change what the moved copies read.
+    if (movedLoadCrossesAliasingWrite(loadOp, forOp)) {
+      LDBG("Keeping dot operand load in place: a write may change the memory "
+           "it reads before the loop or in it: "
+           << *loadOp);
+      return;
+    }
     candidates.push_back({opId, dot, loadOp});
   };
 
