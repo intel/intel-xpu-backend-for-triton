@@ -227,8 +227,9 @@ jobs:
     if: ${{ inputs.warmup_on_cpu }}
     needs: build
     timeout-minutes: 720
-    # The AOT compiler (`ocloc`) must come from the same driver stack as on the GPU runners.
-    runs-on: ${{ fromJson(format('["linux", "cpu", "{0}", "{1}"]', inputs.driver_version, inputs.runner_version)) }}
+    # The AOT compiler (`ocloc`) must come from the same driver stack as on the GPU runners. CPU runners have no
+    # driver label: the LTS ones are `lts-cpu`, the rest are `cpu`.
+    runs-on: ${{ fromJson(format('["linux", "{0}", "{1}"]', inputs.driver_version == 'lts' && 'lts-cpu' || 'cpu', inputs.runner_version)) }}
     env:
       TRITON_XPU_GEN_NATIVE_CODE: 1
     defaults:
