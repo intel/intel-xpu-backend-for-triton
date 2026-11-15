@@ -1801,7 +1801,7 @@ def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device)
 
 
 @pytest.mark.skipif(is_hip(), reason="Assumes 32 threads per warp")
-def test_regress_warp_shuffle_convert_layout(tmp_path):
+def test_regress_warp_shuffle_convert_layout(tmp_path, device):
     rows = 2
     cols = 8
     # We have previously incorrectly lowered a layout conversion between these
@@ -1840,7 +1840,7 @@ def test_regress_warp_shuffle_convert_layout(tmp_path):
         ttgl.store(out_ptr + out_offsets, y)
 
     torch.manual_seed(0)
-    x = torch.randint(-128, 128, (rows, cols), dtype=torch.int16, device="cuda")
+    x = torch.randint(-128, 128, (rows, cols), dtype=torch.int16, device=device)
     ref = torch.zeros_like(x)
     out = torch.zeros_like(x)
 

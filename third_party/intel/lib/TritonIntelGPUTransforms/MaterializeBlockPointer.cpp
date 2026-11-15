@@ -467,8 +467,10 @@ private:
   /// constancy 1 along the M dim, because the compare visitor can only derive
   /// constancy from the divisibility of both sides.
   ///
-  /// For a `tt::LoadOp`, such a mask may still be a `ttgi::matchRowLimitMask`
-  /// row-limit pattern, so permit block IO here too.
+  /// For a `tt::LoadOp`, such a mask may still be a
+  /// `ttgi::matchBoundaryCheckMask` row-limit pattern, so permit block IO here
+  /// too. It is the matcher LowerTo2DBlockLoad uses, so a mask with several
+  /// uniform conjuncts is permitted exactly when it will become `base_height`.
   /// `contiguousDim`/`strideInfo` must match what LowerTo2DBlockLoad later
   /// uses, or stamping `ttig.block_io` here de-anchors the load without it
   /// gaining a real 2D block read. For the same reason the bypass is skipped
@@ -490,8 +492,8 @@ private:
         unsigned pitchDim = (*contiguousDim == rank - 1) ? rank - 2 : rank - 1;
         bool pitchDimIsBroadcast =
             strideInfo && strideInfo->getStride(pitchDim) == 0;
-        if (ttgi::matchRowLimitMask(mask, op.getOther(), maskTy.getShape(),
-                                    *contiguousDim, pitchDimIsBroadcast)) {
+        if (ttgi::matchBoundaryCheckMask(mask, op.getOther(), maskTy.getShape(),
+                                         *contiguousDim, pitchDimIsBroadcast)) {
           // Skip the bypass if LowerTo2DBlockLoad would reject the pitch.
           unsigned elemBits = getIntOrFloatOrPtrBitWidth(
               cast<tt::PointerType>(

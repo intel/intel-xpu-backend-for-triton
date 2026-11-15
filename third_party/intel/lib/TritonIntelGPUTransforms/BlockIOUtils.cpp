@@ -1197,18 +1197,95 @@ std::optional<Value> matchBaseAndRange(Value val, int64_t expectedEnd) {
   return std::nullopt;
 }
 
-/// True if `v` is a `tt.broadcast` degenerate (size 1) along every dim in
-/// `dims` in its pre-broadcast tensor.
-bool isDegenerateAlongDims(Value v, ArrayRef<int64_t> tensorShape,
-                           ArrayRef<unsigned> dims) {
-  auto broadcastOp = v.getDefiningOp<triton::BroadcastOp>();
-  if (!broadcastOp)
-    return false;
-  auto narrowTy = dyn_cast<RankedTensorType>(broadcastOp.getSrc().getType());
-  if (!narrowTy || narrowTy.getRank() != tensorShape.size())
-    return false;
-  ArrayRef<int64_t> narrowShape = narrowTy.getShape();
-  return llvm::all_of(dims, [&](unsigned d) { return narrowShape[d] == 1; });
+/// Strip `tt.broadcast` layers to reach the narrowest tensor a value is built
+/// from.
+Value peelBroadcasts(Value v) {
+  while (auto broadcastOp = v.getDefiningOp<triton::BroadcastOp>())
+    v = broadcastOp.getSrc();
+  return v;
+}
+
+/// Flatten an `arith.andi` tree into its conjuncts. A `tt.broadcast` of an AND
+/// is distributed over it (`broadcast(and(a, b))` == `and(broadcast(a),
+/// broadcast(b))`), since `tt-reorder-broadcast` may have sunk the AND below
+/// the broadcast; the conjuncts are then matched on their own narrow tensors.
+/// The tree is a DAG, so each value is visited once: a shared AND would
+/// otherwise be expanded once per path to it. AND being idempotent, that also
+/// drops a repeated conjunct.
+void collectConjuncts(Value v, SmallPtrSetImpl<Value> &visited,
+                      SmallVectorImpl<Value> &conjuncts) {
+  if (!visited.insert(v).second)
+    return;
+  if (auto broadcastOp = v.getDefiningOp<triton::BroadcastOp>())
+    if (broadcastOp.getSrc().getDefiningOp<arith::AndIOp>())
+      return collectConjuncts(broadcastOp.getSrc(), visited, conjuncts);
+  if (auto andOp = v.getDefiningOp<arith::AndIOp>()) {
+    collectConjuncts(andOp.getLhs(), visited, conjuncts);
+    collectConjuncts(andOp.getRhs(), visited, conjuncts);
+    return;
+  }
+  conjuncts.push_back(v);
+}
+
+/// The dims `v` varies along, i.e. the non-degenerate dims of the narrowest
+/// tensor it is built from. `std::nullopt` if `v` is not a tensor of the same
+/// rank as the mask, which leaves its per-dim behaviour unknown.
+///
+/// A splat varies along nothing, whatever its shape: a scalar flag in a user
+/// mask, `(offs < M) & flag`, reaches here as a `tt.splat` of an i1.
+std::optional<SmallVector<unsigned>>
+varyingDims(Value v, ArrayRef<int64_t> tensorShape) {
+  Value narrow = peelBroadcasts(v);
+  DenseElementsAttr splatAttr;
+  if (narrow.getDefiningOp<triton::SplatOp>() ||
+      (matchPattern(narrow, m_Constant(&splatAttr)) && splatAttr.isSplat()))
+    return SmallVector<unsigned>{};
+
+  auto ty = dyn_cast<RankedTensorType>(narrow.getType());
+  if (!ty || ty.getRank() != tensorShape.size())
+    return std::nullopt;
+  SmallVector<unsigned> dims;
+  for (auto [dim, extent] : llvm::enumerate(ty.getShape()))
+    if (extent != 1)
+      dims.push_back(dim);
+  return dims;
+}
+
+/// A pitch-dim upper bound: `index < splat(bound)`.
+struct LimitCmp {
+  Value base; // null for a bare `arange`
+  Value bound;
+};
+
+/// Match a single boundary-check conjunct along a dim of extent \p extent:
+/// `index < splat(bound)`, where `index` is `base + arange(0, extent)` (see
+/// `matchBaseAndRange`). Signed only, as in matchRowLimitMask: the height
+/// formula assumes it.
+std::optional<LimitCmp> matchLimitCmp(Value conjunct, int64_t extent) {
+  Value cmpCandidate = stripExpandDims(peelBroadcasts(conjunct));
+  auto cmpOp = cmpCandidate.getDefiningOp<arith::CmpIOp>();
+  if (!cmpOp || cmpOp.getPredicate() != arith::CmpIPredicate::slt)
+    return std::nullopt;
+
+  Value index = cmpOp.getLhs();
+  std::optional<Value> base = matchBaseAndRange(index, extent);
+  if (!base)
+    return std::nullopt;
+  // matchBaseAndRange looks through extsi/extui, so the base must have the
+  // compare's own type, or an extension between them (around the add, or on
+  // the base splat) would be lost and computeRowLimitHeight would sign-extend
+  // a zero-extended base (e.g. `extui(base32 + arange) < bound64` with base
+  // 0x80000000), giving the wrong height.
+  if (*base && base->getType() != getElementTypeOrSelf(index.getType()))
+    return std::nullopt;
+
+  // computeRowLimitHeight handles i32 and i64 (e.g. an index promoted to i64
+  // by `.to(tl.int64)`, issue #8565).
+  auto boundSplat = cmpOp.getRhs().getDefiningOp<triton::SplatOp>();
+  if (!boundSplat || !boundSplat.getSrc().getType().isInteger(32) &&
+                         !boundSplat.getSrc().getType().isInteger(64))
+    return std::nullopt;
+  return LimitCmp{*base, boundSplat.getSrc()};
 }
 
 } // namespace
@@ -1228,102 +1305,64 @@ bool isZeroFillOther(Value other) {
   return false;
 }
 
+std::optional<BoundaryMaskInfo>
+matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
+                       unsigned contiguousDim, bool pitchDimIsBroadcast) {
+  if (!mask || tensorShape.size() < 2 || !isZeroFillOther(other))
+    return std::nullopt;
+
+  unsigned rank = tensorShape.size();
+  unsigned pitchDim = (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+
+  SmallPtrSet<Value, 8> visited;
+  SmallVector<Value> conjuncts;
+  collectConjuncts(mask, visited, conjuncts);
+
+  BoundaryMaskInfo info{pitchDim, {}, {}, {}};
+  for (Value conjunct : conjuncts) {
+    std::optional<SmallVector<unsigned>> varying =
+        varyingDims(conjunct, tensorShape);
+    if (!varying)
+      return std::nullopt;
+    ArrayRef<unsigned> dims = *varying;
+    // Uniform along the pitch and contiguous dims: a batch-dims-only
+    // predicate (or a splatted scalar flag), which stays a mask.
+    if (!llvm::is_contained(dims, pitchDim) &&
+        !llvm::is_contained(dims, contiguousDim)) {
+      info.extraPreds.push_back(conjunct);
+      continue;
+    }
+
+    // Anything else has to be the bound along the pitch dim alone, the one
+    // the hardware clamps, and there can only be one.
+    if (dims.size() != 1 || dims.front() != pitchDim || info.rowBound)
+      return std::nullopt;
+    std::optional<LimitCmp> limit =
+        matchLimitCmp(conjunct, tensorShape[pitchDim]);
+    if (!limit)
+      return std::nullopt;
+    info.rowBase = limit->base;
+    info.rowBound = limit->bound;
+  }
+
+  // `base_height` cannot express a bound when every row is the same row.
+  if (!info.rowBound || pitchDimIsBroadcast)
+    return std::nullopt;
+
+  return info;
+}
+
 std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   ArrayRef<int64_t> tensorShape,
                                                   unsigned contiguousDim,
                                                   bool pitchDimIsBroadcast) {
-  if (!mask || tensorShape.size() < 2 || !isZeroFillOther(other) ||
-      pitchDimIsBroadcast)
+  std::optional<BoundaryMaskInfo> m = matchBoundaryCheckMask(
+      mask, other, tensorShape, contiguousDim, pitchDimIsBroadcast);
+  if (!m || m->extraPreds.size() > 1)
     return std::nullopt;
-
-  unsigned rank = tensorShape.size();
-  // Must be bounded along the pitch dim (the 2D tile's non-contiguous dim),
-  // not the memory-contiguous one or a batch dim.
-  unsigned pitchDim = (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
-
-  // The mask may be the row-limit comparison alone, or ANDed (either order)
-  // with a batch-dims-only predicate -- degenerate along the pitch and
-  // contiguous dims, so it's uniform per hardware block-load message and
-  // safe to peel off as `extraPred` instead of folding into `base_height`.
-  //
-  // `tt-reorder-broadcast` may have sunk the AND below the final broadcast,
-  // `broadcast(and(broadcast(row), broadcast(batch)))`; look through that
-  // outer broadcast so the AND is matched on its narrow tensor. The operands'
-  // own broadcasts are checked against `tensorShape` below, which only
-  // depends on the dims they are degenerate along. `extraPred` is then
-  // narrow too (see `RowLimitMaskInfo`).
-  Value rowLimitCandidate = mask;
-  Value extraPred;
-  Value andRoot = mask;
-  if (auto outerBroadcast = mask.getDefiningOp<triton::BroadcastOp>())
-    if (outerBroadcast.getSrc().getDefiningOp<arith::AndIOp>())
-      andRoot = outerBroadcast.getSrc();
-  if (auto andOp = andRoot.getDefiningOp<arith::AndIOp>()) {
-    Value lhs = andOp.getLhs(), rhs = andOp.getRhs();
-    if (isDegenerateAlongDims(rhs, tensorShape, {pitchDim, contiguousDim})) {
-      rowLimitCandidate = lhs;
-      extraPred = rhs;
-    } else if (isDegenerateAlongDims(lhs, tensorShape,
-                                     {pitchDim, contiguousDim})) {
-      rowLimitCandidate = rhs;
-      extraPred = lhs;
-    }
-  }
-
-  auto broadcastOp = rowLimitCandidate.getDefiningOp<triton::BroadcastOp>();
-  if (!broadcastOp)
-    return std::nullopt;
-
-  Value narrow = broadcastOp.getSrc();
-  auto narrowTy = dyn_cast<RankedTensorType>(narrow.getType());
-  if (!narrowTy || narrowTy.getRank() != rank)
-    return std::nullopt;
-
-  // Every dim but the pitch dim must be degenerate (size 1) in the
-  // pre-broadcast comparison -- it can only vary along the bounded dim.
-  ArrayRef<int64_t> narrowShape = narrowTy.getShape();
-  for (unsigned d = 0; d < rank; ++d) {
-    int64_t expected = (d == pitchDim) ? tensorShape[d] : 1;
-    if (narrowShape[d] != expected)
-      return std::nullopt;
-  }
-
-  // The comparison may be 2D already, or still 1D with the bool result
-  // expanded afterwards (through however many nested expand_dims) -- strip
-  // them either way.
-  Value cmpCandidate = stripExpandDims(narrow);
-  auto cmpOp = cmpCandidate.getDefiningOp<arith::CmpIOp>();
-  if (!cmpOp)
-    return std::nullopt;
-  // Signed only: the height formula (`max(bound - rowBase, 0)`) assumes it
-  // and disagrees arbitrarily with an unsigned comparison.
-  if (cmpOp.getPredicate() != arith::CmpIPredicate::slt)
-    return std::nullopt;
-
-  auto boundSplat = cmpOp.getRhs().getDefiningOp<triton::SplatOp>();
-  if (!boundSplat)
-    return std::nullopt;
-
-  std::optional<Value> rowBase =
-      matchBaseAndRange(cmpOp.getLhs(), tensorShape[pitchDim]);
-  if (!rowBase)
-    return std::nullopt;
-
-  // computeRowLimitHeight handles i32 and i64 (e.g. an index promoted to i64
-  // by `.to(tl.int64)`, issue #8565); checked here so every caller agrees on
-  // eligibility.
-  Value boundSrc = boundSplat.getSrc();
-  if (!boundSrc.getType().isInteger(32) && !boundSrc.getType().isInteger(64))
-    return std::nullopt;
-  // `rowBase` must have the compare's type: matchBaseAndRange looks through
-  // extsi/extui, and an extension between the base and the compare (around
-  // the add, or on the base splat) would be lost. computeRowLimitHeight would
-  // then sign-extend a zero-extended base (e.g. `extui(base32 + arange) <
-  // bound64` with base 0x80000000), giving the wrong height.
-  if (*rowBase && rowBase->getType() != boundSrc.getType())
-    return std::nullopt;
-
-  return RowLimitMaskInfo{pitchDim, *rowBase, boundSrc, extraPred};
+  return RowLimitMaskInfo{m->boundedDim, m->rowBase, m->rowBound,
+                          m->extraPreds.empty() ? Value()
+                                                : m->extraPreds.front()};
 }
 
 Value materializeExtraPred(OpBuilder &builder, Location loc, Value extraPred,

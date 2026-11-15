@@ -164,6 +164,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
+// COM: The same opaque row bound ANDed with two scalar flags (`tt.splat`s of
+// COM: an i1). Both are uniform, so the mask is still a row-limit pattern and
+// COM: block IO is permitted, as LowerTo2DBlockLoad will absorb it.
+#blocked7 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @masked_opaque_row_bound_uniform_conjuncts_load
+  tt.func public @masked_opaque_row_bound_uniform_conjuncts_load(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %f0: i1, %f1: i1) {
+    %m_size = tt.load %arg1 : !tt.ptr<i32>
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked7}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked7}>> -> tensor<1x32xi32, #blocked7>
+    %5 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked7}>>
+    %6 = tt.expand_dims %5 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked7}>> -> tensor<256x1xi32, #blocked7>
+    %cst_stride = arith.constant dense<64> : tensor<256x1xi32, #blocked7>
+    %row_off = arith.muli %6, %cst_stride : tensor<256x1xi32, #blocked7>
+    %row_off_bc = tt.broadcast %row_off : tensor<256x1xi32, #blocked7> -> tensor<256x32xi32, #blocked7>
+    %col_off_bc = tt.broadcast %1 : tensor<1x32xi32, #blocked7> -> tensor<256x32xi32, #blocked7>
+    %off = arith.addi %row_off_bc, %col_off_bc : tensor<256x32xi32, #blocked7>
+    %base = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<256x32x!tt.ptr<bf16>, #blocked7>
+    %4 = tt.addptr %base, %off : tensor<256x32x!tt.ptr<bf16>, #blocked7>, tensor<256x32xi32, #blocked7>
+    %7 = tt.splat %m_size : i32 -> tensor<256x1xi32, #blocked7>
+    %8 = arith.cmpi slt, %6, %7 : tensor<256x1xi32, #blocked7>
+    %rowmask = tt.broadcast %8 : tensor<256x1xi1, #blocked7> -> tensor<256x32xi1, #blocked7>
+    %s0 = tt.splat %f0 : i1 -> tensor<256x32xi1, #blocked7>
+    %s1 = tt.splat %f1 : i1 -> tensor<256x32xi1, #blocked7>
+    %m0 = arith.andi %rowmask, %s0 : tensor<256x32xi1, #blocked7>
+    %mask = arith.andi %m0, %s1 : tensor<256x32xi1, #blocked7>
+    // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
+    tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked7>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: i64 counterpart of @masked_opaque_row_bound_load, the form Helion's
 // COM: grouped GEMM emits (issue #8565): rows = (group_start + tile_off) in
 // COM: i64 plus a sign-extended arange, compared against an i32 bound

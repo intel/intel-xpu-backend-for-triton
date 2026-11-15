@@ -13,6 +13,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.benchmark_testing import DEVICE, get_xpu_extension
+from triton_kernels_benchmark.gemm_tile_utils import load_matrix_tile, make_matrix_tile_ptr, store_matrix_tile
 
 sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
 
@@ -71,27 +72,24 @@ def mac_loop(
     else:
         pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
 
-    # Create tensor descriptors
-    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
-    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
-
+    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
+    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     # Walk the segment mirrored inside its tile. When each program has at least one tile of iterations, its first
     # segment then starts at k = 0, so programs on tiles that share A rows or B columns read the same k-panels at about
     # the same time, as in oneDNN's reduced-cache stream-K.
     off_k = (iters_per_tile - remain_iters - (end_iter - start_iter)) * BLOCK_SIZE_K
     for _ in range(start_iter, end_iter):
-        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+        a = load_matrix_tile(a_desc, M, K, stride_am, stride_ak, pid_m * BLOCK_SIZE_M, off_k, BLOCK_SIZE_M,
+                             BLOCK_SIZE_K)
+        b = load_matrix_tile(b_desc, K, N, stride_bk, stride_bn, off_k, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_K,
+                             BLOCK_SIZE_N)
         acc = tl.dot(a, b, acc)
         off_k += BLOCK_SIZE_K
 
     if remain_iters == 0 and end_iter % iters_per_tile == 0:
-        c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                           block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
-        c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], acc)
+        store_matrix_tile(c_ptr, acc, M, N, stride_cm, stride_cn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N,
+                          BLOCK_SIZE_M, BLOCK_SIZE_N)
     else:
         rm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
         rn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
@@ -183,23 +181,21 @@ def full_tiles(
     else:
         pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
 
-    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
-    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
-
+    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
+    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
     off_k = 0
     for _ in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+        a = load_matrix_tile(a_desc, M, K, stride_am, stride_ak, pid_m * BLOCK_SIZE_M, off_k, BLOCK_SIZE_M,
+                             BLOCK_SIZE_K)
+        b = load_matrix_tile(b_desc, K, N, stride_bk, stride_bn, off_k, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_K,
+                             BLOCK_SIZE_N)
         acc = tl.dot(a, b, acc)
         off_k += BLOCK_SIZE_K
 
-    c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
-    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], acc)
+    store_matrix_tile(c_ptr, acc, M, N, stride_cm, stride_cn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_M,
+                      BLOCK_SIZE_N)
 
 
 @triton.jit
@@ -215,9 +211,8 @@ def zero_streamk_tiles(
         pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
     else:
         pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
-    c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
-    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32))
+    store_matrix_tile(c_ptr, tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32), M, N, stride_cm, stride_cn,
+                      pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_M, BLOCK_SIZE_N)
 
 
 # ---------------------------------------------------------------------------
@@ -259,8 +254,7 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
 
     # Check constraints.
     assert a.shape[1] == b.shape[0], 'Incompatible dimensions'
-    assert a.is_contiguous(), 'Matrix A must be contiguous'
-    assert b.is_contiguous(), 'Matrix B must be contiguous'
+    assert all(x.data_ptr() % 16 == 0 for x in (a, b, c)), 'Matrix base addresses must be 16-byte aligned'
     M, K = a.shape
     K, N = b.shape
 
