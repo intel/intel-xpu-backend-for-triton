@@ -44,4 +44,10 @@ struct LegalizeI1VectorMemoryPass
   static StringRef name() { return "LegalizeI1VectorMemoryPass"; }
 };
 
+struct ExpandFmaToContractPairPass
+    : OptionalPassInfoMixin<ExpandFmaToContractPairPass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static StringRef name() { return "ExpandFmaToContractPairPass"; }
+};
+
 } // namespace llvm

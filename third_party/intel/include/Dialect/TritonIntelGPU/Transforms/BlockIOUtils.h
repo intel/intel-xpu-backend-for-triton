@@ -202,14 +202,36 @@ struct RowLimitMaskInfo {
 };
 
 /// Match `mask` against the row-limit pattern above for a tensor of any
-/// rank >= 2, and check the remaining conditions `base_height` needs:
-/// `other` is zero-fill-compatible, the bounded dim is the pitch dim, it
-/// isn't a broadcast pointer, and `rowBase`/`bound` are both i32 or both
-/// i64 (no extension between the base and the compare).
+/// rank >= 2: `matchBoundaryCheckMask` with at most one uniform conjunct, the
+/// one `extraPred` holds.
 std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   ArrayRef<int64_t> tensorShape,
                                                   unsigned contiguousDim,
                                                   bool pitchDimIsBroadcast);
+
+/// A row-limit mask (see `RowLimitMaskInfo`) matched conjunct by conjunct:
+/// an AND of a pitch-dim bound `(base + arange(0, extent)) < bound` and any
+/// number of predicates uniform along both surface dims. The bound maps onto
+/// the 2D block message's own `base_height` clamp, `clamp(bound - base, 0,
+/// extent)` (see `computeRowLimitHeight`), so the mask needs no per-element
+/// predication at all. `rowBase` is null when the index is a bare `arange`.
+///
+/// `extraPreds` are the uniform conjuncts (batch-dim predicates, or scalar
+/// flags splatted to the mask's shape), each as `extraPred` in
+/// `RowLimitMaskInfo`: the caller ANDs them into its own per-message select.
+struct BoundaryMaskInfo {
+  unsigned boundedDim; // the pitch dim, as in `RowLimitMaskInfo`
+  Value rowBase, rowBound;
+  SmallVector<Value> extraPreds;
+};
+
+/// Match `mask` against the pattern above for a tensor of any rank >= 2.
+/// Fails unless every conjunct is recognised, `other` is
+/// zero-fill-compatible, the pitch dim is not broadcast, and the bound is i32
+/// or i64 with the base of the compare's own type (no extension between them).
+std::optional<BoundaryMaskInfo>
+matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
+                       unsigned contiguousDim, bool pitchDimIsBroadcast);
 
 /// Return `extraPred` as a value of type \p maskTy: unchanged if it already has
 /// that shape, else broadcast to it straight from its innermost source (so

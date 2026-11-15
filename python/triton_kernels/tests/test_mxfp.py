@@ -48,7 +48,7 @@ def _nvfp4_to_mxfp8_tile_kernel(X, S, Y, YS, M: tl.constexpr, K: tl.constexpr, B
 @pytest.mark.parametrize("tensor_scale", [False, True])
 def test_nvfp4_to_mxfp8_tile(block_k, k, tensor_scale, device):
     if not is_cuda() or not cuda_capability_geq(10, 0):
-        pytest.xfail("requires Blackwell")
+        pytest.skip("requires Blackwell")
     torch.manual_seed(42)
     m = 17
     values = torch.randint(0, 256, (m, k // 2), device=device, dtype=torch.uint8)
@@ -73,7 +73,7 @@ def test_nvfp4_to_mxfp8_tile(block_k, k, tensor_scale, device):
 @pytest.mark.parametrize("maximum0", range(8))
 def test_nvfp4_to_mxfp8_tile_scale_pairs(maximum0, device):
     if not is_cuda() or not cuda_capability_geq(10, 0):
-        pytest.xfail("requires Blackwell")
+        pytest.skip("requires Blackwell")
     # Every finite nonnegative E4M3 scale pair, with independent FP4 maxima
     # in the two NVFP4 blocks that share one MXFP8 scale.
     cases = torch.arange(127 * 127 * 8, device=device)
@@ -167,7 +167,7 @@ def _mxfp_scale_boundary_data(src_dtype, dst_dtype, device):
 def test_mxfp_upcast_scale_boundaries(upcast, src_dtype, dst_dtype, axis, device):
     if (upcast is upcast_from_mxfp and src_dtype == torch.float8_e4m3fn and is_cuda()
             and torch.cuda.get_device_capability() < (8, 9)):
-        pytest.xfail("E4M3 conversion requires CUDA capability 8.9 or newer")
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
     tensor, scale, expected = _mxfp_scale_boundary_data(src_dtype, dst_dtype, device)
     tensor, scale, expected = (x.transpose(axis, -1) for x in (tensor, scale, expected))
     actual = upcast(tensor, scale, dst_dtype, axis)

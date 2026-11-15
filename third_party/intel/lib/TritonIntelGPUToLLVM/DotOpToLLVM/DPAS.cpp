@@ -5,6 +5,7 @@
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -135,14 +136,14 @@ public:
       if (scaleAVal) {
         scaleA = getScaleValuesFromDotOperandLayoutStruct(
             scaleAVal, repBatch, repM, repK, 3 /*opIdx*/,
-            ATensorTy.getElementType().getIntOrFloatBitWidth() == 16);
+            getIntOrFloatOrPtrBitWidth(ATensorTy.getElementType()) == 16);
       }
 
       auto scaleBVal = adaptor.getBScale();
       if (scaleBVal) {
         scaleB = getScaleValuesFromDotOperandLayoutStruct(
             scaleBVal, repBatch, repN, repK, 4 /*opIdx*/,
-            BTensorTy.getElementType().getIntOrFloatBitWidth() == 16);
+            getIntOrFloatOrPtrBitWidth(BTensorTy.getElementType()) == 16);
       }
     }
 

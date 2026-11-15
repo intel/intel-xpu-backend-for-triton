@@ -1227,6 +1227,8 @@ constexpr const auto SUPPORT_F8_CONV =
     triton::gpu::intel::TritonIntelGPUDialect::getSupportF8ConversionAttrName;
 constexpr const auto SUPPORT_BF16_ARITH = triton::gpu::intel::
     TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName;
+constexpr const auto SUPPORT_BF16_CONV = triton::gpu::intel::
+    TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName;
 constexpr const auto IS_LTS =
     triton::gpu::intel::TritonIntelGPUDialect::getIsLTSAttrName;
 constexpr const char BUILTIN_HFTOHF8[] =
@@ -1237,10 +1239,8 @@ constexpr const char BUILTIN_BFTOHF8[] =
     "__builtin_spirv_ClampConvertBF16ToE4M3INTEL";
 constexpr const char BUILTIN_BFTOBF8[] =
     "__builtin_spirv_ClampConvertBF16ToE5M2INTEL";
-constexpr const char BUILTIN_HF8TOHF[] =
-    "__builtin_spirv_ConvertE4M3ToFP16INTEL";
-constexpr const char BUILTIN_BF8TOHF[] =
-    "__builtin_spirv_ConvertE5M2ToFP16INTEL";
+constexpr const char BUILTIN_HF8TOHF[] = "__builtin_spirv_ConvertE4M3ToFP16EXT";
+constexpr const char BUILTIN_BF8TOHF[] = "__builtin_spirv_ConvertE5M2ToFP16EXT";
 
 // Call the builtin function BaseName. If the
 // input size > 1, pack the values in vectors of size pow 2 <= MaxVecSize.
@@ -1378,6 +1378,28 @@ static bool isDotBInEveryWarp(Operation *op) {
     return false;
   ArrayRef<unsigned> warps = dpas.getWarpsPerCTA();
   return warps.back() == 1 && warps[warps.size() - 2] > 1;
+}
+
+// Converts the next 8 f32 elements to bf16 (RTNE) with one vector
+// __spirv_ConvertFToBF16INTEL call; IGC keeps scalar calls scalar, which
+// raises register pressure (#8594). Returns {} when not applicable.
+SmallVector<Value> convertFp32ToBf16x8(Operation *op, Location loc,
+                                       ConversionPatternRewriter &rewriter,
+                                       MultipleOperandsRange operands) {
+  constexpr unsigned width = 8;
+  if (operands.size() < width || !HasAttr<SUPPORT_BF16_CONV>(op))
+    return {};
+  TritonLLVMIRRewriter b(loc, rewriter);
+  Value vec = b.undef(vec_ty(f32_ty, width));
+  for (unsigned i = 0; i < width; ++i)
+    vec = b.insert_element(vec, operands[i][0], b.i32_val(i));
+  Value cvt = intel::convertWithFunctionCall(
+      b, vec, "__spirv_ConvertFToBF16INTEL", f32_ty, i16_ty);
+  SmallVector<Value> results;
+  for (unsigned i = 0; i < width; ++i)
+    results.push_back(
+        b.bitcast(b.extract_element(i16_ty, cvt, b.i32_val(i)), bf16_ty));
+  return results;
 }
 
 // Attempts to use vectorized conversions via inline PTX when possible.
@@ -1613,6 +1635,11 @@ struct FpToFpOpConversion
     if (srcElementType.isF32() && dstElementType.isBF16()) {
       assert(roundingMode.has_value() &&
              "rounding mode must be specified for fp32->bf16 conversion");
+      if (roundingMode.value() == RoundingMode::RTNE)
+        if (SmallVector<Value> vals =
+                convertFp32ToBf16x8(op, loc, rewriter, operands);
+            !vals.empty())
+          return vals;
       SmallVector<Value> outVals;
       for (Value v : operands[0]) {
         outVals.push_back(
@@ -1997,6 +2024,11 @@ struct TruncFOpConversion
       auto inElemTy = getElementType(op.getIn());
       assert((inElemTy.isF32() || inElemTy.isF64()) &&
              "unsupported conversion");
+      if (inElemTy.isF32())
+        if (SmallVector<Value> vals =
+                convertFp32ToBf16x8(op, loc, rewriter, operands);
+            !vals.empty())
+          return vals;
       Value in = operands[0][0];
       if (inElemTy.isF64())
         in = convertToFp32RoundToOdd(loc, rewriter, in);
@@ -2127,8 +2159,6 @@ struct AbsFOpConversion
   }
 };
 
-// FIXME: Remove this IGC W/A (#8626).
-//
 // Without native bf16 arithmetic (LTS drivers), a bf16 `math.fma` is computed
 // in f32 and rounded back once. `arith-emulate-unsupported-floats` only widens
 // arith ops, so it never reaches `math.fma`. This is exact for the
@@ -2155,12 +2185,7 @@ struct FmaOpConversion
       c = intel::convertBf16ToFp32(loc, rewriter, c);
       elemTy = f32_ty;
     }
-    if (!elemTy.isF32())
-      return {LLVM::FMAOp::create(rewriter, loc, elemTy, a, b, c)};
-    auto fmf = LLVM::FastmathFlagsAttr::get(rewriter.getContext(),
-                                            LLVM::FastmathFlags::contract);
-    Value mul = LLVM::FMulOp::create(rewriter, loc, elemTy, a, b, fmf);
-    Value res = LLVM::FAddOp::create(rewriter, loc, elemTy, mul, c, fmf);
+    Value res = LLVM::FMAOp::create(rewriter, loc, elemTy, a, b, c);
     if (widenBf16)
       res = intel::convertFp32ToBf16(loc, rewriter, res, RoundingMode::RTNE);
     return {res};
