@@ -466,3 +466,40 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
     tt.return %r : tensor<32x16xf32, #blocked>
   }
 }
+
+// -----
+
+// A K tile well above the smallest one: an f16 dot with 2 rows of A and 1
+// column of B per thread and no cast replayed takes 6 bytes per thread per K
+// step, so a tile of 64 takes 384 bytes and 128 takes 768, and the tile is 64.
+// Staged as is, A and B take 64 KB, beyond the 56 KB per-dot limit, so the dot
+// is staged only with a larger SLM target.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dot0    = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot1    = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @large_k_tile
+  // CHECK-NOT: ttg.local_alloc
+  // CHECK: tt.return
+
+  // SLM128K-LABEL: @large_k_tile
+  // SLM128K-DAG: ttg.local_alloc {{%[0-9]+}} : (tensor<16x1024xf16
+  // SLM128K-DAG: ttg.local_alloc {{%[0-9]+}} : (tensor<1024x16xf16
+  // SLM128K: ttg.local_load {{.*}} -> tensor<16x64xf16, #ttg.dot_op<{opIdx = 0
+  // SLM128K: ttg.local_load {{.*}} -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1
+  // SLM128K-COUNT-16: tt.dot {{.*}} : tensor<16x64xf16
+  // SLM128K-NOT: tt.dot
+  // SLM128K: tt.return
+  tt.func public @large_k_tile(%parg0: tensor<16x1024x!tt.ptr<f16>, #blocked>,
+                               %parg1: tensor<1024x16x!tt.ptr<f16>, #blocked>) -> tensor<16x16xf16, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #blocked>
+    %a = tt.load %parg0 : tensor<16x1024x!tt.ptr<f16>, #blocked>
+    %b = tt.load %parg1 : tensor<1024x16x!tt.ptr<f16>, #blocked>
+    %ac = ttg.convert_layout %a : tensor<16x1024xf16, #blocked> -> tensor<16x1024xf16, #dot0>
+    %bc = ttg.convert_layout %b : tensor<1024x16xf16, #blocked> -> tensor<1024x16xf16, #dot1>
+    %r = tt.dot %ac, %bc, %cst {inputPrecision = 2 : i32, maxNumImpreciseAcc = 0 : i32}
+         : tensor<16x1024xf16, #dot0> * tensor<1024x16xf16, #dot1> -> tensor<16x16xf16, #blocked>
+    tt.return %r : tensor<16x16xf16, #blocked>
+  }
+}
