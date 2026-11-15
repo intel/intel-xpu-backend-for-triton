@@ -119,19 +119,26 @@ struct ConvertTritonGPUToLLVM
     // back in modules that cannot hand data to another work-group. The check
     // is deliberately broad: consumer-side ops count too, which also keeps racy
     // hand-offs through plain stores working; LowerTo2DBlockLoad leaves the
-    // volatile and `.cv` loads in place for it. It covers the whole module and
-    // runs before this pass converts anything, since a noinline callee is a
-    // separate function here. Where write-back is not allowed this strips the
-    // module attribute, which the 2D block-store patterns read.
+    // volatile and `.cv` loads in place for it. Ops the check cannot see into
+    // count as well: inline asm and impure extern calls. `.cg` loads do not:
+    // AnnotateCacheControl puts that modifier on ordinary loads. The check
+    // covers the whole module and runs before this pass converts anything,
+    // since a noinline callee is a separate function here. Where write-back is
+    // not allowed this strips the module attribute, which the 2D block-store
+    // patterns read.
     // TODO: only releases at gpu scope or wider can publish data.
     StringRef l1WriteBackAttr = triton::gpu::intel::TritonIntelGPUDialect::
         getStoreL1WriteBackAttrName();
     if (!mod->hasAttrOfType<UnitAttr>(l1WriteBackAttr) ||
         mod.walk([](Operation *op) {
              if (isa<triton::AtomicOpInterface, triton::AtomicPollOp,
-                     triton::ElementwiseInlineAsmOp>(op) ||
+                     triton::ElementwiseInlineAsmOp, triton::gpu::InlineAsmOp>(
+                     op) ||
                  triton::gpu::intel::isVolatileOrCVLoad(op))
                return WalkResult::interrupt();
+             if (auto ext = dyn_cast<triton::ExternElementwiseOp>(op))
+               return ext.getPure() ? WalkResult::advance()
+                                    : WalkResult::interrupt();
              return WalkResult::advance();
            })
             .wasInterrupted())

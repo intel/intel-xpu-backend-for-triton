@@ -174,3 +174,65 @@ def test_write_back_store_visible_after_kernel(reader, device, with_allocator):
         assert torch.equal(got, want), f"{reader}: read a stale tile"
     stores, wb = _2d_store_counts(kernel.asm["llir"])
     assert stores > 0 and wb == (stores if _writes_back() else 0)
+
+
+@triton.jit
+def _pattern_tiles(x_ptr, M, N, stride, seed, BM: tl.constexpr, BN: tl.constexpr):
+    """Stores a seed-dependent pattern from a DPAS layout, so the stores are 2D block stores."""
+    r = tl.program_id(0) * BM + tl.arange(0, BM)
+    c = tl.program_id(1) * BN + tl.arange(0, BN)
+    tile = ((r[:, None] * 37 + c[None, :] * 11 + seed) % 1999 - 999).to(tl.float16)
+    tile = tl.dot((tl.arange(0, BM)[:, None] == tl.arange(0, BM)[None, :]).to(tl.float16), tile).to(tl.float16)
+    desc = tl.make_tensor_descriptor(x_ptr, shape=[M, N], strides=[stride, 1], block_shape=[BM, BN])
+    desc.store([tl.program_id(0) * BM, tl.program_id(1) * BN], tile)
+
+
+@pytest.mark.parametrize("col", [0, 16])
+@pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_write_back_line_split_between_work_groups(col, device, with_allocator):
+    """A view starting at column 16 (32 B into a line) with 32-column tiles splits every 64 B line between two
+    work-groups, usually on different Xe-cores, so two L1s write back halves of one line. Both halves must survive."""
+    M, N, BM, BN, pitch = 1024, 1024, 64, 32, 1088
+    buf = torch.full((M, pitch), -7.0, dtype=torch.float16, device=device)
+    x = buf[:, col:col + N]
+    r = torch.arange(M, device=device)[:, None]
+    c = torch.arange(N, device=device)[None, :]
+    for seed in range(20):
+        kernel = _pattern_tiles[(M // BM, N // BN)](x, M, N, pitch, seed, BM, BN, num_warps=4)
+        assert torch.equal(x, ((r * 37 + c * 11 + seed) % 1999 - 999).to(torch.float16)), f"seed {seed}: lost a store"
+    assert (buf[:, :col] == -7.0).all() and (buf[:, col + N:] == -7.0).all(), "a store wrote outside the view"
+    stores, wb = _2d_store_counts(kernel.asm["llir"])
+    assert stores > 0 and wb == (stores if _writes_back() else 0)
+
+
+@triton.jit
+def _store_then_cg_reload(x_ptr, out_ptr, n, BM: tl.constexpr, BN: tl.constexpr):
+    """Each program stores its tile (2D block stores), then re-reads it with masked `.cg` loads, which skip L1."""
+    pid = tl.program_id(0)
+    base = pid * BM * BN
+    r = tl.arange(0, BM)
+    c = tl.arange(0, BN)
+    tile = (((pid * BM + r[:, None]) * 37 + c[None, :] * 11) % 1999 - 999).to(tl.float16)
+    tile = tl.dot((r[:, None] == r[None, :]).to(tl.float16), tile).to(tl.float16)
+    tl.make_tensor_descriptor(x_ptr + base, shape=[BM, BN], strides=[BN, 1], block_shape=[BM, BN]).store([0, 0], tile)
+    tl.debug_barrier()
+    i = tl.arange(0, BM * BN)
+    tl.store(out_ptr + base + i, tl.load(x_ptr + base + i, mask=i < n, cache_modifier=".cg"), mask=i < n)
+
+
+@pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_cg_load_sees_own_write_back(device, with_allocator):
+    """A `.cg` load skips L1. It still sees the lines its own work-group just wrote back through L1."""
+    BM = BN = 64
+    progs = 512
+    r = torch.arange(progs * BM, device=device)[:, None]
+    want = ((r * 37 + torch.arange(BN, device=device)[None, :] * 11) % 1999 - 999).to(torch.float16).flatten()
+    for _ in range(20):
+        x = torch.full((progs * BM * BN, ), -1.0, dtype=torch.float16, device=device)
+        out = torch.full_like(x, -2.0)
+        kernel = _store_then_cg_reload[(progs, )](x, out, BM * BN, BM, BN, num_warps=4)
+        assert torch.equal(out, want), "a .cg load missed a written-back line"
+    stores, wb = _2d_store_counts(kernel.asm["llir"])
+    assert stores > 0 and wb == (stores if _writes_back() else 0)

@@ -225,3 +225,83 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+// The check cannot see into an impure extern call (here the clock builtin) or
+// ttg.inline_asm: default. A pure extern call (libdevice math) keeps write-back,
+// and so does a `.cg` load, which AnnotateCacheControl puts on ordinary loads.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io", "ttig.store_l1_write_back"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_f16_then_impure_extern
+  tt.func public @store_f16_then_impure_extern(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c3_i32 = arith.constant 3 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x64xf16, #dpas>
+    // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}} cache_control = Default}
+    // CHECK-NOT: triton_gen.2Dblockstore
+    tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xf16, #dpas>, tensor<64x64xf16, #dpas>
+    %0 = tt.extern_elementwise %c3_i32 {libname = "", libpath = "", pure = false, symbol = "_Z27__spirv_ReadClockKHR_Rulongi"} : (i32) -> i64
+    tt.return
+  }
+}
+
+// -----
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io", "ttig.store_l1_write_back"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_f16_then_pure_extern
+  tt.func public @store_f16_then_pure_extern(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %x: f32, %out: !tt.ptr<f32>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x64xf16, #dpas>
+    // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}} cache_control = L1WB_L3WB}
+    // CHECK-NOT: triton_gen.2Dblockstore
+    tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xf16, #dpas>, tensor<64x64xf16, #dpas>
+    %0 = tt.extern_elementwise %x {libname = "", libpath = "", pure = true, symbol = "__imf_rsqrtf"} : (f32) -> f32
+    tt.store %out, %0 : !tt.ptr<f32>
+    tt.return
+  }
+}
+
+// -----
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io", "ttig.store_l1_write_back"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_f16_then_ttg_inline_asm
+  tt.func public @store_f16_then_ttg_inline_asm(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c1_i32 = arith.constant 1 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x64xf16, #dpas>
+    // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}} cache_control = Default}
+    // CHECK-NOT: triton_gen.2Dblockstore
+    // CHECK: llvm.inline_asm
+    tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xf16, #dpas>, tensor<64x64xf16, #dpas>
+    %0 = ttg.inline_asm "mov (M1, 1) $0(0, 0)<1> $1(0, 0)<0;1,0>" {constraints = "=rw,rw", pure = false} %c1_i32 : (i32) -> i32
+    tt.return
+  }
+}
+
+// -----
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [8], order = [0]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io", "ttig.store_l1_write_back"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_f16_then_cg_load
+  tt.func public @store_f16_then_cg_load(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %src: !tt.ptr<f16>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x64xf16, #dpas>
+    // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}} cache_control = L1WB_L3WB}
+    // CHECK-NOT: triton_gen.2Dblockstore
+    tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xf16, #dpas>, tensor<64x64xf16, #dpas>
+    %r = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked>
+    %p = tt.splat %src : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>, #blocked>
+    %q = tt.addptr %p, %r : tensor<128x!tt.ptr<f16>, #blocked>, tensor<128xi32, #blocked>
+    %v = tt.load %q {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : tensor<128x!tt.ptr<f16>, #blocked>
+    tt.store %q, %v : tensor<128x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
