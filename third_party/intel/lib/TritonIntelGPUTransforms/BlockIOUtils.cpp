@@ -1267,13 +1267,10 @@ std::optional<LimitCmp> matchLimitCmp(Value conjunct, int64_t extent) {
   if (!cmpOp)
     return std::nullopt;
 
-  Value index = cmpOp.getLhs(), other = cmpOp.getRhs();
-  arith::CmpIPredicate pred = cmpOp.getPredicate();
-  if (pred == arith::CmpIPredicate::sgt) {
-    pred = arith::CmpIPredicate::slt;
-    std::swap(index, other);
-  }
-  if (pred != arith::CmpIPredicate::slt)
+  Value index = cmpOp.getLhs(), bound = cmpOp.getRhs();
+  if (cmpOp.getPredicate() == arith::CmpIPredicate::sgt)
+    std::swap(index, bound);
+  else if (cmpOp.getPredicate() != arith::CmpIPredicate::slt)
     return std::nullopt;
 
   std::optional<Value> base = matchBaseAndRange(index, extent);
@@ -1289,7 +1286,7 @@ std::optional<LimitCmp> matchLimitCmp(Value conjunct, int64_t extent) {
 
   // computeRowLimitHeight handles i32 and i64 (e.g. an index promoted to i64
   // by `.to(tl.int64)`, issue #8565).
-  auto boundSplat = other.getDefiningOp<triton::SplatOp>();
+  auto boundSplat = bound.getDefiningOp<triton::SplatOp>();
   if (!boundSplat || !boundSplat.getSrc().getType().isInteger(32) &&
                          !boundSplat.getSrc().getType().isInteger(64))
     return std::nullopt;
