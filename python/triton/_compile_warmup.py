@@ -80,6 +80,10 @@ class _WarmupCompiledKernel:
     def __getitem__(self, grid):
         return lambda *args, **kwargs: None
 
+    def __getattr__(self, name):
+        raise AttributeError(f"`{name}` is not available on a kernel compiled by the warmup pool; "
+                             "guard such checks with `is_compile_warmup()`")
+
 
 @contextmanager
 def compile_warmup_only(dispatcher=None):
@@ -117,12 +121,14 @@ def compile_warmup_only(dispatcher=None):
                 kernel, grid, *args, **kwargs)
             torch.testing.assert_close = fake_assert_close
             previous_compile = triton.compiler.compile
-            triton.compile = triton.compiler.compile = warmup_compile
-            active_token = _COMPILE_WARMUP_ACTIVE.set(True)
+            active_token = None
             try:
+                triton.compile = triton.compiler.compile = warmup_compile
+                active_token = _COMPILE_WARMUP_ACTIVE.set(True)
                 yield
             finally:
-                _COMPILE_WARMUP_ACTIVE.reset(active_token)
+                if active_token is not None:
+                    _COMPILE_WARMUP_ACTIVE.reset(active_token)
                 triton.compile = triton.compiler.compile = previous_compile
                 triton.KernelInterface.__getitem__ = previous_getitem
                 torch.testing.assert_close = previous_assert_close
