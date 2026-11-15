@@ -227,7 +227,8 @@ jobs:
     if: ${{ inputs.warmup_on_cpu }}
     needs: build
     timeout-minutes: 720
-    runs-on: ${{ fromJson(format('["linux", "cpu", "{0}"]', inputs.runner_version)) }}
+    # The AOT compiler (`ocloc`) must come from the same driver stack as on the GPU runners.
+    runs-on: ${{ fromJson(format('["linux", "cpu", "{0}", "{1}"]', inputs.driver_version, inputs.runner_version)) }}
     env:
       TRITON_XPU_GEN_NATIVE_CODE: 1
     defaults:
@@ -276,12 +277,37 @@ jobs:
         run: |
           pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@c7c4c74fb8342c3df9d2d7693cf0a426c7736ecd
 
+      - name: Report environment details
+        timeout-minutes: 1
+        run: |
+          cat <<EOF
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=${{ inputs.python_version }}
+          PYTORCH_REPO=$PYTORCH_REPO
+          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
+          PYTORCH_VERSION=$PYTORCH_VERSION
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          TRITON_BRANCH=$GITHUB_REF_NAME
+          OS=${{ runner.os }}
+          RUNNER_NAME=$RUNNER_NAME
+          OCLOC_VERSION=$(ocloc --version)
+          EOF
+          ./scripts/capture-hw-details.sh
+
       # This runner has no GPU: Triton compiles for the device recorded by the build job.
       - name: Set warmup environment
         run: |
           echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
           echo "TRITON_INTEL_TARGET_JSON=$GITHUB_WORKSPACE/xpu-target.json" | tee -a $GITHUB_ENV
           echo "TRITON_CI_COMPILE_TRACE_DIR=$RUNNER_TEMP/triton-ci-compile-trace" | tee -a $GITHUB_ENV
+
+      - name: Check the driver stack matches the GPU runner
+        run: |
+          python scripts/dump_xpu_target.py --check "$TRITON_INTEL_TARGET_JSON"
 
       - name: Warm regression compile cache
         uses: ./.github/actions/warm-compile-cache
