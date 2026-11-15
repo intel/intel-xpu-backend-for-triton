@@ -77,6 +77,10 @@ class XPUOptions:
     # for this target ("256" everywhere except "cri", which gets "512"); see
     # `get_max_grf_mode`, the single source of truth for this policy.
     max_grf_mode: str = "256"
+    # Width in bytes of one GRF register on this target (32 or 64); see
+    # `get_grf_register_size`, the single source of truth for this value
+    # (`parse_options` always sets it, so this default is not used).
+    grf_register_size: int = 64
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -177,9 +181,8 @@ def get_max_grf_mode(arch: dict) -> str:
     participates, the same mechanism every other per-target capability in
     this file uses), from which it reaches every consumer as
     `opt.max_grf_mode`: `annotate_module`'s `ttig.max_grf_mode` module
-    attribute (read by `RegisterPressureAnalysis::getGRFBytesPerHardwareThread`
-    to resolve its `UnknownGRFSizeAssumption::Largest` case for both
-    `grf_mode='default'` and `grf_mode='auto'`), `metadata["max_grf_mode"]` (via
+    attribute (read by `AccelerateMatmul` to bound the GRF a 'default' or
+    'auto' kernel can end up with), `metadata["max_grf_mode"]` (via
     `options.__dict__`, handed to `driver.c`'s `load_binary` so the JIT
     large-GRF retry escalates to the same mode), and `make_zebin`'s ocloc
     auto-large-GRF retry flag.
@@ -206,6 +209,31 @@ def get_grf_modes(arch: dict) -> tuple[str, ...]:
       ("128", "160", "192", "256", "512") if the target is "cri", otherwise ("128", "256").
     """
     return ("128", "160", "192", "256", "512") if arch.get("arch") == "cri" else ("128", "256")
+
+
+def get_grf_register_size(arch: dict) -> int:
+    """
+    Returns the width in bytes of one GRF register on the target.
+
+    A GRF register holds one 32-bit value per lane of the native SIMD width,
+    which is the smallest sub-group size the device reports: 8 lanes (32 B) on
+    Xe-HPG and Xe-LPG (DG2, MTL, ARL), 16 lanes (64 B) on PVC, Xe2 and later.
+    This is derived from the device's `sub_group_sizes` rather than its `arch`
+    string, which `arch_parser.c` leaves empty for SKUs it does not list.
+
+    `parse_target` calls this once per target to populate
+    `dev_prop['grf_register_size']` (a driver- or out-of-tree-arch-module-supplied
+    override wins, as for `max_grf_mode`), from which it reaches
+    `annotate_module`'s `ttig.grf_register_size` module attribute, read by
+    `RegisterPressureAnalysis` to turn a GRF mode's register count into bytes.
+
+    Arguments:
+      arch: the `target.arch` dict for the current device.
+
+    Returns:
+      4 bytes times the smallest entry of `arch["sub_group_sizes"]`.
+    """
+    return 4 * min(arch["sub_group_sizes"])
 
 
 def accepts_default_grf(spill_size, is_lts):
@@ -348,11 +376,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # cosmetic: `make_zebin` interpolates it directly into an `ocloc`
         # flag (hard failure on a typo), `driver.c`'s JIT retry silently
         # falls back to 256 for anything that isn't exactly "512"/"128", and
-        # `RegisterPressureAnalysis` silently falls back to 512 for anything
-        # that isn't exactly "128"/"256": three different interpretations of
-        # the same bad value, with the worst combination (a permissive
-        # 512-byte pressure budget paired with a 256-GRF hardware ceiling)
-        # silently reproducing a register-pressure undercount.
+        # `AccelerateMatmul` falls back to 256 for anything non-numeric.
         # Validate here, once, so every downstream consumer agrees, against
         # `get_grf_modes` rather than a fixed list so an override cannot name a
         # mode an explicit `grf_mode` request would reject as unknown.
@@ -360,6 +384,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if dev_prop['max_grf_mode'] not in (grf_modes := get_grf_modes(tgt_prop)):
             raise AssertionError(f"invalid max_grf_mode override {dev_prop['max_grf_mode']!r}: must be one of "
                                  f"{grf_modes} on {tgt_prop.get('arch')}")
+        # Width in bytes of one GRF register on this target; see
+        # `get_grf_register_size`. Validated here for the same reason as
+        # `max_grf_mode`: `RegisterPressureAnalysis` silently falls back to 32
+        # for anything other than 32 or 64.
+        dev_prop['grf_register_size'] = tgt_prop.get('grf_register_size', get_grf_register_size(tgt_prop))
+        if dev_prop['grf_register_size'] not in (32, 64):
+            raise AssertionError(f"invalid grf_register_size {dev_prop['grf_register_size']!r} on "
+                                 f"{tgt_prop.get('arch')}: must be 32 or 64")
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -377,6 +409,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
         args["max_grf_mode"] = self.properties['max_grf_mode']
+        args["grf_register_size"] = self.properties['grf_register_size']
         grf_mode = args.get("grf_mode", XPUOptions.grf_mode)
         if grf_mode not in ("default", "auto") and grf_mode not in (grf_modes := get_grf_modes(self.target.arch)):
             raise RuntimeError(f"Unknown grf_mode: {grf_mode}; expected 'default', 'auto' or one of {grf_modes} "
@@ -520,6 +553,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.target_arch = cls.target_arch
         module_opts.block_io_base_alignment = properties["block_io_base_alignment"]
         module_opts.max_grf_mode = opt.max_grf_mode
+        module_opts.grf_register_size = opt.grf_register_size
 
     @classmethod
     @track

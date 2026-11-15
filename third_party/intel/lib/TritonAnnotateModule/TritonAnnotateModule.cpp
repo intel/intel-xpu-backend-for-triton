@@ -69,6 +69,10 @@ struct TritonAnnotateModule
       mod->setAttr(ttgi::TritonIntelGPUDialect::getMaxGRFModeAttrName(),
                    builder.getStringAttr(maxGRFMode));
 
+    if (grfRegisterSize != 0)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getGRFRegisterSizeAttrName(),
+                   builder.getI32IntegerAttr(grfRegisterSize));
+
     if (support16BitAtomics)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),

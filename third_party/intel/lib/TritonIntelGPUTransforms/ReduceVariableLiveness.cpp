@@ -451,13 +451,11 @@ public:
 
     Operation *rootOperation = getOperation();
     ModuleOp mod = getOperation();
-    // Sinking is gated on the budget as a *threshold* to act, not a ceiling,
-    // so an unknown ("default"/"auto") GRF size must assume the largest the
-    // device supports -- see UnknownGRFSizeAssumption's documentation.
+    // "default"/"auto" get the 128-register budget: sinking against a larger
+    // one leaves the pressure that would push the build to a larger mode.
     unsigned perLaneGRFBudget =
-        ttgi::RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(
-            grfMode, mod,
-            ttgi::RegisterPressureAnalysis::UnknownGRFSizeAssumption::Largest);
+        ttgi::RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(grfMode,
+                                                                   mod);
     ttg::intel::RegisterPressureAnalysis analysis(rootOperation);
     // TODO: extend the pass to handle `while` loops.
     rootOperation->walk([&](scf::ForOp forOp) {

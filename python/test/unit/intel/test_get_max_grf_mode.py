@@ -5,7 +5,7 @@ https://github.com/intel/intel-xpu-backend-for-triton/issues/8074
 `get_max_grf_mode()` is the single source of truth `parse_target` calls to
 populate `dev_prop['max_grf_mode']`, from which every consumer (the ocloc
 auto-large-GRF retry, `driver.c`'s JIT retry, and the `ttig.max_grf_mode`
-module attribute read by `RegisterPressureAnalysis`) reaches it as
+module attribute read by `AccelerateMatmul`) reaches it as
 `opt.max_grf_mode` rather than re-deriving it. A driver- or out-of-tree
 arch-module-supplied override participates via `parse_target`'s own
 `tgt_prop.get('max_grf_mode', get_max_grf_mode(tgt_prop))` call -- the same
