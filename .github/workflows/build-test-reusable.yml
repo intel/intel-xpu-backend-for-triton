@@ -324,6 +324,15 @@ jobs:
           pytest-targets: . --ignore=test_performance.py
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
+      - name: Warm intel compile cache
+        if: matrix.loop.suite == 'minicore'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/unit
+          skiplist-name: intel
+          pytest-targets: intel/
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+
       - name: Run minicore tests
         if: matrix.loop.suite == 'minicore'
         run: |
