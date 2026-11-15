@@ -66,13 +66,16 @@ def TritonIntelFuseReshape
         %A = tt.reshape %load : tensor<1x512x64xf16> -> tensor<512x64xf16>
         dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
 
-    The transformation drops the reshape operation, and generates:
-        %div = %a / %b
-        %desc = tt.make_tensor_descriptor %base_ptr, [%s0 * %div + %s1, %s2], [%b, %c]
+    The transformation drops the reshape operation and folds the collapsed index into the
+    base, keeping the other two dimensions' own shapes and strides:
+        %p = tt.addptr %base_ptr, max(min(%x, %s0 - 1), 0) * %a
+        %desc = tt.make_tensor_descriptor %p, [%s1, %s2], [%b, %c]
                                           : !tt.tensordesc<512x64xf16>
-        %A = tt.descriptor_load %desc[%x * %div + %y, %z]
+        %A = tt.descriptor_load %desc[%x in [0, %s0) ? %y : %s1, %z]
                                 : !tt.tensordesc<512x64xf16> -> tensor<512x64xf16>
         dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
+    An out-of-range %x thus reads at %s1, which pads the whole block as the rank-3 load did.
+    A unit middle dimension is collapsed the same way.
 
     Before fusing, a reshape that drops the leading unit dimension of a 3-dim tensor is moved
     up until it uses the tt.descriptor_load result directly, even without a dot user, in which

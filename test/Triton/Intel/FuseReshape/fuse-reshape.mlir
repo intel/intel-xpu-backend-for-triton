@@ -96,7 +96,10 @@ tt.func public @fuseMiddleDim(%arg0: tensor<128x256xbf16>, %arg1: !tt.ptr<bf16>)
 // COM: the first at a negative column, and a large one pushed the merged width
 // COM: past the 24-bit surface field, both of which read the block as padding.
 // COM: The stride now only scales the base offset, in i64, and nothing divides
-// COM: by it.
+// COM: by it. The product carries the descriptor's 16-byte stride contract (8
+// COM: f16 elements) as a hint, which AxisInfo cannot derive for an unhinted
+// COM: stride and `MaterializeBlockPointer` needs to keep the base 4-byte
+// COM: aligned.
 tt.func public @fuseRuntimeMiddleStride(%arg0: tensor<128x64xf16>, %arg1: !tt.ptr<f16>, %T: i32, %H: i32, %sT: i64, %sH: i64, %m: i32, %h: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c128_i32 = arith.constant 128 : i32
@@ -116,7 +119,7 @@ tt.func public @fuseRuntimeMiddleStride(%arg0: tensor<128x64xf16>, %arg1: !tt.pt
 // CHECK: [[MIN:%.*]] = arith.minsi %[[IDX]], [[LAST]] : i32
 // CHECK: [[CLAMPED:%.*]] = arith.maxsi [[MIN]], %c0_i32 : i32
 // CHECK: [[WIDE:%.*]] = arith.extsi [[CLAMPED]] : i32 to i64
-// CHECK: [[OFF:%.*]] = arith.muli [[WIDE]], %[[SH]] : i64
+// CHECK: [[OFF:%.*]] = arith.muli [[WIDE]], %[[SH]] {tt.divisibility = 8 : i32} : i64
 // CHECK: [[BASE:%.*]] = tt.addptr %arg1, [[OFF]] : !tt.ptr<f16>, i64
 // CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor [[BASE]], [%[[T]], %c128_i32], [%[[ST]], %c1_i64] : <f16>, <64x128xf16>
 // CHECK: [[GE:%.*]] = arith.cmpi sge, %[[IDX]], %c0_i32 : i32
@@ -264,7 +267,8 @@ tt.func public @fusePaddedStrides(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>,
 // CHECK: [[MIN:%.*]] = arith.minsi %[[IDX]], [[LAST]] : i32
 // CHECK: [[CLAMPED:%.*]] = arith.maxsi [[MIN]], %c0_i32 : i32
 // CHECK: [[WIDE:%.*]] = arith.extsi [[CLAMPED]] : i32 to i64
-// CHECK: [[OFF:%.*]] = arith.muli [[WIDE]], %[[S0]] : i64
+// COM: The stride contract on the product: 16 bytes are 4 f32 elements.
+// CHECK: [[OFF:%.*]] = arith.muli [[WIDE]], %[[S0]] {tt.divisibility = 4 : i32} : i64
 // CHECK: [[BASE:%.*]] = tt.addptr %arg1, [[OFF]] : !tt.ptr<f32>, i64
 // CHECK: [[NONEMPTY:%.*]] = arith.cmpi sgt, %[[K]], %c0_i32 : i32
 // CHECK: [[NE:%.*]] = arith.extui [[NONEMPTY]] : i1 to i32
@@ -589,6 +593,7 @@ tt.func public @fuseGuardsDynamicOuterIndex(%arg0: tensor<16x16xf32>, %arg1: !tt
 }
 // CHECK-LABEL: fuseGuardsDynamicOuterIndex
 // CHECK-SAME: %[[IDX:[a-z0-9]+]]: i32)
+// COM: The stride folds, so AxisInfo sees the product exactly: no hint.
 // CHECK-NOT: arith.select
 // CHECK: [[MIN:%.*]] = arith.minsi %[[IDX]], %c7_i32 : i32
 // CHECK: [[CLAMPED:%.*]] = arith.maxsi [[MIN]], %c0_i32 : i32

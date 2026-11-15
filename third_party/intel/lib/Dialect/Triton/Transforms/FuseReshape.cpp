@@ -188,9 +188,10 @@ private:
 
     // The base depends on this load's collapsed index, so the new descriptor
     // can only stay where the original one was if that index is available
-    // there; otherwise it is rebuilt at the load. Reconstructing the
-    // descriptor per load is cheap: `LowerTo2DBlockLoad` re-extracts every
-    // shape/stride field per load anyway.
+    // there; otherwise it is rebuilt at the load. A loop-invariant index still
+    // gets it hoisted back out of the loop by the TTGIR LICM, and
+    // `LowerTo2DBlockLoad` re-extracts every shape/stride field per load
+    // anyway.
     Operation *insertionPoint =
         domInfo.properlyDominates(collapsedOffset, makeTensorDescOp)
             ? static_cast<Operation *>(makeTensorDescOp)
@@ -209,7 +210,7 @@ private:
     // shape before subtracting: `maxsi(shapes[cd]-1, 0)` would compute
     // INT32_MIN-1, wrap to INT32_MAX and preserve the garbage instead of
     // clamping it. The product is formed in the stride's i64, as the rank-3
-    // load would form it, so it has the stride's sign and cannot wrap.
+    // load forms its own address, so it keeps the stride's sign and range.
     Value lastIdx = builder.createOrFold<arith::SubIOp>(
         loc, builder.createOrFold<arith::MaxSIOp>(loc, collapsedShape, one),
         one);
@@ -218,11 +219,30 @@ private:
         builder.createOrFold<arith::MinSIOp>(loc, collapsedOffset, lastIdx),
         zero);
     Value collapsedStride = strides[collapsedDim];
-    Value baseOffset = builder.createOrFold<arith::MulIOp>(
-        loc,
-        builder.createOrFold<arith::ExtSIOp>(loc, collapsedStride.getType(),
-                                             clampedIdx),
-        collapsedStride);
+    Value wideIdx = builder.createOrFold<arith::ExtSIOp>(
+        loc, collapsedStride.getType(), clampedIdx);
+    Value baseOffset =
+        builder.createOrFold<arith::MulIOp>(loc, wideIdx, collapsedStride);
+    // `make_tensor_descriptor` requires every leading stride to be a multiple
+    // of 16 bytes, and `MaterializeBlockPointer` trusts that for a stride it
+    // knows nothing else about. AxisInfo cannot carry it through the product:
+    // for a stride without a `tt.divisibility` hint it proves only the element
+    // size for the new base, which the 4-byte base check then rejects - while
+    // the unfused load, its leading index folded into the base by
+    // `LowerTo2DBlockLoad`, kept 2D block I/O. So state the contract on the
+    // product. A folded stride needs no hint, and the check on the operands
+    // keeps it off a value the folder returned instead of a new op.
+    auto offsetOp = baseOffset.getDefiningOp<arith::MulIOp>();
+    unsigned elemBytes =
+        getIntOrFloatOrPtrBitWidth(
+            makeTensorDescOp.getType().getBlockType().getElementType()) /
+        8;
+    if (offsetOp && llvm::is_contained(offsetOp->getOperands(), wideIdx) &&
+        llvm::is_contained(offsetOp->getOperands(), collapsedStride) &&
+        !tt::intel::getFoldedConstantValue(collapsedStride) && elemBytes &&
+        16 % elemBytes == 0)
+      offsetOp->setAttr("tt.divisibility",
+                        builder.getI32IntegerAttr(16 / elemBytes));
     Value base = makeTensorDescOp.getBase();
     Value newBase = builder.createOrFold<tt::AddPtrOp>(loc, base.getType(),
                                                        base, baseOffset);
@@ -234,7 +254,14 @@ private:
     // extent needs neither, since `LowerTo2DBlockLoad` sees it and keeps the
     // load off 2D block I/O. Written as multiplies for the same `isDivisible`
     // reason as the guard; the floor is the block extent itself, so the sum
-    // keeps whatever that query answered for `shapes[md]`.
+    // keeps whatever that query answered for `shapes[md]`. Like any width,
+    // the floor is not held to the hardware's 64-byte minimum, which
+    // `LowerTo2DBlockLoad` deliberately does not enforce either.
+    //
+    // The other dimension kept is passed through as is - on the middle
+    // branch `shapes[0]` and `strides[0]` become the surface height and pitch
+    // - and so is exactly as trusted as in a rank-2 descriptor: a runtime
+    // zero height or negative pitch is not caught here.
     SmallVector<Value> newShape = dropDim(shapes, collapsedDim);
     Value mergedShape = shapes[mergedDim];
     Value mergedNonEmpty;
@@ -390,9 +417,10 @@ private:
     if (!getCollapsedDim(tensorTy.getShape()))
       return false;
 
-    // Offsetting the base by `offsets[cd] * strides[cd]` needs the stride in
-    // whole elements of the pointee, which a sub-byte type (e.g. packed FP6,
-    // whose outer strides count bytes) does not give.
+    // Offsetting the base by `offsets[cd] * strides[cd]` elements needs an
+    // element that is a whole number of bytes: the 2D block path packs a
+    // sub-byte element, while `tt.addptr` would advance by its storage size.
+    // Such a load keeps its rank-3 form.
     if (getIntOrFloatOrPtrBitWidth(tensorTy.getElementType()) < 8) {
       LLVM_DEBUG(llvm::dbgs() << "Declining to fuse:\n  " << *descLoadOp
                               << "\n  reason: sub-byte element type\n");

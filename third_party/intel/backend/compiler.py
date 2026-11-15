@@ -450,9 +450,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             key += "N"
         if getattr(arg, "round_f32_to_tf32", False):
             key += "T"
-        # A cap of 4 is enough for the 2D block I/O alignment check, but collapsing a
-        # unit dim of a rank-3 descriptor needs shape[i] % block_shape[i] == 0, so for
-        # that shape cap at the block extent instead (issues/7679).
+        # A cap of 4 is enough for the 2D block I/O alignment check, but once a unit dim
+        # of a rank-3 descriptor is collapsed, its load keeps block-level rather than
+        # per-element bounds checks only if shape[i] % block_shape[i] == 0 is known, so
+        # for that shape cap at the block extent instead (issues/7679).
         block_shape = getattr(arg, "block_shape", None)
         collapsible = block_shape is not None and len(block_shape) == 3 and 1 in block_shape[:2]
         for i, shape_val in enumerate(arg.shape):
