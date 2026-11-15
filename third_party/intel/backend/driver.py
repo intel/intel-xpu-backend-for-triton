@@ -254,14 +254,10 @@ class ArchParser:
 
         return super().__getattribute__(name)
 
-    if os.name != 'nt':
-
-        def __del__(self):
-            if hasattr(self, "shared_library"):
-                handle = self.shared_library._handle
-                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-                self.shared_library.dlclose(handle)
-    else:
+    # No `__del__` on POSIX: `dlclose` is resolved through the handle of `arch_utils`, which has no dependencies, so
+    # it never was found (`undefined symbol: dlclose`) and the library has never been unloaded. The error was
+    # printed as "Exception ignored in" when the parser was destroyed, once per process.
+    if os.name == 'nt':
 
         def __del__(self):
             if hasattr(self, "shared_library"):
