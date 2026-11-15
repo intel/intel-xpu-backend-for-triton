@@ -1,6 +1,8 @@
 """Tests for the `fold_trans` XPUOptions field, which makes AccelerateMatmul fold a tt.trans
 feeding a dot's A operand into the ops that produce it, so the transpose needs no SLM."""
 
+import re
+
 import pytest
 import torch
 
@@ -74,12 +76,15 @@ def test_fold_trans_reaches_accelerate_matmul(fold_trans, mask, device, with_all
                                                 BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, HEAD_DIM=HEAD_DIM, MASK=mask,
                                                 num_warps=8, num_stages=2, fold_trans=fold_trans)
 
-    if not mask:
-        ttgir = kernel.asm["ttgir"]
-        # Without the fold, each of the two transposes feeding a dot's A stays a tt.trans and is
-        # staged through SLM by a ttg.local_alloc; with it, both are gone.
-        assert ("tt.trans " in ttgir) != fold_trans
-        assert ("ttg.local_alloc" in ttgir) != fold_trans
+    ttgir = kernel.asm["ttgir"]
+    # Without the fold, each of the two f32 transposes feeding a dot's A stays a tt.trans and is
+    # staged through SLM by a ttg.local_alloc; with it, both are gone. With the mask, the fold
+    # transposes the mask once, as i32.
+    f32_trans = re.findall(r"tt\.trans .*: tensor<\d+x\d+xf32", ttgir)
+    i32_trans = re.findall(r"tt\.trans .*: tensor<\d+x\d+xi32", ttgir)
+    assert bool(f32_trans) != fold_trans
+    assert ("ttg.local_alloc" in ttgir) != fold_trans
+    assert bool(i32_trans) == (fold_trans and mask)
 
     p = torch.exp2(qk - m[:, None])
     if mask:

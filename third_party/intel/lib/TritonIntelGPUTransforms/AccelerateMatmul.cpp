@@ -1296,6 +1296,13 @@ collectRegion(ArrayRef<tt::TransOp> roots,
         trans && ops.contains(trans.getSrc().getDefiningOp()))
       return std::nullopt;
 
+  // A dot operand convert defined outside the block, e.g. before the loop, is
+  // a leaf when another op of the region uses it, and the rewrite would erase
+  // it with the dot.
+  for (Value leaf : region.leaves)
+    if (llvm::is_contained(region.operandCvts, leaf.getDefiningOp()))
+      return std::nullopt;
+
   // Every value of the region must be used only inside it, by a root, or by
   // a dot operand convert of the region; otherwise it would be needed in both
   // orientations.
@@ -1369,6 +1376,21 @@ Value transposeLeaf(OpBuilder &builder, Value leaf) {
   return builder.createOrFold<tt::TransOp>(loc, leaf, transposeOrder);
 }
 
+// The per-dimension AxisInfo hints copied from an op of the region describe
+// the old axes; the rebuilt op has them swapped.
+void swapAxisHints(Operation *op) {
+  for (StringRef name : {"tt.contiguity", "tt.divisibility", "tt.constancy"}) {
+    auto hint =
+        dyn_cast_or_null<DenseIntElementsAttr>(op->getDiscardableAttr(name));
+    if (!hint || hint.getNumElements() != 2)
+      continue;
+    SmallVector<APInt> values = llvm::to_vector(hint.getValues<APInt>());
+    std::swap(values[0], values[1]);
+    op->setDiscardableAttr(name,
+                           DenseIntElementsAttr::get(hint.getType(), values));
+  }
+}
+
 // trans(dot(a, b, c)) = dot(trans(b), trans(a), trans(c)).
 Value transposeDot(OpBuilder &builder, tt::DotOp dot, IRMapping &mapping,
                    RankedTensorType newType) {
@@ -1389,6 +1411,7 @@ Value transposeDot(OpBuilder &builder, tt::DotOp dot, IRMapping &mapping,
       builder, dot.getLoc(), newType, a, b, mapping.lookup(dot.getC()),
       dot.getInputPrecision(), dot.getMaxNumImpreciseAcc());
   newDot->setDiscardableAttrs(dot->getDiscardableAttrDictionary());
+  swapAxisHints(newDot);
   return newDot;
 }
 
@@ -1419,6 +1442,7 @@ void rewriteRegion(TransposeRegion &region) {
       // Same op on the transposed operands, in the same operand order.
       Operation *clone = builder.clone(*op, mapping);
       clone->getResult(0).setType(newType);
+      swapAxisHints(clone);
       newValue = clone->getResult(0);
     }
     mapping.map(op->getResult(0), newValue);
