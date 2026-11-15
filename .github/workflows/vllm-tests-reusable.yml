@@ -44,7 +44,7 @@ env:
 jobs:
   setup:
     name: Setup
-    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "gpu", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 360
     defaults:
       run:
@@ -143,7 +143,7 @@ jobs:
           - vllm-rest
           # Currently vllm-omni suite only installs the framework, no tests are running yet
           - vllm-omni
-    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "gpu", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 360
     defaults:
       run:

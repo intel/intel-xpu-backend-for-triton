@@ -83,7 +83,7 @@ jobs:
   build:
     name: Build
     timeout-minutes: 720
-    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
+    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "gpu", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -213,7 +213,7 @@ jobs:
       matrix:
         loop: ${{ fromJson(needs.build.outputs.integration-tests-matrix) }}
     timeout-minutes: 720
-    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
+    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "gpu", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     env:
       TRITON_XPU_GEN_NATIVE_CODE: 1
       PYTEST_ADDOPTS: "-p triton._compile_warmup"
