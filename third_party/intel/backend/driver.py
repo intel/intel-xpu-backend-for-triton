@@ -250,14 +250,22 @@ class ArchParser:
             def wrapper(*args, **kwargs):
                 return attr(*args, **kwargs).decode("utf-8")
 
+            # `attr` does not keep the parser alive, and the parser unloads the library when it dies.
+            wrapper.parser = self
             return wrapper
 
         return super().__getattribute__(name)
 
-    # No `__del__` on POSIX: `dlclose` is resolved through the handle of `arch_utils`, which has no dependencies, so
-    # it never was found (`undefined symbol: dlclose`) and the library has never been unloaded. The error was
-    # printed as "Exception ignored in" when the parser was destroyed, once per process.
-    if os.name == 'nt':
+    if os.name != 'nt':
+        # `dlclose` is not a symbol of `arch_utils` (it has no dependencies, so it cannot be looked up through its
+        # handle), it comes from libc. Bound here, as module globals may be gone when a parser dies at exit.
+        _dlclose = ctypes.CDLL(None).dlclose
+        _dlclose.argtypes = (ctypes.c_void_p, )
+
+        def __del__(self):
+            if hasattr(self, "shared_library"):
+                self._dlclose(self.shared_library._handle)
+    else:
 
         def __del__(self):
             if hasattr(self, "shared_library"):
@@ -346,9 +354,8 @@ class SpirvUtils:
     # fixtures defer cache deletion past process exit (#7312).
     #
     # `ArchParser` and `ExtensionUtils` keep their unload because they are out of scope here,
-    # not because they are proven safe. `ArchParser.__getattribute__` returns a closure over
-    # the raw ctypes function that does not keep its owner alive, so a caller outliving the
-    # parser would call into an unloaded library.
+    # not because they are proven safe. The function that `ArchParser.__getattribute__` returns
+    # holds its parser, as a caller outliving the parser would call into an unloaded library.
 
 
 class ExtensionUtils:
