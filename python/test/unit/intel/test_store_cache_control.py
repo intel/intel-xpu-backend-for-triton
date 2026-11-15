@@ -24,6 +24,11 @@ def _writes_back():
     return XPUBackend(target).properties["l1_store_write_bypass"] and not knobs.intel.disable_store_l1_write_back
 
 
+def _has_predicated_io():
+    from triton.backends.intel.compiler import XPUBackend
+    return XPUBackend(triton.runtime.driver.active.get_current_target()).properties["has_predicated_io"]
+
+
 def _2d_store_counts(llir):
     """(all 2D block store calls, calls with L1 write-back) over the SPIR-V builtin and GenISA (LTS) forms."""
     spv = re.findall(r"call spir_func void @\w*Subgroup2DBlockStoreINTEL\w*\([^\n]*", llir)
@@ -236,3 +241,8 @@ def test_cg_load_sees_own_write_back(device, with_allocator):
         assert torch.equal(out, want), "a .cg load missed a written-back line"
     stores, wb = _2d_store_counts(kernel.asm["llir"])
     assert stores > 0 and wb == (stores if _writes_back() else 0)
+    # The reload must really skip L1. Only the predicated path keeps `.cg`; elsewhere it is dropped.
+    if _has_predicated_io():
+        # SPIR-V: a CacheControlLoadINTEL (6442) decoration for level 0 (L1) with policy 0 (uncached).
+        llir = kernel.asm["llir"]
+        assert re.search(r"^!\d+ = !\{i32 6442, i32 0, i32 0, i32 \d+\}$", llir, re.M), "the .cg load does not skip L1"
