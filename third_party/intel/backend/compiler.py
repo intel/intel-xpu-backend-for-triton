@@ -375,6 +375,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     def parse_options(self, opts) -> Any:
         args = {k: v for k, v in opts.items() if k in XPUOptions.__dataclass_fields__}
+        # Experimental vLLM comparison: override explicit kernel settings as well.
+        forced_grf_mode = os.environ.get("TRITON_XPU_FORCE_GRF_MODE", "")
+        if forced_grf_mode:
+            if forced_grf_mode != "256":
+                raise ValueError("TRITON_XPU_FORCE_GRF_MODE must be 256 or empty")
+            args["grf_mode"] = forced_grf_mode
         args["allow_fp8e4nv"] = True
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
