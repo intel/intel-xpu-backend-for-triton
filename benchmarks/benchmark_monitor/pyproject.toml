@@ -1,0 +1,18 @@
+[project]
+name = "benchmark-monitor"
+version = "0.1.0"
+readme = "README.md"
+description = "Nightly benchmark regression monitoring."
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+packages = ["benchmark_monitor"]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
