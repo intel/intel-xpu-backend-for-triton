@@ -3,6 +3,10 @@ Gemm benchmark (tensor descriptor)
 ============================
 
 This benchmark uses the modern tl.make_tensor_descriptor API.
+The fused broadcast-bias epilogue loads one bias vector per tile and uses a
+descriptor output store when the output layout is eligible.
+Grouped tile mapping uses a compile-time group size when all M-groups are full,
+retaining the clipped mapping for partial groups.
 
 This benchmark is come from the Triton tutorial 03a-matrix-multiplication-tensor-descriptor.py
 
@@ -119,10 +123,19 @@ def store_gemm_tile(ptr, tile, bias_ptr, M: tl.constexpr, N: tl.constexpr, strid
         rn = col + tl.arange(0, BLOCK_N)
         mask = (rm < M)[:, None] & (rn < N)[None, :]
         if bias_ptr is not None:
-            bias = tl.load(bias_ptr + rm[:, None] * stride_bias_m + rn[None, :] * stride_bias_n, mask=mask, other=0,
-                           eviction_policy="evict_last").to(tl.float32)
-            tile += bias
-        tl.store(ptr + rm[:, None] * stride_m + rn[None, :] * stride_n, tile.to(ptr.dtype.element_ty), mask=mask)
+            if stride_bias_m == 0:
+                bias = tl.load(bias_ptr + rn * stride_bias_n, mask=rn < N, other=0,
+                               eviction_policy="evict_last").to(tl.float32)
+                tile += bias[None, :]
+            else:
+                bias = tl.load(bias_ptr + rm[:, None] * stride_bias_m + rn[None, :] * stride_bias_n, mask=mask, other=0,
+                               eviction_policy="evict_last").to(tl.float32)
+                tile += bias
+        if bias_ptr is not None and stride_bias_m == 0:
+            store_matrix_tile(ptr, tile.to(ptr.dtype.element_ty), M, N, stride_m, stride_n, row, col, BLOCK_M, BLOCK_N,
+                              BASE_ALIGNED)
+        else:
+            tl.store(ptr + rm[:, None] * stride_m + rn[None, :] * stride_n, tile.to(ptr.dtype.element_ty), mask=mask)
     else:
         store_matrix_tile(ptr, tile, M, N, stride_m, stride_n, row, col, BLOCK_M, BLOCK_N, BASE_ALIGNED)
 
@@ -169,6 +182,8 @@ def get_matmul_autotune_configs() -> List[triton.Config]:
         triton.Config(
             {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 256, 'GROUP_SIZE_M': 1, 'grf_mode': '256'},
             num_stages=2, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 16}, num_stages=2,
+                      num_warps=8),
     ]
 
     return configs
@@ -200,7 +215,10 @@ def matmul_kernel_with_tensor_descriptors(
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
-    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    if tl.cdiv(M, BLOCK_SIZE_M) % GROUP_SIZE_M == 0:
+        group_size_m = GROUP_SIZE_M
+    else:
+        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
@@ -317,7 +335,10 @@ def matmul_kernel_with_tensor_descriptors_batched(
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
-    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    if tl.cdiv(M, BLOCK_SIZE_M) % GROUP_SIZE_M == 0:
+        group_size_m = GROUP_SIZE_M
+    else:
+        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 

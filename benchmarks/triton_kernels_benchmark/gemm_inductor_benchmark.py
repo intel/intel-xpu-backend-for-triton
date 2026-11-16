@@ -3,6 +3,7 @@
 
 The cases are the FP16 GEMMs for which ATen beat Triton in disassembles/log.txt,
 plus new cases from results/qc_aten_selected_20261113/shapes.json.
+Cases 46-51 complete coverage of the November 14 disassembles/log.txt capture.
 Pass --case repeatedly to benchmark selected one-based cases, or --list to inspect
 their shapes and strides without requiring an XPU. Results use the
 triton_kernels_benchmark report format.
@@ -98,6 +99,13 @@ GEMM_CASES = (
     GemmCase("addmm", ((256, 640), (256, 490), (490, 640)), ((0, 1), (490, 1), (640, 1)), 0.008958, 0.014687),
     GemmCase("addmm", ((256, 640), (256, 5052), (5052, 640)), ((0, 1), (5056, 1), (640, 1)), 0.047604, 0.125208),
     GemmCase("addmm", ((256, 64), (256, 204), (204, 64)), ((0, 1), (204, 1), (64, 1)), 0.005000, 0.007395),
+    # Additional ATen winners from the November 14 disassembles/log.txt capture.
+    GemmCase("addmm", ((16384, 256), (16384, 256), (256, 256)), ((0, 1), (256, 1), (256, 1)), 0.035312, 0.035521),
+    GemmCase("addmm", ((256, 32), (256, 20), (20, 32)), ((0, 1), (20, 1), (32, 1)), 0.003438, 0.003750),
+    GemmCase("addmm", ((256, 1), (256, 16), (16, 1)), ((1, 1), (16, 1), (1, 1)), 0.003333, 0.003437),
+    GemmCase("addmm", ((256, 1024), (256, 512), (512, 1024)), ((0, 1), (512, 1), (1024, 1)), 0.006354, 0.006563),
+    GemmCase("addmm", ((256, 256), (256, 2512), (2512, 256)), ((0, 1), (2512, 1), (256, 1)), 0.010000, 0.010833),
+    GemmCase("addmm", ((256, 64), (256, 178), (178, 64)), ((0, 1), (178, 1), (64, 1)), 0.005000, 0.005208),
 )
 
 
@@ -153,6 +161,10 @@ def _register_custom_xpu_mm_heuristic(batched: bool = False):
             GemmConfig(64, 64, 32, 2, 8),
             GemmConfig(128, 128, 64, 2, 32),
             GemmConfig(32, 256, 32, 2, 16),
+            GemmConfig(64, 128, 64, 2, 16, group_m=16),
+            GemmConfig(64, 128, 64, 3, 8),
+            GemmConfig(64, 128, 128, 2, 16, group_m=16),
+            GemmConfig(128, 32, 64, 2, 8, group_m=16),
         ]
         bmm_configs: list[BaseConfig] = [
             GemmConfig(128, 256, 64, 2, 32),
@@ -183,6 +195,10 @@ def _register_custom_xpu_mm_heuristic(batched: bool = False):
             GemmConfig(32, 64, 128, 2, 2),
             GemmConfig(128, 64, 32, 3, 4),
             GemmConfig(256, 128, 32, 1, 32),
+            GemmConfig(64, 128, 64, 2, 16, group_m=16),
+            GemmConfig(64, 128, 64, 3, 8),
+            GemmConfig(64, 128, 128, 2, 16, group_m=16),
+            GemmConfig(128, 32, 64, 2, 8, group_m=16),
         ]
         persistent_configs: list[BaseConfig] = [
             GemmConfig(128, 128, 64, 3, 8),
