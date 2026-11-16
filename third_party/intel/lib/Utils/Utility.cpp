@@ -1,12 +1,14 @@
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -241,6 +243,37 @@ void eraseOperations(SmallPtrSetImpl<Operation *> &operations) {
       continue;
     op->erase();
   }
+}
+
+bool isProgramUniform(Value root, tt::FuncOp funcOp, bool allowLoopIVs) {
+  SmallVector<Value> worklist{root};
+  DenseSet<Value> seen;
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (!seen.insert(value).second)
+      continue;
+    if (auto arg = dyn_cast<BlockArgument>(value)) {
+      auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp());
+      if (allowLoopIVs && forOp && arg == forOp.getInductionVar()) {
+        worklist.append(
+            {forOp.getLowerBound(), forOp.getUpperBound(), forOp.getStep()});
+        continue;
+      }
+      // Arguments of a private helper may come from a per-warp caller.
+      if (!funcOp.isPublic() || arg.getOwner() != &funcOp.getBody().front())
+        return false;
+      continue;
+    }
+    Operation *def = value.getDefiningOp();
+    if (isa<tt::GetProgramIdOp, tt::GetNumProgramsOp>(def))
+      continue;
+    if (!isa_and_nonnull<arith::ArithDialect, math::MathDialect>(
+            def->getDialect()) ||
+        def->getNumRegions())
+      return false;
+    worklist.append(def->operand_begin(), def->operand_end());
+  }
+  return true;
 }
 
 // True if any region of `op` has no blocks.
