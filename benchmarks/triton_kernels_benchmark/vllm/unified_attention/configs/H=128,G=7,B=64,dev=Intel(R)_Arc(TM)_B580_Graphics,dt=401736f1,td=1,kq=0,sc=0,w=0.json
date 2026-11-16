@@ -13,7 +13,6 @@
       "key": {
         "is_3d": false,
         "kv_len_bucket": 2,
-        "num_segments": 1,
         "num_seqs": 1,
         "q_len_bucket": 3,
         "query_work": 114688
@@ -31,7 +30,6 @@
       "key": {
         "is_3d": true,
         "kv_len_bucket": 3,
-        "num_segments": 16,
         "num_seqs": 8,
         "q_len_bucket": 0,
         "query_work": 224
@@ -49,7 +47,6 @@
       "key": {
         "is_3d": true,
         "kv_len_bucket": 4,
-        "num_segments": 16,
         "num_seqs": 4,
         "q_len_bucket": 0,
         "query_work": 112
@@ -67,7 +64,6 @@
       "key": {
         "is_3d": false,
         "kv_len_bucket": 2,
-        "num_segments": 1,
         "num_seqs": 4,
         "q_len_bucket": 3,
         "query_work": 229376
@@ -85,7 +81,6 @@
       "key": {
         "is_3d": false,
         "kv_len_bucket": 3,
-        "num_segments": 1,
         "num_seqs": 256,
         "q_len_bucket": 2,
         "query_work": 64288
