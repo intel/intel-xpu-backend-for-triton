@@ -77,7 +77,7 @@ env:
   # Suites that are split into NUM_SHARDS shards, each shard runs on its own runner
   PARALLEL_SUITES: ""
   # Suites that are run without sharding, one runner per suite
-  SEQUENTIAL_SUITES: "minicore language_and_scaled_dot gluon triton-kernels rest"
+  SEQUENTIAL_SUITES: "minicore_gluon language_and_scaled_dot triton-kernels rest"
 
 jobs:
   build:
@@ -263,7 +263,7 @@ jobs:
       - name: Report environment details
         timeout-minutes: 1
         run: |
-          if [ "${{ matrix.loop.suite }}" == "minicore" ]; then
+          if [ "${{ matrix.loop.suite }}" == "minicore_gluon" ]; then
             reports_file="reports/.env"
           else
             reports_file="/dev/null"
@@ -316,7 +316,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --proton
 
       - name: Warm regression compile cache
-        if: matrix.loop.suite == 'minicore'
+        if: matrix.loop.suite == 'minicore_gluon'
         uses: ./.github/actions/warm-compile-cache
         with:
           working-directory: python/test/regression
@@ -325,7 +325,7 @@ jobs:
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Warm intel compile cache
-        if: matrix.loop.suite == 'minicore'
+        if: matrix.loop.suite == 'minicore_gluon'
         uses: ./.github/actions/warm-compile-cache
         with:
           working-directory: python/test/unit
@@ -334,7 +334,7 @@ jobs:
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Run minicore tests
-        if: matrix.loop.suite == 'minicore'
+        if: matrix.loop.suite == 'minicore_gluon'
         run: |
           ${{ env.TRITON_TEST_CMD }} --minicore
 
@@ -392,7 +392,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --debug
 
       - name: Warm gluon compile cache
-        if: matrix.loop.suite == 'gluon' && inputs.driver_version == 'rolling'
+        if: matrix.loop.suite == 'minicore_gluon' && inputs.driver_version == 'rolling'
         uses: ./.github/actions/warm-compile-cache
         with:
           working-directory: python/test/gluon
@@ -401,7 +401,7 @@ jobs:
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Run gluon tests
-        if: matrix.loop.suite == 'gluon' && inputs.driver_version == 'rolling'
+        if: matrix.loop.suite == 'minicore_gluon' && inputs.driver_version == 'rolling'
         run: |
           ${{ env.TRITON_TEST_CMD }} --gluon
 
@@ -445,9 +445,7 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
 
-      # Skipped when gluon has no warmup to compare against (see the gluon steps above).
       - name: Verify compile warmup completeness
-        if: matrix.loop.suite != 'gluon' || inputs.driver_version == 'rolling'
         run: |
           python -m triton._test_runner report --require-complete \
             || ${{ inputs.ignore_errors || inputs.enable_unskip }}
