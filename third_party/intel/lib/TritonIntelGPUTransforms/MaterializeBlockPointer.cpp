@@ -1,6 +1,5 @@
 #include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Analysis/AxisInfoExt.h"
-#include "intel/include/Analysis/Range.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Analysis/SymbolicBounds.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -16,7 +15,6 @@
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/CastInterfaces.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
@@ -312,9 +310,9 @@ public:
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     // Built on first use, before any relayout. A function's stride verdicts
     // are taken before its loads are retyped, and only scalars are queried.
-    std::unique_ptr<DataFlowSolver> solver;
+    // The guard only calls normalize, which never reads the solver: not run.
+    DataFlowSolver solver;
     std::unique_ptr<tt::intel::SymbolicBoundsProver> prover;
-    bool proverFailed = false;
     mod.walk([&](tt::FuncOp func) {
       bool funcHasDot = false;
       bool hasTaggedPtrLoad = false;
@@ -351,20 +349,9 @@ public:
                          << " has a block_io pointer load; skip relayout");
         return;
       }
-      if (!prover && !proverFailed) {
-        LDBG("Building the range analysis for the relayout stride guard");
-        solver = createDataFlowSolver();
-        solver->load<tt::intel::IntegerRangeAnalysis>(
-            mod, getAnalysis<DominanceInfo>());
-        proverFailed = failed(solver->initializeAndRun(mod));
-        if (!proverFailed)
-          prover = std::make_unique<tt::intel::SymbolicBoundsProver>(
-              *solver, getAnalysis<DominanceInfo>(), mod);
-      }
-      if (proverFailed) {
-        LDBG("Range analysis failed; skip relayout");
-        return;
-      }
+      if (!prover)
+        prover = std::make_unique<tt::intel::SymbolicBoundsProver>(
+            solver, getAnalysis<DominanceInfo>(), mod);
       // A refused load keeps ttig.block_io, so RemoveLayoutConversions could
       // move it into an allowed sibling's layout: all candidates or none.
       if (!llvm::all_of(candidates, [&](tt::DescriptorLoadOp load) {
