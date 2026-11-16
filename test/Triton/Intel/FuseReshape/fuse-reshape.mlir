@@ -244,19 +244,48 @@ tt.func public @fuseHugeCollapsedStride(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr
 
 // -----
 
+// COM: With collapsed index 1 the base offset folds to the stride itself, here
+// COM: the caller's own `arith.muli`. The stride-contract hint is only for a
+// COM: product this pass built, so the caller's op is left as it was.
+tt.func public @fuseUnitIndexLeavesStrideOp(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %a: i64, %b: i64) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c8_i32 = arith.constant 8 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c16_i64 = arith.constant 16 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %s0 = arith.muli %a, %b : i64
+  %0 = tt.make_tensor_descriptor %arg1, [%c8_i32, %c16_i32, %c16_i32], [%s0, %c16_i64, %c1_i64] : <f32>, <1x16x16xf32>
+  %1 = tt.descriptor_load %0[%c1_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x16x16xf32> -> tensor<1x16x16xf32>
+  %2 = tt.reshape %1 : tensor<1x16x16xf32> -> tensor<16x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseUnitIndexLeavesStrideOp
+// CHECK-SAME: %[[A:[a-z0-9]+]]: i64, %[[B:[a-z0-9]+]]: i64)
+// CHECK: [[S0:%.*]] = arith.muli %[[A]], %[[B]] : i64
+// CHECK: [[BASE:%.*]] = tt.addptr %arg1, [[S0]] : !tt.ptr<f32>, i64
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor [[BASE]], [%c16_i32, %c16_i32], [%c16_i64, %c1_i64] : <f32>, <16x16xf32>
+// CHECK: [[LOAD:%.*]] = tt.descriptor_load [[DESC]][%c0_i32, %c0_i32] : !tt.tensordesc<16x16xf32> -> tensor<16x16xf32>
+// CHECK: tt.dot [[LOAD]], {{.*}} : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+
+// -----
+
 // COM: Padded strides (issues/7030): strides[0] need not be a multiple of
 // COM: strides[1], since nothing divides one by the other. Every input is a
 // COM: runtime value, so this also shows the whole runtime form: the clamped
 // COM: base offset, the one-block floor for an empty merged dimension (%K
-// COM: rows), and the guard that keys on both dimensions.
+// COM: rows - 32, not the other dimension's 16), and the guard that keys on
+// COM: both dimensions.
 tt.func public @fusePaddedStrides(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %G: i32, %K: i32, %M: i32, %stride0: i64, %stride1: i64, %g: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i64 = arith.constant 1 : i64
-  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
-  %0 = tt.make_tensor_descriptor %arg1, [%G, %K, %M], [%stride0, %stride1, %c1_i64] : <f32>, <1x16x16xf32>
-  %1 = tt.descriptor_load %0[%g, %c0_i32, %c0_i32] : !tt.tensordesc<1x16x16xf32> -> tensor<1x16x16xf32>
-  %2 = tt.reshape %1 : tensor<1x16x16xf32> -> tensor<16x16xf32>
-  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  %cst = arith.constant dense<0.000000e+00> : tensor<32x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%G, %K, %M], [%stride0, %stride1, %c1_i64] : <f32>, <1x32x16xf32>
+  %1 = tt.descriptor_load %0[%g, %c0_i32, %c0_i32] : !tt.tensordesc<1x32x16xf32> -> tensor<1x32x16xf32>
+  %2 = tt.reshape %1 : tensor<1x32x16xf32> -> tensor<32x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<32x16xf32> * tensor<16x16xf32> -> tensor<32x16xf32>
   tt.return
 }
 // CHECK-LABEL: fusePaddedStrides
@@ -274,9 +303,9 @@ tt.func public @fusePaddedStrides(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>,
 // CHECK: [[NE:%.*]] = arith.extui [[NONEMPTY]] : i1 to i32
 // CHECK: [[EMPTY:%.*]] = arith.subi %c1_i32, [[NE]] : i32
 // CHECK: [[KEEP:%.*]] = arith.muli %[[K]], [[NE]] : i32
-// CHECK: [[FLOOR:%.*]] = arith.muli [[EMPTY]], %c16_i32 : i32
+// CHECK: [[FLOOR:%.*]] = arith.muli [[EMPTY]], %c32_i32 : i32
 // CHECK: [[ROWS:%.*]] = arith.addi [[KEEP]], [[FLOOR]] : i32
-// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor [[BASE]], [[[ROWS]], %[[M]]], [%[[S1]], %c1_i64] : <f32>, <16x16xf32>
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor [[BASE]], [[[ROWS]], %[[M]]], [%[[S1]], %c1_i64] : <f32>, <32x16xf32>
 // CHECK: [[GE:%.*]] = arith.cmpi sge, %[[IDX]], %c0_i32 : i32
 // CHECK: [[LT:%.*]] = arith.cmpi slt, %[[IDX]], %[[G]] : i32
 // CHECK: [[IN:%.*]] = arith.andi [[GE]], [[LT]] : i1
@@ -284,9 +313,9 @@ tt.func public @fusePaddedStrides(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>,
 // CHECK: [[INR:%.*]] = arith.extui [[READS]] : i1 to i32
 // CHECK: [[OUT:%.*]] = arith.subi %c1_i32, [[INR]] : i32
 // CHECK: [[PAD:%.*]] = arith.muli [[OUT]], [[ROWS]] : i32
-// CHECK: [[LOAD:%.*]] = tt.descriptor_load [[DESC]][[[PAD]], %c0_i32] : !tt.tensordesc<16x16xf32> -> tensor<16x16xf32>
+// CHECK: [[LOAD:%.*]] = tt.descriptor_load [[DESC]][[[PAD]], %c0_i32] : !tt.tensordesc<32x16xf32> -> tensor<32x16xf32>
 // CHECK-NOT: arith.select
-// CHECK: tt.dot [[LOAD]], {{.*}} : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+// CHECK: tt.dot [[LOAD]], {{.*}} : tensor<32x16xf32> * tensor<16x16xf32> -> tensor<32x16xf32>
 
 // -----
 
@@ -487,7 +516,7 @@ tt.func public @fuseDynamicCollapsedShape(%arg0: tensor<16x16xf32>, %arg1: !tt.p
 
 // COM: A merged dimension that is empty only at runtime (`%n == 0`). A zero
 // COM: extent reaches the 2D block message as `0 - 1`, a 16MB surface that
-// COM: reads real data, so the extent becomes one 16-row block instead and the
+// COM: reads real data, so the extent becomes one 32-row block instead and the
 // COM: guard keys on `shapes[1] > 0` too: without it an in-range `%off` would
 // COM: read row 0 of that block. Multiplies, never an `arith.select`:
 // COM: `ttgi::isDivisible` understands `muli` (either operand) and `addi`
@@ -500,26 +529,27 @@ tt.func public @fuseDynamicMergedShape(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<
   %c256_i64 = arith.constant 256 : i64
   %c8_i32 = arith.constant 8 : i32
   %c16_i32 = arith.constant 16 : i32
-  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
-  %rows = arith.muli %n, %c16_i32 : i32
-  %0 = tt.make_tensor_descriptor %arg1, [%c8_i32, %rows, %c16_i32], [%c256_i64, %c16_i64, %c1_i64] : <f32>, <1x16x16xf32>
-  %1 = tt.descriptor_load %0[%off, %c0_i32, %c0_i32] : !tt.tensordesc<1x16x16xf32> -> tensor<1x16x16xf32>
-  %2 = tt.reshape %1 : tensor<1x16x16xf32> -> tensor<16x16xf32>
-  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  %c32_i32 = arith.constant 32 : i32
+  %cst = arith.constant dense<0.000000e+00> : tensor<32x16xf32>
+  %rows = arith.muli %n, %c32_i32 : i32
+  %0 = tt.make_tensor_descriptor %arg1, [%c8_i32, %rows, %c16_i32], [%c256_i64, %c16_i64, %c1_i64] : <f32>, <1x32x16xf32>
+  %1 = tt.descriptor_load %0[%off, %c0_i32, %c0_i32] : !tt.tensordesc<1x32x16xf32> -> tensor<1x32x16xf32>
+  %2 = tt.reshape %1 : tensor<1x32x16xf32> -> tensor<32x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<32x16xf32> * tensor<16x16xf32> -> tensor<32x16xf32>
   tt.return
 }
 // CHECK-LABEL: fuseDynamicMergedShape
 // CHECK-SAME: %[[N:[a-z0-9]+]]: i32, %[[IDX:[a-z0-9]+]]: i32)
 // CHECK-NOT: arith.select
-// CHECK: [[R:%.*]] = arith.muli %[[N]], %c16_i32 : i32
+// CHECK: [[R:%.*]] = arith.muli %[[N]], %c32_i32 : i32
 // CHECK: [[BASE:%.*]] = tt.addptr %arg1, {{.*}} : !tt.ptr<f32>, i64
 // CHECK: [[NONEMPTY:%.*]] = arith.cmpi sgt, [[R]], %c0_i32 : i32
 // CHECK: [[NE:%.*]] = arith.extui [[NONEMPTY]] : i1 to i32
 // CHECK: [[EMPTY:%.*]] = arith.subi %c1_i32, [[NE]] : i32
 // CHECK: [[KEEP:%.*]] = arith.muli [[R]], [[NE]] : i32
-// CHECK: [[FLOOR:%.*]] = arith.muli [[EMPTY]], %c16_i32 : i32
+// CHECK: [[FLOOR:%.*]] = arith.muli [[EMPTY]], %c32_i32 : i32
 // CHECK: [[ROWS:%.*]] = arith.addi [[KEEP]], [[FLOOR]] : i32
-// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor [[BASE]], [[[ROWS]], %c16_i32], [%c16_i64, %c1_i64] : <f32>, <16x16xf32>
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor [[BASE]], [[[ROWS]], %c16_i32], [%c16_i64, %c1_i64] : <f32>, <32x16xf32>
 // CHECK: [[GE:%.*]] = arith.cmpi sge, %[[IDX]], %c0_i32 : i32
 // CHECK: [[LT:%.*]] = arith.cmpi slt, %[[IDX]], %c8_i32 : i32
 // CHECK: [[IN:%.*]] = arith.andi [[GE]], [[LT]] : i1
@@ -527,14 +557,15 @@ tt.func public @fuseDynamicMergedShape(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<
 // CHECK: [[INR:%.*]] = arith.extui [[READS]] : i1 to i32
 // CHECK: [[OUT:%.*]] = arith.subi %c1_i32, [[INR]] : i32
 // CHECK: [[PAD:%.*]] = arith.muli [[OUT]], [[ROWS]] : i32
-// CHECK: [[LOAD:%.*]] = tt.descriptor_load [[DESC]][[[PAD]], %c0_i32] : !tt.tensordesc<16x16xf32> -> tensor<16x16xf32>
+// CHECK: [[LOAD:%.*]] = tt.descriptor_load [[DESC]][[[PAD]], %c0_i32] : !tt.tensordesc<32x16xf32> -> tensor<32x16xf32>
 // CHECK-NOT: arith.select
-// CHECK: tt.dot [[LOAD]], {{.*}} : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+// CHECK: tt.dot [[LOAD]], {{.*}} : tensor<32x16xf32> * tensor<16x16xf32> -> tensor<32x16xf32>
 
 // -----
 
 // COM: The middle-dimension counterpart, where the floor is a width: one
-// COM: 16-element block of columns. The collapsed index 1 is in range, so the
+// COM: 16-element block of columns, not the other dimension's 32 rows. The
+// COM: collapsed index 1 is in range, so the
 // COM: guard reduces to the merged dimension's own term.
 tt.func public @fuseDynamicMergedShapeMiddleDim(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %shape2: i32) {
   %c0_i32 = arith.constant 0 : i32
@@ -544,11 +575,11 @@ tt.func public @fuseDynamicMergedShapeMiddleDim(%arg0: tensor<16x16xf32>, %arg1:
   %c256_i64 = arith.constant 256 : i64
   %c4_i32 = arith.constant 4 : i32
   %c16_i32 = arith.constant 16 : i32
-  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
-  %0 = tt.make_tensor_descriptor %arg1, [%c16_i32, %c4_i32, %shape2], [%c256_i64, %c64_i64, %c1_i64] : <f32>, <16x1x16xf32>
-  %1 = tt.descriptor_load %0[%c0_i32, %c1_i32, %c0_i32] : !tt.tensordesc<16x1x16xf32> -> tensor<16x1x16xf32>
-  %2 = tt.reshape %1 : tensor<16x1x16xf32> -> tensor<16x16xf32>
-  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  %cst = arith.constant dense<0.000000e+00> : tensor<32x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c16_i32, %c4_i32, %shape2], [%c256_i64, %c64_i64, %c1_i64] : <f32>, <32x1x16xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %c1_i32, %c0_i32] : !tt.tensordesc<32x1x16xf32> -> tensor<32x1x16xf32>
+  %2 = tt.reshape %1 : tensor<32x1x16xf32> -> tensor<32x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<32x16xf32> * tensor<16x16xf32> -> tensor<32x16xf32>
   tt.return
 }
 // CHECK-LABEL: fuseDynamicMergedShapeMiddleDim
@@ -561,13 +592,13 @@ tt.func public @fuseDynamicMergedShapeMiddleDim(%arg0: tensor<16x16xf32>, %arg1:
 // CHECK: [[KEEP:%.*]] = arith.muli %[[S]], [[NE]] : i32
 // CHECK: [[FLOOR:%.*]] = arith.muli [[EMPTY]], %c16_i32 : i32
 // CHECK: [[COLS:%.*]] = arith.addi [[KEEP]], [[FLOOR]] : i32
-// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor [[BASE]], [%c16_i32, [[COLS]]], [%c256_i64, %c1_i64] : <f32>, <16x16xf32>
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor [[BASE]], [%c16_i32, [[COLS]]], [%c256_i64, %c1_i64] : <f32>, <32x16xf32>
 // CHECK: [[INR:%.*]] = arith.extui [[NONEMPTY]] : i1 to i32
 // CHECK: [[OUT:%.*]] = arith.subi %c1_i32, [[INR]] : i32
 // CHECK: [[PAD:%.*]] = arith.muli [[OUT]], [[COLS]] : i32
-// CHECK: [[LOAD:%.*]] = tt.descriptor_load [[DESC]][%c0_i32, [[PAD]]] : !tt.tensordesc<16x16xf32> -> tensor<16x16xf32>
+// CHECK: [[LOAD:%.*]] = tt.descriptor_load [[DESC]][%c0_i32, [[PAD]]] : !tt.tensordesc<32x16xf32> -> tensor<32x16xf32>
 // CHECK-NOT: arith.select
-// CHECK: tt.dot [[LOAD]], {{.*}} : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+// CHECK: tt.dot [[LOAD]], {{.*}} : tensor<32x16xf32> * tensor<16x16xf32> -> tensor<32x16xf32>
 
 // -----
 
@@ -843,6 +874,31 @@ tt.func public @fuseZeroExtentMergedDim(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr
 // CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor %arg1, [%c16_i32, %c16_i32], [%c16_i64, %c1_i64] : <f32>, <0x16xf32>
 // CHECK: [[LOAD:%.*]] = tt.descriptor_load [[DESC]][%c0_i32, %c0_i32] : !tt.tensordesc<0x16xf32> -> tensor<0x16xf32>
 // CHECK: tt.dot [[LOAD]], {{.*}} : tensor<0x16xf32> * tensor<16x16xf32> -> tensor<0x16xf32>
+
+// -----
+
+// COM: The fused descriptor keeps the original's padding option, so a load the
+// COM: guard forces out of range pads with the descriptor's own value (NaN here,
+// COM: `padding = 2`), as the rank-3 one did.
+tt.func public @fuseKeepsPaddingOption(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %off: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c8_i32 = arith.constant 8 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c16_i64 = arith.constant 16 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c8_i32, %c16_i32, %c16_i32], [%c256_i64, %c16_i64, %c1_i64] {padding = 2 : i32} : <f32>, <1x16x16xf32>
+  %1 = tt.descriptor_load %0[%off, %c0_i32, %c0_i32] : !tt.tensordesc<1x16x16xf32> -> tensor<1x16x16xf32>
+  %2 = tt.reshape %1 : tensor<1x16x16xf32> -> tensor<16x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseKeepsPaddingOption
+// CHECK: [[BASE:%.*]] = tt.addptr %arg1, {{.*}} : !tt.ptr<f32>, i64
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor [[BASE]], [%c16_i32, %c16_i32], [%c16_i64, %c1_i64] {padding = 2 : i32} : <f32>, <16x16xf32>
+// CHECK: [[LOAD:%.*]] = tt.descriptor_load [[DESC]]{{.*}} : !tt.tensordesc<16x16xf32> -> tensor<16x16xf32>
+// CHECK: tt.dot [[LOAD]]
 
 // -----
 
