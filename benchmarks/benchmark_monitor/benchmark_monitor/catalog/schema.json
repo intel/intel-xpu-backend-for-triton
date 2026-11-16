@@ -153,6 +153,14 @@
         "lock_mad_frac": {
           "type": "number",
           "minimum": 0
+        },
+        "improvement_lock_pct": {
+          "type": "number",
+          "minimum": 0
+        },
+        "lock_window": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     }

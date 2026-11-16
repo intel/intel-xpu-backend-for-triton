@@ -21,7 +21,9 @@ from benchmark_monitor.model import SeriesKey, Thresholds
 DEFAULT_CATALOG_PATH = Path(__file__).parent / "catalog" / "default.yaml"
 SCHEMA_PATH = Path(__file__).parent / "catalog" / "schema.json"
 
-_THRESHOLD_KEYS = {"min_drop_pct", "z", "min_history", "window", "max_cv_pct", "lock_mad_frac"}
+_REQUIRED_KEYS = {"min_drop_pct", "z", "min_history", "window", "max_cv_pct", "lock_mad_frac"}
+# The lock-in knobs are optional in `defaults`; Thresholds supplies the #6491 values (8.0 / 8).
+_THRESHOLD_KEYS = _REQUIRED_KEYS | {"improvement_lock_pct", "lock_window"}
 _TOP_KEYS = {"version", "defaults", "metrics", "platforms", "families", "benchmarks", "scopes", "importance"}
 _SCOPE_KEYS = {"source", "platform", "tags", "benchmarks", "groups", "expected_nightly"}
 _SOURCE_KINDS = {"micro", "third_party", "artifact"}
@@ -34,6 +36,8 @@ _RULES: dict[str, tuple[bool, float, bool]] = {
     "window": (True, 1, False),
     "max_cv_pct": (False, 0, True),
     "lock_mad_frac": (False, 0, False),
+    "improvement_lock_pct": (False, 0, False),
+    "lock_window": (True, 1, False),
 }
 # An overlay may only add these sections; everything else could change thresholds.
 _OVERLAY_KEYS = {"version", "platforms", "scopes", "importance"}
@@ -211,7 +215,7 @@ def _parse_scopes(raw: Mapping[str, Any]) -> dict[str, Scope]:
 def _build(raw: Mapping[str, Any]) -> Catalog:
     defaults = _as_mapping("defaults", raw.get("defaults"))
     _check_thresholds("defaults", defaults)
-    missing = _THRESHOLD_KEYS - set(defaults)
+    missing = _REQUIRED_KEYS - set(defaults)
     if missing:
         raise CatalogError(f"defaults: missing {sorted(missing)}")
     metrics, ungated = {}, set()
