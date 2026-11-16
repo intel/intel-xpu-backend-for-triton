@@ -74,6 +74,7 @@ KNOBS_REFLECTED_IN_OPTIONS = {
     "gen_native_code": "generate_native_code",
     "in_loop_sink": "in_loop_sink",
     "libdevice_path": "extern_libs",
+    "pipeline_tile_barrier": "tile_barrier",
 }
 
 # Knobs reflected into `XPUBackend.properties` (`parse_target` folds the
