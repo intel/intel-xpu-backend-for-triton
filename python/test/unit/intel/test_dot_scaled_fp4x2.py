@@ -11,7 +11,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu
+from triton._internal_testing import is_compile_warmup, is_xpu
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 
@@ -99,6 +99,9 @@ def _target_arch():
 def _check_same(run):
     c_u8, kernel_u8 = run(False)
     c_fp4x2, kernel_fp4x2 = run(True)
+    if is_compile_warmup():
+        # Warmup launches return no compiled kernel; only the compilations matter.
+        return
     assert kernel_fp4x2.metadata.threads_per_warp == kernel_u8.metadata.threads_per_warp
     # Both variants must take the DPAS path wherever the target has DPAS. With a
     # minimum sub-group size of 8 (DG2, ARL-H) DPAS needs 8 threads per warp,
@@ -113,6 +116,7 @@ def _check_same(run):
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
 @pytest.mark.parametrize("a_fmt, b_fmt", [("e2m1", "bf16"), ("bf16", "e2m1"), ("e2m1", "e2m1")])
+@pytest.mark.enable_warmup
 def test_dot_scaled_fp4x2_matches_uint8(a_fmt, b_fmt, device):
     M = N = K = 128
     generator = torch.Generator(device="cpu").manual_seed(0)
@@ -141,6 +145,7 @@ def test_dot_scaled_fp4x2_matches_uint8(a_fmt, b_fmt, device):
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
 @pytest.mark.parametrize("a_valid", [1, 0])
+@pytest.mark.enable_warmup
 def test_dot_scaled_fp4x2_masked_operand(a_valid, device):
     M = N = K = 128
     generator = torch.Generator(device="cpu").manual_seed(0)
@@ -162,6 +167,7 @@ def test_dot_scaled_fp4x2_masked_operand(a_valid, device):
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
 @pytest.mark.parametrize("host_desc", [False, True])
+@pytest.mark.enable_warmup
 def test_dot_scaled_fp4x2_tensor_descriptor_loop(host_desc, device, with_allocator):
     M, N, K = 256, 256, 512
     BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 128

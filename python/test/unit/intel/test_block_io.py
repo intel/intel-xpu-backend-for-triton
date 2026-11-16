@@ -8,7 +8,7 @@ import pathlib
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu
+from triton._internal_testing import is_compile_warmup, is_xpu
 
 
 @pytest.fixture(autouse=True)
@@ -126,6 +126,7 @@ layouts = [
 @pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
                    reason="Block loads not supported on this architecture")
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
+@pytest.mark.enable_warmup
 def test_block_io(M, N, dtype_str, layout, transpose, device, tmp_path: pathlib.Path):
     assert os.environ["TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"] == "1"
     warps = warps_per_cta(layout)
@@ -201,7 +202,7 @@ def test_block_io(M, N, dtype_str, layout, transpose, device, tmp_path: pathlib.
     kernel[(1, 1, 1)](a, x)
     assert torch.equal(a, x)
 
-    if support_block_io:
+    if support_block_io and not is_compile_warmup():
         if isinstance(layout, DotOperandLayout):
             if (layout.op_idx == 0 and layout.k_width == 2) and dtype_str == "float32":
                 # The tile width is too large for block load/store
@@ -224,6 +225,7 @@ def test_block_io(M, N, dtype_str, layout, transpose, device, tmp_path: pathlib.
 @pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
                    reason="Block loads not supported on this architecture")
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
+@pytest.mark.enable_warmup
 def test_block_io_nd(shape, dtype_str, block_io, device, tmp_path: pathlib.Path):
     rank = len(shape)
     ty = {"float32": "f32", "float16": "f16", "bfloat16": "i16", "int8": "i8"}[dtype_str]
@@ -298,7 +300,7 @@ def test_block_io_nd(shape, dtype_str, block_io, device, tmp_path: pathlib.Path)
     tile = a[batch:2 * batch]
     assert torch.equal(tile.transpose(-2, -1) if transpose else tile, x)
 
-    if support_block_io:
+    if support_block_io and not is_compile_warmup():
         llir = kernel.asm["llir"]
         load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
         assert load_count > 0
