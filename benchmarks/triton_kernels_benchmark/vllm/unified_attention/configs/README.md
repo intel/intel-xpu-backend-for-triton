@@ -17,7 +17,7 @@ are checked when loading.
 `td` and `sc` (softcap) are flags encoded as 0 or 1, `kq` is the KV quantization
 mode, and `w` is the sliding-window size (0 disables it).
 
-Within each file, entries match the 2D/3D path, segment count, and maximum
+Within each file, entries match the 2D/3D path and maximum
 Q/KV-length buckets. Runtime selects the nearest recorded sequence count, then the
 nearest query-work point (total query tokens × query heads) at that sequence count.
 Both selections use absolute distance and choose the smaller value on a tie.
