@@ -285,6 +285,7 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
                            "mlir::scf::SCFDialect",
                            "mlir::spirv::SPIRVDialect",
                            "mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
 
   let options = [

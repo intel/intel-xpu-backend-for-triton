@@ -277,11 +277,14 @@ Python: `intel.passes.ttgpuir.add_coalesce(pm)`
 
 ### Pass with Scalar Options
 ```cpp
-ADD_PASS_OPTION_WRAPPER_5("add_pipeline",
-                          gpu::intel::createTritonIntelGPUPipeline, int, bool,
-                          std::string, unsigned, unsigned);
+ADD_PASS_OPTION_WRAPPER_2(
+    "add_reduce_variable_liveness",
+    gpu::intel::createTritonIntelGPUReduceVariableLiveness, std::string,
+    bool);
 ```
-Python: `intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier, cls.device_arch, properties['core_clock_rate'], properties['memory_clock_rate'])`
+Python: `intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode, not opt.in_loop_sink)`
+
+The macros stop at five options; past that, write the `m.def` lambda by hand (see `add_pipeline`).
 
 ### Pass with Struct Options
 ```cpp

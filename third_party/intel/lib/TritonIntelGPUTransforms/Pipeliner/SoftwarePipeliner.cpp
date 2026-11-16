@@ -48,7 +48,8 @@ static bool preCondition(scf::ForOp forOp) {
 static void insertTileBarrier(scf::ForOp loop) {
   auto outer = loop->getParentOfType<scf::ForOp>();
   auto funcOp = loop->getParentOfType<triton::FuncOp>();
-  if (!outer || !funcOp)
+  // A private helper may be called by only some warps.
+  if (!outer || !funcOp || !funcOp.isPublic())
     return;
   // Every warp must reach the barrier equally often.
   auto isUniform = [&](Value v) {

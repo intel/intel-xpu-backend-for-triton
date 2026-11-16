@@ -59,8 +59,8 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     tt.return
   }
 
-  // COM: A bound that differs between warps would leave some warps waiting at the barrier. Here it is an
-  // COM: iter_arg seeded with the warp id: unlike an induction variable, it is not uniform by its loop's bounds.
+  // COM: A bound that could differ between warps would leave some warps waiting at the barrier. An iter_arg,
+  // COM: unlike an induction variable, is not proven uniform by its loop's bounds, even when its seed is.
   // CHECK-LABEL: tt.func public @nonuniform_bound
   // CHECK-NOT:     ttg.barrier
   // CHECK:         tt.return
@@ -69,9 +69,9 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     %c0 = arith.constant 0 : i32
     %c1 = arith.constant 1 : i32
     %c64 = arith.constant 64 : i32
+    %pid = tt.get_program_id x : i32
     %np = tt.get_num_programs x : i32
-    %w = ttg.warp_id
-    %u = scf.for %bat = %c0 to %c1 step %c1 iter_args(%lb = %w) -> (i32) : i32 {
+    %u = scf.for %bat = %c0 to %c1 step %c1 iter_args(%lb = %pid) -> (i32) : i32 {
       scf.for %t = %lb to %tiles step %np : i32 {
         %r = scf.for %k = %c0 to %K step %c64 iter_args(%acc = %cst) -> (tensor<128x256xf32, #dpas>) : i32 {
           %a = tt.descriptor_load %descA[%t, %k] {ttig.block_io = "row_major"} : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #dot0>
@@ -85,17 +85,18 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     tt.return
   }
 
+  // COM: A condition built from a scalar load is not proven uniform.
   // CHECK-LABEL: tt.func public @nonuniform_ancestor
   // CHECK-NOT:     ttg.barrier
   // CHECK:         tt.return
-  tt.func public @nonuniform_ancestor(%descA: !tt.tensordesc<128x64xf16>, %descB: !tt.tensordesc<64x256xf16>, %K: i32, %tiles: i32) {
+  tt.func public @nonuniform_ancestor(%descA: !tt.tensordesc<128x64xf16>, %descB: !tt.tensordesc<64x256xf16>, %K: i32, %tiles: i32, %p: !tt.ptr<i32>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
     %c0 = arith.constant 0 : i32
     %c64 = arith.constant 64 : i32
     %pid = tt.get_program_id x : i32
     %np = tt.get_num_programs x : i32
-    %w = ttg.warp_id
-    %first = arith.cmpi eq, %w, %c0 : i32
+    %v = tt.load %p : !tt.ptr<i32>
+    %first = arith.cmpi eq, %v, %c0 : i32
     scf.if %first {
       scf.for %t = %pid to %tiles step %np : i32 {
         %r = scf.for %k = %c0 to %K step %c64 iter_args(%acc = %cst) -> (tensor<128x256xf32, #dpas>) : i32 {
@@ -156,6 +157,127 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
           scf.yield %d : tensor<128x256xf32, #dpas>
         }
       }
+    }
+    tt.return
+  }
+
+  // COM: The #8719 shape: a guard on the tile index sits between the tile loop and the K loop.
+  // CHECK-LABEL: tt.func public @guarded_tile
+  // CHECK:         scf.for
+  // CHECK-NEXT:      ttg.barrier none
+  // CHECK:           scf.if
+  tt.func public @guarded_tile(%descA: !tt.tensordesc<128x64xf16>, %descB: !tt.tensordesc<64x256xf16>, %K: i32, %tiles: i32, %n: i32) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    %pid = tt.get_program_id x : i32
+    %np = tt.get_num_programs x : i32
+    %c1 = arith.constant 1 : i32
+    scf.for %i = %c0 to %n step %c1 : i32 {
+      %ti = arith.muli %i, %np : i32
+      %t = arith.addi %ti, %pid : i32
+      %ok = arith.cmpi slt, %t, %tiles : i32
+      scf.if %ok {
+        %r = scf.for %k = %c0 to %K step %c64 iter_args(%acc = %cst) -> (tensor<128x256xf32, #dpas>) : i32 {
+          %a = tt.descriptor_load %descA[%t, %k] {ttig.block_io = "row_major"} : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #dot0>
+          %b = tt.descriptor_load %descB[%k, %t] {ttig.block_io = "row_major"} : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #dot1>
+          %d = tt.dot %a, %b, %acc, inputPrecision = tf32 : tensor<128x64xf16, #dot0> * tensor<64x256xf16, #dot1> -> tensor<128x256xf32, #dpas>
+          scf.yield %d : tensor<128x256xf32, #dpas>
+        }
+      }
+    }
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func public @loaded_upper_bound
+  // CHECK-NOT:     ttg.barrier
+  // CHECK:         tt.return
+  tt.func public @loaded_upper_bound(%descA: !tt.tensordesc<128x64xf16>, %descB: !tt.tensordesc<64x256xf16>, %K: i32, %p: !tt.ptr<i32>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    %pid = tt.get_program_id x : i32
+    %np = tt.get_num_programs x : i32
+    %ub = tt.load %p : !tt.ptr<i32>
+    scf.for %t = %pid to %ub step %np : i32 {
+        %r = scf.for %k = %c0 to %K step %c64 iter_args(%acc = %cst) -> (tensor<128x256xf32, #dpas>) : i32 {
+          %a = tt.descriptor_load %descA[%t, %k] {ttig.block_io = "row_major"} : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #dot0>
+          %b = tt.descriptor_load %descB[%k, %t] {ttig.block_io = "row_major"} : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #dot1>
+          %d = tt.dot %a, %b, %acc, inputPrecision = tf32 : tensor<128x64xf16, #dot0> * tensor<64x256xf16, #dot1> -> tensor<128x256xf32, #dpas>
+          scf.yield %d : tensor<128x256xf32, #dpas>
+        }
+    }
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func public @loaded_step
+  // CHECK-NOT:     ttg.barrier
+  // CHECK:         tt.return
+  tt.func public @loaded_step(%descA: !tt.tensordesc<128x64xf16>, %descB: !tt.tensordesc<64x256xf16>, %K: i32, %tiles: i32, %p: !tt.ptr<i32>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    %pid = tt.get_program_id x : i32
+    %np = tt.get_num_programs x : i32
+    %st = tt.load %p : !tt.ptr<i32>
+    scf.for %t = %pid to %tiles step %st : i32 {
+        %r = scf.for %k = %c0 to %K step %c64 iter_args(%acc = %cst) -> (tensor<128x256xf32, #dpas>) : i32 {
+          %a = tt.descriptor_load %descA[%t, %k] {ttig.block_io = "row_major"} : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #dot0>
+          %b = tt.descriptor_load %descB[%k, %t] {ttig.block_io = "row_major"} : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #dot1>
+          %d = tt.dot %a, %b, %acc, inputPrecision = tf32 : tensor<128x64xf16, #dot0> * tensor<64x256xf16, #dot1> -> tensor<128x256xf32, #dpas>
+          scf.yield %d : tensor<128x256xf32, #dpas>
+        }
+    }
+    tt.return
+  }
+
+  // COM: Only scf.for and scf.if ancestors are checked; anything else, such as scf.while, keeps the barrier out.
+  // CHECK-LABEL: tt.func public @while_ancestor
+  // CHECK-NOT:     ttg.barrier
+  // CHECK:         tt.return
+  tt.func public @while_ancestor(%descA: !tt.tensordesc<128x64xf16>, %descB: !tt.tensordesc<64x256xf16>, %K: i32, %tiles: i32) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    %pid = tt.get_program_id x : i32
+    %np = tt.get_num_programs x : i32
+    %w = scf.while (%s = %c0) : (i32) -> i32 {
+      %go = arith.cmpi slt, %s, %tiles : i32
+      scf.condition(%go) %s : i32
+    } do {
+    ^bb0(%s1: i32):
+      scf.for %t = %pid to %tiles step %np : i32 {
+        %r = scf.for %k = %c0 to %K step %c64 iter_args(%acc = %cst) -> (tensor<128x256xf32, #dpas>) : i32 {
+          %a = tt.descriptor_load %descA[%t, %k] {ttig.block_io = "row_major"} : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #dot0>
+          %b = tt.descriptor_load %descB[%k, %t] {ttig.block_io = "row_major"} : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #dot1>
+          %d = tt.dot %a, %b, %acc, inputPrecision = tf32 : tensor<128x64xf16, #dot0> * tensor<64x256xf16, #dot1> -> tensor<128x256xf32, #dpas>
+          scf.yield %d : tensor<128x256xf32, #dpas>
+        }
+      }
+      %next = arith.addi %s1, %np : i32
+      scf.yield %next : i32
+    }
+    tt.return
+  }
+
+  // COM: A private helper may be called by only some warps, even when its loop bounds are uniform.
+  // CHECK-LABEL: tt.func private @private_helper
+  // CHECK-NOT:     ttg.barrier
+  // CHECK:         tt.return
+  tt.func private @private_helper(%descA: !tt.tensordesc<128x64xf16>, %descB: !tt.tensordesc<64x256xf16>, %K: i32) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    %pid = tt.get_program_id x : i32
+    %np = tt.get_num_programs x : i32
+    %c1024 = arith.constant 1024 : i32
+    scf.for %t = %pid to %c1024 step %np : i32 {
+        %r = scf.for %k = %c0 to %K step %c64 iter_args(%acc = %cst) -> (tensor<128x256xf32, #dpas>) : i32 {
+          %a = tt.descriptor_load %descA[%t, %k] {ttig.block_io = "row_major"} : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #dot0>
+          %b = tt.descriptor_load %descB[%k, %t] {ttig.block_io = "row_major"} : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #dot1>
+          %d = tt.dot %a, %b, %acc, inputPrecision = tf32 : tensor<128x64xf16, #dot0> * tensor<64x256xf16, #dot1> -> tensor<128x256xf32, #dpas>
+          scf.yield %d : tensor<128x256xf32, #dpas>
+        }
     }
     tt.return
   }
