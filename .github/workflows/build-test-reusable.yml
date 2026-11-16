@@ -522,6 +522,23 @@ jobs:
           old_dir="$(<"$RUNNER_TEMP/warmup/cache_dir")"
           find "$TRITON_CI_COMPILE_TRACE_DIR" -name '*.jsonl' -exec \
             sed -i "s|\"cache_dir\": \"$old_dir\"|\"cache_dir\": \"$cache_dir\"|" {} +
+          # The cache holds every suite, but this job runs one: the completeness report would otherwise ask for
+          # the other suites' tests and call their warmup specializations unused. Keep only this suite's traces.
+          case "${{ matrix.loop.suite }}" in
+            minicore) phases="regression" ;;
+            language_and_scaled_dot) phases="language scaled_dot" ;;
+            rest) phases="matmul tutorials" ;;
+            gluon) phases="gluon" ;;
+            triton-kernels) phases="triton_kernels" ;;
+          esac
+          for trace in "$TRITON_CI_COMPILE_TRACE_DIR"/warmup-*; do
+            name="$(basename "$trace")"
+            keep=false
+            for phase in $phases; do
+              [[ "$name" == "warmup-$phase-"* ]] && keep=true
+            done
+            $keep || rm "$trace"
+          done
 
       - name: Determine number of shards for current suite
         run: |
