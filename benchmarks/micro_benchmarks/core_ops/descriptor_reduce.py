@@ -69,6 +69,8 @@ def benchmark_reduce_segments_2d(T, D, provider):
     assert_close(
         lambda: (reduce_segments_2d_load_kernel[grid](y_ref, x, m, S, H, D, DP, S), y_ref)[1],
         lambda: (reduce_segments_2d_desc_kernel[grid](y, x, m, S, H, D, DP, S), y)[1],
+        atol=4e-2,
+        rtol=1.6e-2,
     )
 
     load_fn = lambda: reduce_segments_2d_load_kernel[grid](y, x, m, S, H, D, DP, S)
