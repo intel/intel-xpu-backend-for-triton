@@ -131,11 +131,11 @@ llvm.func @triton_gen.dpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(!llvm.ptr<3>) -> vector<2xi16> attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
+// CHECK: llvm.func spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(!llvm.ptr<3>) -> vector<2xi16> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.sub_group_block_read(%ptr: !llvm.ptr<3>) {
   // CHECK:     llvm.func @triton_gen.sub_group_block_read(%arg0: !llvm.ptr<3>) {
-  // CHECK:       llvm.call spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(%arg0) {{.*}} : (!llvm.ptr<3>) -> vector<2xi16>
+  // CHECK:       llvm.call spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(%arg0) {convergent, {{.*}} : (!llvm.ptr<3>) -> vector<2xi16>
   %ret = triton_gen.sub_group_block_read %ptr : !llvm.ptr<3> -> vector<2xi16>
   llvm.return
 }
