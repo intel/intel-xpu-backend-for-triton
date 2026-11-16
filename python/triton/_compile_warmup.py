@@ -199,7 +199,8 @@ class _FakeCudaTensorMode(TorchFunctionMode):
             device = kwargs["device"]
             if torch.device(device).type != "cpu":
                 host = func(*args, **{**kwargs, "device": None})
-                return torch.empty(host.shape, dtype=host.dtype, device=device)
+                # Keep the strides: a transposed numpy array gives a transposed tensor, which specializes differently.
+                return torch.empty_strided(host.shape, host.stride(), dtype=host.dtype, device=device)
         if name == "__getitem__" and len(args) == 2 and isinstance(args[0], self.fake_tensor_type):
             result = _basic_getitem(args[0], args[1])
             if result is not None:
