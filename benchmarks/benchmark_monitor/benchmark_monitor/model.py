@@ -77,7 +77,7 @@ class Series:
 
 
 @dataclass(frozen=True)
-class Thresholds:
+class Thresholds:  # pylint: disable=too-many-instance-attributes
     """Resolved gate thresholds for one series."""
 
     min_drop_pct: float
@@ -87,6 +87,8 @@ class Thresholds:
     max_cv_pct: float
     lock_mad_frac: float
     higher_is_better: bool
+    improvement_lock_pct: float = 8.0  # lock the baseline when the recent level is this % better
+    lock_window: int = 8  # cap on the number of recent points used for the lock-in level
 
 
 @dataclass(frozen=True)

@@ -76,7 +76,8 @@ def test_night_selects_point_and_excludes_later():
 
 
 def test_missing_night():
-    assert evaluate(mk([10.0] * 8), TH, night=date(2025, 3, 1)).status is Status.MISSING
+    v = evaluate(mk([10.0] * 8), TH, night=date(2025, 3, 1))
+    assert v.status is Status.MISSING and v.n_history == 0
 
 
 def test_lock_in_stable_improvement():
@@ -136,3 +137,55 @@ def test_evaluate_all_uses_catalog():
     out = evaluate_all([mk([10.0] * 10 + [5.0]), mk([])], cat)
     assert len(out) == 1 and out[0].thresholds == cat.resolve(KEY)
     assert out[0].status is Status.REGRESSION
+
+
+def test_cv_exactly_at_max_cv_is_not_noisy():
+    # mean 100, sample stdev exactly 15.0 -> CV is exactly 15%; the gate skips only when CV > max_cv_pct.
+    hist = [85.0, 115.0, 85.0, 115.0, 100.0]
+    assert evaluate(mk(hist + [100.0]), TH).status is Status.OK
+    assert evaluate(mk(hist + [100.0]), Thresholds(5.0, 3.0, 5, 10, 14.99, 0.05, True)).status is Status.NOISY
+
+
+def test_baseline_is_previous_window_points_not_calendar_nights():
+    start = date(2025, 1, 1)
+    # 12 points with a 2-night gap after the 6th; window=10 keeps the last 10 points before tonight.
+    days = [0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13]
+    vals = [1.0] + [10.0] * 10 + [8.0]
+    s = Series(KEY, tuple(Point(start + timedelta(d), v, 1, (f"r{d}", )) for d, v in zip(days, vals)))
+    v = evaluate(s, TH)
+    assert v.n_history == 10 and v.baseline_median == 10.0 and v.status is Status.REGRESSION
+
+
+def test_night_without_point_is_skipped_not_a_gap():
+    start = date(2025, 1, 1)
+    days = [0, 1, 2, 3, 4, 5, 6, 8, 9]  # night 7 has no point
+    s = Series(KEY,
+               tuple(Point(start + timedelta(d), 10.0 if i < 8 else 8.0, 1, (f"r{d}", )) for i, d in enumerate(days)))
+    v = evaluate(s, TH)
+    assert v.n_history == 8 and v.status is Status.REGRESSION  # all 8 earlier points, the missing night adds nothing
+    assert evaluate(s, TH, night=date(2025, 1, 8)).status is Status.MISSING
+
+
+def test_improvement_lock_pct_is_configurable():
+    vals = [100.0] * 12 + [106.0] * 8 + [100.0]
+    default = evaluate(mk(vals), TH20)
+    assert default.baseline_median == 100.0  # 6% gain < default 8%: no lock-in
+    eager = Thresholds(5.0, 3.0, 5, 20, 15.0, 0.05, True, improvement_lock_pct=4.0)
+    assert evaluate(mk(vals), eager).baseline_median == 106.0
+
+
+def test_lock_window_is_configurable():
+    vals = [100.0] * 14 + [120.0] * 6 + [105.0]
+    assert evaluate(mk(vals), TH20).baseline_median == 120.0  # recent 8 = 2x100 + 6x120 -> median 120
+    short = Thresholds(5.0, 3.0, 5, 20, 15.0, 0.05, True, lock_window=5)
+    assert evaluate(mk(vals), short).baseline_median == 120.0
+    long = Thresholds(5.0, 3.0, 5, 20, 15.0, 0.05, True, lock_window=20)
+    assert evaluate(mk(vals), long).baseline_median == 100.0
+
+
+def test_several_points_per_night_tonight_is_the_last_and_earlier_runs_stay_in_baseline():
+    start = date(2025, 1, 1)
+    pts = [Point(start + timedelta(i), 10.0, 1, (f"r{i}", )) for i in range(8)]
+    pts += [Point(start + timedelta(8), 10.0, 1, ("r8a", )), Point(start + timedelta(8), 8.0, 1, ("r8b", ))]
+    v = evaluate(Series(KEY, tuple(pts)), TH)
+    assert v.status is Status.REGRESSION and v.n_history == 9
