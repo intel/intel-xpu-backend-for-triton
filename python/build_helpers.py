@@ -814,7 +814,7 @@ def _nvidia_toolchain_available():
     than failing the build.
     """
     import platform as _plat
-    return _plat.machine() in ("x86_64", "aarch64", "arm64")
+    return _plat.machine() in ("x86_64", "AMD64", "aarch64", "arm64")
 
 
 def download_and_copy_dependencies(helper_args: BuildHelperArgs):
