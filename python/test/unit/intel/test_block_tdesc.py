@@ -6,13 +6,14 @@ import pathlib
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu, is_xpu_cri
+from triton._internal_testing import is_compile_warmup, is_xpu, is_xpu_cri
 
 
 @pytest.mark.parametrize("M, N",
                          [[256, 64], [256, 32], [128, 32], [128, 16], [64, 64], [64, 32], [32, 32], [16, 64], [16, 16]])
 @pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
 @pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor tests are specific to the XPU backend")
+@pytest.mark.enable_warmup
 def test_tdesc_load_store(M, N, dtype_str, device, tmp_path: pathlib.Path):
     num_warps = 4
     threads_per_warp = 32
@@ -67,6 +68,7 @@ def test_tdesc_load_store(M, N, dtype_str, device, tmp_path: pathlib.Path):
                          [[256, 64], [256, 32], [128, 32], [128, 16], [64, 64], [64, 32], [32, 32], [16, 64], [16, 16]])
 @pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
 @pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor tests are specific to the XPU backend")
+@pytest.mark.enable_warmup
 def test_tdesc_load_zero_padding(M, N, dtype_str, device, tmp_path: pathlib.Path):
     """Load a MxN block through a descriptor whose shape is (M-1)x(N-1).
 
@@ -364,9 +366,12 @@ def _run_neg_col(dtype_str, which, trans, mis, col, device, pad="zero", rw=64, c
                                                      ("int8", 0, 0), ("int8", 1, 1)])
 @pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+@pytest.mark.enable_warmup
 def test_tdesc_negative_col_packed_aligned_base(dtype_str, which, trans, device, with_allocator):
     # -4 is legal for every dtype here (int8 needs a multiple of 4 elements).
     out, expected, kernel = _run_neg_col(dtype_str, which, trans, mis=0, col=-4, device=device)
+    if is_compile_warmup():
+        return
     assert _count_2d_calls(kernel.asm["llir"], "Load") > 0, "the load must stay on 2D block I/O"
     torch.testing.assert_close(out, expected, rtol=0, atol=0, equal_nan=True)
 
@@ -396,6 +401,8 @@ def test_tdesc_nan_padding_transposed_non_square(which, r0, device, with_allocat
 def _unaffected_load_calls(dtype_str, which, trans, rw, cl, device):
     """2D load calls of the same kernel at column 0, where no negative-column handling is needed."""
     kernel = _run_neg_col(dtype_str, which, trans, mis=0, col=0, device=device, rw=rw, cl=cl)[2]
+    if is_compile_warmup():
+        return 0  # only the compilation matters; a warmup launch returns no kernel
     calls = _count_2d_calls(kernel.asm["llir"], "Load")
     assert calls > 0, "the reference kernel must use 2D block loads"
     return calls
@@ -414,10 +421,14 @@ def _unaffected_load_calls(dtype_str, which, trans, rw, cl, device):
 ])
 @pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+@pytest.mark.enable_warmup
 def test_tdesc_negative_col_misaligned_base(dtype_str, which, trans, col, runtime, mis, device, with_allocator):
     out, expected, kernel = _run_neg_col(dtype_str, which, trans, mis, col, device, runtime_col=runtime)
-    assert _count_2d_calls(kernel.asm["llir"], "Load") == _unaffected_load_calls(dtype_str, which, trans, 64, 64,
-                                                                                 device)
+    # Also compiles the reference kernel, which the real run needs.
+    unaffected = _unaffected_load_calls(dtype_str, which, trans, 64, 64, device)
+    if is_compile_warmup():
+        return
+    assert _count_2d_calls(kernel.asm["llir"], "Load") == unaffected
     torch.testing.assert_close(out, expected, rtol=0, atol=0, equal_nan=True)
 
 
@@ -451,6 +462,7 @@ def _neg_col_store_kernel(x_ptr, LD, OFF, OFFC: tl.constexpr, RW: tl.constexpr, 
 ])
 @pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+@pytest.mark.enable_warmup
 def test_tdesc_store_negative_col_misaligned_base(dtype_str, col, runtime, stays_2d, mis, device, with_allocator):
     dtype = getattr(torch, dtype_str)
     eb = torch.empty(0, dtype=dtype).element_size()
@@ -470,6 +482,8 @@ def test_tdesc_store_negative_col_misaligned_base(dtype_str, col, runtime, stays
         if 0 <= col + j < cl:
             tensor[:, col + j] = v[:, j]
     assert torch.equal(buf.cpu(), expected)
+    if is_compile_warmup():
+        return
     if dtype_str == "float16":  # int8 tiles are wider, so whether they straddle is not asserted
         if is_xpu_cri():
             pytest.xfail("`stays_2d` assumes a 64-byte message (span 32 for float16); CRI's span differs")

@@ -44,7 +44,7 @@ env:
 jobs:
   setup:
     name: Setup
-    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "gpu", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 480
     defaults:
       run:
@@ -183,7 +183,7 @@ jobs:
         # kernels. See scripts/sglang/README.md.
         exclude:
           - suite: ${{ !inputs.install_sgl_kernel_xpu && 'sglang-e2e' || '' }}
-    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "gpu", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 240
     defaults:
       run:

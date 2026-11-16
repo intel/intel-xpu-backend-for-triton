@@ -23,6 +23,7 @@ jobs:
   tests:
     name: Tests
     runs-on:
+      - gpu
       - rolling
       - runner-0.0.22
     timeout-minutes: 160
