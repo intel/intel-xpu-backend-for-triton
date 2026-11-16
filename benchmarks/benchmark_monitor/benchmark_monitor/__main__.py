@@ -5,15 +5,12 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
-from benchmark_monitor.aggregate import aggregate
 from benchmark_monitor.catalog import CatalogError, load_catalog
-from benchmark_monitor.gate import evaluate
-from benchmark_monitor.report import Report
+from benchmark_monitor.pipeline import run
 from benchmark_monitor.sink import JsonSink, MarkdownSink
-from benchmark_monitor.source import ArtifactSource, gated_observations
+from benchmark_monitor.source import ArtifactSource
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -22,6 +19,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--artifacts", required=True, help="directory with *-report.csv files (searched recursively)")
     ap.add_argument("--scope", required=True)
     ap.add_argument("--as-of", type=date.fromisoformat, default=None, help="YYYY-MM-DD (default: today, UTC)")
+    ap.add_argument("--nights", type=int, default=30,
+                    help="nights of verdict history to evaluate and suppress over (>= 1)")
     ap.add_argument("--format", choices=("md", "json"), default="md")
     ap.add_argument("--out", default=None, help="output path (default: stdout)")
     args = ap.parse_args(argv)
@@ -40,19 +39,11 @@ def _run(args: argparse.Namespace) -> int:
     if not Path(args.artifacts).is_dir():
         print(f"--artifacts {args.artifacts!r} is not a directory", file=sys.stderr)
         return 2
+    if args.nights < 1:
+        print("--nights must be at least 1", file=sys.stderr)
+        return 2
     as_of = args.as_of or datetime.now(timezone.utc).date()
-    start = as_of - timedelta(days=catalog.max_window())  # enough history for the baseline
-    observations, warnings = gated_observations(
-        catalog,
-        ArtifactSource(args.artifacts, catalog).observations(catalog.scopes[args.scope], start, as_of))
-    by_key = defaultdict(list)
-    for obs in observations:
-        by_key[obs.key].append(obs)
-    series = [aggregate(group) for group in by_key.values()]
-    if not series:
-        warnings.append(f"no observations for scope {args.scope!r} in {start}..{as_of}")
-    report = Report(as_of=as_of, verdicts=tuple(evaluate(s, catalog.resolve(s.key), as_of) for s in series),
-                    warnings=tuple(warnings))
+    report = run(catalog, ArtifactSource(args.artifacts, catalog), [args.scope], as_of, args.nights)
 
     sink_cls = MarkdownSink if args.format == "md" else JsonSink
     sink_cls(args.out or sys.stdout).emit(report)

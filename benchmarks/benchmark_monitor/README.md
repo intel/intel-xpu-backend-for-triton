@@ -1,7 +1,7 @@
 # benchmark_monitor
 
 Nightly benchmark regression monitoring for Triton benchmark results. It reads measurements, aggregates them
-into one point per night, and gates each series against its own recent history.
+into one point per night, gates each series against its own recent history, and suppresses repeat alerts.
 
 ## Install and run
 
@@ -11,7 +11,8 @@ python -m benchmark_monitor --artifacts DIR --scope nightly-b580-micro --as-of 2
 ```
 
 `DIR` is searched recursively for `*-report.csv` files (wide or long format). Other flags: `--catalog PATH`
-(default: the shipped catalog), `--format md|json`, `--out PATH`. Exit code 2 means a bad argument or catalog.
+(default: the shipped catalog), `--nights N` (verdict history to evaluate and suppress over, default 30),
+`--format md|json`, `--out PATH`. Exit code 2 means a bad argument or catalog.
 Runtime dependency: `pyyaml`; Python 3.10 or newer.
 
 ## The catalog

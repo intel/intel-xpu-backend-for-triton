@@ -198,3 +198,41 @@ def test_socket_blocked_in_process(tmp_path, cat, monkeypatch):
     monkeypatch.setattr(socket, "socket", boom)
     p = write(tmp_path / "e-report.csv", [wide()])
     assert list(CsvReportSource([p], cat).observations(scope(cat, "nightly-b580-micro"), D1, D2))
+
+
+def _suppression_report(n_new=12):
+    from benchmark_monitor.suppress import Confirmed, StormDigest, SuppressionResult  # pylint: disable=import-outside-toplevel
+    th = Thresholds(5.0, 3.0, 8, 20, 15.0, 0.05, True)
+
+    def reg(i):
+        key = SeriesKey("micro", "b580", "client", f"gemm-{i}", "triton", "tflops", "{}")
+        return Verdict(key, D1, Status.REGRESSION, 10.0 + i, -5.0, 10.0, 0.1, 9, th)
+
+    new = tuple(reg(i) for i in range(n_new))
+    sup = SuppressionResult(new=new, confirmed=(Confirmed(new[0].key, new[0], 2, D1), ), sustained=(reg(40), ),
+                            muted=(reg(41), ), storms=(StormDigest("flash-attn", 11, 9.5, 20.0), ),
+                            storm_nights=frozenset({D1}), suspect={"micro": "partial run"})
+    return Report(date(2026, 11, 16), new, sup, ("careful", ))
+
+
+def test_sinks_render_suppression_sections_short():
+    out = io.StringIO()
+    MarkdownSink(out).emit(_suppression_report())
+    text = out.getvalue()
+    for title in ("## New (12)", "## Confirmed (1)", "## Sustained (1)", "## Muted (flip-flop) (1)", "## Storms (1)",
+                  "## Warnings"):
+        assert title in text
+    assert "- ... and 2 more" in text and "flash-attn: 11 new" in text and "2 nights since 2026-11-01" in text
+
+
+def test_json_sink_serialises_suppression(tmp_path):
+    path = tmp_path / "s.json"
+    JsonSink(path).emit(_suppression_report(2))
+    data = json.loads(path.read_text())
+    assert data["suppression"]["storm_nights"] == ["2026-11-01"] and len(data["suppression"]["new"]) == 2
+    assert data["suppression"]["confirmed"][0]["streak"] == 2
+
+
+def test_cli_rejects_nights_below_one(tmp_path, capsys):
+    assert main(["--artifacts", str(tmp_path), "--scope", "nightly-b580-micro", "--nights", "0"]) == 2
+    assert "--nights" in capsys.readouterr().err
