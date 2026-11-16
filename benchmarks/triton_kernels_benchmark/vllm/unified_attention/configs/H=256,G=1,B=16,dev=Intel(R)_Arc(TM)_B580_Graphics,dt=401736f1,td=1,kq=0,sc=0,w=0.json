@@ -12,7 +12,6 @@
       "key": {
         "is_3d": true,
         "kv_len_bucket": 2,
-        "num_segments": 16,
         "num_seqs": 3,
         "q_len_bucket": 0,
         "query_work": 12
@@ -29,7 +28,6 @@
       "key": {
         "is_3d": false,
         "kv_len_bucket": 2,
-        "num_segments": 1,
         "num_seqs": 3,
         "q_len_bucket": 2,
         "query_work": 540

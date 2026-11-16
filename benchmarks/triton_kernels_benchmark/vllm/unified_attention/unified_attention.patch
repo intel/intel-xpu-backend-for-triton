@@ -543,10 +543,10 @@ index 4d73e49..b0cc03d 100644
          )
 diff --git a/vllm/v1/attention/ops/triton_unified_attention_config.py b/vllm/v1/attention/ops/triton_unified_attention_config.py
 new file mode 100644
-index 0000000..c1af94b
+index 0000000..2853bd7
 --- /dev/null
 +++ b/vllm/v1/attention/ops/triton_unified_attention_config.py
-@@ -0,0 +1,521 @@
+@@ -0,0 +1,514 @@
 +# SPDX-License-Identifier: Apache-2.0
 +# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +
@@ -615,7 +615,6 @@ index 0000000..c1af94b
 +@dataclass(frozen=True)
 +class AttentionDynamicKey:
 +    is_3d: bool
-+    num_segments: int
 +    q_len_bucket: int
 +    kv_len_bucket: int
 +    num_seqs: int
@@ -624,7 +623,6 @@ index 0000000..c1af94b
 +    def regime(self) -> tuple:
 +        return (
 +            self.is_3d,
-+            self.num_segments,
 +            self.q_len_bucket,
 +            self.kv_len_bucket,
 +        )
@@ -665,7 +663,6 @@ index 0000000..c1af94b
 +    k_dtype,
 +    v_dtype,
 +    out_dtype,
-+    num_segments,
 +    num_seqs,
 +    query_work,
 +) -> AttentionKey:
@@ -689,7 +686,6 @@ index 0000000..c1af94b
 +                ),
 +            )
 +        ),
-+        num_segments=num_segments,
 +        num_seqs=num_seqs,
 +        query_work=query_work,
 +    )
@@ -795,7 +791,6 @@ index 0000000..c1af94b
 +        k_dtype=k.dtype,
 +        v_dtype=v.dtype,
 +        out_dtype=out.dtype,
-+        num_segments=num_par_softmax_segments if is_3d else 1,
 +        num_seqs=num_seqs,
 +        query_work=q.shape[0] * q.shape[1],
 +    )
@@ -923,8 +918,6 @@ index 0000000..c1af94b
 +        if (
 +            dynamic.query_work <= 0
 +            or dynamic.num_seqs <= 0
-+            or not _power_of_two(dynamic.num_segments)
-+            or (not dynamic.is_3d and dynamic.num_segments != 1)
 +            or dynamic.q_len_bucket not in range(4)
 +            or dynamic.kv_len_bucket not in range(5)
 +        ):
