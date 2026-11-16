@@ -604,6 +604,8 @@ jobs:
           mkdir -p "$cache_dir" "$TRITON_CI_COMPILE_TRACE_DIR"
           for phase in $WARMUP_PHASES; do
             part="$RUNNER_TEMP/warmup/triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-$phase"
+            # A pattern that matches a single artifact extracts it straight into the path, several get a directory each.
+            [[ -d "$part" ]] || part="$RUNNER_TEMP/warmup"
             # Entries are keyed by content hash, so suites that compiled the same kernel agree on the files.
             cp -r "$part/cache/." "$cache_dir/"
             cp "$part/trace/"* "$TRITON_CI_COMPILE_TRACE_DIR/"
