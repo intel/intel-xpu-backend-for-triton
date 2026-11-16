@@ -355,6 +355,22 @@ llvm.func @triton_gen.sub_group_bitcast_shuffle(%val : vector<4xi8>) -> vector<2
 
 // -----
 
+module attributes {ttig.support_subgroup_bitcast_shuffle} {
+  // CHECK-LABEL: llvm.func @triton_gen.sub_group_bitcast_shuffle_spirv(
+  // CHECK-SAME:    [[VAL:%.*]]: vector<16xi8>, [[VAL1:%.*]]: vector<4xi16>
+  llvm.func @triton_gen.sub_group_bitcast_shuffle_spirv(%val : vector<16xi8>, %val1 : vector<4xi16>) -> vector<1xi64> {
+    // CHECK: llvm.call spir_funccc @_Z35__spirv_SubgroupBitcastShuffleINTELDv16_c([[VAL]]) {{.*}} : (vector<16xi8>) -> vector<8xi16>
+    %0 = triton_gen.sub_group_bitcast_shuffle %val : vector<16xi8> -> vector<8xi16>
+    // CHECK: [[RES:%.*]] = llvm.call spir_funccc @_Z35__spirv_SubgroupBitcastShuffleINTELDv4_s([[VAL1]]) {{.*}} : (vector<4xi16>) -> i64
+    // CHECK: [[VEC:%.*]] = llvm.bitcast [[RES]] : i64 to vector<1xi64>
+    // CHECK: llvm.return [[VEC]]
+    %1 = triton_gen.sub_group_bitcast_shuffle %val1 : vector<4xi16> -> vector<1xi64>
+    llvm.return %1 : vector<1xi64>
+  }
+}
+
+// -----
+
 llvm.func @triton_gen.sub_group_gather_load(%addrs: vector<32xi64>, %preds: vector<32xi1>) -> vector<1xi64> {
   // CHECK-LABEL: llvm.func @triton_gen.sub_group_gather_load(
   // CHECK: [[RET:%.*]] = llvm.inline_asm{{.*}}"{{.*}}lsc_load.ugm{{.*}}", "=rw,rw.u,rw.u" {{.*}} : (vector<32xi64>, vector<32xi1>) -> vector<1xi64>
