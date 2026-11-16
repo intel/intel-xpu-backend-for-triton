@@ -16,7 +16,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu
+from triton._internal_testing import is_compile_warmup, is_xpu
 
 FP8_PAIRS = [(torch.float8_e5m2, torch.float8_e5m2), (torch.float8_e4m3fn, torch.float8_e4m3fn),
              (torch.float8_e4m3fn, torch.float8_e5m2), (torch.float8_e5m2, torch.float8_e4m3fn)]
@@ -44,6 +44,7 @@ def _fp8_dot(a_ptr, b_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.conste
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
 @pytest.mark.parametrize("a_dtype, b_dtype", FP8_PAIRS)
+@pytest.mark.enable_warmup
 def test_fp8_dot_bf16_acc_dpas(a_dtype, b_dtype, device):
     arch = triton.runtime.driver.active.get_current_target().arch
     if not arch["has_subgroup_matrix_multiply_accumulate"]:
@@ -65,6 +66,8 @@ def test_fp8_dot_bf16_acc_dpas(a_dtype, b_dtype, device):
 
     out, kernel = run(reference=False)
     ref_out, ref_kernel = run(reference=True)
+    if is_compile_warmup():
+        return
     assert "#ttig.dpas" in kernel.asm["ttgir"], "fp8 x fp8 -> bf16 dot does not use DPAS"
     assert kernel.metadata.threads_per_warp == ref_kernel.metadata.threads_per_warp
     assert torch.equal(out, ref_out), "result differs from the fp32-accumulator dot with a cast to bf16"
@@ -76,6 +79,7 @@ def test_fp8_dot_bf16_acc_dpas(a_dtype, b_dtype, device):
 @pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
 @pytest.mark.parametrize("a_dtype, b_dtype", [(torch.float8_e4m3fn, torch.float8_e5m2),
                                               (torch.float8_e5m2, torch.float8_e4m3fn)])
+@pytest.mark.enable_warmup
 def test_mixed_fp8_dot_fp32_acc_dpas(a_dtype, b_dtype, device):
     arch = triton.runtime.driver.active.get_current_target().arch
     if not arch["has_subgroup_matrix_multiply_accumulate"]:
@@ -97,6 +101,8 @@ def test_mixed_fp8_dot_fp32_acc_dpas(a_dtype, b_dtype, device):
 
     out, kernel = run(reference=False)
     ref_out, ref_kernel = run(reference=True)
+    if is_compile_warmup():
+        return
     assert "#ttig.dpas" in kernel.asm["ttgir"], "mixed fp8 x fp8 -> fp32 dot does not use DPAS"
     assert kernel.metadata.threads_per_warp == ref_kernel.metadata.threads_per_warp
     assert torch.equal(out, ref_out), "result differs from the dot with the operands cast to fp16"

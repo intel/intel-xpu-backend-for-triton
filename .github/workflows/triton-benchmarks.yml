@@ -85,6 +85,7 @@ jobs:
     name: Triton benchmarks
     runs-on:
       - linux
+      - gpu
       - ${{ inputs.runner_label || 'b580' }}
     timeout-minutes: 720
     defaults:

@@ -46,6 +46,7 @@ jobs:
     name: Build benchmarks wheel
     runs-on:
       - cpu
+      - rolling
       - runner-0.0.22
     strategy:
       matrix:

@@ -58,6 +58,7 @@ jobs:
     name: Third party benchmarks
     runs-on:
       - linux
+      - gpu
       - ${{ inputs.runner_label || 'max1550' }}
     timeout-minutes: 720
     defaults:

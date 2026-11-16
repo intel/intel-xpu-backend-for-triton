@@ -1732,9 +1732,10 @@ getBytesOfI32Vectors(Value src) {
 // A dot operand that the DPAS lowering converts itself, one DPAS operand at a
 // time (see isDPASOperandConvertedByDot). Converting it here as well would put
 // the whole conversion ahead of the dot, where CSE then keeps it. The op is
-// replaced by a cast of its fp8 source, which the DPAS lowering reads and
-// erases: if the dot lowering ever used the cast as a converted value instead,
-// the leftover cast would fail the conversion rather than feed undef to DPAS.
+// replaced by a cast of its fp8 source (see createLazyFp8Operand), which the
+// DPAS lowering reads and erases: if the dot lowering ever used the cast as a
+// converted value instead, the leftover cast would fail the conversion rather
+// than feed undef to DPAS.
 struct FpToFpOpConvertedByDotConversion
     : public ConvertOpToLLVMPattern<FpToFpOp> {
   using ConvertOpToLLVMPattern<FpToFpOp>::ConvertOpToLLVMPattern;
@@ -1744,7 +1745,7 @@ struct FpToFpOpConvertedByDotConversion
                   ConversionPatternRewriter &rewriter) const override {
     if (!intel::isDPASOperandConvertedByDot(op))
       return failure();
-    rewriter.replaceOp(op, UnrealizedConversionCastOp::create(
+    rewriter.replaceOp(op, intel::createLazyFp8Operand(
                                rewriter, op.getLoc(),
                                getTypeConverter()->convertType(op.getType()),
                                adaptor.getSrc()));
