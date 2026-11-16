@@ -317,14 +317,15 @@ public:
     bool proverFailed = false;
     mod.walk([&](tt::FuncOp func) {
       bool funcHasDot = false;
-      bool hasRowMajorPtrLoad = false;
+      bool hasTaggedPtrLoad = false;
       SmallVector<tt::DescriptorLoadOp> loads;
       SmallVector<tt::ReduceOp> reduces;
       func.walk([&](Operation *op) {
         if (isa<tt::DotOp, tt::DotScaledOp>(op))
           funcHasDot = true;
         else if (isa<tt::LoadOp>(op))
-          hasRowMajorPtrLoad |= isRowMajorTagged(op);
+          hasTaggedPtrLoad |=
+              op->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
         else if (auto load = dyn_cast<tt::DescriptorLoadOp>(op))
           loads.push_back(load);
         else if (auto reduce = dyn_cast<tt::ReduceOp>(op))
@@ -343,10 +344,11 @@ public:
       if (candidates.empty())
         return;
       // The stride guard only sees descriptor loads; RemoveLayoutConversions
-      // can move an unanchored tagged pointer load into a relaid-out layout.
-      if (hasRowMajorPtrLoad) {
+      // can move an unanchored tagged pointer load, in either mode, into a
+      // relaid-out layout.
+      if (hasTaggedPtrLoad) {
         LDBG("Function " << func.getName()
-                         << " has a row_major pointer load; skip relayout");
+                         << " has a block_io pointer load; skip relayout");
         return;
       }
       if (!prover && !proverFailed) {
@@ -1492,8 +1494,8 @@ private:
   /// The relayout's correctness gates, over all of \p func: all eligible loads
   /// of the function are relaid out, or none. A refused load keeps
   /// ttig.block_io without an anchor, so RemoveLayoutConversions could move it
-  /// into an anchored sibling's layout, making it a 2D read after all. Pointer
-  /// tt.loads tagged for 2D reads are not considered.
+  /// into an anchored sibling's layout, making it a 2D read after all. The
+  /// caller refuses functions with a tagged pointer tt.load.
   static bool satisfiesRelayoutGates(tt::FuncOp func,
                                      ArrayRef<tt::DescriptorLoadOp> loads,
                                      ArrayRef<tt::ReduceOp> reduces,
