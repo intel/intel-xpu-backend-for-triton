@@ -35,3 +35,6 @@ apply_patch() {
 echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
+
+# https://github.com/pytorch/pytorch/pull/202922 (Preserve Triton cache-group formats during runtime transport)
+apply_patch pytorch-pr202922-triton-cache-group-formats.patch
