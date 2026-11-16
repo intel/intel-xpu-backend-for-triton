@@ -319,6 +319,7 @@ jobs:
           pytest-targets: . --ignore=test_performance.py
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
           capture-workers: 4
+          separate-cache: true
 
       - name: Warm language compile cache
         uses: ./.github/actions/warm-compile-cache
@@ -332,6 +333,7 @@ jobs:
             -k "not test_mxfp and not test_scaled_dot"
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
           capture-workers: 4
+          separate-cache: true
 
       - name: Warm matmul compile cache
         uses: ./.github/actions/warm-compile-cache
@@ -343,6 +345,7 @@ jobs:
             -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 or test_mxfp8_mxfp4_matmul"
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
           capture-workers: 4
+          separate-cache: true
 
       - name: Warm scaled_dot compile cache
         uses: ./.github/actions/warm-compile-cache
@@ -352,6 +355,7 @@ jobs:
           pytest-targets: language/test_core.py -k "test_scaled_dot"
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
           capture-workers: 4
+          separate-cache: true
 
       - name: Warm gluon compile cache
         if: inputs.driver_version == 'rolling'
@@ -362,6 +366,7 @@ jobs:
           pytest-targets: .
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
           capture-workers: 4
+          separate-cache: true
 
       - name: Warm Triton Kernels compile cache
         uses: ./.github/actions/warm-compile-cache
@@ -371,6 +376,7 @@ jobs:
           pytest-targets: tests -k 'not test_mxfp'
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
           capture-workers: 4
+          separate-cache: true
 
       - name: Warm Flash Attention tutorials compile cache
         uses: ./.github/actions/warm-compile-cache
@@ -380,23 +386,71 @@ jobs:
           pytest-targets: test_tutorials.py --tutorial06-mode fa_only
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
           capture-workers: 4
+          separate-cache: true
 
-      # The cache directory is recorded in the compile trace, the test jobs rewrite it to their own.
+      # One artifact per suite, so that an integration-tests job downloads only the cache it uses. The cache
+      # directory is recorded in the compile trace, the test jobs rewrite it to their own.
       - name: Collect compile cache
         run: |
-          out="$RUNNER_TEMP/warmup"
-          mkdir -p "$out"
-          cache_dir="$(python -c 'import triton; print(triton.knobs.cache.dir)')"
-          echo "$cache_dir" > "$out/cache_dir"
-          cp -r "$cache_dir" "$out/cache"
-          cp -r "$TRITON_CI_COMPILE_TRACE_DIR" "$out/trace"
-          du -sh "$out/cache" "$out/trace"
+          for phase in regression language matmul scaled_dot gluon triton_kernels tutorials; do
+            cache_dir="$RUNNER_TEMP/warmup-cache/$phase"
+            [[ -d "$cache_dir" ]] || continue
+            out="$RUNNER_TEMP/warmup/$phase"
+            mkdir -p "$out/trace"
+            echo "$cache_dir" > "$out/cache_dir"
+            mv "$cache_dir" "$out/cache"
+            cp "$TRITON_CI_COMPILE_TRACE_DIR/warmup-$phase-"* "$out/trace/"
+            du -sh "$out/cache" "$out/trace"
+          done
 
-      - name: Upload compile cache
+      - name: Upload regression compile cache
         uses: actions/upload-artifact@v7
         with:
-          name: triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}
-          path: ${{ runner.temp }}/warmup
+          name: triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-regression
+          path: ${{ runner.temp }}/warmup/regression
+          retention-days: 1
+
+      - name: Upload language compile cache
+        uses: actions/upload-artifact@v7
+        with:
+          name: triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-language
+          path: ${{ runner.temp }}/warmup/language
+          retention-days: 1
+
+      - name: Upload matmul compile cache
+        uses: actions/upload-artifact@v7
+        with:
+          name: triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-matmul
+          path: ${{ runner.temp }}/warmup/matmul
+          retention-days: 1
+
+      - name: Upload scaled_dot compile cache
+        uses: actions/upload-artifact@v7
+        with:
+          name: triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-scaled_dot
+          path: ${{ runner.temp }}/warmup/scaled_dot
+          retention-days: 1
+
+      - name: Upload gluon compile cache
+        if: inputs.driver_version == 'rolling'
+        uses: actions/upload-artifact@v7
+        with:
+          name: triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-gluon
+          path: ${{ runner.temp }}/warmup/gluon
+          retention-days: 1
+
+      - name: Upload triton_kernels compile cache
+        uses: actions/upload-artifact@v7
+        with:
+          name: triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-triton_kernels
+          path: ${{ runner.temp }}/warmup/triton_kernels
+          retention-days: 1
+
+      - name: Upload tutorials compile cache
+        uses: actions/upload-artifact@v7
+        with:
+          name: triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-tutorials
+          path: ${{ runner.temp }}/warmup/tutorials
           retention-days: 1
 
       - name: Save pip cache
@@ -503,27 +557,10 @@ jobs:
         run: |
           echo "TRITON_CI_COMPILE_TRACE_DIR=$RUNNER_TEMP/triton-ci-compile-trace" | tee -a $GITHUB_ENV
 
-      - name: Download compile cache warmed on CPU
-        if: ${{ inputs.warmup_on_cpu }}
-        uses: actions/download-artifact@v8
-        with:
-          name: triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}
-          path: ${{ runner.temp }}/warmup
-
-      - name: Install compile cache warmed on CPU
-        if: ${{ inputs.warmup_on_cpu }}
+      # Each suite has its own artifact (see the warmup-cache job): a job downloads only the ones it runs.
+      - name: Select compile caches for the suite
+        if: ${{ inputs.warmup_on_cpu && (matrix.loop.suite != 'gluon' || inputs.driver_version == 'rolling') }}
         run: |
-          cache_dir="$(python -c 'import triton; print(triton.knobs.cache.dir)')"
-          rm -rf "$cache_dir" "$TRITON_CI_COMPILE_TRACE_DIR"
-          mkdir -p "$(dirname "$cache_dir")"
-          mv "$RUNNER_TEMP/warmup/cache" "$cache_dir"
-          mv "$RUNNER_TEMP/warmup/trace" "$TRITON_CI_COMPILE_TRACE_DIR"
-          # `report --require-complete` pairs warmup and test records by (cache dir, hash).
-          old_dir="$(<"$RUNNER_TEMP/warmup/cache_dir")"
-          find "$TRITON_CI_COMPILE_TRACE_DIR" -name '*.jsonl' -exec \
-            sed -i "s|\"cache_dir\": \"$old_dir\"|\"cache_dir\": \"$cache_dir\"|" {} +
-          # The cache holds every suite, but this job runs one: the completeness report would otherwise ask for
-          # the other suites' tests and call their warmup specializations unused. Keep only this suite's traces.
           case "${{ matrix.loop.suite }}" in
             minicore) phases="regression" ;;
             language_and_scaled_dot) phases="language scaled_dot" ;;
@@ -531,13 +568,33 @@ jobs:
             gluon) phases="gluon" ;;
             triton-kernels) phases="triton_kernels" ;;
           esac
-          for trace in "$TRITON_CI_COMPILE_TRACE_DIR"/warmup-*; do
-            name="$(basename "$trace")"
-            keep=false
-            for phase in $phases; do
-              [[ "$name" == "warmup-$phase-"* ]] && keep=true
-            done
-            $keep || rm "$trace"
+          echo "WARMUP_PHASES=$phases" | tee -a $GITHUB_ENV
+          names="$(echo $phases | tr ' ' ',')"
+          [[ "$names" == *,* ]] && names="{$names}"
+          echo "WARMUP_ARTIFACTS=triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-$names" | tee -a $GITHUB_ENV
+
+      - name: Download compile cache warmed on CPU
+        if: ${{ inputs.warmup_on_cpu && (matrix.loop.suite != 'gluon' || inputs.driver_version == 'rolling') }}
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ env.WARMUP_ARTIFACTS }}
+          path: ${{ runner.temp }}/warmup
+
+      - name: Install compile cache warmed on CPU
+        if: ${{ inputs.warmup_on_cpu && (matrix.loop.suite != 'gluon' || inputs.driver_version == 'rolling') }}
+        run: |
+          cache_dir="$(python -c 'import triton; print(triton.knobs.cache.dir)')"
+          rm -rf "$cache_dir" "$TRITON_CI_COMPILE_TRACE_DIR"
+          mkdir -p "$cache_dir" "$TRITON_CI_COMPILE_TRACE_DIR"
+          for phase in $WARMUP_PHASES; do
+            part="$RUNNER_TEMP/warmup/triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-$phase"
+            # Entries are keyed by content hash, so suites that compiled the same kernel agree on the files.
+            cp -r "$part/cache/." "$cache_dir/"
+            cp "$part/trace/"* "$TRITON_CI_COMPILE_TRACE_DIR/"
+            # `report --require-complete` pairs warmup and test records by (cache dir, hash).
+            old_dir="$(<"$part/cache_dir")"
+            find "$TRITON_CI_COMPILE_TRACE_DIR" -name "warmup-$phase-*" -exec \
+              sed -i "s|\"cache_dir\": \"$old_dir\"|\"cache_dir\": \"$cache_dir\"|" {} +
           done
 
       - name: Determine number of shards for current suite

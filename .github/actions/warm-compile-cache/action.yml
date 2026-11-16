@@ -19,6 +19,11 @@ inputs:
       the pytest process. A test that crashes its worker (e.g. one that needs a real device on a runner
       without a GPU) then only loses its own warmup instead of aborting the whole run.
     default: "0"
+  separate-cache:
+    description: >-
+      Compile into $RUNNER_TEMP/warmup-cache/<skiplist-name> instead of the default cache directory, so that
+      the cache of each suite can be collected and uploaded on its own.
+    default: "false"
 runs:
   using: composite
   steps:
@@ -48,6 +53,10 @@ runs:
         # Matches the TRITON_CI_CACHE_PHASE the real run sets (via TRITON_TEST_SUITE,
         # see scripts/pytest-utils.sh), so "report --require-complete" can pair them up.
         export TRITON_CI_CACHE_PHASE="warmup-${{ inputs.skiplist-name }}"
+
+        if [[ "${{ inputs.separate-cache }}" == true ]]; then
+          export TRITON_CACHE_DIR="$RUNNER_TEMP/warmup-cache/${{ inputs.skiplist-name }}"
+        fi
 
         xdist_args=()
         if [[ "${{ inputs.capture-workers }}" != 0 ]]; then
