@@ -311,10 +311,10 @@ private:
     }
   };
 
-  /// Returns the fp8 source of `operand` if the dot converts it itself (see
-  /// isDPASOperandConvertedByDot). `lowered` is the operand's lowered value:
-  /// the cast of the fp8 source that the `tt.fp_to_fp` lowering left in place
-  /// of the conversion.
+  /// Returns the fp8 source of `operand` if the dot converts it itself, i.e. if
+  /// `lowered`, the operand's lowered value, is the tagged cast that the
+  /// `tt.fp_to_fp` lowering left in place of the conversion (see
+  /// getLazyFp8Cast).
   std::optional<LazyFp8Operand>
   getLazyFp8Operand(Value operand, Value lowered, int64_t batch, int64_t outer,
                     int64_t inner, DpasEncodingAttr::OpIdx opIdx) const {

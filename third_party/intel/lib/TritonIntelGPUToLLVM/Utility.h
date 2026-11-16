@@ -164,7 +164,9 @@ private:
 
 /// Whether the DPAS lowering of the dot that uses `op` converts `op`'s fp8
 /// operand to fp16 itself, one DPAS operand at a time; the `tt.fp_to_fp`
-/// lowering then emits nothing for `op`.
+/// lowering then emits nothing for `op`. Only for the `tt.fp_to_fp` lowering:
+/// by the time the dot is lowered, the ops in between may have split the block
+/// and changed the answer, so the DPAS lowering checks getLazyFp8Cast instead.
 bool isDPASOperandConvertedByDot(FpToFpOp op);
 
 /// What the `tt.fp_to_fp` lowering leaves in place of a conversion that the
