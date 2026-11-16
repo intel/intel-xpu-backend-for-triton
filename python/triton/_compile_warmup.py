@@ -6,6 +6,10 @@ import warnings
 import weakref
 from contextlib import contextmanager
 
+# `-p triton._compile_warmup` imports this module before the test modules do, so `torch` would be the first to pull in
+# `numpy`. With that import order (not otherwise) the softmax-ieee-float16 cases of `test_dot` return wrong results on
+# XPU, with the same SPIR-V and an empty cache. Import `numpy` first, as the test modules do.
+import numpy  # noqa: F401
 import pytest
 import torch
 from torch.overrides import TorchFunctionMode
