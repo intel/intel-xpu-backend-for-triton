@@ -273,6 +273,14 @@ def compile_warmup_only(dispatcher=None):
         if not any(isinstance(value, FakeTensor) for value in args):
             previous_assert_close(*args, **kwargs)
 
+    def fake_do_bench(fn, *args, quantiles=None, return_mode="mean", **kwargs):
+        # Timing needs a device and means nothing here; run `fn` once so its launches are captured. The result is a
+        # nonzero placeholder, as benchmarks divide by it.
+        fn()
+        if quantiles is not None:
+            return [1.0] * len(quantiles)
+        return [1.0] if return_mode == "all" else 1.0
+
     def dispatch(kernel, grid, *args, **kwargs):
         if dispatcher is None:
             return kernel.warmup(*args, grid=grid, **kwargs)
@@ -283,6 +291,8 @@ def compile_warmup_only(dispatcher=None):
         with _FakeCudaTensorMode():
             previous_getitem = triton.KernelInterface.__getitem__
             previous_assert_close = torch.testing.assert_close
+            previous_do_bench = triton.testing.do_bench
+            triton.testing.do_bench = fake_do_bench
             triton.KernelInterface.__getitem__ = lambda kernel, grid: lambda *args, **kwargs: dispatch(
                 kernel, grid, *args, **kwargs)
             torch.testing.assert_close = fake_assert_close
@@ -293,6 +303,7 @@ def compile_warmup_only(dispatcher=None):
                 _COMPILE_WARMUP_ACTIVE.reset(active_token)
                 triton.KernelInterface.__getitem__ = previous_getitem
                 torch.testing.assert_close = previous_assert_close
+                triton.testing.do_bench = previous_do_bench
 
 
 @contextmanager
