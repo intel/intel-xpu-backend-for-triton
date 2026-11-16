@@ -238,3 +238,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// fp8 A with B through shared memory between the conversion and the dot, like
+// a block-scaled fp8 GEMM with M = 1, whose A is a 2D block load in the DPAS
+// layout: the predicated stores of the `ttg.local_alloc` split the block, so
+// the dot is no longer in the block of the conversion when it is lowered. A is
+// still converted per DPAS operand, after the stores, and no cast is left.
+
+#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 2], warpsPerCTA = [1, 1], order = [0, 1]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // LAZY-LABEL: llvm.func spir_kernelcc @dot_fp8_a_b_through_shared
+  // LAZY-NOT:   builtin.unrealized_conversion_cast
+  // LAZY:       llvm.cond_br
+  // LAZY-NOT:   builtin.unrealized_conversion_cast
+  // LAZY:       llvm.fmul
+  // LAZY:       triton_gen.dpas
+  // LAZY:       llvm.fmul
+  // LAZY:       triton_gen.dpas
+  // LAZY-NOT:   builtin.unrealized_conversion_cast
+  // LAZY:       llvm.return
+  // EAGER-LABEL: llvm.func spir_kernelcc @dot_fp8_a_b_through_shared
+  // EAGER:       llvm.fmul
+  // EAGER:       llvm.cond_br
+  // EAGER:       triton_gen.dpas
+  // EAGER-NOT:   llvm.fmul
+  // EAGER:       llvm.return
+  tt.func public @dot_fp8_a_b_through_shared(%a: tensor<32x64xf8E4M3FN, #dot_operand_a>, %b: tensor<64x32xf16, #blocked>, %c: tensor<32x32xf32, #dpas>, %out: !tt.ptr<f32>) {
+    %a16 = tt.fp_to_fp %a : tensor<32x64xf8E4M3FN, #dot_operand_a> -> tensor<32x64xf16, #dot_operand_a>
+    %b_smem = ttg.local_alloc %b : (tensor<64x32xf16, #blocked>) -> !ttg.memdesc<64x32xf16, #shared, #smem>
+    %b16 = ttg.local_load %b_smem : !ttg.memdesc<64x32xf16, #shared, #smem> -> tensor<64x32xf16, #dot_operand_b>
+    %d = tt.dot %a16, %b16, %c, inputPrecision = tf32 : tensor<32x64xf16, #dot_operand_a> * tensor<64x32xf16, #dot_operand_b> -> tensor<32x32xf32, #dpas>
+    %ptrs = tt.splat %out : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #dpas>
+    tt.store %ptrs, %d : tensor<32x32x!tt.ptr<f32>, #dpas>
+    tt.return
+  }
+}

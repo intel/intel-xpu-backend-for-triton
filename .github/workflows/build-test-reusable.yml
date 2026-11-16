@@ -81,13 +81,13 @@ env:
   # Suites that are split into NUM_SHARDS shards, each shard runs on its own runner
   PARALLEL_SUITES: ""
   # Suites that are run without sharding, one runner per suite
-  SEQUENTIAL_SUITES: "minicore language_and_scaled_dot gluon triton-kernels rest"
+  SEQUENTIAL_SUITES: "minicore_gluon language_and_scaled_dot triton-kernels rest"
 
 jobs:
   build:
     name: Build
     timeout-minutes: 720
-    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
+    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "gpu", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -321,6 +321,16 @@ jobs:
           capture-workers: 4
           separate-cache: true
 
+      - name: Warm intel compile cache
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/unit
+          skiplist-name: intel
+          pytest-targets: intel/
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+          capture-workers: 4
+          separate-cache: true
+
       - name: Warm language compile cache
         uses: ./.github/actions/warm-compile-cache
         with:
@@ -392,7 +402,7 @@ jobs:
       # directory is recorded in the compile trace, the test jobs rewrite it to their own.
       - name: Collect compile cache
         run: |
-          for phase in regression language matmul scaled_dot gluon triton_kernels tutorials; do
+          for phase in regression intel language matmul scaled_dot gluon triton_kernels tutorials; do
             cache_dir="$RUNNER_TEMP/warmup-cache/$phase"
             [[ -d "$cache_dir" ]] || continue
             out="$RUNNER_TEMP/warmup/$phase"
@@ -408,6 +418,13 @@ jobs:
         with:
           name: triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-regression
           path: ${{ runner.temp }}/warmup/regression
+          retention-days: 1
+
+      - name: Upload intel compile cache
+        uses: actions/upload-artifact@v7
+        with:
+          name: triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-intel
+          path: ${{ runner.temp }}/warmup/intel
           retention-days: 1
 
       - name: Upload language compile cache
@@ -472,7 +489,7 @@ jobs:
       matrix:
         loop: ${{ fromJson(needs.build.outputs.integration-tests-matrix) }}
     timeout-minutes: 720
-    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
+    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "gpu", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     env:
       TRITON_XPU_GEN_NATIVE_CODE: 1
       PYTEST_ADDOPTS: "-p triton._compile_warmup"
@@ -522,7 +539,7 @@ jobs:
       - name: Report environment details
         timeout-minutes: 1
         run: |
-          if [ "${{ matrix.loop.suite }}" == "minicore" ]; then
+          if [ "${{ matrix.loop.suite }}" == "minicore_gluon" ]; then
             reports_file="reports/.env"
           else
             reports_file="/dev/null"
@@ -559,13 +576,12 @@ jobs:
 
       # Each suite has its own artifact (see the warmup-cache job): a job downloads only the ones it runs.
       - name: Select compile caches for the suite
-        if: ${{ inputs.warmup_on_cpu && (matrix.loop.suite != 'gluon' || inputs.driver_version == 'rolling') }}
+        if: ${{ inputs.warmup_on_cpu }}
         run: |
           case "${{ matrix.loop.suite }}" in
-            minicore) phases="regression" ;;
+            minicore_gluon) phases="regression intel${{ inputs.driver_version == 'rolling' && ' gluon' || '' }}" ;;
             language_and_scaled_dot) phases="language scaled_dot" ;;
             rest) phases="matmul tutorials" ;;
-            gluon) phases="gluon" ;;
             triton-kernels) phases="triton_kernels" ;;
           esac
           echo "WARMUP_PHASES=$phases" | tee -a $GITHUB_ENV
@@ -574,14 +590,14 @@ jobs:
           echo "WARMUP_ARTIFACTS=triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-$names" | tee -a $GITHUB_ENV
 
       - name: Download compile cache warmed on CPU
-        if: ${{ inputs.warmup_on_cpu && (matrix.loop.suite != 'gluon' || inputs.driver_version == 'rolling') }}
+        if: ${{ inputs.warmup_on_cpu }}
         uses: actions/download-artifact@v8
         with:
           pattern: ${{ env.WARMUP_ARTIFACTS }}
           path: ${{ runner.temp }}/warmup
 
       - name: Install compile cache warmed on CPU
-        if: ${{ inputs.warmup_on_cpu && (matrix.loop.suite != 'gluon' || inputs.driver_version == 'rolling') }}
+        if: ${{ inputs.warmup_on_cpu }}
         run: |
           cache_dir="$(python -c 'import triton; print(triton.knobs.cache.dir)')"
           rm -rf "$cache_dir" "$TRITON_CI_COMPILE_TRACE_DIR"
@@ -615,7 +631,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --proton
 
       - name: Warm regression compile cache
-        if: matrix.loop.suite == 'minicore' && !inputs.warmup_on_cpu
+        if: matrix.loop.suite == 'minicore_gluon' && !inputs.warmup_on_cpu
         uses: ./.github/actions/warm-compile-cache
         with:
           working-directory: python/test/regression
@@ -623,8 +639,17 @@ jobs:
           pytest-targets: . --ignore=test_performance.py
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
+      - name: Warm intel compile cache
+        if: matrix.loop.suite == 'minicore_gluon' && !inputs.warmup_on_cpu
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/unit
+          skiplist-name: intel
+          pytest-targets: intel/
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+
       - name: Run minicore tests
-        if: matrix.loop.suite == 'minicore'
+        if: matrix.loop.suite == 'minicore_gluon'
         run: |
           ${{ env.TRITON_TEST_CMD }} --minicore
 
@@ -682,7 +707,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --debug
 
       - name: Warm gluon compile cache
-        if: matrix.loop.suite == 'gluon' && inputs.driver_version == 'rolling' && !inputs.warmup_on_cpu
+        if: matrix.loop.suite == 'minicore_gluon' && inputs.driver_version == 'rolling' && !inputs.warmup_on_cpu
         uses: ./.github/actions/warm-compile-cache
         with:
           working-directory: python/test/gluon
@@ -691,7 +716,7 @@ jobs:
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Run gluon tests
-        if: matrix.loop.suite == 'gluon' && inputs.driver_version == 'rolling'
+        if: matrix.loop.suite == 'minicore_gluon' && inputs.driver_version == 'rolling'
         run: |
           ${{ env.TRITON_TEST_CMD }} --gluon
 
@@ -735,9 +760,7 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
 
-      # Skipped when gluon has no warmup to compare against (see the gluon steps above).
       - name: Verify compile warmup completeness
-        if: matrix.loop.suite != 'gluon' || inputs.driver_version == 'rolling'
         run: |
           python -m triton._test_runner report --require-complete \
             || ${{ inputs.ignore_errors || inputs.enable_unskip }}

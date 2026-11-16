@@ -1258,16 +1258,21 @@ struct LimitCmp {
 };
 
 /// Match a single boundary-check conjunct along a dim of extent \p extent:
-/// `index < splat(bound)`, where `index` is `base + arange(0, extent)` (see
-/// `matchBaseAndRange`). Signed only, as in matchRowLimitMask: the height
-/// formula assumes it.
+/// `index < splat(bound)` or `splat(bound) > index`, where `index` is
+/// `base + arange(0, extent)` (see `matchBaseAndRange`). Signed only: the
+/// height formula assumes it.
 std::optional<LimitCmp> matchLimitCmp(Value conjunct, int64_t extent) {
   Value cmpCandidate = stripExpandDims(peelBroadcasts(conjunct));
   auto cmpOp = cmpCandidate.getDefiningOp<arith::CmpIOp>();
-  if (!cmpOp || cmpOp.getPredicate() != arith::CmpIPredicate::slt)
+  if (!cmpOp)
     return std::nullopt;
 
-  Value index = cmpOp.getLhs();
+  Value index = cmpOp.getLhs(), bound = cmpOp.getRhs();
+  if (cmpOp.getPredicate() == arith::CmpIPredicate::sgt)
+    std::swap(index, bound);
+  else if (cmpOp.getPredicate() != arith::CmpIPredicate::slt)
+    return std::nullopt;
+
   std::optional<Value> base = matchBaseAndRange(index, extent);
   if (!base)
     return std::nullopt;
@@ -1281,7 +1286,7 @@ std::optional<LimitCmp> matchLimitCmp(Value conjunct, int64_t extent) {
 
   // computeRowLimitHeight handles i32 and i64 (e.g. an index promoted to i64
   // by `.to(tl.int64)`, issue #8565).
-  auto boundSplat = cmpOp.getRhs().getDefiningOp<triton::SplatOp>();
+  auto boundSplat = bound.getDefiningOp<triton::SplatOp>();
   if (!boundSplat || !boundSplat.getSrc().getType().isInteger(32) &&
                          !boundSplat.getSrc().getType().isInteger(64))
     return std::nullopt;
