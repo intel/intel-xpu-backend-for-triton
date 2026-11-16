@@ -1,5 +1,7 @@
+import contextlib
 import json
 import os
+import types
 import warnings
 import weakref
 from contextlib import contextmanager
@@ -17,6 +19,91 @@ import triton
 # delete it, so `pytest_runtest_call` below can restore it for `enable_warmup` tests.
 _AMBIENT_GEN_NATIVE_CODE = triton.knobs.intel.gen_native_code
 _NO_OVERRIDE = object()
+
+
+def _emulate_xpu_device_queries():
+    """Answer what `torch.xpu` cannot serve without a device (queries, the device guard) from the offline target."""
+    arch = lambda: triton.runtime.driver.active.get_current_target().arch
+    torch.xpu.get_device_capability = lambda device=None: dict(arch())
+    torch.xpu.get_device_properties = lambda device=None: types.SimpleNamespace(**arch())
+    torch.xpu.device = lambda device: contextlib.nullcontext()
+
+
+if triton.knobs.intel.target_json:
+    _emulate_xpu_device_queries()
+
+_GRAD_FLAG = "_triton_warmup_requires_grad"
+_GRAD_NODE = "_triton_warmup_node"
+_REQUIRES_GRAD = torch._C.TensorBase.requires_grad
+_GRAD = torch._C.TensorBase.grad
+
+
+def _requests_grad(name, func, args, kwargs):
+    """Whether a torch call makes a tensor require grad."""
+    if kwargs and kwargs.get("requires_grad"):
+        return True
+    if name == "requires_grad_":
+        return len(args) < 2 or bool(args[1])
+    return name == "__set__" and getattr(func, "__self__", None) is _REQUIRES_GRAD and len(args) == 2 and bool(args[1])
+
+
+class _EmulatedContext:
+    """Stands in for the autograd context: `save_for_backward` and `saved_tensors` without the C++ graph."""
+
+    def save_for_backward(self, *tensors):
+        self.saved_tensors = tensors
+
+    def __getattr__(self, name):
+        # Optional hooks such as `mark_non_differentiable` or `set_materialize_grads` do not matter for warmup.
+        if name.startswith(("mark_", "set_", "save_")):
+            return lambda *args, **kwargs: None
+        raise AttributeError(name)
+
+
+def _emulated_apply(cls, *args, **kwargs):
+    """`Function.apply` without the autograd graph, which needs the XPU runtime to build.
+
+    Remembers how to call `backward`, so that `Tensor.backward` on an output can launch the backward kernels.
+    """
+    from triton._compile_warmup_state import _COMPILE_WARMUP_ACTIVE
+
+    if not _COMPILE_WARMUP_ACTIVE.get():
+        return super(torch.autograd.Function, cls).apply(*args, **kwargs)
+    context = _EmulatedContext()
+    outputs = cls.forward(context, *args, **kwargs)
+    if any(getattr(arg, _GRAD_FLAG, False) for arg in args):
+        outputs_tuple = outputs if isinstance(outputs, tuple) else (outputs, )
+        for index, output in enumerate(outputs_tuple):
+            if isinstance(output, torch.Tensor):
+                setattr(output, _GRAD_FLAG, True)
+                setattr(output, _GRAD_NODE, (cls, context, args, index, len(outputs_tuple), output.shape, output.dtype))
+    return outputs
+
+
+if triton.knobs.intel.target_json:
+    # Installed at import time, as modules bind `Function.apply` when they are imported (`attention = _attention.apply`).
+    torch.autograd.Function.apply = classmethod(_emulated_apply)
+
+
+def _emulated_backward(tensor, gradient):
+    """Run `backward` of the `Function` that produced `tensor` and hand the results to its inputs."""
+    node = getattr(tensor, _GRAD_NODE, None)
+    if node is None:
+        return
+    cls, context, args, index, count, shape, dtype = node
+    if gradient.shape != shape or gradient.dtype != dtype:
+        # `tensor` came from the output through a cast or view; autograd would hand `backward` the output's layout.
+        gradient = torch.empty(shape, dtype=dtype, device=gradient.device)
+    gradients = [None] * count
+    gradients[index] = gradient
+    results = cls.backward(context, *gradients)
+    results = results if isinstance(results, tuple) else (results, )
+    for arg, result in zip(args, results):
+        if isinstance(arg, torch.Tensor) and getattr(arg, _GRAD_FLAG, False) and result is not None:
+            if getattr(arg, _GRAD_NODE, None) is None:
+                arg.grad = result
+            else:
+                _emulated_backward(arg, result)
 
 
 def _basic_getitem(tensor, index):
@@ -84,6 +171,27 @@ class _FakeCudaTensorMode(TorchFunctionMode):
 
     def __torch_function__(self, func, types, args=(), kwargs=None):
         name = getattr(func, "__name__", "")
+        # Recording autograd history of a fake tensor needs the XPU runtime, so autograd is emulated instead: a tensor
+        # that requires grad is only flagged, and `Function.apply` and `Tensor.backward` call the user's code directly.
+        if triton.knobs.intel.target_json:
+            if _requests_grad(name, func, args, kwargs):
+                kwargs = {key: value for key, value in (kwargs or {}).items() if key != "requires_grad"}
+                if name == "__set__":
+                    setattr(args[0], _GRAD_FLAG, True)
+                    return None
+                result = args[0] if name == "requires_grad_" else func(*args, **kwargs)
+                setattr(result, _GRAD_FLAG, True)
+                return result
+            if name == "backward" and args and isinstance(args[0], self.fake_tensor_type):
+                gradient = args[1] if len(args) > 1 else (kwargs or {}).get("gradient")
+                _emulated_backward(args[0], gradient if gradient is not None else torch.ones_like(args[0]))
+                return None
+            if name == "__get__" and getattr(func, "__self__", None) is _GRAD and isinstance(
+                    args[0], self.fake_tensor_type):
+                result = func(*args)
+                if result is None and getattr(args[0], _GRAD_FLAG, False):
+                    result = torch.empty_like(args[0])
+                return result
         # `torch.tensor(data, device=...)` takes a device guard in C++ before the fake mode can intercept it, which
         # allocates on (or, without a GPU, aborts for) the real device, and so does copying a real tensor there.
         # Warmup never reads the values, so build only the metadata on the CPU and return an empty fake tensor.
@@ -138,7 +246,21 @@ class _FakeCudaTensorMode(TorchFunctionMode):
             if isinstance(result, torch.Tensor) and result.numel() == 1:
                 result._triton_warmup_truth = name == "all"
             return result
-        return func(*args, **(kwargs or {}))
+        result = func(*args, **(kwargs or {}))
+        if triton.knobs.intel.target_json and "detach" not in name:
+            self._inherit_autograd_node(result, args)
+        return result
+
+    def _inherit_autograd_node(self, result, args):
+        """An op on the output of an emulated `Function` (`.half()`, a view) still backpropagates into it."""
+        if not isinstance(result, self.fake_tensor_type) or getattr(result, _GRAD_NODE, None) is not None:
+            return
+        for arg in args:
+            node = getattr(arg, _GRAD_NODE, None) if isinstance(arg, torch.Tensor) else None
+            if node is not None and arg is not result:
+                setattr(result, _GRAD_FLAG, True)
+                setattr(result, _GRAD_NODE, node)
+                return
 
 
 @contextmanager
