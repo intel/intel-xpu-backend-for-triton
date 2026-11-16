@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "benchmark_monitor catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "defaults": {
+      "$ref": "#/$defs/thresholds"
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "higher_is_better": {
+            "type": "boolean"
+          },
+          "gate": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "higher_is_better"
+        ]
+      }
+    },
+    "platforms": {
+      "type": "object",
+      "additionalProperties": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/thresholds"
+          }
+        ],
+        "required": [
+          "match"
+        ],
+        "properties": {
+          "match": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "families": {
+      "type": "object",
+      "additionalProperties": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/thresholds"
+          }
+        ],
+        "required": [
+          "match"
+        ],
+        "properties": {
+          "match": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          }
+        }
+      }
+    },
+    "benchmarks": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/thresholds"
+      }
+    },
+    "scopes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "platform"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "micro",
+              "third_party",
+              "artifact"
+            ]
+          },
+          "platform": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "benchmarks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expected_nightly": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "importance": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "thresholds": {
+      "type": "object",
+      "properties": {
+        "min_drop_pct": {
+          "type": "number",
+          "minimum": 0
+        },
+        "z": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "min_history": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "window": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_cv_pct": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "lock_mad_frac": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
