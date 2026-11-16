@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import transform_results
+import transform_results  # pylint: disable=wrong-import-position
 
 # Raw results in the format written by Mark.run for a two-provider (load vs descriptor) benchmark.
 DESCRIPTOR_CSV = """
