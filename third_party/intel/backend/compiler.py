@@ -71,6 +71,9 @@ class XPUOptions:
     fpsan_homomorphic_casts: bool = False
     core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
     is_lts: bool = True
+    # Whether the driver's IGC can build the sg32 64b 16x2 2D block read (#8858); see `has_2d_block_read_64b_16x2_sg32`.
+    # It changes the emitted code, and being an option it is part of the kernel cache key.
+    has_2d_block_read_64b_16x2_sg32: bool = False
     # Whether these SPIR-V extensions are allowed; overwritten with the
     # ground-truth probe result in `parse_options`.
     allow_long_vector: bool = True
@@ -320,8 +323,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_16bit_atomics'] = tgt_prop.get('has_16bit_atomics', False)
         dev_prop['has_2d_block_io'] = tgt_prop.get('has_2d_block_io', False)
         is_lts = self.is_lts(tgt_prop.get('driver_version'))
-        # Derived from the driver version and changes the emitted SPIR-V, so it must be part of the backend hash.
-        dev_prop['has_2d_block_read_64b_16x2_sg32'] = has_2d_block_read_64b_16x2_sg32(tgt_prop.get('driver_version'))
         dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', not is_lts)
         dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', False)
         dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io', not is_lts)
@@ -380,6 +381,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["allow_fp8e4nv"] = True
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
+        args["has_2d_block_read_64b_16x2_sg32"] = has_2d_block_read_64b_16x2_sg32(
+            self.target.arch.get("driver_version"))
         args["max_grf_mode"] = self.properties['max_grf_mode']
         grf_mode = args.get("grf_mode", XPUOptions.grf_mode)
         if grf_mode not in ("default", "auto") and grf_mode not in (grf_modes := get_grf_modes(self.target.arch)):
@@ -698,9 +701,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         driver_version = metadata["target"].arch.get("driver_version")
         if cls.is_lts(driver_version):
             intel.set_is_lts(mod)
-        # The sg32 64b 16x2 2D block read is only available on newer drivers (#8858). Refresh it here, since Gluon
-        # and `.ttgir` inputs bypass `make_ttgir`.
-        intel.set_support_2d_block_read_64b_16x2_sg32(mod, has_2d_block_read_64b_16x2_sg32(driver_version))
+        # The sg32 64b 16x2 2D block read is only available on newer drivers (#8858). Set it here, the one stage every
+        # input (including Gluon and `.ttgir`, which bypass `make_ttgir`) goes through; clearing it also drops a stale
+        # attribute carried by a hand-written module.
+        intel.set_support_2d_block_read_64b_16x2_sg32(mod, options.has_2d_block_read_64b_16x2_sg32)
 
         # `getGlobalTimer` counts core clock cycles and needs the rate to report
         # nanoseconds.
