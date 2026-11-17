@@ -51,8 +51,9 @@ def aggregate(observations: Iterable[Observation], unit: Literal["night_mean", "
         return statistics.fmean(statistics.fmean(v) for v in by_run.values())
 
     points = [
-        Point(night=utc_night(g[0].observed_at), value=_value(g), n_raw=len(g), run_ids=tuple(sorted({o.run_id
-                                                                                                   for o in g})))
+        Point(night=utc_night(g[0].observed_at), value=_value(g), n_raw=len(g),
+              run_ids=tuple(sorted({o.run_id
+                                    for o in g})))
         for g in groups.values()
     ]
     points.sort(key=lambda p: p.night)  # stable: runs on one night stay in time order
