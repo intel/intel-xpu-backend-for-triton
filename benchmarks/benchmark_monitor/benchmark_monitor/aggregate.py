@@ -26,7 +26,7 @@ def utc_night(moment: datetime) -> date:
 def aggregate(observations: Iterable[Observation], unit: Literal["night_mean", "run"] = "night_mean") -> Series:
     """Aggregate observations sharing one SeriesKey.
 
-    ``night_mean``: one point per UTC night, value = mean of that night's observations.
+    ``night_mean``: one point per UTC night, value = mean of per-run means (each run counts equally).
     ``run``: one point per run_id (mean over duplicate rows of the run), kept in time order.
     """
     if unit not in ("night_mean", "run"):
@@ -42,9 +42,16 @@ def aggregate(observations: Iterable[Observation], unit: Literal["night_mean", "
     for o in sorted(obs, key=lambda o: (_utc(o.observed_at), o.run_id)):
         groups[utc_night(o.observed_at) if unit == "night_mean" else o.run_id].append(o)
 
+    def _value(g: list[Observation]) -> float:
+        if unit == "run":
+            return statistics.fmean(o.value for o in g)
+        by_run: dict[str, list[float]] = defaultdict(list)
+        for o in g:
+            by_run[o.run_id].append(o.value)
+        return statistics.fmean(statistics.fmean(v) for v in by_run.values())
+
     points = [
-        Point(night=utc_night(g[0].observed_at), value=statistics.fmean(o.value
-                                                                        for o in g), n_raw=len(g),
+        Point(night=utc_night(g[0].observed_at), value=_value(g), n_raw=len(g),
               run_ids=tuple(sorted({o.run_id
                                     for o in g})))
         for g in groups.values()
