@@ -2,7 +2,7 @@
 
 // CHECK: llvm.func spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv(i32, i32, i32, i32, !llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {no_unwind, will_return}
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:       [[C2:%.*]] = llvm.mlir.constant(2 : i32) : i32
   // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[C2]] x i16 : (i32) -> !llvm.ptr
@@ -35,7 +35,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -50,7 +50,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -65,7 +65,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -80,7 +80,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -95,7 +95,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -110,7 +110,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -125,7 +125,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -140,7 +140,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -155,7 +155,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -170,7 +170,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -185,7 +185,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -200,7 +200,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -215,7 +215,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -230,7 +230,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -245,7 +245,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -260,7 +260,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -275,7 +275,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -290,7 +290,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -305,7 +305,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -320,7 +320,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -335,7 +335,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -350,7 +350,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -365,7 +365,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -380,7 +380,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -395,7 +395,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -410,7 +410,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -425,7 +425,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -440,7 +440,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -455,7 +455,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -470,7 +470,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -485,7 +485,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -500,7 +500,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(4 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -515,7 +515,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -530,7 +530,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -545,7 +545,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -560,7 +560,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -575,7 +575,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -590,7 +590,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -605,7 +605,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -620,7 +620,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -635,7 +635,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -650,7 +650,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -665,7 +665,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -680,7 +680,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -695,7 +695,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(8 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(8 : i32) : i32
@@ -711,7 +711,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(8 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(8 : i32) : i32
@@ -726,7 +726,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:          llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv(
   // CHECK-SAME:       triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 4>, #triton_gen.load_cache_control<1, Uncached, 4>>
@@ -737,7 +737,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:          llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv(
   // CHECK-SAME:       triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 4>, #triton_gen.load_cache_control<1, Cached, 4>>
@@ -748,7 +748,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:          llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv(
   // CHECK-SAME:       triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Cached, 4>, #triton_gen.load_cache_control<1, Uncached, 4>>
@@ -759,7 +759,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:          llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv(
   // CHECK-SAME:       triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Cached, 4>, #triton_gen.load_cache_control<1, Cached, 4>>
@@ -770,7 +770,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:          llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv(
   // CHECK-SAME:       triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Streaming, 4>, #triton_gen.load_cache_control<1, Uncached, 4>>
@@ -781,7 +781,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:          llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv(
   // CHECK-SAME:       triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Streaming, 4>, #triton_gen.load_cache_control<1, Cached, 4>>
@@ -792,7 +792,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:          llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv(
   // CHECK-SAME:       triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, InvalidateAfterRead, 4>, #triton_gen.load_cache_control<1, Cached, 4>>
@@ -803,7 +803,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-module attributes {"ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:          llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv(
   // CHECK-NOT:        triton_gen.DecorationCacheControlINTEL
@@ -820,7 +820,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 // COM: 64-byte alignment compensation is skipped: the raw ptr, base_width and x
 // COM: are passed to the builtin unchanged.
 
-module attributes {ttig.2d_block_io_base_alignment = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, ttig.2d_block_io_base_alignment = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
   // CHECK-NOT:   llvm.ptrtoint
@@ -840,11 +840,11 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-// Without "ttig.support_2d_block_read_64b_16x2_sg32" (IGC older than ~2.38 lacks
-// the sg32 variant of 64b_16r2x1c, #8858) the GenISA interface is used.
+// Without "ttig.support_spirv_2d_block_io" (IGC older than 2.38 only has a fixed
+// table of builtins, #8858) every shape uses the GenISA interface.
 module attributes {"ttg.threads-per-warp" = 32 : i32} {
-llvm.func @triton_gen.2Dblockload_64b_16r2x1c_sg32(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // CHECK-LABEL: llvm.func @triton_gen.2Dblockload_64b_16r2x1c_sg32
+llvm.func @triton_gen.2Dblockload_no_spirv_2d_block_io(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // CHECK-LABEL: llvm.func @triton_gen.2Dblockload_no_spirv_2d_block_io
   // CHECK-NOT:   __spirv_Subgroup2DBlockLoad
   // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=64, tile_width=2, tile_height=16, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<1xi64>
@@ -854,10 +854,22 @@ llvm.func @triton_gen.2Dblockload_64b_16r2x1c_sg32(%ptr : !llvm.ptr<1>, %base_wi
 
 // -----
 
+module attributes {"ttg.threads-per-warp" = 16 : i32} {
+llvm.func @triton_gen.2Dblockload_no_spirv_2d_block_io_sg16(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // CHECK-LABEL: llvm.func @triton_gen.2Dblockload_no_spirv_2d_block_io_sg16
+  // CHECK-NOT:   __spirv_Subgroup2DBlockLoad
+  // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=8, tile_height=8, v_blocks=2, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<4xi16>
+  llvm.return
+}
+}
+
+// -----
+
 // With the attribute the SPIR-V builtin is used.
-module attributes {"ttg.threads-per-warp" = 32 : i32, "ttig.support_2d_block_read_64b_16x2_sg32"} {
-llvm.func @triton_gen.2Dblockload_64b_16r2x1c_sg32_supported(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // CHECK-LABEL: llvm.func @triton_gen.2Dblockload_64b_16r2x1c_sg32_supported
+module attributes {"ttg.threads-per-warp" = 32 : i32, ttig.support_spirv_2d_block_io} {
+llvm.func @triton_gen.2Dblockload_spirv_2d_block_io(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // CHECK-LABEL: llvm.func @triton_gen.2Dblockload_spirv_2d_block_io
   // CHECK-NOT:   GenISA
   // CHECK:       llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTEL
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=64, tile_width=2, tile_height=16, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<1xi64>

@@ -1,6 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import compile_module_from_src, has_2d_block_read_64b_16x2_sg32, is_lts
+from triton.backends.intel.driver import compile_module_from_src, has_spirv_2d_block_io, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.errors import IntelGPUError, WorkGroupSizeOutOfResources
 from triton.backends.intel.extension_utils import query_device_extensions
@@ -71,9 +71,9 @@ class XPUOptions:
     fpsan_homomorphic_casts: bool = False
     core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
     is_lts: bool = True
-    # Whether the driver's IGC can build the sg32 64b 16x2 2D block read (#8858); see `has_2d_block_read_64b_16x2_sg32`.
+    # Whether the driver's IGC can resolve any 2D block I/O shape from SPIR-V (#8858); see `has_spirv_2d_block_io`.
     # It changes the emitted code, and being an option it is part of the kernel cache key.
-    has_2d_block_read_64b_16x2_sg32: bool = False
+    has_spirv_2d_block_io: bool = False
     # Whether these SPIR-V extensions are allowed; overwritten with the
     # ground-truth probe result in `parse_options`.
     allow_long_vector: bool = True
@@ -381,7 +381,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["allow_fp8e4nv"] = True
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
-        args["has_2d_block_read_64b_16x2_sg32"] = has_2d_block_read_64b_16x2_sg32(
+        args["has_spirv_2d_block_io"] = has_spirv_2d_block_io(
             self.target.arch.get("driver_version"))
         args["max_grf_mode"] = self.properties['max_grf_mode']
         grf_mode = args.get("grf_mode", XPUOptions.grf_mode)
@@ -701,10 +701,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         driver_version = metadata["target"].arch.get("driver_version")
         if cls.is_lts(driver_version):
             intel.set_is_lts(mod)
-        # The sg32 64b 16x2 2D block read is only available on newer drivers (#8858). Set it here, the one stage every
+        # SPIR-V 2D block I/O is only fully supported by newer drivers (#8858). Set it here, the one stage every
         # input (including Gluon and `.ttgir`, which bypass `make_ttgir`) goes through; clearing it also drops a stale
         # attribute carried by a hand-written module.
-        intel.set_support_2d_block_read_64b_16x2_sg32(mod, options.has_2d_block_read_64b_16x2_sg32)
+        intel.set_support_spirv_2d_block_io(mod, options.has_spirv_2d_block_io)
 
         # `getGlobalTimer` counts core clock cycles and needs the rate to report
         # nanoseconds.

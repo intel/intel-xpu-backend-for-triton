@@ -426,14 +426,15 @@ def is_lts(ver) -> bool:
     return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
 
 
-def has_2d_block_read_64b_16x2_sg32(ver) -> bool:
+def has_spirv_2d_block_io(ver) -> bool:
     """
-    Whether the driver's IGC can build `intel_sub_group_2d_block_read_64b_16r2x1c` for sub-group size 32.
+    Whether the driver's IGC can resolve any 2D block I/O shape from SPIR-V.
 
-    Older IGC fails with `undefined reference to __internal_intel_sub_group_2d_block_read_64b_16r2x1c_sg32_*`
-    (#8858). `ver` is the driver version as reported by the runtime, `1.<minor>.<build>+<patch>` (e.g.
+    IGC older than 2.38 only has a fixed table of `intel_sub_group_2d_block_*` builtins, so a shape missing from it
+    fails to build with `undefined reference to __internal_intel_sub_group_2d_block_*` (#8858); 2.38 added a generic
+    resolver. `ver` is the driver version as reported by the runtime, `1.<minor>.<build>+<patch>` (e.g.
     `1.15.38308+1` for compute-runtime 26.18.38308.1), so the compute-runtime build number is its third field.
-    The first release known to build it is 26.27.39122 (IGC 2.38.2); 26.22.38646 (IGC 2.36.3) and older do not.
+    The first release known to have IGC 2.38 is 26.27.39122 (IGC 2.38.2); 26.22.38646 (IGC 2.36.3) and older do not.
     """
     if not ver:
         return False

@@ -140,21 +140,14 @@ static bool isSPVBuiltinAvailable(OpTy op) {
   if (m->hasAttr(intel::TritonIntelGPUDialect::getIsLTSAttrName()))
     return false;
 
-  if constexpr (std::is_same_v<OpTy, TritonGEN::Matrix2DBlockLoadOp>) {
-    // IGC older than 2.38 (compute-runtime < 26.27.39122) cannot build the
-    // sub-group-size-32 variant of intel_sub_group_2d_block_read_64b_16r2x1c:
-    // the build fails with an undefined reference to
-    // `__internal_intel_sub_group_2d_block_read_64b_16r2x1c_sg32*` (issue
-    // #8858). The backend sets this attribute from the driver version; without
-    // it use the GenISA interface.
-    int subGroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(m);
-    if (subGroupSize == 32 && op.getElemSizeInBits() == 64 &&
-        op.getTileHeight() == 16 && op.getTileWidth() == 2 &&
-        op.getVBlocks() == 1 &&
-        !m->hasAttr(intel::TritonIntelGPUDialect::
-                        getSupport2DBlockRead64b16x2SG32AttrName()))
-      return false;
-  }
+  // IGC older than 2.38 (compute-runtime < 26.27.39122) only has a fixed table
+  // of `intel_sub_group_2d_block_*` builtins; a shape missing from it fails to
+  // build with an undefined reference to `__internal_intel_sub_group_2d_block_*`
+  // (issue #8858). Newer IGC resolves any shape. The backend sets this attribute
+  // from the driver version; without it use the GenISA interface.
+  if (!m->hasAttr(
+          intel::TritonIntelGPUDialect::getSupportSPIRV2DBlockIOAttrName()))
+    return false;
 
   return true;
 }

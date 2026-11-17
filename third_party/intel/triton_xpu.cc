@@ -420,11 +420,11 @@ void init_triton_intel(py::module_ &m) {
 
   // Sets or clears the module attribute from the current target, so it is
   // never stale in hand-written TTGIR or Gluon modules that carry one.
-  m.def("set_support_2d_block_read_64b_16x2_sg32",
+  m.def("set_support_spirv_2d_block_io",
         [](mlir::ModuleOp &mod, bool supported) {
           using namespace mlir::triton::gpu::intel;
           constexpr llvm::StringRef name =
-              TritonIntelGPUDialect::getSupport2DBlockRead64b16x2SG32AttrName();
+              TritonIntelGPUDialect::getSupportSPIRV2DBlockIOAttrName();
           if (!supported)
             mod->removeAttr(name);
           else if (!mod->hasAttr(name))

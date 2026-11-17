@@ -141,10 +141,11 @@ def TritonIntelGPU_Dialect : Dialect {
     }
 
     /// Get the name of the attribute used to indicate whether the driver's IGC
-    /// can build the sub-group-size-32 64-bit 16x2 2D block read builtin
-    /// (`intel_sub_group_2d_block_read_64b_16r2x1c`). Older IGC lacks it.
-    static constexpr llvm::StringRef getSupport2DBlockRead64b16x2SG32AttrName() {
-      return "ttig.support_2d_block_read_64b_16x2_sg32";
+    /// can resolve any 2D block I/O shape from SPIR-V. IGC older than 2.38 only
+    /// has a fixed table of `intel_sub_group_2d_block_*` builtins, so a shape
+    /// missing from it fails to build; the lowering then uses GenISA instead.
+    static constexpr llvm::StringRef getSupportSPIRV2DBlockIOAttrName() {
+      return "ttig.support_spirv_2d_block_io";
     }
 
     /// Get the name of the attribute holding the core clock rate in kHz, used

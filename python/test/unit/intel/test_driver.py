@@ -15,7 +15,7 @@ from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
 from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
-from triton.backends.intel.driver import find_sycl_icpx, has_2d_block_read_64b_16x2_sg32
+from triton.backends.intel.driver import find_sycl_icpx, has_spirv_2d_block_io
 from triton.backends.intel.errors import IntelGPUError
 from triton.runtime.errors import OutOfResources
 
@@ -276,8 +276,8 @@ def test_find_sycl_uses_oneapi_root(monkeypatch, no_icpx, recwarn, tmp_path: pat
     ("", False),
     (None, False),
 ])
-def test_has_2d_block_read_64b_16x2_sg32(version, expected):
-    assert has_2d_block_read_64b_16x2_sg32(version) is expected
+def test_has_spirv_2d_block_io(version, expected):
+    assert has_spirv_2d_block_io(version) is expected
 
 
 def test_get_properties_error(device):

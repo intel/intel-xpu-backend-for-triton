@@ -2,6 +2,7 @@
 
 // CHECK: llvm.func spir_funccc @_Z36__spirv_Subgroup2DBlockPrefetchINTELiiiiPU3AS1viiiDv2_i(i32, i32, i32, i32, !llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>) attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind}
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockprefetch(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
   // CHECK-NEXT: [[PTRTOINT:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<1> to i64
@@ -30,9 +31,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=L1UC_L3UC} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:         llvm.mlir.undef : vector<2xi32>
   // CHECK-DAG:     [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -43,9 +46,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=16, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:         llvm.mlir.undef : vector<2xi32>
   // CHECK-DAG:     [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -56,9 +61,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=32, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -69,9 +76,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=8, tile_height=1, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -82,9 +91,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=8, tile_height=2, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -95,9 +106,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=8, tile_height=4, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -108,9 +121,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=8, tile_height=16, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -121,9 +136,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=16, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -134,9 +151,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=16, tile_height=16, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -147,9 +166,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=16, tile_height=32, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -160,9 +181,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -173,9 +196,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=16, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -186,9 +211,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=16, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -199,9 +226,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=16, tile_height=16, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -212,9 +241,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=32, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -225,9 +256,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=16, tile_height=32, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:         llvm.mlir.undef : vector<2xi32>
   // CHECK-DAG:     [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -238,9 +271,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=2, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:         llvm.mlir.undef : vector<2xi32>
   // CHECK-DAG:     [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -251,9 +286,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=16, v_blocks=2, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:         llvm.mlir.undef : vector<2xi32>
   // CHECK-DAG:     [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -264,9 +301,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=32, v_blocks=2, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -277,9 +316,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=16, tile_height=8, v_blocks=2, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -290,9 +331,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=16, tile_height=16, v_blocks=2, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(2 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -303,9 +346,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=16, tile_height=32, v_blocks=2, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -316,9 +361,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=2, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -329,9 +376,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=16, v_blocks=2, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.mlir.constant(4 : i32) : i32
   // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -342,9 +391,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=32, v_blocks=2, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:         llvm.mlir.undef : vector<2xi32>
   // CHECK-DAG:     [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -355,9 +406,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=16, tile_height=32, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:         llvm.mlir.undef : vector<2xi32>
   // CHECK-DAG:     [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -368,9 +421,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=16, tile_height=32, v_blocks=2, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:         llvm.mlir.undef : vector<2xi32>
   // CHECK-DAG:     [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -381,10 +436,10 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=16, tile_height=32, v_blocks=4, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
-
+}
 
 // -----
-module attributes {ttig.support_prefetch_256b} {
+module attributes {ttig.support_spirv_2d_block_io, ttig.support_prefetch_256b} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:         llvm.mlir.constant(8 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(8 : i32) : i32
@@ -399,7 +454,7 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
 
 // -----
 
-module attributes {ttig.support_prefetch_256b} {
+module attributes {ttig.support_spirv_2d_block_io, ttig.support_prefetch_256b} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:         llvm.mlir.constant(4 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -414,7 +469,7 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
 
 // -----
 
-module attributes {ttig.support_prefetch_256b} {
+module attributes {ttig.support_spirv_2d_block_io, ttig.support_prefetch_256b} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:         llvm.mlir.constant(2 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -429,7 +484,7 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
 
 // -----
 
-module attributes {ttig.support_prefetch_256b} {
+module attributes {ttig.support_spirv_2d_block_io, ttig.support_prefetch_256b} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:         llvm.mlir.undef : vector<2xi32>
   // CHECK-DAG:     [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -446,6 +501,7 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
 
 // COM: d16 with tile_width=32, vBlocks=1 (16b_?r32x1c) now uses SPIR-V builtin
 // COM: since IGC handles all hardware-valid configurations generically.
+module attributes {ttig.support_spirv_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch_d16(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:         llvm.mlir.undef : vector<2xi32>
   // CHECK-DAG:     [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -456,6 +512,7 @@ llvm.func @triton_gen.2Dblockprefetch_d16(%ptr : !llvm.ptr<1>, %base_width : i32
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
 
 // -----
 
@@ -465,7 +522,7 @@ llvm.func @triton_gen.2Dblockprefetch_d16(%ptr : !llvm.ptr<1>, %base_width : i32
 // COM: 64-byte alignment compensation is skipped: the raw ptr, base_width and x
 // COM: are passed to the builtin unchanged.
 
-module attributes {ttig.2d_block_io_base_alignment = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_spirv_2d_block_io, ttig.2d_block_io_base_alignment = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockprefetch(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
   // CHECK-NOT:   llvm.ptrtoint
@@ -479,6 +536,19 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   // CHECK-DAG:   [[COORD1:%.*]] = llvm.insertelement %arg5, [[COORD0]][[[ONE]] : i32] : vector<2xi32>
   // CHECK:       llvm.call spir_funccc @_Z36__spirv_Subgroup2DBlockPrefetchINTELiiiiPU3AS1viiiDv2_i({{.*}}, %arg0, %arg1, %arg2, %arg3, [[COORD1]])
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=L1UC_L3UC} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
+  llvm.return
+}
+}
+
+// -----
+
+// Without "ttig.support_spirv_2d_block_io" (IGC older than 2.38, #8858) the GenISA interface is used.
+module attributes {"ttg.threads-per-warp" = 16 : i32} {
+llvm.func @triton_gen.2Dblockprefetch_no_spirv_2d_block_io(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // CHECK-LABEL: llvm.func @triton_gen.2Dblockprefetch_no_spirv_2d_block_io
+  // CHECK-NOT:   __spirv_Subgroup2DBlockPrefetch
+  // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid
+  triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=16, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
 }
