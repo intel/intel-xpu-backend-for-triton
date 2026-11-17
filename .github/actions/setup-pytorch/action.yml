@@ -20,7 +20,7 @@ inputs:
     description: Source or wheels
     default: source
   cache:
-    description: Cache enabled or disabled
+    description: "enabled, read-only (load from cache, never save) or disabled"
     default: enabled
   lts:
     description: Build for LTS driver (limits TORCH_XPU_ARCH_LIST to pvc only)
@@ -95,7 +95,7 @@ runs:
       with:
         path: pytorch
         key: ${{ steps.generate-pytorch-cache-key.outputs.pytorch_cache_key }}
-        enabled: ${{ inputs.cache == 'enabled' }}
+        enabled: ${{ inputs.cache != 'disabled' }}
 
     - name: Clone PyTorch repository
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}

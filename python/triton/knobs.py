@@ -596,7 +596,7 @@ class intel_knobs(base_knobs):
     dump_shader_info: env_bool = env_bool("TRITON_INTEL_ENABLE_IGC_SHADER_DUMP", False)
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
-    descriptor_block_io_relayout: env_bool = env_bool("TRITON_INTEL_DESCRIPTOR_BLOCK_IO_RELAYOUT", False)
+    descriptor_block_io_relayout: env_bool = env_bool("TRITON_INTEL_DESCRIPTOR_BLOCK_IO_RELAYOUT", True)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
     # Disabled on Windows after the regressions tracked in issue #7495. The harmful
     # `cg`-to-`!nontemporal` lowering (an L3 bypass) was removed in issue #7901, so
@@ -611,6 +611,8 @@ class intel_knobs(base_knobs):
     # Default for the `prefetch_cost_model` option: let the pipeliner drop a gapped dot operand's prefetch
     # (issue #8652). Off by default, since whether that wins depends on the launch and the operand pitches.
     enable_prefetch_cost_model: env_bool = env_bool("TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL", False)
+    # Default for the `tile_barrier` option: re-align a persistent kernel's warps at every tile (issue #8719).
+    pipeline_tile_barrier: env_bool = env_bool("TRITON_INTEL_PIPELINE_TILE_BARRIER", True)
     fast_math: _env_fast_math = _env_fast_math()
 
     enable_dump_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_KERNEL_ARGS", False)

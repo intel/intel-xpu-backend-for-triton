@@ -46,6 +46,7 @@ def test_regression_7875(device, tmp_path: pathlib.Path):
         triton.compile(str(temp_file))
 
 
+@pytest.mark.enable_warmup
 def test_regression_7925(device):
     from torch._inductor.runtime import triton_helpers
 
