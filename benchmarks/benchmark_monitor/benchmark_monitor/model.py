@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
+from types import MappingProxyType
 
 
 class Status(str, Enum):
@@ -40,13 +41,21 @@ class SeriesKey:
 
 @dataclass(frozen=True)
 class Observation:
-    """One raw measurement. ``attrs`` holds versions and provenance; empty strings are omitted."""
+    """One raw measurement.
+
+    ``attrs`` holds versions and provenance. On construction it is copied into a read-only mapping and
+    entries whose value is an empty string are dropped. ``attrs`` does not take part in hashing.
+    """
 
     key: SeriesKey
     run_id: str
     observed_at: datetime
     value: float
-    attrs: Mapping[str, str] = field(default_factory=dict)
+    attrs: Mapping[str, str] = field(default_factory=dict, hash=False)
+
+    def __post_init__(self) -> None:
+        cleaned = {k: v for k, v in self.attrs.items() if v != ""}
+        object.__setattr__(self, "attrs", MappingProxyType(cleaned))
 
 
 @dataclass(frozen=True)

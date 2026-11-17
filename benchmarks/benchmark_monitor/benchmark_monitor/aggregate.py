@@ -12,7 +12,11 @@ from benchmark_monitor.model import Observation, Point, Series
 
 
 def _utc(moment: datetime) -> datetime:
-    """Aware UTC form of *moment*; naive datetimes are taken as UTC."""
+    """Aware UTC form of *moment*.
+
+    Naive datetimes are taken as UTC, never as host-local time. Sources must hand over UTC timestamps
+    (naive or aware).
+    """
     if moment.tzinfo is None:
         return moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(timezone.utc)
@@ -38,7 +42,7 @@ def aggregate(observations: Iterable[Observation], unit: Literal["night_mean", "
     if any(o.key != key for o in obs):
         raise ValueError("observations belong to more than one SeriesKey")
 
-    groups: dict[object, list[Observation]] = defaultdict(list)
+    groups: dict[date | str, list[Observation]] = defaultdict(list)
     for o in sorted(obs, key=lambda o: (_utc(o.observed_at), o.run_id)):
         groups[utc_night(o.observed_at) if unit == "night_mean" else o.run_id].append(o)
 
@@ -50,11 +54,9 @@ def aggregate(observations: Iterable[Observation], unit: Literal["night_mean", "
             by_run[o.run_id].append(o.value)
         return statistics.fmean(statistics.fmean(v) for v in by_run.values())
 
-    points = [
-        Point(night=utc_night(g[0].observed_at), value=_value(g), n_raw=len(g),
-              run_ids=tuple(sorted({o.run_id
-                                    for o in g})))
-        for g in groups.values()
-    ]
-    points.sort(key=lambda p: p.night)  # stable: runs on one night stay in time order
-    return Series(key=key, points=tuple(points))
+    def _point(g: list[Observation]) -> Point:
+        run_ids = tuple(sorted({o.run_id for o in g}))
+        return Point(night=utc_night(g[0].observed_at), value=_value(g), n_raw=len(g), run_ids=run_ids)
+
+    # Groups are built from time-sorted observations, so points are already in time order.
+    return Series(key=key, points=tuple(_point(g) for g in groups.values()))

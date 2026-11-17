@@ -148,3 +148,133 @@ def test_max_window_looks_at_every_override():
     text = DEFAULT_CATALOG_PATH.read_text(encoding="utf-8").replace("softmax: {min_drop_pct: 3.0}",
                                                                     "softmax: {min_drop_pct: 3.0, window: 35}")
     assert load_catalog(text).max_window() == 35
+
+
+BASE = "version: 1\ndefaults: {min_drop_pct: 5, z: 3, min_history: 8, window: 20, max_cv_pct: 15, lock_mad_frac: 0.05}\n"
+METRICS = "metrics: {tflops: {higher_is_better: true}}\n"
+
+
+@pytest.mark.parametrize("section", [
+    "benchmarks: {gemm: null}",
+    "benchmarks: {gemm: 3}",
+    "families: {f: null}",
+    "families: {f: [a]}",
+    "platforms: {p: null}",
+    "platforms: {p: [x]}",
+    "families: {f: {match: [1]}}",
+    "families: {f: {match: ['a', null]}}",
+    "families: {f: {match: []}}",
+    "families: {f: {match: a*}}",
+    "platforms: {p: {match: 1}}",
+    "scopes: {s: null}",
+    "scopes: {s: {source: [micro], platform: p}}",
+    "scopes: {s: {source: micro, platform: [p]}}",
+    "scopes: {s: {source: micro, platform: p, expected_nightly: 'false'}}",
+    "scopes: {s: {source: micro, platform: p, expected_nightly: 1}}",
+    "scopes: {s: {source: micro, platform: p, groups: [null]}}",
+])
+def test_malformed_sections_raise_catalog_error(section):
+    with pytest.raises(CatalogError):
+        load_catalog(BASE + METRICS + "platforms: {p: {match: P}}\n" * (not section.startswith("platforms")) + section +
+                     "\n")
+
+
+def test_overlay_non_mapping_platform_is_catalog_error():
+    with pytest.raises(CatalogError):
+        load_catalog(overlays=["version: 1\nplatforms: {x1: null}\n"])
+
+
+def test_benchmark_inherits_family_then_overrides_it():
+    text = DEFAULT_CATALOG_PATH.read_text(encoding="utf-8").replace(
+        "softmax: {min_drop_pct: 3.0}", "softmax: {min_drop_pct: 3.0}\n  flash-attn-fwd: {min_drop_pct: 2.0}")
+    cat = load_catalog(text)
+    assert cat.resolve(key("flash-attn-fwd")).min_drop_pct == 2.0  # benchmark beats its family (8.0)
+    assert cat.resolve(key("flash-attn-bwd")).min_drop_pct == 8.0  # sibling keeps the family value
+
+
+def test_benchmark_inherits_unset_keys_from_family():
+    text = DEFAULT_CATALOG_PATH.read_text(encoding="utf-8").replace(
+        "flex-attn: {match",
+        "flex-attn: {window: 30, match").replace("softmax: {min_drop_pct: 3.0}",
+                                                 "softmax: {min_drop_pct: 3.0}\n  flex-attn-x: {z: 4}")
+    t = load_catalog(text).resolve(key("flex-attn-x"))
+    assert (t.window, t.z, t.min_drop_pct) == (30, 4, 8.0)
+
+
+def test_strict_benchmark_keys_are_exact_names():
+    text = DEFAULT_CATALOG_PATH.read_text(encoding="utf-8").replace("softmax: {min_drop_pct: 3.0}",
+                                                                    "'soft*': {min_drop_pct: 3.0}")
+    with pytest.warns(UserWarning, match="exact names"):
+        cat = load_catalog(text)
+    with pytest.warns(UserWarning, match="exact names"), pytest.raises(CatalogError, match="benchmark 'soft\\*'"):
+        cat.validate(["softmax", "gemm", "flash-attn", "flex-attn-causal"], strict=True)
+    with pytest.warns(UserWarning, match="exact names"):
+        load_catalog(text.replace("'soft*'", "'gemm[bf16]'"))
+
+
+@pytest.mark.parametrize("override", [
+    "defaults: {min_drop_pct: 5, z: 3, min_history: 8, window: 5, max_cv_pct: 15, lock_mad_frac: 0.05}",
+])
+def test_min_history_above_window_is_rejected_in_defaults(override):
+    with pytest.raises(CatalogError, match="min_history 8 exceeds window 5"):
+        load_catalog("version: 1\n" + override + "\n")
+
+
+@pytest.mark.parametrize("old, new", [
+    ("softmax: {min_drop_pct: 3.0}", "softmax: {window: 5}"),
+    ("flex-attn: {match", "flex-attn: {window: 5, match"),
+    ('b580: {match: "B580"}', 'b580: {match: "B580", window: 5}'),
+])
+def test_min_history_above_window_is_rejected_in_overrides(old, new):
+    text = DEFAULT_CATALOG_PATH.read_text(encoding="utf-8").replace(old, new)
+    with pytest.raises(CatalogError, match="exceeds window"):
+        load_catalog(text)
+
+
+def test_window_and_min_history_overridden_together_are_fine():
+    text = DEFAULT_CATALOG_PATH.read_text(encoding="utf-8").replace("softmax: {min_drop_pct: 3.0}",
+                                                                    "softmax: {window: 5, min_history: 4}")
+    assert load_catalog(text).resolve(key("softmax")).window == 5
+
+
+def test_strict_validate_warns_on_overlap_missed_by_pairwise_check():
+    text = BASE + METRICS + 'families:\n  a: {match: ["flash*"]}\n  b: {match: ["*-bwd"]}\n'
+    cat = load_catalog(text)  # "flash*" and "*-bwd" do not match each other as names
+    cat.validate(["flash-attn-bwd"])
+    with pytest.warns(UserWarning, match="matches families"):
+        cat.validate(["flash-attn-bwd"], strict=True)
+
+
+def test_long_single_line_yaml_text_is_not_a_path():
+    pad = ", ".join(f"m{i}: {{higher_is_better: true}}" for i in range(40))
+    text = ("{version: 1, defaults: {min_drop_pct: 5, z: 3, min_history: 8, window: 20, max_cv_pct: 15, "
+            f"lock_mad_frac: 0.05}}, metrics: {{{pad}}}}}")
+    assert len(text) > 300 and "\n" not in text
+    assert load_catalog(text).is_gated("m3")
+
+
+def test_is_gated():
+    cat = load_catalog()
+    assert cat.is_gated("tflops") is True
+    assert cat.is_gated("cpu_mhz") is False
+    with pytest.raises(CatalogError, match="not declared"):
+        cat.is_gated("latency_furlongs")
+
+
+def test_schema_agrees_with_loader():
+    jsonschema = pytest.importorskip("jsonschema")
+    validator = jsonschema.Draft202012Validator(json.loads(SCHEMA_PATH.read_text()))
+    good = DEFAULT_CATALOG_PATH.read_text(encoding="utf-8")
+    assert not list(validator.iter_errors(yaml.safe_load(good)))
+    bad = [
+        good.replace("softmax: {min_drop_pct: 3.0}", "softmax: {min_drop: 3.0}"),  # typo'd key
+        good.replace("flex-attn: {match", "flex-attn: {zz: 1, match"),
+        good.replace('b580: {match: "B580"}', 'b580: {match: "B580", zz: 1}'),
+        good.replace("  max_cv_pct: 15.0\n", ""),  # threshold missing from defaults
+        good.replace("defaults:\n", "defaults_gone:\n"),
+        good.replace("expected_nightly: true", "expected_nightly: 'true'", 1),
+    ]
+    for text in bad:
+        assert list(validator.iter_errors(yaml.safe_load(text))), text
+        with pytest.raises(CatalogError):
+            load_catalog(text)
