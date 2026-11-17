@@ -84,8 +84,7 @@ def ref_paged_attn(
         if soft_cap is not None and soft_cap > 0:
             attn = soft_cap * torch.tanh(attn / soft_cap)
         attn.masked_fill_(mask, float("-inf"))
-        torch.softmax(attn, dim=-1, out=attn)
-        attn = attn.to(v.dtype)  # cast in a second step to reduce peak memory usage
+        attn = torch.softmax(attn, dim=-1).to(v.dtype)  # as in vLLM main's ref_paged_attn (out-of-place softmax)
         out = torch.einsum("hqk,khd->qhd", attn, v)
 
         outputs.append(out)
