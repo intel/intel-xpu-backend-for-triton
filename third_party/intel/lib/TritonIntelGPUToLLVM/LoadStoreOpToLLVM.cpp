@@ -2359,6 +2359,92 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       : ConvertOpToLLVMPattern<triton::LoadOp>(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
+  /// Loads a single row of contiguous, word-aligned addresses under a uniform
+  /// mask with sub-group block reads under one branch, like the single-row
+  /// descriptor loads. Returns the loaded elements, or std::nullopt when the
+  /// load must take the gather path.
+  std::optional<SmallVector<Value>> lowerToSubGroupBlockRead(
+      triton::LoadOp op, ConversionPatternRewriter &rewriter, Type valueElemTy,
+      ArrayRef<Value> ptrElems, ArrayRef<Value> maskElems,
+      ArrayRef<Value> otherElems) const {
+    auto type = dyn_cast<RankedTensorType>(op.getType());
+    // A block read carries no cache control, so loads with a cache policy keep
+    // the gather path; it also reads global memory only.
+    CachePolicy cachePolicy = getCachePolicy(op.getCachePolicyAttr());
+    if (!type || op.getIsVolatile() || valueElemTy.isInteger(1) ||
+        cachePolicy.cacheModifier != CacheModifier::NONE ||
+        cachePolicy.evictionPolicy != EvictionPolicy::NORMAL ||
+        cast<PointerType>(getElementTypeOrSelf(op.getPtr().getType()))
+                .getAddressSpace() != PtrAddrSpace::Global ||
+        tools::getBoolEnv("TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ"))
+      return std::nullopt;
+    std::optional<SubGroupBlockRead> read = matchSubGroupBlockRead(
+        type,
+        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>()));
+    if (!read)
+      return std::nullopt;
+
+    auto &axisInfo =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass);
+    unsigned dim = type.getRank() - 1;
+    AxisInfo *ptrInfo = axisInfo.getAxisInfo(op.getPtr());
+    if (!ptrInfo || ptrInfo->getContiguity(dim) < type.getShape()[dim])
+      return std::nullopt;
+    int64_t ptrDiv = ptrInfo->getDivisibility(dim);
+    if ((ptrDiv & -ptrDiv) < read->wordTy.getWidth() / 8)
+      return std::nullopt;
+    if (op.getMask() && !isBroadcast(op.getMask()))
+      return std::nullopt;
+
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    unsigned numElems = ptrElems.size();
+    Type readTy = read->vec == 1 ? Type(read->wordTy)
+                                 : Type(vec_ty(read->wordTy, read->vec));
+    Type chunkTy = read->chunkElems == 1
+                       ? valueElemTy
+                       : Type(vec_ty(valueElemTy, read->chunkElems));
+    auto emitReads = [&]() {
+      // Lane l holds word l of each read group, so lane 0's address is this
+      // lane's minus l words.
+      Value laneId = getLaneAndWarpId(rewriter, loc).first;
+      Value laneOffset =
+          b.sub(b.i32_val(0), b.mul(laneId, b.i32_val(read->chunkElems)));
+      SmallVector<Value> vals(numElems);
+      for (unsigned g = 0; g < read->numGroups; ++g) {
+        unsigned reg0 = g << read->groupShift;
+        Value ptr0 =
+            b.gep(ptr_ty(ctx, 1), valueElemTy, ptrElems[reg0], laneOffset);
+        Value words =
+            TritonGEN::SubGroupBlockReadOp::create(rewriter, loc, readTy, ptr0);
+        for (unsigned j = 0; j < read->vec; ++j) {
+          Value word = read->vec == 1 ? words
+                                      : b.extract_element(read->wordTy, words,
+                                                          b.i32_val(j));
+          Value chunk = b.bitcast(word, chunkTy);
+          unsigned reg = reg0 + j * read->chunkElems;
+          for (unsigned s = 0; s < read->chunkElems; ++s)
+            vals[reg + s] =
+                read->chunkElems == 1
+                    ? chunk
+                    : b.extract_element(valueElemTy, chunk, b.i32_val(s));
+        }
+      }
+      return vals;
+    };
+    if (maskElems.empty())
+      return emitReads();
+    SmallVector<Value> fill(otherElems);
+    if (fill.empty())
+      fill.assign(numElems,
+                  LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
+                                           rewriter.getZeroAttr(valueElemTy)));
+    Block &end = LLVM::intel::createPredicatedBlock(rewriter, loc, maskElems[0],
+                                                    fill, emitReads);
+    return SmallVector<Value>(end.args_begin(), end.args_end());
+  }
+
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -2414,6 +2500,13 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     if (other) {
       otherElems =
           unpackTensorElements(loc, llOther, rewriter, other.getType());
+    }
+
+    if (std::optional<SmallVector<Value>> vals = lowerToSubGroupBlockRead(
+            op, rewriter, valueElemTy, ptrElems, maskElems, otherElems)) {
+      rewriter.replaceOp(op, packTensorElements(loc, typeConverter, *vals,
+                                                rewriter, op.getType()));
+      return success();
     }
 
     // vectorized iteration through all the pointer/mask/other elements
