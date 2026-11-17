@@ -112,6 +112,9 @@ bool crossesAliasingWrite(Operation *start, Operation *end) {
 /// they share a block) is checked whole, nested regions included: when it is an
 /// enclosing loop, the ops that follow \p forOp in its body also run between
 /// the load and the copy.
+///
+/// The check is deliberately conservative: there is no alias analysis, so a
+/// write to an unrelated buffer blocks the move too.
 bool movedLoadCrossesAliasingWrite(tt::DescriptorLoadOp loadOp,
                                    scf::ForOp forOp) {
   Operation *loopAncestor =
@@ -380,13 +383,6 @@ bool optimizeDotOperands(scf::ForOp forOp,
     auto tensorType = cast<RankedTensorType>(operand.getType());
     if (!isLoadCandidate(loadOp, tensorType.getElementType(), forOp))
       return;
-    // A write before the loop or in it may change what the moved copies read.
-    if (movedLoadCrossesAliasingWrite(loadOp, forOp)) {
-      LDBG("Keeping dot operand load in place: a write may change the memory "
-           "it reads before the loop or in it: "
-           << *loadOp);
-      return;
-    }
     candidates.push_back({opId, dot, loadOp});
   };
 
@@ -434,6 +430,22 @@ bool optimizeDotOperands(scf::ForOp forOp,
                     << perLaneGRFBudget << " B/lane GRF budget");
     return false;
   }
+
+  // A write before the loop or in it may change what the moved copies read.
+  // Checked only once the gate has passed, and once per load: a load feeding
+  // several operands gets the same answer for each.
+  DenseMap<Operation *, bool> crossesWrite;
+  llvm::erase_if(candidates, [&](const Candidate &c) {
+    auto [it, inserted] = crossesWrite.try_emplace(c.loadOp, false);
+    if (inserted) {
+      it->second = movedLoadCrossesAliasingWrite(c.loadOp, forOp);
+      if (it->second)
+        LDBG("Keeping dot operand load in place: a write may change the "
+             "memory it reads before the loop or in it: "
+             << *c.loadOp);
+    }
+    return it->second;
+  });
 
   LDBG("Shortening dot operand live ranges ("
        << candidates.size() << " operand(s) to sink into the loop): peak "

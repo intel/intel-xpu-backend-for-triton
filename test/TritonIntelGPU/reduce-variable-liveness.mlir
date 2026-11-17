@@ -1503,3 +1503,80 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
     tt.return
   }
 }
+
+// -----
+
+// COM: Two pre-loop loads with a store between them: the check is per load, so the
+// COM: A load (before the store) stays in place while the B load (after it) is sunk.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dotA = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+#dotB = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @store_between_operand_loads(%a: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %b: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %c: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+    // CHECK-LABEL: tt.func @store_between_operand_loads(
+    // CHECK-NOT:     ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<256x128xf16>
+    // CHECK:         tt.descriptor_load {{.*}} : !tt.tensordesc<256x128xf16>
+    // CHECK:         tt.descriptor_store {{.*}} : !tt.tensordesc<256x256xf32>
+    // CHECK-NOT:     tt.descriptor_load {{.*}} : !tt.tensordesc<128x256xf16>
+    // CHECK:         ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<128x256xf16>
+    // CHECK-NOT:     tt.descriptor_load {{.*}} : !tt.tensordesc<128x256xf16>
+    // CHECK:         scf.for
+    // CHECK-NOT:     tt.descriptor_load {{.*}} : !tt.tensordesc<256x128xf16>
+    // CHECK:         tt.descriptor_load {{.*}} : !tt.tensordesc<128x256xf16>
+    // CHECK-NOT:     tt.descriptor_load {{.*}} : !tt.tensordesc<256x128xf16>
+    // CHECK:         tt.dot
+    %acc0 = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #dpas>
+    %c128_i32 = arith.constant 128 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %da = tt.make_tensor_descriptor %a, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] : <f16>, <256x128xf16>
+    %db = tt.make_tensor_descriptor %b, [%c128_i32, %c256_i32], [%c256_i64, %c1_i64] : <f16>, <128x256xf16>
+    %dc = tt.make_tensor_descriptor %c, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <256x256xf32>
+    %ta = tt.descriptor_load %da[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<256x128xf16> -> tensor<256x128xf16, #dotA>
+    tt.descriptor_store %dc[%c0_i32, %c0_i32], %acc0 : !tt.tensordesc<256x256xf32>, tensor<256x256xf32, #dpas>
+    %tb = tt.descriptor_load %db[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<128x256xf16> -> tensor<128x256xf16, #dotB>
+    %r:2 = scf.for %iv = %c0_i32 to %c256_i32 step %c128_i32 iter_args(%acc = %acc0, %k = %c0_i32) -> (tensor<256x256xf32, #dpas>, i32)  : i32 {
+      %d = tt.dot %ta, %tb, %acc, inputPrecision = tf32 : tensor<256x128xf16, #dotA> * tensor<128x256xf16, #dotB> -> tensor<256x256xf32, #dpas>
+      %kn = arith.addi %k, %c128_i32 : i32
+      scf.yield %d, %kn : tensor<256x256xf32, #dpas>, i32
+    }
+    tt.descriptor_store %dc[%c0_i32, %c0_i32], %r#0 : !tt.tensordesc<256x256xf32>, tensor<256x256xf32, #dpas>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: @one_load_feeds_both_operands with a store in the loop: the load is checked
+// COM: once for both operands, and neither operand may read an in-loop copy.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dotA = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+#dotB = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @one_load_feeds_both_operands_store_in_loop(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+    // CHECK-LABEL: tt.func @one_load_feeds_both_operands_store_in_loop(
+    // CHECK-NOT:     ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<256x256xf16>
+    // CHECK:         tt.descriptor_load {{.*}} : !tt.tensordesc<256x256xf16>
+    // CHECK:         scf.for
+    // CHECK-NOT:     tt.descriptor_load {{.*}} : !tt.tensordesc<256x256xf16>
+    // CHECK:         tt.dot
+    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #dpas>
+    %c128_i32 = arith.constant 128 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i64 = arith.constant 0 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f16>, <256x256xf16>
+    %out = tt.make_tensor_descriptor %arg1, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f32>, <256x256xf32>
+    %1 = tt.descriptor_load %0[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<256x256xf16> -> tensor<256x256xf16, #dotA>
+    %2:2 = scf.for %arg2 = %c0_i32 to %c128_i32 step %c128_i32 iter_args(%arg3 = %cst, %arg4 = %c0_i32) -> (tensor<256x256xf32, #dpas>, i32)  : i32 {
+      %3 = arith.addi %arg4, %c128_i32 : i32
+      %4 = ttg.convert_layout %1 : tensor<256x256xf16, #dotA> -> tensor<256x256xf16, #dotB>
+      %5 = tt.dot %1, %4, %arg3, inputPrecision = tf32 : tensor<256x256xf16, #dotA> * tensor<256x256xf16, #dotB> -> tensor<256x256xf32, #dpas>
+      tt.descriptor_store %out[%c0_i32, %c0_i32], %5 : !tt.tensordesc<256x256xf32>, tensor<256x256xf32, #dpas>
+      scf.yield %5, %3 : tensor<256x256xf32, #dpas>, i32
+    }
+    tt.descriptor_store %out[%c0_i32, %c0_i32], %2#0 : !tt.tensordesc<256x256xf32>, tensor<256x256xf32, #dpas>
+    tt.return
+  }
+}
