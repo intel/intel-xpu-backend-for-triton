@@ -49,7 +49,7 @@ def has_spirv_capability(device_id: int, probe_spirv: bytes) -> bool | None:
     # re-execute the caller's own `__main__` to bootstrap) -- an abort then
     # only costs that child.
     try:
-        proc = subprocess.run([sys.executable, '-m', 'triton.backends.intel._spirv_probe_worker',
+        proc = subprocess.run([sys.executable, '-m', f'{__package__}._spirv_probe_worker',
                                str(device_id)], input=probe_spirv, capture_output=True, timeout=_PROBE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         return False  # Hung: treat like a crash.
