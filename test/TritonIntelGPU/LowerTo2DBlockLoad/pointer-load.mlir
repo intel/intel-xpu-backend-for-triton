@@ -508,7 +508,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %hi = arith.cmpi slt, %rows, %8 : tensor<64x1xi32, #dot0>
     %10 = arith.andi %lo, %hi : tensor<64x1xi1, #dot0>
     %11 = tt.broadcast %10 : tensor<64x1xi1, #dot0> -> tensor<64x32xi1, #dot0>
-    // COM: No mask operand is left.
     // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}} {row_major} {ttig.block_io_runtime_row_limit}
     %12 = tt.load %4, %11, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %12 : tensor<64x32xf16, #dot0>
@@ -535,8 +534,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %rowb = tt.broadcast %row : tensor<64x1xi32, #dot0> -> tensor<64x32xi32, #dot0>
     %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #dot0>
     %4 = tt.addptr %base, %rowb : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
-    // rows = row_base + arange(0, 64), with the AND on the expanded rows as
-    // RewriteTensorDescriptorToPointer emits it; mask = rows >= 0 && rows < bound.
     %5 = tt.splat %row_base : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
     %6 = arith.addi %5, %0 : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
     %rows = tt.expand_dims %6 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
