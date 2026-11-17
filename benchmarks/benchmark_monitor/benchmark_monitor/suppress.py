@@ -19,10 +19,11 @@ are skipped when following its episode.
 
 from __future__ import annotations
 
+import functools
 import statistics
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from benchmark_monitor.model import SeriesKey, Status, Verdict
@@ -186,9 +187,7 @@ def _episodes(h: _History, key: SeriesKey, nights: list[date]) -> list[int]:
     return lengths
 
 
-def _prior_episodes(h: _History,
-                    cfg: SuppressConfig,
-                    keys: Sequence[SeriesKey],
+def _prior_episodes(h: _History, cfg: SuppressConfig, keys: Sequence[SeriesKey],
                     night: date | None = None) -> dict[SeriesKey, list[int]]:
     """Per series flagged on *night* (default tonight): lengths of its episodes that ENDED before that night's
     began, within the ``flip_days`` window ending on *night*."""
@@ -272,7 +271,8 @@ def _night(history: Mapping[date, Sequence[Verdict]], cfg: SuppressConfig, night
     return _Night(h, new, today, streaks, prior, flip, suspect, live, storming)
 
 
-def _storm_started(nt: _Night, cfg: SuppressConfig, storms: Mapping[date, frozenset[str]]) -> dict[tuple, list[Verdict]]:
+def _storm_started(nt: _Night, cfg: SuppressConfig, storms: Mapping[date,
+                                                                    frozenset[str]]) -> dict[tuple, list[Verdict]]:
     """Cases regressing live on *nt*'s night whose episode began, on an earlier night, in a storm of their family.
 
     Grouped by (source, family, storm night).
@@ -290,6 +290,14 @@ def _storm_started(nt: _Night, cfg: SuppressConfig, storms: Mapping[date, frozen
 
 def _qualifies(nt: _Night, cfg: SuppressConfig, vs: Sequence[Verdict]) -> bool:
     return max(nt.streaks[v.key] for v in vs) >= cfg.confirm_nights
+
+
+def _confirmable(h: _History, cfg: SuppressConfig, nights: Mapping[date, _Night], storms: Mapping[date, frozenset[str]],
+                 key: SeriesKey, ep: tuple[date, ...], i: int) -> bool:
+    """Whether night ``ep[i]`` of *key*'s episode could have confirmed it, judged on that night's own view."""
+    fam = cfg.family_of(key.benchmark)
+    return (fam not in storms[ep[0]] and key.source not in nights[ep[i]].suspect
+            and not is_flip_flop(_prior_episodes(h, cfg, [key], ep[i])[key], i + 1, cfg))
 
 
 def apply(history: Mapping[date, Sequence[Verdict]], cfg: SuppressConfig | None, tonight: date) -> SuppressionResult:
@@ -311,13 +319,8 @@ def apply(history: Mapping[date, Sequence[Verdict]], cfg: SuppressConfig | None,
         if n.streaks[v.key] < cfg.confirm_nights:
             continue
         ep = h.episode(v.key)
-        fam = cfg.family_of(v.key.benchmark)
 
-        def ok(i, v=v, ep=ep, fam=fam):
-            night = nights[ep[i]]  # that night's own view: its suspect sources and its flip-flop window
-            return (fam not in storms_by_night[ep[0]] and v.key.source not in night.suspect and
-                    not is_flip_flop(_prior_episodes(h, cfg, [v.key], ep[i])[v.key], i + 1, cfg))
-
+        ok = functools.partial(_confirmable, h, cfg, nights, storms_by_night, v.key, tuple(ep))
         last = len(ep) - 1
         if ok(last) and not any(ok(i) for i in range(cfg.confirm_nights - 1, last)):
             confirmed.append(Confirmed(v.key, v, n.streaks[v.key], ep[0]))
@@ -326,14 +329,14 @@ def apply(history: Mapping[date, Sequence[Verdict]], cfg: SuppressConfig | None,
     families = []
     seen = {  # (source, family, storm night) groups that already qualified on an earlier night
         g
-        for d, nt in nights.items() if d < tonight
-        for g, vs in _storm_started(nt, cfg, storms_by_night).items() if _qualifies(nt, cfg, vs)
+        for d, nt in nights.items() if d < tonight for g, vs in _storm_started(nt, cfg, storms_by_night).items()
+        if _qualifies(nt, cfg, vs)
     }
     for group, vs in sorted(_storm_started(n, cfg, storms_by_night).items(), key=lambda kv: kv[0]):
         if group in seen or not _qualifies(n, cfg, vs):
             continue
-        keys = tuple(sorted((v.key for v in vs), key=lambda k: (k.benchmark, k.params, k.platform, k.tag, k.compiler,
-                                                                 k.metric)))
+        keys = tuple(
+            sorted((v.key for v in vs), key=lambda k: (k.benchmark, k.params, k.platform, k.tag, k.compiler, k.metric)))
         families.append(ConfirmedFamily(group[0], group[1], tonight, group[2], keys))
 
     warnings = [
@@ -345,6 +348,6 @@ def apply(history: Mapping[date, Sequence[Verdict]], cfg: SuppressConfig | None,
     linked = {c.key for c in confirmed}
     sustained = tuple(v for v in n.today if v not in n.new and v.key not in linked and v.key not in n.flip)
     return SuppressionResult(new=tuple(shown), confirmed=tuple(confirmed), sustained=sustained,
-                             muted=tuple(v for v in n.today if v.key in n.flip), storms=_digest(folded, cfg),
-                             storm_nights=storm_nights, suspect=suspect, held=held, warnings=tuple(warnings),
-                             confirmed_families=tuple(families))
+                             muted=tuple(v for v in n.today
+                                         if v.key in n.flip), storms=_digest(folded, cfg), storm_nights=storm_nights,
+                             suspect=suspect, held=held, warnings=tuple(warnings), confirmed_families=tuple(families))

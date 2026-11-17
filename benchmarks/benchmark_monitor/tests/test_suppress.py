@@ -177,7 +177,7 @@ def test_a_muted_sustained_case_is_listed_as_muted():
     assert not run([verdict(i) for i in (1, 3, 5, 7, 8, 9)], 9).muted  # streak 3 > longest earlier: lifted
     res = run([verdict(i) for i in (0, 1, 2, 4, 6, 8, 9)], 9, SuppressConfig(flip_short_share=0.3))
     assert [v.night for v in res.muted] == [n(9)] and not res.new  # streak 2 <= longest earlier 3
-    assert res.sustained == ()  # a muted case is not also sustained
+    assert not res.sustained  # a muted case is not also sustained
 
 
 def test_confirmation_survives_a_partial_run_on_the_confirming_night():
@@ -230,13 +230,13 @@ def test_broad_regression_is_a_digest_then_one_family_confirmation():
 
 
 def test_family_confirmation_lists_only_cases_still_regressing():
-    flags = gemm_flags((9,)) + gemm_flags((10,), cases=3)
+    flags = gemm_flags((9, )) + gemm_flags((10, ), cases=3)
     cf = run(flags, 10).confirmed_families[0]
     assert [k.params for k in cf.keys] == [f'{{"case":"g{j:02d}"}}' for j in range(3)]
 
 
 def test_storm_that_recovers_by_the_next_night_confirms_no_family():
-    res = run_nights(gemm_flags((9,)), (9, 10, 11))
+    res = run_nights(gemm_flags((9, )), (9, 10, 11))
     assert all(r.confirmed_families == () and r.confirmed == () for r in res.values())
 
 
@@ -244,7 +244,7 @@ def test_family_confirmation_survives_a_missed_night():
     flags = gemm_flags((9, 11))
     res = run(flags, 11, skip=(10, ))
     assert [len(res.confirmed_families), res.confirmed_families[0].first_night] == [1, n(9)]
-    assert run(gemm_flags((9, 11, 12)), 12, skip=(10, )).confirmed_families == ()  # only once
+    assert not run(gemm_flags((9, 11, 12)), 12, skip=(10, )).confirmed_families  # only once
 
 
 def test_family_confirmation_survives_a_partial_run_on_the_confirming_night():
