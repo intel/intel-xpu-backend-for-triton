@@ -10,7 +10,9 @@ Manual providers reuse the kernels in gemm_benchmark, gemm_splitk_benchmark,
 and gemm_streamk_benchmark (not Inductor's grouped_mm). All manual providers use
 the original inputs and strides without padding, packing, or copying. The kernels
 use a tensor descriptor when the strides allow one, and masked pointers otherwise. Split-K and Stream-K run
-one GEMM per batch; their timings include zeroing and all launches. All manual
+one GEMM per batch; their timings include zeroing and all launches. Their CI benchmarks have
+a single config tuned for large square shapes, so here each case first picks the fastest
+tile (and SPLIT_K for Split-K), outside the timed region, and prints it. All manual
 providers accumulate in FP32, add any addmm bias, and return FP16 outputs. The Inductor
 modes print whether Inductor picked its Triton template or an ATen kernel for each case.
 """
@@ -19,12 +21,13 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import torch
 import torch._inductor.config as inductor_config
 from torch._inductor.utils import run_and_get_code
 import triton
+import triton.language as tl
 
 # triton_kernels_benchmark is imported where it is used, because importing it fails without a GPU and --list must work
 # without one.
@@ -90,6 +93,24 @@ MODES = {
 }
 # Inductor mode -> max_autotune_gemm_backends.
 INDUCTOR_BACKENDS = {"aten_only": "ATEN", "triton_aten": "TRITON,ATEN", "triton_only": "TRITON"}
+
+
+class TileConfig(NamedTuple):
+    block_m: int
+    block_n: int
+    num_warps: int
+    split_k: int = 1
+
+
+# The Split-K and Stream-K CI benchmarks have one config, tuned for large square shapes. Here they are tuned per case
+# over the grouped kernel's tiles plus Inductor's 128x128 tile, and Split-K also over SPLIT_K.
+TILES = ((256, 256, 32), (256, 128, 32), (128, 128, 16), (64, 128, 32))
+TUNED_CONFIGS = {
+    "manual_splitk": [TileConfig(m, n, w, split_k) for m, n, w in TILES for split_k in (1, 2, 4, 8)],
+    "manual_streamk": [TileConfig(m, n, w) for m, n, w in TILES],
+}
+BLOCK_K = 32
+GROUP_M = 4
 
 
 def storage_size(shape: tuple[int, ...], stride: tuple[int, ...]) -> int:
@@ -160,8 +181,46 @@ def _register_custom_xpu_mm_heuristic() -> None:
     _HEURISTIC_CACHE.clear()
 
 
-def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...]) -> torch.Tensor:
-    from triton_kernels_benchmark import gemm_splitk_benchmark, gemm_streamk_benchmark
+def _splitk(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, config: TileConfig) -> None:
+    """One Split-K GEMM, launched as `gemm_splitk_benchmark.matmul` does but with the given config."""
+    from triton_kernels_benchmark.gemm_splitk_benchmark import _kernel
+
+    m, k = a.shape
+    n = b.shape[1]
+    grid = (triton.cdiv(m, config.block_m) * triton.cdiv(n, config.block_n), config.split_k)
+    _kernel.fn[grid](a, b, c, m, n, k, *a.stride(), *b.stride(), *c.stride(), acc_dtype=tl.float32,
+                     BLOCK_M=config.block_m, BLOCK_N=config.block_n, BLOCK_K=BLOCK_K, GROUP_M=GROUP_M,
+                     SPLIT_K=config.split_k, num_warps=config.num_warps, num_stages=4, grf_mode="256")
+
+
+def _streamk(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, config: TileConfig) -> None:
+    """One Stream-K GEMM, launched as `gemm_streamk_benchmark.matmul` does but with the given tile."""
+    from triton_kernels_benchmark.gemm_streamk_benchmark import first_wave, full_tiles, zero_streamk_tiles
+
+    m, k = a.shape
+    n = b.shape[1]
+    programs = torch.xpu.get_device_capability(0)["gpu_subslice_count"]
+    iters_per_tile = triton.cdiv(k, BLOCK_K)
+    total_tiles = triton.cdiv(m, config.block_m) * triton.cdiv(n, config.block_n)
+    streamk_tiles = total_tiles % programs
+    if total_tiles - streamk_tiles > programs:
+        streamk_tiles += programs
+    streamk_iters = streamk_tiles * iters_per_tile
+    meta = {
+        "BLOCK_SIZE_M": config.block_m, "BLOCK_SIZE_N": config.block_n, "BLOCK_SIZE_K": BLOCK_K, "GROUP_SIZE_M":
+        GROUP_M, "num_warps": config.num_warps
+    }
+    strides = (*a.stride(), *b.stride(), *c.stride())
+    if streamk_tiles > 0:
+        zero_streamk_tiles[(streamk_tiles, )](c, m, n, k, *c.stride(), **meta)
+    first_wave.fn[(programs, )](a, b, c, m, n, k, *strides, streamk_iters // programs, streamk_iters % programs,
+                                iters_per_tile, **meta, num_stages=2, grf_mode="256")
+    if total_tiles > streamk_tiles:
+        full_tiles.fn[(total_tiles - streamk_tiles, )](a, b, c, m, n, k, *strides, streamk_tiles, **meta, num_stages=2,
+                                                       grf_mode="256")
+
+
+def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...], config: TileConfig | None = None) -> torch.Tensor:
     from triton_kernels_benchmark.gemm_benchmark import (matmul_kernel_with_tensor_descriptors,
                                                          matmul_kernel_with_tensor_descriptors_batched)
 
@@ -173,8 +232,8 @@ def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...]) -> torch.Tensor:
     alloc = torch.zeros if mode == "manual_splitk" else torch.empty
     output = alloc((*a.shape[:-2], m, n), device=a.device, dtype=torch.float32)
 
+    assert all(x.data_ptr() % 16 == 0 for x in (a, b, output)), "Matrix base addresses must be 16-byte aligned"
     if mode == "manual_grouped":
-        assert all(x.data_ptr() % 16 == 0 for x in (a, b, output)), "Matrix base addresses must be 16-byte aligned"
         grid = lambda meta: (triton.cdiv(m, meta["BLOCK_SIZE_M"]) * triton.cdiv(n, meta["BLOCK_SIZE_N"]), a.shape[0]
                              if a.ndim == 3 else 1)
         if a.ndim == 3:
@@ -184,10 +243,10 @@ def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...]) -> torch.Tensor:
             matmul_kernel_with_tensor_descriptors[grid](a, b, output, m, n, k, *a.stride(), *b.stride(),
                                                         *output.stride())
     else:
-        matmul = {"manual_splitk": gemm_splitk_benchmark.matmul, "manual_streamk": gemm_streamk_benchmark.matmul}[mode]
+        matmul = {"manual_splitk": _splitk, "manual_streamk": _streamk}[mode]
         # Both kernels are 2D only, so a bmm runs one GEMM per batch.
         for a_i, b_i, c_i in zip(a, b, output) if a.ndim == 3 else [(a, b, output)]:
-            matmul(a_i, b_i, c_i)
+            matmul(a_i, b_i, c_i, config)
 
     if bias is not None:
         output = output + bias
@@ -224,7 +283,13 @@ def get_benchmark(case_ids: list[int], modes: list[str]) -> Mark:
         torch_fn = lambda: operation(*inputs)
 
         if mode.startswith("manual_"):
-            manual_fn = lambda: _manual_gemm(mode, inputs)
+            config = None
+            if mode in TUNED_CONFIGS:
+                # Pick the fastest config outside the timed region.
+                tune_bench = benchmark_suite.get_do_bench(n_warmup=25, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
+                config = min(TUNED_CONFIGS[mode], key=lambda c: tune_bench(lambda: _manual_gemm(mode, inputs, c))[3])
+                print(f"Case {case}, {MODES[mode]}: picked {config}", flush=True)
+            manual_fn = lambda: _manual_gemm(mode, inputs, config)
             benchmark_suite.assert_close(manual_fn, torch_fn, atol=5e-2, rtol=1e-2, err_msg=f"{mode} to torch")
             _, min_ms, max_ms, mean_ms, cv = do_bench(manual_fn)
         else:
