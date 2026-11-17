@@ -221,8 +221,7 @@ def _streamk(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, config: TileConf
 
 
 def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...], config: TileConfig | None = None) -> torch.Tensor:
-    from triton_kernels_benchmark.gemm_benchmark import (matmul_kernel_with_tensor_descriptors,
-                                                         matmul_kernel_with_tensor_descriptors_batched)
+    from triton_kernels_benchmark.gemm_benchmark import (grouped_tile_gemm_kernel, grouped_tile_gemm_kernel_batched)
 
     bias = inputs[0] if len(inputs) == 3 else None
     a, b = inputs[-2:]
@@ -237,11 +236,10 @@ def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...], config: TileConfig
         grid = lambda meta: (triton.cdiv(m, meta["BLOCK_SIZE_M"]) * triton.cdiv(n, meta["BLOCK_SIZE_N"]), a.shape[0]
                              if a.ndim == 3 else 1)
         if a.ndim == 3:
-            matmul_kernel_with_tensor_descriptors_batched[grid](a, b, output, a.shape[0], m, n, k, *a.stride(),
-                                                                *b.stride(), *output.stride())
+            grouped_tile_gemm_kernel_batched[grid](a, b, output, a.shape[0], m, n, k, *a.stride(), *b.stride(),
+                                                   *output.stride())
         else:
-            matmul_kernel_with_tensor_descriptors[grid](a, b, output, m, n, k, *a.stride(), *b.stride(),
-                                                        *output.stride())
+            grouped_tile_gemm_kernel[grid](a, b, output, m, n, k, *a.stride(), *b.stride(), *output.stride())
     else:
         matmul = {"manual_splitk": _splitk, "manual_streamk": _streamk}[mode]
         # Both kernels are 2D only, so a bmm runs one GEMM per batch.
