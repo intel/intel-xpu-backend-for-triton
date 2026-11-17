@@ -190,6 +190,8 @@ def matmul(a, b, d, c):
     if len(a.shape) == 3 and len(b.shape) == 3:
         assert a.shape[0] == b.shape[0], 'Incompatible Batch dimension'
         assert a.shape[2] == b.shape[1], 'Incompatible dimensions'
+        assert all(x.stride(0) * x.element_size() % 16 == 0
+                   for x in (a, b, c, d)), 'Batch strides must be 16-byte aligned'
         B, M, K = a.shape
         B, K, N = b.shape
         # 1D launch kernel where each block gets its own program.
