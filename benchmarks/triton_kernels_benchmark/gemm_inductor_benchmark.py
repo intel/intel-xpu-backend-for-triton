@@ -109,7 +109,7 @@ def _dedup_gemm_configs(configs):
 def _register_custom_xpu_mm_heuristic():
     """Add custom GEMM configs to Inductor's XPU mm/bmm/addmm/baddbmm template search space."""
     from torch._inductor.heuristics.template.registry import _HEURISTIC_CACHE, register_template_heuristic
-    from torch._inductor.heuristics.template.triton import GemmConfig, MMTemplateConfigMixin, XPUConfigHeuristic
+    from torch._inductor.heuristics.template.triton import GemmConfig, XPUMMTemplateConfigHeuristic
     from torch._inductor.heuristics.template.triton_addmm import AddMMConfigMixin
     from torch._inductor.kernel.bmm import bmm_template
     from torch._inductor.kernel.mm import mm_template
@@ -137,7 +137,7 @@ def _register_custom_xpu_mm_heuristic():
 
     @register_template_heuristic(mm_template.uid, "xpu")
     @register_template_heuristic(bmm_template.uid, "xpu")
-    class MyXPUMMTemplateConfigHeuristic(MMTemplateConfigMixin, XPUConfigHeuristic):
+    class MyXPUMMTemplateConfigHeuristic(XPUMMTemplateConfigHeuristic):
 
         def __init__(self) -> None:
             super().__init__()
