@@ -283,3 +283,25 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @invalid_desc_gather_offsets_no_encoding(%arg0: !tt.tensordesc<1x64xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
+    // expected-error @below {{x offsets must be sliced along dim 1 from the result encoding}}
+    %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x64xbf16>, tensor<32xi32>, i32) -> tensor<32x64xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @invalid_desc_gather_offsets_dim0(%arg0: !tt.tensordesc<1x64xbf16>, %arg1: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, %arg2: i32) {
+    // expected-error @below {{x offsets must be sliced along dim 1 from the result encoding}}
+    %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x64xbf16>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32) -> tensor<32x64xbf16, #blocked>
+    tt.return
+  }
+}
