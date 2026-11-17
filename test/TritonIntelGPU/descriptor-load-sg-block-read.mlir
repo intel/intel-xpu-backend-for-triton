@@ -14,7 +14,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c128 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
     %desc = tt.make_tensor_descriptor %base, [%rows, %c128], [%c128_i64, %c1_i64] : <f32>, <1x128xf32>
-    // CHECK: llvm.cond_br %{{.*}}, ^[[READ:bb[0-9]+]], ^[[END:bb[0-9]+]](%{{.*}} : f32)
+    // COM: The fill is the tt.load's zero `other`, packed and unpacked.
+    // CHECK: %[[ZBC:.*]] = llvm.bitcast %{{.*}} : f32 to f32
+    // CHECK: %[[ZS:.*]] = llvm.insertvalue %[[ZBC]], %{{.*}}[0]
+    // CHECK: %[[FILL:.*]] = llvm.extractvalue %[[ZS]][0]
+    // CHECK: llvm.cond_br %{{.*}}, ^[[READ:bb[0-9]+]], ^[[END:bb[0-9]+]](%[[FILL]] : f32)
     // CHECK: ^[[READ]]:
     // CHECK: %[[WORD:.*]] = triton_gen.sub_group_block_read %{{.*}} : !llvm.ptr<1> -> i32
     // CHECK: %[[VAL:.*]] = llvm.bitcast %[[WORD]] : i32 to f32
@@ -76,7 +80,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c128 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
     %desc = tt.make_tensor_descriptor %base, [%rows, %c128], [%c128_i64, %c1_i64] : <f32>, <1x128xf32>
-    // CHECK-COUNT-2: triton_gen.sub_group_block_read %{{.*}} : !llvm.ptr<1> -> i32
+    // The second group sits 64 elements further along the row: each read takes
+    // its own register's address, moved back to lane 0 by the same offset.
+    // CHECK: %[[C64:.*]] = llvm.mlir.constant(64 : i32) : i32
+    // CHECK: llvm.xor %{{.*}}, %[[C64]] : i32
+    // CHECK: %[[LANE0:.*]] = llvm.sub %{{.*}}, %{{.*}} : i32
+    // CHECK: %[[P0:.*]] = llvm.getelementptr %{{.*}}[%[[LANE0]]]
+    // CHECK: triton_gen.sub_group_block_read %[[P0]] : !llvm.ptr<1> -> i32
+    // CHECK: %[[P1:.*]] = llvm.getelementptr %{{.*}}[%[[LANE0]]]
+    // CHECK: triton_gen.sub_group_block_read %[[P1]] : !llvm.ptr<1> -> i32
     // CHECK-NOT: triton_gen.sub_group_block_read
     %x = tt.descriptor_load %desc[%row, %c0] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x128xf32> -> tensor<1x128xf32, #linear>
     tt.return %x : tensor<1x128xf32, #linear>
@@ -160,7 +172,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c128_i64 = arith.constant 128 : i64
     %desc = tt.make_tensor_descriptor %base, [%rows, %c128], [%c128_i64, %c1_i64] {padding = 2 : i32} : <f32>, <1x128xf32>
     // CHECK: %[[NAN:.*]] = llvm.mlir.constant(0x7FC00000 : f32) : f32
-    // CHECK: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^{{bb[0-9]+}}(%{{.*}} : f32)
+    // CHECK: %[[NBC:.*]] = llvm.bitcast %[[NAN]] : f32 to f32
+    // CHECK: %[[NS:.*]] = llvm.insertvalue %[[NBC]], %{{.*}}[0]
+    // CHECK: %[[NFILL:.*]] = llvm.extractvalue %[[NS]][0]
+    // CHECK: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^{{bb[0-9]+}}(%[[NFILL]] : f32)
     %x = tt.descriptor_load %desc[%row, %c0] {ttig.desc_padding = 2 : i32} : !tt.tensordesc<1x128xf32> -> tensor<1x128xf32, #blocked>
     tt.return %x : tensor<1x128xf32, #blocked>
   }

@@ -116,20 +116,24 @@ public:
       });
     }
 
-    tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
-    tt::intel::ModuleStrideAnalysis strideAnalysis(mod, axisInfoAnalysis);
-
-    DominanceInfo domInfo(mod);
     SmallVector<tt::DescriptorLoadOp> descLoadOps;
     mod.walk([&](tt::DescriptorLoadOp op) { descLoadOps.push_back(op); });
+    DominanceInfo domInfo(mod);
+    if (!has2DBlockIO) {
+      for (auto op : descLoadOps)
+        if (failed(lowerDescriptorLoadToLoad(op, domInfo)))
+          signalPassFailure();
+      return;
+    }
+
+    tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    tt::intel::ModuleStrideAnalysis strideAnalysis(mod, axisInfoAnalysis);
     for (auto op : descLoadOps) {
-      if (has2DBlockIO && convertDescriptorLoadOp(op, axisInfoAnalysis))
+      if (convertDescriptorLoadOp(op, axisInfoAnalysis))
         continue;
       if (failed(lowerDescriptorLoadToLoad(op, domInfo)))
         signalPassFailure();
     }
-    if (!has2DBlockIO)
-      return;
 
     SmallVector<tt::LoadOp> loadOps;
     mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
@@ -352,18 +356,20 @@ private:
         return directDef->getOperand(operandIdx);
       if (!defs.empty()) {
         Value common;
+        bool sameValue = true;
         std::optional<int64_t> cst;
         bool sameCst = true;
         Type operandTy;
         for (tt::MakeTensorDescOp d : defs) {
           Value v = d->getOperand(operandIdx);
           operandTy = v.getType();
-          common = (!common || common == v) ? v : Value();
+          sameValue = sameValue && (!common || common == v);
+          common = v;
           std::optional<int64_t> c = tt::intel::getFoldedConstantValue(v);
           sameCst = sameCst && c && (!cst || *cst == *c);
           cst = c;
         }
-        if (common && domInfo.properlyDominates(common, descDefPoint) &&
+        if (sameValue && domInfo.properlyDominates(common, descDefPoint) &&
             !definedInEnclosingLoop(common))
           return common;
         if (sameCst && !isa<tt::PointerType>(extractTy))

@@ -209,6 +209,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     }
     tt.return %r : tensor<64x32xf16, #blocked>
   }
+// COM: Definitions that disagree on an operand ([%a, %b, %b] here) do not share
+// COM: it, even when the last two agree: the base is read from the descriptor.
+  // CHECK-LABEL: tt.func @three_defs_one_differs(
+  // CHECK-SAME: %[[A:[^:]+]]: !tt.ptr<f16>, %[[B:[^:]+]]: !tt.ptr<f16>
+  // CHECK: ttig.extract_desc %{{.*}}[4]
+  // CHECK-NOT: tt.addptr %[[B]]
+  // CHECK-NOT: tt.splat %[[B]]
+  // CHECK: tt.load
+  tt.func @three_defs_one_differs(%a: !tt.ptr<f16>, %b: !tt.ptr<f16>, %m: i32, %n: i32, %s: i64, %c1: i1, %c2: i1, %i: i32, %j: i32) -> tensor<64x32xf16, #blocked> {
+    %c1_i64 = arith.constant 1 : i64
+    %da = tt.make_tensor_descriptor %a, [%m, %n], [%s, %c1_i64] : <f16>, <64x32xf16>
+    %db1 = tt.make_tensor_descriptor %b, [%m, %n], [%s, %c1_i64] : <f16>, <64x32xf16>
+    %db2 = tt.make_tensor_descriptor %b, [%m, %n], [%s, %c1_i64] : <f16>, <64x32xf16>
+    %y = arith.select %c2, %db1, %db2 : !tt.tensordesc<64x32xf16>
+    %x = arith.select %c1, %da, %y : !tt.tensordesc<64x32xf16>
+    %0 = tt.descriptor_load %x[%i, %j] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    tt.return %0 : tensor<64x32xf16, #blocked>
+  }
 // COM: Through control flow, a shared operand defined inside a loop around the
 // COM: load is read from the descriptor: a loop-carried descriptor could come
 // COM: from an earlier iteration. Loop-invariant shared operands are used directly.

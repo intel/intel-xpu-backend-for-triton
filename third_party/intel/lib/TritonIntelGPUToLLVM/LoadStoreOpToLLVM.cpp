@@ -1366,7 +1366,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   }
 
   /// Adjust other dimension offsets and optionally add boundary checking.
-  /// Used by both LoadOp and DescriptorLoadOp to handle batch dimensions.
+  /// Used by LoadOp to handle batch dimensions.
   void adjustOtherDimension(Value &adjustedOffset, Value &addrElem, Value &pred,
                             Type eltTy, ArrayRef<Value> strides,
                             ArrayRef<Value> shapes, unsigned dim,
@@ -2349,7 +2349,14 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       ArrayRef<Value> ptrElems, ArrayRef<Value> maskElems,
       ArrayRef<Value> otherElems) const {
     auto type = dyn_cast<RankedTensorType>(op.getType());
+    // A block read carries no cache control, so loads with a cache policy keep
+    // the gather path; it also reads global memory only.
+    CachePolicy cachePolicy = getCachePolicy(op.getCachePolicyAttr());
     if (!type || op.getIsVolatile() || valueElemTy.isInteger(1) ||
+        cachePolicy.cacheModifier != CacheModifier::NONE ||
+        cachePolicy.evictionPolicy != EvictionPolicy::NORMAL ||
+        cast<PointerType>(getElementTypeOrSelf(op.getPtr().getType()))
+                .getAddressSpace() != PtrAddrSpace::Global ||
         tools::getBoolEnv("TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ"))
       return std::nullopt;
     std::optional<SubGroupBlockRead> read = matchSubGroupBlockRead(
