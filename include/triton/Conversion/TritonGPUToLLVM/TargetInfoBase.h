@@ -98,6 +98,9 @@ public:
   virtual std::pair<Value, Value> shuffleUp(RewriterBase &rewriter,
                                             Location loc, Value val,
                                             int delta) const = 0;
+  virtual std::pair<Value, Value> shuffleDown(RewriterBase &rewriter,
+                                              Location loc, Value val,
+                                              int delta) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
