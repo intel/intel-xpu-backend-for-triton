@@ -936,6 +936,18 @@ TEST_F(MatchBoundaryCheckMaskTest, LowerBoundAloneRejected) {
   EXPECT_FALSE(match(buildLowerBound(/*varyDim=*/0, shape), shape).has_value());
 }
 
+// `index >= 8` excludes rows the surface would read, so it is not vacuous.
+TEST_F(MatchBoundaryCheckMaskTest, NonZeroLowerBoundRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  SmallVector<int64_t, 2> narrow = {256, 1};
+  Value index2D = expandDims(arange(256), /*axis=*/1, narrow);
+  Value lower =
+      broadcastTo(cmpSge(index2D, splatTo(constI(8, 32), narrow)), shape);
+  Value upper =
+      buildBoundedMask(arange(256), /*varyDim=*/0, shape, constI(100, 32));
+  EXPECT_FALSE(match(andI(lower, upper), shape).has_value());
+}
+
 // A lower and an upper bound that start the index at different places are not
 // the two halves of one boundary check.
 TEST_F(MatchBoundaryCheckMaskTest, MismatchedBasesOnOneDimRejected) {

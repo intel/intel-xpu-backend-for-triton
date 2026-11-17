@@ -524,8 +524,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func @row_limit_mask_lower_bound_signed_base
-  tt.func @row_limit_mask_lower_bound_signed_base(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %bound: i32, %row_base: i32) -> tensor<64x32xf16, #dot0> {
+  // CHECK-LABEL: tt.func @row_limit_mask_lower_bound_unproven_base
+  tt.func @row_limit_mask_lower_bound_unproven_base(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %bound: i32, %row_base: i32) -> tensor<64x32xf16, #dot0> {
     %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
     %zero = arith.constant dense<0> : tensor<64x1xi32, #dot0>
     %cst_stride = arith.constant dense<32> : tensor<64x1xi32, #dot0>
