@@ -7,15 +7,17 @@ triton_kernels_benchmark report format.
 
 Manual providers reuse the kernels in gemm_benchmark, gemm_splitk_benchmark,
 and gemm_streamk_benchmark (not Inductor's grouped_mm). All manual providers use
-the original inputs and strides without padding, packing, or copying. The Intel
-compiler lowers descriptors to block I/O or masked pointers. Split-K and Stream-K run
+the original inputs and strides without padding, packing, or copying. The kernels
+use a tensor descriptor when the strides allow one, and masked pointers otherwise. Split-K and Stream-K run
 one GEMM per batch; their timings include zeroing and all launches. All manual
 providers accumulate in FP32, add any addmm bias, and return FP16 outputs.
 """
 
+from __future__ import annotations
+
 import argparse
-import dataclasses
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import TYPE_CHECKING
 
 import torch
 import torch._inductor.config as inductor_config
@@ -24,6 +26,9 @@ import triton
 # triton_kernels_benchmark is imported where it is used, because importing it fails without a GPU and --list must work
 # without one.
 # pylint: disable=import-outside-toplevel
+if TYPE_CHECKING:
+    from torch._inductor.heuristics.template.triton import GemmConfig
+    from triton_kernels_benchmark.benchmark_testing import Mark
 
 
 @dataclass(frozen=True)
@@ -95,18 +100,18 @@ def make_inputs(case: GemmCase) -> tuple[torch.Tensor, ...]:
         for shape, stride in zip(case.shapes, case.strides))
 
 
-def _dedup_gemm_configs(configs):
+def _dedup_gemm_configs(configs: list[GemmConfig]) -> list[GemmConfig]:
     seen = set()
     out = []
     for config in configs:
-        key = tuple(dataclasses.asdict(config).items())
+        key = tuple(asdict(config).items())
         if key not in seen:
             seen.add(key)
             out.append(config)
     return out
 
 
-def _register_custom_xpu_mm_heuristic():
+def _register_custom_xpu_mm_heuristic() -> None:
     """Add custom GEMM configs to Inductor's XPU mm/bmm/addmm/baddbmm template search space."""
     from torch._inductor.heuristics.template.registry import _HEURISTIC_CACHE, register_template_heuristic
     from torch._inductor.heuristics.template.triton import GemmConfig, XPUMMTemplateConfigHeuristic
@@ -186,7 +191,7 @@ def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...]) -> torch.Tensor:
     return output.to(a.dtype)
 
 
-def get_benchmark(case_ids: list[int], modes: list[str]):
+def get_benchmark(case_ids: list[int], modes: list[str]) -> Mark:
     import triton_kernels_benchmark as benchmark_suite
 
     @benchmark_suite.perf_report(
@@ -237,19 +242,19 @@ def get_benchmark(case_ids: list[int], modes: list[str]):
     return benchmark
 
 
-def print_cases(case_ids: list[int]):
+def print_cases(case_ids: list[int]) -> None:
     for case_id in case_ids:
         case = GEMM_CASES[case_id - 1]
         print(f"{case_id}: {case.op}, shapes={case.shapes}, strides={case.strides}", flush=True)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mode", choices=[*MODES, "all"], default="all")
     parser.add_argument("--case", type=int, action="append", dest="case_ids",
                         help="one-based case number; repeat to select multiple")
     parser.add_argument("--reports", default="", help="directory for benchmark-suite CSV/plot reports")
-    parser.add_argument("--n-runs", type=int, default=1, help="number of benchmark-suite report repetitions")
+    parser.add_argument("--n_runs", type=int, default=1, help="number of benchmark-suite report repetitions")
     parser.add_argument("--list", action="store_true", help="list cases and exit")
     args = parser.parse_args()
 
