@@ -60,7 +60,7 @@ def suffix():
     reset_to_zero=['c_ptr'],
 )
 @triton.jit
-def matmul_kernel_with_tensor_descriptors(
+def grouped_tile_gemm_addmatrix_kernel(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr, d_ptr,
         # Matrix dimensions
@@ -131,7 +131,7 @@ def matmul_kernel_with_tensor_descriptors(
     reset_to_zero=['c_ptr'],
 )
 @triton.jit
-def matmul_kernel_with_tensor_descriptors_batched(
+def grouped_tile_gemm_addmatrix_kernel_batched(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr, d_ptr,
         # Matrix dimensions
@@ -199,7 +199,7 @@ def matmul(a, b, d, c):
             triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
             B,
         )
-        matmul_kernel_with_tensor_descriptors_batched[grid](
+        grouped_tile_gemm_addmatrix_kernel_batched[grid](
             a, b, c, d,  #
             B, M, N, K,  #
             a.stride(0), a.stride(1), a.stride(2),  #
@@ -212,7 +212,7 @@ def matmul(a, b, d, c):
         M, K = a.shape
         K, N = b.shape
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-        matmul_kernel_with_tensor_descriptors[grid](
+        grouped_tile_gemm_addmatrix_kernel[grid](
             a, b, c, d,  #
             M, N, K,  #
             a.stride(0), a.stride(1),  #

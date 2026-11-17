@@ -75,7 +75,7 @@ def get_matmul_autotune_configs() -> List[triton.Config]:
     restore_value=['c_ptr'],
 )
 @triton.jit
-def matmul_kernel_with_tensor_descriptors(
+def grouped_tile_gemm_kernel(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
@@ -164,7 +164,7 @@ def get_cri_matmul_batched_autotune_configs() -> List[triton.Config]:
     restore_value=['c_ptr'],
 )
 @triton.jit
-def matmul_kernel_with_tensor_descriptors_batched(
+def grouped_tile_gemm_kernel_batched(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
@@ -336,8 +336,8 @@ def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     transpose_a=False,
     transpose_b=False,
-    matmul_kernel=matmul_kernel_with_tensor_descriptors,
-    matmul_kernel_batched=matmul_kernel_with_tensor_descriptors_batched,
+    matmul_kernel=grouped_tile_gemm_kernel,
+    matmul_kernel_batched=grouped_tile_gemm_kernel_batched,
     plot_name='matmul-tensor-desc-performance',
 ):
     """
@@ -418,9 +418,8 @@ def get_benchmark(
                 transpose_b=transpose_b,
             )
             # Shapes whose last wave of tiles is mostly empty run faster as stream-K (#8445); only measured on a B580.
-            if ('B580' in DEVICE_NAME and matmul_kernel is matmul_kernel_with_tensor_descriptors
-                    and not (transpose_a or transpose_b) and len(a.shape) == 2
-                    and gemm_streamk_benchmark.should_use_streamk(M, N, K)):
+            if ('B580' in DEVICE_NAME and matmul_kernel is grouped_tile_gemm_kernel and not (transpose_a or transpose_b)
+                    and len(a.shape) == 2 and gemm_streamk_benchmark.should_use_streamk(M, N, K)):
                 c.fill_(float('nan'))  # the check below then fails for an unwritten or unzeroed shared tile
                 triton_fn = lambda: gemm_streamk_benchmark.matmul(a, b, c)
             torch_fn = lambda: torch_mm(torch_a, torch_b, out_dtype=torch.float32)
