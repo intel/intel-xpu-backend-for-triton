@@ -154,6 +154,9 @@ runs:
       run: |
         source ${{ inputs.oneapi }}/setvars.sh
         pip install torch --index-url https://download.pytorch.org/whl/nightly/xpu
+        # setvars.sh puts the system oneAPI libur_loader ahead of the wheel's, so match the wheel's SYCL runtime to it
+        ONEAPI_VERSION="$(basename "$(readlink -f ${{ inputs.oneapi }}/compiler/latest)")"
+        pip install "intel-sycl-rt==${ONEAPI_VERSION}.*"
 
     - name: Get PyTorch version
       shell: bash
