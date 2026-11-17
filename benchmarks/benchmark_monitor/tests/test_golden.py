@@ -24,8 +24,8 @@ def run_gate(case: dict):
         Observation(key, o["run"],
                     datetime.fromisoformat(o["night"]).replace(tzinfo=timezone.utc), o["value"])
         for o in case["observations"]
-        if o["value"] > 0 and date.fromisoformat(o["night"]) <= as_of
-    ]
+        if o["value"] > 0  # the source layer drops non-positive measurements before they reach the gate
+    ]  # observations after as_of stay in: evaluate(night=as_of) must ignore them itself
     series = aggregate(obs, case["unit"]) if obs else Series(key, ())
     return evaluate(series, Thresholds(**case["thresholds"]), night=as_of)
 
@@ -45,8 +45,8 @@ def test_gate_matches_expected(case):
 
 
 def test_corpus_shape():
-    assert len(CASES) == 41
-    assert sum(c["fp_sensitive"] for c in CASES) == 2
+    assert len(CASES) == 47
+    assert sum(c["fp_sensitive"] for c in CASES) == 7
     assert len({c["id"] for c in CASES}) == len(CASES)
 
 
