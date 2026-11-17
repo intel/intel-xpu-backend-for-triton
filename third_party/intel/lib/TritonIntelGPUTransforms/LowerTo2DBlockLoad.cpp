@@ -9,6 +9,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -304,11 +305,8 @@ private:
     bool columnMajor =
         blockIOAttr && ttgi::symbolizeBlockIOMode(blockIOAttr.getValue()) ==
                            ttgi::BlockIOMode::ColumnMajor;
-    // Malformed (hand-written) IR; left for the LLVM conversion to reject.
-    if (op.getIndices().size() != descRank) {
-      LDBG("Index count does not match descriptor rank: " << *op);
-      return success();
-    }
+    if (op.getIndices().size() != descRank)
+      return op.emitOpError("expects one index per descriptor dimension");
     if (columnMajor && rank < 2)
       return op.emitOpError("column_major load requires a result of rank >= 2");
     if (failed(verifyInnerShape(op, descType.getBlockType().getShape(),
@@ -327,32 +325,58 @@ private:
     Type i64Ty = builder.getI64Type();
     Type i1Ty = builder.getI1Type();
 
-    // Use an operand shared by every MakeTensorDescOp, so AxisInfo sees it, if
-    // it dominates where `desc` is defined (not a later loop iteration's
-    // value); otherwise read the field from the descriptor.
+    // Use the operands of the MakeTensorDescOps defining `desc`, so AxisInfo
+    // sees them, when they are the values `desc` was built with: always for a
+    // direct definition or a constant shared by every definition. Through
+    // control flow, an operand shared by every definition must dominate where
+    // `desc` is defined and be defined outside every loop around the load,
+    // since a loop-carried descriptor may come from an earlier iteration.
+    // Otherwise read the field from the descriptor.
+    auto directDef = desc.getDefiningOp<tt::MakeTensorDescOp>();
     Operation *descDefPoint = desc.getDefiningOp()
                                   ? desc.getDefiningOp()
                                   : desc.getParentBlock()->getParentOp();
+    auto definedInEnclosingLoop = [&](Value v) {
+      Operation *def = v.getDefiningOp() ? v.getDefiningOp()
+                                         : v.getParentBlock()->getParentOp();
+      for (auto loop = op->getParentOfType<LoopLikeOpInterface>(); loop;
+           loop = loop->getParentOfType<LoopLikeOpInterface>())
+        if (loop->isAncestor(def))
+          return true;
+      return false;
+    };
     // `fieldIdx` indexes the descriptor struct {shapes, strides, base}.
     auto getField = [&](unsigned operandIdx, unsigned fieldIdx,
                         Type extractTy) -> Value {
+      if (directDef)
+        return directDef->getOperand(operandIdx);
       if (!defs.empty()) {
         Value common;
+        std::optional<int64_t> cst;
+        bool sameCst = true;
+        Type operandTy;
         for (tt::MakeTensorDescOp d : defs) {
           Value v = d->getOperand(operandIdx);
+          operandTy = v.getType();
           common = (!common || common == v) ? v : Value();
-          if (!common)
-            break;
+          std::optional<int64_t> c = tt::intel::getFoldedConstantValue(v);
+          sameCst = sameCst && c && (!cst || *cst == *c);
+          cst = c;
         }
-        if (common && domInfo.properlyDominates(common, descDefPoint))
+        if (common && domInfo.properlyDominates(common, descDefPoint) &&
+            !definedInEnclosingLoop(common))
           return common;
+        if (sameCst && !isa<tt::PointerType>(extractTy))
+          return arith::ConstantIntOp::create(
+              builder, loc, *cst, operandTy.getIntOrFloatBitWidth());
       }
       return ttgi::ExtractDescOp::create(builder, loc, extractTy, desc,
                                          builder.getI32IntegerAttr(fieldIdx));
     };
-    // Addresses are computed in i64 so they cannot wrap. Bounds are compared
-    // in i32: shapes and indices are i32, and an `index + range` that wraps
-    // is negative, so it is still out of bounds.
+    // Strided offsets are computed in i64 so they cannot wrap (a unit-stride
+    // dim uses i32 `index + range`, see below). Bounds are compared in i32:
+    // shapes and indices are i32, and an `index + range` that wraps is
+    // negative, so it is still out of bounds.
     Type i32Ty = builder.getI32Type();
     Type elemTy = resultTy.getElementType();
     Value base = getField(0, 2 * descRank, tt::PointerType::get(elemTy));
@@ -511,6 +535,8 @@ private:
       other = createZeroSplat(builder, loc, memTy);
     }
 
+    // The mask is never dropped, so these loads take the predicated path, which
+    // measured favorable for always-masked descriptor loads (#7090).
     auto load = tt::LoadOp::create(builder, loc, ptr, mask, other,
                                    op.getCachePolicyAttr());
     Value result = load.getResult();

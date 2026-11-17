@@ -273,8 +273,8 @@ public:
     if (static_cast<unsigned>(desc.getRank()) != rank)
       return AxisInfo::getPessimisticValueState(op.getResult());
 
-    int64_t elemBytes =
-        ceil<int64_t>(blockType.getElementType().getIntOrFloatBitWidth(), 8);
+    int64_t elemBytes = ceil<int64_t>(
+        getIntOrFloatOrPtrBitWidth(blockType.getElementType()), 8);
     Type resultTy = op.getResult().getType();
     auto scalar = [&](int64_t divisibility, bool isOne = false) {
       std::optional<APInt> constant;
@@ -282,22 +282,24 @@ public:
         constant = APInt(resultTy.getIntOrFloatBitWidth(), 1);
       return AxisInfo({1}, {std::max<int64_t>(divisibility, 1)}, {1}, constant);
     };
-    auto maxDivisibility = [&](std::optional<unsigned> exclude) {
+    // Largest byte divisibility of a contiguous dim. It divides the base and
+    // every stride but that dim's own, which is 1.
+    auto maxDivisibility = [&]() {
       int64_t div = 1;
       for (unsigned d = 0; d < rank; ++d)
-        if (d != exclude && desc.getContiguity(d) > 1)
+        if (desc.getContiguity(d) > 1)
           div = std::max(div, desc.getDivisibility(d));
       return div;
     };
 
     unsigned field = op.getIndex();
     if (field == 2 * rank)
-      return scalar(maxDivisibility(std::nullopt));
+      return scalar(maxDivisibility());
     if (field >= rank) {
       unsigned dim = field - rank;
       if (desc.getContiguity(dim) > 1)
         return scalar(1, /*isOne=*/true);
-      int64_t div = maxDivisibility(dim);
+      int64_t div = maxDivisibility();
       return scalar(div / std::gcd(div, elemBytes));
     }
     return scalar(desc.getContiguity(field));

@@ -347,30 +347,9 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// Test column_major descriptor load with MIXED divisibility of inner dims:
-// This exercises the permuteDescDim path in LoadStoreOpToLLVM.cpp.
-//
-// Descriptor shape=[17, 16], block_shape=[16, 8].
-// The column_major flag swaps the inner two dims before the load, so:
-//   - result tensor shape is [8, 16] (desc[1], desc[0])
-//   - result dim0 maps to desc dim1: shape=16, offset=8 → blockLevelDims
-//   - result dim1 maps to desc dim0: shape=17, offset=0 → perElementDims
-//
-// Descriptor divisibility analysis (before the inner-dim swap):
-//   desc dim0: shape=17 NOT divisible by block_shape[0]=16 → per-element
-//   desc dim1: shape=16 divisible by block_shape[1]=8, offset=8 div by 8 → block-level
-//
-// After permuteDescDim swaps the inner dims, the CORRECT output maps:
-//   result dim0 (= desc dim1) → block-level: icmp uses base offset 8 directly
-//   result dim1 (= desc dim0) → per-element: icmp uses (per_thread + 0)
-//
-// NOTE: This test is written for the CORRECT post-fix expected output.
-// The current code has a bug in how permuteDescDim remaps blockLevelDims /
-// perElementDims. With the bug, the output SWAPS the classifications:
-//   result dim0 → per-element (per_thread + 8) vs shape 16
-//   result dim1 → block-level (0 directly) vs shape 17
-// The CHECK patterns below document the CORRECT behavior. They will FAIL until
-// the companion permuteDescDim bug-fix is applied to LoadStoreOpToLLVM.cpp.
+// column_major descriptor load with mixed divisibility of the inner dims. Its
+// mask classification is checked on the LowerTo2DBlockLoad output in
+// LowerTo2DBlockLoad/descriptor-load-to-load.mlir; here it must still lower.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
 
@@ -389,32 +368,6 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // offset=[0, 8]: both divisible by their respective block sizes.
 
     %desc = tt.make_tensor_descriptor %arg0, [%c17_i32, %c16_i32], [%c16_i64, %c1_i64] : <f32>, <16x8xf32>
-
-    // COM: -----------------------------------------------------------------------
-    // COM: EXPECTED CHECK PATTERNS (activate once the permuteDescDim fix lands):
-    // COM:
-    // COM:   %[[OFF8:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // COM:   %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // COM:   %[[SHAPE0:.*]] = llvm.extractvalue %[[DESC]][0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // COM:   %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // COM:
-    // COM:   Block-level check for result dim0 (= desc dim1, shape=16, offset=8):
-    // COM:     %[[PSHAPE0:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // COM:     llvm.icmp "sge" %[[OFF8]], %{{.*}} : i32
-    // COM:     llvm.icmp "slt" %[[OFF8]], %[[PSHAPE0]] : i32
-    // COM:
-    // COM:   Per-element check for result dim1 (= desc dim0, shape=17, offset=0):
-    // COM:     %[[ELEM1:.*]] = llvm.add %{{.*}}, %{{.*}} : i32
-    // COM:     %[[PSHAPE1:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // COM:     llvm.icmp "sge" %[[ELEM1]], %{{.*}} : i32
-    // COM:     llvm.icmp "slt" %[[ELEM1]], %[[PSHAPE1]] : i32
-    // COM:
-    // COM: CURRENT (BUGGY) output swaps the classifications:
-    // COM:   result dim0 → per-element check: add(per_thread, 8) vs shape1=16
-    // COM:   result dim1 → block-level check: constant 0 vs shape0=17
-    // COM: The bug is in how permuteDescDim remaps blockLevelDims/perElementDims
-    // COM: indices via permDimIdx in LoadStoreOpToLLVM.cpp.
-    // COM: -----------------------------------------------------------------------
 
     // Verify at least the function compiles and emits a predicated load.
     // CHECK: triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
@@ -561,5 +514,23 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
     tt.descriptor_store %arg0[%c0_i32, %c0_i32], %arg1 : !tt.tensordesc<4x4xf32>, tensor<4x4xf32, #blocked>
     tt.return
+  }
+}
+
+// -----
+
+// An fp4 descriptor reached through a select reads its base with
+// ttig.extract_desc, whose AxisInfo must size the packed element.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @fp4_select_desc
+  // CHECK: triton_gen.predicated_load {{.*}} -> i8
+  tt.func public @fp4_select_desc(%a: !tt.ptr<!tt.fp4e2m1x2> {tt.divisibility = 16 : i32}, %b: !tt.ptr<!tt.fp4e2m1x2> {tt.divisibility = 16 : i32}, %m: i32, %n: i32, %s: i64, %c: i1, %i: i32, %j: i32) -> tensor<64x32x!tt.fp4e2m1x2, #blocked> {
+    %c1_i64 = arith.constant 1 : i64
+    %d1 = tt.make_tensor_descriptor %a, [%m, %n], [%s, %c1_i64] : <!tt.fp4e2m1x2>, <64x32x!tt.fp4e2m1x2>
+    %d2 = tt.make_tensor_descriptor %b, [%m, %n], [%s, %c1_i64] : <!tt.fp4e2m1x2>, <64x32x!tt.fp4e2m1x2>
+    %x = arith.select %c, %d1, %d2 : !tt.tensordesc<64x32x!tt.fp4e2m1x2>
+    %0 = tt.descriptor_load %x[%i, %j] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x32x!tt.fp4e2m1x2> -> tensor<64x32x!tt.fp4e2m1x2, #blocked>
+    tt.return %0 : tensor<64x32x!tt.fp4e2m1x2, #blocked>
   }
 }

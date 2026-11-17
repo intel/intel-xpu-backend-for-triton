@@ -21,11 +21,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: %[[MSPLAT:.*]] = tt.splat %[[M]] : i32 -> tensor<64x1xi32
   // CHECK: arith.cmpi slt, %[[ROWS]], %[[MSPLAT]]
   // COM: The unit-stride dim is addressed by index + range directly, in i32.
+  // CHECK: %[[COLIDX:.*]] = tt.splat %[[J]] : i32 -> tensor<1x32xi32
+  // CHECK: %[[COLS:.*]] = arith.addi %[[COLIDX]], %{{.*}} : tensor<1x32xi32
   // CHECK: tt.addptr {{.*}} : tensor<64x32x!tt.ptr<f16>, #[[$BLOCKED]]>, tensor<64x32xi32
-  // CHECK: arith.cmpi sge, {{.*}} : tensor<1x32xi32
-  // CHECK: arith.cmpi slt, {{.*}} : tensor<1x32xi32
+  // CHECK: arith.cmpi sge, %[[COLS]], {{.*}} : tensor<1x32xi32
+  // CHECK: %[[NSPLAT:.*]] = tt.splat %[[N]] : i32 -> tensor<1x32xi32
+  // CHECK: arith.cmpi slt, %[[COLS]], %[[NSPLAT]]
+  // CHECK: %[[MASK:.*]] = arith.andi {{.*}} : tensor<64x32xi1
   // CHECK: %[[NAN:.*]] = arith.constant dense<0x7E00> : tensor<64x32xf16
-  // CHECK: tt.load {{.*}}, {{.*}}, %[[NAN]]
+  // CHECK: tt.load %{{.*}}, %[[MASK]], %[[NAN]]
   // CHECK-NOT: tt.descriptor_load
   tt.func @per_element_pad_nan(%base: !tt.ptr<f16>, %m: i32, %n: i32, %stride: i64, %i: i32, %j: i32) -> tensor<64x32xf16, #blocked> {
     %c1_i64 = arith.constant 1 : i64
@@ -33,13 +37,59 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %0 = tt.descriptor_load %desc[%i, %j] {ttig.desc_padding = 2 : i32} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
     tt.return %0 : tensor<64x32xf16, #blocked>
   }
+// COM: A block-multiple shape with a runtime index is checked per element.
+  // CHECK-LABEL: tt.func @runtime_index(
+  // CHECK: arith.cmpi sge, {{.*}} : tensor<64x1xi32
+  // CHECK: arith.cmpi slt, {{.*}} : tensor<64x1xi32
+  // CHECK-NOT: arith.cmpi {{.*}} : tensor<1x32
+  // CHECK: tt.load
+  tt.func @runtime_index(%base: !tt.ptr<f16>, %stride: i64, %i: i32) -> tensor<64x32xf16, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%c128_i32, %c128_i32], [%stride, %c1_i64] : <f16>, <64x32xf16>
+    %0 = tt.descriptor_load %desc[%i, %c0_i32] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    tt.return %0 : tensor<64x32xf16, #blocked>
+  }
+// COM: NaN padding fills fp8 with NaN, but e8m0 and integers with zero bits.
+  // CHECK-LABEL: tt.func @pad_nan_fp8(
+  // CHECK: %[[NAN8:.*]] = arith.constant dense<0x7F> : tensor<64x32xf8E4M3FN
+  // CHECK: tt.load {{.*}}, {{.*}}, %[[NAN8]]
+  tt.func @pad_nan_fp8(%base: !tt.ptr<f8E4M3FN>, %m: i32, %n: i32, %stride: i64, %i: i32, %j: i32) -> tensor<64x32xf8E4M3FN, #blocked> {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%m, %n], [%stride, %c1_i64] {padding = 2 : i32} : <f8E4M3FN>, <64x32xf8E4M3FN>
+    %0 = tt.descriptor_load %desc[%i, %j] {ttig.desc_padding = 2 : i32} : !tt.tensordesc<64x32xf8E4M3FN> -> tensor<64x32xf8E4M3FN, #blocked>
+    tt.return %0 : tensor<64x32xf8E4M3FN, #blocked>
+  }
+  // CHECK-LABEL: tt.func @pad_nan_e8m0(
+  // CHECK: %[[Z8:.*]] = arith.constant 0 : i8
+  // CHECK: %[[ZBITS:.*]] = tt.splat %[[Z8]] : i8 -> tensor<64x32xi8
+  // CHECK: %[[ZE8M0:.*]] = tt.bitcast %[[ZBITS]] : tensor<64x32xi8, #[[$BLOCKED]]> -> tensor<64x32xf8E8M0FNU
+  // CHECK: tt.load {{.*}}, {{.*}}, %[[ZE8M0]]
+  tt.func @pad_nan_e8m0(%base: !tt.ptr<f8E8M0FNU>, %m: i32, %n: i32, %stride: i64, %i: i32, %j: i32) -> tensor<64x32xf8E8M0FNU, #blocked> {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%m, %n], [%stride, %c1_i64] {padding = 2 : i32} : <f8E8M0FNU>, <64x32xf8E8M0FNU>
+    %0 = tt.descriptor_load %desc[%i, %j] {ttig.desc_padding = 2 : i32} : !tt.tensordesc<64x32xf8E8M0FNU> -> tensor<64x32xf8E8M0FNU, #blocked>
+    tt.return %0 : tensor<64x32xf8E8M0FNU, #blocked>
+  }
+  // CHECK-LABEL: tt.func @pad_nan_i32(
+  // CHECK: %[[ZI32:.*]] = tt.splat %{{.*}} : i32 -> tensor<64x32xi32
+  // CHECK: tt.load {{.*}}, {{.*}}, %[[ZI32]]
+  tt.func @pad_nan_i32(%base: !tt.ptr<i32>, %m: i32, %n: i32, %stride: i64, %i: i32, %j: i32) -> tensor<64x32xi32, #blocked> {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%m, %n], [%stride, %c1_i64] {padding = 2 : i32} : <i32>, <64x32xi32>
+    %0 = tt.descriptor_load %desc[%i, %j] {ttig.desc_padding = 2 : i32} : !tt.tensordesc<64x32xi32> -> tensor<64x32xi32, #blocked>
+    tt.return %0 : tensor<64x32xi32, #blocked>
+  }
 // COM: Shapes and indices divisible by the block: one scalar check per dim, splatted.
   // CHECK-LABEL: tt.func @uniform_mask(
   // CHECK-NOT: arith.cmpi {{.*}} : tensor<
   // CHECK: arith.cmpi sge, {{.*}} : i32
   // CHECK: arith.cmpi slt, {{.*}} : i32
   // CHECK: %[[PRED:.*]] = tt.splat {{.*}} : i1 -> tensor<64x32xi1
-  // CHECK: tt.load {{.*}}, %[[PRED]],
+  // CHECK: %[[Z16:.*]] = arith.constant 0.000000e+00 : f16
+  // CHECK: %[[ZERO:.*]] = tt.splat %[[Z16]] : f16 -> tensor<64x32xf16
+  // CHECK: tt.load {{.*}}, %[[PRED]], %[[ZERO]]
   tt.func @uniform_mask(%base: !tt.ptr<f16>, %stride: i64) -> tensor<64x32xf16, #blocked> {
     %c0_i32 = arith.constant 0 : i32
     %c128_i32 = arith.constant 128 : i32
@@ -158,5 +208,65 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       scf.yield %s : tensor<64x32xf16, #blocked>
     }
     tt.return %r : tensor<64x32xf16, #blocked>
+  }
+// COM: Through control flow, a shared operand defined inside a loop around the
+// COM: load is read from the descriptor: a loop-carried descriptor could come
+// COM: from an earlier iteration. Loop-invariant shared operands are used directly.
+  // CHECK-LABEL: tt.func @loop_select_in_loop_shape(
+  // CHECK-SAME: %{{[^:]+}}: !tt.ptr<f16>, %{{[^:]+}}: !tt.ptr<f16>, %[[N:[^:]+]]: i32, %[[STRIDE:[^:]+]]: i64
+  // CHECK: scf.for
+  // CHECK: %[[X:.*]] = arith.select
+  // CHECK-DAG: ttig.extract_desc %[[X]][4]
+  // CHECK-DAG: ttig.extract_desc %[[X]][0]
+  // CHECK-NOT: ttig.extract_desc
+  // CHECK-DAG: tt.splat %[[STRIDE]] : i64 -> tensor<64x1xi64
+  // CHECK-DAG: tt.splat %[[N]] : i32 -> tensor<1x32xi32
+  // CHECK: tt.load
+  tt.func @loop_select_in_loop_shape(%a: !tt.ptr<f16>, %b: !tt.ptr<f16>, %n: i32, %s: i64, %ub: i32, %c: i1, %i: i32, %j: i32) -> tensor<64x32xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c64 = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %zero = arith.constant dense<0.0> : tensor<64x32xf16, #blocked>
+    %r = scf.for %iv = %c0 to %ub step %c1 iter_args(%acc = %zero) -> (tensor<64x32xf16, #blocked>) : i32 {
+      %m = arith.addi %iv, %c64 : i32
+      %d1 = tt.make_tensor_descriptor %a, [%m, %n], [%s, %c1_i64] : <f16>, <64x32xf16>
+      %d2 = tt.make_tensor_descriptor %b, [%m, %n], [%s, %c1_i64] : <f16>, <64x32xf16>
+      %x = arith.select %c, %d1, %d2 : !tt.tensordesc<64x32xf16>
+      %v = tt.descriptor_load %x[%i, %j] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+      %sum = arith.addf %acc, %v : tensor<64x32xf16, #blocked>
+      scf.yield %sum : tensor<64x32xf16, #blocked>
+    }
+    tt.return %r : tensor<64x32xf16, #blocked>
+  }
+}
+
+// -----
+
+// COM: column_major with mixed divisibility: result dim 0 walks descriptor dim 1
+// COM: (shape 16, index 8: one check), result dim 1 walks descriptor dim 0
+// COM: (shape 17: per element).
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func public @colmaj_mixed_inner_div(
+  // CHECK-DAG: %[[C17:.*]] = arith.constant 17 : i32
+  // CHECK-DAG: %[[C16:.*]] = arith.constant 16 : i32
+  // CHECK-DAG: %[[C8:.*]] = arith.constant 8 : i32
+  // CHECK: arith.cmpi sge, %[[C8]], %{{.*}} : i32
+  // CHECK: arith.cmpi slt, %[[C8]], %[[C16]] : i32
+  // CHECK: arith.cmpi sge, {{.*}} : tensor<1x16xi32
+  // CHECK: %[[S17:.*]] = tt.splat %[[C17]] : i32 -> tensor<1x16xi32
+  // CHECK: arith.cmpi slt, %{{.*}}, %[[S17]] : tensor<1x16xi32
+  // CHECK: tt.load
+  tt.func public @colmaj_mixed_inner_div(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> tensor<8x16xf32, #blocked> {
+    %c1_i64 = arith.constant 1 : i64
+    %c16_i64 = arith.constant 16 : i64
+    %c17_i32 = arith.constant 17 : i32
+    %c16_i32 = arith.constant 16 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c17_i32, %c16_i32], [%c16_i64, %c1_i64] : <f32>, <16x8xf32>
+    %0 = tt.descriptor_load %desc[%c0_i32, %c8_i32] {ttig.block_io = "column_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<16x8xf32> -> tensor<8x16xf32, #blocked>
+    tt.return %0 : tensor<8x16xf32, #blocked>
   }
 }
