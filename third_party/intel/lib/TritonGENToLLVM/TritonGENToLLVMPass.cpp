@@ -1488,8 +1488,12 @@ private:
     if (spvInputType != input.getType())
       input = b.bitcast(input, spvInputType);
 
+    // The mangled name only encodes the input type, so the result type postfix
+    // keeps shuffles with the same input type and different result types apart.
     std::string fnName =
-        intel::mangle("__spirv_SubgroupBitcastShuffleINTEL", {spvInputType});
+        intel::mangle("__spirv_SubgroupBitcastShuffleINTEL" +
+                          intel::getResultTypePostfix(spvResultType),
+                      {spvInputType});
     Value result = intel::createDeviceFunctionCall(
                        rewriter, fnName, spvResultType, {spvInputType}, {input},
                        {}, intel::convergentNoUnwindWillReturnAttrs)
