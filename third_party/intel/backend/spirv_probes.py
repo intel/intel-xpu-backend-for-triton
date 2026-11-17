@@ -108,7 +108,10 @@ _MAX_REGISTERS_PROBE_SPV = (
 )
 
 # Same shape, declaring `SPV_INTEL_subgroup_bitcast_shuffle`. IGC only enables it
-# on Xe-HPC and later, and rejects the declaration elsewhere (e.g. DG2).
+# on Xe-HPC and later (IGC c018ea16af). Elsewhere (e.g. DG2) its translator knows
+# the extension but leaves it out of the allowed list, so the declaration fails
+# with "which were disabled by --spirv-ext option"; IGC builds without the
+# extension fail with "unknown extension" on every device.
 _SUBGROUP_BITCAST_SHUFFLE_PROBE_SPV = (
     _spirv_words(0x07230203, 0x00010400, 0, 5, 0)  # magic, v1.4, generator, bound, schema
     + _spirv_op(17, 6)  # OpCapability Kernel

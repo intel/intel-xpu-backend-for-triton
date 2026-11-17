@@ -356,6 +356,10 @@ llvm.func @triton_gen.sub_group_bitcast_shuffle(%val : vector<4xi8>) -> vector<2
 // -----
 
 module attributes {ttig.support_subgroup_bitcast_shuffle} {
+  // CHECK-DAG: llvm.func spir_funccc @_Z44__spirv_SubgroupBitcastShuffleINTEL_Rushort8Dv16_c(vector<16xi8>) -> vector<8xi16> attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z42__spirv_SubgroupBitcastShuffleINTEL_Ruint4Dv16_c(vector<16xi8>) -> vector<4xi32> attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z44__spirv_SubgroupBitcastShuffleINTEL_Rushort4l(i64) -> vector<4xi16> attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z42__spirv_SubgroupBitcastShuffleINTEL_RulongDv4_s(vector<4xi16>) -> i64 attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: llvm.func @triton_gen.sub_group_bitcast_shuffle_spirv(
   // CHECK-SAME:    [[VAL:%.*]]: vector<16xi8>, [[VAL1:%.*]]: vector<4xi16>, [[VAL2:%.*]]: vector<1xi64>
   llvm.func @triton_gen.sub_group_bitcast_shuffle_spirv(%val : vector<16xi8>, %val1 : vector<4xi16>, %val2 : vector<1xi64>) -> vector<1xi64> {
