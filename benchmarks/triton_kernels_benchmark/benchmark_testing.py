@@ -803,6 +803,10 @@ class BenchmarkRunResult(_BenchmarkSummary, ABC):
 
     def _run_summary_df(self, res_df: pd.DataFrame, primary_metric_only: bool = False) -> pd.DataFrame:
 
+        def _gmean(values: pd.Series) -> float:
+            values = values.dropna()
+            return scipy.stats.gmean(values) if not values.empty else float("nan")
+
         def _keep_column(column: str) -> bool:
             return (any(column.startswith(p + "-") for p in providers) and not column.endswith(("-min", "-max"))
                     and (not primary_metric_only or column.endswith(self.primary_metric)))
@@ -835,7 +839,7 @@ class BenchmarkRunResult(_BenchmarkSummary, ABC):
         metrics_df.index.name = shape_name
         metrics_df.columns = pd.MultiIndex.from_tuples(column_tuples, names=["provider", "metric"])
         geomeans_df = pd.DataFrame(
-            [metrics_df.select_dtypes(include="number").apply(scipy.stats.gmean)],
+            [metrics_df.select_dtypes(include="number").apply(_gmean)],
             index=["GeoMean"],
         )
         summary_df = pd.concat([metrics_df, geomeans_df])
@@ -846,11 +850,11 @@ class BenchmarkRunResult(_BenchmarkSummary, ABC):
         if ref_provider and primary_metric_only and ref_provider_name is not None:
             non_ref_providers = [provider for provider in providers if provider.lower() != ref_provider.lower()]
             for non_ref_provider in non_ref_providers:
+                # Aggregate ratios only over workloads measured by both providers.
+                ratios = metrics_df[(non_ref_provider, metric)] / metrics_df[(ref_provider_name, metric)]
+                ratios.loc["GeoMean"] = _gmean(ratios)
                 summary_df[(non_ref_provider, "%diff")] = (
-                    (100 *
-                     (summary_df[(non_ref_provider, metric)] / summary_df[(ref_provider_name, metric)])).round(1).map(
-                         "{:.1f}%".format)  # pylint: disable=C0209
-                )
+                    100 * ratios).round(1).map(lambda value: f"{value:.1f}%" if pd.notna(value) else "N/A")
         return summary_df
 
 
