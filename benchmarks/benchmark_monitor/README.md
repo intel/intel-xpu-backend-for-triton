@@ -9,7 +9,7 @@ into one point per night, and gates each series against its own recent history.
 pip install -e benchmarks/benchmark_monitor
 ```
 
-Runtime dependency: `pyyaml`. Python 3.10 or newer.
+Runtime dependency: `pyyaml`. Python 3.11 or newer.
 
 ## The catalog
 
