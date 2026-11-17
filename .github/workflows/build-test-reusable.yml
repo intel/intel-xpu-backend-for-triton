@@ -70,6 +70,10 @@ permissions: read-all
 env:
   TRITON_DISABLE_LINE_INFO: 1
   TEST_UNSKIP: ${{ inputs.enable_unskip }}
+  # PyTorch wheels ship their own SYCL and Unified Runtime libraries. Do not source oneAPI
+  # setvars.sh in this mode: it puts oneAPI's libs first in LD_LIBRARY_PATH, so `import torch`
+  # can resolve them to a different oneAPI version than the wheels were built with.
+  SKIP_ONEAPI: ${{ inputs.pytorch_mode == 'wheels' && '1' || '' }}
   # Increase this value to reset cache
   PIP_CACHE_NUMBER: 1
   # Number of shards for the suites listed in PARALLEL_SUITES
@@ -86,7 +90,7 @@ jobs:
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "gpu", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "[[ -n $SKIP_ONEAPI ]] || source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     outputs:
       test-triton-command: ${{ steps.test-triton.outputs.command }}
       integration-tests-matrix: ${{ steps.test-triton.outputs.matrix }}
@@ -219,7 +223,7 @@ jobs:
       PYTEST_ADDOPTS: "-p triton._compile_warmup"
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "[[ -n $SKIP_ONEAPI ]] || source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Print inputs
         run: |

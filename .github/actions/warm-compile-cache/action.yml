@@ -20,7 +20,7 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
-        source /opt/intel/oneapi/setvars.sh > /dev/null
+        [[ -n $SKIP_ONEAPI ]] || source /opt/intel/oneapi/setvars.sh > /dev/null
 
         # Reuse the --skip-list dir already resolved into $TRITON_TEST_CMD, so warmup
         # skips and xfails what the real run below will skip and xfail on this HW.
