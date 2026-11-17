@@ -5,6 +5,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
+#include "llvm/ADT/bit.h"
 
 #include <array>
 #include <bit>
@@ -205,7 +206,11 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   if (kSize == 64)
     desc.kSize = 1;
 
-  return b.int_val(32, std::bit_cast<uint32_t>(desc));
+  // TODO(akhilgoe): XLA sycl build uses sysroot with older libc++ (glibc 2.31,
+  // gcc 10) that doesn't support std::bit_cast. Hence, use llvm::bit_cast as a
+  // workaround and revert this change once XLA sycl updates to a newer sysroot
+  // (with >= gcc 11).
+  return b.int_val(32, llvm::bit_cast<uint32_t>(desc));
 }
 
 static Value createScaleInstDescriptorFp8(ConversionPatternRewriter &rewriter,
@@ -271,7 +276,11 @@ static Value createScaleInstDescriptorFp8(ConversionPatternRewriter &rewriter,
     desc.BScaleFactor *= 2;
   }
 
-  return b.int_val(32, std::bit_cast<uint32_t>(desc));
+  // TODO(akhilgoe): XLA sycl build uses sysroot with older libc++ (glibc 2.31,
+  // gcc 10) that doesn't support std::bit_cast. Hence, use llvm::bit_cast as a
+  // workaround and revert this change once XLA sycl updates to a newer sysroot
+  // (with >= gcc 11).
+  return b.int_val(32, llvm::bit_cast<uint32_t>(desc));
 }
 
 static Value createScaleInstDescriptorFp4(
@@ -317,7 +326,11 @@ static Value createScaleInstDescriptorFp4(
     // K96 selectors are byte offsets into three (block32) or six (block16)
     // consecutive scales, including across scale words.
     desc.kSizeLower = 1;
-    return b.int_val(32, std::bit_cast<uint32_t>(desc));
+    // TODO(akhilgoe): XLA sycl build uses sysroot with older libc++
+    // (glibc 2.31, gcc 10) that doesn't support std::bit_cast. Hence, use
+    // llvm::bit_cast as a workaround and revert this change once XLA sycl
+    // updates to a newer sysroot (with >= gcc 11).
+    return b.int_val(32, llvm::bit_cast<uint32_t>(desc));
   }
   if (kSize == 128) {
     desc.kSizeUpper = 1;
@@ -348,8 +361,11 @@ static Value createScaleInstDescriptorFp4(
     assert(desc.BScaleFactor == 0 &&
            "MMAv5 with kind=mxf4nvf4 and .block16 only supports SFB_ID 0");
   }
-
-  return b.int_val(32, std::bit_cast<uint32_t>(desc));
+  // TODO(akhilgoe): XLA sycl build uses sysroot with older libc++ (glibc 2.31,
+  // gcc 10) that doesn't support std::bit_cast. Hence, use llvm::bit_cast as a
+  // workaround and revert this change once XLA sycl updates to a newer sysroot
+  // (with >= gcc 11).
+  return b.int_val(32, llvm::bit_cast<uint32_t>(desc));
 }
 
 //===----------------------------------------------------------------------===//
