@@ -737,3 +737,91 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     tt.return
   }
 }
+
+// -----
+
+// COM: After loop fusion, a load in the inner loop finds no pitch if its row stride is defined in the tt.flatten loop
+// COM: around it (#8687), so that loop loses tt.flatten.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @row_stride_in_outer_loop
+  tt.func @row_stride_in_outer_loop(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %ldap: !tt.ptr<i32>, %lda_arg: i32 {tt.divisibility = 16 : i32}, %n: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %cst2 = arith.constant dense<2> : tensor<64x32xi32, #dot0>
+    %cst64 = arith.constant dense<64> : tensor<64x32xi32, #dot0>
+    %mr = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %mr1 = tt.expand_dims %mr {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+    %rows = tt.broadcast %mr1 : tensor<64x1xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %mc = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %mc1 = tt.expand_dims %mc {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %cols = tt.broadcast %mc1 : tensor<1x32xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %sa = tt.splat %lda_arg : i32 -> tensor<64x32xi32, #dot0>
+    %ra = arith.muli %rows, %sa : tensor<64x32xi32, #dot0>
+    %offa = arith.addi %ra, %cols : tensor<64x32xi32, #dot0>
+    %pa = tt.addptr %base, %offa {tt.divisibility = dense<16> : tensor<2xi32>} : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+    %rc = arith.muli %rows, %cst64 : tensor<64x32xi32, #dot0>
+    %offc = arith.addi %rc, %cols : tensor<64x32xi32, #dot0>
+    %pc = tt.addptr %base, %offc {tt.divisibility = dense<16> : tensor<2xi32>} : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+    // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
+    // CHECK-NOT: tt.flatten
+    // CHECK: scf.for
+    scf.for %t = %c0 to %n step %c1 : i32 {
+      %lda = tt.load %ldap : !tt.ptr<i32>
+      %s = tt.splat %lda : i32 -> tensor<64x32xi32, #dot0>
+      %rl = arith.muli %rows, %s : tensor<64x32xi32, #dot0>
+      %off = arith.addi %rl, %cols : tensor<64x32xi32, #dot0>
+      %p = tt.addptr %base, %off {tt.divisibility = dense<16> : tensor<2xi32>} : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+      scf.for %k = %c0 to %n step %c1 : i32 {
+        %a = tt.load %p : tensor<64x32x!tt.ptr<f16>, #dot0>
+      }
+    } {tt.flatten}
+    // COM: Not for a load outside the inner loop (%d), an untagged load (%g), or a row stride defined outside the
+    // COM: outer loop (%e, %f) or in the inner loop (%i).
+    // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
+    // CHECK: scf.for
+    // CHECK-NEXT: tt.load %{{[a-z0-9_]+}} : tensor<64x32x!tt.ptr<f16>
+    // CHECK-NEXT: tt.load {{.*}} {ttig.block_io = "row_major"}
+    // CHECK-NEXT: tt.load {{.*}} {ttig.block_io = "row_major"}
+    // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
+    // CHECK: } {tt.flatten}
+    scf.for %t = %c0 to %n step %c1 : i32 {
+      %lda = tt.load %ldap : !tt.ptr<i32>
+      %s = tt.splat %lda : i32 -> tensor<64x32xi32, #dot0>
+      %rl = arith.muli %rows, %s : tensor<64x32xi32, #dot0>
+      %off = arith.addi %rl, %cols : tensor<64x32xi32, #dot0>
+      %p = tt.addptr %base, %off {tt.divisibility = dense<16> : tensor<2xi32>} : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+      %d = tt.load %p : tensor<64x32x!tt.ptr<f16>, #dot0>
+      %gap = arith.muli %cols, %cst2 : tensor<64x32xi32, #dot0>
+      %offg = arith.addi %rl, %gap : tensor<64x32xi32, #dot0>
+      %pg = tt.addptr %base, %offg {tt.divisibility = dense<16> : tensor<2xi32>} : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+      scf.for %k = %c0 to %n step %c1 : i32 {
+        %g = tt.load %pg : tensor<64x32x!tt.ptr<f16>, #dot0>
+        %e = tt.load %pa : tensor<64x32x!tt.ptr<f16>, #dot0>
+        %f = tt.load %pc : tensor<64x32x!tt.ptr<f16>, #dot0>
+        %ldk = tt.load %ldap : !tt.ptr<i32>
+        %sk = tt.splat %ldk : i32 -> tensor<64x32xi32, #dot0>
+        %rk = arith.muli %rows, %sk : tensor<64x32xi32, #dot0>
+        %offk = arith.addi %rk, %cols : tensor<64x32xi32, #dot0>
+        %pk = tt.addptr %base, %offk {tt.divisibility = dense<16> : tensor<2xi32>} : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+        %i = tt.load %pk : tensor<64x32x!tt.ptr<f16>, #dot0>
+      }
+    } {tt.flatten}
+    // CHECK: tt.load {{.*}} {ttig.block_io = "column_major"}
+    // CHECK-NOT: tt.flatten
+    // CHECK: tt.return
+    scf.for %t = %c0 to %n step %c1 : i32 {
+      %lda = tt.load %ldap : !tt.ptr<i32>
+      %s = tt.splat %lda : i32 -> tensor<64x32xi32, #dot0>
+      %cl = arith.muli %cols, %s : tensor<64x32xi32, #dot0>
+      %off = arith.addi %cl, %rows : tensor<64x32xi32, #dot0>
+      %p = tt.addptr %base, %off {tt.divisibility = dense<16> : tensor<2xi32>} : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+      scf.for %k = %c0 to %n step %c1 : i32 {
+        %a = tt.load %p : tensor<64x32x!tt.ptr<f16>, #dot0>
+      }
+    } {tt.flatten}
+    tt.return
+  }
+}
