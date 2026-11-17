@@ -132,18 +132,7 @@ class Catalog:  # pylint: disable=too-many-instance-attributes
             if scope.platform not in self.platforms:
                 raise CatalogError(f"scope {scope.name!r}: unknown platform {scope.platform!r}")
         self._check_history_fits_window()
-        for name in self.benchmarks:
-            if any(ch in name for ch in "*?["):
-                warnings.warn(
-                    f"benchmark {name!r}: keys under 'benchmarks' are exact names, not globs; "
-                    "use a family for patterns", stacklevel=2)
-        patterns = [(n, p) for n, spec in self.families.items() for p in spec["match"]]
-        for i, (fam, pat) in enumerate(patterns):
-            for other, opat in patterns[i + 1:]:
-                if fam != other and (fnmatch.fnmatchcase(pat, opat) or fnmatch.fnmatchcase(opat, pat)):
-                    warnings.warn(
-                        f"families {fam!r} and {other!r} overlap ({pat!r} vs {opat!r}); "
-                        f"{fam!r} wins for benchmarks matching both", stacklevel=2)
+        self._warn_overlaps_and_globs()
         if not (strict and known_benchmarks is not None):
             return
         known = list(known_benchmarks)
@@ -154,13 +143,31 @@ class Catalog:  # pylint: disable=too-many-instance-attributes
         for name in self.benchmarks:  # exact names, as in resolve()
             if name not in known:
                 raise CatalogError(f"benchmark {name!r}: matches no known benchmark")
-        for bench in known:  # the pairwise pattern check above misses e.g. "flash*" vs "*-bwd"
-            hits = [n for n, spec in self.families.items() if any(fnmatch.fnmatchcase(bench, p) for p in spec["match"])]
-            if len(hits) > 1:
-                warnings.warn(f"benchmark {bench!r} matches families {hits}; {hits[0]!r} wins", stacklevel=2)
+        self._warn_overlaps_among(known)
         for name, spec in self.families.items():  # a family needs only one live pattern
             if not any(fnmatch.fnmatchcase(b, pat) for b in known for pat in spec["match"]):
                 raise CatalogError(f"family {name!r}: no pattern matches a known benchmark")
+
+    def _warn_overlaps_and_globs(self) -> None:
+        for name in self.benchmarks:
+            if any(ch in name for ch in "*?["):
+                warnings.warn(
+                    f"benchmark {name!r}: keys under 'benchmarks' are exact names, not globs; "
+                    "use a family for patterns", stacklevel=3)
+        patterns = [(n, p) for n, spec in self.families.items() for p in spec["match"]]
+        for i, (fam, pat) in enumerate(patterns):
+            for other, opat in patterns[i + 1:]:
+                if fam != other and (fnmatch.fnmatchcase(pat, opat) or fnmatch.fnmatchcase(opat, pat)):
+                    warnings.warn(
+                        f"families {fam!r} and {other!r} overlap ({pat!r} vs {opat!r}); "
+                        f"{fam!r} wins for benchmarks matching both", stacklevel=3)
+
+    def _warn_overlaps_among(self, known: Iterable[str]) -> None:
+        """Real overlaps: the pairwise pattern check misses e.g. ``flash*`` vs ``*-bwd``."""
+        for bench in known:
+            hits = [n for n, spec in self.families.items() if any(fnmatch.fnmatchcase(bench, p) for p in spec["match"])]
+            if len(hits) > 1:
+                warnings.warn(f"benchmark {bench!r} matches families {hits}; {hits[0]!r} wins", stacklevel=3)
 
     def _check_history_fits_window(self) -> None:
         """Every reachable threshold combination needs ``min_history <= window``.
@@ -180,8 +187,9 @@ class Catalog:  # pylint: disable=too-many-instance-attributes
                     merged.update({k: v for k, v in spec.items() if k in _THRESHOLD_KEYS})
                 if merged["min_history"] > merged["window"]:
                     where = label if plat is None else f"{label} on platform {plat!r}"
-                    raise CatalogError(f"{where}: min_history {merged['min_history']} exceeds "
-                                       f"window {merged['window']}; the series could never be gated")
+                    low, high = merged["min_history"], merged["window"]
+                    raise CatalogError(f"{where}: min_history {low} exceeds window {high}; "
+                                       "the series could never be gated")
 
 
 def _check_thresholds(where: str, spec: Mapping[str, Any],
@@ -218,7 +226,8 @@ def _spec(where: str, value: Any) -> Mapping[str, Any]:
 
 def _globs(where: str, value: Any, *, non_empty: bool = False) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value) or (non_empty and not value):
-        raise CatalogError(f"{where}: must be a {'non-empty ' if non_empty else ''}list of strings, got {value!r}")
+        kind = "non-empty list" if non_empty else "list"
+        raise CatalogError(f"{where}: must be a {kind} of strings, got {value!r}")
     return value
 
 
@@ -256,9 +265,10 @@ def _parse_scopes(raw: Mapping[str, Any]) -> dict[str, Scope]:
         if not isinstance(got, str) or got not in _SOURCE_KINDS:
             raise CatalogError(f"scope {name!r}: source must be one of {sorted(_SOURCE_KINDS)}, got {got!r}")
         if not isinstance(spec["platform"], str):
-            raise CatalogError(f"scope {name!r}: platform must be a string, got {spec['platform']!r}")
-        if not isinstance(spec.get("expected_nightly", False), bool):
-            raise CatalogError(f"scope {name!r}: expected_nightly must be a boolean, got {spec['expected_nightly']!r}")
+            raise CatalogError(f"scope {name!r}: platform must be a string, got {spec.get('platform')!r}")
+        nightly = spec.get("expected_nightly", False)
+        if not isinstance(nightly, bool):
+            raise CatalogError(f"scope {name!r}: expected_nightly must be a boolean, got {nightly!r}")
         for field_name in ("tags", "benchmarks", "groups"):
             _globs(f"scope {name!r}: {field_name}", spec.get(field_name, []))
         kwargs = {k: tuple(v) if isinstance(v, list) else v for k, v in spec.items()}

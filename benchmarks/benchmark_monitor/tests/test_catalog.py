@@ -220,12 +220,12 @@ def test_min_history_above_window_is_rejected_in_defaults(override):
         load_catalog("version: 1\n" + override + "\n")
 
 
-@pytest.mark.parametrize("old, new, where", [
-    ("softmax: {min_drop_pct: 3.0}", "softmax: {window: 5}", "benchmark 'softmax'"),
-    ("flex-attn: {match", "flex-attn: {window: 5, match", "family 'flex-attn'"),
-    ('b580: {match: "B580"}', 'b580: {match: "B580", window: 5}', "platform 'b580'"),
+@pytest.mark.parametrize("old, new", [
+    ("softmax: {min_drop_pct: 3.0}", "softmax: {window: 5}"),
+    ("flex-attn: {match", "flex-attn: {window: 5, match"),
+    ('b580: {match: "B580"}', 'b580: {match: "B580", window: 5}'),
 ])
-def test_min_history_above_window_is_rejected_in_overrides(old, new, where):
+def test_min_history_above_window_is_rejected_in_overrides(old, new):
     text = DEFAULT_CATALOG_PATH.read_text(encoding="utf-8").replace(old, new)
     with pytest.raises(CatalogError, match="exceeds window"):
         load_catalog(text)
