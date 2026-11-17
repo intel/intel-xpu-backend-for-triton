@@ -62,12 +62,9 @@ def configs(models):
 
 
 def bench_loop(fn, warmup=100, reps=10):
-    for _ in range(warmup):
-        fn()
-    torch.xpu.synchronize()
-    for _ in range(reps):
-        fn()
-    torch.xpu.synchronize()
+    """Same timing call as the real benchmark (honours BENCHMARKING_METHOD: profiler-based by default)."""
+    import triton_kernels_benchmark as benchmark_suite
+    benchmark_suite.do_bench(fn, n_warmup=warmup, n_repeat=reps, quantiles=[0.5, 0.0, 1.0])
 
 
 def call_provider(provider, ref_paged_attn, qh, kh, hs, sw, seq, nb, bs):
@@ -136,6 +133,8 @@ def call_provider(provider, ref_paged_attn, qh, kh, hs, sw, seq, nb, bs):
 def main():
     models = [int(x) for x in sys.argv[1:]] or [0, 1]
     ref_paged_attn = load_ref()
+    import os
+    print(f"BENCHMARKING_METHOD={os.getenv('BENCHMARKING_METHOD', '(default: UPSTREAM_PYTORCH_PROFILER)')}", flush=True)
     print(f"torch {torch.__version__} triton {triton.__version__} vllm_xpu_kernels from {vllm_xpu_kernels.__file__}",
           flush=True)
     for mi, qh, kh, hs, sw, seq, nb, bs in configs(models):
