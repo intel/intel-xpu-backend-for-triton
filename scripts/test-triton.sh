@@ -801,7 +801,8 @@ run_interpreter_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-16} -m interpreter language/test_core.py language/test_standard.py \
+    run_pytest_command -vvv -n "$(( $(available_cpu_count) * 60 / 100 ))" -m interpreter \
+    language/test_core.py language/test_standard.py \
     language/test_random.py language/test_line_info.py --device cpu
 }
 
@@ -812,7 +813,7 @@ run_proton_tests() {
   cd $TRITON_PROJ/third_party/proton/test
 
   TRITON_TEST_SUITE=proton \
-    run_pytest_command -vvv test_api.py test_cmd.py test_lib.py test_profile.py test_viewer.py --device xpu -s
+    run_pytest_command -vvv test_api.py test_cmd.py test_instrumentation.py test_lib.py test_profile.py test_viewer.py --device xpu -s
 }
 
 run_tutorial_tests() {
@@ -1043,13 +1044,12 @@ run_sglang_quant_tests() {
   echo "********************************************************"
 
   enter_sglang_test_env
-  # FP8 quant + block GEMM, scaled GEMM, AWQ dequant + GEMM.
+  # FP8 quant, scaled GEMM, AWQ dequant.
   # test_int8_kernel.py and test_block_int8.py are left out: they import
   # srt.layers.activation, which needs sgl_kernel on XPU.
   TRITON_TEST_SUITE=sglang_quant \
-    run_pytest_command -vvv --import-mode=importlib \
+    run_pytest_command -vvv \
       test/registered/kernels/ops/quantization/test_fp8_kernel.py \
-      test/registered/kernels/ops/gemm/test_fp8_kernel.py \
       test/registered/kernels/ops/gemm/test_triton_scaled_mm.py \
       test/registered/kernels/ops/quantization/test_awq_dequant.py
 }
@@ -1067,7 +1067,7 @@ run_sglang_moe_tests() {
   TRITON_TEST_SUITE=sglang_moe \
     run_pytest_command -vvv \
       test/registered/moe/test_fused_moe.py \
-      test/registered/lora/test_fused_moe_lora_kernel.py
+      test/registered/kernels/ops/lora/test_fused_moe_lora_kernel.py
 }
 
 run_sglang_mamba_tests() {

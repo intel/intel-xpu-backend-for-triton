@@ -1,0 +1,6 @@
+# XPU does not natively support tmem
+python/test/unit/language/test_matmul.py::test_lhs_in_tmem
+# XPU does not natively support scaled mxfp matmul and tmem
+python/test/unit/language/test_matmul.py::test_lhs_in_tmem_mxfp
+# i4 M-minor join regression is CUDA-specific
+python/test/unit/language/test_matmul.py::test_i4_m_minor_join_bk16_matmul

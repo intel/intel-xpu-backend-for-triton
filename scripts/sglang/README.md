@@ -6,9 +6,9 @@ Install SGLang and run its Triton kernel tests on Intel XPU.
 
 - `install-sglang.sh` - clones SGLang at `sglang-pin.txt`, applies
   `sglang-test-fix.patch`, uses `python/pyproject_xpu.toml`, drops
-  `torch*`/`sglang-kernel-xpu`/`timm` from the requirements so the local torch
-  and Triton survive, installs SGLang editable into `$TRITON_PROJ/sglang`
-  without its Rust extensions.
+  `torch*`/`triton*`/`sglang-kernel-xpu`/`timm` from the requirements so the
+  local torch and Triton survive, installs SGLang editable into
+  `$TRITON_PROJ/sglang` without its Rust extensions.
 - `sglang-pin.txt` - upstream commit.
 - `sglang-test-fix.patch` - XPU fixes on top of the pin.
 - `install-sgl-kernel-xpu.sh` - builds `sgl-kernel-xpu` at
@@ -27,22 +27,20 @@ One flag per kernel family, each with its own `TRITON_TEST_SUITE` and skip list
 | Flag | Test files, relative to `sglang/test/` |
 |---|---|
 | `--sglang-attention` | `registered/attention/test_create_kvindices.py`, `registered/attention/test_triton_attention_kernels.py`, `registered/attention/unittests/dense/test_triton.py` |
-| `--sglang-quant` | `registered/kernels/ops/quantization/test_fp8_kernel.py`, `test_awq_dequant.py`, `registered/kernels/ops/gemm/test_fp8_kernel.py`, `test_triton_scaled_mm.py` |
-| `--sglang-moe` | `registered/moe/test_fused_moe.py`, `registered/lora/test_fused_moe_lora_kernel.py` |
+| `--sglang-quant` | `registered/kernels/ops/quantization/test_fp8_kernel.py`, `test_awq_dequant.py`, `registered/kernels/ops/gemm/test_triton_scaled_mm.py` |
+| `--sglang-moe` | `registered/moe/test_fused_moe.py`, `registered/kernels/ops/lora/test_fused_moe_lora_kernel.py` |
 | `--sglang-mamba` | `registered/layers/mamba/test_causal_conv1d.py`, `test_mamba_ssm.py`, `test_mamba_ssm_ssd.py` |
 | `--sglang-gdn` | `registered/attention/test_chunk_gated_delta_rule.py` |
 | `--sglang-kda` | `registered/attention/test_kda_kernels.py` |
 | `--sglang-spec` | `registered/spec/dspark/test_dspark_kernel_parity.py` |
 | `--sglang-e2e` | `registered/xpu/test_xpu_basic.py` |
 
-Three things to know before editing this:
+Two things to know before editing this:
 
 - Suites run without `-n`. With `-n 4` the attention tests crash an xdist worker
   with a GPU page fault on a single-GPU runner.
 - Skip list node ids start at `registered/`, not `test/registered/`: SGLang ships
   `test/pytest.ini`, so `sglang/test` is the pytest rootdir.
-- `--sglang-quant` needs `--import-mode=importlib`: its two `test_fp8_kernel.py`
-  have no `__init__.py`, so the default mode cannot collect both.
 
 ## Kernel coverage
 
@@ -57,7 +55,7 @@ kernels to `kernels/ops/` (RFC #29630), so recheck them after a pin bump.
 | `decode_attention_fwd`, `_normal`, `_grouped` | `kernels/ops/attention/decode_attention.py` |
 | `extend_attention_fwd`, `_unified`, `build_unified_kv_indices` | `kernels/ops/attention/extend_attention.py` |
 | `context_attention_fwd` | `kernels/ops/attention/prefill_attention.py` |
-| `create_flashinfer_kv_indices_triton` | `kernels/ops/kvcache/kv_indices.py`, re-exported from `kernels/ops/attention/utils.py` |
+| `create_flashinfer_kv_indices_triton` | `kernels/ops/attention/kv_indices.py` |
 | `get_num_kv_splits_triton` | `kernels/ops/attention/metadata.py` |
 
 `unittests/dense/test_triton.py` is the second source of coverage for those
@@ -79,8 +77,8 @@ capture stream device-agnostic via `get_device_module()` and adds
 | Kernels | Source |
 |---|---|
 | `per_token_group_quant_fp8` | `kernels/ops/quantization/fp8_kernel.py` |
-| `w8a8_block_fp8_matmul`, `triton_scaled_mm` | `kernels/ops/gemm/fp8_kernel.py` |
-| `awq_dequantize`, `awq_gemm` | `kernels/ops/quantization/awq_triton.py` |
+| `triton_scaled_mm` | `kernels/ops/gemm/fp8_kernel.py` |
+| `awq_dequantize` | `kernels/ops/quantization/awq_triton.py` |
 
 `--sglang-moe`:
 
@@ -122,7 +120,7 @@ fork silently picks the NVIDIA kernels instead of failing.
 |---|---|
 | `fused_recurrent_kda`, `kda_gate_chunk_cumsum`, `chunk_kda_scaled_dot_kkt_fwd` | `kernels/ops/attention/fla/kda.py` |
 | `fused_recurrent_kda_packed_decode` | `kernels/ops/attention/fla/fused_recurrent.py` |
-| `fused_sigmoid_gating_delta_rule_update` | `kernels/ops/attention/fla/fused_sigmoid_gating_recurrent.py` |
+| `fused_sigmoid_gating_delta_rule_update` | `kernels/ops/attention/linear/fused_sigmoid_gating_recurrent.py` |
 | `chunk_local_cumsum` | `kernels/ops/attention/fla/cumsum.py` |
 
 `--sglang-spec`:
@@ -130,7 +128,7 @@ fork silently picks the NVIDIA kernels instead of failing.
 | Kernels | Source |
 |---|---|
 | `pad_verify_lens_to_bucket`, `build_qo_indptr` | `kernels/ops/speculative/ragged_verify_kernels.py` |
-| `expand_prefill_causally`, `build_page_table_positions`, `build_causal_swa_page_indices` | `kernels/ops/attention/dsv4_attn_metadata_kernels.py` |
+| `expand_prefill_causally`, `build_page_table_positions`, `build_causal_swa_page_indices` | `kernels/ops/attention/dsv4/attn_metadata_kernels.py` |
 | `dspark_accept`, `dspark_attn_metadata`, `dspark_draft_model`, `dspark_schedule`, `dspark_verify_window` | `kernels/ops/speculative/dspark/` |
 
 `--sglang-e2e`. The only suite that runs a real forward pass, so the only one
@@ -160,13 +158,13 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
 
 | Suite | Result | Time |
 |---|---|---|
-| `--sglang-attention` | 22 passed, 2 skipped upstream | 550s |
-| `--sglang-quant` | 5 passed | 14s |
+| `--sglang-attention` | 24 passed, 3 skipped upstream | 578s |
+| `--sglang-quant` | 3 passed | 14s |
 | `--sglang-moe` | 110 passed | 46s |
 | `--sglang-mamba` | 940 passed, 16 skipped upstream | 19s |
 | `--sglang-gdn` | 30 passed, 1 skipped upstream | 9s |
-| `--sglang-kda` | 1 passed, 14 skipped upstream | 10s |
-| `--sglang-spec` | 1 passed, 22 subtests | 38s |
+| `--sglang-kda` | 1 passed, 19 skipped upstream | 18s |
+| `--sglang-spec` | 1 passed, 20 subtests | 35s |
 | `--sglang-e2e` | not measured locally - needs model weights and a server launch | - |
 
 ## Known gaps
@@ -186,20 +184,20 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
   `rmsnorm`/`fused_add_rmsnorm` directly, so that needs real torch fallbacks
   rather than deferred import errors.
 
-  `install-sglang.sh` strips the `sglang-kernel-xpu` requirement together with
-  the `torch==2.13.0+xpu` pin next to it: the requirement is a prebuilt wheel
-  linked against that torch, and the pin would replace ours. The out-of-band
-  build avoids both (`--no-isolation`, and `dependencies = []` upstream, so
-  nothing can replace torch or Triton).
+  `install-sglang.sh` strips the `sglang-kernel-xpu==0.6.0` requirement together
+  with the `torch==2.14.0+xpu` pin: the requirement resolves to a prebuilt wheel
+  that upstream pairs with that torch, and the pin would replace ours. The
+  out-of-band build avoids both (`--no-isolation`, and `dependencies = []`
+  upstream, so nothing can replace torch or Triton).
 
   **No PVC.** `DPCPP_SYCL_TARGET` has no PVC value, and the kernel sources are
   architecture-gated in 79 places with no Xe-HPC branch, so there is nothing to
   target. vllm-xpu-kernels serves `max1100` and `b580` from one wheel
   (`SYCL_SUPPORTED_ARCHS` includes `intel_gpu_pvc`); this cannot.
-  Upstream's only artifact is that wheel (`v0.3.0+xpu` in `sgl-project/whl`): it
-  is not on PyPI (PyPI `sgl-kernel` is the unrelated CUDA package, the XPU
-  distribution is `sglang-kernel-xpu`) and the `sgl-kernel-xpu` releases have no
-  assets.
+  Upstream's only artifact is that wheel (`v0.6.0+xpu` in `sgl-project/whl`,
+  served through the `https://docs.sglang.io/whl/xpu/` index): PyPI only has a
+  1.2 kB `sglang-kernel-xpu` 0.0.1 placeholder (PyPI `sgl-kernel` is the
+  unrelated CUDA package) and the `sgl-kernel-xpu` releases have no assets.
 
   A `bmg` wheel does load on PVC, and the light ops fall back to SPIR-V JIT
   correctly (on Max 1550: `rmsnorm` bit-exact, `silu_and_mul` 1.2e-03 in fp16,
@@ -207,17 +205,12 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
   `flash_attn_varlen_func` call ran 19m44s in the JIT without finishing. So
   installing it there would trade a loud `ImportError` for a hang.
 
-  The build is slow - 871 ninja targets, 61m41s wall and 34 CPU-hours at `-j32`,
-  7.5 GB of output, 83 `libsgl-ops-sycl-*.so`, dominated by the AOT CUTLASS-SYCL
-  FMHA/MLA instantiations. `USE_SYCL_JIT=ON` is upstream's lever for that; it
-  moves the cost to the first call per configuration and needs `icpx` at test
-  time, which the CI shell already provides via `setvars.sh`.
-- **Block pointers.** SGLang's fla kernels still call `tl.make_block_ptr`,
-  removed from this Triton
-  ([#7781](https://github.com/intel/intel-xpu-backend-for-triton/issues/7781)).
-  `sglang-test-fix.patch` moves the GDN path, XPU overrides included, to tensor
-  descriptors; the remaining uses, e.g. in `kda.py`, are not reached by the
-  suites here.
+  The build is slow - at `ada8a03`, 871 ninja targets, 61m41s wall and 34
+  CPU-hours at `-j32`, 7.5 GB of output, 83 `libsgl-ops-sycl-*.so`, dominated by
+  the AOT CUTLASS-SYCL FMHA/MLA instantiations. `USE_SYCL_JIT=ON` is upstream's
+  lever for that; it moves the cost to the first call per configuration and
+  needs `icpx` at test time, which the CI shell already provides via
+  `setvars.sh`.
 - **CUDA-only tests.** Three of four `test_kda_kernels.py` classes skip themselves.
 - **e2e is smoke only.** `--sglang-e2e` asserts throughput, not numerics, so a
   subtly wrong position id or token-pool write still passes. No SGLang test
@@ -230,8 +223,7 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
   `speculative_draft_runner.py` also repeat the `torch.cuda` RNG pattern
   (`mla_attention.py`, `gdn_attention.py`, `kda_attention.py`, `mamba2_attention.py`,
   `lightning_attention.py`, `dsa_attention.py`, `dsv4_attention.py`). Enable one
-  family at a time; `gdn/` and `kda/` stay blocked on `tl.make_block_ptr`
-  regardless (see above).
+  family at a time.
 - **BMG.** `scripts/skiplist/xe2/` is a copy of `default/`; nothing measured on
   B580 yet. `--skip-list` replaces the directory instead of merging, so the
   entries have to be duplicated.

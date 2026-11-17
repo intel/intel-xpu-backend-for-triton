@@ -30,7 +30,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-NEXT: [[N:%.*]] = llvm.bitcast [[QNAN]] : i16 to f16
     // CHECK-NEXT: llvm.select [[C]], [[N]], [[M]] : i1, f16
     // CHECK-NOT: vector<4xi8>
-    // CHECK-NOT: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE4M3ToFP16INTEL
+    // CHECK-NOT: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE4M3ToFP16EXT
     tt.return %dst : tensor<16xf16, #blocked>
   }
 }
@@ -61,7 +61,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // COM: The float-domain sequence must not be used here.
     // CHECK-NOT: llvm.sext {{.*}} : i8 to i16
     // CHECK-NOT: llvm.fcmp
-    // CHECK-NOT: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE4M3ToFP16INTEL
+    // CHECK-NOT: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE4M3ToFP16EXT
     tt.return %dst : tensor<16xf16, #blocked>
   }
 }

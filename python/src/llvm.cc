@@ -2,18 +2,12 @@
 #include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
-#include "third_party/amd/backend/codegen/DAGBuilder.h"
 #include "triton/Tools/LLVMOptions.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "triton/Version.h"
-#include "llvm/ADT/ScopeExit.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
-#include "llvm/CodeGen/MIRParser/MIRParser.h"
-#include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SchedulerRegistry.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
@@ -79,53 +73,6 @@ void enableFPContraction(llvm::Module &module) {
           instruction.getOpcode() == llvm::Instruction::FSub ||
           instruction.getOpcode() == llvm::Instruction::FMul)
         instruction.setHasAllowContract(true);
-}
-
-// The independently pinned AMD code generator predates disjoint alias scopes.
-// Keep explicit alias/noalias relationships, but drop the additional disjoint
-// guarantee when serializing for that backend. Do this after optimization so
-// Triton's LLVM always sees its own metadata format.
-void downgradeAliasScopeDomains(llvm::Module &module) {
-  SmallPtrSet<MDNode *, 16> seen;
-  SmallVector<TrackingMDNodeRef> scopes;
-  auto collect = [&](MDNode *list) {
-    if (list)
-      for (const MDOperand &operand : list->operands()) {
-        auto *scope = cast<MDNode>(operand);
-        if (seen.insert(scope).second)
-          scopes.emplace_back(scope);
-      }
-  };
-  for (Function &function : module)
-    for (Instruction &instruction : instructions(function)) {
-      collect(instruction.getMetadata(LLVMContext::MD_alias_scope));
-      collect(instruction.getMetadata(LLVMContext::MD_noalias));
-      if (auto *decl = dyn_cast<NoAliasScopeDeclInst>(&instruction))
-        collect(decl->getScopeList());
-    }
-
-  DenseMap<MDNode *, MDNode *> domains;
-  for (const TrackingMDNodeRef &scope : scopes) {
-    auto *domain = cast<MDNode>(scope->getOperand(1));
-    if (domains.contains(domain))
-      continue;
-    SmallVector<Metadata *> operands{domain->getOperand(0)};
-    if (domain->getNumOperands() == 3)
-      operands.push_back(domain->getOperand(2));
-    bool selfReference = operands[0] == domain;
-    if (selfReference)
-      operands[0] = nullptr;
-    // Do not merge domains that only differ in the removed flag.
-    MDNode *replacement = MDNode::getDistinct(module.getContext(), operands);
-    if (selfReference)
-      replacement->replaceOperandWith(0, replacement);
-    domains[domain] = replacement;
-  }
-  SmallVector<MDNode *> replacements;
-  for (const TrackingMDNodeRef &scope : scopes)
-    replacements.push_back(domains.lookup(cast<MDNode>(scope->getOperand(1))));
-  for (auto [scope, replacement] : llvm::zip(scopes, replacements))
-    scope->replaceOperandWith(1, replacement);
 }
 
 struct ExpandMaskedDivRemPass : RequiredPassInfoMixin<ExpandMaskedDivRemPass> {
@@ -380,88 +327,6 @@ void lowerNVPTXFCopySign(llvm::Module &module) {
 }
 
 std::string
-translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
-                     const std::string &proc, const std::string &features,
-                     const std::vector<std::string> &flags,
-                     bool enable_fp_fusion, const std::string &dumpFileId) {
-  using namespace mlir;
-
-  // Check if we should dump MIR
-  std::string dumpMirBase = triton::tools::getStrEnv("TRITON_DUMP_MIR");
-  bool dumpMir = !dumpMirBase.empty();
-  if (!dumpMir) {
-    return "";
-  }
-
-  llvm::StripDebugInfo(module);
-
-  LLVMOptionSettings options;
-  options.enable(flags);
-  options.enableFlagsFromDisableLLVMOptEnv();
-  options.enablePrintAfterAllIfRequested();
-  // Stop right after the scheduling-DAG pass, which substitutes itself for the
-  // machine scheduler (see armLivePipelineDAGEmission). This truncates the
-  // pipeline at exactly the same point -stop-before=machine-scheduler did, so
-  // the MIR dumped below is unchanged.
-  options.set("stop-after", llvm::mir_dag::livePipelineDAGPassName());
-  ScopedLLVMOptions optionScope(options.settings);
-
-  // inline everything
-  for (llvm::Function &f : module.functions())
-    if (!f.hasFnAttribute(llvm::Attribute::NoInline))
-      f.addFnAttr(llvm::Attribute::AlwaysInline);
-  // verify and store llvm
-  llvm::legacy::PassManager pm;
-  pm.add(llvm::createAlwaysInlinerLegacyPass());
-  pm.add(llvm::createVerifierPass());
-
-  pm.run(module);
-
-  // create machine
-  module.setTargetTriple(Triple(triple));
-  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
-  // set data layout
-  module.setDataLayout(machine->createDataLayout());
-
-  // Emit machine code (MIR text, since the pipeline stops before regalloc) and,
-  // in the same run, the scheduling DAG built on the live MachineFunction. The
-  // DAG pass takes the machine scheduler's slot, so it sees exactly the MF
-  // whose MIR is printed here -- (bb, position) maps 1:1 onto the dumped body
-  // lines, and `bb` is the number the MIR printer puts in the `bb.N` labels.
-  std::string result;
-  std::string dagText;
-  {
-    llvm::mir_dag::armLivePipelineDAGEmission(&dagText);
-    llvm::scope_exit disarm(
-        [] { llvm::mir_dag::disarmLivePipelineDAGEmission(); });
-    llvm::raw_string_ostream stream(result);
-    llvm::buffer_ostream pstream(stream);
-    llvm::legacy::PassManager pass;
-    machine->addPassesToEmitFile(pass, pstream, nullptr,
-                                 llvm::CodeGenFileType::AssemblyFile);
-    pass.run(module);
-  }
-
-  std::string dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
-  {
-    std::error_code EC;
-    llvm::raw_fd_ostream outFile(dumpFilename, EC, llvm::sys::fs::OF_None);
-    if (EC) {
-      llvm::errs() << "Error opening file " << dumpFilename << ": "
-                   << EC.message() << "\n";
-    } else {
-      outFile << result;
-      outFile << "---";
-      outFile << "\n========== SCHEDULING DAG ==========\n";
-      outFile << dagText;
-    }
-    llvm::errs() << "MIR dumped to: " << dumpFilename << "\n";
-  }
-
-  return result;
-}
-
-std::string
 translateLLVMIRToASM(llvm::Module &module, const std::string &triple,
                      const std::string &proc, const std::string &features,
                      const std::vector<std::string> &flags,
@@ -544,97 +409,6 @@ translateLLVMIRToASM(llvm::Module &module, const std::string &triple,
       timePassesStr.clear();
     }
   }
-  return result;
-}
-
-std::string
-translateMIRToASM(const std::string &mirPath, const std::string &triple,
-                  const std::string &proc, const std::string &features,
-                  const std::vector<std::string> &flags, bool enable_fp_fusion,
-                  bool isObject, bool enableMISched) {
-  using namespace mlir;
-
-  // We need to start before machine-scheduler and disable it instead of simply
-  // start after it because machine-scheduler is used as anchor point to insert
-  // some passes. Starting after machine-scheduler would also not insert these
-  // passes to the pipeline.
-  LLVMOptionSettings options;
-  options.set("start-before", "machine-scheduler");
-  options.setFlag("enable-misched", enableMISched);
-  options.setFlag("enable-post-misched", enableMISched);
-  options.enablePrintAfterAllIfRequested();
-  options.enable(flags);
-  ScopedLLVMOptions optionScope(options.settings);
-
-  // Parse MIR into LLVM Module
-  llvm::LLVMContext context;
-  llvm::SMDiagnostic error;
-
-  // Load MIR file into memory
-  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> buffer =
-      llvm::MemoryBuffer::getFile(mirPath);
-
-  if (!buffer) {
-    llvm::report_fatal_error(llvm::Twine("failed to open MIR file: ") +
-                             mirPath + " " + buffer.getError().message());
-  }
-
-  std::unique_ptr<llvm::MIRParser> mirParser =
-      llvm::createMIRParser(std::move(buffer.get()), context);
-
-  if (!mirParser) {
-    llvm::report_fatal_error("failed to create MIR parser");
-  }
-
-  std::unique_ptr<llvm::Module> module = mirParser->parseIRModule();
-  if (!module) {
-    llvm::report_fatal_error("failed to parse MIR IR module");
-  }
-
-  // Setup target machine
-  module->setTargetTriple(Triple(triple));
-  auto machine =
-      createTargetMachine(module.get(), proc, enable_fp_fusion, features);
-  module->setDataLayout(machine->createDataLayout());
-
-  // Create PassManager
-  llvm::legacy::PassManager pass;
-
-  // IMPORTANT: Add ScopedNoAliasAAWrapperPass to ensure alias analysis
-  // understands !alias.scope and !noalias metadata during machine scheduling.
-  //
-  // When loading MIR directly (swap path), we skip the normal IR optimization
-  // passes that would register ScopedNoAliasAA. Without this, the machine
-  // scheduler cannot prove that async buffer loads (BUFFER_LOAD_DWORDX4_LDS)
-  // don't alias with LDS reads (DS_READ), resulting in unnecessary memory
-  // dependencies and ~30% performance regression.
-  pass.add(llvm::createScopedNoAliasAAWrapperPass());
-
-  // Emit code from MIR
-  std::string result;
-  {
-    llvm::raw_string_ostream stream(result);
-    llvm::buffer_ostream pstream(stream);
-
-    auto fileType = isObject ? llvm::CodeGenFileType::ObjectFile
-                             : llvm::CodeGenFileType::AssemblyFile;
-
-    // Create MachineModuleInfoWrapperPass FIRST
-    llvm::MachineModuleInfoWrapperPass *MMIWP =
-        new llvm::MachineModuleInfoWrapperPass(machine.get());
-
-    // This will run the remaining machine passes and emit assembly/object
-    machine->addPassesToEmitFile(pass, pstream, nullptr, fileType,
-                                 /*NoVerify*/ false, MMIWP);
-
-    // Now parse machine functions
-    if (mirParser->parseMachineFunctions(*module, MMIWP->getMMI())) {
-      llvm::report_fatal_error("Failed to parse machine functions from MIR");
-    }
-
-    pass.run(*module);
-  }
-
   return result;
 }
 
@@ -766,8 +540,7 @@ void init_triton_llvm(py::module_ &m) {
 
   m.def(
       "to_bitcode",
-      [](const std::string &llvmIR, bool enable_fp_fusion,
-         bool legacy_alias_scopes) {
+      [](const std::string &llvmIR, bool enable_fp_fusion) {
         std::string bitcode;
         {
           py::gil_scoped_release release;
@@ -783,15 +556,12 @@ void init_triton_llvm(py::module_ &m) {
                 " at line " + std::to_string(error.getLineNo()));
           if (enable_fp_fusion)
             enableFPContraction(*module);
-          if (legacy_alias_scopes)
-            downgradeAliasScopeDomains(*module);
           llvm::raw_string_ostream stream(bitcode);
           llvm::WriteBitcodeToFile(*module, stream);
         }
         return py::bytes(bitcode.data(), bitcode.size());
       },
-      py::arg("llvm_ir"), py::arg("enable_fp_fusion") = false,
-      py::arg("legacy_alias_scopes") = false);
+      py::arg("llvm_ir"), py::arg("enable_fp_fusion") = false);
 
   // Add Triton and LLVM versions to the module.
   m.def("add_version_info", [](llvm::Module *mod) {
@@ -1016,53 +786,6 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("is_object"), py::arg("canonicalize_gep"),
       py::arg("sched4reg") = false, py::arg("enable_fpsan") = false,
       py::arg("disable_lsr") = false, py::arg("abi") = "");
-
-  m.def("translate_to_mir",
-        [](std::string llvmIR, std::string triple, std::string proc,
-           std::string features, std::vector<std::string> flags,
-           bool enable_fp_fusion, std::string dumpFileId) -> py::object {
-          std::string obj;
-          {
-            // when allow_threads goes out of scope, gil will be released
-            py::gil_scoped_release allow_threads;
-            // create LLVM module from C++
-            llvm::LLVMContext context;
-            std::unique_ptr<llvm::MemoryBuffer> buffer =
-                llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
-            llvm::SMDiagnostic error;
-            std::unique_ptr<llvm::Module> module =
-                llvm::parseIR(buffer->getMemBufferRef(), error, context);
-            if (!module) {
-              llvm::report_fatal_error(
-                  "failed to parse IR: " + error.getMessage() +
-                  "lineno: " + std::to_string(error.getLineNo()));
-            }
-            obj = translateLLVMIRToMIR(*module, triple, proc, features, flags,
-                                       enable_fp_fusion, dumpFileId);
-          }
-          return py::str(obj.c_str(), obj.size());
-        });
-
-  m.def(
-      "translate_mir_to_asm",
-      [](std::string mirPath, std::string triple, std::string proc,
-         std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion, bool isObject,
-         bool enableMISched) -> py::object {
-        std::string result;
-        {
-          py::gil_scoped_release allow_threads;
-          result = translateMIRToASM(mirPath, triple, proc, features, flags,
-                                     enable_fp_fusion, isObject, enableMISched);
-        }
-        if (isObject)
-          return py::object(py::bytes(result.c_str(), result.size()));
-        else
-          return py::object(py::str(result.c_str(), result.size()));
-      },
-      py::arg("mirPath"), py::arg("triple"), py::arg("proc"),
-      py::arg("features"), py::arg("flags"), py::arg("enable_fp_fusion"),
-      py::arg("isObject"), py::arg("enableMISched") = false);
 
   m.def("init_targets", []() {
     static std::once_flag init_flag;

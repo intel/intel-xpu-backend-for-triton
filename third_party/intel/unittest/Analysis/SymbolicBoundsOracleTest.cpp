@@ -225,34 +225,41 @@ public:
     return masks;
   }
 
-  /// Evaluates a materialized guard for one launch: a pure scalar expression
+  /// Evaluates a materialized value for one launch: a pure scalar expression
   /// over the kernel arguments, so it is evaluated on demand through its
   /// operand cone rather than by executing the function.
-  bool evalGuard(Value guard, ArrayRef<int64_t> argValues) {
+  std::optional<APInt> evalScalar(Value value, ArrayRef<int64_t> argValues) {
     env.clear();
     masks.clear();
     mask = StringRef();
 
-    if (!guard) {
-      ADD_FAILURE() << "oracle: no guard to evaluate";
-      return false;
+    if (!value) {
+      ADD_FAILURE() << "oracle: no value to evaluate";
+      return std::nullopt;
     }
-    Operation *def = guard.getDefiningOp();
+    Operation *def = value.getDefiningOp();
     if (!def) {
-      ADD_FAILURE() << "oracle: guard is a block argument";
-      return false;
+      ADD_FAILURE() << "oracle: value is a block argument";
+      return std::nullopt;
     }
     tt::FuncOp f = def->getParentOfType<tt::FuncOp>();
     if (!f) {
-      ADD_FAILURE() << "oracle: guard is not inside a tt.func";
-      return false;
+      ADD_FAILURE() << "oracle: value is not inside a tt.func";
+      return std::nullopt;
     }
     if (bindArgs(f, argValues) != Status::Ok)
-      return false;
-    if (evalDemand(guard) != Status::Ok)
-      return false;
-    const Val &v = env.find(guard)->second;
-    return !v.elems.empty() && v.elems.front().getBoolValue();
+      return std::nullopt;
+    if (evalDemand(value) != Status::Ok)
+      return std::nullopt;
+    const Val &v = env.find(value)->second;
+    if (v.elems.empty())
+      return std::nullopt;
+    return v.elems.front();
+  }
+
+  bool evalGuard(Value guard, ArrayRef<int64_t> argValues) {
+    std::optional<APInt> v = evalScalar(guard, argValues);
+    return v && v->getBoolValue();
   }
 
   /// Executes one launch like `run`, and returns the trip count of every
@@ -784,7 +791,8 @@ public:
 
   /// Parses `ir`, runs the range analysis over it exactly as a consumer pass
   /// does, and builds the prover. Must be called before any query.
-  void parse(StringRef ir) {
+  void parse(StringRef ir, tt::intel::ScalarHandling scalars =
+                               tt::intel::ScalarHandling::LookThrough) {
     module = parseSourceString<ModuleOp>(ir, &ctx);
     ASSERT_TRUE(module) << "failed to parse:\n" << ir.str();
     ModuleOp mod = module.get();
@@ -792,8 +800,8 @@ public:
     solver = createDataFlowSolver();
     solver->load<tt::intel::IntegerRangeAnalysis>(mod, *domInfo);
     ASSERT_TRUE(succeeded(solver->initializeAndRun(mod)));
-    prover = std::make_unique<tt::intel::SymbolicBoundsProver>(*solver,
-                                                               *domInfo, mod);
+    prover = std::make_unique<tt::intel::SymbolicBoundsProver>(
+        *solver, *domInfo, mod, scalars);
   }
 
   /// The single function in the parsed IR. A ModuleOp body's front() is that
@@ -1585,6 +1593,157 @@ TEST_F(SymbolicBoundsGuardTest, GuardMatchesExactArithmetic) {
             << k << " " << t << " " << a;
       }
     }
+}
+
+// `materializeForm` against exact arithmetic: a linear form, a quotient
+// (divsi semantics), the plain i64 fit limit, and constants at the i64 extrema.
+TEST_F(SymbolicBoundsGuardTest, FormMatchesExactArithmetic) {
+  parse(R"(tt.func @f(%a: i8, %b: i8) { tt.return })");
+  using namespace tt::intel;
+  Operation *term = func().getBody().front().getTerminator();
+  OpBuilder b(term);
+  auto sym = [&](SymbolKind kind, unsigned idx, int64_t divisor = 0) {
+    return AffineForm::symbol(prover->symbolFor(kind, arg(idx), divisor));
+  };
+  auto eval = [&](Value v, int64_t x, int64_t y) -> std::optional<int64_t> {
+    if (std::optional<APInt> r = oracle.evalScalar(v, {x, y}))
+      return r->getSExtValue();
+    return std::nullopt;
+  };
+  AffineForm a = sym(SymbolKind::KernelArg, 0);
+  AffineForm bb = sym(SymbolKind::KernelArg, 1);
+  int64_t k55 = int64_t(1) << 55;
+  Value lin = materializeForm(
+      a.scale(3).sub(bb.scale(2)).add(AffineForm::constant(7)), term, b);
+  Value quot = materializeForm(sym(SymbolKind::Quotient, 0, 4), term, b);
+  Value big = materializeForm(a.scale(k55), term, b);
+  ASSERT_TRUE(lin && quot && big);
+  EXPECT_FALSE(materializeForm(a.scale(int64_t(1) << 56), term, b));
+  for (int64_t x = -128; x <= 127; ++x) {
+    EXPECT_EQ(eval(quot, x, 0), x / 4) << x;
+    EXPECT_EQ(eval(big, x, 0), x * k55) << x;
+    for (int64_t y = -128; y <= 127; ++y)
+      EXPECT_EQ(eval(lin, x, y), 3 * x - 2 * y + 7) << x << " " << y;
+  }
+  for (int64_t c : {INT64_MIN, INT64_MAX}) {
+    Value v = materializeForm(AffineForm::constant(c), term, b);
+    ASSERT_TRUE(v && isa<arith::ConstantOp>(v.getDefiningOp())) << c;
+    EXPECT_EQ(eval(v, 0, 0), c);
+  }
+}
+
+// A row count rebuilt from `normalize` as `H = (rhs - lhs) + lane` must give
+// `mask[i] == (i < H)` on every i8 launch under SplatLeaves. Under LookThrough,
+// `kWrappingBound`'s wrapping `subi` comes back unwrapped, and mismatches.
+TEST_F(SymbolicBoundsGuardTest, SplatLeafRowCountMatchesMask) {
+  using namespace tt::intel;
+  const char *kWrappingBound = R"(
+    tt.func @f(%k: i8, %o: i8) {
+      %lane = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+      %r8 = arith.subi %k, %o : i8
+      %r32 = arith.extsi %r8 : i8 to i32
+      %rs = tt.splat %r32 : i32 -> tensor<16xi32>
+      %mask = arith.cmpi slt, %lane, %rs : tensor<16xi32> loc("mask")
+      tt.return
+    })";
+  const char *kRowBase = R"(
+    tt.func @f(%base: i8, %bound: i8) {
+      %lane = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+      %b32 = arith.extsi %base : i8 to i32
+      %n32 = arith.extsi %bound : i8 to i32
+      %bs = tt.splat %b32 : i32 -> tensor<16xi32>
+      %rows = arith.addi %bs, %lane : tensor<16xi32>
+      %ns = tt.splat %n32 : i32 -> tensor<16xi32>
+      %mask = arith.cmpi slt, %rows, %ns : tensor<16xi32> loc("mask")
+      tt.return
+    })";
+  const char *kQuotient = R"(
+    tt.func @f(%k: i8, %o: i8) {
+      %c4 = arith.constant 4 : i8
+      %lane = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+      %r8 = arith.subi %k, %o : i8 loc("r8")
+      %q8 = arith.divsi %r8, %c4 : i8
+      %q32 = arith.extsi %q8 : i8 to i32
+      %qs = tt.splat %q32 : i32 -> tensor<16xi32>
+      %mask = arith.cmpi slt, %lane, %qs : tensor<16xi32> loc("mask")
+      tt.return
+    })";
+  struct Outcome {
+    unsigned checked = 0, mismatched = 0;
+    bool witnessMismatched = false;
+    AffineForm rhs;
+    bool rhsClean = false;
+  };
+  auto check = [&](StringRef ir, ScalarHandling scalars) {
+    Outcome out;
+    parse(ir, scalars);
+    arith::CmpIOp cmp;
+    module->walk([&](arith::CmpIOp op) { cmp = op; });
+    QueryContext ctx{cmp, nullptr};
+    SmallVector<Obligation, 4> rhsObls, lhsObls;
+    out.rhs = prover->normalize(cmp.getRhs(), ctx, rhsObls);
+    out.rhsClean = rhsObls.empty();
+    AffineForm diff =
+        out.rhs.sub(prover->normalize(cmp.getLhs(), ctx, lhsObls));
+    std::optional<Symbol> lane;
+    for (auto &[sym, k] : diff.terms())
+      if (sym.kind() == SymbolKind::Lane) {
+        EXPECT_FALSE(lane) << "more than one lane term";
+        EXPECT_EQ(k, -1);
+        lane = sym;
+      }
+    if (!lane) {
+      ADD_FAILURE() << "no lane term in " << toString(diff);
+      return out;
+    }
+    Operation *term = func().getBody().front().getTerminator();
+    OpBuilder b(term);
+    Value h = materializeForm(diff.add(AffineForm::symbol(*lane)), term, b);
+    if (!h) {
+      ADD_FAILURE() << "H did not materialize: " << toString(diff);
+      return out;
+    }
+    for (int64_t x = -128; x <= 127; ++x)
+      for (int64_t y = -128; y <= 127; ++y) {
+        auto masks = oracle.run(module.get(), {x, y}, "mask");
+        std::optional<APInt> hv = oracle.evalScalar(h, {x, y});
+        if (!masks || masks->size() != 1 || (*masks)[0].size() != 16 || !hv)
+          continue;
+        ++out.checked;
+        bool same = true;
+        for (int64_t i = 0; i < 16; ++i)
+          same &= (*masks)[0][i] == (i < hv->getSExtValue());
+        if (!same) {
+          ++out.mismatched;
+          out.witnessMismatched |= x == 127 && y == -1;
+        }
+      }
+    return out;
+  };
+
+  Outcome q;
+  for (const char *ir : {kWrappingBound, kRowBase, kQuotient}) {
+    q = check(ir, ScalarHandling::SplatLeaves);
+    EXPECT_EQ(q.checked, 65536u);
+    EXPECT_EQ(q.mismatched, 0u);
+  }
+  // Still parsed: kQuotient. Its bound must stay the quotient of the actual
+  // `subi`, not collapse to an opaque value that would match numerically too.
+  Value r8;
+  module->walk([&](arith::SubIOp op) { r8 = op.getResult(); });
+  ASSERT_EQ(q.rhs.numTerms(), 1u) << toString(q.rhs);
+  auto [qsym, qk] = q.rhs.terms().front();
+  EXPECT_EQ(qsym.kind(), SymbolKind::Quotient);
+  EXPECT_EQ(qsym.value(), r8);
+  EXPECT_EQ(qsym.divisor(), 4);
+  EXPECT_EQ(qk, 1);
+  EXPECT_EQ(q.rhs.constant(), 0);
+  EXPECT_TRUE(q.rhsClean);
+
+  Outcome deep = check(kWrappingBound, ScalarHandling::LookThrough);
+  EXPECT_EQ(deep.checked, 65536u);
+  EXPECT_GT(deep.mismatched, 0u);
+  EXPECT_TRUE(deep.witnessMismatched);
 }
 
 //===----------------------------------------------------------------------===//

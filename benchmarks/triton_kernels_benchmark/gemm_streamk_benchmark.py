@@ -13,6 +13,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.benchmark_testing import DEVICE, get_xpu_extension
+from triton_kernels_benchmark.gemm_tile_utils import load_matrix_tile, make_matrix_tile_ptr, store_matrix_tile
 
 sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
 
@@ -71,27 +72,24 @@ def mac_loop(
     else:
         pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
 
-    # Create tensor descriptors
-    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
-    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
-
+    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
+    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     # Walk the segment mirrored inside its tile. When each program has at least one tile of iterations, its first
     # segment then starts at k = 0, so programs on tiles that share A rows or B columns read the same k-panels at about
     # the same time, as in oneDNN's reduced-cache stream-K.
     off_k = (iters_per_tile - remain_iters - (end_iter - start_iter)) * BLOCK_SIZE_K
     for _ in range(start_iter, end_iter):
-        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+        a = load_matrix_tile(a_desc, M, K, stride_am, stride_ak, pid_m * BLOCK_SIZE_M, off_k, BLOCK_SIZE_M,
+                             BLOCK_SIZE_K)
+        b = load_matrix_tile(b_desc, K, N, stride_bk, stride_bn, off_k, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_K,
+                             BLOCK_SIZE_N)
         acc = tl.dot(a, b, acc)
         off_k += BLOCK_SIZE_K
 
     if remain_iters == 0 and end_iter % iters_per_tile == 0:
-        c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                           block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
-        c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], acc)
+        store_matrix_tile(c_ptr, acc, M, N, stride_cm, stride_cn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N,
+                          BLOCK_SIZE_M, BLOCK_SIZE_N)
     else:
         rm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
         rn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
@@ -116,14 +114,12 @@ def get_autotune_configs() -> List[triton.Config]:
 # Stream-K splits the work on the host, so the tile math in `matmul` has to use the same block sizes as
 # the kernels. Autotuning over several configs would desynchronize the two, hence the single config.
 BLOCK_SIZES = get_autotune_configs()[0].kwargs
+NUM_WARPS = get_autotune_configs()[0].num_warps
 
 
 @triton.autotune(
     configs=get_autotune_configs(),
     key=['M', 'N', 'K'],
-    # `mac_loop` accumulates into c with `atomic_add`, so every launch needs c zeroed.
-    # `first_wave` runs before `full_tiles`, so zeroing the whole buffer here is safe.
-    reset_to_zero=['c_ptr'],
 )
 @triton.jit
 def first_wave(
@@ -185,28 +181,64 @@ def full_tiles(
     else:
         pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
 
-    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
-    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
-
+    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
+    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
     off_k = 0
     for _ in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+        a = load_matrix_tile(a_desc, M, K, stride_am, stride_ak, pid_m * BLOCK_SIZE_M, off_k, BLOCK_SIZE_M,
+                             BLOCK_SIZE_K)
+        b = load_matrix_tile(b_desc, K, N, stride_bk, stride_bn, off_k, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_K,
+                             BLOCK_SIZE_N)
         acc = tl.dot(a, b, acc)
         off_k += BLOCK_SIZE_K
 
-    c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
-    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], acc)
+    store_matrix_tile(c_ptr, acc, M, N, stride_cm, stride_cn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_M,
+                      BLOCK_SIZE_N)
+
+
+@triton.jit
+def zero_streamk_tiles(
+        # Pointer to the output matrix and its shape
+        c_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
+        stride_cm: tl.constexpr, stride_cn: tl.constexpr,
+        # Meta-parameters
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
+    # The stream-K tiles are the first ones in the tile order of `mac_loop`.
+    tile_id = tl.program_id(axis=0)
+    if GROUP_SIZE_M > 0:
+        pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
+    else:
+        pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
+    store_matrix_tile(c_ptr, tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32), M, N, stride_cm, stride_cn,
+                      pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_M, BLOCK_SIZE_N)
 
 
 # ---------------------------------------------------------------------------
 # Wrapper
 # ---------------------------------------------------------------------------
+
+
+def should_use_streamk(M: int, N: int, K: int) -> bool:
+    """Whether stream-K is expected to beat the data-parallel GEMM kernel for a plain 2D GEMM of this shape.
+
+    It pays off when the last wave of output tiles is mostly empty (the idle cores are what stream-K fills) and K is
+    long enough to share out. The shape must satisfy all of:
+      - M, N and K are multiples of the block sizes,
+      - at least two full waves of output tiles and at most eight in total,
+      - a partial last wave of at most half as many tiles as Xe cores,
+      - at least 256 K iterations.
+    These limits are conservative and were measured only on an Arc B580.
+    """
+    if DEVICE != 'xpu' or M % BLOCK_SIZES['BLOCK_SIZE_M'] or N % BLOCK_SIZES['BLOCK_SIZE_N'] or K % BLOCK_SIZES[
+            'BLOCK_SIZE_K']:
+        return False
+    num_xe_core = torch.xpu.get_device_capability(0)['gpu_subslice_count']
+    total_tiles = (M // BLOCK_SIZES['BLOCK_SIZE_M']) * (N // BLOCK_SIZES['BLOCK_SIZE_N'])
+    last_wave = total_tiles % num_xe_core
+    return (total_tiles >= 2 * num_xe_core and 0 < last_wave <= num_xe_core // 2
+            and triton.cdiv(total_tiles, num_xe_core) <= 8 and K // BLOCK_SIZES['BLOCK_SIZE_K'] >= 256)
 
 
 def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
@@ -222,8 +254,7 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
 
     # Check constraints.
     assert a.shape[1] == b.shape[0], 'Incompatible dimensions'
-    assert a.is_contiguous(), 'Matrix A must be contiguous'
-    assert b.is_contiguous(), 'Matrix B must be contiguous'
+    assert all(x.data_ptr() % 16 == 0 for x in (a, b, c)), 'Matrix base addresses must be 16-byte aligned'
     M, K = a.shape
     K, N = b.shape
 
@@ -243,9 +274,14 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
     streamk_full_tiles = streamk_iters // streamk_programs
     streamk_partial_tiles = streamk_iters % streamk_programs
 
-    # Tiles that `first_wave` splits across programs are accumulated with atomics, so they have to start from zero,
-    # and the timed iterations have to pay for that like any caller would.
-    c.zero_()
+    # Tiles of `first_wave` that several programs share are accumulated with atomics, so they have to start from
+    # zero. Clearing all first-wave tiles is cheap, and the timed iterations have to pay for it like any caller would.
+    # `full_tiles` overwrites the rest.
+    if DEVICE != 'xpu':
+        c.zero_()  # the tile-only kernel was only measured on XPU
+    elif streamk_tiles > 0:
+        zero_streamk_tiles[(streamk_tiles, )](c, M, N, K, c.stride(0), c.stride(1), BLOCK_SIZE_M, BLOCK_SIZE_N,
+                                              BLOCK_SIZE_K, BLOCK_SIZES['GROUP_SIZE_M'], num_warps=NUM_WARPS)
 
     first_wave[(streamk_programs, )](
         a, b, c,  #
@@ -302,16 +338,22 @@ def benchmark(M, N, K, provider):
     if provider == 'onednn':
         _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.mm(a, b, out_dtype=torch.float32))
     elif provider == 'triton':
-        c = torch.zeros((M, N), device=a.device, dtype=torch.float32)
+        # NaN, so the check below fails for an unwritten tile or a shared tile that was not zeroed.
+        c = torch.full((M, N), float('nan'), device=a.device, dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.mm(a, b, out_dtype=torch.float32)
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     elif provider == 'sycl-tla':
-        # NOTE: SYCL-TLA doesn't have a stream-k matmul op
+        # SYCL-TLA's own stream-K decomposition, so that this benchmark compares stream-K with stream-K.
+        # It is slower than SYCL-TLA's data-parallel GEMM on these shapes; gemm_benchmark.py is where
+        # Triton is compared against SYCL-TLA's best kernel.
         c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
-        func = getattr(sycl_tla_kernel, 'gemm')
-        sycl_tla_fn = lambda: (func(a, b, c, M, N, K, 1), c)[1]
+
+        def sycl_tla_fn():
+            sycl_tla_kernel.gemm_streamk(a, b, c, M, N, K)
+            return c
+
         torch_fn = lambda: torch.mm(a, b, out_dtype=torch.float32)
         benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='sycl-tla to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(sycl_tla_fn)

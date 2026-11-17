@@ -106,6 +106,14 @@ public:
                           unsigned reduceLaneIdMask,
                           unsigned broadcastLaneIdMask) const = 0;
 
+  // Lets the target lower the in-warp phase of a scan, updating |acc| in
+  // place. Returns false, leaving |acc| untouched, to use the generic lowering.
+  virtual bool warpScan(RewriterBase &rewriter, Location loc,
+                        SmallVector<Value> &acc, triton::ScanOp op,
+                        unsigned scanDim, unsigned threadStride) const {
+    return false;
+  }
+
   // Emits LLVM code with |rewriter| to print a message following the given
   // format from the device. |formatStrStart| is the pointer to the start of
   // the format string global variable; |args| are the arguments to fill
@@ -145,6 +153,7 @@ public:
   virtual int getAddressSpace(Attribute addressSpace) const = 0;
 
   virtual bool supportVectorizedAtomics() const = 0;
+  virtual bool supportNativeBF16AtomicAdd() const { return false; }
 
   virtual bool supportLdMatrix() const { return false; }
   virtual bool supportStMatrix() const { return false; }
@@ -160,6 +169,8 @@ public:
   virtual unsigned getReductionTreeArity(Operation *combinerOp) const {
     return 2;
   }
+  // Whether to use three interleaved register chains for a Boolean reduction.
+  virtual bool preferThreePredicateChains() const { return false; }
   virtual bool isCuda() const { return false; }
 
   // Returns the shared memory partition size in bytes. A value of 0 means

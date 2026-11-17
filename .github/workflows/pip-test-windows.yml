@@ -94,6 +94,7 @@ jobs:
           pip install -U intel-sycl-rt==2026.1.0
           # `build` can't determine that Ninja is already installed.
           # similar issue: https://github.com/pypa/build/issues/506
+          $env:MAX_JOBS = $env:NUMBER_OF_PROCESSORS
           python -m build --wheel --no-isolation --skip-dependency-check
           pip install (Get-Item ${{ env.NEW_WORKSPACE }}\dist\*.whl)
 

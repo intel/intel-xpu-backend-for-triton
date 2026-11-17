@@ -37,7 +37,7 @@ env:
 jobs:
   build:
     name: Test
-    runs-on: ${{ (inputs.runner_label == 'lts' || contains(inputs.runner_label, 'igc')) && fromJSON(format('["linux","{0}"]', inputs.runner_label)) || fromJSON(format('["linux","rolling","{0}","{1}"]', inputs.runner_label || 'max1100', inputs.runner_version)) }}
+    runs-on: ${{ (inputs.runner_label == 'lts' || contains(inputs.runner_label, 'igc')) && fromJSON(format('["linux","gpu","{0}"]', inputs.runner_label)) || fromJSON(format('["linux","rolling","{0}","{1}"]', inputs.runner_label || 'max1100', inputs.runner_version)) }}
     timeout-minutes: 960
     defaults:
       run:
@@ -61,7 +61,7 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           ref: ${{ inputs.pytorch_ref }}
-          cache: disabled
+          cache: read-only
           lts: ${{ inputs.runner_label == 'lts' }}
 
       - name: Setup Triton
@@ -101,6 +101,8 @@ jobs:
       - name: Run inductor tests
         run: |
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
+          # PTI's default local collection mode loses kernel timestamps and hangs test_analysis.py on Agama 40196.8 (#8789).
+          export PTI_COLLECTION_MODE=0
           bash scripts/test-pytorch.sh ${{ inputs.suite }}
 
       - name: Upload test logs

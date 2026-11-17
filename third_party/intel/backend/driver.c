@@ -31,6 +31,11 @@
 
 #include <Python.h>
 
+// NOTE: `proton_utils.cpp`'s `getDeviceKey` independently builds the same
+// device-ordinal scheme (index into `queue->get_context().get_devices()`)
+// for Proton's instrumentation profiler. It cannot reuse this list directly
+// -- it builds into a separate shared library, dlopen'd independently of
+// this one -- so if the indexing scheme here changes, update it there too.
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
     g_sycl_l0_device_list;
 
@@ -590,34 +595,6 @@ static BinaryGRFMode getSpirvGRFMode(const uint8_t *binary, size_t size) {
     i += wordCount;
   }
   return {};
-}
-
-sycl::context get_default_context(const sycl::device &sycl_device) {
-  const auto &platform = sycl_device.get_platform();
-#if defined(_WIN32)
-  sycl::context ctx;
-  try {
-#if __SYCL_COMPILER_VERSION >= 20250604
-    ctx = platform.khr_get_default_context();
-#else
-    ctx = platform.ext_oneapi_get_default_context();
-#endif
-  } catch (const std::runtime_error &ex) {
-    // This exception is thrown on Windows because
-    // khr_get_default_context is not implemented. But it can be safely
-    // ignored it seems.
-#if _DEBUG
-    std::cout << "ERROR: " << ex.what() << std::endl;
-#endif
-  }
-  return ctx;
-#else
-#if __SYCL_COMPILER_VERSION >= 20250604
-  return platform.khr_get_default_context();
-#else
-  return platform.ext_oneapi_get_default_context();
-#endif
-#endif
 }
 
 static BuildFlags last_build_flag("");

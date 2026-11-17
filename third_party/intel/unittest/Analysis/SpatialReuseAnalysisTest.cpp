@@ -426,7 +426,8 @@ TEST_F(SpatialReuseAnalysisTest, DescriptorLoadOpOverload) {
   BlockArgument desc = block->getArgument(0);
 
   auto loadOp = DescriptorLoadOp::create(*builder, builder->getUnknownLoc(),
-                                         resultTy, desc);
+                                         resultTy, desc, /*indices=*/{},
+                                         /*cachePolicy=*/Attribute());
 
   SpatialReuseAnalysis analysis(*module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(loadOp), ElementsAre(1u));

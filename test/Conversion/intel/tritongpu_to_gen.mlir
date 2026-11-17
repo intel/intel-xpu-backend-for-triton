@@ -503,7 +503,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @basic_view_broadcast(%arg : tensor<256xf32,#blocked0>) {
     // CHECK:      [[ARG0_0:%.*]] = llvm.extractvalue %arg0[0]
     // CHECK-NEXT: [[ARG0_1:%.*]] = llvm.extractvalue %arg0[1]
-    %0 = tt.reshape %arg allow_reorder : tensor<256xf32, #blocked0> -> tensor<256x1xf32,#blocked2>
+    %0 = tt.reshape %arg : tensor<256xf32, #blocked0> -> tensor<256x1xf32,#blocked2>
     // CHECK:      [[RES:%.*]] = llvm.mlir.undef : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // CHECK-NEXT: [[RES1:%.*]] = llvm.insertvalue [[ARG0_0]], [[RES]][0]
     // CHECK-NEXT: [[RES2:%.*]] = llvm.insertvalue [[ARG0_1]], [[RES1]][1]
@@ -2174,6 +2174,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
     // CHECK: [[MAX:%.*]] = llvm.intr.maxnum(%{{.*}}, %{{.*}}) : (bf16, bf16) -> bf16
     // CHECK: llvm.intr.minnum([[MAX]], %{{.*}}) : (bf16, bf16) -> bf16
     %0 = tt.clampf %x, %lo, %hi, propagateNan = none : tensor<128xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Without native bf16 arithmetic, a bf16 `math.fma` (emitted by DecomposeScaledBlocked for the NaN handling of
+// COM: dot_scaled scales) is computed in f32 and rounded back once; `arith-emulate-unsupported-floats` does not widen it.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_bfloat16_conversion} {
+  // CHECK-LABEL: @fma_bf16_no_bf16_arithmetic
+  tt.func @fma_bf16_no_bf16_arithmetic(%a: tensor<128xbf16, #blocked>, %b: tensor<128xbf16, #blocked>, %c: tensor<128xbf16, #blocked>) {
+    // CHECK-NOT: (bf16, bf16, bf16) -> bf16
+    // CHECK: [[A:%.*]] = llvm.call spir_funccc @_Z27__spirv_ConvertBF16ToFINTELs(%{{.*}})
+    // CHECK: [[B:%.*]] = llvm.call spir_funccc @_Z27__spirv_ConvertBF16ToFINTELs(%{{.*}})
+    // CHECK: [[C:%.*]] = llvm.call spir_funccc @_Z27__spirv_ConvertBF16ToFINTELs(%{{.*}})
+    // CHECK: [[FMA:%.*]] = llvm.intr.fma([[A]], [[B]], [[C]]) : (f32, f32, f32) -> f32
+    // CHECK: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf([[FMA]])
+    // CHECK-NOT: (bf16, bf16, bf16) -> bf16
+    %0 = math.fma %a, %b, %c : tensor<128xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_bfloat16_arithmetic} {
+  // CHECK-LABEL: @fma_bf16_bf16_arithmetic
+  tt.func @fma_bf16_bf16_arithmetic(%a: tensor<128xbf16, #blocked>, %b: tensor<128xbf16, #blocked>, %c: tensor<128xbf16, #blocked>) {
+    // CHECK-NOT: __spirv_ConvertBF16ToFINTEL
+    // CHECK: llvm.intr.fma(%{{.*}}, %{{.*}}, %{{.*}}) : (bf16, bf16, bf16) -> bf16
+    %0 = math.fma %a, %b, %c : tensor<128xbf16, #blocked>
     tt.return
   }
 }

@@ -10,6 +10,14 @@ from torch.overrides import TorchFunctionMode
 
 import triton
 
+# `fresh_knobs` deletes TRITON_XPU_GEN_NATIVE_CODE for the duration of any test that
+# uses it, but warmup's compile runs in a separate pool-worker process that never sees
+# that deletion -- flipping `generate_native_code`, and therefore the compile hash,
+# between warmup and the real run. Snapshot the ambient value before any test can
+# delete it, so `pytest_runtest_call` below can restore it for `enable_warmup` tests.
+_AMBIENT_GEN_NATIVE_CODE = triton.knobs.intel.gen_native_code
+_NO_OVERRIDE = object()
+
 
 class _FakeCudaTensorMode(TorchFunctionMode):
     """Preserve CUDA allocation alignment and view offsets in fake pointers."""
@@ -63,6 +71,16 @@ class _FakeCudaTensorMode(TorchFunctionMode):
         return func(*args, **(kwargs or {}))
 
 
+class _WarmupCompiledKernel:
+    """Stand-in for the `CompiledKernel` of a textual IR kernel compiled by the warmup pool.
+
+    Launching is a no-op and there is no `asm`/`metadata`: tests must skip such checks under `is_compile_warmup()`.
+    """
+
+    def __getitem__(self, grid):
+        return lambda *args, **kwargs: None
+
+
 @contextmanager
 def compile_warmup_only(dispatcher=None):
     """Capture launch specializations without GPU allocations or kernel execution."""
@@ -78,6 +96,19 @@ def compile_warmup_only(dispatcher=None):
             return kernel.warmup(*args, grid=grid, **kwargs)
         return dispatcher.dispatch(*args, kernel=kernel, grid=grid, test=dispatcher.current_test, **kwargs)
 
+    def warmup_compile(src, target=None, options=None, _env_vars=None):
+        # Textual IR kernels (`triton.compile(path)`) are compiled here rather than at launch, so route them
+        # to the pool; the returned stand-in ignores launches. Anything else, e.g. an `ASTSource` passed
+        # directly (`test_regression_7925`) or a call with an explicit target, passes through to the real
+        # `compile`. Kernels launched as `kernel[grid](...)` are captured by `dispatch` instead.
+        if not isinstance(src, str) or target is not None or _env_vars is not None:
+            return previous_compile(src, target=target, options=options, _env_vars=_env_vars)
+        if dispatcher is None:
+            previous_compile(src, options=options)
+        else:
+            dispatcher.dispatch_ir(src, options=options, test=dispatcher.current_test)
+        return _WarmupCompiledKernel()
+
     with triton.knobs.runtime.scope(), warnings.catch_warnings():
         warnings.filterwarnings("ignore", message="Accessing the data pointer of FakeTensor.*")
         with _FakeCudaTensorMode():
@@ -86,11 +117,14 @@ def compile_warmup_only(dispatcher=None):
             triton.KernelInterface.__getitem__ = lambda kernel, grid: lambda *args, **kwargs: dispatch(
                 kernel, grid, *args, **kwargs)
             torch.testing.assert_close = fake_assert_close
+            previous_compile = triton.compiler.compile
+            triton.compile = triton.compiler.compile = warmup_compile
             active_token = _COMPILE_WARMUP_ACTIVE.set(True)
             try:
                 yield
             finally:
                 _COMPILE_WARMUP_ACTIVE.reset(active_token)
+                triton.compile = triton.compiler.compile = previous_compile
                 triton.KernelInterface.__getitem__ = previous_getitem
                 torch.testing.assert_close = previous_assert_close
 
@@ -228,14 +262,21 @@ def compile_warmup(request):
 def pytest_runtest_call(item):
     directory = os.environ.get("TRITON_CI_COMPILE_TRACE_DIR")
     phase = _cache_phase_for_item(item)
+    is_warmed = (item.get_closest_marker("enable_warmup") is not None
+                 and item.get_closest_marker("disable_warmup") is None)
     previous_listener = triton.knobs.compilation.listener
     if directory:
         triton.knobs.compilation.listener = CompilationTrace(directory, phase, item.nodeid)
-        if (not item.config.getoption("--warmup-only") and item.get_closest_marker("enable_warmup") is not None
-                and item.get_closest_marker("disable_warmup") is None):
+        if not item.config.getoption("--warmup-only") and is_warmed:
             path = os.path.join(directory, f"{phase}-{os.getpid()}.tests")
             with open(path, "a", encoding="utf-8") as output:
                 output.write(json.dumps({"phase": phase, "test": item.nodeid}, sort_keys=True) + "\n")
+
+    if is_warmed:
+        # Capture whether gen_native_code had an instance override at all, not just its
+        # resolved value.
+        previous_gen_native_code = triton.knobs.intel.__dict__.get("gen_native_code", _NO_OVERRIDE)
+        triton.knobs.intel.gen_native_code = _AMBIENT_GEN_NATIVE_CODE
 
     dispatcher = getattr(item.config, "_triton_warmup_dispatcher", None)
     if dispatcher is not None:
@@ -253,6 +294,11 @@ def pytest_runtest_call(item):
         if dispatcher is not None:
             dispatcher.current_test = previous_test
             dispatcher.current_phase = previous_phase
+        if is_warmed:
+            if previous_gen_native_code is _NO_OVERRIDE:
+                del triton.knobs.intel.gen_native_code
+            else:
+                triton.knobs.intel.gen_native_code = previous_gen_native_code
         triton.knobs.compilation.listener = previous_listener
 
 

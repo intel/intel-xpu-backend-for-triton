@@ -236,13 +236,15 @@ bool isExpensiveLoadOrStore(Operation *op) {
   // Loads or stores that use a block pointer are expensive if they cannot be
   // lowered to 2D block read/write operations. Temporarily leverage the
   // "ttig.block_io" attribute to filter out inexpensive loads.
-  // Exception: 1D-reshaped loads and stores (indicated by
+  // Exceptions: 1D-reshaped loads and stores (indicated by
   // ttig.block_io_stride) have a specific encoding that matches HW delivery
-  // order and must be anchored.
+  // order, and descriptor loads marked ttig.block_io_anchor were relaid out
+  // for 2D block IO. Both must be anchored.
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
   if (blockIOAttr &&
       !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName()) &&
+      !op->hasAttr(TritonIntelGPUDialect::getBlockIOAnchorAttrName()) &&
       !isMaskedLoadWithoutDotConsumer(op))
     return false;
 

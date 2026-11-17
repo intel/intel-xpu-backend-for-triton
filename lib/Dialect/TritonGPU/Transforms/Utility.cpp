@@ -521,23 +521,20 @@ static Attribute inferSrcEncoding(triton::TransposeOpInterface op,
 
 static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
                                            Attribute srcEnc,
-                                           ArrayRef<int64_t> dstShape,
-                                           Attribute dstEncHint = {},
-                                           bool allowReorder = false) {
-  Attribute dstEnc = dstEncHint;
+                                           ArrayRef<int64_t> dstShape) {
+  Attribute dstEnc;
   auto result =
       srcEnc.getDialect()
           .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferReshapeOpEncoding(srcShape, srcEnc, dstShape, dstEnc,
-                                   allowReorder, /*loc=*/std::nullopt);
+                                   /*loc=*/std::nullopt);
   assert(succeeded(result));
   return dstEnc;
 }
 
 static Attribute inferDstEncoding(triton::ReshapeOp op, Attribute encoding) {
-  return inferReshapeOpDstEncoding(
-      op.getSrc().getType().getShape(), encoding, op.getType().getShape(),
-      op.getType().getEncoding(), op.getAllowReorder());
+  return inferReshapeOpDstEncoding(op.getSrc().getType().getShape(), encoding,
+                                   op.getType().getShape());
 }
 
 static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
@@ -552,9 +549,8 @@ static Attribute inferSrcEncoding(triton::ReshapeOp op, Attribute encoding) {
   // as the encoding of x given the encoding of y in `reshape(y) -> x`.  It's an
   // invariant of inferReshapeOpNoReorderEncoding that it's symmetric in this
   // way.
-  return inferReshapeOpDstEncoding(
-      op.getType().getShape(), encoding, op.getSrc().getType().getShape(),
-      op.getSrc().getType().getEncoding(), op.getAllowReorder());
+  return inferReshapeOpDstEncoding(op.getType().getShape(), encoding,
+                                   op.getSrc().getType().getShape());
 }
 
 static bool isSingleValue(Value value) {
@@ -680,15 +676,6 @@ canUseResultEncoding(Operation *op, Attribute targetEncoding) {
     return SmallVector<OpOperand *>{};
   }
 
-  if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
-    auto reshapeDstType = reshape.getType();
-    RankedTensorType newDstType =
-        reshapeDstType.cloneWithEncoding(targetEncoding);
-    if (!reshape.getAllowReorder() || reshape.getEfficientLayout() ||
-        triton::gpu::isExpensiveView(reshape.getSrc().getType(), newDstType))
-      return std::nullopt;
-    return SmallVector<OpOperand *>{&reshape.getSrcMutable()};
-  }
   if (isa<arith::ConstantOp, triton::MakeRangeOp, triton::SplatOp,
           triton::HistogramOp, triton::gpu::LocalAllocOp,
           triton::gpu::LocalLoadOp, triton::gpu::LocalStoreOp>(op))
@@ -1743,6 +1730,63 @@ std::optional<bool> getBoolFromConstant(Value cst) {
     return boolAttr.getValue();
   }
   return std::nullopt;
+}
+
+static int getNumWorkerWarps(Operation *op) {
+  int defaultNumWarps = gpu::lookupNumWarps(op);
+  auto mod = op->getParentOfType<ModuleOp>();
+  auto totalNumWarps = mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps");
+  return totalNumWarps ? totalNumWarps.getInt() - defaultNumWarps : 0;
+}
+
+void emitClusterSyncForAllWarps(OpBuilder &builder, Location loc,
+                                Operation *anchor,
+                                function_ref<void(OpBuilder &)> emit,
+                                bool joinWarps) {
+  int workerNumWarps = getNumWorkerWarps(anchor);
+  if (workerNumWarps == 0) {
+    emit(builder);
+    if (joinWarps)
+      gpu::BarrierOp::create(builder, loc, gpu::AddrSpace::None);
+    return;
+  }
+  // warp_specialize joins all warps when it ends, which satisfies `joinWarps`.
+
+  OpBuilder::InsertionGuard guard(builder);
+  SmallVector<int32_t> partitionNumWarps;
+  for (int remainingWarps = workerNumWarps; remainingWarps > 0;) {
+    int32_t partitionWarps =
+        llvm::bit_floor(static_cast<uint32_t>(remainingWarps));
+    partitionNumWarps.push_back(partitionWarps);
+    remainingWarps -= partitionWarps;
+  }
+
+  auto wsOp = gpu::WarpSpecializeOp::create(builder, loc, TypeRange{},
+                                            partitionNumWarps);
+  SmallVector<int32_t> startIds;
+  int startId = gpu::lookupNumWarps(anchor);
+  for (int32_t partitionWarps : partitionNumWarps) {
+    startIds.push_back(startId);
+    startId += partitionWarps;
+  }
+  wsOp.setWarpGroupStartIds(startIds);
+
+  Block *defaultBlock = builder.createBlock(&wsOp.getDefaultRegion());
+  builder.setInsertionPointToEnd(defaultBlock);
+  emit(builder);
+  gpu::WarpYieldOp::create(builder, loc, TypeRange(), ValueRange());
+
+  Block *partitionHolder = builder.createBlock(&wsOp.getPartitionOpHolder());
+  builder.setInsertionPointToStart(partitionHolder);
+  auto partitions = gpu::WarpSpecializePartitionsOp::create(
+      builder, loc, ValueRange(),
+      /*numPartitionRegions=*/partitionNumWarps.size());
+  for (Region &partitionRegion : partitions.getPartitionRegions()) {
+    Block *partitionBlock = builder.createBlock(&partitionRegion);
+    builder.setInsertionPointToEnd(partitionBlock);
+    emit(builder);
+    gpu::WarpReturnOp::create(builder, loc);
+  }
 }
 
 } // namespace mlir::triton

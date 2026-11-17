@@ -282,13 +282,20 @@ Formats: exact test path, path with parameters, regex patterns (with `@regexp` s
 
 From `scripts/pytest-utils.sh`:
 - Skip lists passed via `--skip-from-file=path/to/suite.txt`
-- `--select-fail-on-missing` ensures skipped tests exist (catches stale skip entries)
+- Expected-failure lists in the same directory: `<suite>.xfail.txt` (`--xfail-norun-from-file`:
+  reported as XFAIL without running) and `<suite>.xfail-run.txt` (`--xfail-from-file`, strict: the
+  test runs, must fail, and an unexpected pass fails the run; currently unused)
+- Which list: `<suite>.xfail.txt` when a platform limitation, not a bug, keeps the test from
+  passing here (e.g. CUDA-only, missing hardware feature, too little memory); the skip list for
+  everything else, including bugs owned by other teams (IGC, driver, PyTorch). Skipped tests count
+  against `pass_rate_2` (`passed / (total - xfailed)`); xfailed tests do not
+- `--select-fail-on-missing` ensures listed tests exist in skip and xfail lists (catches stale entries)
 - Multiple skip files combined with semicolons
 - Extra suffix-based skip lists via `TRITON_EXTRA_SKIPLIST_SUFFIXES`
 
 ### TEST_UNSKIP Mode
 
-Setting `TEST_UNSKIP=true` ignores all skip/xfail decorators:
+Setting `TEST_UNSKIP=true` ignores all skip/xfail decorators and does not load the skip or xfail lists:
 - Adds `--timeout=500` per test
 - Adds `--max-worker-restart=500` for crash tolerance
 - Useful for validating which skips are still needed
@@ -318,7 +325,7 @@ Setting `TEST_UNSKIP=true` ignores all skip/xfail decorators:
 4. Use `numpy_random()` with explicit seed for reproducibility
 5. Use `to_triton()` / `to_numpy()` for tensor conversion
 6. Set appropriate `rtol`/`atol` for the precision being tested
-7. Add to relevant skip list if known to fail on specific architectures
+7. Add to the relevant skip or xfail list (see Skip List Application) if known to fail on specific architectures
 
 ### New C++ Test Checklist
 

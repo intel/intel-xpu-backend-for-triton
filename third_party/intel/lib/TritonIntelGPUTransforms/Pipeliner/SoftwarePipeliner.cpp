@@ -6,8 +6,10 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir;
 namespace ttgi = mlir::triton::gpu::intel;
@@ -39,13 +41,49 @@ static bool preCondition(scf::ForOp forOp) {
   return true;
 }
 
-static void pipelineLoop(scf::ForOp forOp, int numStages, bool useBarrier) {
+// Re-align the warps of a work-group at the top of the loop enclosing the
+// pipelined `loop`, as a grid launch does at every tile: their own L1
+// prefetches otherwise let them drift apart across a persistent kernel's tiles
+// (#8719).
+static void insertTileBarrier(scf::ForOp loop) {
+  auto outer = loop->getParentOfType<scf::ForOp>();
+  auto funcOp = loop->getParentOfType<triton::FuncOp>();
+  // A private helper may be called by only some warps.
+  if (!outer || !funcOp || !funcOp.isPublic())
+    return;
+  // Every warp must reach the barrier equally often.
+  auto isUniform = [&](Value v) {
+    return triton::intel::isProgramUniform(v, funcOp, /*allowLoopIVs=*/true);
+  };
+  for (Operation *op = outer; op != funcOp; op = op->getParentOp()) {
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      if (!isUniform(forOp.getLowerBound()) ||
+          !isUniform(forOp.getUpperBound()) || !isUniform(forOp.getStep()))
+        return;
+    } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      if (!isUniform(ifOp.getCondition()))
+        return;
+    } else {
+      return;
+    }
+  }
+  Block *body = outer.getBody();
+  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(body->front());
+      barrier && !barrier.isWarp())
+    return;
+  OpBuilder b = OpBuilder::atBlockBegin(body);
+  triton::gpu::BarrierOp::create(b, loop.getLoc(),
+                                 triton::gpu::AddrSpace::None);
+}
+
+static void pipelineLoop(scf::ForOp forOp, int numStages,
+                         const ttgi::PipelineTarget &target) {
   mlir::scf::PipeliningOption options;
   if (!preCondition(forOp))
     return;
 
   bool foundSchedule =
-      ttgi::preProcessLoopAndGetSchedule(forOp, numStages, options);
+      ttgi::preProcessLoopAndGetSchedule(forOp, numStages, target, options);
   if (!foundSchedule)
     return;
 
@@ -58,7 +96,7 @@ static void pipelineLoop(scf::ForOp forOp, int numStages, bool useBarrier) {
     return;
 
   scf::ForOp loop = (*newForOp);
-  if (useBarrier) {
+  if (target.useBarrier) {
     OpBuilder b(loop);
     Location loc = loop.getLoc();
     b.setInsertionPointToStart(loop.getBody());
@@ -66,6 +104,8 @@ static void pipelineLoop(scf::ForOp forOp, int numStages, bool useBarrier) {
     auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
     b.setInsertionPoint(yield);
     triton::TritonGEN::SplitBarrierWaitOp::create(b, loc, bData);
+  } else if (target.tileBarrier) {
+    insertTileBarrier(loop);
   }
 }
 
@@ -89,8 +129,10 @@ struct IntelGPUPipelinePass
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
+    ttgi::PipelineTarget target{deviceArch, coreClockKhz, memClockMhz,
+                                useBarrier, tileBarrier};
     for (scf::ForOp forOp : loops)
-      pipelineLoop(forOp, numStages, useBarrier);
+      pipelineLoop(forOp, numStages, target);
   }
 };
 } // anonymous namespace

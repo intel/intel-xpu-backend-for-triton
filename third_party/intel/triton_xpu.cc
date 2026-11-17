@@ -30,6 +30,7 @@
 #include "triton/Tools/Sys/GetEnv.h"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
@@ -75,8 +76,6 @@ void init_triton_intel_passes_ttir(py::module_ &&m) {
                      intel::createTritonIntelOptimizeLoadMasks);
   ADD_PASS_WRAPPER_0("add_simplify_signed_arithmetic",
                      intel::createTritonIntelSimplifySignedArithmetic);
-  ADD_PASS_WRAPPER_0("add_speculate_signed_div_rem",
-                     intel::createTritonIntelSpeculateSignedDivRem);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi",
                      intel::createTritonIntelGPUFoldTrueCmpI);
   ADD_FUNC_PASS_WRAPPER_0("add_prepare_if_combining",
@@ -89,16 +88,24 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
   ADD_PASS_OPTION_WRAPPER_1(
       "add_to_llvmir", gpu::intel::createConvertTritonIntelGPUToLLVM, bool);
   ADD_PASS_WRAPPER_0("add_gen_to_llvm", createConvertTritonGENToLLVM);
-  ADD_PASS_WRAPPER_0("add_accelerate_matmul",
-                     gpu::intel::createTritonIntelGPUAccelerateMatmul);
+  ADD_PASS_OPTION_WRAPPER_1("add_accelerate_matmul",
+                            gpu::intel::createTritonIntelGPUAccelerateMatmul,
+                            std::string);
   ADD_PASS_WRAPPER_0("add_fold_fp_to_fp",
                      gpu::intel::createTritonIntelGPUFoldFpToFp);
-  ADD_PASS_WRAPPER_0("add_stage_large_fma_dots_via_slm",
-                     gpu::intel::createTritonIntelGPUStageLargeFMADotsViaSLM);
+  ADD_PASS_OPTION_WRAPPER_2(
+      "add_stage_large_fma_dots_via_slm",
+      gpu::intel::createTritonIntelGPUStageLargeFMADotsViaSLM, unsigned, bool);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
-  ADD_PASS_OPTION_WRAPPER_2(
-      "add_pipeline", gpu::intel::createTritonIntelGPUPipeline, int, bool);
+  m.def("add_pipeline",
+        [](mlir::PassManager &pm, int numStages, bool useBarrier,
+           bool tileBarrier, std::string deviceArch, unsigned coreClockKhz,
+           unsigned memClockMhz) {
+          pm.addPass(gpu::intel::createTritonIntelGPUPipeline(
+              {numStages, useBarrier, tileBarrier, deviceArch, coreClockKhz,
+               memClockMhz}));
+        });
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      gpu::intel::createIntelAllocateSharedMemory);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
@@ -168,8 +175,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
   ADD_PASS_OPTION_WRAPPER_1(
       "add_canonicalize_pointers",
       gpu::intel::createTritonIntelGPUCanonicalizePointers, bool);
-  ADD_PASS_WRAPPER_0("add_materialize_block_pointer",
-                     gpu::intel::createTritonIntelGPUMaterializeBlockPointer);
+  ADD_PASS_OPTION_WRAPPER_1(
+      "add_materialize_block_pointer",
+      gpu::intel::createTritonIntelGPUMaterializeBlockPointer, bool);
   ADD_PASS_WRAPPER_0("add_optimize_reduction_locality",
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
   ADD_PASS_WRAPPER_0("add_lower_to_2d_block_load",
@@ -490,8 +498,9 @@ void init_triton_intel(py::module_ &m) {
 
   m.def(
       "translate_to_spirv",
-      [](const std::string &llvmIR,
-         bool isLTS) -> std::tuple<py::object, std::string> {
+      [](const std::string &llvmIR, bool isLTS,
+         const std::map<std::string, bool> &probedExtensions)
+          -> std::tuple<py::object, std::string> {
         std::string name;
         std::string spirvBitcode;
         {
@@ -513,12 +522,14 @@ void init_triton_intel(py::module_ &m) {
           const uint32_t numKernels = findKernels(*module, kernels);
           assert(numKernels == 1 && "Expecting a single SPIR kernel");
           name = (*kernels.begin())->getName().str();
-          spirvBitcode = triton::translateLLVMIRToSPIRV(*module, isLTS);
+          spirvBitcode =
+              triton::translateLLVMIRToSPIRV(*module, isLTS, probedExtensions);
         }
         return std::make_tuple(
             py::bytes(spirvBitcode.data(), spirvBitcode.size()), name);
       },
-      py::arg("llvmIR"), py::arg("isLTS"), ret::take_ownership);
+      py::arg("llvmIR"), py::arg("isLTS"), py::arg("probedExtensions"),
+      ret::take_ownership);
 
   m.def(
       "calculate_warps_per_tile",

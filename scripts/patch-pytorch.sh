@@ -35,5 +35,3 @@ apply_patch() {
 echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
-
-apply_patch "flex-attention-skip-kernel-options.patch"

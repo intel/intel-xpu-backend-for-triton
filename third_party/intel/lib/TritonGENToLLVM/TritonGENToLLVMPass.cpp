@@ -1237,7 +1237,8 @@ struct TritonSubGroupBlockReadLowering
         /*errnoMem=*/LLVM::ModRefInfo::NoModRef,
         /*targetMem0=*/LLVM::ModRefInfo::NoModRef,
         /*targetMem1=*/LLVM::ModRefInfo::NoModRef);
-    auto funcAttrs = intel::noUnwindWillReturnAttrs;
+    // A sub-group collective: LLVM must not move it into divergent code.
+    auto funcAttrs = intel::convergentNoUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
     LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, funcName, type, {ptrTy}, {op.getPtr()}, {}, funcAttrs, {});

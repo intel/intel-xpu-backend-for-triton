@@ -19,6 +19,8 @@ import torch
 
 import triton
 import triton.language as tl
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
 from triton._internal_testing import is_hip
 from triton.runtime.cache import FileCacheManager, RemoteCacheManager
 
@@ -808,6 +810,11 @@ def _preload_function():
     return 17
 
 
+@gluon.jit
+def _preload_gluon_function():
+    return 17
+
+
 def _serialize_constants(constants):
     from triton.runtime.jit import serialize_specialization_data
     return serialize_specialization_data("reference_kernel", {}, constants, {}, SimpleNamespace(), "reference-key",
@@ -827,7 +834,9 @@ def _preload_constants(specialization_data, monkeypatch):
     return jit.JITFunction.preload(kernel, specialization_data)
 
 
-@pytest.mark.parametrize("constant", [int, _PreloadClass, _PreloadClass.Nested, _PreloadAggregate, _preload_function])
+@pytest.mark.parametrize(
+    "constant",
+    [int, _PreloadClass, _PreloadClass.Nested, _PreloadAggregate, _preload_function, _preload_gluon_function])
 def test_preload_reference_constants(constant, monkeypatch):
     specialization_data = _serialize_constants({(0, ): constant})
     constants = _preload_constants(specialization_data, monkeypatch)
@@ -921,6 +930,35 @@ def test_preload_class_kernel(cls, device, fresh_triton_cache, fresh_knobs):
     assert preloaded.hash == compiled.hash
     output.zero_()
     assert kernel[(1, )](output, cls) is preloaded
+    assert output.item() == 17
+    assert len(specializations) == 4
+
+
+def test_preload_gluon_function_kernel(device, fresh_triton_cache, fresh_knobs):
+
+    @gluon.jit
+    def kernel(out, fn: gl.constexpr):
+        gl.store(out, fn())
+
+    specializations = []
+
+    def cache_hook(**kwargs):
+        specializations.append(kwargs["compile"]["specialization_data"])
+
+    fresh_knobs.runtime.jit_cache_hook = cache_hook
+    fresh_knobs.runtime.jit_post_compile_hook = cache_hook
+    output = torch.empty((), device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](output, _preload_gluon_function)
+    assert output.item() == 17
+    assert len(specializations) == 2
+    assert specializations[0] == specializations[1]
+
+    shutil.rmtree(fresh_triton_cache)
+    kernel.device_caches.clear()
+    preloaded = kernel.preload(specializations[0])
+    assert preloaded.hash == compiled.hash
+    output.zero_()
+    assert kernel[(1, )](output, _preload_gluon_function) is preloaded
     assert output.item() == 17
     assert len(specializations) == 4
 
@@ -1075,7 +1113,7 @@ def test_hooks(device, fresh_triton_cache) -> None:
 
 @pytest.mark.xfail(reason="within_2g is a HIP specific optimization", condition=not is_hip(), run=False)
 def test_within_2gb(device, fresh_triton_cache) -> None:
-    default_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0")
+    default_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS")
     try:
         use_buffer_ops_opts = ["1", "0"]
         # The ranges should only be available when buffer ops are enabled
@@ -1083,6 +1121,7 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
         for use_buffer_ops, pointer_range in zip(use_buffer_ops_opts, pointer_ranges):
             # Set AMDGCN_USE_BUFFER_OPS
             os.environ["AMDGCN_USE_BUFFER_OPS"] = use_buffer_ops
+            triton.knobs.refresh_knobs()
 
             @triton.jit
             def kernel_add(a):
@@ -1108,7 +1147,11 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
             kernel_add[(1, 0)](torch.empty(2**31 - 1, dtype=torch.int8, device=device))
             assert pointer_range_32 == pointer_range
     finally:
-        os.environ["AMDGCN_USE_BUFFER_OPS"] = default_buffer_ops
+        if default_buffer_ops is None:
+            os.environ.pop("AMDGCN_USE_BUFFER_OPS", None)
+        else:
+            os.environ["AMDGCN_USE_BUFFER_OPS"] = default_buffer_ops
+        triton.knobs.refresh_knobs()
 
 
 def test_function_arguments(device):

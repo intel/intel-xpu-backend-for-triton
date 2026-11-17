@@ -4,6 +4,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
@@ -21,12 +22,13 @@ unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
   // Handle RankedTensorType with distributed encoding
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     Type elType = tensorType.getElementType();
-    if (!elType.isIntOrFloat())
+    // Packed fp4 (two e2m1 per byte) counts like the i8 it is stored as.
+    if (!elType.isIntOrFloat() && !isa<triton::PackedFloat4E2M1Type>(elType))
       return 0;
     unsigned elemsPerThread = gpu::getTotalElemsPerThread(tensorType);
     // Round up to whole bytes so sub-byte types (fp8/fp4/i1) are not counted
     // as zero pressure, which would systematically under-count FP8 kernels.
-    unsigned bytesPerElem = (elType.getIntOrFloatBitWidth() + 7) / 8;
+    unsigned bytesPerElem = (getIntOrFloatOrPtrBitWidth(elType) + 7) / 8;
     return elemsPerThread * bytesPerElem;
   }
 
@@ -50,16 +52,16 @@ static constexpr unsigned GRFRegisterSizeBytes = 32;
 static constexpr unsigned SmallestGRFModeBytes = 128 * GRFRegisterSizeBytes;
 static constexpr unsigned LargestGRFModeBytes = 512 * GRFRegisterSizeBytes;
 
-/// Maps an explicit GRF mode string ("128"/"256"/"512") to its exact
-/// per-hardware-thread budget in bytes (one hardware thread executes a whole
-/// subgroup/warp of lanes sharing one register file). Returns 0 for anything
-/// else ("default", "auto", empty, or an unrecognized value): 0 bytes is
-/// never a valid budget, so it is an unambiguous "not an explicit mode"
+/// Maps an explicit GRF mode string ("128"/"160"/"192"/"256"/"512") to its
+/// exact per-hardware-thread budget in bytes (one hardware thread executes a
+/// whole subgroup/warp of lanes sharing one register file). Returns 0 for
+/// anything else ("default", "auto", empty, or an unrecognized value): 0 bytes
+/// is never a valid budget, so it is an unambiguous "not an explicit mode"
 /// signal callers can test directly, without needing std::optional.
 static unsigned explicitGRFModeToBytes(StringRef grfMode) {
   unsigned mode = 0;
   if (grfMode.getAsInteger(10, mode) ||
-      (mode != 128 && mode != 256 && mode != 512))
+      (mode != 128 && mode != 160 && mode != 192 && mode != 256 && mode != 512))
     return 0;
   return mode * GRFRegisterSizeBytes;
 }

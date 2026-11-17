@@ -178,6 +178,7 @@ _CUDA_TO_XPU_RUNTIME = {
     "Stream": "Stream",
     "_sleep": "_sleep",
     "current_stream": "current_stream",
+    "get_device_name": "get_device_name",
     "get_rng_state": "get_rng_state",
     "graph": "graph",
     "set_rng_state": "set_rng_state",
