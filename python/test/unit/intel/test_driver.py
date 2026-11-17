@@ -272,9 +272,9 @@ def test_find_sycl_uses_oneapi_root(monkeypatch, no_icpx, recwarn, tmp_path: pat
     ("1.17.39122+11", True),  # 26.27.39122.11 (IGC 2.38.2), first known-good release
     ("1.17.39395+13", True),  # 26.31.39395.13
     ("1.6.35096+9", False),  # LTS
-    ("garbage", False),
-    ("", False),
-    (None, False),
+    ("garbage", True),  # unknown: assume SPIR-V, the default
+    ("", True),
+    (None, True),
 ])
 def test_has_spirv_2d_block_io(version, expected):
     assert has_spirv_2d_block_io(version) is expected

@@ -73,7 +73,7 @@ class XPUOptions:
     is_lts: bool = True
     # Whether the driver's IGC can resolve any 2D block I/O shape from SPIR-V (#8858); see `has_spirv_2d_block_io`.
     # It changes the emitted code, and being an option it is part of the kernel cache key.
-    has_spirv_2d_block_io: bool = False
+    has_spirv_2d_block_io: bool = True
     # Whether these SPIR-V extensions are allowed; overwritten with the
     # ground-truth probe result in `parse_options`.
     allow_long_vector: bool = True

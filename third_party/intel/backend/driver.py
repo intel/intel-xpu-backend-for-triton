@@ -435,12 +435,13 @@ def has_spirv_2d_block_io(ver) -> bool:
     resolver. `ver` is the driver version as reported by the runtime, `1.<minor>.<build>+<patch>` (e.g.
     `1.15.38308+1` for compute-runtime 26.18.38308.1), so the compute-runtime build number is its third field.
     The first release known to have IGC 2.38 is 26.27.39122 (IGC 2.38.2); 26.22.38646 (IGC 2.36.3) and older do not.
+    A missing or unparsable version is assumed to support SPIR-V, the default.
     """
     if not ver:
-        return False
+        return True
     m = _VERSION_PATTERN.match(ver)
     if not m:
-        return False
+        return True
     return int(m.group(3)) >= 39122
 
 
