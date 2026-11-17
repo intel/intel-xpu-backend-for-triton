@@ -83,8 +83,10 @@ def test_naive_datetime_is_utc_not_host_local(monkeypatch):
 
 def test_run_unit_orders_out_of_order_input_by_time():
     t = datetime(2026, 11, 2, 1)
-    s = aggregate([obs("late", t + timedelta(days=1), 3.0), obs("early", t, 1.0), obs("mid", t + timedelta(hours=5), 2.0)],
-                  unit="run")
+    s = aggregate(
+        [obs("late", t + timedelta(days=1), 3.0),
+         obs("early", t, 1.0),
+         obs("mid", t + timedelta(hours=5), 2.0)], unit="run")
     assert [p.run_ids for p in s.points] == [("early", ), ("mid", ), ("late", )]
 
 
