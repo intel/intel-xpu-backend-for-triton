@@ -53,6 +53,40 @@ static Value packedOffsetX(TritonLLVMOpBuilder &b, Value offsetX,
   return b.sdiv(offsetX, b.i32_val(numPackedVals));
 }
 
+/// Whether 2D block stores may widen 16-bit rows (validate2DBlockStoreTile).
+/// The repack's sub-group bitcast shuffle is not implemented by the LTS driver.
+static bool allowStoreLaneInterleave(Operation *op) {
+  auto mod = op->getParentOfType<ModuleOp>();
+  return !mod->hasAttr(TritonIntelGPUDialect::getIsLTSAttrName()) &&
+         !tools::getBoolEnv("TRITON_INTEL_DISABLE_WIDE_BLOCK_STORE");
+}
+
+/// A widened row gives lane l columns 2l and 2l+1, while each (even, odd)
+/// payload pair holds columns l and 16+l; a sub-group bitcast shuffle per pair
+/// redistributes them.
+static Value repackLaneInterleavedRows(ConversionPatternRewriter &rewriter,
+                                       Location loc, Value storeVal) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto vecTy = cast<VectorType>(storeVal.getType());
+  assert(vecTy.getElementType().isInteger(16) && "expecting an i16 payload");
+  auto pairTy = VectorType::get(2, vecTy.getElementType());
+  auto packedTy = VectorType::get(1, rewriter.getI32Type());
+  Value result = storeVal;
+  for (unsigned i = 0; i < vecTy.getNumElements(); i += 2) {
+    Value pair = b.undef(pairTy);
+    for (unsigned j = 0; j < 2; ++j)
+      pair = b.insert_element(
+          pair, b.extract_element(storeVal, b.i32_val(i + j)), b.i32_val(j));
+    Value shuffled = TritonGEN::SubGroupBitcastShuffleOp::create(
+        rewriter, loc, packedTy, pair);
+    Value unpacked = b.bitcast(shuffled, pairTy);
+    for (unsigned j = 0; j < 2; ++j)
+      result = b.insert_element(
+          result, b.extract_element(unpacked, b.i32_val(j)), b.i32_val(i + j));
+  }
+  return result;
+}
+
 /// Unpacked tensor descriptor fields: { shape[rank], stride[rank], base }.
 struct DescriptorFields {
   SmallVector<Value, 4> shapes;  // shapes[0..rank-1]
@@ -3731,10 +3765,29 @@ struct DescriptorStoreOpToBlockIOConversion
     // geometry, enforces the HW address payload restriction, rejects transpose,
     // and forces vBlocks to 1.
     BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
+    unsigned laneInterleave = 1;
     if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
                                   elemSizeInBits, tensorType, maskAxisInfo,
-                                  sizeInfo))
+                                  sizeInfo, laneInterleave,
+                                  allowStoreLaneInterleave(op)))
       return failure();
+    // A widened row doubles the span checked against column 0 below; keep the
+    // narrow row when only the wider one could straddle it.
+    if (laneInterleave > 1 && needs2DBlockIOAlignmentCompensation(op)) {
+      unsigned colIdx =
+          op.getIndices().size() - tensorType.getRank() + sizeInfo.colDim;
+      std::optional<int64_t> colConst =
+          triton::intel::getFoldedConstantValue(adaptor.getIndices()[colIdx]);
+      if (!(colConst && *colConst >= 0) &&
+          !cannotStraddleColumnZero(op.getIndices()[colIdx],
+                                    int64_t(sizeInfo.tileWidth) *
+                                        sizeInfo.numElemPerPackedVal) &&
+          !validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
+                                    elemSizeInBits, tensorType, maskAxisInfo,
+                                    sizeInfo, laneInterleave,
+                                    /*allowLaneInterleave=*/false))
+        return failure();
+    }
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
           isTransposeRequired, useVNNIFormat, regPackedBases] =
@@ -3856,6 +3909,9 @@ struct DescriptorStoreOpToBlockIOConversion
 
     unsigned threadsPerWarp =
         TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+    assert((laneInterleave == 1 ||
+            unsigned(tileWidth) == laneInterleave * threadsPerWarp) &&
+           "a widened row spans the sub-group laneInterleave times");
 
     Type packedType = IntegerType::get(ctx, packedElemSizeInBits);
     unsigned numPackedElemsPerStore = (tileHeight * tileWidth) / threadsPerWarp;
@@ -3940,6 +3996,8 @@ struct DescriptorStoreOpToBlockIOConversion
       }
       if (store2DComposeType != store2DGenXType)
         storeVal = b.bitcast(storeVal, store2DGenXType);
+      if (laneInterleave > 1)
+        storeVal = repackLaneInterleavedRows(rewriter, loc, storeVal);
 
       auto newOp = TritonGEN::Matrix2DBlockStoreOp::create(
           rewriter, loc, addrElem, adjustedBaseWidth, adjustedBaseHeight, pitch,
@@ -4012,9 +4070,11 @@ struct StoreOpToBlockIOConversion
     BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
     MLIRContext *ctx = rewriter.getContext();
 
+    unsigned laneInterleave = 1;
     if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
                                   elemSizeInBits, tensorType, maskAxisInfo,
-                                  sizeInfo))
+                                  sizeInfo, laneInterleave,
+                                  allowStoreLaneInterleave(op)))
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
@@ -4115,6 +4175,9 @@ struct StoreOpToBlockIOConversion
 
     unsigned threadsPerWarp =
         TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+    assert((laneInterleave == 1 ||
+            unsigned(tileWidth) == laneInterleave * threadsPerWarp) &&
+           "a widened row spans the sub-group laneInterleave times");
 
     Type packedType =
         IntegerType::get(ctx, packedElemSizeInBits); // make it opaque type.
@@ -4203,6 +4266,8 @@ struct StoreOpToBlockIOConversion
       }
       if (store2DComposeType != store2DGenXType)
         storeVal = b.bitcast(storeVal, store2DGenXType);
+      if (laneInterleave > 1)
+        storeVal = repackLaneInterleavedRows(rewriter, loc, storeVal);
 
       auto newOp = TritonGEN::Matrix2DBlockStoreOp::create(
           rewriter, loc, addrElem, adjustedBaseWidth, adjustedBaseHeight, pitch,

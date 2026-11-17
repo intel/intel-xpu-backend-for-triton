@@ -813,11 +813,47 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
   return true;
 }
 
+// Folds the first column v-block of a 16-wide, 16-bit SG16 store tile into a
+// 32-wide row by moving its register basis ahead of the row bases, so each
+// message's payload is row-major [r0 blk0, r0 blk1, r1 blk0, ...].
+static bool foldColumnBlockIntoRow(const LinearLayout &ll,
+                                   BlockIOTileSizeInfo &sizeInfo,
+                                   unsigned elemSizeInBits, MLIRContext *ctx) {
+  constexpr int kSubGroupSize = 16;
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  if (elemSizeInBits != 16 || sizeInfo.vBlocks < 2 ||
+      !sizeInfo.regPackedBases ||
+      ll.getInDimSize(StringAttr::get(ctx, "lane")) != kSubGroupSize)
+    return false;
+
+  // The tile walk orders the bases [packed..., rows..., v-blocks..., rest...];
+  // a 16-column first v-block right after the rows means unpacked lanes.
+  const SetVector<unsigned> &bases = *sizeInfo.regPackedBases;
+  auto basisOf = [&](unsigned regBit) {
+    return ll.getBasis(kRegister, llvm::Log2_32(regBit));
+  };
+  unsigned numRows = 0;
+  while (numRows < bases.size() && basisOf(bases[numRows])[sizeInfo.rowDim] > 0)
+    ++numRows;
+  if (numRows == bases.size() ||
+      basisOf(bases[numRows])[sizeInfo.colDim] != kSubGroupSize)
+    return false;
+
+  SetVector<unsigned> reordered;
+  reordered.insert(bases[numRows]);
+  reordered.insert(bases.begin(), bases.end());
+  sizeInfo.regPackedBases = std::move(reordered);
+  sizeInfo.tileWidth *= 2;
+  return true;
+}
+
 bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
                               unsigned elemSizeInBits,
                               RankedTensorType tensorType,
                               AxisInfo *maskAxisInfo,
-                              BlockIOTileSizeInfo &sizeInfoOut) {
+                              BlockIOTileSizeInfo &sizeInfoOut,
+                              unsigned &laneInterleaveOut,
+                              bool allowLaneInterleave) {
   // Compute the store tile geometry and reject configurations the 2D block
   // store cannot express. This mirrors the checks the store lowering applies;
   // keeping them here (rather than duplicated inline in each store lowering
@@ -839,6 +875,12 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
   // 2D block store does not support vnni packing.
   if (sizeInfo.vnni)
     return false;
+
+  laneInterleaveOut = allowLaneInterleave && foldColumnBlockIntoRow(
+                                                 ll, sizeInfo, elemSizeInBits,
+                                                 tensorType.getContext())
+                          ? 2
+                          : 1;
 
   // The store always issues a single v-block per message.
   sizeInfo.vBlocks = 1;
