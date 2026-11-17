@@ -38,6 +38,13 @@ def test_night_mean_merges_duplicates_and_sorts():
     assert (p.value, p.n_raw, p.run_ids) == (20.0, 2, ("r1", "r2"))
 
 
+def test_night_mean_is_mean_of_run_means():
+    t = datetime(2026, 11, 2, 1, tzinfo=timezone.utc)
+    s = aggregate([obs("A", t, 10.0), obs("A", t, 20.0), obs("B", t + timedelta(hours=2), 40.0)])
+    p = s.points[0]
+    assert (p.value, p.n_raw, p.run_ids) == (27.5, 3, ("A", "B"))  # not the row mean 23.33
+
+
 def test_night_is_utc_and_naive_is_utc():
     late_est = datetime(2026, 11, 1, 22, tzinfo=timezone(timedelta(hours=-5)))  # 03:00 UTC next day
     s = aggregate([obs("a", late_est, 1.0), obs("b", datetime(2026, 11, 2, 4), 3.0)])
