@@ -175,9 +175,3 @@ TEST_F(LinearLayoutConversionsTest, I8_32x32x1_M64_N128_K32_B) {
 
 } // anonymous namespace
 } // namespace mlir::triton::gpu::intel
-
-int main(int argc, char *argv[]) {
-  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
-  testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}

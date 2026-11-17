@@ -41,14 +41,21 @@ runs:
       run: triton-benchmarks describe ALL
       continue-on-error: true
 
-    - name: Install triton-utils
+    - name: Detect benchmark source changes
+      id: detect-source-changes
       if: steps.same-run-validate.outcome != 'success'
+      uses: ./.github/actions/check-path-changes
+      with:
+        patterns: '^benchmarks/'
+
+    - name: Install triton-utils
+      if: steps.same-run-validate.outcome != 'success' && steps.detect-source-changes.outputs.changed != 'true'
       shell: bash
       run: pip install "$GITHUB_WORKSPACE/scripts/triton_utils"
 
     - name: Download and install benchmarks wheel (main)
       id: main-wheel
-      if: steps.same-run-validate.outcome != 'success'
+      if: steps.same-run-validate.outcome != 'success' && steps.detect-source-changes.outputs.changed != 'true'
       continue-on-error: true
       shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       env:
@@ -84,9 +91,13 @@ runs:
           echo "::notice::Installed benchmarks from main branch wheel artifact"
         fi
 
-    - name: Fallback to source build
+    - name: Build benchmarks from source
       if: steps.same-run-validate.outcome != 'success' && steps.main-validate.outcome != 'success'
       shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       run: |
-        echo "::warning::Pre-built wheel unavailable, falling back to source build"
+        if [[ "${{ steps.detect-source-changes.outputs.changed }}" == "true" ]]; then
+          echo "::notice::Branch modified benchmarks source; building from source"
+        else
+          echo "::warning::Pre-built wheel unavailable, falling back to source build"
+        fi
         (cd "$GITHUB_WORKSPACE/benchmarks" && pip install --no-build-isolation .)

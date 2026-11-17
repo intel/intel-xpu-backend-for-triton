@@ -72,6 +72,11 @@ SpatialReuseAnalysis::getWarpInvariantOutDims(RankedTensorType ty) const {
   if (!ll)
     return fullAxisSet(rank);
 
+  // A single warp has no other subgroup to share cache lines with, even
+  // though every out-dim is vacuously warp-invariant.
+  if (ll->getInDimSize(kWarp) == 1)
+    return {};
+
   SmallVector<StringAttr> outDims = llvm::to_vector(ll->getOutDimNames());
   SmallVector<unsigned> result;
   for (unsigned i = 0; i < outDims.size(); ++i) {
@@ -122,6 +127,10 @@ SpatialReuseAnalysis::knownWarpInvariantOutDims(RankedTensorType ty) const {
   std::optional<LinearLayout> ll = tryBuildWarpLayout(ty, kWarp);
   if (!ll)
     return std::nullopt;
+
+  // See getWarpInvariantOutDims: a single warp shares nothing.
+  if (ll->getInDimSize(kWarp) == 1)
+    return SmallVector<unsigned>{};
 
   SmallVector<StringAttr> outDims = llvm::to_vector(ll->getOutDimNames());
   SmallVector<unsigned> result;

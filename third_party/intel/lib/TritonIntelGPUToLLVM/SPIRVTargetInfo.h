@@ -9,7 +9,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_SPIRVTARGETINFO_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_SPIRVTARGETINFO_H
 
-#include "TargetInfo.h"
+#include "intel/include/TritonIntelGPUToLLVM/TargetInfo.h"
 
 namespace mlir::triton::intel {
 class SPIRVTargetInfo : public TargetInfo {
@@ -19,6 +19,11 @@ protected:
   Value genWarpReduce(RewriterBase &rewriter, Location loc, Value acc,
                       Operation *reduceOp, unsigned numLanesToReduce,
                       unsigned warpSize) const final;
+
+  FailureOr<Operation *>
+  matchSupportedWarpScanOp(triton::ScanOp op) const final;
+  Value genWarpScan(RewriterBase &rewriter, Location loc, Value acc,
+                    Operation *combineOp, unsigned warpSize) const final;
 };
 } // namespace mlir::triton::intel
 

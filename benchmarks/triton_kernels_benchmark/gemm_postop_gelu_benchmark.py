@@ -13,13 +13,14 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY
 
 kAlpha = tl.constexpr(math.sqrt(2.0 / math.pi))
 
 
 @triton.jit
 def tanh(x):
-    return 2 * tl.sigmoid(2 * x) - 1
+    return tl.fma(2.0, tl.sigmoid(2 * x), -1.0)
 
 
 @triton.jit
@@ -29,7 +30,8 @@ def gelu(x):
 
     .. _GeLU: https://arxiv.org/pdf/1606.08415.pdf
     """
-    return 0.5 * x * (1 + tanh(kAlpha * (x + 0.044715 * x * x * x)))
+    half_x = 0.5 * x
+    return tl.fma(half_x, tanh(kAlpha * tl.fma(0.044715 * x * x, x, x)), half_x)
 
 
 @triton.autotune(
@@ -228,9 +230,6 @@ X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i]
                                     [4096, 8, 128, 16384],  #
                                     [4096, 8, 16384, 128]]
 
-DEVICE_NAME = torch.xpu.get_device_name()
-DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
-
 
 def is_enough_memory(x_val):
     # x_val: (B, M, K, N)
@@ -274,23 +273,23 @@ def benchmark(B, M, N, K, provider):
     # Performance is best at 200-400ms range, but we want stable, not just best
     do_bench = benchmark_suite.get_do_bench(n_warmup=1000, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     if B == 1:
-        a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
-        b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
+        a = torch.rand((M, K), device=DEVICE, dtype=torch.bfloat16)
+        b = torch.rand((K, N), device=DEVICE, dtype=torch.bfloat16)
     else:
-        a = torch.rand((B, M, K), device='xpu', dtype=torch.bfloat16)
-        b = torch.rand((B, K, N), device='xpu', dtype=torch.bfloat16)
+        a = torch.rand((B, M, K), device=DEVICE, dtype=torch.bfloat16)
+        b = torch.rand((B, K, N), device=DEVICE, dtype=torch.bfloat16)
 
     if provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
-            c = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
+            c = torch.empty((B, M, N), device=DEVICE, dtype=torch.float32)
         else:
             assert len(a.shape) == 2, 'Expecting shape of length 2'
-            c = torch.empty((M, N), device='xpu', dtype=torch.float32)
+            c = torch.empty((M, N), device=DEVICE, dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
-        torch_fn = lambda: torch.nn.functional.gelu(torch.matmul(a, b).to(torch.float32))
-        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        torch_mm = torch.bmm if a.dim() == 3 else torch.mm
+        torch_fn = lambda: torch.nn.functional.gelu(torch_mm(a, b, out_dtype=torch.float32))
+        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

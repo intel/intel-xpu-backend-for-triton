@@ -1,4 +1,3 @@
-import torch
 import triton
 import triton.language as tl
 
@@ -10,7 +9,7 @@ from triton.language.target_info import (
     is_hip_cdna4,
     is_xpu,
     is_xpu_cri,
-    is_hip_gfx1250,
+    is_hip_cdna5,
 )
 
 __all__ = [
@@ -18,6 +17,7 @@ __all__ = [
     "get_cdna_version",
     "get_rdna_version",
     "has_tma_gather",
+    "has_tma_scatter",
     "has_native_mxfp",
     "is_cuda",
     "is_hip",
@@ -26,7 +26,7 @@ __all__ = [
     "is_hip_cdna4",
     "is_xpu",
     "is_xpu_cri",
-    "is_hip_gfx1250",
+    "is_hip_cdna5",
     "num_sms",
 ]
 
@@ -71,12 +71,15 @@ def has_tma_gather():
 
 
 @triton.constexpr_function
+def has_tma_scatter():
+    # sm_12x has TMA gather but not scatter: ptxas rejects `.tile::scatter4` on sm_120a.
+    return cuda_capability_geq(10, 0) and tl.target_info.current_target().arch // 10 != 12
+
+
+@triton.constexpr_function
 def has_native_mxfp():
     return cuda_capability_geq(10, 0)
 
 
 def num_sms():
-    if is_cuda():
-        return torch.cuda.get_device_properties(0).multi_processor_count
-    if is_xpu():
-        return torch.xpu.get_device_properties(0).max_compute_units
+    return triton.runtime.driver.active.utils.get_device_properties(0)["multiprocessor_count"]

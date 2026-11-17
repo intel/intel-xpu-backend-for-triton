@@ -13,6 +13,7 @@ from triton._internal_testing import is_xpu
 @pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
 @pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_2d_block_io'],
                    reason="Block loads not supported on this architecture", run=False)
+@pytest.mark.enable_warmup
 def test_block_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib.Path):
     # modify the layouts to ensure the correct OCL/SPIRV intrinsic is called for each datatype
     if dtype_str == "float32":
@@ -37,8 +38,6 @@ def test_block_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib.Path)
 
             %Mload_i32 = arith.constant {M-1} : i32
             %Nload_i32 = arith.constant {N-1} : i32
-            %Mload_i64 = arith.constant {M-1} : i64
-            %Nload_i64 = arith.constant {N-1} : i64
 
             %M_i32 = arith.constant {M} : i32
             %N_i32 = arith.constant {N} : i32
@@ -48,13 +47,13 @@ def test_block_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib.Path)
             %c0_i32 = arith.constant 0 : i32
 
             // A matrix
-            %1 = tt.make_tensor_descriptor %arg0, [%Mload_i32, %Nload_i32], [%Nload_i64, %c1_i64]  : <{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
+            %1 = tt.make_tensor_descriptor %arg0, [%Mload_i32, %Nload_i32], [%N_i64, %c1_i64]  : <{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
             %2 = tt.descriptor_load %1[%0, %c0_i32] {{ttig.block_io = "row_major"}} : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>> -> tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
             %3 = tt.make_tensor_descriptor %arg1, [%M_i32, %N_i32], [%N_i64, %c1_i64] : <{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
             tt.descriptor_store %3[%0, %c0_i32], %2 : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}> >, tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
 
             // B matrix
-            %4 = tt.make_tensor_descriptor %arg2, [%Nload_i32, %Mload_i32], [%Mload_i64, %c1_i64]  : <{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
+            %4 = tt.make_tensor_descriptor %arg2, [%Nload_i32, %Mload_i32], [%M_i64, %c1_i64]  : <{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
             %5 = tt.descriptor_load %4[%c0_i32, %0] {{ttig.block_io = {block_io} }} : !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>> -> tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
             %6 = tt.make_tensor_descriptor %arg3, [%N_i32, %M_i32], [%M_i64, %c1_i64] : <{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
             tt.descriptor_store %6[%c0_i32, %0], %5 : !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}> >, tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
@@ -71,8 +70,6 @@ def test_block_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib.Path)
 
             %Mload_i32 = arith.constant {M-1} : i32
             %Nload_i32 = arith.constant {N-1} : i32
-            %Mload_i64 = arith.constant {M-1} : i64
-            %Nload_i64 = arith.constant {N-1} : i64
 
             %M_i32 = arith.constant {M} : i32
             %N_i32 = arith.constant {N} : i32
@@ -82,13 +79,13 @@ def test_block_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib.Path)
             %c0_i32 = arith.constant 0 : i32
 
             // A matrix
-            %1 = tt.make_tensor_descriptor %arg0, [%Mload_i32, %Nload_i32], [%Nload_i64, %c1_i64] {{padding = 2 : i32}} : <{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
+            %1 = tt.make_tensor_descriptor %arg0, [%Mload_i32, %Nload_i32], [%N_i64, %c1_i64] {{padding = 2 : i32}} : <{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
             %2 = tt.descriptor_load %1[%0, %c0_i32] {{ttig.block_io = "row_major", ttig.desc_padding = 2 : i32}} : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>> -> tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
             %3 = tt.make_tensor_descriptor %arg1, [%M_i32, %N_i32], [%N_i64, %c1_i64] : <{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
             tt.descriptor_store %3[%0, %c0_i32], %2 : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}> >, tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
 
             // B matrix
-            %4 = tt.make_tensor_descriptor %arg2, [%Nload_i32, %Mload_i32], [%Mload_i64, %c1_i64] {{padding = 2 : i32}} : <{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
+            %4 = tt.make_tensor_descriptor %arg2, [%Nload_i32, %Mload_i32], [%M_i64, %c1_i64] {{padding = 2 : i32}} : <{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
             %5 = tt.descriptor_load %4[%c0_i32, %0] {{ttig.block_io = {block_io}, ttig.desc_padding = 2 : i32}} : !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>> -> tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
             %6 = tt.make_tensor_descriptor %arg3, [%N_i32, %M_i32], [%M_i64, %c1_i64] : <{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
             tt.descriptor_store %6[%c0_i32, %0], %5 : !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}> >, tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>

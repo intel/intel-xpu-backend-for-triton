@@ -8,4 +8,6 @@ add_triton_library(TritonIntelGPUIR
 
   LINK_LIBS PUBLIC
   MLIRSideEffectInterfaces
+  TritonGENIR
+  TritonGPUIR
 )

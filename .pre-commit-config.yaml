@@ -141,5 +141,6 @@ exclude: |
     ^third_party/amd/backend/lib/|
     ^third_party/nvidia/backend/include/cuda.h|
     ^third_party/f2reduce|
-    ^third_party/intel/backend/proton/include
+    ^third_party/intel/backend/proton/include|
+    ^benchmarks/triton_kernels_benchmark/vllm/test/test_wan22_torch_compile\.py$
   )

@@ -1,0 +1,2 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/7984
+registered/attention/test_triton_attention_kernels.py::TestTritonAttention::test_extend_attention

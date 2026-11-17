@@ -15,8 +15,7 @@ kernel in `scripts/validate_rules.py`.
 > `python scripts/validate_rules.py --check-ir`.
 
 The canonical real-world reference is the repo's own GEMM benchmark:
-`benchmarks/triton_kernels_benchmark/gemm_block_ptr_benchmark.py` (before) vs
-`gemm_benchmark.py` (after).
+`benchmarks/triton_kernels_benchmark/gemm_benchmark.py` (tensor descriptor version).
 
 ---
 

@@ -8,11 +8,15 @@
 
 #include "triton/Analysis/Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "intel/include/Utils/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -55,11 +59,26 @@ static bool isSingleValue(Value value) {
   return true;
 }
 
-bool isDivisible(Value value, unsigned divisor) {
-  // Case 1: Value is defined by a constant operation
+bool isDivisible(Value value, int64_t divisor) {
+  // Nothing is provably divisible by zero, and a negative divisor has no
+  // meaning for the extents, strides and offsets callers pass. Callers must
+  // reject such divisors themselves; release builds answer conservatively.
+  assert(divisor > 0 && "Expecting a positive divisor");
+  if (divisor <= 0)
+    return false;
+
+  // Every integer is divisible by 1, regardless of how `value` is defined.
+  if (divisor == 1)
+    return true;
+
+  // Case 1: Value is defined by a constant operation. Integer constants are
+  // interpreted as signed, as the index arithmetic producing them is.
   if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
     auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue());
-    return integerAttr && integerAttr.getValue().getZExtValue() % divisor == 0;
+    if (!integerAttr)
+      return false;
+    std::optional<int64_t> intVal = integerAttr.getValue().trySExtValue();
+    return intVal && *intVal % divisor == 0;
   }
 
   // Case 2: Value is a block argument of the entry block
@@ -73,13 +92,22 @@ bool isDivisible(Value value, unsigned divisor) {
              divisibilityAttr.getValue().getZExtValue() % divisor == 0;
     }
     if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      // An iteration argument advanced by a loop-invariant amount,
+      // `x = init; x += c`, holds `init + i * c` on iteration i, so it is
+      // divisible on every iteration if both `init` and `c` are. `c` must be
+      // defined outside the loop, which keeps it independent of `x` and the
+      // recursion finite.
+      if (blockArg != forOp.getInductionVar()) {
+        Value step = tt::intel::getIterArgIncrement(forOp, blockArg);
+        if (!step || !forOp.isDefinedOutsideOfLoop(step))
+          return false;
+        return isDivisible(forOp.getTiedLoopInit(blockArg)->get(), divisor) &&
+               isDivisible(step, divisor);
+      }
       // Nested loops aren't currently handled.
       if (forOp->template getParentOfType<scf::ForOp>())
         return false;
       if (!forOp.getSingleInductionVar())
-        return false;
-      // Check only if the block arg is the loop-var.
-      if (blockArg != forOp.getInductionVar())
         return false;
       return isDivisible(forOp.getLowerBound(), divisor) &&
              isDivisible(forOp.getStep(), divisor);
@@ -92,17 +120,34 @@ bool isDivisible(Value value, unsigned divisor) {
            isDivisible(mulIOp->getOperand(1), divisor);
   }
 
-  // Case 4: Value is defined by arith::ExtSIOp, tt::AddPtrOp or
-  // arith::AddIOp operation.
+  // Case 4: Value is defined by arith::ExtSIOp, arith::TruncIOp,
+  // tt::AddPtrOp, arith::AddIOp, arith::SubIOp, arith::MinSIOp or
+  // arith::MaxSIOp operation. The result of min/max is one of its operands.
   if (auto *op = value.getDefiningOp()) {
-    if (isa<arith::ExtSIOp, tt::AddPtrOp, arith::AddIOp>(op)) {
+    if (isa<arith::ExtSIOp, arith::TruncIOp, tt::AddPtrOp, arith::AddIOp,
+            arith::SubIOp, arith::MinSIOp, arith::MaxSIOp>(op)) {
       return llvm::all_of(op->getOperands(), [&](Value operand) {
         return isDivisible(operand, divisor);
       });
     }
   }
 
+  // Case 5: Value is defined by an arith.select operation. The condition is
+  // irrelevant as long as both candidate values are divisible.
+  if (auto selectOp = value.getDefiningOp<arith::SelectOp>()) {
+    return isDivisible(selectOp.getTrueValue(), divisor) &&
+           isDivisible(selectOp.getFalseValue(), divisor);
+  }
+
   return false;
+}
+
+static Attribute inferSrcEncoding(ttgi::DescriptorGatherOp op,
+                                  Attribute dstEnc) {
+  // only the offsets require the slice encoding, the base pointer is a scalar
+  // and does not require any encoding.
+  return SliceEncodingAttr::get(op->getContext(), 1,
+                                cast<DistributedEncodingTrait>(dstEnc));
 }
 
 Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
@@ -124,7 +169,54 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     }
   }
 
+  if (auto gatherOp = dyn_cast<ttgi::DescriptorGatherOp>(op))
+    return inferSrcEncoding(gatherOp, encoding);
+
   return mlir::inferSrcEncoding(op, encoding);
+}
+
+CachePolicy getCachePolicy(Attribute cachePolicy) {
+  auto policy = dyn_cast_if_present<tt::CachePolicyAttr>(cachePolicy);
+  if (!policy)
+    return {};
+  return {policy.getCacheModifier(), policy.getEvictionPolicy()};
+}
+
+/// True for a masked load whose result does not reach a dot. `block_io` is what
+/// tells the layout propagation the load is free in any encoding, so the load
+/// is rematerialized into its consumer's layout. That is the right trade when
+/// the consumer is a dot: the 2D block message delivers the DPAS operand
+/// directly. With any other consumer the load gives up its coalesced encoding
+/// for nothing, and the mask bounds the resulting tile besides. Keep such a
+/// load anchored -- it can still lower to a 2D block message, just in the
+/// encoding the memory access itself wants.
+static bool isMaskedLoadWithoutDotConsumer(Operation *op) {
+  auto loadOp = dyn_cast<tt::LoadOp>(op);
+  if (!loadOp)
+    return false;
+  Value mask = loadOp.getMask();
+  if (!mask || matchPattern(mask, m_One()))
+    return false;
+
+  SmallVector<Value> worklist{loadOp.getResult()};
+  SmallPtrSet<Operation *, 16> visited;
+  while (!worklist.empty()) {
+    Value val = worklist.pop_back_val();
+    for (Operation *user : val.getUsers()) {
+      if (isa<tt::DotOp, tt::DotScaledOp>(user))
+        return false;
+      // Only look through layout-preserving and elementwise producers: a dot
+      // reached past a reduction is not fed by this tile.
+      if (!isa<ttg::ConvertLayoutOp, tt::FpToFpOp, tt::TransOp, tt::BroadcastOp,
+               tt::ReshapeOp, tt::SplatOp>(user) &&
+          !user->hasTrait<OpTrait::Elementwise>())
+        continue;
+      if (!visited.insert(user).second)
+        continue;
+      llvm::append_range(worklist, user->getResults());
+    }
+  }
+  return true;
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
@@ -144,13 +236,16 @@ bool isExpensiveLoadOrStore(Operation *op) {
   // Loads or stores that use a block pointer are expensive if they cannot be
   // lowered to 2D block read/write operations. Temporarily leverage the
   // "ttig.block_io" attribute to filter out inexpensive loads.
-  // Exception: 1D-reshaped loads and stores (indicated by
+  // Exceptions: 1D-reshaped loads and stores (indicated by
   // ttig.block_io_stride) have a specific encoding that matches HW delivery
-  // order and must be anchored.
+  // order, and descriptor loads marked ttig.block_io_anchor were relaid out
+  // for 2D block IO. Both must be anchored.
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
   if (blockIOAttr &&
-      !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName()))
+      !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName()) &&
+      !op->hasAttr(TritonIntelGPUDialect::getBlockIOAnchorAttrName()) &&
+      !isMaskedLoadWithoutDotConsumer(op))
     return false;
 
   // Loads or stores that use more threads than elements can be presumed to have
@@ -220,9 +315,8 @@ LogicalResult getConvertBackwardSlice(
   DenseSet<std::pair<OpOperand *, Attribute>> seen;
   SmallVector<std::pair<OpOperand *, Attribute>> queue;
 
-  std::optional<bool> enableForLoopSupport =
-      mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
-          "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP"));
+  bool enableForLoopSupport = mlir::triton::tools::getBoolEnv(
+      "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP");
 
   auto enqueue = [&](OpOperand &operand, Attribute encoding) {
     auto x = std::make_pair(&operand, encoding);
@@ -262,6 +356,20 @@ LogicalResult getConvertBackwardSlice(
     auto currentValueType = cast<RankedTensorType>(currentValue.getType());
     if (currentValueType.getEncoding() == encoding)
       continue;
+    // Backward propagation is only supported for region ops whose results
+    // survive rewriteSlice's generic clone+setType path. ForOp and IfOp have
+    // explicit handling below; everything else implementing
+    // RegionBranchOpInterface is rejected, because retyping a result tied to a
+    // region terminator's operands leaves the terminator at the old encoding
+    // (see WarpYieldOp::verify). Note this is a conservative proxy for
+    // structured control flow, not an exact test: region ops that do not
+    // implement the interface (tt.reduce, tt.scan, tt.map_elementwise) pass
+    // through here and rely on their regions being scalar-level, so retyping
+    // the tensor result keeps them valid.
+    if (Operation *defOp = currentValue.getDefiningOp())
+      if (isa<RegionBranchOpInterface>(defOp) &&
+          !isa<scf::ForOp, scf::IfOp>(defOp))
+        return failure();
     slice.insert(currentValue);
 
     Value existing;
@@ -311,12 +419,19 @@ LogicalResult getConvertBackwardSlice(
         enqueue(definingOp->getOpOperand(0), encoding);
         continue;
       }
-      if (canUseResultEncoding(definingOp, encoding))
+      if (auto fixedOperands = canUseResultEncoding(definingOp, encoding)) {
+        // Another path through the slice must preserve these operand layouts.
+        for (OpOperand *operand : *fixedOperands) {
+          Value src = operand->get();
+          auto srcEncoding =
+              cast<RankedTensorType>(src.getType()).getEncoding();
+          if (failed(updateLayout(src, srcEncoding)))
+            return failure();
+        }
         continue;
+      }
       if (stopPropagation && stopPropagation(definingOp))
         continue;
-      if (isa<triton::CatOp>(definingOp))
-        return failure();
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
         // Specially handle gather since its transfer function only applies
         // between its index operand and result.
@@ -332,8 +447,8 @@ LogicalResult getConvertBackwardSlice(
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
         if (isa<RankedTensorType>(operand.get().getType())) {
           Attribute srcEncoding;
-          if (auto upcast = dyn_cast<gpu::UpcastFpOpInterface>(definingOp))
-            srcEncoding = upcast.inferSrcEncoding(i, encoding);
+          if (auto castOp = dyn_cast<gpu::CastFpOpInterface>(definingOp))
+            srcEncoding = castOp.inferSrcEncoding(i, encoding);
           else
             srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
           if (!srcEncoding)
@@ -588,6 +703,21 @@ calculateDPASRepetitions(ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx,
   }
 
   llvm_unreachable("unexpected opIdx");
+}
+
+bool mayWriteMemory(Operation *op, bool ignoreSharedMemory) {
+  std::optional<SmallVector<MemoryEffects::EffectInstance>> effects =
+      getEffectsRecursively(op);
+  if (!effects)
+    return true;
+  return llvm::any_of(*effects, [&](const MemoryEffects::EffectInstance &e) {
+    if (!isa<MemoryEffects::Write>(e.getEffect()))
+      return false;
+    SideEffects::Resource *resource = e.getResource();
+    if (ignoreSharedMemory && isa<SharedMemory>(resource))
+      return false;
+    return !isa<L2Cache>(resource);
+  });
 }
 
 } // namespace mlir::triton::gpu::intel

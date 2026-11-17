@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Set, Union
 from dataclasses import asdict, dataclass, fields
 
 import argparse
+import importlib.util
 import time
 import datetime
 
@@ -16,6 +17,7 @@ from triton_kernels_benchmark.benchmark_testing import (
     BenchmarkConfig,
     BenchmarkConfigRunResult,
     BenchmarkCategory,
+    DEVICE,
     MarkArgs,
 )
 from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
@@ -69,7 +71,20 @@ class BenchmarkConfigs(MarkArgs):
         start_t = time.perf_counter()
         run_results = []
         for config in self.configs:
-            _json_print(str(config))
+            if self.collect_only and config.describe_metadata_only:
+                # Fall back to metadata only when the optional dependency (e.g. vLLM,
+                # SGLang) is absent; a resolution failure with the dependency installed
+                # is a real bug, so re-raise. The dependency package is identified by the
+                # config's long_report_group ("vllm", "sglang", ...).
+                try:
+                    _json_print(str(config))
+                except ImportError:
+                    dep = config.long_report_group
+                    if dep and importlib.util.find_spec(dep) is not None:
+                        raise
+                    _json_print(config.metadata_only_description())
+            else:
+                _json_print(str(config))
             if self.collect_only:
                 continue
             _json_print(f"Running {config.key}")
@@ -378,7 +393,8 @@ class BenchmarkConfigs(MarkArgs):
 def main():
     configs = BenchmarkConfigs.from_args()
     configs.run()
-    if configs.collect_only:
+    # The C++ extensions are built with the oneAPI compiler and are XPU-only
+    if configs.collect_only and DEVICE == "xpu":
         validate_cpp_extensions()
 
 

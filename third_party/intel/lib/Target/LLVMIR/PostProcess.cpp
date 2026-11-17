@@ -1,8 +1,11 @@
 #include "third_party/intel/include/Target/LLVMIR/PostProcess.h"
 #include "third_party/intel/lib/Target/LLVMIR/LLVMPasses.h"
 
+#include "llvm/ADT/SetVector.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 
@@ -148,6 +151,294 @@ void expandSubByteBitwiseAnd(Module &module) {
   }
 }
 
+// Eliminate sub-byte integer types (iN, N<8, N!=4) before SPIR-V translation.
+//
+// Such types would require SPV_INTEL_arbitrary_precision_integers to be
+// represented as OpTypeInt in SPIR-V, but IGC does not support that extension.
+// They appear when the LLVM optimizer packs several i1 lanes (e.g. the results
+// of a vector fcmp) into a narrow integer via `bitcast <K x i1> to <M x iN>`,
+// reads a lane back with extractelement, and tests it against a constant with
+// icmp -- the shape of an "any/all over a comparison" reduction.
+//
+// Rewrite the whole `bitcast -> extractelement -> icmp eq/ne <const>` chain
+// onto the source i1 lanes so no sub-byte integer type is ever created. Lane j
+// of the <M x iN> value aliases source i1 lanes [j*N, j*N + N); on
+// little-endian (SPIR-V targets) bit i of the lane is source lane j*N + i.
+// `lane == C` is thus the AND over those bits of (bit == the corresponding bit
+// of C), built from i1 and/not; `ne` negates the result. Chains not matching
+// this shape are left untouched (correctness preserved; other shapes are not
+// observed in practice).
+void expandSubByteVectorBitcast(Module &module) {
+  SmallVector<BitCastInst *> bitcasts;
+
+  for (auto &func : module)
+    for (auto &block : func)
+      for (auto &inst : block)
+        if (auto *bc = dyn_cast<BitCastInst>(&inst))
+          if (auto *vecTy = dyn_cast<FixedVectorType>(bc->getType()))
+            if (auto *elemTy = dyn_cast<IntegerType>(vecTy->getElementType()))
+              if (elemTy->getBitWidth() < 8)
+                if (auto *srcTy =
+                        dyn_cast<FixedVectorType>(bc->getOperand(0)->getType()))
+                  if (srcTy->getElementType()->isIntegerTy(1))
+                    bitcasts.push_back(bc);
+
+  for (BitCastInst *bc : bitcasts) {
+    unsigned narrowBits =
+        cast<IntegerType>(
+            cast<FixedVectorType>(bc->getType())->getElementType())
+            ->getBitWidth();
+    Value *bits = bc->getOperand(0);
+
+    // Every user must be `extractelement <const>` feeding `icmp eq/ne <const>`.
+    struct Rewrite {
+      ICmpInst *cmp;
+      ExtractElementInst *extract;
+      uint64_t lane;
+    };
+    SmallVector<Rewrite> rewrites;
+    bool rewritable = true;
+    for (User *user : bc->users()) {
+      auto *extract = dyn_cast<ExtractElementInst>(user);
+      auto *idx =
+          extract ? dyn_cast<ConstantInt>(extract->getIndexOperand()) : nullptr;
+      if (!idx || !extract->hasOneUse()) {
+        rewritable = false;
+        break;
+      }
+      auto *cmp = dyn_cast<ICmpInst>(*extract->user_begin());
+      if (!cmp || !cmp->isEquality() || !isa<ConstantInt>(cmp->getOperand(1))) {
+        rewritable = false;
+        break;
+      }
+      rewrites.push_back({cmp, extract, idx->getZExtValue()});
+    }
+    if (!rewritable || rewrites.empty())
+      continue;
+
+    for (const Rewrite &r : rewrites) {
+      uint64_t cst = cast<ConstantInt>(r.cmp->getOperand(1))->getZExtValue();
+      IRBuilder<> b(r.cmp);
+      // AND over bits of the lane: bit set in C must be 1, bit clear must be 0.
+      Value *acc = nullptr;
+      for (unsigned i = 0; i < narrowBits; ++i) {
+        Value *bit = b.CreateExtractElement(bits, r.lane * narrowBits + i);
+        if (!((cst >> i) & 1))
+          bit = b.CreateNot(bit);
+        acc = acc ? b.CreateAnd(acc, bit) : bit;
+      }
+      // acc is true iff lane == C; adjust for eq vs ne.
+      if (r.cmp->getPredicate() == ICmpInst::ICMP_NE)
+        acc = b.CreateNot(acc);
+      r.cmp->replaceAllUsesWith(acc);
+    }
+
+    // Erase the replaced chain in dependency order: compare, then its
+    // single-use extractelement, then the bitcast once its last user is gone.
+    for (const Rewrite &r : rewrites) {
+      r.cmp->eraseFromParent();
+      r.extract->eraseFromParent();
+    }
+    if (bc->use_empty())
+      bc->eraseFromParent();
+  }
+}
+
+static bool isI1Vector(Type *ty) {
+  auto *vecTy = dyn_cast<FixedVectorType>(ty);
+  return vecTy && vecTy->getElementType()->isIntegerTy(1);
+}
+
+// The bytes LLVM's layout gives a `<N x i1>`, as a type SPIR-V can represent:
+// i8/i16/i32/i64 or <4 x i32>. Nothing produces other sizes (the i1 relayout
+// accesses at most 16 bytes), so those accesses are left untouched.
+static Type *getI1VectorStorageType(FixedVectorType *vecTy,
+                                    const DataLayout &dl) {
+  LLVMContext &ctx = vecTy->getContext();
+  uint64_t bytes = dl.getTypeStoreSize(vecTy).getFixedValue();
+  if (bytes == 1 || bytes == 2 || bytes == 4 || bytes == 8)
+    return IntegerType::get(ctx, bytes * 8);
+  if (bytes == 16)
+    return FixedVectorType::get(Type::getInt32Ty(ctx), 4);
+  return nullptr;
+}
+
+// Element `k` of a `<N x i1>` held in its storage type `raw`: bit k of the
+// little-endian integer.
+static Value *extractI1VectorBit(IRBuilder<> &builder, Value *raw, unsigned k) {
+  Value *word = raw;
+  if (auto *vecTy = dyn_cast<FixedVectorType>(raw->getType())) {
+    unsigned wordBits = vecTy->getScalarSizeInBits();
+    word = builder.CreateExtractElement(raw, uint64_t(k / wordBits));
+    k %= wordBits;
+  }
+  auto *wordTy = cast<IntegerType>(word->getType());
+  Value *mask =
+      ConstantInt::get(wordTy, APInt::getOneBitSet(wordTy->getBitWidth(), k));
+  return builder.CreateICmpNE(builder.CreateAnd(word, mask),
+                              ConstantInt::get(wordTy, 0));
+}
+
+static void legalizeI1VectorLoad(LoadInst *load, const DataLayout &dl) {
+  auto *vecTy = cast<FixedVectorType>(load->getType());
+  Type *storageTy = getI1VectorStorageType(vecTy, dl);
+  if (!storageTy)
+    return;
+  IRBuilder<> builder(load);
+  LoadInst *raw =
+      builder.CreateAlignedLoad(storageTy, load->getPointerOperand(),
+                                load->getAlign(), load->isVolatile());
+  raw->copyMetadata(
+      *load, {LLVMContext::MD_alias_scope, LLVMContext::MD_noalias,
+              LLVMContext::MD_nontemporal, LLVMContext::MD_invariant_load});
+
+  // Constant-index extracts, the shape the optimizer leaves behind, read their
+  // bit directly; any other user gets the whole vector rebuilt in registers.
+  Value *bits = nullptr;
+  SmallSetVector<User *, 8> users(load->user_begin(), load->user_end());
+  for (User *user : users) {
+    auto *extract = dyn_cast<ExtractElementInst>(user);
+    auto *idx =
+        extract ? dyn_cast<ConstantInt>(extract->getIndexOperand()) : nullptr;
+    if (idx && idx->getValue().ult(vecTy->getNumElements())) {
+      IRBuilder<> extractBuilder(extract);
+      extract->replaceAllUsesWith(
+          extractI1VectorBit(extractBuilder, raw, idx->getZExtValue()));
+      extract->eraseFromParent();
+      continue;
+    }
+    if (!bits) {
+      bits = PoisonValue::get(vecTy);
+      for (unsigned k = 0; k < vecTy->getNumElements(); ++k)
+        bits = builder.CreateInsertElement(
+            bits, extractI1VectorBit(builder, raw, k), uint64_t(k));
+    }
+    user->replaceUsesOfWith(load, bits);
+  }
+  load->eraseFromParent();
+}
+
+static void legalizeI1VectorStore(StoreInst *store, const DataLayout &dl) {
+  Value *bits = store->getValueOperand();
+  auto *vecTy = cast<FixedVectorType>(bits->getType());
+  Type *storageTy = getI1VectorStorageType(vecTy, dl);
+  if (!storageTy)
+    return;
+  IRBuilder<> builder(store);
+  auto *wordTy = cast<IntegerType>(storageTy->getScalarType());
+  unsigned wordBits = wordTy->getBitWidth();
+  auto *storageVecTy = dyn_cast<FixedVectorType>(storageTy);
+
+  SmallVector<Value *> words(storageVecTy ? storageVecTy->getNumElements() : 1,
+                             nullptr);
+  for (unsigned k = 0; k < vecTy->getNumElements(); ++k) {
+    Value *bit = builder.CreateZExt(
+        builder.CreateExtractElement(bits, uint64_t(k)), wordTy);
+    if (k % wordBits)
+      bit = builder.CreateShl(bit, k % wordBits);
+    Value *&word = words[k / wordBits];
+    word = word ? builder.CreateOr(word, bit) : bit;
+  }
+  assert(!llvm::is_contained(words, nullptr) &&
+         "every storage word must be written");
+
+  Value *raw = words.front();
+  if (storageVecTy) {
+    raw = PoisonValue::get(storageVecTy);
+    for (auto [w, word] : llvm::enumerate(words))
+      raw = builder.CreateInsertElement(raw, word, uint64_t(w));
+  }
+  StoreInst *newStore = builder.CreateAlignedStore(
+      raw, store->getPointerOperand(), store->getAlign(), store->isVolatile());
+  newStore->copyMetadata(*store,
+                         {LLVMContext::MD_alias_scope, LLVMContext::MD_noalias,
+                          LLVMContext::MD_nontemporal});
+  store->eraseFromParent();
+}
+
+// Access `<N x i1>` memory only through integer types.
+//
+// LLVM bit-packs `<N x i1>` in memory (element k = bit k), IGC gives every i1
+// a byte (`i1:8:8`), and SPIR-V defines no memory layout for Booleans. LLVM
+// forms such accesses on its own: InstCombine folds `bitcast <M x iK> to
+// <N x i1>` into the load feeding it, and a bitcast stored value into the
+// store. IGC then either reads N bytes where LLVM meant N bits, returning the
+// wrong elements without an error, or crashes. Rewrite such loads and stores
+// as integer accesses of the same bytes, and do the bit (un)packing in
+// registers.
+void legalizeI1VectorMemory(Module &module) {
+  const DataLayout &dl = module.getDataLayout();
+  if (!dl.isLittleEndian())
+    return;
+
+  SmallVector<LoadInst *> loads;
+  SmallVector<StoreInst *> stores;
+  for (auto &func : module)
+    for (auto &block : func)
+      for (auto &inst : block) {
+        if (auto *load = dyn_cast<LoadInst>(&inst)) {
+          if (isI1Vector(load->getType()))
+            loads.push_back(load);
+        } else if (auto *store = dyn_cast<StoreInst>(&inst)) {
+          if (isI1Vector(store->getValueOperand()->getType()))
+            stores.push_back(store);
+        }
+      }
+
+  for (LoadInst *load : loads)
+    legalizeI1VectorLoad(load, dl);
+  for (StoreInst *store : stores)
+    legalizeI1VectorStore(store, dl);
+}
+
+// W/A for IGC register allocation of `llvm.fma` (#8626) that keeps `tl.fma`
+// bitwise-identical to a separately rounded multiply followed by an fma.
+//
+// Rewrite every scalar f32 `llvm.fma(a, b, c)` into
+//   %m = fmul contract a, b
+//   %r = fadd contract %m, c
+// so IGC allocates registers as it does for the implicitly fused `a * b + c`
+// (an `llvm.fma` call costs up to ~35% more spill on the vLLM fp8 unified
+// attention kernels).
+//
+// This must run after the LLVM optimizer: InstCombine canonicalizes the
+// operand order of a commutative `fadd`, which would put a separately rounded
+// addend (`x * 0.1` in `tl.fma(0.9, g * g, x * 0.1)`) before the contract
+// multiply. IGC then fuses that addend multiply instead of ours, and the
+// rounding of `x * 0.1` is lost (1 ulp off eager). Emitting the pair here keeps
+// the contract multiply as the first operand.
+void expandFmaToContractPair(Module &module) {
+  // Only the scalar f32 overload: other types have different declarations.
+  Function *fma = Intrinsic::getDeclarationIfExists(
+      &module, Intrinsic::fma, {Type::getFloatTy(module.getContext())});
+  if (!fma)
+    return;
+
+  for (User *user : make_early_inc_range(fma->users())) {
+    auto *call = dyn_cast<CallInst>(user);
+    if (!call || call->getCalledFunction() != fma)
+      continue;
+
+    // `IRBuilder` (and IGC) fold a multiply of two constants, rounding the
+    // product to f32 and leaving nothing to fuse. That changes the result of
+    // an exact fma, so keep `llvm.fma` when both multiplicands are constants.
+    if (isa<Constant>(call->getArgOperand(0)) &&
+        isa<Constant>(call->getArgOperand(1)))
+      continue;
+
+    IRBuilder<> builder(call);
+    builder.SetCurrentDebugLocation(call->getDebugLoc());
+    FastMathFlags fmf = call->getFastMathFlags();
+    fmf.setAllowContract(true);
+    builder.setFastMathFlags(fmf);
+    Value *mul =
+        builder.CreateFMul(call->getArgOperand(0), call->getArgOperand(1));
+    Value *add = builder.CreateFAdd(mul, call->getArgOperand(2));
+    call->replaceAllUsesWith(add);
+    call->eraseFromParent();
+  }
+}
+
 void postProcessLLVMIR(llvm::Module &mod) {
   // __devicelib_assert_fail must be a declaration so that
   // IGC can replace it with a runtime assert function.
@@ -167,6 +458,14 @@ void postProcessLLVMIR(llvm::Module &mod) {
   // Widen sub-byte bit ops forbidden by SPV_INTEL_int4.
   expandSubByteBitReverse(mod);
   expandSubByteBitwiseAnd(mod);
+
+  expandSubByteVectorBitcast(mod);
+
+  // IGC and LLVM disagree on the memory layout of `<N x i1>`.
+  legalizeI1VectorMemory(mod);
+
+  // IGC register allocation W/A for `llvm.fma` (#8626).
+  expandFmaToContractPair(mod);
 }
 
 } // namespace mlir::triton::intel
@@ -186,5 +485,23 @@ PreservedAnalyses ExpandSubByteBitReversePass::run(Module &M,
 PreservedAnalyses ExpandSubByteBitwiseAndPass::run(Module &M,
                                                    ModuleAnalysisManager &) {
   mlir::triton::intel::expandSubByteBitwiseAnd(M);
+  return PreservedAnalyses::none();
+}
+
+PreservedAnalyses ExpandSubByteVectorBitcastPass::run(Module &M,
+                                                      ModuleAnalysisManager &) {
+  mlir::triton::intel::expandSubByteVectorBitcast(M);
+  return PreservedAnalyses::none();
+}
+
+PreservedAnalyses LegalizeI1VectorMemoryPass::run(Module &M,
+                                                  ModuleAnalysisManager &) {
+  mlir::triton::intel::legalizeI1VectorMemory(M);
+  return PreservedAnalyses::none();
+}
+
+PreservedAnalyses ExpandFmaToContractPairPass::run(Module &M,
+                                                   ModuleAnalysisManager &) {
+  mlir::triton::intel::expandFmaToContractPair(M);
   return PreservedAnalyses::none();
 }

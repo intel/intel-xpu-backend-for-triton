@@ -28,11 +28,14 @@ public:
     builder = std::make_unique<OpBuilder>(&ctx);
   }
 
-  ModuleOp buildModule() {
+  // Returns an owning handle so the caller controls the module's lifetime.
+  // MLIR ops created via ModuleOp::create() are owned by nothing, so returning
+  // a raw ModuleOp would leak (caught by LeakSanitizer).
+  OwningOpRef<ModuleOp> buildModule() {
     Location loc = builder->getUnknownLoc();
-    auto module = ModuleOp::create(loc);
-    module->setAttr(AttrNumWarpsName, builder->getI32IntegerAttr(4));
-    module->setAttr(AttrNumThreadsPerWarp, builder->getI32IntegerAttr(16));
+    OwningOpRef<ModuleOp> module = ModuleOp::create(loc);
+    (*module)->setAttr(AttrNumWarpsName, builder->getI32IntegerAttr(4));
+    (*module)->setAttr(AttrNumThreadsPerWarp, builder->getI32IntegerAttr(16));
     return module;
   }
 
@@ -70,7 +73,7 @@ public:
   }
 
   BlockArgument addPtrArg(func::FuncOp funcOp, Type elemTy,
-                          unsigned addressSpace = 1) {
+                          PtrAddrSpace addressSpace = PtrAddrSpace::Global) {
     Block *block = &funcOp.getBody().front();
     auto ptrTy = PointerType::get(elemTy, addressSpace);
     FunctionType newFuncType = builder->getFunctionType(
@@ -86,8 +89,8 @@ protected:
 
 // Test 1: Constant scalar has IV stride 0 for any loop
 TEST_F(StrideInfoTest, ConstantScalarIVStrideZero) {
-  ModuleOp module = buildModule();
-  func::FuncOp funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  func::FuncOp funcOp = buildFunc(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   // Build a constant
@@ -100,8 +103,8 @@ TEST_F(StrideInfoTest, ConstantScalarIVStrideZero) {
   scf::YieldOp::create(*builder, loc);
 
   // Run analysis
-  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
-  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
+  ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
 
   StrideInfo *info = strideAnalysis.getStrideInfo(constOp);
   ASSERT_NE(info, nullptr);
@@ -114,8 +117,8 @@ TEST_F(StrideInfoTest, ConstantScalarIVStrideZero) {
 
 // Test 2: Loop IV has stride 1 w.r.t. its own loop, 0 w.r.t. other loop
 TEST_F(StrideInfoTest, LoopIVOwnLoop) {
-  ModuleOp module = buildModule();
-  func::FuncOp funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  func::FuncOp funcOp = buildFunc(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   Location loc = builder->getUnknownLoc();
@@ -131,8 +134,8 @@ TEST_F(StrideInfoTest, LoopIVOwnLoop) {
   scf::YieldOp::create(*builder, loc);
 
   // Run analysis
-  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
-  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
+  ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
 
   StrideInfo *info = strideAnalysis.getStrideInfo(iv1);
   ASSERT_NE(info, nullptr);
@@ -146,8 +149,8 @@ TEST_F(StrideInfoTest, LoopIVOwnLoop) {
 
 // Test 3: arith.muli(iv, 128) → IV stride 128
 TEST_F(StrideInfoTest, MulIVByConstant) {
-  ModuleOp module = buildModule();
-  func::FuncOp funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  func::FuncOp funcOp = buildFunc(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   Location loc = builder->getUnknownLoc();
@@ -162,8 +165,8 @@ TEST_F(StrideInfoTest, MulIVByConstant) {
   scf::YieldOp::create(*builder, loc);
 
   // Run analysis
-  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
-  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
+  ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
 
   StrideInfo *info = strideAnalysis.getStrideInfo(mulOp);
   ASSERT_NE(info, nullptr);
@@ -173,8 +176,8 @@ TEST_F(StrideInfoTest, MulIVByConstant) {
 
 // Test 4: arith.addi(iv, const) → IV stride 1
 TEST_F(StrideInfoTest, AddIVConstant) {
-  ModuleOp module = buildModule();
-  func::FuncOp funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  func::FuncOp funcOp = buildFunc(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   Location loc = builder->getUnknownLoc();
@@ -189,8 +192,8 @@ TEST_F(StrideInfoTest, AddIVConstant) {
   scf::YieldOp::create(*builder, loc);
 
   // Run analysis
-  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
-  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
+  ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
 
   StrideInfo *info = strideAnalysis.getStrideInfo(addOp);
   ASSERT_NE(info, nullptr);
@@ -200,8 +203,8 @@ TEST_F(StrideInfoTest, AddIVConstant) {
 
 // Test 5: tt.splat(muli(iv, 128)) → IV stride [128]
 TEST_F(StrideInfoTest, SplatMulIV) {
-  ModuleOp module = buildModule();
-  func::FuncOp funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  func::FuncOp funcOp = buildFunc(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   Location loc = builder->getUnknownLoc();
@@ -223,8 +226,8 @@ TEST_F(StrideInfoTest, SplatMulIV) {
   scf::YieldOp::create(*builder, loc);
 
   // Run analysis
-  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
-  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
+  ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
 
   StrideInfo *info = strideAnalysis.getStrideInfo(splatOp);
   ASSERT_NE(info, nullptr);
@@ -236,8 +239,8 @@ TEST_F(StrideInfoTest, SplatMulIV) {
 
 // Test 6: 1-D streaming case: addptr(splat(base), splat(muli(iv, 128)))
 TEST_F(StrideInfoTest, OneDimStreamingAddPtr) {
-  ModuleOp module = buildModule();
-  func::FuncOp funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  func::FuncOp funcOp = buildFunc(*module);
 
   // Add a pointer argument
   Type f16Ty = builder->getF16Type();
@@ -257,7 +260,7 @@ TEST_F(StrideInfoTest, OneDimStreamingAddPtr) {
 
   // Create tensor<128x!tt.ptr<f16>> type
   auto encoding = makeBlocked({1}, {16}, {4}, {0});
-  auto ptrTy = PointerType::get(f16Ty, 1);
+  auto ptrTy = PointerType::get(f16Ty);
   auto tensorPtrTy = RankedTensorType::get({128}, ptrTy, encoding);
 
   // splat(base_ptr)
@@ -274,8 +277,8 @@ TEST_F(StrideInfoTest, OneDimStreamingAddPtr) {
   scf::YieldOp::create(*builder, loc);
 
   // Run analysis
-  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
-  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
+  ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
 
   StrideInfo *info = strideAnalysis.getStrideInfo(addPtrOp);
   ASSERT_NE(info, nullptr);
@@ -291,8 +294,8 @@ TEST_F(StrideInfoTest, OneDimStreamingAddPtr) {
 // Test 7: step > 1 — IV-unit stride is independent of loop step; per-iteration
 // stride folds in the step via getPerIterationIVStride().
 TEST_F(StrideInfoTest, StepGreaterThanOne) {
-  ModuleOp module = buildModule();
-  func::FuncOp funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  func::FuncOp funcOp = buildFunc(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   Location loc = builder->getUnknownLoc();
@@ -305,8 +308,8 @@ TEST_F(StrideInfoTest, StepGreaterThanOne) {
 
   scf::YieldOp::create(*builder, loc);
 
-  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
-  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
+  ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
 
   StrideInfo *info = strideAnalysis.getStrideInfo(mulOp);
   ASSERT_NE(info, nullptr);
@@ -322,8 +325,8 @@ TEST_F(StrideInfoTest, StepGreaterThanOne) {
 
 // Test 8: Nested loops — inner IV queried for outer-only-dependent value
 TEST_F(StrideInfoTest, NestedLoopsInnerIVOuterValue) {
-  ModuleOp module = buildModule();
-  func::FuncOp funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  func::FuncOp funcOp = buildFunc(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   Location loc = builder->getUnknownLoc();
@@ -345,8 +348,8 @@ TEST_F(StrideInfoTest, NestedLoopsInnerIVOuterValue) {
   scf::YieldOp::create(*builder, loc);
 
   // Run analysis
-  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
-  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
+  ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
 
   StrideInfo *info = strideAnalysis.getStrideInfo(mulOp);
   ASSERT_NE(info, nullptr);
@@ -369,8 +372,8 @@ TEST_F(StrideInfoTest, NestedLoopsInnerIVOuterValue) {
 
 // Test 9: Spatial stride regression — tt.make_range
 TEST_F(StrideInfoTest, SpatialRangeStrideOne) {
-  ModuleOp module = buildModule();
-  func::FuncOp funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  func::FuncOp funcOp = buildFunc(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   Location loc = builder->getUnknownLoc();
@@ -385,8 +388,8 @@ TEST_F(StrideInfoTest, SpatialRangeStrideOne) {
   scf::YieldOp::create(*builder, loc);
 
   // Run analysis
-  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
-  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
+  ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
 
   StrideInfo *info = strideAnalysis.getStrideInfo(rangeOp);
   ASSERT_NE(info, nullptr);
@@ -401,8 +404,8 @@ TEST_F(StrideInfoTest, SpatialRangeStrideOne) {
 
 // Test 10: Spatial stride regression — tt.splat(const)
 TEST_F(StrideInfoTest, SpatialSplatConstant) {
-  ModuleOp module = buildModule();
-  func::FuncOp funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  func::FuncOp funcOp = buildFunc(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   Location loc = builder->getUnknownLoc();
@@ -421,8 +424,8 @@ TEST_F(StrideInfoTest, SpatialSplatConstant) {
   scf::YieldOp::create(*builder, loc);
 
   // Run analysis
-  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
-  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
+  ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
 
   StrideInfo *info = strideAnalysis.getStrideInfo(splatOp);
   ASSERT_NE(info, nullptr);
@@ -439,8 +442,8 @@ TEST_F(StrideInfoTest, SpatialSplatConstant) {
 // as the runtime stride source along the varying axis, while a constant
 // multiplier yields no symbolic source.
 TEST_F(StrideInfoTest, SymbolicStrideValueFromRuntimeScalar) {
-  ModuleOp module = buildModule();
-  func::FuncOp funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  func::FuncOp funcOp = buildFunc(*module);
 
   // Add a runtime i32 `lda` argument.
   Block *block = &funcOp.getBody().front();
@@ -464,8 +467,8 @@ TEST_F(StrideInfoTest, SymbolicStrideValueFromRuntimeScalar) {
 
   func::ReturnOp::create(*builder, loc);
 
-  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
-  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
+  ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
 
   StrideInfo *info = strideAnalysis.getStrideInfo(mulOp);
   ASSERT_NE(info, nullptr);
@@ -478,8 +481,8 @@ TEST_F(StrideInfoTest, SymbolicStrideValueFromRuntimeScalar) {
 // Test 12: A constant multiplier produces a known stride and NO symbolic
 // source (the constant path is preferred and getStrideValue stays null).
 TEST_F(StrideInfoTest, ConstantStrideHasNoSymbolicValue) {
-  ModuleOp module = buildModule();
-  func::FuncOp funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  func::FuncOp funcOp = buildFunc(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   Location loc = builder->getUnknownLoc();
@@ -493,8 +496,8 @@ TEST_F(StrideInfoTest, ConstantStrideHasNoSymbolicValue) {
       SplatElementsAttr::get(rangeTy, builder->getI32IntegerAttr(128)));
   auto mulOp = arith::MulIOp::create(*builder, loc, rangeOp, c128);
 
-  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
-  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
+  ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
 
   StrideInfo *info = strideAnalysis.getStrideInfo(mulOp);
   ASSERT_NE(info, nullptr);

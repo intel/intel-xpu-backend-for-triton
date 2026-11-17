@@ -6,7 +6,7 @@
 
 // COM: Test case: f16 blocked prefetch, 128x64 tensor, 4 warps.
 // COM: With 128x64xf16 and 4 warps (256B prefetch support enabled):
-// COM:   tileHeight=32, tileWidth=32 -> vBlocks=2, tile_width=16
+// COM:   tileHeight=32, tileWidth=32 -> vBlocks=1, tile_width=32
 // COM:   warpsM=2, warpsN=2
 // COM:   numTilesPerWarp = (128*64) / (32*32*4) = 2
 // COM: Expect 2 triton_gen.2Dblockprefetch ops per prefetch invocation.
@@ -28,7 +28,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
     %ptr = tt.addptr %9, %8 : tensor<128x64x!tt.ptr<f16>, #blocked>, tensor<128x64xi32, #blocked>
 
-    // CHECK-COUNT-2: triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK-COUNT-2: triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 32, v_blocks = 1, cache_control = L1C_L3C}
     ttig.prefetch %ptr {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #blocked>
 
     tt.return
@@ -101,9 +101,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     // COM: prefetch when the predicate is false. Check that the prefetch is
     // COM: still emitted (twice) and that its offsetY comes from an llvm.select.
     // CHECK: %[[SEL0:.*]] = llvm.select %{{.*}}, %{{.*}}, %{{.*}} : i1, i32
-    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL0]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 32, v_blocks = 1, cache_control = L1C_L3C}
     // CHECK: %[[SEL1:.*]] = llvm.select %{{.*}}, %{{.*}}, %{{.*}} : i1, i32
-    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL1]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 32, v_blocks = 1, cache_control = L1C_L3C}
     ttig.prefetch %ptr, %mask {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 0>, ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #blocked>
 
     tt.return
@@ -146,9 +146,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     // COM: The uniform `%pred` is folded into offsetY via llvm.select; the
     // COM: per-element `%boundsMask` is dropped (safe for a prefetch hint).
     // CHECK: %[[SEL0:.*]] = llvm.select %{{.*}}, %{{.*}}, %{{.*}} : i1, i32
-    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL0]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 32, v_blocks = 1, cache_control = L1C_L3C}
     // CHECK: %[[SEL1:.*]] = llvm.select %{{.*}}, %{{.*}}, %{{.*}} : i1, i32
-    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL1]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 32, v_blocks = 1, cache_control = L1C_L3C}
     ttig.prefetch %ptr, %mask {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 0>, ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #blocked>
 
     tt.return
@@ -214,8 +214,39 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
     %ptr = tt.addptr %9, %8 : tensor<128x64x!tt.ptr<f16>, #blocked>, tensor<128x64xi32, #blocked>
 
-    // CHECK-COUNT-2: triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1UC_L3C}
+    // CHECK-COUNT-2: triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 32, v_blocks = 1, cache_control = L1UC_L3C}
     ttig.prefetch %ptr {boundaryCheck = array<i32>, cache = 3 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #blocked>
+
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Broadcast row (M == 1, row stride 0): the descriptor must use
+// COM: base_height = 1 and a non-zero base_width/pitch (see #7267).
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @prefetch_broadcast_row_f32
+  tt.func public @prefetch_broadcast_row_f32(%arg0: !tt.ptr<f32>) {
+    // COM: 16x32 tensor-of-pointers with a broadcast row (stride 0).
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x32xi32, #blocked>
+    %2 = tt.broadcast %1 : tensor<1x32xi32, #blocked> -> tensor<16x32xi32, #blocked>
+    %3 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<16x32x!tt.ptr<f32>, #blocked>
+    %ptr = tt.addptr %3, %2 : tensor<16x32x!tt.ptr<f32>, #blocked>, tensor<16x32xi32, #blocked>
+
+    // COM: base_height comes from the constant 1 (broadcast row); base_width
+    // COM: from the contiguous-dim surface extent (pitch is inflated separately
+    // COM: to satisfy the HW pitch >= base_width constraint after alignment
+    // COM: compensation). Tie both captures into the op operands so the check
+    // COM: fails if either descriptor value regresses.
+    // CHECK: %[[BASE_H_I64:.*]] = llvm.mlir.constant(1 : i64) : i64
+    // CHECK: %[[BASE_W:.*]] = llvm.trunc %{{.*}} : i64 to i32
+    // CHECK: %[[BASE_H:.*]] = llvm.trunc %[[BASE_H_I64]] : i64 to i32
+    // CHECK: triton_gen.2Dblockprefetch %{{.*}}, %[[BASE_W]], %[[BASE_H]], %{{.*}} {elem_size_in_bits = 32, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = L1C_L3C}
+    ttig.prefetch %ptr {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : tensor<16x32x!tt.ptr<f32>, #blocked>
 
     tt.return
   }

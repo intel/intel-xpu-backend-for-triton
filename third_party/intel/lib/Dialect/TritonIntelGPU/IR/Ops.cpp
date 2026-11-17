@@ -10,6 +10,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
 
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -126,9 +127,30 @@ LogicalResult Subgroup2DBlockLoadOp::verify() {
   if (!resultType)
     return emitOpError("result must be a ranked tensor type");
 
-  if (resultType.getRank() < 2)
-    return emitOpError("result tensor must have rank >= 2, got ")
-           << resultType.getRank();
+  unsigned rank = resultType.getRank();
+  if (rank < 2)
+    return emitOpError("result tensor must have rank >= 2, got ") << rank;
+
+  // The 2D block I/O tile covers the inner 2 dimensions only; every leading
+  // (batch) dimension needs an explicit stride because it cannot be derived
+  // from the 2D surface parameters.
+  if (getBatchStrides().size() != rank - 2)
+    return emitOpError("expected ")
+           << (rank - 2) << " batch stride(s) for a rank-" << rank
+           << " result, got " << getBatchStrides().size();
+
+  if (getBatchOffsets().size() != getBatchShapes().size())
+    return emitOpError("expected the same number of batch offsets and batch "
+                       "shapes, got ")
+           << getBatchOffsets().size() << " and " << getBatchShapes().size();
+
+  // A rank-reducing load drops leading descriptor dimensions from the result,
+  // so the descriptor has at least as many batch dimensions as the result.
+  if (getBatchOffsets().size() < getBatchStrides().size())
+    return emitOpError("expected at least ")
+           << getBatchStrides().size()
+           << " batch offset(s), one per descriptor batch dimension, got "
+           << getBatchOffsets().size();
 
   return success();
 }
@@ -145,7 +167,97 @@ LogicalResult Subgroup2DBlockLoadFromPtrOp::verify() {
   if (getMask() && !getOther())
     return emitOpError("'other' must be present when 'mask' is present");
 
+  // The lowering derives an X shift from a column-limit width, so it must be
+  // a whole number of granules. Only a constant width can be checked here.
+  if ((*this)->hasAttr(
+          TritonIntelGPUDialect::getBlockIORuntimeColLimitAttrName())) {
+    unsigned elemBits = getIntOrFloatOrPtrBitWidth(resultType.getElementType());
+    if (elemBits % 8 != 0)
+      return emitOpError("column-limit width needs byte-sized elements, got ")
+             << elemBits << "-bit elements";
+    APInt width;
+    if (matchPattern(getBaseWidth(), m_ConstantInt(&width))) {
+      int64_t granule = std::max<int64_t>(4, elemBits / 8);
+      if (width.isNegative() || width.getSExtValue() % granule != 0)
+        return emitOpError("column-limit width must be a non-negative "
+                           "multiple of ")
+               << granule << " bytes, got " << width.getSExtValue();
+    }
+  }
+
   return success();
+}
+
+// -- DescriptorGatherOp
+static LogicalResult verifyGatherScatterResultType(Operation *op,
+                                                   ShapedType resultType,
+                                                   ShapedType indicesType) {
+  if (indicesType.getRank() != 1)
+    return op->emitOpError("x offsets must be a 1D tensor, but got ")
+           << indicesType;
+  if (resultType.getRank() != 2)
+    return op->emitOpError("result must be a 2D tensor, but got ")
+           << resultType;
+
+  Type dtype = resultType.getElementType();
+  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(dtype);
+  if (bitWidth > 64)
+    return op->emitOpError("dtype cannot be greater than 64 bits");
+
+  unsigned minCols = 256 / bitWidth;
+  if (unsigned cols = resultType.getShape()[1]; cols < minCols) {
+    return op->emitOpError("must have at least ")
+           << minCols << " columns for " << dtype << ", but got " << cols;
+  }
+
+  if (resultType.getShape()[0] != indicesType.getShape()[0]) {
+    return op->emitOpError("result tensor must have as many rows as indices (")
+           << indicesType.getShape()[0] << "), but got " << resultType;
+  }
+
+  return success();
+}
+
+static LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
+                                           ShapedType resultType,
+                                           ShapedType indicesType) {
+  // Gather from `!tt.tensordesc<1xMxdtype>`.
+  if (blockType.getRank() != 2) {
+    return op->emitOpError("descriptor block must be a 2D tensor, but got ")
+           << blockType;
+  }
+  if (blockType.getShape()[0] != 1) {
+    return op->emitOpError("descriptor block must have exactly 1 row, but got ")
+           << blockType;
+  }
+
+  // With x offsets `tensor<Nxinttype>` into `tensor<NxMxdtype>`.
+  if (failed(verifyGatherScatterResultType(op, resultType, indicesType)))
+    return failure();
+
+  if (resultType.getShape()[1] != blockType.getShape()[1]) {
+    return op->emitOpError("result tensor number of columns must match block (")
+           << blockType.getShape()[1] << "), but got " << resultType;
+  }
+  if (resultType.getElementType() != blockType.getElementType()) {
+    return op->emitOpError("result tensor element type must match block (")
+           << blockType.getElementType() << "), but got " << resultType;
+  }
+
+  return success();
+}
+
+LogicalResult DescriptorGatherOp::verify() {
+  return intel::verifyGatherScatterOp(
+      *this, getDesc().getType().getSignlessBlockType(), getResult().getType(),
+      getXOffsets().getType());
+}
+
+// -- DescriptorScatterOp --
+LogicalResult DescriptorScatterOp::verify() {
+  return intel::verifyGatherScatterOp(
+      *this, getDesc().getType().getSignlessBlockType(), getSrc().getType(),
+      getXOffsets().getType());
 }
 
 } // namespace mlir::triton::gpu::intel

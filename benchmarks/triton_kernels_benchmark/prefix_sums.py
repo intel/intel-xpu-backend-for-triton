@@ -5,6 +5,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.benchmark_testing import DEVICE
 
 
 @triton.jit
@@ -31,13 +32,20 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
             x_names=["M", "N", "AXIS"],
-            x_vals=[(m, n, a)
-                    for (m, n) in [(32, 16), (32, 32), (32, 64), (64, 32)]  #  #  #  #
-                    for a in [0, 1]  #  #
-                    ],
+            x_vals=[
+                (m, n, a)
+                for (m, n) in [(32, 16), (32, 32), (32, 64), (64, 32)]  #  #  #  #
+                for a in [0, 1]  #  #
+            ] + [
+                # A one-row tile puts the whole sub-group on the scanned axis
+                # (threadsPerWarp = [1, 32]), which is what reaches the hardware
+                # sub-group scan. The square tiles above split threadsPerWarp
+                # across both dimensions and never do.
+                (1, n, 1) for n in [1024, 8192]
+            ],
             line_arg="provider",
-            line_vals=providers.keys(),
-            line_names=providers.values(),
+            line_vals=list(providers.keys()),
+            line_names=list(providers.values()),
             styles=[("blue", "-"), ("green", "-"), ("orange", "-")],
             ylabel=["GB/s", "TFlops"],
             plot_name="prefix-sums",
@@ -45,7 +53,7 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
         ))
     def benchmark(M, N, AXIS, provider):
         do_bench = benchmark_suite.get_do_bench(n_warmup=1000, n_repeat=100, quantiles=[0.5, 0.0, 1.0])
-        x = torch.rand(M, N, device="xpu", dtype=torch.float32)
+        x = torch.rand(M, N, device=DEVICE, dtype=torch.float32)
 
         if provider == "triton":
             triton_fn = lambda: scan_kernel[(1, )](x, BLOCK_SIZE_M=M, BLOCK_SIZE_N=N, AXIS=AXIS)

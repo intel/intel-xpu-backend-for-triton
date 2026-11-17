@@ -1,7 +1,10 @@
+#include "PrefetchCostModel.h"
 #include "Schedule.h"
 #include "include/triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/SCF/Transforms/Transforms.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -11,7 +14,9 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CheckedArithmetic.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/MathExtras.h"
 #include <cstdlib>
 #include <cstring>
@@ -25,6 +30,7 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
+namespace prefetchcost = mlir::triton::gpu::intel::prefetchcost;
 
 static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val);
 
@@ -68,7 +74,7 @@ static unsigned getTileBytes(Operation *op, int numStages) {
   auto tensorType = dyn_cast<RankedTensorType>(op->getResultTypes()[0]);
   if (!tensorType || !tensorType.hasStaticShape())
     return std::numeric_limits<unsigned>::max();
-  unsigned bits = tensorType.getElementType().getIntOrFloatBitWidth();
+  unsigned bits = getIntOrFloatOrPtrBitWidth(tensorType.getElementType());
   int64_t numElems = tensorType.getNumElements();
   int64_t bytesPerElem = llvm::divideCeil(bits, 8u);
   int64_t totalBytes = numElems * bytesPerElem * numStages;
@@ -77,12 +83,260 @@ static unsigned getTileBytes(Operation *op, int numStages) {
              : static_cast<unsigned>(totalBytes);
 }
 
+/// Whether \p numIters steps of \p step fit the signed range of \p ty (index is
+/// 64 bits); a longer walk wraps, so its step is not constant. A walk that fits
+/// wraps \p ty at most once, so each value checked here adds at most one
+/// irregular iteration to an otherwise constant walk.
+static bool travelFits(Type ty, int64_t step, int64_t numIters) {
+  unsigned width =
+      ty.isIndex() ? 64 : std::min(ty.getIntOrFloatBitWidth(), 64u);
+  std::optional<uint64_t> travel = llvm::checkedMulUnsigned<uint64_t>(
+      llvm::AbsoluteValue(step), static_cast<uint64_t>(numIters));
+  return travel && *travel <= static_cast<uint64_t>(llvm::maxIntN(width));
+}
+
+/// Return the constant amount by which \p v changes per iteration of \p forOp,
+/// or std::nullopt when it is not a compile-time constant or a value it is
+/// computed from does not travel within its type over \p numIters iterations.
+static std::optional<int64_t> getConstantStep(scf::ForOp forOp, Value v,
+                                              int64_t numIters,
+                                              unsigned depth = 0) {
+  if (depth > 8)
+    return std::nullopt;
+  if (forOp.isDefinedOutsideOfLoop(v) || getConstantIntValue(v))
+    return 0;
+  if (v == forOp.getInductionVar())
+    return getConstantIntValue(forOp.getStep());
+  if (auto arg = dyn_cast<BlockArgument>(v)) {
+    OpOperand *yielded = arg.getOwner() == forOp.getBody()
+                             ? forOp.getTiedLoopYieldedValue(arg)
+                             : nullptr;
+    auto add = yielded ? yielded->get().getDefiningOp<arith::AddIOp>()
+                       : arith::AddIOp();
+    if (!add || (add.getLhs() != arg && add.getRhs() != arg))
+      return std::nullopt;
+    return getConstantIntValue(add.getLhs() == arg ? add.getRhs()
+                                                   : add.getLhs());
+  }
+  Operation *def = v.getDefiningOp();
+  if (def->getBlock() != forOp.getBody())
+    return std::nullopt;
+  auto step = [&](Value x) -> std::optional<int64_t> {
+    std::optional<int64_t> s = getConstantStep(forOp, x, numIters, depth + 1);
+    return s && travelFits(x.getType(), *s, numIters) ? s : std::nullopt;
+  };
+  return TypeSwitch<Operation *, std::optional<int64_t>>(def)
+      .Case<arith::AddIOp, arith::SubIOp>(
+          [&](auto op) -> std::optional<int64_t> {
+            std::optional<int64_t> l = step(op.getLhs()), r = step(op.getRhs());
+            if (!l || !r)
+              return std::nullopt;
+            if constexpr (std::is_same_v<decltype(op), arith::AddIOp>)
+              return llvm::checkedAdd(*l, *r);
+            return llvm::checkedSub(*l, *r);
+          })
+      .Case<arith::MulIOp>([&](arith::MulIOp op) -> std::optional<int64_t> {
+        std::optional<int64_t> c = getConstantIntValue(op.getRhs());
+        Value x = op.getLhs();
+        if (!c) {
+          c = getConstantIntValue(op.getLhs());
+          x = op.getRhs();
+        }
+        std::optional<int64_t> s = c ? step(x) : std::nullopt;
+        return s ? llvm::checkedMul(*s, *c) : std::nullopt;
+      })
+      .Case<arith::ExtSIOp, arith::IndexCastOp>(
+          [&](auto op) { return step(op.getIn()); })
+      // Zero extension makes a falling value jump when it passes zero.
+      .Case<arith::ExtUIOp>([&](arith::ExtUIOp op) -> std::optional<int64_t> {
+        std::optional<int64_t> s = step(op.getIn());
+        return s && *s >= 0 ? s : std::nullopt;
+      })
+      .Default([](Operation *) { return std::nullopt; });
+}
+
+/// The walk of \p load's block: runs along its last dimension, advanced each
+/// iteration by the step of the last index, or nullopt if that step is not a
+/// compile-time constant over \p numIters iterations. A `block_io` descriptor
+/// load has a unit last stride, so each run is contiguous.
+static std::optional<prefetchcost::OperandWalk>
+getOperandWalk(scf::ForOp forOp, tt::DescriptorLoadOp load, int64_t numIters) {
+  RankedTensorType blockTy = load.getDesc().getType().getBlockType();
+  ArrayRef<int64_t> shape = blockTy.getShape();
+  int64_t elemBytes = llvm::divideCeil(blockTy.getElementTypeBitWidth(), 8u);
+  Value index = load.getIndices().back();
+  std::optional<int64_t> step = getConstantStep(forOp, index, numIters);
+  if (!step || !travelFits(index.getType(), *step, numIters))
+    return std::nullopt;
+  std::optional<int64_t> stepBytes = llvm::checkedMul(*step, elemBytes);
+  if (!stepBytes)
+    return std::nullopt;
+  return prefetchcost::OperandWalk{product<int64_t>(shape.drop_back()),
+                                   shape.back() * elemBytes, *stepBytes};
+}
+
+/// Whether \p v is the same in every iteration of \p forOp: defined outside it,
+/// or by a region-free pure op whose operands are; body block arguments vary.
+static bool isLoopInvariant(scf::ForOp forOp, Value v, unsigned depth = 0) {
+  if (forOp.isDefinedOutsideOfLoop(v))
+    return true;
+  Operation *def = v.getDefiningOp();
+  if (depth > 8 || !def || !isPure(def) || def->getNumRegions() != 0)
+    return false;
+  return llvm::all_of(def->getOperands(), [&](Value operand) {
+    return isLoopInvariant(forOp, operand, depth + 1);
+  });
+}
+
+/// 16-bit DPAS-equivalent work of one iteration over the dots in \p forOp, or
+/// nullopt unless every dot is a DPAS dot fed by \p candidates through layout
+/// conversions in the body, and every candidate feeds one: the model prices dot
+/// operands only. Candidates that feed a B operand are added to \p feedsB.
+static std::optional<double>
+getDotFlopsPerIter(scf::ForOp forOp, ArrayRef<PrefetchCandidate> candidates,
+                   SmallPtrSetImpl<Operation *> &feedsB) {
+  auto traceToCandidate = [&](Value v) -> Operation * {
+    while (auto cvt = v.getDefiningOp<ttg::ConvertLayoutOp>()) {
+      if (cvt->getBlock() != forOp.getBody())
+        break;
+      v = cvt.getSrc();
+    }
+    Operation *def = v.getDefiningOp();
+    return llvm::any_of(candidates,
+                        [&](const PrefetchCandidate &c) { return c.op == def; })
+               ? def
+               : nullptr;
+  };
+
+  SmallPtrSet<Operation *, 4> fed;
+  double flops = 0;
+  WalkResult result = forOp.getBody()->walk([&](tt::DotOp dot) {
+    auto aTy = cast<RankedTensorType>(dot.getA().getType());
+    RankedTensorType dTy = dot.getType();
+    auto dpas = dyn_cast<ttgi::DpasEncodingAttr>(dTy.getEncoding());
+    if (!dpas)
+      return WalkResult::interrupt();
+    Operation *a = traceToCandidate(dot.getA());
+    Operation *b = traceToCandidate(dot.getB());
+    if (!a || !b)
+      return WalkResult::interrupt();
+    fed.insert({a, b});
+    feedsB.insert(b);
+    // The DPAS rate scales with opsPerChannel, which is 2 for 16-bit operands.
+    flops += 2.0 * dTy.getNumElements() * aTy.getShape().back() * 2 /
+             dpas.getOpsPerChannel();
+    return WalkResult::advance();
+  });
+  if (result.wasInterrupted() || fed.size() != candidates.size())
+    return std::nullopt;
+  return flops;
+}
+
+/// Index of the candidate whose prefetch the cost model drops, or nullopt to
+/// keep them all, which is also the answer for any loop the model does not
+/// price.
+static std::optional<unsigned>
+choosePrefetchToDrop(scf::ForOp forOp, int numStages,
+                     const ttgi::PipelineTarget &target,
+                     ArrayRef<PrefetchCandidate> candidates) {
+  std::optional<prefetchcost::Device> dev = prefetchcost::getDevice(
+      target.deviceArch, {.coreClockHz = target.coreClockKhz * 1e3,
+                          .memClockHz = target.memClockMhz * 1e6});
+  if (!dev || candidates.empty())
+    return std::nullopt;
+
+  auto keep = []([[maybe_unused]] StringRef why) -> std::optional<unsigned> {
+    LDBG("prefetch cost model: keep (" << why << ")");
+    return std::nullopt;
+  };
+  // Split barriers add synchronization the fit never measured.
+  if (target.useBarrier)
+    return keep("split barriers");
+  // A dot_scaled is unpriced and would under-count the flops; a dot under an
+  // scf.if can only over-count, and preCondition rejects inner loops.
+  bool scaledDot = false;
+  forOp.getBody()->walk(
+      [&](Operation *op) { scaledDot |= isa<tt::DotScaledOp>(op); });
+  if (scaledDot)
+    return keep("dot_scaled");
+  if (candidates.size() < 2)
+    return keep("lone prefetch");
+  // On the annotation path a prefetch is issued at its load's loop.stage, which
+  // shortens the num_stages - 1 distance the model prices.
+  if (llvm::any_of(candidates, [](const PrefetchCandidate &c) {
+        auto stage = c.op->getAttrOfType<IntegerAttr>(tt::kLoopStageAttrName);
+        return stage && stage.getInt() != 0;
+      }))
+    return keep("annotated stage");
+  std::optional<APInt> tripCount = forOp.getStaticTripCount();
+  int64_t numIters = tripCount && tripCount->getActiveBits() <= 62
+                         ? static_cast<int64_t>(tripCount->getZExtValue())
+                         : 0;
+  if (numIters < numStages)
+    return keep("trip count");
+  SmallPtrSet<Operation *, 2> feedsB;
+  std::optional<double> flops = getDotFlopsPerIter(forOp, candidates, feedsB);
+  if (!flops)
+    return keep("dot operands");
+
+  prefetchcost::LoopShape shape{.flopsPerIter = *flops,
+                                .tripCount = numIters,
+                                .prefetchDistance =
+                                    static_cast<unsigned>(numStages - 1)};
+  for (const PrefetchCandidate &candidate : candidates) {
+    auto load = dyn_cast<tt::DescriptorLoadOp>(candidate.op);
+    if (!load)
+      return keep("operand is not a descriptor load");
+    ttgi::CachePolicy policy = ttgi::getCachePolicy(load.getCachePolicyAttr());
+    if (policy.cacheModifier != tt::CacheModifier::NONE ||
+        policy.evictionPolicy != tt::EvictionPolicy::NORMAL)
+      return keep("cache policy");
+    // The walk reads the step from the index, so the descriptor must not move.
+    if (!isLoopInvariant(forOp, load.getDesc()))
+      return keep("descriptor varies");
+    std::optional<prefetchcost::OperandWalk> walk =
+        getOperandWalk(forOp, load, numIters);
+    if (!walk)
+      return keep("index step");
+    shape.operands.push_back(*walk);
+  }
+  // chooseDrop keeps it too, but the debug print below must not price it.
+  if (shape.prefetchDistance > dev->arch.onsetItersByDistance.size())
+    return keep("prefetch distance");
+
+  std::optional<unsigned> drop = prefetchcost::chooseDrop(shape, *dev);
+  // Every fit dropped a gapped A; dropping a gapped B was never measured.
+  if (drop && feedsB.contains(candidates[*drop].op))
+    return keep("gapped operand feeds B");
+  LLVM_DEBUG({
+    auto us = [&](std::optional<unsigned> plan) {
+      return llvm::format("%.2f",
+                          1e6 * prefetchcost::loopSeconds(shape, *dev, plan));
+    };
+    DBGS() << "prefetch cost model: distance=" << shape.prefetchDistance
+           << " keep=" << us(std::nullopt) << "us";
+    for (auto [idx, walk] : llvm::enumerate(shape.operands))
+      if (walk.gapped(dev->arch.granuleBytes))
+        llvm::dbgs() << " drop(" << idx
+                     << ")=" << us(static_cast<unsigned>(idx)) << "us";
+    llvm::dbgs() << " -> ";
+    if (drop)
+      llvm::dbgs() << "drop(" << *drop << ") " << candidates[*drop].op->getLoc()
+                   << "\n";
+    else
+      llvm::dbgs() << "keep\n";
+  });
+  return drop;
+}
+
 /// Collect all prefetch candidates from the loop body. Dot-feeding loads
-/// are always collected; elementwise loads are only collected on architectures
-/// with 256B prefetch support (Xe3P+), where software prefetch can outpace the
-/// hardware prefetcher.
+/// are collected unless the cost model drops one (see choosePrefetchToDrop);
+/// elementwise loads are only collected on architectures with 256B prefetch
+/// support (Xe3P+), where software prefetch can outpace the hardware
+/// prefetcher.
 static SmallVector<PrefetchCandidate>
-collectPrefetchCandidates(scf::ForOp forOp, int numStages) {
+collectPrefetchCandidates(scf::ForOp forOp, int numStages,
+                          const ttgi::PipelineTarget &target) {
   constexpr unsigned kMaxElementwisePrefetchOps = 4;
   constexpr unsigned kMaxPerLoadPrefetchBytes = 16384;
 
@@ -113,6 +367,9 @@ collectPrefetchCandidates(scf::ForOp forOp, int numStages) {
       ++numElementwisePrefetch;
     }
   }
+  if (std::optional<unsigned> drop =
+          choosePrefetchToDrop(forOp, numStages, target, candidates))
+    candidates.erase(candidates.begin() + *drop);
   return candidates;
 }
 
@@ -153,7 +410,7 @@ static bool annotationsAreUsable(scf::ForOp forOp,
 
   // (3) Each candidate must carry loop.stage, except the Xe3P+ elementwise
   // carve-out (a candidate that does not feed a dot, on a module that supports
-  // 256B prefetch -- see collectPrefetchCandidates lines 100-110).
+  // 256B prefetch -- see the elementwise branch of collectPrefetchCandidates).
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   bool enableElementwisePrefetch = moduleOp->hasAttr(
       ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName());
@@ -227,9 +484,12 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp,
                              bool useAnnotations) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
+  ttgi::CachePolicy cachePolicy =
+      ttgi::getCachePolicy(loadOp.getCachePolicyAttr());
   auto prefetchOp = ttgi::PrefetchOp::create(
       builder, loadOp->getLoc(), loadOp.getPtr(), loadOp.getMask(),
-      loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+      cachePolicy.cacheModifier, cachePolicy.evictionPolicy,
+      loadOp.getIsVolatile());
 
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();
@@ -271,9 +531,11 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::DescriptorLoadOp loadOp,
                              bool useAnnotations) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
+  ttgi::CachePolicy cachePolicy =
+      ttgi::getCachePolicy(loadOp.getCachePolicyAttr());
   auto prefetchOp = ttgi::DescriptorPrefetchOp::create(
       builder, loadOp->getLoc(), loadOp.getDesc(), loadOp.getIndices(),
-      loadOp.getCache(), loadOp.getEvict());
+      cachePolicy.cacheModifier, cachePolicy.evictionPolicy);
 
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();
@@ -470,11 +732,12 @@ createSchedule(scf::ForOp forOp, int numStages) {
 }
 
 bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
+                                        const PipelineTarget &target,
                                         mlir::scf::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
   SmallVector<PrefetchCandidate> candidates =
-      collectPrefetchCandidates(forOp, numStages);
+      collectPrefetchCandidates(forOp, numStages, target);
   if (candidates.empty()) {
     LDBG("No loads to pipeline");
     return false;
@@ -491,7 +754,8 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
         ArrayRef<int64_t> shape = tensorType.getShape();
         auto numElems = product<int64_t>(shape);
         prefetchBytes +=
-            numElems * tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+            numElems * getIntOrFloatOrPtrBitWidth(tensorType.getElementType()) /
+            8;
       }
       DBGS() << "  " << *op << "\n";
     }

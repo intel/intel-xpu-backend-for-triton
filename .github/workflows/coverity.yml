@@ -18,17 +18,18 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install /usr/bin/file
         run: |
-          sudo apt install -y file
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends file
 
       - name: Install Python
         uses: ./.github/actions/setup-python
         with:
-          python_version: "3.10"
-          use_pyenv: true
+          python_version: "3.11"
+          use_pyenv: false
 
       - name: Load coverity from cache
         id: coverity-cache

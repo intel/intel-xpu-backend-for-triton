@@ -146,7 +146,8 @@ static void populateOpPatterns(LLVMTypeConverter &converter,
                                RewritePatternSet &patterns, StringRef f32Func,
                                StringRef f64Func) {
   patterns.add<ScalarizeVectorOpLowering<OpTy>>(converter);
-  patterns.add<OpToFuncCallLowering<OpTy>>(converter, f32Func, f64Func);
+  patterns.add<mlir::triton::intel::OpToFuncCallLowering<OpTy>>(
+      converter, f32Func, f64Func);
 }
 
 void mlir::triton::populateGPUToTritonGENConversionPatterns(

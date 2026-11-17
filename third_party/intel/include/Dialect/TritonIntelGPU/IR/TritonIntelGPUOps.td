@@ -32,21 +32,6 @@ def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 class TTIG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonIntelGPU_Dialect, mnemonic, !listconcat(traits, [VerifyMemDescLayoutsTrait])>;
 
-def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
-  let summary = "Memory allocation operation";
-  let description = [{
-    The `alloc` operation allocates a region of memory as specified by its type.
-    Example:
-      ```mlir
-      %0 = ttig.alloc() : <8x64xf32, 3>
-      ```
-  }];
-  let results = (outs TT_Ptr:$result);
-  let assemblyFormat = [{
-    attr-dict `:` type($result)
-  }];
-}
-
 def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
   MemoryEffects<[MemWrite<L2Cache>]>,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
@@ -108,26 +93,12 @@ def TTIG_DescriptorPrefetchOp : TTIG_Op<"descriptor_prefetch", [MemoryEffects<[M
   let hasVerifier = 1;
 }
 
-// same as tt.broadcast except that we don't require SameOperandsAndResultEncoding
-def TTIG_BroadcastOp : TTIG_Op<"broadcast", [Pure, SameOperandsAndResultElementType]> {
-  let summary = "broadcast a tensor";
-  let description = [{
-    For a given tensor, broadcast changes one or more dimensions with size 1
-    to a new size, e.g. tensor<1x32x1xf32> -> tensor<2x32x4xf32>.  You cannot
-    change the size of a non-1 dimension.
-  }];
-
-  let arguments = (ins TT_Tensor:$src);
-  let results = (outs TT_Tensor:$result);
-  let assemblyFormat = [{
-    $src attr-dict `:` type($src) `->` type($result)
-  }];
-}
-
-class IsLocalPointerToElementType<string pointer, string value, string summary> :
+// `tt.ptr` no longer spells the workgroup (SLM) address space: PtrAddrSpace
+// only has global/descriptor/constant, and adding a case would break the
+// exhaustive switches every backend has over it. Match the pointee type only.
+class IsPointerToElementType<string pointer, string value, string summary> :
     TypesMatchWith<summary, value, pointer, [{
-      ::mlir::triton::PointerType::get( }] # ElementType<"_self">.result # [{,
-          static_cast<unsigned>(::mlir::triton::TritonGEN::kWorkgroup))
+      ::mlir::triton::PointerType::get( }] # ElementType<"_self">.result # [{)
     }]>;
 
 // NOTE: This operation shouldn't be needed, as simply modifying the encoding
@@ -136,7 +107,7 @@ class IsLocalPointerToElementType<string pointer, string value, string summary> 
 def TTIG_SubGroupTransposeOp
     : TTIG_Op<"sub_group_transpose",
         [AllTypesMatch<["src", "res"]>,
-         IsLocalPointerToElementType<"local_buffer", "src",
+         IsPointerToElementType<"local_buffer", "src",
              "local_buffer can be used to store src in local memory">]> {
   let summary = "Sub-group elements transpose operation";
      let description = [{
@@ -206,7 +177,9 @@ def TTIG_ExtractDescOp : TTIG_Op<"extract_desc", [Pure]> {
   let assemblyFormat = "$desc `[` $index `]` attr-dict `:` type($desc) `->` type($result)";
 }
 
-def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
+def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load", [
+  AttrSizedOperandSegments
+]> {
   let summary = "2D block load from a descriptor-based surface";
   let description = [{
     Loads a 2D tile from a memory surface described by decomposed parameters.
@@ -223,6 +196,26 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     descriptor indices) that are combined with per-sub-tile linear layout
     offsets during LLVM lowering.
 
+    `batch_strides` carries the element stride of each leading (batch)
+    dimension of the result tensor, i.e. one value per dimension in
+    `[0, rank - 2)`, outermost first. The 2D block I/O tile only ever covers
+    the inner two dimensions, so the LLVM lowering walks the batch dimensions
+    of the result layout and folds `offset * batch_strides[dim]` into the base
+    pointer. These strides cannot be derived from `base_width` / `base_height`
+    / `base_pitch` (those describe a single 2D surface only), so they must be
+    supplied by the producer of this op.
+
+    `batch_offsets` and `batch_shapes` carry the index and the declared extent
+    of every batch dimension of the *descriptor*, outermost first. They are used
+    only to bounds-check those dimensions: `base_ptr` already includes every
+    batch offset, so a batch index escapes the hardware's `base_width` x
+    `base_height` clamp and cannot be checked by the hardware. Unlike
+    `batch_strides`, which describes only what the result layout walks
+    (`rank - 2` entries), these describe the descriptor (`descriptor_rank - 2`
+    entries) and so also cover the leading dimensions a rank-reducing load
+    drops. The dropped dimensions are therefore the first
+    `batch_offsets.size() - batch_strides.size()` entries.
+
     When `pad_nan` is set, the LLVM lowering builds boundary masks from
     the surface dimensions and fills out-of-bounds elements with NaN.
     Otherwise, the hardware zero-fills out-of-bounds elements.
@@ -236,6 +229,9 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     I32:$base_pitch,
     I32:$offset_x,
     I32:$offset_y,
+    Variadic<I64>:$batch_strides,
+    Variadic<I32>:$batch_offsets,
+    Variadic<I32>:$batch_shapes,
     OptionalAttr<UnitAttr>:$pad_nan,
     TTIG_BlockIOMode:$memory_layout
   );
@@ -244,6 +240,9 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
   let assemblyFormat = [{
     $base_ptr `,` $base_width `,` $base_height `,` $base_pitch
     `[` $offset_x `,` $offset_y `]`
+    (`batch_strides` `[` $batch_strides^ `]`)?
+    (`batch_offsets` `[` $batch_offsets^ `]`)?
+    (`batch_shapes` `[` $batch_shapes^ `]`)?
     `{` $memory_layout (`,` `pad_nan` $pad_nan^)? `}`
     attr-dict `:` type($base_ptr) `->` type($result)
   }];
@@ -278,42 +277,89 @@ def TTIG_Subgroup2DBlockLoadFromPtrOp : TTIG_Op<"2d_block_load_from_ptr", [
     and known `row_stride`. Creating this op from a ptr tensor that does not
     satisfy this precondition produces undefined behavior at lowering.
 
-    `base_width` (surface width in bytes), `base_height` (surface height in
-    rows), and `base_pitch` (row stride in bytes) are runtime `i32` operands,
-    matching `ttig.2d_block_load` and `triton_gen.2Dblockload`. Compile-time
-    values are just `arith.constant`; runtime ones (e.g. tensor dimensions
-    from boundary-check mask extraction) are computed SSA values.
+    `base_pitch` (row stride in bytes), `base_height` (valid row count) and
+    `base_width` (valid bytes per row) are runtime `i32` operands, matching
+    `ttig.2d_block_load` and `triton_gen.2Dblockload`. A compile-time value is
+    just an `arith.constant`; a runtime one (e.g. grouped-GEMM `lda`, or a
+    per-group row bound) is the computed SSA value. Rows at or beyond
+    `base_height`, and bytes at or beyond `base_width`, are zero-filled by the
+    hardware instead of being read.
 
-    The hardware uses `base_width` and `base_height` for implicit boundary
-    checking: elements outside the surface are zero-filled. When a
-    boundary-check mask is stripped (because `other=0` matches hardware
-    zero-fill), the extracted bounds become `base_width`/`base_height`.
+    When the `ttig.block_io_runtime_row_limit` attribute is set, `base_height`
+    is relative to the *tensor's* first row, not any individual hardware
+    message's first row: the LLVM lowering subtracts each message's own row
+    offset from `base_height` before passing it to `triton_gen.2Dblockload`.
+
+    When the `ttig.block_io_runtime_col_limit` attribute is set, `base_width`
+    is the number of valid bytes per row counted from the *tensor's* first
+    column, a whole number of `max(4, element bytes)`-byte granules. The LLVM
+    lowering neither widens it per message nor scales it by `v_blocks`; where
+    it is under the hardware's 64-byte minimum, it moves the surface origin
+    left by the shortfall rather than widen the surface past the bound.
   }];
 
   let arguments = (ins
     Arg<TT_PtrLike, "tensor of pointers to the memory surface",
         [MemRead<GlobalMemory>]>:$ptr,
-    I32:$base_width,
-    I32:$base_height,
     I32:$base_pitch,
+    I32:$base_height,
+    I32:$base_width,
     Optional<TT_BoolLike>:$mask,
     Optional<TT_Type>:$other,
-    TTIG_BlockIOMode:$memory_layout,
-    OptionalAttr<UnitAttr>:$hw_boundary_check
+    TTIG_BlockIOMode:$memory_layout
   );
 
   let results = (outs TT_Tensor:$result);
   let assemblyFormat = [{
-    $ptr `,` $base_width `,` $base_height `,` $base_pitch
+    $ptr `,` $base_pitch `,` $base_height `,` $base_width
     (`,` $mask^ `,` $other)?
     ` ` `{` $memory_layout `}`
     attr-dict `:` functional-type(operands, results)
   }];
-  let extraClassDeclaration = [{
-    /// Whether this op uses hardware boundary checking (base_width/base_height
-    /// represent actual tensor bounds, not tile dimensions).
-    bool usesHwBoundaryCheck() { return getHwBoundaryCheckAttr() != nullptr; }
+  let hasVerifier = 1;
+}
+
+def TTIG_DescriptorGatherOp : TTIG_Op<"descriptor_gather", [TT_DescriptorLoadLikeOpInterface]> {
+  let summary = "gather multiple rows from a descriptor into a single tensor";
+  let description = [{
+    The `ttig.descriptor_gather` op has the same semantics as `tt.descriptor_gather`.
+    Its verifier and layout inference are Intel-specific.
   }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    RankedTensorOf<[I16, I32]>:$x_offsets,
+    I32:$y_offset
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $desc `[` $x_offsets `,` $y_offset `]`
+    attr-dict `:` functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
+}
+
+def TTIG_DescriptorScatterOp : TTIG_Op<"descriptor_scatter", [TT_DescriptorStoreLikeOpInterface]> {
+  let summary = "scatter multiple rows to a descriptor from a single tensor";
+  let description = [{
+    The `ttig.descriptor_scatter` op has the same semantics as `tt.descriptor_scatter`.
+    Its verifier and layout inference are Intel-specific.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
+    RankedTensorOf<[I16, I32]>:$x_offsets,
+    I32:$y_offset,
+    TT_Tensor:$src
+  );
+
+  let assemblyFormat = [{
+    $desc `[` $x_offsets `,` $y_offset `]` `,` $src
+    attr-dict `:` type(operands)
+  }];
+
   let hasVerifier = 1;
 }
 

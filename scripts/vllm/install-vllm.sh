@@ -7,6 +7,13 @@ readonly DEFAULT_BRANCH="main"
 readonly SCRIPTS_DIR="$ROOT/scripts"
 readonly VLLM_PROJ="$ROOT/vllm"
 readonly VLLM_XPU_KERNELS_PROJ="$ROOT/vllm-xpu-kernels"
+readonly VLLM_OMNI_PROJ="$ROOT/vllm-omni"
+
+# Installed from source packages for XPU, vllm-omni must not replace them.
+readonly PROTECTED_PACKAGES=(torch triton pytorch-triton-xpu torchvision torchaudio vllm)
+
+# Provides the `pip` wrapper (pip or `uv pip`).
+source "$SCRIPTS_DIR/pip-utils.sh"
 
 # Check if the specified package is installed and matches the pinned commit.
 # Returns 0 if the installed package is correct, 1 if it needs to be installed/reinstalled.
@@ -16,18 +23,18 @@ check_installed_package() {
   local force="$3"
   local latest="$4"
 
-  if ! python -m pip show "$package" &>/dev/null; then
+  if ! pip show "$package" &>/dev/null; then
     return 1
   fi
 
   if [[ "$latest" == true ]]; then
     echo "*** --latest specified: ignoring installed $package. ***"
-    python -m pip uninstall -y "$package"
+    pip uninstall -y "$package"
 
     return 1
   fi
 
-  local current_commit="$(python -m pip show "$package" | awk '/^Version:/ {print $2}')"
+  local current_commit="$(pip show "$package" | awk '/^Version:/ {print $2}')"
   current_commit="${current_commit#*+g}"
   current_commit="${current_commit%%.*}"
   echo "*** $package is installed at commit: $current_commit. ***"
@@ -48,15 +55,29 @@ check_installed_package() {
     exit 1
   fi
 
-  python -m pip uninstall -y "$package"
+  pip uninstall -y "$package"
 
   return 1
 }
 
 show_installs() {
   echo "*** Installed versions: ***"
-  echo "vllm: $(python -m pip show vllm | awk '/^Version:/ {print $2}')."
-  echo "vllm-xpu-kernels: $(python -m pip show vllm-xpu-kernels | awk '/^Version:/ {print $2}')."
+  echo "vllm: $(pip show vllm | awk '/^Version:/ {print $2}')."
+  if [[ "$target_device" == xpu ]]; then
+    echo "vllm-xpu-kernels: $(pip show vllm-xpu-kernels | awk '/^Version:/ {print $2}')."
+  fi
+}
+
+# Print the device the installation should target: `xpu` or `cuda`.
+detect_target_device() {
+  local device
+  device="$(python -c '
+import torch
+
+print("cuda" if not torch.xpu.is_available() and torch.cuda.is_available() else "xpu")
+' 2>/dev/null)" || device=""
+
+  echo "${device:-xpu}"
 }
 
 update_submodules_and_clean() {
@@ -78,7 +99,11 @@ clone_repo() {
   git clone --single-branch -b "$DEFAULT_BRANCH" "$repo_url" "$target_dir"
 
   if [[ "$latest" == false ]]; then
-    git -C "$target_dir" checkout "$pinned_commit"
+    # A commit outside the default branch, such as a release tag, has to be fetched explicitly.
+    if ! git -C "$target_dir" checkout "$pinned_commit"; then
+      git -C "$target_dir" fetch origin "$pinned_commit"
+      git -C "$target_dir" checkout FETCH_HEAD
+    fi
   fi
 
   update_submodules_and_clean "$target_dir"
@@ -124,57 +149,154 @@ install_vllm() {
     exit 1
   fi
 
-  local benchmark_tests_dir="$ROOT/benchmarks/triton_kernels_benchmark/vllm/batched_moe/tests"
-  rm -rf "$benchmark_tests_dir"
-  cp -r "$VLLM_PROJ/tests" "$benchmark_tests_dir"
+  local requirements="$VLLM_PROJ/requirements/xpu.txt"
+  local sed_args=(
+    -e '/^torch/d'
+    -e '/^triton/d'
+    -e '/^--extra-index-url.*https:\/\/download\.pytorch\.org\/whl/d'
+  )
 
-  sed -i \
-    -e '/^pytest-shard/d' \
-    -e '/^torch/d' \
-    -e '/^triton/d' \
-    -e '/^vllm[_-]xpu[_-]kernels/d' \
-    -e '/^xgrammar/d' \
-    -e '/^--extra-index-url.*https:\/\/download\.pytorch\.org\/whl/d' \
-    "$VLLM_PROJ/requirements/xpu.txt"
-  python -m pip install -r "$VLLM_PROJ/requirements/xpu.txt"
+  if [[ "$target_device" == cuda ]]; then
+    requirements="$VLLM_PROJ/requirements/common.txt"
+  else
+    sed_args+=(-e '/^pytest-shard/d' -e '/^xgrammar/d')
+  fi
 
-  VLLM_TARGET_DEVICE=xpu python -m pip install --no-deps --no-build-isolation -e "$VLLM_PROJ"
+  # When building vLLM XPU kernels from source, remove their requirement entry
+  # so that the release pinned by vLLM is not installed and a source-built wheel
+  # can be installed instead.
+  if [[ "$build_kernels" == true ]]; then
+    sed_args+=(-e '/^vllm[_-]xpu[_-]kernels/d')
+  fi
+
+  sed -i "${sed_args[@]}" "$requirements"
+  pip install -r "$requirements"
+
+  if [[ "$target_device" == cuda ]]; then
+    # On CUDA add needed build requirements and remove torch to keep installed torch version.
+    local build_requirements="$VLLM_PROJ/requirements/build/cuda.txt"
+    sed -i -e '/^torch/d' "$build_requirements"
+    pip install -r "$build_requirements"
+  fi
+
+  (
+    export VLLM_TARGET_DEVICE="$target_device"
+    if [[ "$target_device" == cuda ]]; then
+      export VLLM_USE_PRECOMPILED=1
+    fi
+
+    pip install --no-deps --no-build-isolation -e "$VLLM_PROJ"
+  )
+}
+
+# Print "<name>==<version>" for each installed protected package, skipping the ones that are absent.
+protected_versions() {
+  local package version
+
+  for package in "${PROTECTED_PACKAGES[@]}"; do
+    if version="$(pip show "$package" 2>/dev/null | awk '/^Version:/ { print $2 }')" \
+      && [[ -n "$version" ]]; then
+      echo "$package==$version"
+    fi
+  done
+}
+
+# Install vllm-omni and its dependency closure without replacing the protected packages.
+install_vllm_omni() {
+  # vllm-omni imports vllm at module scope without declaring it. It also needs torchvision for its
+  # cosmos-guardrail requirement, torchvision on PyPI pins torch==<exact release> which will pull
+  # a PyPI torch and override the installed from source one. vllm-omni also imports torchaudio without
+  # declaring it, and its s3tokenizer requirement would otherwise pull a PyPI torchaudio built for another torch.
+  local package
+  for package in vllm torchvision torchaudio; do
+    if ! pip show "$package" >/dev/null; then
+      echo "ERROR: $package must be installed from source before installing vllm-omni." >&2
+      exit 1
+    fi
+  done
+
+  local work_dir
+  work_dir="$(mktemp -d)"
+  trap "rm -rf '$work_dir'" EXIT
+  local constraints="$work_dir/constraints.txt"
+
+  protected_versions | tee "$constraints"
+
+  VLLM_OMNI_TARGET_DEVICE=xpu pip install -c "$constraints" "$VLLM_OMNI_PROJ"
+
+  if ! protected_versions | diff -u "$constraints" -; then
+    echo "ERROR: installing vllm-omni changed the XPU stack (see the diff above)." >&2
+    exit 1
+  fi
+
+  # vllm-omni picks its platform at runtime, so a replaced torch would silently run
+  # on CPU instead of failing the install -- assert the platform is XPU.
+  (cd "$work_dir" && python - <<'PY'
+import torch
+
+from vllm_omni.platforms import resolve_current_omni_platform_cls_qualname
+
+if not torch.xpu.is_available():
+    raise SystemExit(f"ERROR: torch.xpu.is_available() is False (torch {torch.__version__}).")
+
+platform = resolve_current_omni_platform_cls_qualname()
+if "xpu" not in platform.lower():
+    raise SystemExit(f"ERROR: vllm-omni resolved to {platform}, not an XPU platform.")
+
+print(f"vllm-omni on {torch.xpu.get_device_name(0)} via {platform}")
+PY
+  )
 }
 
 cd "$ROOT"
 
-build_vllm=false
 prepare_source_only=false
 latest=false
 force_reinstall=false
-check_wheel=false
 use_venv=false
 clean=true
-triton_repo=intel/intel-xpu-backend-for-triton
-triton_repo_branch=$DEFAULT_BRANCH
+build_kernels=false
+kernels_hash=""
+fix_patch=""
+omni=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --source)
-      build_vllm=true
+    --omni)
+      omni=true
       shift
       ;;
+    --fix-patch)
+      if [[ -z "${2:-}" ]]; then
+        echo "ERROR: --fix-patch requires an argument." >&2
+        exit 1
+      fi
+      fix_patch="$2"
+      shift 2
+      ;;
+    --kernels-source)
+      build_kernels=true
+      shift
+      ;;
+    --kernels-hash)
+      if [[ -z "${2:-}" ]]; then
+        echo "ERROR: --kernels-hash requires an argument." >&2
+        exit 1
+      fi
+      build_kernels=true
+      kernels_hash="$2"
+      shift 2
+      ;;
     --prepare-source)
-      build_vllm=true
       prepare_source_only=true
       shift
       ;;
     --latest)
-      build_vllm=true
       latest=true
       shift
       ;;
     --force-reinstall)
       force_reinstall=true
-      shift
-      ;;
-    --check-wheel)
-      check_wheel=true
       shift
       ;;
     --venv)
@@ -185,57 +307,49 @@ while [[ $# -gt 0 ]]; do
       clean=false
       shift
       ;;
-    --triton-repo)
-      if [[ -z "${2:-}" ]]; then
-        echo "ERROR: --triton-repo requires an argument." >&2
-        exit 1
-      fi
-      triton_repo="$2"
-      shift 2
-      ;;
-    --triton-repo-branch)
-      if [[ -z "${2:-}" ]]; then
-        echo "ERROR: --triton-repo-branch requires an argument." >&2
-        exit 1
-      fi
-      triton_repo_branch="$2"
-      shift 2
-      ;;
     --help)
       cat <<EOF
 Usage: $0 [options]
 
+vLLM is built and installed from source at the pinned commit hash as an editable
+install and vLLM XPU kernels are installed from the release pinned by vLLM.
+
 Options:
-  --source                       Build vLLM XPU kernels from source using pinned commit.
+  --omni                         Install vLLM at the release targeted by the pinned vllm-omni, then vllm-omni. Use
+                                 it only in the vllm-omni test suite, it may change the vLLM dependencies.
 
-  --prepare-source               Prepare vLLM and vLLM XPU kernels source only (clone/reset + patch), without
-                                 build/install. With --no-clean and an existing source tree, checkout/reset and
-                                 patching are skipped and the tree is reused as-is.
+  --fix-patch <path>             Apply the given patch to the vLLM source instead of vllm-fix.patch, or
+                                 vllm-omni-vllm-fix.patch with --omni.
 
-  --latest                       Build vLLM and vLLM XPU kernels from the latest commits in the $DEFAULT_BRANCH branch.
+  --kernels-source               Build vLLM XPU kernels from source at the top of the $DEFAULT_BRANCH branch.
 
-  --force-reinstall              Force reinstallation of vLLM and vLLM XPU kernels.
+  --kernels-hash <hash>          Build vLLM XPU kernels from source at the given commit hash. Implies --kernels-source.
 
-  --check-wheel                  Check if a prebuilt vLLM XPU kernels wheel already exists before building.
+  --prepare-source               Prepare source only (clone/reset + patch), without build/install.
+
+  --latest                       Build vLLM from the latest commit in the $DEFAULT_BRANCH branch.
+
+  --force-reinstall              Force reinstallation of vLLM.
 
   --venv                         Activate Python virtual environment from .venv/ before installation.
 
-  -nc, --no-clean                Reuse existing vLLM and vLLM XPU kernels source trees without cleanup; skips
-                                 checkout/reset and patching when source exists.
-
-  --triton-repo <repo>           GitHub repo to fetch prebuilt vLLM XPU kernels wheels from
-                                 (default: intel/intel-xpu-backend-for-triton).
-
-  --triton-repo-branch <branch>  Branch to fetch prebuilt vLLM XPU kernels wheels from (default: $DEFAULT_BRANCH).
+  -nc, --no-clean                Reuse existing source trees without cleanup; skips checkout/reset and patching when
+                                 source exists.
 
   --help                         Show this help message and exit.
 
+Environment variables:
+  VLLM_TARGET_DEVICE            Device to install for: xpu (default when an XPU is present) or
+                                cuda. On cuda, vllm-xpu-kernels and the XPU test patcher are
+                                skipped.
+
 Examples:
-  ./install-vllm.sh --source
+  ./install-vllm.sh --kernels-source
+  ./install-vllm.sh --kernels-hash abc1234
   ./install-vllm.sh --prepare-source
   ./install-vllm.sh --prepare-source --latest
   ./install-vllm.sh --latest --venv
-  ./install-vllm.sh --triton-repo my_fork/intel-xpu-backend-for-triton --triton-repo-branch dev
+  ./install-vllm.sh --omni
 EOF
       exit 0
       ;;
@@ -251,107 +365,106 @@ if [[ "$use_venv" == true ]]; then
   source .venv/bin/activate
 fi
 
-vllm_pinned_commit=""
-vllm_xpu_kernels_pinned_commit=""
+target_device="${VLLM_TARGET_DEVICE:-$(detect_target_device)}"
+echo "*** Installing vLLM for target device: $target_device. ***"
 
-if [[ "$latest" == false ]]; then
-  vllm_pinned_commit="$(<"$SCRIPTS_DIR/vllm/vllm-pin.txt")"
-  echo "*** Using the pinned vllm commit: $vllm_pinned_commit. ***"
-
-  vllm_xpu_kernels_pinned_commit="$(<"$SCRIPTS_DIR/vllm/vllm-xpu-kernels-pin.txt")"
-  echo "*** Using the pinned vllm-xpu-kernels commit: $vllm_xpu_kernels_pinned_commit. ***"
+if [[ "$target_device" == cuda && "$build_kernels" == true ]]; then
+  echo "ERROR: vllm-xpu-kernels is XPU-only, --kernels-source and --kernels-hash are not supported on cuda." >&2
+  exit 1
 fi
 
-if [[ "$prepare_source_only" == false ]]; then
-  correct_vllm_installed=false
-  correct_vllm_xpu_kernels_installed=false
+if [[ "$target_device" == cuda && "$omni" == true ]]; then
+  echo "ERROR: --omni is not supported on cuda." >&2
+  exit 1
+fi
 
+vllm_pinned_commit=""
+if [[ "$omni" == true ]]; then
+  if [[ "$latest" == true ]]; then
+    echo "ERROR: --omni and --latest cannot be used together." >&2
+    exit 1
+  fi
+
+  prepare_source "$VLLM_OMNI_PROJ" "https://github.com/vllm-project/vllm-omni.git" "$(<"$SCRIPTS_DIR/vllm/vllm-omni-pin.txt")" false
+
+  # vllm-omni targets a vLLM release, which its XPU image is built on.
+  vllm_tag="$(sed -n 's/^ARG VLLM_VERSION=//p' "$VLLM_OMNI_PROJ/docker/Dockerfile.xpu")"
+  if [[ -n "$vllm_tag" ]]; then
+    vllm_pinned_commit="$(git ls-remote https://github.com/vllm-project/vllm.git "refs/tags/$vllm_tag" "refs/tags/$vllm_tag^{}" | tail -1 | cut -f1)"
+  fi
+  if [[ -z "$vllm_pinned_commit" ]]; then
+    echo "ERROR: vLLM release '$vllm_tag' targeted by vllm-omni not found." >&2
+    exit 1
+  fi
+  echo "*** Using vllm $vllm_tag targeted by vllm-omni: $vllm_pinned_commit. ***"
+elif [[ "$latest" == false ]]; then
+  vllm_pinned_commit="$(<"$SCRIPTS_DIR/vllm/vllm-pin.txt")"
+  echo "*** Using the pinned vllm commit: $vllm_pinned_commit. ***"
+fi
+
+if [[ -z "$fix_patch" ]]; then
+  fix_patch="$SCRIPTS_DIR/vllm/vllm-fix.patch"
+  if [[ "$omni" == true ]]; then
+    fix_patch="$SCRIPTS_DIR/vllm/vllm-omni-vllm-fix.patch"
+  fi
+fi
+
+kernels_latest=false
+if [[ "$build_kernels" == true ]]; then
+  if [[ -n "$kernels_hash" ]]; then
+    echo "*** Building vllm-xpu-kernels from source at commit: $kernels_hash. ***"
+  else
+    echo "*** Building vllm-xpu-kernels from source at the top of $DEFAULT_BRANCH. ***"
+    kernels_latest=true
+  fi
+fi
+
+if [[ "$prepare_source_only" == false && "$build_kernels" == false ]]; then
   if check_installed_package "vllm" "${vllm_pinned_commit:-}" "$force_reinstall" "$latest"; then
-    correct_vllm_installed=true
-  fi
-
-  if check_installed_package "vllm-xpu-kernels" "${vllm_xpu_kernels_pinned_commit:-}" "$force_reinstall" "$latest"; then
-    correct_vllm_xpu_kernels_installed=true
-  fi
-
-  if [[ "$correct_vllm_installed" == true && "$correct_vllm_xpu_kernels_installed" == true ]]; then
     show_installs
 
-    echo "*** Both vllm and vllm-xpu-kernels are installed at the correct commits. ***"
+    echo "*** vllm is installed at the correct commit. ***"
+    if [[ "$omni" == true ]]; then
+      install_vllm_omni
+    fi
     exit 0
   fi
 fi
 
+# Prepare source code for projects.
 prepare_source "$VLLM_PROJ" "https://github.com/vllm-project/vllm.git" "${vllm_pinned_commit:-}" "$latest"
-if [[ "$clean" == true ]]; then
-  git -C "$VLLM_PROJ" apply "$SCRIPTS_DIR/vllm/vllm-fix.patch"
-  python "$SCRIPTS_DIR/vllm/vllm_xpu_patch.py" "$VLLM_PROJ"
+if [[ "$build_kernels" == true ]]; then
+  prepare_source "$VLLM_XPU_KERNELS_PROJ" "https://github.com/vllm-project/vllm-xpu-kernels.git" "${kernels_hash:-}" "$kernels_latest"
 fi
 
-if [[ "$build_vllm" == false ]]; then
-  if ! command -v gh &>/dev/null; then
-    echo "ERROR: gh is not installed." >&2
-    exit 1
+# Apply patches to vLLM source code.
+if [[ "$clean" == true ]]; then
+  git -C "$VLLM_PROJ" apply "$fix_patch"
+  # The patcher rewrites hardcoded CUDA references in vLLM's tests to XPU ones.
+  if [[ "$target_device" == xpu ]]; then
+    python "$SCRIPTS_DIR/vllm/vllm_xpu_patch.py" "$VLLM_PROJ"
   fi
-
-  if ! command -v jq &>/dev/null; then
-    echo "ERROR: jq is not installed." >&2
-    exit 1
-  fi
-
-  echo "*** Downloading nightly builds. ***"
-  run_id="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')"
-  temp_dir="$(mktemp -d)"
-  wheel_pattern="wheels-vllm-py$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")-*"
-  gh run download "$run_id" \
-    --repo "$triton_repo" \
-    --pattern "$wheel_pattern" \
-    --dir "$temp_dir"
-  echo "*** Installing vLLM XPU kernels from nightly builds. ***"
-  python -m pip install "$temp_dir"/$wheel_pattern/vllm_xpu_kernels-*.whl
-  rm -rf "$temp_dir"
-  echo "*** Installing vLLM from source. ***"
-  install_vllm
-  show_installs
-
-  exit 0
 fi
 
 echo "*** Base directory: $ROOT. ***"
 echo "*** vLLM project: $VLLM_PROJ. ***"
-echo "*** vLLM XPU kernels project: $VLLM_XPU_KERNELS_PROJ. ***"
+if [[ "$build_kernels" == true ]]; then
+  echo "*** vLLM XPU kernels project: $VLLM_XPU_KERNELS_PROJ. ***"
+fi
 
 if [[ "$prepare_source_only" == true ]]; then
-  prepare_source "$VLLM_XPU_KERNELS_PROJ" "https://github.com/vllm-project/vllm-xpu-kernels.git" "${vllm_xpu_kernels_pinned_commit:-}" "$latest"
-
   echo "*** vLLM source prepared at $VLLM_PROJ. ***"
   echo "*** Current commit: $(git -C "$VLLM_PROJ" rev-parse HEAD). ***"
-  echo "*** vLLM XPU kernels source prepared at $VLLM_XPU_KERNELS_PROJ. ***"
-  echo "*** Current commit: $(git -C "$VLLM_XPU_KERNELS_PROJ" rev-parse HEAD). ***"
+  if [[ "$build_kernels" == true ]]; then
+    echo "*** vLLM XPU kernels source prepared at $VLLM_XPU_KERNELS_PROJ. ***"
+    echo "*** Current commit: $(git -C "$VLLM_XPU_KERNELS_PROJ" rev-parse HEAD). ***"
+  fi
+
   exit 0
 fi
 
-vllm_xpu_kernels_wheel_exists=false
-if [[ "$latest" == true ]]; then
-  echo "*** --latest specified: skipping wheel check.  ***"
-elif [[ -d "$VLLM_XPU_KERNELS_PROJ/dist" ]]; then
-  python_version="$(python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')")"
-  wheel_pattern="vllm_xpu_kernels-*+g${vllm_xpu_kernels_pinned_commit:0:7}.d*-cp${python_version}-cp${python_version}-linux_x86_64.whl"
-  wheel="$(find "$VLLM_XPU_KERNELS_PROJ/dist" -maxdepth 1 -type f -name "$wheel_pattern" -printf '%f\n' 2>/dev/null | head -n 1)"
-
-  if [[ -n "$wheel" ]]; then
-    echo "*** Found vllm_xpu_kernels wheel: $wheel. ***"
-    vllm_xpu_kernels_wheel_exists=true
-  else
-    echo "*** No matching wheel in $VLLM_XPU_KERNELS_PROJ/dist. ***"
-  fi
-else
-  echo "*** $VLLM_XPU_KERNELS_PROJ/dist does not exist. ***"
-fi
-
-if [[ "$check_wheel" == false ]] || [[ "$vllm_xpu_kernels_wheel_exists" == false ]]; then
-  prepare_source "$VLLM_XPU_KERNELS_PROJ" "https://github.com/vllm-project/vllm-xpu-kernels.git" "${vllm_xpu_kernels_pinned_commit:-}" "$latest"
-
+# Install vLLM XPU kernel requirements, build wheel from source, install wheel.
+if [[ "$build_kernels" == true ]]; then
   sed -i \
     -e '/"torch/d' \
     "$VLLM_XPU_KERNELS_PROJ/pyproject.toml"
@@ -361,11 +474,16 @@ if [[ "$check_wheel" == false ]] || [[ "$vllm_xpu_kernels_wheel_exists" == false
     -e '/^triton/d' \
     -e '/^--extra-index-url.*https:\/\/download\.pytorch\.org\/whl/d' \
     "$VLLM_XPU_KERNELS_PROJ/requirements.txt"
-  python -m pip install -r "$VLLM_XPU_KERNELS_PROJ/requirements.txt"
+  pip install -r "$VLLM_XPU_KERNELS_PROJ/requirements.txt"
   VLLM_TARGET_DEVICE=xpu python -m build --wheel --no-isolation "$VLLM_XPU_KERNELS_PROJ"
+
+  pip install --no-deps --force-reinstall "$VLLM_XPU_KERNELS_PROJ"/dist/*.whl
 fi
 
 install_vllm
-python -m pip install "$VLLM_XPU_KERNELS_PROJ"/dist/*.whl
 
 show_installs
+
+if [[ "$omni" == true ]]; then
+  install_vllm_omni
+fi

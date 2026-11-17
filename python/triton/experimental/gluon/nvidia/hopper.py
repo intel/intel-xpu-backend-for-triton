@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Any, Optional
-from triton._utils import validate_block_shape, canonicalize_dtype, get_primitive_bitwidth
+from triton._utils import canonicalize_dtype, fp6_logical_shape, get_primitive_bitwidth, validate_block_shape, validate_fp6_box
 from triton.experimental.gluon.language._layouts import NVMMASharedLayout
 import triton.language as tl
 
@@ -21,6 +21,7 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
         assert shape_dim > 0, "shape must be positive"
     assert strides[-1] == 1, "Last dimension must be contiguous"
     assert isinstance(layout, NVMMASharedLayout), "Layout must be NVMMASharedLayout"
+    assert layout.rank == len(block_shape), "layout rank must match block shape rank"
     assert padding == "zero" or padding == "nan", "Illegal value for padding"
     if padding == "nan":
         assert tensor.dtype.is_floating_point, "Padding option `nan` is only supported for floating point tensors"
@@ -31,11 +32,19 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
     min_block = layout.swizzle_byte_width // (elem_bytes * padding_factor)
     assert block_shape[-1] >= min_block, \
         f"Expected block_shape[-1] to be at least {min_block} but got {block_shape[-1]}"
+    if layout.padding in ("b6x16_p32", "b6p2x16"):
+        validate_fp6_box(block_shape[-1], shape[-1], strides[:-1], padding, host=True)
+        alignment = block_shape[-1] // 4
+        if dtype_str != "u8" or layout.swizzle_byte_width not in (0, 128) or tensor.data_ptr() % alignment:
+            raise ValueError(f"FP6 requires {alignment}-byte aligned uint8 storage and 0/128-byte swizzling")
     if layout.fp4_padded:
         assert tensor.data_ptr() % 32 == 0, "For fp4_padded, base must 32-byte aligned"
         for stride in strides[:-1]:
             assert (stride * elem_bytes) % 32 == 0, "For fp4_padded, tensor strides must be 32-byte aligned"
-        assert tl.target_info.cuda_capability_geq(10, 0), "fp4_padded requires blackwell or newer"
+        # Descriptors may be constructed for offline compilation without an active runtime driver.
+        target = tl.target_info.current_target()
+        assert target is None or tl.target_info.cuda_capability_geq(10, 0), \
+            "fp4_padded requires blackwell or newer"
     assert not layout.fp4_padded or layout.swizzle_byte_width == 128, (
         f"FP4 padded operands must be swizzled with 128-byte width, but got {layout.swizzle_byte_width}")
     assert layout.element_bitwidth in [
@@ -92,9 +101,10 @@ class TensorDescriptor:
             padding: "zero" (default) or "nan" for out-of-bounds padding
             round_f32_to_tf32: Round float32 to TF32 precision (default False)
         """
+        shape = fp6_logical_shape(tensor.shape) if layout.padding in ("b6x16_p32", "b6p2x16") else tensor.shape
         return TensorDescriptor(
             tensor,
-            tensor.shape,
+            shape,
             tensor.stride(),
             block_shape,
             layout,

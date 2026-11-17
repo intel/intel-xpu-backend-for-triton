@@ -1,6 +1,7 @@
 #include "Analysis/ScopeIdAllocation.h"
 #include "Conversion/ProtonGPUToLLVM/Passes.h"
 #include "Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h"
+#include "Conversion/ProtonGPUToLLVM/ProtonIntelGPUToLLVM/Passes.h"
 #include "Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h"
 #include "Conversion/ProtonToProtonGPU/Passes.h"
 #include "Dialect/Proton/IR/Dialect.h"
@@ -10,29 +11,29 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#include <pybind11/stl_bind.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
-namespace py = pybind11;
+namespace py = nanobind;
 using namespace mlir::triton;
 
-void init_triton_proton(py::module &&m) {
+void init_triton_proton(py::module_ &m) {
   m.doc() = "Python bindings to the Proton backend";
 
   // Proton enums
-  py::enum_<proton::MetricType>(m, "METRIC_TYPE", py::module_local())
+  py::enum_<proton::MetricType>(m, "METRIC_TYPE")
       .value("CYCLE", proton::MetricType::CYCLE)
       .export_values();
 
-  py::enum_<proton::SamplingStrategy>(m, "SAMPLING_STRATEGY",
-                                      py::module_local())
+  py::enum_<proton::SamplingStrategy>(m, "SAMPLING_STRATEGY")
       .value("NONE", proton::SamplingStrategy::NONE)
       .value("SELECTIVE", proton::SamplingStrategy::SELECTIVE)
       .export_values();
 
   // ProtonGPU enums
-  py::enum_<proton::gpu::Granularity>(m, "GRANULARITY", py::module_local())
+  py::enum_<proton::gpu::Granularity>(m, "GRANULARITY")
       .value("CTA", proton::gpu::Granularity::CTA)
       .value("WARP", proton::gpu::Granularity::WARP)
       .value("WARP_2", proton::gpu::Granularity::WARP_2)
@@ -44,13 +45,12 @@ void init_triton_proton(py::module &&m) {
       .value("WARP_GROUP_8", proton::gpu::Granularity::WARP_GROUP_8)
       .export_values();
 
-  py::enum_<proton::gpu::BufferStrategy>(m, "BUFFER_STRATEGY",
-                                         py::module_local())
+  py::enum_<proton::gpu::BufferStrategy>(m, "BUFFER_STRATEGY")
       .value("CIRCULAR", proton::gpu::BufferStrategy::CIRCULAR)
       .value("FLUSH", proton::gpu::BufferStrategy::FLUSH)
       .export_values();
 
-  py::enum_<proton::gpu::BufferType>(m, "BUFFER_TYPE", py::module_local())
+  py::enum_<proton::gpu::BufferType>(m, "BUFFER_TYPE")
       .value("SHARED", proton::gpu::BufferType::SHARED)
       .value("GLOBAL", proton::gpu::BufferType::GLOBAL)
       .export_values();
@@ -81,6 +81,22 @@ void init_triton_proton(py::module &&m) {
           opBuilder.create<proton::RecordOp>(isStart, nameAttr);
         });
 
+  m.def(
+      "create_proton_allocate_event",
+      [](TritonOpBuilder &opBuilder, const std::string &name) -> mlir::Value {
+        auto nameAttr = mlir::StringAttr::get(opBuilder.getContext(), name);
+        auto op = opBuilder.create<proton::AllocateEventOp>(
+            mlir::TypeRange{mlir::IntegerType::get(opBuilder.getContext(), 32)},
+            nameAttr);
+        return op.getEvent();
+      });
+
+  m.def(
+      "create_proton_event",
+      [](TritonOpBuilder &opBuilder, bool isStart, mlir::Value event) -> void {
+        opBuilder.create<proton::EventOp>(isStart, event);
+      });
+
   m.def("add_convert_proton_to_protongpu",
         [](mlir::PassManager &pm, proton::MetricType &metricType,
            proton::SamplingStrategy samplingStrategy,
@@ -101,6 +117,8 @@ void init_triton_proton(py::module &&m) {
   ADD_PASS_WRAPPER_1("add_convert_proton_amd_gpu_to_llvm",
                      proton::gpu::createConvertProtonAMDGPUToLLVMPass,
                      const std::string &);
+  ADD_PASS_WRAPPER_0("add_convert_proton_intel_gpu_to_llvm",
+                     proton::gpu::createConvertProtonIntelGPUToLLVMPass);
   ADD_PASS_WRAPPER_0("add_allocate_proton_shared_memory",
                      proton::gpu::createAllocateProtonSharedMemoryPass);
   ADD_PASS_WRAPPER_0("add_schedule_buffer_store",

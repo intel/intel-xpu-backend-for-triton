@@ -1,2 +1,0 @@
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/1704
-python/test/unit/language/test_subprocess.py::test_print[device_print_uint-uint32]

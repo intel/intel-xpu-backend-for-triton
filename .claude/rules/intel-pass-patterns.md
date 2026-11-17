@@ -1,6 +1,15 @@
 ---
 description: 'MLIR pass writing patterns for Intel XPU backend: pass declaration, structural patterns, MLIR best practices, utilities, and complete pass inventory'
-applyTo: '**/intel/lib/**/*.cpp, **/intel/lib/**/*.h, **/intel/include/**/Transforms/**/*.td, **/intel/include/**/Transforms/**/*.h, **/intel/include/TritonGENToLLVM/**/*.td, **/intel/include/TritonIntelGPUToLLVM/**/*.td, **/intel/include/GPUToTritonGEN/**/*.td, **/intel/include/TritonAnnotateModule/**/*.td, **/triton_xpu.cc'
+paths:
+  - "**/intel/lib/**/*.cpp"
+  - "**/intel/lib/**/*.h"
+  - "**/intel/include/**/Transforms/**/*.td"
+  - "**/intel/include/**/Transforms/**/*.h"
+  - "**/intel/include/TritonGENToLLVM/**/*.td"
+  - "**/intel/include/TritonIntelGPUToLLVM/**/*.td"
+  - "**/intel/include/GPUToTritonGEN/**/*.td"
+  - "**/intel/include/TritonAnnotateModule/**/*.td"
+  - "**/triton_xpu.cc"
 ---
 
 # Intel XPU Backend — MLIR Pass Writing Patterns
@@ -268,10 +277,14 @@ Python: `intel.passes.ttgpuir.add_coalesce(pm)`
 
 ### Pass with Scalar Options
 ```cpp
-ADD_PASS_OPTION_WRAPPER_2("add_pipeline",
-                          gpu::intel::createTritonIntelGPUPipeline, int, bool);
+ADD_PASS_OPTION_WRAPPER_2(
+    "add_reduce_variable_liveness",
+    gpu::intel::createTritonIntelGPUReduceVariableLiveness, std::string,
+    bool);
 ```
-Python: `intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)`
+Python: `intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode, not opt.in_loop_sink)`
+
+The macros stop at five options; past that, write the `m.def` lambda by hand (see `add_pipeline`).
 
 ### Pass with Struct Options
 ```cpp

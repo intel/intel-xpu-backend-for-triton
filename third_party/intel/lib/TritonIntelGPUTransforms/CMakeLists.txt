@@ -2,18 +2,24 @@ add_triton_library(TritonIntelGPUTransforms
   AccelerateMatmul.cpp
   AnnotateCacheControl.cpp
   BlockIOUtils.cpp
+  CanonicalizePointers.cpp
+  CodeSinking.cpp
   DecomposeScaledBlocked.cpp
+  LoopDistribute.cpp
+  FoldFpToFp.cpp
   HoistLayoutConversions.cpp
   LowerTo2DBlockLoad.cpp
   MaterializeBlockPointer.cpp
   OptimizeDotOperands.cpp
   OptimizeReductionLocality.cpp
   Pipeliner/MatmulLoopPipeline.cpp
+  Pipeliner/PrefetchCostModel.cpp
   Pipeliner/SoftwarePipeliner.cpp
   ReduceDataDuplication.cpp
   ReduceVariableLiveness.cpp
   RemoveLayoutConversions.cpp
   RewriteStackPtr.cpp
+  StageLargeFMADotsViaSLM.cpp
   Utility.cpp
   WidenLoadStoreEncoding.cpp
 

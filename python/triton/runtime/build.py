@@ -30,7 +30,7 @@ def is_xpu():
 
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
     if "cl.EXE" in cc or "clang-cl" in cc or "icx-cl" in cc:
-        cc_cmd = [cc, "/Zc:__cplusplus", "/std:c++17", src, "/nologo", "/O2", "/LD", "/wd4996", "/MD", "/EHsc"]
+        cc_cmd = [cc, "/Zc:__cplusplus", "/std:c++20", src, "/nologo", "/O2", "/LD", "/wd4996", "/MD", "/EHsc"]
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
         cc_cmd += ["/link"]
@@ -110,22 +110,26 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
 
     if is_xpu():
-        icpx = shutil.which("icpx")
+        csycl = shutil.which(knobs.intel.sycl_compiler) if knobs.intel.sycl_compiler else None
+        if csycl is None:
+            icpx = shutil.which("icpx")
+            dpclang = shutil.which("dpclang++")
+            csycl = icpx or dpclang
         cxx = shutil.which(os.environ.get("CXX", "shutil-dummy-value"))
         if cxx is None:
             clangpp = shutil.which("clang++")
             gxx = shutil.which("g++")
             cl = shutil.which("cl")
-            cxx = icpx or cl if os.name == "nt" else icpx or clangpp or gxx
+            cxx = csycl or cl if os.name == "nt" else csycl or clangpp or gxx
             if cxx is None:
                 raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
         cc = cxx
 
-        if cxx is icpx:
-            ccflags += ["-fsycl"]
+        if cxx is csycl:
+            ccflags += ["-fsycl", "-fno-sycl-id-queries-fit-in-int"]
         else:
             if os.name != "nt":
-                ccflags += ["--std=c++17"]
+                ccflags += ["--std=c++20"]
             if os.environ.get("TRITON_SUPPRESS_GCC_HOST_CODE_DEPRECATION_WARNINGS", "1") == "1":
                 ccflags += ["-Wno-deprecated-declarations"]
             if os.environ.get("TRITON_SUPPRESS_SYCL_DISABLE_FSYCL_SYCLHPP_WARNING", "1") == "1":
@@ -140,7 +144,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
     cc_cmd = _cc_cmd(cc, src, so, include_dirs, library_dirs, libraries)
     if language == "c++":
-        cc_cmd.insert(3, "-std=c++17")
+        cc_cmd.insert(3, "-std=c++20")
     cc_cmd += ccflags
 
     if os.getenv("VERBOSE"):

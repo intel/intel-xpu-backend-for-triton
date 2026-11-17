@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+# Provides the `pip` wrapper (pip or `uv pip`).
+source "$(dirname "$0")/pip-utils.sh"
+
 # Select what to build.
 BUILD_LEVEL_ZERO=false
 for arg in "$@"; do
