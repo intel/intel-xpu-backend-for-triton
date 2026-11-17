@@ -58,6 +58,12 @@ def test_second_night_confirms_exactly_once():
     assert run(flags[:2], 10).confirmed[0].first_night == n(9)
 
 
+def test_sustained_excludes_confirmed_items():
+    res = run([verdict(9), verdict(10)], 10)
+    assert len(res.confirmed) == 1 and not res.sustained
+    assert set(v.key for v in res.sustained).isdisjoint(c.key for c in res.confirmed)
+
+
 def test_confirm_nights_one_links_on_the_first_night():
     res = run([verdict(10)], 10, SuppressConfig(confirm_nights=1))
     assert len(res.confirmed) == 1 and res.item_count == 1  # no double count
@@ -128,7 +134,7 @@ def test_no_data_tonight_is_not_suspect_but_warns():
 def test_a_night_without_data_does_not_make_a_standing_flag_new_again():
     h = history([verdict(8), verdict(10)], 10, skip=(9, ))
     res = apply(h, SuppressConfig(), n(10))
-    assert not res.new and len(res.sustained) == 1
+    assert not res.new and len(res.confirmed) == 1 and not res.sustained  # confirmed, not also sustained
 
 
 def test_flip_flop_cases_are_muted():
@@ -215,7 +221,7 @@ def test_series_own_missing_night_does_not_break_its_episode():
         for i in (3, 5, 6)
     }
     assert len(res[3].new) == 1 and not res[3].confirmed
-    assert not res[5].new and len(res[5].sustained) == 1  # not new again
+    assert not res[5].new and not res[5].sustained  # not new again; listed as confirmed only
     assert len(res[5].confirmed) == 1 and res[5].confirmed[0].first_night == n(3)
     assert not res[6].confirmed
 
