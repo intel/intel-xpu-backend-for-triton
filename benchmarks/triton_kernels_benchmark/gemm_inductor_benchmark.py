@@ -10,8 +10,10 @@ Manual providers reuse the kernels in gemm_benchmark, gemm_postop_addmatrix_benc
 gemm_splitk_benchmark and gemm_streamk_benchmark (not Inductor's grouped_mm), on the
 original inputs and strides without padding, packing or copying. The kernels use a
 tensor descriptor when the strides allow one, and masked pointers otherwise. Split-K and
-Stream-K run one GEMM per batch; their timings include zeroing and all launches. Their
-CI benchmarks have a single config tuned for large square shapes, so here each case first
+Stream-K are 2D only, so for the bmm cases they run one GEMM per batch; their timings
+include zeroing and all launches. Each of those GEMMs has only a few output tiles, far
+too few to fill the GPU, so these bmm numbers understate both algorithms. Their CI
+benchmarks have a single config tuned for large square shapes, so here each case first
 picks the fastest tile (and SPLIT_K for Split-K), outside the timed region, and prints it.
 
 All manual providers accumulate in FP32, add any addmm bias and return FP16 outputs.
