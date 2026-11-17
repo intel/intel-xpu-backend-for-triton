@@ -175,7 +175,11 @@ public:
       currDesc.leadDimensionBaseOffset = 0;
     }
     int32_t smemByteOffsetb128 = smemByteOffsetb8 >> 4;
-    uint64_t descBits = std::bit_cast<uint64_t>(currDesc) + smemByteOffsetb128;
+    // TODO(akhilgoe): XLA sycl build uses sysroot with older libc++
+    // (glibc 2.31, gcc 10) that doesn't support std::bit_cast. Hence, use
+    // llvm::bit_cast as a workaround and revert this change once XLA sycl
+    // updates to a newer sysroot (with >= gcc 11).
+    uint64_t descBits = llvm::bit_cast<uint64_t>(currDesc) + smemByteOffsetb128;
     // Add the base address to the descriptor
     Value low = tb.add(tb.i32_val(uint32_t(descBits)), baseb128);
     Value high = tb.i32_val(descBits >> 32);
@@ -287,8 +291,12 @@ private:
       return mlir::emitError(
           loc, "MMA instruction exceeds the shared-memory layout");
 
+    // TODO(akhilgoe): XLA sycl build uses sysroot with older libc++
+    // (glibc 2.31, gcc 10) that doesn't support std::bit_cast. Hence, use
+    // llvm::bit_cast as a workaround and revert this change once XLA sycl
+    // updates to a newer sysroot (with >= gcc 11).
     auto desc =
-        std::bit_cast<SMEMDescriptor>(mmaVersion == 5 ? 1ULL << 46 : 0ULL);
+        llvm::bit_cast<SMEMDescriptor>(mmaVersion == 5 ? 1ULL << 46 : 0ULL);
     // The lbo / sbo is defined wrt. the 128b elements
     desc.leadDimensionBaseOffset = (lbo * bitwidth / 8) >> 4;
     desc.strideDimensionBaseOffset = (sbo * bitwidth / 8) >> 4;
