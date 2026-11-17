@@ -6,11 +6,11 @@ from datetime import date, timedelta
 
 import pytest
 
-from benchmark_monitor import Point, Series, SeriesKey, Status, Thresholds, load_catalog
+from benchmark_monitor import CatalogError, Point, Series, SeriesKey, Status, Thresholds, load_catalog
 from benchmark_monitor.gate import evaluate, evaluate_all
 
 KEY = SeriesKey("micro", "b580", "ci", "gemm", "triton", "tflops", "{}")
-# #6491 DEFAULT_CONFIG: min_history=5, rolling_window=10, z=3, drop=5, max_cv=15%, lock 5%.
+# #6491 DEFAULT_CONFIG: min_history=5, rolling_window=10, z=3, drop=5, max_cv=15%, lock_mad_frac=0.05.
 TH = Thresholds(5.0, 3.0, 5, 10, 15.0, 0.05, True)
 TH20 = Thresholds(5.0, 3.0, 5, 20, 15.0, 0.05, True)
 
@@ -132,11 +132,48 @@ def test_lower_is_better_mirrors():
     assert v.status is Status.REGRESSION and v.baseline_median == 80.0
 
 
+LOWER = Thresholds(5.0, 3.0, 5, 10, 15.0, 0.05, False)
+
+
+def test_negative_baseline_lower_is_better_regresses():
+    # ns_per_arg can be negative: -8 is a higher (worse) value than -10 for a lower-is-better metric.
+    v = evaluate(mk([-10.0] * 10 + [-8.0]), LOWER)
+    assert v.status is Status.REGRESSION
+    assert v.drop_pct == pytest.approx(20.0) and v.z is not None and v.z < 0
+    assert v.baseline_median == -10.0 and v.mad == pytest.approx(0.1)  # MAD proxy stays positive
+    assert evaluate(mk([-10.0] * 10 + [-12.0]), LOWER).status is Status.IMPROVEMENT
+
+
+def test_negative_baseline_higher_is_better_mirrors():
+    assert status([-10.0] * 10 + [-12.0]) is Status.REGRESSION
+    assert status([-10.0] * 10 + [-8.0]) is Status.IMPROVEMENT
+    assert status([-10.0] * 10 + [-9.9]) is Status.OK
+
+
+def test_negative_history_is_still_filtered_for_noise():
+    assert status([-17.0, -29.0] * 5 + [-17.0]) is Status.NOISY
+
+
+def test_negative_baseline_lock_in():
+    th = Thresholds(5.0, 3.0, 5, 20, 15.0, 0.05, False)
+    v = evaluate(mk([-100.0] * 15 + [-120.0] * 5 + [-105.0]), th)  # more negative = lower = better: locks at -120
+    assert v.baseline_median == -120.0 and v.status is Status.REGRESSION
+
+
 def test_evaluate_all_uses_catalog():
     cat = load_catalog()
     out = evaluate_all([mk([10.0] * 10 + [5.0]), mk([])], cat)
     assert len(out) == 1 and out[0].thresholds == cat.resolve(KEY)
     assert out[0].status is Status.REGRESSION
+
+
+def test_evaluate_all_skips_ungated_metrics_and_rejects_undeclared():
+    cat = load_catalog()
+    ungated = SeriesKey("micro", "b580", "ci", "gemm", "triton", "cpu_mhz", "{}")
+    out = evaluate_all([mk([10.0] * 10 + [5.0], ungated), mk([10.0] * 10 + [5.0])], cat)
+    assert [v.key.metric for v in out] == ["tflops"]
+    with pytest.raises(CatalogError, match="not declared"):
+        evaluate_all([mk([1.0], SeriesKey("micro", "b580", "ci", "gemm", "triton", "nope", "{}"))], cat)
 
 
 def test_cv_exactly_at_max_cv_is_not_noisy():
@@ -175,10 +212,12 @@ def test_improvement_lock_pct_is_configurable():
 
 
 def test_lock_window_is_configurable():
-    vals = [100.0] * 14 + [120.0] * 6 + [105.0]
-    assert evaluate(mk(vals), TH20).baseline_median == 120.0  # recent 8 = 2x100 + 6x120 -> median 120
+    vals = [100.0] * 16 + [120.0] * 4 + [105.0]
+    assert evaluate(mk(vals), TH20).baseline_median == 100.0  # default 8: recent = 4x100 + 4x120, MAD too wide
     short = Thresholds(5.0, 3.0, 5, 20, 15.0, 0.05, True, lock_window=5)
-    assert evaluate(mk(vals), short).baseline_median == 120.0
+    assert evaluate(mk(vals), short).baseline_median == 120.0  # last 5 = 100 + 4x120 -> median 120, MAD 0
+    tiny = Thresholds(5.0, 3.0, 5, 20, 15.0, 0.05, True, lock_window=3)
+    assert evaluate(mk(vals), tiny).baseline_median == 120.0  # below min_history: the last 5 points are used
     long = Thresholds(5.0, 3.0, 5, 20, 15.0, 0.05, True, lock_window=20)
     assert evaluate(mk(vals), long).baseline_median == 100.0
 
