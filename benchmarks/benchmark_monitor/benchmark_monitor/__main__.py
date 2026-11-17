@@ -21,6 +21,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--as-of", type=date.fromisoformat, default=None, help="YYYY-MM-DD (default: today, UTC)")
     ap.add_argument("--nights", type=int, default=30,
                     help="nights of verdict history to evaluate and suppress over (>= 1)")
+    ap.add_argument(
+        "--history-days", type=int, default=None,
+        help="calendar days of history to read before the first evaluated night (default: 3 x the largest catalog window; "
+        "0 = all history). The gate then takes the last `window` points per series")
     ap.add_argument("--format", choices=("md", "json"), default="md")
     ap.add_argument("--out", default=None, help="output path (default: stdout)")
     args = ap.parse_args(argv)
@@ -43,7 +47,8 @@ def _run(args: argparse.Namespace) -> int:
         print("--nights must be at least 1", file=sys.stderr)
         return 2
     as_of = args.as_of or datetime.now(timezone.utc).date()
-    report = run(catalog, ArtifactSource(args.artifacts, catalog), [args.scope], as_of, args.nights)
+    report = run(catalog, ArtifactSource(args.artifacts, catalog), [args.scope], as_of, args.nights,
+                 history_days=args.history_days)
 
     sink_cls = MarkdownSink if args.format == "md" else JsonSink
     sink_cls(args.out or sys.stdout).emit(report)

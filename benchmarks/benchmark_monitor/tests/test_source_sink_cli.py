@@ -4,13 +4,14 @@ import json
 import socket
 import subprocess
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from benchmark_monitor import SeriesKey, Status, Thresholds, Verdict, load_catalog
 from benchmark_monitor.__main__ import main
+from benchmark_monitor.pipeline import history_start
 from benchmark_monitor.report import Report
 from benchmark_monitor.sink import JsonSink, MarkdownSink, _by_case
 from benchmark_monitor.source import ArtifactSource, CsvReportSource
@@ -272,3 +273,106 @@ def test_case_order_is_deterministic():
     assert first == [label for label, _ in _by_case(reversed(vs))]
     # drop desc, then benchmark, then params
     assert first == ["a-gemm / b580 `{}`", "b-attn / b580 `{}`", "c-add / b580 `{\"n\":0}`", "c-add / b580 `{\"n\":1}`"]
+
+def test_markdown_table_identifies_series_and_escapes_cells():
+    key = SeriesKey("third_party", "b580", "ci|x", "moe", "triton-td", "tflops", '{"label":"a|b`c\nd"}')
+    th = Thresholds(5.0, 3.0, 8, 20, 15.0, 0.05, True)
+    rep = Report(date(2026, 11, 16), (Verdict(key, D1, Status.REGRESSION, 12.34, -4.5, 10.0, 0.2, 9, th), ))
+    text = MarkdownSink(io.StringIO()).render(rep)
+    header, _, row = [ln for ln in text.splitlines() if ln.startswith("|")]
+    assert "compiler" in header and "source" in header and "tag" in header
+    assert "triton-td" in row and "third_party" in row
+    cells = row.replace("\\|", "\0").split("|")[1:-1]
+    assert len(cells) == header.count("|") - 1  # escaped pipe did not add a column
+    assert "`" not in row and "\n" not in row and "a\\|b" in row
+
+
+def test_history_start_default_is_three_windows_and_configurable():
+    assert history_start(date(2026, 11, 30), None, 20) == date(2026, 10, 1)
+    assert history_start(date(2026, 11, 30), 5, 20) == date(2026, 11, 25)
+    assert history_start(date(2026, 11, 30), 0, 20) == date.min
+
+
+def test_cli_gappy_series_keeps_enough_points_for_the_window(tmp_path):
+    # One run every 3rd night: the last 20 *calendar* days hold only ~6 points (< min_history 8).
+    base = date(2026, 11, 1)
+    offsets = list(range(0, 33, 3)) + [33]  # 11 flat runs, then a 20% drop
+    for off in offsets:
+        night = base + timedelta(days=off)
+        write(
+            tmp_path / "art" / f"n{off}-report.csv",
+            [wide(run_uuid=f"r{off}", datetime=f"{night}T03:00:00", tflops="8.0" if off == 33 else "10.0", hbm_gbs="")])
+    out = tmp_path / "out.json"
+    argv = [
+        "--artifacts",
+        str(tmp_path / "art"), "--scope", "nightly-b580-micro", "--as-of",
+        str(base + timedelta(days=33)), "--format", "json", "--out",
+        str(out)
+    ]
+    assert main(argv) == 0
+    data = json.loads(out.read_text())
+    assert data["counts"] == {"regression": 1} and data["verdicts"][0]["n_history"] == 11
+    assert main(argv + ["--history-days", "20", "--nights", "1", "--out", str(out)]) == 0  # the old behaviour: masked
+    assert json.loads(out.read_text())["counts"] == {"insufficient_history": 1}
+
+
+def _signed_report(higher_is_better):
+    from benchmark_monitor.suppress import SuppressionResult  # pylint: disable=import-outside-toplevel
+    th = Thresholds(5.0, 3.0, 8, 20, 15.0, 0.05, higher_is_better)
+    metric = "tflops" if higher_is_better else "time_us"
+    key = SeriesKey("micro", "b580", "client", "gemm", "triton", metric, "{}")
+    v = Verdict(key, D1, Status.REGRESSION, 9.1 if higher_is_better else 20.0, -5.0, 10.0, 0.1, 9, th)
+    return Report(date(2026, 11, 16), (v, ), SuppressionResult(new=(v, ), sustained=(v, ), muted=(v, )))
+
+
+def test_sink_prints_actual_direction_of_change():
+    out = io.StringIO()
+    MarkdownSink(out).emit(_signed_report(True))
+    assert out.getvalue().count("tflops -9.1%") == 3  # a fall of a higher-is-better metric
+    out = io.StringIO()
+    MarkdownSink(out).emit(_signed_report(False))
+    assert out.getvalue().count("time_us +20.0%") == 3  # a rise of a lower-is-better metric: worse
+    assert "time_us -20.0%" not in out.getvalue()
+
+
+def _families_report():
+    from dataclasses import dataclass  # pylint: disable=import-outside-toplevel
+    from benchmark_monitor.suppress import SuppressionResult  # pylint: disable=import-outside-toplevel
+
+    @dataclass(frozen=True)
+    class Fam:  # stand-in for suppress.ConfirmedFamily
+        source: str
+        family: str
+        night: date
+        first_night: date
+        keys: tuple
+
+    @dataclass(frozen=True)
+    class Sup(SuppressionResult):  # stand-in with the S4a field
+        confirmed_families: tuple = ()
+
+    keys = tuple(
+        SeriesKey("micro", "b580", "client", f"flash-attn-{i}", "triton", m, "{}") for i in range(5)
+        for m in ("tflops", "gbps"))
+    fam = Fam("micro", "flash-attn", D2, D1, keys)
+    return Report(date(2026, 11, 20), (), Sup(confirmed_families=(fam, )))
+
+
+def test_confirmed_families_in_markdown_and_json(tmp_path):
+    out = io.StringIO()
+    MarkdownSink(out).emit(_families_report())
+    text = out.getvalue()
+    assert "## Confirmed families (1)" in text
+    assert "flash-attn (micro): storm night 2026-11-20, first 2026-11-01, 5 cases" in text  # 10 series, 5 cases
+    assert "flash-attn-0 / b580" in text and "flash-attn-3" not in text and "... and 2 more" in text
+    path = tmp_path / "f.json"
+    JsonSink(path).emit(_families_report())
+    fam = json.loads(path.read_text())["suppression"]["confirmed_families"][0]
+    assert (fam["family"], fam["source"], fam["night"], fam["n_cases"]) == ("flash-attn", "micro", "2026-11-20", 5)
+    assert len(fam["top_cases"]) == 3
+
+
+def test_no_families_section_without_the_field():
+    out = io.StringIO()
+    MarkdownSink(out).emit(_metric_report())  # a result without confirmed_families
+    assert "Confirmed families" not in out.getvalue()
