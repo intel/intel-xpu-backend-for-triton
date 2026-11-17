@@ -2,6 +2,10 @@
 
 Ports ``analyze()`` from #6491 to the ``Series``/``Thresholds`` model. #6491 works per run; here each
 ``Point`` plays the role of one run (aggregation is not this module's job).
+
+Percentages are relative to the magnitude of the baseline (``abs(median)``). Metrics such as ``ns_per_arg``
+are differences of two timings and can be negative; dividing by a negative median would flip the sign of
+the relative change against the sign of the z-score, so no verdict could ever fire.
 """
 
 from __future__ import annotations
@@ -27,15 +31,15 @@ def _baseline(history: list[float], thresholds: Thresholds, sign: float) -> tupl
     recent = history[-max(thresholds.min_history, min(int(thresholds.lock_window), len(history))):]
     recent_median = statistics.median(recent)
     recent_mad = _mad(recent, recent_median)
-    gain_pct = sign * (recent_median - full_median) / full_median * 100 if full_median else 0.0
-    if gain_pct > thresholds.improvement_lock_pct and recent_mad < recent_median * thresholds.lock_mad_frac:
+    gain_pct = sign * (recent_median - full_median) / abs(full_median) * 100 if full_median else 0.0
+    if gain_pct > thresholds.improvement_lock_pct and recent_mad < abs(recent_median) * thresholds.lock_mad_frac:
         median = recent_median
-        mad = recent_mad if recent_mad > 0 else recent_median * _MAD_PROXY_FRAC
+        mad = recent_mad if recent_mad > 0 else abs(recent_median) * _MAD_PROXY_FRAC
     else:
         median = full_median
         mad = _mad(history, full_median)
     if mad == 0:  # 1% of the baseline as a MAD proxy
-        mad = median * _MAD_PROXY_FRAC if median > 0 else 1e-6
+        mad = abs(median) * _MAD_PROXY_FRAC if median != 0 else 1e-6
     return median, mad
 
 
@@ -51,7 +55,7 @@ def evaluate(series: Series, thresholds: Thresholds, night: date | None = None) 
         night = series.points[-1].night
     idx = max((i for i, p in enumerate(series.points) if p.night == night), default=None)
     current: Point | None = None if idx is None else series.points[idx]
-    history = [p.value for p in series.points[:idx or 0]][-thresholds.window:] if idx is not None else []
+    history = [p.value for p in series.points[:idx]][-thresholds.window:] if idx is not None else []
 
     def verdict(status: Status, **kw: float | None) -> Verdict:
         n_history = 0 if status is Status.MISSING else len(history)
@@ -63,9 +67,9 @@ def evaluate(series: Series, thresholds: Thresholds, night: date | None = None) 
     if len(history) < thresholds.min_history:
         return verdict(Status.INSUFFICIENT_HISTORY)
 
-    # CV: sample stdev over the whole window, only when mean > 0.
+    # CV: sample stdev over the whole window relative to |mean|, only when the mean is not zero.
     mean = statistics.mean(history)
-    if mean > 0 and len(history) >= 2 and statistics.stdev(history) / mean * 100 > thresholds.max_cv_pct:
+    if mean != 0 and len(history) >= 2 and statistics.stdev(history) / abs(mean) * 100 > thresholds.max_cv_pct:
         return verdict(Status.NOISY)
 
     sign = 1.0 if thresholds.higher_is_better else -1.0
@@ -78,7 +82,7 @@ def evaluate(series: Series, thresholds: Thresholds, night: date | None = None) 
             return verdict(Status.OK, drop_pct=0.0, z=0.0, median=median, mad=mad)
         change_pct = delta / 1e-6 * 100
     else:
-        change_pct = delta / median * 100
+        change_pct = delta / abs(median) * 100
     drop_pct = -change_pct  # positive = worse
     if z < -thresholds.z and change_pct < -thresholds.min_drop_pct:
         status = Status.REGRESSION
@@ -90,5 +94,8 @@ def evaluate(series: Series, thresholds: Thresholds, night: date | None = None) 
 
 
 def evaluate_all(series_iter: Iterable[Series], catalog: Catalog) -> list[Verdict]:
-    """Gate every non-empty series on its last night with catalog-resolved thresholds."""
-    return [evaluate(s, catalog.resolve(s.key)) for s in series_iter if s.points]
+    """Gate every non-empty series on its last night with catalog-resolved thresholds.
+
+    Series of metrics declared with ``gate: false`` are skipped; an undeclared metric raises CatalogError.
+    """
+    return [evaluate(s, catalog.resolve(s.key)) for s in series_iter if s.points and catalog.is_gated(s.key.metric)]

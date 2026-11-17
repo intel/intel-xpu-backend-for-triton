@@ -112,7 +112,7 @@ def test_default_catalog_families_do_not_overlap(recwarn):
 
 @pytest.mark.parametrize("bad", [
     "window: 0", "window: 2.5", "min_history: 0", "z: 0", "min_drop_pct: -1", "max_cv_pct: 0", "min_drop_pct: .inf",
-    "window: true"
+    "window: true", "lock_window: 0", "improvement_lock_pct: -1"
 ])
 def test_threshold_values_are_validated(bad):
     name, value = bad.split(": ")

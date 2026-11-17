@@ -88,7 +88,7 @@ class Thresholds:  # pylint: disable=too-many-instance-attributes
     lock_mad_frac: float
     higher_is_better: bool
     improvement_lock_pct: float = 8.0  # lock the baseline when the recent level is this % better
-    lock_window: int = 8  # cap on the number of recent points used for the lock-in level
+    lock_window: int = 8  # recent points for the lock-in level; at least min_history are used
 
 
 @dataclass(frozen=True)
