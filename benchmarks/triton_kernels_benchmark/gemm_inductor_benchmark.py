@@ -2,8 +2,9 @@
 
 The cases are FP16 GEMMs where Inductor's Triton GEMM was slower than ATen.
 Pass --case repeatedly to benchmark selected one-based cases, or --list to inspect
-their shapes and strides without requiring an XPU. Results use the
-triton_kernels_benchmark report format.
+their shapes and strides, and which matrices the manual kernels access through
+masked pointers, without requiring an XPU. Results use the triton_kernels_benchmark
+report format.
 
 Manual providers reuse the kernels in gemm_benchmark, gemm_splitk_benchmark,
 and gemm_streamk_benchmark (not Inductor's grouped_mm). All manual providers use
@@ -242,10 +243,31 @@ def get_benchmark(case_ids: list[int], modes: list[str]) -> Mark:
     return benchmark
 
 
+def uses_descriptor(shape: tuple[int, ...], stride: tuple[int, ...], itemsize: int) -> bool:
+    """Whether the manual kernels access this matrix through a tensor descriptor, as `gemm_tile_utils` decides."""
+    (rows, cols), (stride_row, stride_col) = shape[-2:], stride[-2:]
+    if stride_row == 1 and stride_col != 1:
+        rows, cols, stride_row, stride_col = cols, rows, stride_col, stride_row
+    return stride_col == 1 and stride_row >= cols and stride_row * itemsize % 16 == 0
+
+
+def pointer_path_operands(case: GemmCase) -> list[str]:
+    """The matrices the manual kernels load or store through masked pointers instead of a tensor descriptor."""
+    (a_shape, b_shape), (a_stride, b_stride) = case.shapes[-2:], case.strides[-2:]
+    n = b_shape[-1]
+    # The manual kernels write a contiguous FP32 output.
+    operands = {"A": (a_shape, a_stride, 2), "B": (b_shape, b_stride, 2), "C": ((a_shape[-2], n), (n, 1), 4)}
+    return [
+        name for name, (shape, stride, itemsize) in operands.items() if not uses_descriptor(shape, stride, itemsize)
+    ]
+
+
 def print_cases(case_ids: list[int]) -> None:
     for case_id in case_ids:
         case = GEMM_CASES[case_id - 1]
         print(f"{case_id}: {case.op}, shapes={case.shapes}, strides={case.strides}", flush=True)
+        if pointer := pointer_path_operands(case):
+            print(f"   manual kernels use masked pointers for {', '.join(pointer)}", flush=True)
 
 
 def main() -> None:
