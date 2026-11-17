@@ -21,7 +21,7 @@ Two lowering paths exist for TritonGEN operations:
 ### `isSPVBuiltinAvailable()` Decision Logic
 Returns `false` (use GenISA) when:
 - Module has the `ttig.is_lts` attribute (LTS driver)
-- Module lacks the `ttig.support_spirv_2d_block_io` attribute (driver older than compute-runtime 26.27.39122, i.e. IGC < 2.38, which only has a fixed table of 2D block builtins; set in `make_llir` from the driver version)
+- Module has the `ttig.use_genisa_2d_block_io` attribute (driver older than compute-runtime 26.27.39122, i.e. IGC < 2.38, which only has a fixed table of 2D block builtins; set in `make_llir` from the driver version)
 - The specific operation signature is not valid in the SPIR-V interface (see below)
 - Subgroup size ≠ 16 (SPIR-V 2D block operations only support subgroup size 16)
 

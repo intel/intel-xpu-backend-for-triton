@@ -420,12 +420,12 @@ void init_triton_intel(py::module_ &m) {
 
   // Sets or clears the module attribute from the current target, so it is
   // never stale in hand-written TTGIR or Gluon modules that carry one.
-  m.def("set_support_spirv_2d_block_io",
-        [](mlir::ModuleOp &mod, bool supported) {
+  m.def("set_use_genisa_2d_block_io",
+        [](mlir::ModuleOp &mod, bool useGenISA) {
           using namespace mlir::triton::gpu::intel;
           constexpr llvm::StringRef name =
-              TritonIntelGPUDialect::getSupportSPIRV2DBlockIOAttrName();
-          if (!supported)
+              TritonIntelGPUDialect::getUseGenISA2DBlockIOAttrName();
+          if (!useGenISA)
             mod->removeAttr(name);
           else if (!mod->hasAttr(name))
             mod->setAttr(name, mlir::Builder(mod.getContext()).getUnitAttr());

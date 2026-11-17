@@ -701,10 +701,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         driver_version = metadata["target"].arch.get("driver_version")
         if cls.is_lts(driver_version):
             intel.set_is_lts(mod)
-        # SPIR-V 2D block I/O is only fully supported by newer drivers (#8858). Set it here, the one stage every
+        # Older drivers only resolve a fixed set of SPIR-V 2D block I/O shapes (#8858). Set it here, the one stage every
         # input (including Gluon and `.ttgir`, which bypass `make_ttgir`) goes through; clearing it also drops a stale
         # attribute carried by a hand-written module.
-        intel.set_support_spirv_2d_block_io(mod, options.has_spirv_2d_block_io)
+        intel.set_use_genisa_2d_block_io(mod, not options.has_spirv_2d_block_io)
 
         # `getGlobalTimer` counts core clock cycles and needs the rate to report
         # nanoseconds.

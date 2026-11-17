@@ -144,9 +144,8 @@ static bool isSPVBuiltinAvailable(OpTy op) {
   // of `intel_sub_group_2d_block_*` builtins; a shape missing from it fails to
   // build with an undefined reference to `__internal_intel_sub_group_2d_block_*`
   // (issue #8858). Newer IGC resolves any shape. The backend sets this attribute
-  // from the driver version; without it use the GenISA interface.
-  if (!m->hasAttr(
-          intel::TritonIntelGPUDialect::getSupportSPIRV2DBlockIOAttrName()))
+  // from the driver version.
+  if (m->hasAttr(intel::TritonIntelGPUDialect::getUseGenISA2DBlockIOAttrName()))
     return false;
 
   return true;

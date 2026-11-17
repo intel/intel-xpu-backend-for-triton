@@ -140,12 +140,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.is_lts";
     }
 
-    /// Get the name of the attribute used to indicate whether the driver's IGC
-    /// can resolve any 2D block I/O shape from SPIR-V. IGC older than 2.38 only
-    /// has a fixed table of `intel_sub_group_2d_block_*` builtins, so a shape
-    /// missing from it fails to build; the lowering then uses GenISA instead.
-    static constexpr llvm::StringRef getSupportSPIRV2DBlockIOAttrName() {
-      return "ttig.support_spirv_2d_block_io";
+    /// Get the name of the attribute that makes 2D block I/O lower through the
+    /// GenISA interface instead of the SPIR-V builtins. IGC older than 2.38
+    /// only has a fixed table of `intel_sub_group_2d_block_*` builtins, so a
+    /// shape missing from it fails to build.
+    static constexpr llvm::StringRef getUseGenISA2DBlockIOAttrName() {
+      return "ttig.use_genisa_2d_block_io";
     }
 
     /// Get the name of the attribute holding the core clock rate in kHz, used
