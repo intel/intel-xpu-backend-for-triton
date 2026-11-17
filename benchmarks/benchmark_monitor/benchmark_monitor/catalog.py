@@ -134,8 +134,9 @@ class Catalog:  # pylint: disable=too-many-instance-attributes
         self._check_history_fits_window()
         for name in self.benchmarks:
             if any(ch in name for ch in "*?["):
-                warnings.warn(f"benchmark {name!r}: keys under 'benchmarks' are exact names, not globs; "
-                              "use a family for patterns", stacklevel=2)
+                warnings.warn(
+                    f"benchmark {name!r}: keys under 'benchmarks' are exact names, not globs; "
+                    "use a family for patterns", stacklevel=2)
         patterns = [(n, p) for n, spec in self.families.items() for p in spec["match"]]
         for i, (fam, pat) in enumerate(patterns):
             for other, opat in patterns[i + 1:]:
@@ -160,7 +161,6 @@ class Catalog:  # pylint: disable=too-many-instance-attributes
         for name, spec in self.families.items():  # a family needs only one live pattern
             if not any(fnmatch.fnmatchcase(b, pat) for b in known for pat in spec["match"]):
                 raise CatalogError(f"family {name!r}: no pattern matches a known benchmark")
-
 
     def _check_history_fits_window(self) -> None:
         """Every reachable threshold combination needs ``min_history <= window``.

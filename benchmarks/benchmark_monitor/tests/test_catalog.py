@@ -194,8 +194,9 @@ def test_benchmark_inherits_family_then_overrides_it():
 
 def test_benchmark_inherits_unset_keys_from_family():
     text = DEFAULT_CATALOG_PATH.read_text(encoding="utf-8").replace(
-        "flex-attn: {match", "flex-attn: {window: 30, match").replace("softmax: {min_drop_pct: 3.0}",
-                                                                       "softmax: {min_drop_pct: 3.0}\n  flex-attn-x: {z: 4}")
+        "flex-attn: {match",
+        "flex-attn: {window: 30, match").replace("softmax: {min_drop_pct: 3.0}",
+                                                 "softmax: {min_drop_pct: 3.0}\n  flex-attn-x: {z: 4}")
     t = load_catalog(text).resolve(key("flex-attn-x"))
     assert (t.window, t.z, t.min_drop_pct) == (30, 4, 8.0)
 
