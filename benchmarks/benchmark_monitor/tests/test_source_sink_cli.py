@@ -274,6 +274,7 @@ def test_case_order_is_deterministic():
     # drop desc, then benchmark, then params
     assert first == ["a-gemm / b580 `{}`", "b-attn / b580 `{}`", "c-add / b580 `{\"n\":0}`", "c-add / b580 `{\"n\":1}`"]
 
+
 def test_markdown_table_identifies_series_and_escapes_cells():
     key = SeriesKey("third_party", "b580", "ci|x", "moe", "triton-td", "tflops", '{"label":"a|b`c\nd"}')
     th = Thresholds(5.0, 3.0, 8, 20, 15.0, 0.05, True)
@@ -352,7 +353,8 @@ def _families_report():
         confirmed_families: tuple = ()
 
     keys = tuple(
-        SeriesKey("micro", "b580", "client", f"flash-attn-{i}", "triton", m, "{}") for i in range(5)
+        SeriesKey("micro", "b580", "client", f"flash-attn-{i}", "triton", m, "{}")
+        for i in range(5)
         for m in ("tflops", "gbps"))
     fam = Fam("micro", "flash-attn", D2, D1, keys)
     return Report(date(2026, 11, 20), (), Sup(confirmed_families=(fam, )))

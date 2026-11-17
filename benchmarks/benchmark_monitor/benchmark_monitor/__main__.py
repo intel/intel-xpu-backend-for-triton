@@ -22,8 +22,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--nights", type=int, default=30,
                     help="nights of verdict history to evaluate and suppress over (>= 1)")
     ap.add_argument(
-        "--history-days", type=int, default=None,
-        help="calendar days of history to read before the first evaluated night (default: 3 x the largest catalog window; "
+        "--history-days", type=int, default=None, help=
+        "calendar days of history to read before the first evaluated night (default: 3 x the largest catalog window; "
         "0 = all history). The gate then takes the last `window` points per series")
     ap.add_argument("--format", choices=("md", "json"), default="md")
     ap.add_argument("--out", default=None, help="output path (default: stdout)")

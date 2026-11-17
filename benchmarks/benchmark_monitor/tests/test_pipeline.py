@@ -128,12 +128,15 @@ def test_distinct_runs_of_one_series_are_kept_across_scopes():
 
     class Two:
 
-        def observations(self, scope, start, end):
+        def observations(self, scope, _start, _end):
             key = SeriesKey("micro", "b580", "client", "gemm", "triton", "tflops", "{}")
             moment = datetime(2026, 11, 10, 3, tzinfo=timezone.utc)
             # scope a returns runs A and B; scope b only A
-            yield from [Observation(key, r, moment, v) for r, v in (("A", 10.0), ("B", 4.0))
-                        if scope.name == "nightly-b580-micro" or r == "A"]
+            yield from [
+                Observation(key, r, moment, v)
+                for r, v in (("A", 10.0), ("B", 4.0))
+                if scope.name == "nightly-b580-micro" or r == "A"
+            ]
 
     cat = load_catalog()
     other = replace(cat.scopes["nightly-b580-micro"], name="other")

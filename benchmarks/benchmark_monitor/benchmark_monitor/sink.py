@@ -82,10 +82,7 @@ def _change(v: Verdict) -> str:
 
 
 def _flagged(verdicts: tuple[Verdict, ...]) -> tuple[list[str], int]:
-    rows = [
-        f"{label}: " + ", ".join(f"{v.key.metric} {_change(v)}" for v in vs)
-        for label, vs in _by_case(verdicts)
-    ]
+    rows = [f"{label}: " + ", ".join(f"{v.key.metric} {_change(v)}" for v in vs) for label, vs in _by_case(verdicts)]
     return rows, len(verdicts)
 
 
@@ -110,8 +107,8 @@ def _families(sup: SuppressionResult) -> list[dict[str, object]]:
             groups.setdefault(_case(key), key)
         ordered = sorted(groups.items(), key=lambda kv: (kv[1].benchmark, kv[1].params, kv[0]))
         out.append({
-            "family": cf.family, "source": cf.source, "night": cf.night, "first_night": cf.first_night,
-            "n_cases": len(ordered), "top_cases": [_label(k) for _, k in ordered[:MAX_FAMILY_CASES]]
+            "family": cf.family, "source": cf.source, "night": cf.night, "first_night": cf.first_night, "n_cases":
+            len(ordered), "top_cases": [_label(k) for _, k in ordered[:MAX_FAMILY_CASES]]
         })
     return sorted(out, key=lambda d: (str(d["source"]), str(d["family"]), str(d["night"])))
 
@@ -119,10 +116,12 @@ def _families(sup: SuppressionResult) -> list[dict[str, object]]:
 def _confirmed_families(sup: SuppressionResult) -> list[str]:
     rows = []
     for d in _families(sup):
-        top = ", ".join(d["top_cases"])  # type: ignore[arg-type]
-        more = int(d["n_cases"]) - len(d["top_cases"])  # type: ignore[arg-type]
-        rows.append(f"{d['family']} ({d['source']}): storm night {d['night']}, first {d['first_night']}, "
-                    f"{d['n_cases']} cases; top: {top}" + (f", ... and {more} more" if more > 0 else ""))
+        tops = list(d["top_cases"])  # type: ignore[call-overload]
+        total = int(d["n_cases"])  # type: ignore[call-overload]
+        family, source, night, first = d["family"], d["source"], d["night"], d["first_night"]
+        more = f", ... and {total - len(tops)} more" if total > len(tops) else ""
+        rows.append(f"{family} ({source}): storm night {night}, first {first}, {total} cases; top: "
+                    + ", ".join(tops) + more)
     return rows
 
 
@@ -165,9 +164,9 @@ class MarkdownSink:
         ]
         for v in sorted(regs, key=lambda v: -(v.drop_pct or 0.0)):
             k = v.key
-            cells = tuple(_cell(c) for c in (k.source, k.platform, k.tag, k.benchmark, k.compiler, k.metric,
-                                             k.params)) + (_fmt(v.drop_pct, ".1f"), _fmt(v.z, ".2f"),
-                                                           _fmt(v.baseline_median, ".4g"), str(v.n_history))
+            cells = tuple(_cell(c)
+                          for c in (k.source, k.platform, k.tag, k.benchmark, k.compiler, k.metric, k.params)) + (_fmt(
+                              v.drop_pct, ".1f"), _fmt(v.z, ".2f"), _fmt(v.baseline_median, ".4g"), str(v.n_history))
             lines.append("| " + " | ".join(cells) + " |")
         return lines
 
