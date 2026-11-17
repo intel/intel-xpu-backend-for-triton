@@ -276,12 +276,16 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
     prefetch of one dot operand is dropped when the model predicts that demand-loading
     it is faster. The XPU backend passes those facts only when the `prefetch_cost_model`
     option (default `TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL`, off) is set.
+    With `tile-barrier`, a pipelined loop nested in a work-group-uniform `scf.for` puts a
+    `ttg.barrier none` at the top of that loop's body, so the warps of a persistent kernel
+    re-align at every tile instead of drifting apart.
   }];
 
   let dependentDialects = ["mlir::arith::ArithDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::spirv::SPIRVDialect",
                            "mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
 
   let options = [
@@ -290,6 +294,8 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
            "number of pipeline stages">,
     Option<"useBarrier", "use-barrier", "bool", /*default*/"false",
            "generate barriers">,
+    Option<"tileBarrier", "tile-barrier", "bool", /*default*/"true",
+           "re-align the warps at each iteration of a loop enclosing a pipelined loop">,
     Option<"deviceArch", "device-arch", "std::string", /*default*/"\"\"",
            "device architecture, e.g. 'bmg' (empty if unknown)">,
     Option<"coreClockKhz", "core-clock-khz", "unsigned", /*default*/"0",
@@ -382,6 +388,9 @@ def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-blo
     A load is not re-encoded when its reductions and the conversion of their results to a `tt.store` (reached
     through elementwise ops and at most one convert) need no shared memory in the current layout but would in
     the new one.
+    Nor is it re-encoded when, along any grid axis, the tiles read by programs pid and pid+1 are a power of two
+    above 256 KiB apart, or that distance is not a compile-time constant. Since that check only sees descriptor
+    loads, a function with a pointer `tt.load` tagged `ttig.block_io` is not re-encoded at all.
     Every tagged descriptor load in the function also needs zero padding, and with 16 lanes every value computed from a reduction must be f32 or i32 (an op the check
     does not recognize refuses too), since such kernels miscompile. These gates are function-wide: a function
     relays out all its eligible loads or none.
