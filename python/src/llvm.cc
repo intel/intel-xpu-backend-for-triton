@@ -231,6 +231,7 @@ createTargetMachine(llvm::Module *module, std::string proc,
   opt.MCOptions.AsmVerbose = true;
   opt.MCOptions.PreserveAsmComments = true;
   opt.MCOptions.ABIName = abi;
+  opt.MCOptions.LibraryOptions = &ScopedLLVMOptions::getLibraryOptions();
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
       module->getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
       std::nullopt,
@@ -598,6 +599,7 @@ void init_triton_llvm(py::module_ &m) {
         }
         llvm::TargetOptions opt;
         opt.MCOptions.ABIName = abi;
+        opt.MCOptions.LibraryOptions = &ScopedLLVMOptions::getLibraryOptions();
         // Target machine is only used to create the data layout.
         std::unique_ptr<llvm::TargetMachine> machine{
             target->createTargetMachine(targetTriple, proc, features, opt,
