@@ -277,7 +277,8 @@ def apply(history: Mapping[date, Sequence[Verdict]], cfg: SuppressConfig | None,
         if (d := [k for k, c2 in c.items() if c2 > 0]) and max(d) < tonight
     ]
     warnings += [f"{s}: {held[s]} new flag(s) held back, {r}" for s, r in sorted(suspect.items()) if s in held]
-    sustained = tuple(v for v in n.today if v not in n.new)
+    linked = {c.key for c in confirmed}
+    sustained = tuple(v for v in n.today if v not in n.new and v.key not in linked)
     return SuppressionResult(new=tuple(shown), confirmed=tuple(confirmed), sustained=sustained,
                              muted=tuple(v for v in n.today if v.key in n.flip), storms=_digest(folded, cfg),
                              storm_nights=storm_nights, suspect=suspect, held=held, warnings=tuple(warnings))
