@@ -12,7 +12,7 @@ import pytest
 from benchmark_monitor import SeriesKey, Status, Thresholds, Verdict, load_catalog
 from benchmark_monitor.__main__ import main
 from benchmark_monitor.report import Report
-from benchmark_monitor.sink import JsonSink, MarkdownSink
+from benchmark_monitor.sink import JsonSink, MarkdownSink, _by_case
 from benchmark_monitor.source import ArtifactSource, CsvReportSource
 
 HOST = {"gpu_device": "Intel(R) Arc(TM) B580 Graphics", "torch_version": "2.9", "agama_version": ""}
@@ -236,3 +236,39 @@ def test_json_sink_serialises_suppression(tmp_path):
 def test_cli_rejects_nights_below_one(tmp_path, capsys):
     assert main(["--artifacts", str(tmp_path), "--scope", "nightly-b580-micro", "--nights", "0"]) == 2
     assert "--nights" in capsys.readouterr().err
+
+
+def _metric_report():
+    from benchmark_monitor.suppress import Confirmed, SuppressionResult  # pylint: disable=import-outside-toplevel
+    th = Thresholds(5.0, 3.0, 8, 20, 15.0, 0.05, True)
+
+    def reg(bench, metric, drop, params="{}"):
+        key = SeriesKey("micro", "b580", "client", bench, "triton", metric, params)
+        return Verdict(key, D1, Status.REGRESSION, drop, -5.0, 10.0, 0.1, 9, th)
+
+    new = (reg("b-attn", "gbps", 9.0), reg("a-gemm", "tflops", 12.0), reg("b-attn", "tflops", 9.1),
+           reg("a-gemm", "gbps", 12.0), reg("c-add", "gbps", 9.1, '{"n":1}'), reg("c-add", "gbps", 9.1, '{"n":0}'))
+    sup = SuppressionResult(new=new, confirmed=tuple(Confirmed(v.key, v, 2, D1) for v in new[:3]), sustained=(),
+                            muted=(), storms=(), storm_nights=frozenset(), suspect={})
+    return Report(date(2026, 11, 16), new, sup, ())
+
+
+def test_sink_lists_each_case_once_with_all_its_metrics():
+    out = io.StringIO()
+    MarkdownSink(out).emit(_metric_report())
+    text = out.getvalue()
+    assert "4 regressing cases tonight (6 series); 4 new." in text
+    assert "## New (4, 6 series)" in text
+    assert "- a-gemm / b580 `{}`: gbps -12.0%, tflops -12.0%" in text  # tie on drop: metric name order
+    assert "- b-attn / b580 `{}`: tflops -9.1%, gbps -9.0%" in text
+    assert text.count("a-gemm / b580") == 2  # New and Confirmed only
+    assert "## Confirmed (2, 3 series)" in text
+    assert "b-attn / b580 `{}`: gbps 2 nights since 2026-11-01, tflops 2 nights since 2026-11-01" in text
+
+
+def test_case_order_is_deterministic():
+    vs = list(_metric_report().suppression.new)
+    first = [label for label, _ in _by_case(vs)]
+    assert first == [label for label, _ in _by_case(reversed(vs))]
+    # drop desc, then benchmark, then params
+    assert first == ["a-gemm / b580 `{}`", "b-attn / b580 `{}`", "c-add / b580 `{\"n\":0}`", "c-add / b580 `{\"n\":1}`"]
