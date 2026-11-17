@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
-// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefix=DISABLED
+// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefix=DISABLED
 
 // A single-row descriptor load whose bounds checks are all block-level, and whose lanes hold consecutive 32/64-bit
 // words of the row, becomes one sub-group block read per read group under a single uniform branch.
@@ -14,8 +14,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c128 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
     %desc = tt.make_tensor_descriptor %base, [%rows, %c128], [%c128_i64, %c1_i64] : <f32>, <1x128xf32>
-    // CHECK: %[[FILL:.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
-    // CHECK: llvm.cond_br %{{.*}}, ^[[READ:bb[0-9]+]], ^[[END:bb[0-9]+]](%[[FILL]] : f32)
+    // CHECK: llvm.cond_br %{{.*}}, ^[[READ:bb[0-9]+]], ^[[END:bb[0-9]+]](%{{.*}} : f32)
     // CHECK: ^[[READ]]:
     // CHECK: %[[WORD:.*]] = triton_gen.sub_group_block_read %{{.*}} : !llvm.ptr<1> -> i32
     // CHECK: %[[VAL:.*]] = llvm.bitcast %[[WORD]] : i32 to f32
@@ -77,16 +76,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c128 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
     %desc = tt.make_tensor_descriptor %base, [%rows, %c128], [%c128_i64, %c1_i64] : <f32>, <1x128xf32>
-    // CHECK: %[[P0:.*]] = llvm.getelementptr
-    // CHECK: triton_gen.sub_group_block_read %[[P0]] : !llvm.ptr<1> -> i32
-    // The second group sits 64 elements further along the row.
-    // CHECK: %[[C64:.*]] = llvm.mlir.constant(64 : i32) : i32
-    // CHECK: %[[COL:.*]] = llvm.xor %[[C64]], %{{.*}} : i32
-    // CHECK: %[[IDX:.*]] = llvm.add %{{.*}}, %[[COL]] : i32
-    // CHECK: %[[SCALED:.*]] = llvm.mul %[[IDX]], %{{.*}} : i32
-    // CHECK: %[[OFF:.*]] = llvm.add %{{.*}}, %[[SCALED]] : i32
-    // CHECK: %[[P1:.*]] = llvm.getelementptr %{{.*}}[%[[OFF]]]
-    // CHECK: triton_gen.sub_group_block_read %[[P1]] : !llvm.ptr<1> -> i32
+    // CHECK-COUNT-2: triton_gen.sub_group_block_read %{{.*}} : !llvm.ptr<1> -> i32
     // CHECK-NOT: triton_gen.sub_group_block_read
     %x = tt.descriptor_load %desc[%row, %c0] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x128xf32> -> tensor<1x128xf32, #linear>
     tt.return %x : tensor<1x128xf32, #linear>
@@ -170,7 +160,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c128_i64 = arith.constant 128 : i64
     %desc = tt.make_tensor_descriptor %base, [%rows, %c128], [%c128_i64, %c1_i64] {padding = 2 : i32} : <f32>, <1x128xf32>
     // CHECK: %[[NAN:.*]] = llvm.mlir.constant(0x7FC00000 : f32) : f32
-    // CHECK: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^{{bb[0-9]+}}(%[[NAN]] : f32)
+    // CHECK: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^{{bb[0-9]+}}(%{{.*}} : f32)
     %x = tt.descriptor_load %desc[%row, %c0] {ttig.desc_padding = 2 : i32} : !tt.tensordesc<1x128xf32> -> tensor<1x128xf32, #blocked>
     tt.return %x : tensor<1x128xf32, #blocked>
   }

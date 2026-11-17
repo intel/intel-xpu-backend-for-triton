@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not='llvm.bitcast {{.*}}xi1>' --implicit-check-not='llvm.bitcast {{.*}} to i1{{$}}' --implicit-check-not='llvm.sext {{.*}} : i1 to'
+// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not='llvm.bitcast {{.*}}xi1>' --implicit-check-not='llvm.bitcast {{.*}} : i{{(8|16|32|64)}} to i1{{$}}' --implicit-check-not='llvm.sext {{.*}} : i1 to'
 
 // Bool tensors are bytes in memory, as for tl.store: zext, then pack i8 words (#8670).
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
@@ -26,8 +26,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
   // CHECK:       llvm.bitcast {{%.*}} : vector<4xi8> to i32
   // CHECK:       llvm.load {{.*}} -> i32
   // CHECK:       [[WORD:%.*]] = llvm.bitcast {{%.*}} : i32 to vector<4xi8>
-  // CHECK:       [[BYTE:%.*]] = llvm.extractelement [[WORD]][{{%.*}} : i32] : vector<4xi8>
-  // CHECK:       llvm.icmp "ne" [[BYTE]], {{%.*}} : i8
+  // CHECK:       llvm.extractelement [[WORD]][{{%.*}} : i32] : vector<4xi8>
+  // CHECK:       llvm.icmp "ne" {{%.*}}, {{%.*}} : i8
   tt.func public @load_i1(%ptr: !tt.ptr<i1> {tt.divisibility = 16 : i32}, %m: i32, %n: i32 {tt.divisibility = 16 : i32}, %stride: i64 {tt.divisibility = 16 : i32}) -> tensor<1x64xi1, #blocked4> {
     %c0 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64

@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -verify-diagnostics --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm
+// RUN: triton-opt %s -split-input-file -verify-diagnostics --tritonintelgpu-lower-to-2d-block-load
 
 // COM: === Issue #8102: divergent descriptor padding must never reach LLVM ===
 // COM:
@@ -14,7 +14,8 @@
 // COM: TTGIR exists, so these cases are unreachable there. This file is the
 // COM: backstop for everything that bypasses that expansion -- hand-written TTGIR,
 // COM: future passes that reintroduce a divergent merge, or a regression in the
-// COM: expansion's legality predicate. Reaching the LLVM lowering with an
+// COM: expansion's legality predicate. Reaching LowerTo2DBlockLoad, which turns
+// COM: every descriptor load into a 2D block load or a tt.load, with an
 // COM: undecidable padding must be a hard error, not a silent PAD_ZERO.
 // COM:
 // COM: Every case here fans the provenance out with `arith.select`, deliberately
@@ -28,28 +29,14 @@
 // COM: in which case the lowering succeeds, emits a predicated load, and the fill
 // COM: value it picks is what reaches the masked-off lanes.
 // COM:
-// COM: TWO diagnostics are expected per case: the conversion pattern's own
-// COM: `emitError`, plus the dialect-conversion driver's follow-up
-// COM: "failed to legalize operation 'tt.descriptor_load'". The driver returns on
-// COM: the first failed op, so there is exactly one of the latter per case.
-// COM:
 // COM: Every case is a fix witness: without the fix the lowering emits no padding
 // COM: diagnostic at all, so each fails as `expected error "..." was not produced`
 // COM: and the masked-off lanes quietly take whatever the pre-fix precedence gave
 // COM: them -- the stamped attribute, else the traced padding, else PAD_ZERO.
 // COM:
-// COM: The `expected-error` strings below are deliberately specific, and a loose
-// COM: substring is not merely weak -- it silently matches the WRONG diagnostic.
-// COM: The driver's "failed to legalize operation" message embeds the printed op,
-// COM: so wherever that op is stamped with `ttig.desc_padding` -- cases 2 and 3 --
-// COM: an annotation of just `padding` pairs with the driver's message instead of
-// COM: the pattern's; the remaining annotation then has nothing left to match and
-// COM: the case fails for a reason unrelated to the code under test. Keep both
-// COM: annotations quoting wording unique to the diagnostic they belong to.
-// COM:
 // COM: `-verify-diagnostics` runs in its default strict mode, where an unannotated
-// COM: diagnostic is an error, so a conversion pattern retried into emitting
-// COM: duplicates fails this file rather than passing it quietly.
+// COM: diagnostic is an error, so a duplicate diagnostic fails this file rather
+// COM: than passing it quietly.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 
@@ -65,8 +52,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %d0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 1 : i32} : <f32>, <4x4xf32>
     %d1 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 2 : i32} : <f32>, <4x4xf32>
     %desc = arith.select %cond, %d0, %d1 : !tt.tensordesc<4x4xf32>
-    // expected-error @+2 {{descriptor padding is divergent: the operations defining this descriptor disagree}}
-    // expected-error @+1 {{failed to legalize operation 'tt.descriptor_load'}}
+    // expected-error @+1 {{descriptor padding is divergent: the operations defining this descriptor disagree}}
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %0 : tensor<4x4xf32, #blocked>
   }
@@ -92,8 +78,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %d0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 1 : i32} : <f32>, <4x4xf32>
     %d1 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 2 : i32} : <f32>, <4x4xf32>
     %desc = arith.select %cond, %d0, %d1 : !tt.tensordesc<4x4xf32>
-    // expected-error @+2 {{descriptor padding is divergent: the operations defining this descriptor disagree}}
-    // expected-error @+1 {{failed to legalize operation 'tt.descriptor_load'}}
+    // expected-error @+1 {{descriptor padding is divergent: the operations defining this descriptor disagree}}
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 2 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %0 : tensor<4x4xf32, #blocked>
   }
@@ -125,8 +110,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %d0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 2 : i32} : <f32>, <4x4xf32>
     %d1 = tt.make_tensor_descriptor %arg1, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 2 : i32} : <f32>, <4x4xf32>
     %desc = arith.select %cond, %d0, %d1 : !tt.tensordesc<4x4xf32>
-    // expected-error @+2 {{'ttig.desc_padding' disagrees with the padding of the operations defining this descriptor}}
-    // expected-error @+1 {{failed to legalize operation 'tt.descriptor_load'}}
+    // expected-error @+1 {{'ttig.desc_padding' disagrees with the padding of the operations defining this descriptor}}
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %0 : tensor<4x4xf32, #blocked>
   }
@@ -152,8 +136,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %d0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 2 : i32} : <f32>, <4x4xf32>
     %d1 = tt.make_tensor_descriptor %arg1, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 2 : i32} : <f32>, <4x4xf32>
     %desc = arith.select %cond, %d0, %d1 : !tt.tensordesc<4x4xf32>
-    // expected-error @+2 {{'ttig.desc_padding' is missing but the operations defining this descriptor agree on a padding mode}}
-    // expected-error @+1 {{failed to legalize operation 'tt.descriptor_load'}}
+    // expected-error @+1 {{'ttig.desc_padding' is missing but the operations defining this descriptor agree on a padding mode}}
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %0 : tensor<4x4xf32, #blocked>
   }

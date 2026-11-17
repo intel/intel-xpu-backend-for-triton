@@ -1,4 +1,4 @@
-// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 TRITON_INTEL_PREDICATED_STORE=1  triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 TRITON_INTEL_PREDICATED_STORE=1  triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 // COM: Baseline 128-bit vectorization — ttig.support_256b_load_store is NOT set on the module. See load_store_256b_to_llvm.mlir for the widened variant.
 

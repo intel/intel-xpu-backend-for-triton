@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --convert-triton-intel-gpu-to-llvm -canonicalize | FileCheck %s
 
 // Regression test: fp4_to_fp fallback path when the input tensor is loaded
 // as packed i32 words (sizePerThread=8 forces a vector<2xi32> descriptor load).

@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --triton-annotate-module='support-f4-conversion' --convert-triton-intel-gpu-to-llvm --canonicalize | FileCheck %s --check-prefixes=CHECK-SPIRV
-// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm  -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --triton-annotate-module='support-f4-conversion' --convert-triton-intel-gpu-to-llvm --canonicalize | FileCheck %s --check-prefixes=CHECK-SPIRV
+// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --convert-triton-intel-gpu-to-llvm  -canonicalize | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [32], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
