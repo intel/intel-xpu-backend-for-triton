@@ -1,6 +1,7 @@
 #include "triton/Tools/LLVMOptions.h"
 
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/LibraryOptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <condition_variable>
@@ -25,6 +26,7 @@ struct Registry {
   // The override set currently applied to LLVM's registries. Empty whenever
   // `users` is zero.
   Settings active;
+  llvm::cl::LibraryOptionsContext libraryOptions;
   // Live scopes sharing `active`.
   unsigned users = 0;
   // Scopes waiting to replace `active`. While any is pending, new scopes do not
@@ -101,13 +103,15 @@ void applySettings(Registry &reg, Settings settings) {
   // handles TableGen library options, including codegen's start/stop passes,
   // and owns any argument strings retained by those options. Keep ignoring
   // unknown options, which may differ between LLVM revisions.
-  llvm::cl::ParseCommandLineOptions(argv.size(), argv.data(), "",
+  reg.libraryOptions = llvm::cl::LibraryOptionsContext();
+  llvm::cl::parseCommandLineOptions(reg.libraryOptions, argv, "",
                                     &llvm::nulls());
   reg.active = std::move(settings);
 }
 
 void restoreSettings(Registry &reg) {
   llvm::cl::ResetAllOptionOccurrences();
+  reg.libraryOptions = llvm::cl::LibraryOptionsContext();
   reg.active.clear();
 }
 
@@ -152,6 +156,11 @@ ScopedLLVMOptions::~ScopedLLVMOptions() {
   reg.changed.notify_all();
 }
 
+const llvm::cl::LibraryOptionsContext &
+ScopedLLVMOptions::getLibraryOptions() {
+  return registry().libraryOptions;
+}
+
 ExclusiveLLVMOptionAccess::ExclusiveLLVMOptionAccess() {
   Registry &reg = registry();
   std::unique_lock<std::mutex> lock(reg.mutex);
@@ -168,6 +177,7 @@ ExclusiveLLVMOptionAccess::~ExclusiveLLVMOptionAccess() {
   if (registryGeneration != reg.generation)
     return;
   llvm::cl::ResetAllOptionOccurrences();
+  reg.libraryOptions = llvm::cl::LibraryOptionsContext();
   reg.exclusiveHeld = false;
   reg.changed.notify_all();
 }

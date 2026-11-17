@@ -64,9 +64,15 @@ class DummyTargetMachine : public llvm::TargetMachine {
 public:
   DummyTargetMachine()
       : llvm::TargetMachine(target(), "", llvm::Triple(), "", "",
-                            llvm::TargetOptions()) {}
+                            targetOptions()) {}
 
 private:
+  static llvm::TargetOptions targetOptions() {
+    llvm::TargetOptions options;
+    options.MCOptions.LibraryOptions = &ScopedLLVMOptions::getLibraryOptions();
+    return options;
+  }
+
   static const llvm::Target &target() {
     static const llvm::Target instance{};
     return instance;

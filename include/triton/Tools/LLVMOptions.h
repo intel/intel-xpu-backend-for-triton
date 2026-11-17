@@ -6,6 +6,10 @@
 #include <utility>
 #include <vector>
 
+namespace llvm::cl {
+class LibraryOptionsContext;
+} // namespace llvm::cl
+
 namespace mlir::triton::tools {
 
 // LLVM command line options (cl::opt and TableGen library options) are
@@ -40,6 +44,8 @@ public:
 
   ScopedLLVMOptions(const ScopedLLVMOptions &) = delete;
   ScopedLLVMOptions &operator=(const ScopedLLVMOptions &) = delete;
+
+  static const llvm::cl::LibraryOptionsContext &getLibraryOptions();
 
 private:
   // A forked child starts with a fresh registry. Objects inherited from the

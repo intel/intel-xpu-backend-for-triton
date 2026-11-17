@@ -194,6 +194,8 @@ createTargetMachine(llvm::Module &module, const CodegenOptions *options,
   targetOptions.MCOptions.AsmVerbose = true;
   targetOptions.MCOptions.PreserveAsmComments = true;
   targetOptions.MCOptions.ABIName = options->abi;
+  targetOptions.MCOptions.LibraryOptions =
+      &ScopedLLVMOptions::getLibraryOptions();
 
   std::unique_ptr<llvm::TargetMachine> machine(target->createTargetMachine(
       module.getTargetTriple(), options->processor, options->features,
