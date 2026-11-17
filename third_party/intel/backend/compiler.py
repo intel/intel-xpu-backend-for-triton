@@ -1,6 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import compile_module_from_src, is_lts
+from triton.backends.intel.driver import compile_module_from_src, has_2d_block_read_64b_16x2_sg32, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.errors import IntelGPUError, WorkGroupSizeOutOfResources
 from triton.backends.intel.extension_utils import query_device_extensions
@@ -575,6 +575,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
         cls.annotate_module(module_opts, properties, opt)
         module_opts.is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
+        module_opts.support_2d_block_read_64b_16x2_sg32 = has_2d_block_read_64b_16x2_sg32(
+            metadata["target"].arch.get("driver_version"))
         module_opts.use_cl_rounded_divide_sqrt = (module_opts.is_lts and intel.has_precise_divide_sqrt(mod))
         module_opts.is_fast_math = knobs.intel.fast_math
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
@@ -913,6 +915,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         else:
                             error = f'`ocloc` failed with error code {e.returncode}'
 
+                        if 'undefined reference to `__internal_intel_' in output:
+                            error += (' (ocloc cannot resolve an Intel builtin emitted by Triton; the installed '
+                                      'GPU compute runtime / ocloc is likely too old - please upgrade '
+                                      'intel-opencl-icd, libze and intel-ocloc to a recent release)')
                         raise IntelGPUError(f'{error}\n'
                                             f'`ocloc` stderr:\n{e.output}\n'
                                             f'Repro command: {ocloc_cmd}\n') from e

@@ -140,6 +140,13 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.is_lts";
     }
 
+    /// Get the name of the attribute used to indicate whether the driver's IGC
+    /// can build the sub-group-size-32 64-bit 16x2 2D block read builtin
+    /// (`intel_sub_group_2d_block_read_64b_16r2x1c`). Older IGC lacks it.
+    static constexpr llvm::StringRef getSupport2DBlockRead64b16x2SG32AttrName() {
+      return "ttig.support_2d_block_read_64b_16x2_sg32";
+    }
+
     /// Get the name of the attribute holding the core clock rate in kHz, used
     /// to convert cycles to nanoseconds.
     static constexpr llvm::StringRef getCoreClockRateAttrName() {

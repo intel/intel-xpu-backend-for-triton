@@ -837,3 +837,30 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
   llvm.return
 }
 }
+
+// -----
+
+// Without "ttig.support_2d_block_read_64b_16x2_sg32" (IGC older than ~2.38 lacks
+// the sg32 variant of 64b_16r2x1c, #8858) the GenISA interface is used.
+module attributes {"ttg.threads-per-warp" = 32 : i32} {
+llvm.func @triton_gen.2Dblockload_64b_16r2x1c_sg32(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // CHECK-LABEL: llvm.func @triton_gen.2Dblockload_64b_16r2x1c_sg32
+  // CHECK-NOT:   __spirv_Subgroup2DBlockLoad
+  // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=64, tile_width=2, tile_height=16, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<1xi64>
+  llvm.return
+}
+}
+
+// -----
+
+// With the attribute the SPIR-V builtin is used.
+module attributes {"ttg.threads-per-warp" = 32 : i32, "ttig.support_2d_block_read_64b_16x2_sg32"} {
+llvm.func @triton_gen.2Dblockload_64b_16r2x1c_sg32_supported(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // CHECK-LABEL: llvm.func @triton_gen.2Dblockload_64b_16r2x1c_sg32_supported
+  // CHECK-NOT:   GenISA
+  // CHECK:       llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTEL
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=64, tile_width=2, tile_height=16, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<1xi64>
+  llvm.return
+}
+}

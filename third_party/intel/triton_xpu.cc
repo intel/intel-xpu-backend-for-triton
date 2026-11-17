@@ -144,6 +144,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
               &gpu::intel::TritonAnnotateModuleOptions::supportF4Conversion)
       .def_rw("support_f8_conversion",
               &gpu::intel::TritonAnnotateModuleOptions::supportF8Conversion)
+      .def_rw("support_2d_block_read_64b_16x2_sg32",
+              &gpu::intel::TritonAnnotateModuleOptions::
+                  support2DBlockRead64b16x2SG32)
       .def_rw("support_256b_prefetch",
               &gpu::intel::TritonAnnotateModuleOptions::supportPrefetch256Bytes)
       .def_rw("support_256b_load_store",

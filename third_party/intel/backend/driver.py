@@ -426,6 +426,22 @@ def is_lts(ver) -> bool:
     return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
 
 
+def has_2d_block_read_64b_16x2_sg32(ver) -> bool:
+    """
+    Whether the driver's IGC can build `intel_sub_group_2d_block_read_64b_16r2x1c` for sub-group size 32.
+
+    Older IGC fails with `undefined reference to __internal_intel_sub_group_2d_block_read_64b_16r2x1c_sg32_*`
+    (#8858). The first compute-runtime release known to build it is 26.27.39122 (IGC 2.38.2); 26.22.38646
+    (IGC 2.36.3) and older do not.
+    """
+    if not ver:
+        return False
+    m = _VERSION_PATTERN.match(ver)
+    if not m:
+        return False
+    return tuple(int(x) if x is not None else 0 for x in m.groups()) >= (26, 27, 39122, 0)
+
+
 @lru_cache
 def get_hasher_common(eventless_submit: bool = True):
     hasher = hashlib.sha256((__CACHE_VERSION + platform_key()).encode("utf-8"))
