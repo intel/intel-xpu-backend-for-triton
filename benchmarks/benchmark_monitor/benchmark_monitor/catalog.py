@@ -264,8 +264,9 @@ def _parse_scopes(raw: Mapping[str, Any]) -> dict[str, Scope]:
         got = spec["source"]
         if not isinstance(got, str) or got not in _SOURCE_KINDS:
             raise CatalogError(f"scope {name!r}: source must be one of {sorted(_SOURCE_KINDS)}, got {got!r}")
-        if not isinstance(spec["platform"], str):
-            raise CatalogError(f"scope {name!r}: platform must be a string, got {spec.get('platform')!r}")
+        plat = spec["platform"]
+        if not isinstance(plat, str):
+            raise CatalogError(f"scope {name!r}: platform must be a string, got {plat!r}")
         nightly = spec.get("expected_nightly", False)
         if not isinstance(nightly, bool):
             raise CatalogError(f"scope {name!r}: expected_nightly must be a boolean, got {nightly!r}")
