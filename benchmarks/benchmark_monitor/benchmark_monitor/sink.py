@@ -120,8 +120,8 @@ def _confirmed_families(sup: SuppressionResult) -> list[str]:
         total = int(d["n_cases"])  # type: ignore[call-overload]
         family, source, night, first = d["family"], d["source"], d["night"], d["first_night"]
         more = f", ... and {total - len(tops)} more" if total > len(tops) else ""
-        rows.append(f"{family} ({source}): storm night {night}, first {first}, {total} cases; top: "
-                    + ", ".join(tops) + more)
+        rows.append(f"{family} ({source}): storm night {night}, first {first}, {total} cases; top: " + ", ".join(tops) +
+                    more)
     return rows
 
 
