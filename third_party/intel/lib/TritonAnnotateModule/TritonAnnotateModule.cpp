@@ -108,11 +108,6 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getUseClRoundedDivideSqrtAttrName(),
           builder.getUnitAttr());
 
-    if (support2DBlockRead64b16x2SG32)
-      mod->setAttr(ttgi::TritonIntelGPUDialect::
-                       getSupport2DBlockRead64b16x2SG32AttrName(),
-                   builder.getUnitAttr());
-
     if (isLTS)
       mod->setAttr(ttgi::TritonIntelGPUDialect::getIsLTSAttrName(),
                    builder.getUnitAttr());

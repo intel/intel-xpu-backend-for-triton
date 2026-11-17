@@ -144,9 +144,6 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
               &gpu::intel::TritonAnnotateModuleOptions::supportF4Conversion)
       .def_rw("support_f8_conversion",
               &gpu::intel::TritonAnnotateModuleOptions::supportF8Conversion)
-      .def_rw("support_2d_block_read_64b_16x2_sg32",
-              &gpu::intel::TritonAnnotateModuleOptions::
-                  support2DBlockRead64b16x2SG32)
       .def_rw("support_256b_prefetch",
               &gpu::intel::TritonAnnotateModuleOptions::supportPrefetch256Bytes)
       .def_rw("support_256b_load_store",
@@ -420,6 +417,19 @@ void init_triton_intel(py::module_ &m) {
     });
     return result.wasInterrupted();
   });
+
+  // Sets or clears the module attribute from the current target, so it is
+  // never stale in hand-written TTGIR or Gluon modules that carry one.
+  m.def("set_support_2d_block_read_64b_16x2_sg32",
+        [](mlir::ModuleOp &mod, bool supported) {
+          using namespace mlir::triton::gpu::intel;
+          constexpr llvm::StringRef name =
+              TritonIntelGPUDialect::getSupport2DBlockRead64b16x2SG32AttrName();
+          if (!supported)
+            mod->removeAttr(name);
+          else if (!mod->hasAttr(name))
+            mod->setAttr(name, mlir::Builder(mod.getContext()).getUnitAttr());
+        });
 
   m.def("set_is_lts", [](mlir::ModuleOp &mod) {
     using namespace mlir::triton::gpu::intel;

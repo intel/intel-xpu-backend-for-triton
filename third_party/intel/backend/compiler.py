@@ -320,6 +320,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_16bit_atomics'] = tgt_prop.get('has_16bit_atomics', False)
         dev_prop['has_2d_block_io'] = tgt_prop.get('has_2d_block_io', False)
         is_lts = self.is_lts(tgt_prop.get('driver_version'))
+        # Derived from the driver version and changes the emitted SPIR-V, so it must be part of the backend hash.
+        dev_prop['has_2d_block_read_64b_16x2_sg32'] = has_2d_block_read_64b_16x2_sg32(tgt_prop.get('driver_version'))
         dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', not is_lts)
         dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', False)
         dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io', not is_lts)
@@ -575,8 +577,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
         cls.annotate_module(module_opts, properties, opt)
         module_opts.is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
-        module_opts.support_2d_block_read_64b_16x2_sg32 = has_2d_block_read_64b_16x2_sg32(
-            metadata["target"].arch.get("driver_version"))
         module_opts.use_cl_rounded_divide_sqrt = (module_opts.is_lts and intel.has_precise_divide_sqrt(mod))
         module_opts.is_fast_math = knobs.intel.fast_math
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
@@ -698,6 +698,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         driver_version = metadata["target"].arch.get("driver_version")
         if cls.is_lts(driver_version):
             intel.set_is_lts(mod)
+        # The sg32 64b 16x2 2D block read is only available on newer drivers (#8858). Refresh it here, since Gluon
+        # and `.ttgir` inputs bypass `make_ttgir`.
+        intel.set_support_2d_block_read_64b_16x2_sg32(mod, has_2d_block_read_64b_16x2_sg32(driver_version))
 
         # `getGlobalTimer` counts core clock cycles and needs the rate to report
         # nanoseconds.

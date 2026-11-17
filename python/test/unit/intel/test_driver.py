@@ -15,7 +15,7 @@ from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
 from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
-from triton.backends.intel.driver import find_sycl_icpx
+from triton.backends.intel.driver import find_sycl_icpx, has_2d_block_read_64b_16x2_sg32
 from triton.backends.intel.errors import IntelGPUError
 from triton.runtime.errors import OutOfResources
 
@@ -263,6 +263,21 @@ def test_find_sycl_uses_oneapi_root(monkeypatch, no_icpx, recwarn, tmp_path: pat
     assert str(compiler_root / "include") in include_dir
     assert str(compiler_root / "include" / "sycl") in include_dir
     assert not [str(w.message) for w in recwarn], f"unexpected warnings: {[str(w.message) for w in recwarn]}"
+
+
+@pytest.mark.parametrize("version, expected", [
+    ("1.15.38308+1", False),  # compute-runtime 26.18.38308.1 (IGC 2.34.4), the failing driver of #8858
+    ("1.17.38646+4", False),  # 26.22.38646.4 (IGC 2.36.3)
+    ("1.17.39121+99", False),
+    ("1.17.39122+11", True),  # 26.27.39122.11 (IGC 2.38.2), first known-good release
+    ("1.17.39395+13", True),  # 26.31.39395.13
+    ("1.6.35096+9", False),  # LTS
+    ("garbage", False),
+    ("", False),
+    (None, False),
+])
+def test_has_2d_block_read_64b_16x2_sg32(version, expected):
+    assert has_2d_block_read_64b_16x2_sg32(version) is expected
 
 
 def test_get_properties_error(device):

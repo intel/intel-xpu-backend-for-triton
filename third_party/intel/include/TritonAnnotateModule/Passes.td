@@ -56,8 +56,6 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "target architecture name">,
     Option<"isLTS", "is-lts", "bool", /*default*/"false",
            "whether driver is LTS">,
-    Option<"support2DBlockRead64b16x2SG32", "support-2d-block-read-64b-16x2-sg32", "bool", /*default*/"false",
-           "whether the 64-bit 16x2 sub-group-size-32 2D block read builtin can be built">,
     Option<"supportPrefetch256Bytes", "support-prefetch-256b", "bool", /*default*/"false",
            "whether prefetch 256 bytes is supported">,
     Option<"support256bLoadStore", "support-256b-load-store", "bool", /*default*/"false",
