@@ -129,6 +129,48 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
 
 // -----
 
+// Test 5a: a shape[1] hint of 12 proves 4 bf16 (its power-of-two divisor), not 8.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice_x = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_predicated_io} {
+  tt.func public @shape_hint_caps_vec(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: tensor<64xi32, #slice_x>, %arg2: i32 {tt.divisibility = 12 : i32}) -> tensor<64x128xbf16, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c4096_i32 = arith.constant 4096 : i32
+    %c128_i64 = arith.constant 128 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c4096_i32, %arg2], [%c128_i64, %c1_i64] : <bf16>, <1x128xbf16>
+    %result = ttig.descriptor_gather %desc[%arg1, %c0_i32] : (!tt.tensordesc<1x128xbf16>, tensor<64xi32, #slice_x>, i32) -> tensor<64x128xbf16, #blocked>
+    tt.return %result : tensor<64x128xbf16, #blocked>
+  }
+}
+
+// CHECK-LABEL: llvm.func spir_kernelcc @shape_hint_caps_vec
+// CHECK-COUNT-16: triton_gen.predicated_load {{.*}} -> vector<2xi32>
+// CHECK-NOT: triton_gen.predicated_load
+
+// -----
+
+// Test 5b: base and row-pitch hints of 24 bytes prove 4 bf16, not 8.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice_x = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_predicated_io} {
+  tt.func public @pitch_hint_caps_vec(%arg0: !tt.ptr<bf16> {tt.divisibility = 24 : i32}, %arg1: tensor<64xi32, #slice_x>, %arg2: i64 {tt.divisibility = 12 : i32}) -> tensor<64x128xbf16, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c4096_i32 = arith.constant 4096 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c4096_i32, %c128_i32], [%arg2, %c1_i64] : <bf16>, <1x128xbf16>
+    %result = ttig.descriptor_gather %desc[%arg1, %c0_i32] : (!tt.tensordesc<1x128xbf16>, tensor<64xi32, #slice_x>, i32) -> tensor<64x128xbf16, #blocked>
+    tt.return %result : tensor<64x128xbf16, #blocked>
+  }
+}
+
+// CHECK-LABEL: llvm.func spir_kernelcc @pitch_hint_caps_vec
+// CHECK-COUNT-16: triton_gen.predicated_load {{.*}} -> vector<2xi32>
+// CHECK-NOT: triton_gen.predicated_load
+
+// -----
+
 // Test 6: broadcast registers. A zero register basis gives 16 logical registers
 // with 8 unique values: each canonical register is loaded once, and the result
 // struct holds the unique values only.

@@ -590,18 +590,18 @@ unsigned ModuleAxisInfoAnalysis::getDescriptorAlignment(Value desc,
   AxisInfo *descInfo = getAxisInfo(desc);
   if (!descInfo || dim >= static_cast<unsigned>(descInfo->getRank()))
     return 1;
-  auto pow2Floor = [](int64_t v) -> int64_t {
-    return v <= 1 ? 1 : int64_t(1) << llvm::Log2_64(v);
-  };
+  // A non-power-of-two hint such as 24 proves only its largest power-of-two
+  // divisor (8), not its floor (16), as for the index (#7990).
+  auto pow2Divisor = [](int64_t v) -> int64_t { return v <= 0 ? 1 : v & -v; };
   // Divisibility is in bytes; other dims are already folded into it.
   int64_t elemBytes = std::max(1u, elemBits / 8);
-  int64_t ptrAlign = descInfo->getDivisibility(dim) / elemBytes;
-  // The index shifts the base by index * elemBytes, so only its power-of-two
-  // divisor keeps the access aligned (#7990); a constant 0 reports kMaxDivisor.
+  int64_t ptrAlign = std::max<int64_t>(
+      1, pow2Divisor(descInfo->getDivisibility(dim)) / elemBytes);
+  // A constant 0 index reports kMaxDivisor.
   AxisInfo *idxInfo = getAxisInfo(index);
   int64_t idxDiv = idxInfo ? idxInfo->getDivisibility(0) : 1;
-  return std::min({pow2Floor(descInfo->getContiguity(dim)), pow2Floor(ptrAlign),
-                   idxDiv & -idxDiv});
+  return std::min({pow2Divisor(descInfo->getContiguity(dim)), ptrAlign,
+                   pow2Divisor(idxDiv)});
 }
 
 } // namespace mlir::triton::intel
