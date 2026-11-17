@@ -99,9 +99,9 @@ def _confirmed(sup: SuppressionResult) -> tuple[list[str], int]:
 
 
 def _families(sup: SuppressionResult) -> list[dict[str, object]]:
-    """Confirmed storm families (``confirmed_families``, absent before S4a) with a case count and top cases."""
+    """Confirmed storm families with a case count and top cases."""
     out = []
-    for cf in getattr(sup, "confirmed_families", ()):
+    for cf in sup.confirmed_families:
         groups: dict[tuple[str, ...], SeriesKey] = {}
         for key in cf.keys:
             groups.setdefault(_case(key), key)

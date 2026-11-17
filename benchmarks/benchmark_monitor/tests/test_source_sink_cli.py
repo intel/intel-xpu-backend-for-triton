@@ -337,27 +337,14 @@ def test_sink_prints_actual_direction_of_change():
 
 
 def _families_report():
-    from dataclasses import dataclass  # pylint: disable=import-outside-toplevel
-    from benchmark_monitor.suppress import SuppressionResult  # pylint: disable=import-outside-toplevel
-
-    @dataclass(frozen=True)
-    class Fam:  # stand-in for suppress.ConfirmedFamily
-        source: str
-        family: str
-        night: date
-        first_night: date
-        keys: tuple
-
-    @dataclass(frozen=True)
-    class Sup(SuppressionResult):  # stand-in with the S4a field
-        confirmed_families: tuple = ()
+    from benchmark_monitor.suppress import ConfirmedFamily, SuppressionResult  # pylint: disable=import-outside-toplevel
 
     keys = tuple(
         SeriesKey("micro", "b580", "client", f"flash-attn-{i}", "triton", m, "{}")
         for i in range(5)
         for m in ("tflops", "gbps"))
-    fam = Fam("micro", "flash-attn", D2, D1, keys)
-    return Report(date(2026, 11, 20), (), Sup(confirmed_families=(fam, )))
+    fam = ConfirmedFamily("micro", "flash-attn", D2, D1, keys)
+    return Report(date(2026, 11, 20), (), SuppressionResult(confirmed_families=(fam, )))
 
 
 def test_confirmed_families_in_markdown_and_json(tmp_path):
@@ -378,3 +365,34 @@ def test_no_families_section_without_the_field():
     out = io.StringIO()
     MarkdownSink(out).emit(_metric_report())  # a result without confirmed_families
     assert "Confirmed families" not in out.getvalue()
+
+
+def test_storm_scenario_renders_one_confirmed_family(tmp_path):
+    """A 12-case family storm on night S, still regressing on S+1, through the real suppress.apply."""
+    from benchmark_monitor.suppress import SuppressConfig, apply  # pylint: disable=import-outside-toplevel
+    th = Thresholds(5.0, 3.0, 5, 20, 15.0, 0.05, True)
+    storm, tonight = date(2026, 11, 9), date(2026, 11, 10)
+
+    def verdicts(day, status):
+        out = [
+            Verdict(SeriesKey("micro", "b580", "client", "gemm", "triton", "tflops", f'{{"case":"g{j:02d}"}}'), day,
+                    status, 10.0, -4.0, 10.0, 0.1, 20, th) for j in range(12)
+        ]
+        return out + [
+            Verdict(SeriesKey("micro", "b580", "client", "filler", "triton", "tflops", f'{{"case":"ok{j}"}}'), day,
+                    Status.OK, 0.0, 0.0, 10.0, 0.1, 20, th) for j in range(100)
+        ]
+
+    hist = {storm: verdicts(storm, Status.REGRESSION), tonight: verdicts(tonight, Status.REGRESSION)}
+    sup = apply(hist, SuppressConfig(), tonight)
+    assert len(sup.confirmed_families) == 1 and not sup.confirmed
+    report = Report(tonight, tuple(hist[tonight]), sup)
+    out = io.StringIO()
+    MarkdownSink(out).emit(report)
+    text = out.getvalue()
+    assert "## Confirmed families (1)" in text
+    assert "gemm (micro): storm night 2026-11-10, first 2026-11-09, 12 cases" in text
+    path = tmp_path / "s.json"
+    JsonSink(path).emit(report)
+    fams = json.loads(path.read_text())["suppression"]["confirmed_families"]
+    assert len(fams) == 1 and (fams[0]["family"], fams[0]["n_cases"]) == ("gemm", 12)
