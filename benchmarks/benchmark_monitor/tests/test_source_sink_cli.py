@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from benchmark_monitor import SeriesKey, Status, Thresholds, Verdict, load_catalog
-from benchmark_monitor.__main__ import main
+from benchmark_monitor.__main__ import history_start, main
 from benchmark_monitor.report import Report
 from benchmark_monitor.sink import JsonSink, MarkdownSink
 from benchmark_monitor.source import ArtifactSource, CsvReportSource
@@ -208,13 +208,12 @@ def test_markdown_table_identifies_series_and_escapes_cells():
     header, _, row = [ln for ln in text.splitlines() if ln.startswith("|")]
     assert "compiler" in header and "source" in header and "tag" in header
     assert "triton-td" in row and "third_party" in row
-    cells = [c for c in row.replace("\\|", "\0").split("|")[1:-1]]
+    cells = row.replace("\\|", "\0").split("|")[1:-1]
     assert len(cells) == header.count("|") - 1  # escaped pipe did not add a column
     assert "`" not in row and "\n" not in row and "a\\|b" in row
 
 
 def test_history_start_default_is_three_windows_and_configurable():
-    from benchmark_monitor.__main__ import history_start
     assert history_start(date(2026, 11, 30), None, 20) == date(2026, 10, 1)
     assert history_start(date(2026, 11, 30), 5, 20) == date(2026, 11, 25)
     assert history_start(date(2026, 11, 30), 0, 20) == date.min
@@ -226,12 +225,16 @@ def test_cli_gappy_series_keeps_enough_points_for_the_window(tmp_path):
     offsets = list(range(0, 33, 3)) + [33]  # 11 flat runs, then a 20% drop
     for off in offsets:
         night = base + timedelta(days=off)
-        write(tmp_path / "art" / f"n{off}-report.csv",
-              [wide(run_uuid=f"r{off}", datetime=f"{night}T03:00:00", tflops="8.0" if off == 33 else "10.0",
-                    hbm_gbs="")])
+        write(
+            tmp_path / "art" / f"n{off}-report.csv",
+            [wide(run_uuid=f"r{off}", datetime=f"{night}T03:00:00", tflops="8.0" if off == 33 else "10.0", hbm_gbs="")])
     out = tmp_path / "out.json"
-    argv = ["--artifacts", str(tmp_path / "art"), "--scope", "nightly-b580-micro", "--as-of", str(base + timedelta(days=33)),
-            "--format", "json", "--out", str(out)]
+    argv = [
+        "--artifacts",
+        str(tmp_path / "art"), "--scope", "nightly-b580-micro", "--as-of",
+        str(base + timedelta(days=33)), "--format", "json", "--out",
+        str(out)
+    ]
     assert main(argv) == 0
     data = json.loads(out.read_text())
     assert data["counts"] == {"regression": 1} and data["verdicts"][0]["n_history"] == 11

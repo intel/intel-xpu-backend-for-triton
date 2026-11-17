@@ -22,9 +22,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--artifacts", required=True, help="directory with *-report.csv files (searched recursively)")
     ap.add_argument("--scope", required=True)
     ap.add_argument("--as-of", type=date.fromisoformat, default=None, help="YYYY-MM-DD (default: today, UTC)")
-    ap.add_argument("--history-days", type=int, default=None,
-                    help="calendar days of history to read before --as-of (default: 3 x the largest catalog window; "
-                    "0 = all history). The gate then takes the last `window` points per series")
+    ap.add_argument(
+        "--history-days", type=int, default=None,
+        help="calendar days of history to read before --as-of (default: 3 x the largest catalog window; "
+        "0 = all history). The gate then takes the last `window` points per series")
     ap.add_argument("--format", choices=("md", "json"), default="md")
     ap.add_argument("--out", default=None, help="output path (default: stdout)")
     args = ap.parse_args(argv)

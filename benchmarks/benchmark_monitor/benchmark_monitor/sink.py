@@ -54,9 +54,10 @@ class MarkdownSink:
             ]
             for v in sorted(regs, key=lambda v: -(v.drop_pct or 0.0)):
                 k = v.key
-                cells = tuple(_cell(c) for c in (k.source, k.platform, k.tag, k.benchmark, k.compiler, k.metric,
-                                                 k.params)) + (_fmt(v.drop_pct, ".1f"), _fmt(v.z, ".2f"),
-                                                               _fmt(v.baseline_median, ".4g"), str(v.n_history))
+                cells = tuple(
+                    _cell(c)
+                    for c in (k.source, k.platform, k.tag, k.benchmark, k.compiler, k.metric, k.params)) + (_fmt(
+                        v.drop_pct, ".1f"), _fmt(v.z, ".2f"), _fmt(v.baseline_median, ".4g"), str(v.n_history))
                 lines.append("| " + " | ".join(cells) + " |")
         else:
             lines.append("None.")
