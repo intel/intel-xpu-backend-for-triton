@@ -1,8 +1,10 @@
 """Tests for suppress.apply (synthetic data only)."""
 from datetime import date, timedelta
 
+import pytest
+
 from benchmark_monitor import SeriesKey, Status, Thresholds, Verdict
-from benchmark_monitor.suppress import SuppressConfig, SuppressionResult, apply, is_flip_flop
+from benchmark_monitor.suppress import ConfirmedFamily, SuppressConfig, SuppressionResult, apply, is_flip_flop
 
 D0 = date(2026, 11, 1)
 TH = Thresholds(5.0, 3.0, 5, 20, 15.0, 0.05, True)
@@ -61,7 +63,6 @@ def test_second_night_confirms_exactly_once():
 def test_sustained_excludes_confirmed_items():
     res = run([verdict(9), verdict(10)], 10)
     assert len(res.confirmed) == 1 and not res.sustained
-    assert set(v.key for v in res.sustained).isdisjoint(c.key for c in res.confirmed)
 
 
 def test_confirm_nights_one_links_on_the_first_night():
@@ -141,6 +142,7 @@ def test_flip_flop_cases_are_muted():
     flags = [verdict(i, "flaky") for i in (2, 5, 8, 11)] + [verdict(i, "steady") for i in (8, 9, 10, 11)]
     res = run(flags, 11)
     assert [m.key.params for m in res.muted] == ['{"case":"flaky"}'] and not res.new
+    assert all(v.key not in {m.key for m in res.muted} for v in res.sustained)  # muted is not also sustained
     assert res.item_count == 0
 
 
@@ -175,6 +177,7 @@ def test_a_muted_sustained_case_is_listed_as_muted():
     assert not run([verdict(i) for i in (1, 3, 5, 7, 8, 9)], 9).muted  # streak 3 > longest earlier: lifted
     res = run([verdict(i) for i in (0, 1, 2, 4, 6, 8, 9)], 9, SuppressConfig(flip_short_share=0.3))
     assert [v.night for v in res.muted] == [n(9)] and not res.new  # streak 2 <= longest earlier 3
+    assert res.sustained == ()  # a muted case is not also sustained
 
 
 def test_confirmation_survives_a_partial_run_on_the_confirming_night():
@@ -193,6 +196,85 @@ def test_confirmation_is_not_repeated_when_the_confirming_night_alerted():
 def test_storm_started_episodes_stay_unconfirmed_on_later_nights():
     flags = [verdict(i, f"s{j}") for i in (9, 10, 11) for j in range(10)]
     assert all(r.confirmed == () for r in run_nights(flags, range(10, 12)).values())
+
+
+def gemm_flags(nights, cases=12):
+    return [verdict(i, f"g{j:02d}", "gemm") for i in nights for j in range(cases)]
+
+
+def test_storm_on_the_first_history_night_still_counts():
+    flags = gemm_flags((0, 1, 2), cases=10)
+    res = run_nights(flags, (0, 1, 2))
+    assert [r.storms[0].count if r.storms else 0 for r in res.values()] == [10, 0, 0]
+    assert all(r.confirmed == () for r in res.values())  # not confirmed one by one
+    assert n(0) in res[1].storm_nights and n(0) in res[2].storm_nights
+    assert [len(r.confirmed_families) for r in res.values()] == [0, 1, 0]
+
+
+def test_consecutive_nights_do_not_repeat_a_confirmation_as_old_episodes_leave_the_window():
+    """Episodes on days 0-1, 3-4 and 6 leave the 28-day window while the day 26 episode runs."""
+    flags = [verdict(i) for i in (0, 1, 3, 4, 6, 26, 27, 28)]
+    res = run_nights(flags, range(26, 29))
+    assert [len(r.confirmed) for r in res.values()] == [0, 1, 0]
+    assert res[27].confirmed[0].first_night == n(26)
+
+
+def test_broad_regression_is_a_digest_then_one_family_confirmation():
+    res = run_nights(gemm_flags((9, 10, 11, 12)), range(9, 13))
+    assert [(len(r.storms), len(r.confirmed_families)) for r in res.values()] == [(1, 0), (0, 1), (0, 0), (0, 0)]
+    assert all(r.confirmed == () for r in res.values())
+    cf = res[10].confirmed_families[0]
+    assert (cf.source, cf.family, cf.night, cf.first_night) == ("micro", "gemm", n(10), n(9))
+    assert cf.keys == tuple(sorted(cf.keys, key=lambda k: k.params)) and len(cf.keys) == 12
+    assert isinstance(cf, ConfirmedFamily) and res[10].item_count == 1
+
+
+def test_family_confirmation_lists_only_cases_still_regressing():
+    flags = gemm_flags((9,)) + gemm_flags((10,), cases=3)
+    cf = run(flags, 10).confirmed_families[0]
+    assert [k.params for k in cf.keys] == [f'{{"case":"g{j:02d}"}}' for j in range(3)]
+
+
+def test_storm_that_recovers_by_the_next_night_confirms_no_family():
+    res = run_nights(gemm_flags((9,)), (9, 10, 11))
+    assert all(r.confirmed_families == () and r.confirmed == () for r in res.values())
+
+
+def test_family_confirmation_survives_a_missed_night():
+    flags = gemm_flags((9, 11))
+    res = run(flags, 11, skip=(10, ))
+    assert [len(res.confirmed_families), res.confirmed_families[0].first_night] == [1, n(9)]
+    assert run(gemm_flags((9, 11, 12)), 12, skip=(10, )).confirmed_families == ()  # only once
+
+
+def test_family_confirmation_survives_a_partial_run_on_the_confirming_night():
+    res = run_nights(gemm_flags((9, 10, 11, 12)), range(10, 13), override={10: 10})
+    assert res[10].confirmed_families == () and "micro" in res[10].suspect
+    assert len(res[11].confirmed_families) == 1 and res[12].confirmed_families == ()
+
+
+def test_family_confirmation_respects_confirm_nights():
+    cfg = SuppressConfig(confirm_nights=3)
+    res = run_nights(gemm_flags((9, 10, 11, 12)), range(10, 13), cfg)
+    assert [len(r.confirmed_families) for r in res.values()] == [0, 1, 0]
+
+
+def test_confirm_nights_of_three_confirms_a_case_on_the_third_night():
+    res = run_nights([verdict(i) for i in (8, 9, 10, 11)], range(9, 12), SuppressConfig(confirm_nights=3))
+    assert [len(r.confirmed) for r in res.values()] == [0, 1, 0]
+
+
+def test_coverage_history_limits_the_baseline_and_zero_turns_the_check_off():
+    ov = {i: 100 for i in range(10)} | {3: 20, 4: 20, 5: 20, 6: 20, 7: 20, 8: 20, 9: 20, 10: 40}
+    assert run([], 10, override=ov).suspect == {}  # median of the last 10 nights is 20
+    assert "micro" in run([], 10, SuppressConfig(coverage_history=3), override={**ov, 7: 100, 8: 100, 9: 100}).suspect
+    assert run([], 10, SuppressConfig(coverage_history=0), override={**ov, 10: 1}).suspect == {}
+
+
+def test_invalid_knobs_are_rejected():
+    for bad in ({"storm_threshold": -1}, {"coverage_history": -1}, {"min_coverage": 1.5}, {"flip_short_share": -0.1}):
+        with pytest.raises(ValueError):
+            SuppressConfig(**bad)
 
 
 def test_empty_history_and_pure_flip_flop_rule():
