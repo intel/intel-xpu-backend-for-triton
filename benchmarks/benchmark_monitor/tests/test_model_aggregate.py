@@ -1,4 +1,5 @@
 """Tests for model and aggregate (synthetic data only)."""
+import time
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -66,3 +67,37 @@ def test_rejects_empty_mixed_keys_and_bad_unit():
         aggregate([obs("a", t, 1.0), obs("b", t, 1.0, other)])
     with pytest.raises(ValueError):
         aggregate([obs("a", t, 1.0)], unit="week")  # type: ignore[arg-type]
+
+
+def test_naive_datetime_is_utc_not_host_local(monkeypatch):
+    # 01:00 naive is 2026-11-02 in UTC but 2026-11-01 (19:30 UTC) if read as Asia/Kolkata local time.
+    monkeypatch.setenv("TZ", "Asia/Kolkata")
+    time.tzset()
+    try:
+        s = aggregate([obs("a", datetime(2026, 11, 2, 1), 1.0)])
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+    assert s.points[0].night == date(2026, 11, 2)
+
+
+def test_run_unit_orders_out_of_order_input_by_time():
+    t = datetime(2026, 11, 2, 1)
+    s = aggregate([obs("late", t + timedelta(days=1), 3.0), obs("early", t, 1.0), obs("mid", t + timedelta(hours=5), 2.0)],
+                  unit="run")
+    assert [p.run_ids for p in s.points] == [("early", ), ("mid", ), ("late", )]
+
+
+def test_observation_attrs_are_read_only_and_drop_empty_strings():
+    source = {"triton_commit": "abc", "driver": ""}
+    o = Observation(KEY, "r", datetime(2026, 11, 2), 1.0, source)
+    assert dict(o.attrs) == {"triton_commit": "abc"}
+    with pytest.raises(TypeError):
+        o.attrs["x"] = "y"  # type: ignore[index]
+    source["later"] = "z"
+    assert "later" not in o.attrs
+
+
+def test_observation_is_hashable():
+    o = Observation(KEY, "r", datetime(2026, 11, 2), 1.0, {"a": "b"})
+    assert hash(o) == hash(Observation(KEY, "r", datetime(2026, 11, 2), 1.0, {"a": "c"}))

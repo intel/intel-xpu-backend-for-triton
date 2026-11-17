@@ -12,7 +12,7 @@ point per UTC night, or one per run (`benchmark_monitor.aggregate`). Stdlib only
 pip install -e benchmarks/benchmark_monitor
 ```
 
-Python 3.10 or newer.
+Python 3.11 or newer.
 
 ## Tests
 
