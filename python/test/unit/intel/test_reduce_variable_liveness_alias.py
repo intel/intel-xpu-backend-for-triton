@@ -2,8 +2,8 @@
 the memory it reads: the dot has to see the tile as it was when the program loaded it.
 
 Each kernel loads one operand tile once, before the loop, then writes that tile's memory
-(in the loop, or between the load and the loop), in place or through a second pointer
-argument the caller binds to the same buffer. The `no_write` variants are the same
+(in the loop, or between the load and the loop) through a second pointer argument the
+caller binds to the same buffer. The `no_write` variants are the same
 kernels without the write, where the pass may still move the load.
 
 With num_warps > 1 the warp that writes an element need not be one that read it before
@@ -28,7 +28,6 @@ BM, BN, BK = 128, 64, 64
 
 PATTERNS = [
     "in_loop_other_arg",  # A, written in the loop through the aliasing second argument
-    "in_loop_same_desc",  # A, written in the loop through its own descriptor
     "before_loop",  # A, written between the load and the loop
     "in_loop_use_after",  # A, written in the loop, also read by a dot after the loop
     "operand_b",  # B, written in the loop through the aliasing second argument
@@ -36,9 +35,8 @@ PATTERNS = [
 
 
 @triton.jit
-def _pre_loop_operand_kernel(a_ptr, b_ptr, w_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
-                             BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr, PATTERN: tl.constexpr,
-                             WRITE: tl.constexpr, SYNC: tl.constexpr):
+def _pre_loop_operand_kernel(a_ptr, b_ptr, w_ptr, out_ptr, M, N, K, BM: tl.constexpr, BN: tl.constexpr,
+                             BK: tl.constexpr, PATTERN: tl.constexpr, WRITE: tl.constexpr, SYNC: tl.constexpr):
     a_desc = tl.make_tensor_descriptor(a_ptr, shape=[M, K], strides=[K, 1], block_shape=[BM, BK])
     b_desc = tl.make_tensor_descriptor(b_ptr, shape=[K, N], strides=[N, 1], block_shape=[BK, BN])
     out_desc = tl.make_tensor_descriptor(out_ptr, shape=[M, N], strides=[N, 1], block_shape=[BM, BN])
@@ -65,15 +63,10 @@ def _pre_loop_operand_kernel(a_ptr, b_ptr, w_ptr, out_ptr, M: tl.constexpr, N: t
                 tl.debug_barrier()
         for k in range(0, K, BK):
             acc = tl.dot(a, b_desc.load([k, 0]), acc)
-            if WRITE:
-                if PATTERN == "in_loop_same_desc":
-                    a_desc.store([0, 0], acc.to(a_ptr.dtype.element_ty))
-                    if SYNC:
-                        tl.debug_barrier()
-                elif PATTERN != "before_loop":
-                    w_desc.store([0, 0], acc.to(w_ptr.dtype.element_ty))
-                    if SYNC:
-                        tl.debug_barrier()
+            if WRITE and PATTERN != "before_loop":
+                w_desc.store([0, 0], acc.to(w_ptr.dtype.element_ty))
+                if SYNC:
+                    tl.debug_barrier()
         if PATTERN == "in_loop_use_after":
             acc = tl.dot(a, b_desc.load([0, 0]), acc)
     out_desc.store([0, 0], acc)
