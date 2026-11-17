@@ -4,14 +4,24 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "version"
+    "version",
+    "defaults"
   ],
   "properties": {
     "version": {
       "const": 1
     },
     "defaults": {
-      "$ref": "#/$defs/thresholds"
+      "$ref": "#/$defs/thresholds",
+      "required": [
+        "min_drop_pct",
+        "z",
+        "min_history",
+        "window",
+        "max_cv_pct",
+        "lock_mad_frac"
+      ],
+      "unevaluatedProperties": false
     },
     "metrics": {
       "type": "object",
@@ -46,7 +56,8 @@
           "match": {
             "type": "string"
           }
-        }
+        },
+        "unevaluatedProperties": false
       }
     },
     "families": {
@@ -68,14 +79,17 @@
             },
             "minItems": 1
           }
-        }
+        },
+        "unevaluatedProperties": false
       }
     },
     "benchmarks": {
       "type": "object",
       "additionalProperties": {
-        "$ref": "#/$defs/thresholds"
-      }
+        "$ref": "#/$defs/thresholds",
+        "unevaluatedProperties": false
+      },
+      "description": "Exact benchmark names, not globs; use families for patterns."
     },
     "scopes": {
       "type": "object",
@@ -140,11 +154,13 @@
         },
         "min_history": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Integer; write 8, not 8.0 (the loader rejects a decimal point)."
         },
         "window": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Integer; write 20, not 20.0 (the loader rejects a decimal point). Must be >= min_history."
         },
         "max_cv_pct": {
           "type": "number",

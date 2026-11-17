@@ -94,6 +94,13 @@ class Catalog:  # pylint: disable=too-many-instance-attributes
             return "undeclared"
         return "ungated" if metric in self.ungated_metrics else "gated"
 
+    def is_gated(self, metric: str) -> bool:
+        """True if *metric* is gated; False for ``gate: false``. An undeclared metric raises."""
+        state = self.metric_state(metric)
+        if state == "undeclared":
+            raise CatalogError(f"metric {metric!r} is not declared in the catalog")
+        return state == "gated"
+
     def max_window(self) -> int:
         """Largest ``window`` configured anywhere: how many nights of history a gate may need."""
         specs = [self.defaults, *self.families.values(), *self.benchmarks.values(), *self.platforms.values()]
@@ -124,6 +131,11 @@ class Catalog:  # pylint: disable=too-many-instance-attributes
         for scope in self.scopes.values():
             if scope.platform not in self.platforms:
                 raise CatalogError(f"scope {scope.name!r}: unknown platform {scope.platform!r}")
+        self._check_history_fits_window()
+        for name in self.benchmarks:
+            if any(ch in name for ch in "*?["):
+                warnings.warn(f"benchmark {name!r}: keys under 'benchmarks' are exact names, not globs; "
+                              "use a family for patterns", stacklevel=2)
         patterns = [(n, p) for n, spec in self.families.items() for p in spec["match"]]
         for i, (fam, pat) in enumerate(patterns):
             for other, opat in patterns[i + 1:]:
@@ -134,14 +146,42 @@ class Catalog:  # pylint: disable=too-many-instance-attributes
         if not (strict and known_benchmarks is not None):
             return
         known = list(known_benchmarks)
-        selectors = [(f"scope {s.name!r}", p) for s in self.scopes.values() for p in s.benchmarks]
-        selectors += [(f"benchmark {n!r}", n) for n in self.benchmarks]
-        for where, pat in selectors:
-            if not any(fnmatch.fnmatchcase(b, pat) for b in known):
-                raise CatalogError(f"{where}: selector {pat!r} matches no known benchmark")
+        for scope in self.scopes.values():
+            for pat in scope.benchmarks:
+                if not any(fnmatch.fnmatchcase(b, pat) for b in known):
+                    raise CatalogError(f"scope {scope.name!r}: selector {pat!r} matches no known benchmark")
+        for name in self.benchmarks:  # exact names, as in resolve()
+            if name not in known:
+                raise CatalogError(f"benchmark {name!r}: matches no known benchmark")
+        for bench in known:  # the pairwise pattern check above misses e.g. "flash*" vs "*-bwd"
+            hits = [n for n, spec in self.families.items() if any(fnmatch.fnmatchcase(bench, p) for p in spec["match"])]
+            if len(hits) > 1:
+                warnings.warn(f"benchmark {bench!r} matches families {hits}; {hits[0]!r} wins", stacklevel=2)
         for name, spec in self.families.items():  # a family needs only one live pattern
             if not any(fnmatch.fnmatchcase(b, pat) for b in known for pat in spec["match"]):
                 raise CatalogError(f"family {name!r}: no pattern matches a known benchmark")
+
+
+    def _check_history_fits_window(self) -> None:
+        """Every reachable threshold combination needs ``min_history <= window``.
+
+        The gate keeps only ``window`` points and needs ``min_history`` of them, so a larger
+        ``min_history`` would leave the series permanently without a verdict.
+        """
+        benches = {name: (self._first_family(name), spec) for name, spec in self.benchmarks.items()}
+        layers: list[tuple[str, list[Mapping[str, Any]]]] = [("defaults", [])]
+        layers += [(f"family {n!r}", [spec]) for n, spec in self.families.items()]
+        for n, (fam, spec) in benches.items():
+            layers.append((f"benchmark {n!r}", ([] if fam is None else [fam[1]]) + [spec]))
+        for label, specs in layers:
+            for plat, pspec in [(None, {}), *self.platforms.items()]:
+                merged = dict(self.defaults)
+                for spec in [*specs, pspec]:
+                    merged.update({k: v for k, v in spec.items() if k in _THRESHOLD_KEYS})
+                if merged["min_history"] > merged["window"]:
+                    where = label if plat is None else f"{label} on platform {plat!r}"
+                    raise CatalogError(f"{where}: min_history {merged['min_history']} exceeds "
+                                       f"window {merged['window']}; the series could never be gated")
 
 
 def _check_thresholds(where: str, spec: Mapping[str, Any],
@@ -169,6 +209,19 @@ def _as_mapping(where: str, value: Any) -> Mapping[str, Any]:
     return value
 
 
+def _spec(where: str, value: Any) -> Mapping[str, Any]:
+    """A nested entry (platform, family, benchmark, metric, scope) must be a mapping; null is not one."""
+    if not isinstance(value, Mapping):
+        raise CatalogError(f"{where}: expected a mapping, got {value!r}")
+    return value
+
+
+def _globs(where: str, value: Any, *, non_empty: bool = False) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value) or (non_empty and not value):
+        raise CatalogError(f"{where}: must be a {'non-empty ' if non_empty else ''}list of strings, got {value!r}")
+    return value
+
+
 def _parse(raw: Any) -> dict[str, Any]:
     raw = _as_mapping("catalog", raw)
     unknown = set(raw) - _TOP_KEYS
@@ -181,7 +234,10 @@ def _parse(raw: Any) -> dict[str, Any]:
 
 def _load_yaml(source: str | Path) -> dict[str, Any]:
     """Read a catalog from an existing path, otherwise parse *source* as YAML text."""
-    is_path = isinstance(source, Path) or ("\n" not in source and Path(source).is_file())
+    try:
+        is_path = isinstance(source, Path) or ("\n" not in source and Path(source).is_file())
+    except OSError:  # e.g. file name too long: single-line YAML text, not a path
+        is_path = False
     try:
         text = Path(source).read_text(encoding="utf-8") if is_path else str(source)
         return _parse(yaml.safe_load(text))
@@ -192,17 +248,19 @@ def _load_yaml(source: str | Path) -> dict[str, Any]:
 def _parse_scopes(raw: Mapping[str, Any]) -> dict[str, Scope]:
     scopes = {}
     for name, spec in raw.items():
-        spec = _as_mapping(f"scope {name!r}", spec)
+        spec = _spec(f"scope {name!r}", spec)
         unknown = set(spec) - _SCOPE_KEYS
         if unknown or not {"source", "platform"} <= set(spec):
             raise CatalogError(f"scope {name!r}: needs source+platform; unknown keys {sorted(unknown)}")
-        if spec["source"] not in _SOURCE_KINDS:
-            got = spec["source"]
+        got = spec["source"]
+        if not isinstance(got, str) or got not in _SOURCE_KINDS:
             raise CatalogError(f"scope {name!r}: source must be one of {sorted(_SOURCE_KINDS)}, got {got!r}")
+        if not isinstance(spec["platform"], str):
+            raise CatalogError(f"scope {name!r}: platform must be a string, got {spec['platform']!r}")
+        if not isinstance(spec.get("expected_nightly", False), bool):
+            raise CatalogError(f"scope {name!r}: expected_nightly must be a boolean, got {spec['expected_nightly']!r}")
         for field_name in ("tags", "benchmarks", "groups"):
-            value = spec.get(field_name, [])
-            if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-                raise CatalogError(f"scope {name!r}: {field_name} must be a list of strings")
+            _globs(f"scope {name!r}: {field_name}", spec.get(field_name, []))
         kwargs = {k: tuple(v) if isinstance(v, list) else v for k, v in spec.items()}
         scopes[name] = Scope(name=name, **kwargs)
     return scopes
@@ -216,7 +274,7 @@ def _build(raw: Mapping[str, Any]) -> Catalog:
         raise CatalogError(f"defaults: missing {sorted(missing)}")
     metrics, ungated = {}, set()
     for name, spec in _as_mapping("metrics", raw.get("metrics")).items():
-        spec = _as_mapping(f"metric {name!r}", spec)
+        spec = _spec(f"metric {name!r}", spec)
         if "higher_is_better" not in spec or set(spec) - _METRIC_KEYS or not all(
                 isinstance(v, bool) for v in spec.values()):
             raise CatalogError(f"metric {name!r}: expected boolean higher_is_better and optional boolean gate")
@@ -225,6 +283,7 @@ def _build(raw: Mapping[str, Any]) -> Catalog:
             ungated.add(name)
     platforms = _as_mapping("platforms", raw.get("platforms"))
     for name, spec in platforms.items():
+        spec = _spec(f"platform {name!r}", spec)
         _check_thresholds(f"platform {name!r}", spec, {"match"})
         try:
             re.compile(spec["match"])
@@ -232,12 +291,12 @@ def _build(raw: Mapping[str, Any]) -> Catalog:
             raise CatalogError(f"platform {name!r}: needs a valid regex 'match'") from exc
     families = _as_mapping("families", raw.get("families"))
     for name, spec in families.items():
+        spec = _spec(f"family {name!r}", spec)
         _check_thresholds(f"family {name!r}", spec, {"match"})
-        if not isinstance(spec.get("match"), list) or not spec["match"]:
-            raise CatalogError(f"family {name!r}: 'match' must be a non-empty list of globs")
+        _globs(f"family {name!r}: match", spec.get("match"), non_empty=True)
     benchmarks = _as_mapping("benchmarks", raw.get("benchmarks"))
     for name, spec in benchmarks.items():
-        _check_thresholds(f"benchmark {name!r}", spec)
+        _check_thresholds(f"benchmark {name!r}", _spec(f"benchmark {name!r}", spec))
     catalog = Catalog(defaults, metrics, platforms, families, benchmarks,
                       _parse_scopes(_as_mapping("scopes", raw.get("scopes"))),
                       _as_mapping("importance", raw.get("importance")), frozenset(ungated))
@@ -261,7 +320,7 @@ def load_catalog(path_or_text: str | Path | None = None, overlays: Sequence[str 
             add = _as_mapping(f"overlay {section}", extra.get(section))
             if section == "platforms":
                 for name, spec in add.items():
-                    if set(spec) - {"match"}:
+                    if set(_spec(f"overlay platform {name!r}", spec)) - {"match"}:
                         raise CatalogError(f"overlay platform {name!r}: may only set 'match'")
             clash = set(add) & set(_as_mapping(section, raw.get(section)))
             if clash:

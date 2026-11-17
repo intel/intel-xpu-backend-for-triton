@@ -15,13 +15,13 @@ Runtime dependency: `pyyaml`. Python 3.11 or newer.
 
 `benchmark_monitor/catalog/default.yaml` is the single place that says what is monitored and how strictly:
 
-- `defaults`, `families` (benchmark-name globs), `benchmarks` and `platforms` set the gate thresholds. They are
+- `defaults`, `families` (benchmark-name globs), `benchmarks` (exact names) and `platforms` set the gate thresholds. They are
   resolved in that order; within `families` the first match in declaration order wins.
 - `metrics` declares every metric the monitor may see and whether higher is better. A metric with `gate: false`
   is recorded but never gated. A metric that is not declared is an error, never a guess.
 - `scopes` choose the series to monitor (source, platform, tags, benchmark globs).
 
-`catalog/schema.json` describes the file for editors. A site can add platforms and scopes through overlays, but an
+`catalog/schema.json` describes the file for editors. A site can add platforms, scopes and `importance` through overlays, but an
 overlay cannot change thresholds.
 
 ## Tests
