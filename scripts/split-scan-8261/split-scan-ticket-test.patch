@@ -1,0 +1,37 @@
+diff --git a/test/inductor/test_torchinductor.py b/test/inductor/test_torchinductor.py
+index bc9a871..b6ecbbf 100644
+--- a/test/inductor/test_torchinductor.py
++++ b/test/inductor/test_torchinductor.py
+@@ -2870,6 +2870,32 @@ class CommonTemplate:
+         data = make_tensor((2**16,), dtype=torch.float32, device=self.device)
+         self.common(fn, (lengths, data))
+ 
++    @skip_if_gpu_halide
++    def test_split_scan_block_ticket(self):
++        # On XPU the split-scan block index comes from an atomic ticket taken when
++        # the block starts, so the decoupled look-back never waits on a block that
++        # has not started yet. Other backends keep using tl.program_id.
++        if self.device == "cpu":
++            raise unittest.SkipTest("split scan is a Triton GPU kernel")
++
++        def fn(a):
++            return torch.cumsum(a, -1)
++
++        inp = make_tensor(
++            10, 3, 352, 352, low=0, dtype=torch.float32, device=self.device
++        )
++        inp = inp.view(-1)
++        result, code = run_and_get_code(torch.compile(fn), inp)
++        self.assertEqual(result, fn(inp), rtol=1e-4, atol=1e-5)
++        code = "\n".join(code)
++        self.assertIn("triton_spl_", code)
++        if self.device == "xpu":
++            FileCheck().check("r0_ticket = (tl.atomic_add(").check(
++                "% tl.num_programs(0)"
++            ).check("r0_offset = r0_ticket * R0_BLOCK").run(code)
++        else:
++            self.assertNotIn("r0_ticket", code)
++
+     # Triton CPU split scan lowering uses tl.debug_barrier, which is not yet
+     # implemented in the Triton CPU version pinned in CI.
+     @xfail_if_triton_cpu
