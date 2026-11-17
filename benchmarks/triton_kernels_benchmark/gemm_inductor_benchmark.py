@@ -6,20 +6,28 @@ their shapes and strides, and which matrices the manual kernels access through
 masked pointers, without requiring an XPU. Results use the triton_kernels_benchmark
 report format.
 
-Manual providers reuse the kernels in gemm_benchmark, gemm_splitk_benchmark,
-and gemm_streamk_benchmark (not Inductor's grouped_mm). All manual providers use
-the original inputs and strides without padding, packing, or copying. The kernels
-use a tensor descriptor when the strides allow one, and masked pointers otherwise. Split-K and Stream-K run
-one GEMM per batch; their timings include zeroing and all launches. Their CI benchmarks have
-a single config tuned for large square shapes, so here each case first picks the fastest
-tile (and SPLIT_K for Split-K), outside the timed region, and prints it. All manual
-providers accumulate in FP32, add any addmm bias, and return FP16 outputs. The Inductor
-modes print whether Inductor picked its Triton template or an ATen kernel for each case.
+Manual providers reuse the kernels in gemm_benchmark, gemm_postop_addmatrix_benchmark,
+gemm_splitk_benchmark and gemm_streamk_benchmark (not Inductor's grouped_mm), on the
+original inputs and strides without padding, packing or copying. The kernels use a
+tensor descriptor when the strides allow one, and masked pointers otherwise. Split-K and
+Stream-K run one GEMM per batch; their timings include zeroing and all launches. Their
+CI benchmarks have a single config tuned for large square shapes, so here each case first
+picks the fastest tile (and SPLIT_K for Split-K), outside the timed region, and prints it.
+
+All manual providers accumulate in FP32, add any addmm bias and return FP16 outputs.
+The grouped-tile kernels add the bias and store FP16 in their epilogue, as Inductor's
+template does; the addmm cases use the post-op add-matrix kernel, tuned over
+gemm_benchmark's configs. Split-K and Stream-K reduce partial sums in an FP32 buffer, so
+they add the bias and cast in one more pass, which their timings include.
+
+The Inductor modes print whether Inductor picked its Triton template or an ATen kernel
+for each case.
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -220,35 +228,74 @@ def _streamk(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, config: TileConf
                                                        grf_mode="256")
 
 
+@functools.cache
+def _addmatrix_kernel():
+    """The post-op add-matrix kernel, tuned over the GEMM benchmark's configs like the no-bias cases.
+
+    The strides are in the key, so a shape that comes with several layouts is tuned once per layout.
+    """
+    from triton_kernels_benchmark.gemm_benchmark import get_matmul_autotune_configs
+    from triton_kernels_benchmark.gemm_postop_addmatrix_benchmark import grouped_tile_gemm_addmatrix_kernel
+
+    key = [
+        "M", "N", "K", "stride_am", "stride_ak", "stride_bk", "stride_bn", "stride_cm", "stride_cn", "stride_dm",
+        "stride_dn"
+    ]
+    return triton.autotune(configs=get_matmul_autotune_configs(), key=key)(grouped_tile_gemm_addmatrix_kernel.fn)
+
+
+@triton.jit
+def _bias_cast_kernel(x_ptr, bias_ptr, y_ptr, numel, N: tl.constexpr, stride_bias_n: tl.constexpr,
+                      HAS_BIAS: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    """y = x + bias, cast to y's type, in one pass over a contiguous (..., N) FP32 GEMM result."""
+    offs = tl.program_id(axis=0).to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offs < numel
+    x = tl.load(x_ptr + offs, mask=mask)
+    if HAS_BIAS:
+        x += tl.load(bias_ptr + (offs % N) * stride_bias_n, mask=mask).to(tl.float32)
+    tl.store(y_ptr + offs, x.to(y_ptr.dtype.element_ty), mask=mask)
+
+
 def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...], config: TileConfig | None = None) -> torch.Tensor:
-    from triton_kernels_benchmark.gemm_benchmark import (grouped_tile_gemm_kernel, grouped_tile_gemm_kernel_batched)
+    from triton_kernels_benchmark.gemm_benchmark import grouped_tile_gemm_kernel, grouped_tile_gemm_kernel_batched
 
     bias = inputs[0] if len(inputs) == 3 else None
     a, b = inputs[-2:]
     m, k = a.shape[-2:]
     n = b.shape[-1]
-    # Split-K accumulates with atomics, so its output must start at zero.
-    alloc = torch.zeros if mode == "manual_splitk" else torch.empty
-    output = alloc((*a.shape[:-2], m, n), device=a.device, dtype=torch.float32)
+    output = torch.empty((*a.shape[:-2], m, n), device=a.device, dtype=a.dtype)
 
-    assert all(x.data_ptr() % 16 == 0 for x in (a, b, output)), "Matrix base addresses must be 16-byte aligned"
     if mode == "manual_grouped":
+        # The kernels add the bias and store FP16 in their epilogue, as Inductor's template does.
+        assert all(x.data_ptr() % 16 == 0 for x in (a, b, output)), "Matrix base addresses must be 16-byte aligned"
         grid = lambda meta: (triton.cdiv(m, meta["BLOCK_SIZE_M"]) * triton.cdiv(n, meta["BLOCK_SIZE_N"]), a.shape[0]
                              if a.ndim == 3 else 1)
-        if a.ndim == 3:
+        if bias is not None:
+            assert a.ndim == 2, "Only 2D GEMMs have a bias"
+            _addmatrix_kernel()[grid](a, b, output, bias, m, n, k, *a.stride(), *b.stride(), *output.stride(),
+                                      *bias.stride(), tl.float32)
+        elif a.ndim == 3:
             grouped_tile_gemm_kernel_batched[grid](a, b, output, a.shape[0], m, n, k, *a.stride(), *b.stride(),
                                                    *output.stride())
         else:
             grouped_tile_gemm_kernel[grid](a, b, output, m, n, k, *a.stride(), *b.stride(), *output.stride())
-    else:
-        matmul = {"manual_splitk": _splitk, "manual_streamk": _streamk}[mode]
-        # Both kernels are 2D only, so a bmm runs one GEMM per batch.
-        for a_i, b_i, c_i in zip(a, b, output) if a.ndim == 3 else [(a, b, output)]:
-            matmul(a_i, b_i, c_i, config)
+        return output
 
-    if bias is not None:
-        output = output + bias
-    return output.to(a.dtype)
+    # Split-K and Stream-K reduce partial sums in an FP32 buffer, so the bias add and the cast take one more pass.
+    # Split-K accumulates with atomics, so its buffer must start at zero.
+    assert bias is None or bias.stride(-2) == 0, "The addmm bias must be a broadcast row"
+    alloc = torch.zeros if mode == "manual_splitk" else torch.empty
+    acc = alloc(output.shape, device=a.device, dtype=torch.float32)
+    assert all(x.data_ptr() % 16 == 0 for x in (a, b, acc)), "Matrix base addresses must be 16-byte aligned"
+    matmul = {"manual_splitk": _splitk, "manual_streamk": _streamk}[mode]
+    # Both kernels are 2D only, so a bmm runs one GEMM per batch.
+    for a_i, b_i, c_i in zip(a, b, acc) if a.ndim == 3 else [(a, b, acc)]:
+        matmul(a_i, b_i, c_i, config)
+    block = 1024
+    bias_args = (bias, bias.stride(-1), True) if bias is not None else (acc, 0, False)
+    _bias_cast_kernel[(triton.cdiv(acc.numel(), block), )](acc, bias_args[0], output, acc.numel(), n, *bias_args[1:],
+                                                           BLOCK_SIZE=block)
+    return output
 
 
 def inductor_pick(code: list[str]) -> str:
