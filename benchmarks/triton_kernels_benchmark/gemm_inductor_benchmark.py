@@ -11,7 +11,8 @@ and gemm_streamk_benchmark (not Inductor's grouped_mm). All manual providers use
 the original inputs and strides without padding, packing, or copying. The kernels
 use a tensor descriptor when the strides allow one, and masked pointers otherwise. Split-K and Stream-K run
 one GEMM per batch; their timings include zeroing and all launches. All manual
-providers accumulate in FP32, add any addmm bias, and return FP16 outputs.
+providers accumulate in FP32, add any addmm bias, and return FP16 outputs. The Inductor
+modes print whether Inductor picked its Triton template or an ATen kernel for each case.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING
 
 import torch
 import torch._inductor.config as inductor_config
+from torch._inductor.utils import run_and_get_code
 import triton
 
 # triton_kernels_benchmark is imported where it is used, because importing it fails without a GPU and --list must work
@@ -192,6 +194,12 @@ def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...]) -> torch.Tensor:
     return output.to(a.dtype)
 
 
+def inductor_pick(code: list[str]) -> str:
+    """Which GEMM Inductor's generated code calls: its Triton template or an ATen kernel."""
+    markers = {"Triton": "triton_tem_", "ATen": "extern_kernels."}
+    return "+".join(name for name, marker in markers.items() if any(marker in c for c in code)) or "unknown"
+
+
 def get_benchmark(case_ids: list[int], modes: list[str]) -> Mark:
     import triton_kernels_benchmark as benchmark_suite
 
@@ -225,7 +233,9 @@ def get_benchmark(case_ids: list[int], modes: list[str]) -> Mark:
                                        force_disable_caches=True):
                 compiled = torch.compile(operation, mode="max-autotune-no-cudagraphs")
                 compiled_fn = lambda: compiled(*inputs)
-                compiled_fn()  # Compile and autotune outside the timed region.
+                # Compile and autotune outside the timed region.
+                _, code = run_and_get_code(compiled_fn)
+                print(f"Case {case}, {MODES[mode]}: Inductor picked {inductor_pick(code)}", flush=True)
                 benchmark_suite.assert_close(compiled_fn, torch_fn, atol=5e-2, rtol=1e-2, err_msg=f"{mode} to torch")
                 _, min_ms, max_ms, mean_ms, cv = do_bench(compiled_fn)
             torch.compiler.reset()
