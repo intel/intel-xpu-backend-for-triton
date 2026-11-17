@@ -31,6 +31,8 @@ def _emulate_xpu_device_queries():
     torch.xpu.get_device_capability = lambda device=None: dict(arch())
     torch.xpu.get_device_properties = lambda device=None: types.SimpleNamespace(**arch())
     torch.xpu.device = lambda device: contextlib.nullcontext()
+    # Tests that guard on a device (`pytest.skip("XPU is not available")`) would otherwise not warm anything.
+    torch.xpu.is_available = lambda: True
 
 
 if triton.knobs.intel.target_json:

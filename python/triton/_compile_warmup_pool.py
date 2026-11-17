@@ -267,8 +267,12 @@ def _silence_worker_shutdown_diagnostics():
     _SHUTDOWN_STDERR_SILENCED = True
 
 
-def _initialize_preload_worker(triton_key):
+def _initialize_preload_worker(triton_key, target_json):
     triton.runtime.cache.triton_key = lambda: triton_key
+    # Workers start on demand, possibly inside a test whose `fresh_knobs` has cleared the environment, and then
+    # they would find no device to compile for.
+    if target_json:
+        os.environ["TRITON_INTEL_TARGET_JSON"] = target_json
 
 
 def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes, kernel_repr, instrumentation_mode,
@@ -403,9 +407,9 @@ class ProcessPoolWarmupDispatcher:
         self._executor = None
         if self._connection is None:
             context = mp.get_context("spawn")
-            self._executor = ProcessPoolExecutor(max_workers=max_workers, mp_context=context,
-                                                 initializer=_initialize_preload_worker,
-                                                 initargs=(triton.runtime.cache.triton_key(), ))
+            self._executor = ProcessPoolExecutor(
+                max_workers=max_workers, mp_context=context, initializer=_initialize_preload_worker,
+                initargs=(triton.runtime.cache.triton_key(), triton.knobs.intel.target_json))
         self._max_workers = max_workers
         self._cache_dir = triton.knobs.cache.dir
         self._trace_directory = trace_directory
