@@ -391,6 +391,7 @@ class SpirvProbeUtils:
     """Ground-truth probe for whether a SPIR-V capability is accepted by the driver's own JIT."""
 
     def __init__(self, cache_path: str):
+        self.cache_path = cache_path
         self.shared_library = ctypes.PyDLL(cache_path)
         self.shared_library.probe_spirv_module.restype = ctypes.py_object
         self.shared_library.probe_spirv_module.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_size_t)
