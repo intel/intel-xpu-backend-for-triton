@@ -96,9 +96,14 @@ def grouped_tile_gemm_addmatrix_kernel(
         accumulator = tl.dot(a, b, accumulator)
         off_k += BLOCK_SIZE_K
 
-    d_desc = make_matrix_tile_ptr(d_ptr, M, N, stride_dm, stride_dn, BLOCK_SIZE_M, BLOCK_SIZE_N)
-    d = load_matrix_tile(d_desc, M, N, stride_dm, stride_dn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_M,
-                         BLOCK_SIZE_N)
+    if stride_dm == 0:
+        # D repeats one row along M, as an addmm bias does, so load that row once.
+        rn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+        d = tl.load(d_ptr + rn * stride_dn, mask=rn < N, other=0)[None, :]
+    else:
+        d_desc = make_matrix_tile_ptr(d_ptr, M, N, stride_dm, stride_dn, BLOCK_SIZE_M, BLOCK_SIZE_N)
+        d = load_matrix_tile(d_desc, M, N, stride_dm, stride_dn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N,
+                             BLOCK_SIZE_M, BLOCK_SIZE_N)
     c = accumulator + d
 
     store_matrix_tile(c_ptr, c, M, N, stride_cm, stride_cn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_M,
@@ -172,9 +177,14 @@ def grouped_tile_gemm_addmatrix_kernel_batched(
         off_k += BLOCK_SIZE_K
 
     offset_d = bid.to(tl.int64) * stride_dz
-    d_desc = make_matrix_tile_ptr(d_ptr + offset_d, M, N, stride_dm, stride_dn, BLOCK_SIZE_M, BLOCK_SIZE_N)
-    d = load_matrix_tile(d_desc, M, N, stride_dm, stride_dn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_M,
-                         BLOCK_SIZE_N)
+    if stride_dm == 0:
+        # D repeats one row along M, as an addmm bias does, so load that row once.
+        rn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+        d = tl.load(d_ptr + offset_d + rn * stride_dn, mask=rn < N, other=0)[None, :]
+    else:
+        d_desc = make_matrix_tile_ptr(d_ptr + offset_d, M, N, stride_dm, stride_dn, BLOCK_SIZE_M, BLOCK_SIZE_N)
+        d = load_matrix_tile(d_desc, M, N, stride_dm, stride_dn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N,
+                             BLOCK_SIZE_M, BLOCK_SIZE_N)
     c = accumulator + d
 
     offset_c = bid.to(tl.int64) * stride_cz
