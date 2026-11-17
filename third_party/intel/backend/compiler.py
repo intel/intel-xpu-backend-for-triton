@@ -381,8 +381,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["allow_fp8e4nv"] = True
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
-        args["has_spirv_2d_block_io"] = has_spirv_2d_block_io(
-            self.target.arch.get("driver_version"))
+        args["has_spirv_2d_block_io"] = has_spirv_2d_block_io(self.target.arch.get("driver_version"))
         args["max_grf_mode"] = self.properties['max_grf_mode']
         grf_mode = args.get("grf_mode", XPUOptions.grf_mode)
         if grf_mode not in ("default", "auto") and grf_mode not in (grf_modes := get_grf_modes(self.target.arch)):

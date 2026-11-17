@@ -142,9 +142,9 @@ static bool isSPVBuiltinAvailable(OpTy op) {
 
   // IGC older than 2.38 (compute-runtime < 26.27.39122) only has a fixed table
   // of `intel_sub_group_2d_block_*` builtins; a shape missing from it fails to
-  // build with an undefined reference to `__internal_intel_sub_group_2d_block_*`
-  // (issue #8858). Newer IGC resolves any shape. The backend sets this attribute
-  // from the driver version.
+  // build with an undefined reference to
+  // `__internal_intel_sub_group_2d_block_*` (issue #8858). Newer IGC resolves
+  // any shape. The backend sets this attribute from the driver version.
   if (m->hasAttr(intel::TritonIntelGPUDialect::getUseGenISA2DBlockIOAttrName()))
     return false;
 
