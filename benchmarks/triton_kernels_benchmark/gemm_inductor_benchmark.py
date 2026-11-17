@@ -1,6 +1,6 @@
 """Compare TorchInductor ATen/Triton GEMM backends and manual grouped tile-order/Split-K/Stream-K GEMM.
 
-The cases are the FP16 GEMMs for which ATen beat Triton in disassembles/log.txt.
+The cases are FP16 GEMMs where Inductor's Triton GEMM was slower than ATen.
 Pass --case repeatedly to benchmark selected one-based cases, or --list to inspect
 their shapes and strides without requiring an XPU. Results use the
 triton_kernels_benchmark report format.
@@ -31,46 +31,44 @@ class GemmCase:
     op: str
     shapes: tuple[tuple[int, ...], ...]
     strides: tuple[tuple[int, ...], ...]
-    logged_aten_ms: float
-    logged_triton_ms: float
 
 
-# Shapes and strides are captured that inductor Triton GEMM are not in good perf.
+# Shapes and strides where Inductor's Triton GEMM was slower than ATen.
 GEMM_CASES = (
-    GemmCase("bmm", ((80, 256, 640), (80, 640, 960)), ((640, 51200, 1), (614400, 960, 1)), 0.261250, 0.263958),
-    GemmCase("bmm", ((32, 256, 200), (32, 200, 1600)), ((51200, 200, 1), (320000, 1600, 1)), 0.088437, 0.091875),
-    GemmCase("addmm", ((256, 2560), (256, 7076), (7076, 2560)), ((0, 1), (7088, 1), (2560, 1)), 0.131146, 0.194792),
-    GemmCase("mm", ((256, 744), (744, 744)), ((744, 1), (744, 1)), 0.012083, 0.015312),
-    GemmCase("addmm", ((256, 512), (256, 356), (356, 512)), ((0, 1), (356, 1), (512, 1)), 0.010417, 0.010625),
-    GemmCase("addmm", ((256, 512), (256, 490), (490, 512)), ((0, 1), (490, 1), (512, 1)), 0.006354, 0.012812),
-    GemmCase("addmm", ((256, 256), (256, 640), (640, 256)), ((0, 1), (640, 1), (256, 1)), 0.005834, 0.006042),
-    GemmCase("addmm", ((256, 256), (256, 252), (252, 256)), ((0, 1), (252, 1), (256, 1)), 0.007604, 0.008125),
-    GemmCase("addmm", ((256, 256), (256, 7347), (7347, 256)), ((0, 1), (7360, 1), (256, 1)), 0.038646, 0.152917),
-    GemmCase("addmm", ((256, 256), (256, 7343), (7343, 256)), ((0, 1), (7360, 1), (256, 1)), 0.032708, 0.153437),
-    GemmCase("addmm", ((256, 256), (256, 512), (512, 256)), ((0, 1), (2560, 1), (256, 1)), 0.005000, 0.005729),
-    GemmCase("addmm", ((256, 256), (256, 856), (856, 256)), ((0, 1), (856, 1), (256, 1)), 0.006562, 0.015729),
-    GemmCase("addmm", ((256, 256), (256, 1616), (1616, 256)), ((0, 1), (1664, 1), (256, 1)), 0.010625, 0.014583),
-    GemmCase("addmm", ((256, 128), (256, 560), (560, 128)), ((0, 1), (560, 1), (128, 1)), 0.006250, 0.008855),
-    GemmCase("addmm", ((256, 128), (256, 992), (992, 128)), ((0, 1), (992, 1), (128, 1)), 0.006979, 0.007396),
-    GemmCase("addmm", ((8448, 1536), (8448, 512), (512, 1536)), ((0, 1), (512, 1), (1, 512)), 0.084271, 0.166875),
-    GemmCase("addmm", ((8448, 512), (8448, 512), (512, 512)), ((0, 1), (512, 1), (512, 1)), 0.039062, 0.070417),
-    GemmCase("addmm", ((8448, 512), (8448, 1024), (1024, 512)), ((0, 1), (1024, 1), (512, 1)), 0.061771, 0.121042),
-    GemmCase("addmm", ((8448, 1024), (8448, 512), (512, 1024)), ((0, 1), (512, 1), (1, 512)), 0.062084, 0.128229),
-    GemmCase("addmm", ((256, 256), (256, 1072), (1072, 256)), ((0, 1), (1088, 1), (256, 1)), 0.009375, 0.011145),
-    GemmCase("addmm", ((256, 128), (256, 744), (744, 128)), ((0, 1), (744, 1), (128, 1)), 0.006667, 0.016667),
-    GemmCase("addmm", ((256, 640), (256, 1288), (1288, 640)), ((0, 1), (1344, 1), (640, 1)), 0.017708, 0.026771),
-    GemmCase("addmm", ((256, 640), (256, 1080), (1080, 640)), ((0, 1), (1088, 1), (640, 1)), 0.017187, 0.022708),
-    GemmCase("addmm", ((256, 640), (256, 1778), (1778, 640)), ((0, 1), (1792, 1), (640, 1)), 0.024792, 0.032708),
-    GemmCase("addmm", ((256, 640), (256, 576), (576, 640)), ((0, 1), (576, 1), (640, 1)), 0.007396, 0.007813),
-    GemmCase("addmm", ((256, 640), (256, 976), (976, 640)), ((0, 1), (976, 1), (640, 1)), 0.012396, 0.014479),
-    GemmCase("addmm", ((256, 640), (256, 1004), (1004, 640)), ((0, 1), (1004, 1), (640, 1)), 0.013854, 0.022292),
-    GemmCase("addmm", ((256, 640), (256, 688), (688, 640)), ((0, 1), (688, 1), (640, 1)), 0.010521, 0.010833),
-    GemmCase("addmm", ((256, 256), (256, 2540), (2540, 256)), ((0, 1), (2540, 1), (256, 1)), 0.011458, 0.047708),
-    GemmCase("addmm", ((256, 256), (256, 1288), (1288, 256)), ((0, 1), (1288, 1), (256, 1)), 0.011250, 0.025938),
-    GemmCase("addmm", ((256, 512), (256, 6052), (6052, 512)), ((0, 1), (6080, 1), (512, 1)), 0.046666, 0.122917),
-    GemmCase("addmm", ((8704, 512), (8704, 512), (512, 512)), ((0, 1), (512, 1), (512, 1)), 0.039271, 0.072292),
-    GemmCase("addmm", ((8704, 512), (8704, 1024), (1024, 512)), ((0, 1), (1024, 1), (512, 1)), 0.061458, 0.124271),
-    GemmCase("addmm", ((256, 257), (256, 4544), (4544, 257)), ((0, 1), (4544, 1), (257, 1)), 0.039896, 0.071354),
+    GemmCase("bmm", ((80, 256, 640), (80, 640, 960)), ((640, 51200, 1), (614400, 960, 1))),
+    GemmCase("bmm", ((32, 256, 200), (32, 200, 1600)), ((51200, 200, 1), (320000, 1600, 1))),
+    GemmCase("addmm", ((256, 2560), (256, 7076), (7076, 2560)), ((0, 1), (7088, 1), (2560, 1))),
+    GemmCase("mm", ((256, 744), (744, 744)), ((744, 1), (744, 1))),
+    GemmCase("addmm", ((256, 512), (256, 356), (356, 512)), ((0, 1), (356, 1), (512, 1))),
+    GemmCase("addmm", ((256, 512), (256, 490), (490, 512)), ((0, 1), (490, 1), (512, 1))),
+    GemmCase("addmm", ((256, 256), (256, 640), (640, 256)), ((0, 1), (640, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 252), (252, 256)), ((0, 1), (252, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 7347), (7347, 256)), ((0, 1), (7360, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 7343), (7343, 256)), ((0, 1), (7360, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 512), (512, 256)), ((0, 1), (2560, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 856), (856, 256)), ((0, 1), (856, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 1616), (1616, 256)), ((0, 1), (1664, 1), (256, 1))),
+    GemmCase("addmm", ((256, 128), (256, 560), (560, 128)), ((0, 1), (560, 1), (128, 1))),
+    GemmCase("addmm", ((256, 128), (256, 992), (992, 128)), ((0, 1), (992, 1), (128, 1))),
+    GemmCase("addmm", ((8448, 1536), (8448, 512), (512, 1536)), ((0, 1), (512, 1), (1, 512))),
+    GemmCase("addmm", ((8448, 512), (8448, 512), (512, 512)), ((0, 1), (512, 1), (512, 1))),
+    GemmCase("addmm", ((8448, 512), (8448, 1024), (1024, 512)), ((0, 1), (1024, 1), (512, 1))),
+    GemmCase("addmm", ((8448, 1024), (8448, 512), (512, 1024)), ((0, 1), (512, 1), (1, 512))),
+    GemmCase("addmm", ((256, 256), (256, 1072), (1072, 256)), ((0, 1), (1088, 1), (256, 1))),
+    GemmCase("addmm", ((256, 128), (256, 744), (744, 128)), ((0, 1), (744, 1), (128, 1))),
+    GemmCase("addmm", ((256, 640), (256, 1288), (1288, 640)), ((0, 1), (1344, 1), (640, 1))),
+    GemmCase("addmm", ((256, 640), (256, 1080), (1080, 640)), ((0, 1), (1088, 1), (640, 1))),
+    GemmCase("addmm", ((256, 640), (256, 1778), (1778, 640)), ((0, 1), (1792, 1), (640, 1))),
+    GemmCase("addmm", ((256, 640), (256, 576), (576, 640)), ((0, 1), (576, 1), (640, 1))),
+    GemmCase("addmm", ((256, 640), (256, 976), (976, 640)), ((0, 1), (976, 1), (640, 1))),
+    GemmCase("addmm", ((256, 640), (256, 1004), (1004, 640)), ((0, 1), (1004, 1), (640, 1))),
+    GemmCase("addmm", ((256, 640), (256, 688), (688, 640)), ((0, 1), (688, 1), (640, 1))),
+    GemmCase("addmm", ((256, 256), (256, 2540), (2540, 256)), ((0, 1), (2540, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 1288), (1288, 256)), ((0, 1), (1288, 1), (256, 1))),
+    GemmCase("addmm", ((256, 512), (256, 6052), (6052, 512)), ((0, 1), (6080, 1), (512, 1))),
+    GemmCase("addmm", ((8704, 512), (8704, 512), (512, 512)), ((0, 1), (512, 1), (512, 1))),
+    GemmCase("addmm", ((8704, 512), (8704, 1024), (1024, 512)), ((0, 1), (1024, 1), (512, 1))),
+    GemmCase("addmm", ((256, 257), (256, 4544), (4544, 257)), ((0, 1), (4544, 1), (257, 1))),
 )
 
 # Benchmark mode -> report label.
@@ -109,11 +107,7 @@ def _dedup_gemm_configs(configs):
 
 
 def _register_custom_xpu_mm_heuristic():
-    """Register a custom XPU MM template heuristic to keep the reproducer faithful.
-
-    This matches the logic in `gemm_bmm_80x256x640.py` so the compiled path still
-    exercises the same autotune search space and settings as the source reproducer.
-    """
+    """Add custom GEMM configs to Inductor's XPU mm/bmm/addmm/baddbmm template search space."""
     from torch._inductor.heuristics.template.registry import _HEURISTIC_CACHE, register_template_heuristic
     from torch._inductor.heuristics.template.triton import GemmConfig, MMTemplateConfigMixin, XPUConfigHeuristic
     from torch._inductor.heuristics.template.triton_addmm import AddMMConfigMixin
@@ -246,9 +240,7 @@ def get_benchmark(case_ids: list[int], modes: list[str]):
 def print_cases(case_ids: list[int]):
     for case_id in case_ids:
         case = GEMM_CASES[case_id - 1]
-        print(f"{case_id}: {case.op}, shapes={case.shapes}, strides={case.strides}")
-        print(f"   log winner: ATen={case.logged_aten_ms:.6f} ms, best Triton={case.logged_triton_ms:.6f} ms",
-              flush=True)
+        print(f"{case_id}: {case.op}, shapes={case.shapes}, strides={case.strides}", flush=True)
 
 
 def main():
