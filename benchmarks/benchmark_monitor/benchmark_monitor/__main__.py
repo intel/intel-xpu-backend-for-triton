@@ -22,6 +22,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--artifacts", required=True, help="directory with *-report.csv files (searched recursively)")
     ap.add_argument("--scope", required=True)
     ap.add_argument("--as-of", type=date.fromisoformat, default=None, help="YYYY-MM-DD (default: today, UTC)")
+    ap.add_argument("--history-days", type=int, default=None,
+                    help="calendar days of history to read before --as-of (default: 3 x the largest catalog window; "
+                    "0 = all history). The gate then takes the last `window` points per series")
     ap.add_argument("--format", choices=("md", "json"), default="md")
     ap.add_argument("--out", default=None, help="output path (default: stdout)")
     args = ap.parse_args(argv)
@@ -30,6 +33,16 @@ def main(argv: list[str] | None = None) -> int:
     except (CatalogError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+
+def history_start(as_of: date, history_days: int | None, max_window: int) -> date:
+    """First night to read. The gate's window counts points, not days, so a series with gaps needs a wider
+    calendar span than ``max_window``: default 3x, 0 = unbounded. The gate trims to its last ``window`` points."""
+    if history_days is None:
+        history_days = max_window * 3
+    if history_days <= 0:
+        return date.min
+    return as_of - timedelta(days=history_days)
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -41,7 +54,7 @@ def _run(args: argparse.Namespace) -> int:
         print(f"--artifacts {args.artifacts!r} is not a directory", file=sys.stderr)
         return 2
     as_of = args.as_of or datetime.now(timezone.utc).date()
-    start = as_of - timedelta(days=catalog.max_window())  # enough history for the baseline
+    start = history_start(as_of, args.history_days, catalog.max_window())
     observations, warnings = gated_observations(
         catalog,
         ArtifactSource(args.artifacts, catalog).observations(catalog.scopes[args.scope], start, as_of))

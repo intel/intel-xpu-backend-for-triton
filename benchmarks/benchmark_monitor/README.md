@@ -11,7 +11,8 @@ python -m benchmark_monitor --artifacts DIR --scope nightly-b580-micro --as-of 2
 ```
 
 `DIR` is searched recursively for `*-report.csv` files (wide or long format). Other flags: `--catalog PATH`
-(default: the shipped catalog), `--format md|json`, `--out PATH`. Exit code 2 means a bad argument or catalog.
+(default: the shipped catalog), `--format md|json`, `--out PATH`, `--history-days N` (calendar days read before `--as-of`; default 3 x the largest
+catalog window, 0 = all history; the gate's `window` counts points, so gaps need a wider span). Exit code 2 means a bad argument or catalog.
 Runtime dependency: `pyyaml`; Python 3.10 or newer.
 
 ## The catalog

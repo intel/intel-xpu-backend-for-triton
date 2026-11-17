@@ -33,8 +33,13 @@ def _fmt(value: float | None, spec: str) -> str:
     return "-" if value is None else format(value, spec)
 
 
+def _cell(text: str) -> str:
+    """Make *text* safe inside a Markdown table cell: no pipes, backticks or line breaks."""
+    return " ".join(text.replace("\\", "\\\\").replace("|", "\\|").replace("`", "'").split())
+
+
 class MarkdownSink:
-    """Regressions first (as a table), then counts per status and warnings."""
+    """A regressions table, then counts per status and warnings."""
 
     def __init__(self, target: str | Path | IO[str]):
         self.target = target
@@ -44,13 +49,14 @@ class MarkdownSink:
         lines = [f"# Benchmark monitor report for {report.as_of.isoformat()}", "", f"## Regressions ({len(regs)})", ""]
         if regs:
             lines += [
-                "| benchmark | platform | metric | params | drop % | z | baseline | n |",
-                "|---|---|---|---|---|---|---|---|"
+                "| source | platform | tag | benchmark | compiler | metric | params | drop % | z | baseline | n |",
+                "|---|---|---|---|---|---|---|---|---|---|---|"
             ]
             for v in sorted(regs, key=lambda v: -(v.drop_pct or 0.0)):
                 k = v.key
-                cells = (k.benchmark, k.platform, k.metric, f"`{k.params}`", _fmt(v.drop_pct, ".1f"), _fmt(v.z, ".2f"),
-                         _fmt(v.baseline_median, ".4g"), str(v.n_history))
+                cells = tuple(_cell(c) for c in (k.source, k.platform, k.tag, k.benchmark, k.compiler, k.metric,
+                                                 k.params)) + (_fmt(v.drop_pct, ".1f"), _fmt(v.z, ".2f"),
+                                                               _fmt(v.baseline_median, ".4g"), str(v.n_history))
                 lines.append("| " + " | ".join(cells) + " |")
         else:
             lines.append("None.")
