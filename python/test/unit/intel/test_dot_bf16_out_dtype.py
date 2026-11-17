@@ -13,7 +13,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu
+from triton._internal_testing import is_compile_warmup, is_xpu
 
 FP8_PAIRS = [(torch.float8_e5m2, torch.float8_e5m2), (torch.float8_e4m3fn, torch.float8_e4m3fn),
              (torch.float8_e4m3fn, torch.float8_e5m2)]
@@ -54,6 +54,7 @@ def test_dot_bf16_out_dtype_rejected(in_dtype, with_acc, device):
 @pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
 @pytest.mark.parametrize("a_dtype, b_dtype", [(torch.bfloat16, torch.bfloat16)] + FP8_PAIRS)
 @pytest.mark.parametrize("with_acc", [False, True])
+@pytest.mark.enable_warmup
 def test_dot_bf16_out_dtype_supported(a_dtype, b_dtype, with_acc, device):
     N = 32
     generator = torch.Generator(device="cpu").manual_seed(0)
@@ -65,6 +66,8 @@ def test_dot_bf16_out_dtype_supported(a_dtype, b_dtype, with_acc, device):
 
     out = c.to(device)
     kernel = _dot_bf16_out[(1, )](a.to(device), b.to(device), out, N, WITH_ACC=with_acc)
+    if is_compile_warmup():
+        return
     if a_dtype == torch.bfloat16 and _arch()["has_subgroup_matrix_multiply_accumulate"]:
         assert "#ttig.dpas" in kernel.asm["ttgir"], "bf16 accumulator dot no longer uses DPAS"
     # Dots that do not use DPAS (fp8 without fp8 DPAS, mixed fp8 formats, or no

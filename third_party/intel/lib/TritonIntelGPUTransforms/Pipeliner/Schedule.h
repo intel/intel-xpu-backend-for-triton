@@ -13,6 +13,7 @@ struct PipelineTarget {
   unsigned coreClockKhz = 0;
   unsigned memClockMhz = 0;
   bool useBarrier = false;
+  bool tileBarrier = false;
 };
 
 bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,

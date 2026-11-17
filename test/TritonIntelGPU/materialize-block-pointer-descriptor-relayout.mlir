@@ -1153,6 +1153,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // -----
 
+// COM: Like the gates, the stride guard is function-wide: B's tiles are 512 KiB apart, so neither
+// COM: load is relaid out. B is i1, whose step is only seen with its element size rounded up to a byte.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @sibling_stride_unchanged(
+  // CHECK-NOT: ttig.block_io_anchor
+  // LOWER-LABEL: tt.func public @sibling_stride_unchanged(
+  // LOWER-NOT: ttig.2d_block_load
+  // LOWER: tt.return
+  tt.func public @sibling_stride_unchanged(%a_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %b_ptr: !tt.ptr<i1> {tt.divisibility = 16 : i32}, %out_ptrs: tensor<256x!tt.ptr<f32>, #blocked1>, %nseg: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1024_i32 = arith.constant 1024 : i32
+    %c524288_i32 = arith.constant 524288 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c1024_i64 = arith.constant 1024 : i64
+    %pid = tt.get_program_id x : i32
+    %off = arith.muli %pid, %c524288_i32 : i32
+    %b_base = tt.addptr %b_ptr, %off : !tt.ptr<i1>, i32
+    %da = tt.make_tensor_descriptor %a_ptr, [%nseg, %c1024_i32], [%c1024_i64, %c1_i64] : <f32>, <16x256xf32>
+    %db = tt.make_tensor_descriptor %b_base, [%nseg, %c1024_i32], [%c1024_i64, %c1_i64] : <i1>, <16x256xi1>
+    %a = tt.descriptor_load %da[%c0_i32, %c0_i32] : !tt.tensordesc<16x256xf32> -> tensor<16x256xf32, #blocked>
+    %b = tt.descriptor_load %db[%c0_i32, %c0_i32] : !tt.tensordesc<16x256xi1> -> tensor<16x256xi1, #blocked>
+    %bf = arith.uitofp %b : tensor<16x256xi1, #blocked> to tensor<16x256xf32, #blocked>
+    %ra = "tt.reduce"(%a) <{axis = 0 : i32}> ({
+    ^bb0(%x: f32, %y: f32):
+      %t = arith.addf %x, %y : f32
+      tt.reduce.return %t : f32
+    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %rb = "tt.reduce"(%bf) <{axis = 0 : i32}> ({
+    ^bb0(%x: f32, %y: f32):
+      %t = arith.addf %x, %y : f32
+      tt.reduce.return %t : f32
+    }) : (tensor<16x256xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %s = arith.addf %ra, %rb : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %c = ttg.convert_layout %s : tensor<256xf32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<256xf32, #blocked1>
+    tt.store %out_ptrs, %c : tensor<256x!tt.ptr<f32>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: With 1 warp the column sum and its bf16 result's convert for the store need no
 // COM: shared memory; with the relayout the convert would, so the load is not relaid out.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
