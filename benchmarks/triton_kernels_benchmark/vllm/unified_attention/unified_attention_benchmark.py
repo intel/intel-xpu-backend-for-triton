@@ -511,3 +511,5 @@ if __name__ == '__main__':
     is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
     _benchmark_attention = get_unified_attention_benchmark(is_fp8=IS_FP8, is_td_patched=is_td_patched)
     _benchmark_attention.run(show_plots=False, print_data=True)
+
+# CI experiment (#8742): touching benchmarks/ makes CI build the benchmark package from this branch instead of installing main's wheel.
