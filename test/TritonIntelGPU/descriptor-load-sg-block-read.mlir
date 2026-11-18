@@ -30,6 +30,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// The load's cache policy carries over to the block read.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: @row_cache_control
+  tt.func public @row_cache_control(%base: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %rows: i32, %row: i32) -> tensor<1x128xf32, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c128 = arith.constant 128 : i32
+    %c128_i64 = arith.constant 128 : i64
+    %desc = tt.make_tensor_descriptor %base, [%rows, %c128], [%c128_i64, %c1_i64] : <f32>, <1x128xf32>
+    // CHECK: triton_gen.sub_group_block_read %{{.*}} {cache_control = L1UC_L3C} : !llvm.ptr<1> -> i32
+    %x = tt.descriptor_load %desc[%row, %c0] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>, ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x128xf32> -> tensor<1x128xf32, #blocked>
+    tt.return %x : tensor<1x128xf32, #blocked>
+  }
+}
+
+// -----
+
 // Two f32 per lane: one 64-bit word.
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_predicated_io} {

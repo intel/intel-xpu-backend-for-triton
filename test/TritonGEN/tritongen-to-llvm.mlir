@@ -142,6 +142,15 @@ llvm.func @triton_gen.sub_group_block_read(%ptr: !llvm.ptr<3>) {
 
 // -----
 
+llvm.func @triton_gen.sub_group_block_read(%ptr: !llvm.ptr<1>) {
+  // CHECK:     llvm.func @triton_gen.sub_group_block_read(%arg0: !llvm.ptr<1>) {
+  // CHECK:       llvm.call spir_funccc @_Z29intel_sub_group_block_read_uiPU3AS1j(%arg0) {{{.*}}, triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<1, Cached, 0>>, {{.*}}} : (!llvm.ptr<1>) -> i32
+  %ret = triton_gen.sub_group_block_read %ptr {cache_control = L1UC_L3C} : !llvm.ptr<1> -> i32
+  llvm.return
+}
+
+// -----
+
 // CHECK: llvm.func spir_funccc @_Z31intel_sub_group_block_write_us2PU3AS3tDv2_t(!llvm.ptr<3>, vector<2xi16>) attributes {memory_effects = #llvm.memory_effects<other = none, argMem = readwrite, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.sub_group_block_write(%ptr: !llvm.ptr<3>, %val : vector<2xi16>) {
