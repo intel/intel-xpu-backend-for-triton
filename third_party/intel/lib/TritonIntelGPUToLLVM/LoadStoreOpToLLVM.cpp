@@ -2368,9 +2368,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       ArrayRef<Value> ptrElems, ArrayRef<Value> maskElems,
       ArrayRef<Value> otherElems) const {
     auto type = dyn_cast<RankedTensorType>(op.getType());
-    // FIXME: A block read carries no cache control (#8878), so loads whose
-    // policy asks for other than the default L1C_L3C caching keep the gather
-    // path. A block read also reads global memory only.
+    // FIXME: A block read carries no cache control yet (#8878). Until it does,
+    // loads whose policy asks for other than the default L1C_L3C caching keep
+    // the gather lowering, even unmasked ones whose plain loads drop the hint
+    // too. This lowering builds global (addrspace 1) addresses only.
     TritonGEN::LoadCacheControl cacheControl = tritonToIntelCacheModifier(op);
     if (!type || op.getIsVolatile() || valueElemTy.isInteger(1) ||
         (cacheControl != TritonGEN::LoadCacheControl::DEFAULT &&
