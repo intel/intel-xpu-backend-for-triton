@@ -2,7 +2,7 @@
 
 Each test compiles a fresh `triton.jit` into its own TRITON_CACHE_DIR, because the in-memory JIT cache ignores
 TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ. Cache-control annotation is turned off: a block read carries no cache
-control, so loads with a cache policy keep the gathers.
+control, so loads it stamps `.cg` keep the gathers.
 """
 import pytest
 import torch

@@ -26,6 +26,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %x = tt.load %p, %m, %o : tensor<128x!tt.ptr<f32>, #blocked>
     tt.return %x : tensor<128xf32, #blocked>
   }
+  // COM: evict_last asks for the default L1C_L3C caching, so it keeps the block read.
+  // CHECK-LABEL: @row_evict_last(
+  // CHECK: triton_gen.sub_group_block_read
+  tt.func public @row_evict_last(%base: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> tensor<128xf32, #blocked> {
+    %r = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked>
+    %s = tt.splat %base : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #blocked>
+    %p = tt.addptr %s, %r : tensor<128x!tt.ptr<f32>, #blocked>, tensor<128xi32, #blocked>
+    %x = tt.load %p {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<128x!tt.ptr<f32>, #blocked>
+    tt.return %x : tensor<128xf32, #blocked>
+  }
   // COM: Loads that keep the gathers.
   // CHECK-LABEL: @keep_volatile(
   // CHECK-NOT: sub_group_block_read

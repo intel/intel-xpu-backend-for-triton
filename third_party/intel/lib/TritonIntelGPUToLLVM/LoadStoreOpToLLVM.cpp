@@ -2368,12 +2368,13 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       ArrayRef<Value> ptrElems, ArrayRef<Value> maskElems,
       ArrayRef<Value> otherElems) const {
     auto type = dyn_cast<RankedTensorType>(op.getType());
-    // A block read carries no cache control, so loads with a cache policy keep
-    // the gather path; it also reads global memory only.
-    CachePolicy cachePolicy = getCachePolicy(op.getCachePolicyAttr());
+    // FIXME: A block read carries no cache control (#8878), so loads whose
+    // policy asks for other than the default L1C_L3C caching keep the gather
+    // path. A block read also reads global memory only.
+    TritonGEN::LoadCacheControl cacheControl = tritonToIntelCacheModifier(op);
     if (!type || op.getIsVolatile() || valueElemTy.isInteger(1) ||
-        cachePolicy.cacheModifier != CacheModifier::NONE ||
-        cachePolicy.evictionPolicy != EvictionPolicy::NORMAL ||
+        (cacheControl != TritonGEN::LoadCacheControl::DEFAULT &&
+         cacheControl != TritonGEN::LoadCacheControl::L1C_L3C) ||
         cast<PointerType>(getElementTypeOrSelf(op.getPtr().getType()))
                 .getAddressSpace() != PtrAddrSpace::Global ||
         tools::getBoolEnv("TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ"))
