@@ -35,6 +35,11 @@ namespace mlir::triton {
 /// running over partially converted IR, as the LLVM lowering's does.
 bool dividendIsNonNegative(Operation *op);
 
+/// Returns true if `v` is non-negative wherever `useOp` executes, by the same
+/// structural composition (and the same no-signed-overflow assumption) as
+/// `dividendIsNonNegative`. "Could not tell" is false.
+bool valueIsNonNegative(Value v, Operation *useOp);
+
 } // namespace mlir::triton
 
 #endif // TRITON_ANALYSIS_SIGNEDNESS_H
