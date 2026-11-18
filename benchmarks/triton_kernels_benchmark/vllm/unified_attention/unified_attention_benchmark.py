@@ -82,6 +82,7 @@ def ref_paged_attn(
                   f"strides q {tuple(q.stride())} k {tuple(k.stride())} contiguous {q.is_contiguous()}/{k.is_contiguous()}",
                   flush=True)
         attn = attn_bf.float()
+        del attn_bf  # same lifetime as the original code: the bf16 result is freed right after the cast
         empty_mask = torch.ones(query_len, kv_len)
         mask = torch.triu(empty_mask, diagonal=kv_len - query_len + 1).bool()
         if sliding_window is not None:
