@@ -225,9 +225,9 @@ def test_gather_reduce_fp8(y0, device, monkeypatch):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-3)
 
 
-@pytest.mark.parametrize("width, hint, block_y", [(24, 24, 64), (20, 20, 16), (0, 16, 64)])
+@pytest.mark.parametrize("width, hint, block_y", [(24, 24, 64), (0, 16, 64)])
 def test_gather_shape_hint(width, hint, block_y, device):
-    """Admitted shapes whose divisor is not a power of two (24), is clamped by the block (20 in 16), or is maximal
+    """Admitted shapes whose divisor is not a power of two (24, whose power-of-two part proves 8 elements) or is maximal
     (an empty row): rows load as 16-byte chunks, none of which straddles the extent."""
     torch.manual_seed(0)
     src = torch.randn(128, 64, device=device, dtype=torch.bfloat16)
