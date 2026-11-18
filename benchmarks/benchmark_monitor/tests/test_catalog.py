@@ -172,6 +172,11 @@ METRICS = "metrics: {tflops: {higher_is_better: true}}\n"
     "scopes: {s: {source: micro, platform: p, expected_nightly: 'false'}}",
     "scopes: {s: {source: micro, platform: p, expected_nightly: 1}}",
     "scopes: {s: {source: micro, platform: p, groups: [null]}}",
+    "benchmarks: {123: {}}",
+    "benchmarks: {gemm: {1: 2, zz: 3}}",
+    "families: {7: {match: [a]}}",
+    "platforms: {1: {match: x}}",
+    "scopes: {true: {source: micro, platform: p}}",
 ])
 def test_malformed_sections_raise_catalog_error(section):
     with pytest.raises(CatalogError):
@@ -229,6 +234,16 @@ def test_min_history_above_window_is_rejected_in_overrides(old, new):
     text = DEFAULT_CATALOG_PATH.read_text(encoding="utf-8").replace(old, new)
     with pytest.raises(CatalogError, match="exceeds window"):
         load_catalog(text)
+
+
+def test_family_reached_only_through_overrides_is_not_checked_alone():
+    text = BASE + METRICS + "families: {f: {match: [gemm], window: 5}}\nbenchmarks: {gemm: {min_history: 4}}\n"
+    thresholds = load_catalog(text).resolve(key("gemm"))
+    assert (thresholds.min_history, thresholds.window) == (4, 5)
+    with pytest.raises(CatalogError, match="family 'f'"):
+        load_catalog(text.replace("[gemm]", "[gemm, softmax]"))
+    with pytest.raises(CatalogError, match="family 'f'"):
+        load_catalog(text.replace("[gemm]", "['gemm*']"))
 
 
 def test_window_and_min_history_overridden_together_are_fine():
