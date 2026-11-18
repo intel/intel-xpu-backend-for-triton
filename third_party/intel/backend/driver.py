@@ -11,6 +11,7 @@ import sysconfig
 import tempfile
 import warnings
 from pathlib import Path
+from types import SimpleNamespace
 from functools import cached_property, lru_cache
 
 from triton import knobs
@@ -521,16 +522,6 @@ def _load_offline_target():
     return offline
 
 
-class OfflineXPUUtils:
-    """Stands in for `XPUUtils` when `TRITON_INTEL_TARGET_JSON` is set: no device, no SYCL queue."""
-
-    device_count = 1
-
-    @staticmethod
-    def get_device_properties(device):
-        return _load_offline_target()["device_properties"]
-
-
 class XPUUtils(object):
     _instance = None
 
@@ -827,25 +818,27 @@ class XPUDriver(DriverBase):
 
     def __init__(self):
         self.launcher_cls = XPULauncher
-        if knobs.intel.target_json:
+        try:
+            from torch._C import _xpu_getCurrentRawStream, _xpu_getDevice
+            self.get_current_device = _xpu_getDevice
+            self.get_current_stream = _xpu_getCurrentRawStream
+        except ImportError:
+            import torch
+            self.get_current_device = torch.xpu.current_device
+            self.get_current_stream = lambda idx: torch.xpu.current_stream(idx).sycl_queue
+        if knobs.intel.target_json:  # No device to ask: the recorded one is device 0, and there is no stream.
             self.get_current_device = lambda: 0
             self.get_current_stream = lambda idx: 0
-        else:
-            try:
-                from torch._C import _xpu_getCurrentRawStream, _xpu_getDevice
-                self.get_current_device = _xpu_getDevice
-                self.get_current_stream = _xpu_getCurrentRawStream
-            except ImportError:
-                import torch
-                self.get_current_device = torch.xpu.current_device
-                self.get_current_stream = lambda idx: torch.xpu.current_stream(idx).sycl_queue
         super().__init__()
 
     def __getattr__(self, name):
         # Lazily initialize utils to avoid unnecessary XPU runtime invocations.
         # See https://github.com/intel/intel-xpu-backend-for-triton/issues/624
         if name == "utils":
-            self.utils = OfflineXPUUtils() if knobs.intel.target_json else XPUUtils()
+            # Compiling for the recorded device needs nothing but its properties, and no XPU runtime.
+            self.utils = (SimpleNamespace(
+                get_device_properties=lambda device: _load_offline_target()["device_properties"])
+                          if knobs.intel.target_json else XPUUtils())
             return self.utils
         else:
             raise AttributeError
