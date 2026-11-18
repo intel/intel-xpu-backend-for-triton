@@ -400,7 +400,9 @@ tt.func public @fuseMiddleDimKeepsLeadingFields(%arg0: tensor<16x16xf32>, %arg1:
 // COM: The promoted pitch must not be narrower than the surface width, a 2D
 // COM: block rule that nothing after this pass checks. Here strides[0] is 16
 // COM: f32 elements (64 bytes) and the width 32 (128 bytes), so the load keeps
-// COM: its rank-3 form.
+// COM: its rank-3 form. The second load collapses the outer dimension of the
+// COM: same strides: its pitch is strides[1], as for the unfused load, so it
+// COM: still fuses.
 tt.func public @noFuseMiddleDimPitchBelowWidth(%arg0: tensor<32x16xf32>, %arg1: !tt.ptr<f32>) {
   %c0_i32 = arith.constant 0 : i32
   %c2_i32 = arith.constant 2 : i32
@@ -415,6 +417,10 @@ tt.func public @noFuseMiddleDimPitchBelowWidth(%arg0: tensor<32x16xf32>, %arg1: 
   %1 = tt.descriptor_load %0[%c0_i32, %c2_i32, %c0_i32] : !tt.tensordesc<16x1x32xf32> -> tensor<16x1x32xf32>
   %2 = tt.reshape %1 : tensor<16x1x32xf32> -> tensor<16x32xf32>
   %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x32xf32> * tensor<32x16xf32> -> tensor<16x16xf32>
+  %4 = tt.make_tensor_descriptor %arg1, [%c4_i32, %c16_i32, %c32_i32], [%c16_i64, %c32_i64, %c1_i64] : <f32>, <1x16x32xf32>
+  %5 = tt.descriptor_load %4[%c2_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x16x32xf32> -> tensor<1x16x32xf32>
+  %6 = tt.reshape %5 : tensor<1x16x32xf32> -> tensor<16x32xf32>
+  %7 = tt.dot %6, %arg0, %cst, inputPrecision = tf32 : tensor<16x32xf32> * tensor<32x16xf32> -> tensor<16x16xf32>
   tt.return
 }
 // CHECK-LABEL: noFuseMiddleDimPitchBelowWidth
@@ -422,6 +428,10 @@ tt.func public @noFuseMiddleDimPitchBelowWidth(%arg0: tensor<32x16xf32>, %arg1: 
 // CHECK: [[LOAD:%.*]] = tt.descriptor_load {{.*}} : !tt.tensordesc<16x1x32xf32> -> tensor<16x1x32xf32>
 // CHECK: [[RESHAPE:%.*]] = tt.reshape [[LOAD]] : tensor<16x1x32xf32> -> tensor<16x32xf32>
 // CHECK: tt.dot [[RESHAPE]], {{.*}} : tensor<16x32xf32> * tensor<32x16xf32> -> tensor<16x16xf32>
+// CHECK: [[BASE:%.*]] = tt.addptr %arg1, %c32_i64{{[_0-9]*}} : !tt.ptr<f32>, i64
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor [[BASE]], [%c16_i32, %c32_i32], [%c32_i64, %c1_i64] : <f32>, <16x32xf32>
+// CHECK: [[OUTER:%.*]] = tt.descriptor_load [[DESC]][%c0_i32, %c0_i32] : !tt.tensordesc<16x32xf32> -> tensor<16x32xf32>
+// CHECK: tt.dot [[OUTER]], {{.*}} : tensor<16x32xf32> * tensor<32x16xf32> -> tensor<16x16xf32>
 
 // -----
 
