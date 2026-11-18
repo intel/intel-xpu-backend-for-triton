@@ -15,6 +15,9 @@
 
 namespace mlir::triton::gpu::intel {
 std::string getTypeMangling(mlir::Type type, bool isUnsigned = false);
+/// Returns the `_R<type>` postfix a SPIR-V builtin name uses to encode an
+/// unsigned integer result type, e.g. `_Rushort8` for `vector<8xi16>`.
+std::string getResultTypePostfix(mlir::Type type);
 std::string mangle(llvm::StringRef baseName, llvm::ArrayRef<mlir::Type> types,
                    ArrayRef<bool> isUnsigned = {});
 } // namespace mlir::triton::gpu::intel

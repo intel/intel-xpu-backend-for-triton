@@ -136,6 +136,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
               &gpu::intel::TritonAnnotateModuleOptions::supportBF16Conversion)
       .def_rw("support_predicated_io",
               &gpu::intel::TritonAnnotateModuleOptions::supportPredicatedIO)
+      .def_rw("support_subgroup_bitcast_shuffle",
+              &gpu::intel::TritonAnnotateModuleOptions::
+                  supportSubgroupBitcastShuffle)
       .def_rw("support_subgroup_matrix_multiply_accumulate",
               &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
       .def_rw("support_subgroup_scaled_matrix_multiply_accumulate",
