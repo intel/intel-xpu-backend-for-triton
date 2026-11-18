@@ -618,6 +618,27 @@ def test_descriptor_overlapping_strides_out_of_range_middle_pads(device, with_al
     assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
 
 
+# Collapsing the middle dimension makes strides[0] the 2D block pitch. Here it is
+# 32 f16 elements (64 bytes) against a 64-element (128-byte) head, so rows
+# overlap. A strided view allows that, but a 2D block message needs a pitch no
+# narrower than its width, so the load must read the right values without one.
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_middle_pitch_below_width(device, with_allocator):
+    TOKENS, HEADS, HEAD_DIM, S0, S1, HEAD = 32, 2, 64, 32, 64, 1
+
+    torch.manual_seed(42)
+    a = torch.randn((TOKENS - 1) * S0 + (HEADS - 1) * S1 + HEAD_DIM, dtype=torch.float16, device=device)
+    out = torch.full((TOKENS, HEAD_DIM), -1.0, dtype=torch.float32, device=device)
+    kernel = _overlap_middle_kernel[(1, )](a, out, HEAD, TOKENS, HEADS, HEAD_DIM, S0, S1, TOKENS, HEAD_DIM)
+
+    view = torch.as_strided(a, (TOKENS, HEADS, HEAD_DIM), (S0, S1, 1))
+    torch.testing.assert_close(out, view[:, HEAD].to(torch.float32))
+    llir = kernel.asm["llir"]
+    n2d = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
+    assert n2d == 0, "2D block load with a pitch below its width"
+
+
 @triton.jit
 def _head_tiles_kernel(a, c_ptr, tokens, heads, stride_t, stride_h, BLOCK_M: tl.constexpr, BLOCK_D: tl.constexpr):
     # One (BLOCK_M, BLOCK_D) tile per head, from a host descriptor or one built here.
