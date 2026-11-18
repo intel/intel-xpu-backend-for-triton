@@ -113,38 +113,19 @@ def _emulated_backward(tensor, gradient):
 
 
 def _basic_getitem(tensor, index):
-    """`tensor[index]` for ints, slices, `None` and `...` built from views, or None for any other index.
+    """`tensor[index]` for ints, slices, `None` and `...`, or None for any other index.
 
     `Tensor.__getitem__` takes a device guard in C++ that fails when no device is visible, even for a fake
-    tensor, while `select`/`narrow`/`unsqueeze` do not.
+    tensor, while `as_strided` does not. Indexing a `meta` tensor of the same layout gives the layout of the result.
     """
     index = index if isinstance(index, tuple) else (index, )
-    is_int = lambda item: isinstance(item, int) and not isinstance(item, bool)
-    if not all(item is None or item is Ellipsis or isinstance(item, slice) or is_int(item) for item in index):
+    if not all(item is None or item is Ellipsis or isinstance(item, (int, slice)) for item in index):
         return None
-    if sum(item is Ellipsis for item in index) > 1:
+    try:
+        view = torch.empty_strided(tensor.shape, tensor.stride(), dtype=tensor.dtype, device="meta")[index]
+    except (IndexError, ValueError):
         return None
-    consumed = sum(isinstance(item, slice) or is_int(item) for item in index)
-    if consumed > tensor.dim():
-        return None
-    result, dim = tensor, 0
-    for item in index:
-        if item is None:
-            result = result.unsqueeze(dim)
-            dim += 1
-        elif item is Ellipsis:
-            dim += tensor.dim() - consumed
-        elif isinstance(item, slice):
-            start, stop, step = item.indices(result.shape[dim])
-            if step < 1:
-                return None
-            result = result.narrow(dim, start, max(0, stop - start))
-            if step > 1:
-                result = result.unfold(dim, 1, step).squeeze(-1)
-            dim += 1
-        else:
-            result = result.select(dim, item)
-    return result
+    return tensor.as_strided(view.shape, view.stride(), tensor.storage_offset() + view.storage_offset())
 
 
 class _FakeCudaTensorMode(TorchFunctionMode):
@@ -216,16 +197,8 @@ class _FakeCudaTensorMode(TorchFunctionMode):
             return args[0] if name == "copy_" else None
         # Moving to an accelerator copies under a device guard too; a no-op move returns the tensor itself.
         if name == "to" and isinstance(args[0], torch.Tensor):
-            device, dtype = (kwargs or {}).get("device"), (kwargs or {}).get("dtype")
-            for argument in args[1:]:
-                if isinstance(argument, torch.dtype):
-                    dtype = argument
-                elif isinstance(argument, (str, torch.device)):
-                    device = argument
-                elif isinstance(argument, torch.Tensor):
-                    device, dtype = argument.device, argument.dtype
-            if device is not None and torch.device(device).type != "cpu":
-                device = torch.device(device)
+            device, dtype, *_ = torch._C._nn._parse_to(*args[1:], **(kwargs or {}))
+            if device is not None and device.type != "cpu":
                 tensor = args[0]
                 if (tensor.device.type == device.type and device.index in (None, tensor.device.index)
                         and dtype in (None, tensor.dtype)):
@@ -260,14 +233,10 @@ class _FakeCudaTensorMode(TorchFunctionMode):
 
     def _inherit_autograd_node(self, result, args):
         """An op on the output of an emulated `Function` (`.half()`, a view) still backpropagates into it."""
-        if not isinstance(result, self.fake_tensor_type) or getattr(result, _GRAD_NODE, None) is not None:
-            return
-        for arg in args:
-            node = getattr(arg, _GRAD_NODE, None) if isinstance(arg, torch.Tensor) else None
-            if node is not None and arg is not result:
-                setattr(result, _GRAD_FLAG, True)
-                setattr(result, _GRAD_NODE, node)
-                return
+        node = next((node for arg in args if (node := getattr(arg, _GRAD_NODE, None))), None)
+        if node and isinstance(result, self.fake_tensor_type) and all(arg is not result for arg in args):
+            setattr(result, _GRAD_FLAG, True)
+            setattr(result, _GRAD_NODE, node)
 
 
 class _WarmupCompiledKernel:
