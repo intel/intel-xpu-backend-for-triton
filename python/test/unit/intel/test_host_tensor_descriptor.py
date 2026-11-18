@@ -282,10 +282,10 @@ def _neg_stride_kernel(a_ptr, out_ptr, batch, B: tl.constexpr, R: tl.constexpr, 
     tl.store(out_ptr + offs, acc)
 
 
-# A negative outermost stride (issues/8001, case 2). Merging the slices divided
-# by it and read the block as padding, so it had to decline; the collapse now
-# only offsets the base by it. The base sits at the last slice so the negative
-# stride walks backwards inside the tensor rather than before the allocation.
+# A negative outermost stride (issues/8001, case 2): the load fuses, the collapse
+# offsets the base by the stride, and the right slice is read. The base sits at
+# the last slice so the negative stride walks backwards inside the tensor rather
+# than before the allocation.
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
 def test_descriptor_negative_outer_stride(device, with_allocator):
@@ -655,10 +655,8 @@ def _check_head_tiles(base, shape, strides, ref, host, device):
 
 
 # A runtime negative strides[1] (issues/8072): heads stored in reverse, the base
-# at the last one. Merging the head into the column divided by the stride and
-# fused whatever its sign, so every head but the first landed at a negative
-# column and read as zeros. A host descriptor and one built from kernel
-# arguments both carry the stride as a runtime value.
+# at the last one. Every head must read its own tile. A host descriptor and one
+# built from kernel arguments both carry the stride as a runtime value.
 @pytest.mark.parametrize("host", [True, False])
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
@@ -669,10 +667,9 @@ def test_descriptor_negative_middle_stride(host, device, with_allocator):
 
 
 # A (heads, tokens, head_dim) tensor read as (tokens, heads, head_dim), e.g. BHSD
-# storage seen as BSHD, has strides [head_dim, tokens * head_dim, 1]. Merging put
-# head h at column h * tokens * head_dim of one surface, whose width passed the
-# 24-bit field from head 128 on (128 * 512 * 128 * 2 bytes == 16 MiB), so those
-# heads read as zeros.
+# storage seen as BSHD, has strides [head_dim, tokens * head_dim, 1]. Heads 128
+# and 129 start 16 MiB or more into the tensor (128 * 512 * 128 * 2 bytes), past
+# what a 24-bit 2D block surface field spans, and must read their own tiles too.
 @pytest.mark.parametrize("host", [True, False])
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
