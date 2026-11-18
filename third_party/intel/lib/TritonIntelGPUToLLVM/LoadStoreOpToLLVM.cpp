@@ -2349,12 +2349,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       ArrayRef<Value> ptrElems, ArrayRef<Value> maskElems,
       ArrayRef<Value> otherElems) const {
     auto type = dyn_cast<RankedTensorType>(op.getType());
-    // A block read carries no cache control, so loads with a cache policy keep
-    // the gather path; it also reads global memory only.
-    CachePolicy cachePolicy = getCachePolicy(op.getCachePolicyAttr());
+    // This lowering builds global (addrspace 1) addresses only.
     if (!type || op.getIsVolatile() || valueElemTy.isInteger(1) ||
-        cachePolicy.cacheModifier != CacheModifier::NONE ||
-        cachePolicy.evictionPolicy != EvictionPolicy::NORMAL ||
         cast<PointerType>(getElementTypeOrSelf(op.getPtr().getType()))
                 .getAddressSpace() != PtrAddrSpace::Global ||
         tools::getBoolEnv("TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ"))
@@ -2365,8 +2361,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     if (!read)
       return std::nullopt;
 
-    // The row must be contiguous and every read base word-aligned, and the
-    // mask the same for every element.
     auto &axisInfo =
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass);
     unsigned dim = type.getRank() - 1;
@@ -2388,6 +2382,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Type chunkTy = read->chunkElems == 1
                        ? valueElemTy
                        : Type(vec_ty(valueElemTy, read->chunkElems));
+    TritonGEN::LoadCacheControl cacheControl = tritonToIntelCacheModifier(op);
     auto emitReads = [&]() {
       // Lane l holds word l of each read group, so lane 0's address is this
       // lane's minus l words.
@@ -2399,8 +2394,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         unsigned reg0 = g << read->groupShift;
         Value ptr0 =
             b.gep(ptr_ty(ctx, 1), valueElemTy, ptrElems[reg0], laneOffset);
-        Value words =
-            TritonGEN::SubGroupBlockReadOp::create(rewriter, loc, readTy, ptr0);
+        Value words = TritonGEN::SubGroupBlockReadOp::create(
+            rewriter, loc, readTy, ptr0, cacheControl);
         for (unsigned j = 0; j < read->vec; ++j) {
           Value word = read->vec == 1 ? words
                                       : b.extract_element(read->wordTy, words,
