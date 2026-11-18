@@ -99,7 +99,7 @@ index 70d5e9d935..96d5669b7c 100644
          u = u.contiguous()
      if delta.stride(-1) != 1:
 diff --git a/tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py b/tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py
-index 04601c98cd..853ee8b6d7 100644
+index 04601c98cd..210efddccd 100644
 --- a/tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py
 +++ b/tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py
 @@ -294,7 +294,7 @@ _REAL_GEOMETRIES = [
@@ -120,15 +120,16 @@ index 04601c98cd..853ee8b6d7 100644
  @pytest.mark.parametrize("precision", _PRECISIONS)
  @pytest.mark.parametrize("geometry", _REAL_GEOMETRIES)
  def test_replayssm_standard_decode_real_geometry(
-@@ -372,6 +372,7 @@ def test_replayssm_standard_decode_stochastic_rounding(philox_rounds: int):
+@@ -371,7 +371,7 @@ def test_replayssm_standard_decode_stochastic_rounding(philox_rounds: int):
+     )
  
  
- @pytest.mark.skipif(not torch.cuda.is_available(), reason="Need CUDA device")
+-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Need CUDA device")
 +@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="Need CUDA device")
  @pytest.mark.parametrize(
      "precision",
      [
-@@ -403,7 +404,7 @@ def test_replayssm_standard_decode_desync_write_pos(
+@@ -403,7 +403,7 @@ def test_replayssm_standard_decode_desync_write_pos(
      )
  
  
@@ -137,7 +138,7 @@ index 04601c98cd..853ee8b6d7 100644
  @pytest.mark.parametrize("precision", _PRECISIONS)
  @pytest.mark.parametrize("with_padding", [False, True])
  def test_replayssm_standard_decode_with_batch_indices(
-@@ -548,7 +549,7 @@ _TP_GEOMETRIES = [
+@@ -548,7 +548,7 @@ _TP_GEOMETRIES = [
  ]
  
  
