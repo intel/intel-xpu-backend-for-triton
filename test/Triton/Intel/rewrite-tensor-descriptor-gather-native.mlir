@@ -420,6 +420,21 @@ module {
     tt.return %d : tensor<64x16xf32>
   }
 
+  // COM: ... nor one that is also stored.
+  tt.func public @fp8_cvt_and_store(%arg0: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %idx: tensor<64xi32>, %out: !tt.ptr<f8E4M3FN>) -> tensor<64x128xf32> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cw_i64 = arith.constant 128 : i64
+    %cw_i32 = arith.constant 128 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %cw_i32], [%cw_i64, %c1_i64] : <f8E4M3FN>, <1x128xf8E4M3FN>
+    %g = tt.descriptor_gather %desc[%idx, %c0_i32] : (!tt.tensordesc<1x128xf8E4M3FN>, tensor<64xi32>, i32) -> tensor<64x128xf8E4M3FN>
+    %p = tt.splat %out : !tt.ptr<f8E4M3FN> -> tensor<64x128x!tt.ptr<f8E4M3FN>>
+    tt.store %p, %g : tensor<64x128x!tt.ptr<f8E4M3FN>>
+    %f = tt.fp_to_fp %g : tensor<64x128xf8E4M3FN> -> tensor<64x128xf32>
+    tt.return %f : tensor<64x128xf32>
+  }
+
   // COM: Only f8E4M3FN was measured.
   tt.func public @fp8e5_cvt(%arg0: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %idx: tensor<64xi32>) -> tensor<64x128xf32> {
     %c0_i32 = arith.constant 0 : i32
@@ -453,6 +468,8 @@ module {
 // CLS-LABEL: @fp8_cvt_8k
 // CLS-NOT:   tt.descriptor_gather
 // CLS-LABEL: @fp8_dot
+// CLS-NOT:   tt.descriptor_gather
+// CLS-LABEL: @fp8_cvt_and_store
 // CLS-NOT:   tt.descriptor_gather
 // CLS-LABEL: @fp8e5_cvt
 // CLS-NOT:   tt.descriptor_gather

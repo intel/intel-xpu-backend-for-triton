@@ -1339,9 +1339,10 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
   });
 }
 
-// A gather stays native only in the class measured at parity with the pointer
-// expansion: column offset 0 and a row access proven 16-byte aligned. Power-of-
-// two divisors, not floors, keep non-power-of-two hints from overclaiming.
+// One of the gather admission checks (all are listed at the DescriptorGatherOp
+// case below): column offset 0 and a row access proven 16-byte aligned.
+// Power-of-two divisors, not floors, keep non-power-of-two hints from
+// overclaiming.
 static bool isAlignedNativeGather(triton::DescriptorGatherOp op,
                                   intel::ModuleAxisInfoAnalysis &axisInfo) {
   if (!matchPattern(op.getYOffset(), m_Zero()))
@@ -1362,7 +1363,7 @@ static bool isAlignedNativeGather(triton::DescriptorGatherOp op,
 // The two classes where IGC was shown to schedule the native lowering better
 // than the pointer expansion (B580), within their measured ranges: f16/bf16
 // tiles used only as tt.dot A operands, whose loads reach SLM unconverted, up
-// to 8 KiB per warp on 2 or 4 warps; and f8E4M3FN tiles converted by
+// to 8 KiB per warp on 2 or 4 warps; and f8E4M3FN tiles used only by
 // tt.fp_to_fp at 2-4 KiB per warp on 4 warps.
 static bool isMeasuredNativeGatherClass(triton::DescriptorGatherOp op,
                                         int numWarps) {
@@ -1380,8 +1381,8 @@ static bool isMeasuredNativeGatherClass(triton::DescriptorGatherOp op,
                     use.getOperandNumber() == 0;
            });
   return isa<Float8E4M3FNType>(elemTy) && numWarps == 4 &&
-         bytesPerWarp >= 2048 && bytesPerWarp <= 4096 &&
-         llvm::any_of(result.getUsers(), [](Operation *user) {
+         bytesPerWarp >= 2048 && bytesPerWarp <= 4096 && !result.use_empty() &&
+         llvm::all_of(result.getUsers(), [](Operation *user) {
            return isa<triton::FpToFpOp>(user);
          });
 }
