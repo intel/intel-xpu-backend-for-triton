@@ -169,15 +169,32 @@ class Catalog:  # pylint: disable=too-many-instance-attributes
             if len(hits) > 1:
                 warnings.warn(f"benchmark {bench!r} matches families {hits}; {hits[0]!r} wins", stacklevel=3)
 
+    def _family_applies_alone(self, name: str, spec: Mapping[str, Any]) -> bool:
+        """True if family *name* can apply to a benchmark that has no exact ``benchmarks`` entry.
+
+        A glob may match names the catalog does not list, so it counts. An exact-name pattern
+        counts only if that name has no override and this family is its first match.
+        """
+        for pat in spec["match"]:
+            if any(ch in pat for ch in "*?["):
+                return True
+            hit = self._first_family(pat)
+            if pat not in self.benchmarks and hit is not None and hit[0] == name:
+                return True
+        return False
+
     def _check_history_fits_window(self) -> None:
         """Every reachable threshold combination needs ``min_history <= window``.
 
         The gate keeps only ``window`` points and needs ``min_history`` of them, so a larger
-        ``min_history`` would leave the series permanently without a verdict.
+        ``min_history`` would leave the series permanently without a verdict. A family on its
+        own is skipped when no benchmark can resolve to it (see :meth:`_family_applies_alone`).
         """
         benches = {name: (self._first_family(name), spec) for name, spec in self.benchmarks.items()}
         layers: list[tuple[str, list[Mapping[str, Any]]]] = [("defaults", [])]
-        layers += [(f"family {n!r}", [spec]) for n, spec in self.families.items()]
+        layers += [(f"family {n!r}", [spec])
+                   for n, spec in self.families.items()
+                   if self._family_applies_alone(n, spec)]
         for n, (fam, spec) in benches.items():
             layers.append((f"benchmark {n!r}", ([] if fam is None else [fam[1]]) + [spec]))
         for label, specs in layers:
@@ -214,13 +231,21 @@ def _as_mapping(where: str, value: Any) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise CatalogError(f"{where}: expected a mapping" +
                            (" (is the file path correct?)" if where == "catalog" else ""))
-    return value
+    return _string_keys(where, value)
 
 
 def _spec(where: str, value: Any) -> Mapping[str, Any]:
     """A nested entry (platform, family, benchmark, metric, scope) must be a mapping; null is not one."""
     if not isinstance(value, Mapping):
         raise CatalogError(f"{where}: expected a mapping, got {value!r}")
+    return _string_keys(where, value)
+
+
+def _string_keys(where: str, value: Mapping[Any, Any]) -> Mapping[str, Any]:
+    """Names are looked up as strings, so a YAML key such as ``123`` or ``true`` is an error."""
+    bad = [k for k in value if not isinstance(k, str)]
+    if bad:
+        raise CatalogError(f"{where}: keys must be strings, got {bad!r}")
     return value
 
 
