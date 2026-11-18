@@ -2403,13 +2403,13 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     //       should be rarely seen
     SmallVector<Value> otherElems;
     bool otherIsSplatConstInt = false;
-    int64_t splatVal = 0;
+    APInt splatVal;
     DenseElementsAttr constAttr;
     if (other && isa<IntegerType>(valueElemTy) &&
         matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
         isa<IntegerType>(constAttr.getElementType())) {
       otherIsSplatConstInt = true;
-      splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
+      splatVal = constAttr.getSplatValue<APInt>();
     }
     if (other) {
       otherElems =
@@ -2471,9 +2471,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           v = b.bitcast(v, IntegerType::get(ctx, width));
 
           if (otherIsSplatConstInt) {
-            for (size_t s = 0; s < 32; s += valueElemNBits)
-              splatVal |= splatVal << valueElemNBits;
-            v = b.int_val(width, splatVal);
+            // Replicate the element bits, not the sign-extended value.
+            APInt bits = splatVal.zextOrTrunc(valueElemNBits);
+            v = b.int_val(width, APInt::getSplat(width, bits).getSExtValue());
           }
 
           other_ =

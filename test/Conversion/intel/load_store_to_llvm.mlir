@@ -309,3 +309,41 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
     tt.return
   }
 }
+
+// -----
+
+// COM: A splat integer 'other' is packed into the fallback word of a masked
+// COM: vector load. Negative values must be packed from the element bits, not
+// COM: from the sign-extended value: i8 -2 is 0xFEFEFEFE, i16 -2 is 0xFFFEFFFE.
+
+#b4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+#b2 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: masked_load_negative_other_i8
+  tt.func @masked_load_negative_other_i8(%p: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %n: i32 {tt.divisibility = 16 : i32}) {
+    %r = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #b4>
+    %s = tt.splat %p : !tt.ptr<i8> -> tensor<64x!tt.ptr<i8>, #b4>
+    %a = tt.addptr %s, %r : tensor<64x!tt.ptr<i8>, #b4>, tensor<64xi32, #b4>
+    %ns = tt.splat %n : i32 -> tensor<64xi32, #b4>
+    %m = arith.cmpi slt, %r, %ns : tensor<64xi32, #b4>
+    %o = arith.constant dense<-2> : tensor<64xi8, #b4>
+    // CHECK: [[OTHER:%.*]] = llvm.mlir.constant(-16843010 : i32) : i32
+    // CHECK: triton_gen.predicated_load {{.*}}, [[OTHER]] {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+    %v = tt.load %a, %m, %o : tensor<64x!tt.ptr<i8>, #b4>
+    tt.return
+  }
+
+  // CHECK-LABEL: masked_load_negative_other_i16
+  tt.func @masked_load_negative_other_i16(%p: !tt.ptr<i16> {tt.divisibility = 16 : i32}, %n: i32 {tt.divisibility = 16 : i32}) {
+    %r = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #b2>
+    %s = tt.splat %p : !tt.ptr<i16> -> tensor<32x!tt.ptr<i16>, #b2>
+    %a = tt.addptr %s, %r : tensor<32x!tt.ptr<i16>, #b2>, tensor<32xi32, #b2>
+    %ns = tt.splat %n : i32 -> tensor<32xi32, #b2>
+    %m = arith.cmpi slt, %r, %ns : tensor<32xi32, #b2>
+    %o = arith.constant dense<-2> : tensor<32xi16, #b2>
+    // CHECK: [[OTHER:%.*]] = llvm.mlir.constant(-65538 : i32) : i32
+    // CHECK: triton_gen.predicated_load {{.*}}, [[OTHER]] {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+    %v = tt.load %a, %m, %o : tensor<32x!tt.ptr<i16>, #b2>
+    tt.return
+  }
+}
