@@ -289,6 +289,13 @@ def TTIG_Subgroup2DBlockLoadFromPtrOp : TTIG_Op<"2d_block_load_from_ptr", [
     is relative to the *tensor's* first row, not any individual hardware
     message's first row: the LLVM lowering subtracts each message's own row
     offset from `base_height` before passing it to `triton_gen.2Dblockload`.
+
+    When the `ttig.block_io_runtime_col_limit` attribute is set, `base_width`
+    is the number of valid bytes per row counted from the *tensor's* first
+    column, a whole number of `max(4, element bytes)`-byte granules. The LLVM
+    lowering neither widens it per message nor scales it by `v_blocks`; where
+    it is under the hardware's 64-byte minimum, it moves the surface origin
+    left by the shortfall rather than widen the surface past the bound.
   }];
 
   let arguments = (ins

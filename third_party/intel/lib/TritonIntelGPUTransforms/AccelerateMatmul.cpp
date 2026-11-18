@@ -60,9 +60,10 @@ static void setAttrOnBOperand(Operation *op, StringRef attrName,
 }
 
 unsigned getOpsPerChannel(Type elemType, ModuleOp m) {
-  assert(elemType.isIntOrFloat() && "unsupported type for DpasEncodingAttr");
+  assert((elemType.isIntOrFloat() || isa<tt::PackedFloat4E2M1Type>(elemType)) &&
+         "unsupported type for DpasEncodingAttr");
 
-  unsigned dpasElemBitWidths = elemType.getIntOrFloatBitWidth();
+  unsigned dpasElemBitWidths = getIntOrFloatOrPtrBitWidth(elemType);
   bool supportsFP8 =
       m->hasAttr(ttgi::TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
   if (!supportsFP8 && llvm::isa<Float8E5M2Type, Float8E4M3FNType>(elemType))
@@ -344,7 +345,7 @@ public:
     size_t rank = retShape.size();
     SmallVector<unsigned> repCluster = ttgi::calculateRepCluster(
         *dpasCap, opsPerChan, retShape, threadsPerWarp,
-        oldAType.getElementType().getIntOrFloatBitWidth(),
+        getIntOrFloatOrPtrBitWidth(oldAType.getElementType()),
         isa<Float8E5M2Type, Float8E4M3FNType>(oldAType.getElementType()),
         oldAType.getShape(), oldBType.getShape(), warpsPerTile);
 
@@ -444,7 +445,8 @@ private:
     unsigned rank = shape.size();
     int64_t m = shape[rank - 2], n = shape[rank - 1];
     int64_t k = bType.getShape()[rank - 2];
-    int64_t bBytes = k * n * bType.getElementTypeBitWidth() / 8;
+    int64_t bBytes =
+        k * n * getIntOrFloatOrPtrBitWidth(bType.getElementType()) / 8;
     int64_t accBytes = m * n * cType.getElementTypeBitWidth() / 8;
     // A GRF entry holds one 32-bit value per lane of the DPAS sub-group.
     int64_t grfBytes = int64_t(grfEntries) * dpasCap.executionSize * 4;
@@ -915,7 +917,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
         // a bf16 multiply-add to a `mad` with a bf16 destination, which rounds
         // toward zero. Accumulate in fp32 and round the result once instead,
         // as bf16 DPAS does per instruction. This covers bf16 and fp8 dots
-        // that cannot use DPAS (e.g. fp8 without fp8 DPAS, or mixed fp8).
+        // that cannot use DPAS (e.g. fp8 without fp8 DPAS).
         // fp16 accumulators are intentionally left as is: an fp16 multiply-add
         // rounds to nearest.
         dotOp = accumulateInF32(dotOp);

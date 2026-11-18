@@ -93,12 +93,19 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
                             std::string);
   ADD_PASS_WRAPPER_0("add_fold_fp_to_fp",
                      gpu::intel::createTritonIntelGPUFoldFpToFp);
-  ADD_PASS_WRAPPER_0("add_stage_large_fma_dots_via_slm",
-                     gpu::intel::createTritonIntelGPUStageLargeFMADotsViaSLM);
+  ADD_PASS_OPTION_WRAPPER_2(
+      "add_stage_large_fma_dots_via_slm",
+      gpu::intel::createTritonIntelGPUStageLargeFMADotsViaSLM, unsigned, bool);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
-  ADD_PASS_OPTION_WRAPPER_2(
-      "add_pipeline", gpu::intel::createTritonIntelGPUPipeline, int, bool);
+  m.def("add_pipeline",
+        [](mlir::PassManager &pm, int numStages, bool useBarrier,
+           bool tileBarrier, std::string deviceArch, unsigned coreClockKhz,
+           unsigned memClockMhz) {
+          pm.addPass(gpu::intel::createTritonIntelGPUPipeline(
+              {numStages, useBarrier, tileBarrier, deviceArch, coreClockKhz,
+               memClockMhz}));
+        });
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      gpu::intel::createIntelAllocateSharedMemory);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
@@ -129,6 +136,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
               &gpu::intel::TritonAnnotateModuleOptions::supportBF16Conversion)
       .def_rw("support_predicated_io",
               &gpu::intel::TritonAnnotateModuleOptions::supportPredicatedIO)
+      .def_rw("support_subgroup_bitcast_shuffle",
+              &gpu::intel::TritonAnnotateModuleOptions::
+                  supportSubgroupBitcastShuffle)
       .def_rw("support_subgroup_matrix_multiply_accumulate",
               &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
       .def_rw("support_subgroup_scaled_matrix_multiply_accumulate",
@@ -411,6 +421,17 @@ void init_triton_intel(py::module_ &m) {
       return WalkResult::advance();
     });
     return result.wasInterrupted();
+  });
+
+  // Also clears the attribute, so a stale one is never kept.
+  m.def("set_use_genisa_2d_block_io", [](mlir::ModuleOp &mod, bool useGenISA) {
+    using namespace mlir::triton::gpu::intel;
+    constexpr llvm::StringRef name =
+        TritonIntelGPUDialect::getUseGenISA2DBlockIOAttrName();
+    if (!useGenISA)
+      mod->removeAttr(name);
+    else if (!mod->hasAttr(name))
+      mod->setAttr(name, mlir::Builder(mod.getContext()).getUnitAttr());
   });
 
   m.def("set_is_lts", [](mlir::ModuleOp &mod) {

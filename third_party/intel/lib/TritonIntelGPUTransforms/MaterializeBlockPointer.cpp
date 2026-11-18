@@ -1,6 +1,7 @@
 #include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
+#include "intel/include/Analysis/SymbolicBounds.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
@@ -9,11 +10,13 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/CastInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
@@ -46,6 +49,137 @@ static bool isBlockIOForAllLayoutsExplicitlyDisabled() {
       tt::tools::getStrEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
   return enableBlockIOForAllLayout.has_value() &&
          !enableBlockIOForAllLayout.value();
+}
+
+/// True if \p op is tagged for row-major 2D block reads.
+static bool isRowMajorTagged(Operation *op) {
+  auto attr = op->getAttrOfType<StringAttr>(
+      ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+  return attr && attr.getValue() ==
+                     ttgi::stringifyBlockIOMode(ttgi::BlockIOMode::RowMajor);
+}
+
+/// True if \p root may depend on a program id. Looks through loop iter_args
+/// (init and yield) and the IV's bounds; any other region value, an op with
+/// regions, or running out of budget answers true.
+static bool dependsOnProgramId(Value root) {
+  SmallVector<Value> work{root};
+  DenseSet<Value> seen;
+  while (!work.empty()) {
+    Value v = work.pop_back_val();
+    if (!seen.insert(v).second)
+      continue;
+    if (seen.size() > 256)
+      return true;
+    if (auto arg = dyn_cast<BlockArgument>(v)) {
+      Operation *owner = arg.getOwner()->getParentOp();
+      if (isa<tt::FuncOp>(owner))
+        continue;
+      auto forOp = dyn_cast<scf::ForOp>(owner);
+      if (!forOp)
+        return true;
+      if (arg == forOp.getInductionVar()) {
+        work.append({forOp.getLowerBound(), forOp.getStep()});
+        continue;
+      }
+      OpOperand *init = forOp.getTiedLoopInit(arg);
+      OpOperand *yielded = forOp.getTiedLoopYieldedValue(arg);
+      if (!init || !yielded)
+        return true;
+      work.append({init->get(), yielded->get()});
+      continue;
+    }
+    Operation *def = v.getDefiningOp();
+    if (isa<tt::GetProgramIdOp>(def) || def->getNumRegions() > 0)
+      return true;
+    llvm::append_range(work, def->getOperands());
+  }
+  return false;
+}
+
+/// Byte distance between the tiles that \p op reads in programs pid and pid+1
+/// of each grid axis, at the same iteration. std::nullopt unless the descriptor
+/// has one definition with pid-independent strides, and every pid-dependent
+/// term of its base and of the indices is a constant multiple of a program id,
+/// with a constant stride for the indices.
+static std::optional<std::array<int64_t, 3>>
+programIdByteSteps(tt::DescriptorLoadOp op,
+                   tt::intel::SymbolicBoundsProver &prover) {
+  // Which of several definitions a program uses may itself depend on its id.
+  std::optional<tt::MakeTensorDescOp> def =
+      tt::intel::findMakeTensorDescOp(op.getDesc());
+  if (!def)
+    return std::nullopt;
+  tt::MakeTensorDescOp d = *def;
+  // A pid-dependent pitch moves each row of the tile by a different amount.
+  if (llvm::any_of(d.getStrides(), dependsOnProgramId))
+    return std::nullopt;
+  tt::intel::QueryContext ctx{op, op->getParentOfType<scf::ForOp>()};
+  int64_t elemBytes =
+      llvm::divideCeil(op.getType().getElementTypeBitWidth(), 8);
+  std::array<int64_t, 3> elems{0, 0, 0};
+  auto accumulate = [&](Value v, int64_t scale) {
+    SmallVector<tt::intel::Obligation, 0> obligations;
+    tt::intel::AffineForm form = prover.normalize(v, ctx, obligations);
+    for (auto [sym, coeff] : form.terms()) {
+      if (sym.kind() != tt::intel::SymbolKind::ProgramId) {
+        if (dependsOnProgramId(sym.value()))
+          return false;
+        continue;
+      }
+      int32_t axis =
+          sym.value().getDefiningOp<tt::GetProgramIdOp>().getAxisAsInt();
+      int64_t term;
+      if (llvm::MulOverflow(coeff, scale, term) ||
+          llvm::AddOverflow(elems[axis], term, elems[axis]))
+        return false;
+    }
+    return true;
+  };
+  Value base = d.getBase();
+  for (auto add = base.getDefiningOp<tt::AddPtrOp>(); add;
+       add = base.getDefiningOp<tt::AddPtrOp>()) {
+    if (!accumulate(add.getOffset(), 1))
+      return std::nullopt;
+    base = add.getPtr();
+  }
+  if (dependsOnProgramId(base))
+    return std::nullopt;
+  for (auto [i, idx] : llvm::enumerate(op.getIndices())) {
+    if (!dependsOnProgramId(idx))
+      continue;
+    std::optional<int64_t> stride =
+        tt::intel::getFoldedConstantValue(d.getStrides()[i]);
+    if (!stride || !accumulate(idx, *stride))
+      return std::nullopt;
+  }
+  for (int64_t &e : elems)
+    if (llvm::MulOverflow(e, elemBytes, e))
+      return std::nullopt;
+  return elems;
+}
+
+/// Issue #8458 (B580): 2D reads by many programs whose tiles are a power of
+/// two above 256 KiB apart ran up to 1.42x slower than gathers; smaller and
+/// non-power-of-two strides did not. Unknown steps are refused too.
+static bool
+programIdStepsAllowRelayout(tt::DescriptorLoadOp op,
+                            tt::intel::SymbolicBoundsProver &prover) {
+  std::optional<std::array<int64_t, 3>> steps = programIdByteSteps(op, prover);
+  if (!steps) {
+    LDBG("Program-id address step is not a known constant; skip relayout");
+    return false;
+  }
+  for (int64_t step : *steps) {
+    uint64_t mag = step < 0 ? 0 - uint64_t(step) : uint64_t(step);
+    if (mag > (uint64_t(256) << 10) && llvm::isPowerOf2_64(mag)) {
+      LDBG("Program-id address step " << step
+                                      << " B is a power of two above 256 KiB; "
+                                         "skip relayout");
+      return false;
+    }
+  }
+  return true;
 }
 
 // Check a descriptor base pointer or pitch against an alignment requirement.
@@ -111,7 +245,7 @@ static bool isLeadingRebaseAligned(
   unsigned descRank = op.getDesc().getType().getBlockType().getRank();
   if (srcRank >= descRank)
     return true;
-  unsigned elementWidth = srcType.getElementTypeBitWidth();
+  unsigned elementWidth = getIntOrFloatOrPtrBitWidth(srcType.getElementType());
   if (elementWidth % 8 != 0 || shapeRank != descRank)
     return false;
   unsigned strideDivisor = std::max(1u, 4 / (elementWidth / 8));
@@ -175,13 +309,22 @@ public:
       return;
     }
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+    // Built on first use, before any relayout. A function's stride verdicts
+    // are taken before its loads are retyped, and only scalars are queried.
+    // The guard only calls normalize, which never reads the solver: not run.
+    DataFlowSolver solver;
+    std::unique_ptr<tt::intel::SymbolicBoundsProver> prover;
     mod.walk([&](tt::FuncOp func) {
       bool funcHasDot = false;
+      bool hasTaggedPtrLoad = false;
       SmallVector<tt::DescriptorLoadOp> loads;
       SmallVector<tt::ReduceOp> reduces;
       func.walk([&](Operation *op) {
         if (isa<tt::DotOp, tt::DotScaledOp>(op))
           funcHasDot = true;
+        else if (isa<tt::LoadOp>(op))
+          hasTaggedPtrLoad |=
+              op->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
         else if (auto load = dyn_cast<tt::DescriptorLoadOp>(op))
           loads.push_back(load);
         else if (auto reduce = dyn_cast<tt::ReduceOp>(op))
@@ -195,7 +338,28 @@ public:
       }
       if (!satisfiesRelayoutGates(func, loads, reduces, threadsPerWarp))
         return;
-      for (tt::DescriptorLoadOp load : loads)
+      SmallVector<tt::DescriptorLoadOp> candidates(
+          llvm::make_filter_range(loads, isRowMajorTagged));
+      if (candidates.empty())
+        return;
+      // The stride guard only sees descriptor loads; RemoveLayoutConversions
+      // can move an unanchored tagged pointer load, in either mode, into a
+      // relaid-out layout.
+      if (hasTaggedPtrLoad) {
+        LDBG("Function " << func.getName()
+                         << " has a block_io pointer load; skip relayout");
+        return;
+      }
+      if (!prover)
+        prover = std::make_unique<tt::intel::SymbolicBoundsProver>(
+            solver, getAnalysis<DominanceInfo>(), mod);
+      // A refused load keeps ttig.block_io, so RemoveLayoutConversions could
+      // move it into an allowed sibling's layout: all candidates or none.
+      if (!llvm::all_of(candidates, [&](tt::DescriptorLoadOp load) {
+            return programIdStepsAllowRelayout(load, *prover);
+          }))
+        return;
+      for (tt::DescriptorLoadOp load : candidates)
         relayoutDescriptorLoadForBlockIO(load, axisInfoAnalysis);
     });
   }
@@ -280,7 +444,8 @@ private:
       return;
     }
 
-    unsigned elementWidth = tensorType.getElementTypeBitWidth();
+    unsigned elementWidth =
+        getIntOrFloatOrPtrBitWidth(tensorType.getElementType());
     LDBG("elementWidth: " << elementWidth);
 
     // The row_major attribute stamped below requires a unit last stride. The
@@ -394,7 +559,7 @@ private:
           strideInfo ? strideInfo->getStride(otherDim) : -1;
       Type elemTy =
           cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
-      unsigned elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
+      unsigned elemSizeInBytes = getIntOrFloatOrPtrBitWidth(elemTy) / 8;
       if (otherDimStride >= 0) {
         if ((otherDimStride * elemSizeInBytes) % 16 != 0) {
           LDBG("Non 16-byte aligned stride: " << otherDimStride);
@@ -465,8 +630,10 @@ private:
   /// constancy 1 along the M dim, because the compare visitor can only derive
   /// constancy from the divisibility of both sides.
   ///
-  /// For a `tt::LoadOp`, such a mask may still be a `ttgi::matchRowLimitMask`
-  /// row-limit pattern, so permit block IO here too.
+  /// For a `tt::LoadOp`, such a mask may still be a
+  /// `ttgi::matchBoundaryCheckMask` row-limit pattern, so permit block IO here
+  /// too. It is the matcher LowerTo2DBlockLoad uses, so a mask with several
+  /// uniform conjuncts is permitted exactly when it will become `base_height`.
   /// `contiguousDim`/`strideInfo` must match what LowerTo2DBlockLoad later
   /// uses, or stamping `ttig.block_io` here de-anchors the load without it
   /// gaining a real 2D block read. For the same reason the bypass is skipped
@@ -488,14 +655,15 @@ private:
         unsigned pitchDim = (*contiguousDim == rank - 1) ? rank - 2 : rank - 1;
         bool pitchDimIsBroadcast =
             strideInfo && strideInfo->getStride(pitchDim) == 0;
-        if (ttgi::matchRowLimitMask(mask, op.getOther(), maskTy.getShape(),
-                                    *contiguousDim, pitchDimIsBroadcast)) {
+        if (ttgi::matchBoundaryCheckMask(mask, op.getOther(), maskTy.getShape(),
+                                         *contiguousDim, pitchDimIsBroadcast,
+                                         op)) {
           // Skip the bypass if LowerTo2DBlockLoad would reject the pitch.
-          unsigned elemBits = cast<tt::PointerType>(
-                                  cast<RankedTensorType>(op.getPtr().getType())
-                                      .getElementType())
-                                  .getPointeeType()
-                                  .getIntOrFloatBitWidth();
+          unsigned elemBits = getIntOrFloatOrPtrBitWidth(
+              cast<tt::PointerType>(
+                  cast<RankedTensorType>(op.getPtr().getType())
+                      .getElementType())
+                  .getPointeeType());
           int64_t stride = strideInfo ? strideInfo->getStride(pitchDim) : -1;
           bool pitchOk = ttgi::isBlockPitchSupported(
               stride >= 0 ? std::optional<int64_t>(stride * elemBits / 8)
@@ -749,7 +917,7 @@ private:
     // Validate HW constraints common to both loads and stores.
     Type pointeeTy =
         cast<tt::PointerType>(ptrTensorTy.getElementType()).getPointeeType();
-    unsigned elemBits = pointeeTy.getIntOrFloatBitWidth();
+    unsigned elemBits = getIntOrFloatOrPtrBitWidth(pointeeTy);
     unsigned elemBytes = elemBits / 8;
 
     // Minimum pitch is 64 bytes.
@@ -1163,7 +1331,8 @@ private:
     // comparing its input and result types, so a candidate's type can differ.
     tt::TensorDescType descType = cast<tt::TensorDescType>(desc.getType());
     RankedTensorType tensorType = descType.getBlockType();
-    unsigned elementWidth = tensorType.getElementTypeBitWidth();
+    unsigned elementWidth =
+        getIntOrFloatOrPtrBitWidth(tensorType.getElementType());
     LDBG("strideOneDim: " << strideOneDimVal);
 
     // Ensure the base ptr is 4-byte aligned.
@@ -1318,8 +1487,8 @@ private:
   /// The relayout's correctness gates, over all of \p func: all eligible loads
   /// of the function are relaid out, or none. A refused load keeps
   /// ttig.block_io without an anchor, so RemoveLayoutConversions could move it
-  /// into an anchored sibling's layout, making it a 2D read after all. Pointer
-  /// tt.loads tagged for 2D reads are not considered.
+  /// into an anchored sibling's layout, making it a 2D read after all. The
+  /// caller refuses functions with a tagged pointer tt.load.
   static bool satisfiesRelayoutGates(tt::FuncOp func,
                                      ArrayRef<tt::DescriptorLoadOp> loads,
                                      ArrayRef<tt::ReduceOp> reduces,
@@ -1462,11 +1631,7 @@ private:
       return;
     }
 
-    auto blockIOAttr = op->getAttrOfType<StringAttr>(
-        ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
-    if (!blockIOAttr ||
-        blockIOAttr.getValue() !=
-            ttgi::stringifyBlockIOMode(ttgi::BlockIOMode::RowMajor)) {
+    if (!isRowMajorTagged(op)) {
       LDBG("Not tagged ttig.block_io = row_major; skip relayout");
       return;
     }

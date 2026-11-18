@@ -77,13 +77,13 @@ env:
   # Suites that are split into NUM_SHARDS shards, each shard runs on its own runner
   PARALLEL_SUITES: ""
   # Suites that are run without sharding, one runner per suite
-  SEQUENTIAL_SUITES: "minicore language_and_scaled_dot gluon triton-kernels rest"
+  SEQUENTIAL_SUITES: "minicore_gluon language_and_scaled_dot triton-kernels rest"
 
 jobs:
   build:
     name: Build
     timeout-minutes: 720
-    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
+    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "gpu", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -213,7 +213,7 @@ jobs:
       matrix:
         loop: ${{ fromJson(needs.build.outputs.integration-tests-matrix) }}
     timeout-minutes: 720
-    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
+    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "gpu", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     env:
       TRITON_XPU_GEN_NATIVE_CODE: 1
       PYTEST_ADDOPTS: "-p triton._compile_warmup"
@@ -263,7 +263,7 @@ jobs:
       - name: Report environment details
         timeout-minutes: 1
         run: |
-          if [ "${{ matrix.loop.suite }}" == "minicore" ]; then
+          if [ "${{ matrix.loop.suite }}" == "minicore_gluon" ]; then
             reports_file="reports/.env"
           else
             reports_file="/dev/null"
@@ -316,7 +316,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --proton
 
       - name: Warm regression compile cache
-        if: matrix.loop.suite == 'minicore'
+        if: matrix.loop.suite == 'minicore_gluon'
         uses: ./.github/actions/warm-compile-cache
         with:
           working-directory: python/test/regression
@@ -324,8 +324,17 @@ jobs:
           pytest-targets: . --ignore=test_performance.py
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
+      - name: Warm intel compile cache
+        if: matrix.loop.suite == 'minicore_gluon'
+        uses: ./.github/actions/warm-compile-cache
+        with:
+          working-directory: python/test/unit
+          skiplist-name: intel
+          pytest-targets: intel/
+          ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
+
       - name: Run minicore tests
-        if: matrix.loop.suite == 'minicore'
+        if: matrix.loop.suite == 'minicore_gluon'
         run: |
           ${{ env.TRITON_TEST_CMD }} --minicore
 
@@ -383,7 +392,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --debug
 
       - name: Warm gluon compile cache
-        if: matrix.loop.suite == 'gluon' && inputs.driver_version == 'rolling'
+        if: matrix.loop.suite == 'minicore_gluon' && inputs.driver_version == 'rolling'
         uses: ./.github/actions/warm-compile-cache
         with:
           working-directory: python/test/gluon
@@ -392,7 +401,7 @@ jobs:
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
 
       - name: Run gluon tests
-        if: matrix.loop.suite == 'gluon' && inputs.driver_version == 'rolling'
+        if: matrix.loop.suite == 'minicore_gluon' && inputs.driver_version == 'rolling'
         run: |
           ${{ env.TRITON_TEST_CMD }} --gluon
 
@@ -436,20 +445,7 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
 
-      - name: Install transformers
-        if: matrix.loop.suite == 'rest'
-        run: |
-          cd pytorch
-          pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
-
-      - name: Run E2E test
-        if: matrix.loop.suite == 'rest'
-        run: |
-          timeout -s KILL 4900 ${{ env.TRITON_TEST_CMD }} --inductor || ${{ inputs.ignore_errors }}
-
-      # Skipped when gluon has no warmup to compare against (see the gluon steps above).
       - name: Verify compile warmup completeness
-        if: matrix.loop.suite != 'gluon' || inputs.driver_version == 'rolling'
         run: |
           python -m triton._test_runner report --require-complete \
             || ${{ inputs.ignore_errors || inputs.enable_unskip }}

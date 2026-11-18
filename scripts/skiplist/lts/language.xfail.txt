@@ -8,3 +8,24 @@ python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_redu
 # Below tests require AGAMA 1208 or above
 python/test/unit/language/test_core.py::test_side_effectful_reduction
 python/test/unit/language/test_core.py::test_side_effectful_reduction_2d
+
+# requires CUDA
+python/test/unit/language/test_core.py::test_side_effectful_scan
+# test_inline_asm is only supported in CUDA
+python/test/unit/language/test_core.py::test_inline_asm
+python/test/unit/language/test_core.py::test_inline_asm_packed
+python/test/unit/language/test_core.py::test_inline_asm_multiple_outputs
+python/test/unit/language/test_core.py::test_inline_asm_packed_multiple_outputs
+python/test/unit/language/test_core.py::test_inline_asm_with_pointers
+# Direct f16/bf16 conversions require SM90
+python/test/unit/language/test_conversions.py::test_typeconvert_fp16_bf16_direct
+# Only supported on CUDA and HIP
+python/test/unit/language/test_core.py::test_num_ctas_pre_sm90
+# Tests NVIDIA explicit-rounding conversion lowering
+python/test/unit/language/test_conversions.py::test_typeconvert_rounding_edges
+# fnuz fp8 is an AMD format
+python/test/unit/language/test_conversions.py::test_typeconvert_upcast_fnuz_nan
+# tests NVIDIA E5M2 conversion
+python/test/unit/language/test_conversions.py::test_typeconvert_e5m2_bf16_all_encodings
+# tests NVIDIA saturating FP8 conversion
+python/test/unit/language/test_conversions.py::test_typeconvert_fp8_rounding_edges

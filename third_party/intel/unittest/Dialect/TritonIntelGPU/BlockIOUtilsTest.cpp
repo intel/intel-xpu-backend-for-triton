@@ -278,6 +278,11 @@ public:
                                  rhs);
   }
 
+  Value cmpSgt(Value lhs, Value rhs) {
+    return arith::CmpIOp::create(builder, loc(), arith::CmpIPredicate::sgt, lhs,
+                                 rhs);
+  }
+
   Value addI32(Value lhs, Value rhs) {
     return arith::AddIOp::create(builder, loc(), lhs, rhs);
   }
@@ -483,7 +488,7 @@ TEST_F(MatchRowLimitMaskTest, NonSplatBoundRejected) {
 }
 
 // 2 * arange is neither a bare arange nor base + arange.
-TEST_F(MatchRowLimitMaskTest, NonArangeLhsRejected) {
+TEST_F(MatchRowLimitMaskTest, NonArangeIndexRejected) {
   SmallVector<int64_t, 2> shape = {256, 32};
   Value scaled = mulI32(arange(256), splatTo(constI(2, 32), {256}));
   Value mask =
@@ -495,22 +500,114 @@ TEST_F(MatchRowLimitMaskTest, NonArangeLhsRejected) {
                    .has_value());
 }
 
-// sext to i64 still matches the arange, but base_height requires i32.
-TEST_F(MatchRowLimitMaskTest, NonI32BoundRejected) {
+// `sext(arange(0, N)) < bound64`, with no explicit base: matches with a null
+// `rowBase` and the i64 bound.
+TEST_F(MatchRowLimitMaskTest, I64BareArangeHasNullRowBase) {
   SmallVector<int64_t, 2> shape = {256, 32};
-  Value idx64 = arith::ExtSIOp::create(
-      builder, loc(), RankedTensorType::get({256}, builder.getI64Type()),
-      arange(256));
-  Value idx64_2D = expandDims(idx64, /*axis=*/1, {256, 1});
+  auto i64TensorTy = RankedTensorType::get({256}, builder.getI64Type());
+  Value idx64 =
+      arith::ExtSIOp::create(builder, loc(), i64TensorTy, arange(256));
   Value bound64 = constI(100, 64);
-  Value boundSplat2D = splatTo(bound64, {256, 1});
-  Value cmp = cmpSlt(idx64_2D, boundSplat2D);
-  Value mask = broadcastTo(cmp, shape);
+  Value mask = buildRowLimitMask(idx64, /*boundedDim=*/0, shape, bound64);
 
-  EXPECT_FALSE(matchRowLimitMask(mask, /*other=*/Value(), shape,
-                                 /*contiguousDim=*/1,
-                                 /*pitchDimIsBroadcast=*/false)
-                   .has_value());
+  auto result = matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                  /*contiguousDim=*/1,
+                                  /*pitchDimIsBroadcast=*/false);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_FALSE(result->rowBase);
+  EXPECT_EQ(result->bound, bound64);
+}
+
+// An i64 row index (issue #8565: Helion computes it with `.to(tl.int64)`):
+// `(rowBase64 + sext(arange)) < bound64` matches, with i64 `rowBase`/`bound`.
+TEST_F(MatchRowLimitMaskTest, I64RowIndexAccepted) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  auto i64TensorTy = RankedTensorType::get({256}, builder.getI64Type());
+  Value idx64 =
+      arith::ExtSIOp::create(builder, loc(), i64TensorTy, arange(256));
+  Value rowBase64 = constI(7, 64);
+  Value rows64 = addI32(splatTo(rowBase64, {256}), idx64);
+  Value bound64 = constI(100, 64);
+  Value mask = buildRowLimitMask(rows64, /*boundedDim=*/0, shape, bound64);
+
+  auto result = matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                  /*contiguousDim=*/1,
+                                  /*pitchDimIsBroadcast=*/false);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBase, rowBase64);
+  EXPECT_EQ(result->bound, bound64);
+}
+
+// The shape Helion's grouped GEMM emits: an i64 base summed from
+// sign-extended i32 scalars, and an i32 bound sign-extended before the splat.
+TEST_F(MatchRowLimitMaskTest, I64RowIndexFromExtendedI32Accepted) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Type i64Ty = builder.getI64Type();
+  auto i64TensorTy = RankedTensorType::get({256}, i64Ty);
+  Value groupStart =
+      arith::ExtSIOp::create(builder, loc(), i64Ty, constI(4096, 32));
+  Value tileOffset =
+      arith::ExtSIOp::create(builder, loc(), i64Ty, constI(256, 32));
+  Value rowBase64 = addI32(groupStart, tileOffset);
+  Value idx64 =
+      arith::ExtSIOp::create(builder, loc(), i64TensorTy, arange(256));
+  Value rows64 = addI32(splatTo(rowBase64, {256}), idx64);
+  Value bound64 =
+      arith::ExtSIOp::create(builder, loc(), i64Ty, constI(8192, 32));
+  Value mask = buildRowLimitMask(rows64, /*boundedDim=*/0, shape, bound64);
+
+  auto result = matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                  /*contiguousDim=*/1,
+                                  /*pitchDimIsBroadcast=*/false);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBase, rowBase64);
+  EXPECT_EQ(result->bound, bound64);
+}
+
+// An extension between an i32 base and an i64 compare is rejected: the
+// matcher looks through it, so the height would be computed from the i32 base
+// with the wrong extension (base 0x80000000 under `extui` is +2^31, but
+// computeRowLimitHeight sign-extends it to -2^31 and returns the full tile).
+TEST_F(MatchRowLimitMaskTest, I32BaseExtendedToI64CompareRejected) {
+  SmallVector<int64_t, 2> shape = {64, 32};
+  Type i64Ty = builder.getI64Type();
+  auto i64TensorTy = RankedTensorType::get({64}, i64Ty);
+  Value bound64 = constI(2147483664, 64);
+
+  // extui(base32 + arange) < bound64, extension around the add.
+  {
+    Value rows32 = addI32(splatTo(constI(INT32_MIN, 32), {64}), arange(64));
+    Value rows64 = arith::ExtUIOp::create(builder, loc(), i64TensorTy, rows32);
+    Value mask = buildRowLimitMask(rows64, /*boundedDim=*/0, shape, bound64);
+    EXPECT_FALSE(matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                   /*contiguousDim=*/1,
+                                   /*pitchDimIsBroadcast=*/false)
+                     .has_value());
+  }
+  // extui(splat(base32)) + sext(arange) < bound64, extension on the splat.
+  {
+    Value base64 = arith::ExtUIOp::create(builder, loc(), i64TensorTy,
+                                          splatTo(constI(INT32_MIN, 32), {64}));
+    Value idx64 =
+        arith::ExtSIOp::create(builder, loc(), i64TensorTy, arange(64));
+    Value mask = buildRowLimitMask(addI32(base64, idx64), /*boundedDim=*/0,
+                                   shape, bound64);
+    EXPECT_FALSE(matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                   /*contiguousDim=*/1,
+                                   /*pitchDimIsBroadcast=*/false)
+                     .has_value());
+  }
+  // extsi(base32 + arange) < bound64: conservatively rejected too.
+  {
+    Value rows32 = addI32(splatTo(constI(7, 32), {64}), arange(64));
+    Value rows64 = arith::ExtSIOp::create(builder, loc(), i64TensorTy, rows32);
+    Value mask =
+        buildRowLimitMask(rows64, /*boundedDim=*/0, shape, constI(100, 64));
+    EXPECT_FALSE(matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                   /*contiguousDim=*/1,
+                                   /*pitchDimIsBroadcast=*/false)
+                     .has_value());
+  }
 }
 
 // A rank-3 tensor (batch dim 0, pitch dim 1, contiguous dim 2) with just the
@@ -612,8 +709,10 @@ TEST_F(MatchRowLimitMaskTest, ExtraPredVaryingAlongContiguousDimRejected) {
                    .has_value());
 }
 
-// computeRowLimitHeight: `clamp(bound - rowBase, 0, rowExtent)`, widened to
-// i64 before subtracting to avoid overflow.
+// computeRowLimitHeight: `clamp(bound - rowBase, 0, rowExtent)` as an i32.
+// i32 inputs (or no rowBase) are widened to i64 and clamped with signed
+// min/max; i64 inputs, whose difference can overflow, use
+// `(bound <=s rowBase) ? 0 : minui(bound - rowBase, rowExtent)`.
 class ComputeRowLimitHeightTest : public ::testing::Test {
 public:
   void SetUp() override {
@@ -649,6 +748,252 @@ TEST_F(ComputeRowLimitHeightTest, NullRowBaseSkipsSubtraction) {
   auto maxOp = minOp.getLhs().getDefiningOp<arith::MaxSIOp>();
   ASSERT_TRUE(maxOp);
   EXPECT_TRUE(isa<arith::ExtSIOp>(maxOp.getLhs().getDefiningOp()));
+}
+
+// An i64 bound with no rowBase can't overflow: the bound feeds the signed
+// clamp directly, with no subtraction and no sign extension.
+TEST_F(ComputeRowLimitHeightTest, I64BoundNullRowBase) {
+  Value bound =
+      arith::ConstantIntOp::create(builder, loc(), builder.getI64Type(), 100);
+  Value height = computeRowLimitHeight(builder, loc(), bound, /*rowBase=*/{},
+                                       /*rowExtent=*/64);
+  ASSERT_TRUE(height.getType().isInteger(32));
+
+  auto trunc = height.getDefiningOp<arith::TruncIOp>();
+  ASSERT_TRUE(trunc);
+  auto minOp = trunc.getIn().getDefiningOp<arith::MinSIOp>();
+  ASSERT_TRUE(minOp);
+  auto maxOp = minOp.getLhs().getDefiningOp<arith::MaxSIOp>();
+  ASSERT_TRUE(maxOp);
+  EXPECT_EQ(maxOp.getLhs(), bound);
+}
+
+// i64 inputs can overflow `bound - rowBase`, so the height is
+// `(bound <=s rowBase) ? 0 : minui(bound - rowBase, rowExtent)`, with no
+// sign extension of the already-i64 operands.
+TEST_F(ComputeRowLimitHeightTest, I64InputsUseOverflowSafeClamp) {
+  Value bound =
+      arith::ConstantIntOp::create(builder, loc(), builder.getI64Type(), 100);
+  Value rowBase =
+      arith::ConstantIntOp::create(builder, loc(), builder.getI64Type(), 7);
+  Value height = computeRowLimitHeight(builder, loc(), bound, rowBase,
+                                       /*rowExtent=*/64);
+  ASSERT_TRUE(height.getType().isInteger(32));
+
+  auto trunc = height.getDefiningOp<arith::TruncIOp>();
+  ASSERT_TRUE(trunc);
+  auto select = trunc.getIn().getDefiningOp<arith::SelectOp>();
+  ASSERT_TRUE(select);
+  auto cmp = select.getCondition().getDefiningOp<arith::CmpIOp>();
+  ASSERT_TRUE(cmp);
+  EXPECT_EQ(cmp.getPredicate(), arith::CmpIPredicate::sle);
+  EXPECT_EQ(cmp.getLhs(), bound);
+  EXPECT_EQ(cmp.getRhs(), rowBase);
+  auto minOp = select.getFalseValue().getDefiningOp<arith::MinUIOp>();
+  ASSERT_TRUE(minOp);
+  auto sub = minOp.getLhs().getDefiningOp<arith::SubIOp>();
+  ASSERT_TRUE(sub);
+  EXPECT_EQ(sub.getLhs(), bound);
+  EXPECT_EQ(sub.getRhs(), rowBase);
+}
+
+// matchBoundaryCheckMask, reusing MatchRowLimitMaskTest's builders.
+class MatchBoundaryCheckMaskTest : public MatchRowLimitMaskTest {
+protected:
+  std::optional<BoundaryMaskInfo> match(Value mask, ArrayRef<int64_t> shape,
+                                        Value other = Value()) {
+    // The mask's own op stands in for the load as the point the index base's
+    // sign is asked at.
+    return matchBoundaryCheckMask(mask, other, shape, /*contiguousDim=*/1,
+                                  /*pitchDimIsBroadcast=*/false,
+                                  mask.getDefiningOp());
+  }
+
+  Value cmpSge(Value lhs, Value rhs) {
+    return arith::CmpIOp::create(builder, loc(), arith::CmpIPredicate::sge, lhs,
+                                 rhs);
+  }
+
+  // `arange(0, extent) >= 0` along `varyDim`, broadcast to `tensorShape`.
+  Value buildLowerBound(unsigned varyDim, ArrayRef<int64_t> tensorShape) {
+    SmallVector<int64_t> narrowShape(tensorShape.size(), 1);
+    narrowShape[varyDim] = tensorShape[varyDim];
+    Value indexND =
+        expandToShape(arange(tensorShape[varyDim]), varyDim, narrowShape);
+    Value zero = splatTo(constI(0, 32), narrowShape);
+    return broadcastTo(cmpSge(indexND, zero), tensorShape);
+  }
+};
+
+// Unlike matchRowLimitMask, which keeps at most one, every conjunct uniform
+// along both surface dims is kept, splats included: a batch-dim predicate and
+// a scalar flag can both reach one mask.
+TEST_F(MatchBoundaryCheckMaskTest, SeveralUniformConjunctsKept) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value rowBound = constI(100, 32);
+  Value rowMask = buildBoundedMask(arange(256), /*varyDim=*/0, shape, rowBound);
+  Value flagA = splatTo(constI(1, 1), shape);
+  Value flagB = splatTo(constI(1, 1), shape);
+
+  auto result = match(andI(flagA, andI(rowMask, flagB)), shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, rowBound);
+  ASSERT_EQ(result->extraPreds.size(), 2u);
+  EXPECT_EQ(result->extraPreds[0], flagA);
+  EXPECT_EQ(result->extraPreds[1], flagB);
+}
+
+// Two pitch-dim bounds are two clamps, and base_height holds only one.
+TEST_F(MatchBoundaryCheckMaskTest, SecondRowBoundRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value first =
+      buildBoundedMask(arange(256), /*varyDim=*/0, shape, constI(100, 32));
+  Value second =
+      buildBoundedMask(arange(256), /*varyDim=*/0, shape, constI(90, 32));
+  EXPECT_FALSE(match(andI(first, second), shape).has_value());
+}
+
+// Only a zero `other` matches the hardware's zero fill.
+TEST_F(MatchBoundaryCheckMaskTest, NonZeroFillOtherRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value mask =
+      buildBoundedMask(arange(256), /*varyDim=*/0, shape, constI(100, 32));
+  EXPECT_FALSE(
+      match(mask, shape, denseIntSplat(shape, /*value=*/1)).has_value());
+}
+
+// base_height cannot express a bound when every row is the same row.
+TEST_F(MatchBoundaryCheckMaskTest, PitchDimBroadcastRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value mask =
+      buildBoundedMask(arange(256), /*varyDim=*/0, shape, constI(100, 32));
+  EXPECT_FALSE(matchBoundaryCheckMask(mask, /*other=*/Value(), shape,
+                                      /*contiguousDim=*/1,
+                                      /*pitchDimIsBroadcast=*/true,
+                                      mask.getDefiningOp())
+                   .has_value());
+}
+
+// An AND reused on both sides at every level is a DAG of 2^depth paths; it is
+// walked once per value, and the repeated conjuncts collapse into one each.
+TEST_F(MatchBoundaryCheckMaskTest, SharedAndVisitedOnce) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value rowBound = constI(100, 32);
+  Value flag = splatTo(constI(1, 1), shape);
+  Value mask =
+      andI(buildBoundedMask(arange(256), /*varyDim=*/0, shape, rowBound), flag);
+  for (int i = 0; i < 64; ++i)
+    mask = andI(mask, mask);
+
+  auto result = match(mask, shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, rowBound);
+  ASSERT_EQ(result->extraPreds.size(), 1u);
+  EXPECT_EQ(result->extraPreds.front(), flag);
+}
+
+// `bound > index` is the same bound with the index on the right (the form
+// `K > offs_k` takes in the IR).
+TEST_F(MatchBoundaryCheckMaskTest, SwappedComparisonAccepted) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  SmallVector<int64_t, 2> narrow = {256, 1};
+  Value rowBound = constI(100, 32);
+  Value index2D = expandDims(arange(256), /*axis=*/1, narrow);
+  Value mask = broadcastTo(cmpSgt(splatTo(rowBound, narrow), index2D), shape);
+
+  auto result = match(mask, shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, rowBound);
+}
+
+// `index > bound` is a lower bound, which base_height cannot express.
+TEST_F(MatchBoundaryCheckMaskTest, IndexGreaterThanBoundRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  SmallVector<int64_t, 2> narrow = {256, 1};
+  Value index2D = expandDims(arange(256), /*axis=*/1, narrow);
+  Value bound2D = splatTo(constI(100, 32), narrow);
+  Value mask = broadcastTo(cmpSgt(index2D, bound2D), shape);
+  EXPECT_FALSE(match(mask, shape).has_value());
+}
+
+// A bare `arange` starts at zero, so a lower bound next to the upper bound is
+// vacuous and dropped.
+TEST_F(MatchBoundaryCheckMaskTest, LowerBoundDroppedNextToUpperBound) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value rowBound = constI(100, 32);
+  Value rowMask = andI(buildLowerBound(/*varyDim=*/0, shape),
+                       buildBoundedMask(arange(256), 0, shape, rowBound));
+
+  auto result = match(rowMask, shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, rowBound);
+  EXPECT_TRUE(result->extraPreds.empty());
+}
+
+// Alone it is the whole mask, and dropping it would make the load unmasked.
+TEST_F(MatchBoundaryCheckMaskTest, LowerBoundAloneRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  EXPECT_FALSE(match(buildLowerBound(/*varyDim=*/0, shape), shape).has_value());
+}
+
+// `index >= 8` excludes rows the surface would read, so it is not vacuous.
+TEST_F(MatchBoundaryCheckMaskTest, NonZeroLowerBoundRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  SmallVector<int64_t, 2> narrow = {256, 1};
+  Value index2D = expandDims(arange(256), /*axis=*/1, narrow);
+  Value lower =
+      broadcastTo(cmpSge(index2D, splatTo(constI(8, 32), narrow)), shape);
+  Value upper =
+      buildBoundedMask(arange(256), /*varyDim=*/0, shape, constI(100, 32));
+  EXPECT_FALSE(match(andI(lower, upper), shape).has_value());
+}
+
+// A lower and an upper bound that start the index at different places are not
+// the two halves of one boundary check.
+TEST_F(MatchBoundaryCheckMaskTest, MismatchedBasesOnOneDimRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value based = addI32(splatTo(constI(8, 32), {256}), arange(256));
+  Value upper = buildBoundedMask(based, /*varyDim=*/0, shape, constI(100, 32));
+  EXPECT_FALSE(match(andI(buildLowerBound(/*varyDim=*/0, shape), upper), shape)
+                   .has_value());
+}
+
+// `0 <= index` is the lower bound with the index on the right.
+TEST_F(MatchBoundaryCheckMaskTest, SwappedLowerBoundAccepted) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  SmallVector<int64_t, 2> narrow = {256, 1};
+  Value rowBound = constI(100, 32);
+  Value index2D = expandDims(arange(256), /*axis=*/1, narrow);
+  Value lower = broadcastTo(
+      arith::CmpIOp::create(builder, loc(), arith::CmpIPredicate::sle,
+                            splatTo(constI(0, 32), narrow), index2D),
+      shape);
+  Value upper = buildBoundedMask(arange(256), /*varyDim=*/0, shape, rowBound);
+
+  auto result = match(andI(lower, upper), shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, rowBound);
+}
+
+// matchRowLimitMask has no load to ask the sign at, so it drops a lower
+// bound only for a bare `arange`, even where the load-aware match proves the
+// base non-negative.
+TEST_F(MatchBoundaryCheckMaskTest, LowerBoundWithBaseNeedsLoadOp) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value rowIndex = addI32(splatTo(constI(8, 32), {256}), arange(256));
+  SmallVector<int64_t, 2> narrow = {256, 1};
+  Value index2D = expandDims(rowIndex, /*axis=*/1, narrow);
+  Value lower =
+      broadcastTo(cmpSge(index2D, splatTo(constI(0, 32), narrow)), shape);
+  Value upper =
+      buildBoundedMask(rowIndex, /*varyDim=*/0, shape, constI(100, 32));
+  Value mask = andI(lower, upper);
+
+  EXPECT_TRUE(match(mask, shape).has_value());
+  EXPECT_FALSE(matchRowLimitMask(mask, /*other=*/Value(), shape,
+                                 /*contiguousDim=*/1,
+                                 /*pitchDimIsBroadcast=*/false)
+                   .has_value());
 }
 
 // The pitch policy shared by MaterializeBlockPointer and LowerTo2DBlockLoad.

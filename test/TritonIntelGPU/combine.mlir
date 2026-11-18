@@ -2035,6 +2035,9 @@ tt.func @warp_specialize_backward_negative(%arg0: tensor<1024xi32, #blocked>) ->
   default {
     %1 = arith.addi %arg0, %arg0 : tensor<1024xi32, #blocked>
     ttg.warp_yield %1 : tensor<1024xi32, #blocked>
+  }
+  partition0() num_warps(4) {
+    ttg.warp_return
   } : () -> tensor<1024xi32, #blocked>
   %2 = ttg.convert_layout %0 : tensor<1024xi32, #blocked> -> tensor<1024xi32, #blocked1>
   tt.return %2 : tensor<1024xi32, #blocked1>

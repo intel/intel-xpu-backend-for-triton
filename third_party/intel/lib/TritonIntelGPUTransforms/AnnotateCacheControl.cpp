@@ -8,6 +8,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -333,7 +334,7 @@ static int64_t computeTileBytes(Value result) {
   auto ty = dyn_cast<RankedTensorType>(result.getType());
   if (!ty)
     return 0;
-  unsigned bits = ty.getElementTypeBitWidth();
+  unsigned bits = getIntOrFloatOrPtrBitWidth(ty.getElementType());
   if (bits == 0 || bits % 8 != 0)
     return 0;
   int64_t numElements = ty.getNumElements();

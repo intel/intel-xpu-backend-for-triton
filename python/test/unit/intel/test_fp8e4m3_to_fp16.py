@@ -45,7 +45,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu
+from triton._internal_testing import is_compile_warmup, is_xpu
 
 
 def expected_fp16_for_byte(byte: int) -> int:
@@ -163,6 +163,7 @@ def test_fp8e4m3fn_to_fp16_all_bytes(device):
 @pytest.mark.parametrize("op_idx, num_warps", [(0, 1), (1, 1), (1, 4)])
 @pytest.mark.parametrize("k", [32, 64])
 @pytest.mark.parametrize("block_io", ["row_major", "column_major"])
+@pytest.mark.enable_warmup
 def test_fp8e4m3fn_to_fp16_dot_operand(op_idx, num_warps, k, block_io, device, tmp_path):
     """Exhaustive FP8E4M3FN -> FP16 conversion in dot operand layouts loaded by 2D block loads."""
     shape = (1024 // k, k) if op_idx == 0 else (k, 1024 // k)
@@ -205,6 +206,8 @@ def test_fp8e4m3fn_to_fp16_dot_operand(op_idx, num_warps, k, block_io, device, t
     kernel = triton.compile(str(temp_file))
     kernel[(1, 1, 1)](src.to(device).view(torch.float8_e4m3fn), dst)
 
+    if is_compile_warmup():
+        return
     if support_block_io:
         llir = kernel.asm["llir"]
         assert llir.count("spirv_Subgroup2DBlockLoad") + llir.count("GenISA.LSC2DBlockRead") > 0

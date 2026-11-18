@@ -1,5 +1,2 @@
 # This test uses meta-llama/Meta-Llama-3-8B-Instruct: https://github.com/intel/intel-xpu-backend-for-triton/issues/7437
 tests/v1/spec_decode/test_max_len.py::test_eagle_max_len
-
-# Model Runner V2 does not support parallel drafting for EAGLE: https://github.com/intel/intel-xpu-backend-for-triton/issues/7166
-tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_parallel_drafting

@@ -183,9 +183,10 @@ Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
 /// to avoid flipping masked-out elements' sign bit.
 bool isZeroFillOther(Value other);
 
-/// A mask of the form `(rowBase + arange(0, N)) < bound`, broadcast along
-/// every other dim (contiguous dim and any batch dims). Expressible as a
-/// 2D block load's `base_height` instead of per-element predication.
+/// A mask of the form `(rowBase + arange(0, N)) < bound`, or the same compare
+/// written `bound > (rowBase + arange(0, N))`, broadcast along every other dim
+/// (contiguous dim and any batch dims). Expressible as a 2D block load's
+/// `base_height` instead of per-element predication.
 ///
 /// `extraPred`, if non-null, is a batch-dims-only predicate ANDed into the
 /// original mask (degenerate along the pitch and contiguous dims, so it's
@@ -202,13 +203,41 @@ struct RowLimitMaskInfo {
 };
 
 /// Match `mask` against the row-limit pattern above for a tensor of any
-/// rank >= 2, and check the remaining conditions `base_height` needs:
-/// `other` is zero-fill-compatible, the bounded dim is the pitch dim, it
-/// isn't a broadcast pointer, and `rowBase`/`bound` are i32.
+/// rank >= 2: `matchBoundaryCheckMask` with at most one uniform conjunct, the
+/// one `extraPred` holds.
 std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
                                                   ArrayRef<int64_t> tensorShape,
                                                   unsigned contiguousDim,
                                                   bool pitchDimIsBroadcast);
+
+/// A row-limit mask (see `RowLimitMaskInfo`) matched conjunct by conjunct:
+/// an AND of a pitch-dim bound `(base + arange(0, extent)) < bound`, or the
+/// same compare written `bound > (base + arange(0, extent))`, and any number
+/// of predicates uniform along both surface dims. The bound maps onto
+/// the 2D block message's own `base_height` clamp, `clamp(bound - base, 0,
+/// extent)` (see `computeRowLimitHeight`), so the mask needs no per-element
+/// predication at all. `rowBase` is null when the index is a bare `arange`.
+///
+/// `extraPreds` are the uniform conjuncts (batch-dim predicates, or scalar
+/// flags splatted to the mask's shape), each as `extraPred` in
+/// `RowLimitMaskInfo`: the caller ANDs them into its own per-message select.
+struct BoundaryMaskInfo {
+  unsigned boundedDim; // the pitch dim, as in `RowLimitMaskInfo`
+  Value rowBase, rowBound;
+  SmallVector<Value> extraPreds;
+};
+
+/// Match `mask` against the pattern above for a tensor of any rank >= 2.
+/// Fails unless every conjunct is recognised, `other` is
+/// zero-fill-compatible, the pitch dim is not broadcast, and the bound is i32
+/// or i64 with the base of the compare's own type (no extension between them).
+/// The bound may be ANDed with `index >= 0`, which is dropped only if
+/// \p loadOp proves the index base non-negative (see
+/// `triton::valueIsNonNegative`); without it only a bare `arange` qualifies.
+std::optional<BoundaryMaskInfo>
+matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
+                       unsigned contiguousDim, bool pitchDimIsBroadcast,
+                       Operation *loadOp);
 
 /// Return `extraPred` as a value of type \p maskTy: unchanged if it already has
 /// that shape, else broadcast to it straight from its innermost source (so
@@ -216,8 +245,9 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
 Value materializeExtraPred(OpBuilder &builder, Location loc, Value extraPred,
                            RankedTensorType maskTy);
 
-/// Compute `clamp(bound - rowBase, 0, rowExtent)` as an i32, widening to i64
-/// first to avoid overflow. `rowBase` may be null.
+/// Compute `clamp(bound - rowBase, 0, rowExtent)` as an i32. `bound` and
+/// `rowBase` are i32 or i64; the result is exact for any value, including i64
+/// inputs whose difference overflows. `rowBase` may be null.
 Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
                             Value rowBase, int64_t rowExtent);
 

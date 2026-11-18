@@ -1334,9 +1334,6 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, 
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
 
-    if BLOCK_K < K and is_cuda() and torch.cuda.get_device_capability(0)[0] != 10:
-        pytest.skip("Currently broken on hopper")
-
     required_sm = BLOCK_M * BLOCK_K * 2 + BLOCK_K * BLOCK_N * 2
     max_sm = triton.runtime.driver.active.utils.get_device_properties(
         triton.runtime.driver.active.get_current_device())["max_shared_mem"]

@@ -733,7 +733,8 @@ struct AtomicCASOpConversion
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
+                                 targetInfo);
     Value llPtr = adaptor.getPtr();
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
@@ -836,7 +837,8 @@ public:
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
+                                 targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
@@ -1551,6 +1553,13 @@ struct AsyncTMACopyLocalToGlobalOpConversion
   matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto descTy = op.getDesc().getType();
+    auto layout = cast<ttg::NVMMASharedEncodingAttr>(descTy.getSharedLayout());
+    if (computeCapability != 103 && layout.isPaddedFp6() &&
+        ttng::getTMABlockShape(descTy, /*packedSize=*/false,
+                               ttg::TMAMode::Tiled)
+                .back() == 64)
+      return op.emitOpError("64-value FP6 TMA stores require SM103");
     auto l2Policy = createTMACachePolicy(op, op.getCachePolicyAttr(), rewriter,
                                          computeCapability, 90);
     if (failed(l2Policy))

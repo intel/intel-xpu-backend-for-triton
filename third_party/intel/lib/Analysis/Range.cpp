@@ -3,10 +3,13 @@
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/InferIntRangeInterface.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -104,33 +107,44 @@ static void inferResultRange(arith::BitcastOp op,
   setResultRange(op.getResult(), argRanges[0]);
 }
 
-// Whether `op` is certain to finish and pass control to the next op.
+// Whether `op` is certain to finish and pass control to the next op. Only ops
+// known to finish are accepted; any other op may abort, spin or not return.
 static bool transfersExecution(Operation *op) {
-  // May abort or may not return.
-  if (isa<tt::AssertOp>(op) || isa<CallOpInterface>(op))
+  // A call may not return, whatever effects it reports.
+  if (isa<CallOpInterface>(op))
     return false;
-  // Regionless and not CallOpInterface, yet a poll may spin until the
-  // expected value appears (its timeout is a runtime value and may be
-  // unbounded), and an impure external call or inline asm may never return.
-  if (isa<tt::AtomicPollOp>(op))
-    return false;
-  if (auto ext = dyn_cast<tt::ExternElementwiseOp>(op); ext && !ext.getPure())
-    return false;
-  if (auto asmOp = dyn_cast<tt::ElementwiseInlineAsmOp>(op);
-      asmOp && !asmOp.getPure())
-    return false;
-  if (op->getNumRegions() == 0)
+  if (op->getNumRegions() != 0) {
+    // These run single-block regions a bounded number of times, so they finish
+    // if their nested ops do. Loops are not modelled, and `tt.map_elementwise`
+    // regions may hold CFG cycles.
+    if (!isa<scf::IfOp, tt::ReduceOp, tt::ScanOp>(op))
+      return false;
+    for (Region &region : op->getRegions())
+      for (Operation &nested : region.getOps())
+        if (!transfersExecution(&nested))
+          return false;
     return true;
-  // These run single-block regions a bounded number of times, so they finish
-  // if their nested ops do. Loops are not modelled, and `tt.map_elementwise`
-  // regions may hold CFG cycles.
-  if (!isa<scf::IfOp, tt::ReduceOp, tt::ScanOp>(op))
-    return false;
-  for (Region &region : op->getRegions())
-    for (Operation &nested : region.getOps())
-      if (!transfersExecution(&nested))
-        return false;
-  return true;
+  }
+  // Effect-free ops of these dialects compute a value and finish. They need not
+  // be speculatable: a division by zero is undefined behavior, not a hang.
+  if (isa_and_nonnull<tt::TritonDialect, ttg::TritonGPUDialect,
+                      arith::ArithDialect, math::MathDialect, scf::SCFDialect,
+                      ub::UBDialect>(op->getDialect()) &&
+      isMemoryEffectFree(op))
+    return true;
+  // Ops with effects that finish. A barrier hangs only in non-uniform control
+  // flow, which is undefined behavior. Proton ops are matched by name, so this
+  // library does not depend on Proton.
+  if (isa<tt::LoadOp, tt::StoreOp, tt::AtomicRMWOp, tt::AtomicCASOp,
+          tt::AtomicLoadOp, tt::AtomicStoreOp, tt::DescriptorLoadOp,
+          tt::DescriptorStoreOp, tt::DescriptorReduceOp, tt::DescriptorGatherOp,
+          tt::DescriptorScatterOp, tt::PrintOp, ttg::BarrierOp,
+          ttg::LocalAllocOp, ttg::LocalDeallocOp, ttg::LocalLoadOp,
+          ttg::LocalStoreOp, LLVM::AssumeOp>(op))
+    return true;
+  StringRef name = op->getName().getStringRef();
+  return name == "proton.record" || name == "proton.event" ||
+         name == "proton.allocate_event";
 }
 
 bool assumeApplies(LLVM::AssumeOp assume, Operation *useOp,
