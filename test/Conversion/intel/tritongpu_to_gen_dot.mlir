@@ -142,6 +142,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=4}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8} {
+  // CHECK-LABEL: dot_f32_f32_hf8_bf8
+  tt.func @dot_f32_f32_hf8_bf8(%a: tensor<16x16xf8E4M3FN, #dot_operand_a>, %b: tensor<16x16xf8E5M2, #dot_operand_b>, %c: tensor<16x16xf32, #dpas>) {
+    // COM: Mixed fp8 native DPAS: A is f8E4M3FN (0x4000), B is f8E5M2 (0x10000 << 1).
+    // CHECK-DAG: [[OPS:%.*]] = llvm.mlir.constant(147456 : i32) : i32
+    // CHECK:     llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi({{.*}}, {{.*}}, {{.*}}, {{.*}}, [[OPS]])
+    %0 = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<16x16xf8E4M3FN, #dot_operand_a> * tensor<16x16xf8E5M2, #dot_operand_b> -> tensor<16x16xf32, #dpas>
+    tt.return
+  }
+}
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=4}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8} {
+  // CHECK-LABEL: dot_bf16_bf16_hf8_bf8
+  tt.func @dot_bf16_bf16_hf8_bf8(%a: tensor<16x16xf8E4M3FN, #dot_operand_a>, %b: tensor<16x16xf8E5M2, #dot_operand_b>, %c: tensor<16x16xbf16, #dpas>) {
+    // COM: Mixed fp8 native DPAS with a bf16 accumulator (0xC): 0x4000 | (0x10000 << 1) | 0xC.
+    // CHECK-DAG: [[OPS:%.*]] = llvm.mlir.constant(147468 : i32) : i32
+    // CHECK:     llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iS_i({{.*}}, {{.*}}, {{.*}}, {{.*}}, [[OPS]])
+    %0 = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<16x16xf8E4M3FN, #dot_operand_a> * tensor<16x16xf8E5M2, #dot_operand_b> -> tensor<16x16xbf16, #dpas>
+    tt.return
+  }
+}
+
+// -----
+
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>

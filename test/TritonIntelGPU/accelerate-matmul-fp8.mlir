@@ -421,3 +421,22 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
     tt.return %0 : tensor<128x128xf32, #blocked>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func public @kernel_mixed_fp8_native(%arg1:  tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %arg2 :tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %arg3: tensor<128x128x!tt.ptr<f32>, #blocked1>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    // COM: Checks that mixed fp8 formats use fp8 DPAS when 'support_subgroup_matrix_multiply_accumulate_bf8' is set
+    // CHECK-LABEL: @kernel_mixed_fp8_native
+    // CHECK-NOT: tt.fp_to_fp
+    // CHECK: tt.dot{{.*}} : tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma{{.*}}*{{.*}}tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma{{.*}}-> tensor<128x128xf32, #mma
+    %res = tt.dot %arg1, %arg2, %cst : tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf32, #blocked>
+    %52 = ttg.convert_layout %res : tensor<128x128xf32, #blocked> -> tensor<128x128xf32, #blocked1>
+    tt.store %arg3, %52 : tensor<128x128x!tt.ptr<f32>, #blocked1>
+    tt.return
+  }
+}
