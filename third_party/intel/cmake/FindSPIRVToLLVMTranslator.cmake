@@ -29,7 +29,9 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
             # FIXME: Don't apply 3122.patch when LTS driver is updated.
             # FIXME: Drop revert-4116-4117.patch once the LLVM pin includes
             # llvm/llvm-project@910cdcd09377.
-            foreach(PATCH 3122.patch revert-4116-4117.patch)
+            # FIXME: Drop 4174.patch once the translator pin includes
+            # KhronosGroup/SPIRV-LLVM-Translator#4174.
+            foreach(PATCH 3122.patch revert-4116-4117.patch 4174.patch)
                 execute_process(
                     COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/${PATCH}
                     WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}

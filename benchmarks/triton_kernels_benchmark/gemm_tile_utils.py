@@ -8,12 +8,27 @@ import triton
 import triton.language as tl
 
 
+@triton.constexpr_function
+def is_transposed(M, N, stride_m, stride_n, transposed):
+    """Return whether the matrix is stored transposed, i.e. contiguous along M.
+
+    The strides cannot tell when M or N is 1, so a caller that knows the layout passes `transposed`. It must agree with
+    the strides whenever they can tell.
+    """
+    inferred = stride_m == 1 and stride_n != 1
+    if transposed is None:
+        return inferred
+    assert M == 1 or N == 1 or transposed == inferred, \
+        f'transposed={transposed} disagrees with strides ({stride_m}, {stride_n}) of a {M}x{N} matrix'
+    return transposed
+
+
 @triton.jit
 def make_matrix_tile_ptr(ptr, M: tl.constexpr, N: tl.constexpr, stride_m: tl.constexpr, stride_n: tl.constexpr,
-                         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+                         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, TRANSPOSED: tl.constexpr = None):
     """Build a descriptor or pointer tensor before the reduction loop."""
-    TRANSPOSE: tl.constexpr = stride_m == 1 and stride_n != 1
-    if TRANSPOSE:
+    COL_MAJOR: tl.constexpr = is_transposed(M, N, stride_m, stride_n, TRANSPOSED)
+    if COL_MAJOR:
         ROWS: tl.constexpr = N
         COLS: tl.constexpr = M
         STRIDE_ROW: tl.constexpr = stride_n
@@ -44,11 +59,11 @@ def make_matrix_tile_ptr(ptr, M: tl.constexpr, N: tl.constexpr, stride_m: tl.con
 
 @triton.jit
 def load_matrix_tile(matrix_ptr, M: tl.constexpr, N: tl.constexpr, stride_m: tl.constexpr, stride_n: tl.constexpr, row,
-                     col, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+                     col, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, TRANSPOSED: tl.constexpr = None):
     """Load a tile from a prebuilt descriptor or pointer tensor."""
     handle = matrix_ptr
-    TRANSPOSE: tl.constexpr = stride_m == 1 and stride_n != 1
-    if TRANSPOSE:
+    COL_MAJOR: tl.constexpr = is_transposed(M, N, stride_m, stride_n, TRANSPOSED)
+    if COL_MAJOR:
         ROWS: tl.constexpr = N
         COLS: tl.constexpr = M
         STRIDE_ROW: tl.constexpr = stride_n
@@ -80,7 +95,7 @@ def load_matrix_tile(matrix_ptr, M: tl.constexpr, N: tl.constexpr, stride_m: tl.
             cc = (off_col + tl.arange(0, BLOCK_COLS)).to(tl.int64)
             tile = tl.where((rr < ROWS)[:, None] & (cc < COLS)[None, :],
                             tl.broadcast_to(tile, (BLOCK_ROWS, BLOCK_COLS)), 0)
-    if TRANSPOSE:
+    if COL_MAJOR:
         tile = tile.T
     return tile
 
