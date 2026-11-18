@@ -195,7 +195,7 @@ TEST_F(DPASAnalysisTest, DotOp_MixedFP8_FP16) {
   EXPECT_EQ(dpasType, DPASEngineTypeXe2::NOT_APPLICABLE);
 }
 
-// With fp8 DPAS, mixed fp8 formats keep the FMA path.
+// fp8 DPAS accepts different fp8 formats for A and B.
 TEST_F(DPASAnalysisTest, DotOp_Xe3P_MixedFP8_BF16) {
   OwningOpRef<ModuleOp> module =
       createModule(/*supportDPAS=*/true, /*supportFp8=*/true);
@@ -203,7 +203,7 @@ TEST_F(DPASAnalysisTest, DotOp_Xe3P_MixedFP8_BF16) {
                            Float8E5M2Type::get(&ctx), builder->getBF16Type());
 
   auto dpasType = DPASAnalysisV2::getDPASType(dotOp);
-  EXPECT_EQ(dpasType, DPASEngineTypeXe3P::NOT_APPLICABLE);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe3P::BF16_BF16_FP8_FP8);
 }
 
 TEST_F(DPASAnalysisTest, DotOp_Xe3P_MixedFP8_FP32) {
@@ -213,7 +213,7 @@ TEST_F(DPASAnalysisTest, DotOp_Xe3P_MixedFP8_FP32) {
                            Float8E5M2Type::get(&ctx), builder->getF32Type());
 
   auto dpasType = DPASAnalysisV2::getDPASType(dotOp);
-  EXPECT_EQ(dpasType, DPASEngineTypeXe3P::NOT_APPLICABLE);
+  EXPECT_EQ(dpasType, DPASEngineTypeXe3P::FP32_FP32_FP8_FP8);
 }
 
 TEST_F(DPASAnalysisTest, DotOp_BF16_BF16_FP32) {
