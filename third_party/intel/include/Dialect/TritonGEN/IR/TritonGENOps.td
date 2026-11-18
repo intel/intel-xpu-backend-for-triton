@@ -367,11 +367,10 @@ def TritonGEN_SubGroupBlockReadOp: TritonGEN_Op<"sub_group_block_read"> {
     etc.
 
     `ptr` must be aligned to the size of the element type of `res`.
-    `cache_control` is printed only when it is not `DEFAULT`.
 
      Example:
      ```mlir
-     %0 = triton_gen.sub_group_block_read %ptr : !llvm.ptr<1> -> vector<4xi32>
+     %0 = triton_gen.sub_group_block_read %ptr {cache_control = Default} : !llvm.ptr<1> -> vector<4xi32>
      %1 = triton_gen.sub_group_block_read %ptr {cache_control = L1UC_L3C} : !llvm.ptr<1> -> i32
      ```
   }];
@@ -385,7 +384,7 @@ def TritonGEN_SubGroupBlockReadOp: TritonGEN_Op<"sub_group_block_read"> {
   let results = (outs TritonGEN_SubGroupBlockMemoryAccessType:$res);
 
   let assemblyFormat = [{
-    $ptr (` ` `{` `cache_control` `=` $cache_control^ `}`)? attr-dict `:` qualified(type($ptr)) `->` type($res)
+    $ptr ` ` `{` `cache_control` `=` $cache_control `}` attr-dict `:` qualified(type($ptr)) `->` type($res)
   }];
 }
 
