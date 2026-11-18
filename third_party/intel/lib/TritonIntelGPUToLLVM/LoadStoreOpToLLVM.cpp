@@ -2368,14 +2368,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       ArrayRef<Value> ptrElems, ArrayRef<Value> maskElems,
       ArrayRef<Value> otherElems) const {
     auto type = dyn_cast<RankedTensorType>(op.getType());
-    // FIXME: A block read carries no cache control yet (#8878). Until it does,
-    // loads whose policy asks for other than the default L1C_L3C caching keep
-    // the gather lowering, even unmasked ones whose plain loads drop the hint
-    // too. This lowering builds global (addrspace 1) addresses only.
-    TritonGEN::LoadCacheControl cacheControl = tritonToIntelCacheModifier(op);
+    // This lowering builds global (addrspace 1) addresses only.
     if (!type || op.getIsVolatile() || valueElemTy.isInteger(1) ||
-        (cacheControl != TritonGEN::LoadCacheControl::DEFAULT &&
-         cacheControl != TritonGEN::LoadCacheControl::L1C_L3C) ||
         cast<PointerType>(getElementTypeOrSelf(op.getPtr().getType()))
                 .getAddressSpace() != PtrAddrSpace::Global ||
         tools::getBoolEnv("TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ"))
@@ -2407,6 +2401,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Type chunkTy = read->chunkElems == 1
                        ? valueElemTy
                        : Type(vec_ty(valueElemTy, read->chunkElems));
+    TritonGEN::LoadCacheControl cacheControl = tritonToIntelCacheModifier(op);
     auto emitReads = [&]() {
       // Lane l holds word l of each read group, so lane 0's address is this
       // lane's minus l words.
@@ -2418,8 +2413,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         unsigned reg0 = g << read->groupShift;
         Value ptr0 =
             b.gep(ptr_ty(ctx, 1), valueElemTy, ptrElems[reg0], laneOffset);
-        Value words =
-            TritonGEN::SubGroupBlockReadOp::create(rewriter, loc, readTy, ptr0);
+        Value words = TritonGEN::SubGroupBlockReadOp::create(
+            rewriter, loc, readTy, ptr0, cacheControl);
         for (unsigned j = 0; j < read->vec; ++j) {
           Value word = read->vec == 1 ? words
                                       : b.extract_element(read->wordTy, words,
