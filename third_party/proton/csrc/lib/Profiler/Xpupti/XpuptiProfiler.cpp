@@ -600,8 +600,8 @@ void XpuptiProfiler::startOp(const Scope &scope) {
   PendingPhases::Phases phases;
   for (auto *data : dataSet)
     phases.emplace_back(data, data->getPhaseInfo().current);
-  dynamic_cast<XpuptiProfilerPimpl &>(*pImpl).pendingOps.add(
-      scope.scopeId, std::move(phases));
+  dynamic_cast<XpuptiProfilerPimpl &>(*pImpl).pendingOps.add(scope.scopeId,
+                                                             std::move(phases));
   GPUProfiler<XpuptiProfiler>::startOp(scope);
 }
 
