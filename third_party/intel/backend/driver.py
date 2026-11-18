@@ -428,16 +428,12 @@ def is_lts(ver) -> bool:
 
 def has_spirv_2d_block_io(ver: str | None) -> bool:
     """
-    Whether the driver's IGC can resolve any 2D block I/O shape from SPIR-V.
+    Whether the SPIR-V 2D block I/O builtins can be used with this driver (#8858).
 
-    IGC older than 2.38 only has a fixed table of `intel_sub_group_2d_block_*` builtins, so a shape missing from it
-    fails to build with `undefined reference to __internal_intel_sub_group_2d_block_*` (#8858); 2.38 added a generic
-    resolver. `ver` is either the driver version as reported by the runtime, `1.<minor>.<build>+<patch>` (e.g.
-    `1.15.38308+1` for compute-runtime 26.18.38308.1; Windows reports `1.6.<build>`), or the version of `ocloc`
-    (`26.18.38308.1`), which is what consumes the SPIR-V for an AOT compile. Either way the compute-runtime build
-    number is the third field.
-    The first release known to have IGC 2.38 is 26.27.39122 (IGC 2.38.2); 26.22.38646 (IGC 2.36.3) and older do not.
-    A missing or unparsable version is assumed to support SPIR-V, the default.
+    IGC before 2.38 (compute-runtime 26.27.39122) only has a fixed table of `intel_sub_group_2d_block_*` builtins, so
+    other shapes fail to build; 2.38 added a generic resolver. `ver` is the driver version
+    (`1.<minor>.<build>[+<patch>]`) or the `ocloc` version (`26.18.38308.1`); either way the compute-runtime build
+    number is the third field. A missing or unparsable version keeps the SPIR-V default.
     """
     if not ver:
         return True

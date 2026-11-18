@@ -72,8 +72,7 @@ class XPUOptions:
     fpsan_homomorphic_casts: bool = False
     core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
     is_lts: bool = True
-    # Whether the driver's IGC can resolve any 2D block I/O shape from SPIR-V (#8858); see `has_spirv_2d_block_io`.
-    # It changes the emitted code, and being an option it is part of the kernel cache key.
+    # Whether the SPIR-V 2D block I/O builtins can be used (#8858); see `has_spirv_2d_block_io`.
     has_spirv_2d_block_io: bool = True
     # Whether these SPIR-V extensions are allowed; overwritten with the
     # ground-truth probe result in `parse_options`.
@@ -408,9 +407,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                                            and accepts_maximum_registers(native, self.device_arch, device_id))
         options.allow_subgroup_bitcast_shuffle = (not options.is_lts and accepts_subgroup_bitcast_shuffle(
             native, self.device_arch, device_id))
-        # IGC resolves any 2D block I/O shape from SPIR-V only since 2.38 (#8858). Go by the version of whichever side
-        # consumes the SPIR-V: `ocloc` for an AOT compile (falling back to the driver if it can't be determined),
-        # otherwise the installed driver.
+        # Like the probes above: `ocloc` consumes the SPIR-V of an AOT compile, the driver that of a JIT one.
         igc_version = (get_ocloc_version() if native else None) or self.target.arch.get("driver_version")
         options.has_spirv_2d_block_io = has_spirv_2d_block_io(igc_version)
         return options
@@ -709,9 +706,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         driver_version = metadata["target"].arch.get("driver_version")
         if cls.is_lts(driver_version):
             intel.set_is_lts(mod)
-        # Older drivers only resolve a fixed set of SPIR-V 2D block I/O shapes (#8858). Set it here, the one stage every
-        # input (including Gluon and `.ttgir`, which bypass `make_ttgir`) goes through; clearing it also drops a stale
-        # attribute carried by a hand-written module.
+        # Set for every input, including Gluon and `.ttgir`, which bypass `make_ttgir`.
         intel.set_use_genisa_2d_block_io(mod, not options.has_spirv_2d_block_io)
 
         # `getGlobalTimer` counts core clock cycles and needs the rate to report

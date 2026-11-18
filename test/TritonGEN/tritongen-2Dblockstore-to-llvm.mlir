@@ -229,7 +229,7 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base
 
 // -----
 
-// COM: With "ttig.use_genisa_2d_block_io" (IGC older than 2.38, #8858) the GenISA interface is used.
+// COM: "ttig.use_genisa_2d_block_io" selects GenISA (#8858).
 module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.use_genisa_2d_block_io} {
 llvm.func @triton_gen.2Dblockstore_use_genisa(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<8xi16>) {
   // CHECK-LABEL: llvm.func @triton_gen.2Dblockstore_use_genisa

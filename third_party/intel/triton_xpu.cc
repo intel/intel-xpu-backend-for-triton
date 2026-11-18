@@ -421,8 +421,7 @@ void init_triton_intel(py::module_ &m) {
     return result.wasInterrupted();
   });
 
-  // Sets or clears the module attribute from the current target, so it is
-  // never stale in hand-written TTGIR or Gluon modules that carry one.
+  // Also clears the attribute, so a stale one is never kept.
   m.def("set_use_genisa_2d_block_io", [](mlir::ModuleOp &mod, bool useGenISA) {
     using namespace mlir::triton::gpu::intel;
     constexpr llvm::StringRef name =

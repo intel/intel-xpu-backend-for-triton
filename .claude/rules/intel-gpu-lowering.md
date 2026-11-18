@@ -21,7 +21,7 @@ Two lowering paths exist for TritonGEN operations:
 ### `isSPVBuiltinAvailable()` Decision Logic
 Returns `false` (use GenISA) when:
 - Module has the `ttig.is_lts` attribute (LTS driver)
-- Module has the `ttig.use_genisa_2d_block_io` attribute (driver older than compute-runtime 26.27.39122, i.e. IGC < 2.38, which only has a fixed table of 2D block builtins; set in `make_llir` from the driver version, or from the `ocloc` version for an AOT compile)
+- Module has the `ttig.use_genisa_2d_block_io` attribute (IGC < 2.38, i.e. compute-runtime < 26.27.39122; set in `make_llir`)
 
 ## DPAS Lowering
 

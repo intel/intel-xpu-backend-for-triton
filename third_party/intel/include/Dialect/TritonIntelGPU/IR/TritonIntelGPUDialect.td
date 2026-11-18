@@ -147,9 +147,7 @@ def TritonIntelGPU_Dialect : Dialect {
     }
 
     /// Get the name of the attribute that makes 2D block I/O lower through the
-    /// GenISA interface instead of the SPIR-V builtins. IGC older than 2.38
-    /// only has a fixed table of `intel_sub_group_2d_block_*` builtins, so a
-    /// shape missing from it fails to build.
+    /// GenISA interface instead of the SPIR-V builtins (set for IGC < 2.38).
     static constexpr llvm::StringRef getUseGenISA2DBlockIOAttrName() {
       return "ttig.use_genisa_2d_block_io";
     }

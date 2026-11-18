@@ -272,7 +272,7 @@ def test_find_sycl_uses_oneapi_root(monkeypatch, no_icpx, recwarn, tmp_path: pat
     ("1.17.38646+4", False),  # 26.22.38646.4 (IGC 2.36.3)
     ("1.17.39121+99", False),
     ("1.17.39122+11", True),  # 26.27.39122.11 (IGC 2.38.2), first known-good release
-    ("1.17.39395+13", True),  # 26.31.39395.13
+    ("1.17.39395+13", True),
     ("1.6.35096+9", False),  # the LTS threshold release; its build number is below the cutoff
     ("garbage", True),  # unknown: assume SPIR-V, the default
     ("", True),
@@ -291,7 +291,7 @@ def _target_with_driver_version(version):
                                                   ("1.17.39122+11", False),  # 26.27.39122.11 (IGC 2.38.2)
                                                   ])
 def test_2d_block_io_lowering_follows_driver_version(device, fresh_knobs, version, uses_genisa):
-    """The lowering is picked from the target's driver version: old IGC cannot build every SPIR-V 2D block shape."""
+    """The 2D block I/O lowering follows the target's driver version."""
     fresh_knobs.intel.gen_native_code = False
 
     @triton.jit
