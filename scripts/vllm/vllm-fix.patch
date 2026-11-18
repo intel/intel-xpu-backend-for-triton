@@ -373,19 +373,6 @@ index 0b8d5abcca..78dff302b2 100644
              env[_SPAWN_CHILD_ENV] = "1"
  
              result = subprocess.run(
-diff --git a/tests/v1/attention/test_indexer_dcp_localize.py b/tests/v1/attention/test_indexer_dcp_localize.py
-index a90270537a..4ec6a6a5c4 100644
---- a/tests/v1/attention/test_indexer_dcp_localize.py
-+++ b/tests/v1/attention/test_indexer_dcp_localize.py
-@@ -665,7 +665,7 @@ def test_cutedsl_gathered_select_compact_keys_match_reference(
- 
- 
- @pytest.mark.skipif(
--    not current_platform.is_cuda() or not has_cutedsl(),
-+    not current_platform.is_cuda() or not has_cutedsl() or not current_platform.is_xpu(),
-     reason="This test requires CUDA and CuteDSL",
- )
- @pytest.mark.parametrize("epoch", [1, 2])
 diff --git a/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py b/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py
 index 267d39622e..f8430ca01f 100644
 --- a/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py
