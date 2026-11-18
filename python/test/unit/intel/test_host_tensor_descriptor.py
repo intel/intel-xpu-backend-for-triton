@@ -662,6 +662,7 @@ def _check_head_tiles(base, shape, strides, ref, host, device):
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
 def test_descriptor_negative_middle_stride(host, device, with_allocator):
     TOKENS, HEADS, HEAD_DIM = 128, 4, 128
+    torch.manual_seed(42)
     a = torch.randn((TOKENS, HEADS, HEAD_DIM), dtype=torch.float16, device=device)
     _check_head_tiles(a[:, -1], a.shape, [HEADS * HEAD_DIM, -HEAD_DIM, 1], a.flip(1), host, device)
 
@@ -675,6 +676,7 @@ def test_descriptor_negative_middle_stride(host, device, with_allocator):
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
 def test_descriptor_wide_middle_stride(host, device, with_allocator):
     HEADS, TOKENS, HEAD_DIM = 130, 512, 128
+    torch.manual_seed(42)
     storage = torch.randn((HEADS, TOKENS, HEAD_DIM), dtype=torch.float16, device=device)
     view = storage.transpose(0, 1)
     _check_head_tiles(storage, view.shape, view.stride(), view, host, device)
