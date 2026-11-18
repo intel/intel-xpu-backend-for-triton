@@ -89,17 +89,13 @@ tt.func public @fuseMiddleDim(%arg0: tensor<128x256xbf16>, %arg1: !tt.ptr<bf16>)
 
 // -----
 
-// COM: Issue #8072. strides[1] is a runtime value, as a host TensorDescriptor
-// COM: delivers it (strides[2] is the constant 1 that
-// COM: RewriteTensorDescriptorToPointer installs). Merging divided by it and
-// COM: fused whatever its sign or size: a negative stride put every head but
-// COM: the first at a negative column, and a large one pushed the merged width
-// COM: past the 24-bit surface field, both of which read the block as padding.
-// COM: The stride now only scales the base offset, in i64, and nothing divides
-// COM: by it. The product carries the descriptor's 16-byte stride contract (8
-// COM: f16 elements) as a hint, which AxisInfo cannot derive for an unhinted
-// COM: stride and `MaterializeBlockPointer` needs to keep the base 4-byte
-// COM: aligned.
+// COM: Issue #8072: a runtime strides[1], as a host TensorDescriptor delivers
+// COM: it (strides[2] is the constant 1 that RewriteTensorDescriptorToPointer
+// COM: installs). The stride only scales the base offset, in i64, and nothing
+// COM: divides by it. The product carries the descriptor's 16-byte stride
+// COM: contract (8 f16 elements) as a hint, which AxisInfo cannot derive for an
+// COM: unhinted stride and `MaterializeBlockPointer` needs to keep the base
+// COM: 4-byte aligned.
 tt.func public @fuseRuntimeMiddleStride(%arg0: tensor<128x64xf16>, %arg1: !tt.ptr<f16>, %T: i32, %H: i32, %sT: i64, %sH: i64, %m: i32, %h: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c128_i32 = arith.constant 128 : i32
@@ -189,9 +185,8 @@ tt.func public @fuseNegativeOuterStride(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr
 // -----
 
 // COM: A (heads, tokens, head_dim) tensor read as (tokens, heads, head_dim)
-// COM: has strides [128, 8192 * 128, 1]. Merging put head 8 at column
-// COM: 8 * 8192 * 128 of a surface 2^24 + 256 bytes wide, past the width field.
-// COM: The rebased surface is the head itself, 128 elements wide.
+// COM: has strides [128, 8192 * 128, 1]. Head 8 starts 8 * 8192 * 128
+// COM: elements in, and the surface is the head itself, 128 elements wide.
 tt.func public @fuseWideMiddleStride(%arg0: tensor<128x64xf16>, %arg1: !tt.ptr<f16>) {
   %c0_i32 = arith.constant 0 : i32
   %c8_i32 = arith.constant 8 : i32
@@ -218,8 +213,7 @@ tt.func public @fuseWideMiddleStride(%arg0: tensor<128x64xf16>, %arg1: !tt.ptr<f
 // -----
 
 // COM: A collapsed stride beyond i32 is used as is: the offset is formed in the
-// COM: stride's i64, so nothing narrows (merging truncated the stride ratio to
-// COM: i32 and had to decline strides like these).
+// COM: stride's i64, so nothing narrows.
 tt.func public @fuseHugeCollapsedStride(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
@@ -761,8 +755,8 @@ tt.func public @fuseInRangeIndexFoldsGuard(%arg0: tensor<16x16xf32>, %arg1: !tt.
 // -----
 
 // COM: A negative index on the merged dimension pads only the block's leading
-// COM: rows, which merging could not express and declined (#8070). The rebased
-// COM: load keeps the index, and the rank-2 bounds check pads those rows.
+// COM: rows (#8070). The fused load keeps the index, and the rank-2 bounds
+// COM: check pads those rows.
 tt.func public @fuseNegativeMergedIndex(%arg0: tensor<64x64xf32>, %arg1: !tt.ptr<f32>) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32

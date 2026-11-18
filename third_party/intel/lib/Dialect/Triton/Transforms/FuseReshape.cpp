@@ -55,13 +55,9 @@ namespace {
 // taken from %y, %n and %e from %s2, and the guard on %z:
 //   %desc = tt.make_tensor_descriptor %p, [%s0,%e], [%a,%c]
 //   %A = tt.descriptor_load %desc[%x,%j] -> tensor<64x128xf16>
-// The collapsed index goes into the base rather than into a neighbouring
-// coordinate, so the new descriptor's strides and (but for the empty case)
-// shapes are the original ones. Merging it instead (row %x*(%a/%b) + %y over
-// an extent derived from the strides) declared surfaces the rank-3 descriptor
-// never had: a negative runtime stride turned the block into padding (issue
-// #8072), and a large one pushed the derived extent past the 24-bit surface
-// field.
+// The collapsed index goes into the base, so the new descriptor keeps the
+// original strides and (but for the empty case) shapes; nothing is derived
+// from them (issue #8072).
 class FuseReshapeWithLoad : public tt::intel::Fuser {
 public:
   void run(ModuleOp moduleOp) {
@@ -188,10 +184,11 @@ private:
 
     // The base depends on this load's collapsed index, so the new descriptor
     // can only stay where the original one was if that index is available
-    // there; otherwise it is rebuilt at the load. A loop-invariant index still
-    // gets it hoisted back out of the loop by the TTGIR LICM, and
-    // `LowerTo2DBlockLoad` re-extracts every shape/stride field per load
-    // anyway.
+    // there; otherwise it is rebuilt at the load. For a loop-invariant index
+    // the TTGIR LICM hoists it back out of the loop, but only after
+    // pipelining, so `MaterializeBlockPointer` and the pipeliner see it inside
+    // the loop. `LowerTo2DBlockLoad` re-extracts every shape/stride field per
+    // load anyway.
     Operation *insertionPoint =
         domInfo.properlyDominates(collapsedOffset, makeTensorDescOp)
             ? static_cast<Operation *>(makeTensorDescOp)
@@ -254,9 +251,11 @@ private:
     // extent needs neither, since `LowerTo2DBlockLoad` sees it and keeps the
     // load off 2D block I/O. Written as multiplies for the same `isDivisible`
     // reason as the guard; the floor is the block extent itself, so the sum
-    // keeps whatever that query answered for `shapes[md]`. Like any width,
-    // the floor is not held to the hardware's 64-byte minimum, which
-    // `LowerTo2DBlockLoad` deliberately does not enforce either.
+    // keeps whatever that query answered for `shapes[md]`. On the middle
+    // branch the floor is a surface width, and like any width it is not held
+    // to the hardware's 64-byte minimum, which `LowerTo2DBlockLoad`
+    // deliberately does not enforce either. On the outer branch it is the
+    // surface height, which has no minimum.
     //
     // The other dimension kept is passed through as is - on the middle
     // branch `shapes[0]` and `strides[0]` become the surface height and pitch
