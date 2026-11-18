@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import argparse
 import functools
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
@@ -43,7 +43,6 @@ import triton.language as tl
 # without one.
 # pylint: disable=import-outside-toplevel
 if TYPE_CHECKING:
-    from torch._inductor.heuristics.template.triton import GemmConfig
     from triton_kernels_benchmark.benchmark_testing import Mark
 
 
@@ -58,38 +57,38 @@ class GemmCase:
 GEMM_CASES = (
     GemmCase("bmm", ((80, 256, 640), (80, 640, 960)), ((640, 51200, 1), (614400, 960, 1))),
     GemmCase("bmm", ((32, 256, 200), (32, 200, 1600)), ((51200, 200, 1), (320000, 1600, 1))),
-    GemmCase("addmm", ((256, 2560), (256, 7076), (7076, 2560)), ((0, 1), (7088, 1), (2560, 1))),
     GemmCase("mm", ((256, 744), (744, 744)), ((744, 1), (744, 1))),
+    GemmCase("addmm", ((256, 128), (256, 560), (560, 128)), ((0, 1), (560, 1), (128, 1))),
+    GemmCase("addmm", ((256, 128), (256, 744), (744, 128)), ((0, 1), (744, 1), (128, 1))),
+    GemmCase("addmm", ((256, 128), (256, 992), (992, 128)), ((0, 1), (992, 1), (128, 1))),
+    GemmCase("addmm", ((256, 256), (256, 252), (252, 256)), ((0, 1), (252, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 512), (512, 256)), ((0, 1), (2560, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 640), (640, 256)), ((0, 1), (640, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 856), (856, 256)), ((0, 1), (856, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 1072), (1072, 256)), ((0, 1), (1088, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 1288), (1288, 256)), ((0, 1), (1288, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 1616), (1616, 256)), ((0, 1), (1664, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 2540), (2540, 256)), ((0, 1), (2540, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 7343), (7343, 256)), ((0, 1), (7360, 1), (256, 1))),
+    GemmCase("addmm", ((256, 256), (256, 7347), (7347, 256)), ((0, 1), (7360, 1), (256, 1))),
+    GemmCase("addmm", ((256, 257), (256, 4544), (4544, 257)), ((0, 1), (4544, 1), (257, 1))),
     GemmCase("addmm", ((256, 512), (256, 356), (356, 512)), ((0, 1), (356, 1), (512, 1))),
     GemmCase("addmm", ((256, 512), (256, 490), (490, 512)), ((0, 1), (490, 1), (512, 1))),
-    GemmCase("addmm", ((256, 256), (256, 640), (640, 256)), ((0, 1), (640, 1), (256, 1))),
-    GemmCase("addmm", ((256, 256), (256, 252), (252, 256)), ((0, 1), (252, 1), (256, 1))),
-    GemmCase("addmm", ((256, 256), (256, 7347), (7347, 256)), ((0, 1), (7360, 1), (256, 1))),
-    GemmCase("addmm", ((256, 256), (256, 7343), (7343, 256)), ((0, 1), (7360, 1), (256, 1))),
-    GemmCase("addmm", ((256, 256), (256, 512), (512, 256)), ((0, 1), (2560, 1), (256, 1))),
-    GemmCase("addmm", ((256, 256), (256, 856), (856, 256)), ((0, 1), (856, 1), (256, 1))),
-    GemmCase("addmm", ((256, 256), (256, 1616), (1616, 256)), ((0, 1), (1664, 1), (256, 1))),
-    GemmCase("addmm", ((256, 128), (256, 560), (560, 128)), ((0, 1), (560, 1), (128, 1))),
-    GemmCase("addmm", ((256, 128), (256, 992), (992, 128)), ((0, 1), (992, 1), (128, 1))),
-    GemmCase("addmm", ((8448, 1536), (8448, 512), (512, 1536)), ((0, 1), (512, 1), (1, 512))),
+    GemmCase("addmm", ((256, 512), (256, 6052), (6052, 512)), ((0, 1), (6080, 1), (512, 1))),
+    GemmCase("addmm", ((256, 640), (256, 576), (576, 640)), ((0, 1), (576, 1), (640, 1))),
+    GemmCase("addmm", ((256, 640), (256, 688), (688, 640)), ((0, 1), (688, 1), (640, 1))),
+    GemmCase("addmm", ((256, 640), (256, 976), (976, 640)), ((0, 1), (976, 1), (640, 1))),
+    GemmCase("addmm", ((256, 640), (256, 1004), (1004, 640)), ((0, 1), (1004, 1), (640, 1))),
+    GemmCase("addmm", ((256, 640), (256, 1080), (1080, 640)), ((0, 1), (1088, 1), (640, 1))),
+    GemmCase("addmm", ((256, 640), (256, 1288), (1288, 640)), ((0, 1), (1344, 1), (640, 1))),
+    GemmCase("addmm", ((256, 640), (256, 1778), (1778, 640)), ((0, 1), (1792, 1), (640, 1))),
+    GemmCase("addmm", ((256, 2560), (256, 7076), (7076, 2560)), ((0, 1), (7088, 1), (2560, 1))),
     GemmCase("addmm", ((8448, 512), (8448, 512), (512, 512)), ((0, 1), (512, 1), (512, 1))),
     GemmCase("addmm", ((8448, 512), (8448, 1024), (1024, 512)), ((0, 1), (1024, 1), (512, 1))),
     GemmCase("addmm", ((8448, 1024), (8448, 512), (512, 1024)), ((0, 1), (512, 1), (1, 512))),
-    GemmCase("addmm", ((256, 256), (256, 1072), (1072, 256)), ((0, 1), (1088, 1), (256, 1))),
-    GemmCase("addmm", ((256, 128), (256, 744), (744, 128)), ((0, 1), (744, 1), (128, 1))),
-    GemmCase("addmm", ((256, 640), (256, 1288), (1288, 640)), ((0, 1), (1344, 1), (640, 1))),
-    GemmCase("addmm", ((256, 640), (256, 1080), (1080, 640)), ((0, 1), (1088, 1), (640, 1))),
-    GemmCase("addmm", ((256, 640), (256, 1778), (1778, 640)), ((0, 1), (1792, 1), (640, 1))),
-    GemmCase("addmm", ((256, 640), (256, 576), (576, 640)), ((0, 1), (576, 1), (640, 1))),
-    GemmCase("addmm", ((256, 640), (256, 976), (976, 640)), ((0, 1), (976, 1), (640, 1))),
-    GemmCase("addmm", ((256, 640), (256, 1004), (1004, 640)), ((0, 1), (1004, 1), (640, 1))),
-    GemmCase("addmm", ((256, 640), (256, 688), (688, 640)), ((0, 1), (688, 1), (640, 1))),
-    GemmCase("addmm", ((256, 256), (256, 2540), (2540, 256)), ((0, 1), (2540, 1), (256, 1))),
-    GemmCase("addmm", ((256, 256), (256, 1288), (1288, 256)), ((0, 1), (1288, 1), (256, 1))),
-    GemmCase("addmm", ((256, 512), (256, 6052), (6052, 512)), ((0, 1), (6080, 1), (512, 1))),
+    GemmCase("addmm", ((8448, 1536), (8448, 512), (512, 1536)), ((0, 1), (512, 1), (1, 512))),
     GemmCase("addmm", ((8704, 512), (8704, 512), (512, 512)), ((0, 1), (512, 1), (512, 1))),
     GemmCase("addmm", ((8704, 512), (8704, 1024), (1024, 512)), ((0, 1), (1024, 1), (512, 1))),
-    GemmCase("addmm", ((256, 257), (256, 4544), (4544, 257)), ((0, 1), (4544, 1), (257, 1))),
 )
 
 # Benchmark mode -> report label.
@@ -134,19 +133,8 @@ def make_inputs(case: GemmCase) -> tuple[torch.Tensor, ...]:
         for shape, stride in zip(case.shapes, case.strides))
 
 
-def _dedup_gemm_configs(configs: list[GemmConfig]) -> list[GemmConfig]:
-    seen = set()
-    out = []
-    for config in configs:
-        key = tuple(asdict(config).items())
-        if key not in seen:
-            seen.add(key)
-            out.append(config)
-    return out
-
-
 def _register_custom_xpu_mm_heuristic() -> None:
-    """Add custom GEMM configs to Inductor's XPU mm/bmm/addmm/baddbmm template search space."""
+    """Add custom GEMM configs to Inductor's XPU mm/bmm/addmm template search space."""
     from torch._inductor.heuristics.template.registry import _HEURISTIC_CACHE, register_template_heuristic
     from torch._inductor.heuristics.template.triton import GemmConfig, XPUMMTemplateConfigHeuristic
     from torch._inductor.heuristics.template.triton_addmm import AddMMConfigMixin
@@ -154,12 +142,12 @@ def _register_custom_xpu_mm_heuristic() -> None:
     from torch._inductor.kernel.mm import mm_template
 
     custom_mm_configs = [
-        GemmConfig(128, 128, 64, 2, 32),
-        GemmConfig(128, 128, 32, 2, 16),
         GemmConfig(16, 512, 64, 2, 8),
         GemmConfig(32, 256, 32, 2, 16),
         GemmConfig(32, 256, 128, 3, 32),
+        GemmConfig(128, 128, 32, 2, 16),
         GemmConfig(128, 128, 64, 2, 16),
+        GemmConfig(128, 128, 64, 2, 32),
         GemmConfig(128, 128, 64, 3, 16),
         GemmConfig(128, 128, 64, 3, 32),
         GemmConfig(128, 128, 128, 2, 16),
@@ -180,11 +168,9 @@ def _register_custom_xpu_mm_heuristic() -> None:
 
         def __init__(self) -> None:
             super().__init__()
-            self.mm_configs = _dedup_gemm_configs([*self.mm_configs, *custom_mm_configs])
-            self.exhaustive_configs = self.mm_configs
+            self.mm_configs = [*self.mm_configs, *custom_mm_configs]
 
     @register_template_heuristic(mm_template.uid, "xpu", op_name="addmm")
-    @register_template_heuristic(bmm_template.uid, "xpu", op_name="baddbmm")
     class MyXPUAddmmTemplateConfigHeuristic(AddMMConfigMixin, MyXPUMMTemplateConfigHeuristic):  # pylint: disable=unused-variable
         pass
 
@@ -232,18 +218,12 @@ def _streamk(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, config: TileConf
 
 @functools.cache
 def _addmatrix_kernel():
-    """The post-op add-matrix kernel, tuned over the GEMM benchmark's configs like the no-bias cases.
-
-    The strides are in the key, so a shape that comes with several layouts is tuned once per layout.
-    """
+    """The post-op add-matrix kernel, tuned over the GEMM benchmark's configs like the no-bias cases."""
     from triton_kernels_benchmark.gemm_benchmark import get_matmul_autotune_configs
     from triton_kernels_benchmark.gemm_postop_addmatrix_benchmark import grouped_tile_gemm_addmatrix_kernel
 
-    key = [
-        "M", "N", "K", "stride_am", "stride_ak", "stride_bk", "stride_bn", "stride_cm", "stride_cn", "stride_dm",
-        "stride_dn"
-    ]
-    return triton.autotune(configs=get_matmul_autotune_configs(), key=key)(grouped_tile_gemm_addmatrix_kernel.fn)
+    autotune = triton.autotune(configs=get_matmul_autotune_configs(), key=["M", "N", "K"])
+    return autotune(grouped_tile_gemm_addmatrix_kernel.fn)
 
 
 @triton.jit
@@ -373,12 +353,16 @@ def uses_descriptor(shape: tuple[int, ...], stride: tuple[int, ...], itemsize: i
     return stride_col == 1 and stride_row >= cols and stride_row * itemsize % 16 == 0
 
 
-def pointer_path_operands(case: GemmCase) -> list[str]:
-    """The matrices the manual kernels load or store through masked pointers instead of a tensor descriptor."""
+def pointer_path_operands(case: GemmCase, output_itemsize: int) -> list[str]:
+    """The matrices the manual kernels load or store through masked pointers instead of a tensor descriptor.
+
+    The addmm bias is not listed: it is a broadcast row, which the grouped-tile kernel loads once.
+    """
     (a_shape, b_shape), (a_stride, b_stride) = case.shapes[-2:], case.strides[-2:]
     n = b_shape[-1]
-    # The manual kernels write a contiguous FP32 output.
-    operands = {"A": (a_shape, a_stride, 2), "B": (b_shape, b_stride, 2), "C": ((a_shape[-2], n), (n, 1), 4)}
+    operands = {
+        "A": (a_shape, a_stride, 2), "B": (b_shape, b_stride, 2), "C": ((a_shape[-2], n), (n, 1), output_itemsize)
+    }
     return [
         name for name, (shape, stride, itemsize) in operands.items() if not uses_descriptor(shape, stride, itemsize)
     ]
@@ -388,8 +372,13 @@ def print_cases(case_ids: list[int]) -> None:
     for case_id in case_ids:
         case = GEMM_CASES[case_id - 1]
         print(f"{case_id}: {case.op}, shapes={case.shapes}, strides={case.strides}", flush=True)
-        if pointer := pointer_path_operands(case):
-            print(f"   manual kernels use masked pointers for {', '.join(pointer)}", flush=True)
+        # The grouped-tile kernels write the FP16 output, Split-K and Stream-K an FP32 partial-sum buffer.
+        pointer = {"grouped tiles": pointer_path_operands(case, 2), "Split-K/Stream-K": pointer_path_operands(case, 4)}
+        if pointer["grouped tiles"] == pointer["Split-K/Stream-K"]:
+            pointer = {"manual kernels": pointer["grouped tiles"]}
+        for kernels, names in pointer.items():
+            if names:
+                print(f"   {kernels} use masked pointers for {', '.join(names)}", flush=True)
 
 
 def main() -> None:
