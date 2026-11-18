@@ -153,10 +153,16 @@ public:
     TritonGEN::PrecisionType BPrecision;
 
     if constexpr (std::is_same<OpTy, DotOp>::value) {
+      [[maybe_unused]] auto isFP8 = [](TritonGEN::PrecisionType precision) {
+        return precision == TritonGEN::PrecisionType::F8E5M2 ||
+               precision == TritonGEN::PrecisionType::F8E4M3FN;
+      };
       APrecision = getElementPrecision(ATensorTy, resElemTy),
       BPrecision = getElementPrecision(BTensorTy, resElemTy);
 
-      assert(APrecision == BPrecision &&
+      // fp8 DPAS accepts different fp8 formats for A and B.
+      assert((APrecision == BPrecision ||
+              (isFP8(APrecision) && isFP8(BPrecision))) &&
              "A and B precision enumerators do not match");
     } else if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
       auto aElemType = adaptor.getAElemType();
