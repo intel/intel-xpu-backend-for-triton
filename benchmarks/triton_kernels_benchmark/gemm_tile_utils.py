@@ -73,7 +73,13 @@ def load_matrix_tile(matrix_ptr, M: tl.constexpr, N: tl.constexpr, stride_m: tl.
         cc = (off_col + tl.arange(0, LOAD_COLS)).to(tl.int64)
         tile = tl.load(handle + tl.cast(off_row, tl.int64) * STRIDE_ROW + tl.cast(off_col, tl.int64) * STRIDE_COL,
                        mask=(rr < ROWS)[:, None] & (cc < COLS)[None, :], other=0)
-        tile = tl.broadcast_to(tile, (BLOCK_ROWS, BLOCK_COLS))
+        if LOAD_ROWS != BLOCK_ROWS or LOAD_COLS != BLOCK_COLS:
+            # The broadcast also fills indices past ROWS or COLS. Zero them as the masked load would, since a dot's K
+            # tail relies on that padding.
+            rr = (off_row + tl.arange(0, BLOCK_ROWS)).to(tl.int64)
+            cc = (off_col + tl.arange(0, BLOCK_COLS)).to(tl.int64)
+            tile = tl.where((rr < ROWS)[:, None] & (cc < COLS)[None, :],
+                            tl.broadcast_to(tile, (BLOCK_ROWS, BLOCK_COLS)), 0)
     if TRANSPOSE:
         tile = tile.T
     return tile
