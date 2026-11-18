@@ -46,7 +46,7 @@ def TritonIntelRemoveMasks
 
 def TritonIntelFuseReshape
     : Pass<"triton-intel-fuse-reshape", "mlir::ModuleOp"> {
-  let summary = "Fuse a tt.reshape operation with a tt.load operation (tensor descriptors only)";
+  let summary = "Fuse tt.reshape operations into tensor-descriptor loads and stores";
 
   let description = [{
     This pass attempts to fuse a tt.reshape operation with a tt.descriptor_load operation.
@@ -73,6 +73,14 @@ def TritonIntelFuseReshape
     operations that keep dimension 0 in place; those operands and the tt.trans operations are
     rebuilt at rank 2. Inline asm, multi-result operations, and any operation or load carrying
     tt.contiguity, tt.divisibility or tt.constancy block the move.
+
+    It also folds a tt.reshape that only prepends unit dimensions to a value of rank 2 or more
+    into the tt.descriptor_store of its result, which then stores the value directly (a
+    rank-reduced store):
+        %r = tt.reshape %x : tensor<128x64xf16> -> tensor<1x128x64xf16>
+        tt.descriptor_store %desc[%b, %y, %z], %r : !tt.tensordesc<1x128x64xf16>, tensor<1x128x64xf16>
+    becomes:
+        tt.descriptor_store %desc[%b, %y, %z], %x : !tt.tensordesc<1x128x64xf16>, tensor<128x64xf16>
   }];
 
   let dependentDialects = [
@@ -175,34 +183,6 @@ def TritonIntelSimplifySignedArithmetic
   }];
 
   let dependentDialects = [
-    "mlir::triton::TritonDialect"
-  ];
-}
-
-def TritonIntelSpeculateSignedDivRem
-    : Pass<"triton-intel-speculate-signed-div-rem", "mlir::ModuleOp"> {
-  let summary = "Convert signed div/rem to unsigned under a runtime assertion";
-
-  let description = [{
-    Converts arith.divsi/arith.remsi to arith.divui/arith.remui under a
-    tt.assert that the dividend is non-negative. This recovers the AxisInfo
-    constancy and contiguity deductions, which are disabled for the signed
-    operations because their floor-division argument only holds for a
-    non-negative dividend. A negative dividend then aborts with a diagnostic
-    instead of silently producing a wrong answer.
-
-    An operation is converted only when the deduction would have fired on it and
-    the check it needs is worth its cost; anything else is left signed, keeping
-    the sound but weaker lattice. SpeculateSignedDivRem.cpp documents each of
-    those conditions at the site that applies it.
-
-    Runs after TritonIntelSimplifySignedArithmetic, whose simpler prover has
-    already converted the operations that need no runtime check to be sound.
-  }];
-
-  let dependentDialects = [
-    "mlir::arith::ArithDialect",
-    "mlir::scf::SCFDialect",
     "mlir::triton::TritonDialect"
   ];
 }

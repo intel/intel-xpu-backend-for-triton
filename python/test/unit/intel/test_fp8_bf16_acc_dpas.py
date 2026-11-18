@@ -8,7 +8,8 @@ the same way. The result must match, bit for bit, the same kernel written with
 fp16 operands, an fp32 accumulator and an explicit cast to bf16.
 
 Mixed fp8 formats with an fp32 accumulator are extended to fp16 like
-same-format fp8, so they use DPAS too instead of the FMA path.
+same-format fp8, so they use DPAS too instead of the FMA path. With fp8 DPAS,
+mixed fp8 formats with an fp32 or a bf16 accumulator use it directly.
 """
 
 import pytest
@@ -16,7 +17,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu
+from triton._internal_testing import is_compile_warmup, is_xpu
 
 FP8_PAIRS = [(torch.float8_e5m2, torch.float8_e5m2), (torch.float8_e4m3fn, torch.float8_e4m3fn),
              (torch.float8_e4m3fn, torch.float8_e5m2), (torch.float8_e5m2, torch.float8_e4m3fn)]
@@ -44,6 +45,7 @@ def _fp8_dot(a_ptr, b_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.conste
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
 @pytest.mark.parametrize("a_dtype, b_dtype", FP8_PAIRS)
+@pytest.mark.enable_warmup
 def test_fp8_dot_bf16_acc_dpas(a_dtype, b_dtype, device):
     arch = triton.runtime.driver.active.get_current_target().arch
     if not arch["has_subgroup_matrix_multiply_accumulate"]:
@@ -65,6 +67,8 @@ def test_fp8_dot_bf16_acc_dpas(a_dtype, b_dtype, device):
 
     out, kernel = run(reference=False)
     ref_out, ref_kernel = run(reference=True)
+    if is_compile_warmup():
+        return
     assert "#ttig.dpas" in kernel.asm["ttgir"], "fp8 x fp8 -> bf16 dot does not use DPAS"
     assert kernel.metadata.threads_per_warp == ref_kernel.metadata.threads_per_warp
     assert torch.equal(out, ref_out), "result differs from the fp32-accumulator dot with a cast to bf16"
@@ -76,12 +80,13 @@ def test_fp8_dot_bf16_acc_dpas(a_dtype, b_dtype, device):
 @pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
 @pytest.mark.parametrize("a_dtype, b_dtype", [(torch.float8_e4m3fn, torch.float8_e5m2),
                                               (torch.float8_e5m2, torch.float8_e4m3fn)])
+@pytest.mark.enable_warmup
 def test_mixed_fp8_dot_fp32_acc_dpas(a_dtype, b_dtype, device):
     arch = triton.runtime.driver.active.get_current_target().arch
     if not arch["has_subgroup_matrix_multiply_accumulate"]:
         pytest.skip("needs DPAS")
     if arch.get("has_subgroup_matrix_multiply_accumulate_bfloat8", False):
-        pytest.skip("mixed fp8 x fp8 -> fp32 uses the FMA path on this target")
+        pytest.skip("mixed fp8 x fp8 -> fp32 uses fp8 DPAS on this target")
     M, N, K = 128, 128, 128
     BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
     generator = torch.Generator(device="cpu").manual_seed(0)
@@ -97,9 +102,41 @@ def test_mixed_fp8_dot_fp32_acc_dpas(a_dtype, b_dtype, device):
 
     out, kernel = run(reference=False)
     ref_out, ref_kernel = run(reference=True)
+    if is_compile_warmup():
+        return
     assert "#ttig.dpas" in kernel.asm["ttgir"], "mixed fp8 x fp8 -> fp32 dot does not use DPAS"
     assert kernel.metadata.threads_per_warp == ref_kernel.metadata.threads_per_warp
     assert torch.equal(out, ref_out), "result differs from the dot with the operands cast to fp16"
 
     expected = c + a.float() @ b.float()
     torch.testing.assert_close(out.cpu(), expected, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
+@pytest.mark.parametrize("acc_dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("a_dtype, b_dtype", [(torch.float8_e4m3fn, torch.float8_e5m2),
+                                              (torch.float8_e5m2, torch.float8_e4m3fn)])
+@pytest.mark.enable_warmup
+def test_mixed_fp8_dot_native_dpas(a_dtype, b_dtype, acc_dtype, device):
+    arch = triton.runtime.driver.active.get_current_target().arch
+    if not arch.get("has_subgroup_matrix_multiply_accumulate_bfloat8", False):
+        pytest.skip("needs fp8 DPAS")
+    M, N, K = 128, 128, 128
+    BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
+    generator = torch.Generator(device="cpu").manual_seed(0)
+    a = (torch.randn((M, K), generator=generator) / 2).to(a_dtype)
+    b = (torch.randn((K, N), generator=generator) / 2).to(b_dtype)
+    c = torch.randn((M, N), generator=generator).to(acc_dtype)
+
+    out = c.to(device)
+    kernel = _fp8_dot[(M // BLOCK_M, N // BLOCK_N)](a.to(device), b.to(device), out, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
+                                                    REFERENCE=False)
+    if is_compile_warmup():
+        return
+    ttgir = kernel.asm["ttgir"]
+    assert "#ttig.dpas" in ttgir, "mixed fp8 dot does not use DPAS"
+    assert "xf16" not in ttgir, "mixed fp8 operands are extended instead of using fp8 DPAS"
+
+    expected = c.float() + a.float() @ b.float()
+    atol, rtol = (1e-4, 1e-4) if acc_dtype == torch.float32 else (0.1, 2e-2)
+    torch.testing.assert_close(out.float().cpu(), expected, atol=atol, rtol=rtol)

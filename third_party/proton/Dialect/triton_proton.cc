@@ -1,6 +1,7 @@
 #include "Analysis/ScopeIdAllocation.h"
 #include "Conversion/ProtonGPUToLLVM/Passes.h"
 #include "Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h"
+#include "Conversion/ProtonGPUToLLVM/ProtonIntelGPUToLLVM/Passes.h"
 #include "Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h"
 #include "Conversion/ProtonToProtonGPU/Passes.h"
 #include "Dialect/Proton/IR/Dialect.h"
@@ -116,6 +117,8 @@ void init_triton_proton(py::module_ &m) {
   ADD_PASS_WRAPPER_1("add_convert_proton_amd_gpu_to_llvm",
                      proton::gpu::createConvertProtonAMDGPUToLLVMPass,
                      const std::string &);
+  ADD_PASS_WRAPPER_0("add_convert_proton_intel_gpu_to_llvm",
+                     proton::gpu::createConvertProtonIntelGPUToLLVMPass);
   ADD_PASS_WRAPPER_0("add_allocate_proton_shared_memory",
                      proton::gpu::createAllocateProtonSharedMemoryPass);
   ADD_PASS_WRAPPER_0("add_schedule_buffer_store",

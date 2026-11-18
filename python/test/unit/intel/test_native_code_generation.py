@@ -113,7 +113,8 @@ def test_auto_large_grf(device, tmp_path):
 
 @pytest.mark.parametrize("generate_native_code", [False, True], ids=["load_binary", "make_zebin"])
 @pytest.mark.parametrize("grf_mode", ["128", "160", "192", "256", "512", "auto"])
-def test_explicit_grf_mode_uses_maximum_registers(device, grf_mode, generate_native_code):
+def test_explicit_grf_mode_uses_maximum_registers(device, grf_mode, generate_native_code, fresh_knobs):
+    fresh_knobs.intel.gen_native_code = False
 
     @triton.jit
     def kernel(X, SIZE: tl.constexpr):

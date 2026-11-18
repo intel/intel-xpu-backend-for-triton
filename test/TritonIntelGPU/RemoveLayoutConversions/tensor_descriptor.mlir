@@ -485,3 +485,58 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return %first : tensor<64x64xf32, #dpas1>
   }
 }
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+#coalesced = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+
+// COM: Test 14: unlike Test 10, a rank-reduced descriptor store keeps its
+// COM: coalesced layout, also against a backward remat into the DPAS layout,
+// COM: unless it is tagged for 2D block I/O (#8516).
+
+// CHECK-LABEL: @rank_reduced_descriptor_store_keeps_convert
+// CHECK: %[[DOT:.*]] = tt.dot
+// CHECK: %[[CVT:.*]] = ttg.convert_layout %[[DOT]] : tensor<64x64xf16, #mma> -> tensor<64x64xf16, #blocked>
+// CHECK: tt.descriptor_store %arg0[{{.*}}], %[[CVT]] : !tt.tensordesc<1x64x64xf16>, tensor<64x64xf16, #blocked>
+// CHECK-LABEL: @rank_reduced_block_io_descriptor_store_takes_dpas
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.descriptor_store {{.*}} : !tt.tensordesc<1x64x64xf16>, tensor<64x64xf16, #mma>
+// CHECK-LABEL: @rank_reduced_descriptor_store_skips_dpas_remat
+// CHECK: tt.descriptor_store {{.*}} : !tt.tensordesc<1x64x64xf32>, tensor<64x64xf32, #blocked>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @rank_reduced_descriptor_store_keeps_convert(
+      %desc: !tt.tensordesc<1x64x64xf16>, %a: tensor<64x64xf16, #dot0>,
+      %b: tensor<64x64xf16, #dot1>, %acc: tensor<64x64xf16, #dpas>) {
+    %c0 = arith.constant 0 : i32
+    %dot = tt.dot %a, %b, %acc, inputPrecision = ieee :
+        tensor<64x64xf16, #dot0> * tensor<64x64xf16, #dot1> -> tensor<64x64xf16, #dpas>
+    %cvt = ttg.convert_layout %dot : tensor<64x64xf16, #dpas> -> tensor<64x64xf16, #coalesced>
+    tt.descriptor_store %desc[%c0, %c0, %c0], %cvt : !tt.tensordesc<1x64x64xf16>, tensor<64x64xf16, #coalesced>
+    tt.return
+  }
+  tt.func @rank_reduced_block_io_descriptor_store_takes_dpas(
+      %desc: !tt.tensordesc<1x64x64xf16>, %a: tensor<64x64xf16, #dot0>,
+      %b: tensor<64x64xf16, #dot1>, %acc: tensor<64x64xf16, #dpas>) {
+    %c0 = arith.constant 0 : i32
+    %dot = tt.dot %a, %b, %acc, inputPrecision = ieee :
+        tensor<64x64xf16, #dot0> * tensor<64x64xf16, #dot1> -> tensor<64x64xf16, #dpas>
+    %cvt = ttg.convert_layout %dot : tensor<64x64xf16, #dpas> -> tensor<64x64xf16, #coalesced>
+    tt.descriptor_store %desc[%c0, %c0, %c0], %cvt {ttig.block_io = "row_major"} : !tt.tensordesc<1x64x64xf16>, tensor<64x64xf16, #coalesced>
+    tt.return
+  }
+  tt.func @rank_reduced_descriptor_store_skips_dpas_remat(
+      %in: !tt.tensordesc<64x64xf32>, %out: !tt.tensordesc<1x64x64xf32>,
+      %a: tensor<64x64xf16, #dot0>, %b: tensor<64x64xf16, #dot1>) -> tensor<64x64xf32, #dpas> {
+    %c0 = arith.constant 0 : i32
+    %x = tt.descriptor_load %in[%c0, %c0] {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xf32> -> tensor<64x64xf32, #coalesced>
+    %y = arith.addf %x, %x : tensor<64x64xf32, #coalesced>
+    %acc = ttg.convert_layout %y : tensor<64x64xf32, #coalesced> -> tensor<64x64xf32, #dpas>
+    %dot = tt.dot %a, %b, %acc, inputPrecision = ieee :
+        tensor<64x64xf16, #dot0> * tensor<64x64xf16, #dot1> -> tensor<64x64xf32, #dpas>
+    tt.descriptor_store %out[%c0, %c0, %c0], %y : !tt.tensordesc<1x64x64xf32>, tensor<64x64xf32, #coalesced>
+    tt.return %dot : tensor<64x64xf32, #dpas>
+  }
+}

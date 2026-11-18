@@ -83,6 +83,7 @@ jobs:
           pip install -r python\requirements.txt
           # `build` can't determine that Ninja is already installed.
           # similar issue: https://github.com/pypa/build/issues/506
+          $env:MAX_JOBS = $env:NUMBER_OF_PROCESSORS
           python -m build --wheel --no-isolation --skip-dependency-check
 
       # Uploaded before the unit tests so that the test job can run even if unit tests fail.

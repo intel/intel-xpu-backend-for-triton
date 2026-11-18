@@ -44,7 +44,7 @@ env:
 jobs:
   setup:
     name: Setup
-    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "gpu", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 360
     defaults:
       run:
@@ -143,7 +143,7 @@ jobs:
           - vllm-rest
           # Currently vllm-omni suite only installs the framework, no tests are running yet
           - vllm-omni
-    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "gpu", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 360
     defaults:
       run:
@@ -282,7 +282,7 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-kda
 
-      # vllm-rest groups short suites: gdn-attn, linear-attn, deepgemm, inductor, lora, batch-invariant, model-ops, v1-runner
+      # vllm-rest groups short suites: gdn-attn, linear-attn, deepgemm, inductor, lora, batch-invariant, model-ops
       - name: Run gdn-attn tests
         if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
@@ -317,11 +317,6 @@ jobs:
         if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-model-ops
-
-      - name: Run v1-runner tests
-        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
-        run: |
-          ${{ env.TRITON_TEST_CMD }} --vllm-v1-runner
 
       - name: Run tdesc tests
         if: ${{ matrix.suite == 'vllm-tdesc' && steps.install-vllm.outcome == 'success' && !cancelled() }}

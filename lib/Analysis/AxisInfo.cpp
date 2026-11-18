@@ -3,6 +3,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Matchers.h"
+#include "triton/Analysis/Signedness.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -400,6 +401,23 @@ public:
   }
 };
 
+template <typename OpTy>
+class PointerCastOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
+public:
+  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(OpTy op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    if (isa<RankedTensorType>(op.getSrc().getType()))
+      return AxisInfo::getPessimisticValueState(op.getResult());
+    // Scalar pointer casts preserve byte alignment.
+    const AxisInfo &info = operands[0]->getValue();
+    return AxisInfo(/*contiguity=*/{1}, info.getDivisibility(),
+                    /*constancy=*/{1});
+  }
+};
+
 class BitcastOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<triton::BitcastOp> {
 public:
@@ -660,8 +678,13 @@ private:
     // the minimal constancy is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual constancy.
+    //
+    // NOTE: For signed division (DivSIOp), truncation toward zero breaks the
+    // constancy pattern for negative inputs, so the deduction is taken only
+    // where the dividend is provably non-negative.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        triton::dividendIsNonNegative(op)) {
       constancy = std::max(constancy,
                            gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                                rhs.getDivisibility(dim)));
@@ -715,8 +738,13 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
+    //
+    // NOTE: For signed remainder (RemSIOp), srem produces negative results for
+    // negative dividends, breaking the contiguity pattern, so the deduction is
+    // taken only where the dividend is provably non-negative.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        triton::dividendIsNonNegative(op)) {
       contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                        rhs.getDivisibility(dim));
     }
@@ -1223,6 +1251,8 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   IdentityOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   IdentityOpAxisInfoVisitor<triton::gpu::ThreadHandoffOp>,
                   BitcastOpAxisInfoVisitor,
+                  PointerCastOpAxisInfoVisitor<triton::IntToPtrOp>,
+                  PointerCastOpAxisInfoVisitor<triton::PtrToIntOp>,
                   IdentityOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();

@@ -31,6 +31,11 @@
 
 #include <Python.h>
 
+// NOTE: `proton_utils.cpp`'s `getDeviceKey` independently builds the same
+// device-ordinal scheme (index into `queue->get_context().get_devices()`)
+// for Proton's instrumentation profiler. It cannot reuse this list directly
+// -- it builds into a separate shared library, dlopen'd independently of
+// this one -- so if the indexing scheme here changes, update it there too.
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
     g_sycl_l0_device_list;
 

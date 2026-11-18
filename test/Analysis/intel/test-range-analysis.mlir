@@ -234,16 +234,16 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+1 {{unsigned : [0, 67107840] signed : [0, 67107840]}}
     %1 = arith.muli %0, %c1024_i32 : i32
     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
-    // expected-remark@+2 {{result 1: unsigned : [0, 17391] signed : [0, 17391]}}
+    // expected-remark@+2 {{result 1: unsigned : [0, 262911] signed : [0, 262911]}}
     // expected-remark@+1 {{inferred total trip count: 16}}
     %3:3 = scf.for %arg2 = %c0 to %c16 step %c1 iter_args(%arg3 = %arg0, %arg4 = %cst, %arg5 = %arg1) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
-      // expected-remark@+2 {{result 1: unsigned : [0, 261888] signed : [0, 261888]}}
+      // expected-remark@+2 {{result 1: unsigned : [0, 262911] signed : [0, 262911]}}
       // expected-remark@+1 {{inferred total trip count: 256}}
       %10:3 = scf.for %arg6 = %c0 to %c16 step %c1 iter_args(%arg7 = %arg3, %arg8 = %arg4, %arg9 = %arg5) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
         %11 = tt.addptr %arg7, %1 : !tt.ptr<f32>, i32
         // expected-remark@+1 {{unsigned : [0, 1023] signed : [0, 1023]}}
         %12 = arith.extsi %2 : tensor<1024xi32> to tensor<1024xi64>
-        // expected-remark@+1 {{unsigned : [0, 261888] signed : [0, 261888]}}
+        // expected-remark@+1 {{unsigned : [0, 262911] signed : [0, 262911]}}
         %13 = arith.addi %12, %arg8 : tensor<1024xi64>
         %14 = tt.splat %11 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
         %15 = tt.addptr %14, %13 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi64>
@@ -256,7 +256,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     %4 = tt.addptr %3#0, %1 : !tt.ptr<f32>, i32
     // expected-remark@+1 {{unsigned : [0, 1023] signed : [0, 1023]}}
     %5 = arith.extsi %2 : tensor<1024xi32> to tensor<1024xi64>
-    // expected-remark@+1 {{unsigned : [0, 18414] signed : [0, 18414]}}
+    // expected-remark@+1 {{unsigned : [0, 263934] signed : [0, 263934]}}
     %6 = arith.addi %5, %3#1 : tensor<1024xi64>
     %7 = tt.splat %4 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
     %8 = tt.addptr %7, %6 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi64>
@@ -1798,6 +1798,138 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %15 = tt.splat %output_ptr : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
     %16 = tt.addptr %15, %12 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
     tt.store %16, %14, %8 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// The init value does not use up the budget, so the result includes 16 (#8604).
+// CHECK-LABEL: tt.func @forOpAssumedDynamicBound
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @forOpAssumedDynamicBound(%n: i32) -> i32 {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c16 = arith.constant 16 : i32
+    %ge = arith.cmpi sge, %n, %c0 : i32
+    llvm.intr.assume %ge : i1
+    %le = arith.cmpi sle, %n, %c16 : i32
+    llvm.intr.assume %le : i1
+    // expected-remark@+1 {{unsigned : [0, 16] signed : [0, 16]}}
+    %r = scf.for %i = %c0 to %n step %c1 iter_args(%a = %c0) -> (i32) : i32 {
+      %a1 = arith.addi %a, %c1 : i32
+      scf.yield %a1 : i32
+    }
+    tt.return %r : i32
+  }
+}
+
+// -----
+
+// The inner bound grows with each outer step until the trip count passes the limit, so the
+// result is the full range.
+// CHECK-LABEL: tt.func @forNestedWideningInnerBound
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @forNestedWideningInnerBound() -> i32 {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // expected-remark@+1 {{result 1: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %r:2 = scf.for %i = %c0 to %c4 step %c1 iter_args(%upper = %c1, %count = %c0_i32) -> (index, i32) {
+      %s = scf.for %j = %c0 to %upper step %c1 iter_args(%v = %c0_i32) -> (i32) {
+        %v1 = arith.addi %v, %c1_i32 : i32
+        scf.yield %v1 : i32
+      }
+      %upper1 = arith.addi %upper, %c1 : index
+      scf.yield %upper1, %s : index, i32
+    }
+    tt.return %r#1 : i32
+  }
+}
+
+// -----
+
+// The result's count is not spent while the init from the first loop converges (#8604).
+// CHECK-LABEL: tt.func @forOpInitFromLoop
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @forOpInitFromLoop() -> i32 {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c4 = arith.constant 4 : i32
+    %c16 = arith.constant 16 : i32
+    %a = scf.for %i = %c0 to %c16 step %c1 iter_args(%x = %c0) -> (i32) : i32 {
+      %x1 = arith.addi %x, %c1 : i32
+      scf.yield %x1 : i32
+    }
+    // expected-remark@+1 {{unsigned : [2, 20] signed : [2, 20]}}
+    %b = scf.for %j = %c0 to %c4 step %c1 iter_args(%y = %a) -> (i32) : i32 {
+      %y1 = arith.addi %y, %c1 : i32
+      scf.yield %y1 : i32
+    }
+    tt.return %b : i32
+  }
+}
+
+// -----
+
+// Same for an inner loop whose init changes with every outer iteration: the result is 36.
+// CHECK-LABEL: tt.func @forNestedInitFromOuterArg
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @forNestedInitFromOuterArg() -> i32 {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c2 = arith.constant 2 : i32
+    %c4 = arith.constant 4 : i32
+    // expected-remark@+1 {{unsigned : [3, 36] signed : [3, 36]}}
+    %r = scf.for %i = %c0 to %c4 step %c1 iter_args(%a = %c0) -> (i32) : i32 {
+      %s = scf.for %j = %c0 to %c4 step %c1 iter_args(%b = %a) -> (i32) : i32 {
+        %b2 = arith.addi %b, %c2 : i32
+        scf.yield %b2 : i32
+      }
+      %s1 = arith.addi %s, %c1 : i32
+      scf.yield %s1 : i32
+    }
+    tt.return %r : i32
+  }
+}
+
+// -----
+
+// The difference of the unknown i64 bounds overflows int64, so the trip count is unknown.
+// CHECK-LABEL: tt.func @forOpUnknownI64Bounds
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @forOpUnknownI64Bounds(%lo: i64, %hi: i64) -> i32 {
+    %c2 = arith.constant 2 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %r = scf.for %i = %lo to %hi step %c2 iter_args(%v = %c0_i32) -> (i32) : i64 {
+      %v1 = arith.addi %v, %c1_i32 : i32
+      scf.yield %v1 : i32
+    }
+    tt.return %r : i32
+  }
+}
+
+// -----
+
+// The inner total trip count (2^63 - 1)^2 saturates instead of wrapping to 1.
+// CHECK-LABEL: tt.func @forNestedTripCountProduct
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @forNestedTripCountProduct(%n: i64, %m: i64) {
+    %c0 = arith.constant 0 : i64
+    %c1 = arith.constant 1 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    scf.for %i = %c0 to %n step %c1 : i64 {
+      // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+      %s = scf.for %j = %c0 to %m step %c1 iter_args(%v = %c0_i32) -> (i32) : i64 {
+        %v1 = arith.addi %v, %c1_i32 : i32
+        scf.yield %v1 : i32
+      }
+    }
     tt.return
   }
 }
