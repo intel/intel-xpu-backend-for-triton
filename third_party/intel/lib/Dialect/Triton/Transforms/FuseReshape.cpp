@@ -260,7 +260,8 @@ private:
     // The other dimension kept is passed through as is - on the middle
     // branch `shapes[0]` and `strides[0]` become the surface height and pitch
     // - and so is exactly as trusted as in a rank-2 descriptor: a runtime
-    // zero height or negative pitch is not caught here.
+    // zero height or negative pitch is not caught here. `isCandidate` only
+    // declines a folded pitch narrower than the width.
     SmallVector<Value> newShape = dropDim(shapes, collapsedDim);
     Value mergedShape = shapes[mergedDim];
     Value mergedNonEmpty;
@@ -413,7 +414,8 @@ private:
     if (!llvm::equal(tensorTy.getShape(), descLoadOp.getType().getShape()))
       return false;
 
-    if (!getCollapsedDim(tensorTy.getShape()))
+    std::optional<unsigned> collapsedDim = getCollapsedDim(tensorTy.getShape());
+    if (!collapsedDim)
       return false;
 
     // Offsetting the base by `offsets[cd] * strides[cd]` elements needs an
@@ -424,6 +426,28 @@ private:
       LLVM_DEBUG(llvm::dbgs() << "Declining to fuse:\n  " << *descLoadOp
                               << "\n  reason: sub-byte element type\n");
       return false;
+    }
+
+    // Collapsing the middle dimension makes `strides[0]` the surface pitch,
+    // which the unfused load never used as one (on the outer branch
+    // `strides[1]` stays the pitch it already was). A 2D block message needs a
+    // pitch no narrower than its width, and nothing downstream checks that, so
+    // decline where it provably fails: a folded positive pitch below a folded
+    // width, or below the one-block floor a runtime width gets when empty. A
+    // non-positive pitch is left to `LowerTo2DBlockLoad`, which keeps it off
+    // 2D block I/O.
+    if (*collapsedDim == 1) {
+      std::optional<int64_t> pitch =
+          tt::intel::getFoldedConstantValue(makeTensorDescOp->getStrides()[0]);
+      int64_t width =
+          tt::intel::getFoldedConstantValue(makeTensorDescOp->getShape()[2])
+              .value_or(tensorTy.getDimSize(2));
+      if (pitch && *pitch > 0 && width > *pitch) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "Declining to fuse:\n  " << *descLoadOp
+                   << "\n  reason: promoted pitch below the surface width\n");
+        return false;
+      }
     }
 
     return true;

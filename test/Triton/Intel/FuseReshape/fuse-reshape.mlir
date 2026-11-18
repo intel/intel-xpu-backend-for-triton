@@ -396,6 +396,59 @@ tt.func public @fuseMiddleDimKeepsLeadingFields(%arg0: tensor<16x16xf32>, %arg1:
 
 // -----
 
+// COM: The promoted pitch must not be narrower than the surface width, a 2D
+// COM: block rule that nothing after this pass checks. Here strides[0] is 16
+// COM: f32 elements (64 bytes) and the width 32 (128 bytes), so the load keeps
+// COM: its rank-3 form.
+tt.func public @noFuseMiddleDimPitchBelowWidth(%arg0: tensor<32x16xf32>, %arg1: !tt.ptr<f32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %c32_i32 = arith.constant 32 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c16_i64 = arith.constant 16 : i64
+  %c32_i64 = arith.constant 32 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c16_i32, %c4_i32, %c32_i32], [%c16_i64, %c32_i64, %c1_i64] : <f32>, <16x1x32xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %c2_i32, %c0_i32] : !tt.tensordesc<16x1x32xf32> -> tensor<16x1x32xf32>
+  %2 = tt.reshape %1 : tensor<16x1x32xf32> -> tensor<16x32xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x32xf32> * tensor<32x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: noFuseMiddleDimPitchBelowWidth
+// CHECK-NOT: tt.addptr
+// CHECK: [[LOAD:%.*]] = tt.descriptor_load {{.*}} : !tt.tensordesc<16x1x32xf32> -> tensor<16x1x32xf32>
+// CHECK: [[RESHAPE:%.*]] = tt.reshape [[LOAD]] : tensor<16x1x32xf32> -> tensor<16x32xf32>
+// CHECK: tt.dot [[RESHAPE]], {{.*}} : tensor<16x32xf32> * tensor<32x16xf32> -> tensor<16x16xf32>
+
+// -----
+
+// COM: The same with a runtime width: the one-block floor it gets for the
+// COM: empty case, 32 elements (128 bytes), is wider than the 64-byte pitch.
+tt.func public @noFuseMiddleDimPitchBelowFloor(%arg0: tensor<32x16xf32>, %arg1: !tt.ptr<f32>, %D: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c16_i64 = arith.constant 16 : i64
+  %c32_i64 = arith.constant 32 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c16_i32, %c4_i32, %D], [%c16_i64, %c32_i64, %c1_i64] : <f32>, <16x1x32xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %c2_i32, %c0_i32] : !tt.tensordesc<16x1x32xf32> -> tensor<16x1x32xf32>
+  %2 = tt.reshape %1 : tensor<16x1x32xf32> -> tensor<16x32xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x32xf32> * tensor<32x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: noFuseMiddleDimPitchBelowFloor
+// CHECK-NOT: tt.addptr
+// CHECK: [[LOAD:%.*]] = tt.descriptor_load {{.*}} : !tt.tensordesc<16x1x32xf32> -> tensor<16x1x32xf32>
+// CHECK: [[RESHAPE:%.*]] = tt.reshape [[LOAD]] : tensor<16x1x32xf32> -> tensor<16x32xf32>
+// CHECK: tt.dot [[RESHAPE]], {{.*}} : tensor<16x32xf32> * tensor<32x16xf32> -> tensor<16x16xf32>
+
+// -----
+
 // COM: An empty collapsed dimension makes the rank-3 load pure padding. The
 // COM: clamp keeps the base where it is (the clamp range is [0, 0]) and the
 // COM: guard folds to the padding index: the rows' own extent, 16.
