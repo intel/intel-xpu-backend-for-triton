@@ -160,8 +160,10 @@ makeTensorDescAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
     //  [base + 8, base + 9, base +10, nullptr,]
     //  [nullptr,  nullptr,  nullptr,  nullptr,]]
     // clang-format on
-    // The contiguity of the two dim should be 1.
-    int64_t contiguous = shapeInfo[dim].getDivisibility(0);
+    // The contiguity of the two dim should be 1. Divisibility hints need not be
+    // powers of two, so only the power-of-two part bounds the contiguity.
+    int64_t shapeDiv = shapeInfo[dim].getDivisibility(0);
+    int64_t contiguous = shapeDiv & -shapeDiv;
     const std::optional<APInt> &stride = strideInfo[dim].getConstantValue();
     contiguity.push_back(
         stride && stride->isOne() ? std::min(contiguous, blkShape[dim]) : 1);
@@ -259,13 +261,15 @@ public:
 /// the base and every stride other than stride[d] (scaled to bytes), and a
 /// contiguous dim has stride 1 and a shape divisible by its contiguity.
 class ExtractDescOpAxisInfoVisitor final
-    : public AxisInfoVisitorImpl<gpu::intel::ExtractDescOp> {
+    : public AxisInfoVisitorImpl<ttgi::ExtractDescOp> {
 public:
-  using AxisInfoVisitorImpl<gpu::intel::ExtractDescOp>::AxisInfoVisitorImpl;
+  using AxisInfoVisitorImpl<ttgi::ExtractDescOp>::AxisInfoVisitorImpl;
 
   AxisInfo
-  getAxisInfo(gpu::intel::ExtractDescOp op,
+  getAxisInfo(ttgi::ExtractDescOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    LDBG("ExtractDescOpAxisInfoVisitor: " << *op);
+
     auto descType = cast<TensorDescType>(op.getDesc().getType());
     RankedTensorType blockType = descType.getBlockType();
     const AxisInfo &desc = operands[0]->getValue();

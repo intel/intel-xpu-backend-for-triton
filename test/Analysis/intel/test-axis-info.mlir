@@ -1145,12 +1145,12 @@ tt.func public @ptr_offset(%arg1: tensor<128x1xi32>) {
 
 // -----
 
-// COM: Fields of a loop-carried descriptor, bounded by its address-level AxisInfo.
+// COM: Fields of a loop-carried descriptor, bounded by its address-level AxisInfo. The base steps by one element, so
+// COM: the join keeps only 2-byte alignment for the base and the outer stride.
 // CHECK-LABEL: @extract_desc
 tt.func public @extract_desc(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %m: i32 {tt.divisibility = 16 : i32}, %n: i32 {tt.divisibility = 16 : i32}, %stride: i64 {tt.divisibility = 16 : i32}, %ub: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
-  %c64_i32 = arith.constant 64 : i32
   %c1_i64 = arith.constant 1 : i64
   %d0 = tt.make_tensor_descriptor %base, [%m, %n], [%stride, %c1_i64] : <f16>, <64x32xf16>
   %r:2 = scf.for %iv = %c0_i32 to %ub step %c1_i32 iter_args(%d = %d0, %p = %base) -> (!tt.tensordesc<64x32xf16>, !tt.ptr<f16>) : i32 {
@@ -1158,15 +1158,61 @@ tt.func public @extract_desc(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %
     %shape0 = ttig.extract_desc %d[0] : <64x32xf16> -> i64
     // CHECK: ttig.extract_desc %{{.*}}[1] {{.*}} => contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>
     %shape1 = ttig.extract_desc %d[1] : <64x32xf16> -> i64
-    // CHECK: ttig.extract_desc %{{.*}}[2] {{.*}} => contiguity = [1], divisibility = [8], constancy = [1], constant_value = <none>
+    // CHECK: ttig.extract_desc %{{.*}}[2] {{.*}} => contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
     %stride0 = ttig.extract_desc %d[2] : <64x32xf16> -> i64
     // CHECK: ttig.extract_desc %{{.*}}[3] {{.*}} => contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1
     %stride1 = ttig.extract_desc %d[3] : <64x32xf16> -> i64
-    // CHECK: ttig.extract_desc %{{.*}}[4] {{.*}} => contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>
+    // CHECK: ttig.extract_desc %{{.*}}[4] {{.*}} => contiguity = [1], divisibility = [2], constancy = [1], constant_value = <none>
     %b = ttig.extract_desc %d[4] : <64x32xf16> -> !tt.ptr<f16>
-    %p2 = tt.addptr %p, %c64_i32 : !tt.ptr<f16>, i32
+    %p2 = tt.addptr %p, %c1_i32 : !tt.ptr<f16>, i32
     %d2 = tt.make_tensor_descriptor %p2, [%m, %n], [%stride, %c1_i64] : <f16>, <64x32xf16>
     scf.yield %d2, %p2 : !tt.tensordesc<64x32xf16>, !tt.ptr<f16>
   }
+  tt.return
+}
+
+// -----
+
+// COM: A contiguous outer dim: stride 0 is 1 and stride 1 takes the divisibility.
+// CHECK-LABEL: @extract_desc_col_major
+tt.func public @extract_desc_col_major(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %m: i32 {tt.divisibility = 16 : i32}, %n: i32 {tt.divisibility = 16 : i32}, %stride: i64 {tt.divisibility = 16 : i32}) {
+  %c1_i64 = arith.constant 1 : i64
+  %d = tt.make_tensor_descriptor %base, [%m, %n], [%c1_i64, %stride] : <f16>, <64x32xf16>
+  // CHECK: ttig.extract_desc %{{.*}}[0] {{.*}} => contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>
+  %shape0 = ttig.extract_desc %d[0] : <64x32xf16> -> i64
+  // CHECK: ttig.extract_desc %{{.*}}[1] {{.*}} => contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
+  %shape1 = ttig.extract_desc %d[1] : <64x32xf16> -> i64
+  // CHECK: ttig.extract_desc %{{.*}}[2] {{.*}} => contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1
+  %stride0 = ttig.extract_desc %d[2] : <64x32xf16> -> i64
+  // CHECK: ttig.extract_desc %{{.*}}[3] {{.*}} => contiguity = [1], divisibility = [8], constancy = [1], constant_value = <none>
+  %stride1 = ttig.extract_desc %d[3] : <64x32xf16> -> i64
+  // CHECK: ttig.extract_desc %{{.*}}[4] {{.*}} => contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>
+  %b = ttig.extract_desc %d[4] : <64x32xf16> -> !tt.ptr<f16>
+  tt.return
+}
+
+// -----
+
+// COM: A shape divisible by 6 proves only 2 contiguous elements, not the block width 4.
+// CHECK-LABEL: @extract_desc_npot_shape
+tt.func public @extract_desc_npot_shape(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %m: i32 {tt.divisibility = 16 : i32}, %n: i32 {tt.divisibility = 6 : i32}, %stride: i64 {tt.divisibility = 16 : i32}) {
+  %c1_i64 = arith.constant 1 : i64
+  %d = tt.make_tensor_descriptor %base, [%m, %n], [%stride, %c1_i64] : <f16>, <8x4xf16>
+  // CHECK: ttig.extract_desc %{{.*}}[1] {{.*}} => contiguity = [1], divisibility = [2], constancy = [1], constant_value = <none>
+  %shape1 = ttig.extract_desc %d[1] : <8x4xf16> -> i64
+  tt.return
+}
+
+// -----
+
+// COM: Packed fp4 elements count as one byte.
+// CHECK-LABEL: @extract_desc_fp4
+tt.func public @extract_desc_fp4(%base: !tt.ptr<!tt.fp4e2m1x2> {tt.divisibility = 16 : i32}, %m: i32 {tt.divisibility = 16 : i32}, %n: i32 {tt.divisibility = 16 : i32}, %stride: i64 {tt.divisibility = 16 : i32}) {
+  %c1_i64 = arith.constant 1 : i64
+  %d = tt.make_tensor_descriptor %base, [%m, %n], [%stride, %c1_i64] : <!tt.fp4e2m1x2>, <64x32x!tt.fp4e2m1x2>
+  // CHECK: ttig.extract_desc %{{.*}}[2] {{.*}} => contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>
+  %stride0 = ttig.extract_desc %d[2] : <64x32x!tt.fp4e2m1x2> -> i64
+  // CHECK: ttig.extract_desc %{{.*}}[4] {{.*}} => contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>
+  %b = ttig.extract_desc %d[4] : <64x32x!tt.fp4e2m1x2> -> !tt.ptr<!tt.fp4e2m1x2>
   tt.return
 }
