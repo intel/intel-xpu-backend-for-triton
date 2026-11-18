@@ -104,9 +104,15 @@ def _make_case(case, n_rows, block_y, dtype, device):
 _BITS = {"half": 16, "bfloat": 16, "float": 32, "double": 64}
 
 
-def _load_widths(llir, predicated_only=False):
-    """Byte width of every global load and predicated-load call (only the latter with predicated_only)."""
-    tys = [] if predicated_only else re.findall(r"= load (<\d+ x \w+>|\w+), ptr addrspace\(1\)", llir)
+def _load_widths(llir, masked_only=False):
+    """Byte width of every global load and predicated-load call. masked_only keeps the masked ones in either form: the
+    calls, or, without predicated IO, the plain loads that a phi merges with a constant fill value."""
+    loads = re.findall(r"(%[\w.]+) = load (<\d+ x \w+>|\w+), ptr addrspace\(1\)", llir)
+    if masked_only:
+        fills = re.findall(r"= phi .*\[ [^%\s][^,]*, %.*", llir)
+        filled = {v for phi in fills for v in re.findall(r"\[ (%[\w.]+), ", phi)}
+        loads = [load for load in loads if load[0] in filled]
+    tys = [ty for _, ty in loads]
     tys += re.findall(r"= (?:tail )?call spir_func (<\d+ x \w+>|\w+) @_Z\d+__spirv_PredicatedLoadINTEL", llir)
     widths = Counter()
     for t in tys:
@@ -196,8 +202,8 @@ def test_gather_dot(case, y0, device, monkeypatch):
 
 @pytest.mark.parametrize("num_warps", [4, 8])
 def test_gather_dot_class_num_warps(num_warps, device, monkeypatch):
-    """The class gate sizes the tile per warp from the kernel's num_warps: a 2 KiB fp16 dot operand stays native at
-    4 warps and, at 1 KiB with 8 warps, takes the pointer expansion."""
+    """The class gate reads the kernel's num_warps: a 2 KiB-per-warp fp16 dot operand stays native at 4 warps and takes
+    the pointer expansion at 8, which is outside the measured 2 or 4."""
     a, idx, y = _make_case("in_bounds", 64, 64, torch.float16, device)
     b = torch.randn(64, 64, device=device, dtype=torch.float16)
     out = torch.empty(64, 64, device=device)
@@ -231,7 +237,7 @@ def test_gather_shape_hint(width, hint, block_y, device):
     w = torch.tensor([width], device=device, dtype=torch.int32)
     k = _gather_hint[(1, )](out, src, idx, b, 128, w, 64, hint, 64, block_y, num_warps=4)
     _check_native(k)
-    assert set(_load_widths(k.asm["llir"], predicated_only=True)) == {16}
+    assert set(_load_widths(k.asm["llir"], masked_only=True)) == {16}
     g = _gather_ref(src[:, :width], idx, 0, block_y) if width else torch.zeros(64, block_y, device=device,
                                                                                dtype=src.dtype)
     torch.testing.assert_close(out, g.float() @ b.float(), atol=1e-2, rtol=1e-2)
