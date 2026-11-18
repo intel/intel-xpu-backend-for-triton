@@ -99,7 +99,7 @@ index 70d5e9d935..96d5669b7c 100644
          u = u.contiguous()
      if delta.stride(-1) != 1:
 diff --git a/tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py b/tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py
-index 04601c98cd..210efddccd 100644
+index 04601c98cd..853ee8b6d7 100644
 --- a/tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py
 +++ b/tests/kernels/mamba/test_replayssm_standard_decode_mamba2.py
 @@ -294,7 +294,7 @@ _REAL_GEOMETRIES = [
@@ -120,16 +120,15 @@ index 04601c98cd..210efddccd 100644
  @pytest.mark.parametrize("precision", _PRECISIONS)
  @pytest.mark.parametrize("geometry", _REAL_GEOMETRIES)
  def test_replayssm_standard_decode_real_geometry(
-@@ -371,7 +371,7 @@ def test_replayssm_standard_decode_stochastic_rounding(philox_rounds: int):
-     )
+@@ -372,6 +372,7 @@ def test_replayssm_standard_decode_stochastic_rounding(philox_rounds: int):
  
  
--@pytest.mark.skipif(not torch.cuda.is_available(), reason="Need CUDA device")
+ @pytest.mark.skipif(not torch.cuda.is_available(), reason="Need CUDA device")
 +@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="Need CUDA device")
  @pytest.mark.parametrize(
      "precision",
      [
-@@ -403,7 +403,7 @@ def test_replayssm_standard_decode_desync_write_pos(
+@@ -403,7 +404,7 @@ def test_replayssm_standard_decode_desync_write_pos(
      )
  
  
@@ -138,7 +137,7 @@ index 04601c98cd..210efddccd 100644
  @pytest.mark.parametrize("precision", _PRECISIONS)
  @pytest.mark.parametrize("with_padding", [False, True])
  def test_replayssm_standard_decode_with_batch_indices(
-@@ -548,7 +548,7 @@ _TP_GEOMETRIES = [
+@@ -548,7 +549,7 @@ _TP_GEOMETRIES = [
  ]
  
  
@@ -374,160 +373,21 @@ index 0b8d5abcca..78dff302b2 100644
              env[_SPAWN_CHILD_ENV] = "1"
  
              result = subprocess.run(
-diff --git a/tests/v1/attention/test_deepseek_v4_swa_visible.py b/tests/v1/attention/test_deepseek_v4_swa_visible.py
-index b2088f0aba..f80c8759c0 100644
---- a/tests/v1/attention/test_deepseek_v4_swa_visible.py
-+++ b/tests/v1/attention/test_deepseek_v4_swa_visible.py
-@@ -227,7 +227,7 @@ CASES: list[_Case] = [
- ]
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
- @pytest.mark.parametrize("case", CASES)
- def test_swa_indices_kernel_with_image_spans(case):
-     rows, lens = ref_swa_slot_rows(
-@@ -246,7 +246,7 @@ def test_swa_indices_kernel_with_image_spans(case):
-     assert indices.cpu().tolist() == rows
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
- @pytest.mark.parametrize("case", CASES)
- def test_swa_indices_kernel_without_image_unchanged(case):
-     """HAS_IMAGE=False must reproduce the plain causal sliding window."""
-@@ -415,7 +415,7 @@ COMBINE_CASES = [
- ]
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
- @pytest.mark.parametrize("cfg", COMBINE_CASES)
- def test_combine_topk_swa_with_image_spans(cfg):
-     case = CASES[0]
-@@ -458,7 +458,7 @@ def test_v41_combine_topk_swa_stops_at_replay_start(cfg, query_len):
-     assert indices.cpu().tolist() == rows
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
- @pytest.mark.parametrize("cfg", COMBINE_CASES)
- def test_combine_topk_swa_without_image_unchanged(cfg):
-     """left_visible=None must reproduce the plain causal combined indices."""
-@@ -612,7 +612,7 @@ def build_metadata(
-     )
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
- def test_builder_in_image_visibility():
-     seq_lens = [30, 12]
-     query_lens = [30, 12]
-@@ -639,7 +639,7 @@ def test_builder_in_image_visibility():
-     assert md.prefill_swa_indices[:, 0].cpu().tolist() == rows
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
- def test_builder_no_image_spans_fast_path():
-     """Vision model, image-free batch: no visibility tensors, plain window."""
-     seq_lens = [30, 12]
-@@ -659,7 +659,7 @@ def test_builder_no_image_spans_fast_path():
-     assert md.prefill_swa_indices[:, 0].cpu().tolist() == rows
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
- def test_builder_text_model_unchanged():
-     """Text-only model: buffers stay window-sized and spans are ignored."""
-     seq_lens = [30, 12]
-@@ -680,7 +680,7 @@ def test_builder_text_model_unchanged():
-     assert md.prefill_swa_indices[:, 0].cpu().tolist() == rows
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
- @pytest.mark.parametrize("compress_ratio", [0, 1, 2])
- @pytest.mark.parametrize("query_len", [100, 4000])
- def test_v41_image_prefill_uses_causal_swa(compress_ratio, query_len):
-@@ -740,7 +740,7 @@ def test_v41_image_prefill_uses_causal_swa(compress_ratio, query_len):
- # SWA bounded replay: every prefill index path clamps the window at replay_start.
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
- def test_builder_replay_start_bounds_prefill_window_and_gather():
-     """Paged-direct prefill indices stop at replay_start and the FlashMLA
-     gather only covers the context the request may see."""
-@@ -779,7 +779,7 @@ def test_builder_replay_start_bounds_prefill_window_and_gather():
-     ]
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
- def test_builder_replaying_group_builds_without_replay_start():
-     """Graph captures build without model-specific kwargs: a replaying group's
-     metadata then bounds nothing."""
 diff --git a/tests/v1/attention/test_indexer_dcp_localize.py b/tests/v1/attention/test_indexer_dcp_localize.py
-index a90270537a..568e71d185 100644
+index a90270537a..4ec6a6a5c4 100644
 --- a/tests/v1/attention/test_indexer_dcp_localize.py
 +++ b/tests/v1/attention/test_indexer_dcp_localize.py
-@@ -665,8 +665,7 @@ def test_cutedsl_gathered_select_compact_keys_match_reference(
+@@ -665,7 +665,7 @@ def test_cutedsl_gathered_select_compact_keys_match_reference(
  
  
  @pytest.mark.skipif(
 -    not current_platform.is_cuda() or not has_cutedsl(),
--    reason="This test requires CUDA and CuteDSL",
-+    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="This test requires CUDA or ROCm"
++    not current_platform.is_cuda() or not has_cutedsl() or not current_platform.is_xpu(),
+     reason="This test requires CUDA and CuteDSL",
  )
  @pytest.mark.parametrize("epoch", [1, 2])
- # 14 id bits fit the spare score bits; 20 leave 4 for the token-id passes.
-@@ -817,7 +816,9 @@ def test_sparse_prefill_dcp_metadata_localizes_causal_bounds():
-     )
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(
-+    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="This test requires CUDA or ROCm"
-+)
- @pytest.mark.parametrize("block_stride_rows", [None, 12])
- def test_dcp_filter_compacts_valid_slots_for_sparse_kernel(
-     block_stride_rows: int | None,
-@@ -855,7 +856,9 @@ def test_dcp_filter_compacts_valid_slots_for_sparse_kernel(
-     )
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(
-+    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="This test requires CUDA or ROCm"
-+)
- @pytest.mark.parametrize("interleave", [1, 2])
- @pytest.mark.parametrize("dcp_rank", [0, 1])
- # Include padded single-tile compaction and the multi-tile atomic fallback.
-@@ -920,7 +923,9 @@ def test_dcp_filter_compaction_matches_reference(
-         assert set(out[r, :n].cpu().tolist()) == set(expected.cpu().tolist())
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(
-+    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="This test requires CUDA or ROCm"
-+)
- @pytest.mark.parametrize("interleave", [1, 2, 4])
- def test_dcp_global_topk_physical_attention_matches_non_dcp(interleave: int):
-     torch.manual_seed(2)
-@@ -993,7 +998,9 @@ def test_dcp_global_topk_physical_attention_matches_non_dcp(interleave: int):
-     torch.testing.assert_close(dcp_lse, ref_lse, atol=1e-5, rtol=1e-5)
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(
-+    not (current_platform.is_cuda_alike() or current_platform.is_xpu()), reason="This test requires CUDA or ROCm"
-+)
- @pytest.mark.parametrize("is_lse_base_on_e", [True, False])
- def test_correct_attn_out_zeroes_empty_nan_partial(is_lse_base_on_e: bool):
-     out = torch.full((1, 1, 4), float("nan"), device=DEVICE_TYPE)
 diff --git a/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py b/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py
-index 267d39622e..91f8221873 100644
+index 267d39622e..f8430ca01f 100644
 --- a/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py
 +++ b/tests/v1/attention/test_indexer_deepseek_v4_slot_mapping.py
 @@ -303,7 +303,7 @@ def test_indexer_draft_decode_refresh_follows_new_batch(monkeypatch, compress_ra
@@ -539,24 +399,6 @@ index 267d39622e..91f8221873 100644
  @pytest.mark.parametrize(
      "query_lens", [[1], [0, 257, 1, 0, 3], [6] * 64, [2, 6, 4, 0], [0, 0, 0]]
  )
-@@ -467,7 +467,7 @@ def test_compressed_slot_mapping_warmup_includes_index_kpool():
-     assert {(key.compress_ratio, key.block_size) for key in keys} == {(32, 2)}
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
- def test_compressed_slot_mapping_inherits_padded_token_slots():
-     """A token whose own slot is padded (SWA bounded replay) closes no
-     compressed state either."""
-@@ -622,7 +622,7 @@ def test_zero_token_pcp_rank_participates_in_compressed_mapping_gather(monkeypat
-     torch.testing.assert_close(metadata.slot_mapping, gathered_slot_mapping)
- 
- 
--@requires_accelerator
-+@pytest.mark.skipif(not (torch.cuda.is_available() or torch.xpu.is_available()), reason="requires CUDA")
- def test_indexer_builder_deepseek_v4_compressed_slot_mapping_uses_num_states():
-     """Regression test: DeepseekV4 compression path must compute slot_mapping from
-     compressed positions, not reuse the uncompressed common metadata mapping.
 diff --git a/tests/v1/attention/test_mla_backends.py b/tests/v1/attention/test_mla_backends.py
 index 92f7ba64c2..03ce390e4f 100644
 --- a/tests/v1/attention/test_mla_backends.py
