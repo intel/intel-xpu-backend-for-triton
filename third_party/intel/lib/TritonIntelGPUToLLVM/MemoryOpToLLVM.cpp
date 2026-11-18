@@ -277,7 +277,7 @@ struct AtomicLoadOpConversion
 
     Location loc = op.getLoc();
     MemSemantic sem = op.getSem();
-    insertAtomicOrderingBarriers(op, sem, rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, sem, op.getScope(), rewriter, targetInfo);
     StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
 
     SmallVector<Value> ptrElements =
@@ -329,7 +329,8 @@ struct AtomicStoreOpConversion
           op, "defer to upstream atomic_store lowering");
 
     Location loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
+                                 targetInfo);
     StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
 
     SmallVector<Value> ptrElements =

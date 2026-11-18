@@ -65,6 +65,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_predicated_io";
     }
 
+    /// Get the name of the attribute used to indicate whether the
+    /// SPV_INTEL_subgroup_bitcast_shuffle extension is available.
+    static constexpr llvm::StringRef getSupportSubgroupBitcastShuffleAttrName() {
+      return "ttig.support_subgroup_bitcast_shuffle";
+    }
+
     /// Get the name of the attribute used to indicate whether the DPAS
     /// operation is available.
     static constexpr llvm::StringRef getSupportDPASAttrName() {
@@ -105,6 +111,26 @@ def TritonIntelGPU_Dialect : Dialect {
     /// for 2D block IO on stores reshaped from 1D tensor-of-pointers.
     static constexpr llvm::StringRef getBlockIOStrideAttrName() {
       return "ttig.block_io_stride";
+    }
+
+    /// Get the name of the attribute used to indicate that a load relaid out
+    /// for 2D block IO is a layout anchor for RemoveLayoutConversions.
+    static constexpr llvm::StringRef getBlockIOAnchorAttrName() {
+      return "ttig.block_io_anchor";
+    }
+
+    /// Get the name of the attribute marking a `ttig.2d_block_load_from_ptr`
+    /// (or prefetch) whose `base_height` is a runtime row-limit bound, not a
+    /// fixed per-message tile height (see ttgi::matchRowLimitMask).
+    static constexpr llvm::StringRef getBlockIORuntimeRowLimitAttrName() {
+      return "ttig.block_io_runtime_row_limit";
+    }
+
+    /// Get the name of the attribute marking a `ttig.2d_block_load_from_ptr`
+    /// whose `base_width` is a runtime column bound relative to the tensor's
+    /// first column, not the per-message tile width.
+    static constexpr llvm::StringRef getBlockIORuntimeColLimitAttrName() {
+      return "ttig.block_io_runtime_col_limit";
     }
 
     /// Get the name of the attribute used to specify the target architecture. This

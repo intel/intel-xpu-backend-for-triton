@@ -276,6 +276,41 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
 
 
 @pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.parametrize("reset_period", [0, 2, 4])
+def test_tma_matmul_accumulator_intermediate_read(device, reset_period):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit
+    def kernel(A, B, C, RESET_PERIOD: tl.constexpr):
+        acc = tl.zeros((256, 16), tl.float32)
+        for k in range(8):
+            a = A.load([0, k * 16])
+            b = B.load([k * 16, 0])
+            acc = tl.dot(a, b, acc)
+            # Some snapshots are followed by accumulation into the same buffer.
+            if k % 2 == 0:
+                C.store([(k // 2) * 256, 0], acc)
+            if RESET_PERIOD:
+                if k % RESET_PERIOD == 0:
+                    acc = tl.zeros((256, 16), tl.float32)
+
+    a = torch.ones((256, 128), device=device, dtype=torch.float16)
+    b = torch.ones((128, 16), device=device, dtype=torch.float16)
+    c = torch.empty((1024, 16), device=device, dtype=torch.float32)
+    a_desc = TensorDescriptor.from_tensor(a, [256, 16])
+    b_desc = TensorDescriptor.from_tensor(b, [16, 16])
+    c_desc = TensorDescriptor.from_tensor(c, [256, 16])
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, reset_period, num_stages=3, num_warps=4)
+    if is_compile_warmup():
+        return
+    assert "tcgen05.mma.cta_group::1" in compiled.asm["ptx"]
+
+    values = {0: [16, 48, 80, 112], 2: [16, 32, 32, 32], 4: [16, 32, 64, 32]}[reset_period]
+    expected = torch.tensor(values, device=device, dtype=torch.float32)
+    torch.testing.assert_close(c.view(4, 256, 16), expected[:, None, None].expand(4, 256, 16), atol=0, rtol=0)
+
+
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 @pytest.mark.parametrize("use_loop, num_stages", [(False, 3), (True, 1), (True, 3)])
 @pytest.mark.parametrize("transpose_b", [False, True])
 @pytest.mark.parametrize("num_ctas", [2, 4, 8])
@@ -334,7 +369,7 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
 
 def test_i4_m_minor_join_bk16_matmul(device):
     if not is_cuda():
-        pytest.xfail("i4 M-minor join regression is CUDA-specific")
+        pytest.skip("i4 M-minor join regression is CUDA-specific")
     if torch.cuda.get_device_capability()[0] < 8:
         pytest.skip("bf16 dot requires NVIDIA compute capability >= 8")
 
@@ -998,9 +1033,6 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
 @pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
                     reason="Requires compute capability == 10")
 def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, monkeypatch):
-    if is_xpu():
-        pytest.xfail("XPU does not natively support tmem")
-
     M = 1024
     N = 512
     K = 256
@@ -1071,9 +1103,7 @@ def lhs_in_tmem_kernel_mxfp(  #
 @pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
                     reason="Requires compute capability == 10")
 def test_lhs_in_tmem_mxfp(device, monkeypatch):
-    if is_xpu():
-        pytest.xfail("XPU does not natively support scaled mxfp matmul and tmem")
-
+    _knob_promote_lhs_to_tmem(monkeypatch)
     M, N, K = 128, 64, 32
     torch.manual_seed(42)
     a = torch.randint(20, 40, (M, K), dtype=torch.uint8, device=device)

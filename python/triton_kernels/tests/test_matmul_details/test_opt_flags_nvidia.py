@@ -36,7 +36,7 @@ from triton_kernels.testing import assert_close
 def test_hopper_mxfp4_compiled_occupancy_budget(block_m, num_warps, occupancy, full_grid, scaled_input, device,
                                                 monkeypatch):
     if device != "cuda" or not is_cuda() or torch.cuda.get_device_capability()[0] != 9:
-        pytest.xfail("requires Hopper")
+        pytest.skip("requires Hopper")
 
     torch.manual_seed(0)
     m = block_m * torch.cuda.get_device_properties(device).multi_processor_count if full_grid else 129
@@ -125,7 +125,7 @@ def _shuffle_blackwell_mxfp4_weight(weight):
 )
 def test_matmul_hopper_mxfp4_rhs_scale_padding_is_masked(device, constraints):
     if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
-        pytest.xfail("requires CUDA")
+        pytest.skip("requires CUDA")
     if torch.cuda.get_device_capability()[0] != 9:
         pytest.skip("requires Hopper")
 
@@ -185,7 +185,7 @@ def _hopper_rhs_packed_n_extent(out, n: tl.constexpr):
 @pytest.mark.parametrize("n", [258, 320])
 def test_matmul_hopper_mxfp4_rhs_packed_n_padding(device, n):
     if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
-        pytest.xfail("requires CUDA")
+        pytest.skip("requires CUDA")
     if torch.cuda.get_device_capability()[0] != 9:
         pytest.skip("requires Hopper")
 
@@ -251,7 +251,8 @@ def test_fp4_reduction_stage_budget(monkeypatch, block_m, num_warps, epilogue_su
     monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", lambda *_: True)
     monkeypatch.setattr(opt_flags, "cuda_capability_geq", lambda *_: True)
     scale = torch.empty((1, ), dtype=torch.float8_e4m3fn)
-    precision = PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale)
+    unit = torch.ones(())
+    precision = PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale, a_mx_tensor_scale=unit, b_mx_tensor_scale=unit)
     flags = opt_flags.make_default_opt_flags_nvidia(
         FP4,
         FP4,
@@ -291,8 +292,10 @@ def test_fp4_reduction_stage_budget_other_epilogues(monkeypatch, overrides, expe
                         lambda _: SimpleNamespace(shared_memory_per_block_optin=232448))
     monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", lambda *_: True)
     scale = torch.empty((1, ), dtype=torch.float8_e4m3fn)
+    unit = torch.ones(())
+    precision = PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale, a_mx_tensor_scale=unit, b_mx_tensor_scale=unit)
     args = {
-        "precision_config": PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale),
+        "precision_config": precision,
         "is_persistent": True,
         "block_m": 128,
         "block_n": 256,
@@ -338,6 +341,8 @@ def test_matmul_fp4_reduction_shared_memory(device, monkeypatch, block_m, num_wa
     precision = PrecisionConfig(
         a_mx_scale=a_scale,
         b_mx_scale=b_scale,
+        a_mx_tensor_scale=torch.ones((), device=device),
+        b_mx_tensor_scale=torch.ones((), device=device),
         c_mx_scale=c_scale,
         a_microblock_size=16,
         b_microblock_size=16,
@@ -378,7 +383,7 @@ def test_matmul_fp4_reduction_shared_memory(device, monkeypatch, block_m, num_wa
 
 def test_matmul_blackwell_scale_small_n(device):
     if device != "cuda" or not torch.cuda.is_available():
-        pytest.xfail("requires CUDA")
+        pytest.skip("requires CUDA")
     if torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell or newer")
 
@@ -399,7 +404,7 @@ def test_matmul_blackwell_scale_small_n(device):
 @pytest.mark.parametrize("split_k", [1, 2])
 def test_matmul_clc(device, split_k):
     if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
-        pytest.xfail("requires CUDA")
+        pytest.skip("requires CUDA")
     if torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell or newer")
 
@@ -422,7 +427,7 @@ def test_matmul_clc(device, split_k):
 
 def test_matmul_clc_rejects_ragged_m_grid(device):
     if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
-        pytest.xfail("requires CUDA")
+        pytest.skip("requires CUDA")
     if torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell or newer")
 
@@ -437,7 +442,7 @@ def test_matmul_clc_rejects_ragged_m_grid(device):
 
 def test_matmul_blackwell_shuffled_mxfp4_weight(device):
     if device != "cuda" or not torch.cuda.is_available():
-        pytest.xfail("requires CUDA")
+        pytest.skip("requires CUDA")
     if torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell or newer")
 

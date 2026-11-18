@@ -114,10 +114,13 @@ for t in TUTORIALS:
     if t == _FA_TUTORIAL:
 
         def test(fa_config, monkeypatch, tutorial_environment, t=t):
-            # "default" = no env-var overrides; uses environment as-is.
+            # "default" = no env-var overrides; the tutorial's own HEAD_DIM/FWD_DTYPES
+            # defaults then cover both head dims and fp8+fp16 fwd/bwd in one run.
             if fa_config in ("fp8_only", "skip_fp8"):
                 _configure_fa(fa_config, monkeypatch)
             _run_tutorial(t, monkeypatch, tutorial_environment)
+
+        test = pytest.mark.enable_warmup(test)
 
     else:
 

@@ -34,6 +34,7 @@ jobs:
     timeout-minutes: 480
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on:
+      - gpu
       - rolling
       - runner-0.0.22
     steps:

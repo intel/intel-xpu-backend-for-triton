@@ -4,6 +4,7 @@ import triton
 from triton._C.libtriton import ir as triton_ir
 from triton._C.libtriton import proton as triton_proton
 from triton._C.libtriton import amd as triton_amd
+from triton._C.libtriton import intel as triton_intel
 from triton._C.libtriton import nvidia as triton_nvidia
 from triton._C.libtriton import passes as triton_passes
 from triton._C.libproton import proton as libproton
@@ -20,7 +21,26 @@ from .. import mode
 VERSION = 1
 
 
-class CudaAllocator:
+def _function_id(function: Any) -> int:
+    """Returns an integer id for a compiled kernel's native function handle.
+
+    Most backends represent it as a plain pointer-sized int already, but some
+    (e.g. Intel's `XPULauncher`) hand back a `PyCapsule` wrapping the native
+    kernel handle instead, which `libproton`'s native entry points can't take
+    directly.
+    """
+    if isinstance(function, int):
+        return function
+    import ctypes
+    ctypes.pythonapi.PyCapsule_GetName.restype = ctypes.c_char_p
+    ctypes.pythonapi.PyCapsule_GetName.argtypes = [ctypes.py_object]
+    name = ctypes.pythonapi.PyCapsule_GetName(function)
+    ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
+    ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+    return ctypes.pythonapi.PyCapsule_GetPointer(function, name)
+
+
+class DeviceAllocator:
 
     def __init__(self, instrumentation_hook):
         self.instrumentation_hook = instrumentation_hook
@@ -36,10 +56,11 @@ class CudaAllocator:
         # more efficient profiling data processing, rather than relying solely on post-processing.
         aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
 
-        # Create the buffer
+        # Create the buffer on whichever backend is currently active (cuda, hip, xpu, ...).
         import torch
+        device = triton.runtime.driver.active.get_active_torch_device()
         with metadata_state():
-            buffer = torch.zeros((aligned_size, ), dtype=torch.uint8, device="cuda")
+            buffer = torch.zeros((aligned_size, ), dtype=torch.uint8, device=device)
         self.instrumentation_hook.buffer = buffer
         return buffer
 
@@ -124,7 +145,7 @@ class InstrumentationHook(Hook):
         # Mapping of function objects to their scope ID pairs
         self.mode: mode.InstrumentationMode = _interpret_mode(mode_obj)
 
-        self.allocator = CudaAllocator(self)
+        self.allocator = DeviceAllocator(self)
         self.buffer = None
         self.metadata_path: Dict[Any, Optional[str]] = {}
         self._instrumentation_backend: Optional[str] = None
@@ -161,6 +182,8 @@ class InstrumentationHook(Hook):
             elif backend_name == "amd":
                 arch = triton.runtime.driver.active.utils.get_device_properties(device)["arch"].split(":")[0]
                 triton_proton.add_convert_proton_amd_gpu_to_llvm(pm, arch)
+            elif backend_name == "intel":
+                triton_proton.add_convert_proton_intel_gpu_to_llvm(pm)
 
         register_instrumentation(point="load-dialects", backend=backend_name, callback=triton_proton.load_dialects)
         register_instrumentation(point="ttgpuir-to-llvmir", backend=backend_name, callback=to_llvmir_passes)
@@ -221,13 +244,16 @@ class InstrumentationHook(Hook):
                 triton_nvidia.load_dialects(context)
             elif backend_name == "amd":
                 triton_amd.load_dialects(context)
+            elif backend_name == "intel":
+                triton_intel.load_dialects(context)
             triton_proton.load_dialects(context)
             module = triton_ir.parse_mlir_module(ir_path, context)
             module.context = context
 
             scope_id_names = triton_proton.get_scope_id_names(module)
             scope_id_parents = triton_proton.get_scope_id_parents(module)
-            libproton.init_function_metadata(function, name, scope_id_names, scope_id_parents, metadata_path)
+            libproton.init_function_metadata(_function_id(function), name, scope_id_names, scope_id_parents,
+                                             metadata_path)
         else:
             raise RuntimeError(f"IR path not found in metadata for function {function}")
 
@@ -235,7 +261,7 @@ class InstrumentationHook(Hook):
         if not function:
             return
         self.metadata_path.pop(function, None)
-        libproton.destroy_function_metadata(function)
+        libproton.destroy_function_metadata(_function_id(function))
 
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()
@@ -244,7 +270,7 @@ class InstrumentationHook(Hook):
         func = metadata.data.get("function")
         stream = metadata.data.get("stream")
         alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
-        libproton.enter_instrumented_op(stream, func, self._data_ptr(), alloc_size)
+        libproton.enter_instrumented_op(stream, _function_id(func), self._data_ptr(), alloc_size)
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
 
@@ -252,7 +278,7 @@ class InstrumentationHook(Hook):
         func = metadata.data.get("function")
         stream = metadata.data.get("stream")
         alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
-        libproton.exit_instrumented_op(stream, func, self._data_ptr(), alloc_size)
+        libproton.exit_instrumented_op(stream, _function_id(func), self._data_ptr(), alloc_size)
 
         if InstrumentationHook.enable_host_buffer:
             self._populate_host_buffer(func)
@@ -269,6 +295,8 @@ class InstrumentationHook(Hook):
                     return 1
                 elif target["backend"] == "hip":
                     return 2
+                elif target["backend"] == "xpu":
+                    return 3
                 return 0
 
             alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()

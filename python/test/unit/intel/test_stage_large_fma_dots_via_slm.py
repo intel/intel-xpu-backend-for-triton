@@ -137,3 +137,78 @@ def test_correctness_outer_loop(M, N, K, BLOCK_K, device):
     ref = torch.matmul(a.float(), b.float()).to(torch.float16)
     err = (c.float() - ref.float()).abs().max().item()
     assert err < 1e-1, f"max abs error {err} exceeds 1e-1"
+
+
+@triton.jit
+def _fp8_fma_matmul_kernel(a_ptr, b_ptr, c_ptr, x_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+                           BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+    offs_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = tl.program_id(1) * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k in range(0, K, BLOCK_K):
+        a = tl.load(a_ptr + offs_m[:, None] * K + (k + offs_k)[None, :])
+        b = tl.load(b_ptr + (k + offs_k)[:, None] * N + offs_n[None, :])
+        acc = tl.dot(a, b, acc)
+    tl.store(c_ptr + offs_m[:, None] * N + offs_n[None, :], acc)
+    # An fp32 IEEE dot in the same kernel keeps the fp8 dot on the FMA path
+    # on DPAS hardware too.
+    r = tl.arange(0, 16)
+    x = (r[:, None] + r[None, :]).to(tl.float32)
+    tl.store(x_ptr + r[:, None] * 16 + r[None, :], tl.dot(x, x, input_precision="ieee"))
+
+
+def _run_fp8_fma_matmul(a_dtype, b_dtype, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps, device):
+    """Runs the fp8 FMA matmul, checks it against a CPU reference and returns
+    the element types staged in SLM for A and for B (empty if the dot is not
+    staged). Skips where the dot is not expected to be staged decoded."""
+    torch.manual_seed(0)
+    a = (torch.randn((M, K)) / 4).to(getattr(torch, a_dtype)).to(device)
+    b = (torch.randn((K, N)) / 4).to(getattr(torch, b_dtype)).to(device)
+    c = torch.empty((M, N), dtype=torch.float32, device=device)
+    x = torch.empty((16, 16), dtype=torch.float32, device=device)
+    grid = (M // BLOCK_M, N // BLOCK_N)
+    kernel = _fp8_fma_matmul_kernel[grid](a, b, c, x, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps=num_warps)
+
+    ref = (a.cpu().double() @ b.cpu().double()).float()
+    torch.testing.assert_close(c.cpu(), ref, atol=1e-4, rtol=1e-5)
+
+    ttgir = kernel.asm["ttgir"]
+    if "#ttig.dpas" in ttgir:
+        pytest.skip("the dot uses DPAS on this target")
+    if "ttig.support_f8_conversion" in ttgir:
+        pytest.skip("with native fp8 conversion the fp16 decode stays after the layout conversion")
+
+    # The K-tile subslices of A are BLOCK_M x K_TILE, those of B K_TILE x BLOCK_N.
+    a_types, b_types = set(), set()
+    for line in ttgir.splitlines():
+        if "ttg.memdesc_subslice" not in line:
+            continue
+        result = line.split("->")[-1].split("!ttg.memdesc<")[1].split(",")[0]
+        (a_types if result.startswith(f"{BLOCK_M}x") else b_types).add(result.split("x")[-1])
+    assert a_types and b_types, "the dot was not staged through SLM"
+    return a_types, b_types
+
+
+@pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
+@pytest.mark.parametrize("a_dtype, b_dtype", [("float8_e4m3fn", "float8_e5m2"), ("float8_e5m2", "float8_e4m3fn")])
+def test_fp8_operands_staged_decoded(a_dtype, b_dtype, device):
+    """An fp8 operand that AccelerateMatmul decodes before the layout conversion
+    is staged in SLM as decoded 16-bit values, so the decode is not replayed per
+    K tile in the replicated dot operand layout."""
+    a_types, _ = _run_fp8_fma_matmul(a_dtype, b_dtype, 256, 256, 256, 128, 128, 64, 8, device)
+    # On this tile AccelerateMatmul decodes A before the layout conversion, and
+    # the staging must keep it decoded. B is replicated less, keeps its decode
+    # in the dot operand layout and is staged as fp8.
+    assert a_types == {"f16"}, f"A was staged as {a_types} instead of decoded values"
+
+
+@pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
+def test_fp8_operands_staged_decoded_beyond_default_slm(device):
+    """Staging both operands of this tile decoded takes 80 KB, more than the
+    56 KB the pass assumes without the target's shared memory size: A is only
+    staged decoded if the compiler passes the device's size to the pass."""
+    if torch.xpu.get_device_properties(device).local_mem_size < 96 * 1024:
+        pytest.skip("needs at least 96 KB of shared local memory")
+    a_types, b_types = _run_fp8_fma_matmul("float8_e4m3fn", "float8_e5m2", 256, 64, 256, 256, 64, 128, 8, device)
+    assert a_types == {"f16"} and b_types == {"f16"}, f"staged A as {a_types} and B as {b_types}"

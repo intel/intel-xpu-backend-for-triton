@@ -43,6 +43,7 @@ jobs:
     name: SGLang benchmarks
     runs-on:
       - linux
+      - gpu
       - ${{ inputs.runner_label || 'b580' }}
     timeout-minutes: 720
     defaults:
@@ -172,5 +173,5 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: benchmark-reports
+          name: benchmark-reports-sglang
           path: reports

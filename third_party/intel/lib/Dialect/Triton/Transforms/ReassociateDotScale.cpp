@@ -195,7 +195,8 @@ private:
     // Extending before the splat keeps the conversion on a scalar.
     if (scale.elemTy != computeElemTy)
       scalarValue =
-          arith::ExtFOp::create(rewriter, loc, computeElemTy, scalarValue);
+          arith::ExtFOp::create(rewriter, loc, computeElemTy, scalarValue,
+                                arith::FastMathFlagsAttr{});
 
     RankedTensorType splatTy = RankedTensorType::get(
         targetTy.getShape(), computeElemTy, targetTy.getEncoding());
@@ -204,7 +205,8 @@ private:
     // Widen the target operand if the compute type is wider.
     Value targetExt = target;
     if (targetElemTy != computeElemTy)
-      targetExt = arith::ExtFOp::create(rewriter, loc, splatTy, target);
+      targetExt = arith::ExtFOp::create(rewriter, loc, splatTy, target,
+                                        arith::FastMathFlagsAttr{});
 
     auto fmf = arith::FastMathFlagsAttr::get(rewriter.getContext(),
                                              arith::FastMathFlags::reassoc);

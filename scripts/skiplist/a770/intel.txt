@@ -1,7 +1,12 @@
-# test_gather_warp_shuffle
-python/test/unit/intel/test_core.py::test_gather_warp_shuffle[src_shape1-indices_shape1-0-linear<{register = [[0, 2], [32, 0], [2, 0], [0, 16], [0, 32], [64, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>-linear<{register = [[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>]
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/7503
 # Windows: kernel exceeds HW PTSS (per-thread scratch space) limit for this
 # layout/shape even after the 256-GRF retry path.
 python/test/unit/intel/test_core.py::test_chain_reduce[1-max-src_layout2-256-128]
 python/test/unit/intel/test_core.py::test_chain_reduce[1-max-src_layout2-256-256]
+# tt.dot_scaled with a minimum sub-group size of 8 takes the FMA path (no DPAS
+# at 32 threads per warp), and the kernels exceed the HW PTSS (per-thread
+# scratch space) limit; uint8 operands fail the same way. Same as
+# test_core.py::test_scaled_dot in scaled_dot.txt.
+python/test/unit/intel/test_dot_scaled_fp4x2.py::test_dot_scaled_fp4x2_matches_uint8
+python/test/unit/intel/test_dot_scaled_fp4x2.py::test_dot_scaled_fp4x2_masked_operand
+python/test/unit/intel/test_dot_scaled_fp4x2.py::test_dot_scaled_fp4x2_tensor_descriptor_loop

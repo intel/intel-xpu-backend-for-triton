@@ -85,3 +85,38 @@ module {
     tt.return
   }
 }
+
+// -----
+
+// COM: An fp4e2m1x2 descriptor counts one byte per element, like i8: the row
+// COM: length is rounded down to a multiple of 4 and the loop is versioned.
+module {
+  // CHECK-LABEL: tt.func @version_fp4x2
+  tt.func @version_fp4x2(%p: !tt.ptr<!tt.fp4e2m1x2>, %k: i32, %ld: i64) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i64
+    // CHECK: %[[RAW:.*]] = tt.make_tensor_descriptor %arg0, [%arg1, %arg1]
+    // CHECK: %[[C4:.*]] = arith.constant 4 : i32
+    // CHECK: %[[DIV:.*]] = arith.divsi %arg1, %[[C4]] : i32
+    // CHECK: %[[K:.*]] = arith.muli %[[DIV]], %[[C4]] : i32
+    // CHECK: %[[ALIGNED:.*]] = tt.make_tensor_descriptor %arg0, [%arg1, %[[K]]]
+    // CHECK: arith.remsi %arg1
+    // CHECK: %[[PRED:.*]] = arith.cmpi eq
+    // CHECK: scf.if %[[PRED]]
+    // CHECK: scf.while
+    // CHECK: tt.descriptor_load %[[ALIGNED]]{{.*}} : !tt.tensordesc<16x16x!tt.fp4e2m1x2>
+    // CHECK: } else {
+    // CHECK: scf.while
+    // CHECK: tt.descriptor_load %[[RAW]]{{.*}} : !tt.tensordesc<16x16x!tt.fp4e2m1x2>
+    %d = tt.make_tensor_descriptor %p, [%k, %k], [%ld, %c1] : <!tt.fp4e2m1x2>, <16x16x!tt.fp4e2m1x2>
+    %r = scf.while (%i = %c0) : (i32) -> i32 {
+      %c = arith.cmpi slt, %i, %k : i32
+      scf.condition(%c) %i : i32
+    } do {
+    ^bb0(%i: i32):
+      %x = tt.descriptor_load %d[%c0, %i] : !tt.tensordesc<16x16x!tt.fp4e2m1x2> -> tensor<16x16x!tt.fp4e2m1x2>
+      scf.yield %i : i32
+    }
+    tt.return
+  }
+}

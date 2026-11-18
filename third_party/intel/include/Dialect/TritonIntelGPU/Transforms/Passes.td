@@ -23,7 +23,15 @@ def TritonIntelGPUAccelerateMatmul
   let dependentDialects = [
     "mlir::triton::TritonDialect",
     "mlir::triton::gpu::intel::TritonIntelGPUDialect",
-    "mlir::arith::ArithDialect"
+    "mlir::arith::ArithDialect",
+    // DecomposeScaledBlocked emits `math.fma` to turn the +inf that the E8M0
+    // NaN encoding (byte 0xFF) decodes to into NaN.
+    "mlir::math::MathDialect"
+  ];
+
+  let options = [
+    Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
+         "GRF mode the kernel is compiled with">,
   ];
 }
 
@@ -73,8 +81,27 @@ def TritonIntelGPUStageLargeFMADotsViaSLM
     preserves global-memory coalescing and composes with software
     pipelining (which already stages SLM).
 
-    Pass is a no-op on DPAS-capable hardware (PVC, BMG, ARL-H Xe2).
+    On DPAS-capable hardware (PVC, BMG, ARL-H Xe2) the pass only applies to
+    dots that keep a `BlockedEncoding`, i.e. that are lowered to FMA (e.g.
+    fp32 dots with `inputPrecision = ieee`, fp64 dots, or fp8 dots without
+    DPAS support).
+
+    An fp8 operand that AccelerateMatmul decoded before its layout conversion
+    can be staged either as fp8, with the decode replayed per K tile in the
+    replicated dot operand layout, or already decoded, at twice the shared
+    memory. Dots whose operands fit 56 KB as they are are staged as before;
+    decoded operands, and operands beyond 56 KB, are staged while all the
+    dots staged in the function fit in the target's shared memory.
   }];
+
+  let options = [
+    Option<"slmSize", "slm-size", "unsigned", /*default*/"0",
+           "Shared local memory per work-group, in bytes; the pass leaves "
+           "8 KB of it for other passes. 0 means 64 KB">,
+    Option<"stageDecoded", "stage-decoded", "bool", /*default*/"true",
+           "Stage fp8 operands decoded before their layout conversion as "
+           "decoded values when they fit">
+  ];
 
   let dependentDialects = [
     "mlir::arith::ArithDialect",
@@ -244,12 +271,21 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
     Apply software pipelinining to loops containing `tt.dot` operations.
     The pass supports prefetching `tt.dot` operands. The `num-stages` argument controls
     the prefetching and distance (i.e. the number of iterations to prefetch in advance).
+    On a device for which the prefetch cost model has constants (`device-arch`) and
+    whose facts are given (`core-clock-khz`, `mem-clock-mhz`), the
+    prefetch of one dot operand is dropped when the model predicts that demand-loading
+    it is faster. The XPU backend passes those facts only when the `prefetch_cost_model`
+    option (default `TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL`, off) is set.
+    With `tile-barrier`, a pipelined loop nested in a work-group-uniform `scf.for` puts a
+    `ttg.barrier none` at the top of that loop's body, so the warps of a persistent kernel
+    re-align at every tile instead of drifting apart.
   }];
 
   let dependentDialects = ["mlir::arith::ArithDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::spirv::SPIRVDialect",
                            "mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
 
   let options = [
@@ -258,6 +294,14 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
            "number of pipeline stages">,
     Option<"useBarrier", "use-barrier", "bool", /*default*/"false",
            "generate barriers">,
+    Option<"tileBarrier", "tile-barrier", "bool", /*default*/"true",
+           "re-align the warps at each iteration of a loop enclosing a pipelined loop">,
+    Option<"deviceArch", "device-arch", "std::string", /*default*/"\"\"",
+           "device architecture, e.g. 'bmg' (empty if unknown)">,
+    Option<"coreClockKhz", "core-clock-khz", "unsigned", /*default*/"0",
+           "core clock in kHz (0 if unknown)">,
+    Option<"memClockMhz", "mem-clock-mhz", "unsigned", /*default*/"0",
+           "memory clock in MHz, as the device reports it (0 if unknown)">,
   ];
 }
 
@@ -328,17 +372,42 @@ def TritonIntelGPUReduceDataDuplication: Pass<"tritonintelgpu-reduce-data-duplic
 }
 
 def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-block-pointer", "mlir::ModuleOp"> {
-  let summary = "annotate load operations with information required to exploit 2D block HW instructions";
+  let summary = "annotate load operations with information required to exploit 2D block HW instructions, "
+                "and optionally re-encode descriptor loads to use them";
 
   let description = [{
     This pass annotates load operations using a block pointer with information required to exploit 2D
     block HW instructions during lowering (e.g. whether the memory access pattern is row or column major).
+
+    With `enable-descriptor-relayout`, the pass may also re-encode a rank-2, row-major descriptor load
+    whose blocked layout does not lower to 2D block reads, in a function without `tt.dot` or
+    `tt.dot_scaled`. It does so only when the load's users are layout converts, elementwise ops or
+    reductions along a single axis (not stores), the 2D block load lowering accepts the new layout, and the
+    new layout needs fewer HW messages. The load is marked `ttig.block_io_anchor` and converted back to its
+    old layout, so RemoveLayoutConversions carries the new layout to its users.
+    A load is not re-encoded when its reductions and the conversion of their results to a `tt.store` (reached
+    through elementwise ops and at most one convert) need no shared memory in the current layout but would in
+    the new one.
+    Nor is it re-encoded when, along any grid axis, the tiles read by programs pid and pid+1 are a power of two
+    above 256 KiB apart, or that distance is not a compile-time constant. Since that check only sees descriptor
+    loads, a function with a pointer `tt.load` tagged `ttig.block_io` is not re-encoded at all.
+    Every tagged descriptor load in the function also needs zero padding, and with 16 lanes every value computed from a reduction must be f32 or i32 (an op the check
+    does not recognize refuses too), since such kernels miscompile. These gates are function-wide: a function
+    relays out all its eligible loads or none.
+    `TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0` disables the re-encoding.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
+
+  let options = [
+    Option<"enableDescriptorRelayout", "enable-descriptor-relayout",
+           "bool", /*default=*/"false",
+           "Allow re-encoding eligible rank-2 row-major descriptor loads in "
+           "functions without a dot so they lower to 2D block reads">
+  ];
 }
 
 def TritonIntelGPUWidenLoadStoreEncoding : Pass<"tritonintelgpu-widen-load-store-encoding", "mlir::ModuleOp"> {

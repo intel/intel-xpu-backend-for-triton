@@ -132,6 +132,14 @@ def _validate_np_data_size(np_array, tl_dtype):
     return True
 
 
+def _int_constant(value, np_dtype):
+    # The compiled builder takes the value as an int64 (signed types) or a
+    # uint64 (unsigned types) and arith.constant keeps its low bits, so e.g.
+    # tl.full(shape, 0xFFFFFFFF, tl.int32) is -1.
+    wide_dtype = np.int64 if np.issubdtype(np_dtype, np.signedinteger) else np.uint64
+    return np.array([value], dtype=wide_dtype).astype(np_dtype)
+
+
 def _get_signed_np_dtype(dtype):
     if dtype == np.uint8:
         return np.int8
@@ -216,6 +224,20 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         exponent[zero_significand_index & subnormal_index] = bias_input - bias_output
         significand[subnormal_index] = (significand[subnormal_index] << bit_pos[subnormal_index]) & (
             (1 << input_dtype.fp_mantissa_width) - 1)
+    if input_dtype == tl.float8e4nv:
+        magnitude = input_bin & ((1 << (input_dtype.primitive_bitwidth - 1)) - 1)
+        input_nan = magnitude == (1 << (input_dtype.primitive_bitwidth - 1)) - 1
+        input_inf = np.zeros(input_bin.shape, dtype=bool)
+    elif input_dtype in (tl.float8e4b8, tl.float8e5b16):
+        input_nan = input_bin == (1 << (input_dtype.primitive_bitwidth - 1))
+        input_inf = np.zeros(input_bin.shape, dtype=bool)
+    elif input_dtype == tl.float8e4b15:
+        input_nan = np.zeros(input_bin.shape, dtype=bool)
+        input_inf = np.zeros(input_bin.shape, dtype=bool)
+    else:
+        nonfinite_input = input_exponent == (1 << input_exponent_width) - 1
+        input_nan = nonfinite_input & ((input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)) != 0)
+        input_inf = nonfinite_input & ((input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)) == 0)
     sign_output = sign
     # Include the leading bit and align subnormal results before rounding.
     full_significand = significand | (1 << input_dtype.fp_mantissa_width)
@@ -237,20 +259,20 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
     exponent_output = np.minimum(output_exponent, max_exponent)
     exponent_output[retained < (1 << output_dtype.fp_mantissa_width)] = 0
     significand_output = retained & ((1 << output_dtype.fp_mantissa_width) - 1)
-    if not input_dtype.is_fp8() and not output_dtype.is_fp8():
-        # Reserved source exponents represent infinities/NaNs, not finite exponents.
-        nonfinite = input_exponent == (1 << input_exponent_width) - 1
-        input_nan = nonfinite & ((input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)) != 0)
+    if not output_dtype.is_fp8():
+        nonfinite = input_nan | input_inf
         overflow = (output_exponent >= max_exponent) & ~nonfinite
         if rounding_mode == _ir.ROUNDING_MODE.RTNE:
             exponent_output[overflow] = max_exponent
             significand_output[overflow] = 0
-            significand_output[input_nan] = 1 << (output_dtype.fp_mantissa_width - 1)
         else:
             exponent_output[overflow] = max_exponent - 1
             significand_output[overflow] = (1 << output_dtype.fp_mantissa_width) - 1
         exponent_output[nonfinite] = max_exponent
-        significand_output[nonfinite & ~input_nan] = 0
+        significand_output[input_inf] = 0
+        # if the input was NaN but conversion erased all its mantissa bits,
+        # set one bit so the output remains NaN.
+        significand_output[input_nan] = 1 << (output_dtype.fp_mantissa_width - 1)
     if output_dtype in (tl.float8e4b8, tl.float8e5b16):
         # FNUZ formats have only unsigned zero; the sign bit alone encodes NaN.
         zero_output = (exponent_output == 0) & (significand_output == 0)
@@ -488,28 +510,28 @@ class InterpreterBuilder:
         return TensorHandle(np.array([value], dtype=np.bool_), tl.int1)
 
     def get_uint8(self, value):
-        return TensorHandle(np.array([value], dtype=np.uint8), tl.uint8)
+        return TensorHandle(_int_constant(value, np.uint8), tl.uint8)
 
     def get_int8(self, value):
-        return TensorHandle(np.array([value], dtype=np.int8), tl.int8)
+        return TensorHandle(_int_constant(value, np.int8), tl.int8)
 
     def get_uint16(self, value):
-        return TensorHandle(np.array([value], dtype=np.uint16), tl.uint16)
+        return TensorHandle(_int_constant(value, np.uint16), tl.uint16)
 
     def get_int16(self, value):
-        return TensorHandle(np.array([value], dtype=np.int16), tl.int16)
+        return TensorHandle(_int_constant(value, np.int16), tl.int16)
 
     def get_uint32(self, value):
-        return TensorHandle(np.array([value], dtype=np.uint32), tl.uint32)
+        return TensorHandle(_int_constant(value, np.uint32), tl.uint32)
 
     def get_int32(self, value):
-        return TensorHandle(np.array([value], dtype=np.int32), tl.int32)
+        return TensorHandle(_int_constant(value, np.int32), tl.int32)
 
     def get_uint64(self, value):
-        return TensorHandle(np.array([value], dtype=np.uint64), tl.uint64)
+        return TensorHandle(_int_constant(value, np.uint64), tl.uint64)
 
     def get_int64(self, value):
-        return TensorHandle(np.array([value], dtype=np.int64), tl.int64)
+        return TensorHandle(_int_constant(value, np.int64), tl.int64)
 
     def get_fp16(self, value):
         return TensorHandle(np.array([value], dtype=np.float16), tl.float16)
@@ -923,11 +945,25 @@ class InterpreterBuilder:
         # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
         pass
 
-    def create_make_tensor_descriptor(self, base: TensorHandle, shape: List[TensorHandle], strides: List[TensorHandle],
-                                      tensor_shape: List[int], is_signed: bool, padding: str = "zero"):
-        desc = TensorDescHandle(base, shape, strides, tensor_shape, padding)
+    def create_tensor_descriptor_type(self, block_type, is_signed, fp6_format=None):
+        elem_ty = block_type.element_ty
+        if elem_ty.is_int() and elem_ty.is_int_signed() != is_signed:
+            block_type = block_type.with_element_ty(tl.core.get_int_dtype(elem_ty.primitive_bitwidth, is_signed))
+        return tl.core.tensor_descriptor_base_type(block_type, fp6_format)
+
+    def create_make_tensor_descriptor(self, *args, **kwargs):
+        if args and isinstance(args[0], tl.core.tensor_descriptor_base_type):
+            desc_ty, base, shape, strides, *padding = args
+            desc = TensorDescHandle(base, shape, strides, desc_ty.block_type.shape, *padding, **kwargs)
+        else:
+            desc = self._make_tensor_descriptor_from_shape(*args, **kwargs)
         desc.validate()
         return desc
+
+    def _make_tensor_descriptor_from_shape(self, base: TensorHandle, shape: List[TensorHandle],
+                                           strides: List[TensorHandle], tensor_shape: List[int], is_signed: bool,
+                                           padding: str = "zero"):
+        return TensorDescHandle(base, shape, strides, tensor_shape, padding)
 
     def create_descriptor_load(self, desc: TensorDescHandle, indices: List[TensorHandle], cache_policy):
         ptrs, mask = desc.materialize_pointers(indices)
@@ -1060,8 +1096,9 @@ class ReduceScanOpInterface:
         self.combine_fn = combine_fn
 
     def check_axis(self, shape, axis):
-        if axis is not None and axis >= len(shape):
-            raise ValueError(f"axis {axis} out of bounds for shape {shape}")
+        axis = tl.core._unwrap_if_constexpr(axis)
+        if axis is not None:
+            self.axis = tl.core._wrap_axis(axis, len(shape))
 
     def check_tensor(self, input):
         for arg in input:
@@ -1340,6 +1377,7 @@ def _patch_lang(fn):
         _patch_builtin(lang.tensor, interpreter_builder, scope)
         if lang == tl:
             _patch_builtin(lang.math, interpreter_builder, scope)
+            _patch_builtin(lang.fpsan, interpreter_builder, scope)
         _patch_lang_tensor(lang.tensor, scope)
         _patch_lang_core(lang, scope)
     _patch_builtin(tl.core.tensor_descriptor_base, interpreter_builder, scope)
@@ -1379,7 +1417,7 @@ def _implicit_cvt(arg):
         desc = interpreter_semantic.make_tensor_descriptor(base=_implicit_cvt(arg.base),
                                                            shape=[_implicit_cvt(s) for s in arg.shape], strides=strides,
                                                            block_shape=[tl.constexpr(b) for b in arg.block_shape],
-                                                           padding_option=arg.padding)
+                                                           padding_option=arg.padding, fp6_format=arg.fp6_format)
         desc.handle.round_f32_to_tf32 = arg.round_f32_to_tf32
         return desc
     return arg
@@ -1423,6 +1461,7 @@ class GridExecutor:
                     arg.block_shape,
                     arg.padding,
                     arg.round_f32_to_tf32,
+                    arg.fp6_format,
                 )
             elif not hasattr(arg, "data_ptr"):
                 return arg
@@ -1693,9 +1732,11 @@ class InterpretedFunction(KernelInterface[T]):
 
     def __call__(self, *args, **kwargs):
         # This is a device function call
-        _patch_lang(self.fn)
-        fn = self.rewrite()
+        scope = _patch_lang(self.fn)
         try:
+            fn = self.rewrite()
             return fn(*args, **kwargs)
         except Exception as e:
             raise InterpreterError(repr(e)) from e
+        finally:
+            scope.restore()

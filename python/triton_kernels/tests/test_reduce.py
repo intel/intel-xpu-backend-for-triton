@@ -176,7 +176,7 @@ def test_op_empty_forward_backward(B, M, N, dtype, mask_mode, device):
 @pytest.mark.enable_warmup(min_capability=9, priority=1)
 def test_unpadded_batch_size_rowidxs_subtile():
     if not torch.cuda.is_available() or not is_cuda():
-        pytest.xfail("rowidxs path requires CUDA")
+        pytest.skip("rowidxs path requires CUDA")
     if torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("rowidxs path requires CUDA capability >= 9")
 

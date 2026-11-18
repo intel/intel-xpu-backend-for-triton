@@ -2,6 +2,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir::triton::gpu::intel {
@@ -457,9 +458,7 @@ bool cvtIsSubGroupReinterpret(ConvertLayoutOp op) {
   // case.
   Type elemType = srcTy.getElementType();
   unsigned bitsPerElement =
-      isa<PointerType>(elemType)
-          ? kPtrBitWidth
-          : std::max<int>(8, elemType.getIntOrFloatBitWidth());
+      std::max<int>(8, getIntOrFloatOrPtrBitWidth(elemType));
   if (packedRegisterSize * bitsPerElement >= 128)
     return false;
 
@@ -519,7 +518,7 @@ unsigned getScratchSizeInBytesOld(ReduceOpHelper &helper, triton::ReduceOp op) {
 
   unsigned bytesPerElem = 0;
   for (const auto &ty : op.getElementTypes()) {
-    bytesPerElem += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
+    bytesPerElem += ceil<unsigned>(getIntOrFloatOrPtrBitWidth(ty), 8);
   }
   return bytesPerElem * elems;
 }
