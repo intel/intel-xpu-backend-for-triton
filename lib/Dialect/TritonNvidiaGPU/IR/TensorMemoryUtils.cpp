@@ -83,6 +83,9 @@ int getContextualMaxNReg(Operation *op) {
       unsigned idx = op->getParentRegion()->getRegionNumber();
       if (auto actRegisters = partitions.getParentOp().getActualRegisters())
         return (*actRegisters)[1 + idx];
+      if (auto requestedRegisters =
+              partitions.getParentOp().getRequestedRegisters())
+        return (*requestedRegisters)[idx];
       return {};
     }
 
@@ -124,14 +127,9 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth,
 
   // Remove broadcasting in the registers
   auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
-  if (!removeBroadcastSrc.isIdentity()) {
-    auto prmtCvt = removeBroadcastSrc.apply(cvt);
-    auto info = lowerTMemLdSt(prmtCvt, maxnreg, bitwidth, emitError, unpacked);
-    if (failed(info))
-      return failure();
-    info->broadcast = std::move(removeBroadcastSrc);
-    return info;
-  }
+  if (!removeBroadcastSrc.isIdentity())
+    return lowerTMemLdSt(removeBroadcastSrc.apply(cvt), maxnreg, bitwidth,
+                         emitError, unpacked);
   auto *ctx = cvt.getInDimNames().begin()->getContext();
   auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
   auto kReg = S("register");
@@ -139,16 +137,8 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth,
   auto kRow = S("row");
   auto kCol = S("col");
   if (bitwidth < 32) {
-    LinearLayout quot;
-    int bestContig = 1;
-    for (int contig = 1; bitwidth * contig <= 32; contig *= 2) {
-      auto maybeQuot =
-          divideLeft(cvt, LinearLayout::identity1D(contig, kReg, kCol));
-      if (!maybeQuot)
-        break;
-      quot = *maybeQuot;
-      bestContig = contig;
-    }
+    auto [bestContig, quot] =
+        factorMaximalIdentityPrefix(cvt, kReg, kCol, 32 / bitwidth);
     bool padding = false;
     int newBitwidth = bitwidth;
     if (bestContig > 1) {
@@ -170,7 +160,9 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth,
       // to fill a full 32b register, e.g., colN = 1 and colStride != 1 or when
       // bitwidth == 8 (this happens with scales with K=1).
       // These two cases are mostly supported for testing purposes.
-      unpacked = bitwidth == 16;
+      // A padded TMEM value occupies one physical column, so an unpacked
+      // store would overwrite the adjacent column.
+      unpacked = false;
       quot = *maybeQuot;
       padding = true;
       newBitwidth = 32;
@@ -256,10 +248,9 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth,
   return info;
 }
 
-FailureOr<TMemLdStEncodingInfo>
-computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
-                            int maxnreg,
-                            std::function<InFlightDiagnostic()> emitError) {
+FailureOr<LinearLayout>
+computeTMemLdStLayout(RankedTensorType regTy, MemDescType memTy,
+                      std::function<InFlightDiagnostic()> emitError) {
   auto memLayout = toLinearLayout(memTy);
   auto regLayout = toLinearLayout(regTy);
   auto *ctx = regTy.getContext();
@@ -297,9 +288,18 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   bases[kWarp][1] = {64, 0};
   cvt = LinearLayout(std::move(bases), cvt.getOutDims(),
                      /*isSurjective=*/cvt.isSurjective());
+  return cvt;
+}
 
+FailureOr<TMemLdStEncodingInfo>
+computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
+                            int maxnreg,
+                            std::function<InFlightDiagnostic()> emitError) {
+  auto layout = computeTMemLdStLayout(regTy, memTy, emitError);
+  if (failed(layout))
+    return failure();
   int bitwidth = memTy.getElementTypeBitWidth();
-  return lowerTMemLdSt(cvt, maxnreg, bitwidth, emitError);
+  return lowerTMemLdSt(*layout, maxnreg, bitwidth, emitError);
 }
 
 bool supportsTMemLoadReduce(RankedTensorType regTy, MemDescType memTy,

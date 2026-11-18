@@ -5,6 +5,7 @@
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/Triton/Transforms/ArithTypeConversion.h"
 #include "triton/Dialect/Triton/Transforms/FunctionTypeConversion.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -17,6 +18,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Pass/Pass.h"
@@ -228,6 +230,13 @@ Value generateOther(OpBuilder &builder, Location loc, Type scalarTy,
                     ArrayRef<int64_t> blockShape,
                     Value paddingOption = nullptr) {
   auto blockTy = RankedTensorType::get(blockShape, scalarTy);
+  if (isa<triton::PackedFloat4E2M1Type, Float8E8M0FNUType>(scalarTy)) {
+    // Descriptor zero padding fills the encoded bytes with zero bits.
+    auto bitsTy = blockTy.clone(builder.getI8Type());
+    auto zero =
+        arith::ConstantOp::create(builder, loc, builder.getZeroAttr(bitsTy));
+    return triton::BitcastOp::create(builder, loc, blockTy, zero);
+  }
   if (paddingOption && mlir::isa<FloatType>(scalarTy)) {
     auto floatTy = mlir::cast<FloatType>(scalarTy);
     auto nan = llvm::APFloat::getNaN(floatTy.getFloatSemantics());
@@ -299,6 +308,14 @@ SmallVector<mlir::Value> castToI64(OpBuilder &builder,
   auto i64Type = builder.getI64Type();
   return llvm::map_to_vector(values, [&](mlir::Value v) {
     return builder.createOrFold<arith::ExtSIOp>(v.getLoc(), i64Type, v);
+  });
+}
+
+SmallVector<mlir::Value> castUnsignedToI64(OpBuilder &builder,
+                                           mlir::ValueRange values) {
+  auto i64Type = builder.getI64Type();
+  return llvm::map_to_vector(values, [&](mlir::Value v) {
+    return builder.createOrFold<arith::ExtUIOp>(v.getLoc(), i64Type, v);
   });
 }
 
@@ -559,7 +576,7 @@ validateMultiRangeSetup(Value xOffsets, RankedTensorType tensorTy, Value desc) {
   if (ranges.size() > kMaxSubRanges)
     return std::nullopt;
 
-  // 4. All sub-ranges must have equal count (tt.cat requires
+  // 4. All sub-ranges must have equal count (tt.join requires
   // SameTypeOperands).
   int64_t rangeCount = ranges[0].count;
   for (const auto &range : ranges) {
@@ -635,8 +652,9 @@ struct RewriteContiguousGather
 
     // Create tt.descriptor_load with offsets [baseOffset, yOffset].
     SmallVector<Value> indices = {setup->baseOffset, gatherOp.getYOffset()};
-    auto descLoadOp = triton::DescriptorLoadOp::create(rewriter, loc, resultTy,
-                                                       newMakeDesc, indices);
+    auto descLoadOp = triton::DescriptorLoadOp::create(
+        rewriter, loc, resultTy, newMakeDesc, indices,
+        /*cachePolicy=*/Attribute());
 
     // TF32 rounding for f32 types is handled by RewriteLoadPattern
     // when it converts the DescriptorLoadOp in the subsequent phase.
@@ -650,7 +668,7 @@ private:
 
 /// Rewrite DescriptorGatherOps with compile-time-constant x_offsets that form
 /// multiple contiguous sub-ranges into one descriptor_load per sub-range,
-/// concatenated with tt.cat.
+/// concatenated along the row dimension.
 ///
 /// Example — constant offsets [0,1,2,3, 8,9,10,11] on tensor<1x64xbf16>:
 ///   %x = arith.constant dense<[0, 1, 2, 3, 8, 9, 10, 11]> : tensor<8xi32>
@@ -662,9 +680,12 @@ private:
 ///   %v0 = tt.descriptor_load %d0[%c0, %y] : ... -> tensor<4x64xbf16>
 ///   %d1 = tt.make_tensor_desc ... : !tt.tensordesc<4x64xbf16>
 ///   %v1 = tt.descriptor_load %d1[%c8, %y] : ... -> tensor<4x64xbf16>
-///   %v  = tt.cat %v0, %v1 : tensor<4x64xbf16> -> tensor<8x64xbf16>
+///   %j  = tt.join %v0, %v1 : tensor<4x64xbf16> -> tensor<4x64x2xbf16>
+///   %t  = tt.trans %j {order = array<i32: 2, 0, 1>}
+///          : tensor<4x64x2xbf16> -> tensor<2x4x64xbf16>
+///   %v  = tt.reshape %t : tensor<2x4x64xbf16> -> tensor<8x64xbf16>
 ///
-/// Constraint: all sub-ranges must have equal size (tt.cat requires
+/// Constraint: all sub-ranges must have equal size (tt.join requires
 /// SameTypeOperands). Falls back if sub-ranges differ in count.
 struct RewriteMultiRangeGather
     : public OpRewritePattern<triton::DescriptorGatherOp> {
@@ -690,18 +711,24 @@ struct RewriteMultiRangeGather
           rewriter, loc, rewriter.getI32IntegerAttr(range.start));
       SmallVector<Value> indices = {startOffset, gatherOp.getYOffset()};
       auto load = triton::DescriptorLoadOp::create(
-          rewriter, loc, setup->sliceTy, desc, indices);
+          rewriter, loc, setup->sliceTy, desc, indices,
+          /*cachePolicy=*/Attribute());
       loads.push_back(load.getResult());
     }
 
-    // Concatenate with tt.cat using a balanced reduction tree.
-    // tt.cat requires SameTypeOperands, so we can only cat tensors of
+    // Concatenate along the row dimension using a balanced reduction tree.
+    // tt.join requires SameTypeOperands, so we can only combine tensors of
     // equal shape. A balanced tree ensures each pair has the same type.
     // Requires the number of ranges to be a power of 2.
     if (loads.size() & (loads.size() - 1))
       return rewriter.notifyMatchFailure(
           gatherOp, "number of sub-ranges is not a power of 2");
 
+    // Row-wise concatenation of two [R, W] tensors is expressed as
+    // join -> trans -> reshape: the join yields [R, W, 2], transposing with
+    // order [2, 0, 1] yields [2, R, W] so the operands end up in row order,
+    // and the reshape flattens the leading dimensions into [2 * R, W].
+    SmallVector<int32_t, 3> transOrder{2, 0, 1};
     SmallVector<Value> current = std::move(loads);
     int64_t currentRows = setup->rangeCount;
     while (current.size() > 1) {
@@ -709,9 +736,15 @@ struct RewriteMultiRangeGather
       int64_t nextRows = currentRows * 2;
       auto catTy =
           RankedTensorType::get({nextRows, setup->rowWidth}, setup->elemTy);
-      for (size_t i = 0; i < current.size(); i += 2)
-        next.push_back(triton::CatOp::create(rewriter, loc, catTy, current[i],
-                                             current[i + 1]));
+      for (size_t i = 0; i < current.size(); i += 2) {
+        Value joined =
+            triton::JoinOp::create(rewriter, loc, current[i], current[i + 1]);
+        Value transposed =
+            triton::TransOp::create(rewriter, loc, joined, transOrder);
+        next.push_back(triton::ReshapeOp::create(rewriter, loc, catTy,
+                                                 transposed,
+                                                 /*efficientLayout=*/false));
+      }
       current = std::move(next);
       currentRows = nextRows;
     }
@@ -829,7 +862,7 @@ struct RewriteMakeTensorDesc : OpConversionPattern<triton::MakeTensorDescOp> {
     SmallVector<mlir::Value> ptrShapeStridesPaddingOption;
     llvm::append_values(ptrShapeStridesPaddingOption, adaptor.getBase());
     llvm::append_range(ptrShapeStridesPaddingOption,
-                       castToI64(rewriter, adaptor.getShape()));
+                       castUnsignedToI64(rewriter, adaptor.getShape()));
     llvm::append_range(ptrShapeStridesPaddingOption, adaptor.getStrides());
     auto paddingOption = mlir::arith::ConstantOp::create(
         rewriter, op.getLoc(), rewriter.getI1Type(),
@@ -860,7 +893,7 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
     auto newLoad = triton::LoadOp::create(
         rewriter, loc, generatePtr(rewriter, loc, blockShape, desc, offsets),
         generateMask(rewriter, loc, blockShape, desc, offsets), other,
-        triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL, false);
+        op.getCachePolicyAttr());
     newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     Value result = newLoad.getResult();
@@ -897,8 +930,7 @@ struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
 
     auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
         op, generatePtr(rewriter, loc, blockShape, desc, offsets), op.getSrc(),
-        generateMask(rewriter, loc, blockShape, desc, offsets),
-        triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL);
+        generateMask(rewriter, loc, blockShape, desc, offsets));
     newStore->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     return llvm::success();
@@ -941,9 +973,7 @@ struct RewriteGatherPattern : OpConversionPattern<triton::DescriptorGatherOp> {
     auto other = generateOther(rewriter, loc,
                                descTy.getSignlessBlockType().getElementType(),
                                blockShape, desc.paddingOption);
-    auto newLoad = triton::LoadOp::create(
-        rewriter, loc, ptr, mask, other, triton::CacheModifier::NONE,
-        triton::EvictionPolicy::NORMAL, false);
+    auto newLoad = triton::LoadOp::create(rewriter, loc, ptr, mask, other);
     newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     Value result = newLoad.getResult();
@@ -972,8 +1002,7 @@ struct RewriteScatterPattern
     auto [ptr, mask] = generateGatherScatterPtrMask(
         rewriter, loc, blockShape, desc, op.getXOffsets(), op.getYOffset());
     auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
-        op, ptr, op.getSrc(), mask, triton::CacheModifier::NONE,
-        triton::EvictionPolicy::NORMAL);
+        op, ptr, op.getSrc(), mask);
     newStore->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     return llvm::success();
@@ -1045,7 +1074,9 @@ struct RewriteReducePattern : OpConversionPattern<triton::DescriptorReduceOp> {
 /// Check if a descriptor-typed function argument only feeds DescriptorLoadOp
 /// or DescriptorStoreOp (directly or through loops/conditionals), and does NOT
 /// feed DescriptorGatherOp, DescriptorScatterOp, or DescriptorReduceOp.
-static bool descArgFeedsOnlyLoadStore(Value descArg) {
+static bool
+descArgFeedsOnlyLoadStore(Value descArg,
+                          SmallVectorImpl<triton::DescriptorLoadOp> &loads) {
   SmallVector<Value, 8> worklist;
   SmallPtrSet<Value, 8> visited;
   worklist.push_back(descArg);
@@ -1059,6 +1090,8 @@ static bool descArgFeedsOnlyLoadStore(Value descArg) {
     for (OpOperand &use : cur.getUses()) {
       Operation *user = use.getOwner();
       if (isa<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(user)) {
+        if (auto load = dyn_cast<triton::DescriptorLoadOp>(user))
+          loads.push_back(load);
         hasLoadOrStore = true;
         continue;
       }
@@ -1088,7 +1121,7 @@ static bool descArgFeedsOnlyLoadStore(Value descArg) {
 /// Pre-pass: For public FuncOps with TensorDescType-typed arguments that feed
 /// only DescriptorLoad/Store, expand the function signature and insert a
 /// synthetic MakeTensorDescOp. This makes the descriptor traceable by
-/// findAllMakeTensorDescOps() and enables the 2D block I/O fast path for
+/// findDescriptorDefinitions() and enables the 2D block I/O fast path for
 /// host-side tensor descriptors.
 static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
   moduleOp->walk([](triton::FuncOp funcOp) {
@@ -1132,7 +1165,8 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       Type elemType = blockType.getElementType();
       Value descArg = entryBlock.getArgument(idx);
 
-      if (!descArgFeedsOnlyLoadStore(descArg))
+      SmallVector<triton::DescriptorLoadOp> loads;
+      if (!descArgFeedsOnlyLoadStore(descArg, loads))
         continue;
 
       // The frontend (tensor_descriptor_type._flatten_ir_types) places i32
@@ -1163,7 +1197,7 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       // Expand: replace !tt.tensordesc<...> with (ptr, i64×2*rank, i1, i1).
       MLIRContext *ctx = funcOp.getContext();
       Location loc = descArg.getLoc();
-      Type ptrType = triton::PointerType::get(elemType, /*addressSpace=*/1);
+      Type ptrType = triton::PointerType::get(elemType);
       Type i64Type = IntegerType::get(ctx, 64);
       Type i1Type = IntegerType::get(ctx, 1);
 
@@ -1193,17 +1227,19 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
                                            builder.getI64IntegerAttr(1));
       strideArgs.back() = c1;
 
-      // For rank-3+, replace non-last strides with constants from tt.stride.N
-      // attributes. This enables FuseReshape to prove stride divisibility for
-      // rank-reducing loads.
-      if (rank >= 3) {
-        for (unsigned d = 0; d < rank - 1; ++d) {
-          std::string attrName = "tt.stride." + std::to_string(d);
-          if (auto attr = funcOp.getArgAttrOfType<IntegerAttr>(
-                  idx, StringRef(attrName))) {
-            strideArgs[d] = arith::ConstantOp::create(
-                builder, loc, builder.getI64Type(),
-                builder.getI64IntegerAttr(attr.getValue().getSExtValue()));
+      // Read attributes from descriptor arg at original position (idx), before
+      // arg_attrs array is updated by expansion.
+      DictionaryAttr descArgAttrs = funcOp.getArgAttrDict(idx);
+
+      // Collect shape divisibility from specialization.
+      SmallVector<std::pair<unsigned, unsigned>> shapeDivAttrs;
+      if (descArgAttrs) {
+        for (unsigned d = 0; d < rank; ++d) {
+          std::string attrName =
+              "tt.shape." + std::to_string(d) + ".divisibility";
+          if (auto attr =
+                  dyn_cast_or_null<IntegerAttr>(descArgAttrs.get(attrName))) {
+            shapeDivAttrs.push_back({d, attr.getValue().getZExtValue()});
           }
         }
       }
@@ -1211,10 +1247,12 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       // Determine padding from the tt.padding attribute on the descriptor arg
       // (set by the specialization system for NaN-padded host descriptors).
       auto paddingOpt = triton::PaddingOption::PAD_ZERO;
-      if (auto padAttr =
-              funcOp.getArgAttrOfType<IntegerAttr>(idx, "tt.padding"))
-        if (padAttr.getValue().getZExtValue() != 0)
-          paddingOpt = triton::PaddingOption::PAD_NAN;
+      if (descArgAttrs) {
+        if (auto padAttr =
+                dyn_cast_or_null<IntegerAttr>(descArgAttrs.get("tt.padding")))
+          if (padAttr.getValue().getZExtValue() != 0)
+            paddingOpt = triton::PaddingOption::PAD_NAN;
+      }
       auto paddingAttr = triton::PaddingOptionAttr::get(ctx, paddingOpt);
 
       auto syntheticDesc = triton::MakeTensorDescOp::create(
@@ -1225,6 +1263,30 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       oldDescArg.replaceAllUsesWith(syntheticDesc);
       entryBlock.eraseArgument(oldDescIdx);
 
+      // Determine TF32 rounding from the tt.round_f32_to_tf32 attribute on the
+      // descriptor arg (set by the specialization system, like tt.padding
+      // above). Using the attribute rather than the runtime i1 argument keeps
+      // the flag a compile-time constant, so the non-rounding path costs
+      // nothing instead of paying for a select on every loaded element.
+      bool roundF32 = false;
+      if (descArgAttrs) {
+        if (auto roundAttr = dyn_cast_or_null<IntegerAttr>(
+                descArgAttrs.get("tt.round_f32_to_tf32")))
+          roundF32 = roundAttr.getValue().getZExtValue() != 0;
+      }
+
+      // MakeTensorDescOp has no TF32 flag, round the loaded values instead.
+      if (elemType.isF32() && roundF32) {
+        for (triton::DescriptorLoadOp load : loads) {
+          Value x = load.getResult();
+          SmallVector<OpOperand *> uses(llvm::make_pointer_range(x.getUses()));
+          builder.setInsertionPointAfter(load);
+          Value rounded = roundF32ToTF32(builder, load.getLoc(), x);
+          for (OpOperand *use : uses)
+            use->set(rounded);
+        }
+      }
+
       // Update the function type.
       funcOp.setType(FunctionType::get(ctx, entryBlock.getArgumentTypes(),
                                        funcType.getResults()));
@@ -1232,25 +1294,19 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       // Set tt.divisibility based on host TensorDescriptor guarantees:
       //   base: always 16-byte aligned
       //   non-last strides: stride * elem_bytes % 16 == 0
-      unsigned elemBytes = elemType.getIntOrFloatBitWidth() / 8;
+      unsigned elemBytes = getIntOrFloatOrPtrBitWidth(elemType) / 8;
       unsigned strideDivisibility = 16 / std::max(1u, elemBytes);
 
       pendingAttrs.push_back({basePtr, 16});
-      // Frontend stride args used by MakeTensorDescOp (guaranteed by
-      // TensorDescriptor: stride * elem_bytes % 16 == 0).
-      // Only need to add to BlockArgument strides (not constants).
+      // Frontend stride args: only add BlockArgument strides (not constants).
       for (unsigned d = 0; d < rank - 1; ++d)
         if (isa<BlockArgument>(strideArgs[d]))
           pendingAttrs.push_back({strideArgs[d], strideDivisibility});
 
-      // Last-dim shape divisibility (set by "L" specialization key when
-      // shape[-1] * elem_bytes % 8 == 0). Required by
-      // satisfies2DBlockReadAlignment.
-      if (auto lastDimAttr = funcOp.getArgAttrOfType<IntegerAttr>(
-              idx, "tt.last_dim_divisibility")) {
-        unsigned lastDimDiv =
-            lastDimAttr.getValue().getZExtValue() / std::max(1u, elemBytes);
-        pendingAttrs.push_back({shapeArgs.back(), lastDimDiv});
+      // Shape divisibility from specialization.
+      for (auto &[d, div] : shapeDivAttrs) {
+        if (isa<BlockArgument>(shapeArgs[d]))
+          pendingAttrs.push_back({shapeArgs[d], div});
       }
 
       // Refresh for next iteration.
@@ -1280,6 +1336,163 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       }
     }
   });
+}
+
+static llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
+collectCandidateMakeTensorDescOps(Operation *op) {
+  llvm::SmallSetVector<triton::MakeTensorDescOp, 4> candidateMakeTensorDescOps;
+  llvm::SmallSetVector<triton::MakeTensorDescOp, 4> unhandledMakeTensorDescOps;
+  SmallVector<llvm::SmallSetVector<triton::MakeTensorDescOp, 4>> descGroups;
+  op->walk([&](Operation *op) {
+    TypeSwitch<Operation *>(op)
+        .Case<triton::DescriptorLoadOp>([&](triton::DescriptorLoadOp op) {
+          triton::intel::DescriptorDefinitions defs =
+              triton::intel::findDescriptorDefinitions(op.getDesc());
+          // Candidates that disagree on `padding` leave the descriptor-native
+          // path with no compile-time fill value (#8102): the load would
+          // silently get PAD_ZERO even on the branch that asked for PAD_NAN.
+          // The pointer expansion carries padding as a runtime i1 and selects
+          // the fill per branch, so route those descriptors to it. An empty
+          // trace is NOT divergence -- it is already a non-candidate via
+          // allSatisfy, so it must not be evicted here.
+          bool divergentPadding = !defs.empty() && !defs.consistentPadding();
+          for (triton::MakeTensorDescOp d : defs) {
+            candidateMakeTensorDescOps.insert(d);
+            if (divergentPadding)
+              unhandledMakeTensorDescOps.insert(d);
+          }
+        })
+        .Case<triton::DescriptorStoreOp>([&](triton::DescriptorStoreOp op) {
+          // Stores carry no padding, so there is nothing to diverge on.
+          for (triton::MakeTensorDescOp d :
+               triton::intel::findDescriptorDefinitions(op.getDesc()))
+            candidateMakeTensorDescOps.insert(d);
+        })
+        .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
+              triton::DescriptorReduceOp>([&](auto op) {
+          for (triton::MakeTensorDescOp d :
+               triton::intel::findDescriptorDefinitions(op.getDesc()))
+            unhandledMakeTensorDescOps.insert(d);
+        })
+        .Case<triton::CallOp, triton::ReturnOp>([&](auto op) {
+          // A descriptor in a function signature is unconditionally illegal
+          // (see the `FuncOp` legality below), so a descriptor crossing a
+          // call boundary always expands and the maker has to follow. Only
+          // operands need this: a call *result* already traces to nothing.
+          for (Value v : op->getOperands())
+            if (isa<triton::TensorDescType>(v.getType()))
+              for (triton::MakeTensorDescOp d :
+                   triton::intel::findDescriptorDefinitions(v))
+                unhandledMakeTensorDescOps.insert(d);
+        })
+        .Default([](auto) {});
+
+    // Legality is decided per op over all of its descriptor-typed operands
+    // and results, so their producers form one group that must be converted
+    // together. A region op additionally converts as a unit with its region
+    // terminators, so what they pass back joins the group.
+    llvm::SmallSetVector<triton::MakeTensorDescOp, 4> group;
+    bool hasUntraceable = false;
+    auto addDefs = [&](Value v) {
+      if (!isa<triton::TensorDescType>(v.getType()))
+        return;
+      triton::intel::DescriptorDefinitions defs =
+          triton::intel::findDescriptorDefinitions(v);
+      if (defs.empty()) {
+        hasUntraceable = true;
+        return;
+      }
+      for (triton::MakeTensorDescOp d : defs)
+        group.insert(d);
+    };
+    for (Value operand : op->getOperands())
+      addDefs(operand);
+    for (Value result : op->getResults())
+      addDefs(result);
+    // The op's own results collapse to an empty trace as soon as one incoming
+    // edge is untraceable, which hides the makers on the other edges: they are
+    // then seen only at their own terminator, stay native, and leave that
+    // terminator at the pre-expansion arity. Reach the edges directly (#8256).
+    if (isa<RegionBranchOpInterface>(op))
+      for (Region &region : op->getRegions())
+        for (Block &block : region)
+          for (Value v : block.getTerminator()->getOperands())
+            addDefs(v);
+    // An untraceable descriptor contributes no producer, so the closure below
+    // has nothing to spread from -- yet it already makes this op illegal
+    // (`tracesToCandidates` is false for an empty trace), leaving the op
+    // converted around producers that stay unconverted. Mirror the predicate:
+    // evict the group outright (#8170).
+    if (hasUntraceable)
+      unhandledMakeTensorDescOps.insert(group.begin(), group.end());
+    if (group.size() > 1)
+      descGroups.push_back(std::move(group));
+    return WalkResult::advance();
+  });
+
+  // With `buildMaterializations = false` legality cannot be mixed within a
+  // group: one producer leaving the descriptor path (evicted, or never a
+  // candidate) drags every traced producer that shares an op -- or that op's
+  // region terminators -- with it. Close the evicted set over the groups.
+  auto isEvicted = [&](triton::MakeTensorDescOp d) {
+    return unhandledMakeTensorDescOps.contains(d) ||
+           !candidateMakeTensorDescOps.contains(d);
+  };
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (const llvm::SmallSetVector<triton::MakeTensorDescOp, 4> &group :
+         descGroups) {
+      if (!llvm::any_of(group, isEvicted))
+        continue;
+      for (triton::MakeTensorDescOp d : group)
+        changed |= unhandledMakeTensorDescOps.insert(d);
+    }
+  }
+  for (triton::MakeTensorDescOp maker : unhandledMakeTensorDescOps)
+    candidateMakeTensorDescOps.remove(maker);
+  return candidateMakeTensorDescOps;
+}
+
+static bool splitDirectDescriptorUses(
+    Operation *op,
+    const llvm::SmallSetVector<triton::MakeTensorDescOp, 4> &candidates) {
+  SmallVector<std::pair<triton::MakeTensorDescOp, SmallVector<OpOperand *>>>
+      splits;
+  // Snapshot original makers and operand uses before inserting any clones.
+  op->walk([&](triton::MakeTensorDescOp maker) {
+    if (candidates.contains(maker))
+      return;
+
+    SmallVector<OpOperand *> directUses;
+    bool hasOtherUses = false;
+    for (OpOperand &use : maker.getResult().getUses()) {
+      bool isDirectUse =
+          TypeSwitch<Operation *, bool>(use.getOwner())
+              .Case<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(
+                  [&](auto access) { return &use == &access.getDescMutable(); })
+              .Default([](Operation *) { return false; });
+      if (isDirectUse)
+        directUses.push_back(&use);
+      else
+        hasOtherUses = true;
+    }
+    if (!directUses.empty() && hasOtherUses)
+      splits.emplace_back(maker, std::move(directUses));
+  });
+
+  IRRewriter rewriter(op->getContext());
+  for (auto &[maker, directUses] : splits) {
+    // A clone feeding only direct accesses is a candidate with one
+    // maker/padding, no untraceable sibling or structural multi-producer group.
+    // The original retains all fallback connections.
+    rewriter.setInsertionPointAfter(maker);
+    auto nativeMaker = cast<triton::MakeTensorDescOp>(rewriter.clone(*maker));
+    for (OpOperand *use : directUses)
+      rewriter.modifyOpInPlace(use->getOwner(),
+                               [&] { use->set(nativeMaker.getResult()); });
+  }
+  return !splits.empty();
 }
 
 /**
@@ -1312,15 +1525,15 @@ class TritonRewriteTensorDescriptorToPointerPass
 
     // Pre-pass: Synthesize MakeTensorDescOps for host-side tensor descriptor
     // function arguments. This enables the 2D block I/O fast path by making
-    // descriptors traceable via findAllMakeTensorDescOps().
+    // descriptors traceable via findDescriptorDefinitions().
     synthesizeDescriptorsFromFuncArgs(op);
 
     // Pre-pass: Rewrite contiguous DescriptorGatherOps/DescriptorScatterOps to
     // DescriptorLoadOps/DescriptorStoreOps. When x_offsets are provably
     // contiguous, replace the gather/scatter with a single 2D block load/store.
     // For constant offsets with multiple contiguous sub-ranges, emit one
-    // load/store per sub-range (concatenating loads with tt.cat, extracting
-    // store slices with tt.gather).
+    // load/store per sub-range (concatenating loads along the row dimension,
+    // extracting store slices with tt.gather).
     // Enabled by default. Set
     // TRITON_INTEL_DISABLE_DESCRIPTOR_GATHER_SCATTER_REWRITE=1 to disable.
     if (!tools::getBoolEnv(
@@ -1343,28 +1556,12 @@ class TritonRewriteTensorDescriptorToPointerPass
       (void)applyPatternsGreedily(op, std::move(patterns));
     }
 
+    // Split after the greedy pre-rewrites: they replace gathers/scatters with
+    // new direct descriptor loads/stores, which the split must see.
     llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
-        candidateMakeTensorDescOps;
-    llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
-        unhandledMakeTensorDescOps;
-    op->walk([&](Operation *op) {
-      TypeSwitch<Operation *>(op)
-          .Case<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(
-              [&](auto op) {
-                for (auto d :
-                     triton::intel::findAllMakeTensorDescOps(op.getDesc()))
-                  candidateMakeTensorDescOps.insert(d);
-              })
-          .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
-                triton::DescriptorReduceOp>([&](auto op) {
-            for (auto d : triton::intel::findAllMakeTensorDescOps(op.getDesc()))
-              unhandledMakeTensorDescOps.insert(d);
-          })
-          .Default([](auto) {});
-      return WalkResult::advance();
-    });
-    for (auto op : unhandledMakeTensorDescOps)
-      candidateMakeTensorDescOps.remove(op);
+        candidateMakeTensorDescOps = collectCandidateMakeTensorDescOps(op);
+    if (splitDirectDescriptorUses(op, candidateMakeTensorDescOps))
+      candidateMakeTensorDescOps = collectCandidateMakeTensorDescOps(op);
 
     mlir::ConversionTarget target(getContext());
     target.addDynamicallyLegalDialect<mlir::arith::ArithDialect,
@@ -1378,17 +1575,30 @@ class TritonRewriteTensorDescriptorToPointerPass
           // Check if all tensor descriptor values in the op trace back to
           // candidate MakeTensorDescOps.
           auto allDescValuesAreCandidate = [&](Operation *op) {
-            for (Value operand : op->getOperands()) {
-              if (!isa<triton::TensorDescType>(operand.getType()))
-                continue;
-              auto allDescs = triton::intel::findAllMakeTensorDescOps(operand);
-              if (allDescs.empty())
-                return false;
-              if (!llvm::all_of(allDescs, [&](auto d) {
+            auto tracesToCandidates = [&](Value v) {
+              // allSatisfy is false for an empty trace, which is what we want:
+              // an untraceable descriptor is not a candidate.
+              return triton::intel::findDescriptorDefinitions(v).allSatisfy(
+                  [&](triton::MakeTensorDescOp d) {
                     return candidateMakeTensorDescOps.contains(d);
-                  }))
+                  });
+            };
+            for (Value operand : op->getOperands())
+              if (isa<triton::TensorDescType>(operand.getType()) &&
+                  !tracesToCandidates(operand))
                 return false;
-            }
+            // Results matter too: an op that only *produces* a non-candidate
+            // descriptor (an scf.if yielding one, a tt.call returning one)
+            // would otherwise stay legal while
+            // populateSCFStructuralTypeConversions /
+            // populateFunctionTypeConversions rewrite its yield/callee 1->N,
+            // leaving a signature that no longer matches its own body. Upstream
+            // marks an op illegal on operands OR results; this restores that
+            // invariant while keeping the candidate carve-out. See #8166.
+            for (Value result : op->getResults())
+              if (isa<triton::TensorDescType>(result.getType()) &&
+                  !tracesToCandidates(result))
+                return false;
             return true;
           };
 
@@ -1398,6 +1608,8 @@ class TritonRewriteTensorDescriptorToPointerPass
               })
               .Default([&](auto *op) { return allDescValuesAreCandidate(op); });
         });
+    // Unconditional: a signature descriptor expands whether or not its maker
+    // is a candidate, which is why `tt.call` / `tt.return` operands evict.
     target.addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) {
       return !hasATensorDescriptorType(funcOp.getFunctionType().getInputs()) &&
              !hasATensorDescriptorType(funcOp.getFunctionType().getResults());

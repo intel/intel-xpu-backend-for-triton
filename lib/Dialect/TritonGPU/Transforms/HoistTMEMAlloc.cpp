@@ -68,7 +68,13 @@ public:
     if (valueFromTMEM == kUnknown) {
       return failure();
     }
+    // The store predicate is a scalar i1, so only a uniform condition can be
+    // folded into it. A splatted condition is uniform; use its scalar source.
     Value pred = select.getCondition();
+    if (auto splat = pred.getDefiningOp<tt::SplatOp>())
+      pred = splat.getSrc();
+    if (!pred.getType().isInteger(1))
+      return failure();
     // In case the false operand is overwriting, we need to negate the predicate
     // (owerwrite when select would be false)
     if (valueFromTMEM == kTrue) {
@@ -195,7 +201,7 @@ public:
   }
 };
 
-// Hoists a tmem alloc outside an if op like this:
+// Hoist a TMEM alloc from either arm when the other yields its initializer.
 // %0 = scf.if {
 //   %1, %token0 = tmem.alloc %init
 //   ...
@@ -228,33 +234,33 @@ public:
     auto ifOp = dyn_cast<scf::IfOp>(alloc->getParentOp());
     if (!ifOp || !ifOp.elseBlock())
       return failure();
-    auto thenOp = ifOp.thenBlock()->getTerminator();
-    auto elseOp = ifOp.elseBlock()->getTerminator();
+    auto *loadYield = alloc->getBlock()->getTerminator();
+    auto initYield = alloc->getBlock() == ifOp.thenBlock() ? ifOp.elseYield()
+                                                           : ifOp.thenYield();
     SmallVector<int> yieldArgs;
-    for (auto [thenOperand, elseOperand] :
-         llvm::zip(thenOp->getOpOperands(), elseOp->getOpOperands())) {
-      auto load = thenOperand.get().getDefiningOp<TMEMTokenLoadOp>();
+    for (auto [loadOperand, initOperand] :
+         llvm::zip(loadYield->getOpOperands(), initYield->getOpOperands())) {
+      auto load = loadOperand.get().getDefiningOp<TMEMTokenLoadOp>();
       if (!load || load.getSrc() != alloc.getResult())
         continue;
-      if (elseOperand.get() != init)
+      if (initOperand.get() != init)
         continue;
-      yieldArgs.push_back(thenOperand.getOperandNumber());
+      yieldArgs.push_back(loadOperand.getOperandNumber());
     }
     if (yieldArgs.empty())
       return failure();
-    // Since init is used in the else terminator we know that it dominates the
-    // if op.
+    // Both arms use init, so it dominates the if.
     alloc->moveBefore(ifOp);
     rewriter.setInsertionPointAfter(ifOp);
     for (int argNo : yieldArgs) {
       auto load =
-          cast<TMEMTokenLoadOp>(thenOp->getOperand(argNo).getDefiningOp());
+          cast<TMEMTokenLoadOp>(loadYield->getOperand(argNo).getDefiningOp());
       auto newLoad = cast<TMEMTokenLoadOp>(rewriter.clone(*load));
       rewriter.modifyOpInPlace(ifOp, [&] {
         ifOp->getResult(argNo).replaceAllUsesWith(newLoad.getResult());
         newLoad.getDepMutable().assign(ifOp->getResult(argNo));
-        thenOp->setOperand(argNo, load.getToken());
-        elseOp->setOperand(argNo, alloc.getToken());
+        loadYield->setOperand(argNo, load.getToken());
+        initYield->setOperand(argNo, alloc.getToken());
         ifOp->getResult(argNo).setType(newLoad.getToken().getType());
       });
     }
@@ -274,6 +280,11 @@ public:
     Value init = alloc.getSrc();
     if (!init)
       return failure();
+    while (auto cvt = init.getDefiningOp<ConvertLayoutOp>()) {
+      if (!init.hasOneUse())
+        return failure();
+      init = cvt.getSrc();
+    }
     auto load = init.getDefiningOp<TMEMTokenLoadOp>();
     if (!load || !load->hasOneUse() || !load.getDep().hasOneUse())
       return failure();
@@ -634,6 +645,16 @@ struct HoistTMEMAlloc
   void runOnOperation() override {
     ModuleOp m = getOperation();
     if (!postPipeline) {
+      // Forward TMEM loads before hoisting turns allocation initializers into
+      // explicit stores.
+      mlir::RewritePatternSet forwardingPatterns(&getContext());
+      forwardingPatterns.add<TMEMLoadForwarding>(&getContext());
+      if (failed(applyPatternsGreedily(getOperation(),
+                                       std::move(forwardingPatterns)))) {
+        signalPassFailure();
+        return;
+      }
+
       SmallVector<ttng::MMAv5OpInterface> mmaOps;
       m.walk([&](ttng::MMAv5OpInterface mmaOp) { mmaOps.push_back(mmaOp); });
       for (auto mmaOp : mmaOps) {

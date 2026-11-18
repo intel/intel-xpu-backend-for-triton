@@ -143,6 +143,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
+// COM: Column-major B pointer load with fp8 + opsPerChan=2 + threadsPerWarp=32.
+// COM: This combination is intentionally rejected by validate2DBlockLoadTile for
+// COM: transpose handling; it must remain a plain tt.load.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [16, 16], B = [16, 16], C = [16, 16]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @column_major_b_tpw32_fp8_rejected
+  tt.func @column_major_b_tpw32_fp8_rejected(%arg0: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}) -> tensor<32x64xf8E4M3FN, #dot1> {
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot1}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot1}>> -> tensor<1x64xi32, #dot1>
+    %2 = tt.splat %arg0 : !tt.ptr<f8E4M3FN> -> tensor<1x64x!tt.ptr<f8E4M3FN>, #dot1>
+    %3 = tt.addptr %2, %1 : tensor<1x64x!tt.ptr<f8E4M3FN>, #dot1>, tensor<1x64xi32, #dot1>
+    %4 = tt.broadcast %3 : tensor<1x64x!tt.ptr<f8E4M3FN>, #dot1> -> tensor<32x64x!tt.ptr<f8E4M3FN>, #dot1>
+    // CHECK: tt.load
+    %5 = tt.load %4 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f8E4M3FN>, #dot1>
+    tt.return %5 : tensor<32x64xf8E4M3FN, #dot1>
+  }
+}
+
+// -----
+
 // COM: Regression test for issue #7022 (T5 training warmup failure).
 // COM: Inductor's hf_T5 / hf_T5_base softmax-backward kernel produces a
 // COM: column-major tensor-of-pointers load whose column stride is
@@ -170,5 +191,54 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     // CHECK: tt.load
     tt.load %ptrs {ttig.block_io = "column_major"} : tensor<8x8x!tt.ptr<bf16>, #blocked>
     tt.return
+  }
+}
+
+// -----
+
+// COM: The descriptor comes from an scf.if whose two candidates disagree on
+// COM: padding (default PAD_ZERO vs PAD_NAN). DescriptorDefinitions::
+// COM: consistentPadding() returns nullopt, so the pass refuses the conversion
+// COM: even though block_io is present and every other constraint is met.
+// COM: @if_consistent_padding in descriptor-load.mlir is the positive twin --
+// COM: without it this case would also pass if the pass simply failed to trace
+// COM: through scf.if at all.
+// COM:
+// COM: Refusing is correct, and it is correct for two different reasons depending
+// COM: on how the IR was reached:
+// COM:
+// COM: (a) In the normal pipeline this input cannot occur. A load with divergent
+// COM:     padding provenance is expanded to pointers before TTGIR exists (see
+// COM:     @if_divergent_padding in
+// COM:     test/Triton/Intel/rewrite-tensor-descriptor-to-pointer.mlir), where the
+// COM:     padding becomes a runtime i1 and the out-of-bounds fill becomes a select
+// COM:     between a NaN splat and a zero splat. So refusing the 2D block path here
+// COM:     is correct AND complete -- there is no case left that it mishandles.
+// COM:
+// COM: (b) For standalone hand-written TTGIR like this fixture, refusing is still
+// COM:     correct, and it is no longer the only thing standing between the user and
+// COM:     wrong results: the LLVM lowering now rejects such a load outright rather
+// COM:     than silently defaulting to PAD_ZERO. See
+// COM:     test/TritonIntelGPU/descriptor-load-divergent-padding.mlir.
+// COM:
+// COM: Issue #8102 is the silent-PAD_ZERO degradation that those two changes close.
+// COM: This case's scope is narrower: only that the 2D block conversion is refused.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @if_divergent_padding
+  tt.func @if_divergent_padding(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: i32, %arg3: i32, %arg4: i64, %cond: i1) -> tensor<64x32xf16, #dot0> {
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %desc = scf.if %cond -> (!tt.tensordesc<64x32xf16>) {
+      %d1 = tt.make_tensor_descriptor %arg0, [%arg2, %arg3], [%arg4, %c1_i64] : <f16>, <64x32xf16>
+      scf.yield %d1 : !tt.tensordesc<64x32xf16>
+    } else {
+      %d2 = tt.make_tensor_descriptor %arg1, [%arg2, %arg3], [%arg4, %c1_i64] {padding = 2 : i32} : <f16>, <64x32xf16>
+      scf.yield %d2 : !tt.tensordesc<64x32xf16>
+    }
+    // CHECK: tt.descriptor_load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }

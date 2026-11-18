@@ -74,8 +74,8 @@ public:
           numEls *= vecTy.getNumElements();
         }
         auto baseName = elemTy == f16_ty
-                            ? "__builtin_spirv_ConvertE2M1ToFP16INTEL"
-                            : "__builtin_spirv_ConvertE2M1ToBF16INTEL";
+                            ? "__builtin_spirv_ConvertE2M1ToFP16EXT"
+                            : "__builtin_spirv_ConvertE2M1ToBF16EXT";
         auto i4Ty = rw.builder->getI4Type();
         v = rw.bitcast(v, VectorType::get({numEls}, i4Ty));
         return convertWithFunctionCall(rw, v, baseName, i4Ty, elemTy);
@@ -113,7 +113,8 @@ public:
         results.push_back(b.extract_element(table, idx1));
         results.push_back(b.extract_element(table, idx2));
       } else if (vecTy.getElementType() == b.builder->getI32Type()) {
-        ShapedType i8VecTy = VectorType::get(4, i8Ty);
+        VectorType i8VecTy = VectorType::get(4, i8Ty);
+        int32_t numI8Elements = i8VecTy.getNumElements();
         Value andVect =
             b.dense_val(vecTy, b.builder->getI32IntegerAttr(0x0F0F0F0F));
         Value shVec = b.dense_val(vecTy, b.builder->getI32IntegerAttr(4));
@@ -126,8 +127,7 @@ public:
           Value i2 = b.extract_element(i32IdxVec2, idx);
           Value idxVec1 = b.bitcast(i1, i8VecTy);
           Value idxVec2 = b.bitcast(i2, i8VecTy);
-          extractFloats(b, idxVec1, idxVec2, vecTy.getNumElements(), results,
-                        table);
+          extractFloats(b, idxVec1, idxVec2, numI8Elements, results, table);
         }
       } else {
         assert(vecTy.getElementType() == i8Ty);

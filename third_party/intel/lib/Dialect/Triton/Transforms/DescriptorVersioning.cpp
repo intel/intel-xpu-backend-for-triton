@@ -28,6 +28,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
@@ -74,8 +75,9 @@ SmallVector<DescCandidate> collectKCandidates(scf::WhileOp whileOp) {
       return;
 
     auto descType = cast<tt::TensorDescType>(descOp->getType());
-    unsigned divisor =
-        llvm::divideCeil(32u, descType.getBlockType().getElementTypeBitWidth());
+    unsigned divisor = llvm::divideCeil(
+        32u,
+        getIntOrFloatOrPtrBitWidth(descType.getBlockType().getElementType()));
     if (divisor <= 1)
       return;
 

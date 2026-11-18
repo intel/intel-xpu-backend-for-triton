@@ -72,12 +72,12 @@ convertActivityToMetric(xpupti::Pti_Activity *activity) {
   return metric;
 }
 
-uint32_t processActivityKernel(
-    XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
-    XpuptiProfiler::ExternIdToStateMap &externIdToState,
-    std::map<uint64_t, std::reference_wrapper<XpuptiProfiler::ExternIdState>>
-        &externIdToStateCache,
-    xpupti::Pti_Activity *activity) {
+uint32_t
+processActivityKernel(CorrIdToExternIdMap &corrIdToExternId,
+                      ExternIdToStateMap &externIdToState,
+                      std::map<uint64_t, std::reference_wrapper<ExternIdState>>
+                          &externIdToStateCache,
+                      xpupti::Pti_Activity *activity) {
   auto *kernel = reinterpret_cast<pti_view_record_kernel *>(activity);
   auto correlationId = kernel->_correlation_id;
   size_t externId = 0;
@@ -90,11 +90,10 @@ uint32_t processActivityKernel(
     // Non-graph kernels
     bool isMissingName = false;
     DataToEntryMap dataToEntry;
-    externIdToState.withRead(externId,
-                             [&](const XpuptiProfiler::ExternIdState &state) {
-                               isMissingName = state.isMissingName;
-                               dataToEntry = state.dataToEntry;
-                             });
+    externIdToState.withRead(externId, [&](const ExternIdState &state) {
+      isMissingName = state.isMissingName;
+      dataToEntry = state.dataToEntry;
+    });
     if (!isMissingName) {
       for (auto &[data, entry] : dataToEntry) {
         if (auto kernelMetric = convertActivityToMetric(activity)) {
@@ -128,12 +127,12 @@ uint32_t processActivityKernel(
   return correlationId;
 }
 
-uint32_t processActivity(
-    XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
-    XpuptiProfiler::ExternIdToStateMap &externIdToState,
-    std::map<uint64_t, std::reference_wrapper<XpuptiProfiler::ExternIdState>>
-        &externIdToStateCache,
-    xpupti::Pti_Activity *activity) {
+uint32_t
+processActivity(CorrIdToExternIdMap &corrIdToExternId,
+                ExternIdToStateMap &externIdToState,
+                std::map<uint64_t, std::reference_wrapper<ExternIdState>>
+                    &externIdToStateCache,
+                xpupti::Pti_Activity *activity) {
   auto correlationId = 0;
   switch (activity->_view_kind) {
   case PTI_VIEW_DEVICE_GPU_KERNEL: {
@@ -213,7 +212,7 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
   uint32_t maxCorrelationId = 0;
   pti_result status;
   xpupti::Pti_Activity *activity = nullptr;
-  std::map<uint64_t, std::reference_wrapper<XpuptiProfiler::ExternIdState>>
+  std::map<uint64_t, std::reference_wrapper<ExternIdState>>
       externIdToStateCache;
   do {
     status = xpupti::viewGetNextRecord<false>(buffer, validSize, &activity);
@@ -262,6 +261,22 @@ void XpuptiProfiler::XpuptiProfilerPimpl::callbackFn(
                                                scope.scopeId, 1, isMissingName,
                                                dataToEntry);
   } else if (callback_data->_phase == PTI_CB_PHASE_API_EXIT) {
+    // PTI reports the kernel name only on exit: re-enter the unnamed launch op
+    // under it, so the kernel's metric lands on the launch op itself.
+    const pti_gpu_op_details *op = callback_data->_operation_count > 0
+                                       ? callback_data->_operation_details
+                                       : nullptr;
+    if (op != nullptr && op->_operation_kind == PTI_GPU_OPERATION_KIND_KERNEL &&
+        op->_name != nullptr && *op->_name != '\0' &&
+        threadState.isApiExternOp &&
+        threadState.scopeStack.back().name.empty()) {
+      auto scopeId = threadState.scopeStack.back().scopeId;
+      threadState.exitOp();
+      threadState.enterOp(Scope(scopeId, op->_name));
+      threadState.profiler.correlation.correlate(
+          callback_data->_correlation_id, scopeId, 1, /*isMissingName=*/false,
+          threadState.dataToEntry);
+    }
     threadState.exitOp();
     threadState.profiler.correlation.submit(callback_data->_correlation_id);
   } else {

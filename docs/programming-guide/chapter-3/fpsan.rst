@@ -164,6 +164,33 @@ Important caveat:
 
 - This is ring arithmetic modulo ``2^w``, not IEEE arithmetic.
 
+Absolute Value
+==============
+
+Supported operation:
+
+- ``tl.abs(x)``
+
+Rewrite:
+
+- clear the sign bit of ``x``, preserving all other bits, including NaN bits
+
+This is implemented with signed integer absolute value on ``embed(x)``,
+mapping the most negative payload to zero before unembedding.
+
+Exact preserved properties:
+
+- ``abs(x) = abs(-x)``
+- ``abs(abs(x)) = abs(x)``
+- ``embed(abs(x)) >= 0`` in signed payload order
+
+Important caveat:
+
+- ``abs(x) = maximum(x, -x)`` except for negative zero. Its payload is the
+  most negative signed integer, which wraps back to itself under FPSan
+  negation. Thus ``maximum(x, -x)`` returns negative zero, while ``abs(x)``
+  returns positive zero.
+
 Min, Max, and Clamp
 ===================
 
@@ -261,6 +288,66 @@ Exact preserved properties:
 Important caveat:
 
 - There is no special fused-rounding behavior.
+
+Opt-in Expression Boundaries
+===========================
+
+Use ``tl.fpsan.barrier(x)`` (or ``gl.fpsan.barrier(x)`` in Gluon) to make an
+intermediate result significant to a FpSan comparison. The input must be a
+floating-point scalar or tensor; its type, shape, and layout are preserved.
+
+With FpSan enabled, the barrier applies a deterministic, non-homomorphic
+transformation to each element's payload. For example:
+
+.. code-block:: python
+
+   left = tl.fpsan.barrier(a * b) * c
+   right = a * tl.fpsan.barrier(b * c)
+
+   unfused = tl.fpsan.barrier(a * b) + c
+   fused = tl.fma(a, b, c)
+
+These pairs can have different FpSan results. Without the barriers, each pair
+has identical payload algebra. Put the barrier around the intermediate whose
+boundary matters: wrapping only the final result does not distinguish
+expressions that already have identical payloads.
+
+Every barrier uses the same transformation, independent of source location.
+Equivalent annotated computations therefore still agree across kernels. Each
+call applies the transformation again; nested barriers are not redundant.
+As with other FpSan checks, different computations can collide for particular
+inputs, so a matching result is not proof of equivalence.
+
+When FpSan is disabled, this function returns its input unchanged and emits no
+operation. It does not enforce rounding, prevent fusion or reassociation in
+normal compilation, or synchronize execution.
+
+Local Homomorphic Casts
+======================
+
+``tl.fpsan.homomorphic_cast(x, dtype)`` (also available in Gluon) explicitly
+retains the low payload bits when converting to a narrower floating-point type.
+It preserves addition and multiplication across the conversion. Other casts
+retain their existing FpSan semantics.
+
+Use a barrier to mark how far such a cast may move without changing the FpSan
+signature:
+
+.. code-block:: python
+
+   result = tl.fpsan.homomorphic_cast(tl.fpsan.barrier(a * b), tl.float16)
+
+The barrier mixes high payload bits into low bits before they are discarded.
+Moving the downcast ahead of the barrier therefore generally changes the result,
+including when the narrowed value is cast back to the original width before
+the barrier. This is a signature distinction, not a compiler optimization
+restriction; collisions remain possible.
+
+The source and destination must be floating-point types, and the destination
+must be the same width or narrower. Same-width conversions preserve the payload.
+Widening is rejected because signed extension is not a ring homomorphism.
+Without FpSan, this function performs an ordinary floating-point cast, with the
+optional ``fp_downcast_rounding`` argument interpreted as for ``tl.cast``.
 
 ----------------
 Unary Math Ops
@@ -368,14 +455,17 @@ Supported operations:
 
 Rewrite:
 
-- signed integer extension or truncation in payload space, followed by
-  ``unembed``
+- signed integer extension when widening
+- when narrowing, fold the discarded high payload bits into the retained bits,
+  then truncate and ``unembed``
+- optionally, set ``TRITON_FPSAN_HOMOMORPHIC_CASTS=1`` to use simple payload
+  truncation when narrowing; this preserves addition across independently
+  downcast partial reductions
 
 Exact preserved properties:
 
 - ``0``, ``+1``, and ``-1`` remain stable across the conversion
 - sign-extension behavior in the payload domain
-- truncation drops high payload bits
 - an upcast followed by a downcast is the identity
 
 Important caveat:
@@ -406,16 +496,17 @@ Important caveat:
 - The same raw-payload interpretation is reused by scaled-dot paths for
   ``e2m1``.
 
-----------------------------
-Pure Extern Elementwise Ops
-----------------------------
+------------------------------------------
+Pure Extern and Inline-Asm Elementwise Ops
+------------------------------------------
 
 Supported operation:
 
-- ``tl.extern_elementwise`` when all of the following hold:
+- ``tl.extern_elementwise`` and ``tl.inline_asm_elementwise`` when all of the
+  following hold:
 
   - the op is ``pure``
-  - the result type is float-like
+  - every result type is float-like
   - there is at least one operand
   - every operand is numeric
 
@@ -423,19 +514,22 @@ Rewrite:
 
 - rotate each operand payload by its argument index
 - sum the rotated payloads
-- xor the result with a stable hash of the symbol name
+- xor the result with a stable hash of the symbol name or inline-asm string;
+  inline-asm result indices are also included for multi-result operations
 - unembed
 
 Exact preserved properties:
 
 - deterministic dependence on all operands and on operand order
-- deterministic distinction between different external symbols
+- deterministic distinction between different external symbols, inline-asm
+  strings, and inline-asm result indices
 - mixed float and integer operands are supported; float operands are embedded,
   integer operands are used directly after signed casting to the result width
 
 Important caveat:
 
-- This is a structural tag, not a numeric model of the external function.
+- This is a structural tag, not a numeric model of the external function or
+  inline assembly.
 
 ---------------------------
 Gluon MMA and Tensor Memory
@@ -449,7 +543,7 @@ Supported Gluon operations include:
 - ``tcgen05_copy`` and ``tcgen05_commit``
 - ``allocate_tensor_memory``
 - tensor-memory descriptor methods such as ``load``, ``load_min``,
-  ``load_max``, ``store``, ``slice``, ``index``, and ``_reinterpret``
+  ``load_max``, ``store``, ``slice``, ``index``, and ``reinterpret``
 - AMD ``mfma``, ``mfma_scaled``, ``wmma``, ``wmma_scaled``, and
   ``scaled_upcast``
 

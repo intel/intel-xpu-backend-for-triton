@@ -11,7 +11,15 @@ public:
   XpuRuntime() : Runtime(DeviceType::XPU) {}
   ~XpuRuntime() = default;
 
-  // Set by Session::makeProfiler for the xpupti backend.
+  // Set by Session::makeProfiler for any XPU session. There is exactly one
+  // queue process-wide, set once at session start -- not one per device --
+  // so XPU instrumentation only supports a single GPU today. `getDevice()`
+  // still reports a distinct ordinal per visible device (see
+  // `proton_utils.cpp`'s `getDeviceKey`), but every call that resolves a
+  // stream or allocates a buffer (`getPriorityStream`,
+  // `allocateDeviceBuffer`, `allocateHostBuffer`, ...) goes through this one
+  // queue regardless of which device ordinal asked, so multi-GPU callers
+  // would silently get device 0's resources for every device.
   void setSyclQueue(void *syclQueue) { syclQueue_ = syclQueue; }
   void *getSyclQueue() const { return syclQueue_; }
 

@@ -111,14 +111,6 @@ The driver (`third_party/intel/backend/driver.py`) integrates with:
 | INT8, FP8 (E5M2/E4M3FN) | 8 | 4 | 32 |
 | FP4 (E2M1) | 4 | 4 (with fp4KPack=2) | 64 |
 
-### WarpEncodingAttr Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `sizePerThread` | ArrayRef<unsigned> | Elements computed per thread in each dimension |
-| `threadsPerWarp` | ArrayRef<unsigned> | Number of threads per warp in each dimension |
-| `order` | ArrayRef<unsigned> | Access order (fastest-changing dimension first) |
-
 ### Subgroup2DBlockEncodingAttr Parameters
 
 | Parameter | Type | Constraint | Description |

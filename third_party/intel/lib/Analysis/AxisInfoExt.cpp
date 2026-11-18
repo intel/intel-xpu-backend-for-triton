@@ -1,7 +1,9 @@
 #include "intel/include/Analysis/AxisInfoExt.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <numeric>
@@ -66,7 +68,7 @@ public:
           resTy ? to_vector(resTy.getShape()) : AxisInfo::DimVectorT(rank, 1);
       AxisInfo::DimVectorT contiguity(rank, 1);
       AxisInfo::DimVectorT divisibility(
-          rank, highestPowOf2Divisor<int64_t>(constantValue.value()));
+          rank, highestPowOf2Divisor<int64_t>(constantValue->getSExtValue()));
       return AxisInfo(contiguity, divisibility, constancy, constantValue);
     }
     AxisInfo::DimVectorT contiguity;
@@ -96,8 +98,8 @@ protected:
     return std::gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
-  virtual std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
-                                                  const AxisInfo &rhs) {
+  virtual std::optional<APInt> getConstantValue(OpTy op, const AxisInfo &lhs,
+                                                const AxisInfo &rhs) {
     return {};
   }
 };
@@ -105,6 +107,11 @@ protected:
 //===----------------------------------------------------------------------===//
 // Intel-specific visitors
 //===----------------------------------------------------------------------===//
+
+static AxisInfo getPessimisticDescriptorState(TensorDescInterface descType) {
+  AxisInfo::DimVectorT ones(descType.getBlockType().getRank(), 1);
+  return AxisInfo(ones, ones, ones);
+}
 
 /// Compute AxisInfo for ops that create a tensor descriptor.
 ///
@@ -141,7 +148,7 @@ makeTensorDescAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
     return strideVal;
   };
 
-  unsigned elemBytes = ceil<unsigned>(elemTy.getIntOrFloatBitWidth(), 8);
+  unsigned elemBytes = ceil<unsigned>(getIntOrFloatOrPtrBitWidth(elemTy), 8);
   for (unsigned dim = 0; dim < rank; ++dim) {
     // The maximum contiguity is the divisibility of boundary shape, which is
     // the case when stride is 1. Take an example of !tt.ptr<tensor<4x4xi8>>: if
@@ -153,11 +160,13 @@ makeTensorDescAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
     //  [base + 8, base + 9, base +10, nullptr,]
     //  [nullptr,  nullptr,  nullptr,  nullptr,]]
     // clang-format on
-    // The contiguity of the two dim should be 1.
-    int64_t contiguous = shapeInfo[dim].getDivisibility(0);
-    contiguity.push_back(strideInfo[dim].getConstantValue() == 1
-                             ? std::min(contiguous, blkShape[dim])
-                             : 1);
+    // The contiguity of the two dim should be 1. Divisibility hints need not be
+    // powers of two, so only the power-of-two part bounds the contiguity.
+    int64_t shapeDiv = shapeInfo[dim].getDivisibility(0);
+    int64_t contiguous = shapeDiv & -shapeDiv;
+    const std::optional<APInt> &stride = strideInfo[dim].getConstantValue();
+    contiguity.push_back(
+        stride && stride->isOne() ? std::min(contiguous, blkShape[dim]) : 1);
 
     // The divisibility of dim d is bounded by the stride of
     // the *other* dimension;
@@ -183,9 +192,11 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     LDBG("MakeTensorDescOpAxisInfoVisitor: " << *op);
 
-    RankedTensorType tensorType =
-        cast<TensorDescType>(op.getResult().getType()).getBlockType();
-    unsigned rank = op.getShape().size();
+    auto descType = cast<TensorDescType>(op.getResult().getType());
+    RankedTensorType tensorType = descType.getBlockType();
+    unsigned rank = tensorType.getRank();
+    if (op.getShape().size() != rank)
+      return getPessimisticDescriptorState(descType);
 
     assert(operands.size() >= rank * 2 + 1 &&
            "Insufficient operands for MakeTensorDescOp AxisInfo analysis");
@@ -245,6 +256,60 @@ public:
   }
 };
 
+/// A field of a descriptor read with ttig.extract_desc. The descriptor's
+/// address-level AxisInfo bounds its fields: divisibility[d] (bytes) divides
+/// the base and every stride other than stride[d] (scaled to bytes), and a
+/// contiguous dim has stride 1 and a shape divisible by its contiguity.
+class ExtractDescOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<ttgi::ExtractDescOp> {
+public:
+  using AxisInfoVisitorImpl<ttgi::ExtractDescOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(ttgi::ExtractDescOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    LDBG("ExtractDescOpAxisInfoVisitor: " << *op);
+
+    auto descType = cast<TensorDescType>(op.getDesc().getType());
+    RankedTensorType blockType = descType.getBlockType();
+    const AxisInfo &desc = operands[0]->getValue();
+    unsigned rank = blockType.getRank();
+    if (static_cast<unsigned>(desc.getRank()) != rank)
+      return AxisInfo::getPessimisticValueState(op.getResult());
+
+    int64_t elemBytes = ceil<int64_t>(
+        getIntOrFloatOrPtrBitWidth(blockType.getElementType()), 8);
+    Type resultTy = op.getResult().getType();
+    auto scalar = [&](int64_t divisibility, bool isOne = false) {
+      std::optional<APInt> constant;
+      if (isOne)
+        constant = APInt(resultTy.getIntOrFloatBitWidth(), 1);
+      return AxisInfo({1}, {std::max<int64_t>(divisibility, 1)}, {1}, constant);
+    };
+    // Largest byte divisibility of a contiguous dim. It divides the base and
+    // every stride but that dim's own, which is 1.
+    auto maxDivisibility = [&]() {
+      int64_t div = 1;
+      for (unsigned d = 0; d < rank; ++d)
+        if (desc.getContiguity(d) > 1)
+          div = std::max(div, desc.getDivisibility(d));
+      return div;
+    };
+
+    unsigned field = op.getIndex();
+    if (field == 2 * rank)
+      return scalar(maxDivisibility());
+    if (field >= rank) {
+      unsigned dim = field - rank;
+      if (desc.getContiguity(dim) > 1)
+        return scalar(1, /*isOne=*/true);
+      int64_t div = maxDivisibility();
+      return scalar(div / std::gcd(div, elemBytes));
+    }
+    return scalar(desc.getContiguity(field));
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // LLVM dialect and IndexCast visitors
 //===----------------------------------------------------------------------===//
@@ -272,15 +337,13 @@ public:
     auto intAttr = dyn_cast<IntegerAttr>(op.getValue());
     auto boolAttr = dyn_cast<BoolAttr>(op.getValue());
     if (intAttr || boolAttr) {
-      int64_t value{};
-      if (intAttr)
-        value = intAttr.getValue().getSExtValue();
-      else
-        value = boolAttr.getValue() ? 1 : 0;
-      return AxisInfo(/*contiguity=*/{1},
-                      /*divisibility=*/{highestPowOf2Divisor(value)},
-                      /*constancy=*/{1},
-                      /*knownConstantValue=*/{value});
+      APInt value =
+          intAttr ? intAttr.getValue() : APInt(1, boolAttr.getValue());
+      return AxisInfo(
+          /*contiguity=*/{1},
+          /*divisibility=*/{highestPowOf2Divisor(value.getSExtValue())},
+          /*constancy=*/{1},
+          /*knownConstantValue=*/value);
     }
     // TODO: generalize to dense attr
     auto splatAttr = dyn_cast<SplatElementsAttr>(op.getValue());
@@ -298,7 +361,7 @@ public:
           AxisInfo::DimVectorT(ty.getRank(), highestPowOf2Divisor(value)),
           /*constancy=*/
           AxisInfo::DimVectorT(ty.getShape().begin(), ty.getShape().end()),
-          /*knownConstantValue=*/{value});
+          /*knownConstantValue=*/apValue);
     }
     return AxisInfo();
   }
@@ -341,12 +404,13 @@ private:
     return std::gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
-  std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
-                                          const AxisInfo &rhs) override {
-    if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value()) {
-      return {lhs.getConstantValue().value() + rhs.getConstantValue().value()};
-    }
+  std::optional<APInt> getConstantValue(OpTy op, const AxisInfo &lhs,
+                                        const AxisInfo &rhs) override {
+    const std::optional<APInt> &lhsValue = lhs.getConstantValue();
+    const std::optional<APInt> &rhsValue = rhs.getConstantValue();
+    if (lhsValue && rhsValue &&
+        lhsValue->getBitWidth() == rhsValue->getBitWidth())
+      return *lhsValue + *rhsValue;
     return {};
   }
 };
@@ -361,6 +425,7 @@ AxisInfoAnalysisExt::AxisInfoAnalysisExt(DataFlowSolver &solver)
     : triton::AxisInfoAnalysis(solver) {
   visitors.append<MakeTensorDescOpAxisInfoVisitor>();
   visitors.append<DescriptorLoadOpAxisInfoVisitor>();
+  visitors.append<ExtractDescOpAxisInfoVisitor>();
   visitors.append<CastOpAxisInfoVisitor<arith::IndexCastOp>>();
   // TODO: Remove rules for LLVM::ConstantOp, LLVM::AddOp
   // when scf.for supports integer induction variables
@@ -371,6 +436,44 @@ AxisInfoAnalysisExt::AxisInfoAnalysisExt(DataFlowSolver &solver)
 triton::AxisInfoAnalysis *
 AxisInfoAnalysisExt::loadAnalysis(DataFlowSolver *solver) {
   return solver->load<AxisInfoAnalysisExt>();
+}
+
+void AxisInfoAnalysisExt::setToEntryState(
+    dataflow::Lattice<AxisInfo> *lattice) {
+  Value value = lattice->getAnchor();
+  auto descType = dyn_cast<TensorDescInterface>(value.getType());
+  if (!descType) {
+    triton::AxisInfoAnalysis::setToEntryState(lattice);
+    return;
+  }
+
+  // Entry states must match the descriptor visitor's block rank (#8170).
+  AxisInfo state = getPessimisticDescriptorState(descType);
+  AxisInfo::DimVectorT contiguity = state.getContiguity();
+  AxisInfo::DimVectorT divisibility = state.getDivisibility();
+  AxisInfo::DimVectorT constancy = state.getConstancy();
+  auto blockArg = dyn_cast<BlockArgument>(value);
+  if (blockArg && blockArg.getOwner()->isEntryBlock()) {
+    if (auto func =
+            dyn_cast<FunctionOpInterface>(blockArg.getOwner()->getParentOp()))
+      AxisInfo::initPessimisticStateFromFunc(blockArg.getArgNumber(), func,
+                                             &contiguity, &divisibility,
+                                             &constancy);
+  } else if (Operation *op = value.getDefiningOp()) {
+    AxisInfo::initDimVectorFromHint(op->getDiscardableAttr("tt.contiguity"),
+                                    &contiguity);
+    AxisInfo::initDimVectorFromHint(op->getDiscardableAttr("tt.divisibility"),
+                                    &divisibility);
+    AxisInfo::initDimVectorFromHint(op->getDiscardableAttr("tt.constancy"),
+                                    &constancy);
+  }
+
+  unsigned rank = descType.getBlockType().getRank();
+  for (AxisInfo::DimVectorT *vec : {&contiguity, &divisibility, &constancy})
+    if (vec->size() != rank)
+      *vec = AxisInfo::DimVectorT(rank, 1);
+  propagateIfChanged(
+      lattice, lattice->join(AxisInfo(contiguity, divisibility, constancy)));
 }
 
 //===----------------------------------------------------------------------===//
@@ -436,7 +539,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   // Get the pointee type if we have a tensor of ptrs to compute contiguity for
   if (auto ptrTy = dyn_cast<PointerType>(elemTy))
     elemTy = ptrTy.getPointeeType();
-  auto elemNumBits = elemTy.getIntOrFloatBitWidth();
+  auto elemNumBits = getIntOrFloatOrPtrBitWidth(elemTy);
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);

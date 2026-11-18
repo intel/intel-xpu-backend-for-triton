@@ -26,7 +26,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %tmp0_7 = arith.addi %tmp0_6, %tmp0 : tensor<1024x1xi32, #blocked>
     %tmp0_8 = tt.splat %in_ptr0 : !tt.ptr<f32> -> tensor<1024x1x!tt.ptr<f32>, #blocked>
     %tmp0_9 = tt.addptr %tmp0_8, %tmp0_7 : tensor<1024x1x!tt.ptr<f32>, #blocked>, tensor<1024x1xi32, #blocked>
-    %tmp0_10 = tt.load %tmp0_9 evictionPolicy = evict_last {ttig.block_io = "row_major"} : tensor<1024x1x!tt.ptr<f32>, #blocked>
+    %tmp0_10 = tt.load %tmp0_9 {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>, ttig.block_io = "row_major"} : tensor<1024x1x!tt.ptr<f32>, #blocked>
     %0 = arith.muli %xoffset, %c3_i32 : i32
     %1 = tt.splat %0 : i32 -> tensor<1024x1xi32, #blocked>
     %2 = arith.addi %y0, %1 : tensor<1024x1xi32, #blocked>

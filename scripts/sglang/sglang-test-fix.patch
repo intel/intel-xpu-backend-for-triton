@@ -1,0 +1,741 @@
+diff --git a/python/sglang/kernels/ops/attention/dsv4/compress.py b/python/sglang/kernels/ops/attention/dsv4/compress.py
+index bbe5e111f0..ca6878e79f 100644
+--- a/python/sglang/kernels/ops/attention/dsv4/compress.py
++++ b/python/sglang/kernels/ops/attention/dsv4/compress.py
+@@ -20,23 +20,27 @@ from .kv_layout import KVLayout
+ from .utils import make_name
+ 
+ _is_xpu = is_xpu()
+-if _is_xpu:
+-    from sgl_kernel import compress_norm_rope_store as compress_norm_rope_store_xpu
+-    from sgl_kernel import (
+-        flash_compress4_decode,
+-        flash_compress4_prefill,
+-        flash_compress128_decode,
+-        flash_compress128_prefill,
+-        plan_compress_decode,
+-        plan_compress_decode_legacy,
+-        plan_compress_prefill,
+-        plan_compress_prefill_legacy,
+-    )
++try:
++    if _is_xpu:
++        from sgl_kernel import compress_norm_rope_store as compress_norm_rope_store_xpu
++        from sgl_kernel import (
++            flash_compress4_decode,
++            flash_compress4_prefill,
++            flash_compress128_decode,
++            flash_compress128_prefill,
++            plan_compress_decode,
++            plan_compress_decode_legacy,
++            plan_compress_prefill,
++            plan_compress_prefill_legacy,
++        )
+ 
+-    _XPU_COMPRESS_FNS = {
+-        4: (flash_compress4_decode, flash_compress4_prefill),
+-        128: (flash_compress128_decode, flash_compress128_prefill),
+-    }
++        _XPU_COMPRESS_FNS = {
++            4: (flash_compress4_decode, flash_compress4_prefill),
++            128: (flash_compress128_decode, flash_compress128_prefill),
++        }
++except ImportError:
++    # sgl-kernel-xpu is optional, so just run without the DSv4 compress kernels.
++    _is_xpu = False
+ 
+ 
+ if TYPE_CHECKING:
+diff --git a/python/sglang/kernels/ops/attention/dsv4/norm_rope.py b/python/sglang/kernels/ops/attention/dsv4/norm_rope.py
+index 24acfae2a8..26a8ad0d8d 100644
+--- a/python/sglang/kernels/ops/attention/dsv4/norm_rope.py
++++ b/python/sglang/kernels/ops/attention/dsv4/norm_rope.py
+@@ -16,9 +16,15 @@ from .utils import make_name
+ _is_hip = is_hip()
+ _is_xpu = is_xpu()
+ 
+-if _is_xpu:
+-    from sgl_kernel import fused_k_norm_rope_flashmla as fused_k_norm_rope_flashmla_xpu
+-    from sgl_kernel import fused_q_norm_rope as fused_q_norm_rope_xpu
++try:
++    if _is_xpu:
++        from sgl_kernel import (
++            fused_k_norm_rope_flashmla as fused_k_norm_rope_flashmla_xpu,
++        )
++        from sgl_kernel import fused_q_norm_rope as fused_q_norm_rope_xpu
++except ImportError:
++    # sgl-kernel-xpu is optional, so just run without the DSv4 elementwise kernels.
++    _is_xpu = False
+ 
+ 
+ @cache_once
+diff --git a/python/sglang/kernels/ops/quantization/fp8_kernel.py b/python/sglang/kernels/ops/quantization/fp8_kernel.py
+index 44f55a7b54..eaa80c726f 100644
+--- a/python/sglang/kernels/ops/quantization/fp8_kernel.py
++++ b/python/sglang/kernels/ops/quantization/fp8_kernel.py
+@@ -48,7 +48,11 @@ if _is_cuda:
+         per_token_group_quant,
+     )
+ elif _is_xpu:
+-    from sgl_kernel import sgl_per_tensor_quant_fp8, sgl_per_token_quant_fp8
++    try:
++        from sgl_kernel import sgl_per_tensor_quant_fp8, sgl_per_token_quant_fp8
++    except ImportError:
++        # sgl-kernel-xpu is optional, so just run without the FP8 quant kernels.
++        pass
+ 
+ if _is_musa:
+     from sgl_kernel import sgl_per_token_quant_fp8
+diff --git a/test/registered/attention/test_triton_attention_kernels.py b/test/registered/attention/test_triton_attention_kernels.py
+index 22ff81cb61..0473d9184e 100644
+--- a/test/registered/attention/test_triton_attention_kernels.py
++++ b/test/registered/attention/test_triton_attention_kernels.py
+@@ -22,7 +22,12 @@ from sglang.kernels.ops.attention.prefill_attention import (
+ )
+ from sglang.srt.layers.attention.triton_backend import TritonAttnBackend
+ from sglang.srt.model_executor.forward_mode import ForwardMode
+-from sglang.srt.utils import get_device
++from sglang.srt.utils import (
++    get_device,
++    get_device_core_count,
++    get_device_module,
++    is_xpu,
++)
+ from sglang.srt.utils.common import temp_set_env
+ from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+ from sglang.test.kernels.extend_attention import redundant_attention
+@@ -98,13 +103,18 @@ def extend_attention_fwd_torch(
+ 
+         final_mask = causal_mask & window_mask
+ 
+-        attn_scores = (
+-            torch.einsum("qhd,khd->qhk", q_extend, k_full_hq) * scale
+-        )  # [extend_len, H_Q, total_len]
+-        attn_scores = attn_scores.masked_fill(~final_mask.unsqueeze(1), float("-inf"))
++        for c in range(0, extend_len, 1024):
++            attn_scores = (
++                torch.einsum("qhd,khd->qhk", q_extend[c : c + 1024], k_full_hq) * scale
++            )  # [chunk, H_Q, total_len]
++            attn_scores = attn_scores.masked_fill(
++                ~final_mask[c : c + 1024].unsqueeze(1), float("-inf")
++            )
+ 
+-        attn_weights = F.softmax(attn_scores, dim=-1)
+-        o[q_start:q_end] = torch.einsum("qhk,khd->qhd", attn_weights, v_full_hq)
++            attn_weights = F.softmax(attn_scores, dim=-1)
++            o[q_start:q_end][c : c + 1024] = torch.einsum(
++                "qhk,khd->qhd", attn_weights, v_full_hq
++            )
+ 
+ 
+ def decode_attention_fwd_torch(
+@@ -953,6 +963,7 @@ class TestTritonAttention(CustomTestCase):
+         so every replay must see its own flag and match an eager run without rotation.
+         """
+         device = get_device()
++        device_module = get_device_module()
+         dtype = torch.bfloat16
+         bs, pool, D, max_kv_splits = 8, 8192, 128, 8
+         rounds = [
+@@ -966,9 +977,7 @@ class TestTritonAttention(CustomTestCase):
+             backend = TritonAttnBackend.__new__(TritonAttnBackend)
+             backend.num_head, backend.num_kv_head = H_Q, H_KV
+             backend.max_kv_splits = max_kv_splits
+-            backend.device_core_count = torch.cuda.get_device_properties(
+-                device
+-            ).multi_processor_count
++            backend.device_core_count = get_device_core_count()
+             backend.static_kv_splits = False
+             backend.enable_deterministic = False
+             backend.split_tile_size = None
+@@ -1025,9 +1034,9 @@ class TestTritonAttention(CustomTestCase):
+ 
+             update(rounds[1][0])
+             decode(o, backend.cuda_graph_uneven_batch)
+-            torch.cuda.synchronize()
+-            graph = torch.cuda.CUDAGraph()
+-            with torch.cuda.graph(graph):
++            device_module.synchronize()
++            graph = torch.xpu.XPUGraph() if is_xpu() else torch.cuda.CUDAGraph()
++            with device_module.graph(graph):
+                 decode(o, backend.cuda_graph_uneven_batch)
+             flag_ptr = backend.cuda_graph_uneven_batch.data_ptr()
+             for lens, uneven in rounds:
+@@ -1182,15 +1191,22 @@ class TestTritonAttention(CustomTestCase):
+             v_scale=1.0,
+         )
+ 
+-        # Build unified KV indices
+-        extend_kv_indices = torch.arange(
+-            total_token_num - extend_token_num,
+-            total_token_num,
+-            dtype=torch.int64,
+-            device=device,
++        # Build unified KV indices. Prefix and extend tokens are interleaved per
++        # request in k_buffer/v_buffer, so the extend positions are not one
++        # contiguous range at the end of the buffer.
++        extend_kv_indices = torch.empty(
++            (extend_token_num,), dtype=torch.int64, device=device
+         )
+         extend_start_loc = torch.zeros((B,), dtype=torch.int32, device=device)
+         extend_start_loc[1:] = torch.cumsum(b_seq_len_extend[:-1], 0)
++        for i in range(B):
++            extend_kv_indices[
++                extend_start_loc[i] : extend_start_loc[i] + b_seq_len_extend[i]
++            ] = torch.arange(
++                b_start_loc[i] + b_seq_len_prefix[i],
++                b_start_loc[i] + b_seq_len[i],
++                device=device,
++            )
+ 
+         unified_kv_indptr, unified_kv_indices, prefix_lens = build_unified_kv_indices(
+             kv_indptr,
+diff --git a/python/sglang/srt/layers/activation.py b/python/sglang/srt/layers/activation.py
+index 8b28083108..0fa5945d0e 100644
+--- a/python/sglang/srt/layers/activation.py
++++ b/python/sglang/srt/layers/activation.py
+@@ -105,7 +105,23 @@ if _is_cuda:
+         return _act_and_mul(_jit_gelu_tanh_and_mul, _sgl_gelu_tanh_and_mul, input, out)
+ 
+ elif _is_xpu:
+-    from sgl_kernel import gelu_and_mul, gelu_tanh_and_mul, silu_and_mul
++    try:
++        from sgl_kernel import gelu_and_mul, gelu_tanh_and_mul, silu_and_mul
++    except ImportError:
++        # sgl-kernel-xpu is optional. Fall back to the same math forward_native
++        # uses, keeping the (input, out) signature the forward_xpu methods expect.
++        def silu_and_mul(input: torch.Tensor, out: torch.Tensor) -> None:
++            d = input.shape[-1] // 2
++            out.copy_(F.silu(input[..., :d]) * input[..., d:])
++
++        def gelu_and_mul(input: torch.Tensor, out: torch.Tensor) -> None:
++            d = input.shape[-1] // 2
++            out.copy_(F.gelu(input[..., :d], approximate="none") * input[..., d:])
++
++        def gelu_tanh_and_mul(input: torch.Tensor, out: torch.Tensor) -> None:
++            d = input.shape[-1] // 2
++            out.copy_(F.gelu(input[..., :d], approximate="tanh") * input[..., d:])
++
+ elif _is_hip:
+     from sgl_kernel import gelu_and_mul, gelu_quick, gelu_tanh_and_mul, silu_and_mul
+ elif _is_musa:
+diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
+index d423975a63..40eb8a4099 100644
+--- a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
++++ b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
+@@ -87,7 +87,12 @@ elif _is_hip:
+     # Note: vllm_ops is not needed for HIP when _use_aiter=False
+     # because the code uses moe_sum_reduce_triton as fallback (line 619)
+ elif _is_xpu:
+-    from sgl_kernel import moe_sum_reduce, silu_and_mul
++    try:
++        from sgl_kernel import moe_sum_reduce, silu_and_mul
++    except ImportError:
++        # sgl-kernel-xpu is optional, so fall through to the native torch
++        # silu_and_mul and the Triton moe_sum_reduce_triton below.
++        _is_xpu = False
+ elif _is_musa:
+     from sgl_kernel import moe_sum_reduce
+ 
+@@ -109,6 +114,39 @@ padding_size = get_moe_padding_size(_use_aiter)
+ logger = logging.getLogger(__name__)
+ 
+ 
++def _sgl_fused_experts_supports(
++    hidden_states: torch.Tensor,
++    w1: torch.Tensor,
++    w2: torch.Tensor,
++    *,
++    quantized: bool,
++) -> bool:
++    """Whether sgl-kernel-xpu's grouped GEMM can take these operands.
++
++    The unquantized XPU route ends in ``moe_grouped_mm_nt_xe20``, which is built
++    for bfloat16 only -- its kernels live under ``kernels/moe/xe20/bf16`` and the
++    launcher template carries no element type -- and which reads A and B through
++    2D block loads whose pitch is the row length in bytes, so the hardware wants
++    that 16-byte aligned. The kernel checks neither: another dtype aborts from
++    the middle of the model, and an unaligned row silently returns wrong numbers.
++    The rule is known on the sgl-kernel side -- its own ``silu_and_mul`` wrapper
++    rejects a row that is not a multiple of 16 bytes -- just not applied here.
++
++    So keep operands it cannot handle on the Triton path below, which has no such
++    restriction. The quantized routes go to different operators
++    (``moe_grouped_mm_nt_xe20_fp8_w8a16``, ``_w4a16``) whose envelope this has not
++    characterized, so they are left exactly as they were.
++    """
++    if quantized:
++        return True
++    for tensor in (hidden_states, w1, w2):
++        if tensor.dtype != torch.bfloat16:
++            return False
++        if (tensor.shape[-1] * tensor.element_size()) % 16 != 0:
++            return False
++    return True
++
++
+ def _validate_fused_swiglu_interleaved(
+     *,
+     activation: str,
+@@ -1299,7 +1337,18 @@ def fused_moe(
+     Returns:
+     - torch.Tensor: The output tensor after applying the MoE layer.
+     """
+-    if _is_xpu and not get_moe_runner_backend().is_triton():
++    if (
++        _is_xpu
++        and not get_moe_runner_backend().is_triton()
++        and _sgl_fused_experts_supports(
++            hidden_states,
++            w1,
++            w2,
++            quantized=(
++                use_fp8_w8a8 or use_int8_w8a8 or use_int8_w8a16 or use_int4_w4a16
++            ),
++        )
++    ):
+         topk_weight, topk_ids, _ = topk_output
+         topk_weight, topk_ids = route_dropped_experts_to_local(
+             topk_weights=topk_weight, topk_ids=topk_ids
+diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
+index 1c7b31b054..df39754fa8 100644
+--- a/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
++++ b/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
+@@ -18,6 +18,61 @@ _is_musa = is_musa()
+ if _is_cuda or _is_hip or _is_xpu or _is_musa:
+     from sglang.kernels.ops.moe import moe_align_block_size as sgl_moe_align_block_size
+ 
++if _is_xpu:
++    try:
++        import sgl_kernel  # noqa: F401
++    except ImportError:
++        # sgl-kernel-xpu is optional, but sgl_moe_align_block_size resolves to a
++        # kernel with no XPU implementation, so without it the Triton MoE kernels
++        # have no way to group tokens by expert. Group them with torch instead:
++        # same layout, sentinel padding and per-block expert ids.
++        def sgl_moe_align_block_size(
++            topk_ids: torch.Tensor,
++            num_experts: int,
++            block_size: int,
++            sorted_ids: torch.Tensor,
++            expert_ids: torch.Tensor,
++            num_tokens_post_pad: torch.Tensor,
++            cumsum_buffer: torch.Tensor,
++            pad_sorted_token_ids: bool = False,
++            ignore_invalid_expert: bool = False,
++        ) -> None:
++            numel = topk_ids.numel()
++            flat = topk_ids.flatten().to(torch.int64)
++            if bool((flat < 0).any()):
++                raise NotImplementedError(
++                    "the torch moe_align_block_size fallback does not handle the "
++                    "expert-parallel -1 sentinel; install sgl-kernel-xpu for EP"
++                )
++            order = torch.argsort(flat, stable=True).cpu()
++            counts = torch.bincount(flat, minlength=num_experts).cpu().tolist()
++
++            # Tokens past num_tokens_post_pad are never read, but the padding
++            # sentinel numel is >= num_valid_tokens so the kernels mask it out.
++            sorted_ids.fill_(numel)
++            expert_ids.zero_()
++
++            blocks, block_experts, pos = [], [], 0
++            for expert, count in enumerate(counts):
++                if count == 0:
++                    continue
++                num_blocks = triton.cdiv(count, block_size)
++                block = torch.full((num_blocks * block_size,), numel, dtype=torch.int32)
++                block[:count] = order[pos : pos + count].to(torch.int32)
++                pos += count
++                blocks.append(block)
++                block_experts += [expert] * num_blocks
++
++            if not blocks:
++                num_tokens_post_pad.zero_()
++                return
++            tokens = torch.cat(blocks)
++            sorted_ids[: tokens.numel()].copy_(tokens)
++            expert_ids[: len(block_experts)].copy_(
++                torch.tensor(block_experts, dtype=torch.int32)
++            )
++            num_tokens_post_pad.fill_(tokens.numel())
++
+ if _is_cuda:
+     from sglang.kernels.ops.moe.moe_align_small_numel import (
+         SMALL_NUMEL_LIMIT,
+diff --git a/python/sglang/srt/layers/moe/topk.py b/python/sglang/srt/layers/moe/topk.py
+index 834cb1d432..942de5b3cd 100644
+--- a/python/sglang/srt/layers/moe/topk.py
++++ b/python/sglang/srt/layers/moe/topk.py
+@@ -268,7 +268,28 @@ if _is_cuda or _is_hip or _is_xpu:
+         # XPU has no tvm_ffi; use the AOT symbols from sgl_kernel directly.
+         # topk_sigmoid was aligned with the post-#28715 CUDA signature in
+         # sgl-kernel-xpu#285.
+-        from sgl_kernel import topk_sigmoid, topk_softmax
++        try:
++            from sgl_kernel import topk_sigmoid, topk_softmax
++        except ImportError:
++            # sgl-kernel-xpu is optional. Route softmax scoring through torch and
++            # leave topk_sigmoid undefined, exactly as the branch below does when
++            # its JIT kernel is missing.
++            def topk_softmax(
++                topk_weights: torch.Tensor,
++                topk_ids: torch.Tensor,
++                gating_output: torch.Tensor,
++                renormalize: bool = False,
++            ) -> None:
++                weights, ids = torch.topk(
++                    torch.softmax(gating_output.float(), dim=-1),
++                    topk_ids.shape[1],
++                    dim=-1,
++                )
++                if renormalize:
++                    weights = weights / weights.sum(dim=-1, keepdim=True)
++                topk_weights.copy_(weights)
++                topk_ids.copy_(ids)
++
+     else:
+         from sglang.kernels.ops.moe import topk_softmax
+ if _use_aiter:
+diff --git a/test/registered/moe/test_fused_moe.py b/test/registered/moe/test_fused_moe.py
+index bd46a16f12..7c6cfc296e 100644
+--- a/test/registered/moe/test_fused_moe.py
++++ b/test/registered/moe/test_fused_moe.py
+@@ -120,7 +120,12 @@ class TestFusedMOE(CustomTestCase):
+         if use_fp8_w8a8:
+             # AssertionError: fp8e4nv data type is not supported on CUDA arch < 89
+             capability = get_device_capability()
+-            if not _is_hip and not (capability[0] >= 9 or capability == (8, 9)):
++            # get_device_capability() reports (None, None) on XPU, so treat an
++            # unknown capability as unsupported rather than raising a TypeError.
++            if not _is_hip and (
++                capability[0] is None
++                or not (capability[0] >= 9 or capability == (8, 9))
++            ):
+                 return
+ 
+             a = self.create_random_gpu_tensor((m, k), dtype)
+diff --git a/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py b/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
+index 7237880479..4e12e369d3 100644
+--- a/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
++++ b/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
+@@ -22,6 +22,7 @@ from sglang.srt.model_executor.graph_shared_output import GraphSharedOutput
+ from sglang.srt.model_executor.model_runner import ModelRunner
+ from sglang.srt.runtime_context import get_context, get_parallel
+ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
++from sglang.srt.utils import get_device, get_device_module
+ 
+ # Use single-rank attention without distributed initialization.
+ _parallel_override = get_parallel().override(attn_tp_size=1, attn_dcp_rank=0)
+@@ -31,7 +32,7 @@ DEFAULT_HEAD_DIM = 16
+ DEFAULT_HIDDEN_SIZE = 64
+ DEFAULT_MAX_CONTEXT_LEN = 64
+ DEFAULT_DTYPE = torch.float16
+-DEFAULT_DEVICE = "cuda"
++DEFAULT_DEVICE = get_device()
+ DENSE_ATOL = 3e-2
+ DENSE_RTOL = 3e-2
+ 
+@@ -979,7 +980,7 @@ def build_dense_attention_fixture(
+ ) -> DenseAttentionFixture:
+     seed = 2026 + len(case.name) + case.num_kv_heads
+     torch.manual_seed(seed)
+-    torch.cuda.manual_seed_all(seed)
++    get_device_module().manual_seed_all(seed)
+ 
+     # A hybrid model (Gemma-4: 256-wide SWA layers, 512-wide global layers)
+     # declares its widest head model-wide; the layer under test may be narrower.
+diff --git a/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py b/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
+index 401ec6bba3..8d4a5ed966 100644
+--- a/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
++++ b/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
+@@ -31,6 +31,7 @@ from sglang.srt.speculative.frozen_kv_mtp_info import (
+ )
+ from sglang.srt.speculative.frozen_kv_mtp_worker_v2 import FrozenKVMTPDraftWorker
+ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
++from sglang.srt.utils import get_device_module
+ from sglang.test.kits.attention_unittest.attention_methods.dense_attention import (
+     _token_loc as _dsa_token_loc,
+ )
+@@ -270,22 +271,25 @@ def _seeded_rng(seed: int, *, device: str | torch.device):
+     input builders below need deterministic randomness per case but must not
+     leak that seed into the rest of the test process (build_*_fixture relies
+     on its own seeding for parameter init)."""
++    device_module = get_device_module()
+     cpu_state = torch.random.get_rng_state()
+-    cuda_state = torch.cuda.get_rng_state(device=device)
++    device_state = device_module.get_rng_state(device=device)
+     try:
+         torch.manual_seed(seed)
+-        torch.cuda.manual_seed_all(seed)
++        device_module.manual_seed_all(seed)
+         yield
+     finally:
+         torch.random.set_rng_state(cpu_state)
+-        torch.cuda.set_rng_state(cuda_state, device=device)
++        device_module.set_rng_state(device_state, device=device)
+ 
+ 
+ @contextmanager
+ def _single_rank_graph_capture(stream=None):
+     # Mirrors `graph_capture(stream=None)`: capture runs on the caller's stream
+     # when it leases one, so the shim stays valid for both call shapes.
+-    yield SimpleNamespace(stream=stream if stream is not None else torch.cuda.Stream())
++    yield SimpleNamespace(
++        stream=stream if stream is not None else get_device_module().Stream()
++    )
+ 
+ 
+ def _reset_cuda_graph_test_buffers() -> None:
+diff --git a/python/sglang/test/kits/attention_unittest/runner_modes/cuda_graph_decode_runner.py b/python/sglang/test/kits/attention_unittest/runner_modes/cuda_graph_decode_runner.py
+index d4adf872b1..da0a1c7a70 100644
+--- a/python/sglang/test/kits/attention_unittest/runner_modes/cuda_graph_decode_runner.py
++++ b/python/sglang/test/kits/attention_unittest/runner_modes/cuda_graph_decode_runner.py
+@@ -4,6 +4,7 @@ from typing import Any, Callable
+ import torch
+ 
+ from sglang.srt.model_executor.forward_context import ForwardContext, forward_context
++from sglang.srt.utils import get_device_module, is_xpu
+ from sglang.test.kits.attention_unittest.attention_methods.dense_attention import (
+     _make_forward_batch as _make_dsa_forward_batch,
+ )
+@@ -407,14 +408,15 @@ def _run_cuda_graph_decode_case(
+         device=device,
+     )
+ 
+-    caller_stream = torch.cuda.current_stream(device=device)
+-    stream = torch.cuda.Stream(device=device)
++    device_module = get_device_module()
++    caller_stream = device_module.current_stream(device=device)
++    stream = device_module.Stream(device=device)
+     stream.wait_stream(caller_stream)
+     graphs = []
+     try:
+         with (
+             torch.no_grad(),
+-            torch.cuda.stream(stream),
++            device_module.stream(stream),
+             forward_context(ForwardContext(attn_backend=backend)),
+         ):
+             backend.init_cuda_graph_state(
+@@ -428,8 +430,8 @@ def _run_cuda_graph_decode_case(
+                 backend.init_forward_metadata_in_graph(capture_batch)
+                 adapter.run_forward(graph_fixture, capture_batch, capture_inputs)
+                 backend.on_after_cuda_graph_warmup()
+-                graph = torch.cuda.CUDAGraph()
+-                with torch.cuda.graph(graph, stream=stream):
++                graph = torch.xpu.XPUGraph() if is_xpu() else torch.cuda.CUDAGraph()
++                with device_module.graph(graph, stream=stream):
+                     backend.init_forward_metadata_in_graph(capture_batch)
+                     output = adapter.run_forward(
+                         graph_fixture, capture_batch, capture_inputs
+diff --git a/test/registered/attention/unittests/dense/test_triton.py b/test/registered/attention/unittests/dense/test_triton.py
+index 2d79949829..b834f3f116 100644
+--- a/test/registered/attention/unittests/dense/test_triton.py
++++ b/test/registered/attention/unittests/dense/test_triton.py
+@@ -3,8 +3,12 @@ import unittest
+ import torch
+ 
+ from sglang.srt.model_executor.forward_mode import ForwardMode
+-from sglang.srt.utils import is_hip
+-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
++from sglang.srt.utils import get_device_module, is_hip
++from sglang.test.ci.ci_register import (
++    register_amd_ci,
++    register_cuda_ci,
++    register_xpu_ci,
++)
+ from sglang.test.kits.attention_unittest.attention_methods.dense_attention import (
+     DenseAttentionCase,
+     make_dense_cases,
+@@ -33,9 +37,10 @@ from sglang.test.test_utils import CustomTestCase
+ register_cuda_ci(est_time=19, stage="base-b", runner_config="4-gpu-b200")
+ register_cuda_ci(est_time=18, stage="base-b", runner_config="1-gpu-small")
+ register_amd_ci(est_time=25, suite="stage-b-test-1-gpu-large-amd")
++register_xpu_ci(est_time=25, suite="stage-b-test-1-gpu-xpu")
+ 
+ 
+-@unittest.skipIf(not torch.cuda.is_available(), "CUDA is required")
++@unittest.skipIf(not get_device_module().is_available(), "an accelerator is required")
+ class TestTritonDenseAttentionBackendCorrectness(CustomTestCase):
+     CASES = make_dense_cases("triton")
+     CUDA_GRAPH_CASES = (
+@@ -303,6 +308,10 @@ class TestTritonDenseAttentionBackendCorrectness(CustomTestCase):
+         ),
+     )
+ 
++    def setUp(self):
++        super().setUp()
++        self.enterContext(torch.no_grad())
++
+     def test_projected_dense_attention_cases(self):
+         for case in self.CASES:
+             with self.subTest(case=case.name, backend=case.backend):
+diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
+index 6f7fc405ab..99107ffafd 100644
+--- a/python/sglang/srt/layers/layernorm.py
++++ b/python/sglang/srt/layers/layernorm.py
+@@ -103,12 +103,22 @@ if _is_cuda or _is_xpu or _is_musa:
+         _flashinfer_layernorm_available = False
+         _flashinfer_rmsnorm_quant_available = False
+ 
+-    from sgl_kernel import (
+-        fused_add_rmsnorm,
+-        gemma_fused_add_rmsnorm,
+-        gemma_rmsnorm,
+-        rmsnorm,
+-    )
++    try:
++        from sgl_kernel import (
++            fused_add_rmsnorm,
++            gemma_fused_add_rmsnorm,
++            gemma_rmsnorm,
++            rmsnorm,
++        )
++    except ImportError:
++        if not _is_xpu:
++            raise
++
++        # sgl-kernel-xpu is optional.
++        def rmsnorm(*args, **kwargs):
++            raise ImportError("rmsnorm requires sgl-kernel-xpu, which is not installed")
++
++        fused_add_rmsnorm = gemma_fused_add_rmsnorm = gemma_rmsnorm = rmsnorm
+ _has_aiter_layer_norm = False
+ _has_vllm_rms_norm = False
+ _has_rocm_triton_gemma_rms_norm = False
+diff --git a/python/sglang/srt/layers/sampler.py b/python/sglang/srt/layers/sampler.py
+index 0829892cba..d7d7b0c4e6 100644
+--- a/python/sglang/srt/layers/sampler.py
++++ b/python/sglang/srt/layers/sampler.py
+@@ -53,10 +53,20 @@ if is_cuda():
+     )
+ 
+ if is_musa() or is_xpu():
+-    from sgl_kernel import (
+-        min_p_sampling_from_probs,
+-        top_k_top_p_sampling_from_probs,
+-    )
++    try:
++        from sgl_kernel import (
++            min_p_sampling_from_probs,
++            top_k_top_p_sampling_from_probs,
++        )
++    except ImportError:
++        if not is_xpu():
++            raise
++
++        # sgl-kernel-xpu is optional.
++        def top_k_top_p_sampling_from_probs(*args, **kwargs):
++            raise ImportError("intel_xpu sampling requires sgl-kernel-xpu")
++
++        min_p_sampling_from_probs = top_k_top_p_sampling_from_probs
+ 
+     from sglang.srt.layers.sampling_renorm import (
+         top_k_renorm_prob,
+diff --git a/python/sglang/srt/managers/hisparse_coordinator.py b/python/sglang/srt/managers/hisparse_coordinator.py
+index 9d31623e29..33633fae32 100644
+--- a/python/sglang/srt/managers/hisparse_coordinator.py
++++ b/python/sglang/srt/managers/hisparse_coordinator.py
+@@ -17,10 +17,19 @@ import torch
+ from sglang.srt.utils import get_device_module, is_hip, is_xpu
+ 
+ if is_xpu():
+-    from sgl_kernel import (
+-        load_cache_to_device_buffer_dsv4_mla,
+-        load_cache_to_device_buffer_mla,
+-    )
++    try:
++        from sgl_kernel import (
++            load_cache_to_device_buffer_dsv4_mla,
++            load_cache_to_device_buffer_mla,
++        )
++    except ImportError:
++        # sgl-kernel-xpu is optional.
++        def load_cache_to_device_buffer_mla(*args, **kwargs):
++            raise ImportError(
++                "HiSparse requires sgl-kernel-xpu, which is not installed"
++            )
++
++        load_cache_to_device_buffer_dsv4_mla = load_cache_to_device_buffer_mla
+ 
+     def copy_cache_planned_mla(*args, **kwargs):
+         raise RuntimeError(
+diff --git a/python/sglang/srt/mem_cache/hisparse_memory_pool.py b/python/sglang/srt/mem_cache/hisparse_memory_pool.py
+index 99523e59fb..2cff915928 100644
+--- a/python/sglang/srt/mem_cache/hisparse_memory_pool.py
++++ b/python/sglang/srt/mem_cache/hisparse_memory_pool.py
+@@ -24,7 +24,18 @@ _is_cuda = is_cuda()
+ _is_hip = is_hip()
+ _is_xpu = is_xpu()
+ if _is_cuda or _is_hip or _is_xpu:
+-    from sgl_kernel.kvcacheio import transfer_kv_all_layer_mla
++    try:
++        from sgl_kernel.kvcacheio import transfer_kv_all_layer_mla
++    except ImportError:
++        if not _is_xpu:
++            raise
++
++        # sgl-kernel-xpu is optional.
++        def transfer_kv_all_layer_mla(*args, **kwargs):
++            raise ImportError(
++                "HiSparse requires sgl-kernel-xpu, which is not installed"
++            )
++
+ else:
+ 
+     def transfer_kv_all_layer_mla(*args, **kwargs):
+diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
+index 3c18f44e0a..6eb01a618f 100644
+--- a/python/sglang/srt/mem_cache/memory_pool.py
++++ b/python/sglang/srt/mem_cache/memory_pool.py
+@@ -134,7 +134,11 @@ _is_fp8_fnuz = is_fp8_fnuz()
+ _use_aiter = bool(envs.SGLANG_USE_AITER.get()) and _is_hip
+ 
+ if _is_xpu:
+-    from sgl_kernel import store_cache_xpu
++    try:
++        from sgl_kernel import store_cache_xpu
++    except ImportError:
++        # sgl-kernel-xpu is optional.
++        _is_xpu = False
+ 
+ 
+ def conv_window_dedup_enabled(
+@@ -189,7 +193,7 @@ def _set_kv_buffer_impl(
+             size_limit=size_limit,
+         )
+ 
+-    if _is_xpu and v_row_dim == row_dim:
++    if _is_xpu and v_row_dim == row_dim and indices.is_contiguous():
+         return store_cache_xpu(
+             k.view(-1, row_dim),
+             v.view(-1, row_dim),
+diff --git a/python/sglang/srt/layers/attention/dsa_backend.py b/python/sglang/srt/layers/attention/dsa_backend.py
+index 0c9e2c01df..256de0081d 100644
+--- a/python/sglang/srt/layers/attention/dsa_backend.py
++++ b/python/sglang/srt/layers/attention/dsa_backend.py
+@@ -186,10 +186,19 @@ if _is_hip:
+             "aiter is AMD specific kernel library. Please make sure aiter is installed on your AMD device."
+         )
+ elif _is_xpu:
+-    from sgl_kernel.flash_attn import (
+-        flash_attn_varlen_func,
+-        flash_attn_with_kvcache,
+-    )
++    try:
++        from sgl_kernel.flash_attn import (
++            flash_attn_varlen_func,
++            flash_attn_with_kvcache,
++        )
++    except ImportError:
++        # sgl-kernel-xpu is optional.
++        def flash_attn_varlen_func(*args, **kwargs):
++            raise ImportError(
++                "DSA attention requires sgl-kernel-xpu, which is not installed"
++            )
++
++        flash_attn_with_kvcache = flash_attn_varlen_func
+ else:
+     from sglang.kernels.ops.attention.flash_attention import (
+         flash_attn_varlen_func,

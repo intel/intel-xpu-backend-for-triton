@@ -26,14 +26,26 @@ namespace mlir::triton::gpu::intel {
 // dynamic cast result.
 RankedTensorType getRankedTensorType(Type type);
 
-// Check if given value is divisible by the divisor.
-bool isDivisible(Value value, unsigned divisor);
+// Check if given value is provably divisible by the divisor. Returns false for
+// a non-positive divisor.
+bool isDivisible(Value value, int64_t divisor);
 
 // Infers the encoding of the source of op given the result encoding.
 Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 
 // Retuns true if the operation is an expensive load or store operation.
 bool isExpensiveLoadOrStore(Operation *op);
+
+// The target-neutral cache hints carried by a Triton memory operation.
+struct CachePolicy {
+  CacheModifier cacheModifier = CacheModifier::NONE;
+  EvictionPolicy evictionPolicy = EvictionPolicy::NORMAL;
+};
+
+// Decodes the optional `cachePolicy` attribute of a Triton memory operation.
+// Cache policies defined by another target carry no meaning for Intel GPUs, so
+// they decode to the hardware default.
+CachePolicy getCachePolicy(Attribute cachePolicy);
 
 // Returns true if the tensor type has a dot dpas encoding.
 bool hasDotDpasEncoding(RankedTensorType tensorType);
@@ -105,6 +117,12 @@ calculateDPASRepetitions(ArrayRef<int64_t> shape, DpasEncodingAttr::OpIdx opIdx,
                          ArrayRef<unsigned> repCluster, unsigned repeatCount,
                          unsigned systolicDepth, unsigned executionSize,
                          unsigned opsPerChannel);
+
+// Returns true if `op` or an op nested in it may write memory. Unknown effects
+// count as writes (TritonGPUReorderInstructions treats them as none). L2Cache
+// writes are ignored: prefetches declare them only to survive CSE/DCE. Shared
+// memory writes are ignored if `ignoreSharedMemory`.
+bool mayWriteMemory(Operation *op, bool ignoreSharedMemory = false);
 
 } // namespace mlir::triton::gpu::intel
 

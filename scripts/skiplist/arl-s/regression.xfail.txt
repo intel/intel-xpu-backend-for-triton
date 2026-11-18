@@ -1,0 +1,2 @@
+# regression test for an NVIDIA ptxas bug
+python/test/regression/test_functional_regressions.py::test_permutation_ptxas_bug

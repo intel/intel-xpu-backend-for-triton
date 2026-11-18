@@ -59,7 +59,7 @@ If you do not have a system Python installed at this step, you can install one w
 For example:
 
 ```
-choco install python --version=3.10.11
+choco install python --version=3.11.9
 ```
 
 ### Git
@@ -150,7 +150,7 @@ pip install -U pybind11 cmake
 Build and install Triton:
 
 ```
-pip install -v '.[build,tests,tutorials]'
+pip install -v .
 cd ..
 ```
 

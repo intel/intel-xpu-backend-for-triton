@@ -363,16 +363,20 @@ tt.func @descriptor_load(%arg0: !tt.ptr<f16>) {
 
 // CHECK-LABEL: @ptr_offset_pattern
 // This tests a realistic pattern: computing 2D pointer offsets
-tt.func @ptr_offset_pattern(%arg0: i32, %arg1: tensor<128x1xi32>) {
+tt.func @ptr_offset_pattern(%arg1: tensor<128x1xi32>) {
   // CHECK: arith.constant {{.*}} => stride = [0, 0]
   %cst_0 = arith.constant dense<512> : tensor<128x1xi32>
   // CHECK: arith.constant {{.*}} => stride = [0]
   %cst_1 = arith.constant dense<512> : tensor<128xi32>
   // CHECK: arith.constant {{.*}} => stride = [0]
   %c128_i32 = arith.constant 128 : i32
+  // A program id is non-negative, so the remainder below keeps its stride.
+  // The declined case is in stride-info-assume.mlir.
+  // CHECK: tt.get_program_id {{.*}} => stride = [-1]
+  %pid = tt.get_program_id x : i32
   // scalar * scalar => stride = [0]
   // CHECK: arith.muli {{.*}} => stride = [0]
-  %0 = arith.muli %arg0, %c128_i32 : i32
+  %0 = arith.muli %pid, %c128_i32 : i32
   // Splat scalar => stride = [0]
   // CHECK: tt.splat {{.*}} => stride = [0]
   %1 = tt.splat %0 : i32 -> tensor<128xi32>

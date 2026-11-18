@@ -146,66 +146,45 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Test 5 - Regression test for #7435 (part 2): decomposing a `(x + C) *
-// COM: K` multiply into uniform/non-uniform parts must not distribute into a
-// COM: bare `x * K` cross term computed at the ORIGINAL i32 width. Here `x`
-// COM: (a runtime tensor argument, standing in for a divui/remui-derived
-// COM: index as PyTorch Inductor emits for its cat/split fusions) ranges up
-// COM: to 63, and `x * 67108864` alone overflows i32 (63 * 67108864 >
-// COM: INT32_MAX) even though the original `(x + (-8)) * 67108864` does not
-// COM: for the intended (masked) range of `x`. The cross terms must be
-// COM: computed at i64 to avoid reintroducing this overflow.
+// COM: Test 5 - Decomposing a `(x + C) * K` multiply into uniform/
+// COM: non-uniform parts must not distribute into a bare `x * K` cross term.
+// COM: Here `x` (a runtime tensor argument, standing in for a
+// COM: divui/remui-derived index as PyTorch Inductor emits for its
+// COM: cat/split fusions) ranges up to 63, and `x * 67108864` alone
+// COM: overflows i32 (63 * 67108864 > INT32_MAX) even though the original
+// COM: `(x + (-8)) * 67108864` does not for the intended (masked) range of
+// COM: `x`. Widening the dangerous cross term to a wider type instead of
+// COM: bailing out was tried and itself caused a separate correctness
+// COM: regression, so the pass must bail out of distributing this multiply
+// COM: entirely and keep the whole `(x + C) * K` expression fused, exactly
+// COM: as originally written.
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: tt.func public @mul_distribute_no_overflow(
+  // CHECK-SAME: %[[X:[^:]*]]: tensor<64xi32>
   tt.func public @mul_distribute_no_overflow(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %x: tensor<64xi32>) {
+    // CHECK: %[[C:.*]] = arith.constant dense<-8> : tensor<64xi32>
     %c-8_i32 = arith.constant dense<-8> : tensor<64xi32>
+    // CHECK: %[[K:.*]] = arith.constant dense<67108864> : tensor<64xi32>
     %c67108864_i32 = arith.constant dense<67108864> : tensor<64xi32>
+    // COM: The original fused `(x + C) * K` must survive unchanged -- not
+    // COM: distributed into a standalone `x * K` cross term. Assert this
+    // COM: directly: no arith.muli may take %[[X]] as an operand, since the
+    // COM: only sound multiply of %x is the fused `(x + C) * K` below, never
+    // COM: a bare `x * K`.
+    // CHECK-NOT: arith.muli %[[X]]
+    // CHECK-NOT: arith.muli {{.*}}, %[[X]]
+    // CHECK: %[[SHIFTED:.*]] = arith.addi %[[X]], %[[C]] : tensor<64xi32>
     %shifted = arith.addi %x, %c-8_i32 : tensor<64xi32>
+    // CHECK: %[[OFFSET:.*]] = arith.muli %[[SHIFTED]], %[[K]] : tensor<64xi32>
+    // CHECK-NOT: arith.muli %[[X]]
+    // CHECK-NOT: arith.muli {{.*}}, %[[X]]
     %offset = arith.muli %shifted, %c67108864_i32 : tensor<64xi32>
     %base = tt.splat %arg0 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
     %ptr = tt.addptr %base, %offset : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
-    // COM: The non-uniform cross term (x * 67108864) must be computed at
-    // COM: i64, not the original i32 -- otherwise it silently overflows for
-    // COM: x >= 32 and produces a wrong address.
-    // CHECK: arith.muli {{.*}} : tensor<64xi64>
-    // CHECK: tt.addptr {{.*}} : tensor<64x!tt.ptr<f32>>, tensor<64xi64>
     %val = tt.load %ptr : tensor<64x!tt.ptr<f32>>
     %out_base = tt.splat %arg1 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
     tt.store %out_base, %val : tensor<64x!tt.ptr<f32>>
-    tt.return
-  }
-}
-
-// -----
-
-// COM: Test 6 - Regression test for #7435 (part 3): when the non-uniform
-// COM: part of a `tt.broadcast`'s source has been widened to i64 (e.g. by
-// COM: the Test 5 fix inside createDecomposeOffsetFromMul), the rebuilt
-// COM: tt.broadcast must widen its own result type to match -- reusing the
-// COM: original (narrower) broadcast type verbatim would produce a
-// COM: `tt.broadcast` whose operand and result element types disagree,
-// COM: which the verifier rejects (`'tt.broadcast' op requires the same
-// COM: element type for all operands and results`).
-
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: tt.func public @broadcast_after_mul_widen(
-  tt.func public @broadcast_after_mul_widen(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %x: tensor<8x1xi32>) {
-    %c-8_i32 = arith.constant dense<-8> : tensor<8x1xi32>
-    %c67108864_i32 = arith.constant dense<67108864> : tensor<8x1xi32>
-    %shifted = arith.addi %x, %c-8_i32 : tensor<8x1xi32>
-    // COM: The multiply's non-uniform cross term is widened to i64 (Test 5),
-    // COM: so the tt.broadcast consuming it must also widen to i64 -- not
-    // COM: stay at the original i32 broadcast type.
-    %mul = arith.muli %shifted, %c67108864_i32 : tensor<8x1xi32>
-    %offset = tt.broadcast %mul : tensor<8x1xi32> -> tensor<8x64xi32>
-    %base = tt.splat %arg0 : !tt.ptr<f32> -> tensor<8x64x!tt.ptr<f32>>
-    %ptr = tt.addptr %base, %offset : tensor<8x64x!tt.ptr<f32>>, tensor<8x64xi32>
-    // CHECK: tt.broadcast {{.*}} : tensor<8x1xi64> -> tensor<8x64xi64>
-    // CHECK: tt.addptr {{.*}} : tensor<8x64x!tt.ptr<f32>>, tensor<8x64xi64>
-    %val = tt.load %ptr : tensor<8x64x!tt.ptr<f32>>
-    %out_base = tt.splat %arg1 : !tt.ptr<f32> -> tensor<8x64x!tt.ptr<f32>>
-    tt.store %out_base, %val : tensor<8x64x!tt.ptr<f32>>
     tt.return
   }
 }

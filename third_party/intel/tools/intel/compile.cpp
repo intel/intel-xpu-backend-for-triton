@@ -7,6 +7,12 @@
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
 
+namespace syclex = sycl::ext::oneapi::experimental;
+
+// Eventless kernel submission requires a rolling (non-LTS) driver. Baked in
+// by compile.py based on the compile-time target's driver version.
+{eventless_submit_define}
+
 // helpers to check for ze errors
 #define ZE_CHECK(ans) {{\
     gpuAssert((ans), __FILE__, __LINE__);\
@@ -132,7 +138,7 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
   void* profile_scratch = nullptr;
   void *params[] = {{ {arg_pointers} }};
   uint32_t num_params = sizeof(params)/sizeof(params[0]);
-  uint32_t expected_num_params = sycl_kernel.get_info<sycl::info::kernel::num_args>();
+  uint32_t kernel_num_args = sycl_kernel.get_info<sycl::info::kernel::num_args>();
 
   size_t global_range_x = static_cast<size_t>({gridX}) * {threads_per_warp} * {num_warps};
   size_t global_range_y = {gridY};
@@ -145,9 +151,14 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
   sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
 
-  if (static_cast<bool>({shared})) {{
-    expected_num_params -= 1;
-  }}
+  // Shared memory is allocated statically in the kernel module (mirrors the JIT
+  // launcher in driver.c): bind a shared memory argument only for kernels that
+  // need a dynamic allocation (compiled with
+  // TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1, or using a partitioned shared
+  // layout), which have one extra argument.
+  const bool bind_shared_memory =
+      static_cast<bool>({shared}) && (kernel_num_args == num_params + 1);
+  uint32_t expected_num_params = kernel_num_args - (bind_shared_memory ? 1 : 0);
   assert(num_params == expected_num_params && "number of kernel param not matched");
   // Submit the imported kernel.
   auto cgf = [&](sycl::handler &cgh) {{
@@ -169,16 +180,21 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
     // list, so they must be bound explicitly here (mirrors the JIT launcher in driver.c).
     set_scalar_arg<void *>(cgh, num_params - 2, params[num_params - 2]);
     set_scalar_arg<void *>(cgh, num_params - 1, params[num_params - 1]);
-    if (static_cast<bool>({shared})) {{
+    if (bind_shared_memory) {{
         using share_mem_t = sycl::local_accessor<int8_t, 1>;
         share_mem_t local_buffer = share_mem_t({shared}, cgh);
         cgh.set_arg(num_params, local_buffer);
-        cgh.parallel_for(parallel_work_size, sycl_kernel);
-    }} else {{
-        cgh.parallel_for(parallel_work_size, sycl_kernel);
     }}
+    syclex::nd_launch(cgh, parallel_work_size, sycl_kernel);
   }};
+#if __SYCL_COMPILER_VERSION >= 20260204 && defined(ENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT)
+  // Event-less submit: nothing here consumes the event. Kept off the LTS driver
+  // line, where the driver harvests the device-side assert and printf buffers
+  // only when the host waits on the kernel's event.
+  syclex::submit(stream, cgf);
+#else
   stream.submit(cgf);
+#endif
   stream.wait_and_throw();
   return 0;
 }}

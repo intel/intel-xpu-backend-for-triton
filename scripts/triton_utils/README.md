@@ -18,7 +18,7 @@ triton-utils pass_rate --reports ./reports
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - `gh` CLI (GitHub CLI) - required for downloading reports from CI
 
 ## Installation
@@ -280,7 +280,7 @@ Use `--wheel-set` (repeatable) to filter by predefined wheel sets:
 
 | Preset | Packages |
 |--------|----------|
-| `torch` | torch, torchvision, torchaudio, timm |
+| `torch` | torch, torchvision, torchaudio, torchao, timm |
 | `triton` | triton |
 | `bench` | triton_kernels_benchmark |
 | `pti` | intel_pti |

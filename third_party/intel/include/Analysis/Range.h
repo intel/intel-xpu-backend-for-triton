@@ -3,6 +3,7 @@
 
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
@@ -10,12 +11,24 @@
 
 namespace mlir::triton::intel {
 
+/// An assume constrains an SSA value at `useOp` only if it is certain to
+/// execute whenever `useOp` does. Forward case: the assume properly
+/// dominates `useOp`. Backward case: the assume comes later in the same block
+/// and nothing between the op enclosing `useOp` and the assume can abort, spin
+/// or fail to return.
+bool assumeApplies(LLVM::AssumeOp assume, Operation *useOp,
+                   const DominanceInfo &domInfo);
+
 /// Determines the range of integer variables.
 /// This pass is based on MLIR's dataflow framework and extends upstream's
 /// IntegerRangeAnalysis to better support Triton-specific constructs.
 class IntegerRangeAnalysis : public dataflow::IntegerRangeAnalysis {
 public:
   using Base = dataflow::IntegerRangeAnalysis;
+  /// The `llvm.intr.assume` operations anchored on a value. Holds the assume
+  /// ops themselves, not their condition comparisons: applicability depends on
+  /// where the assume executes, and a comparison can be hoisted far above it
+  /// (see `assumeApplies`).
   using AssumptionsOps = SetVector<Operation *>;
 
   IntegerRangeAnalysis(DataFlowSolver &solver, ModuleOp &mod,
@@ -37,9 +50,9 @@ public:
 
   /// Implements "abstract interpretation" of loops with known bounds in order
   /// to infer the ranges for loop carried values. Lattice states are propagated
-  /// to all region successors N times, where N is the total trip count of the
-  /// loop. After propagation both loop body values and users of loop results
-  /// will have accurate ranges.
+  /// to all region successors N times, where N is the loop's simulation steps
+  /// (see `loopSimulationSteps`). After propagation both loop body values and
+  /// users of loop results will have accurate ranges.
   ///
   /// Notes:
   ///   - it attempts to compute loop's total trip count in the context of a
@@ -47,9 +60,10 @@ public:
   ///     actually visit the loop N times for each iter_arg (each argument
   ///     lattice) so we actually track visit count for (loop, arg) not just
   ///     (loop).
-  ///   - before propagating, we check if we have propagated for (loop, arg)
-  ///     >= N times. If so, we do not propagate (and thus the traversal
-  ///     converges/ends).
+  ///   - before propagating along a backedge into an iter_arg, we check if we
+  ///     have propagated for (loop, arg) >= N - 1 times. If so, we do not
+  ///     propagate (and thus the traversal converges/ends). The init values
+  ///     and the loop results are always propagated.
   ///
   /// Note, for loops where the trip count cannot be inferred *and* loops
   /// with a total trip count larger than `kDefaultMaxTripCount`, fallback
@@ -81,18 +95,20 @@ private:
   llvm::SmallMapVector<Value, ConstantIntRanges, 2> opResultAssumption;
   DominanceInfo &domInfo;
 
-  /// Trip counts of all loops with static loop bounds contained under the root
-  /// operation being analyzed. Note, nested loops have trip counts computed as
-  /// a product of enclosing loops; i.e. for
+  /// Simulation steps of all loops contained under the root operation being
+  /// analyzed: the loop's total trip count, raised to that of any nested loop
+  /// up to `kDefaultMaxTripCount`.
+  /// Note, nested loops have trip counts computed as a product of enclosing
+  /// loops; i.e. for
   ///   scf.for i = 1 to 10
   ///     scf.for j = 1 to 10
   /// the trip count of the outer loop (on i) is 10 but the trip count of the
-  /// inner loop (on j) is 100.
-  llvm::SmallDenseMap<LoopLikeOpInterface, int64_t> loopTripCounts;
+  /// inner loop (on j) is 100, so both loops are simulated 100 steps.
+  llvm::SmallDenseMap<LoopLikeOpInterface, int64_t> loopSimulationSteps;
 
   /// Visit counts tabulating how many times each lattice has been propagated
-  /// through each loop. This is used in visitRegionSuccessors to end
-  /// propagation when loopVisits[loop, lattice] reaches loopTripCounts[loop].
+  /// along a backedge of each loop. This is used in visitRegionSuccessors to
+  /// end propagation when loopVisits[loop, lattice] reaches the step limit.
   llvm::SmallDenseMap<
       std::pair<LoopLikeOpInterface, dataflow::IntegerValueRangeLattice *>,
       int64_t>

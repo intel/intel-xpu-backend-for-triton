@@ -7,6 +7,9 @@ Scripts for installing and testing vLLM on Intel XPU as part of the Triton CI.
 - **install-vllm.sh** - Clones, patches, and installs vLLM for XPU. Handles
   pinned commit checkout, `vllm-fix.patch` application, AST-based CUDA-to-XPU
   test patching, and dependency installation with torch constraint protection.
+  `vllm-xpu-kernels` is installed from the release vLLM pins in
+  `requirements/xpu.txt` by default; pass `--kernels-source` (top of main) or
+  `--kernels-hash <hash>` to build the kernels from source instead.
 - **vllm-xpu-patch.py** - AST-guided patcher that scans vLLM test files for
   hardcoded CUDA references and applies source-level XPU replacements.
 
@@ -50,8 +53,6 @@ Validates GPU Model Runner V2 Triton kernels on XPU.
 | `_bias_kernel` | `vllm/v1/worker/gpu/sample/logit_bias.py` | (via sampling e2e) |
 | `_apply_grammar_bitmask_kernel` | `vllm/v1/worker/gpu/structured_outputs.py` | (via structured output e2e) |
 | `_num_nans_kernel` | `vllm/v1/worker/gpu/metrics/logits.py` | `tests/v1/worker/test_gpu_model_runner.py` |
-
-Both suites run with `VLLM_USE_V2_MODEL_RUNNER=1` to activate the V2 code paths.
 
 ### `--vllm-moe` (TRITON_TEST_SUITE=vllm_moe)
 

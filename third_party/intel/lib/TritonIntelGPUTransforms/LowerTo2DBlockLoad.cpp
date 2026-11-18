@@ -9,6 +9,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -35,20 +36,11 @@ namespace mlir::triton::gpu::intel {
 namespace {
 
 /// Check whether a load is eligible for 2D block IO lowering.
-template <typename OpTy,
-          std::enable_if_t<
-              llvm::is_one_of<OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value,
-              bool> = true>
-static bool isBlockIOEligible(OpTy op) {
-  RankedTensorType tensorTy;
-  if constexpr (std::is_same_v<OpTy, tt::LoadOp>) {
-    tensorTy =
-        dyn_cast<RankedTensorType>(tt::getPointeeType(op.getPtr().getType()));
-    if (!tensorTy)
-      return false;
-  } else {
-    tensorTy = cast<RankedTensorType>(op.getType());
-  }
+static bool isBlockIOEligible(tt::LoadOp op) {
+  auto tensorTy =
+      dyn_cast<RankedTensorType>(tt::getPointeeType(op.getPtr().getType()));
+  if (!tensorTy)
+    return false;
 
   return ttgi::isBlockIOEligible(op, tensorTy);
 }
@@ -71,6 +63,13 @@ static int64_t getStride(tt::intel::ModuleStrideAnalysis &strideAnalysis,
 static Value createZeroSplat(OpBuilder &builder, Location loc,
                              RankedTensorType tensorTy) {
   Type elemType = tensorTy.getElementType();
+  // Packed fp4 has no scalar constants and e8m0 cannot represent 0: splat
+  // zero bits as i8 and bitcast, like upstream's descriptor zero padding.
+  if (isa<tt::PackedFloat4E2M1Type, Float8E8M0FNUType>(elemType)) {
+    auto bitsTy = tensorTy.clone(builder.getI8Type());
+    Value zeroBits = createZeroSplat(builder, loc, bitsTy);
+    return tt::BitcastOp::create(builder, loc, tensorTy, zeroBits);
+  }
   Attribute zeroAttr;
   if (isa<FloatType>(elemType))
     zeroAttr = builder.getFloatAttr(elemType, 0.0);
@@ -121,7 +120,7 @@ public:
     SmallVector<tt::DescriptorLoadOp> descLoadOps;
     mod.walk([&](tt::DescriptorLoadOp op) { descLoadOps.push_back(op); });
     for (auto op : descLoadOps)
-      convertDescriptorLoadOp(op);
+      convertDescriptorLoadOp(op, axisInfoAnalysis);
 
     SmallVector<tt::LoadOp> loadOps;
     mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
@@ -131,63 +130,44 @@ public:
 
 private:
   /// Convert a tt.descriptor_load to ttig.2d_block_load.
-  void convertDescriptorLoadOp(tt::DescriptorLoadOp op) {
-    if (!isBlockIOEligible(op))
+  void
+  convertDescriptorLoadOp(tt::DescriptorLoadOp op,
+                          tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+    auto tensorTy = cast<RankedTensorType>(op.getType());
+    if (!ttgi::isDescriptorLoadLowerableTo2DBlock(op, tensorTy,
+                                                  axisInfoAnalysis))
       return;
 
-    auto tensorTy = cast<RankedTensorType>(op.getType());
     unsigned rank = tensorTy.getRank();
-    unsigned elemSizeInBits = tensorTy.getElementTypeBitWidth();
+    unsigned elemSizeInBits =
+        getIntOrFloatOrPtrBitWidth(tensorTy.getElementType());
 
     // Find all MakeTensorDescOps that could define this descriptor.
     Value desc = op.getDesc();
-    SmallVector<tt::MakeTensorDescOp> allDescs =
-        tt::intel::findAllMakeTensorDescOps(desc);
-    if (allDescs.empty()) {
-      LDBG("Could not find MakeTensorDescOp for: " << *op);
-      return;
-    }
-
-    // All candidates must have the same padding.
-    tt::PaddingOption padding = allDescs[0].getPadding();
-    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
-          return d.getPadding() == padding;
-        })) {
-      LDBG("Inconsistent padding across descriptor candidates for: " << *op);
-      return;
-    }
+    tt::intel::DescriptorDefinitions defs =
+        tt::intel::findDescriptorDefinitions(desc);
+    std::optional<tt::PaddingOption> padding = defs.consistentPadding();
+    assert(padding && "isDescriptorLoadLowerableTo2DBlock checks padding");
 
     auto descType = cast<tt::TensorDescType>(desc.getType());
     unsigned descRank = descType.getBlockType().getRank();
     assert(descRank >= rank && "descriptor rank must be >= result tensor rank");
 
     bool memoryRowMajor = ttgi::isMemoryRowMajor(op);
-
-    // Validate that tile computation will succeed during LLVM lowering.
     bool oneMatrixPerLoadForBT =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
 
-    unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
-    Attribute encoding = tensorTy.getEncoding();
-    LinearLayout llEncoding =
-        cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
-            tensorTy.getShape());
-    if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
-                                       elemSizeInBits, tensorTy,
-                                       oneMatrixPerLoadForBT)) {
-      LDBG("Tile validation failed for descriptor load: " << *op);
-      return;
-    }
-
-    // For descriptor loads, the 2D block I/O tile must use only the inner 2
-    // dims. Reject if rowDim or colDim falls in a batch dimension.
-    if (rank > 2) {
-      auto sizeInfo = ttgi::getBlockIOTileSize<true>(
-          llEncoding, contiguousDim, elemSizeInBits,
-          /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
-      int innerDimStart = static_cast<int>(rank - 2);
-      if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart) {
-        LDBG("Batch dim in tile for descriptor load: " << *op);
+    // A misaligned pitch is an error whatever the layout, so this check is not
+    // part of isDescriptorLoadLowerableTo2DBlock.
+    int64_t elemBytesConst = elemSizeInBits / 8;
+    for (tt::MakeTensorDescOp d : defs) {
+      std::optional<int64_t> stride = tt::intel::getFoldedConstantValue(
+          d->getOperand(/*pitch stride*/ 1 + descRank + (descRank - 2)));
+      if (stride && (*stride * elemBytesConst) % 16 != 0) {
+        op->emitOpError("descriptor pitch of ")
+            << *stride * elemBytesConst
+            << " bytes is not a multiple of 16 bytes";
+        signalPassFailure();
         return;
       }
     }
@@ -204,7 +184,7 @@ private:
     // per iteration. Struct layout: { shapes[rank], strides[rank], base_ptr }.
     Type i64Ty = builder.getI64Type();
     Type ptrType =
-        tt::PointerType::get(descType.getBlockType().getElementType(), 1);
+        tt::PointerType::get(descType.getBlockType().getElementType());
     SmallVector<Value> shapes(descRank);
     SmallVector<Value> strides(descRank);
     for (unsigned d = 0; d < descRank; ++d) {
@@ -240,53 +220,6 @@ private:
       return v;
     };
 
-    // If the pitch stride is a known constant AND the descriptor/result ranks
-    // match, validate HW constraints (>= 64 bytes, 16-byte aligned, encoded
-    // in 24 bits per the `triton_gen.2Dblockload` verifier).
-    // For rank-reducing loads, the stride interpretation may differ from the
-    // 2D surface pitch, so skip static validation (runtime will handle it).
-    if (rank == descRank) {
-      std::optional<int64_t> pitchStride =
-          tt::intel::getFoldedConstantValue(strides[descRank - 2]);
-      if (pitchStride) {
-        int64_t pitchBytes = *pitchStride * elemSizeInBits / 8;
-        if (pitchBytes < 64 || (pitchBytes % 16) != 0 ||
-            pitchBytes > (int64_t(1) << 24)) {
-          LDBG("Invalid pitch " << pitchBytes
-                                << " for descriptor load: " << *op);
-          return;
-        }
-      }
-    }
-
-    // The 2Dblockload HW encodes base_width / base_pitch in 24 bits (the
-    // TritonGEN→LLVM lowering subtracts 1 on emission, so the user-facing
-    // max is 2^24). Bail out if any compile-time-foldable byte value
-    // exceeds that range — otherwise the top bits would be silently
-    // dropped, producing a garbage surface descriptor. Non-foldable
-    // (runtime) shapes/strides are trusted to fit — the HW verifier will
-    // complain if they don't.
-    //
-    // We chase the descriptor's defining MakeTensorDescOp(s) to reach the
-    // original SSA — `strides`/`shapes` above are ttig.extract_desc results
-    // whose defining ops the folder can't see through.
-    constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
-    int64_t elemBytesConst = elemSizeInBits / 8;
-    auto wouldOverflow = [&](unsigned operandIdx) {
-      return llvm::any_of(allDescs, [&](tt::MakeTensorDescOp d) {
-        auto folded =
-            tt::intel::getFoldedConstantValue(d->getOperand(operandIdx));
-        return folded && *folded * elemBytesConst > kMax2DBlockField;
-      });
-    };
-    // MakeTensorDescOp operands: base, shape[rank], strides[rank].
-    if (wouldOverflow(/*inner shape*/ 1 + (descRank - 1)) ||
-        wouldOverflow(/*pitch stride*/ 1 + descRank + (descRank - 2))) {
-      LDBG("Pitch/base_width exceeds HW 24-bit range for descriptor load: "
-           << *op);
-      return;
-    }
-
     // Surface width = inner dimension size * element bytes.
     // Surface height = second-to-last dimension size.
     // Pitch = stride of the second-to-last dimension * element bytes.
@@ -303,13 +236,31 @@ private:
     Value offsetX = indices[descRank - 1];
     Value offsetY = indices[descRank - 2];
 
+    // The batch *indices* were folded into base_ptr above, but the result
+    // layout also walks the batch dimensions during LLVM lowering and needs
+    // their real strides, which are not derivable from the 2D surface params.
+    // Result dim d is descriptor dim d + (descRank - rank).
+    SmallVector<Value> batchStrides;
+    for (unsigned d = 0; d + 2 < rank; ++d)
+      batchStrides.push_back(strides[d + (descRank - rank)]);
+
+    // Batch indices folded into base_ptr re-base the 2D surface, so they
+    // escape the hardware's clamp; the lowering needs each index and its
+    // declared extent to predicate the load. For that check only -- never for
+    // addressing, since base_ptr already carries the offsets.
+    SmallVector<Value> batchOffsets, batchShapes;
+    for (unsigned d = 0; d < numBatchDims; ++d) {
+      batchOffsets.push_back(indices[d]);
+      batchShapes.push_back(toI32(shapes[d]));
+    }
+
     // Determine padding mode from the descriptor.
-    bool padNan = padding == tt::PaddingOption::PAD_NAN;
+    bool padNan = *padding == tt::PaddingOption::PAD_NAN;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
-        offsetX, offsetY, padNanAttr,
+        offsetX, offsetY, batchStrides, batchOffsets, batchShapes, padNanAttr,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate one_matrix_per_load attribute if present.
@@ -333,7 +284,8 @@ private:
     auto tensorTy =
         cast<RankedTensorType>(tt::getPointeeType(op.getPtr().getType()));
     unsigned rank = tensorTy.getRank();
-    unsigned elemSizeInBits = tensorTy.getElementTypeBitWidth();
+    unsigned elemSizeInBits =
+        getIntOrFloatOrPtrBitWidth(tensorTy.getElementType());
 
     bool memoryRowMajor = ttgi::isMemoryRowMajor(op);
     unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
@@ -341,14 +293,31 @@ private:
     bool oneMatrixPerLoadForBT =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
 
+    // A row-limit mask can become `base_height` instead of per-element
+    // masking (hardware zero-fill). Decided up front so tile-size
+    // computation below can treat this load as unmasked.
+    std::optional<ttgi::BoundaryMaskInfo> rowLimitMask;
+    if (op.getMask() && rank >= 2) {
+      unsigned pitchTensorDim =
+          (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+      bool pitchDimIsBroadcast =
+          getStride(strideAnalysis, op.getPtr(), pitchTensorDim) == 0;
+      if (auto m = ttgi::matchBoundaryCheckMask(
+              op.getMask(), op.getOther(), tensorTy.getShape(), contiguousDim,
+              pitchDimIsBroadcast, op))
+        rowLimitMask = m;
+    }
+
     // Retrieve mask axis info to validate tile constraints consistently
-    // with the downstream LLVM lowering.
+    // with the downstream LLVM lowering. Skipped for a row-limit mask: its
+    // bound is handled via base_height below, not by clamping the tile.
     tt::AxisInfo *maskAxisInfo = nullptr;
-    if (op.getMask())
+    if (op.getMask() && !rowLimitMask)
       maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
 
-    // For 1D->2D reshape loads, skip tile validation and use the stride
-    // attribute directly for pitch.
+    // Whether this load was annotated by the 1D→2D reshape in
+    // MaterializeBlockPointer. Used for pitch and base-height computation
+    // below.
     bool has1DReshapeStride =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName());
 
@@ -360,36 +329,70 @@ private:
     int tileHeight = -1;
     int numPackedVals = -1;
     bool isTranspose = false;
-    if (has1DReshapeStride) {
-      // 1D reshape: conventional dims, no tile validation needed.
-      rowDim = memoryRowMajor ? rank - 2 : rank - 1;
-      colDim = memoryRowMajor ? rank - 1 : rank - 2;
-    } else {
-      Attribute encoding = tensorTy.getEncoding();
-      LinearLayout llEncoding =
-          cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
-              tensorTy.getShape());
+
+    Attribute encoding = tensorTy.getEncoding();
+    LinearLayout llEncoding =
+        cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
+            tensorTy.getShape());
+    if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
+                                       elemSizeInBits, tensorTy,
+                                       oneMatrixPerLoadForBT, maskAxisInfo)) {
+      LDBG("Tile validation failed for load: " << *op);
+      return;
+    }
+    auto sizeInfo =
+        ttgi::getBlockIOLoadTileSize(llEncoding, contiguousDim, elemSizeInBits,
+                                     maskAxisInfo, oneMatrixPerLoadForBT);
+    rowDim = sizeInfo.rowDim;
+    colDim = sizeInfo.colDim;
+    tileWidth = sizeInfo.tileWidth;
+    tileHeight = sizeInfo.tileHeight;
+    isTranspose = sizeInfo.transpose;
+    numPackedVals = sizeInfo.numElemPerPackedVal;
+
+    // For the 2D block load surface, the pitch dimension is always the
+    // non-contiguous memory direction. For transposed loads, rowDim is the
+    // memory-contiguous dim and colDim is non-contiguous, so pitch uses colDim.
+    unsigned pitchDim = isTranspose ? colDim : rowDim;
+
+    // matchBoundaryCheckMask assumed the pitch dim is the conventional rank-2/
+    // rank-1 dim, but for rank > 2 the tile's actual pitch dim (above) can
+    // land on a batch dim instead (e.g. a layout with no register packing).
+    // base_height only predicates `pitchDim`, so a mismatch here would
+    // silently apply the bound to the wrong dimension; fall back to the
+    // per-element masked path, redoing tile selection with the mask's real
+    // axis info now that it is no longer absorbed into base_height.
+    if (rowLimitMask && rowLimitMask->boundedDim != pitchDim) {
+      LDBG("Row-limit mask bounds dim " << rowLimitMask->boundedDim
+                                        << " but tile pitch dim is " << pitchDim
+                                        << "; falling back to "
+                                           "masked load: "
+                                        << *op);
+      rowLimitMask = std::nullopt;
+      maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
       if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
                                          elemSizeInBits, tensorTy,
                                          oneMatrixPerLoadForBT, maskAxisInfo)) {
-        LDBG("Tile validation failed for load: " << *op);
+        LDBG("Tile validation failed for load (row-limit fallback): " << *op);
         return;
       }
-      auto sizeInfo = ttgi::getBlockIOTileSize<true>(
-          llEncoding, contiguousDim, elemSizeInBits, maskAxisInfo,
-          oneMatrixPerLoadForBT);
+      sizeInfo = ttgi::getBlockIOLoadTileSize(llEncoding, contiguousDim,
+                                              elemSizeInBits, maskAxisInfo,
+                                              oneMatrixPerLoadForBT);
       rowDim = sizeInfo.rowDim;
       colDim = sizeInfo.colDim;
       tileWidth = sizeInfo.tileWidth;
       tileHeight = sizeInfo.tileHeight;
       isTranspose = sizeInfo.transpose;
       numPackedVals = sizeInfo.numElemPerPackedVal;
+      pitchDim = isTranspose ? colDim : rowDim;
     }
 
-    // For the 2D block load surface, the pitch dimension is always the
-    // non-contiguous memory direction. For transposed loads, rowDim is the
-    // memory-contiguous dim and colDim is non-contiguous, so pitch uses colDim.
-    unsigned pitchDim = isTranspose ? colDim : rowDim;
+    // Check the final tile, after any row-limit fallback.
+    tt::AxisInfo *ptrInfo = axisInfoAnalysis.getAxisInfo(op.getPtr());
+    if (elemSizeInBits * numPackedVals > 32 &&
+        (!ptrInfo || ptrInfo->getDivisibility(contiguousDim) % 8))
+      return;
 
     // Compute pitch from stride analysis or the 1D->2D reshape attribute.
     // For the HW surface: width is along memory-contiguous direction, height
@@ -398,10 +401,9 @@ private:
     // width/height.
     unsigned surfaceWidthDim = isTranspose ? rowDim : colDim;
     unsigned surfaceHeightDim = isTranspose ? colDim : rowDim;
+    // Dummy pitch for broadcast loads below; see isBlockPitchSupported for
+    // the validity check.
     constexpr int64_t MIN_PITCH = 64;
-    // Surface pitch is encoded in 24 bits in the 2D block IO message
-    // descriptor (see `triton_gen.2Dblockload` verifier in TritonGENOps.cpp).
-    constexpr int64_t MAX_PITCH = int64_t(1) << 24;
 
     // Pitch is either a compile-time constant or a runtime SSA value,
     // never both.
@@ -467,24 +469,14 @@ private:
       }
     }
 
-    // The HW needs pitch >= 64 bytes, a multiple of 16, and within 24 bits.
-    // For a constant pitch we just check it. For a runtime pitch we can't,
-    // so we rely on the checks already done: MaterializeBlockPointer proved
-    // the stride is 16-byte aligned, `lda >= K` keeps pitch >= the row width,
-    // and the row-width check below covers the 64-byte minimum.
-    if (!pitchValue) {
-      if (pitch < MIN_PITCH || (pitch % 16) != 0 || pitch > MAX_PITCH) {
-        LDBG("Invalid pitch " << pitch << " for load: " << *op);
-        return;
-      }
-    } else {
-      int64_t fullRowBytes =
-          tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8;
-      if (fullRowBytes < MIN_PITCH) {
-        LDBG("Runtime pitch: full row width " << fullRowBytes << " < "
-                                              << MIN_PITCH << " bytes");
-        return;
-      }
+    // A runtime pitch can't be range-checked here; MaterializeBlockPointer
+    // proved it 16-byte aligned and the row-width check covers the minimum.
+    if (!ttgi::isBlockPitchSupported(
+            pitchValue ? std::nullopt : std::optional<int64_t>(pitch),
+            /*hasRuntimeStride=*/pitchValue != nullptr,
+            tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8)) {
+      LDBG("Unsupported pitch for load: " << *op);
+      return;
     }
 
     // For broadcast loads, the LLVM lowering's row replication
@@ -518,25 +510,52 @@ private:
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;
 
-    // If mask is present but other is absent, create a zero splat as the
-    // default padding value (the verifier requires 'other' when 'mask' is set).
-    Value mask = op.getMask();
-    Value other = op.getOther();
-    if (mask && !other)
-      other = createZeroSplat(builder, loc, tensorTy);
-
     // Pitch is a single i32 operand: the runtime value when we have one, an
-    // arith.constant otherwise (the lowering and asserts treat both the same).
+    // arith.constant otherwise (the lowering and asserts treat both the
+    // same).
     Value pitchOperand =
         pitchValue
             ? pitchValue
             : arith::ConstantOp::create(
                   builder, loc,
                   builder.getI32IntegerAttr(static_cast<int32_t>(pitch)));
+    Value mask = op.getMask();
+    Value other = op.getOther();
+    Value heightOperand;
+    if (rowLimitMask) {
+      // Drop the row-limit component: base_height replaces it. Keep the
+      // uniform conjuncts, ANDed, as the mask operand for the LLVM lowering to
+      // AND into its per-message select.
+      auto maskTy = cast<RankedTensorType>(op.getMask().getType());
+      mask = Value();
+      for (Value pred : rowLimitMask->extraPreds) {
+        pred = ttgi::materializeExtraPred(builder, loc, pred, maskTy);
+        mask = mask ? arith::AndIOp::create(builder, loc, mask, pred) : pred;
+      }
+      other = mask ? createZeroSplat(builder, loc, tensorTy) : Value();
+      // Relative to the tile's first row and may be <= 0; the LLVM lowering
+      // adjusts per message and never forwards a non-positive base_height.
+      heightOperand = ttgi::computeRowLimitHeight(
+          builder, loc, rowLimitMask->rowBound, rowLimitMask->rowBase,
+          tensorTy.getShape()[rowLimitMask->boundedDim]);
+    } else {
+      // If mask is present but other is absent, create a zero splat as the
+      // default padding value (the verifier requires 'other' when 'mask' is
+      // set).
+      if (mask && !other)
+        other = createZeroSplat(builder, loc, tensorTy);
+      heightOperand = arith::ConstantOp::create(
+          builder, loc,
+          builder.getI32IntegerAttr(static_cast<int32_t>(baseHeightRows)));
+    }
+
+    Value widthOperand = arith::ConstantOp::create(
+        builder, loc,
+        builder.getI32IntegerAttr(static_cast<int32_t>(baseWidthBytes)));
+
     auto blockPtrLoadOp = ttgi::Subgroup2DBlockLoadFromPtrOp::create(
-        builder, loc, op.getType(), op.getPtr(), pitchOperand, mask, other,
-        builder.getI32IntegerAttr(baseWidthBytes),
-        builder.getI32IntegerAttr(baseHeightRows),
+        builder, loc, op.getType(), op.getPtr(), pitchOperand, heightOperand,
+        widthOperand, mask, other,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate attributes if present.
@@ -548,6 +567,10 @@ private:
             ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName()))
       blockPtrLoadOp->setAttr(
           ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName(), attr);
+    if (rowLimitMask)
+      blockPtrLoadOp->setAttr(
+          ttgi::TritonIntelGPUDialect::getBlockIORuntimeRowLimitAttrName(),
+          builder.getUnitAttr());
 
     op.replaceAllUsesWith(blockPtrLoadOp.getResult());
     op.erase();

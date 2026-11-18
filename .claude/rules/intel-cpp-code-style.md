@@ -1,6 +1,11 @@
 ---
 description: 'AI-assisted coding guidelines following LLVM/MLIR standards'
-applyTo: '**/*.cpp, **/*.tpp, **/*.c, **/*.h, **/*.hpp'
+paths:
+  - "**/*.cpp"
+  - "**/*.tpp"
+  - "**/*.c"
+  - "**/*.h"
+  - "**/*.hpp"
 ---
 
 # LLVM/MLIR Coding Guidelines for AI Assistance

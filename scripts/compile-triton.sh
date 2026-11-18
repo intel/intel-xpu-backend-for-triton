@@ -4,6 +4,9 @@ set -euo pipefail
 
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# Provides the `pip` wrapper (pip or `uv pip`).
+source "$(dirname "$0")/pip-utils.sh"
+
 # Select what to build.
 BUILD_LLVM=false
 BUILD_TRITON=false
@@ -184,7 +187,7 @@ build_triton() {
   fi
 
   # Install triton and its dependencies.
-  pip install -v -e '.[build,tests]'
+  pip install -v -e .
 }
 
 build() {

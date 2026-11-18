@@ -3,7 +3,6 @@
 ; A `bitcast <K x i1> to <M x iN>` (N<8) read back via extractelement and tested
 ; with icmp eq/ne <const> is rewritten onto the source i1 lanes, so no sub-byte
 ; integer type (scalar iN or <M x iN> vector) reaches the SPIR-V translator
-; (arbitrary-precision OpTypeInt crashes IGC on LTS2).
 
 ; "any of the first two lanes set": icmp ne <lane0>, 0 lowers to
 ; not((not bit0) and (not bit1)), i.e. bit0 or bit1, over the source i1 lanes.

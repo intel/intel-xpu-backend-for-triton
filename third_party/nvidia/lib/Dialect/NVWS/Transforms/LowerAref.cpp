@@ -39,7 +39,6 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -96,38 +95,32 @@ void assignStageCluster(Operation *op,
   }
 }
 
-bool isOperandPipelineable(Value v, scf::ForOp forOp) {
-  auto isPipelineable = [](Operation *op) {
-    return isa<ArefPutEnterOp, ArefGetEnterOp, ArefBufferOp>(op);
-  };
-
-  Operation *foundDef = nullptr;
-  return triton::nvidia_gpu::isOperandPipelineableBase(v, forOp, foundDef,
-                                                       isPipelineable);
+// An aref releases its buffer after MMA completion. An immutable allocation
+// outside the loop can also be read across iterations without being refilled.
+bool canReadAcrossIterations(Value v, scf::ForOp forOp) {
+  while (Operation *def = v.getDefiningOp()) {
+    if (isa<ArefPutEnterOp, ArefGetEnterOp, ArefBufferOp>(def))
+      return true;
+    if (!def->hasTrait<OpTrait::MemDescViewTrait>())
+      break;
+    v = def->getOperand(0);
+  }
+  return forOp.isDefinedOutsideOfLoop(v) &&
+         !cast<MemDescType>(v.getType()).getMutableMemory();
 }
 
-void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp,
-                unsigned defaultNumStages) {
-  bool isAsync = true;
-  auto forOp = mmaOp->getParentOfType<scf::ForOp>();
-  if (!forOp)
+void promoteToAsync(MMAv5OpInterface mma, unsigned defaultNumStages) {
+  auto loop = mma->getParentOfType<scf::ForOp>();
+  if (!loop || getNumStagesOrDefault(loop, defaultNumStages) <= 1)
     return;
-
-  unsigned numStages = getNumStagesOrDefault(forOp, defaultNumStages);
-  if (numStages <= 1)
+  if (!canReadAcrossIterations(mma.getA(), loop) ||
+      !canReadAcrossIterations(mma.getB(), loop))
     return;
-
-  if (auto scaledOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(
-          mmaOp.getOperation())) {
-    if (!triton::nvidia_gpu::areScalesPipelineable(scaledOp, forOp)) {
-      isAsync = false;
-    }
-    if (!isOperandPipelineable(scaledOp.getAScale(), forOp) ||
-        !isOperandPipelineable(scaledOp.getBScale(), forOp)) {
-      isAsync = false;
-    }
-  }
-  mmaOp.setIsAsync(isAsync);
+  if (auto scaled = dyn_cast<TCGen5MMAScaledOp>(mma.getOperation()))
+    if (!canReadAcrossIterations(scaled.getAScale(), loop) ||
+        !canReadAcrossIterations(scaled.getBScale(), loop))
+      return;
+  mma.setIsAsync(true);
 }
 
 struct ArefValue {
@@ -179,10 +172,10 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
       continue;
     auto partitionIds = getPartitionIds(user);
 
-    assert(partitionIds.size() == 1);
-
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
-      if (producerGroups.count(partitionIds.front())) {
+      assert(partitionIds.size() == 1 &&
+             "aref producer must have exactly one partition");
+      if (producerGroups.contains(partitionIds.front())) {
         continue;
       }
       producerGroups.insert(partitionIds.front());
@@ -191,6 +184,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         case AsyncOp::TC5MMA:
         case AsyncOp::TMALoad:
         case AsyncOp::NONE:
+        case AsyncOp::CLC:
           count.producerPendingCount += 1;
           break;
         default:
@@ -198,19 +192,19 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         }
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      if (consumerGroups.count(partitionIds.front())) {
-        continue;
-      }
-      consumerGroups.insert(partitionIds.front());
-      for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
-        switch (kind) {
-        case AsyncOp::TC5MMA:
-        case AsyncOp::WGMMA:
-        case AsyncOp::NONE:
-          count.consumerPendingCount += 1;
-          break;
-        default:
-          llvm_unreachable("unsupported consumer kind");
+      for (int partitionId : partitionIds) {
+        if (!consumerGroups.insert(partitionId))
+          continue;
+        for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
+          switch (kind) {
+          case AsyncOp::TC5MMA:
+          case AsyncOp::WGMMA:
+          case AsyncOp::NONE:
+            count.consumerPendingCount += 1;
+            break;
+          default:
+            llvm_unreachable("unsupported consumer kind");
+          }
         }
       }
     }
@@ -249,14 +243,8 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
       arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
   auto depth = getArefDepth(arefBufTypes[0]);
 
-  SetVector<Operation *> arefUsers;
-  for (auto user : op->getUsers())
-    arefUsers.insert(user);
-  auto sorted = topologicalSort(arefUsers);
-
   ImplicitLocOpBuilder b1(op->getLoc(), op), b2(op->getLoc(), op);
-  auto op1 = op->getBlock()->findAncestorOpInBlock(*sorted.back());
-  b2.setInsertionPointAfter(op1);
+  b2.setInsertionPoint(op->getBlock()->getTerminator());
 
   auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
   auto fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
@@ -297,7 +285,7 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
                    Value barrierAlloc, Value pred) {
   auto newLoadOp = triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
       rewriter, op.getLoc(), op.getDesc(), op.getIndices(), barrierAlloc,
-      op.getResult(), pred);
+      op.getResult(), pred, /*multicast=*/false, op.getCachePolicyAttr());
   assignStageCluster(newLoadOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
 };
@@ -353,6 +341,30 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
   }
 }
 
+void lowerCLC(ArefPutEnterOp op, Value fullBarrier, PatternRewriter &rewriter) {
+  SmallVector<nvws::CLCTryCancelOp> clcOps;
+  for (Value buffer : op.getBuffers()) {
+    for (Operation *user : buffer.getUsers()) {
+      if (auto clc = dyn_cast<nvws::CLCTryCancelOp>(user))
+        clcOps.push_back(clc);
+    }
+  }
+  assert(clcOps.size() == 1 && "expected one CLC producer per response aref");
+  auto clc = clcOps.front();
+  auto pred = arith::ConstantIntOp::create(rewriter, clc.getLoc(), 1, 1);
+  assignStageCluster(pred, getPartitionWsTagIds(clc), getStageCluster(clc),
+                     rewriter);
+  auto expect = nvidia_gpu::BarrierExpectOp::create(rewriter, clc.getLoc(),
+                                                    fullBarrier, 16, pred);
+  assignStageCluster(expect, getPartitionWsTagIds(clc), getStageCluster(clc),
+                     rewriter);
+  auto issue = nvidia_gpu::CLCTryCancelOp::create(rewriter, clc.getLoc(),
+                                                  clc.getResult(), fullBarrier);
+  assignStageCluster(issue, getPartitionWsTagIds(clc), getStageCluster(clc),
+                     rewriter);
+  clc.erase();
+}
+
 void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
                   Value phase, Value stage) {
   auto waitOp = WaitBarrierOp::create(rewriter, op->getLoc(), barrier, phase);
@@ -361,9 +373,7 @@ void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
 }
 
 void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
-                       ArefValue arefVal,
-                       const DenseSet<MMAv5OpInterface> &mmav5Ops,
-                       unsigned defaultNumStages) {
+                       ArefValue arefVal) {
   auto loc = op.getLoc();
   rewriter.setInsertionPointAfter(op);
 
@@ -396,10 +406,8 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
          "Expecting matching Aref on the ArefPutExitOp");
 
   auto asyncKinds = castAsyncOpAttrs(exitOp.getAsyncOps());
-  auto hasAsyncLoad = [](AsyncOp kind) {
-    return kind == AsyncOp::TMALoad || kind == AsyncOp::CpAsync;
-  };
   auto hasTMA = [](AsyncOp kind) { return kind == AsyncOp::TMALoad; };
+  auto hasCLC = [](AsyncOp kind) { return kind == AsyncOp::CLC; };
 
   if (llvm::any_of(asyncKinds, hasTMA)) {
     Value fullBarrier =
@@ -408,10 +416,11 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
     lowerTMALoad(op, fullBarrier, rewriter, arefVal);
   }
 
-  if (llvm::any_of(asyncKinds, hasAsyncLoad)) {
-    for (auto mmav5 : mmav5Ops) {
-      setIsAsync(mmav5, defaultNumStages);
-    }
+  if (llvm::any_of(asyncKinds, hasCLC)) {
+    Value fullBarrier =
+        getFullBarrier(rewriter, loc, arefVal, op.getStage(),
+                       getPartitionWsTagIds(op), getStageCluster(op));
+    lowerCLC(op, fullBarrier, rewriter);
   }
 
   for (auto [oldBuffer, view] : llvm::zip(op.getBuffers(), views)) {
@@ -484,6 +493,7 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
                                                     Value(), ValueRange{});
       break;
     case AsyncOp::TMALoad:
+    case AsyncOp::CLC:
       // nothing to do, the arrive is done by HW
       break;
     case AsyncOp::CpAsync:
@@ -594,13 +604,14 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
         if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
           mmav5Ops.insert(mmav5);
         } else if (auto forOp = consumer->getParentOfType<scf::ForOp>()) {
-          auto users =
-              getTopLevelUsersInLoop(consumer, forOp, [](Operation *user) {
-                return isa<MMAv5OpInterface>(user);
-              });
-          for (auto user : users) {
-            mmav5Ops.insert(cast<MMAv5OpInterface>(user));
-          }
+          // Collect the MMAs themselves: the top-level users returned here are
+          // their ancestors in the loop body, e.g. an scf.if around the MMA.
+          getTopLevelUsersInLoop(consumer, forOp, [&](Operation *user) {
+            auto mmav5 = dyn_cast<MMAv5OpInterface>(user);
+            if (mmav5)
+              mmav5Ops.insert(mmav5);
+            return bool(mmav5);
+          });
         }
       }
     }
@@ -610,8 +621,7 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
 
 class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
 public:
-  LowerArefCreate(MLIRContext *ctx, unsigned defaultNumStages)
-      : OpRewritePattern(ctx), defaultNumStages(defaultNumStages) {}
+  using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(ArefCreateOp op,
                                 PatternRewriter &rewriter) const override {
@@ -619,16 +629,10 @@ public:
     SetVector<Operation *> opToDelete;
     opToDelete.insert(op.getOperation());
 
-    // setIsAsync(true) will be invoked on these mmav5 ops during
-    // rewritePutEnterOp when the producer is async loads. Since collecting
-    // consumer mmav5 ops requires the corresponding get enter op to be still
-    // used in the IR, collect them here.
-    auto mmav5Ops = getAsyncMMAv5Consumers(op.getResult());
-
     for (auto userOp : op->getUsers()) {
       opToDelete.insert(userOp);
       if (auto user = dyn_cast<ArefPutEnterOp>(userOp)) {
-        rewritePutEnterOp(user, rewriter, aref, mmav5Ops, defaultNumStages);
+        rewritePutEnterOp(user, rewriter, aref);
       } else if (auto user = dyn_cast<ArefGetEnterOp>(userOp)) {
         rewriteGetEnterOp(user, rewriter, aref);
       } else if (auto user = dyn_cast<ArefPutExitOp>(userOp)) {
@@ -657,9 +661,6 @@ public:
 
     return success();
   }
-
-private:
-  unsigned defaultNumStages;
 };
 
 bool isProducerLoad(ArefCreateOp arefOp) {
@@ -919,8 +920,9 @@ public:
     mlir::ModuleOp m = getOperation();
 
     SmallVector<scf::ForOp> loops;
-    m.walk([&](scf::ForOp loop) {
-      if (loop->hasAttr(triton::kWarpSpecializeAttrName)) {
+    m.walk([&](Operation *loop) {
+      if (isa<scf::ForOp, scf::WhileOp>(loop) &&
+          loop->hasAttr(triton::kWarpSpecializeAttrName)) {
         loop->walk([&](scf::ForOp op) { loops.push_back(op); });
       }
     });
@@ -935,6 +937,9 @@ public:
       // does load from global to shared memory.
       if (isProducerLoad(arefOp)) {
         arefOps.push_back(arefOp);
+        // Check the operands while they still refer to their original arefs.
+        for (auto mma : getAsyncMMAv5Consumers(arefOp.getResult()))
+          promoteToAsync(mma, numStages);
       }
     });
     multiBufferAref(arefOps, numStages);
@@ -945,7 +950,7 @@ public:
       return signalPassFailure();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<LowerArefCreate>(context, numStages);
+    patterns.add<LowerArefCreate>(context);
     GreedyRewriteConfig config;
     config.enableConstantCSE(false);
     config.enableFolding(false);

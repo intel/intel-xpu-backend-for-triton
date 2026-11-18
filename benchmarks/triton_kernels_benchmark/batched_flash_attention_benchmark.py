@@ -5,39 +5,16 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.benchmark_testing import DEVICE
 
 
 def fwd_autotune_config() -> list[triton.Config]:
     return [
-        triton.Config({"BLOCK_M": 128, "BLOCK_N": 64}, num_stages=3, num_warps=8),
-        triton.Config({"BLOCK_M": 128, "BLOCK_N": 32}, num_stages=3, num_warps=16),
+        triton.Config({"BLOCK_M": 128, "BLOCK_N": 64, "grf_mode": "256", "in_loop_sink": False}, num_stages=3,
+                      num_warps=8),
+        triton.Config({"BLOCK_M": 128, "BLOCK_N": 32, "grf_mode": "256", "in_loop_sink": False}, num_stages=3,
+                      num_warps=16),
     ]
-
-
-@triton.jit
-def load_if(block_ptr, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
-    if EVEN_M & EVEN_N:
-        return tl.load(block_ptr)
-    if EVEN_M:
-        return tl.load(block_ptr, boundary_check=(1, ), padding_option="zero")
-    if EVEN_N:
-        return tl.load(block_ptr, boundary_check=(0, ), padding_option="zero")
-
-    return tl.load(block_ptr, boundary_check=(0, 1), padding_option="zero")
-
-
-@triton.jit
-def store_if(block_ptr, value, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
-    if EVEN_M & EVEN_N:
-        tl.store(block_ptr, value)
-        return
-    if EVEN_M:
-        tl.store(block_ptr, value, boundary_check=(1, ))
-        return
-    if EVEN_N:
-        tl.store(block_ptr, value, boundary_check=(0, ))
-    else:
-        tl.store(block_ptr, value, boundary_check=(0, 1))
 
 
 @triton.jit
@@ -148,8 +125,7 @@ def fa_fwd_kernel(
         strides=[q_head * V_DIM, 1],
         block_shape=[BLOCK_M, V_DIM],
     )
-    l_block_ptr = tl.make_block_ptr(base=l_ptr + q_start * q_head + start_qh, shape=(q_len, ), strides=(q_head, ),
-                                    offsets=(start_m * BLOCK_M, ), block_shape=(BLOCK_M, ), order=(0, ))
+    l_base = l_ptr + q_start * q_head + start_qh
     desc_q_attn_arg = tl.make_tensor_descriptor(
         q_attn_arg_ptr + q_start,
         shape=[q_len],
@@ -193,7 +169,8 @@ def fa_fwd_kernel(
     acc = acc / l[:, None]
     l = m * scale + tl.log(l)
     desc_o.store([start_m * BLOCK_M, 0], acc.to(dtype))
-    store_if(l_block_ptr, l, False, True)
+    l_offs = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    tl.store(l_base + l_offs.to(tl.int64) * q_head, l, mask=l_offs < q_len)
 
 
 def batched_attention(q, k, v, q_attn_arg, k_attn_arg, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, scale, mask_opt,
@@ -232,7 +209,7 @@ def random_segments(
     cv_tol: float = 1.0,
     max_length: int | None = None,
     max_trials: int = 1000,
-    device: str = "xpu",
+    device: str = DEVICE,
     seed: int | None = None,
 ):
     """
@@ -361,8 +338,8 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
             ],
             x_vals=x_vals,
             line_arg="provider",
-            line_vals=providers.keys(),
-            line_names=providers.values(),
+            line_vals=list(providers.keys()),
+            line_names=list(providers.values()),
             styles=[("green", "-")],
             ylabel=["GB/s", "TFlops"],
             plot_name="batched-flash-attn-performance",
@@ -371,11 +348,11 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
     def benchmark(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN, H_Q, H_KV, D_HEAD_QK, D_HEAD_V, provider):
         do_bench = benchmark_suite.get_do_bench(n_warmup=400, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         segments, _, max_len, _ = random_segments(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN, seed=42)
-        bitmap = build_segment_bitmap(segments, TOTAL_TOKENS, "xpu")
+        bitmap = build_segment_bitmap(segments, TOTAL_TOKENS, DEVICE)
         dtype = torch.float16
-        q = torch.randn((TOTAL_TOKENS, H_Q, D_HEAD_QK), dtype=dtype, device="xpu")
-        k = torch.randn((TOTAL_TOKENS, H_KV, D_HEAD_QK), dtype=dtype, device="xpu")
-        v = torch.randn((TOTAL_TOKENS, H_KV, D_HEAD_V), dtype=dtype, device="xpu")
+        q = torch.randn((TOTAL_TOKENS, H_Q, D_HEAD_QK), dtype=dtype, device=DEVICE)
+        k = torch.randn((TOTAL_TOKENS, H_KV, D_HEAD_QK), dtype=dtype, device=DEVICE)
+        v = torch.randn((TOTAL_TOKENS, H_KV, D_HEAD_V), dtype=dtype, device=DEVICE)
         scale = 0.125
 
         if provider == "triton":
