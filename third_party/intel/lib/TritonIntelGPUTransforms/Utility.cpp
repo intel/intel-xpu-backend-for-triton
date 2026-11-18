@@ -21,6 +21,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <optional>
@@ -189,7 +190,9 @@ CachePolicy getCachePolicy(Attribute cachePolicy) {
 /// directly. With any other consumer the load gives up its coalesced encoding
 /// for nothing, and the mask bounds the resulting tile besides. Keep such a
 /// load anchored -- it can still lower to a 2D block message, just in the
-/// encoding the memory access itself wants.
+/// encoding the memory access itself wants. A broadcast load whose result is
+/// combined with a DPAS value (e.g. a GEMM bias) is the exception: it is costed
+/// by its distinct addresses below, see feedsDpasValue.
 static bool isMaskedLoadWithoutDotConsumer(Operation *op) {
   auto loadOp = dyn_cast<tt::LoadOp>(op);
   if (!loadOp)
@@ -217,6 +220,163 @@ static bool isMaskedLoadWithoutDotConsumer(Operation *op) {
     }
   }
   return true;
+}
+
+/// Per-query results of getUniformDims, keyed by (value, depth), so that a
+/// value reached through several operands (e.g. `x = x * x` chains) is analysed
+/// once per depth: the walk stays linear in the number of values instead of
+/// exponential in the depth, and its answer does not depend on visit order.
+using UniformDimsCache =
+    DenseMap<std::pair<Value, unsigned>, SmallVector<bool>>;
+
+static SmallVector<bool> getUniformDims(Value value, UniformDimsCache &cache,
+                                        unsigned depth);
+
+/// For each dimension of the tensor \p value, true if every element along that
+/// dimension provably has the same value, e.g. a pointer tensor built from a
+/// broadcast row such as an addmm bias with stride (0, 1). Looks through the
+/// ops that build such tensors and answers false for anything else.
+static SmallVector<bool>
+computeUniformDims(Value value, UniformDimsCache &cache, unsigned depth) {
+  auto tensorTy = cast<RankedTensorType>(value.getType());
+  ArrayRef<int64_t> shape = tensorTy.getShape();
+  // A dimension of size 1 is trivially uniform.
+  SmallVector<bool> uniform =
+      llvm::map_to_vector(shape, [](int64_t dim) { return dim == 1; });
+  constexpr unsigned maxDepth = 16;
+  Operation *def = value.getDefiningOp();
+  if (!def || depth >= maxDepth)
+    return uniform;
+
+  auto allUniform = [&]() { return SmallVector<bool>(shape.size(), true); };
+  auto fromOperand = [&](Value operand) -> std::optional<SmallVector<bool>> {
+    auto operandTy = dyn_cast<RankedTensorType>(operand.getType());
+    if (!operandTy || operandTy.getShape() != shape)
+      return std::nullopt;
+    return getUniformDims(operand, cache, depth + 1);
+  };
+
+  if (isa<tt::SplatOp>(def))
+    return allUniform();
+  if (auto constantOp = dyn_cast<arith::ConstantOp>(def))
+    return isa<SplatElementsAttr>(constantOp.getValue()) ? allUniform()
+                                                         : uniform;
+  if (auto broadcastOp = dyn_cast<tt::BroadcastOp>(def)) {
+    Value src = broadcastOp.getSrc();
+    SmallVector<bool> srcUniform = getUniformDims(src, cache, depth + 1);
+    ArrayRef<int64_t> srcShape =
+        cast<RankedTensorType>(src.getType()).getShape();
+    for (auto [dim, srcSize] : llvm::enumerate(srcShape))
+      uniform[dim] = uniform[dim] || srcSize == 1 || srcUniform[dim];
+    return uniform;
+  }
+  if (auto expandDimsOp = dyn_cast<tt::ExpandDimsOp>(def)) {
+    SmallVector<bool> srcUniform =
+        getUniformDims(expandDimsOp.getSrc(), cache, depth + 1);
+    srcUniform.insert(srcUniform.begin() + expandDimsOp.getAxis(), true);
+    return srcUniform;
+  }
+  if (isa<ttg::ConvertLayoutOp>(def)) {
+    if (std::optional<SmallVector<bool>> srcUniform =
+            fromOperand(def->getOperand(0)))
+      return *srcUniform;
+    return uniform;
+  }
+  // An elementwise result is uniform along a dimension when every operand is.
+  // Inline asm is excluded: it receives packed elements, so an output element
+  // can depend on its neighbours and uniform operands prove nothing.
+  if (isa<tt::AddPtrOp>(def) ||
+      (def->hasTrait<OpTrait::Elementwise>() && isPure(def) &&
+       def->getNumResults() == 1 && !isa<tt::ElementwiseInlineAsmOp>(def))) {
+    SmallVector<bool> result = allUniform();
+    for (Value operand : def->getOperands()) {
+      std::optional<SmallVector<bool>> operandUniform = fromOperand(operand);
+      if (!operandUniform)
+        return uniform;
+      for (auto [dim, isUniform] : llvm::enumerate(*operandUniform))
+        result[dim] = result[dim] && isUniform;
+    }
+    for (auto [dim, isUniform] : llvm::enumerate(result))
+      uniform[dim] = uniform[dim] || isUniform;
+    return uniform;
+  }
+  return uniform;
+}
+
+static SmallVector<bool> getUniformDims(Value value, UniformDimsCache &cache,
+                                        unsigned depth) {
+  auto key = std::make_pair(value, depth);
+  auto it = cache.find(key);
+  if (it != cache.end())
+    return it->second;
+  SmallVector<bool> uniform = computeUniformDims(value, cache, depth);
+  cache.try_emplace(key, uniform);
+  return uniform;
+}
+
+/// Number of distinct addresses a tensor of pointers can hold when it is
+/// broadcast along some, but not all, of its dimensions: the product of the
+/// extents of the dimensions along which the pointer varies. Otherwise the
+/// logical element count. A fully uniform tile (e.g. a load of a splat pointer)
+/// keeps the logical count: it is not a broadcast row or column, and whether
+/// such a load should anchor a layout is a separate question. A dimension the
+/// walk cannot prove uniform (an unhandled op, or the depth limit) counts as
+/// varying: that is safe for the uniformity proof, but it can make a fully
+/// uniform tile look like a broadcast and cost it by the remaining extent.
+static int64_t getNumDistinctElements(Value ptr) {
+  auto ptrTy = cast<RankedTensorType>(ptr.getType());
+  UniformDimsCache cache;
+  SmallVector<bool> uniformDims = getUniformDims(ptr, cache, /*depth=*/0);
+  int64_t numDistinct = 1;
+  bool anyUniform = false, anyVarying = false;
+  for (auto [size, isUniform] :
+       llvm::zip_equal(ptrTy.getShape(), uniformDims)) {
+    if (size == 1)
+      continue;
+    if (isUniform) {
+      anyUniform = true;
+    } else {
+      anyVarying = true;
+      numDistinct *= size;
+    }
+  }
+  return anyUniform && anyVarying ? numDistinct : ptrTy.getNumElements();
+}
+
+/// True if the result of \p loadOp is converted to a DPAS encoding, or is
+/// combined through layout-only and elementwise ops with a value that is in, or
+/// is converted from, a DPAS encoding: e.g. a bias added to a dot accumulator
+/// in a GEMM epilogue. Such a load is rematerialized into the DPAS encoding
+/// instead of converting the whole tile through shared memory.
+static bool feedsDpasValue(tt::LoadOp loadOp) {
+  auto isDpasValue = [](Value value) {
+    auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
+    if (tensorTy && hasDpasEncoding(tensorTy))
+      return true;
+    auto convertOp = value.getDefiningOp<ttg::ConvertLayoutOp>();
+    return convertOp && hasDpasEncoding(convertOp.getSrc().getType());
+  };
+
+  SmallVector<Value> worklist{loadOp.getResult()};
+  SmallPtrSet<Operation *, 16> visited;
+  while (!worklist.empty()) {
+    Value val = worklist.pop_back_val();
+    for (Operation *user : val.getUsers()) {
+      if (auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(user))
+        if (hasDpasEncoding(convertOp.getType()))
+          return true;
+      bool elementwise = user->hasTrait<OpTrait::Elementwise>();
+      if (!elementwise && !isa<ttg::ConvertLayoutOp, tt::FpToFpOp,
+                               tt::BroadcastOp, tt::ReshapeOp>(user))
+        continue;
+      if (!visited.insert(user).second)
+        continue;
+      if (elementwise && llvm::any_of(user->getOperands(), isDpasValue))
+        return true;
+      llvm::append_range(worklist, user->getResults());
+    }
+  }
+  return false;
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
@@ -263,7 +423,20 @@ bool isExpensiveLoadOrStore(Operation *op) {
     int numWarps = ttg::lookupNumWarps(op);
     auto mod = op->getParentOfType<ModuleOp>();
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    return ptrType.getNumElements() >= numWarps * threadsPerWarp;
+    // A load whose pointer is broadcast along some dimensions, such as an
+    // addmm bias with stride (0, 1), reads each distinct address repeatedly;
+    // only the distinct addresses cost memory traffic. When it feeds a DPAS
+    // value, counting the logical elements instead would anchor the load in its
+    // coalesced encoding and keep a convert of the whole tile to DPAS through
+    // shared memory, although its repeated reads are cache hits. Other loads,
+    // and stores, keep the logical count.
+    int64_t numElements = ptrType.getNumElements();
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+      int64_t numDistinct = getNumDistinctElements(base);
+      if (numDistinct < numElements && feedsDpasValue(loadOp))
+        numElements = numDistinct;
+    }
+    return numElements >= numWarps * threadsPerWarp;
   }
 
   return false;
