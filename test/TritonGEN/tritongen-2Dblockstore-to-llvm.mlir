@@ -226,3 +226,16 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base
   llvm.return
 }
 }
+
+// -----
+
+// COM: "ttig.use_genisa_2d_block_io" selects GenISA (#8858).
+module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.use_genisa_2d_block_io} {
+llvm.func @triton_gen.2Dblockstore_use_genisa(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<8xi16>) {
+  // CHECK-LABEL: llvm.func @triton_gen.2Dblockstore_use_genisa
+  // CHECK-NOT:   __spirv_Subgroup2DBlockStore
+  // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.
+  triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=16, tile_width=16, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
+  llvm.return
+}
+}
