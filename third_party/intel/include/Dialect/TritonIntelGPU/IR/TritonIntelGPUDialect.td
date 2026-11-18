@@ -65,6 +65,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_predicated_io";
     }
 
+    /// Get the name of the attribute used to indicate whether the
+    /// SPV_INTEL_subgroup_bitcast_shuffle extension is available.
+    static constexpr llvm::StringRef getSupportSubgroupBitcastShuffleAttrName() {
+      return "ttig.support_subgroup_bitcast_shuffle";
+    }
+
     /// Get the name of the attribute used to indicate whether the DPAS
     /// operation is available.
     static constexpr llvm::StringRef getSupportDPASAttrName() {
@@ -138,6 +144,12 @@ def TritonIntelGPU_Dialect : Dialect {
     /// Please use this attribute with caution, this is intended for temporary use.
     static constexpr llvm::StringRef getIsLTSAttrName() {
       return "ttig.is_lts";
+    }
+
+    /// Get the name of the attribute that makes 2D block I/O lower through the
+    /// GenISA interface instead of the SPIR-V builtins (set for IGC < 2.38).
+    static constexpr llvm::StringRef getUseGenISA2DBlockIOAttrName() {
+      return "ttig.use_genisa_2d_block_io";
     }
 
     /// Get the name of the attribute holding the core clock rate in kHz, used
