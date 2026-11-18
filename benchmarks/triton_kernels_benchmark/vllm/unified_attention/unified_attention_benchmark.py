@@ -74,7 +74,14 @@ def ref_paged_attn(
         if q.shape[1] != k.shape[1]:
             k = torch.repeat_interleave(k, q.shape[1] // k.shape[1], dim=1)
             v = torch.repeat_interleave(v, q.shape[1] // v.shape[1], dim=1)
-        attn = torch.einsum("qhd,khd->hqk", q, k).float()
+        attn_bf = torch.einsum("qhd,khd->hqk", q, k)
+        if i == 0 and num_seqs == 4 and q.shape[1] == 64 and query_len == 2048 and kv_len == 2048:
+            print("DIAGPTR8742 q/k/attn_bf16 data_ptr % 4096 = "
+                  f"{q.data_ptr() % 4096}/{k.data_ptr() % 4096}/{attn_bf.data_ptr() % 4096}; "
+                  f"% 1MiB = {q.data_ptr() % 2**20}/{k.data_ptr() % 2**20}/{attn_bf.data_ptr() % 2**20}; "
+                  f"strides q {tuple(q.stride())} k {tuple(k.stride())} contiguous {q.is_contiguous()}/{k.is_contiguous()}",
+                  flush=True)
+        attn = attn_bf.float()
         empty_mask = torch.ones(query_len, kv_len)
         mask = torch.triu(empty_mask, diagonal=kv_len - query_len + 1).bool()
         if sliding_window is not None:
@@ -478,6 +485,31 @@ def get_unified_attention_benchmark(
                     a_x = torch.einsum("qhd,khd->hqk", q0, k0).float()
                     a_c = torch.einsum("qhd,khd->hqk", q0.float().cpu(), k0.float().cpu())
                     _cmp("A qk-einsum xpu-vs-cpu32", a_x, a_c, 3e-2, 3e-2)
+                    # variants in the same (failing) process state, compared on heads 0..3 only
+                    ref4 = a_c[:4]
+                    h4 = lambda t: t[:4]
+                    variants = {
+                        "A2 same einsum again": lambda: torch.einsum("qhd,khd->hqk", q0, k0).float(),
+                        "A3 torch.bmm": lambda: torch.bmm(q0.permute(1, 0, 2), k0.permute(1, 2, 0)).float(),
+                        "A4 einsum on contiguous clones": lambda: torch.einsum("qhd,khd->hqk", q0.clone(), k0.clone()).float(),
+                        "A5 einsum after empty_cache": lambda: (torch.xpu.empty_cache(),
+                                                              torch.einsum("qhd,khd->hqk", q0, k0).float())[1],
+                        "A6 fp32 einsum": lambda: torch.einsum("qhd,khd->hqk", q0.float(), k0.float()),
+                        "A7 einsum heads 0..3 only": lambda: torch.einsum("qhd,khd->hqk", q0[:, :4], k0[:, :4]).float(),
+                        "A8 einsum heads 0..3 contiguous": lambda: torch.einsum("qhd,khd->hqk", q0[:, :4].contiguous(),
+                                                                              k0[:, :4].contiguous()).float(),
+                    }
+                    for vname, vfn in variants.items():
+                        try:
+                            vout = vfn()
+                            nb = int((~torch.isclose(h4(vout).float().cpu(), ref4, atol=3e-2, rtol=3e-2)).sum())
+                            print(f"DIAG8742 variant {vname}: bad(heads 0..3)={nb}/{ref4.numel()}", flush=True)
+                        except Exception as ve:  # pylint: disable=broad-except
+                            print(f"DIAG8742 variant {vname}: error {type(ve).__name__}: {ve}", flush=True)
+                    free_b, total_b = torch.xpu.mem_get_info()
+                    print(f"DIAG8742 xpu memory at failure: free {free_b / 2**30:.2f} / {total_b / 2**30:.2f} GiB; "
+                          f"allocated {torch.xpu.memory_allocated() / 2**30:.2f} GiB, reserved {torch.xpu.memory_reserved() / 2**30:.2f} GiB",
+                          flush=True)
                     msk = torch.triu(torch.ones(qlen, kvlen), diagonal=kvlen - qlen + 1).bool()
                     b_x = a_x.masked_fill(msk, float("-inf"))
                     s_in = b_x.clone()
