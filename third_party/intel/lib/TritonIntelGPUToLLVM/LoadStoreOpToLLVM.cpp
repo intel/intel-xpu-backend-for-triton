@@ -597,10 +597,10 @@ struct LoadStoreConversionBase {
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
       return false;
 
-    // Predicated load and store are enabled by default for all four op types
-    // (LoadOp, StoreOp, DescriptorLoadOp, DescriptorStoreOp). Either env var
-    // (TRITON_INTEL_PREDICATED_LOAD, TRITON_INTEL_PREDICATED_STORE) overrides
-    // in both directions.
+    // Predicated load and store are enabled by default for all five op types
+    // (LoadOp, StoreOp, DescriptorLoadOp, DescriptorStoreOp and the ttig
+    // DescriptorGatherOp). Either env var (TRITON_INTEL_PREDICATED_LOAD,
+    // TRITON_INTEL_PREDICATED_STORE) overrides in both directions.
     //
     // Note that DescriptorLoadOp always emits a boundary-check mask, even for
     // provably in-bounds tiles, so this choice applies to all of its masked
@@ -3014,22 +3014,6 @@ private:
         unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
     DescriptorFields desc = unpackDescriptor(llDesc, descRank, loc, rewriter);
 
-    Value laneId = getLaneAndWarpId(rewriter, loc).first;
-    // IGC must see the warp ID as uniform: it feeds the `rw.u` address operand
-    // of the sub-group gather load, which IGC rejects if it cannot prove it.
-    Value warpId = arith::IndexCastOp::create(
-        rewriter, loc, i32_ty,
-        mlir::gpu::SubgroupIdOp::create(rewriter, loc, /*upperBound=*/nullptr));
-    // Get the sub offset Y from the warp ID.
-    auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
-                                     {{kRegister, b.i32_val(0)},
-                                      {kLane, b.i32_val(0)},
-                                      {kWarp, warpId},
-                                      {kBlock, b.i32_val(0)}});
-    // Add sub-offset Y from warp Id.
-    Value basicOffsetY = b.add(offsetY, getNamedOffset(offsets, kDim1));
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
-
     // Each lane loads `vec` registers that are adjacent columns of one row with
     // one predicated vector load, as tt.load does. `vec` divides shape[1] and
     // is aligned with y, so a chunk is either wholly in or wholly out of bounds
@@ -3102,6 +3086,22 @@ private:
       rewriter.replaceOp(op, {emitVectorized()});
       return success();
     }
+
+    Value laneId = getLaneAndWarpId(rewriter, loc).first;
+    // IGC must see the warp ID as uniform: it feeds the `rw.u` address operand
+    // of the sub-group gather load, which IGC rejects if it cannot prove it.
+    Value warpId = arith::IndexCastOp::create(
+        rewriter, loc, i32_ty,
+        mlir::gpu::SubgroupIdOp::create(rewriter, loc, /*upperBound=*/nullptr));
+    // Get the sub offset Y from the warp ID.
+    auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
+                                     {{kRegister, b.i32_val(0)},
+                                      {kLane, b.i32_val(0)},
+                                      {kWarp, warpId},
+                                      {kBlock, b.i32_val(0)}});
+    // Add sub-offset Y from warp Id.
+    Value basicOffsetY = b.add(offsetY, getNamedOffset(offsets, kDim1));
+    Type llvmResultStructTy = typeConverter->convertType(op.getType());
 
     auto emitGather = [&](const GatherLayoutConfig &cfg) -> Value {
       LinearLayout shuffleMapping =

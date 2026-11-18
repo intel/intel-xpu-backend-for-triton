@@ -1340,7 +1340,8 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
 }
 
 // One of the gather admission checks (all are listed at the DescriptorGatherOp
-// case below): column offset 0 and a row access proven 16-byte aligned.
+// case below): column offset 0, elements of at least 8 bits (so no i1), and a
+// row access proven 16-byte aligned.
 // Power-of-two divisors, not floors, keep non-power-of-two hints from
 // overclaiming.
 static bool isAlignedNativeGather(triton::DescriptorGatherOp op,
@@ -1430,14 +1431,13 @@ collectCandidateMakeTensorDescOps(Operation *op, int numWarps,
         .Case<triton::DescriptorGatherOp>([&](triton::DescriptorGatherOp op) {
           // A gather stays native (lowered as ttig.descriptor_gather) only
           // where that lowering matches the pointer expansion: zero padding,
-          // no i1 elements, a unit last stride, isAlignedNativeGather and
+          // a unit last stride, isAlignedNativeGather and
           // isMeasuredNativeGatherClass.
           triton::intel::DescriptorDefinitions defs =
               triton::intel::findDescriptorDefinitions(op.getDesc());
           bool keepNative =
               keepNativeGathers &&
               defs.consistentPadding() == triton::PaddingOption::PAD_ZERO &&
-              !getElementTypeOrSelf(op.getType()).isInteger(1) &&
               defs.allSatisfy([](triton::MakeTensorDescOp d) {
                 return matchPattern(d.getStrides().back(), m_One());
               }) &&
