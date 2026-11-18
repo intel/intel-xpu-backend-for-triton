@@ -1,6 +1,7 @@
 // RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-dpas=true threads-per-warp=32' | FileCheck %s
 // RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=8 support-dpas=true threads-per-warp=32' | FileCheck %s --check-prefix=CHECK-SG8
 // RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-dpas=false threads-per-warp=16' | FileCheck %s --check-prefix=CHECK-NO-DPAS
+// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-dpas=true support-dpas-bf8=true threads-per-warp=32' | FileCheck %s --check-prefix=CHECK-BF8
 
 // Test that module annotations are applied correctly without dot operations
 // CHECK: module attributes {"ttg.threads-per-warp" = 32 : i32{{.*}}ttig.min_sg_size = 16{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
@@ -129,7 +130,11 @@ module {
 
 // -----
 
+// Test that mixed fp8 dots with a bf16 accumulator get the DPAS warp size, with and without fp8 DPAS
 // CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.min_sg_size = 16{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
+// CHECK-BF8: tt.func @kernel_fp8_bf16_acc_dot
+// CHECK-BF8: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.support_subgroup_matrix_multiply_accumulate_bf8
+// CHECK-BF8-NEXT: tt.func @kernel_mixed_fp8_bf16_acc_dot
 module {
   tt.func @kernel_mixed_fp8_bf16_acc_dot(%arg0: tensor<128x128x!tt.ptr<bf16>>) {
     %a = arith.constant dense<1.00e+00> : tensor<128x64xf8E4M3FN>
@@ -145,6 +150,8 @@ module {
 
 // Test that mixed fp8 dots with an fp32 accumulator, which use fp16 DPAS without fp8 DPAS, get the DPAS warp size
 // CHECK: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.min_sg_size = 16{{.*}}ttig.support_subgroup_matrix_multiply_accumulate
+// CHECK-BF8: module attributes {"ttg.threads-per-warp" = 16 : i32{{.*}}ttig.support_subgroup_matrix_multiply_accumulate_bf8
+// CHECK-BF8-NEXT: tt.func @kernel_mixed_fp8_f32_acc_dot
 module {
   tt.func @kernel_mixed_fp8_f32_acc_dot(%arg0: tensor<128x128x!tt.ptr<f32>>) {
     %a = arith.constant dense<1.00e+00> : tensor<128x64xf8E4M3FN>
