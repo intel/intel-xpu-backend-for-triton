@@ -312,7 +312,8 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   // Note: we only walk thru register packing order by increasing the
   // tileHeight and vBlocks for simplicity. This may cause low efficiency in
   // block store for some cases because the block store doesn't support
-  // vBlocks > 1. Illustration of the tile shape and register packing:
+  // vBlocks > 1 (foldColumnBlockIntoRow handles the 16-bit SG16 case).
+  // Illustration of the tile shape and register packing:
   // clang-format off
   //                 vBlocks=2
   //                     ^
@@ -329,7 +330,8 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   // │    │    │    │    │    │    │    │    │
   // └────┴────┴────┴────┴────┴────┴────┴────┘
   // We will pack the R0 and R2 as the first matrix. R1 and R3 as the second matrix with vBlocks=2 for 2 matrixes.
-  // But the tile shape following maybe more efficient for block store because block store only supports vBlocks=1.
+  // Block store only supports vBlocks=1, so for 16-bit SG16 tiles foldColumnBlockIntoRow produces the tile shape below
+  // (lanes shown as in the layout; the store lowering then repacks each row across lanes).
   //               tileWidth=32
   //                     ^
   // ┌───────────────────┬───────────────────┐
@@ -815,7 +817,8 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
 
 // Folds the first column v-block of a 16-wide, 16-bit SG16 store tile into a
 // 32-wide row by moving its register basis ahead of the row bases, so each
-// message's payload is row-major [r0 blk0, r0 blk1, r1 blk0, ...].
+// lane's registers are ordered [r0 blk0, r0 blk1, r1 blk0, ...]. The caller
+// must still repack each row across lanes (see validate2DBlockStoreTile).
 static bool foldColumnBlockIntoRow(const LinearLayout &ll,
                                    BlockIOTileSizeInfo &sizeInfo,
                                    unsigned elemSizeInBits, MLIRContext *ctx) {

@@ -61,9 +61,10 @@ static bool allowStoreLaneInterleave(Operation *op) {
          !tools::getBoolEnv("TRITON_INTEL_DISABLE_WIDE_BLOCK_STORE");
 }
 
-/// A widened row gives lane l columns 2l and 2l+1, while each (even, odd)
-/// payload pair holds columns l and 16+l; a sub-group bitcast shuffle per pair
-/// redistributes them.
+/// A row wider than the sub-group gives lane l columns 2l and 2l+1
+/// (SPV_INTEL_2d_block_io, "Mapping Block Data to Invocations"), while each
+/// (even, odd) payload pair holds columns l and 16+l. The values must change
+/// lanes, so a sub-group bitcast shuffle per pair redistributes them.
 static Value repackLaneInterleavedRows(ConversionPatternRewriter &rewriter,
                                        Location loc, Value storeVal) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
