@@ -89,6 +89,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_subgroup_scaled_matrix_multiply_accumulate";
     }
 
+    /// Get the name of the attribute used to indicate whether the Block Scale DPAS
+    /// operation supports FP4 (E2M1) operands.
+    static constexpr llvm::StringRef getSupportBlockScaleDPASWithFP4AttrName() {
+      return "ttig.support_subgroup_scaled_matrix_multiply_accumulate_fp4";
+    }
+
     /// Get the name of the attribute used to indicate whether the F4 conversion
     /// operation is available.
     static constexpr llvm::StringRef getSupportF4ConversionAttrName() {
