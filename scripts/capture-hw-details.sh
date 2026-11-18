@@ -131,10 +131,14 @@ else
     export TORCH_VERSION="Not installed"
 fi
 
-if [ -f /opt/intel/installed.txt ]; then
-    export DLE_VERSION=$(grep -oP 'deep-learning-essentials-\K[0-9.]+' /opt/intel/installed.txt)
-else
+if [ ! -f /opt/intel/installed.txt ]; then
     export DLE_VERSION="Not installed"
+elif [[ ${SETVARS_COMPLETED:-} != 1 ]]; then
+    # The DLE is installed, but this environment does not use it: oneAPI's setvars.sh
+    # exports SETVARS_COMPLETED=1 only after it initializes the environment successfully.
+    export DLE_VERSION="Not initialized"
+else
+    export DLE_VERSION=$(grep -oP 'deep-learning-essentials-\K[0-9.]+' /opt/intel/installed.txt)
 fi
 
 if icpx --version &> /dev/null; then
