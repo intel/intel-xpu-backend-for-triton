@@ -1237,7 +1237,8 @@ struct TritonSubGroupBlockReadLowering
         /*errnoMem=*/LLVM::ModRefInfo::NoModRef,
         /*targetMem0=*/LLVM::ModRefInfo::NoModRef,
         /*targetMem1=*/LLVM::ModRefInfo::NoModRef);
-    auto funcAttrs = intel::noUnwindWillReturnAttrs;
+    // A sub-group collective: LLVM must not move it into divergent code.
+    auto funcAttrs = intel::convergentNoUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
     LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, funcName, type, {ptrTy}, {op.getPtr()}, {}, funcAttrs, {});
@@ -1448,6 +1449,13 @@ struct TritonSubGroupBitcastShuffleLowering
   LogicalResult
   matchAndRewrite(TritonGEN::SubGroupBitcastShuffleOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    if (mod->hasAttr(intel::TritonIntelGPUDialect::
+                         getSupportSubgroupBitcastShuffleAttrName())) {
+      rewriter.replaceOp(op, createSPIRVBuiltin(op, rewriter));
+      return success();
+    }
+
     Type inputType = op.getValue().getType();
     Type resultType = op.getResult().getType();
 
@@ -1460,6 +1468,39 @@ struct TritonSubGroupBitcastShuffleLowering
         intel::convergentNoUnwindWillReturnAttrs);
     rewriter.replaceOp(op, call.getResult());
     return success();
+  }
+
+private:
+  // The extension takes integer scalars or vectors of 2, 4, 8 or 16 elements,
+  // so a single-element vector is passed as a scalar.
+  static Type getSPIRVType(VectorType type) {
+    return type.getNumElements() == 1 ? type.getElementType() : Type(type);
+  }
+
+  static Value createSPIRVBuiltin(TritonGEN::SubGroupBitcastShuffleOp op,
+                                  ConversionPatternRewriter &rewriter) {
+    auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+    VectorType resultType = op.getResult().getType();
+    Type spvInputType = getSPIRVType(op.getValue().getType());
+    Type spvResultType = getSPIRVType(resultType);
+
+    Value input = op.getValue();
+    if (spvInputType != input.getType())
+      input = b.bitcast(input, spvInputType);
+
+    // The mangled name only encodes the input type, so the result type postfix
+    // keeps shuffles with the same input type and different result types apart.
+    std::string fnName =
+        intel::mangle("__spirv_SubgroupBitcastShuffleINTEL" +
+                          intel::getResultTypePostfix(spvResultType),
+                      {spvInputType});
+    Value result = intel::createDeviceFunctionCall(
+                       rewriter, fnName, spvResultType, {spvInputType}, {input},
+                       {}, intel::convergentNoUnwindWillReturnAttrs)
+                       .getResult();
+    if (spvResultType != resultType)
+      result = b.bitcast(result, resultType);
+    return result;
   }
 };
 

@@ -131,11 +131,11 @@ llvm.func @triton_gen.dpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(!llvm.ptr<3>) -> vector<2xi16> attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
+// CHECK: llvm.func spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(!llvm.ptr<3>) -> vector<2xi16> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.sub_group_block_read(%ptr: !llvm.ptr<3>) {
   // CHECK:     llvm.func @triton_gen.sub_group_block_read(%arg0: !llvm.ptr<3>) {
-  // CHECK:       llvm.call spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(%arg0) {{.*}} : (!llvm.ptr<3>) -> vector<2xi16>
+  // CHECK:       llvm.call spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(%arg0) {convergent, {{.*}} : (!llvm.ptr<3>) -> vector<2xi16>
   %ret = triton_gen.sub_group_block_read %ptr : !llvm.ptr<3> -> vector<2xi16>
   llvm.return
 }
@@ -351,6 +351,31 @@ llvm.func @triton_gen.sub_group_bitcast_shuffle(%val : vector<4xi8>) -> vector<2
   // CHECK:         llvm.return [[RES]]
   %0 = triton_gen.sub_group_bitcast_shuffle %val : vector<4xi8> -> vector<2xi16>
   llvm.return %0 : vector<2xi16>
+}
+
+// -----
+
+module attributes {ttig.support_subgroup_bitcast_shuffle} {
+  // CHECK-DAG: llvm.func spir_funccc @_Z44__spirv_SubgroupBitcastShuffleINTEL_Rushort8Dv16_c(vector<16xi8>) -> vector<8xi16> attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z42__spirv_SubgroupBitcastShuffleINTEL_Ruint4Dv16_c(vector<16xi8>) -> vector<4xi32> attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z44__spirv_SubgroupBitcastShuffleINTEL_Rushort4l(i64) -> vector<4xi16> attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z42__spirv_SubgroupBitcastShuffleINTEL_RulongDv4_s(vector<4xi16>) -> i64 attributes {convergent, no_unwind, will_return}
+  // CHECK-LABEL: llvm.func @triton_gen.sub_group_bitcast_shuffle_spirv(
+  // CHECK-SAME:    [[VAL:%.*]]: vector<16xi8>, [[VAL1:%.*]]: vector<4xi16>, [[VAL2:%.*]]: vector<1xi64>
+  llvm.func @triton_gen.sub_group_bitcast_shuffle_spirv(%val : vector<16xi8>, %val1 : vector<4xi16>, %val2 : vector<1xi64>) -> vector<1xi64> {
+    // CHECK: llvm.call spir_funccc @_Z44__spirv_SubgroupBitcastShuffleINTEL_Rushort8Dv16_c([[VAL]]) {{.*}} : (vector<16xi8>) -> vector<8xi16>
+    %0 = triton_gen.sub_group_bitcast_shuffle %val : vector<16xi8> -> vector<8xi16>
+    // CHECK: llvm.call spir_funccc @_Z42__spirv_SubgroupBitcastShuffleINTEL_Ruint4Dv16_c([[VAL]]) {{.*}} : (vector<16xi8>) -> vector<4xi32>
+    %1 = triton_gen.sub_group_bitcast_shuffle %val : vector<16xi8> -> vector<4xi32>
+    // CHECK: [[SCALAR:%.*]] = llvm.bitcast [[VAL2]] : vector<1xi64> to i64
+    // CHECK: llvm.call spir_funccc @_Z44__spirv_SubgroupBitcastShuffleINTEL_Rushort4l([[SCALAR]]) {{.*}} : (i64) -> vector<4xi16>
+    %2 = triton_gen.sub_group_bitcast_shuffle %val2 : vector<1xi64> -> vector<4xi16>
+    // CHECK: [[RES:%.*]] = llvm.call spir_funccc @_Z42__spirv_SubgroupBitcastShuffleINTEL_RulongDv4_s([[VAL1]]) {{.*}} : (vector<4xi16>) -> i64
+    // CHECK: [[VEC:%.*]] = llvm.bitcast [[RES]] : i64 to vector<1xi64>
+    // CHECK: llvm.return [[VEC]]
+    %3 = triton_gen.sub_group_bitcast_shuffle %val1 : vector<4xi16> -> vector<1xi64>
+    llvm.return %3 : vector<1xi64>
+  }
 }
 
 // -----
