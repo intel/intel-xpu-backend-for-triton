@@ -80,8 +80,10 @@ KNOBS_REFLECTED_IN_OPTIONS = {
 }
 
 # Knobs reflected into `XPUBackend.properties` (`parse_target` folds the
-# queried -- or env-supplied -- device extensions into it).
-KNOBS_REFLECTED_IN_TARGET = {"device_extensions"}
+# queried -- or env-supplied -- device extensions into it). `target_json` replaces
+# the queried device with the one recorded in the file, so it reaches the key
+# through the same target.
+KNOBS_REFLECTED_IN_TARGET = {"device_extensions", "target_json"}
 
 # Knobs that cannot change the compiled kernel, and why.
 CACHE_NEUTRAL_KNOBS = {

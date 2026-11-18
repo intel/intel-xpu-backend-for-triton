@@ -11,6 +11,7 @@ import sysconfig
 import tempfile
 import warnings
 from pathlib import Path
+from types import SimpleNamespace
 from functools import cached_property, lru_cache
 
 from triton import knobs
@@ -539,6 +540,16 @@ PEAK_DRAM_GBPS = {
 }
 
 
+@lru_cache
+def _load_offline_target():
+    with open(knobs.intel.target_json) as f:
+        offline = json.load(f)
+    props = offline["device_properties"]
+    if "sub_group_sizes" in props:
+        props["sub_group_sizes"] = tuple(props["sub_group_sizes"])
+    return offline
+
+
 class XPUUtils(object):
     _instance = None
 
@@ -843,19 +854,29 @@ class XPUDriver(DriverBase):
             import torch
             self.get_current_device = torch.xpu.current_device
             self.get_current_stream = lambda idx: torch.xpu.current_stream(idx).sycl_queue
+        if knobs.intel.target_json:  # No device to ask: the recorded one is device 0, and there is no stream.
+            self.get_current_device = lambda: 0
+            self.get_current_stream = lambda idx: 0
         super().__init__()
 
     def __getattr__(self, name):
         # Lazily initialize utils to avoid unnecessary XPU runtime invocations.
         # See https://github.com/intel/intel-xpu-backend-for-triton/issues/624
         if name == "utils":
-            self.utils = XPUUtils()
+            # Compiling for the recorded device needs nothing but its properties, and no XPU runtime.
+            self.utils = (SimpleNamespace(
+                get_device_properties=lambda device: _load_offline_target()["device_properties"])
+                          if knobs.intel.target_json else XPUUtils())
             return self.utils
         else:
             raise AttributeError
 
     @lru_cache
     def _construct_target(self, device):
+        if knobs.intel.target_json:
+            offline = _load_offline_target()
+            return GPUTarget("xpu", offline["arch"], warp_size=offline["warp_size"])
+
         import torch
         from triton.backends.intel.extension_utils import query_device_extensions
 
@@ -912,6 +933,8 @@ class XPUDriver(DriverBase):
 
     @staticmethod
     def is_active():
+        if knobs.intel.target_json:
+            return True
         try:
             import torch
             return torch.xpu.is_available()
