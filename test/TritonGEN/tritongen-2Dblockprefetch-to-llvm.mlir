@@ -485,7 +485,7 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
 
 // -----
 
-// With "ttig.use_genisa_2d_block_io" (IGC older than 2.38, #8858) the GenISA interface is used.
+// COM: With "ttig.use_genisa_2d_block_io" (IGC older than 2.38, #8858) the GenISA interface is used.
 module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.use_genisa_2d_block_io} {
 llvm.func @triton_gen.2Dblockprefetch_use_genisa(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-LABEL: llvm.func @triton_gen.2Dblockprefetch_use_genisa

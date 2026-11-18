@@ -426,14 +426,16 @@ def is_lts(ver) -> bool:
     return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
 
 
-def has_spirv_2d_block_io(ver) -> bool:
+def has_spirv_2d_block_io(ver: str | None) -> bool:
     """
     Whether the driver's IGC can resolve any 2D block I/O shape from SPIR-V.
 
     IGC older than 2.38 only has a fixed table of `intel_sub_group_2d_block_*` builtins, so a shape missing from it
     fails to build with `undefined reference to __internal_intel_sub_group_2d_block_*` (#8858); 2.38 added a generic
-    resolver. `ver` is the driver version as reported by the runtime, `1.<minor>.<build>+<patch>` (e.g.
-    `1.15.38308+1` for compute-runtime 26.18.38308.1), so the compute-runtime build number is its third field.
+    resolver. `ver` is either the driver version as reported by the runtime, `1.<minor>.<build>+<patch>` (e.g.
+    `1.15.38308+1` for compute-runtime 26.18.38308.1; Windows reports `1.6.<build>`), or the version of `ocloc`
+    (`26.18.38308.1`), which is what consumes the SPIR-V for an AOT compile. Either way the compute-runtime build
+    number is the third field.
     The first release known to have IGC 2.38 is 26.27.39122 (IGC 2.38.2); 26.22.38646 (IGC 2.36.3) and older do not.
     A missing or unparsable version is assumed to support SPIR-V, the default.
     """
@@ -443,6 +445,17 @@ def has_spirv_2d_block_io(ver) -> bool:
     if not m:
         return True
     return int(m.group(3)) >= 39122
+
+
+@lru_cache
+def get_ocloc_version() -> str | None:
+    """The version of the `ocloc` on PATH, e.g. `26.18.38308.1`, or None if it can't be determined."""
+    try:
+        proc = subprocess.run(['ocloc', '--version'], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = re.search(r'\d+\.\d+\.\d+(?:\.\d+)?', proc.stdout)
+    return m.group(0) if m else None
 
 
 @lru_cache

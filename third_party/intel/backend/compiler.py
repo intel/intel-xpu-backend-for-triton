@@ -1,6 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import compile_module_from_src, has_spirv_2d_block_io, is_lts
+from triton.backends.intel.driver import compile_module_from_src, get_ocloc_version, has_spirv_2d_block_io, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.errors import IntelGPUError, WorkGroupSizeOutOfResources
 from triton.backends.intel.extension_utils import query_device_extensions
@@ -381,7 +381,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["allow_fp8e4nv"] = True
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
-        args["has_spirv_2d_block_io"] = has_spirv_2d_block_io(self.target.arch.get("driver_version"))
         args["max_grf_mode"] = self.properties['max_grf_mode']
         grf_mode = args.get("grf_mode", XPUOptions.grf_mode)
         if grf_mode not in ("default", "auto") and grf_mode not in (grf_modes := get_grf_modes(self.target.arch)):
@@ -405,6 +404,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # `accepts_maximum_registers` returns True for LTS (but should return False)
         options.allow_maximum_registers = (not options.is_lts
                                            and accepts_maximum_registers(native, self.device_arch, device_id))
+        # IGC resolves any 2D block I/O shape from SPIR-V only since 2.38 (#8858). Go by the version of whichever side
+        # consumes the SPIR-V: `ocloc` for an AOT compile (falling back to the driver if it can't be determined),
+        # otherwise the installed driver.
+        igc_version = (get_ocloc_version() if native else None) or self.target.arch.get("driver_version")
+        options.has_spirv_2d_block_io = has_spirv_2d_block_io(igc_version)
         return options
 
     @staticmethod

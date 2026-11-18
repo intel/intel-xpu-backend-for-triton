@@ -840,8 +840,8 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
-// With "ttig.use_genisa_2d_block_io" (IGC older than 2.38 only has a fixed
-// table of builtins, #8858) every shape uses the GenISA interface.
+// COM: With "ttig.use_genisa_2d_block_io" (IGC older than 2.38 only has a fixed
+// COM: table of builtins, #8858) every shape uses the GenISA interface.
 module attributes {"ttg.threads-per-warp" = 32 : i32, ttig.use_genisa_2d_block_io} {
 llvm.func @triton_gen.2Dblockload_use_genisa_sg32(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-LABEL: llvm.func @triton_gen.2Dblockload_use_genisa_sg32
