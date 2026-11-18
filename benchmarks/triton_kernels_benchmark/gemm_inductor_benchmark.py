@@ -402,9 +402,16 @@ def main() -> None:
         raise RuntimeError("This benchmark requires an XPU-enabled PyTorch installation and an available Intel GPU")
     torch.manual_seed(0)
     modes = list(MODES) if args.mode == "all" else [args.mode]
+    device_name = torch.xpu.get_device_name()
+    print(f"Device: {device_name}", flush=True)
+    # FIXME: Stream-K's first_wave hangs the GPU or gives wrong results on B580 (#8880).
+    if "B580" in device_name and "manual_streamk" in modes:
+        print(f"Skipping {MODES['manual_streamk']} on B580 (#8880)", flush=True)
+        modes.remove("manual_streamk")
+        if not modes:
+            return
     if {"triton_aten", "triton_only"} & set(modes):
         _register_custom_xpu_mm_heuristic()
-    print(f"Device: {torch.xpu.get_device_name()}", flush=True)
     from triton_kernels_benchmark.benchmark_testing import MarkArgs
 
     get_benchmark(case_ids, modes).run(show_plots=False, print_data=True,
