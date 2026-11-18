@@ -239,8 +239,8 @@ tt.func public @fuseHugeCollapsedStride(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr
 // -----
 
 // COM: With collapsed index 1 the base offset folds to the stride itself, here
-// COM: the caller's own `arith.muli`. The stride-contract hint is only for a
-// COM: product this pass built, so the caller's op is left as it was.
+// COM: the caller's own `arith.muli`. The stride-contract hint goes on a copy
+// COM: of that op, so the caller's op is left as it was.
 tt.func public @fuseUnitIndexLeavesStrideOp(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %a: i64, %b: i64) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
@@ -258,8 +258,9 @@ tt.func public @fuseUnitIndexLeavesStrideOp(%arg0: tensor<16x16xf32>, %arg1: !tt
 }
 // CHECK-LABEL: fuseUnitIndexLeavesStrideOp
 // CHECK-SAME: %[[A:[a-z0-9]+]]: i64, %[[B:[a-z0-9]+]]: i64)
-// CHECK: [[S0:%.*]] = arith.muli %[[A]], %[[B]] : i64
-// CHECK: [[BASE:%.*]] = tt.addptr %arg1, [[S0]] : !tt.ptr<f32>, i64
+// CHECK: arith.muli %[[A]], %[[B]] : i64
+// CHECK: [[OFF:%.*]] = arith.muli %[[A]], %[[B]] {tt.divisibility = 4 : i32} : i64
+// CHECK: [[BASE:%.*]] = tt.addptr %arg1, [[OFF]] : !tt.ptr<f32>, i64
 // CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor [[BASE]], [%c16_i32, %c16_i32], [%c16_i64, %c1_i64] : <f32>, <16x16xf32>
 // CHECK: [[LOAD:%.*]] = tt.descriptor_load [[DESC]][%c0_i32, %c0_i32] : !tt.tensordesc<16x16xf32> -> tensor<16x16xf32>
 // CHECK: tt.dot [[LOAD]], {{.*}} : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
