@@ -323,10 +323,10 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   // ┌───────────────────┬───────────────────┐
   // lane 0 1 2 .....  15 lane 0 1 2 .....  15
   // ┌────┬────┬────┬────┬────┬────┬────┬────┐
-  // │R0  │    │    │    │R1  │    │    │    │
+  // │R0  │    │    │    │R2  │    │    │    │
   // │    │    │    │    │    │    │    │    │
   // ├────┼────┼────┼────┼────┼────┼────┼────┤
-  // │R2  │    │    │    │R3  │    │    │    │
+  // │R1  │    │    │    │R3  │    │    │    │
   // │    │    │    │    │    │    │    │    │
   // └────┴────┴────┴────┴────┴────┴────┴────┘
   // We will pack the R0 and R2 as the first matrix. R1 and R3 as the second matrix with vBlocks=2 for 2 matrixes.
