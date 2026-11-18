@@ -2471,7 +2471,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           v = b.bitcast(v, IntegerType::get(ctx, width));
 
           if (otherIsSplatConstInt) {
-            // Replicate the element bits, not the sign-extended value.
             APInt bits = splatVal.zextOrTrunc(valueElemNBits);
             v = b.int_val(width, APInt::getSplat(width, bits).getSExtValue());
           }
