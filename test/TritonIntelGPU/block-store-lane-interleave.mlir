@@ -16,9 +16,32 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
   // CHECK:         llvm.insertelement %[[E8]], %{{.*}} : vector<16xf16>
   // CHECK-NOT:     llvm.insertelement
   // CHECK:         llvm.insertelement %[[E1]], %{{.*}} : vector<16xf16>
-  // CHECK:         llvm.bitcast %{{.*}} : vector<16xf16> to vector<16xi16>
-  // CHECK-COUNT-8: triton_gen.sub_group_bitcast_shuffle %{{.*}} : vector<2xi16> -> vector<1xi32>
-  // CHECK:         triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default} : ({{.*}}, vector<16xi16>)
+  // CHECK:         %[[P:.*]] = llvm.bitcast %{{.*}} : vector<16xf16> to vector<16xi16>
+  // CHECK:         triton_gen.sub_group_bitcast_shuffle
+  // Row 1: payload elements 2 and 3 go through the shuffle and back in place.
+  // CHECK:         %[[I2:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-NEXT:    %[[X2:.*]] = llvm.extractelement %[[P]][%[[I2]] : i32] : vector<16xi16>
+  // CHECK-NEXT:    %[[J0:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT:    %[[A0:.*]] = llvm.insertelement %[[X2]], %{{.*}}[%[[J0]] : i32] : vector<2xi16>
+  // CHECK-NEXT:    %[[I3:.*]] = llvm.mlir.constant(3 : i32) : i32
+  // CHECK-NEXT:    %[[X3:.*]] = llvm.extractelement %[[P]][%[[I3]] : i32] : vector<16xi16>
+  // CHECK-NEXT:    %[[J1:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT:    %[[A1:.*]] = llvm.insertelement %[[X3]], %[[A0]][%[[J1]] : i32] : vector<2xi16>
+  // CHECK-NEXT:    %[[S:.*]] = triton_gen.sub_group_bitcast_shuffle %[[A1]] : vector<2xi16> -> vector<1xi32>
+  // CHECK-NEXT:    %[[U:.*]] = llvm.bitcast %[[S]] : vector<1xi32> to vector<2xi16>
+  // CHECK-NEXT:    %[[K0:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT:    %[[Y0:.*]] = llvm.extractelement %[[U]][%[[K0]] : i32] : vector<2xi16>
+  // CHECK-NEXT:    %[[L2:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-NEXT:    %[[R2:.*]] = llvm.insertelement %[[Y0]], %{{.*}}[%[[L2]] : i32] : vector<16xi16>
+  // CHECK-NEXT:    %[[K1:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT:    %[[Y1:.*]] = llvm.extractelement %[[U]][%[[K1]] : i32] : vector<2xi16>
+  // CHECK-NEXT:    %[[L3:.*]] = llvm.mlir.constant(3 : i32) : i32
+  // CHECK-NEXT:    llvm.insertelement %[[Y1]], %[[R2]][%[[L3]] : i32] : vector<16xi16>
+  // CHECK-COUNT-6: triton_gen.sub_group_bitcast_shuffle %{{.*}} : vector<2xi16> -> vector<1xi32>
+  // The message stores the last insert of the repack.
+  // CHECK:         %[[I15:.*]] = llvm.mlir.constant(15 : i32) : i32
+  // CHECK-NEXT:    %[[REPACKED:.*]] = llvm.insertelement %{{.*}}, %{{.*}}[%[[I15]] : i32] : vector<16xi16>
+  // CHECK:         triton_gen.2Dblockstore {{.*}}, %[[REPACKED]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default} : ({{.*}}, vector<16xi16>)
   // CHECK-COUNT-3: triton_gen.2Dblockstore {{.*}} tile_width = 32
   // CHECK-NOT:     triton_gen.2Dblockstore
   // OFF-LABEL:     llvm.func spir_kernelcc @fold_tdesc
@@ -42,6 +65,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
   // CHECK-LABEL: llvm.func spir_kernelcc @fold_ptr
   // CHECK:         triton_gen.sub_group_bitcast_shuffle
   // CHECK-COUNT-2: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default}
+  // OFF-LABEL:     llvm.func spir_kernelcc @fold_ptr
+  // OFF-NOT:       triton_gen.sub_group_bitcast_shuffle
+  // OFF-COUNT-4:   triton_gen.2Dblockstore {{.*}} tile_width = 16
   tt.func public @fold_ptr(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x64xf16, #dpas>) {
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dpas}>>
     %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dpas}>> -> tensor<64x1xi32, #dpas>
@@ -157,6 +183,18 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
   // CHECK-NOT:     triton_gen.sub_group_bitcast_shuffle
   // CHECK-COUNT-8: triton_gen.2Dblockstore {{.*}} tile_width = 16, tile_height = 8
   tt.func public @no_fold_straddle_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %col: i32 {tt.divisibility = 16 : i32}, %val: tensor<32x32xf16, #dpas>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <32x32xf16, #dpas>
+    tt.descriptor_store %desc[%c0_i32, %col], %val {ttig.block_io = "row_major"} : !tt.tensordesc<32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+
+  // A column index known divisible by 32 cannot straddle column 0, so it folds.
+  // CHECK-LABEL: llvm.func spir_kernelcc @fold_aligned_col_tdesc
+  // CHECK:         triton_gen.sub_group_bitcast_shuffle
+  // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}} tile_width = 32, tile_height = 8
+  tt.func public @fold_aligned_col_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %col: i32 {tt.divisibility = 32 : i32}, %val: tensor<32x32xf16, #dpas>) {
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <32x32xf16, #dpas>

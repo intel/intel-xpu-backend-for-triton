@@ -75,15 +75,19 @@ static Value repackLaneInterleavedRows(ConversionPatternRewriter &rewriter,
   Value result = storeVal;
   for (unsigned i = 0; i < vecTy.getNumElements(); i += 2) {
     Value pair = b.undef(pairTy);
-    for (unsigned j = 0; j < 2; ++j)
-      pair = b.insert_element(
-          pair, b.extract_element(storeVal, b.i32_val(i + j)), b.i32_val(j));
+    // Separate statements keep the op order independent of the compiler's
+    // argument evaluation order.
+    for (unsigned j = 0; j < 2; ++j) {
+      Value elem = b.extract_element(storeVal, b.i32_val(i + j));
+      pair = b.insert_element(pair, elem, b.i32_val(j));
+    }
     Value shuffled = TritonGEN::SubGroupBitcastShuffleOp::create(
         rewriter, loc, packedTy, pair);
     Value unpacked = b.bitcast(shuffled, pairTy);
-    for (unsigned j = 0; j < 2; ++j)
-      result = b.insert_element(
-          result, b.extract_element(unpacked, b.i32_val(j)), b.i32_val(i + j));
+    for (unsigned j = 0; j < 2; ++j) {
+      Value elem = b.extract_element(unpacked, b.i32_val(j));
+      result = b.insert_element(result, elem, b.i32_val(i + j));
+    }
   }
   return result;
 }
@@ -643,6 +647,18 @@ struct LoadStoreConversionBase {
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
             .getAxisInfo(idx);
     return span > 0 && (info ? info->getDivisibility(0) : 1) % span == 0;
+  }
+
+  /// Where a 2D block message of \p span columns can start relative to column
+  /// 0, given its column index \p idx (lowered: \p llIdx).
+  enum class ColumnZero { NonNegative, Aligned, MayStraddle };
+  ColumnZero classifyColumnZero(Value idx, Value llIdx, int64_t span) const {
+    std::optional<int64_t> colConst =
+        triton::intel::getFoldedConstantValue(llIdx);
+    if (colConst && *colConst >= 0)
+      return ColumnZero::NonNegative;
+    return cannotStraddleColumnZero(idx, span) ? ColumnZero::Aligned
+                                               : ColumnZero::MayStraddle;
   }
 
   // Ensure the operation doesn't have attributes that the IGC predicated
@@ -3777,17 +3793,16 @@ struct DescriptorStoreOpToBlockIOConversion
     if (laneInterleave > 1 && needs2DBlockIOAlignmentCompensation(op)) {
       unsigned colIdx =
           op.getIndices().size() - tensorType.getRank() + sizeInfo.colDim;
-      std::optional<int64_t> colConst =
-          triton::intel::getFoldedConstantValue(adaptor.getIndices()[colIdx]);
-      if (!(colConst && *colConst >= 0) &&
-          !cannotStraddleColumnZero(op.getIndices()[colIdx],
-                                    int64_t(sizeInfo.tileWidth) *
-                                        sizeInfo.numElemPerPackedVal) &&
-          !validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
-                                    elemSizeInBits, tensorType, maskAxisInfo,
-                                    sizeInfo, laneInterleave,
-                                    /*allowLaneInterleave=*/false))
-        return failure();
+      int64_t span = int64_t(sizeInfo.tileWidth) * sizeInfo.numElemPerPackedVal;
+      if (classifyColumnZero(op.getIndices()[colIdx],
+                             adaptor.getIndices()[colIdx],
+                             span) == ColumnZero::MayStraddle) {
+        [[maybe_unused]] bool valid = validate2DBlockStoreTile(
+            llEncoding.value(), contiguousDim, elemSizeInBits, tensorType,
+            maskAxisInfo, sizeInfo, laneInterleave,
+            /*allowLaneInterleave=*/false);
+        assert(valid && "the narrow tile passed the same checks");
+      }
     }
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
@@ -3940,14 +3955,12 @@ struct DescriptorStoreOpToBlockIOConversion
     // its row and leave a possibly straddling one to the masked scatter.
     bool redirectNegCol = false;
     if (needs2DBlockIOAlignmentCompensation(op)) {
-      std::optional<int64_t> colConst =
-          triton::intel::getFoldedConstantValue(baseOffsets[descColDim]);
-      if (!(colConst && *colConst >= 0)) {
-        if (!cannotStraddleColumnZero(op.getIndices()[descColDim],
-                                      int64_t(tileWidth) * numPackedVals))
-          return failure();
-        redirectNegCol = true;
-      }
+      ColumnZero colZero = classifyColumnZero(
+          op.getIndices()[descColDim], baseOffsets[descColDim],
+          int64_t(tileWidth) * numPackedVals);
+      if (colZero == ColumnZero::MayStraddle)
+        return failure();
+      redirectNegCol = colZero == ColumnZero::Aligned;
     }
 
     // --- Emit 2D block stores ---
