@@ -77,8 +77,10 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base
 
 llvm.func @triton_gen.sub_group_block_read(%ptr : !llvm.ptr<1>) {
   // CHECK:      llvm.func @triton_gen.sub_group_block_read(%arg0: !llvm.ptr<1>) {
-  // CHECK-NEXT:   triton_gen.sub_group_block_read %arg0 : !llvm.ptr<1> -> vector<2xi16>
-  triton_gen.sub_group_block_read %ptr : !llvm.ptr<1> -> vector<2xi16>
+  // CHECK-NEXT:   triton_gen.sub_group_block_read %arg0 {cache_control = Default} : !llvm.ptr<1> -> vector<2xi16>
+  triton_gen.sub_group_block_read %ptr {cache_control = Default} : !llvm.ptr<1> -> vector<2xi16>
+  // CHECK-NEXT:   triton_gen.sub_group_block_read %arg0 {cache_control = L1UC_L3C} : !llvm.ptr<1> -> i32
+  triton_gen.sub_group_block_read %ptr {cache_control = L1UC_L3C} : !llvm.ptr<1> -> i32
   llvm.return
 }
 
