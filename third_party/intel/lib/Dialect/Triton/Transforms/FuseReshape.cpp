@@ -9,6 +9,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -228,18 +229,36 @@ private:
     // the unfused load, its leading index folded into the base by
     // `LowerTo2DBlockLoad`, kept 2D block I/O. So state the contract on the
     // product. A folded stride needs no hint, and the check on the operands
-    // keeps it off a value the folder returned instead of a new op.
-    auto offsetOp = baseOffset.getDefiningOp<arith::MulIOp>();
+    // keeps it off a value the folder returned instead of a new op. An index
+    // that folds to 1 returns the caller's stride itself, so the hint goes on
+    // a copy of its defining op: a new `arith.muli` by 1 would lose it to the
+    // canonicalizer that runs before `MaterializeBlockPointer`. A stride with
+    // no defining op (an i64 kernel argument) is left without one.
     unsigned elemBytes =
         getIntOrFloatOrPtrBitWidth(
             makeTensorDescOp.getType().getBlockType().getElementType()) /
         8;
-    if (offsetOp && llvm::is_contained(offsetOp->getOperands(), wideIdx) &&
-        llvm::is_contained(offsetOp->getOperands(), collapsedStride) &&
-        !tt::intel::getFoldedConstantValue(collapsedStride) && elemBytes &&
-        16 % elemBytes == 0)
-      offsetOp->setAttr("tt.divisibility",
-                        builder.getI32IntegerAttr(16 / elemBytes));
+    if (!tt::intel::getFoldedConstantValue(collapsedStride) && elemBytes &&
+        16 % elemBytes == 0) {
+      Operation *offsetOp = baseOffset.getDefiningOp();
+      if (baseOffset == collapsedStride) {
+        if (offsetOp && isPure(offsetOp) && offsetOp->getNumRegions() == 0 &&
+            offsetOp->getNumResults() == 1) {
+          offsetOp = builder.clone(*offsetOp);
+          baseOffset = offsetOp->getResult(0);
+        } else {
+          offsetOp = nullptr;
+        }
+      } else if (!isa_and_nonnull<arith::MulIOp>(offsetOp) ||
+                 !llvm::is_contained(offsetOp->getOperands(), wideIdx) ||
+                 !llvm::is_contained(offsetOp->getOperands(),
+                                     collapsedStride)) {
+        offsetOp = nullptr;
+      }
+      if (offsetOp)
+        offsetOp->setAttr("tt.divisibility",
+                          builder.getI32IntegerAttr(16 / elemBytes));
+    }
     Value base = makeTensorDescOp.getBase();
     Value newBase = builder.createOrFold<tt::AddPtrOp>(loc, base.getType(),
                                                        base, baseOffset);

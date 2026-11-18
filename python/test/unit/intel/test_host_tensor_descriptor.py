@@ -727,11 +727,16 @@ def _runtime_strides_kernel(a_ptr, out_ptr, idx, stride0, stride1, S0: tl.conste
 # had 2D block I/O, and the middle one gets it as well. Whether the load fuses is
 # not the point here, so only its values and its 2D block loads are checked; the
 # identity operand leaves it the only 2D-eligible load.
+#
+# `idx` 2 leaves the base offset a runtime product. 1 is specialized to a
+# constant and the collapsed extent is constexpr, so the offset folds to the
+# stride itself.
+@pytest.mark.parametrize("idx", [1, 2])
 @pytest.mark.parametrize("outer", [True, False])
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
-def test_descriptor_unhinted_collapsed_stride_block_io(outer, device, with_allocator):
-    N, R, C, IDX = 4, 32, 64, 2
+def test_descriptor_unhinted_collapsed_stride_block_io(outer, idx, device, with_allocator):
+    N, R, C = 4, 32, 64
     if outer:  # (N, R, C), slices R * C + 8 elements apart
         shape, strides = (N, R, C), (R * C + 8, C, 1)
     else:  # (R, N, C), heads C + 8 elements apart
@@ -740,10 +745,10 @@ def test_descriptor_unhinted_collapsed_stride_block_io(outer, device, with_alloc
     torch.manual_seed(42)
     a = torch.randn(shape[0] * strides[0], dtype=torch.float16, device=device)
     out = torch.full((R, C), -1.0, dtype=torch.float32, device=device)
-    kernel = _runtime_strides_kernel[(1, )](a, out, IDX, strides[0], strides[1], *shape, outer, R, C)
+    kernel = _runtime_strides_kernel[(1, )](a, out, idx, strides[0], strides[1], *shape, outer, R, C)
 
     view = torch.as_strided(a, shape, strides)
-    tile = view[IDX] if outer else view[:, IDX]
+    tile = view[idx] if outer else view[:, idx]
     torch.testing.assert_close(out, tile.to(torch.float32))
     llir = kernel.asm["llir"]
     assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
