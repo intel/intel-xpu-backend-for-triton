@@ -27,8 +27,8 @@ def is_transposed(M, N, stride_m, stride_n, transposed):
 def make_matrix_tile_ptr(ptr, M: tl.constexpr, N: tl.constexpr, stride_m: tl.constexpr, stride_n: tl.constexpr,
                          BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, TRANSPOSED: tl.constexpr = None):
     """Build a descriptor or pointer tensor before the reduction loop."""
-    TRANSPOSE: tl.constexpr = is_transposed(M, N, stride_m, stride_n, TRANSPOSED)
-    if TRANSPOSE:
+    COL_MAJOR: tl.constexpr = is_transposed(M, N, stride_m, stride_n, TRANSPOSED)
+    if COL_MAJOR:
         ROWS: tl.constexpr = N
         COLS: tl.constexpr = M
         STRIDE_ROW: tl.constexpr = stride_n
@@ -62,8 +62,8 @@ def load_matrix_tile(matrix_ptr, M: tl.constexpr, N: tl.constexpr, stride_m: tl.
                      col, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, TRANSPOSED: tl.constexpr = None):
     """Load a tile from a prebuilt descriptor or pointer tensor."""
     handle = matrix_ptr
-    TRANSPOSE: tl.constexpr = is_transposed(M, N, stride_m, stride_n, TRANSPOSED)
-    if TRANSPOSE:
+    COL_MAJOR: tl.constexpr = is_transposed(M, N, stride_m, stride_n, TRANSPOSED)
+    if COL_MAJOR:
         ROWS: tl.constexpr = N
         COLS: tl.constexpr = M
         STRIDE_ROW: tl.constexpr = stride_n
@@ -95,7 +95,7 @@ def load_matrix_tile(matrix_ptr, M: tl.constexpr, N: tl.constexpr, stride_m: tl.
             cc = (off_col + tl.arange(0, BLOCK_COLS)).to(tl.int64)
             tile = tl.where((rr < ROWS)[:, None] & (cc < COLS)[None, :],
                             tl.broadcast_to(tile, (BLOCK_ROWS, BLOCK_COLS)), 0)
-    if TRANSPOSE:
+    if COL_MAJOR:
         tile = tile.T
     return tile
 
