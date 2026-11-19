@@ -20,27 +20,6 @@ from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_MODULE, ge
 onednn_kernel = get_xpu_extension("onednn_kernel")
 
 
-@torch.jit.script
-def naive_softmax(x):
-    """Compute row-wise softmax of X using native pytorch
-
-    We subtract the maximum element in order to avoid overflows. Softmax is invariant to
-    this shift.
-    """
-    # read  MN elements ; write M  elements
-    x_max = x.max(dim=1)[0]
-    # read MN + M elements ; write MN elements
-    z = x - x_max[:, None]
-    # read  MN elements ; write MN elements
-    numerator = torch.exp(z)
-    # read  MN elements ; write M  elements
-    denominator = numerator.sum(dim=1)
-    # read MN + M elements ; write MN elements
-    ret = numerator / denominator[:, None]
-    # in total: read 5MN + 2M elements ; wrote 3MN + 2M elements
-    return ret
-
-
 @triton.autotune(
     configs=[
         triton.Config({"warp_size": 32}, num_warps=32),
@@ -113,7 +92,6 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
     supported_providers = {
         "triton": "Triton",
         # "torch-native": "Torch (native)",
-        # "torch-jit": # "Torch (jit)",
     }
     if onednn_kernel is not None:
         supported_providers["onednn"] = "oneDNN"
@@ -132,7 +110,7 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
             args={"M": 4096},  # values for function arguments not in `x_names` and `y_name`
         ))
     def benchmark(M, N, provider):
-        # Maximum across torch-native=10, triton=800, torch-jit=10, onednn=800
+        # Maximum across torch-native=10, triton=800, onednn=800
         # For onednn more warmup very slowly makes performance worse
         do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         x = torch.randn(M, N, device=DEVICE, dtype=torch.bfloat16)
@@ -144,9 +122,6 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
             torch_fn = lambda: torch.softmax(x, axis=-1)
             benchmark_suite.assert_close(triton_fn, torch_fn, err_msg="triton to torch")
             _, min_ms, max_ms, mean, cv = do_bench(triton_fn)
-
-        elif provider == "torch-jit":
-            _, min_ms, max_ms, mean, cv = do_bench(lambda: naive_softmax(x))
 
         elif provider == "onednn":
             name = "onednn_softmax"

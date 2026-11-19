@@ -1,6 +1,7 @@
 """Nightly benchmark regression monitoring."""
 
 from benchmark_monitor.aggregate import aggregate
+from benchmark_monitor.catalog import Catalog, CatalogError, Scope, load_catalog
 from benchmark_monitor.model import (
     Observation,
     Point,
@@ -13,8 +14,11 @@ from benchmark_monitor.model import (
 )
 
 __all__ = [
+    "Catalog",
+    "CatalogError",
     "Observation",
     "Point",
+    "Scope",
     "Series",
     "SeriesKey",
     "Status",
@@ -22,4 +26,5 @@ __all__ = [
     "Verdict",
     "aggregate",
     "canonical_params",
+    "load_catalog",
 ]

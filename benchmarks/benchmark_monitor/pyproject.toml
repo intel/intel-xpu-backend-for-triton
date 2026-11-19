@@ -2,12 +2,15 @@
 name = "benchmark-monitor"
 version = "0.1.0"
 readme = "README.md"
-description = "Nightly benchmark regression monitoring."
+description = "Nightly benchmark regression monitoring: model, catalog, aggregation, gate."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["pyyaml"]
 
 [tool.setuptools]
 packages = ["benchmark_monitor"]
+
+[tool.setuptools.package-data]
+benchmark_monitor = ["catalog/*.yaml", "catalog/*.json"]
 
 [build-system]
 requires = ["setuptools>=75.0"]

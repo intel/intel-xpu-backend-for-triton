@@ -146,6 +146,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.is_lts";
     }
 
+    /// Get the name of the attribute that makes 2D block I/O lower through the
+    /// GenISA interface instead of the SPIR-V builtins (set for IGC < 2.38).
+    static constexpr llvm::StringRef getUseGenISA2DBlockIOAttrName() {
+      return "ttig.use_genisa_2d_block_io";
+    }
+
     /// Get the name of the attribute holding the core clock rate in kHz, used
     /// to convert cycles to nanoseconds.
     static constexpr llvm::StringRef getCoreClockRateAttrName() {
