@@ -427,6 +427,34 @@ def is_lts(ver) -> bool:
     return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
 
 
+def has_spirv_2d_block_io(ver: str | None) -> bool:
+    """
+    Whether the SPIR-V 2D block I/O builtins can be used with this driver (#8858).
+
+    IGC before 2.38 (compute-runtime 26.27.39122) only has a fixed table of `intel_sub_group_2d_block_*` builtins, so
+    other shapes fail to build; 2.38 added a generic resolver. `ver` is the driver version
+    (`1.<minor>.<build>[+<patch>]`) or the `ocloc` version (`26.18.38308.1`); either way the compute-runtime build
+    number is the third field. A missing or unparsable version keeps the SPIR-V default.
+    """
+    if not ver:
+        return True
+    m = _VERSION_PATTERN.match(ver)
+    if not m:
+        return True
+    return int(m.group(3)) >= 39122
+
+
+@lru_cache
+def get_ocloc_version() -> str | None:
+    """The version of the `ocloc` on PATH, e.g. `26.18.38308.1`, or None if it can't be determined."""
+    try:
+        proc = subprocess.run(['ocloc', '--version'], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = re.search(r'\d+\.\d+\.\d+(?:\.\d+)?', proc.stdout)
+    return m.group(0) if m else None
+
+
 @lru_cache
 def get_hasher_common(eventless_submit: bool = True):
     hasher = hashlib.sha256((__CACHE_VERSION + platform_key()).encode("utf-8"))

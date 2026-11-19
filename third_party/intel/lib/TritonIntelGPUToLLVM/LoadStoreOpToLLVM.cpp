@@ -3130,6 +3130,7 @@ struct DescriptorLoadOpConversion
     Type chunkTy = read->chunkElems == 1
                        ? valueElemTy
                        : Type(vec_ty(valueElemTy, read->chunkElems));
+    TritonGEN::LoadCacheControl cacheControl = tritonToIntelCacheModifier(op);
     auto emitReads = [&]() {
       Value warpId = getLaneAndWarpId(rewriter, loc).second;
       SmallVector<Value> vals(numElems);
@@ -3148,8 +3149,8 @@ struct DescriptorLoadOpConversion
           offset = b.add(offset, b.mul(idx, b.trunc(i32_ty, desc.strides[i])));
         }
         Value ptr = b.gep(ptr_ty(ctx, 1), valueElemTy, desc.base, offset);
-        Value words =
-            TritonGEN::SubGroupBlockReadOp::create(rewriter, loc, readTy, ptr);
+        Value words = TritonGEN::SubGroupBlockReadOp::create(
+            rewriter, loc, readTy, ptr, cacheControl);
         for (unsigned j = 0; j < read->vec; ++j) {
           Value word = read->vec == 1 ? words
                                       : b.extract_element(read->wordTy, words,
@@ -4446,7 +4447,8 @@ struct AtomicCASOpConversion
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
+                                 targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
@@ -4639,7 +4641,8 @@ struct AtomicRMWOpConversion
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
+                                 targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
