@@ -1,0 +1,107 @@
+name: Windows torch import diagnostics
+run-name: ${{ inputs.run_name }}
+
+# Diagnoses `ImportError: DLL load failed while importing _C` of the Windows XPU torch nightlies on the
+# CI runner. For every torch version it records which DLL cannot be resolved, whether adding directories,
+# PATH entries or the preload loop removed by pytorch/pytorch#202206 makes `import torch` work, and whether
+# the XPU runtime loads lazily loaded libraries. Nothing from this repository is built or imported.
+# See scripts/windows_torch_import_diag.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Runner label
+        type: string
+        default: a770
+      torch_versions:
+        description: >-
+          Comma-separated torch versions to try, e.g. 2.16.0.dev20261030,2.16.0.dev20261104 ("+xpu" is added).
+          "latest" installs the newest nightly.
+        type: string
+        default: 2.16.0.dev20261030,2.16.0.dev20261102,2.16.0.dev20261104,latest
+      run_name:
+        description: Custom run name
+        type: string
+        default: Windows torch import diagnostics
+
+permissions: read-all
+
+env:
+  PYTHONIOENCODING: utf-8
+  PIP_DISABLE_PIP_VERSION_CHECK: 1
+
+jobs:
+  diagnose:
+    name: Diagnose
+    runs-on:
+      - windows
+      - ${{ inputs.runner_label }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/windows_torch_import_diag.py
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install analysis tools
+        run: python -m pip install pefile
+
+      - name: Machine snapshot
+        shell: bash
+        run: |
+          mkdir -p diag-results
+          python scripts/windows_torch_import_diag.py snapshot --out diag-results
+
+      - name: Try torch versions
+        shell: bash
+        env:
+          TORCH_VERSIONS: ${{ inputs.torch_versions }}
+        run: |
+          if [[ ! "$TORCH_VERSIONS" =~ ^[A-Za-z0-9.,+]+$ ]]; then
+            echo "::error::invalid torch_versions: $TORCH_VERSIONS"
+            exit 1
+          fi
+          INDEX=https://download.pytorch.org/whl/nightly/xpu
+          IFS=',' read -ra VERSIONS <<< "$TORCH_VERSIONS"
+          for v in "${VERSIONS[@]}"; do
+            echo "::group::torch $v"
+            venv="$(cygpath -m "$RUNNER_TEMP")/venv-$v"
+            rm -rf "$venv"
+            python -m venv "$venv"
+            if [[ "$v" == "latest" ]]; then
+              spec="torch"
+            else
+              spec="torch==${v%+xpu}+xpu"
+            fi
+            if ! "$venv/Scripts/python.exe" -m pip install --pre "$spec" --index-url "$INDEX" \
+                > "diag-results/$v.pip.log" 2>&1; then
+              echo "pip install of $spec failed"
+              tail -n 20 "diag-results/$v.pip.log"
+              echo "pip install of $spec failed" > "diag-results/$v.install-failed.txt"
+              echo "::endgroup::"
+              continue
+            fi
+            # A failing diagnosis of one version must not stop the others.
+            python scripts/windows_torch_import_diag.py run --label "$v" --out diag-results \
+              --venv-root "$venv" --venv-python "$venv/Scripts/python.exe" || echo "::warning::diagnosis of $v failed"
+            "$venv/Scripts/python.exe" -m pip freeze > "diag-results/$v.freeze.txt" 2>&1 || true
+            echo "::endgroup::"
+          done
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: python scripts/windows_torch_import_diag.py summarize --results diag-results
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-torch-import-diagnostics-${{ github.run_id }}
+          path: diag-results
