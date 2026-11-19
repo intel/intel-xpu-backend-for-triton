@@ -52,7 +52,8 @@ def matmul_kernel(
         stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+        TRANSPOSE_A: tl.constexpr, TRANSPOSE_B: tl.constexpr):  # pylint: disable=unused-argument
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -107,7 +108,8 @@ def matmul_kernel_batched(
         stride_bz: tl.constexpr, stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cz: tl.constexpr, stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+        TRANSPOSE_A: tl.constexpr, TRANSPOSE_B: tl.constexpr):  # pylint: disable=unused-argument
     bid = tl.program_id(axis=1)
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
