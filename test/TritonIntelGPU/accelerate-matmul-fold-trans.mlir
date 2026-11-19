@@ -408,6 +408,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
+// COM: Chained transposes where the inner one (%xsT) has no dot in its slice: it is only a tt.trans leaf of the
+// COM: region of %gT, whose source %xs is not in the region, so it cancels and %gT is folded.
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate} {
+  // FOLD-LABEL: @chained_dotless_inner
+  // FOLD: %[[XS:.*]] = arith.mulf
+  // FOLD-NOT: tt.trans %[[XS]]
+  // FOLD: ttg.convert_layout %[[XS]]
+  // FOLD-NOT: tt.trans {{.*}}xf32
+  // FOLD: tt.return
+  tt.func public @chained_dotless_inner(%desc: !tt.tensordesc<64x64xf16>, %scale: f16) -> tensor<64x64xf32, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+    %x = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked1>
+    %v = tt.descriptor_load %desc[%c64_i32, %c0_i32] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked1>
+    %w = tt.descriptor_load %desc[%c128_i32, %c0_i32] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked1>
+    %sc = tt.splat %scale : f16 -> tensor<64x64xf16, #blocked1>
+    %xs = arith.mulf %x, %sc : tensor<64x64xf16, #blocked1>
+    %xsT = tt.trans %xs {order = array<i32: 1, 0>} : tensor<64x64xf16, #blocked1> -> tensor<64x64xf16, #blocked2>
+    %xsT_a = ttg.convert_layout %xsT : tensor<64x64xf16, #blocked2> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %v_b = ttg.convert_layout %v : tensor<64x64xf16, #blocked1> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %g = tt.dot %xsT_a, %v_b, %cst, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x64xf32, #blocked>
+    %gT = tt.trans %g {order = array<i32: 1, 0>} : tensor<64x64xf32, #blocked> -> tensor<64x64xf32, #blocked3>
+    %gT16 = arith.truncf %gT : tensor<64x64xf32, #blocked3> to tensor<64x64xf16, #blocked3>
+    %gT_a = ttg.convert_layout %gT16 : tensor<64x64xf16, #blocked3> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %w_b = ttg.convert_layout %w : tensor<64x64xf16, #blocked1> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %o = tt.dot %gT_a, %w_b, %cst, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x64xf32, #blocked>
+    tt.return %o : tensor<64x64xf32, #blocked>
+  }
+}
+
+// -----
+
 // COM: Chained transposes where the inner root (%lT) transposes a load: %lT is a tt.trans leaf of a load, not of
 // COM: an interior value, so the region still folds: %t is computed transposed and no f32 tt.trans is left.
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
@@ -907,5 +945,108 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %v_b = ttg.convert_layout %v : tensor<64x64xf16, #blocked1> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
     %o = tt.dot %pT_a, %v_b, %cst, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x64xf32, #blocked>
     tt.return %o : tensor<64x64xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: @gemm_prologue next to a dot-fed transpose in one body: each transpose needs a dot in its own slice, so
+// COM: %pT is folded and %xsT stays as written.
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate} {
+  // FOLD-LABEL: @mixed_roots
+  // FOLD: %[[XS:.*]] = arith.mulf
+  // FOLD: tt.trans %[[XS]]
+  // FOLD-NOT: tt.trans {{.*}}xf32
+  // FOLD: tt.return
+  tt.func public @mixed_roots(%desc: !tt.tensordesc<64x64xf16>, %scale: f16) -> (tensor<64x64xf32, #blocked>, tensor<64x64xf32, #blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c192_i32 = arith.constant 192 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+    %x = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked1>
+    %y = tt.descriptor_load %desc[%c64_i32, %c0_i32] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked1>
+    %sc = tt.splat %scale : f16 -> tensor<64x64xf16, #blocked1>
+    %xs = arith.mulf %x, %sc : tensor<64x64xf16, #blocked1>
+    %xsT = tt.trans %xs {order = array<i32: 1, 0>} : tensor<64x64xf16, #blocked1> -> tensor<64x64xf16, #blocked2>
+    %xsT_a = ttg.convert_layout %xsT : tensor<64x64xf16, #blocked2> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %y_b = ttg.convert_layout %y : tensor<64x64xf16, #blocked1> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %g = tt.dot %xsT_a, %y_b, %cst, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x64xf32, #blocked>
+    %a = tt.descriptor_load %desc[%c128_i32, %c0_i32] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked1>
+    %b = tt.descriptor_load %desc[%c192_i32, %c0_i32] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked1>
+    %bT = tt.trans %b {order = array<i32: 1, 0>} : tensor<64x64xf16, #blocked1> -> tensor<64x64xf16, #blocked2>
+    %a_a = ttg.convert_layout %a : tensor<64x64xf16, #blocked1> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %bT_b = ttg.convert_layout %bT : tensor<64x64xf16, #blocked2> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %s = tt.dot %a_a, %bT_b, %cst, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x64xf32, #blocked>
+    %p = math.exp2 %s : tensor<64x64xf32, #blocked>
+    %pT = tt.trans %p {order = array<i32: 1, 0>} : tensor<64x64xf32, #blocked> -> tensor<64x64xf32, #blocked3>
+    %pT16 = arith.truncf %pT : tensor<64x64xf32, #blocked3> to tensor<64x64xf16, #blocked3>
+    %pT_a = ttg.convert_layout %pT16 : tensor<64x64xf16, #blocked3> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %v_b = ttg.convert_layout %y : tensor<64x64xf16, #blocked1> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %o = tt.dot %pT_a, %v_b, %cst, inputPrecision = tf32 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x64xf32, #blocked>
+    tt.return %g, %o : tensor<64x64xf32, #blocked>, tensor<64x64xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: Two transposes of different shapes, 64x32 and 128x32, share the leaf %m2: it is transposed once, to
+// COM: 1x32, and each rebuilt broadcast takes it to its own shape.
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate} {
+  // FOLD-LABEL: @shared_leaf_two_shapes
+  // FOLD: %[[M:.*]] = tt.expand_dims {{.*}} {axis = 0 : i32} : tensor<32xf32, {{.*}}> -> tensor<1x32xf32
+  // FOLD-NOT: tt.expand_dims
+  // FOLD: tt.broadcast %[[M]] {{.*}} -> tensor<64x32xf32
+  // FOLD: tt.broadcast %[[M]] {{.*}} -> tensor<128x32xf32
+  // FOLD-NOT: tt.trans {{.*}}xf32
+  // FOLD: tt.return
+  tt.func public @shared_leaf_two_shapes(%q_desc: !tt.tensordesc<32x64xf16>, %k1_desc: !tt.tensordesc<64x64xf16>,
+                                         %k2_desc: !tt.tensordesc<128x64xf16>, %do_desc: !tt.tensordesc<32x64xf16>,
+                                         %m: tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>) -> (tensor<64x64xf32, #blocked>, tensor<128x64xf32, #blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+    %cst32x64 = arith.constant dense<0.000000e+00> : tensor<32x64xf32, #blocked>
+    %cst32x128 = arith.constant dense<0.000000e+00> : tensor<32x128xf32, #blocked>
+    %cst64 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+    %cst128 = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #blocked>
+    %q = tt.descriptor_load %q_desc[%c0_i32, %c0_i32] : !tt.tensordesc<32x64xf16> -> tensor<32x64xf16, #blocked1>
+    %k1 = tt.descriptor_load %k1_desc[%c0_i32, %c0_i32] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked1>
+    %k2 = tt.descriptor_load %k2_desc[%c0_i32, %c0_i32] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked1>
+    %do = tt.descriptor_load %do_desc[%c0_i32, %c0_i32] : !tt.tensordesc<32x64xf16> -> tensor<32x64xf16, #blocked1>
+    %m2 = tt.expand_dims %m {axis = 1 : i32} : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32x1xf32, #blocked>
+    // p1 = exp2(q k1^T - m[:, None]), o1 = p1^T do
+    %k1T = tt.trans %k1 {order = array<i32: 1, 0>} : tensor<64x64xf16, #blocked1> -> tensor<64x64xf16, #blocked2>
+    %q_a1 = ttg.convert_layout %q : tensor<32x64xf16, #blocked1> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %k1T_b = ttg.convert_layout %k1T : tensor<64x64xf16, #blocked2> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %qk1 = tt.dot %q_a1, %k1T_b, %cst32x64, inputPrecision = tf32 : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x64xf32, #blocked>
+    %mb1 = tt.broadcast %m2 : tensor<32x1xf32, #blocked> -> tensor<32x64xf32, #blocked>
+    %s1 = arith.subf %qk1, %mb1 : tensor<32x64xf32, #blocked>
+    %p1 = math.exp2 %s1 : tensor<32x64xf32, #blocked>
+    %p1T = tt.trans %p1 {order = array<i32: 1, 0>} : tensor<32x64xf32, #blocked> -> tensor<64x32xf32, #blocked3>
+    %p1T16 = arith.truncf %p1T : tensor<64x32xf32, #blocked3> to tensor<64x32xf16, #blocked3>
+    %p1T_a = ttg.convert_layout %p1T16 : tensor<64x32xf16, #blocked3> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %do_b1 = ttg.convert_layout %do : tensor<32x64xf16, #blocked1> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %o1 = tt.dot %p1T_a, %do_b1, %cst64, inputPrecision = tf32 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x64xf32, #blocked>
+    // p2 = exp2(q k2^T - m[:, None]), o2 = p2^T do
+    %k2T = tt.trans %k2 {order = array<i32: 1, 0>} : tensor<128x64xf16, #blocked1> -> tensor<64x128xf16, #blocked2>
+    %q_a2 = ttg.convert_layout %q : tensor<32x64xf16, #blocked1> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %k2T_b = ttg.convert_layout %k2T : tensor<64x128xf16, #blocked2> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %qk2 = tt.dot %q_a2, %k2T_b, %cst32x128, inputPrecision = tf32 : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x128xf32, #blocked>
+    %mb2 = tt.broadcast %m2 : tensor<32x1xf32, #blocked> -> tensor<32x128xf32, #blocked>
+    %s2 = arith.subf %qk2, %mb2 : tensor<32x128xf32, #blocked>
+    %p2 = math.exp2 %s2 : tensor<32x128xf32, #blocked>
+    %p2T = tt.trans %p2 {order = array<i32: 1, 0>} : tensor<32x128xf32, #blocked> -> tensor<128x32xf32, #blocked3>
+    %p2T16 = arith.truncf %p2T : tensor<128x32xf32, #blocked3> to tensor<128x32xf16, #blocked3>
+    %p2T_a = ttg.convert_layout %p2T16 : tensor<128x32xf16, #blocked3> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %do_b2 = ttg.convert_layout %do : tensor<32x64xf16, #blocked1> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %o2 = tt.dot %p2T_a, %do_b2, %cst128, inputPrecision = tf32 : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x64xf32, #blocked>
+    tt.return %o1, %o2 : tensor<64x64xf32, #blocked>, tensor<128x64xf32, #blocked>
   }
 }

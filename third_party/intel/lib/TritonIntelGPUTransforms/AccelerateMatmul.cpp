@@ -1210,6 +1210,37 @@ bool isInterior(Operation *op) {
   return op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op);
 }
 
+// Bounds the compile time of the walks; not a cost model.
+constexpr unsigned maxRegionOps = 256;
+
+// A value the region transposes as a whole instead of walking into it.
+bool isLeaf(Value value, Operation *def, Block *block) {
+  return isFreeLeaf(def) || def->getBlock() != block ||
+         isSelectCondition(value);
+}
+
+// Whether the backward slice of `root`, walked with collectRegion's leaf and
+// interior rules, has a dot. It is decided per transpose: one without a dot is
+// not a root even when another transpose of its block is.
+bool sliceHasDot(tt::TransOp root) {
+  Block *block = root->getBlock();
+  SmallVector<Value> worklist = {root.getSrc()};
+  DenseSet<Operation *> visited;
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    Operation *def = value.getDefiningOp();
+    if (!def || isLeaf(value, def, block) || !isInterior(def) ||
+        !visited.insert(def).second)
+      continue;
+    if (isa<tt::DotOp>(def))
+      return true;
+    if (visited.size() > maxRegionOps)
+      return false;
+    llvm::append_range(worklist, def->getOperands());
+  }
+  return false;
+}
+
 struct TransposeRegion {
   SmallVector<tt::TransOp> roots;
   // Interior ops, in program order.
@@ -1224,8 +1255,6 @@ std::optional<TransposeRegion>
 collectRegion(ArrayRef<tt::TransOp> roots,
               const ttgi::DpasEncodingAttr::DPASCapability &dpasCap,
               ModuleOp mod) {
-  // Bounds the compile time of the walk; not a cost model.
-  constexpr unsigned maxOps = 256;
   Block *block = roots.front()->getBlock();
   TransposeRegion region;
   region.roots.assign(roots.begin(), roots.end());
@@ -1253,8 +1282,7 @@ collectRegion(ArrayRef<tt::TransOp> roots,
     // Block arguments, e.g. loop-carried values, are not handled.
     if (!def)
       return std::nullopt;
-    if (isFreeLeaf(def) || def->getBlock() != block ||
-        isSelectCondition(value)) {
+    if (isLeaf(value, def, block)) {
       region.leaves.insert(value);
       continue;
     }
@@ -1262,7 +1290,7 @@ collectRegion(ArrayRef<tt::TransOp> roots,
       return std::nullopt;
     if (!ops.insert(def))
       continue;
-    if (ops.size() > maxOps)
+    if (ops.size() > maxRegionOps)
       return std::nullopt;
     if (auto dot = dyn_cast<tt::DotOp>(def)) {
       worklist.push_back(getDotOperandSource(dot.getA(), &region.operandCvts));
@@ -1272,10 +1300,6 @@ collectRegion(ArrayRef<tt::TransOp> roots,
     }
     llvm::append_range(worklist, def->getOperands());
   }
-
-  // Without a dot the transposes would only move.
-  if (llvm::none_of(ops, [](Operation *op) { return isa<tt::DotOp>(op); }))
-    return std::nullopt;
 
   // The flipped dot swaps M and N. A dot whose shape fits DPAS only unflipped,
   // e.g. M < executionSize <= N, would fall back to FMA.
@@ -1494,7 +1518,8 @@ void foldTransposeIntoProducers(ModuleOp mod) {
           !isa<tt::FuncOp, scf::ForOp>(trans->getParentOp()))
         return;
       tt::DotOp dot = getDotFedAsA(trans);
-      if (dot && fitsDPASShape(dot, dot.getType().getShape(), *dpasCap, mod))
+      if (dot && fitsDPASShape(dot, dot.getType().getShape(), *dpasCap, mod) &&
+          sliceHasDot(trans))
         rootsPerBlock[trans->getBlock()].push_back(trans);
     });
     for (auto &[block, roots] : rootsPerBlock) {
