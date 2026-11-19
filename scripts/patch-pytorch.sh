@@ -37,4 +37,5 @@ echo "Applying PyTorch patches in $REPO_ROOT"
 # put your patch applies here
 
 # Inductor's layout-conflict fallback raises KeyError for an extern choice that has no timing.
-apply_patch "inductor-extern-fallback-missing-timing.patch"
+# https://github.com/pytorch/pytorch/issues/205677
+apply_patch patch/inductor-extern-fallback-missing-timing.patch
