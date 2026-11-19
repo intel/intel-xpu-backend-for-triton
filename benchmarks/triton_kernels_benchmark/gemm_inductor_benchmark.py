@@ -238,6 +238,11 @@ def _bias_cast_kernel(x_ptr, bias_ptr, y_ptr, numel, N: tl.constexpr, stride_bia
     tl.store(y_ptr + offs, x.to(y_ptr.dtype.element_ty), mask=mask)
 
 
+def _is_transposed(x: torch.Tensor) -> bool:
+    """Whether a matrix is stored transposed (contiguous along its rows), as `gemm_tile_utils.is_transposed` infers."""
+    return x.stride(-2) == 1 and x.stride(-1) != 1
+
+
 def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...], config: TileConfig | None = None) -> torch.Tensor:
     from triton_kernels_benchmark.gemm_benchmark import grouped_tile_gemm_kernel, grouped_tile_gemm_kernel_batched
 
@@ -256,11 +261,14 @@ def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...], config: TileConfig
             assert a.ndim == 2, "Only 2D GEMMs have a bias"
             _addmatrix_kernel()[grid](a, b, output, bias, m, n, k, *a.stride(), *b.stride(), *output.stride(),
                                       *bias.stride(), tl.float32)
-        elif a.ndim == 3:
-            grouped_tile_gemm_kernel_batched[grid](a, b, output, a.shape[0], m, n, k, *a.stride(), *b.stride(),
-                                                   *output.stride())
         else:
-            grouped_tile_gemm_kernel[grid](a, b, output, m, n, k, *a.stride(), *b.stride(), *output.stride())
+            transpose = {"TRANSPOSE_A": _is_transposed(a), "TRANSPOSE_B": _is_transposed(b)}
+            if a.ndim == 3:
+                grouped_tile_gemm_kernel_batched[grid](a, b, output, a.shape[0], m, n, k, *a.stride(), *b.stride(),
+                                                       *output.stride(), **transpose)
+            else:
+                grouped_tile_gemm_kernel[grid](a, b, output, m, n, k, *a.stride(), *b.stride(), *output.stride(),
+                                               **transpose)
         return output
 
     # Split-K and Stream-K reduce partial sums in an FP32 buffer, so the bias add and the cast take one more pass.
