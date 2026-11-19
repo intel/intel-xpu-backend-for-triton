@@ -261,7 +261,7 @@ def _parse(raw: Any) -> dict[str, Any]:
     unknown = set(raw) - _TOP_KEYS
     if unknown:
         raise CatalogError(f"catalog: unknown keys {sorted(unknown)}")
-    if raw.get("version") != 1:
+    if isinstance(raw.get("version"), bool) or raw.get("version") != 1:  # True == 1 in Python
         raise CatalogError("catalog: unsupported version " + repr(raw.get("version")))
     return dict(raw)
 

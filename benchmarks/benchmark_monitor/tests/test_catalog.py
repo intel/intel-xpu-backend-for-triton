@@ -63,6 +63,14 @@ def test_strict_validate_unmatched_selector():
     cat.validate(["gemm"])  # non-strict: fine
 
 
+def test_strict_validate_reaches_family_and_scope_checks():
+    with pytest.raises(CatalogError, match="family 'flash-attn'"):
+        load_catalog().validate(["softmax"], strict=True)
+    text = BASE + METRICS + "platforms: {p: {match: P}}\nscopes: {s: {source: micro, platform: p, benchmarks: ['nope*']}}\n"
+    with pytest.raises(CatalogError, match="selector 'nope\\*'"):
+        load_catalog(text).validate(["gemm"], strict=True)
+
+
 def test_overlay_adds_scope_but_not_thresholds(tmp_path: Path):
     ok = "version: 1\nplatforms: {x1: {match: 'X1'}}\nscopes: {s: {source: artifact, platform: x1}}\nimportance: {gemm: 1}\n"
     cat = load_catalog(overlays=[ok])
@@ -134,6 +142,11 @@ def test_scope_fields_are_validated(scope):
     base = DEFAULT_CATALOG_PATH.read_text(encoding="utf-8").split("scopes:")[0]
     with pytest.raises(CatalogError):
         load_catalog(base + f"scopes:\n  s: {scope}\nimportance: {{}}\n")
+
+
+def test_bool_version_is_rejected():  # True == 1 in Python; schema.json says const 1
+    with pytest.raises(CatalogError, match="unsupported version"):
+        load_catalog(BASE.replace("version: 1", "version: true"))
 
 
 def test_single_line_text_is_yaml_not_a_path():
