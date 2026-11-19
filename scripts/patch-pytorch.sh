@@ -35,3 +35,5 @@ apply_patch() {
 echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
+
+apply_patch "inductor-precompile-reuse-module-path.patch"
