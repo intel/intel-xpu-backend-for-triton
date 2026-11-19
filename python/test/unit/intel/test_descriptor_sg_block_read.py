@@ -3,6 +3,8 @@
 Each test wraps a plain function in a fresh `triton.jit` and compiles into its own TRITON_CACHE_DIR, because the
 in-memory JIT cache ignores TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ.
 """
+import struct
+
 import pytest
 import torch
 
@@ -111,3 +113,37 @@ def test_split_sum(conditional, device, with_allocator, monkeypatch, tmp_path):
     for s in range(rows.shape[1]):
         acc += rows[:, s]
     assert torch.equal(out, acc)
+
+
+_BLOCK_READ_CACHE_CONTROL_IR = """
+target triple = "spir64-unknown-unknown"
+
+define spir_kernel void @block_read(ptr addrspace(1) %in, ptr addrspace(1) %out) {
+  %v = call spir_func i32 @_Z29intel_sub_group_block_read_uiPU3AS1j(ptr addrspace(1) %in), !spirv.DecorationCacheControlINTEL !0
+  store i32 %v, ptr addrspace(1) %out
+  ret void
+}
+
+declare spir_func i32 @_Z29intel_sub_group_block_read_uiPU3AS1j(ptr addrspace(1))
+
+!opencl.ocl.version = !{!2}
+!0 = !{!1}
+!1 = !{i32 6442, i32 0, i32 0, i32 0}
+!2 = !{i32 3, i32 0}
+"""
+
+
+def test_cache_control_decorates_block_read_pointer():
+    from triton._C.libtriton import intel
+    spirv, _ = intel.translate_to_spirv(_BLOCK_READ_CACHE_CONTROL_IR, False, {})
+    words = struct.unpack(f"<{len(spirv) // 4}I", spirv)
+    decorated, read_ptrs = set(), []
+    i = 5
+    while i < len(words):
+        count, opcode = words[i] >> 16, words[i] & 0xFFFF
+        if opcode == 71 and words[i + 2] == 6442:  # OpDecorate ... CacheControlLoadINTEL
+            decorated.add(words[i + 1])
+        elif opcode == 5575:  # OpSubgroupBlockReadINTEL
+            read_ptrs.append(words[i + 3])
+        i += count
+    assert read_ptrs and all(p in decorated for p in read_ptrs)

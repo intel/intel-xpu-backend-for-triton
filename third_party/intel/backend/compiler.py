@@ -1,11 +1,11 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
-from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import compile_module_from_src, get_ocloc_version, has_spirv_2d_block_io, is_lts
-from triton.backends.intel.track import track
-from triton.backends.intel.errors import IntelGPUError, WorkGroupSizeOutOfResources
-from triton.backends.intel.extension_utils import query_device_extensions
-from triton.backends.intel.spirv_probes import (accepts_long_vector, accepts_maximum_registers,
-                                                accepts_subgroup_bitcast_shuffle)
+from triton._C.libtriton import ir, passes, llvm
+from .native import intel
+from .driver import compile_module_from_src, get_ocloc_version, has_spirv_2d_block_io, is_lts
+from .track import track
+from .errors import IntelGPUError, WorkGroupSizeOutOfResources
+from .extension_utils import query_device_extensions
+from .spirv_probes import accepts_long_vector, accepts_maximum_registers, accepts_subgroup_bitcast_shuffle
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import OutOfResources
@@ -599,6 +599,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
+        intel.passes.ttgpuir.add_rewrite_tensor_descriptor_gather_scatter(pm)
         if properties["has_256b_load_store"]:
             intel.passes.ttgpuir.add_widen_load_store_encoding(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
