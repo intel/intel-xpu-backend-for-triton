@@ -120,13 +120,14 @@ jobs:
           python_version: ${{ inputs.python_version }}
           use_pyenv: ${{ inputs.use_pyenv_python }}
 
-      # Build PyTorch here once, integration tests jobs should load it from cache.
+      # Build PyTorch here once, integration tests jobs load it from cache or install the uploaded wheel.
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
           lts: ${{ inputs.runner_label == 'lts' || inputs.driver_version == 'lts' }}
+          upload_artifact: pytorch-${{ inputs.python_version }}-${{ steps.artifact-label.outputs.name }}${{ inputs.runner_label != '' && inputs.driver_version == 'lts' && '-lts' || '' }}
 
       - name: Build Triton
         uses: ./.github/actions/setup-triton
@@ -249,6 +250,7 @@ jobs:
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
           lts: ${{ inputs.runner_label == 'lts' || inputs.driver_version == 'lts' }}
+          download_artifact: pytorch-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}${{ inputs.runner_label != '' && inputs.driver_version == 'lts' && '-lts' || '' }}
 
       - name: Download Triton wheels
         uses: actions/download-artifact@v8
