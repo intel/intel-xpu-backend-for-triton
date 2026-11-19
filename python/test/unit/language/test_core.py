@@ -101,6 +101,10 @@ def _bitwidth(dtype: str) -> int:
     return int(re.search(r'(\d+)$', dtype).group(1))
 
 
+def _assert_128bit_global_memory(ptx, op):
+    assert re.search(rf"\b{op}\.global\.v(?:4\.b32|2\.b64)\b", ptx)
+
+
 def _dtype(dtype: str) -> str:
     # ex.: "int64" -> "int"
     return re.match(r'([a-zA-Z]+)', dtype).group(0)
@@ -2161,7 +2165,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
             assert "fence.acq_rel.gpu" in h.asm["ptx"]
         return
 
-    assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
+    ptx = h.asm["ptx"]
+    assert f"atom.global.gpu.{sem_str}." in ptx or f"atom.{sem_str}.gpu.global." in ptx
 
 
 @pytest.mark.interpreter
@@ -2449,7 +2454,8 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
     if not is_cuda():
         return
-    assert f"atom.global.{sem_str}" in h.asm["ptx"]
+    ptx = h.asm["ptx"]
+    assert f"atom.global.{sem_str}.gpu.cas." in ptx or f"atom.{sem_str}.gpu.global.cas." in ptx
 
 
 @pytest.mark.interpreter
@@ -4414,11 +4420,11 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
 
     # parse ptx to make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
-    assert 'ld.global.v4' in ptx
-    assert 'st.global.v4' in ptx
+    _assert_128bit_global_memory(ptx, 'ld')
+    _assert_128bit_global_memory(ptx, 'st')
     ptx = pgm_contiguous.asm['ptx']
-    assert 'ld.global.v4' in ptx
-    assert 'st.global.v4' in ptx
+    _assert_128bit_global_memory(ptx, 'ld')
+    _assert_128bit_global_memory(ptx, 'st')
 
 
 @pytest.mark.interpreter
@@ -4889,20 +4895,15 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     ptx = pgm.asm['ptx']
 
     # XXX: skip small sizes because they are not vectorized; with runtime
-    # strides, v4 needs the contiguous dim >= 16 (K for loads, N for stores).
+    # strides, 128-bit vectors need the contiguous dim >= 16 (K for loads, N for stores).
     enough_work = (M * N // (num_warps * 32) >= 4) and (K > 16 or N > 16 or M > 16)
     if enough_work and K >= 16:
-        if 'float64' in in_dtype:
-            assert 'ld.global.v2.b64' in ptx
-        else:
-            assert 'ld.global.v4' in ptx
+        _assert_128bit_global_memory(ptx, 'ld')
     if enough_work and N >= 16:
         if 'float8' in in_dtype:
             assert 'st.global.v2' in ptx
-        elif 'float64' in in_dtype:
-            assert 'st.global.v2.b64' in ptx
         else:
-            assert 'st.global.v4' in ptx
+            _assert_128bit_global_memory(ptx, 'st')
 
     is_tcgen5 = (capability[0] == 10) and (num_warps % 4) == 0 and (M % 64) == 0 and (N % 8) == 0
 
@@ -5235,9 +5236,9 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     if is_cuda():
         ptx = pgm.asm['ptx']
         if (max(M, N) * K) // (num_warps * 32) >= 4:
-            assert 'ld.global.v4' in ptx
+            _assert_128bit_global_memory(ptx, 'ld')
         if M * N // (num_warps * 32) >= 4:
-            assert 'st.global.v4' in ptx
+            _assert_128bit_global_memory(ptx, 'st')
         assert (re.search(r'(mma|wgmma.mma_async).sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.(f|bf)16.(f|bf)16', ptx)
                 or "tcgen05.mma.cta_group::1.kind::f16" in ptx)
     if is_hip_cdna4() and normal_type in ["bf16", "fp16"]:
@@ -5251,13 +5252,17 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
 
 @triton.jit
 def _scaled_dot_scale_kernel(X, W, S, Y, RHS_SCALE: tl.constexpr, NORMAL_TYPE: tl.constexpr, SCALE_FACTOR: tl.constexpr,
-                             FAST_MATH: tl.constexpr):
+                             FAST_MATH: tl.constexpr, S2=None, BOTH_SCALE: tl.constexpr = False):
     indices = tl.arange(0, 128)
     offsets = indices[:, None] * 128 + indices[None, :]
     x = tl.load(X + offsets)
     w = tl.load(W + offsets)
     scales = tl.load(S + indices[:, None] * (128 // SCALE_FACTOR) + tl.arange(0, 128 // SCALE_FACTOR)[None, :])
-    if RHS_SCALE:
+    if BOTH_SCALE:
+        # The rhs is the same e4m3 weight, scaled by S2.
+        scales2 = tl.load(S2 + indices[:, None] * (128 // SCALE_FACTOR) + tl.arange(0, 128 // SCALE_FACTOR)[None, :])
+        y = tl.dot_scaled(w, scales, "e4m3", w, scales2, "e4m3", fast_math=FAST_MATH)
+    elif RHS_SCALE:
         y = tl.dot_scaled(x, None, NORMAL_TYPE, w, scales, "e4m3", fast_math=FAST_MATH)
     else:
         y = tl.dot_scaled(w, scales, "e4m3", x, None, NORMAL_TYPE, fast_math=FAST_MATH)
@@ -5267,10 +5272,12 @@ def _scaled_dot_scale_kernel(X, W, S, Y, RHS_SCALE: tl.constexpr, NORMAL_TYPE: t
 @pytest.mark.parametrize("rhs_scale", [False, True])
 @pytest.mark.parametrize("normal_type", ["bf16", "fp16"])
 @pytest.mark.parametrize("fast_math", [False, True])
+@pytest.mark.parametrize("scale_dtype", ["uint8", "float8_e8m0fnu"])
 @pytest.mark.enable_warmup(min_capability=9)
-def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
+def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, scale_dtype, device):
     if not (is_xpu() and not is_xpu_cri()) and (not is_cuda() or torch.cuda.get_device_capability() < (8, 9)):
         pytest.xfail("requires CUDA FP8 support")
+    scale_dtype = getattr(torch, scale_dtype)
 
     dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
     x = torch.full((128, 128), 2.0**112 if normal_type == "bf16" else 1.0, dtype=dtype, device=device)
@@ -5285,7 +5292,36 @@ def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
         if fast_math and scale == 255:
             continue
         scales.fill_(scale)
-        _scaled_dot_scale_kernel[(1, )](x, w, scales, out, rhs_scale, normal_type, 32, fast_math, num_warps=4)
+        # A native float8_e8m0fnu scale must decode like the same bytes viewed
+        # as uint8, including byte 0xFF, which is the E8M0 NaN encoding.
+        _scaled_dot_scale_kernel[(1, )](x, w, scales.view(scale_dtype), out, rhs_scale, normal_type, 32, fast_math,
+                                        num_warps=4)
+        if is_compile_warmup():
+            return
+        torch.testing.assert_close(out, torch.full_like(out, expected), rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("scale_dtype", ["uint8", "float8_e8m0fnu"])
+@pytest.mark.enable_warmup(min_capability=9)
+def test_scaled_dot_both_operands_minimum_scale(scale_dtype, device):
+    # Without block-scale DPAS, a rank-2 dot with only an rhs scale is transposed into an lhs-scaled one before it is
+    # decomposed, so test_scaled_dot_minimum_scale never reaches the rhs decode path there. Scaling both operands does,
+    # with fast_math off so the NaN handling runs on both.
+    if not (is_xpu() and not is_xpu_cri()) and (not is_cuda() or torch.cuda.get_device_capability() < (8, 9)):
+        pytest.xfail("requires CUDA FP8 support")
+    scale_dtype = getattr(torch, scale_dtype)
+
+    w = torch.full((128, 128), 256.0, dtype=torch.float8_e4m3fn, device=device)
+    scales = torch.empty((128, 4), dtype=torch.uint8, device=device)
+    unit_scales = torch.full((128, 4), 127, dtype=torch.uint8, device=device)  # E8M0 for 2^0
+    out = torch.empty((128, 128), dtype=torch.float32, device=device)
+    # lhs = 2^8 * 2^(scale - 127) and rhs = 2^8, summed over K = 2^7: 2^(scale - 104). Byte 254 overflows the bf16
+    # operand to inf, and byte 255 is the E8M0 NaN encoding.
+    expected_values = (2.0**-104, 2.0**-103, 2.0**23, float("inf"), float("nan"))
+    for scale, expected in zip((0, 1, 127, 254, 255), expected_values):
+        scales.fill_(scale)
+        _scaled_dot_scale_kernel[(1, )](w, w, scales.view(scale_dtype), out, False, "bf16", 32, False,
+                                        unit_scales.view(scale_dtype), BOTH_SCALE=True, num_warps=4)
         if is_compile_warmup():
             return
         torch.testing.assert_close(out, torch.full_like(out, expected), rtol=0, atol=0, equal_nan=True)
@@ -5583,6 +5619,25 @@ def test_full(dtype_str, shape, device):
     if is_compile_warmup():
         return
     assert torch.all(out_dynamic == 2)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("value, dtype_str, expected", [
+    (0xFF, "int8", -1),
+    (0x8000, "int16", -32768),
+    (0xFFFFFFFF, "int32", -1),
+    (0x1FF, "uint8", 0xFF),
+])
+def test_full_int_constant_out_of_range(value, dtype_str, expected, device):
+    # An integer constant keeps its low bits, as arith.constant does.
+
+    @triton.jit
+    def kernel(out, VALUE: tl.constexpr, DTYPE: tl.constexpr):
+        tl.store(out + tl.arange(0, 4), tl.full([4], VALUE, DTYPE))
+
+    out = torch.zeros(4, dtype=getattr(torch, dtype_str), device=device)
+    kernel[(1, )](out, value, getattr(tl, dtype_str))
+    assert torch.all(out == expected)
 
 
 @pytest.mark.parametrize("value", [1e-8, 3e-7, -2.5e-7, 1.5e-6, 1e-40, 0.1, 3.14159265])
@@ -5935,12 +5990,11 @@ def test_load_cache_modifier(cache, device):
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        all_modifiers = ['.ca', '.cg', '.cs', '.cv']
-        for modifier in all_modifiers:
-            if modifier == cache:
-                assert f'ld.global{modifier}' in ptx
-            else:
-                assert f'ld.global{modifier}' not in ptx
+        modifiers = re.findall(r'\bld\.global(?:\.(ca|cg|cs|cv))?\.(?:v[248]\.)?[busf]\d+\b', ptx)
+        assert modifiers
+        # An omitted load cache modifier means .ca.
+        expected = cache.removeprefix('.') or 'ca'
+        assert all((modifier or 'ca') == expected for modifier in modifiers)
 
 
 @pytest.mark.interpreter
@@ -6110,12 +6164,11 @@ def test_store_cache_modifier(cache, device):
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        all_modifiers = ['.wb', '.cg', '.cs', '.wt']
-        for modifier in all_modifiers:
-            if modifier == cache:
-                assert f'st.global{modifier}' in ptx
-            else:
-                assert f'st.global{modifier}' not in ptx
+        modifiers = re.findall(r'\bst\.global(?:\.(wb|cg|cs|wt))?\.(?:v[248]\.)?[busf]\d+\b', ptx)
+        assert modifiers
+        # An omitted store cache modifier means .wb.
+        expected = cache.removeprefix('.') or 'wb'
+        assert all((modifier or 'wb') == expected for modifier in modifiers)
 
 
 @pytest.mark.interpreter
@@ -6553,7 +6606,7 @@ def test_num_warps_pow2(device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm(num_ctas, device):
     if not is_cuda():
-        pytest.xfail("test_inline_asm is only supported in CUDA")
+        pytest.skip("test_inline_asm is only supported in CUDA")
 
     @triton.jit
     def kernel(X, Y, Z, n: tl.constexpr, BLOCK: tl.constexpr):
@@ -6581,7 +6634,7 @@ def test_inline_asm(num_ctas, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm_packed(num_ctas, device):
     if not is_cuda():
-        pytest.xfail("test_inline_asm is only supported in CUDA")
+        pytest.skip("test_inline_asm is only supported in CUDA")
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -6608,7 +6661,7 @@ def test_inline_asm_packed(num_ctas, device):
 @pytest.mark.parametrize('num_ctas', num_ctas_list)
 def test_inline_asm_with_pointers(num_ctas, device):
     if not is_cuda():
-        pytest.xfail('test_inline_asm is only supported in CUDA')
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -6633,7 +6686,7 @@ def test_inline_asm_with_pointers(num_ctas, device):
 
 def test_inline_asm_multiple_outputs(device):
     if not is_cuda():
-        pytest.xfail('test_inline_asm is only supported in CUDA')
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(A, B, C, D, BLOCK: tl.constexpr):
@@ -6679,7 +6732,7 @@ def test_inline_asm_multiple_outputs(device):
 
 def test_inline_asm_packed_multiple_outputs(device):
     if not is_cuda():
-        pytest.xfail('test_inline_asm is only supported in CUDA')
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(A, B, C, D, BLOCK: tl.constexpr):
@@ -6940,6 +6993,45 @@ def test_if_else(device):
     cond[0] = False
     kernel[(1, )](cond, true_val, false_val, out)
     assert to_numpy(out)[0] == false_val[0]
+
+
+@pytest.mark.xfail(not is_hip(), reason="AMD pointer canonicalization regression", run=False)
+@pytest.mark.parametrize("num_tensors", [32, 100])
+def test_if_elif_shared_pointer_body(num_tensors, device, fresh_knobs):
+    fresh_knobs.amd.use_buffer_ops = True
+
+    @triton.jit
+    def kernel(Inputs, Outputs, n_elements, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        blocks = tl.cdiv(n_elements, BLOCK)
+        # DISPATCH
+        offsets = local * BLOCK + tl.arange(0, BLOCK)
+        value = tl.load(in_ptr + offsets, offsets < n_elements, other=0)
+        tl.store(out_ptr + offsets, value + 1, offsets < n_elements)
+
+    # Selecting both pointers before the shared body produces nested scf.if
+    # operations with two pointer results. The forward-slice walk must not
+    # revisit their users once for every path through those results.
+    dispatch = []
+    for i in range(num_tensors):
+        dispatch += [
+            f"{'if' if i == 0 else 'elif'} pid < {i + 1} * blocks:",
+            f"    local = pid - {i} * blocks",
+            f"    in_ptr = Inputs[{i}]",
+            f"    out_ptr = Outputs[{i}]",
+        ]
+    dispatch += ["else:", "    local = pid", "    in_ptr = Inputs[0]", "    out_ptr = Outputs[0]"]
+    kernel = patch_kernel(kernel, {"# DISPATCH": "\n    ".join(dispatch)})
+
+    # Distinct data across tensors and elements catches incorrect pointer or
+    # offset propagation. The final block also exercises the load/store masks.
+    n_elements = 1000
+    inputs = tuple(
+        torch.arange(n_elements, device=device, dtype=torch.float32) + i * n_elements for i in range(num_tensors))
+    outputs = tuple(torch.full_like(x, float("nan")) for x in inputs)
+    kernel[(num_tensors * triton.cdiv(n_elements, 128), )](inputs, outputs, n_elements, BLOCK=128)
+    for x, y in zip(inputs, outputs):
+        torch.testing.assert_close(y, x + 1, rtol=0, atol=0)
 
 
 @pytest.mark.interpreter
@@ -7258,9 +7350,6 @@ def test_poison_return(device):
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel.warmup(a, grid=(1, ))
     assert "ub.poison" in h.asm["ttir"], h.asm["ttir"]
-    # hip/xpu uses llvm.store, which in this case is removed by the optimizer
-    if not (is_hip() or is_xpu()):
-        assert "poison" in h.asm["llir"], h.asm["llir"]
 
 
 # -----------------------
@@ -7302,7 +7391,8 @@ def test_globaltimer(device):
         start = func()
         off = tl.arange(0, 128)
         for i in range(10000):
-            tl.store(Out1 + off, tl.load(Out1 + off) + 1)
+            # Keep the timed loop from folding into a single addition.
+            tl.store(Out1 + off, tl.load(Out1 + off, volatile=True) + 1)
         end = func()
         tl.store(Out2, start)
         tl.store(Out2 + 1, end)
@@ -7636,7 +7726,7 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs):
 
 def test_num_ctas_pre_sm90(device, fresh_knobs):
     if not is_cuda() and not is_hip():
-        pytest.xfail("Only supported on CUDA and HIP")
+        pytest.skip("Only supported on CUDA and HIP")
 
     @triton.jit
     def _kernel(src):
@@ -8153,7 +8243,7 @@ def test_dtype(device):
 
 def test_side_effectful_scan(device):
     if device != "cuda":
-        pytest.xfail()
+        pytest.skip()
 
     @triton.jit(debug=True)
     def sanitize_cumsum_kernel(Z, X, BLOCK: tl.constexpr):

@@ -7,7 +7,6 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::intel {
 namespace {
-constexpr int kPtrBitWidth = 64;
 constexpr unsigned invalidSize = -1;
 
 unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
@@ -18,9 +17,7 @@ unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
   if (gpu::intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
     Type elemTy = srcTy.getElementType();
     unsigned bytesPerElement =
-        isa<PointerType>(elemTy)
-            ? kPtrBitWidth / 8
-            : std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
+        std::max<int>(8, getIntOrFloatOrPtrBitWidth(elemTy)) / 8;
     unsigned numElements = product(srcTy.getShape());
     Attribute encoding = srcTy.getEncoding();
     int subGroupSize =

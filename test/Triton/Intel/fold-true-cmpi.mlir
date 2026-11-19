@@ -280,3 +280,53 @@ module {
 // CHECK:           scf.for
 // CHECK:           %[[O:.*]] = arith.cmpi sge, %{{.*}}, %c-1_i32 : i32
 // CHECK:           tt.return %[[O]]
+
+// -----
+
+// COM: The loop result is in [0, 16] (#8604), so the comparison stays.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @loop_result_assumed_bound_not_folded(%n: i32) -> i1 {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c16 = arith.constant 16 : i32
+    %ge = arith.cmpi sge, %n, %c0 : i32
+    llvm.intr.assume %ge : i1
+    %le = arith.cmpi sle, %n, %c16 : i32
+    llvm.intr.assume %le : i1
+    %r = scf.for %i = %c0 to %n step %c1 iter_args(%a = %c0) -> (i32) : i32 {
+      %a1 = arith.addi %a, %c1 : i32
+      scf.yield %a1 : i32
+    }
+    %lt = arith.cmpi slt, %r, %c16 : i32
+    tt.return %lt : i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @loop_result_assumed_bound_not_folded
+// CHECK:           %[[LT:.*]] = arith.cmpi slt, %{{.*}}, %c16_i32 : i32
+// CHECK:           tt.return %[[LT]]
+
+// -----
+
+// COM: The result of this 3x3 nest is 9 (#8604), so the comparison stays.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @nested_loop_result_not_folded() -> i1 {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c3 = arith.constant 3 : i32
+    %c9 = arith.constant 9 : i32
+    %r = scf.for %i = %c0 to %c3 step %c1 iter_args(%a = %c0) -> (i32) : i32 {
+      %s = scf.for %j = %c0 to %c3 step %c1 iter_args(%b = %a) -> (i32) : i32 {
+        %b1 = arith.addi %b, %c1 : i32
+        scf.yield %b1 : i32
+      }
+      scf.yield %s : i32
+    }
+    %lt = arith.cmpi slt, %r, %c9 : i32
+    tt.return %lt : i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @nested_loop_result_not_folded
+// CHECK:           %[[LT:.*]] = arith.cmpi slt, %{{.*}}, %c9_i32 : i32
+// CHECK:           tt.return %[[LT]]

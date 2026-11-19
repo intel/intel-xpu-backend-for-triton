@@ -540,3 +540,103 @@ module {
     tt.return
   }
 }
+
+// -----
+
+// COM: An op the analysis knows nothing about blocks.
+// CHECK-LABEL: tt.func @unregistered_op_blocks
+module {
+  tt.func @unregistered_op_blocks(%n: i32) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %use = arith.addi %n, %c0 : i32
+    "test.opaque"() : () -> ()
+    %cmp = arith.cmpi sge, %n, %c64 : i32
+    llvm.intr.assume %cmp : i1
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Effect-free ops are accepted only from dialects known to terminate.
+// CHECK-LABEL: tt.func @effect_free_op_of_other_dialect_blocks
+module {
+  tt.func @effect_free_op_of_other_dialect_blocks(%n: i32) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %use = arith.addi %n, %c0 : i32
+    %k = llvm.mlir.constant(1 : i32) : i32
+    %cmp = arith.cmpi sge, %n, %c64 : i32
+    llvm.intr.assume %cmp : i1
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Listed ops with memory effects, effect-free math and ub ops, and pure
+// COM: extern and inline-asm ops finish. The earlier assume is on %m, so the
+// COM: fact on %n can only come from the last assume.
+// CHECK-LABEL: tt.func @listed_effectful_ops_do_not_block
+module {
+  tt.func @listed_effectful_ops_do_not_block(%n: i32, %m: i32, %p: !tt.ptr<i32>, %d: !tt.tensordesc<8x32xi32>, %g: !tt.tensordesc<1x32xi32>, %rows: tensor<8xi32>) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    %true = arith.constant true
+    // expected-remark@+1 {{unsigned : [64, 2147483647] signed : [64, 2147483647]}}
+    %use = arith.addi %n, %c0 : i32
+    %cm = arith.cmpi sge, %m, %c0 : i32
+    llvm.intr.assume %cm : i1
+    %v = tt.load %p : !tt.ptr<i32>
+    tt.store %p, %v : !tt.ptr<i32>
+    %r = tt.atomic_rmw add, relaxed, gpu, %p, %v, %true : (!tt.ptr<i32>, i32, i1) -> i32
+    %c = tt.atomic_cas acq_rel, gpu, %p, %c0, %v : (!tt.ptr<i32>, i32, i32) -> i32
+    %a = tt.atomic_load acquire, gpu, %p : (!tt.ptr<i32>) -> i32
+    tt.atomic_store release, gpu, %p, %a, %true : !tt.ptr<i32>
+    %t = tt.descriptor_load %d[%c0, %c0] : !tt.tensordesc<8x32xi32> -> tensor<8x32xi32>
+    tt.descriptor_store %d[%c0, %c0], %t : !tt.tensordesc<8x32xi32>, tensor<8x32xi32>
+    tt.descriptor_reduce add, %d[%c0, %c0], %t : !tt.tensordesc<8x32xi32>, tensor<8x32xi32>
+    %gt = tt.descriptor_gather %g[%rows, %c0] : (!tt.tensordesc<1x32xi32>, tensor<8xi32>, i32) -> tensor<8x32xi32>
+    tt.descriptor_scatter %g[%rows, %c0], %gt : !tt.tensordesc<1x32xi32>, tensor<8xi32>, i32, tensor<8x32xi32>
+    tt.print ": " {hex = false, isSigned = array<i32: 1>} : %v : i32
+    ttg.barrier local
+    proton.record start "s"
+    %e = proton.allocate_event "e" : i32
+    proton.event start %e : i32
+    %abs = math.absi %m : i32
+    %poison = ub.poison : i32
+    %pe = tt.extern_elementwise %m {libname = "l", libpath = "p", symbol = "s", pure = true} : (i32) -> i32
+    %pa = tt.elementwise_inline_asm "nop" {constraints = "=r,r", packed_element = 1 : i32, pure = true} %m : i32 -> i32
+    %cmp = arith.cmpi sge, %n, %c64 : i32
+    llvm.intr.assume %cmp : i1
+    tt.return
+  }
+}
+
+// -----
+
+// COM: TTGIR shared-memory ops and effect-free ttg ops finish.
+// CHECK-LABEL: tt.func @ttg_ops_do_not_block
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @ttg_ops_do_not_block(%n: i32, %t: tensor<128xi32, #blocked>) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    // expected-remark@+1 {{unsigned : [64, 2147483647] signed : [64, 2147483647]}}
+    %use = arith.addi %n, %c0 : i32
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable>
+    %view = ttg.memdesc_index %buf[%c0] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    ttg.local_store %t, %view : tensor<128xi32, #blocked> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    %l = ttg.local_load %view : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #blocked>
+    %cv = ttg.convert_layout %l : tensor<128xi32, #blocked> -> tensor<128xi32, #blocked>
+    ttg.local_dealloc %buf : !ttg.memdesc<2x128xi32, #shared, #smem, mutable>
+    %cmp = arith.cmpi sge, %n, %c64 : i32
+    llvm.intr.assume %cmp : i1
+    tt.return
+  }
+}

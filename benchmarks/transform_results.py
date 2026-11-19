@@ -11,16 +11,21 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Parse MoE benchmark CSV')
     parser.add_argument('source', help='Path to the MoE benchmark CSV file')
     parser.add_argument('target', help='Path to output CSV file')
-    parser.add_argument(
-        '--param_cols',
-        help='Names of parameter columns, separated by commas.',
-        required=True,
-    )
+    params = parser.add_mutually_exclusive_group(required=True)
+    params.add_argument('--param_cols', help='Names of parameter columns, separated by commas.')
+    params.add_argument('--infer_param_cols', action='store_true',
+                        help='Treat every column without "-", except datetime and run_counter, as a parameter.')
     parser.add_argument('--tag', help='Tag for the benchmark run', default='')
     parser.add_argument('--benchmark', help='moe-benchmark', required=True)
     parser.add_argument('--bgroup', help='Benchmark group', required=True)
 
     return parser.parse_args()
+
+
+def infer_param_cols(csv_file_path):
+    """Returns parameter columns of a raw `Mark.run` CSV: the ones that are not `<provider>-<metric>`."""
+    columns = pd.read_csv(csv_file_path, nrows=0).columns
+    return [c for c in columns if '-' not in c and c not in ('datetime', 'run_counter')]
 
 
 def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols, extra_params=None):
@@ -46,7 +51,7 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols, extra_para
 
     df['params'] = df.apply(serialize_params, axis=1)
 
-    compilers = ['pytorch', 'triton', 'triton-td', 'sycl-tla']
+    compilers = ['pytorch', 'triton', 'triton-td', 'sycl-tla', 'load', 'load_masked', 'load_unmasked', 'descriptor']
 
     dfs = []
     for compiler_name in compilers:
@@ -103,7 +108,7 @@ def main():
     if not os.path.exists(args.source):
         raise ValueError(f'Error: CSV file {args.source} not found')
 
-    param_cols = args.param_cols.split(',')
+    param_cols = infer_param_cols(args.source) if args.infer_param_cols else args.param_cols.split(',')
     df_results = parse_csv(args.source, args.tag, args.bgroup, args.benchmark, param_cols)
     df_results.to_csv(args.target, index=False)
 

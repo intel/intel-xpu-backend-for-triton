@@ -67,6 +67,11 @@ static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
       continue;
     // Reduce within warps.
     SmallVector<Value> acc = srcValues[srcIndex];
+    if (targetInfo.warpScan(rewriter, loc, acc, helper.getOperation(), scanDim,
+                            threadStride)) {
+      srcValues[srcIndex] = std::move(acc);
+      continue;
+    }
     for (unsigned i = 1; i <= scanDim / 2; i <<= 1) {
       SmallVector<Value> shfl(acc.size());
       for (unsigned j = 0; j < acc.size(); ++j) {

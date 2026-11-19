@@ -4,6 +4,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
@@ -21,12 +22,13 @@ unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
   // Handle RankedTensorType with distributed encoding
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     Type elType = tensorType.getElementType();
-    if (!elType.isIntOrFloat())
+    // Packed fp4 (two e2m1 per byte) counts like the i8 it is stored as.
+    if (!elType.isIntOrFloat() && !isa<triton::PackedFloat4E2M1Type>(elType))
       return 0;
     unsigned elemsPerThread = gpu::getTotalElemsPerThread(tensorType);
     // Round up to whole bytes so sub-byte types (fp8/fp4/i1) are not counted
     // as zero pressure, which would systematically under-count FP8 kernels.
-    unsigned bytesPerElem = (elType.getIntOrFloatBitWidth() + 7) / 8;
+    unsigned bytesPerElem = (getIntOrFloatOrPtrBitWidth(elType) + 7) / 8;
     return elemsPerThread * bytesPerElem;
   }
 

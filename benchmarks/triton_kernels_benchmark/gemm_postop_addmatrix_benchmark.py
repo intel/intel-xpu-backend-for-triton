@@ -13,6 +13,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY, DEVICE_MODULE
+from triton_kernels_benchmark.gemm_tile_utils import load_matrix_tile, make_matrix_tile_ptr, store_matrix_tile
 import psutil
 
 INT8_ONLY_OPTION = os.getenv('INT8_ONLY', '0') == '1'
@@ -59,7 +60,7 @@ def suffix():
     reset_to_zero=['c_ptr'],
 )
 @triton.jit
-def matmul_kernel_with_tensor_descriptors(
+def grouped_tile_gemm_addmatrix_kernel(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr, d_ptr,
         # Matrix dimensions
@@ -82,27 +83,26 @@ def matmul_kernel_with_tensor_descriptors(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
-    b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
+    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
+    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ACCUMULATOR_DTYPE)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
-        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+        a = load_matrix_tile(a_desc, M, K, stride_am, stride_ak, pid_m * BLOCK_SIZE_M, off_k, BLOCK_SIZE_M,
+                             BLOCK_SIZE_K)
+        b = load_matrix_tile(b_desc, K, N, stride_bk, stride_bn, off_k, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_K,
+                             BLOCK_SIZE_N)
         accumulator = tl.dot(a, b, accumulator)
         off_k += BLOCK_SIZE_K
 
-    d_desc = tl.make_tensor_descriptor(base=d_ptr, shape=(M, N), strides=(stride_dm, stride_dn),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
-    d = d_desc.load([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N])
+    d_desc = make_matrix_tile_ptr(d_ptr, M, N, stride_dm, stride_dn, BLOCK_SIZE_M, BLOCK_SIZE_N)
+    d = load_matrix_tile(d_desc, M, N, stride_dm, stride_dn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_M,
+                         BLOCK_SIZE_N)
     c = accumulator + d
 
-    c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
-    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
+    store_matrix_tile(c_ptr, c, M, N, stride_cm, stride_cn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_M,
+                      BLOCK_SIZE_N)
 
 
 # pylint: disable=unused-argument
@@ -131,7 +131,7 @@ def matmul_kernel_with_tensor_descriptors(
     reset_to_zero=['c_ptr'],
 )
 @triton.jit
-def matmul_kernel_with_tensor_descriptors_batched(
+def grouped_tile_gemm_addmatrix_kernel_batched(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr, d_ptr,
         # Matrix dimensions
@@ -158,41 +158,40 @@ def matmul_kernel_with_tensor_descriptors_batched(
     offset_a = bid.to(tl.int64) * stride_az
     offset_b = bid.to(tl.int64) * stride_bz
 
-    a_desc = tl.make_tensor_descriptor(base=a_ptr + offset_a, shape=(M, K), strides=(stride_am, stride_ak),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K))
-    b_desc = tl.make_tensor_descriptor(base=b_ptr + offset_b, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
+    a_desc = make_matrix_tile_ptr(a_ptr + offset_a, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
+    b_desc = make_matrix_tile_ptr(b_ptr + offset_b, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ACCUMULATOR_DTYPE)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
-        a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
-        b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
+        a = load_matrix_tile(a_desc, M, K, stride_am, stride_ak, pid_m * BLOCK_SIZE_M, off_k, BLOCK_SIZE_M,
+                             BLOCK_SIZE_K)
+        b = load_matrix_tile(b_desc, K, N, stride_bk, stride_bn, off_k, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_K,
+                             BLOCK_SIZE_N)
         accumulator = tl.dot(a, b, accumulator)
         off_k += BLOCK_SIZE_K
 
     offset_d = bid.to(tl.int64) * stride_dz
-    d_desc = tl.make_tensor_descriptor(base=d_ptr + offset_d, shape=(M, N), strides=(stride_dm, stride_dn),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
-    d = d_desc.load([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N])
+    d_desc = make_matrix_tile_ptr(d_ptr + offset_d, M, N, stride_dm, stride_dn, BLOCK_SIZE_M, BLOCK_SIZE_N)
+    d = load_matrix_tile(d_desc, M, N, stride_dm, stride_dn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_M,
+                         BLOCK_SIZE_N)
     c = accumulator + d
 
     offset_c = bid.to(tl.int64) * stride_cz
-    c_desc = tl.make_tensor_descriptor(base=c_ptr + offset_c, shape=(M, N), strides=(stride_cm, stride_cn),
-                                       block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
-
-    c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
+    store_matrix_tile(c_ptr + offset_c, c, M, N, stride_cm, stride_cn, pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N,
+                      BLOCK_SIZE_M, BLOCK_SIZE_N)
 
 
 # We can now create a convenience wrapper function that only takes two input tensors,
 # and (1) checks any shape constraint; (2) launches the above kernel.
 def matmul(a, b, d, c):
     # Check constraints.
+    assert all(x.data_ptr() % 16 == 0 for x in (a, b, c, d)), 'Matrix base addresses must be 16-byte aligned'
     if len(a.shape) == 3 and len(b.shape) == 3:
         assert a.shape[0] == b.shape[0], 'Incompatible Batch dimension'
         assert a.shape[2] == b.shape[1], 'Incompatible dimensions'
-        assert a.is_contiguous(), 'Matrix A must be contiguous'
-        assert b.is_contiguous(), 'Matrix B must be contiguous'
+        assert all(x.stride(0) * x.element_size() % 16 == 0
+                   for x in (a, b, c, d)), 'Batch strides must be 16-byte aligned'
         B, M, K = a.shape
         B, K, N = b.shape
         # 1D launch kernel where each block gets its own program.
@@ -200,7 +199,7 @@ def matmul(a, b, d, c):
             triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
             B,
         )
-        matmul_kernel_with_tensor_descriptors_batched[grid](
+        grouped_tile_gemm_addmatrix_kernel_batched[grid](
             a, b, c, d,  #
             B, M, N, K,  #
             a.stride(0), a.stride(1), a.stride(2),  #
@@ -210,12 +209,10 @@ def matmul(a, b, d, c):
             tl.float32 if a.dtype.is_floating_point else tl.int32)
     elif len(a.shape) == 2 and len(b.shape) == 2:
         assert a.shape[1] == b.shape[0], 'Incompatible dimensions'
-        assert a.is_contiguous(), 'Matrix A must be contiguous'
-        assert b.is_contiguous(), 'Matrix B must be contiguous'
         M, K = a.shape
         K, N = b.shape
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-        matmul_kernel_with_tensor_descriptors[grid](
+        grouped_tile_gemm_addmatrix_kernel[grid](
             a, b, c, d,  #
             M, N, K,  #
             a.stride(0), a.stride(1),  #

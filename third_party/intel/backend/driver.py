@@ -23,6 +23,7 @@ from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase, TensorDescABI, decompose_descriptor
 from triton.backends.driver import expand_signature, get_kernel_argument_layout, wrap_handle_tensordesc_impl
+from . import native
 
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
@@ -418,7 +419,7 @@ class SpirvUtils:
         try:
             return self.shared_library.load_binary(args)
         except Exception as e:
-            from triton.backends.intel.errors import IntelGPUError
+            from .errors import IntelGPUError
             from triton.runtime.errors import OutOfResources
             if isinstance(e, OutOfResources):
                 raise
@@ -524,6 +525,34 @@ def is_lts(ver) -> bool:
     if not m:
         return True
     return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
+
+
+def has_spirv_2d_block_io(ver: str | None) -> bool:
+    """
+    Whether the SPIR-V 2D block I/O builtins can be used with this driver (#8858).
+
+    IGC before 2.38 (compute-runtime 26.27.39122) only has a fixed table of `intel_sub_group_2d_block_*` builtins, so
+    other shapes fail to build; 2.38 added a generic resolver. `ver` is the driver version
+    (`1.<minor>.<build>[+<patch>]`) or the `ocloc` version (`26.18.38308.1`); either way the compute-runtime build
+    number is the third field. A missing or unparsable version keeps the SPIR-V default.
+    """
+    if not ver:
+        return True
+    m = _VERSION_PATTERN.match(ver)
+    if not m:
+        return True
+    return int(m.group(3)) >= 39122
+
+
+@lru_cache
+def get_ocloc_version() -> str | None:
+    """The version of the `ocloc` on PATH, e.g. `26.18.38308.1`, or None if it can't be determined."""
+    try:
+        proc = subprocess.run(['ocloc', '--version'], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = re.search(r'\d+\.\d+\.\d+(?:\.\d+)?', proc.stdout)
+    return m.group(0) if m else None
 
 
 @lru_cache
@@ -934,7 +963,7 @@ class XPUDriver(DriverBase):
     @lru_cache
     def _construct_target(self, device):
         import torch
-        from triton.backends.intel.extension_utils import query_device_extensions
+        from .extension_utils import query_device_extensions
 
         dev_property = torch.xpu.get_device_capability(device)
 
@@ -962,8 +991,6 @@ class XPUDriver(DriverBase):
         return self._construct_target(device)
 
     def build_proton_help_lib(self):
-        from triton.backends.intel.driver import compile_module_from_src
-
         dirname = os.path.dirname(os.path.realpath(__file__))
         return compile_module_from_src(src=Path(dirname).joinpath("proton_utils.cpp").read_text(), name="proton_utils")
 
@@ -989,6 +1016,8 @@ class XPUDriver(DriverBase):
 
     @staticmethod
     def is_active():
+        if native.error:  # the backend's C++ module could not be loaded (native.py)
+            return False
         try:
             import torch
             return torch.xpu.is_available()

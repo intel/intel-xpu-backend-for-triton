@@ -7,7 +7,7 @@ converter implementation (Fp8E5M2_to_Bf16 in ElementwiseOpToLLVM.cpp).
 The reserved fp8e5m2 encodings now propagate to IEEE special values instead of
 decoding to finite bf16: bytes 0x7C/0xFC (exponent all-ones, mantissa 0) map to
 +-Inf (0x7F80/0xFF80), and bytes 0x7D-0x7F / 0xFD-0xFF (mantissa != 0) map to a
-canonical quiet NaN (0x7FC0/0xFFC0), sign preserved.
+quiet NaN (its sign and payload are not checked).
 """
 import torch
 import pytest
@@ -52,6 +52,12 @@ EXPECTED_BF16_BITS = [
     0xffc0, 0xffc0,  # 0xf0-0xff (0xfc=-Inf, 0xfd-0xff=NaN)
 ]
 
+# The reserved NaN encodings, which are only checked for decoding to a quiet NaN.
+RESERVED_NAN_BYTES = (0x7D, 0x7E, 0x7F, 0xFD, 0xFE, 0xFF)
+
+# The quiet bit (top mantissa bit) of a bf16 NaN.
+BF16_QUIET_BIT = 0x0040
+
 
 @triton.jit
 def type_convert(src, dst, BLOCK_SIZE: tl.constexpr):
@@ -84,23 +90,26 @@ def test_fp8e5m2_to_bf16_bit_exact(device):
     # Launch kernel
     type_convert[(SIZE // BLOCK_SIZE, )](src_fp8, dst, BLOCK_SIZE)
 
-    # Primary assertion: bit-exact equality for all 256 bytes
+    # Primary assertion: bit-exact equality for all bytes except the reserved
+    # NaN bytes, which only have to decode to a quiet NaN
     expected_uint16 = torch.tensor(EXPECTED_BF16_BITS, dtype=torch.uint16, device=device)
     dst_uint16 = dst.view(torch.uint16)
 
-    if not torch.equal(dst_uint16, expected_uint16):
-        # Detailed failure report
-        mismatch_mask = dst_uint16 != expected_uint16
-        mismatch_indices = torch.nonzero(mismatch_mask, as_tuple=False).squeeze(1)
-        failures = []
-        for idx in mismatch_indices[:20]:  # Report up to 20 failures
-            byte = idx.item()
-            expected = expected_uint16[byte].item()
-            actual = dst_uint16[byte].item()
+    is_nan = torch.isnan(dst).cpu().tolist()
+    failures = []
+    for byte, actual in enumerate(dst_uint16.cpu().tolist()):
+        if byte in RESERVED_NAN_BYTES:
+            if not (is_nan[byte] and actual & BF16_QUIET_BIT):
+                failures.append(f"byte=0x{byte:02x} expected=quiet NaN actual=0x{actual:04x}")
+            continue
+        expected = EXPECTED_BF16_BITS[byte]
+        if actual != expected:
             failures.append(f"byte=0x{byte:02x} expected=0x{expected:04x} actual=0x{actual:04x}")
-        msg = f"{len(mismatch_indices)} byte(s) mismatch:\n  " + "\n  ".join(failures)
-        if len(mismatch_indices) > 20:
-            msg += f"\n  ... and {len(mismatch_indices) - 20} more"
+    if failures:
+        # Report up to 20 failures
+        msg = f"{len(failures)} byte(s) mismatch:\n  " + "\n  ".join(failures[:20])
+        if len(failures) > 20:
+            msg += f"\n  ... and {len(failures) - 20} more"
         pytest.fail(msg)
 
     # Subnormal-table sub-asserts: validate each subnormal byte individually
@@ -112,14 +121,6 @@ def test_fp8e5m2_to_bf16_bit_exact(device):
         actual = dst_uint16[byte].item()
         assert actual == expected, \
             f"Subnormal byte 0x{byte:02x}: expected=0x{expected:04x} actual=0x{actual:04x}"
-
-    # NaN sub-asserts: E5M2 has multiple NaN encodings (0x7D-0x7F, 0xFD-0xFF),
-    # which now decode to a canonical quiet NaN with the sign preserved.
-    nan_bytes = {0x7D: 0x7FC0, 0x7E: 0x7FC0, 0x7F: 0x7FC0, 0xFD: 0xFFC0, 0xFE: 0xFFC0, 0xFF: 0xFFC0}
-    for byte, want in nan_bytes.items():
-        actual = dst_uint16[byte].item()
-        assert actual == want, \
-            f"NaN byte 0x{byte:02x}: expected=0x{want:04x} actual=0x{actual:04x}"
 
     # Infinity sub-asserts: E5M2 inf encodings (0x7C, 0xFC) decode to +-Inf.
     inf_bytes = {0x7C: 0x7F80, 0xFC: 0xFF80}

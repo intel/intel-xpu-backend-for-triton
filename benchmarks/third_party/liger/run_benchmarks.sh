@@ -14,6 +14,10 @@ for file in Liger-Kernel/benchmark/scripts/benchmark_*; do
     if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_fused_linear_jsd.py" ]; then
         continue
     fi
+    # TODO: unskip when https://github.com/intel/intel-xpu-backend-for-triton/issues/8737 is resolved
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_sparse_multi_token_attention.py" ]; then
+        continue
+    fi
     if python "$file"; then
         echo "Benchmark ran successfully: $file"
     else

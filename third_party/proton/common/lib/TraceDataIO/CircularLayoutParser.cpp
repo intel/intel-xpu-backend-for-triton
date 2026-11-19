@@ -243,6 +243,10 @@ Device decodeDevice(const uint32_t dev) {
     device.type = DeviceType::HIP;
     device.arch = "";
     break;
+  case 3:
+    device.type = DeviceType::XPU;
+    device.arch = "";
+    break;
   default:
     break;
   }

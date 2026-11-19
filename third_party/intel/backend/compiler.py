@@ -1,10 +1,11 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
-from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import compile_module_from_src, is_lts
-from triton.backends.intel.track import track
-from triton.backends.intel.errors import IntelGPUError
-from triton.backends.intel.extension_utils import query_device_extensions
-from triton.backends.intel.spirv_probes import accepts_long_vector, accepts_maximum_registers
+from triton._C.libtriton import ir, passes, llvm
+from .native import intel
+from .driver import compile_module_from_src, get_ocloc_version, has_spirv_2d_block_io, is_lts
+from .track import track
+from .errors import IntelGPUError, WorkGroupSizeOutOfResources
+from .extension_utils import query_device_extensions
+from .spirv_probes import accepts_long_vector, accepts_maximum_registers, accepts_subgroup_bitcast_shuffle
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import OutOfResources
@@ -56,6 +57,10 @@ class XPUOptions:
     sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
     dynamic_shared_memory: bool = knobs.intel.dynamic_shared_memory
     use_barrier: bool = False
+    # Default TRITON_INTEL_PIPELINE_TILE_BARRIER (on); a kernel option, so it is part of the cache key.
+    tile_barrier: bool = True
+    # Opt-in (TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL when unset); a kernel option, so a triton.Config can autotune it.
+    prefetch_cost_model: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -67,10 +72,13 @@ class XPUOptions:
     fpsan_homomorphic_casts: bool = False
     core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
     is_lts: bool = True
+    # Whether the SPIR-V 2D block I/O builtins can be used (#8858); see `has_spirv_2d_block_io`.
+    has_spirv_2d_block_io: bool = True
     # Whether these SPIR-V extensions are allowed; overwritten with the
     # ground-truth probe result in `parse_options`.
     allow_long_vector: bool = True
     allow_maximum_registers: bool = True
+    allow_subgroup_bitcast_shuffle: bool = False
     # Largest GRF mode the backend's automatic escalation will ever select
     # for this target ("256" everywhere except "cri", which gets "512"); see
     # `get_max_grf_mode`, the single source of truth for this policy.
@@ -335,6 +343,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # this so the downstream 64-byte alignment compensation is skipped.
         dev_prop['block_io_base_alignment'] = tgt_prop.get('block_io_base_alignment', 64)
         dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
+        # MHz from torch.xpu.get_device_capability(). A missing key (0) leaves the prefetch cost model inert,
+        # so loops keep every prefetch; kXe2Discrete is calibrated against the reported value (19000 on the B580).
+        dev_prop['memory_clock_rate'] = tgt_prop.get('memory_clock_rate') or 0
         dev_prop['is_lts'] = is_lts
         # Largest GRF mode the backend's automatic escalation will ever select
         # for this target; see `get_max_grf_mode`. A driver- or out-of-tree
@@ -379,6 +390,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
         if "in_loop_sink" not in args:
             args["in_loop_sink"] = knobs.intel.in_loop_sink
+        if "prefetch_cost_model" not in args:
+            args["prefetch_cost_model"] = knobs.intel.enable_prefetch_cost_model
+        if "tile_barrier" not in args:
+            args["tile_barrier"] = knobs.intel.pipeline_tile_barrier
         options = XPUOptions(**args)
 
         # Ground-truth probe of whichever side actually consumes this
@@ -390,6 +405,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # `accepts_maximum_registers` returns True for LTS (but should return False)
         options.allow_maximum_registers = (not options.is_lts
                                            and accepts_maximum_registers(native, self.device_arch, device_id))
+        options.allow_subgroup_bitcast_shuffle = (not options.is_lts and accepts_subgroup_bitcast_shuffle(
+            native, self.device_arch, device_id))
+        # Like the probes above: `ocloc` consumes the SPIR-V of an AOT compile, the driver that of a JIT one.
+        igc_version = (get_ocloc_version() if native else None) or self.target.arch.get("driver_version")
+        options.has_spirv_2d_block_io = has_spirv_2d_block_io(igc_version)
         return options
 
     @staticmethod
@@ -440,16 +460,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def min_dot_size(device_props: dict):
-        execution_size = min(device_props["sub_group_sizes"])
 
         def get_min_dot_size(lhs_type, rhs_type):
-            lhs_type = lhs_type.scalar
-            rhs_type = rhs_type.scalar
-
-            # FMA path currently has accuracy errors for INT8 dots.
-            if lhs_type.is_int8() and rhs_type.is_int8():
-                return (1, execution_size, 32)
-
             # Fallback to use FMA if size configurations not supported/performant for DPAS.
             return (1, 1, 1)
 
@@ -481,6 +493,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             raise ValueError(
                 f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
             )
+        # `max_num_sub_groups` assumes the smallest sub-group size, so 32-lane kernels can pass it
+        # and still exceed `max_work_group_size`; raise `OutOfResources` so the autotuner skips them.
+        max_work_group_size = properties.get('max_work_group_size')
+        if max_work_group_size and opt.num_warps * opt.warp_size > max_work_group_size:
+            fitting = [s for s in properties['sub_group_sizes'] if opt.num_warps * s <= max_work_group_size]
+            smaller_warp_size = max(fitting) if fitting else None
+            raise WorkGroupSizeOutOfResources(opt.num_warps, opt.warp_size, max_work_group_size, smaller_warp_size,
+                                              opt.sub_32_dpas)
         # The backend has no CTA cluster support: getClusterCTAId is hardwired to
         # 0, clusterBarrier is a plain workgroup barrier, and loadDShared /
         # storeDShared ignore the ctaId they are given. Accepting num_ctas > 1
@@ -498,6 +518,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_bfloat16_arithmetic = properties["has_bfloat16_arithmetic"]
         module_opts.support_bfloat16_conversion = properties["has_bfloat16_conversion"]
         module_opts.support_predicated_io = properties["has_predicated_io"]
+        module_opts.support_subgroup_bitcast_shuffle = opt.allow_subgroup_bitcast_shuffle
         module_opts.support_subgroup_matrix_multiply_accumulate = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_subgroup_scaled_matrix_multiply_accumulate = properties[
             "has_subgroup_scaled_matrix_multiply_accumulate"]
@@ -578,6 +599,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
+        intel.passes.ttgpuir.add_rewrite_tensor_descriptor_gather_scatter(pm)
         if properties["has_256b_load_store"]:
             intel.passes.ttgpuir.add_widen_load_store_encoding(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
@@ -591,8 +613,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             passes.common.add_canonicalizer(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm, opt.grf_mode)
-        intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm)
-        intel.passes.ttgpuir.add_materialize_block_pointer(pm)
+        intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm, metadata["target"].arch.get("local_mem_size") or 0,
+                                                              True)
+        intel.passes.ttgpuir.add_materialize_block_pointer(pm, knobs.intel.descriptor_block_io_relayout)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_fold_fp_to_fp(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
@@ -600,7 +623,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if os.environ.get("TRITON_INTEL_ANNOTATE_LATENCIES", "0") == "1":
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
+        # Without device facts the pipeliner's prefetch cost model is inert and every prefetch is kept.
+        facts = ((cls.device_arch, properties['core_clock_rate'],
+                  properties['memory_clock_rate']) if opt.prefetch_cost_model else ("", 0, 0))
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier, opt.tile_barrier, *facts)
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode, not opt.in_loop_sink)
@@ -681,6 +707,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         driver_version = metadata["target"].arch.get("driver_version")
         if cls.is_lts(driver_version):
             intel.set_is_lts(mod)
+        # Set for every input, including Gluon and `.ttgir`, which bypass `make_ttgir`.
+        intel.set_use_genisa_2d_block_io(mod, not options.has_spirv_2d_block_io)
 
         # `getGlobalTimer` counts core clock cycles and needs the rate to report
         # nanoseconds.
@@ -695,9 +723,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
-        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
-        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
+        # Instrumentation point here so we can override IRs above (e.g., ttir and ttgir).
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
+        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         pm.run(mod, 'make_llir.allocate_memory')
 
         metadata["shared"] = src.get_int_attr("ttg.shared")
@@ -798,6 +826,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         probed_extensions = {
             'SPV_EXT_long_vector': options.allow_long_vector,
             'SPV_INTEL_maximum_registers': options.allow_maximum_registers,
+            'SPV_INTEL_subgroup_bitcast_shuffle': options.allow_subgroup_bitcast_shuffle,
         }
         spirv, name = intel.translate_to_spirv(src, is_lts, probed_extensions)
         metadata["name"] = name
@@ -898,6 +927,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         else:
                             error = f'`ocloc` failed with error code {e.returncode}'
 
+                        if 'undefined reference to `__internal_intel_' in output:
+                            error += (' (ocloc cannot resolve an Intel builtin emitted by Triton; the installed '
+                                      'GPU compute runtime / ocloc is likely too old - please upgrade '
+                                      'intel-opencl-icd, libze and intel-ocloc to a recent release)')
                         raise IntelGPUError(f'{error}\n'
                                             f'`ocloc` stderr:\n{e.output}\n'
                                             f'Repro command: {ocloc_cmd}\n') from e

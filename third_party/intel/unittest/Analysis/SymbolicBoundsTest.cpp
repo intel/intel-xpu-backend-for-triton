@@ -48,7 +48,8 @@ public:
 
   /// Parses `ir`, runs the range analysis over it exactly as a consumer pass
   /// does, and builds the prover. Must be called before any query.
-  void parse(StringRef ir) {
+  void parse(StringRef ir, tt::intel::ScalarHandling scalars =
+                               tt::intel::ScalarHandling::LookThrough) {
     module = parseSourceString<ModuleOp>(ir, &ctx);
     ASSERT_TRUE(module) << "failed to parse:\n" << ir.str();
     ModuleOp mod = module.get();
@@ -56,8 +57,8 @@ public:
     solver = createDataFlowSolver();
     solver->load<tt::intel::IntegerRangeAnalysis>(mod, *domInfo);
     ASSERT_TRUE(succeeded(solver->initializeAndRun(mod)));
-    prover = std::make_unique<tt::intel::SymbolicBoundsProver>(*solver,
-                                                               *domInfo, mod);
+    prover = std::make_unique<tt::intel::SymbolicBoundsProver>(
+        *solver, *domInfo, mod, scalars);
   }
 
   /// The single function in the parsed IR. A ModuleOp body's front() is that
@@ -966,6 +967,162 @@ TEST_F(SymbolicBoundsTest, MaterializeInsertsBeforeTheAnchor) {
   // The caller's insertion point is restored.
   EXPECT_EQ(b.getInsertionBlock(), term->getBlock());
   EXPECT_TRUE(b.getInsertionPoint() == Block::iterator(term));
+}
+
+// Each rejection leaves the IR untouched; the i32 loop IV materializes inside
+// its loop, so only the kind can reject the trip count there.
+TEST_F(SymbolicBoundsTest, MaterializeFormDeclines) {
+  parse(R"(
+    tt.func @f(%a: i32, %n: i32, %l: i64, %i: index, %w: i129,
+               %p: !tt.ptr<f32>, %x: f32) {
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      %lane = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32> loc("lane")
+      %t = tt.splat %a : i32 -> tensor<16xi32> loc("t")
+      scf.for %iv = %c0 to %n step %c1 : i32 {
+        %in = arith.addi %iv, %c1 : i32 loc("in")
+        scf.yield
+      } loc("loop")
+      %late = arith.addi %a, %c1 : i32 loc("late")
+      tt.return
+    })");
+  using namespace tt::intel;
+  auto sym = [&](SymbolKind kind, Value v, int64_t divisor = 0) {
+    return AffineForm::symbol(prover->symbolFor(kind, v, divisor));
+  };
+  auto numOps = [&] {
+    unsigned n = 0;
+    func().walk([&](Operation *) { ++n; });
+    return n;
+  };
+  scf::ForOp loop = forNamed("loop");
+  Value iv = loop.getInductionVar();
+  Operation *in = get("in").getDefiningOp();
+  Operation *term = func().getBody().front().getTerminator();
+  OpBuilder b(term);
+  auto declines = [&](const AffineForm &f, Operation *before, StringRef what) {
+    unsigned n = numOps();
+    EXPECT_FALSE(materializeForm(f, before, b)) << what.str();
+    EXPECT_EQ(numOps(), n) << what.str();
+  };
+
+  ASSERT_TRUE(materializeForm(sym(SymbolKind::LoopIV, iv), in, b));
+  declines(sym(SymbolKind::TripCount, iv, 1), in, "trip count");
+  declines(sym(SymbolKind::LoopIV, iv), term, "IV outside its loop");
+  declines(sym(SymbolKind::Lane, get("lane")), term, "lane");
+  declines(sym(SymbolKind::Opaque, get("t")), term, "tensor");
+  declines(sym(SymbolKind::Opaque, get("late")), loop, "defined later");
+  declines(sym(SymbolKind::KernelArg, arg(2)), term, "i64");
+  declines(sym(SymbolKind::KernelArg, arg(3)), term, "index");
+  declines(sym(SymbolKind::KernelArg, arg(4)), term, "i129");
+  declines(sym(SymbolKind::KernelArg, arg(5)), term, "ptr");
+  declines(sym(SymbolKind::KernelArg, arg(6)), term, "f32");
+  declines(sym(SymbolKind::Opaque, Value()), term, "no value");
+  declines(sym(SymbolKind::Quotient, arg(0), 0), term, "divisor 0");
+  declines(sym(SymbolKind::Quotient, arg(0), -4), term, "divisor -4");
+  declines(AffineForm::constant(INT64_MAX).add(AffineForm::constant(1)), term,
+           "overflowed constant");
+
+  // A valid form lands right before the anchor, whatever the insertion point.
+  AffineForm valid =
+      sym(SymbolKind::KernelArg, arg(0)).scale(3).add(AffineForm::constant(1));
+  Value v = materializeForm(valid, loop, b);
+  ASSERT_TRUE(v);
+  EXPECT_EQ(v.getDefiningOp()->getNextNode(), loop.getOperation());
+  EXPECT_EQ(b.getInsertionBlock(), term->getBlock());
+  EXPECT_TRUE(b.getInsertionPoint() == Block::iterator(term));
+}
+
+// `materializeForm` declines index terms, but `materialize` must keep
+// emitting them through `index_cast`.
+TEST_F(SymbolicBoundsTest, MaterializeKeepsIndexGuards) {
+  parse(R"(
+    tt.func @f(%i: index) {
+      %z = arith.constant 0 : index
+      %cmpIdx = arith.cmpi sge, %i, %z : index loc("cmpIdx")
+      tt.return
+    })");
+  tt::intel::BoundProof p = proof(get("cmpIdx"));
+  ASSERT_EQ(tt::intel::toString(p), "Conditional{arg0 >= 0}");
+  Operation *term = func().getBody().front().getTerminator();
+  OpBuilder b(term);
+  ASSERT_TRUE(tt::intel::materialize(p.conditions, term, b));
+  unsigned casts = 0;
+  func().walk([&](arith::IndexCastOp) { ++casts; });
+  EXPECT_EQ(casts, 1u);
+}
+
+// Under SplatLeaves a splatted scalar keeps its form only when no obligation
+// came with it (Wrap or NonNegative); otherwise the scalar itself is the leaf.
+TEST_F(SymbolicBoundsTest, SplatLeavesKeepOnlyExactForms) {
+  StringRef ir = R"(
+    tt.func @f(%a: i32, %b: i32, %c: i8) {
+      %c1 = arith.constant 1 : i32
+      %kr = arith.subi %a, %b : i32 loc("kr")
+      %s1 = tt.splat %kr : i32 -> tensor<16xi32> loc("s1")
+      %s2 = tt.splat %a : i32 -> tensor<16xi32> loc("s2")
+      %ap1 = arith.addi %a, %c1 : i32
+      %e1 = arith.extsi %ap1 : i32 to i64
+      %e0 = arith.extsi %a : i32 to i64
+      %d = arith.subi %e1, %e0 : i64 loc("d")
+      %s3 = tt.splat %d : i64 -> tensor<16xi64> loc("s3")
+      %u = arith.extui %c : i8 to i32 loc("u")
+      %s4 = tt.splat %u : i32 -> tensor<16xi32> loc("s4")
+      tt.return
+    })";
+  auto normWithObls = [&](StringRef name) {
+    SmallVector<tt::intel::Obligation, 4> obls;
+    Value v = get(name);
+    std::string form = tt::intel::toString(prover->normalize(v, at(v), obls));
+    return std::make_pair(form, obls);
+  };
+  parse(ir);
+  auto [deep, deepObls] = normWithObls("s1");
+  EXPECT_EQ(deep, "arg0 - arg1");
+  ASSERT_EQ(deepObls.size(), 1u);
+  EXPECT_EQ(deepObls.front().kind, tt::intel::Obligation::Wrap);
+
+  parse(ir, tt::intel::ScalarHandling::SplatLeaves);
+  for (auto [name, expected] :
+       {std::pair<StringRef, StringRef>{"s1", "opaque(kr)"},
+        {"s2", "arg0"},
+        {"s3", "opaque(d)"},
+        {"s4", "opaque(u)"}}) {
+    auto [form, obls] = normWithObls(name);
+    EXPECT_EQ(form, expected.str()) << name.str();
+    EXPECT_TRUE(obls.empty()) << name.str();
+  }
+}
+
+// A SplatLeaves prover only normalizes: every query that a default prover
+// decides comes back Unknown, constants included.
+TEST_F(SymbolicBoundsTest, SplatLeavesProverIsNormalizeOnly) {
+  StringRef ir = R"(
+    tt.func @f() {
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      %c4 = arith.constant 4 : i32
+      %t = arith.constant true loc("t")
+      %f = arith.constant false loc("f")
+      %cmp = arith.cmpi slt, %c0, %c4 : i32 loc("cmp")
+      scf.for %i = %c0 to %c4 step %c1 : i32 {
+        scf.yield
+      } loc("loop")
+      tt.return
+    })";
+  auto verdicts = [&] {
+    Value cmp = get("cmp"), t = get("t"), f = get("f");
+    return std::vector<std::string>{
+        verdict(cmp), tt::intel::toString(prover->proveTrue(cmp, at(cmp))),
+        tt::intel::toString(prover->proveTrue(t, at(t))),
+        tt::intel::toString(prover->proveTrue(f, at(f))), trip("loop", 2)};
+  };
+  parse(ir);
+  EXPECT_EQ(verdicts(),
+            (std::vector<std::string>{"Satisfied", "Satisfied", "Satisfied",
+                                      "Refuted", "Satisfied"}));
+  parse(ir, tt::intel::ScalarHandling::SplatLeaves);
+  EXPECT_EQ(verdicts(), std::vector<std::string>(5, "Unknown"));
 }
 
 TEST_F(SymbolicBoundsTest, NormalizeRejectsNonPositiveDivisor) {

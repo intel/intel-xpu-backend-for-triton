@@ -76,6 +76,7 @@ env:
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   N_RUNS: ${{ inputs.n_runs || '1' }}
   TRITON_AUTOTUNE_WARMUP_WORKERS: 8
+  TRITON_PRINT_AUTOTUNING: '1'
   TRITON_XPU_GEN_NATIVE_CODE: '1'
   # FIXME: Remove once CI has PTI 1.3 (expected in oneAPI 2026.3); older PTI hangs on PVC with PyTorch's event-less kernels
   PTI_COLLECTION_MODE: ${{ startsWith(inputs.runner_label, 'max') && '0' || '' }}
@@ -85,6 +86,7 @@ jobs:
     name: Triton benchmarks
     runs-on:
       - linux
+      - gpu
       - ${{ inputs.runner_label || 'b580' }}
     timeout-minutes: 720
     defaults:
@@ -271,7 +273,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'batched-flash-attention')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'batched-flash-attention') }}
         run: |
           source ./scripts/capture-hw-details.sh
-          TRITON_PRINT_AUTOTUNING=1 triton-benchmarks run batched-flash-attention --reports $REPORTS --n_runs $N_RUNS --tag $TAG
+          triton-benchmarks run batched-flash-attention --reports $REPORTS --n_runs $N_RUNS --tag $TAG
 
       - name: Run Triton FlexAttention Causal Mask fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex-attention-causal')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex-attention-causal') }}
@@ -306,12 +308,24 @@ jobs:
       - name: Run micro benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'micro_benchmarks')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'micro_benchmarks') }}
         run: |
+          source ./scripts/capture-hw-details.sh
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
+
+          # Convert raw descriptor-vs-load CSVs to *-report.csv.
+          for plot in copy-1d gelu-1d copy-2d permute-3d row-sum-2d layer-norm-2d matmul-desc cat-reduce-2d \
+                      grouped-matmul-row-limit batched-grouped-matmul-row-limit; do
+            [ -f "$REPORTS/$plot.csv" ] || { echo "::warning::$plot.csv not found, skipping"; continue; }
+            python ../transform_results.py $REPORTS/$plot.csv $REPORTS/$plot-report.csv \
+              --tag $TAG \
+              --bgroup descriptor \
+              --benchmark $plot \
+              --infer_param_cols
+          done
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: benchmark-reports
+          name: benchmark-reports-triton
           path: reports
