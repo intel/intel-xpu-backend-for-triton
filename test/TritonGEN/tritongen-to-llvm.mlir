@@ -149,8 +149,19 @@ llvm.func @triton_gen.dpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b
 
 llvm.func @triton_gen.sub_group_block_read(%ptr: !llvm.ptr<3>) {
   // CHECK:     llvm.func @triton_gen.sub_group_block_read(%arg0: !llvm.ptr<3>) {
-  // CHECK:       llvm.call spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(%arg0) {convergent, {{.*}} : (!llvm.ptr<3>) -> vector<2xi16>
-  %ret = triton_gen.sub_group_block_read %ptr : !llvm.ptr<3> -> vector<2xi16>
+  // CHECK:       llvm.call spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(%arg0) {convergent,
+  // CHECK-NOT:   triton_gen.DecorationCacheControlINTEL
+  // CHECK-SAME:  : (!llvm.ptr<3>) -> vector<2xi16>
+  %ret = triton_gen.sub_group_block_read %ptr {cache_control = Default} : !llvm.ptr<3> -> vector<2xi16>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.sub_group_block_read(%ptr: !llvm.ptr<1>) {
+  // CHECK:     llvm.func @triton_gen.sub_group_block_read(%arg0: !llvm.ptr<1>) {
+  // CHECK:       llvm.call spir_funccc @_Z29intel_sub_group_block_read_uiPU3AS1j(%arg0) {{{.*}}, triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<1, Cached, 0>>, {{.*}}} : (!llvm.ptr<1>) -> i32
+  %ret = triton_gen.sub_group_block_read %ptr {cache_control = L1UC_L3C} : !llvm.ptr<1> -> i32
   llvm.return
 }
 

@@ -15,7 +15,9 @@ from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
 from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
-from triton.backends.intel.driver import find_sycl_icpx
+from triton.backends.compiler import GPUTarget
+from triton.backends.intel import compiler as intel_compiler
+from triton.backends.intel.driver import find_sycl_icpx, has_spirv_2d_block_io
 from triton.backends.intel.errors import IntelGPUError
 from triton.runtime.errors import OutOfResources
 
@@ -263,6 +265,68 @@ def test_find_sycl_uses_oneapi_root(monkeypatch, no_icpx, recwarn, tmp_path: pat
     assert str(compiler_root / "include") in include_dir
     assert str(compiler_root / "include" / "sycl") in include_dir
     assert not [str(w.message) for w in recwarn], f"unexpected warnings: {[str(w.message) for w in recwarn]}"
+
+
+@pytest.mark.parametrize("version, expected", [
+    ("1.15.38308+1", False),  # compute-runtime 26.18.38308.1 (IGC 2.34.4), the failing driver of #8858
+    ("1.17.38646+4", False),  # 26.22.38646.4 (IGC 2.36.3)
+    ("1.17.39121+99", False),
+    ("1.17.39122+11", True),  # 26.27.39122.11 (IGC 2.38.2), first known-good release
+    ("1.17.39395+13", True),
+    ("1.6.35096+9", False),  # the LTS threshold release; its build number is below the cutoff
+    ("garbage", True),  # unknown: assume SPIR-V, the default
+    ("", True),
+    (None, True),
+])
+def test_has_spirv_2d_block_io(version, expected):
+    assert has_spirv_2d_block_io(version) is expected
+
+
+def _target_with_driver_version(version):
+    target = driver.active.get_current_target()
+    return GPUTarget(target.backend, {**target.arch, "driver_version": version}, target.warp_size)
+
+
+@pytest.mark.parametrize("version, uses_genisa", [("1.17.38646+4", True),  # compute-runtime 26.22.38646.4 (IGC 2.36.3)
+                                                  ("1.17.39122+11", False),  # 26.27.39122.11 (IGC 2.38.2)
+                                                  ])
+def test_2d_block_io_lowering_follows_driver_version(device, fresh_knobs, version, uses_genisa):
+    """The 2D block I/O lowering follows the target's driver version."""
+    fresh_knobs.intel.gen_native_code = False
+
+    @triton.jit
+    def _kernel(in_ptr, out_ptr, N: tl.constexpr, BLOCK: tl.constexpr):
+        desc = tl.make_tensor_descriptor(in_ptr, shape=[N, N], strides=[N, 1], block_shape=[BLOCK, BLOCK])
+        offs = tl.arange(0, BLOCK)
+        tl.store(out_ptr + offs[:, None] * BLOCK + offs[None, :], desc.load([0, 0]))
+
+    src = triton.compiler.ASTSource(
+        _kernel, signature={"in_ptr": "*fp16", "out_ptr": "*fp16", "N": "constexpr", "BLOCK": "constexpr"},
+        constexprs={"N": 256, "BLOCK": 32})
+    llir = triton.compile(src, target=_target_with_driver_version(version)).asm["llir"]
+    spirv_loads = llir.count("Subgroup2DBlockLoad")
+    genisa_loads = llir.count("GenISA.LSC2DBlockRead")
+    if uses_genisa:
+        assert genisa_loads > 0 and spirv_loads == 0
+    else:
+        assert spirv_loads > 0 and genisa_loads == 0
+
+
+@pytest.mark.parametrize("native, ocloc_version, driver_version, expected", [
+    (False, "26.18.38308.1", "1.17.39122+11", True),  # JIT: the driver's IGC consumes the SPIR-V
+    (False, "26.27.39122.11", "1.15.38308+1", False),
+    (True, "26.18.38308.1", "1.17.39122+11", False),  # AOT: `ocloc`'s IGC does
+    (True, "26.27.39122.11", "1.15.38308+1", True),
+    (True, None, "1.15.38308+1", False),  # no usable `ocloc`: fall back to the driver
+    (True, None, "1.17.39122+11", True),
+])
+def test_has_spirv_2d_block_io_option_source(device, monkeypatch, fresh_knobs, native, ocloc_version, driver_version,
+                                             expected):
+    fresh_knobs.intel.gen_native_code = False
+    monkeypatch.setattr(intel_compiler, "get_ocloc_version", lambda: ocloc_version)
+    backend = intel_compiler.XPUBackend(_target_with_driver_version(driver_version))
+    options = backend.parse_options({"generate_native_code": native})
+    assert options.has_spirv_2d_block_io is expected
 
 
 def test_get_properties_error(device):

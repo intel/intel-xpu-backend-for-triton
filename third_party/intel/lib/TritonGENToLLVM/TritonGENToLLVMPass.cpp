@@ -140,6 +140,10 @@ static bool isSPVBuiltinAvailable(OpTy op) {
   if (m->hasAttr(intel::TritonIntelGPUDialect::getIsLTSAttrName()))
     return false;
 
+  // IGC < 2.38 cannot build every SPIR-V 2D block shape (issue #8858).
+  if (m->hasAttr(intel::TritonIntelGPUDialect::getUseGenISA2DBlockIOAttrName()))
+    return false;
+
   return true;
 }
 
@@ -1242,6 +1246,12 @@ struct TritonSubGroupBlockReadLowering
     funcAttrs.memEffectsAttr = memAttr;
     LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, funcName, type, {ptrTy}, {op.getPtr()}, {}, funcAttrs, {});
+    if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
+            loadCacheControlToCacheControls(rewriter, op.getCacheControl(),
+                                            /*ptrOperandIndex=*/0)) {
+      call->setAttr(TritonGEN::TritonGENDialect::getCacheControlsAttrName(),
+                    *optCacheControls);
+    }
 
     rewriter.replaceOp(op, call.getResult());
     return success();
