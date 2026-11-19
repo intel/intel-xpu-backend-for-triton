@@ -142,8 +142,14 @@ jobs:
           EOF
           ./scripts/capture-hw-details.sh | tee -a "$REPORTS/.env"
 
-      - name: Run vllm unified attention bf16
+      - name: Diagnose 8742 alone/model/full (experiment, not for merge)
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        timeout-minutes: 240
+        run: |
+          bash scripts/diag/ua_alone.sh 2>&1 | tee "$REPORTS/ua_alone.txt"
+
+      - name: Run vllm unified attention bf16
+        if: false
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -151,7 +157,7 @@ jobs:
           bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
 
       - name: Run vllm unified attention fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: false
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -159,7 +165,7 @@ jobs:
           FP8="1" bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
 
       - name: Run vllm batched moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: false
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -168,7 +174,7 @@ jobs:
 
 
       - name: Run vllm batched moe fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: false
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -176,7 +182,7 @@ jobs:
           FP8="1" bash run_benchmark.sh batched_moe --reports $REPORTS --tag $TAG
 
       - name: Run vllm fused moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: false
         run: |
           source ./scripts/capture-hw-details.sh
 

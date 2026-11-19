@@ -248,9 +248,14 @@ def _build_attention_configs(model_configs):
             # Heavy seq_lens only run with block_size=64 to bound CI time.
             if id(seq_lens) in heavy and block_size != 64:
                 continue
-            # FIXME: mismatch against the torch reference on this shape, remove once the cause is
-            # found: https://github.com/intel/intel-xpu-backend-for-triton/issues/8742
-            if seq_lens == [(2048, 2048)] * 4:
+            # EXPERIMENT (#8742, not for merge): UA_ONLY=alone runs only the failing config, UA_ONLY=model all configs
+            # of the failing model (64-8-128, no sliding window); the skip of the failing shape is removed.
+            only = os.getenv("UA_ONLY", "")
+            if only == "alone" and not (list(base_config[:3]) == [64, 8, 128] and sliding_window is None
+                                        and seq_lens == [(2048, 2048)] * 4 and num_blocks == 2048
+                                        and block_size == 64):
+                continue
+            if only == "model" and not (list(base_config[:3]) == [64, 8, 128] and sliding_window is None):
                 continue
             x_val = (*base_config, seq_lens, sliding_window, soft_cap, num_blocks, block_size)
             qdtype = x_val[3]
