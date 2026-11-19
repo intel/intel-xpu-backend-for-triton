@@ -1,5 +1,5 @@
 name: Windows torch import diagnostics
-run-name: ${{ inputs.run_name }}
+run-name: ${{ inputs.run_name || 'Windows torch import diagnostics' }}
 
 # Diagnoses `ImportError: DLL load failed while importing _C` of the Windows XPU torch nightlies on the
 # CI runner. For every torch version it records which DLL cannot be resolved, whether adding directories,
@@ -8,6 +8,11 @@ run-name: ${{ inputs.run_name }}
 # See scripts/windows_torch_import_diag.py.
 
 on:
+  # TEMPORARY: lets the workflow run from this branch before it exists on main (workflow_dispatch needs it on
+  # the default branch). Remove this trigger before merging; the input defaults below then apply again.
+  push:
+    branches:
+      - ci/windows-torch-import-diagnostics
   workflow_dispatch:
     inputs:
       runner_label:
@@ -36,7 +41,7 @@ jobs:
     name: Diagnose
     runs-on:
       - windows
-      - ${{ inputs.runner_label }}
+      - ${{ inputs.runner_label || 'a770' }}
     timeout-minutes: 120
     steps:
       - name: Checkout repository
@@ -61,7 +66,7 @@ jobs:
       - name: Try torch versions
         shell: bash
         env:
-          TORCH_VERSIONS: ${{ inputs.torch_versions }}
+          TORCH_VERSIONS: ${{ inputs.torch_versions || '2.16.0.dev20261030,2.16.0.dev20261102,2.16.0.dev20261104,latest' }}
         run: |
           if [[ ! "$TORCH_VERSIONS" =~ ^[A-Za-z0-9.,+]+$ ]]; then
             echo "::error::invalid torch_versions: $TORCH_VERSIONS"
