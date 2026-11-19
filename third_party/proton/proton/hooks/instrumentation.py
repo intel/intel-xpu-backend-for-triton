@@ -21,25 +21,6 @@ from .. import mode
 VERSION = 1
 
 
-def _function_id(function: Any) -> int:
-    """Returns an integer id for a compiled kernel's native function handle.
-
-    Most backends represent it as a plain pointer-sized int already, but some
-    (e.g. Intel's `XPULauncher`) hand back a `PyCapsule` wrapping the native
-    kernel handle instead, which `libproton`'s native entry points can't take
-    directly.
-    """
-    if isinstance(function, int):
-        return function
-    import ctypes
-    ctypes.pythonapi.PyCapsule_GetName.restype = ctypes.c_char_p
-    ctypes.pythonapi.PyCapsule_GetName.argtypes = [ctypes.py_object]
-    name = ctypes.pythonapi.PyCapsule_GetName(function)
-    ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
-    ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
-    return ctypes.pythonapi.PyCapsule_GetPointer(function, name)
-
-
 class DeviceAllocator:
 
     def __init__(self, instrumentation_hook):
@@ -252,8 +233,7 @@ class InstrumentationHook(Hook):
 
             scope_id_names = triton_proton.get_scope_id_names(module)
             scope_id_parents = triton_proton.get_scope_id_parents(module)
-            libproton.init_function_metadata(_function_id(function), name, scope_id_names, scope_id_parents,
-                                             metadata_path)
+            libproton.init_function_metadata(function, name, scope_id_names, scope_id_parents, metadata_path)
         else:
             raise RuntimeError(f"IR path not found in metadata for function {function}")
 
@@ -261,7 +241,7 @@ class InstrumentationHook(Hook):
         if not function:
             return
         self.metadata_path.pop(function, None)
-        libproton.destroy_function_metadata(_function_id(function))
+        libproton.destroy_function_metadata(function)
 
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()
@@ -270,7 +250,7 @@ class InstrumentationHook(Hook):
         func = metadata.data.get("function")
         stream = metadata.data.get("stream")
         alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
-        libproton.enter_instrumented_op(stream, _function_id(func), self._data_ptr(), alloc_size)
+        libproton.enter_instrumented_op(stream, func, self._data_ptr(), alloc_size)
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
 
@@ -278,7 +258,7 @@ class InstrumentationHook(Hook):
         func = metadata.data.get("function")
         stream = metadata.data.get("stream")
         alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
-        libproton.exit_instrumented_op(stream, _function_id(func), self._data_ptr(), alloc_size)
+        libproton.exit_instrumented_op(stream, func, self._data_ptr(), alloc_size)
 
         if InstrumentationHook.enable_host_buffer:
             self._populate_host_buffer(func)

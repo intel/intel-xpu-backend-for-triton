@@ -400,7 +400,7 @@ def test_load_binary_does_not_leak_kernel_capsule(device):
     assert sys.getrefcount(module) == baseline + 1, \
         "kernel.module capsule has a reference beyond the attribute and this local -- it leaked"
     assert sys.getrefcount(function) == baseline + 1, \
-        "kernel.function capsule has a reference beyond the attribute and this local -- it leaked"
+        "kernel.function has a reference beyond the attribute and this local -- it leaked"
 
 
 def test_wait_on_sycl_queue_error(device):

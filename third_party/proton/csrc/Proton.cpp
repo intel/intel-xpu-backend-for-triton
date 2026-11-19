@@ -210,31 +210,6 @@ static void initProton(nanobind::module_ &m) {
       nanobind::arg("scalarMetricKernelNumThreads") = 1,
       nanobind::arg("scalarMetricKernelSharedMemBytes") = 0);
 
-  m.def(
-      "set_metric_kernels",
-      [](nanobind::capsule tensorMetricKernel,
-         nanobind::capsule scalarMetricKernel, uintptr_t stream,
-         unsigned int tensorMetricKernelNumThreads,
-         unsigned int tensorMetricKernelSharedMemBytes,
-         unsigned int scalarMetricKernelNumThreads,
-         unsigned int scalarMetricKernelSharedMemBytes) {
-        void *streamPtr = reinterpret_cast<void *>(stream);
-        MetricKernelLaunchState metricKernelLaunchState{
-            MetricKernelLaunchConfig{tensorMetricKernel.data(), streamPtr,
-                                     tensorMetricKernelNumThreads,
-                                     tensorMetricKernelSharedMemBytes},
-            MetricKernelLaunchConfig{scalarMetricKernel.data(), streamPtr,
-                                     scalarMetricKernelNumThreads,
-                                     scalarMetricKernelSharedMemBytes}};
-        SessionManager::instance().setMetricKernels(metricKernelLaunchState);
-      },
-      nanobind::arg("tensorMetricKernel"), nanobind::arg("scalarMetricKernel"),
-      nanobind::arg("stream"),
-      nanobind::arg("tensorMetricKernelNumThreads") = 1,
-      nanobind::arg("tensorMetricKernelSharedMemBytes") = 0,
-      nanobind::arg("scalarMetricKernelNumThreads") = 1,
-      nanobind::arg("scalarMetricKernelSharedMemBytes") = 0);
-
   m.def("get_context_depth", [](size_t sessionId) {
     return SessionManager::instance().getContextDepth(sessionId);
   });

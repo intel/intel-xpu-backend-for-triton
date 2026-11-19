@@ -341,7 +341,7 @@ class SpirvUtils:
     #
     # The type is not the only thing here that outlives an unload, so do not "fix" this by
     # moving `PyKernelArgType` into Python and restoring the unload: `load_binary` returns
-    # capsules whose destructors (`freeKernel`, `freeKernelBundle`) and whose name strings
+    # a module capsule whose destructor (`freeKernelBundle`) and whose name string
     # live in this module, and every `XPULauncher` holds callables from it. Unloading is safe
     # only once nothing reachable from Python can reference this module's code or storage.
     #
