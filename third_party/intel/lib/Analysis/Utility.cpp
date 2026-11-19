@@ -239,9 +239,9 @@ unsigned getSubGroupTransposeRowLength(unsigned threadsPerWarp,
   // Elements narrower than a dword pad up to a whole dword instead: each lane
   // loads its row as one vector, and the LLVM load carries the row's alignment,
   // so rows must stay dword-aligned (issue #8749: with a 17-byte pitch the i8
-  // vectors came back shifted by `address % 4`). The resulting pitches in
-  // dwords (5 for i8, 9 for i16, 17 for i32) are all odd, so columns still
-  // spread over banks.
+  // vectors came back shifted by `address % 4`). The pitch in dwords stays odd
+  // for 1-, 2- and 4-byte elements (5, 9 and 17), so columns still spread over
+  // banks; 8-byte elements are unchanged (136 bytes).
   constexpr unsigned dwordBytes = 4;
   unsigned padding = std::max(1u, dwordBytes / bytesPerElement);
   return threadsPerWarp + padding;

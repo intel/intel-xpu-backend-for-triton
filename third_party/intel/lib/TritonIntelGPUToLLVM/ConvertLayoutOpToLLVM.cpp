@@ -366,8 +366,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Load from matrix, non-trasposed.
 
-    // Each work-item will load a row (but the last garbage element) and go to
-    // the next row it needs to handle.
+    // Each work-item will load a row (but the padding at its end) and go to the
+    // next row it needs to handle.
 
     int32_t workItemStride =
         numContiguousRows == 1 ? rowLength * threadsPerWarp : rowLength;
@@ -388,16 +388,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     VectorType vecType = vec_ty(elementType, vecLoadWidth);
     assert(threadsPerWarp % vecLoadWidth == 0 &&
            "Column must be loadable with N loads");
-    // The rows are only guaranteed to be dword (or element) aligned, not
-    // aligned to the vector type's natural alignment LLVM would otherwise
-    // assume.
-    unsigned loadAlignment = std::max(4u, bytesPerElement);
-    assert((rowLength * bytesPerElement) % loadAlignment == 0 &&
-           "Row pitch must keep the per-lane loads aligned");
+    // Rows of sub-dword elements are dword-aligned, not aligned to the vector
+    // type's natural alignment LLVM would otherwise assume: say so (#8749).
+    // Wider elements keep the load as it always was.
+    unsigned loadAlignment = bytesPerElement < 4 ? 4 : 0;
+    assert((rowLength * bytesPerElement) % 4 == 0 &&
+           "Row pitch must keep the per-lane loads dword-aligned");
     for (unsigned i = 0; i < rowsPerThread; ++i) {
       for (unsigned j = 0; j < threadsPerWarp; j += vecLoadWidth) {
         transposedVecs.push_back(
-            b.load(vecType, workItemBasePtr, loadAlignment));
+            loadAlignment ? b.load(vecType, workItemBasePtr, loadAlignment)
+                          : b.load(vecType, workItemBasePtr));
         workItemBasePtr =
             b.gep(workItemBasePtr.getType(), vecType, workItemBasePtr,
                   ArrayRef<LLVM::GEPArg>{1}, LLVM::GEPNoWrapFlags::inbounds);

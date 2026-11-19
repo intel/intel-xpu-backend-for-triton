@@ -168,7 +168,7 @@ The builder extracts `dotOpEnc.getKWidth()` and calls the backend-specific `comp
 ### Bank Conflict Avoidance via Padding
 
 For sub-group transpose operations through SLM, rows are padded (`getSubGroupTransposeRowLength()`
-in `intel/lib/Analysis/Utility.cpp`, shared by the allocation analysis and the lowering):
+in `third_party/intel/lib/Analysis/Utility.cpp`, shared by the allocation analysis and the lowering):
 ```
 padding = max(1, 4 / bytesPerElement)   // 4 for i8, 2 for i16, 1 for i32/i64
 rowLength = threadsPerWarp + padding
@@ -176,10 +176,11 @@ numMatrixCells = (numElements / subGroupSize) * rowLength
 scratchBytes = numMatrixCells * bytesPerElement
 ```
 
-The padding keeps adjacent rows on different SLM banks (the pitch in dwords is odd) and, for
-sub-dword element types, keeps every row dword-aligned: each lane loads its row as one vector and
-the load carries that alignment explicitly (issue #8749: a 17-byte i8 pitch returned data shifted
-by `address % 4`).
+The padding keeps adjacent rows on different SLM banks (the pitch in dwords is odd for 1-, 2- and
+4-byte elements; 8-byte elements keep their 136-byte pitch) and, for sub-dword element types, keeps
+every row dword-aligned: each lane loads its row as one vector and, for those types, the load
+carries that alignment explicitly (issue #8749: a 17-byte i8 pitch returned data shifted by
+`address % 4`).
 
 ### Shared Memory Order
 
