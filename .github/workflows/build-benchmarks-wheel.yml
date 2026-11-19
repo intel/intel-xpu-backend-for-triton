@@ -72,6 +72,9 @@ jobs:
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
+        with:
+          # The lookup needs actions: read, which the callers of this workflow do not grant
+          main_wheel: false
 
       - name: Build benchmarks wheel
         run: |
