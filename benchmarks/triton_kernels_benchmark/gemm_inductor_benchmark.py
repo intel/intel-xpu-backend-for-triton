@@ -121,6 +121,10 @@ TUNED_CONFIGS = {
 BLOCK_K = 32
 GROUP_M = 4
 
+# SYCL's intel_gpu_bmg_g21 and intel_gpu_bmg_g31, the dies Triton's arch_parser maps to "bmg". Asking Triton's driver for
+# the target before benchmarking would stop the profiler from seeing Triton's kernels.
+BMG_ARCHITECTURES = (0x500400400, 0x500800000)
+
 
 def storage_size(shape: tuple[int, ...], stride: tuple[int, ...]) -> int:
     """Number of elements a strided tensor spans."""
@@ -272,9 +276,9 @@ def _manual_gemm(mode: str, inputs: tuple[torch.Tensor, ...], config: TileConfig
         return output
 
     # Split-K and Stream-K reduce partial sums in an FP32 buffer, so the bias add and the cast take one more pass.
-    # Split-K accumulates with atomics, so its buffer must start at zero.
+    # Split-K with SPLIT_K > 1 accumulates with atomics, so its buffer must start at zero.
     assert bias is None or bias.stride(-2) == 0, "The addmm bias must be a broadcast row"
-    alloc = torch.zeros if mode == "manual_splitk" else torch.empty
+    alloc = torch.zeros if mode == "manual_splitk" and config.split_k > 1 else torch.empty
     acc = alloc(output.shape, device=a.device, dtype=torch.float32)
     assert all(x.data_ptr() % 16 == 0 for x in (a, b, acc)), "Matrix base addresses must be 16-byte aligned"
     matmul = {"manual_splitk": _splitk, "manual_streamk": _streamk}[mode]
@@ -412,9 +416,9 @@ def main() -> None:
     modes = list(MODES) if args.mode == "all" else [args.mode]
     device_name = torch.xpu.get_device_name()
     print(f"Device: {device_name}", flush=True)
-    # FIXME: Stream-K's first_wave hangs the GPU or gives wrong results on B580 (#8880).
-    if "B580" in device_name and "manual_streamk" in modes:
-        print(f"Skipping {MODES['manual_streamk']} on B580 (#8880)", flush=True)
+    # FIXME: Stream-K's first_wave hangs the GPU or gives wrong results on BMG (#8880).
+    if torch.xpu.get_device_properties().architecture in BMG_ARCHITECTURES and "manual_streamk" in modes:
+        print(f"Skipping {MODES['manual_streamk']} on BMG (#8880)", flush=True)
         modes.remove("manual_streamk")
         if not modes:
             return
