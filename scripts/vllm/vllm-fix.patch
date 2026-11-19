@@ -415,6 +415,22 @@ index 92f7ba64c2..03ce390e4f 100644
  # Remove FLASHMLA from the list if not supported
  if not is_flashmla_dense_supported()[0]:
      BACKENDS_TO_TEST.remove(AttentionBackendEnum.FLASHMLA)
+diff --git a/tests/v1/kv_connector/unit/test_nixl_connector.py b/tests/v1/kv_connector/unit/test_nixl_connector.py
+--- a/tests/v1/kv_connector/unit/test_nixl_connector.py
++++ b/tests/v1/kv_connector/unit/test_nixl_connector.py
+@@ -5305,6 +5305,12 @@
+ ):
+     """Both transfer modes explain the shared Mamba PP restriction."""
+     monkeypatch.setenv("VLLM_SSM_CONV_STATE_LAYOUT", "DS")
++    # get_conv_state_layout() is lru_cached; an earlier test in the same
++    # process may have cached "SD", which would ignore the env var above.
++    monkeypatch.setattr(
++        "vllm.model_executor.layers.mamba.mamba_utils.get_conv_state_layout",
++        lambda: "DS",
++    )
+     block_size = maybe_update_block_size(16)
+     config = create_vllm_config(kv_role="kv_producer", block_size=block_size)
+     config.parallel_config.pipeline_parallel_size = 2
 diff --git a/tests/v1/sample/test_logprobs.py b/tests/v1/sample/test_logprobs.py
 index 488a346dcd..bbc5b0ab39 100644
 --- a/tests/v1/sample/test_logprobs.py
