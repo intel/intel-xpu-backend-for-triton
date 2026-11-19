@@ -333,3 +333,11 @@ index 50870957a4..92380da15f 100644
          NUM_SEGMENTS_PER_SEQ=num_segments,
          USE_FP8=output_scale is not None,
          IS_3D=use_3d,
+@@ -1512,7 +1580,6 @@ def unified_attention(
+         USE_TD_QO=use_td_qo,
+         MM_PREFIX_CLAMP_SW=mm_prefix_clamp_sliding_window,
+         WINDOW_SEGMENTS=window_segments,
+-        **launch_kwargs,
+     )
+ 
+     if use_3d:
