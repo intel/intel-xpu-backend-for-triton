@@ -33,6 +33,13 @@ bool cvtIsSubGroupReinterpret(ConvertLayoutOp op);
 /// Return whether `type` is a valid element type for a fast sub-group
 /// transpose.
 bool isValidElementTypeForSubGroupTranspose(Type type);
+/// Return the number of elements per row of the local-memory matrix a sub-group
+/// transpose goes through, for a sub-group of `threadsPerWarp` work-items and
+/// `bytesPerElement`-byte elements. Rows hold one element per work-item plus
+/// padding; the padding keeps lanes reading a column on different banks and,
+/// for elements narrower than a dword, keeps every row dword-aligned.
+unsigned getSubGroupTransposeRowLength(unsigned threadsPerWarp,
+                                       unsigned bytesPerElement);
 
 // The following four queries used to live on core's `ReduceOpHelper`, but the
 // Intel backend is their only consumer: core's own reduction lowering computes

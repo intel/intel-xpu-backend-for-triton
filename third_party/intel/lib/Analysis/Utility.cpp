@@ -232,6 +232,21 @@ bool isValidElementTypeForSubGroupTranspose(Type type) {
       .Default(false);
 }
 
+unsigned getSubGroupTransposeRowLength(unsigned threadsPerWarp,
+                                       unsigned bytesPerElement) {
+  // One extra element keeps the lanes of a sub-group, which read a column of
+  // the matrix (addresses `rowLength` elements apart), on distinct banks.
+  // Elements narrower than a dword pad up to a whole dword instead: each lane
+  // loads its row as one vector, and the LLVM load carries the row's alignment,
+  // so rows must stay dword-aligned (issue #8749: with a 17-byte pitch the i8
+  // vectors came back shifted by `address % 4`). The resulting pitches in
+  // dwords (5 for i8, 9 for i16, 17 for i32) are all odd, so columns still
+  // spread over banks.
+  constexpr unsigned dwordBytes = 4;
+  unsigned padding = std::max(1u, dwordBytes / bytesPerElement);
+  return threadsPerWarp + padding;
+}
+
 bool cvtIsSubGroupTranspose(RankedTensorType srcTy, RankedTensorType dstTy) {
   if (!canTypeBeConvertedForSubGroupTranspose(srcTy.getElementType()))
     return false;

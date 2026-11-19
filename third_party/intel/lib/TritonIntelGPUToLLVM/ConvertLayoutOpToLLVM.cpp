@@ -335,9 +335,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     int numRows = inVals.size();
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    // Add an element that won't be accessed at the end of the row to avoid bank
-    // conflicts.
-    int rowLength = threadsPerWarp + 1;
+    unsigned bytesPerElement = elementType.getIntOrFloatBitWidth() / 8;
+    // Padded rows: bank conflicts and, for sub-dword elements, dword alignment
+    // of the per-lane row loads below.
+    int rowLength =
+        intel::getSubGroupTransposeRowLength(threadsPerWarp, bytesPerElement);
     Type offsetType = getTypeConverter()->getIndexType();
     unsigned offsetBitWidth = offsetType.getIntOrFloatBitWidth();
     Value subGroupId = getValueOrCreateCastToIndexLike(
@@ -386,9 +388,16 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     VectorType vecType = vec_ty(elementType, vecLoadWidth);
     assert(threadsPerWarp % vecLoadWidth == 0 &&
            "Column must be loadable with N loads");
+    // The rows are only guaranteed to be dword (or element) aligned, not
+    // aligned to the vector type's natural alignment LLVM would otherwise
+    // assume.
+    unsigned loadAlignment = std::max(4u, bytesPerElement);
+    assert((rowLength * bytesPerElement) % loadAlignment == 0 &&
+           "Row pitch must keep the per-lane loads aligned");
     for (unsigned i = 0; i < rowsPerThread; ++i) {
       for (unsigned j = 0; j < threadsPerWarp; j += vecLoadWidth) {
-        transposedVecs.push_back(b.load(vecType, workItemBasePtr));
+        transposedVecs.push_back(
+            b.load(vecType, workItemBasePtr, loadAlignment));
         workItemBasePtr =
             b.gep(workItemBasePtr.getType(), vecType, workItemBasePtr,
                   ArrayRef<LLVM::GEPArg>{1}, LLVM::GEPNoWrapFlags::inbounds);

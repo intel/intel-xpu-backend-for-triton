@@ -42,11 +42,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // Check scracth memory configuration for different sub-group transpose-like layout conversions.
 
 // CHECK-LABEL: module attributes
-// CHECK-SAME: ttg.shared = 544 : i32
+// CHECK-SAME: ttg.shared = 576 : i32
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @test_f16(%arg0: tensor<16x16xf16, #blocked>) -> tensor<16x16xf16, #blocked1> {
     // Scratch buffers carry both the offset and the allocated size.
-    // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 544 : i32
+    // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 576 : i32
     %0 = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
     tt.return %0 : tensor<16x16xf16, #blocked1>
   }
@@ -114,10 +114,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // starts emitting it on call sites. Only the offset is stable across both.
 
 // CHECK-LABEL: module attributes
-// CHECK-SAME: ttg.shared = 544 : i32
+// CHECK-SAME: ttg.shared = 576 : i32
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func private @test_callee(%arg0: tensor<16x16xf16, #blocked>) {
-    // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 544 : i32
+    // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 576 : i32
     %0 = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
     tt.return
   }
