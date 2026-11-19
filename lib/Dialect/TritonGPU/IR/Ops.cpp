@@ -1,4 +1,5 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/DebugStringHelper.h"
