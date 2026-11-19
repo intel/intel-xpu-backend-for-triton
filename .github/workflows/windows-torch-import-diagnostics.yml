@@ -47,7 +47,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          sparse-checkout: scripts/windows_torch_import_diag.py
+          sparse-checkout: scripts
 
       - name: Setup Python
         uses: actions/setup-python@v7
