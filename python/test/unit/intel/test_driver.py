@@ -271,12 +271,22 @@ def test_find_sycl_uses_oneapi_root(monkeypatch, no_icpx, recwarn, tmp_path: pat
     assert not [str(w.message) for w in recwarn], f"unexpected warnings: {[str(w.message) for w in recwarn]}"
 
 
-def _write_shared_library(path: pathlib.Path, soname: str):
-    """Writes the smallest 64-bit ELF shared library with a soname: no code, just the dynamic section."""
+def _write_shared_library(path: pathlib.Path, soname: str | None, needed: tuple[str, ...] = ()):
+    """Writes the smallest 64-bit ELF shared library with a soname and needed libraries: just a dynamic section."""
     base, dynamic_offset = 0x1000, 64 + 2 * 56  # the ELF header, then two program headers
-    strtab_offset = dynamic_offset + 3 * 16
-    dynamic = struct.pack("<qQqQqQ", 5, base + strtab_offset, 14, 1, 0, 0)  # DT_STRTAB, DT_SONAME, DT_NULL
-    strtab = b"\0" + soname.encode() + b"\0"
+    names = ([soname] if soname else []) + list(needed)
+    strtab, offsets = b"\0", {}
+    for name in names:
+        offsets[name] = len(strtab)
+        strtab += name.encode() + b"\0"
+    entries = [(1, offsets[name]) for name in needed]  # DT_NEEDED
+    if soname:
+        entries.append((14, offsets[soname]))  # DT_SONAME
+    strtab_offset = dynamic_offset + 16 * (len(entries) + 2)
+    dynamic = struct.pack("<qQ", 5, base + strtab_offset)  # DT_STRTAB
+    for tag, value in entries:
+        dynamic += struct.pack("<qQ", tag, value)
+    dynamic += struct.pack("<qQ", 0, 0)  # DT_NULL
     size = strtab_offset + len(strtab)
     header = b"\x7fELF\x02\x01\x01" + bytes(9) + struct.pack("<HHIQQQIHHHHHH", 3, 62, 1, 0, 64, 0, 0, 64, 56, 2, 64, 0,
                                                              0)
@@ -286,8 +296,34 @@ def _write_shared_library(path: pathlib.Path, soname: str):
     path.write_bytes(header + load + dynamic_header + dynamic + strtab)
 
 
-def _make_sycl_install(root: pathlib.Path, soname: str, headers: bool = True, wheel: bool = False) -> pathlib.Path:
-    """Lays out a SYCL runtime as oneAPI or, with `wheel`, the `intel-sycl-rt` wheel does, and returns its library."""
+def _write_pe_image(path: pathlib.Path, imports: tuple[str, ...]):
+    """Writes the smallest PE32+ image importing `imports`: one section holding the import directory."""
+    section_rva = section_offset = 0x200
+    directory_size = 20 * (len(imports) + 1)
+    names, name_rvas = b"", []
+    for name in imports:
+        name_rvas.append(section_rva + directory_size + len(names))
+        names += name.encode() + b"\0"
+    directory = b"".join(struct.pack("<IIIII", 1, 0, 0, rva, 1) for rva in name_rvas) + bytes(20)
+    section = directory + names
+    optional = struct.pack("<H", 0x20B) + bytes(110)  # PE32+ magic, then the fixed part up to the directories
+    directories = bytes(8) + struct.pack("<II", section_rva, directory_size) + bytes(8 * 14)  # import is the 2nd
+    optional += directories
+    coff = struct.pack("<HHIIIHH", 0x8664, 1, 0, 0, 0, len(optional), 0x2022)
+    section_header = b".idata\0\0" + struct.pack("<IIIIIIHHI", len(section), section_rva, len(section), section_offset,
+                                                 0, 0, 0, 0, 0x40000040)
+    pe_offset = 0x40
+    headers = b"MZ" + bytes(0x3A) + struct.pack("<I", pe_offset) + b"PE\0\0" + coff + optional + section_header
+    assert len(headers) <= section_offset
+    path.write_bytes(headers.ljust(section_offset, b"\0") + section)
+
+
+def _make_sycl_install(root: pathlib.Path, soname: str, headers: bool = True, wheel: bool = False,
+                       header_version: int = 20250508) -> pathlib.Path:
+    """Lays out a SYCL runtime as oneAPI or, with `wheel`, the `intel-sycl-rt` wheel does, and returns its library.
+
+    `header_version` is the `__SYCL_COMPILER_VERSION` of its headers, the runtime's build date.
+    """
     library = root / "lib" / soname
     library.parent.mkdir(parents=True)
     _write_shared_library(library, soname)
@@ -299,21 +335,37 @@ def _make_sycl_install(root: pathlib.Path, soname: str, headers: bool = True, wh
     if headers:
         (root / "include" / "sycl").mkdir(parents=True)
         (root / "include" / "sycl" / "sycl.hpp").touch()
+        (root / "include" / "sycl" / "version.hpp").write_text(f"#define __SYCL_COMPILER_VERSION {header_version}\n"
+                                                               f"#define __LIBSYCL_MAJOR_VERSION {soname[-1]}\n")
     return library
 
 
-def _fake_sycl_setup(monkeypatch, tmp_path: pathlib.Path, loaded: str, torch_headers: bool = True):
-    """An `icpx` from oneAPI 2025.3 on `PATH` next to the newer SYCL runtime of PyTorch's wheels.
+def _fake_torch(monkeypatch, tmp_path: pathlib.Path, runtimes: tuple[str | None, ...] | None):
+    """Makes PyTorch's XPU libraries look like they link the SYCL runtimes in `runtimes`, one per library.
 
-    Makes the runtimes named by `loaded` ("oneapi", "torch", "both" or "nothing") look loaded into
-    the process, or makes the process look unable to tell ("unreadable"). "torch_two" maps two
-    runtimes from PyTorch's directory; "torch_deleted" and "oneapi_deleted" map a runtime after it
-    was removed from disk. Returns oneAPI's compiler root as `icpx` reports it, PyTorch's root, and
-    the file the fake `icpx` creates when it runs.
+    None in `runtimes` is a library linking no SYCL at all; `runtimes=None` is a PyTorch without XPU
+    libraries, e.g. a CPU-only build.
     """
-    # As in oneAPI, `latest` is a symlink, and the process maps the library by its real path.
+    libraries = []
+    for i, runtime in enumerate(runtimes or ()):
+        library = tmp_path / "torch" / "lib" / ["libtorch_xpu.so", "libc10_xpu.so"][i]
+        library.parent.mkdir(parents=True, exist_ok=True)
+        _write_shared_library(library, library.name, ("libc.so.6", ) + ((runtime, ) if runtime else ()))
+        libraries.append(str(library))
+    monkeypatch.setattr(intel_driver, "_torch_xpu_libraries", lambda: libraries)
+
+
+def _fake_sycl_setup(monkeypatch, tmp_path: pathlib.Path, torch_runtime: str | None, torch_headers: bool = True,
+                     icpx_soname: str = "libsycl.so.8", icpx_version: int = 20250508, wheel_version: int = 20260331):
+    """An `icpx` on `PATH` next to the `intel-sycl-rt` wheel (SYCL 2026.0, `libsycl.so.9`) of PyTorch's wheels.
+
+    By default `icpx` is from oneAPI 2025.3 (`libsycl.so.8`). PyTorch's libraries link `torch_runtime`
+    (None: PyTorch is not installed or has no XPU support). Returns oneAPI's compiler root as `icpx`
+    reports it, the wheel's root, and the file the fake `icpx` creates when it runs.
+    """
+    # As in oneAPI, `latest` is a symlink.
     oneapi = tmp_path / "oneapi" / "compiler" / "latest"
-    oneapi_lib = _make_sycl_install(oneapi.with_name("2025.3"), "libsycl.so.8")
+    _make_sycl_install(oneapi.with_name("2025.3"), icpx_soname, header_version=icpx_version)
     oneapi.symlink_to("2025.3")
     icpx_ran = tmp_path / "icpx_ran"
     icpx = oneapi / "bin" / "icpx"
@@ -322,110 +374,142 @@ def _fake_sycl_setup(monkeypatch, tmp_path: pathlib.Path, loaded: str, torch_hea
     icpx.chmod(0o755)
     monkeypatch.setenv("PATH", f"{icpx.parent}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.delenv("TRITON_INTEL_SYCL_COMPILER", raising=False)
+    monkeypatch.delenv("ONEAPI_ROOT", raising=False)
 
-    torch_root = tmp_path / "venv"
-    torch_lib = _make_sycl_install(torch_root, "libsycl.so.9", headers=torch_headers, wheel=True)
+    wheel_root = tmp_path / "venv"
+    _make_sycl_install(wheel_root, "libsycl.so.9", headers=torch_headers, wheel=True, header_version=wheel_version)
+    monkeypatch.setattr(
+        intel_driver, "_find_sycl_from_wheel", lambda include_dir:
+        (include_dir + ([str(wheel_root / "include")] if torch_headers else []), [str(wheel_root / "lib")]))
 
-    maps = tmp_path / "maps"
-    if loaded != "unreadable":
-        mapped = {
-            "oneapi": [oneapi_lib], "torch": [torch_lib], "both": [torch_lib, oneapi_lib], "nothing": [], "torch_two":
-            [torch_lib,
-             torch_lib.with_name("libsycl.so.8")], "torch_deleted": [torch_lib], "oneapi_deleted": [oneapi_lib]
-        }[loaded]
-        # The kernel marks a mapped file that was unlinked since. oneAPI's `libsycl.so` symlink then dangles.
-        suffix = ""
-        if loaded.endswith("_deleted"):
-            mapped[0].unlink()
-            suffix = " (deleted)"
-        lines = [
-            "01f17000-0a5d7000 rw-p 00000000 00:00 0                                  [heap]",
-            "71d16c800000-71d16e600000 rw-p 00000000 00:00 0 ",
-        ]
-        for inode, library in enumerate(mapped, start=3184608):
-            lines += [
-                f"71d182000000-71d1820fd000 r--p 00000000 fc:01 {inode}                    {library}{suffix}",
-                f"71d1820fd000-71d1823d1000 r-xp 000fc000 fc:01 {inode}                    {library}{suffix}",
-            ]
-        maps.write_text("\n".join(lines) + "\n")
-    monkeypatch.setattr(intel_driver, "_PROC_SELF_MAPS", str(maps))
-    return oneapi, torch_root, icpx_ran
+    _fake_torch(monkeypatch, tmp_path, None if torch_runtime is None else (torch_runtime, torch_runtime))
+    return oneapi, wheel_root, icpx_ran
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the loaded SYCL runtime is found through /proc")
-@pytest.mark.parametrize("loaded, torch_headers, builds_against", [
-    pytest.param("torch", True, "torch", id="issue_8200"),
-    pytest.param("oneapi", True, "oneapi", id="icpx_runtime_loaded"),
-    pytest.param("nothing", True, "oneapi", id="no_runtime_loaded"),
-    pytest.param("both", True, "oneapi", id="unknown_which_runtime_pytorch_uses"),
-    pytest.param("torch_two", True, "oneapi", id="unknown_which_runtime_in_one_directory_pytorch_uses"),
-    pytest.param("unreadable", True, "oneapi", id="not_linux"),
-    pytest.param("torch", False, "oneapi", id="no_headers_to_build_against"),
-    pytest.param("torch_deleted", True, "oneapi", id="loaded_runtime_removed_from_disk"),
-    pytest.param("oneapi_deleted", True, "oneapi", id="loaded_runtime_removed_from_disk_leaving_dangling_symlink"),
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
+@pytest.mark.parametrize("torch_runtime, torch_headers, builds_against", [
+    pytest.param("libsycl.so.9", True, "wheel", id="issue_8200"),
+    pytest.param("libsycl.so.8", True, "oneapi", id="pytorch_links_icpx_runtime"),
+    pytest.param(None, True, "oneapi", id="no_pytorch_xpu"),
+    pytest.param("libsycl.so.9", False, "oneapi", id="no_headers_to_build_against"),
+    pytest.param("libsycl.so.7", True, "oneapi", id="pytorch_runtime_not_installed"),
 ])
-def test_find_sycl_prefers_loaded_runtime(monkeypatch, recwarn, tmp_path: pathlib.Path, loaded, torch_headers,
-                                          builds_against):
-    """Triton's helpers are built against the SYCL runtime PyTorch has already loaded.
+def test_find_sycl_prefers_pytorch_runtime(monkeypatch, recwarn, tmp_path: pathlib.Path, torch_runtime, torch_headers,
+                                           builds_against):
+    """Triton's helpers are built against the SYCL runtime PyTorch links.
 
     PyTorch hands them its `sycl::queue`, so building them against another runtime puts two SYCL
     runtimes with different ABIs into one process. With PyTorch 2.13 wheels (SYCL 2026.0) and an
     `icpx` from oneAPI 2025.3 on `PATH`, the first call on the queue segfaulted in
-    `sycl::context::get_devices()`.
+    `sycl::context::get_devices()`. The runtime is the soname `libtorch_xpu.so` and `libc10_xpu.so`
+    record, read from the files: PyTorch does not look SYCL up at run time.
     See https://github.com/intel/intel-xpu-backend-for-triton/issues/8200.
     """
-    oneapi, torch_root, _ = _fake_sycl_setup(monkeypatch, tmp_path, loaded, torch_headers)
-    expected, other = (torch_root, tmp_path / "oneapi") if builds_against == "torch" else (oneapi, torch_root)
+    oneapi, wheel_root, _ = _fake_sycl_setup(monkeypatch, tmp_path, torch_runtime, torch_headers)
+    expected, other = (wheel_root, tmp_path / "oneapi") if builds_against == "wheel" else (oneapi, wheel_root)
 
     helper = CompilationHelper()
 
     assert helper.libsycl_dir == [str(expected / "lib")]
-    assert str(expected / "include" / "sycl") in helper.include_dir
+    assert str(expected / "include") in helper.include_dir
     assert not any(str(other) in d for d in helper.include_dir + helper.library_dir), \
         f"the other SYCL runtime leaked into the compiler flags: {helper.include_dir + helper.library_dir}"
     # `icpx` adds its own SYCL to the build, so it may build only against that one.
     assert helper.use_sycl_compiler == (builds_against == "oneapi")
     warned = [str(w.message) for w in recwarn]
-    # One runtime is known to be the one loaded, yet cannot be built against.
-    unusable = {
-        "torch": torch_root / "lib", "torch_deleted": torch_root / "lib", "oneapi_deleted":
-        oneapi.with_name("2025.3") / "lib"
-    }.get(loaded)
-    if unusable and builds_against == "oneapi":
-        assert any(str(unusable) in m for m in warned), f"a possible crash was not reported: {warned}"
+    if torch_runtime is not None and builds_against != "wheel" and torch_runtime != "libsycl.so.8":
+        # PyTorch's runtime is known, yet cannot be built against: a possible crash is reported.
+        assert len(warned) == 1 and torch_runtime in warned[0] and "icpx" in warned[0], warned
     else:
         assert not warned, f"unexpected warnings: {warned}"
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the loaded SYCL runtime is found through /proc")
-def test_find_sycl_checks_which_runtime_links(monkeypatch, recwarn, tmp_path: pathlib.Path):
-    """Holding the loaded runtime does not make a directory safe to build against.
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
+@pytest.mark.parametrize("icpx_version, builds_against", [
+    pytest.param(20260601, "wheel", id="icpx_newer_than_pytorch_runtime"),
+    pytest.param(20260101, "oneapi", id="icpx_older_than_pytorch_runtime"),
+    pytest.param(20260331, "oneapi", id="same_version"),
+])
+def test_find_sycl_prefers_oldest_headers_of_same_runtime(monkeypatch, recwarn, tmp_path: pathlib.Path, icpx_version,
+                                                          builds_against):
+    """Of several installations of the runtime PyTorch links, the one with the oldest headers is used.
 
-    Here oneAPI's directory also holds a newer runtime, which `libsycl.so` links, so a helper built
-    against it would load that one next to the one already loaded.
+    The DPC++ ABI lets code built against older headers run on a newer `libsycl.so` of the same
+    soname, not the reverse. With `icpx` 2026.2 on `PATH` and PyTorch's `intel-sycl-rt` 2026.0 wheel
+    (both `libsycl.so.9`), helpers built with `icpx`'s headers would run on the older runtime PyTorch
+    loads; the wheel's headers are safe with either. The order of discovery decides ties.
     """
-    oneapi, _, _ = _fake_sycl_setup(monkeypatch, tmp_path, "oneapi")
-    lib = oneapi.with_name("2025.3") / "lib"
-    _write_shared_library(lib / "libsycl.so.9", "libsycl.so.9")
-    (lib / "libsycl.so").unlink()
-    (lib / "libsycl.so").symlink_to("libsycl.so.9")
+    oneapi, wheel_root, _ = _fake_sycl_setup(monkeypatch, tmp_path, "libsycl.so.9", icpx_soname="libsycl.so.9",
+                                             icpx_version=icpx_version, wheel_version=20260331)
+
+    helper = CompilationHelper()
+
+    expected = wheel_root if builds_against == "wheel" else oneapi
+    assert helper.libsycl_dir == [str(expected / "lib")]
+    assert helper.use_sycl_compiler == (builds_against == "oneapi")
+    assert not [str(w.message) for w in recwarn]
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
+def test_find_sycl_with_pytorch_libraries_disagreeing(monkeypatch, recwarn, tmp_path: pathlib.Path):
+    """PyTorch libraries linking different runtimes cannot be followed; the search is unchanged and warns."""
+    oneapi, _, _ = _fake_sycl_setup(monkeypatch, tmp_path, "libsycl.so.9")
+    _fake_torch(monkeypatch, tmp_path, ("libsycl.so.9", "libsycl.so.8"))
+
+    helper = CompilationHelper()
+
+    assert helper.libsycl_dir == [str(oneapi / "lib")]
+    assert helper.use_sycl_compiler
+    warned = [str(w.message) for w in recwarn]
+    assert len(warned) == 1 and "libtorch_xpu.so needs libsycl.so.9" in warned[0] and \
+        "libc10_xpu.so needs libsycl.so.8" in warned[0], warned
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
+def test_find_sycl_with_pytorch_library_without_sycl(monkeypatch, recwarn, tmp_path: pathlib.Path):
+    """A PyTorch library that links no SYCL (a CPU build's leftover) does not count against the one that does."""
+    _, wheel_root, _ = _fake_sycl_setup(monkeypatch, tmp_path, "libsycl.so.9")
+    _fake_torch(monkeypatch, tmp_path, ("libsycl.so.9", None))
+
+    helper = CompilationHelper()
+
+    assert helper.libsycl_dir == [str(wheel_root / "lib")]
+    assert not [str(w.message) for w in recwarn]
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
+def test_find_sycl_checks_which_runtime_links(monkeypatch, recwarn, tmp_path: pathlib.Path):
+    """Holding PyTorch's runtime does not make a directory safe to build against.
+
+    Here the wheel's directory also holds a newer runtime, which `libsycl.so` links, so a helper
+    built against it would load that one next to the one PyTorch loads. A dangling `libsycl.so`
+    symlink, left by an uninstall, links nothing at all.
+    """
+    oneapi, wheel_root, _ = _fake_sycl_setup(monkeypatch, tmp_path, "libsycl.so.9")
+    lib = wheel_root / "lib"
+    _write_shared_library(lib / "libsycl.so.10", "libsycl.so.10")
+    shutil.copyfile(lib / "libsycl.so.10", lib / "libsycl.so")
 
     helper = CompilationHelper()
 
     assert helper.libsycl_dir == [str(oneapi / "lib")]
     warned = [str(w.message) for w in recwarn]
-    assert any(str(lib / "libsycl.so.8") in m for m in warned), f"a possible crash was not reported: {warned}"
+    assert len(warned) == 1 and f"{lib} links libsycl.so.10" in warned[0], warned
+
+    (lib / "libsycl.so").unlink()
+    (lib / "libsycl.so").symlink_to("libsycl.so.11")
+    assert intel_driver._runtime_in([str(lib)]) is None
+    assert not intel_driver._links_runtime([str(lib)], "libsycl.so.9")
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the loaded SYCL runtime is found through /proc")
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
 def test_helper_cache_key_follows_runtime_upgrade_in_place(monkeypatch, request, tmp_path: pathlib.Path):
     """A cached helper is not reused after the SYCL runtime in the same directory changes.
 
     `pip install -U` replaces the runtime without moving it, so the directory in the cache key stays
-    the same while the helper built before still needs the old soname. The cache is consulted before
-    any helper is loaded, so no runtime is mapped yet.
+    the same while the helper built before still needs the old soname.
     """
-    oneapi, _, _ = _fake_sycl_setup(monkeypatch, tmp_path, "nothing")
+    oneapi, _, _ = _fake_sycl_setup(monkeypatch, tmp_path, None)
     request.addfinalizer(intel_driver.get_hasher_common.cache_clear)
 
     def cache_key() -> tuple[list[str], str]:
@@ -445,8 +529,8 @@ def test_helper_cache_key_follows_runtime_upgrade_in_place(monkeypatch, request,
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the libraries mapped into this process")
-def test_soname_of_a_real_library():
-    """`_soname` reads real shared libraries, not only the fakes above: libc's soname is the same everywhere."""
+def test_elf_dynamic_of_a_real_library():
+    """The ELF reader reads real shared libraries, not only the fakes above: libc's soname is the same everywhere."""
     with open("/proc/self/maps") as maps:
         mapped = {
             fields[5]
@@ -457,17 +541,46 @@ def test_soname_of_a_real_library():
     if libc is None:
         pytest.skip(f"no glibc mapped into this process: {sorted(mapped)}")
 
+    soname, needed = intel_driver._elf_dynamic(libc)
+    assert soname == "libc.so.6"
+    assert any(name.startswith("ld-linux") for name in needed), needed
     assert intel_driver._soname(libc) == "libc.so.6"
+    assert intel_driver._pe_imports(libc) is None
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the loaded SYCL runtime is found through /proc")
-@pytest.mark.parametrize("loaded, runs_icpx", [("torch", False), ("oneapi", True)])
-def test_helpers_built_without_icpx_for_loaded_runtime(monkeypatch, request, tmp_path: pathlib.Path, loaded, runs_icpx):
+def test_pe_imports(tmp_path: pathlib.Path):
+    """The PE reader finds the DLLs a Windows PyTorch's `torch_xpu.dll` imports, among them its SYCL runtime."""
+    image = tmp_path / "torch_xpu.dll"
+    _write_pe_image(image, ("KERNEL32.dll", "sycl9.dll", "c10_xpu.dll"))
+
+    assert intel_driver._pe_imports(str(image)) == ["KERNEL32.dll", "sycl9.dll", "c10_xpu.dll"]
+    assert [name for name in intel_driver._pe_imports(str(image))
+            if re.fullmatch(r"sycl\d*\.dll", name)] == ["sycl9.dll"]
+    _write_pe_image(image, ())
+    assert intel_driver._pe_imports(str(image)) == []
+    (tmp_path / "not_pe.dll").write_bytes(b"\x7fELF" + bytes(64))
+    assert intel_driver._pe_imports(str(tmp_path / "not_pe.dll")) is None
+
+
+def test_torch_sycl_runtime_of_installed_pytorch():
+    """The runtime PyTorch links is read from the installed PyTorch's own libraries, without importing it."""
+    libraries = intel_driver._torch_xpu_libraries()
+    if not libraries:
+        pytest.skip("the installed PyTorch has no XPU libraries")
+
+    runtime = intel_driver._torch_sycl_runtime()
+    assert runtime is not None and re.fullmatch(r"libsycl\.so(\.\d+)*|sycl\d*\.dll", runtime, re.IGNORECASE), runtime
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
+@pytest.mark.parametrize("torch_runtime, runs_icpx", [("libsycl.so.9", False), ("libsycl.so.8", True)])
+def test_helpers_built_without_icpx_for_pytorch_runtime(monkeypatch, request, tmp_path: pathlib.Path, torch_runtime,
+                                                        runs_icpx):
     """Helpers built against PyTorch's SYCL runtime are compiled by the host compiler, not `icpx`.
 
     `icpx` adds its own SYCL headers and runtime to the build, which need not be PyTorch's.
     """
-    _, _, icpx_ran = _fake_sycl_setup(monkeypatch, tmp_path, loaded)
+    _, _, icpx_ran = _fake_sycl_setup(monkeypatch, tmp_path, torch_runtime)
     monkeypatch.setattr(intel_driver, "COMPILATION_HELPER", CompilationHelper())
     # `get_hasher_common` caches a hash of the fake helper above.
     request.addfinalizer(intel_driver.get_hasher_common.cache_clear)
@@ -482,6 +595,29 @@ def test_helpers_built_without_icpx_for_loaded_runtime(monkeypatch, request, tmp
         intel_driver.compile_module_from_src("#error stop after choosing the compiler\n", "sycl_compiler_choice")
 
     assert icpx_ran.exists() == runs_icpx
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="host compilers are looked up as on Linux")
+def test_build_explains_skipped_sycl_compiler(monkeypatch, recwarn, tmp_path: pathlib.Path):
+    """When `icpx` may not build the helpers, the user is told why a host C++ compiler is needed."""
+    compilers = {"icpx": "/opt/intel/oneapi/compiler/latest/bin/icpx", "gcc": shutil.which("gcc") or "/usr/bin/gcc"}
+    monkeypatch.setattr(build.shutil, "which", lambda name, *a, **k: compilers.get(name))
+    monkeypatch.setattr(build, "is_xpu", lambda: True)
+    monkeypatch.delenv("CXX", raising=False)
+    monkeypatch.delenv("TRITON_INTEL_SYCL_COMPILER", raising=False)
+    source = tmp_path / "helper.c"
+    source.write_text("#error never compiled\n")
+
+    with pytest.raises(RuntimeError, match=r"Failed to find C\+\+ compiler.*icpx was not used.*host C\+\+ compiler"):
+        build._build("helper", str(source), str(tmp_path), [], [], [], [], use_sycl_compiler=False)
+
+    # A compiler the user asked for by `TRITON_INTEL_SYCL_COMPILER` is skipped with a warning, not silently.
+    compilers["g++"] = shutil.which("g++") or "/usr/bin/g++"
+    monkeypatch.setenv("TRITON_INTEL_SYCL_COMPILER", "icpx")
+    with pytest.raises(RuntimeError):  # the host compiler then fails on `#error`
+        build._build("helper", str(source), str(tmp_path), [], [], [], [], use_sycl_compiler=False)
+    warned = [str(w.message) for w in recwarn]
+    assert any("TRITON_INTEL_SYCL_COMPILER=icpx is not used" in m for m in warned), warned
 
 
 @pytest.mark.parametrize("version, expected", [
