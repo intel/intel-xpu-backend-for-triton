@@ -483,7 +483,7 @@ def _gluon_ws_noinline_kernel(out_ptr):
     )
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="requires Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
 def test_gluon_two_cta_warp_specialize_noinline_call(with_gsan):
     out = torch.full((256, ), -1, dtype=torch.int32, device="cuda")
 
@@ -1987,8 +1987,7 @@ def test_host_tma_scatter_updates_shadow(fresh_knobs, shadow_granularity):
     assert target_storage[m_size, y_offset].item() == 0
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
 @pytest.mark.parametrize("dtype,shadow_granularity",
                          [(dtype, min(4, dtype.itemsize))
                           for dtype in (torch.int32, torch.float16, torch.bfloat16, torch.uint64)],

@@ -255,6 +255,7 @@ build/.../unittest/TestDPASLinearLayout
 Skip lists are organized by GPU architecture in `scripts/skiplist/`:
 ```
 skiplist/
+├── common/           # <suite>.xfail.txt entries added for every GPU (not a --skip-list dir)
 ├── default/          # Common skips for all GPUs
 ├── a770/             # Intel Arc A770 (Xe-HPG)
 ├── arl-h/            # Arrow Lake H
@@ -282,9 +283,12 @@ Formats: exact test path, path with parameters, regex patterns (with `@regexp` s
 
 From `scripts/pytest-utils.sh`:
 - Skip lists passed via `--skip-from-file=path/to/suite.txt`
-- Expected-failure lists in the same directory: `<suite>.xfail.txt` (`--xfail-norun-from-file`:
-  reported as XFAIL without running) and `<suite>.xfail-run.txt` (`--xfail-from-file`, strict: the
-  test runs, must fail, and an unexpected pass fails the run; currently unused)
+- Expected-failure lists in the same directory: `<suite>.xfail.txt` (`--xfail-norun-from-file`
+  with `--xfail-overrides-skip`: reported as XFAIL without running, even when the test's own skip
+  marks are true) and `<suite>.xfail-run.txt` (`--xfail-from-file`, strict: the test runs, must
+  fail, and an unexpected pass fails the run; currently unused)
+- `skiplist/common/<suite>.xfail.txt` is added to the `<suite>.xfail.txt` of every GPU. It lists
+  tests upstream skips on non-CUDA/HIP hardware; their upstream `skipif` stays in the test
 - Which list: `<suite>.xfail.txt` when a platform limitation, not a bug, keeps the test from
   passing here (e.g. CUDA-only, missing hardware feature, too little memory); the skip list for
   everything else, including bugs owned by other teams (IGC, driver, PyTorch). Skipped tests count
@@ -295,7 +299,9 @@ From `scripts/pytest-utils.sh`:
 
 ### TEST_UNSKIP Mode
 
-Setting `TEST_UNSKIP=true` ignores all skip/xfail decorators and does not load the skip or xfail lists:
+Setting `TEST_UNSKIP=true` turns `pytest.skip()` calls into no-ops and does not load the skip or
+xfail lists. Skip and xfail marks (`skipif` and `xfail` decorators) still apply, so the tests in
+`skiplist/common/` report SKIPPED. It also:
 - Adds `--timeout=500` per test
 - Adds `--max-worker-restart=500` for crash tolerance
 - Useful for validating which skips are still needed
@@ -326,6 +332,8 @@ Setting `TEST_UNSKIP=true` ignores all skip/xfail decorators and does not load t
 5. Use `to_triton()` / `to_numpy()` for tensor conversion
 6. Set appropriate `rtol`/`atol` for the precision being tested
 7. Add to the relevant skip or xfail list (see Skip List Application) if known to fail on specific architectures
+8. In upstream tests, keep upstream's `skipif` unchanged; to report XFAIL on XPU, add the test to
+   `skiplist/common/<suite>.xfail.txt` instead of editing the decorator
 
 ### New C++ Test Checklist
 

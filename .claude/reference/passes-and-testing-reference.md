@@ -290,8 +290,8 @@ From `conftest.py`:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `TRITON_TEST_SKIPLIST_DIR` | `scripts/skiplist/default` | Skip and xfail list directory |
-| `TEST_UNSKIP` | `false` | Ignore skip/xfail decorators and the skip and xfail lists |
+| `TRITON_TEST_SKIPLIST_DIR` | `scripts/skiplist/default` | Skip and xfail list directory; `scripts/skiplist/common/<suite>.xfail.txt` is added to its xfail list |
+| `TEST_UNSKIP` | `false` | Ignore `pytest.skip()` calls and the skip and xfail lists; skip and xfail marks still apply |
 | `TRITON_INTERPRET` | — | Run in interpreter mode (no GPU) |
 | `PYTEST_MAX_PROCESSES` | 8 | Parallel worker count |
 

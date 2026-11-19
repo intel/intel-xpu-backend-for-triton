@@ -39,7 +39,7 @@ def test_metadata() -> None:
     assert used_hook
 
 
-@pytest.mark.xfail(not is_cuda(), reason="max_occupancy requires CUDA", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="max_occupancy requires CUDA")
 @pytest.mark.parametrize("max_occupancy", [None, *range(1, 33), 1024])
 @pytest.mark.parametrize("num_warps", [1, 4])
 @pytest.mark.parametrize("num_ctas", [1, 2])
@@ -106,7 +106,7 @@ def test_max_occupancy_launch(max_occupancy, num_warps, num_ctas, device, monkey
     assert shared_sizes == [launcher.shared, launcher.shared]
 
 
-@pytest.mark.xfail(not is_cuda(), reason="max_occupancy requires CUDA", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="max_occupancy requires CUDA")
 def test_max_occupancy_preserves_required_shared_memory(device):
     from triton.experimental import gluon
     from triton.experimental.gluon import language as gl
@@ -368,7 +368,7 @@ def test_interpreter_implicit_cvt_bool() -> None:
     assert bool(value.handle.data[0]) is True
 
 
-@pytest.mark.xfail(not is_hip(), reason="requires HIP", run=False)
+@pytest.mark.skipif(not is_hip(), reason="requires HIP")
 def test_wgp_cu_mode_launch_argument():
     arch = triton.runtime.driver.active.get_current_target().arch
     if not arch.startswith(("gfx11", "gfx120")):

@@ -1034,8 +1034,7 @@ def test_host_tma_scatter_write_after_read(shadow_granularity):
                       marker="target_desc.scatter(values, x_offsets, y_offset)", error="Write after read race detected")
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
 @pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
 def test_host_tma_atomic_on_release_flag_does_not_publish_data(shadow_granularity):
     _run_failure_case("host_tma_atomic_flag_publish", shadow_granularity, runner=_run_host_tma_atomic_flag_publish_case,

@@ -1,0 +1,6 @@
+# Requires CUDA
+python/test/unit/tools/test_triton_to_gluon.py::test_num_threads
+# Requires HIP
+python/test/unit/tools/test_aot.py::test_gluon_kernel
+# Requires descriptor gather/scatter support
+python/test/unit/tools/test_triton_to_gluon.py::test_gather_scatter_roundtrip

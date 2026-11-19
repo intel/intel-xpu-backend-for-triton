@@ -7,7 +7,7 @@ import triton.language as tl
 from triton._internal_testing import supports_clc
 from triton.tools.tensor_descriptor import TensorDescriptor
 
-requires_clc = pytest.mark.xfail(not supports_clc(), reason="CLC requires NVIDIA SM100+", run=False)
+requires_clc = pytest.mark.skipif(not supports_clc(), reason="CLC requires NVIDIA SM100+")
 
 
 def _assert_clc_ws_ir(compiled):

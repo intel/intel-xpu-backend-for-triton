@@ -1,0 +1,30 @@
+# AMD pointer canonicalization regression
+python/test/unit/language/test_core.py::test_if_elif_shared_pointer_body
+# CLC requires NVIDIA SM100+
+python/test/unit/language/test_clc.py::test_clc_descriptor_matmul_num_ctas
+python/test/unit/language/test_clc.py::test_clc_exactly_once_program_id_multicta
+python/test/unit/language/test_clc.py::test_clc_multicta_loop_reuse_consan
+python/test/unit/language/test_clc.py::test_clc_no_pending_work
+python/test/unit/language/test_clc.py::test_clc_pointer_matmul_num_ctas
+python/test/unit/language/test_clc.py::test_clc_ws_consan_1cta
+python/test/unit/language/test_clc.py::test_clc_ws_tma_matmul_1cta
+# Requires CUDA
+python/test/unit/language/test_core.py::test_enable_reflect_ftz
+python/test/unit/language/test_core.py::test_reduce64_integer
+# Requires CUDA PTX
+python/test/unit/language/test_core.py::test_atomic_load_store_coalesced
+# Requires NVIDIA division lowering
+python/test/unit/language/test_core.py::test_fdiv_constant_matches_div_full
+# Requires NVIDIA thread region lowering
+python/test/unit/language/test_core.py::test_thread_regions_atomic_loop_handoff
+python/test/unit/language/test_core.py::test_thread_regions_conditional_poll
+python/test/unit/language/test_core.py::test_thread_regions_explicit_scalar_mask
+python/test/unit/language/test_core.py::test_thread_regions_pointer_handoff
+python/test/unit/language/test_core.py::test_thread_regions_poll_acquire
+python/test/unit/language/test_core.py::test_thread_regions_scalar_consumers
+python/test/unit/language/test_core.py::test_thread_regions_scalar_shift
+# Requires TMA (Hopper+)
+python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_alignment_iisan_dynamic
+# num_ctas > 1 requires NVIDIA SM90+ (Hopper)
+python/test/unit/language/test_core.py::test_scalar_atomic_cas_multicta_result
+python/test/unit/language/test_core.py::test_tensor_atomic_cas_multicta_result

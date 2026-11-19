@@ -229,7 +229,7 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         assert count > 0, "The bf8 dpas is not used."
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("num_ctas, num_stages, K, warp_specialize", [
     (2, 3, 1024, False),
     (2, 3, 1024, True),
@@ -275,7 +275,7 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
     torch.testing.assert_close(aux, expected_aux, atol=0.001, rtol=0.001)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("reset_period", [0, 2, 4])
 def test_tma_matmul_accumulator_intermediate_read(device, reset_period):
     from triton.tools.tensor_descriptor import TensorDescriptor
@@ -310,7 +310,7 @@ def test_tma_matmul_accumulator_intermediate_read(device, reset_period):
     torch.testing.assert_close(c.view(4, 256, 16), expected[:, None, None].expand(4, 256, 16), atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("use_loop, num_stages", [(False, 3), (True, 1), (True, 3)])
 @pytest.mark.parametrize("transpose_b", [False, True])
 @pytest.mark.parametrize("num_ctas", [2, 4, 8])
@@ -1824,7 +1824,7 @@ def nvfp4_ue5m3_matmul(a_ptr, b_ptr, output_ptr, a_scale, b_scale, M, N, K, stri
     tl.store(output_ptrs, accumulator, mask=mask)
 
 
-@pytest.mark.xfail(not is_rubin(), reason="Requires Rubin", run=False)
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
 def test_nvfp4_ue5m3_matmul():
 
     def ue5m3_to_float32(data):
@@ -1895,7 +1895,7 @@ def test_nvfp4_ue5m3_matmul():
         assert "kind::mxf4nvf4.block_scale.block16" in kernel.asm["ptx"]
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_warp_specialized_matmul_auxiliary_output(device, fresh_compilation_knobs):
     from triton.tools.tensor_descriptor import TensorDescriptor
 

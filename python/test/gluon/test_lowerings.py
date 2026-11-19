@@ -261,7 +261,7 @@ def test_convert_1d_to_2d_slice_cga(num_ctas, device):
     torch.testing.assert_close(out, torch.arange(head, device=device, dtype=torch.float32))
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
 @pytest.mark.parametrize("warp_specialize", [False, True])
 def test_atomic_poll_two_ctas(warp_specialize, device):
 
@@ -299,7 +299,7 @@ def test_atomic_poll_two_ctas(warp_specialize, device):
     assert out.item() == 42
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
 @pytest.mark.parametrize("num_ctas", [2, 4])
 def test_cluster_barrier_in_warp_specialize(device, num_ctas):
     BLOCK = ttgl.constexpr(128)
@@ -328,7 +328,7 @@ def test_cluster_barrier_in_warp_specialize(device, num_ctas):
     torch.testing.assert_close(out, torch.arange(2 * BLOCK.value, device=device, dtype=torch.int32))
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
 @pytest.mark.parametrize("use_worker_partition", [False, True])
 def test_convert_layout_cross_cta_in_warp_specialize(use_worker_partition, device):
     M = ttgl.constexpr(64)
@@ -376,7 +376,7 @@ def test_convert_layout_cross_cta_in_warp_specialize(use_worker_partition, devic
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
-@pytest.mark.xfail(not is_hip(), reason="Generic linear layouts are only supported on AMD", run=False)
+@pytest.mark.skipif(not is_hip(), reason="Generic linear layouts are only supported on AMD")
 @pytest.mark.parametrize("src_warp, dst_warp", [(64, 96), (96, 64)])
 def test_convert_layout_overlapping_identity_dims(src_warp, dst_warp, device):
 
@@ -488,8 +488,7 @@ def _swizzled_warp_layouts():
 
 # ===--- Tests with swizzled/non-injective DistributedLinearLayout ---===
 
-requires_generic_linear = pytest.mark.xfail(not is_hip(), reason="Generic linear layouts are only supported on AMD",
-                                            run=False)
+requires_generic_linear = pytest.mark.skipif(not is_hip(), reason="Generic linear layouts are only supported on AMD")
 
 
 @requires_generic_linear
@@ -834,7 +833,7 @@ def test_local_store_tmem_32x32b_2cta_splitm_to_splitk(device):
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("instr_variant", ["32x32b", "16x64b", "16x128b", "16x256b"])
 def test_tmem_load_store_instruction_sizes(instr_variant, device):
     shape = (128, 128)
@@ -1104,7 +1103,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, saniti
     torch.testing.assert_close(z, z_ref.to(torch_dtype))
 
 
-@pytest.mark.xfail(not is_cuda(), reason="NVIDIA redux instructions", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="NVIDIA redux instructions")
 @pytest.mark.parametrize("size, group_bit, broadcast_bits",
                          [(16, i, ()) for i in range(5)] + [(8, 0, ()),
                                                             (32, 0, ())] + [(16, i, (i, ))
@@ -1265,7 +1264,7 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
         assert "shfl.sync.bfly" in ptx
 
 
-@pytest.mark.xfail(not is_cuda(), reason="NVIDIA redux instructions", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="NVIDIA redux instructions")
 @pytest.mark.parametrize("op", ["add", "xor", "max"])
 @pytest.mark.parametrize("dtype_str", ["int32", "int64", "uint64"])
 def test_reduce_broadcast_across_warps(op, dtype_str, device):

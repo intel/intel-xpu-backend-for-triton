@@ -92,16 +92,29 @@ pytest() {
         fi
     fi
 
-    # Expected-failure lists, next to the skip list of the suite:
-    #   <suite>.xfail.txt:     reported as XFAIL without running. For a platform limitation, not a bug.
+    # Expected-failure lists, in the skip list directory of the suite and in skiplist/common/:
+    #   <suite>.xfail.txt:     reported as XFAIL without running, even if the test's own skip marks are true.
+    #                          For a platform limitation, not a bug. skiplist/common/<suite>.xfail.txt holds
+    #                          the entries for all GPUs (tests upstream skips on non-CUDA/HIP hardware).
     #   <suite>.xfail-run.txt: runs, expected to fail, fails the run if it passes (strict). Currently unused.
     # Everything else, including bugs owned by other teams, goes in the skip list.
     if [[ ! -f $TRITON_TEST_SELECTFILE && -v TRITON_TEST_SUITE && $TEST_UNSKIP = false ]]; then
-        XFAILFILE="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail.txt"
+        XFAILFILES=""
+        for XFAILFILE in "$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail.txt" \
+                "$SCRIPTS_DIR/skiplist/common/$TRITON_TEST_SUITE.xfail.txt"; do
+            if [[ -f $XFAILFILE ]]; then
+                # Windows paths, so a ';' list does not depend on MSYS path conversion.
+                if [[ $OSTYPE = msys* || $OSTYPE = cygwin* ]]; then
+                    XFAILFILE="$(cygpath -m "$XFAILFILE")"
+                fi
+                XFAILFILES="${XFAILFILES:+$XFAILFILES;}$XFAILFILE"
+            fi
+        done
         XFAILRUNFILE="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.xfail-run.txt"
-        if [[ -f $XFAILFILE ]]; then
+        if [[ -n $XFAILFILES ]]; then
             pytest_extra_args+=(
-                "--xfail-norun-from-file=$XFAILFILE"
+                "--xfail-norun-from-file=$XFAILFILES"
+                "--xfail-overrides-skip"
             )
         fi
         if [[ -f $XFAILRUNFILE ]]; then

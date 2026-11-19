@@ -1395,7 +1395,7 @@ def test_fdiv_constant_in_range(denominator, ieee_rounding, device):
             assert "arith.divf" in compiled.asm["ttgir"]
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires NVIDIA division lowering", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA division lowering")
 def test_fdiv_constant_matches_div_full(device):
 
     @triton.jit
@@ -1925,7 +1925,7 @@ def test_atomic_load_store(dtype, scalar, ordered, device):
             assert ptx.count("fence.acq_rel.gpu;") == 2 * ordered
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires CUDA PTX", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA PTX")
 @pytest.mark.parametrize("dtype", [torch.int8, torch.float16, torch.int32, torch.int64])
 @pytest.mark.parametrize("mask_group", [0, 2, 16])
 def test_atomic_load_store_coalesced(dtype, mask_group, device):
@@ -2489,10 +2489,9 @@ def test_atomic_cas_pointee_type(dtype_str, mode, compare, device):
     torch.testing.assert_close(out, expected.expand(size, 2))
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
-                   reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)", run=False)
-@pytest.mark.xfail(is_sm12x(), reason="scalar multi-CTA atomic_cas is not supported on sm12x (consumer Blackwell)",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
+                    reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
+@pytest.mark.skipif(is_sm12x(), reason="scalar multi-CTA atomic_cas is not supported on sm12x (consumer Blackwell)")
 def test_scalar_atomic_cas_multicta_result(device):
 
     @triton.jit
@@ -2508,8 +2507,8 @@ def test_scalar_atomic_cas_multicta_result(device):
     torch.testing.assert_close(output, torch.full_like(output, 7))
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
-                   reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
+                    reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
 @pytest.mark.parametrize("size", [1, 4, 16, 128, 512])
 def test_tensor_atomic_cas_multicta_result(size, device):
 
@@ -3610,7 +3609,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
 @pytest.mark.parametrize("op", ["add", "and", "or", "xor"])
 @pytest.mark.parametrize("dtype_str", ["int64", "uint64"])
 @pytest.mark.parametrize("num_warps", [4, 32])
-@pytest.mark.xfail(not is_cuda(), reason="Requires CUDA", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_reduce64_integer(op, dtype_str, num_warps, device):
 
     @triton.jit
@@ -6995,7 +6994,7 @@ def test_if_else(device):
     assert to_numpy(out)[0] == false_val[0]
 
 
-@pytest.mark.xfail(not is_hip(), reason="AMD pointer canonicalization regression", run=False)
+@pytest.mark.skipif(not is_hip(), reason="AMD pointer canonicalization regression")
 @pytest.mark.parametrize("num_tensors", [32, 100])
 def test_if_elif_shared_pointer_body(num_tensors, device, fresh_knobs):
     fresh_knobs.amd.use_buffer_ops = True
@@ -7656,7 +7655,7 @@ def test_allow_fp_fusion(explicit_fma, allow_fusion, device, fresh_knobs):
 # -----------------------
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires CUDA", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 @pytest.mark.parametrize("enable_reflect_ftz", [False, True])
 def test_enable_reflect_ftz(enable_reflect_ftz, device, fresh_knobs):
 
@@ -8826,7 +8825,7 @@ def test_libdevice_rint(dtype_str, device):
     np.testing.assert_allclose(to_numpy(res_out), ref_out, rtol=0, atol=0, equal_nan=True)
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires NVIDIA thread region lowering", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
 @pytest.mark.parametrize("width", [1, 32, 64, 128])
 @pytest.mark.parametrize("atomic", [False, True])
 @pytest.mark.parametrize("dtype", [torch.int8, torch.int32, torch.int64, torch.float16, torch.float32])
@@ -8857,7 +8856,7 @@ def test_thread_regions_scalar_consumers(width, atomic, dtype, device, fresh_kno
         assert ("shfl.sync" in compiled.asm["ptx"]) == (width == 32)
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires NVIDIA thread region lowering", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
 @pytest.mark.parametrize("num_warps", [1, 4])
 def test_thread_regions_atomic_loop_handoff(num_warps, device, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = ""
@@ -8881,7 +8880,7 @@ def test_thread_regions_atomic_loop_handoff(num_warps, device, fresh_knobs):
     assert out.tolist() == [0, 16]
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires NVIDIA thread region lowering", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
 @pytest.mark.parametrize("width", [32, 128])
 def test_thread_regions_pointer_handoff(width, device, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = ""
@@ -8901,7 +8900,7 @@ def test_thread_regions_pointer_handoff(width, device, fresh_knobs):
     torch.testing.assert_close(out, expected)
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires NVIDIA thread region lowering", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
 @pytest.mark.parametrize("num_ctas", [1, 2, 4])
 def test_thread_regions_scalar_shift(num_ctas, device, fresh_knobs):
     skip_if_unsupported_cluster_size(num_ctas)
@@ -8923,7 +8922,7 @@ def test_thread_regions_scalar_shift(num_ctas, device, fresh_knobs):
         assert "shfl.sync" in compiled.asm["ptx"]
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires NVIDIA thread region lowering", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("num_ctas", [1, 2, 4])
 def test_thread_regions_explicit_scalar_mask(enabled, num_ctas, device, fresh_knobs):
@@ -8946,7 +8945,7 @@ def test_thread_regions_explicit_scalar_mask(enabled, num_ctas, device, fresh_kn
     assert compiled.metadata.shared == 0
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires NVIDIA thread region lowering", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
 @pytest.mark.parametrize("result_width", [0, 1, 32, 64, 128])
 @pytest.mark.parametrize("num_ctas", [1, 2])
 def test_thread_regions_poll_acquire(result_width, num_ctas, device, fresh_knobs):
@@ -8985,7 +8984,7 @@ def test_thread_regions_poll_acquire(result_width, num_ctas, device, fresh_knobs
         assert out[128].item() == 0
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires NVIDIA thread region lowering", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
 @pytest.mark.parametrize("abort", [False, True])
 def test_thread_regions_conditional_poll(abort, device, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = ""

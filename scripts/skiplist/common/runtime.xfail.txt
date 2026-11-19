@@ -1,0 +1,10 @@
+# PTX file in this unit test is only for SM90
+python/test/unit/runtime/test_autotuner.py::test_override_ptx
+# Requires compute capability >= 9 for NV
+python/test/unit/runtime/test_autotuner.py::test_override_ttgir
+python/test/unit/runtime/test_autotuner.py::test_override_ttir
+# max_occupancy requires CUDA
+python/test/unit/runtime/test_launch.py::test_max_occupancy_launch
+python/test/unit/runtime/test_launch.py::test_max_occupancy_preserves_required_shared_memory
+# requires HIP
+python/test/unit/runtime/test_launch.py::test_wgp_cu_mode_launch_argument

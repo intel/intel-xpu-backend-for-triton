@@ -399,7 +399,7 @@ def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m
     tl.store(Y + offs_y, y)
 
 
-@pytest.mark.xfail(not cuda_capability_geq(9), reason="Only supported for capability >= 9", run=False)
+@pytest.mark.skipif(not cuda_capability_geq(9), reason="Only supported for capability >= 9")
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("mx_axis", [0, 1])
 @pytest.mark.parametrize("all_scales", [False, True])

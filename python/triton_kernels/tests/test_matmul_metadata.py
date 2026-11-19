@@ -261,7 +261,7 @@ def test_matmul_launch_metadata_fp4_x_fp4_ragged_m_counts_active_scale_bytes():
     assert actual["bytes"] == 974
 
 
-@pytest.mark.xfail(not torch.cuda.is_available(), reason="CUDA is required", run=False)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 @pytest.mark.parametrize(
     "case",
     [
@@ -330,7 +330,7 @@ def test_matmul_launch_metadata_nosync_matches_old_formula(case):
     torch.testing.assert_close(actual["bytes"].cpu(), expected["bytes"].to(torch.int64).cpu(), rtol=0, atol=0)
 
 
-@pytest.mark.xfail(not torch.cuda.is_available(), reason="CUDA is required", run=False)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 def test_matmul_flops_and_bytes_from_slices_handles_large_slice_count():
     device = torch.device("cuda")
     slice_sizes = torch.arange(1501, dtype=torch.int32, device=device) % 17
