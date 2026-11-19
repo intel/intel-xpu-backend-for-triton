@@ -5,6 +5,7 @@ usage: replay_full.py [model_index ...]      (MODELS_BF16 indices, default 0 1)
 Set PYTHONPATH to a directory containing another vllm_xpu_kernels to A/B kernel versions.
 """
 import ast
+import os
 import sys
 import time
 from itertools import product
@@ -68,6 +69,9 @@ def bench_loop(fn, warmup=100, reps=10):
 
 
 def call_provider(provider, ref_paged_attn, qh, kh, hs, sw, seq, nb, bs):
+    if os.getenv("UA_CLEANUP") == "1":  # what the real benchmark does before every provider call
+        import triton_kernels_benchmark.benchmark_testing as bt
+        bt.cleanup_memory()
     dtype = torch.bfloat16
     torch.manual_seed(20)
     torch.set_default_device("xpu")

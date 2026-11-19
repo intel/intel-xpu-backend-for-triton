@@ -144,23 +144,13 @@ jobs:
 
       - name: Diagnose 8742 (experiment, not for merge)
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
-        timeout-minutes: 240
+        timeout-minutes: 150
         run: |
           {
-            echo "=== phase 1: fresh process, reference only (start of job) ==="
-            python scripts/diag/ua_phase1.py 3 || true
-            echo "=== phase 1v: ONEDNN_VERBOSE for the two einsums (fresh process) ==="
-            ONEDNN_VERBOSE=1 python scripts/diag/ua_phase1.py 1 --ops-only 2>&1 | grep -iE "matmul|gemm" | cut -c1-400 | head -30 || true
-            echo "=== phase 2: fresh process after importing vllm_xpu_kernels + vllm ==="
-            python scripts/diag/ua_phase1.py 3 --imports vllm_xpu_kernels,vllm || true
-            echo "=== phase 3a: replay of the benchmark flow with the real harness do_bench (torch profiler), run 1 ==="
-            python scripts/diag/ua_replay_full.py 0 1 || true
-            echo "=== phase 3b: same replay, BENCHMARKING_METHOD=ELAPSED_TIME (no profiler) ==="
-            BENCHMARKING_METHOD=ELAPSED_TIME python scripts/diag/ua_replay_full.py 0 1 || true
-            echo "=== phase 3c: same replay as 3a (profiler), run 2 ==="
-            python scripts/diag/ua_replay_full.py 0 1 || true
-            echo "=== phase 4: fresh process again (end of job) ==="
-            python scripts/diag/ua_phase1.py 3 || true
+            echo "=== phase 5a: replay with cleanup_memory() before every provider call (like the real benchmark), ELAPSED_TIME timing ==="
+            UA_CLEANUP=1 BENCHMARKING_METHOD=ELAPSED_TIME python scripts/diag/ua_replay_full.py 0 1 || true
+            echo "=== phase 5b: same, default profiler timing ==="
+            UA_CLEANUP=1 python scripts/diag/ua_replay_full.py 0 1 || true
           } 2>&1 | tee "$REPORTS/ua_diag.txt"
 
       - name: Run vllm unified attention bf16
