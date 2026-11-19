@@ -53,12 +53,53 @@ static Value packedOffsetX(TritonLLVMOpBuilder &b, Value offsetX,
   return b.sdiv(offsetX, b.i32_val(numPackedVals));
 }
 
+/// Whether math sits between \p storedVal and its dot, load, constant or
+/// argument. IGC vectorizes epilogue math from the payload's per-block element
+/// order; the interleaved payload stops it (e.g. attention's `acc / l`).
+static bool hasEpilogueMath(Value storedVal) {
+  SmallVector<Value> worklist = {storedVal};
+  SmallPtrSet<Value, 8> visited;
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (!visited.insert(v).second)
+      continue;
+    // SCF reaches this pass as CF, and block signatures are converted first:
+    // arguments and control-flow results arrive as casts of block arguments.
+    if (auto arg = dyn_cast<BlockArgument>(v)) {
+      for (BlockOperand &edge : arg.getOwner()->getUses()) {
+        auto branch = dyn_cast<BranchOpInterface>(edge.getOwner());
+        if (!branch)
+          return true;
+        Value incoming = branch.getSuccessorOperands(
+            edge.getOperandNumber())[arg.getArgNumber()];
+        if (!incoming)
+          return true;
+        worklist.push_back(incoming);
+      }
+      continue;
+    }
+    Operation *def = v.getDefiningOp();
+    if (isa<arith::TruncFOp, triton::FpToFpOp, UnrealizedConversionCastOp>(
+            def) &&
+        def->getNumOperands() == 1) {
+      worklist.push_back(def->getOperand(0));
+    } else if (!isa<arith::ConstantOp, triton::DotOp, triton::DotScaledOp,
+                    triton::LoadOp, triton::DescriptorLoadOp,
+                    triton::gpu::intel::Subgroup2DBlockLoadOp,
+                    triton::gpu::intel::Subgroup2DBlockLoadFromPtrOp>(def)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// Whether 2D block stores may widen 16-bit rows (validate2DBlockStoreTile).
 /// The repack's sub-group bitcast shuffle is not implemented by the LTS driver.
-static bool allowStoreLaneInterleave(Operation *op) {
+static bool allowStoreLaneInterleave(Operation *op, Value storedVal) {
   auto mod = op->getParentOfType<ModuleOp>();
   return !mod->hasAttr(TritonIntelGPUDialect::getIsLTSAttrName()) &&
-         !tools::getBoolEnv("TRITON_INTEL_DISABLE_WIDE_BLOCK_STORE");
+         !tools::getBoolEnv("TRITON_INTEL_DISABLE_WIDE_BLOCK_STORE") &&
+         !hasEpilogueMath(storedVal);
 }
 
 /// A row wider than the sub-group gives lane l columns 2l and 2l+1
@@ -3786,7 +3827,7 @@ struct DescriptorStoreOpToBlockIOConversion
     if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
                                   elemSizeInBits, tensorType, maskAxisInfo,
                                   sizeInfo, laneInterleave,
-                                  allowStoreLaneInterleave(op)))
+                                  allowStoreLaneInterleave(op, op.getSrc())))
       return failure();
     // A widened row doubles the span checked against column 0 below; keep the
     // narrow row when only the wider one could straddle it.
@@ -4088,7 +4129,7 @@ struct StoreOpToBlockIOConversion
     if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
                                   elemSizeInBits, tensorType, maskAxisInfo,
                                   sizeInfo, laneInterleave,
-                                  allowStoreLaneInterleave(op)))
+                                  allowStoreLaneInterleave(op, op.getValue())))
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,

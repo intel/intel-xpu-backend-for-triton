@@ -220,3 +220,103 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// Math between the stored value and its dot, load, constant or argument keeps
+// 16-wide rows: IGC vectorizes epilogue math from the narrow payload only.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // SCF reaches this pass as CF, IV first: the walk follows the accumulator's
+  // branch operands to the zero init and the dot, so the loop result folds.
+  // CHECK-LABEL: llvm.func spir_kernelcc @fold_loop_dot_tdesc
+  // CHECK:       ^bb1(%{{[0-9]+}}: i32, %[[ACC:[0-9]+]]: !llvm.struct<(f32
+  // CHECK:         llvm.br ^bb1(
+  // CHECK-NEXT:  ^bb3:
+  // CHECK-NEXT:    llvm.extractvalue %[[ACC]][0]
+  // CHECK:         triton_gen.sub_group_bitcast_shuffle
+  // CHECK:         triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default}
+  // CHECK-COUNT-3: triton_gen.2Dblockstore {{.*}} tile_width = 32
+  // CHECK-NOT:     triton_gen.2Dblockstore
+  tt.func public @fold_loop_dot_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %a: tensor<32x16xf16, #dot0>, %b: tensor<16x32xf16, #dot1>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dpas>
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <32x32xf16, #dpas>
+    cf.br ^loop(%c0_i32, %zero : i32, tensor<32x32xf32, #dpas>)
+  ^loop(%i: i32, %acc: tensor<32x32xf32, #dpas>):
+    %more = arith.cmpi slt, %i, %arg2 : i32
+    cf.cond_br %more, ^body, ^exit
+  ^body:
+    %d = tt.dot %a, %b, %acc, inputPrecision = tf32 : tensor<32x16xf16, #dot0> * tensor<16x32xf16, #dot1> -> tensor<32x32xf32, #dpas>
+    %next = arith.addi %i, %c1_i32 : i32
+    cf.br ^loop(%next, %d : i32, tensor<32x32xf32, #dpas>)
+  ^exit:
+    %t = arith.truncf %acc : tensor<32x32xf32, #dpas> to tensor<32x32xf16, #dpas>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32], %t {ttig.block_io = "row_major"} : !tt.tensordesc<32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+
+  // A loop-carried sum is math too; only the walk through the branches finds it.
+  // CHECK-LABEL: llvm.func spir_kernelcc @no_fold_loop_add_tdesc
+  // CHECK-NOT:     triton_gen.sub_group_bitcast_shuffle
+  // CHECK-COUNT-8: triton_gen.2Dblockstore {{.*}} tile_width = 16, tile_height = 8
+  tt.func public @no_fold_loop_add_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %a: tensor<32x16xf16, #dot0>, %b: tensor<16x32xf16, #dot1>, %more: i1) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dpas>
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <32x32xf16, #dpas>
+    cf.br ^loop(%zero : tensor<32x32xf32, #dpas>)
+  ^loop(%acc: tensor<32x32xf32, #dpas>):
+    cf.cond_br %more, ^body, ^exit
+  ^body:
+    %d = tt.dot %a, %b, %zero, inputPrecision = tf32 : tensor<32x16xf16, #dot0> * tensor<16x32xf16, #dot1> -> tensor<32x32xf32, #dpas>
+    %s = arith.addf %acc, %d : tensor<32x32xf32, #dpas>
+    cf.br ^loop(%s : tensor<32x32xf32, #dpas>)
+  ^exit:
+    %t = arith.truncf %acc : tensor<32x32xf32, #dpas> to tensor<32x32xf16, #dpas>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32], %t {ttig.block_io = "row_major"} : !tt.tensordesc<32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+
+  // tt.store checks its value too; ttig.block_io_stride stands in for the pitch.
+  // CHECK-LABEL: llvm.func spir_kernelcc @no_fold_mul_ptr
+  // CHECK-NOT:     triton_gen.sub_group_bitcast_shuffle
+  // CHECK-COUNT-8: triton_gen.2Dblockstore {{.*}} tile_width = 16, tile_height = 8
+  tt.func public @no_fold_mul_ptr(%ptrs: tensor<32x32x!tt.ptr<f16>, #dpas>, %x: tensor<32x32xf16, #dpas>) {
+    %v = arith.mulf %x, %x : tensor<32x32xf16, #dpas>
+    tt.store %ptrs, %v {ttig.block_io = "row_major", ttig.block_io_stride = 32 : i64} : tensor<32x32x!tt.ptr<f16>, #dpas>
+    tt.return
+  }
+
+  // tt.fp_to_fp converts like arith.truncf, so a converted dot folds.
+  // CHECK-LABEL: llvm.func spir_kernelcc @fold_fp_to_fp_dot_tdesc
+  // CHECK:         triton_gen.sub_group_bitcast_shuffle
+  // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}} tile_width = 32, tile_height = 8
+  tt.func public @fold_fp_to_fp_dot_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %a: tensor<32x16xf16, #dot0>, %b: tensor<16x32xf16, #dot1>, %c: tensor<32x32xf32, #dpas>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <32x32xf16, #dpas>
+    %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<32x16xf16, #dot0> * tensor<16x32xf16, #dot1> -> tensor<32x32xf32, #dpas>
+    %t = tt.fp_to_fp %d, rounding = rtne : tensor<32x32xf32, #dpas> -> tensor<32x32xf16, #dpas>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32], %t {ttig.block_io = "row_major"} : !tt.tensordesc<32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+
+  // A loaded tile stored back unchanged folds.
+  // CHECK-LABEL: llvm.func spir_kernelcc @fold_load_tdesc
+  // CHECK:         triton_gen.sub_group_bitcast_shuffle
+  // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}} tile_width = 32, tile_height = 8
+  tt.func public @fold_load_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <32x32xf16, #dpas>
+    %v = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<32x32xf16, #dpas> -> tensor<32x32xf16, #dpas>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32], %v {ttig.block_io = "row_major"} : !tt.tensordesc<32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+}
