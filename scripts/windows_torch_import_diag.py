@@ -13,8 +13,9 @@ found.`` and does not name the DLL that cannot be resolved. This script gathers,
 * ``probe``     - Windows only. ``LoadLibraryExW`` each resolved module in dependency order and print the Win32
                   error of the first failure, with the search flags of the old and the new loader.
 * ``variants``  - Windows only. ``import torch`` in a fresh interpreter under several loader variants (plain,
-                  ``PATH`` prefix, extra DLL directories, the removed preload loop, system oneAPI on ``PATH``),
-                  followed by an XPU smoke test for every variant that imports.
+                  ``PATH`` prefixes (torch/lib only, Library/bin only, both), extra DLL directories, the removed
+                  preload loop, system oneAPI on ``PATH``), followed by an XPU smoke test for every variant that
+                  imports.
 * ``run``       - all of the above for one virtual environment, written to ``<out>/<label>.json``.
 * ``summarize`` - merge the ``run`` results into a Markdown table (and ``$GITHUB_STEP_SUMMARY``).
 
@@ -346,6 +347,8 @@ def run_variants(python: str, venv_root: Path, site_packages: Path) -> dict:
     libbin = str(venv_root / "Library" / "bin")
     variants: dict[str, tuple[str, list[str]]] = {
         "baseline": ("import torch", []),
+        "path_torch_lib_only": ("import torch", [lib]),
+        "path_library_bin_only": ("import torch", [libbin]),
         "path_prefix": ("import torch", [libbin, lib]),
         "add_all_dll_dirs": (ADD_ALL_DLL_DIRS + "import torch", []),
         "old_preload_emulation": (OLD_PRELOAD + "import torch", []),
