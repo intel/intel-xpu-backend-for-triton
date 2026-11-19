@@ -14,9 +14,11 @@ include "mlir/Pass/PassBase.td"
 def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-intel-rewrite-tensor-descriptor-to-pointer", /*Op*/"mlir::ModuleOp"> {
   let summary = "Rewrite load/stores of tensor descriptors into pointer load/stores";
   let description = [{
-    This pass rewrites all load/store semantics initiated by a `tt.make_tensor_descriptor` into pointer semantics. After
-    this pass, `tt.make_tensor_descriptor`  will disappear, and it generates logics to compute the pointer/mask/other
-    for each load/store.
+    This pass rewrites tensor descriptor accesses into pointer semantics, generating the pointer/mask/other for each
+    rewritten load/store. Accesses the backend lowers directly from the descriptor can stay native instead, with their
+    `tt.make_tensor_descriptor`: loads and stores on a descriptor the pass can trace to its definition, and gathers
+    admitted by the native-gather rules, which later become `ttig.descriptor_gather`. With
+    TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1 the pass rewrites every gather.
   }];
   let options = [
     Option<"numWarps", "num-warps", "int32_t", /*default*/"4",

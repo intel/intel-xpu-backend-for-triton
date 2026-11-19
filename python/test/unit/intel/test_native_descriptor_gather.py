@@ -1,6 +1,6 @@
 """Native descriptor gathers (#8666) on XPU: a gather with a constant zero column offset, a 16-byte-aligned row
 access and a measured tile class (here 16-bit tt.dot A operands and an fp8 reduction) stays a ttig.descriptor_gather,
-reads zero out of bounds, and emits the same global loads as the pointer expansion
+reads zero out of bounds, and emits the same multiset of global-load widths as the pointer expansion
 (TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER=1); any other gather, including the 16-bit stores and reductions here,
 is expanded exactly as with that switch.
 """
@@ -19,7 +19,8 @@ from triton._internal_testing import is_xpu
 ENV = "TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER"
 pytestmark = [
     pytest.mark.skipif(not is_xpu(), reason="XPU-specific lowering"),
-    pytest.mark.skipif(os.environ.get(ENV) == "1", reason="native descriptor gathers disabled"),
+    pytest.mark.skipif(
+        os.environ.get(ENV, "").lower() in ("1", "true", "on"), reason="native descriptor gathers disabled"),
 ]
 
 

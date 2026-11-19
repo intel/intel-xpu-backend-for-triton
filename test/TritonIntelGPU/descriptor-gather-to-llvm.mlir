@@ -215,3 +215,43 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 // CHECK-NOT: triton_gen.sub_group_gather_load
 // CHECK-COUNT-32: triton_gen.predicated_load {{.*}} -> i16
 // CHECK-NOT: triton_gen.predicated_load
+
+// -----
+
+// Test 8: the native f8E4M3FN tile unpacks i32 words into i8 registers; a runtime y loads one i8 per element.
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice_x = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_predicated_io} {
+  tt.func public @fp8_vectorized(%arg0: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %arg1: tensor<64xi32, #slice_x>) -> tensor<64x128xf8E4M3FN, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c128_i32 = arith.constant 128 : i32
+    %c128_i64 = arith.constant 128 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c128_i32, %c128_i32], [%c128_i64, %c1_i64] : <f8E4M3FN>, <1x128xf8E4M3FN>
+    %result = ttig.descriptor_gather %desc[%arg1, %c0_i32] : (!tt.tensordesc<1x128xf8E4M3FN>, tensor<64xi32, #slice_x>, i32) -> tensor<64x128xf8E4M3FN, #blocked>
+    tt.return %result : tensor<64x128xf8E4M3FN, #blocked>
+  }
+  tt.func public @fp8_per_element(%arg0: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %arg1: tensor<64xi32, #slice_x>, %arg2: i32) -> tensor<64x128xf8E4M3FN, #blocked> {
+    %c1_i64 = arith.constant 1 : i64
+    %c128_i32 = arith.constant 128 : i32
+    %c128_i64 = arith.constant 128 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c128_i32, %c128_i32], [%c128_i64, %c1_i64] : <f8E4M3FN>, <1x128xf8E4M3FN>
+    %result = ttig.descriptor_gather %desc[%arg1, %arg2] : (!tt.tensordesc<1x128xf8E4M3FN>, tensor<64xi32, #slice_x>, i32) -> tensor<64x128xf8E4M3FN, #blocked>
+    tt.return %result : tensor<64x128xf8E4M3FN, #blocked>
+  }
+}
+
+// CHECK-LABEL: llvm.func spir_kernelcc @fp8_vectorized
+// CHECK:      %[[ZERO:.*]] = llvm.mlir.zero : vector<4xi32>
+// CHECK:      %[[WORDS:.*]] = triton_gen.predicated_load %{{.*}}, %{{.*}}, %[[ZERO]] {{.*}} -> vector<4xi32>
+// CHECK-NEXT: %[[BYTES:.*]] = llvm.bitcast %[[WORDS]] : vector<4xi32> to vector<16xi8>
+// CHECK:      %[[I1:.*]] = llvm.mlir.constant(1 : i32) : i32
+// CHECK-NEXT: %[[B1:.*]] = llvm.extractelement %[[BYTES]][%[[I1]] : i32] : vector<16xi8>
+// CHECK-COUNT-3: triton_gen.predicated_load %{{.*}}, %{{.*}}, %[[ZERO]] {{.*}} -> vector<4xi32>
+// CHECK-NOT: triton_gen.predicated_load
+// CHECK:      llvm.insertvalue %[[B1]], %{{.*}}[1] : !llvm.struct<(i8,
+
+// CHECK-LABEL: llvm.func spir_kernelcc @fp8_per_element
+// CHECK:     %[[ZERO:.*]] = llvm.mlir.zero : i8
+// CHECK-COUNT-64: triton_gen.predicated_load %{{.*}}, %{{.*}}, %[[ZERO]] {{.*}} -> i8
+// CHECK-NOT: triton_gen.predicated_load

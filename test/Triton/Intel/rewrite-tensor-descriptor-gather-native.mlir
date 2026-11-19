@@ -114,7 +114,7 @@ module {
 
 // -----
 
-// COM: Non-unit last stride: the native fast paths load contiguous columns.
+// COM: Non-unit last stride: the vectorized lowering loads adjacent columns.
 module {
   tt.func public @strided_columns(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %idx: tensor<32xi32>) -> tensor<32x64xbf16> {
     %c0_i32 = arith.constant 0 : i32
