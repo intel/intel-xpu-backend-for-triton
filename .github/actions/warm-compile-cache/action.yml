@@ -52,15 +52,7 @@ runs:
           export TRITON_CACHE_DIR="$RUNNER_TEMP/warmup-cache/${{ inputs.skiplist-name }}"
         fi
 
-        # Without a GPU (a recorded target) a test can crash its worker, e.g. one that needs a real device, and then
-        # only loses its own warmup instead of aborting the whole run, so run the tests in xdist workers.
-        xdist_args=()
-        if [[ -n "${TRITON_INTEL_TARGET_JSON:-}" ]]; then
-          capture_workers=$(( $(nproc) * 25 / 100 ))
-          xdist_args+=(-n "$(( capture_workers > 0 ? capture_workers : 1 ))")
-        fi
-
-        pytest -p triton._compile_warmup -s --tb=line --warmup-only "${xdist_args[@]}" \
+        pytest -p triton._compile_warmup -s --tb=line --warmup-only \
           --warmup-workers "$(( $(nproc) * 60 / 100 ))" \
           --device xpu "${skip_args[@]}" ${{ inputs.pytest-targets }} \
           || [[ "${{ inputs.ignore-errors }}" == true ]]

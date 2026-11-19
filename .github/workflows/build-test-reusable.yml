@@ -398,10 +398,16 @@ jobs:
             cache_dir="$RUNNER_TEMP/warmup-cache/$phase"
             [[ -d "$cache_dir" ]] || continue
             out="$RUNNER_TEMP/warmup/$phase"
+            # Without a trace there is nothing to pair the cache with in the completeness check.
+            traces=("$TRITON_CI_COMPILE_TRACE_DIR/warmup-$phase-"*)
+            if [[ ! -e "${traces[0]}" ]]; then
+              echo "::warning::No warmup trace for $phase, its compile cache is not uploaded"
+              continue
+            fi
             mkdir -p "$out/trace"
             echo "$cache_dir" > "$out/cache_dir"
             mv "$cache_dir" "$out/cache"
-            cp "$TRITON_CI_COMPILE_TRACE_DIR/warmup-$phase-"* "$out/trace/"
+            cp "${traces[@]}" "$out/trace/"
             du -sh "$out/cache" "$out/trace"
           done
 
@@ -581,6 +587,7 @@ jobs:
           [[ "$names" == *,* ]] && names="{$names}"
           echo "WARMUP_ARTIFACTS=triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-$names" | tee -a $GITHUB_ENV
 
+      # `pattern` is matched with minimatch, so `name-{a,b}` selects the artifacts of several suites.
       - name: Download compile cache warmed on CPU
         if: ${{ inputs.warmup_on_cpu }}
         uses: actions/download-artifact@v8
@@ -596,8 +603,16 @@ jobs:
           mkdir -p "$cache_dir" "$TRITON_CI_COMPILE_TRACE_DIR"
           for phase in $WARMUP_PHASES; do
             part="$RUNNER_TEMP/warmup/triton-compile-cache-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}-$phase"
-            # A pattern that matches a single artifact extracts it straight into the path, several get a directory each.
-            [[ -d "$part" ]] || part="$RUNNER_TEMP/warmup"
+            if [[ ! -d "$part" ]]; then
+              # A pattern that matches a single artifact extracts it straight into the path, several get a directory each.
+              direct="$RUNNER_TEMP/warmup"
+              if [[ -f "$direct/cache_dir" && "$(basename "$(<"$direct/cache_dir")")" == "$phase" ]]; then
+                part="$direct"
+              else
+                echo "::warning::No compile cache was downloaded for $phase, nothing is prewarmed for it"
+                continue
+              fi
+            fi
             # Entries are keyed by content hash, so suites that compiled the same kernel agree on the files.
             cp -r "$part/cache/." "$cache_dir/"
             cp "$part/trace/"* "$TRITON_CI_COMPILE_TRACE_DIR/"
