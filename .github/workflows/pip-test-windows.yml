@@ -72,6 +72,14 @@ jobs:
           .venv\Scripts\activate.ps1
           pip install torch --index-url https://download.pytorch.org/whl/nightly/xpu
 
+      # Since pytorch/pytorch#202206 (first in torch 2.16.0.dev20261104) `import torch` fails with "DLL load
+      # failed while importing _C" unless the directory the pip runtime packages (intel-sycl-rt, mkl, ...)
+      # install their DLLs into is on PATH; registering it with os.add_dll_directory is not enough.
+      - name: Add the Intel runtime DLLs to PATH
+        run: |
+          $bin = (Resolve-Path .venv\Library\bin).Path
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+
       - name: PyTorch version
         run: |
           .venv\Scripts\activate.ps1
