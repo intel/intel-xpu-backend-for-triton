@@ -45,13 +45,13 @@ jobs:
           CACHE_NUMBER: 1
         with:
           path: $HOME/.cache/pip
-          key: pip-3.12-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.CACHE_NUMBER }}
+          key: pip-3.11-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.CACHE_NUMBER }}
 
-      - name: Install Python 3.12
+      - name: Install Python 3.11
         if: ${{ env.TARGET_PRID == null }}
         uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
       - name: Install Python build dependencies
         run: |
