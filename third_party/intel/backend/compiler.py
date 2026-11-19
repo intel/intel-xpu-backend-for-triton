@@ -1,10 +1,11 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
-from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import compile_module_from_src, is_lts
-from triton.backends.intel.track import track
-from triton.backends.intel.errors import IntelGPUError, WorkGroupSizeOutOfResources
-from triton.backends.intel.extension_utils import query_device_extensions
-from triton.backends.intel.spirv_probes import accepts_long_vector, accepts_maximum_registers
+from triton._C.libtriton import ir, passes, llvm
+from .native import intel
+from .driver import compile_module_from_src, get_ocloc_version, has_spirv_2d_block_io, is_lts
+from .track import track
+from .errors import IntelGPUError, WorkGroupSizeOutOfResources
+from .extension_utils import query_device_extensions
+from .spirv_probes import accepts_long_vector, accepts_maximum_registers, accepts_subgroup_bitcast_shuffle
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import OutOfResources
@@ -72,10 +73,13 @@ class XPUOptions:
     fpsan_homomorphic_casts: bool = False
     core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
     is_lts: bool = True
+    # Whether the SPIR-V 2D block I/O builtins can be used (#8858); see `has_spirv_2d_block_io`.
+    has_spirv_2d_block_io: bool = True
     # Whether these SPIR-V extensions are allowed; overwritten with the
     # ground-truth probe result in `parse_options`.
     allow_long_vector: bool = True
     allow_maximum_registers: bool = True
+    allow_subgroup_bitcast_shuffle: bool = False
     # Largest GRF mode the backend's automatic escalation will ever select
     # for this target ("256" everywhere except "cri", which gets "512"); see
     # `get_max_grf_mode`, the single source of truth for this policy.
@@ -402,6 +406,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # `accepts_maximum_registers` returns True for LTS (but should return False)
         options.allow_maximum_registers = (not options.is_lts
                                            and accepts_maximum_registers(native, self.device_arch, device_id))
+        options.allow_subgroup_bitcast_shuffle = (not options.is_lts and accepts_subgroup_bitcast_shuffle(
+            native, self.device_arch, device_id))
+        # Like the probes above: `ocloc` consumes the SPIR-V of an AOT compile, the driver that of a JIT one.
+        igc_version = (get_ocloc_version() if native else None) or self.target.arch.get("driver_version")
+        options.has_spirv_2d_block_io = has_spirv_2d_block_io(igc_version)
         return options
 
     @staticmethod
@@ -510,6 +519,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_bfloat16_arithmetic = properties["has_bfloat16_arithmetic"]
         module_opts.support_bfloat16_conversion = properties["has_bfloat16_conversion"]
         module_opts.support_predicated_io = properties["has_predicated_io"]
+        module_opts.support_subgroup_bitcast_shuffle = opt.allow_subgroup_bitcast_shuffle
         module_opts.support_subgroup_matrix_multiply_accumulate = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_subgroup_scaled_matrix_multiply_accumulate = properties[
             "has_subgroup_scaled_matrix_multiply_accumulate"]
@@ -590,6 +600,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
+        intel.passes.ttgpuir.add_rewrite_tensor_descriptor_gather_scatter(pm)
         if properties["has_256b_load_store"]:
             intel.passes.ttgpuir.add_widen_load_store_encoding(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
@@ -697,6 +708,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         driver_version = metadata["target"].arch.get("driver_version")
         if cls.is_lts(driver_version):
             intel.set_is_lts(mod)
+        # Set for every input, including Gluon and `.ttgir`, which bypass `make_ttgir`.
+        intel.set_use_genisa_2d_block_io(mod, not options.has_spirv_2d_block_io)
 
         # `getGlobalTimer` counts core clock cycles and needs the rate to report
         # nanoseconds.
@@ -814,6 +827,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         probed_extensions = {
             'SPV_EXT_long_vector': options.allow_long_vector,
             'SPV_INTEL_maximum_registers': options.allow_maximum_registers,
+            'SPV_INTEL_subgroup_bitcast_shuffle': options.allow_subgroup_bitcast_shuffle,
         }
         spirv, name = intel.translate_to_spirv(src, is_lts, probed_extensions)
         metadata["name"] = name
@@ -914,6 +928,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         else:
                             error = f'`ocloc` failed with error code {e.returncode}'
 
+                        if 'undefined reference to `__internal_intel_' in output:
+                            error += (' (ocloc cannot resolve an Intel builtin emitted by Triton; the installed '
+                                      'GPU compute runtime / ocloc is likely too old - please upgrade '
+                                      'intel-opencl-icd, libze and intel-ocloc to a recent release)')
                         raise IntelGPUError(f'{error}\n'
                                             f'`ocloc` stderr:\n{e.output}\n'
                                             f'Repro command: {ocloc_cmd}\n') from e

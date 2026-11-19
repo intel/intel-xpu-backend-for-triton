@@ -916,7 +916,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
         // a bf16 multiply-add to a `mad` with a bf16 destination, which rounds
         // toward zero. Accumulate in fp32 and round the result once instead,
         // as bf16 DPAS does per instruction. This covers bf16 and fp8 dots
-        // that cannot use DPAS (e.g. fp8 without fp8 DPAS, or mixed fp8).
+        // that cannot use DPAS (e.g. fp8 without fp8 DPAS).
         // fp16 accumulators are intentionally left as is: an fp16 multiply-add
         // rounds to nearest.
         dotOp = accumulateInF32(dotOp);

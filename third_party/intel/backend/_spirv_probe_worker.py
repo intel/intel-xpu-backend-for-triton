@@ -1,6 +1,6 @@
 """
 Dedicated helper subprocess for `spirv_probes.has_spirv_capability`. Invoked
-as `python -m triton.backends.intel._spirv_probe_worker <device_id>` with
+as `python -m <backend package>._spirv_probe_worker <device_id>` with
 the probe SPIR-V on stdin; prints a `PROBE_RESULT_MARKER`-prefixed
 `True`/`False`/`None` line and exits 0.
 """
@@ -9,8 +9,9 @@ import os
 import sys
 from pathlib import Path
 
-from triton.backends.intel.driver import compile_module_from_src
-from triton.backends.intel.spirv_probes import PROBE_RESULT_MARKER
+import triton  # noqa: F401 -- out of tree, importing .driver before core is a circular import
+from .driver import compile_module_from_src
+from .spirv_probes import PROBE_RESULT_MARKER
 
 
 def _get_probe_checker():
