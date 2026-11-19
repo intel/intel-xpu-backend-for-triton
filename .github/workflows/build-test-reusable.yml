@@ -318,7 +318,6 @@ jobs:
           skiplist-name: regression
           pytest-targets: . --ignore=test_performance.py
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
-          capture-workers: 4
           separate-cache: true
 
       - name: Warm intel compile cache
@@ -328,7 +327,6 @@ jobs:
           skiplist-name: intel
           pytest-targets: intel/
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
-          capture-workers: 4
           separate-cache: true
 
       - name: Warm language compile cache
@@ -342,7 +340,6 @@ jobs:
             --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py
             -k "not test_mxfp and not test_scaled_dot"
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
-          capture-workers: 4
           separate-cache: true
 
       - name: Warm matmul compile cache
@@ -354,7 +351,6 @@ jobs:
             language/test_matmul.py
             -k "not test_mxfp and not test_preshuffle_scale_mxfp_cdna4 or test_mxfp8_mxfp4_matmul"
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
-          capture-workers: 4
           separate-cache: true
 
       - name: Warm scaled_dot compile cache
@@ -364,7 +360,6 @@ jobs:
           skiplist-name: scaled_dot
           pytest-targets: language/test_core.py -k "test_scaled_dot"
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
-          capture-workers: 4
           separate-cache: true
 
       - name: Warm gluon compile cache
@@ -375,7 +370,6 @@ jobs:
           skiplist-name: gluon
           pytest-targets: .
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
-          capture-workers: 4
           separate-cache: true
 
       - name: Warm Triton Kernels compile cache
@@ -385,7 +379,6 @@ jobs:
           skiplist-name: triton_kernels
           pytest-targets: tests -k 'not test_mxfp'
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
-          capture-workers: 4
           separate-cache: true
 
       - name: Warm Flash Attention tutorials compile cache
@@ -395,7 +388,6 @@ jobs:
           skiplist-name: tutorials
           pytest-targets: test_tutorials.py --tutorial06-mode fa_only
           ignore-errors: ${{ inputs.ignore_errors || inputs.enable_unskip }}
-          capture-workers: 4
           separate-cache: true
 
       # One artifact per suite, so that an integration-tests job downloads only the cache it uses. The cache

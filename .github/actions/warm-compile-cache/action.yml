@@ -13,12 +13,6 @@ inputs:
   ignore-errors:
     description: Treat a warmup failure as non-fatal, mirroring the real suite's error policy
     default: "false"
-  capture-workers:
-    description: >-
-      Number of pytest-xdist workers that run the tests while capturing kernel launches, 0 to run them in
-      the pytest process. A test that crashes its worker (e.g. one that needs a real device on a runner
-      without a GPU) then only loses its own warmup instead of aborting the whole run.
-    default: "0"
   separate-cache:
     description: >-
       Compile into $RUNNER_TEMP/warmup-cache/<skiplist-name> instead of the default cache directory, so that
@@ -58,9 +52,12 @@ runs:
           export TRITON_CACHE_DIR="$RUNNER_TEMP/warmup-cache/${{ inputs.skiplist-name }}"
         fi
 
+        # Without a GPU (a recorded target) a test can crash its worker, e.g. one that needs a real device, and then
+        # only loses its own warmup instead of aborting the whole run, so run the tests in xdist workers.
         xdist_args=()
-        if [[ "${{ inputs.capture-workers }}" != 0 ]]; then
-          xdist_args+=(-n "${{ inputs.capture-workers }}")
+        if [[ -n "${TRITON_INTEL_TARGET_JSON:-}" ]]; then
+          capture_workers=$(( $(nproc) * 25 / 100 ))
+          xdist_args+=(-n "$(( capture_workers > 0 ? capture_workers : 1 ))")
         fi
 
         pytest -p triton._compile_warmup -s --tb=line --warmup-only "${xdist_args[@]}" \
