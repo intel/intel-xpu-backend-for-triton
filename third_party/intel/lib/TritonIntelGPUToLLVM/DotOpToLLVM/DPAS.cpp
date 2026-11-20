@@ -153,10 +153,16 @@ public:
     TritonGEN::PrecisionType BPrecision;
 
     if constexpr (std::is_same<OpTy, DotOp>::value) {
+      [[maybe_unused]] auto isFP8 = [](TritonGEN::PrecisionType precision) {
+        return precision == TritonGEN::PrecisionType::F8E5M2 ||
+               precision == TritonGEN::PrecisionType::F8E4M3FN;
+      };
       APrecision = getElementPrecision(ATensorTy, resElemTy),
       BPrecision = getElementPrecision(BTensorTy, resElemTy);
 
-      assert(APrecision == BPrecision &&
+      // fp8 DPAS accepts different fp8 formats for A and B.
+      assert((APrecision == BPrecision ||
+              (isFP8(APrecision) && isFP8(BPrecision))) &&
              "A and B precision enumerators do not match");
     } else if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
       auto aElemType = adaptor.getAElemType();
@@ -311,26 +317,32 @@ private:
     }
   };
 
-  /// Returns the fp8 source of `operand` if the dot converts it itself (see
-  /// isDPASOperandConvertedByDot). `lowered` is the operand's lowered value:
-  /// the cast of the fp8 source that the `tt.fp_to_fp` lowering left in place
-  /// of the conversion.
+  /// Returns the fp8 source of `operand` if the dot converts it itself, i.e. if
+  /// `lowered`, the operand's lowered value, is the tagged cast that the
+  /// `tt.fp_to_fp` lowering left in place of the conversion (see
+  /// getLazyFp8Cast).
   std::optional<LazyFp8Operand>
   getLazyFp8Operand(Value operand, Value lowered, int64_t batch, int64_t outer,
                     int64_t inner, DpasEncodingAttr::OpIdx opIdx) const {
+    // Follow the `tt.fp_to_fp` lowering, which left a tagged cast if the dot
+    // converts the operand, rather than calling isDPASOperandConvertedByDot
+    // again: lowering the ops in between can split their block (e.g. the
+    // predicated stores of a `ttg.local_alloc`), and it requires one block.
     auto cvt = operand.getDefiningOp<FpToFpOp>();
-    if (!cvt || !triton::intel::isDPASOperandConvertedByDot(cvt))
+    UnrealizedConversionCastOp cast = triton::intel::getLazyFp8Cast(lowered);
+    if (!cvt || !cast)
       return std::nullopt;
     // The `tt.fp_to_fp` lowering emitted no conversion for `cvt`, so this must
     // not fail from here on.
-    auto cast = lowered.getDefiningOp<UnrealizedConversionCastOp>();
-    assert(cast && cast->getNumOperands() == 1 &&
-           isa<LLVM::LLVMStructType>(cast->getOperand(0).getType()) &&
-           "expected the cast of the lowered fp8 operand");
-    Value llSrc = cast->getOperand(0);
-    std::optional<triton::intel::Fp8ToFp16Lowering> lowering =
-        triton::intel::Fp8ToFp16Lowering::get(cvt, llSrc, rewriter);
-    assert(lowering && "expected an fp8 -> fp16 conversion");
+    std::optional<triton::intel::Fp8ToFp16Lowering> lowering;
+    if (cast->getNumOperands() == 1 &&
+        isa<LLVM::LLVMStructType>(cast->getOperand(0).getType()))
+      lowering = triton::intel::Fp8ToFp16Lowering::get(cvt, cast->getOperand(0),
+                                                       rewriter);
+    if (!lowering)
+      llvm::report_fatal_error(
+          "lazy fp8 DPAS operand: expected the fp8 -> fp16 conversion of a "
+          "lowered fp8 tensor");
 
     // The element order of getValuesFromDotOperandLayoutStruct.
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
@@ -824,6 +836,19 @@ bool isDPASOperandConvertedByDot(FpToFpOp op) {
   return bytesPerLane(dot.getA()) + bytesPerLane(dot.getB()) +
              bytesPerLane(dot.getC()) >=
          minBytesPerLane;
+}
+
+static constexpr StringLiteral kLazyFp8Attr = "ttig.lazy_fp8_dpas_operand";
+
+Value createLazyFp8Operand(OpBuilder &b, Location loc, Type type, Value llSrc) {
+  auto cast = UnrealizedConversionCastOp::create(b, loc, type, llSrc);
+  cast->setAttr(kLazyFp8Attr, b.getUnitAttr());
+  return cast.getResult(0);
+}
+
+UnrealizedConversionCastOp getLazyFp8Cast(Value lowered) {
+  auto cast = lowered.getDefiningOp<UnrealizedConversionCastOp>();
+  return cast && cast->hasAttr(kLazyFp8Attr) ? cast : nullptr;
 }
 
 } // namespace mlir::triton::intel

@@ -293,10 +293,10 @@ private:
     bool oneMatrixPerLoadForBT =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
 
-    // A row-limit mask can become `base_height` instead of per-element
-    // masking (hardware zero-fill). Decided up front so tile-size
-    // computation below can treat this load as unmasked.
-    std::optional<ttgi::BoundaryMaskInfo> rowLimitMask;
+    // A boundary-check mask can become `base_height` / `base_width` instead
+    // of per-element masking (hardware zero-fill). Decided up front so
+    // tile-size computation below can treat this load as unmasked.
+    std::optional<ttgi::BoundaryMaskInfo> boundaryMask;
     if (op.getMask() && rank >= 2) {
       unsigned pitchTensorDim =
           (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
@@ -304,15 +304,24 @@ private:
           getStride(strideAnalysis, op.getPtr(), pitchTensorDim) == 0;
       if (auto m = ttgi::matchBoundaryCheckMask(
               op.getMask(), op.getOther(), tensorTy.getShape(), contiguousDim,
-              pitchDimIsBroadcast))
-        rowLimitMask = m;
+              pitchDimIsBroadcast, op)) {
+        // A column bound only reaches the hardware when its granularity is
+        // provable; without that, keep the whole mask rather than a half
+        // match, so the load stays on the path its `ttig.block_io` stamp was
+        // decided on.
+        if (ttgi::colLimitIsHWCompatible(*m, axisInfoAnalysis, elemSizeInBits))
+          boundaryMask = m;
+        else
+          LDBG("Column bound granularity not provable for load: " << *op);
+      }
     }
 
     // Retrieve mask axis info to validate tile constraints consistently
-    // with the downstream LLVM lowering. Skipped for a row-limit mask: its
-    // bound is handled via base_height below, not by clamping the tile.
+    // with the downstream LLVM lowering. Skipped for a boundary-check mask:
+    // its bounds are handled via base_height/base_width below, not by
+    // clamping the tile.
     tt::AxisInfo *maskAxisInfo = nullptr;
-    if (op.getMask() && !rowLimitMask)
+    if (op.getMask() && !boundaryMask)
       maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
 
     // Whether this load was annotated by the 1D→2D reshape in
@@ -355,25 +364,31 @@ private:
     // memory-contiguous dim and colDim is non-contiguous, so pitch uses colDim.
     unsigned pitchDim = isTranspose ? colDim : rowDim;
 
-    // matchBoundaryCheckMask assumed the pitch dim is the conventional rank-2/
-    // rank-1 dim, but for rank > 2 the tile's actual pitch dim (above) can
+    // matchBoundaryCheckMask assumed the surface dims are the conventional
+    // rank-2/rank-1 ones, but for rank > 2 the tile's actual dims (above) can
     // land on a batch dim instead (e.g. a layout with no register packing).
-    // base_height only predicates `pitchDim`, so a mismatch here would
-    // silently apply the bound to the wrong dimension; fall back to the
-    // per-element masked path, redoing tile selection with the mask's real
-    // axis info now that it is no longer absorbed into base_height.
-    if (rowLimitMask && rowLimitMask->boundedDim != pitchDim) {
-      LDBG("Row-limit mask bounds dim " << rowLimitMask->boundedDim
-                                        << " but tile pitch dim is " << pitchDim
-                                        << "; falling back to "
-                                           "masked load: "
-                                        << *op);
-      rowLimitMask = std::nullopt;
+    // base_height/base_width only clamp the tile's own dims, so a mismatch
+    // here would silently apply a bound to the wrong dimension; fall back to
+    // the per-element masked path, redoing tile selection with the mask's real
+    // axis info now that it is no longer absorbed into the surface.
+    bool boundOnWrongDim =
+        boundaryMask &&
+        ((boundaryMask->rowBound && boundaryMask->boundedDim != pitchDim) ||
+         (boundaryMask->colBound &&
+          (isTranspose ? rowDim : colDim) != contiguousDim));
+    if (boundOnWrongDim) {
+      LDBG("Boundary-check mask bounds dims "
+           << boundaryMask->boundedDim << "/" << contiguousDim
+           << " but the tile's surface dims differ; falling back to masked "
+              "load: "
+           << *op);
+      boundaryMask = std::nullopt;
       maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
       if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
                                          elemSizeInBits, tensorTy,
                                          oneMatrixPerLoadForBT, maskAxisInfo)) {
-        LDBG("Tile validation failed for load (row-limit fallback): " << *op);
+        LDBG("Tile validation failed for load (boundary-mask fallback): "
+             << *op);
         return;
       }
       sizeInfo = ttgi::getBlockIOLoadTileSize(llEncoding, contiguousDim,
@@ -521,37 +536,50 @@ private:
                   builder.getI32IntegerAttr(static_cast<int32_t>(pitch)));
     Value mask = op.getMask();
     Value other = op.getOther();
-    Value heightOperand;
-    if (rowLimitMask) {
-      // Drop the row-limit component: base_height replaces it. Keep the
-      // uniform conjuncts, ANDed, as the mask operand for the LLVM lowering to
-      // AND into its per-message select.
+    Value heightOperand, widthOperand;
+    if (boundaryMask) {
+      // Drop the absorbed bounds: base_height/base_width replace them. Keep
+      // the uniform conjuncts, ANDed, as the mask operand for the LLVM
+      // lowering to AND into its per-message select.
       auto maskTy = cast<RankedTensorType>(op.getMask().getType());
       mask = Value();
-      for (Value pred : rowLimitMask->extraPreds) {
+      for (Value pred : boundaryMask->extraPreds) {
         pred = ttgi::materializeExtraPred(builder, loc, pred, maskTy);
         mask = mask ? arith::AndIOp::create(builder, loc, mask, pred) : pred;
       }
       other = mask ? createZeroSplat(builder, loc, tensorTy) : Value();
-      // Relative to the tile's first row and may be <= 0; the LLVM lowering
-      // adjusts per message and never forwards a non-positive base_height.
-      heightOperand = ttgi::computeRowLimitHeight(
-          builder, loc, rowLimitMask->rowBound, rowLimitMask->rowBase,
-          tensorTy.getShape()[rowLimitMask->boundedDim]);
+      if (boundaryMask->rowBound)
+        // Relative to the tile's first row and may be <= 0; the LLVM lowering
+        // adjusts per message and never forwards a non-positive base_height.
+        heightOperand = ttgi::computeRowLimitHeight(
+            builder, loc, boundaryMask->rowBound, boundaryMask->rowBase,
+            tensorTy.getShape()[boundaryMask->boundedDim]);
+      if (boundaryMask->colBound)
+        // Relative to the tile's first column, as base_height is to its first
+        // row, and clamped to the tile. May be under the 64-byte minimum (or
+        // zero); the LLVM lowering moves the surface origin left until it is
+        // not.
+        widthOperand = ttgi::computeColLimitWidth(
+            builder, loc, boundaryMask->colBound, boundaryMask->colBase,
+            tensorTy.getShape()[contiguousDim], elemSizeInBits / 8);
     } else {
       // If mask is present but other is absent, create a zero splat as the
       // default padding value (the verifier requires 'other' when 'mask' is
       // set).
       if (mask && !other)
         other = createZeroSplat(builder, loc, tensorTy);
+    }
+
+    // Whatever the mask did not absorb keeps the per-tile surface: a height of
+    // the tile's own rows and a width of its own bytes.
+    if (!heightOperand)
       heightOperand = arith::ConstantOp::create(
           builder, loc,
           builder.getI32IntegerAttr(static_cast<int32_t>(baseHeightRows)));
-    }
-
-    Value widthOperand = arith::ConstantOp::create(
-        builder, loc,
-        builder.getI32IntegerAttr(static_cast<int32_t>(baseWidthBytes)));
+    if (!widthOperand)
+      widthOperand = arith::ConstantOp::create(
+          builder, loc,
+          builder.getI32IntegerAttr(static_cast<int32_t>(baseWidthBytes)));
 
     auto blockPtrLoadOp = ttgi::Subgroup2DBlockLoadFromPtrOp::create(
         builder, loc, op.getType(), op.getPtr(), pitchOperand, heightOperand,
@@ -567,9 +595,13 @@ private:
             ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName()))
       blockPtrLoadOp->setAttr(
           ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName(), attr);
-    if (rowLimitMask)
+    if (boundaryMask && boundaryMask->rowBound)
       blockPtrLoadOp->setAttr(
           ttgi::TritonIntelGPUDialect::getBlockIORuntimeRowLimitAttrName(),
+          builder.getUnitAttr());
+    if (boundaryMask && boundaryMask->colBound)
+      blockPtrLoadOp->setAttr(
+          ttgi::TritonIntelGPUDialect::getBlockIORuntimeColLimitAttrName(),
           builder.getUnitAttr());
 
     op.replaceAllUsesWith(blockPtrLoadOp.getResult());

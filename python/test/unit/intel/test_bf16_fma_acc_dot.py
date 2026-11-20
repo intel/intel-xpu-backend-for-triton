@@ -13,7 +13,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_xpu
+from triton._internal_testing import is_compile_warmup, is_xpu
 
 
 @triton.jit
@@ -41,6 +41,7 @@ def _fma_dot_bf16_acc(a_ptr, b_ptr, c_ptr, ieee_ptr, N: tl.constexpr, K: tl.cons
 @pytest.mark.parametrize("a_dtype, b_dtype", [(torch.bfloat16, torch.bfloat16), (torch.float8_e5m2, torch.float8_e5m2),
                                               (torch.float8_e4m3fn, torch.float8_e4m3fn),
                                               (torch.float8_e4m3fn, torch.float8_e5m2)])
+@pytest.mark.enable_warmup
 def test_fma_dot_bf16_acc(a_dtype, b_dtype, device):
     N, K, BLOCK_K = 64, 128, 32
     generator = torch.Generator(device="cpu").manual_seed(0)
@@ -55,7 +56,8 @@ def test_fma_dot_bf16_acc(a_dtype, b_dtype, device):
         return out, kernel
 
     out, kernel = run(bf16_acc=True)
-    assert "#ttig.dpas" not in kernel.asm["ttgir"], "kernel no longer exercises the FMA path"
+    if not is_compile_warmup():
+        assert "#ttig.dpas" not in kernel.asm["ttgir"], "kernel no longer exercises the FMA path"
     ref_out, _ = run(bf16_acc=False)
     assert torch.equal(out, ref_out), "bf16 accumulator result differs from the fp32 accumulator kernel"
 

@@ -92,20 +92,28 @@ import torch
 
 import triton
 import triton.language as tl
+from triton.language.target_info import is_xpu_cri
+
+# Only CRI accepts the 160 GRF mode.
+CRI_AUTOTUNE_CONFIGS = [
+    triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '160'},
+                  num_stages=4, num_warps=32)
+]
 
 
 @triton.autotune(
     configs=[
+        # 256-row tiles, 2-4 stages: 256x256 at 256 GRF, 256x128 at 256 and 128 GRF.
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': n, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
+                      num_stages=s, num_warps=w)
+        for s in [2, 3, 4]
+        for (n, m, w) in [(256, '256', 32), (128, '256', 32), (128, '128', 64)]
+    ] + [
+        # Smaller tiles for the small and awkward sizes, all at 128 GRF.
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
-            num_stages=s, num_warps=32) for s in [1, 2, 3]
-    ] + [
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
-                      num_stages=s, num_warps=w) for s in [2, 3, 4] for (m, w) in ([('256', 32), ('128', 64)])
-    ] + [
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
-                      num_stages=s, num_warps=32) for s in [2] for m in ['256', '128']
-    ],
+            {'BLOCK_SIZE_M': bm, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '128'},
+            num_stages=s, num_warps=32) for (bm, s) in [(64, 2), (64, 4), (128, 4)]
+    ] + (CRI_AUTOTUNE_CONFIGS if is_xpu_cri() else []),
     key=['M', 'N', 'K'],
 )
 @triton.jit
