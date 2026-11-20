@@ -315,12 +315,38 @@ static SmallVector<ArrayRef<Value>> splitInBatches(ArrayRef<Value> srcValues,
   return batches;
 }
 
+static Value genInterleavedWarpReduce(RewriterBase &rewriter, Location loc,
+                                      Value input, unsigned waveOp,
+                                      unsigned numLanesToReduce,
+                                      unsigned interleave, unsigned warpSize) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  unsigned clusterSize = numLanesToReduce * interleave;
+  if (clusterSize == warpSize) {
+    gpu::intel::Intrinsic waveInterleave =
+        gpu::intel::GenISA<llvm::GenISAIntrinsic::ID::GenISA_WaveInterleave>(
+            rewriter, input.getType());
+    return waveInterleave(
+        rewriter, loc,
+        {input, b.i8_val(waveOp), b.i32_val(interleave), b.i32_val(0)});
+  }
+  gpu::intel::Intrinsic waveClusteredInterleave = gpu::intel::GenISA<
+      llvm::GenISAIntrinsic::ID::GenISA_WaveClusteredInterleave>(
+      rewriter, input.getType());
+  return waveClusteredInterleave(rewriter, loc,
+                                 {input, b.i8_val(waveOp),
+                                  b.i32_val(clusterSize), b.i32_val(interleave),
+                                  b.i32_val(0)});
+}
+
 bool TargetInfo::warpBatchReduce(RewriterBase &rewriter, Location loc,
                                  SmallVector<SmallVector<Value>> &acc,
                                  triton::ReduceOp op,
                                  unsigned reduceLaneIdMask) const {
   static const bool enableBatchedReduce =
       triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_SIMD_REDUCE");
+  // Keep GenISA as the default; this opt-in selects the inline vISA path.
+  static const bool useInlineVISAReduce =
+      triton::tools::getBoolEnv("TRITON_INTEL_USE_INLINE_VISA_SIMD_REDUCE");
   if (!enableBatchedReduce)
     return false;
   assert(reduceLaneIdMask && "reduceLaneIdMask cannot be 0");
@@ -337,8 +363,6 @@ bool TargetInfo::warpBatchReduce(RewriterBase &rewriter, Location loc,
   // No horizontal reduce required.
   if (numLaneToReduce == 1)
     return false;
-  // Interleaved reductions are handled by the Xe SIMD helper below; do not
-  // reject them before that path is reached.
   // Check if it is a simple reduce operation supported by
   // TritonGEN::SubGroupReduceOp.
   if (op.getNumOperands() != 1 || op.getNumResults() != 1)
@@ -434,11 +458,26 @@ bool TargetInfo::warpBatchReduce(RewriterBase &rewriter, Location loc,
                 return b.insert_element(reduceTy, acc, src, b.i32_val(index));
               });
           SmallVector<Value> ret(accSize);
-          if (warpSize == numLaneToReduce && interleave == 1) {
-            Value result =
-                waveAll(rewriter, loc,
-                        {batchedReduceVal, b.i8_val((unsigned)waveOps),
-                         b.i1_val(1), b.i32_val(0)});
+          if (!useInlineVISAReduce) {
+            Value result;
+            if (interleave > 1) {
+              result = genInterleavedWarpReduce(rewriter, loc, batchedReduceVal,
+                                                static_cast<unsigned>(waveOps),
+                                                numLaneToReduce, interleave,
+                                                warpSize);
+            } else if (warpSize == numLaneToReduce) {
+              result = waveAll(rewriter, loc,
+                               {batchedReduceVal, b.i8_val((unsigned)waveOps),
+                                b.i1_val(1), b.i32_val(0)});
+            } else {
+              gpu::intel::Intrinsic waveClustered = gpu::intel::GenISA<
+                  llvm::GenISAIntrinsic::ID::GenISA_WaveClustered>(rewriter,
+                                                                   reduceTy);
+              result =
+                  waveClustered(rewriter, loc,
+                                {batchedReduceVal, b.i8_val((unsigned)waveOps),
+                                 b.i32_val(numLaneToReduce), b.i32_val(0)});
+            }
 
             for (unsigned j = 0; j < accSize; ++j) {
               ret[j] = b.extract_element(result, b.i32_val(j));
