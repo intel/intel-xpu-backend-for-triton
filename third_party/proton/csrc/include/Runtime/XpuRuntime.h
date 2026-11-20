@@ -1,6 +1,7 @@
 #ifndef PROTON_RUNTIME_XPU_RUNTIME_H_
 #define PROTON_RUNTIME_XPU_RUNTIME_H_
 
+#include "Driver/GPU/XpuApi.h"
 #include "Runtime.h"
 #include "Utility/Singleton.h"
 
@@ -8,7 +9,7 @@ namespace proton {
 
 class XpuRuntime : public Singleton<XpuRuntime>, public Runtime {
 public:
-  XpuRuntime() : Runtime(DeviceType::XPU) {}
+  XpuRuntime() : Runtime(xpu::kDeviceType) {}
   ~XpuRuntime() = default;
 
   // Set by Session::makeProfiler for any XPU session. There is exactly one

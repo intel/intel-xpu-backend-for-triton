@@ -47,7 +47,7 @@ Device getDevice(uint64_t index) {
                       arch);
   FreeLibrary(handle);
 
-  return Device(DeviceType::XPU, index, clockRate, memoryClockRate, busWidth,
+  return Device(kDeviceType, index, clockRate, memoryClockRate, busWidth,
                 numSms, arch);
 }
 #else
@@ -78,7 +78,7 @@ Device getDevice(uint64_t index) {
                       arch);
   dlclose(handle);
 
-  return Device(DeviceType::XPU, index, clockRate, memoryClockRate, busWidth,
+  return Device(kDeviceType, index, clockRate, memoryClockRate, busWidth,
                 numSms, arch);
 }
 #endif
