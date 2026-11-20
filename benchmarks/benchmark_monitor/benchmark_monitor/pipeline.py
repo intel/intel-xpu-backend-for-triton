@@ -29,6 +29,16 @@ def history_start(as_of: date, history_days: int | None, max_window: int) -> dat
 Gate = Callable[[Series, Thresholds, date], Verdict]
 
 
+def sparse_sources(catalog: Catalog, scope_names: Iterable[str]) -> frozenset[str]:
+    """Sources whose selected scopes all have ``expected_nightly: false``: their data gaps are not a bad run.
+
+    Suppression works per source, so one nightly scope on a source keeps the data-gap check for all of it.
+    """
+    scopes = [catalog.scopes[name] for name in scope_names]
+    nightly = {s.source for s in scopes if s.expected_nightly}
+    return frozenset(s.source for s in scopes if s.source not in nightly)
+
+
 def run(catalog: Catalog, source: Source, scope_names: Iterable[str], as_of: date, nights: int,
         suppress_cfg: SuppressConfig | None = None, gate: Gate | None = None,
         history_days: int | None = None) -> Report:
@@ -43,7 +53,9 @@ def run(catalog: Catalog, source: Source, scope_names: Iterable[str], as_of: dat
     if nights < 1:
         raise ValueError(f"nights must be at least 1, got {nights}")
     gate = gate or evaluate
+    names = list(dict.fromkeys(scope_names))  # a repeated scope is read once
     cfg = suppress_cfg or SuppressConfig()
+    cfg = replace(cfg, sparse_sources=cfg.sparse_sources | sparse_sources(catalog, names))
     days = [as_of - timedelta(days=i) for i in range(nights - 1, -1, -1)]
     start = history_start(days[0], history_days, catalog.max_window())
     grouped: dict[SeriesKey, list[Observation]] = defaultdict(list)
@@ -55,7 +67,7 @@ def run(catalog: Catalog, source: Source, scope_names: Iterable[str], as_of: dat
         warnings[f"nights={nights} is below confirm_nights={cfg.confirm_nights}: nothing can be confirmed, "
                  "so a standing regression is reported as new every night"] = None
     seen: set[tuple[SeriesKey, str, datetime]] = set()
-    for name in dict.fromkeys(scope_names):  # a repeated scope is read once
+    for name in names:
         raw = list(source.observations(catalog.scopes[name], start, as_of))
         if not raw:
             warnings[f"scope {name}: no observations in {start}..{as_of}"] = None

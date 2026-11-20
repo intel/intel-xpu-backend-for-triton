@@ -174,3 +174,32 @@ def test_distinct_runs_of_one_series_are_kept_across_scopes():
 def test_few_nights_warn_that_nothing_can_be_confirmed(nights, warns):
     rep = run(load_catalog(), FakeSource(["gemm"]), ["nightly-b580-micro"], AS_OF, nights, gate=fake_gate)
     assert any("nothing can be confirmed" in w for w in rep.warnings) is warns
+
+
+class WeeklySource:
+    """One run every 7 days ending on *end*; the value drops on *end* itself."""
+
+    def observations(self, scope, start, end):
+        key = SeriesKey(scope.source, scope.platform, "client", "gemm", "triton", "tflops", "{}")
+        day = end
+        while day >= start:
+            yield Observation(key, f"r{day}", datetime(day.year, day.month, day.day, 3, tzinfo=timezone.utc),
+                              5.0 if day == end else 10.0)
+            day -= timedelta(days=7)
+
+
+WEEKLY = "version: 1\nscopes: {weekly-micro: {source: micro, platform: b580, tags: [client], expected_nightly: false}}\n"
+
+
+def test_scope_not_expected_nightly_is_not_held_for_its_gaps():
+    weekly = run(load_catalog(overlays=[WEEKLY]), WeeklySource(), ["weekly-micro"], AS_OF, 15, gate=fake_gate)
+    assert [v.key.benchmark for v in weekly.suppression.new] == ["gemm"] and not weekly.suppression.held
+    nightly = run(load_catalog(), WeeklySource(), ["nightly-b580-micro"], AS_OF, 15, gate=fake_gate)
+    assert not nightly.suppression.new and nightly.suppression.held == {"micro": 1}  # a 7-day gap is suspect
+
+
+def test_one_nightly_scope_keeps_the_gap_check_for_its_source():
+    from benchmark_monitor.pipeline import sparse_sources  # pylint: disable=import-outside-toplevel
+    cat = load_catalog(overlays=[WEEKLY])
+    assert sparse_sources(cat, ["weekly-micro"]) == {"micro"}
+    assert sparse_sources(cat, ["weekly-micro", "nightly-b580-micro"]) == frozenset()
