@@ -12,6 +12,8 @@
 
 #include <Python.h>
 
+#include <stdexcept>
+
 #include "Backend/Backend.h"
 #include "Driver/GPU/XpuApi.h"
 #include "Profiler/Xpupti/XpuptiProfiler.h"
@@ -37,18 +39,25 @@ void prepareSession() {
     }
     Py_DECREF(runtime);
   }
+  bool prepared = false;
   if (result && PyTuple_Check(result) && PyTuple_Size(result) == 2) {
     void *queue = PyLong_AsVoidPtr(PyTuple_GetItem(result, 0));
     const char *path = PyUnicode_AsUTF8(PyTuple_GetItem(result, 1));
-    XpuRuntime::instance().setSyclQueue(queue);
-    if (path)
+    if (path && !PyErr_Occurred()) {
+      XpuRuntime::instance().setSyclQueue(queue);
       xpu::PROTON_UTILS = path;
+      prepared = true;
+    }
   }
   Py_XDECREF(result);
-  // A session start must not raise into an unrelated Python frame.
+  // Print and clear the Python error: left pending, it would surface in an
+  // unrelated frame. The exception below makes proton.start() raise instead.
   if (PyErr_Occurred())
     PyErr_Print();
   PyGILState_Release(gil);
+  if (!prepared)
+    throw std::runtime_error(
+        "[PROTON] Could not prepare the XPU profiler session");
 }
 
 BackendRegistration makeRegistration() {
