@@ -1,8 +1,8 @@
 diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batched_moe.py
-index 6b2783b0df..85fd716f96 100644
+index 4adb0bb154..980074cf9a 100644
 --- a/tests/kernels/moe/test_batched_moe.py
 +++ b/tests/kernels/moe/test_batched_moe.py
-@@ -476,11 +476,15 @@ def _run_td(A, B, num_expert_tokens, use_td: bool, swap: bool | None = None):
+@@ -478,11 +478,15 @@ def _run_td(A, B, num_expert_tokens, use_td: bool, swap: bool | None = None):
      max_tokens = A.shape[1]
      K = A.shape[2]
      N = B.shape[1]
@@ -21,7 +21,7 @@ index 6b2783b0df..85fd716f96 100644
      kernel = batched_triton_kernel_swapped if swap else batched_triton_kernel
      kernel[grid](
          A,
-@@ -514,9 +518,6 @@ def _run_td(A, B, num_expert_tokens, use_td: bool, swap: bool | None = None):
+@@ -516,9 +520,6 @@ def _run_td(A, B, num_expert_tokens, use_td: bool, swap: bool | None = None):
          False,
          False,
          False,
@@ -32,7 +32,7 @@ index 6b2783b0df..85fd716f96 100644
      )
      return out
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-index 79649b1e6d..4fce3eafd9 100644
+index 61d2b2a5d5..5e36e32db0 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 @@ -175,7 +175,7 @@ def moe_mmk(
@@ -44,7 +44,7 @@ index 79649b1e6d..4fce3eafd9 100644
  
          # Advance the ptrs to the next K block.
          a_ptrs += BLOCK_K * stride_ak
-@@ -291,10 +291,77 @@ def expert_triton_kernel(
+@@ -293,10 +293,77 @@ def expert_triton_kernel(
      )
  
      # store in C
@@ -126,7 +126,7 @@ index 79649b1e6d..4fce3eafd9 100644
  
  
  @triton.jit
-@@ -427,6 +494,10 @@ def batched_triton_kernel(
+@@ -431,6 +498,10 @@ def batched_triton_kernel(
      )
  
  
@@ -137,7 +137,7 @@ index 79649b1e6d..4fce3eafd9 100644
  @triton.jit
  def batched_triton_kernel_swapped(
      a_ptr,  # [E, max_num_tokens, K]
-@@ -435,9 +506,9 @@ def batched_triton_kernel_swapped(
+@@ -439,9 +510,9 @@ def batched_triton_kernel_swapped(
      expert_num_tokens,  # [E]
      compute_type: tl.constexpr,
      # Dimensions
@@ -150,7 +150,7 @@ index 79649b1e6d..4fce3eafd9 100644
      # Quantization data
      a_scale_ptr,
      b_scale_ptr,
-@@ -447,20 +518,20 @@ def batched_triton_kernel_swapped(
+@@ -451,20 +522,20 @@ def batched_triton_kernel_swapped(
      # how much to increase `a_ptr` by to get the element one row down
      # (A has M rows).
      stride_ae: tl.int64,
@@ -184,7 +184,7 @@ index 79649b1e6d..4fce3eafd9 100644
      # Blockwise quantization data
      group_n: tl.constexpr,
      group_k: tl.constexpr,
-@@ -608,8 +679,13 @@ def invoke_moe_batched_triton_kernel(
+@@ -619,8 +690,13 @@ def invoke_moe_batched_triton_kernel(
      # Consecutive programs share an expert's weight tile, which is faster on XPU.
      swap_grid = current_platform.is_xpu()
      num_experts = expert_num_tokens.size(0)
@@ -200,7 +200,7 @@ index 79649b1e6d..4fce3eafd9 100644
  
      A_scale = normalize_batched_scales_shape(A_scale, expert_num_tokens.shape[0])
  
-@@ -706,10 +782,5 @@ def invoke_moe_batched_triton_kernel(
+@@ -717,13 +793,8 @@ def invoke_moe_batched_triton_kernel(
          use_fp8_w8a8,
          use_int8_w8a16,
          per_act_token_quant,
@@ -209,5 +209,8 @@ index 79649b1e6d..4fce3eafd9 100644
 -        BLOCK_N=BLOCK_N,
 -        BLOCK_K=BLOCK_K,
          USE_TD=use_td,
+         per_out_ch_quant=per_out_ch_quant,
 -        **launch_options,
      )
+ 
+ 

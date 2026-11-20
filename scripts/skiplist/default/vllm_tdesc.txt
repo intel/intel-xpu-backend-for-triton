@@ -555,3 +555,13 @@ tests/kernels/moe/test_moe_layer.py::test_moe_layer[True-allgather_reducescatter
 
 # Upstream source-sync test compares kernel.fn sources, but batched_moe.patch autotunes/constexpr-ifies only the swapped kernel (.fn is a JITFunction): https://github.com/intel/intel-xpu-backend-for-triton/issues/8591
 tests/kernels/moe/test_batched_moe.py::test_swapped_kernel_matches_original_source
+
+# unified_attention.patch forces the 2D kernel for sliding windows <= 1024, but the upstream window-aware split-K gate test expects the 3D kernel (assert kernel["IS_3D"] is expect_3d): issue pending
+tests/kernels/attention/test_triton_unified_attention.py::test_window_aware_segments_gate[1-options0-True-True]
+tests/kernels/attention/test_triton_unified_attention.py::test_window_aware_segments_gate[1-options2-True-False]
+tests/kernels/attention/test_triton_unified_attention.py::test_window_aware_segments_gate[5-options3-True-False]
+tests/kernels/attention/test_triton_unified_attention.py::test_window_aware_segments_gate[1-options5-True-False]
+tests/kernels/attention/test_triton_unified_attention.py::test_window_aware_segments_gate[1-options6-True-False]
+tests/kernels/attention/test_triton_unified_attention.py::test_window_aware_segments_gate[1-options7-True-False]
+tests/kernels/attention/test_triton_unified_attention.py::test_window_aware_segments_gate[1-options8-True-False]
+tests/kernels/attention/test_triton_unified_attention.py::test_window_aware_segments_gate[1-options9-True-False]
