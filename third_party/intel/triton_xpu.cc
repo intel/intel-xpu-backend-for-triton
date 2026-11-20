@@ -75,6 +75,9 @@ void init_triton_intel_passes_ttir(py::module_ &&m) {
   ADD_PASS_WRAPPER_0("add_fuse_reshape", intel::createTritonIntelFuseReshape);
   ADD_PASS_WRAPPER_0("add_optimize_load_masks",
                      intel::createTritonIntelOptimizeLoadMasks);
+  ADD_PASS_OPTION_WRAPPER_2("add_narrow_broadcast_loads",
+                            intel::createTritonIntelNarrowBroadcastLoads,
+                            int32_t, int32_t);
   ADD_PASS_WRAPPER_0("add_simplify_signed_arithmetic",
                      intel::createTritonIntelSimplifySignedArithmetic);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi",

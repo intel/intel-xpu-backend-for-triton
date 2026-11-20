@@ -61,6 +61,8 @@ class XPUOptions:
     tile_barrier: bool = True
     # Opt-in (TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL when unset); a kernel option, so a triton.Config can autotune it.
     prefetch_cost_model: bool = False
+    # On unless TRITON_INTEL_DISABLE_NARROW_BROADCAST_LOADS; a kernel option, so it is part of the cache key.
+    narrow_broadcast_loads: bool = True
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -394,6 +396,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             args["prefetch_cost_model"] = knobs.intel.enable_prefetch_cost_model
         if "tile_barrier" not in args:
             args["tile_barrier"] = knobs.intel.pipeline_tile_barrier
+        if "narrow_broadcast_loads" not in args:
+            args["narrow_broadcast_loads"] = not knobs.intel.disable_narrow_broadcast_loads
         options = XPUOptions(**args)
 
         # Ground-truth probe of whichever side actually consumes this
@@ -596,6 +600,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        if opt.narrow_broadcast_loads:
+            intel.passes.ttir.add_narrow_broadcast_loads(pm, opt.num_warps, opt.warp_size)
+            passes.common.add_canonicalizer(pm)
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
