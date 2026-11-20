@@ -852,3 +852,139 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     tt.return
   }
 }
+
+// -----
+
+// COM: A store mask of row constancy 1 (bound 8449) is stamped when the row bound clamps the surface (pitch 320
+// COM: bytes); not with base pid * 48, no multiple of 64 (C3), nor with pitch 256 < 256 + 63 (C6).
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [16, 1], order = [1, 0]}>
+#rows = #ttg.slice<{dim = 1, parent = #blocked}>
+#cols = #ttg.slice<{dim = 0, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @store_row_clamp
+  // CHECK: tt.store {{.*}} {ttig.block_io = "row_major"} :
+  // CHECK-NEXT: tt.store %{{[0-9]+}}, %arg1, %{{[0-9]+}} :
+  // CHECK-NEXT: tt.store %{{[0-9]+}}, %arg1, %{{[0-9]+}} :
+  tt.func public @store_row_clamp(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #blocked>, %pid: i32) {
+    %c48 = arith.constant 48 : i32
+    %c64 = arith.constant 64 : i32
+    %bound = arith.constant dense<8449> : tensor<64x1xi32, #blocked>
+    %s160 = arith.constant dense<160> : tensor<64x1xi32, #blocked>
+    %s128 = arith.constant dense<128> : tensor<64x1xi32, #blocked>
+    %ar = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #rows>
+    %ac = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #cols>
+    %ec = tt.expand_dims %ac {axis = 0 : i32} : tensor<128xi32, #cols> -> tensor<1x128xi32, #blocked>
+    %cb = tt.broadcast %ec : tensor<1x128xi32, #blocked> -> tensor<64x128xi32, #blocked>
+    %ps = tt.splat %p : !tt.ptr<f16> -> tensor<64x1x!tt.ptr<f16>, #blocked>
+    %b64 = arith.muli %pid, %c64 : i32
+    %sb64 = tt.splat %b64 : i32 -> tensor<64xi32, #rows>
+    %r64 = arith.addi %sb64, %ar : tensor<64xi32, #rows>
+    %e64 = tt.expand_dims %r64 {axis = 1 : i32} : tensor<64xi32, #rows> -> tensor<64x1xi32, #blocked>
+    %k64 = arith.cmpi slt, %e64, %bound : tensor<64x1xi32, #blocked>
+    %m64 = tt.broadcast %k64 : tensor<64x1xi1, #blocked> -> tensor<64x128xi1, #blocked>
+    %b48 = arith.muli %pid, %c48 : i32
+    %sb48 = tt.splat %b48 : i32 -> tensor<64xi32, #rows>
+    %r48 = arith.addi %sb48, %ar : tensor<64xi32, #rows>
+    %e48 = tt.expand_dims %r48 {axis = 1 : i32} : tensor<64xi32, #rows> -> tensor<64x1xi32, #blocked>
+    %k48 = arith.cmpi slt, %e48, %bound : tensor<64x1xi32, #blocked>
+    %m48 = tt.broadcast %k48 : tensor<64x1xi1, #blocked> -> tensor<64x128xi1, #blocked>
+    %o1 = arith.muli %e64, %s160 : tensor<64x1xi32, #blocked>
+    %q1 = tt.addptr %ps, %o1 : tensor<64x1x!tt.ptr<f16>, #blocked>, tensor<64x1xi32, #blocked>
+    %w1 = tt.broadcast %q1 : tensor<64x1x!tt.ptr<f16>, #blocked> -> tensor<64x128x!tt.ptr<f16>, #blocked>
+    %p1 = tt.addptr %w1, %cb : tensor<64x128x!tt.ptr<f16>, #blocked>, tensor<64x128xi32, #blocked>
+    %o2 = arith.muli %e48, %s160 : tensor<64x1xi32, #blocked>
+    %q2 = tt.addptr %ps, %o2 : tensor<64x1x!tt.ptr<f16>, #blocked>, tensor<64x1xi32, #blocked>
+    %w2 = tt.broadcast %q2 : tensor<64x1x!tt.ptr<f16>, #blocked> -> tensor<64x128x!tt.ptr<f16>, #blocked>
+    %p2 = tt.addptr %w2, %cb : tensor<64x128x!tt.ptr<f16>, #blocked>, tensor<64x128xi32, #blocked>
+    %o3 = arith.muli %e64, %s128 : tensor<64x1xi32, #blocked>
+    %q3 = tt.addptr %ps, %o3 : tensor<64x1x!tt.ptr<f16>, #blocked>, tensor<64x1xi32, #blocked>
+    %w3 = tt.broadcast %q3 : tensor<64x1x!tt.ptr<f16>, #blocked> -> tensor<64x128x!tt.ptr<f16>, #blocked>
+    %p3 = tt.addptr %w3, %cb : tensor<64x128x!tt.ptr<f16>, #blocked>, tensor<64x128xi32, #blocked>
+    tt.store %p1, %v, %m64 : tensor<64x128x!tt.ptr<f16>, #blocked>
+    tt.store %p2, %v, %m48 : tensor<64x128x!tt.ptr<f16>, #blocked>
+    tt.store %p3, %v, %m64 : tensor<64x128x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A store mask of row constancy 1 (bound 8449) is not stamped at a pitch of 2^25 bytes, past the block pitch limit.
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+#r = #ttg.slice<{dim = 1, parent = #mma}>
+#c = #ttg.slice<{dim = 0, parent = #mma}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @store_huge_pitch_row_mask
+  // CHECK-NOT: ttig.block_io
+  tt.func public @store_huge_pitch_row_mask(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf16, #mma>, %pid_m: i32, %pid_n: i32) {
+    %cst = arith.constant dense<16777216> : tensor<64x1xi32, #mma>
+    %cst_0 = arith.constant dense<512> : tensor<1x128xi32, #mma>
+    %cst_1 = arith.constant dense<8449> : tensor<64x1xi32, #mma>
+    %c128_i32 = arith.constant 128 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %accm = arith.muli %pid_m, %c64_i32 : i32
+    %accn = arith.muli %pid_n, %c128_i32 : i32
+    %rm = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #r>
+    %rm_s = tt.splat %accm : i32 -> tensor<64xi32, #r>
+    %rm_a = arith.addi %rm_s, %rm : tensor<64xi32, #r>
+    %rn = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #c>
+    %rn_s = tt.splat %accn : i32 -> tensor<128xi32, #c>
+    %rn_a = arith.addi %rn_s, %rn : tensor<128xi32, #c>
+    %m2 = tt.expand_dims %rm_a {axis = 1 : i32} : tensor<64xi32, #r> -> tensor<64x1xi32, #mma>
+    %mrow = arith.cmpi slt, %m2, %cst_1 : tensor<64x1xi32, #mma>
+    %n2 = tt.expand_dims %rn_a {axis = 0 : i32} : tensor<128xi32, #c> -> tensor<1x128xi32, #mma>
+    %mcol = arith.cmpi slt, %n2, %cst_0 : tensor<1x128xi32, #mma>
+    %mrowb = tt.broadcast %mrow : tensor<64x1xi1, #mma> -> tensor<64x128xi1, #mma>
+    %mcolb = tt.broadcast %mcol : tensor<1x128xi1, #mma> -> tensor<64x128xi1, #mma>
+    %mask = arith.andi %mrowb, %mcolb : tensor<64x128xi1, #mma>
+    %0 = arith.muli %m2, %cst : tensor<64x1xi32, #mma>
+    %1 = tt.splat %c_ptr : !tt.ptr<f16> -> tensor<64x1x!tt.ptr<f16>, #mma>
+    %2 = tt.addptr %1, %0 : tensor<64x1x!tt.ptr<f16>, #mma>, tensor<64x1xi32, #mma>
+    %3 = tt.broadcast %2 : tensor<64x1x!tt.ptr<f16>, #mma> -> tensor<64x128x!tt.ptr<f16>, #mma>
+    %4 = tt.broadcast %n2 : tensor<1x128xi32, #mma> -> tensor<64x128xi32, #mma>
+    %5 = tt.addptr %3, %4 : tensor<64x128x!tt.ptr<f16>, #mma>, tensor<64x128xi32, #mma>
+    tt.store %5, %val, %mask : tensor<64x128x!tt.ptr<f16>, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Nor is a rank-3 store with such a mask: the surface clamp only matches 2D stores.
+#b3 = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [1, 1, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+#s2 = #ttg.slice<{dim = 2, parent = #b3}>
+#s1 = #ttg.slice<{dim = 1, parent = #b3}>
+#rM = #ttg.slice<{dim = 0, parent = #s2}>
+#rN = #ttg.slice<{dim = 0, parent = #s1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @store_rank3_row_mask
+  // CHECK-NOT: ttig.block_io
+  tt.func public @store_rank3_row_mask(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<2x64x128xf16, #b3>, %pid_m: i32, %pid_n: i32) {
+    %cst = arith.constant dense<1024> : tensor<1x64x1xi32, #b3>
+    %cst_1 = arith.constant dense<8449> : tensor<1x64x1xi32, #b3>
+    %c128_i32 = arith.constant 128 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %accm = arith.muli %pid_m, %c64_i32 : i32
+    %accn = arith.muli %pid_n, %c128_i32 : i32
+    %rm = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #rM>
+    %rm_s = tt.splat %accm : i32 -> tensor<64xi32, #rM>
+    %rm_a = arith.addi %rm_s, %rm : tensor<64xi32, #rM>
+    %rn = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #rN>
+    %rn_s = tt.splat %accn : i32 -> tensor<128xi32, #rN>
+    %rn_a = arith.addi %rn_s, %rn : tensor<128xi32, #rN>
+    %m2 = tt.expand_dims %rm_a {axis = 0 : i32} : tensor<64xi32, #rM> -> tensor<1x64xi32, #s2>
+    %m3 = tt.expand_dims %m2 {axis = 2 : i32} : tensor<1x64xi32, #s2> -> tensor<1x64x1xi32, #b3>
+    %mrow = arith.cmpi slt, %m3, %cst_1 : tensor<1x64x1xi32, #b3>
+    %n2 = tt.expand_dims %rn_a {axis = 0 : i32} : tensor<128xi32, #rN> -> tensor<1x128xi32, #s1>
+    %n3 = tt.expand_dims %n2 {axis = 1 : i32} : tensor<1x128xi32, #s1> -> tensor<1x1x128xi32, #b3>
+    %mask = tt.broadcast %mrow : tensor<1x64x1xi1, #b3> -> tensor<2x64x128xi1, #b3>
+    %0 = arith.muli %m3, %cst : tensor<1x64x1xi32, #b3>
+    %ob = tt.broadcast %0 : tensor<1x64x1xi32, #b3> -> tensor<2x64x128xi32, #b3>
+    %nb = tt.broadcast %n3 : tensor<1x1x128xi32, #b3> -> tensor<2x64x128xi32, #b3>
+    %off = arith.addi %ob, %nb : tensor<2x64x128xi32, #b3>
+    %1 = tt.splat %c_ptr : !tt.ptr<f16> -> tensor<2x64x128x!tt.ptr<f16>, #b3>
+    %2 = tt.addptr %1, %off : tensor<2x64x128x!tt.ptr<f16>, #b3>, tensor<2x64x128xi32, #b3>
+    tt.store %2, %val, %mask : tensor<2x64x128x!tt.ptr<f16>, #b3>
+    tt.return
+  }
+}
