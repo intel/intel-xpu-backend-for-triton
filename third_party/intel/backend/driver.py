@@ -1,7 +1,9 @@
 import importlib.metadata
+import mmap
 import os
 import json
 import re
+import struct
 import sys
 import hashlib
 import shutil
@@ -35,37 +37,47 @@ ARG_KERNEL = None
 ARG_TUPLE = None
 
 
-def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
+def _find_sycl_from_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    """The SYCL of the `icpx` on `PATH`: only the compiler knows where its runtime and headers are."""
     include_dir = include_dir.copy()
     icpx_path = shutil.which("icpx")
-    if icpx_path:
-        # only `icpx` compiler knows where sycl runtime binaries and header files are
-        compiler_root = os.path.abspath(f"{icpx_path}/../..")
-        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
-        sycl_dir = os.path.join(compiler_root, "lib")
-        return include_dir, [sycl_dir]
+    if not icpx_path:
+        return include_dir, []
+    compiler_root = os.path.abspath(f"{icpx_path}/../..")
+    include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
+    return include_dir, [os.path.join(compiler_root, "lib")]
 
+
+def _find_sycl_from_oneapi_root(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    """The SYCL of the compiler under `ONEAPI_ROOT`, if the variable names an install that has one."""
+    include_dir = include_dir.copy()
     oneapi_root = os.getenv("ONEAPI_ROOT")
-    if oneapi_root:
-        # Any oneAPI component's `setvars.sh` sets `ONEAPI_ROOT`, so it does not mean a compiler is
-        # installed here (a VTune-only install has no `compiler` directory at all). Check that both
-        # paths exist before returning them.
-        # See https://github.com/intel/intel-xpu-backend-for-triton/issues/7977.
-        compiler_root = os.path.join(oneapi_root, "compiler", "latest")
-        sycl_dir = os.path.join(compiler_root, "lib")
-        if os.path.isfile(os.path.join(compiler_root, "include", "sycl", "sycl.hpp")) and os.path.isdir(sycl_dir):
-            include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
-            return include_dir, [sycl_dir]
-        if os.path.isdir(compiler_root):
-            # A compiler directory with only half of SYCL in it is not something a normal install
-            # leaves behind, and the SYCL found below may be a different version than the one
-            # meant to be used, so do not skip it silently.
-            warnings.warn(
-                f"{compiler_root} does not provide SYCL (need include/sycl/sycl.hpp and lib); "
-                "ignoring ONEAPI_ROOT and looking for SYCL elsewhere.",
-                stacklevel=2,
-            )
+    if not oneapi_root:
+        return include_dir, []
+    # Any oneAPI component's `setvars.sh` sets `ONEAPI_ROOT`, so it does not mean a compiler is
+    # installed here (a VTune-only install has no `compiler` directory at all). Check that both
+    # paths exist before returning them.
+    # See https://github.com/intel/intel-xpu-backend-for-triton/issues/7977.
+    compiler_root = os.path.join(oneapi_root, "compiler", "latest")
+    sycl_dir = os.path.join(compiler_root, "lib")
+    if os.path.isfile(os.path.join(compiler_root, "include", "sycl", "sycl.hpp")) and os.path.isdir(sycl_dir):
+        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
+        return include_dir, [sycl_dir]
+    if os.path.isdir(compiler_root):
+        # A compiler directory with only half of SYCL in it is not something a normal install
+        # leaves behind, and the SYCL found below may be a different version than the one
+        # meant to be used, so do not skip it silently.
+        warnings.warn(
+            f"{compiler_root} does not provide SYCL (need include/sycl/sycl.hpp and lib); "
+            "ignoring ONEAPI_ROOT and looking for SYCL elsewhere.",
+            stacklevel=3,
+        )
+    return include_dir, []
 
+
+def _find_sycl_from_wheel(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    """The SYCL of the `intel-sycl-rt` wheel, which PyTorch's XPU wheels depend on."""
+    include_dir = include_dir.copy()
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
     except importlib.metadata.PackageNotFoundError:
@@ -80,16 +92,28 @@ def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
         # being add: include and include/sycl.
         if "sycl.hpp" in f.name:
             include_dir += [str(f.locate().parent.parent.resolve())]
-        if any(map(lambda el: el in f.name, ("libsycl.so", "sycl.lib"))):
+        # Only the library itself: the wheel also ships `libsycl.so.N-gdb.py` and its `__pycache__`.
+        if re.fullmatch(r"libsycl\.so(\.\d+)*|sycl\.lib", f.name):
             sycl_dir = f.locate().parent.resolve()
             if os.name == "nt":
                 # for sycl8.dll loading on Windows
                 dll_path = sycl_dir.parent.joinpath("bin")
-                sycl_dirs.append(str(dll_path))
-                _ = os.add_dll_directory(str(dll_path))
-            sycl_dirs.append(str(sycl_dir))
+                if str(dll_path) not in sycl_dirs:
+                    sycl_dirs.append(str(dll_path))
+                    _ = os.add_dll_directory(str(dll_path))
+            if str(sycl_dir) not in sycl_dirs:
+                sycl_dirs.append(str(sycl_dir))
 
     return include_dir, sycl_dirs
+
+
+def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    """The first SYCL found among `icpx` on `PATH`, `ONEAPI_ROOT` and the `intel-sycl-rt` wheel."""
+    for finder in (_find_sycl_from_icpx, _find_sycl_from_oneapi_root, _find_sycl_from_wheel):
+        found_include_dir, sycl_dirs = finder(include_dir)
+        if sycl_dirs:
+            return found_include_dir, sycl_dirs
+    return include_dir.copy(), []
 
 
 def find_sycl_dpclang(include_dir: list[str]) -> tuple[list[str], list[str]]:
@@ -141,7 +165,212 @@ def find_sycl_dpclang(include_dir: list[str]) -> tuple[list[str], list[str]]:
     return include_dir, sycl_dirs
 
 
-def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
+def _elf_dynamic(path: str) -> tuple[str | None, list[str]] | None:
+    """Returns the soname and the needed libraries of the 64-bit little-endian ELF file at `path`.
+
+    None if it is not such a file. Read from the dynamic section, so no toolchain is needed.
+    """
+    try:
+        with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as elf:
+            if elf[:6] != b"\x7fELF\x02\x01":
+                return None
+            phoff, = struct.unpack_from("<Q", elf, 0x20)
+            phentsize, phnum = struct.unpack_from("<HH", elf, 0x36)
+            loads, dynamic = [], range(0)
+            for i in range(phnum):
+                p_type, _, p_offset, p_vaddr, _, p_filesz = struct.unpack_from("<IIQQQQ", elf, phoff + i * phentsize)
+                if p_type == 1:  # PT_LOAD
+                    loads.append((p_vaddr, p_offset, p_filesz))
+                elif p_type == 2:  # PT_DYNAMIC
+                    dynamic = range(p_offset, p_offset + p_filesz, 16)
+            strtab, soname, needed = None, None, []
+            for entry in dynamic:
+                tag, value = struct.unpack_from("<qQ", elf, entry)
+                if tag == 0:  # DT_NULL
+                    break
+                if tag == 1:  # DT_NEEDED
+                    needed.append(value)
+                elif tag == 5 and strtab is None:  # DT_STRTAB
+                    strtab = value
+                elif tag == 14 and soname is None:  # DT_SONAME
+                    soname = value
+            if strtab is None:
+                return None, []
+            # DT_STRTAB is the address the string table is loaded at, so find it in the file.
+            for p_vaddr, p_offset, p_filesz in loads:
+                if p_vaddr <= strtab < p_vaddr + p_filesz:
+                    file_strtab = p_offset + strtab - p_vaddr
+
+                    def string(offset: int) -> str | None:
+                        start = file_strtab + offset
+                        end = elf.find(b"\0", start)
+                        return elf[start:end].decode() if end >= 0 else None
+
+                    return (None if soname is None else string(soname),
+                            [name for name in map(string, needed) if name is not None])
+            return None, []
+    except (OSError, ValueError, struct.error):  # unreadable, empty or truncated
+        return None
+
+
+def _soname(path: str) -> str | None:
+    """Returns the soname of the ELF shared library at `path`, if it has one."""
+    dynamic = _elf_dynamic(path)
+    return dynamic[0] if dynamic else None
+
+
+def _pe_imports(path: str) -> list[str] | None:
+    """Returns the names of the DLLs the PE image at `path` imports, or None if it is not a PE image."""
+    try:
+        with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as pe:
+            if pe[:2] != b"MZ":
+                return None
+            pe_offset, = struct.unpack_from("<I", pe, 0x3C)
+            if pe[pe_offset:pe_offset + 4] != b"PE\0\0":
+                return None
+            coff = pe_offset + 4
+            num_sections, = struct.unpack_from("<H", pe, coff + 2)
+            optional_size, = struct.unpack_from("<H", pe, coff + 16)
+            optional = coff + 20
+            magic, = struct.unpack_from("<H", pe, optional)
+            # The data directories follow the optional header's fixed part: 96 bytes in PE32, 112 in PE32+.
+            directories = optional + (112 if magic == 0x20B else 96)
+            import_rva, = struct.unpack_from("<I", pe, directories + 8)  # the second directory
+            if import_rva == 0:
+                return []
+            sections = []
+            for i in range(num_sections):
+                virtual_size, virtual_address, raw_size, raw_offset = struct.unpack_from(
+                    "<IIII", pe, optional + optional_size + i * 40 + 8)
+                sections.append((virtual_address, max(virtual_size, raw_size), raw_offset))
+
+            def file_offset(rva: int) -> int:
+                for virtual_address, size, raw_offset in sections:
+                    if virtual_address <= rva < virtual_address + size:
+                        return raw_offset + rva - virtual_address
+                raise ValueError(f"RVA {rva:#x} is in no section")
+
+            names = []
+            entry = file_offset(import_rva)
+            while True:
+                lookup, _, _, name_rva, _ = struct.unpack_from("<IIIII", pe, entry)
+                if lookup == 0 and name_rva == 0:
+                    break
+                start = file_offset(name_rva)
+                end = pe.find(b"\0", start)
+                if end < 0:
+                    raise ValueError("unterminated DLL name")
+                names.append(pe[start:end].decode())
+                entry += 20
+            return names
+    except (OSError, ValueError, struct.error):  # unreadable, empty or truncated
+        return None
+
+
+def _linked_libraries(path: str) -> list[str] | None:
+    """Returns the libraries the shared library at `path` links, as the dynamic loader names them."""
+    if os.name == "nt":
+        return _pe_imports(path)
+    dynamic = _elf_dynamic(path)
+    return dynamic[1] if dynamic else None
+
+
+# The file name the dynamic loader resolves a SYCL runtime by: `libsycl.so.N` (its soname) on Linux,
+# `syclN.dll` on Windows.
+_SYCL_RUNTIME = re.compile(r"sycl\d*\.dll", re.IGNORECASE) if os.name == "nt" else re.compile(r"libsycl\.so(\.\d+)*")
+
+# The PyTorch libraries that link the SYCL runtime; both carry the dependency.
+_TORCH_XPU_LIBRARIES = ("torch_xpu.dll", "c10_xpu.dll") if os.name == "nt" else ("libtorch_xpu.so", "libc10_xpu.so")
+
+
+def _torch_xpu_libraries() -> list[str]:
+    """Paths of the installed PyTorch's XPU libraries, found without importing PyTorch."""
+    try:
+        files = importlib.metadata.files("torch")
+    except importlib.metadata.PackageNotFoundError:
+        return []
+    return [str(f.locate()) for f in files or [] if f.name in _TORCH_XPU_LIBRARIES]
+
+
+def _torch_sycl_runtime() -> str | None:
+    """Returns the SYCL runtime PyTorch's XPU libraries link, as the loader names it (e.g. `libsycl.so.9`).
+
+    PyTorch does not look SYCL up at run time: `libtorch_xpu.so` and `libc10_xpu.so` record the
+    runtime's soname at build time (`libsycl.so.8` for 2025.x, `libsycl.so.9` for 2026.x) and the
+    dynamic loader resolves it. That soname is read from the files here, so it needs neither PyTorch
+    imported nor its runtime loaded yet. None if PyTorch is not installed or has no XPU support,
+    or if its libraries disagree.
+    """
+    runtimes = {}
+    for library in _torch_xpu_libraries():
+        linked = _linked_libraries(library)
+        if linked is None:
+            continue
+        found = {name for name in linked if _SYCL_RUNTIME.fullmatch(name)}
+        if len(found) == 1:
+            runtimes[library] = found.pop()
+    if not runtimes:
+        return None
+    if len(set(runtimes.values())) > 1:
+        warnings.warn(
+            "PyTorch's XPU libraries link different SYCL runtimes: " +
+            ", ".join(f"{os.path.basename(library)} needs {runtime}" for library, runtime in runtimes.items()) +
+            ". Triton cannot tell which one its helpers must use and builds them as if PyTorch were not installed.",
+            stacklevel=3,
+        )
+        return None
+    return next(iter(runtimes.values()))
+
+
+def _runtime_in(sycl_dirs: list[str]) -> str | None:
+    """Returns the SYCL runtime `-lsycl` in `sycl_dirs` links, as the loader names it.
+
+    On Linux that is the soname of `libsycl.so`: a helper is linked against that soname and the
+    loader reuses a loaded library with the same one, whatever directory either comes from. The
+    directory may hold other runtimes too, and a wheel ships `libsycl.so` as a copy, so neither the
+    directory nor the file name says which. None if `libsycl.so` is missing or unreadable, e.g. a
+    symlink left dangling by an uninstall. On Windows it is the `syclN.dll` next to the import library.
+    """
+    for sycl_dir in sycl_dirs:
+        if os.name == "nt":
+            try:
+                dlls = [name for name in os.listdir(sycl_dir) if _SYCL_RUNTIME.fullmatch(name)]
+            except OSError:
+                dlls = []
+            if len(dlls) == 1:
+                return dlls[0]
+        else:
+            soname = _soname(os.path.join(sycl_dir, "libsycl.so"))
+            if soname is not None:
+                return soname
+    return None
+
+
+def _has_sycl_headers(include_dir: list[str]) -> bool:
+    """Whether the helpers can be compiled against the SYCL headers in `include_dir`."""
+    return any(os.path.isfile(os.path.join(directory, "sycl", "sycl.hpp")) for directory in include_dir)
+
+
+def _links_runtime(sycl_dirs: list[str], runtime: str) -> bool:
+    """Whether `-lsycl` in `sycl_dirs` links the SYCL runtime named `runtime`, which helpers then use."""
+    found = _runtime_in(sycl_dirs)
+    return found is not None and (found.lower() == runtime.lower() if os.name == "nt" else found == runtime)
+
+
+def _sycl_header_version(include_dir: list[str]) -> int | None:
+    """Returns `__SYCL_COMPILER_VERSION` of the SYCL headers in `include_dir`: the runtime's build date."""
+    for directory in include_dir:
+        try:
+            with open(os.path.join(directory, "sycl", "version.hpp")) as header:
+                for line in header:
+                    if match := re.match(r"\s*#\s*define\s+__SYCL_COMPILER_VERSION\s+(\d+)", line):
+                        return int(match.group(1))
+        except OSError:
+            continue
+    return None
+
+
+def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str], bool]:
     """
     Looks for the sycl library in known places.
 
@@ -149,25 +378,65 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
       include_dir: list of include directories to pass to compiler.
 
     Returns:
-      enriched include_dir and libsycl.so location.
+      enriched include_dir, libsycl.so location, and whether a SYCL compiler may build against it.
 
     Raises:
       AssertionError: if library was not found.
     """
 
-    sycl_dirs = []
+    # Every SYCL installation found, in the order they were preferred in before PyTorch's runtime
+    # was taken into account: what it is, its include and library directories, and whether it is a
+    # SYCL compiler's own, which that compiler may then build against.
+    candidates: list[tuple[str, list[str], list[str], bool]] = []
     csycl = knobs.intel.sycl_compiler
     if not csycl or csycl == "icpx":
-        include_dir, sycl_dirs = find_sycl_icpx(include_dir)
-    if len(sycl_dirs) == 0 and (not csycl or csycl.startswith("dpclang")):
-        include_dir, sycl_dirs = find_sycl_dpclang(include_dir)
-    if len(sycl_dirs) == 0:
+        finders = [
+            ("icpx", _find_sycl_from_icpx, True),
+            ("ONEAPI_ROOT", _find_sycl_from_oneapi_root, False),
+            ("the intel-sycl-rt wheel", _find_sycl_from_wheel, False),
+        ]
+        for what, finder, is_compiler in finders:
+            found_include_dir, sycl_dirs = finder(include_dir)
+            if sycl_dirs:
+                candidates.append((what, found_include_dir, sycl_dirs, is_compiler))
+    if not candidates and (not csycl or csycl.startswith("dpclang")):
+        found_include_dir, sycl_dirs = find_sycl_dpclang(include_dir)
+        if sycl_dirs:
+            candidates.append((csycl or "dpclang++", found_include_dir, sycl_dirs, True))
+    if not candidates:
         raise AssertionError("sycl headers not found, please install `icpx` compiler, "
                              "or provide `ONEAPI_ROOT` environment "
                              "or install `intel-sycl-rt>=2025.0.0` wheel"
                              "or instal `dpclang` compiler (experimental)")
 
-    return include_dir, sycl_dirs
+    # The helpers are handed PyTorch's `sycl::queue`, so they must use the SYCL runtime PyTorch
+    # links: another one, with another ABI, crashes on the first call on the queue. Build against the
+    # installation whose `libsycl.so` has that soname. Of several, take the one with the oldest
+    # headers: a runtime runs code built against older headers of the same soname, never newer ones.
+    # A SYCL compiler adds its own SYCL to the build, so it may only build against its own.
+    # See https://github.com/intel/intel-xpu-backend-for-triton/issues/8200.
+    chosen = candidates[0]
+    runtime = _torch_sycl_runtime()
+    if runtime is not None:
+        matching = [
+            candidate for candidate in candidates
+            if _links_runtime(candidate[2], runtime) and _has_sycl_headers(candidate[1])
+        ]
+        if matching:
+            chosen = min(
+                matching, key=lambda candidate:
+                (_sycl_header_version(candidate[1]) is None, _sycl_header_version(candidate[1]) or 0))
+        else:
+            found = ", ".join(f"{what}: {sycl_dirs[0]} links {_runtime_in(sycl_dirs) or 'no libsycl.so'}" +
+                              ("" if _has_sycl_headers(found_include_dir) else " and has no headers")
+                              for what, found_include_dir, sycl_dirs, _ in candidates)
+            warnings.warn(
+                f"PyTorch links the SYCL runtime {runtime}, but no SYCL installation found provides it ({found}). "
+                f"Triton builds its helpers against {chosen[0]}, which crashes if the two runtimes' ABIs differ.",
+                stacklevel=2,
+            )
+    _, include_dir, sycl_dirs, is_compiler = chosen
+    return include_dir, sycl_dirs, is_compiler
 
 
 class CompilationHelper:
@@ -179,6 +448,7 @@ class CompilationHelper:
         self._library_dir = None
         self._include_dir = None
         self._libsycl_dir = None
+        self._use_sycl_compiler = None
         self.libraries = ['sycl', 'ze_loader']
 
     @property
@@ -193,7 +463,7 @@ class CompilationHelper:
         include_dir = [os.path.join(ze_root, "include")]
 
         library_dir = []
-        include_dir, self._libsycl_dir = find_sycl(include_dir)
+        include_dir, self._libsycl_dir, self._use_sycl_compiler = find_sycl(include_dir)
         if self._libsycl_dir:
             library_dir += self._libsycl_dir
         if os.name == "nt":
@@ -231,6 +501,11 @@ class CompilationHelper:
     def libsycl_dir(self) -> list[str]:
         self._compute_compilation_options_lazy
         return self._libsycl_dir
+
+    @cached_property
+    def use_sycl_compiler(self) -> bool:
+        self._compute_compilation_options_lazy
+        return self._use_sycl_compiler
 
 
 COMPILATION_HELPER = CompilationHelper()
@@ -465,6 +740,10 @@ def get_hasher_common(eventless_submit: bool = True):
     # share the same cache entry and load an incompatible .so.
     if COMPILATION_HELPER.libsycl_dir:
         hasher.update(str(COMPILATION_HELPER.libsycl_dir).encode("utf-8"))
+        # The directory stays when the runtime in it is upgraded in place (`pip install -U`), but the
+        # helper is linked against one soname, so it must be rebuilt then.
+        for sycl_dir in COMPILATION_HELPER.libsycl_dir:
+            hasher.update(str(_soname(os.path.join(sycl_dir, "libsycl.so"))).encode("utf-8"))
     if eventless_submit:
         hasher.update("eventless_submit=True".encode("utf-8"))
     return hasher
@@ -509,7 +788,8 @@ def compile_module_from_src(src: str, name: str, eventless_submit: bool = True):
                     extra_compiler_args += ["-DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
 
             so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
-                        COMPILATION_HELPER.libraries, ccflags=extra_compiler_args)
+                        COMPILATION_HELPER.libraries, ccflags=extra_compiler_args,
+                        use_sycl_compiler=COMPILATION_HELPER.use_sycl_compiler)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
 

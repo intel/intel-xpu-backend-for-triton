@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import warnings
 import tempfile
 from pathlib import Path
 
@@ -94,7 +95,7 @@ def _language_from_filename(source_name: str) -> str:
 
 
 def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_dirs: list[str], libraries: list[str],
-           ccflags: list[str], language: str = "c") -> str:
+           ccflags: list[str], language: str = "c", use_sycl_compiler: bool = True) -> str:
     if impl := knobs.build.impl:
         return impl(name, src, srcdir, library_dirs, include_dirs, libraries, ccflags)
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
@@ -115,6 +116,16 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
             icpx = shutil.which("icpx")
             dpclang = shutil.which("dpclang++")
             csycl = icpx or dpclang
+        skipped_sycl_compiler = None
+        if not use_sycl_compiler and csycl is not None:
+            # A SYCL compiler adds its own SYCL headers and runtime to the build, which are not the
+            # ones given: the helpers are built against the SYCL runtime PyTorch links instead.
+            skipped_sycl_compiler, csycl = csycl, None
+            if knobs.intel.sycl_compiler:
+                warnings.warn(
+                    f"TRITON_INTEL_SYCL_COMPILER={knobs.intel.sycl_compiler} is not used: Triton builds its SYCL "
+                    "helpers against the SYCL runtime PyTorch links, which is not that compiler's, so the host "
+                    "C++ compiler builds them.", stacklevel=2)
         cxx = shutil.which(os.environ.get("CXX", "shutil-dummy-value"))
         if cxx is None:
             clangpp = shutil.which("clang++")
@@ -122,7 +133,11 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
             cl = shutil.which("cl")
             cxx = csycl or cl if os.name == "nt" else csycl or clangpp or gxx
             if cxx is None:
-                raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
+                hint = ""
+                if skipped_sycl_compiler:
+                    hint = (f" {skipped_sycl_compiler} was not used: Triton builds its SYCL helpers against the SYCL "
+                            "runtime PyTorch links, which is not that compiler's, so they need a host C++ compiler.")
+                raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable." + hint)
         cc = cxx
 
         if cxx is csycl:
