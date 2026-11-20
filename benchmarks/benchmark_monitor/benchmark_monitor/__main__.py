@@ -44,7 +44,7 @@ def _run(args: argparse.Namespace) -> int:
         print(f"--artifacts {args.artifacts!r} is not a directory", file=sys.stderr)
         return 2
     if args.nights < 1:
-        print("--nights must be at least 1", file=sys.stderr)
+        print(f"--nights must be at least 1, got {args.nights}", file=sys.stderr)
         return 2
     as_of = args.as_of or datetime.now(timezone.utc).date()
     report = run(catalog, ArtifactSource(args.artifacts, catalog), [args.scope], as_of, args.nights,

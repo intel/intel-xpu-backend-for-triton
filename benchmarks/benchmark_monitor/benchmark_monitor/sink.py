@@ -7,7 +7,8 @@ from collections import Counter, defaultdict
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import IO, Iterable, Iterator, Protocol
+from datetime import date
+from typing import IO, Any, Iterable, Iterator, Protocol, TypedDict
 
 from benchmark_monitor.model import SeriesKey, Status, Verdict
 from benchmark_monitor.report import Report
@@ -44,7 +45,14 @@ def _case(key: SeriesKey) -> tuple[str, ...]:
 
 
 def _label(key: SeriesKey) -> str:
-    return f"{key.benchmark} / {key.platform} `{key.params}`"
+    return f"{key.benchmark} / {key.platform} / {key.compiler} `{key.params}`"
+
+
+def _labels(keys: Iterable[SeriesKey]) -> dict[tuple[str, ...], str]:
+    """Label per case. Source and tag are added only where two cases would otherwise print the same label."""
+    cases = {_case(k): k for k in keys}
+    base = Counter(_label(k) for k in cases.values())
+    return {c: _label(k) + (f" [{k.source}, {k.tag}]" if base[_label(k)] > 1 else "") for c, k in cases.items()}
 
 
 def _by_case(verdicts: Iterable[Verdict]) -> list[tuple[str, list[Verdict]]]:
@@ -55,7 +63,8 @@ def _by_case(verdicts: Iterable[Verdict]) -> list[tuple[str, list[Verdict]]]:
     for vs in groups.values():
         vs.sort(key=lambda v: (-(v.drop_pct or 0.0), v.key.metric))
     order = sorted(groups.items(), key=lambda kv: (-(kv[1][0].drop_pct or 0.0), kv[0][3], kv[0][5], kv[0]))
-    return [(_label(vs[0].key), vs) for _, vs in order]
+    labels = _labels(v.key for vs in groups.values() for v in vs)
+    return [(labels[case], vs) for case, vs in order]
 
 
 def n_cases(verdicts: Iterable[Verdict]) -> int:
@@ -91,35 +100,53 @@ def _confirmed(sup: SuppressionResult) -> tuple[list[str], int]:
     for c in sup.confirmed:
         groups[_case(c.key)].append(c)
     rows = []
-    for _, cs in sorted(groups.items(), key=lambda kv: (kv[1][0].key.benchmark, kv[1][0].key.params, kv[0])):
+    labels = _labels(c.key for c in sup.confirmed)
+    for case, cs in sorted(groups.items(), key=lambda kv: (kv[1][0].key.benchmark, kv[1][0].key.params, kv[0])):
         cs.sort(key=lambda c: c.key.metric)
-        rows.append(f"{_label(cs[0].key)}: " +
+        rows.append(f"{labels[case]}: " +
                     ", ".join(f"{c.key.metric} {c.streak} nights since {c.first_night}" for c in cs))
     return rows, len(sup.confirmed)
 
 
-def _families(sup: SuppressionResult) -> list[dict[str, object]]:
-    """Confirmed storm families with a case count and top cases."""
-    out = []
+class FamilyRow(TypedDict):
+    """One confirmed family in the reports: the grouped view (cases) plus the series ``keys`` it came from."""
+
+    family: str
+    source: str
+    night: date
+    first_night: date
+    n_cases: int
+    top_cases: list[str]
+    keys: list[dict[str, Any]]
+
+
+def _families(sup: SuppressionResult) -> list[FamilyRow]:
+    """Confirmed storm families with a case count, top cases and the series keys."""
+    out: list[FamilyRow] = []
     for cf in sup.confirmed_families:
+        labels = _labels(cf.keys)
         groups: dict[tuple[str, ...], SeriesKey] = {}
         for key in cf.keys:
             groups.setdefault(_case(key), key)
         ordered = sorted(groups.items(), key=lambda kv: (kv[1].benchmark, kv[1].params, kv[0]))
         out.append({
-            "family": cf.family, "source": cf.source, "night": cf.night, "first_night": cf.first_night, "n_cases":
-            len(ordered), "top_cases": [_label(k) for _, k in ordered[:MAX_FAMILY_CASES]]
+            "family": cf.family,
+            "source": cf.source,
+            "night": cf.night,
+            "first_night": cf.first_night,
+            "n_cases": len(ordered),
+            "top_cases": [labels[c] for c, _ in ordered[:MAX_FAMILY_CASES]],
+            "keys": [asdict(k) for k in cf.keys],
         })
-    return sorted(out, key=lambda d: (str(d["source"]), str(d["family"]), str(d["night"])))
+    return sorted(out, key=lambda d: (d["source"], d["family"], str(d["night"])))
 
 
 def _confirmed_families(sup: SuppressionResult) -> list[str]:
     rows = []
     for d in _families(sup):
-        tops = list(d["top_cases"])  # type: ignore[call-overload]
-        total = int(d["n_cases"])  # type: ignore[call-overload]
-        family, source, night, first = d["family"], d["source"], d["night"], d["first_night"]
+        tops, total = d["top_cases"], d["n_cases"]
         more = f", ... and {total - len(tops)} more" if total > len(tops) else ""
+        family, source, night, first = d["family"], d["source"], d["night"], d["first_night"]
         rows.append(f"{family} ({source}): storm night {night}, first {first}, {total} cases; top: " + ", ".join(tops) +
                     more)
     return rows
@@ -194,17 +221,17 @@ class MarkdownSink:
 
 
 class JsonSink:
-    """Full report as JSON (dates ISO-formatted, enums by value). Stays per series: no grouping by case."""
+    """Full report as JSON (dates ISO-formatted, enums by value). Verdicts and suppression lists stay per series.
+    ``confirmed_families`` rows add ``n_cases`` and ``top_cases`` (grouped by case) and keep every series ``keys``."""
 
     def __init__(self, target: str | Path | IO[str]):
         self.target = target
 
     def emit(self, report: Report) -> None:
-        payload = json.loads(json.dumps(asdict(report), default=_json_default))
+        payload = asdict(report)
         if report.suppression is not None:
-            payload["suppression"]["confirmed_families"] = json.loads(
-                json.dumps(_families(report.suppression), default=_json_default))
+            payload["suppression"]["confirmed_families"] = _families(report.suppression)
         payload["counts"] = dict(Counter(v.status.value for v in report.verdicts))
         with _open(self.target) as out:
-            json.dump(payload, out, indent=2, sort_keys=True)
+            json.dump(payload, out, indent=2, sort_keys=True, default=_json_default)
             out.write("\n")

@@ -47,25 +47,27 @@ def run(catalog: Catalog, source: Source, scope_names: Iterable[str], as_of: dat
     days = [as_of - timedelta(days=i) for i in range(nights - 1, -1, -1)]
     start = history_start(days[0], history_days, catalog.max_window())
     grouped: dict[SeriesKey, list[Observation]] = defaultdict(list)
-    warnings: list[str] = []
+    warnings: dict[str, None] = {}  # ordered set
     if cfg.flip_episodes > 0 and nights < cfg.flip_days:
-        warnings.append(f"nights={nights} is shorter than the flip-flop look-back of {cfg.flip_days}; "
-                        "flip-flop muting may miss earlier episodes")
+        warnings[f"nights={nights} is shorter than the flip-flop look-back of {cfg.flip_days}; "
+                 "flip-flop muting may miss earlier episodes"] = None
     if nights < cfg.confirm_nights:
-        warnings.append(f"nights={nights} is below confirm_nights={cfg.confirm_nights}: nothing can be confirmed, "
-                        "so a standing regression is reported as new every night")
+        warnings[f"nights={nights} is below confirm_nights={cfg.confirm_nights}: nothing can be confirmed, "
+                 "so a standing regression is reported as new every night"] = None
     seen: set[tuple[SeriesKey, str, datetime]] = set()
-    for name in scope_names:
+    for name in dict.fromkeys(scope_names):  # a repeated scope is read once
         raw = list(source.observations(catalog.scopes[name], start, as_of))
         if not raw:
-            warnings.append(f"scope {name}: no observations in {start}..{as_of}")
+            warnings[f"scope {name}: no observations in {start}..{as_of}"] = None
         kept, skipped = gated_observations(catalog, raw)
-        warnings += [w for w in skipped if w not in warnings]
+        warnings.update(dict.fromkeys(skipped))
+        this_scope: set[tuple[SeriesKey, str, datetime]] = set()
         for obs in kept:
             ident = (obs.key, obs.run_id, obs.observed_at)
-            if ident not in seen:  # the same observation can be selected by overlapping scopes
-                seen.add(ident)
+            if ident not in seen:  # drop only what an earlier scope returned; rows within one scope all count
+                this_scope.add(ident)
                 grouped[obs.key].append(obs)
+        seen |= this_scope
     history: dict[date, list[Verdict]] = {d: [] for d in days}
     for key, obs in sorted(grouped.items(), key=lambda kv: astuple(kv[0])):
         series, thresholds = aggregate(obs), catalog.resolve(key)

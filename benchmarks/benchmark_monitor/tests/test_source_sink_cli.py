@@ -236,7 +236,7 @@ def test_json_sink_serialises_suppression(tmp_path):
 
 def test_cli_rejects_nights_below_one(tmp_path, capsys):
     assert main(["--artifacts", str(tmp_path), "--scope", "nightly-b580-micro", "--nights", "0"]) == 2
-    assert "--nights" in capsys.readouterr().err
+    assert "--nights must be at least 1, got 0" in capsys.readouterr().err
 
 
 def _metric_report():
@@ -260,11 +260,11 @@ def test_sink_lists_each_case_once_with_all_its_metrics():
     text = out.getvalue()
     assert "4 regressing cases tonight (6 series); 4 new." in text
     assert "## New (4, 6 series)" in text
-    assert "- a-gemm / b580 `{}`: gbps -12.0%, tflops -12.0%" in text  # tie on drop: metric name order
-    assert "- b-attn / b580 `{}`: tflops -9.1%, gbps -9.0%" in text
-    assert text.count("a-gemm / b580") == 2  # New and Confirmed only
+    assert "- a-gemm / b580 / triton `{}`: gbps -12.0%, tflops -12.0%" in text  # tie on drop: metric name order
+    assert "- b-attn / b580 / triton `{}`: tflops -9.1%, gbps -9.0%" in text
+    assert text.count("a-gemm / b580 / triton") == 2  # New and Confirmed only
     assert "## Confirmed (2, 3 series)" in text
-    assert "b-attn / b580 `{}`: gbps 2 nights since 2026-11-01, tflops 2 nights since 2026-11-01" in text
+    assert "b-attn / b580 / triton `{}`: gbps 2 nights since 2026-11-01, tflops 2 nights since 2026-11-01" in text
 
 
 def test_case_order_is_deterministic():
@@ -272,7 +272,10 @@ def test_case_order_is_deterministic():
     first = [label for label, _ in _by_case(vs)]
     assert first == [label for label, _ in _by_case(reversed(vs))]
     # drop desc, then benchmark, then params
-    assert first == ["a-gemm / b580 `{}`", "b-attn / b580 `{}`", "c-add / b580 `{\"n\":0}`", "c-add / b580 `{\"n\":1}`"]
+    assert first == [
+        "a-gemm / b580 / triton `{}`", "b-attn / b580 / triton `{}`", "c-add / b580 / triton `{\"n\":0}`",
+        "c-add / b580 / triton `{\"n\":1}`"
+    ]
 
 
 def test_markdown_table_identifies_series_and_escapes_cells():
@@ -353,7 +356,7 @@ def test_confirmed_families_in_markdown_and_json(tmp_path):
     text = out.getvalue()
     assert "## Confirmed families (1)" in text
     assert "flash-attn (micro): storm night 2026-11-20, first 2026-11-01, 5 cases" in text  # 10 series, 5 cases
-    assert "flash-attn-0 / b580" in text and "flash-attn-3" not in text and "... and 2 more" in text
+    assert "flash-attn-0 / b580 / triton" in text and "flash-attn-3" not in text and "... and 2 more" in text
     path = tmp_path / "f.json"
     JsonSink(path).emit(_families_report())
     fam = json.loads(path.read_text())["suppression"]["confirmed_families"][0]
@@ -396,3 +399,36 @@ def test_storm_scenario_renders_one_confirmed_family(tmp_path):
     JsonSink(path).emit(report)
     fams = json.loads(path.read_text())["suppression"]["confirmed_families"]
     assert len(fams) == 1 and (fams[0]["family"], fams[0]["n_cases"]) == ("gemm", 12)
+
+
+def _same_shape_report(*keys):
+    from benchmark_monitor.suppress import SuppressionResult  # pylint: disable=import-outside-toplevel
+    th = Thresholds(5.0, 3.0, 8, 20, 15.0, 0.05, True)
+    new = tuple(Verdict(k, D1, Status.REGRESSION, 12.0, -5.0, 10.0, 0.1, 9, th) for k in keys)
+    return Report(date(2026, 11, 16), new, SuppressionResult(new=new))
+
+
+def test_labels_tell_compilers_of_one_shape_apart():
+    keys = [SeriesKey("third_party", "b580", "client", "gemm", c, "tflops", '{"m":1}') for c in ("triton", "onednn")]
+    text = MarkdownSink(io.StringIO()).render(_same_shape_report(*keys))
+    assert "- gemm / b580 / triton `{\"m\":1}`: tflops -12.0%" in text
+    assert "- gemm / b580 / onednn `{\"m\":1}`: tflops -12.0%" in text
+    assert "## New (2)" in text and "[third_party, client]" not in text  # no source/tag noise without a clash
+
+
+def test_labels_add_source_and_tag_only_when_they_clash():
+    keys = [
+        SeriesKey("micro", "b580", "client", "gemm", "triton", "tflops", "{}"),
+        SeriesKey("third_party", "b580", "ci", "gemm", "triton", "tflops", "{}"),
+    ]
+    text = MarkdownSink(io.StringIO()).render(_same_shape_report(*keys))
+    assert "- gemm / b580 / triton `{}` [micro, client]: tflops -12.0%" in text
+    assert "- gemm / b580 / triton `{}` [third_party, ci]: tflops -12.0%" in text
+
+
+def test_json_confirmed_families_keep_series_keys(tmp_path):
+    path = tmp_path / "k.json"
+    JsonSink(path).emit(_families_report())
+    fam = json.loads(path.read_text())["suppression"]["confirmed_families"][0]
+    assert len(fam["keys"]) == 10 and fam["n_cases"] == 5  # per series, plus the grouped summary
+    assert fam["keys"][0]["benchmark"] == "flash-attn-0" and fam["keys"][0]["metric"] == "tflops"

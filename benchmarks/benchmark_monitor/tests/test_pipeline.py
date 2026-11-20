@@ -114,9 +114,34 @@ def test_overlapping_scopes_do_not_double_count():
         seen.append(sum(p.n_raw for p in series.points if p.night == night))
         return fake_gate(series, thresholds, night)
 
-    src = FakeSource(["gemm"])
-    run(cat, src, ["nightly-b580-micro", "nightly-b580-micro"], AS_OF, 1, gate=counting_gate)
+    other = replace(cat.scopes["nightly-b580-micro"], name="other")
+    cat = replace(cat, scopes={**cat.scopes, "other": other})
+    run(cat, FakeSource(["gemm"]), ["nightly-b580-micro", "other"], AS_OF, 1, gate=counting_gate)
     assert seen == [1]  # the same observation, selected by both scopes, counts once
+
+
+def test_repeated_scope_name_is_read_once():
+    src = FakeSource(["gemm"])
+    run(load_catalog(), src, ["nightly-b580-micro", "nightly-b580-micro"], AS_OF, 1, gate=fake_gate)
+    assert [c[0] for c in src.calls] == ["nightly-b580-micro"]
+
+
+def test_rows_of_one_run_in_one_scope_are_all_kept_and_averaged():
+    got = []
+
+    def value_gate(series, thresholds, night):
+        got.append({p.night: p.value for p in series.points}[night])
+        return fake_gate(series, thresholds, night)
+
+    class Rows:
+
+        def observations(self, _scope, _start, _end):
+            key = SeriesKey("micro", "b580", "client", "gemm", "triton", "tflops", "{}")
+            moment = datetime(2026, 11, 10, 3, tzinfo=timezone.utc)
+            yield from [Observation(key, "A", moment, 10.0), Observation(key, "A", moment, 20.0)]
+
+    run(load_catalog(), Rows(), ["nightly-b580-micro"], AS_OF, 1, gate=value_gate)
+    assert got == [15.0]  # the mean of the run's rows, not the first row
 
 
 def test_distinct_runs_of_one_series_are_kept_across_scopes():
