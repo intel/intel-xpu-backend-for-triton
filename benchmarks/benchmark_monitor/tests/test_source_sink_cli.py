@@ -10,9 +10,10 @@ from pathlib import Path
 import pytest
 
 from benchmark_monitor import SeriesKey, Status, Thresholds, Verdict, load_catalog
-from benchmark_monitor.__main__ import history_start, main
+from benchmark_monitor.__main__ import main
+from benchmark_monitor.pipeline import history_start
 from benchmark_monitor.report import Report
-from benchmark_monitor.sink import JsonSink, MarkdownSink
+from benchmark_monitor.sink import JsonSink, MarkdownSink, _by_case
 from benchmark_monitor.source import ArtifactSource, CsvReportSource
 
 HOST = {"gpu_device": "Intel(R) Arc(TM) B580 Graphics", "torch_version": "2.9", "agama_version": ""}
@@ -200,6 +201,83 @@ def test_socket_blocked_in_process(tmp_path, cat, monkeypatch):
     assert list(CsvReportSource([p], cat).observations(scope(cat, "nightly-b580-micro"), D1, D2))
 
 
+def _suppression_report(n_new=12):
+    from benchmark_monitor.suppress import Confirmed, StormDigest, SuppressionResult  # pylint: disable=import-outside-toplevel
+    th = Thresholds(5.0, 3.0, 8, 20, 15.0, 0.05, True)
+
+    def reg(i):
+        key = SeriesKey("micro", "b580", "client", f"gemm-{i}", "triton", "tflops", "{}")
+        return Verdict(key, D1, Status.REGRESSION, 10.0 + i, -5.0, 10.0, 0.1, 9, th)
+
+    new = tuple(reg(i) for i in range(n_new))
+    sup = SuppressionResult(new=new, confirmed=(Confirmed(new[0].key, new[0], 2, D1), ), sustained=(reg(40), ),
+                            muted=(reg(41), ), storms=(StormDigest("flash-attn", 11, 9.5, 20.0), ),
+                            storm_nights=frozenset({D1}), suspect={"micro": "partial run"})
+    return Report(date(2026, 11, 16), new, sup, ("careful", ))
+
+
+def test_sinks_render_suppression_sections_short():
+    out = io.StringIO()
+    MarkdownSink(out).emit(_suppression_report())
+    text = out.getvalue()
+    for title in ("## New (12)", "## Confirmed (1)", "## Sustained (1)", "## Muted (flip-flop) (1)", "## Storms (1)",
+                  "## Warnings"):
+        assert title in text
+    assert "- ... and 2 more" in text and "flash-attn: 11 new" in text and "2 nights since 2026-11-01" in text
+
+
+def test_json_sink_serialises_suppression(tmp_path):
+    path = tmp_path / "s.json"
+    JsonSink(path).emit(_suppression_report(2))
+    data = json.loads(path.read_text())
+    assert data["suppression"]["storm_nights"] == ["2026-11-01"] and len(data["suppression"]["new"]) == 2
+    assert data["suppression"]["confirmed"][0]["streak"] == 2
+
+
+def test_cli_rejects_nights_below_one(tmp_path, capsys):
+    assert main(["--artifacts", str(tmp_path), "--scope", "nightly-b580-micro", "--nights", "0"]) == 2
+    assert "--nights must be at least 1, got 0" in capsys.readouterr().err
+
+
+def _metric_report():
+    from benchmark_monitor.suppress import Confirmed, SuppressionResult  # pylint: disable=import-outside-toplevel
+    th = Thresholds(5.0, 3.0, 8, 20, 15.0, 0.05, True)
+
+    def reg(bench, metric, drop, params="{}"):
+        key = SeriesKey("micro", "b580", "client", bench, "triton", metric, params)
+        return Verdict(key, D1, Status.REGRESSION, drop, -5.0, 10.0, 0.1, 9, th)
+
+    new = (reg("b-attn", "gbps", 9.0), reg("a-gemm", "tflops", 12.0), reg("b-attn", "tflops", 9.1),
+           reg("a-gemm", "gbps", 12.0), reg("c-add", "gbps", 9.1, '{"n":1}'), reg("c-add", "gbps", 9.1, '{"n":0}'))
+    sup = SuppressionResult(new=new, confirmed=tuple(Confirmed(v.key, v, 2, D1) for v in new[:3]), sustained=(),
+                            muted=(), storms=(), storm_nights=frozenset(), suspect={})
+    return Report(date(2026, 11, 16), new, sup, ())
+
+
+def test_sink_lists_each_case_once_with_all_its_metrics():
+    out = io.StringIO()
+    MarkdownSink(out).emit(_metric_report())
+    text = out.getvalue()
+    assert "4 regressing cases tonight (6 series); 4 new." in text
+    assert "## New (4, 6 series)" in text
+    assert "- a-gemm / b580 / triton `{}`: gbps -12.0%, tflops -12.0%" in text  # tie on drop: metric name order
+    assert "- b-attn / b580 / triton `{}`: tflops -9.1%, gbps -9.0%" in text
+    assert text.count("a-gemm / b580 / triton") == 2  # New and Confirmed only
+    assert "## Confirmed (2, 3 series)" in text
+    assert "b-attn / b580 / triton `{}`: gbps 2 nights since 2026-11-01, tflops 2 nights since 2026-11-01" in text
+
+
+def test_case_order_is_deterministic():
+    vs = list(_metric_report().suppression.new)
+    first = [label for label, _ in _by_case(vs)]
+    assert first == [label for label, _ in _by_case(reversed(vs))]
+    # drop desc, then benchmark, then params
+    assert first == [
+        "a-gemm / b580 / triton `{}`", "b-attn / b580 / triton `{}`", "c-add / b580 / triton `{\"n\":0}`",
+        "c-add / b580 / triton `{\"n\":1}`"
+    ]
+
+
 def test_markdown_table_identifies_series_and_escapes_cells():
     key = SeriesKey("third_party", "b580", "ci|x", "moe", "triton-td", "tflops", '{"label":"a|b`c\nd"}')
     th = Thresholds(5.0, 3.0, 8, 20, 15.0, 0.05, True)
@@ -238,8 +316,122 @@ def test_cli_gappy_series_keeps_enough_points_for_the_window(tmp_path):
     assert main(argv) == 0
     data = json.loads(out.read_text())
     assert data["counts"] == {"regression": 1} and data["verdicts"][0]["n_history"] == 11
-    assert main(argv + ["--history-days", "20", "--out", str(out)]) == 0  # the old behaviour: masked
+    assert main(argv + ["--history-days", "20", "--nights", "1", "--out", str(out)]) == 0  # the old behaviour: masked
     assert json.loads(out.read_text())["counts"] == {"insufficient_history": 1}
+
+
+def _signed_report(higher_is_better):
+    from benchmark_monitor.suppress import SuppressionResult  # pylint: disable=import-outside-toplevel
+    th = Thresholds(5.0, 3.0, 8, 20, 15.0, 0.05, higher_is_better)
+    metric = "tflops" if higher_is_better else "time_us"
+    key = SeriesKey("micro", "b580", "client", "gemm", "triton", metric, "{}")
+    v = Verdict(key, D1, Status.REGRESSION, 9.1 if higher_is_better else 20.0, -5.0, 10.0, 0.1, 9, th)
+    return Report(date(2026, 11, 16), (v, ), SuppressionResult(new=(v, ), sustained=(v, ), muted=(v, )))
+
+
+def test_sink_prints_actual_direction_of_change():
+    out = io.StringIO()
+    MarkdownSink(out).emit(_signed_report(True))
+    assert out.getvalue().count("tflops -9.1%") == 3  # a fall of a higher-is-better metric
+    out = io.StringIO()
+    MarkdownSink(out).emit(_signed_report(False))
+    assert out.getvalue().count("time_us +20.0%") == 3  # a rise of a lower-is-better metric: worse
+    assert "time_us -20.0%" not in out.getvalue()
+
+
+def _families_report():
+    from benchmark_monitor.suppress import ConfirmedFamily, SuppressionResult  # pylint: disable=import-outside-toplevel
+
+    keys = tuple(
+        SeriesKey("micro", "b580", "client", f"flash-attn-{i}", "triton", m, "{}")
+        for i in range(5)
+        for m in ("tflops", "gbps"))
+    fam = ConfirmedFamily("micro", "flash-attn", D2, D1, keys)
+    return Report(date(2026, 11, 20), (), SuppressionResult(confirmed_families=(fam, )))
+
+
+def test_confirmed_families_in_markdown_and_json(tmp_path):
+    out = io.StringIO()
+    MarkdownSink(out).emit(_families_report())
+    text = out.getvalue()
+    assert "## Confirmed families (1)" in text
+    assert "flash-attn (micro): storm night 2026-11-20, first 2026-11-01, 5 cases" in text  # 10 series, 5 cases
+    assert "flash-attn-0 / b580 / triton" in text and "flash-attn-3" not in text and "... and 2 more" in text
+    path = tmp_path / "f.json"
+    JsonSink(path).emit(_families_report())
+    fam = json.loads(path.read_text())["suppression"]["confirmed_families"][0]
+    assert (fam["family"], fam["source"], fam["night"], fam["n_cases"]) == ("flash-attn", "micro", "2026-11-20", 5)
+    assert len(fam["top_cases"]) == 3
+
+
+def test_no_families_section_without_the_field():
+    out = io.StringIO()
+    MarkdownSink(out).emit(_metric_report())  # a result without confirmed_families
+    assert "Confirmed families" not in out.getvalue()
+
+
+def test_storm_scenario_renders_one_confirmed_family(tmp_path):
+    """A 12-case family storm on night S, still regressing on S+1, through the real suppress.apply."""
+    from benchmark_monitor.suppress import SuppressConfig, apply  # pylint: disable=import-outside-toplevel
+    th = Thresholds(5.0, 3.0, 5, 20, 15.0, 0.05, True)
+    storm, tonight = date(2026, 11, 9), date(2026, 11, 10)
+
+    def verdicts(day, status):
+        out = [
+            Verdict(SeriesKey("micro", "b580", "client", "gemm", "triton", "tflops", f'{{"case":"g{j:02d}"}}'), day,
+                    status, 10.0, -4.0, 10.0, 0.1, 20, th) for j in range(12)
+        ]
+        return out + [
+            Verdict(SeriesKey("micro", "b580", "client", "filler", "triton", "tflops", f'{{"case":"ok{j}"}}'), day,
+                    Status.OK, 0.0, 0.0, 10.0, 0.1, 20, th) for j in range(100)
+        ]
+
+    hist = {storm: verdicts(storm, Status.REGRESSION), tonight: verdicts(tonight, Status.REGRESSION)}
+    sup = apply(hist, SuppressConfig(), tonight)
+    assert len(sup.confirmed_families) == 1 and not sup.confirmed
+    report = Report(tonight, tuple(hist[tonight]), sup)
+    out = io.StringIO()
+    MarkdownSink(out).emit(report)
+    text = out.getvalue()
+    assert "## Confirmed families (1)" in text
+    assert "gemm (micro): storm night 2026-11-10, first 2026-11-09, 12 cases" in text
+    path = tmp_path / "s.json"
+    JsonSink(path).emit(report)
+    fams = json.loads(path.read_text())["suppression"]["confirmed_families"]
+    assert len(fams) == 1 and (fams[0]["family"], fams[0]["n_cases"]) == ("gemm", 12)
+
+
+def _same_shape_report(*keys):
+    from benchmark_monitor.suppress import SuppressionResult  # pylint: disable=import-outside-toplevel
+    th = Thresholds(5.0, 3.0, 8, 20, 15.0, 0.05, True)
+    new = tuple(Verdict(k, D1, Status.REGRESSION, 12.0, -5.0, 10.0, 0.1, 9, th) for k in keys)
+    return Report(date(2026, 11, 16), new, SuppressionResult(new=new))
+
+
+def test_labels_tell_compilers_of_one_shape_apart():
+    keys = [SeriesKey("third_party", "b580", "client", "gemm", c, "tflops", '{"m":1}') for c in ("triton", "onednn")]
+    text = MarkdownSink(io.StringIO()).render(_same_shape_report(*keys))
+    assert "- gemm / b580 / triton `{\"m\":1}`: tflops -12.0%" in text
+    assert "- gemm / b580 / onednn `{\"m\":1}`: tflops -12.0%" in text
+    assert "## New (2)" in text and "[third_party, client]" not in text  # no source/tag noise without a clash
+
+
+def test_labels_add_source_and_tag_only_when_they_clash():
+    keys = [
+        SeriesKey("micro", "b580", "client", "gemm", "triton", "tflops", "{}"),
+        SeriesKey("third_party", "b580", "ci", "gemm", "triton", "tflops", "{}"),
+    ]
+    text = MarkdownSink(io.StringIO()).render(_same_shape_report(*keys))
+    assert "- gemm / b580 / triton `{}` [micro, client]: tflops -12.0%" in text
+    assert "- gemm / b580 / triton `{}` [third_party, ci]: tflops -12.0%" in text
+
+
+def test_json_confirmed_families_keep_series_keys(tmp_path):
+    path = tmp_path / "k.json"
+    JsonSink(path).emit(_families_report())
+    fam = json.loads(path.read_text())["suppression"]["confirmed_families"][0]
+    assert len(fam["keys"]) == 10 and fam["n_cases"] == 5  # per series, plus the grouped summary
+    assert fam["keys"][0]["benchmark"] == "flash-attn-0" and fam["keys"][0]["metric"] == "tflops"
 
 
 def test_signed_metric_keeps_zero_and_negative_values(tmp_path, cat):
