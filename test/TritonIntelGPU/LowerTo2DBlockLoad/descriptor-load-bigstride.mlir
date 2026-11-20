@@ -11,8 +11,9 @@
 // (ttig.2d_block_io_base_alignment), the lowering later adds up to 63 bytes of
 // base misalignment to base_width, so width must also stay <= 2^24 - 63
 // (Cases 5, 22 and 23). For every candidate tt.make_tensor_descriptor, the
-// transform leaves the tt.descriptor_load unlowered if a field that is a
-// compile-time constant falls outside that range:
+// transform emits no 2D block load, and lowers the tt.descriptor_load to a
+// tt.load instead, if a field that is a compile-time constant falls outside
+// that range:
 //   width  = shape[descRank-1] * elemBytes   (the column dim)
 //   height = shape[descRank-2]               (the row dim)
 //   pitch  = stride[descRank-2] * elemBytes  (the row dim)
@@ -22,8 +23,10 @@
 // are trusted. The byte products are overflow-safe, so a stride whose product
 // wraps int64 back into range is still rejected. The batch dims of a
 // rank-reducing descriptor are not surface fields and are not range-checked
-// (Case 16). Each negative case also checks that the pass emitted no IR before
-// bailing (no stray ttig.extract_desc).
+// (Case 16). Each negative case with a direct tt.make_tensor_descriptor also
+// checks that the 2D attempt emitted no IR before bailing (no stray
+// ttig.extract_desc); through control flow the tt.load lowering itself reads
+// the descriptor fields with ttig.extract_desc.
 //
 // From Case 3 on, at most one width/height/pitch operand is a compile-time
 // constant (the field under test; none in Case 16) and the others are runtime
@@ -35,7 +38,7 @@
 // Case 1: descriptor pitch stride = 2^30 f16 elements → byte pitch = 2^31,
 // which exceeds 2^24. `%big_stride` is an `arith.constant`, which the
 // transform's `getFoldedConstantValue` can inspect. Expected: no
-// ttig.2d_block_load emitted, and the tt.descriptor_load survives.
+// ttig.2d_block_load emitted, and the load lowered to a tt.load.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {

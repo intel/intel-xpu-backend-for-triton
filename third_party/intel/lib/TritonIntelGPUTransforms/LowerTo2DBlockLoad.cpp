@@ -401,7 +401,20 @@ private:
     // negative, so it is still out of bounds.
     Type i32Ty = builder.getI32Type();
     Type elemTy = resultTy.getElementType();
-    Value base = getField(0, 2 * descRank, tt::PointerType::get(elemTy));
+    // The pointers keep the address space of the descriptor's base.
+    std::optional<tt::PtrAddrSpace> defAddrSpace;
+    for (tt::MakeTensorDescOp d : defs) {
+      tt::PtrAddrSpace as =
+          cast<tt::PointerType>(d.getBase().getType()).getAddressSpace();
+      if (defAddrSpace && *defAddrSpace != as)
+        return op.emitOpError("the operations defining this descriptor "
+                              "disagree on the address space of its base");
+      defAddrSpace = as;
+    }
+    tt::PtrAddrSpace addrSpace =
+        defAddrSpace.value_or(tt::PtrAddrSpace::Global);
+    Value base =
+        getField(0, 2 * descRank, tt::PointerType::get(elemTy, addrSpace));
     SmallVector<Value> shapes, strides;
     for (unsigned d = 0; d < descRank; ++d) {
       Value shapeField = getField(1 + d, d, i64Ty);
@@ -454,7 +467,7 @@ private:
 
     // Bools are bytes in memory, as for tl.load.
     Type memElemTy = elemTy.isInteger(1) ? builder.getI8Type() : elemTy;
-    Type ptrTy = tt::PointerType::get(memElemTy);
+    Type ptrTy = tt::PointerType::get(memElemTy, addrSpace);
     if (memElemTy != elemTy)
       base = tt::BitcastOp::create(builder, loc, ptrTy, base);
 

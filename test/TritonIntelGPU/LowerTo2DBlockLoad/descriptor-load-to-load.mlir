@@ -293,3 +293,20 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return %0 : tensor<8x16xf32, #blocked>
   }
 }
+
+// -----
+
+// COM: The pointers keep the address space of the descriptor's base.
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @constant_address_space(
+  // CHECK: tt.splat %{{.*}} : !tt.ptr<f16, "constant"> -> tensor<1x32x!tt.ptr<f16, "constant">
+  // CHECK: tt.load %{{.*}} : tensor<1x32x!tt.ptr<f16, "constant">
+  tt.func @constant_address_space(%base: !tt.ptr<f16, "constant">, %m: i32, %n: i32, %s: i64, %i: i32) -> tensor<1x32xf16, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %d = tt.make_tensor_descriptor %base, [%m, %n], [%s, %c1_i64] : <f16, "constant">, <1x32xf16>
+    %x = tt.descriptor_load %d[%i, %c0_i32] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x32xf16> -> tensor<1x32xf16, #blocked>
+    tt.return %x : tensor<1x32xf16, #blocked>
+  }
+}
