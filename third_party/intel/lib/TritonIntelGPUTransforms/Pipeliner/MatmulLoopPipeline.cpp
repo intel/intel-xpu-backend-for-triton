@@ -743,7 +743,8 @@ createSchedule(scf::ForOp forOp, int numStages) {
 static void rematerializeBoundaryMask(scf::ForOp forOp, tt::LoadOp loadOp) {
   Value mask = loadOp.getMask();
   auto tensorTy = dyn_cast<RankedTensorType>(loadOp.getType());
-  if (!mask || !tensorTy || tensorTy.getRank() < 2 ||
+  if (!mask || forOp.isDefinedOutsideOfLoop(mask) || !tensorTy ||
+      tensorTy.getRank() < 2 ||
       !loadOp->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
     return;
   unsigned rank = tensorTy.getRank();
