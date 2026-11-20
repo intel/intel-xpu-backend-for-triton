@@ -541,7 +541,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+        intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm, opt.num_warps)
         passes.common.add_cse(pm)
         intel.passes.ttir.add_reassociate_dot_scale(pm, knobs.intel.fast_math)
         passes.ttir.add_triton_licm(pm)

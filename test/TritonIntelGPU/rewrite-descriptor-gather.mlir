@@ -1,4 +1,4 @@
-// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_GATHER_SCATTER_REWRITE=0 triton-opt %s -split-input-file --triton-intel-rewrite-tensor-descriptor-to-pointer | FileCheck %s
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_GATHER_SCATTER_REWRITE=0 triton-opt %s -split-input-file --triton-intel-rewrite-tensor-descriptor-to-pointer=native-gather-classes=false | FileCheck %s
 //
 // Tests for the descriptor_gather → descriptor_load optimization in the
 // rewrite-tensor-descriptor-to-pointer pass. When x_offsets are provably
@@ -108,10 +108,10 @@ module {
 
 // -----
 
-// COM: Case 5 - Fallback: non-contiguous offsets. x_offsets is an arbitrary
-// COM: argument tensor, not a make_range pattern. Should fall back to tt.load.
+// COM: Case 5 - Non-contiguous offsets: x_offsets is an arbitrary
+// COM: argument tensor, not a make_range pattern. Stays a native gather.
 module {
-  tt.func public @gather_noncontiguous_fallback(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<16xi32>) -> (tensor<16x32xf16>) {
+  tt.func public @gather_noncontiguous(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<16xi32>) -> (tensor<16x32xf16>) {
     %c1_i64 = arith.constant 1 : i64
     %c256_i64 = arith.constant 256 : i64
     %c0_i32 = arith.constant 0 : i32
@@ -122,15 +122,16 @@ module {
   }
 }
 
-// CHECK-LABEL: @gather_noncontiguous_fallback
+// CHECK-LABEL: @gather_noncontiguous
 // CHECK-NOT: tt.descriptor_load
-// CHECK: tt.load
+// CHECK: tt.descriptor_gather
 
 // -----
 
-// COM: Case 6 - Fallback: multi-range with unequal sub-range sizes.
+// COM: Case 6 - Multi-range with unequal sub-range sizes.
 // COM: x_offsets = [0,1,2,3,4, 8,9,10] has sub-ranges of size 5 and 3.
-// COM: tt.join requires SameTypeOperands, so the pattern cannot apply.
+// COM: tt.join requires SameTypeOperands, so the pattern cannot apply and the
+// COM: gather stays native.
 module {
   tt.func public @gather_unequal_ranges(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) -> (tensor<8x32xbf16>) {
     %c1_i64 = arith.constant 1 : i64
@@ -146,4 +147,4 @@ module {
 
 // CHECK-LABEL: @gather_unequal_ranges
 // CHECK-NOT: tt.descriptor_load
-// CHECK: tt.load
+// CHECK: tt.descriptor_gather
