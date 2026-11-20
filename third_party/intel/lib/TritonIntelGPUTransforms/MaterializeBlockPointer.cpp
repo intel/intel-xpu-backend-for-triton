@@ -639,8 +639,9 @@ private:
   /// gaining a real 2D block read. For the same reason the bypass is skipped
   /// when LowerTo2DBlockLoad would reject the row pitch
   /// (`ttgi::isBlockPitchSupported`) or the column bound's granularity
-  /// (`ttgi::colLimitIsHWCompatible`). Stores aren't covered: nothing
-  /// downstream consumes a store-side bound.
+  /// (`ttgi::colLimitIsHWCompatible`). A `tt::StoreOp` is also permitted along
+  /// a dim of constancy below 2 where StoreOpToBlockIOConversion clamps the
+  /// surface to the mask's bound instead (`ttgi::matchStoreBoundaryClamp`).
   template <typename OpType>
   bool maskPermitsBlockTile(OpType op,
                             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -696,6 +697,16 @@ private:
     // outright and clamps each tile dimension to the constancy along it.
     for (unsigned dim : {rank - 2, rank - 1}) {
       int64_t constancy = maskAxisInfo->getConstancy(dim);
+      if constexpr (std::is_same_v<OpType, tt::StoreOp>) {
+        if (constancy < 2 && contiguousDim &&
+            isStoreSurfaceClamped(op, dim, axisInfoAnalysis, strideInfo, rank,
+                                  *contiguousDim)) {
+          LDBG("Mask constancy along dim "
+               << dim << " is " << constancy
+               << ", but the store's surface is clamped along it");
+          continue;
+        }
+      }
       if (constancy < 2 || !llvm::isPowerOf2_64(constancy)) {
         LDBG("Mask constancy along dim " << dim << " is " << constancy
                                          << ", which degenerates the 2D block "
@@ -704,6 +715,30 @@ private:
       }
     }
     return true;
+  }
+
+  /// Whether StoreOpToBlockIOConversion clamps the surface of \p op along
+  /// \p dim to its mask's bound, at the constant pitch it would emit.
+  static bool
+  isStoreSurfaceClamped(tt::StoreOp op, unsigned dim,
+                        tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                        tt::intel::StrideInfo *strideInfo, unsigned rank,
+                        unsigned contiguousDim) {
+    if (rank != 2)
+      return false;
+    unsigned pitchDim = (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+    int64_t stride = strideInfo ? strideInfo->getStride(pitchDim) : -1;
+    unsigned elemBits = getIntOrFloatOrPtrBitWidth(
+        cast<RankedTensorType>(op.getValue().getType()).getElementType());
+    std::optional<int64_t> pitchBytes;
+    if (stride > 0)
+      pitchBytes = stride * elemBits / 8;
+    if (!ttgi::isBlockPitchSupported(pitchBytes, /*hasRuntimeStride=*/false, 0))
+      return false;
+    ttgi::StoreBoundaryClamp clamp = ttgi::matchStoreBoundaryClamp(
+        op, contiguousDim, /*pitchDimIsBroadcast=*/stride == 0, pitchBytes,
+        axisInfoAnalysis);
+    return dim == contiguousDim ? clamp.col.has_value() : clamp.row.has_value();
   }
 
   /// Look through cast wrappers (index_cast, extui, extsi, trunci, etc.)

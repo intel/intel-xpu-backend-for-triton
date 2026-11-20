@@ -121,6 +121,30 @@ void eraseUnusedOps(SetVector<Operation *> &opsToDelete) {
       op->erase();
 }
 
+// Erase the trivially dead ops in `funcOp`. Ops with regions are kept, so no
+// queued op can be erased along with its parent.
+static void eraseTriviallyDeadOps(tt::FuncOp funcOp) {
+  auto isDead = [](Operation *op) {
+    return op->getNumRegions() == 0 && isOpTriviallyDead(op);
+  };
+  SetVector<Operation *> worklist;
+  funcOp.walk([&](Operation *op) {
+    if (isDead(op))
+      worklist.insert(op);
+  });
+  while (!worklist.empty()) {
+    Operation *op = worklist.pop_back_val();
+    SmallVector<Operation *> producers;
+    for (Value operand : op->getOperands())
+      if (Operation *defOp = operand.getDefiningOp())
+        producers.push_back(defOp);
+    op->erase();
+    for (Operation *defOp : producers)
+      if (isDead(defOp))
+        worklist.insert(defOp);
+  }
+}
+
 // Return the distinct DPAS result encodings of the tt.dot ops in `funcOp`, in
 // walk order.
 static SmallVector<ttgi::DpasEncodingAttr>
@@ -241,6 +265,7 @@ public:
   void hoistConvertOnTopOfExtOrBroadcast(ttg::ConvertLayoutOp convertOp);
   bool hoistConvertIntoConditionals();
   void hoistConvertIntoConditionals(ttg::ConvertLayoutOp convertOp);
+  void foldDotOperandConvertsIntoLoads();
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
                     ttg::ConvertLayoutOp convertOp, IRMapping &mapping);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
@@ -2519,6 +2544,25 @@ void LayoutRematerialization::hoistConvertDotOperand(
   rewriteSlice(innerSlice, layout, convertOp, mapping);
 }
 
+// Retry backward rematerialization on dot operand converts of single-use loads,
+// such as those hoistConvertDotOperand leaves when an anchor blocked the slice.
+void LayoutRematerialization::foldDotOperandConvertsIntoLoads() {
+  SmallVector<ttg::ConvertLayoutOp> convertOps;
+  funcOp.walk([&](ttg::ConvertLayoutOp convertOp) {
+    Value src = convertOp.getSrc();
+    Operation *defOp = src.getDefiningOp();
+    if (isa<ttg::DotOperandEncodingAttr>(convertOp.getType().getEncoding()) &&
+        isa_and_nonnull<tt::LoadOp, tt::DescriptorLoadOp>(defOp) &&
+        src.hasOneUse())
+      convertOps.push_back(convertOp);
+  });
+  for (ttg::ConvertLayoutOp convertOp : convertOps) {
+    backwardRematerialization(convertOp);
+    if (opToDelete.contains(convertOp))
+      LDBG("folded dot operand convert into load " << convertOp.getSrc());
+  }
+}
+
 // For convert left we try to hoist them above type extension to reduce the cost
 // of the convert.
 void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
@@ -2776,6 +2820,14 @@ void hoistConvert(
     {
       LayoutRematerialization layoutRemat(funcOp, convertCostCache);
       layoutRemat.hoistConvertDotOperand();
+      layoutRemat.cleanup();
+    }
+    // The hoists leave the original producers dead but alive; erase them so a
+    // load whose convert was hoisted has a single use.
+    eraseTriviallyDeadOps(funcOp);
+    {
+      LayoutRematerialization layoutRemat(funcOp, convertCostCache);
+      layoutRemat.foldDotOperandConvertsIntoLoads();
       layoutRemat.cleanup();
     }
   });

@@ -552,7 +552,8 @@ private:
         // Relative to the tile's first row and may be <= 0; the LLVM lowering
         // adjusts per message and never forwards a non-positive base_height.
         heightOperand = ttgi::computeRowLimitHeight(
-            builder, loc, boundaryMask->rowBound, boundaryMask->rowBase,
+            builder, loc, cast<Value>(boundaryMask->rowBound),
+            boundaryMask->rowBase,
             tensorTy.getShape()[boundaryMask->boundedDim]);
       if (boundaryMask->colBound)
         // Relative to the tile's first column, as base_height is to its first
@@ -560,8 +561,9 @@ private:
         // zero); the LLVM lowering moves the surface origin left until it is
         // not.
         widthOperand = ttgi::computeColLimitWidth(
-            builder, loc, boundaryMask->colBound, boundaryMask->colBase,
-            tensorTy.getShape()[contiguousDim], elemSizeInBits / 8);
+            builder, loc, cast<Value>(boundaryMask->colBound),
+            boundaryMask->colBase, tensorTy.getShape()[contiguousDim],
+            elemSizeInBits / 8);
     } else {
       // If mask is present but other is absent, create a zero splat as the
       // default padding value (the verifier requires 'other' when 'mask' is
