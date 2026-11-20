@@ -110,12 +110,12 @@ jobs:
         run: |
           pip install transformers 'pandas<3.0' pytest
 
-      - name: Install benchmarks
+      - name: Install benchmarks from comparison snapshot
         id: install-benchmarks
-        uses: ./.github/actions/install-benchmarks
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          github-token: ${{ github.token }}
+        run: |
+          pip uninstall -y triton-kernels-benchmark 2>/dev/null || true
+          pip install --no-build-isolation ./benchmarks
+          triton-benchmarks describe ALL
 
       - name: Install vllm
         id: install-vllm
@@ -136,6 +136,9 @@ jobs:
           TRITON_REPO=$GITHUB_REPOSITORY
           TRITON_COMMIT_ID=$GITHUB_SHA
           TRITON_BRANCH=$GITHUB_REF_NAME
+          BENCHMARK_SOURCE_COMMIT=$(git rev-parse HEAD)
+          BENCHMARK_SOURCE_SHA256=$(sha256sum benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py | cut -d ' ' -f1)
+          UA_PATCH_SHA256=$(sha256sum benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch | cut -d ' ' -f1)
           VLLM_PIN=$(cat scripts/vllm/vllm-pin.txt)
           VLLM_XPU_KERNELS_VERSION=$(pip show vllm-xpu-kernels | awk '/^Version:/ {print $2}')
           OS=${{ runner.os }}
