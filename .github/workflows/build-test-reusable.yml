@@ -791,6 +791,8 @@ jobs:
   reports:
     name: Reports
     needs: integration-tests
+    # Explicit condition: the implicit success() would skip this job because warmup-cache (an ancestor) can be skipped
+    if: ${{ !cancelled() && needs.integration-tests.result == 'success' }}
     uses: ./.github/workflows/reports-reusable.yml
     with:
       python_version: ${{ inputs.python_version }}
