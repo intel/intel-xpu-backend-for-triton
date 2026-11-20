@@ -182,6 +182,13 @@ CachePolicy getCachePolicy(Attribute cachePolicy) {
   return {policy.getCacheModifier(), policy.getEvictionPolicy()};
 }
 
+bool isVolatileOrCVLoad(Operation *op) {
+  auto load = dyn_cast<tt::LoadOp>(op);
+  return load && (load.getIsVolatile() ||
+                  getCachePolicy(load.getCachePolicyAttr()).cacheModifier ==
+                      tt::CacheModifier::CV);
+}
+
 /// True for a masked load whose result does not reach a dot. `block_io` is what
 /// tells the layout propagation the load is free in any encoding, so the load
 /// is rematerialized into its consumer's layout. That is the right trade when
