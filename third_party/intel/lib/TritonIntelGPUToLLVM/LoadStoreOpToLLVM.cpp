@@ -4095,6 +4095,109 @@ struct StoreOpToBlockIOConversion
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
+  /// A store's surface clamps and the pitch their C6 check was proven for.
+  struct SurfaceClamp : StoreBoundaryClamp {
+    int64_t pitchBytes;
+  };
+
+  /// For a store whose tile the mask's constancy rejects or keeps to one row,
+  /// the mask's clamps (remapped) along the dims it relaxes, and in \p sizeInfo
+  /// the relaxed tile. Builds no IR and sets \p sizeInfo only on success.
+  std::optional<SurfaceClamp>
+  matchSurfaceClamp(triton::StoreOp op, const LinearLayout &ll,
+                    unsigned contiguousDim, unsigned elemSizeInBits,
+                    AxisInfo *maskAxisInfo, BlockIOTileSizeInfo &sizeInfo,
+                    ConversionPatternRewriter &rewriter) const {
+    auto tensorType = cast<RankedTensorType>(op.getValue().getType());
+    if (!op.getMask() || !maskAxisInfo || tensorType.getRank() != 2)
+      return std::nullopt;
+    // A block store carries no cache control, so a store asking for one stays
+    // on the generic path, which honours it.
+    if (tritonToIntelCacheModifier(op) != TritonGEN::StoreCacheControl::DEFAULT)
+      return std::nullopt;
+
+    // The pitch `matchAndRewrite` emits via `getPitch`, narrowed so that no
+    // failure can follow: no stride-0 or annotated row, and only a pitch the
+    // verifier accepts.
+    unsigned pitchTensorDim = 1 - contiguousDim;
+    int64_t rowStride = getStride(op.getPtr(), pitchTensorDim);
+    int64_t pitch = rowStride * elemSizeInBits / 8;
+    std::optional<int64_t> pitchBytes;
+    if (!op->hasAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName()) &&
+        rowStride > 0 && pitch >= 64 && pitch <= kMax2DBlockField &&
+        pitch % 16 == 0)
+      pitchBytes = pitch;
+    StoreBoundaryClamp clamp = matchStoreBoundaryClamp(
+        op, contiguousDim, /*pitchDimIsBroadcast=*/rowStride == 0, pitchBytes,
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass));
+
+    // Only a column constancy below the unmasked tile's width, or a row one
+    // below 2, is relaxed; any other keeps today's checks, e.g. a non-power of
+    // two from a `tt.constancy` hint.
+    auto unmasked = BlockIOTileSizeInfo::unknown();
+    if (!validate2DBlockStoreTile(ll, contiguousDim, elemSizeInBits, tensorType,
+                                  /*maskAxisInfo=*/nullptr, unmasked))
+      return std::nullopt;
+    AxisInfo::DimVectorT constancy = maskAxisInfo->getConstancy();
+    if (constancy[contiguousDim] >=
+        unmasked.tileWidth * unmasked.numElemPerPackedVal)
+      clamp.col.reset();
+    if (constancy[pitchTensorDim] >= 2)
+      clamp.row.reset();
+    if (!clamp.col && !clamp.row)
+      return std::nullopt;
+    if (clamp.col)
+      constancy[contiguousDim] = clamp.col->extent;
+    if (clamp.row)
+      constancy[pitchTensorDim] = clamp.row->extent;
+
+    AxisInfo relaxed(maskAxisInfo->getContiguity(),
+                     maskAxisInfo->getDivisibility(), constancy,
+                     maskAxisInfo->getConstantValue());
+    auto relaxedInfo = BlockIOTileSizeInfo::unknown();
+    if (!validate2DBlockStoreTile(ll, contiguousDim, elemSizeInBits, tensorType,
+                                  &relaxed, relaxedInfo))
+      return std::nullopt;
+    assert(relaxedInfo.colDim == static_cast<int>(contiguousDim) &&
+           relaxedInfo.rowDim == static_cast<int>(pitchTensorDim) &&
+           "a block store tile is never transposed");
+
+    // A valid tile the relaxation does not grow is lowered as it is; an invalid
+    // one is `unknown()`, which no relaxed tile equals.
+    if (relaxedInfo.tileHeight == sizeInfo.tileHeight &&
+        relaxedInfo.tileWidth == sizeInfo.tileWidth)
+      return std::nullopt;
+
+    // The shift is whole granules, so it must be whole packed elements.
+    if (clamp.col) {
+      unsigned granuleElems =
+          get2DBlockIOWidthGranuleBytes(elemSizeInBits) / (elemSizeInBits / 8);
+      if (granuleElems % relaxedInfo.numElemPerPackedVal != 0)
+        return std::nullopt;
+    }
+
+    auto remap = [&](std::optional<StoreDimClamp> &dim) {
+      if (!dim)
+        return true;
+      if (dim->base) {
+        dim->base = rewriter.getRemappedValue(dim->base);
+        if (!dim->base)
+          return false;
+      }
+      if (auto bound = dyn_cast<Value>(dim->bound)) {
+        Value remapped = rewriter.getRemappedValue(bound);
+        if (!remapped)
+          return false;
+        dim->bound = remapped;
+      }
+      return true;
+    };
+    if (!remap(clamp.col) || !remap(clamp.row))
+      return std::nullopt;
+    sizeInfo = std::move(relaxedInfo);
+    return SurfaceClamp{clamp, *pitchBytes};
+  }
+
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
@@ -4130,9 +4233,16 @@ struct StoreOpToBlockIOConversion
     BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
     MLIRContext *ctx = rewriter.getContext();
 
-    if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
-                                  elemSizeInBits, tensorType, maskAxisInfo,
-                                  sizeInfo))
+    bool tileIsValid = validate2DBlockStoreTile(
+        llEncoding.value(), contiguousDim, elemSizeInBits, tensorType,
+        maskAxisInfo, sizeInfo);
+    // A valid tile whose mask is constant over two rows is lowered as it is.
+    std::optional<SurfaceClamp> clamp;
+    if (!tileIsValid || (rank == 2 && maskAxisInfo &&
+                         maskAxisInfo->getConstancy(1 - contiguousDim) < 2))
+      clamp = matchSurfaceClamp(op, *llEncoding, contiguousDim, elemSizeInBits,
+                                maskAxisInfo, sizeInfo, rewriter);
+    if (!tileIsValid && !clamp)
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
@@ -4215,6 +4325,33 @@ struct StoreOpToBlockIOConversion
     }
     if (!pitch)
       return failure();
+
+    // The surface ends at the column bound and, when that leaves it narrower
+    // than 64 bytes, grows to the left by `colShift`. It ends at the row bound.
+    Value colWidth, colShift, colShiftElems, rowHeight;
+    if (clamp) {
+      // The clamp is only proven for the pitch `matchSurfaceClamp` checked.
+      if (getConstantIntValue(pitch) != clamp->pitchBytes)
+        return failure();
+      auto materialize = [&](OpFoldResult bound) -> Value {
+        if (auto value = dyn_cast<Value>(bound))
+          return value;
+        auto attr = cast<IntegerAttr>(cast<Attribute>(bound));
+        return LLVM::ConstantOp::create(rewriter, loc, attr.getType(), attr);
+      };
+      if (clamp->col) {
+        unsigned elemBytes = elemSizeInBits / 8;
+        colWidth = computeColLimitWidth(
+            rewriter, loc, materialize(clamp->col->bound), clamp->col->base,
+            clamp->col->extent, elemBytes);
+        colShift = b.smax(b.sub(b.i32_val(64), colWidth), b.i32_val(0));
+        colShiftElems = b.udiv(colShift, b.i32_val(elemBytes));
+      }
+      if (clamp->row)
+        rowHeight =
+            computeRowLimitHeight(rewriter, loc, materialize(clamp->row->bound),
+                                  clamp->row->base, clamp->row->extent);
+    }
     Value offsetBaseX = b.i32_val(0);
     Value offsetBaseY = b.i32_val(0);
 
@@ -4285,13 +4422,25 @@ struct StoreOpToBlockIOConversion
       // of the BLOCK.
       Value offsetX = offsets[colDim].second;
       Value offsetY = b.i32_val(0);
+      // Moving the origin left and `x` right by one shift keeps the message.
+      Value x0 = offsetX;
+      if (colWidth)
+        offsetX = b.add(x0, colShiftElems);
       Value negOffsetX = b.sub(b.i32_val(0), offsetX);
       addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negOffsetX);
       // The offset is in number of original elements. So we need to scale it
       // by element bytes size.
       adjustedBaseWidth =
-          b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
+          b.add(baseWidth, b.mul(x0, b.i32_val(elemSizeInBits / 8)));
       adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
+      if (colWidth)
+        adjustedBaseWidth =
+            b.add(b.umin(adjustedBaseWidth, colWidth), colShift);
+      // Counted from the message's first row; a message with no row left has
+      // a false `pred`, so the floor of 1 the encoding needs writes nothing.
+      if (rowHeight)
+        adjustedBaseHeight =
+            b.smax(b.sub(rowHeight, offsets[rowDim].second), b.i32_val(1));
 
       // Use the top-left address and mask of the block to store the data.
       // (The first value refer by the registerIdx.)
