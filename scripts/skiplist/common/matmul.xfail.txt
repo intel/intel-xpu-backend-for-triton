@@ -1,0 +1,7 @@
+# Requires Blackwell
+python/test/unit/language/test_matmul.py::test_tma_matmul_accumulator_intermediate_read
+python/test/unit/language/test_matmul.py::test_tma_matmul_mixed_consumers
+python/test/unit/language/test_matmul.py::test_tma_matmul_two_ctas
+python/test/unit/language/test_matmul.py::test_warp_specialized_matmul_auxiliary_output
+# Requires Rubin
+python/test/unit/language/test_matmul.py::test_nvfp4_ue5m3_matmul

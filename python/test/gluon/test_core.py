@@ -318,7 +318,7 @@ def test_atomic_bitwise_float_bits(op, tensor, dtype, device):
     assert torch.equal(x.view(bits_ty), expected)
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires CUDA PTX", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA PTX")
 @pytest.mark.parametrize("op", ["load", "store"])
 @pytest.mark.parametrize(
     "dtype",
@@ -475,7 +475,7 @@ def _noinline_shared_allocation_call_kernel(input, output, sentinel_output, NEST
     ttgl.store(sentinel_output + offsets, caller_allocation.load(layout))
 
 
-@pytest.mark.xfail(not is_ampere_or_newer(), reason="Requires Ampere or newer, or AMD", run=False)
+@pytest.mark.skipif(not (is_ampere_or_newer() or is_hip()), reason="Requires Ampere or newer, or AMD")
 @pytest.mark.parametrize("NESTED", [False, True], ids=["direct", "nested"])
 def test_noinline_call_preserves_live_shared_allocation(NESTED, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = ""
@@ -492,7 +492,7 @@ def test_noinline_call_preserves_live_shared_allocation(NESTED, fresh_knobs):
     torch.testing.assert_close(sentinel_output, torch.arange(128, device="cuda", dtype=torch.int32) + 4096)
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_copy_kernel_multi_cta():
     XBLOCK = 2048
     layout = ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0],
@@ -577,7 +577,7 @@ def local_store_sharded_to_replicated_kernel(out, src_cga: ttgl.constexpr, share
         ttgl.store(out + shard * size + offsets, smem.gather(offsets ^ (32 * shard), axis=0))
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("shared_cga", [((0, ), ), ((0, ), (0, )), ((0, ), (1, ))])
 def test_local_store_sharded_to_replicated(shared_cga):
     src_cga = tuple((1 << bit, ) for bit in range(len(shared_cga)))
@@ -675,7 +675,7 @@ def noinline_tma_kernel(desc):
     alloc._keep_alive()
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_tma():
     out = torch.ones((16, 16), dtype=torch.float16, device="cuda")
     layout = ttgl.NVMMASharedLayout(
@@ -691,7 +691,7 @@ def test_tma():
     torch.testing.assert_close(out, torch.zeros_like(out))
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_proxy_fence_noinline_tma_store():
     out = torch.ones((16, 16), dtype=torch.float16, device="cuda")
     layout = ttgl.NVMMASharedLayout(32, 16, rank=2)
@@ -716,7 +716,7 @@ def tma_im2col_kernel(in_desc, out_desc, MULTICAST: ttgl.constexpr, POLICY: ttgl
     tma.store_wait(pendings=0)
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("pixels_per_column", [32, 256, 512, 1024])
 @pytest.mark.parametrize("channels_per_pixel", [32])
 @pytest.mark.parametrize("swizzle_byte_width", [32])
@@ -775,7 +775,7 @@ def tma_round_f32_to_tf32_kernel(in_desc, out_desc):
     smem._keep_alive()
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_gluon_tma_round_f32_to_tf32():
 
     def round_to_tf32(x: torch.Tensor) -> torch.Tensor:
@@ -826,7 +826,7 @@ def tma_multicast_copy_kernel(in_desc, out_desc, POLICY: ttgl.constexpr = None):
     smem._keep_alive()
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [1, 4], [4, 4]])
 @pytest.mark.parametrize(
     "policy", [None, hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first"))])
@@ -891,7 +891,7 @@ def get_split_dim(cga_layout, dim):
     return 1 << sum(basis[dim] != 0 for basis in cga_layout)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("cga_layout", [
     [[1, 0]],
     [[0, 0], [1, 0]],
@@ -991,7 +991,7 @@ def tma_gather_scatter_subslice_kernel(in_desc, out_desc, parent_out, KIND: ttgl
     ttgl.store(parent_out + ttgl.set_auto_layout(offsets, values.type.layout), values)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("kind", ["row", "column", "remote", "column_sharded", "mixed_remote", "remote_multicast"])
 def test_tma_gather_scatter_subslice(kind):
     values = torch.arange(64 * 128, dtype=torch.float16, device="cuda").reshape(64, 128)
@@ -1091,7 +1091,7 @@ def make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, two_cta_dim):
     return cga_layout
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [2, 4], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [True, False] if is_blackwell() else [False])
 def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
@@ -1246,7 +1246,7 @@ def tcgen05_mma_scaled_direct_multicast_kernel(a_desc, b_desc, out_ptr, BLOCK_M:
     ttgl.store(out_ptr + out_offs_m * BLOCK_N + out_offs_n, out)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tcgen05_mma_scaled_direct_multicast_barrier():
     num_ctas = 4
     BLOCK_M = 256
@@ -1315,7 +1315,7 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
     ),
     ttgl.nvidia.ampere.CachePolicy(l2=ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_last", 1.0), ),
 ], ids=["default", "evict_first", "evict_last", "fractional", "fractional_one"])
-@pytest.mark.xfail(not is_ampere_or_newer(), reason="Requires Ampere", run=False)
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere")
 def test_async_copy_mbarrier(copy_vec, cache_policy, device):
     tensor_opts = dict(dtype=torch.float, device=device)
     out = torch.empty((32, 32), **tensor_opts)
@@ -1331,7 +1331,7 @@ def test_async_copy_mbarrier(copy_vec, cache_policy, device):
     assert ("L2::cache_hint" in ptx) == expect_policy
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 @pytest.mark.parametrize("num_ctas", [2, 4])
 @pytest.mark.parametrize("batch", [2, 4])
 @pytest.mark.parametrize("two_ctas, simultaneous", [(False, False), (True, False), (False, True)])
@@ -1429,7 +1429,7 @@ def test_warp_specialize_noinline_ids():
     torch.testing.assert_close(scan_out, expected + 1, rtol=0, atol=0)
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_mbarrier_tma_progress(device):
 
     @gluon.jit
@@ -1475,7 +1475,7 @@ def test_mbarrier_tma_progress(device):
     torch.cuda.synchronize(device)
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 @pytest.mark.parametrize("expect_before_copy", [True, False])
 @pytest.mark.parametrize("synchronize_expect", [True, False])
 def test_mbarrier_multiple_tma_expectations(device, expect_before_copy, synchronize_expect):
@@ -1543,7 +1543,7 @@ def test_mbarrier_multiple_tma_expectations(device, expect_before_copy, synchron
     torch.testing.assert_close(out, inp[-32:])
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_mbarrier_private_phase_progress(device):
 
     @gluon.jit
@@ -1573,7 +1573,7 @@ def test_mbarrier_private_phase_progress(device):
     torch.cuda.synchronize(device)
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 @pytest.mark.parametrize("num_ctas", [1, 2])
 def test_mbarrier_private_indexed_counter(num_ctas, device):
 
@@ -1600,7 +1600,7 @@ def test_mbarrier_private_indexed_counter(num_ctas, device):
     assert out.item() == 1
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_mbarrier_atomic_progress(device):
 
     @gluon.jit
@@ -1640,7 +1640,7 @@ def test_mbarrier_atomic_progress(device):
     assert flag.item() == 1
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 @pytest.mark.parametrize("producer_warps", [1, 8])
 @pytest.mark.parametrize("num_ctas", [1, 4])
 def test_mbarrier_automatic_warp_arrivals(producer_warps, num_ctas):
@@ -1718,7 +1718,7 @@ def test_mbarrier_automatic_warp_arrivals(producer_warps, num_ctas):
     torch.testing.assert_close(out, inp + 1)
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_mbarrier_wait_before_distributed_arrival():
 
     @gluon.jit
@@ -1752,7 +1752,7 @@ def test_mbarrier_wait_before_distributed_arrival():
     torch.testing.assert_close(out, inp.reshape(blocks, iterations, block).sum(dim=1, dtype=torch.int32))
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 @pytest.mark.parametrize("worker_warps", [2, 8])
 def test_mbarrier_automatic_warp_arrivals_noinline(worker_warps):
 
@@ -1785,7 +1785,7 @@ def test_mbarrier_automatic_warp_arrivals_noinline(worker_warps):
     torch.cuda.synchronize()
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper or newer", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 @pytest.mark.parametrize("num_ctas,from_cta,two_ctas", [(2, 0, False), (8, 5, False), (4, None, True)])
 def test_mbarrier_automatic_warp_arrivals_cross_cta(num_ctas, from_cta, two_ctas):
 
@@ -1835,7 +1835,7 @@ def test_mbarrier_automatic_warp_arrivals_cross_cta(num_ctas, from_cta, two_ctas
 # non-multicast path.
 @pytest.mark.parametrize("num_ctas", [2, 4, 8])
 @pytest.mark.parametrize("multicast_cta", range(8))
-@pytest.mark.xfail(not is_rubin(), reason="Requires Rubin", run=False)
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
 def test_mbarrier_arrive_multicast(num_ctas, multicast_cta):
     if multicast_cta >= num_ctas:
         pytest.skip("multicast_cta must be < num_ctas")
@@ -1863,7 +1863,7 @@ def test_mbarrier_arrive_multicast(num_ctas, multicast_cta):
 
 
 @pytest.mark.parametrize("num_ctas", [2, 4, 8])
-@pytest.mark.xfail(not is_rubin(), reason="Requires Rubin", run=False)
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
 def test_mbarrier_arrive_broadcast_one_cta(num_ctas):
 
     @gluon.jit
@@ -1891,7 +1891,7 @@ def test_mbarrier_arrive_broadcast_one_cta(num_ctas):
     torch.testing.assert_close(out, torch.arange(num_ctas, device="cuda", dtype=torch.int32))
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_device_tma_load():
 
     @gluon.jit
@@ -1939,7 +1939,7 @@ def test_device_tma_load():
     torch.testing.assert_close(input, output)
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_device_tma_store():
 
     @gluon.jit
@@ -1977,7 +1977,7 @@ def test_device_tma_store():
     torch.testing.assert_close(out, torch.zeros_like(out))
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_device_tma_stride_alignment():
 
     @gluon.jit
@@ -2057,7 +2057,7 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
     ttgl.store(out_ptrs, acc)
 
 
-@pytest.mark.xfail(not is_hopper(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
 @pytest.mark.parametrize("ASYNC", [True, False])
 def test_warpgroup_mma(ASYNC):
     torch.manual_seed(0)
@@ -2094,7 +2094,7 @@ def test_warpgroup_mma(ASYNC):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("M", [64, 128])
 @pytest.mark.parametrize("N", [64, 128, 256])
 def test_tcgen05_mma_collector_a(M, N):
@@ -2119,7 +2119,7 @@ def test_tcgen05_mma_collector_a(M, N):
     torch.testing.assert_close(out, a.float() @ b.float(), atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_rubin(), reason="Requires Rubin", run=False)
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
 @pytest.mark.parametrize("N,BLOCK_N,expected", [
     pytest.param(128, 128, [("", "fill"), ("", "lastuse")], id="b-only"),
     pytest.param(256, 128, [("", "fill"), ("fill", "lastuse"), ("lastuse", "fill"), ("", "lastuse")], id="b-major"),
@@ -2188,7 +2188,7 @@ def warpgroup_mma_wait_multi_warpgroup_kernel(a_ptr, b0_ptr, b1_ptr, out_ptr, D:
     ttgl.store(out_ptr + pid.to(ttgl.int64) * (M * D) + out_r[:, None] * D + out_c[None, :], acc)
 
 
-@pytest.mark.xfail(not is_hopper(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
 def test_warpgroup_mma_wait_synchronizes_warpgroups():
     torch.manual_seed(0)
     d, num_warp_groups = 64, 2
@@ -2352,7 +2352,7 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, out_desc, gather_idx_p
         ttgl.store(out_ptr + offs_m * BLOCK_N + offs_n, acc)
 
 
-@pytest.mark.xfail(not (is_hopper() or is_blackwell()), reason="Requires Hopper or Blackwell", run=False)
+@pytest.mark.skipif(not (is_hopper() or is_blackwell()), reason="Requires Hopper or Blackwell")
 @pytest.mark.parametrize("warps", ([8, 1], [4, 2], [4, 1]))
 @pytest.mark.parametrize("reps", ([1, 1, 1], [2, 2, 2], [1, 4, 2]))
 @pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [4, 4]])
@@ -2364,7 +2364,7 @@ def test_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, u
                                expect_before_copy=True)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_gather_scatter", [False, True], ids=["copy", "gather"])
 @pytest.mark.parametrize("expect_before_copy", [True, False], ids=["expect-first", "copy-first"])
@@ -2514,7 +2514,7 @@ def _run_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, u
     torch.testing.assert_close(out, ref, atol=atol, rtol=rtol)
 
 
-@pytest.mark.xfail(not (is_hopper() or is_blackwell()), reason="Requires Hopper or Blackwell", run=False)
+@pytest.mark.skipif(not (is_hopper() or is_blackwell()), reason="Requires Hopper or Blackwell")
 @pytest.mark.parametrize("bitwidth, transpose_a, transpose_b, acc_dtype",
                          [(bitwidth, transpose_a, transpose_b, acc_dtype)
                           for bitwidth in [8, 16, 32]
@@ -2737,7 +2737,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     torch.testing.assert_close(out, ref, atol=atol, rtol=rtol)
 
 
-@pytest.mark.xfail(not is_hip_cdna4(), reason="Requires CDNA4", run=False)
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("use_buffer_load", [True, False])
 def test_amd_direct_load_to_shared(use_buffer_load):
 
@@ -2773,7 +2773,7 @@ def test_amd_direct_load_to_shared(use_buffer_load):
     assert 'vmcnt(0)' in pgm.asm['amdgcn']
 
 
-@pytest.mark.xfail(not (is_hip_rdna3() or is_hip_rdna4()), reason="Requires RDNA3 or RDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_rdna3() or is_hip_rdna4()), reason="Requires RDNA3 or RDNA4")
 @pytest.mark.parametrize("M, N, K", [(64, 64, 64)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 @pytest.mark.parametrize("wide_k_width", [False, True])
@@ -2845,7 +2845,7 @@ def _check_cd_regclass_pins(llir, cd_regclass):
         assert f'"={cd_regclass},0"' in llir
 
 
-@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("M, N, K", [(32, 32, 16), (16, 16, 32)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 @pytest.mark.parametrize("num_warps", [4, 8])
@@ -2918,7 +2918,7 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version, cd_regclass):
     _check_cd_regclass_pins(compiled.asm["llir"], cd_regclass)
 
 
-@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("M, N, K, instr_shape, k_width, cdna4_only", [
     (32, 32, 128, [32, 32, 8], 4, False),
     (32, 32, 128, [32, 32, 8], 8, False),
@@ -2972,7 +2972,7 @@ def test_amd_mfma_small_k(M, N, K, instr_shape, k_width, cdna4_only, block_k_div
     torch.testing.assert_close(c, ref, atol=1e-3, rtol=1e-3)
 
 
-@pytest.mark.xfail(not is_hip_cdna4(), reason="Requires CDNA4", run=False)
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("M, N, K", [(32, 32, 128)])
 @pytest.mark.parametrize("a_type, b_type, cd_regclass",
                          [(a_type, b_type, None)
@@ -3079,7 +3079,7 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
     _check_cd_regclass_pins(compiled.asm['llir'], cd_regclass)
 
 
-@pytest.mark.xfail(not is_hip_cdna4(), reason="Requires CDNA4", run=False)
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("M, N, K", [(64, 64, 256)])
 @pytest.mark.parametrize("instr_shape", [[16, 16, 128], [32, 32, 64]])
 @pytest.mark.parametrize("a_type, b_type", [("e2m1", "e2m1"), ("e4m3", "e4m3"), ("e5m2", "e2m1"), ("e2m1", "e4m3")])
@@ -3155,7 +3155,7 @@ def test_amd_mfma_scaled_small_k(M, N, K, instr_shape, a_type, b_type, block_k_d
     torch.testing.assert_close(c.cpu(), ref, atol=1e-3, rtol=1e-4)
 
 
-@pytest.mark.xfail(not is_hip_cdna4(), reason="Requires CDNA4", run=False)
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 def test_amd_mfma_scaled_3d(device='cuda'):
 
     @gluon.jit
@@ -3257,7 +3257,7 @@ def test_math_fast_dividef(device):
     torch.testing.assert_close(z, torch.div(x, y), atol=1e-5, rtol=1e-4)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_copy_2d():
     device = "cuda"
 
@@ -3343,7 +3343,7 @@ def test_tmem_pipeline_stage_subslice_index_reinterpret():
 
 
 @pytest.mark.parametrize("M, N, BLOCK_M, BLOCK_N", [(256, 128, 128, 128), (128, 256, 64, 128)])
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_row_slice(M, N, BLOCK_M, BLOCK_N):
 
     @gluon.jit
@@ -3411,7 +3411,7 @@ def test_tmem_source_layout_contiguous_subslice():
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
 @pytest.mark.parametrize("M, N, BLOCK_N, dim", [(256, 256, 64, 0), (256, 128, 128, 1)])
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_noncontiguous_subslice_load_store(dtype, M, N, BLOCK_N, dim):
 
     @gluon.jit
@@ -3442,7 +3442,7 @@ def test_tmem_noncontiguous_subslice_load_store(dtype, M, N, BLOCK_N, dim):
     torch.testing.assert_close(out, ref, atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_blackwell_ultra(), reason="Requires Blackwell Ultra", run=False)
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires Blackwell Ultra")
 def test_tmem_noncontiguous_subslice_load_min():
 
     @gluon.jit
@@ -3471,7 +3471,7 @@ def test_tmem_noncontiguous_subslice_load_min():
     torch.testing.assert_close(reduced, inp[128:].amin(dim=1), atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_subslice_unpacked_one_column():
 
     @gluon.jit
@@ -3493,7 +3493,7 @@ def test_tmem_subslice_unpacked_one_column():
     torch.testing.assert_close(out[:, 1], inp[:, 1], atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("store_repeats", [1, 4])
 def test_tmem_same_warp_raw_then_cross_warp(device, store_repeats):
 
@@ -3538,7 +3538,7 @@ def test_tmem_same_warp_raw_then_cross_warp(device, store_repeats):
         torch.testing.assert_close(cross, expected_cross, rtol=0, atol=0)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("pred", [False, True])
 @pytest.mark.parametrize("iterations", [1, 3])
 def test_tmem_wait_predicated_store(pred, iterations):
@@ -3579,7 +3579,7 @@ def test_tmem_wait_predicated_store(pred, iterations):
     torch.testing.assert_close(out, expected, atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_subslice_block_m_64():
 
     @gluon.jit
@@ -3660,7 +3660,7 @@ def test_tmem_subslice_block_m_64():
     torch.testing.assert_close(out_ref, out_tri, atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("K,N,mn_major,storage_n,block_n", [(128, 1, False, 8, 8), (128, 1, False, 4, 8),
                                                             (128, 1, False, 2, 8), (128, 1, False, 2, 16),
                                                             (256, 4, False, 8, 8), (256, 1, True, 16, 16)])
@@ -3755,7 +3755,7 @@ def test_tcgen05_mma_zero_n_bases(K, N, mn_major, storage_n, block_n, scaled, tw
     torch.testing.assert_close(out, expected, atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("block_m", [64, 128])
 def test_tcgen05_mma_projected_tmem_layout(block_m):
     M, N, K = 2 * block_m, 16, 128
@@ -3774,7 +3774,7 @@ def test_tcgen05_mma_projected_tmem_layout(block_m):
     torch.testing.assert_close(out, a.float() @ b.float(), atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_block_m_64_mma():
 
     @gluon.jit
@@ -3864,7 +3864,7 @@ def test_block_m_64_mma():
     torch.testing.assert_close(d_ref, d_tri, rtol=0.08, atol=0)
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires CUDA", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 @pytest.mark.parametrize("high_base", [1, 2])
 def test_shared_dynamic_stage_synchronization(high_base, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = ""
@@ -3914,7 +3914,7 @@ def test_shared_dynamic_stage_synchronization(high_base, fresh_knobs):
     assert (barrier is not None) == (high_base == 1)
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_multibuffer_prefix_subslice():
 
     @gluon.jit
@@ -3941,7 +3941,7 @@ def test_multibuffer_prefix_subslice():
     torch.testing.assert_close(out3, torch.full_like(out3, 3), atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_proxy_fence_nested_multibuffer_prefix(fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = ""
 
@@ -4007,7 +4007,7 @@ def test_slice_reinterpret(device):
     torch.testing.assert_close(input, output, atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_tma_slice():
     XBLOCK = YBLOCK = ttgl.constexpr(128)
 
@@ -4044,7 +4044,7 @@ def test_tma_slice():
 @pytest.mark.parametrize("swizzle", [32, 64, 128])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("M, N, BLOCK_N", [(128, 128, 128), (256, 128, 64), (128, 128, 16)])
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_copy_no_scales(M, N, BLOCK_N, num_warps, swizzle):
 
     @gluon.jit
@@ -4087,7 +4087,7 @@ def test_tmem_copy_no_scales(M, N, BLOCK_N, num_warps, swizzle):
 
 @pytest.mark.parametrize("N, BLOCK_N", [(256, 64), (64, 8), (64, 4)])
 @pytest.mark.parametrize("pred", [False, True])
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_copy_noncontiguous_subslice(N, BLOCK_N, pred):
 
     @gluon.jit(do_not_specialize=["pred"])
@@ -4150,7 +4150,7 @@ def test_2d_tensor_early_return(device):
     assert compiled_kernel.asm["llir"].count("define") == 1
 
 
-@pytest.mark.xfail(not is_hip_cdna3() and not is_hip_cdna4(), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not is_hip_cdna3() and not is_hip_cdna4(), reason="Requires CDNA3 or CDNA4")
 def test_inline_with_amdgpu_dialect():
 
     @gluon.jit
@@ -4313,7 +4313,7 @@ def _combine_add2(a, b, c, d):
     return ttgl.split(blackwell.add2(lhs, rhs))
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
 def test_packed_arith_reduction(dtype):
 
@@ -4345,7 +4345,7 @@ def test_packed_arith_reduction(dtype):
         assert "prmt.b32" not in compiled.asm["ptx"]
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("op", ["add", "sub", "mul", "fma", "min", "max"])
 def test_packed_arith(op, dtype):
@@ -4418,7 +4418,7 @@ def test_packed_arith(op, dtype):
     assert f"ttng.packed_arith {op_name}" in compiled.asm["ttgir"]
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("op", ["min", "max"])
 def test_packed_arith_minmax_special_values(op, dtype):
@@ -4473,7 +4473,7 @@ def test_packed_arith_minmax_special_values(op, dtype):
     torch.testing.assert_close(out.view(torch.int16), expected.view(torch.int16), atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
 def test_packed_arith_chains(dtype):
 
@@ -4519,7 +4519,7 @@ def test_packed_arith_chains(dtype):
     assert "prmt.b32" not in compiled.asm["ptx"]
 
 
-@pytest.mark.xfail(not is_hip_cdna4(), reason="Requires CDNA4", run=False)
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 def test_buffer_atomic_rmw_add_bf16():
     BLOCK = 128
     elem_type = torch.bfloat16
@@ -4546,7 +4546,7 @@ def test_buffer_atomic_rmw_add_bf16():
     assert llir.count("tail call <2 x bfloat> @llvm.amdgcn.raw.ptr.buffer.atomic.fadd.v2bf16") == SIZE_PER_THREAD // 2
 
 
-@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("soffset, num_elements", [(0, 40), (10, 40), (30, 60), (10, 5), (5, 0)])
 def test_buffer_descriptor_soffset_bounds(soffset, num_elements):
 
@@ -4576,7 +4576,7 @@ def test_buffer_descriptor_soffset_bounds(soffset, num_elements):
     assert re.search(r"buffer_load_dword v\d+, v\d+, s\[\d+:\d+\], s\d+ offen", compiled.asm["amdgcn"])
 
 
-@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("num_elements", [4096, 3100])
 @pytest.mark.parametrize("rows_per_thread", [1, 2])
 def test_buffer_descriptor_tensor_soffset(num_elements, rows_per_thread):
@@ -4615,7 +4615,7 @@ def test_buffer_descriptor_tensor_soffset(num_elements, rows_per_thread):
     assert re.search(r"buffer_store_dwordx4 v\[\d+:\d+\], v\d+, s\[\d+:\d+\], s\d+ offen", amdgcn)
 
 
-@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("dtype", [torch.int8, torch.int32])
 @pytest.mark.parametrize("lane_bytes", ["element", 16])
 @pytest.mark.parametrize("num_records", [2**31, 2**32 - 4, 2**32 - 1])
@@ -4656,7 +4656,7 @@ def test_buffer_descriptor_full_range_mask(dtype, lane_bytes, num_records, soffs
         assert "buffer_load_dwordx4" in amdgcn and "buffer_store_dwordx4" in amdgcn
 
 
-@pytest.mark.xfail(not is_hip_cdna4(), reason="Requires CDNA4", run=False)
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("vec", [1, 4])
 @pytest.mark.parametrize("bound", ["partial", "full"])
 @pytest.mark.parametrize("soffset", [0, 5])
@@ -4688,7 +4688,7 @@ def test_buffer_load_to_shared_bounds_mask(vec, bound, soffset):
     torch.testing.assert_close(dst, torch.where(loaded, src[soffset:], 0).int(), atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 def test_buffer_descriptor_in_loop():
 
     @gluon.jit
@@ -4713,7 +4713,7 @@ def test_buffer_descriptor_in_loop():
     torch.testing.assert_close(dst, expected, atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("scope, scope_bits", [(None, ""), ("cta", " sc0"), ("gpu", " sc1"), ("sys", " sc0 sc1")])
 @pytest.mark.parametrize("nontemporal", [False, True])
 def test_buffer_load_store_scope_cache_policy(scope, scope_bits, nontemporal):
@@ -4744,7 +4744,7 @@ def test_buffer_load_store_scope_cache_policy(scope, scope_bits, nontemporal):
     assert bits("buffer_store_dword") == expected
 
 
-@pytest.mark.xfail(not is_hip_cdna4(), reason="Requires CDNA4", run=False)
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("nontemporal", [False, True])
 def test_cache_policy_global_load_to_shared(nontemporal):
 
@@ -4771,7 +4771,7 @@ def test_cache_policy_global_load_to_shared(nontemporal):
     assert all(("nt" in line.split()) == nontemporal for line in lines), lines
 
 
-@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 def test_buffer_ops_require_descriptor():
 
     @gluon.jit
@@ -4784,7 +4784,7 @@ def test_buffer_ops_require_descriptor():
         kernel[(1, )](src, num_warps=1)
 
 
-@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("soffset_shape, error", [
     ([2, 64], "must broadcast to the offsets shape"),
     ([1, 64], "same across the lanes of a wave"),
@@ -4818,7 +4818,7 @@ def test_buffer_tensor_soffset_must_be_wave_uniform(soffset_shape, error, op):
         kernel[(1, )](src, *soffset_shape, op, num_warps=1)
 
 
-@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("scope", ["gpu", "sys"])
 def test_buffer_atomic_load_store_handoff(scope):
 
@@ -4865,7 +4865,7 @@ def test_buffer_atomic_load_store_handoff(scope):
     assert any(re.search(rf"label %{label}\b", llir[load:]) for label in labels_before)
 
 
-@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("num_records", [48 * 4, 2**32 - 1])
 def test_buffer_atomic_load_store_bounds_mask(num_records):
 
@@ -4896,7 +4896,7 @@ def test_buffer_atomic_load_store_bounds_mask(num_records):
     torch.testing.assert_close(dst, expected, atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("hint", [False, True])
 def test_buffer_descriptor_alignment_hint(hint):
 
@@ -4922,7 +4922,7 @@ def test_buffer_descriptor_alignment_hint(hint):
     assert f"@llvm.amdgcn.raw.ptr.buffer.load.{load}(" in compiled.asm["llir"]
 
 
-@pytest.mark.xfail(not is_ampere_or_newer(), reason="Requires Ampere or newer", run=False)
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 def test_mma_v2(dtype):
     torch.manual_seed(42)
@@ -5064,7 +5064,7 @@ def test_split_auto_layout_execution(device):
     torch.testing.assert_close(output, ref)
 
 
-@pytest.mark.xfail(not is_blackwell_ultra(), reason="Requires SM103", run=False)
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires SM103")
 def test_fp6_tma_store_noinline():
     dst = torch.full((2, 48), 0xa5, device="cuda", dtype=torch.uint8)
     desc = TensorDescriptor.from_tensor(dst, [2, 64], ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16"))
@@ -5097,8 +5097,8 @@ def test_fp6_tma_store_reshaped_source_sm100():
     triton.compile(source, target=GPUTarget("cuda", 100, 32))
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
-                   reason="Requires SM100 or SM103", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
+                    reason="Requires SM100 or SM103")
 @pytest.mark.parametrize("host,rows,width", [(False, 1, 128), (True, 1, 128), (True, 1, 64), (True, 2, 64)])
 def test_fp6_tma_store_contiguous(host, rows, width, with_allocator):
     if width == 64 and not is_blackwell_ultra():
@@ -5150,8 +5150,8 @@ def _fp6_mma_tile(a_desc, b_desc, sa, sb, out, A_FMT: ttgl.constexpr, B_FMT: ttg
     ttgl.store(out + 128 * r[:, None] + c[None, :], acc.load())
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
-                   reason="Requires SM100 or SM103", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
+                    reason="Requires SM100 or SM103")
 @pytest.mark.parametrize("a_fmt,b_fmt", [("e4m3", "e2m3"), ("e4m3", "e3m2"), ("e2m3", "e3m2")])
 @pytest.mark.parametrize("mx", [False, True], ids=["fp6", "mxfp6"])
 @pytest.mark.parametrize("transpose_b", [True, False], ids=["transposed_b", "b"])
@@ -5182,7 +5182,7 @@ def test_fp6_tma_mma_operand(a_fmt, b_fmt, mx, transpose_b):
     torch.testing.assert_close(out, a @ b, atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tcgen05_mma_scaled_minimal():
     M = 128
     N = 128
@@ -5268,7 +5268,7 @@ def test_tcgen05_mma_scaled_minimal():
 
 
 @pytest.mark.parametrize("transposed", [False, True])
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tcgen05_mma_scaled_shared_linear_fp4(transposed):
 
     @gluon.jit
@@ -5296,7 +5296,7 @@ def test_tcgen05_mma_scaled_shared_linear_fp4(transposed):
     torch.testing.assert_close(out, torch.full_like(out, 32), rtol=0, atol=0)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tcgen05_mma_scaled_noncontiguous_accumulator():
 
     @gluon.jit
@@ -5354,7 +5354,7 @@ def test_tcgen05_mma_scaled_noncontiguous_accumulator():
         pytest.param("e2m1", None, "e2m1", None, True, True, False, 16, True, id="nvfp4_nvfp4"),
     ],
 )
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("acc_block_n", [64, 128])
 def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_dtype, a_is_fp4, b_is_fp4, a_fp4_padded,
                                      scale_vec_size, nvfp4, acc_block_n):
@@ -5491,7 +5491,7 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
     torch.testing.assert_close(out, ref, atol=atol, rtol=rtol)
 
 
-@pytest.mark.xfail(not (is_ampere_or_newer() or is_hip()), reason="Requires Ampere or newer, or AMD", run=False)
+@pytest.mark.skipif(not (is_ampere_or_newer() or is_hip()), reason="Requires Ampere or newer, or AMD")
 def test_coalesced_layout():
 
     @gluon.jit
@@ -5536,7 +5536,7 @@ def test_coalesced_layout():
     torch.testing.assert_close(output, ref)
 
 
-@pytest.mark.xfail(not (is_ampere_or_newer() or is_hip()), reason="Requires Ampere or newer, or AMD", run=False)
+@pytest.mark.skipif(not (is_ampere_or_newer() or is_hip()), reason="Requires Ampere or newer, or AMD")
 def test_convert_auto_layout_to_coalesced_layout():
 
     @gluon.jit
@@ -5580,7 +5580,7 @@ def test_convert_auto_layout_to_coalesced_layout():
     torch.testing.assert_close(output, ref)
 
 
-@pytest.mark.xfail(not is_ampere_or_newer(), reason="Requires Ampere or newer", run=False)
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
 @pytest.mark.parametrize("operation", ["ld", "st"])
 @pytest.mark.parametrize("dtype, transpose, reg_bases, lane_bases", [
     pytest.param(torch.int8, True, [128, 32, 64, 8, 512, 1024], [16, 256, 1, 2, 4], id="b8-transpose-nonadditive"),
@@ -5650,8 +5650,8 @@ def in_thread_transpose_roundtrip_kernel(input, output, M: ttgl.constexpr, N: tt
     ttgl.store(output + offs_m * N + offs_n, out_data)
 
 
-@pytest.mark.xfail(not (is_hip_cdna() or is_hip_rdna()),
-                   reason="Correctness tests for special cases on AMD architectures", run=False)
+@pytest.mark.skipif(not (is_hip_cdna() or is_hip_rdna()),
+                    reason="Correctness tests for special cases on AMD architectures")
 @pytest.mark.parametrize("src_reg_bases, dst_reg_bases", [
     ([[0, 1], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[1, 0], [2, 0], [4, 0], [0, 1], [0, 2], [0, 4]]),
     ([[0, 1], [0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], [[0, 1], [0, 4], [0, 2], [1, 0], [2, 0], [4, 0]]),
@@ -5694,7 +5694,7 @@ def descriptor_shape_kernel(desc, expect_shape):
         ttgl.device_assert(desc.shape[i] == expect_shape[i])
 
 
-@pytest.mark.xfail(not is_blackwell_ultra(), reason="Requires SM103", run=False)
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires SM103")
 def test_fp6_host_descriptor_shape_only():
     dst = torch.empty((2, 48), device="cuda", dtype=torch.uint8)
 
@@ -5707,7 +5707,7 @@ def test_fp6_host_descriptor_shape_only():
         warmup("b6x16_p32")
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_descriptor_shape():
     t = torch.randint(0, 256, (512, 512), dtype=torch.uint8)
 
@@ -5943,7 +5943,7 @@ def shared_gather_cga_kernel(
     ttgl.store(out + offsets, result)
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("num_ctas,broadcast_mask", _shared_gather_cga_cases())
 def test_shared_gather_cga(num_ctas, broadcast_mask):
     skip_if_unsupported_cluster_size(num_ctas)
@@ -6090,7 +6090,7 @@ def cross_cta_tma_kernel(desc, out, cga_layout: ttgl.constexpr, MODE: ttgl.const
         tma.async_atomic_add(desc, [0, 0], tile)
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("mode,cga_layout", [
     ("load", ((1, 0), )),
     ("load", ((1, 0), (0, 0))),
@@ -7607,7 +7607,7 @@ def tmem_reduction_kernel(
     ttgl.store(red_ptr + offs_1d, reduced)
 
 
-@pytest.mark.xfail(not (is_blackwell_ultra() or is_rubin()), reason="Requires Blackwell Ultra or Rubin", run=False)
+@pytest.mark.skipif(not (is_blackwell_ultra() or is_rubin()), reason="Requires Blackwell Ultra or Rubin")
 @pytest.mark.parametrize("red_op", ["min", "max"])
 @pytest.mark.parametrize("use_abs", [False, True])
 @pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
@@ -7665,7 +7665,7 @@ def test_tmem_reduction(red_op, use_abs, propagate_nan, M, N, num_warps):
 
 
 @pytest.mark.parametrize("num_ctas", [1, 2])
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_clc_basic(num_ctas):
     # Launch a grid with 2x the number of CTAs as the number of SMs
     # And ask to allocate a big chunk of smem per block (almost all
@@ -7962,7 +7962,7 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
 ])
 @pytest.mark.parametrize("ctas_per_cga", [(1, 1), (2, 1), (4, 1), (2, 2), (4, 2), (4, 4)])
 @pytest.mark.parametrize("multicast", [True, False])
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE, ctas_per_cga, multicast):
     skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
     BLOCK_M = 128 * ctas_per_cga[0]
@@ -7977,7 +7977,7 @@ def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE,
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
 
 
-@pytest.mark.xfail(not is_blackwell_ultra(), reason="Requires sm103 K96 MMA", run=False)
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K96 MMA")
 @pytest.mark.parametrize("fmt, vec_size", [("mxfp4", 32), ("nvfp4", 16)])
 @pytest.mark.parametrize(
     "m, n, k, block_m, block_n, block_k",
@@ -8172,7 +8172,7 @@ def tma_cache_policy_copy_kernel(in_desc, out_desc, Flag, POLICY: ttgl.constexpr
     smem._keep_alive()
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("kind,rank", [("load", 1), ("load", 2), ("load", 5), ("store", 1), ("store", 2), ("store", 5),
                                        ("gather", 2), ("scatter", 2)])
 @pytest.mark.parametrize("pred", [False, True])
@@ -8333,7 +8333,7 @@ def test_thread_regions_map_elementwise_callees(call_depth, device, fresh_knobs)
     assert compiled.metadata.shared == 0
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="requires warp specialization and CTA clusters", run=False)
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="requires warp specialization and CTA clusters")
 def test_thread_regions_multi_cta_noinline_worker(device, fresh_knobs):
     skip_if_unsupported_cluster_size(2)
     fresh_knobs.compilation.instrumentation_mode = ""

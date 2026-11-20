@@ -1915,8 +1915,7 @@ def _run_tensor_descriptor_dynamic_iisan(device, stride_m_val, base_byte_offset=
     torch.cuda.synchronize()
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires TMA (Hopper+)",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires TMA (Hopper+)")
 def test_tensor_descriptor_alignment_iisan_dynamic(device):
 
     base_env = {"CUDA_LAUNCH_BLOCKING": "1", "TRITON_INSTRUMENTATION_MODE": "iisan"}

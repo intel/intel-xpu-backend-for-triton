@@ -131,7 +131,7 @@ def run_failing_kernel(device, enable_consan, mode, num_ctas):
     failing_kernel[(1, )](input, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_cache_miss_knob(device, monkeypatch, num_ctas, run_wrapper):
     # First run without consan
     run_in_process(run_failing_kernel, (device, False, "knob", num_ctas))
@@ -144,7 +144,7 @@ def test_cache_miss_knob(device, monkeypatch, num_ctas, run_wrapper):
         assert any(msg in str(result.exc) for msg in ["device-side assert", "unspecified launch failure"])
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_cache_miss_env(device, monkeypatch, num_ctas, run_wrapper):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "")
     # First run without consan
@@ -158,7 +158,7 @@ def test_cache_miss_env(device, monkeypatch, num_ctas, run_wrapper):
         assert any(msg in str(result.exc) for msg in ["device-side assert", "unspecified launch failure"])
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.disable_warmup(reason="compiles into an intentionally isolated temporary cache")
 def test_consan_uses_profile_scratch(device, fresh_knobs, num_ctas):
     with knobs.cache.scope(), knobs.runtime.scope():
@@ -197,8 +197,7 @@ def _consan_noinline_convert_layout_kernel(input, output, sentinel_output):
     ttgl.store(sentinel_output + offsets, caller_allocation.load(layout))
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
 def test_consan_noinline_convert_layout_scratch(device, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = "consan"
     values = torch.arange(128, device=device, dtype=torch.int32)
@@ -213,8 +212,7 @@ def test_consan_noinline_convert_layout_scratch(device, fresh_knobs):
     torch.testing.assert_close(sentinel_output, values + 4096)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("MEMORY_KIND", ["shared", "tensor"])
 def test_consan_initializes_allocations_with_nan(MEMORY_KIND, device, num_ctas):
     knobs.compilation.instrumentation_mode = "consan"
@@ -245,7 +243,7 @@ def test_consan_initializes_allocations_with_nan(MEMORY_KIND, device, num_ctas):
     assert torch.isnan(output).all()
 
 
-@pytest.mark.xfail(not is_rubin(), reason="Requires Rubin", run=False)
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
 def test_mbarrier_arrive_multicast_completion(device, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     knobs.refresh_knobs()
@@ -264,8 +262,7 @@ def test_mbarrier_arrive_multicast_completion(device, monkeypatch):
     torch.testing.assert_close(output, torch.arange(2, device=device, dtype=torch.int32))
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -312,8 +309,7 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     kernel[(1, )](input_desc, output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("BLOCK", [64, 128], ids=["redundant-threads", "full-cta"])
 @pytest.mark.parametrize("EXPECT_DELTA", [0, 4], ids=["match", "mismatch"])
 def test_async_shared_store_expect_bytes(BLOCK, EXPECT_DELTA, device, run_wrapper, monkeypatch, num_ctas):
@@ -351,8 +347,7 @@ def test_async_shared_store_expect_bytes(BLOCK, EXPECT_DELTA, device, run_wrappe
     kernel[(1, )](output, EXPECT_DELTA=EXPECT_DELTA, BLOCK=BLOCK, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("WAIT", [True, False], ids=["wait", "no-wait"])
 def test_async_shared_store_completion(WAIT, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
@@ -390,8 +385,7 @@ def test_async_shared_store_completion(WAIT, device, run_wrapper, monkeypatch, n
     kernel[(1, )](output, WAIT=WAIT, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("EXPECT_DELTA", [0, 4], ids=["match", "mismatch"])
 def test_async_shared_store_split_recipients(EXPECT_DELTA, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
@@ -435,8 +429,7 @@ def test_async_shared_store_split_recipients(EXPECT_DELTA, device, run_wrapper, 
     torch.testing.assert_close(output, torch.arange(XBLOCK.value * num_ctas, device=device, dtype=torch.int32))
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FENCE", [False, True], ids=["missing", "present"])
 def test_async_shared_store_proxy_handoff(FENCE, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
@@ -487,8 +480,7 @@ def test_async_shared_store_proxy_handoff(FENCE, device, run_wrapper, monkeypatc
     torch.testing.assert_close(output, torch.full_like(output, 42.0))
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_tma_multicast_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
@@ -538,7 +530,7 @@ def test_async_tma_multicast_kernel(FAILURE, device, run_wrapper, monkeypatch, n
     kernel[(1, )](input_desc, output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell")
 def test_collapsed_wait_does_not_publish_peer_cta(device, run_wrapper, monkeypatch):
     if run_wrapper:
         result = run_in_process(test_collapsed_wait_does_not_publish_peer_cta, (device, False, monkeypatch))
@@ -580,7 +572,7 @@ def test_collapsed_wait_does_not_publish_peer_cta(device, run_wrapper, monkeypat
     kernel[(1, )](a_desc, b_desc, num_warps=4, num_ctas=2)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_clc_result_visibility(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -621,7 +613,7 @@ def test_clc_result_visibility(FAILURE, device, run_wrapper, monkeypatch, num_ct
     kernel[(1, )](output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell")
 def test_clc_double_try_cancel_result_overwrite(device, run_wrapper, monkeypatch):
     if run_wrapper:
         result = run_in_process(test_clc_double_try_cancel_result_overwrite, (device, False, monkeypatch))
@@ -653,7 +645,7 @@ def test_clc_double_try_cancel_result_overwrite(device, run_wrapper, monkeypatch
     kernel[(1, )](num_warps=4, num_ctas=2)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell")
 def test_clc_result_reuse_after_cluster_barrier(device, run_wrapper, monkeypatch):
     if run_wrapper:
         result = run_in_process(test_clc_result_reuse_after_cluster_barrier, (device, False, monkeypatch))
@@ -692,7 +684,7 @@ def test_clc_result_reuse_after_cluster_barrier(device, run_wrapper, monkeypatch
     kernel[(1, )](output, num_warps=4, num_ctas=2)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell")
 @pytest.mark.parametrize("SYNCHRONIZED", [False, True], ids=["local-expect", "from-cta0-expect"])
 def test_clc_slot_reuse_from_cta(SYNCHRONIZED, device, run_wrapper, monkeypatch):
     if run_wrapper:
@@ -748,8 +740,7 @@ def test_clc_slot_reuse_from_cta(SYNCHRONIZED, device, run_wrapper, monkeypatch)
     kernel[(1, )](SYNCHRONIZED=SYNCHRONIZED, num_warps=4, num_ctas=2)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 def test_async_tma_multicast_kernel_reuse(device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
         pytest.skip("Need at least 2 CTAs for multicast in this test")
@@ -796,8 +787,7 @@ def test_async_tma_multicast_kernel_reuse(device, run_wrapper, monkeypatch, num_
     kernel[(1, )](input_desc, output, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 def test_async_tma_multicast_kernel_local_store_race(device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
         pytest.skip("Need at least 2 CTAs for multicast in this test")
@@ -842,8 +832,7 @@ def test_async_tma_multicast_kernel_local_store_race(device, run_wrapper, monkey
     kernel[(1, )](input_desc, output, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 def test_cluster_barrier_does_not_publish_later_read(device, run_wrapper, monkeypatch):
     if run_wrapper:
         result = run_in_process(test_cluster_barrier_does_not_publish_later_read, (device, False, monkeypatch))
@@ -882,8 +871,7 @@ def test_cluster_barrier_does_not_publish_later_read(device, run_wrapper, monkey
     kernel[(1, )](input_desc, num_warps=4, num_ctas=4)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("PUBLISHED", [True, False], ids=["published-reader", "remote-reader"])
 def test_remote_shared_load_reader_visibility(PUBLISHED, FAILURE, device, run_wrapper, monkeypatch):
@@ -929,8 +917,7 @@ def test_remote_shared_load_reader_visibility(PUBLISHED, FAILURE, device, run_wr
     kernel[(1, )](out, PUBLISHED=PUBLISHED, FAILURE=FAILURE, num_warps=4, num_ctas=2)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FINISHED", [True, False])
 def test_cluster_barrier_publishes_only_observed_tensor_reads(FINISHED, device, run_wrapper, monkeypatch):
     if not FINISHED and run_wrapper:
@@ -983,8 +970,7 @@ def test_cluster_barrier_publishes_only_observed_tensor_reads(FINISHED, device, 
     kernel[(1, )](input_desc, out, FINISHED=FINISHED, num_warps=4, num_ctas=2)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize(
     "MODE,BLOCK,SIZE_PER_THREAD,NUM_CTAS,FAILURE",
     [
@@ -1060,8 +1046,7 @@ def test_local_scatter_conflicting_values(MODE, BLOCK, SIZE_PER_THREAD, NUM_CTAS
         torch.testing.assert_close(output, expected)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize(
     "OP,FAILURE",
     [
@@ -1128,8 +1113,7 @@ def test_local_indexed_cross_cta_visibility(OP, FAILURE, device, run_wrapper, mo
         torch.testing.assert_close(out, expected)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_tma_kernel_2bufs_1bar(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -1181,8 +1165,7 @@ def test_async_tma_kernel_2bufs_1bar(FAILURE, device, run_wrapper, monkeypatch, 
     kernel[(1, )](a_desc, b_desc, output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("EXPECT_DELTA", [-16, 16], ids=["under", "over"])
 def test_async_tma_expect_bytes_mismatch(EXPECT_DELTA, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -1225,8 +1208,7 @@ def test_async_tma_expect_bytes_mismatch(EXPECT_DELTA, device, run_wrapper, monk
     kernel[(1, )](input_desc, output, EXPECT_DELTA=EXPECT_DELTA, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_tma_interleave_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -1284,8 +1266,7 @@ def test_tma_interleave_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ct
     kernel[(1, )](input_desc, output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_tma_wait_tracks_only_waited_barrier(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -1345,8 +1326,7 @@ def test_tma_wait_tracks_only_waited_barrier(FAILURE, device, run_wrapper, monke
     kernel[(1, )](input_desc, output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_tma_wait_tracks_only_requested_phase(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -1417,8 +1397,7 @@ def test_tma_wait_tracks_only_requested_phase(FAILURE, device, run_wrapper, monk
     kernel[(1, )](input_desc, output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("WAIT_LATEST", [True, False])
 def test_tma_wait_does_not_publish_overwritten_row(WAIT_LATEST, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -1478,8 +1457,7 @@ def test_tma_wait_does_not_publish_overwritten_row(WAIT_LATEST, device, run_wrap
     kernel[(1, )](input_desc, output, WAIT_LATEST=WAIT_LATEST, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("OP", ["load", "store"])
 @pytest.mark.parametrize("SYNCHRONIZED", [True, False])
 def test_tma_overlapping_operations(OP, SYNCHRONIZED, device, run_wrapper, monkeypatch, num_ctas):
@@ -1537,8 +1515,7 @@ def test_tma_overlapping_operations(OP, SYNCHRONIZED, device, run_wrapper, monke
         torch.testing.assert_close(output, input)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires ampere or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires ampere or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_copy(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -1582,8 +1559,7 @@ def test_async_copy(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     kernel[(1, )](input, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("num_ctas", [1, 2], ids=["1cta", "2ctas"])
 @pytest.mark.parametrize("CASE", [
     "wait", "noinc", "committed", "missing_wait", "wrong_barrier", "after_arrive", "reused_buffer", "peer_read",
@@ -1662,8 +1638,7 @@ def test_async_copy_mbarrier_completion(CASE, num_ctas, device, run_wrapper, mon
         torch.testing.assert_close(output, expected)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("MODE", ["group_before", "group_after", "non_acquiring", "mixed_tma"])
 def test_ws_async_copy_mbarrier_visibility(MODE, device, run_wrapper, monkeypatch):
     if run_wrapper:
@@ -1745,8 +1720,7 @@ def test_ws_async_copy_mbarrier_visibility(MODE, device, run_wrapper, monkeypatc
         torch.testing.assert_close(output, expected)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires ampere or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires ampere or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_tma_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -1789,8 +1763,7 @@ def test_tma_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     kernel[(1, )](output_desc, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
 @pytest.mark.parametrize("FAILURE", [
     pytest.param(True, id="reused-pending-source"),
     pytest.param(False, id="stable-source"),
@@ -1862,8 +1835,7 @@ def test_tma_store_convert_layout_scratch(FAILURE, device, run_wrapper, monkeypa
     kernel[(1, )](output_desc, input, sink, iterations, FAILURE=FAILURE, num_warps=4)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("MEM_ACCESS_KIND", ["tma_cp", "local_store", "tmem_load", "tmem_store"])
 @pytest.mark.parametrize("TWO_CTAS", [False, True])
@@ -1967,8 +1939,7 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
                   num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("MEM_ACCESS_KIND", ["local_store", "tmem_load"])
 @pytest.mark.parametrize("PRED", [True, False])
@@ -2029,8 +2000,7 @@ def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, PRED, device, run_wrapper, monkey
     kernel[(1, )](input, output, PRED, FAILURE=FAILURE, MEM_ACCESS_KIND=MEM_ACCESS_KIND, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("MODE", ["stale-observer", "stale-snapshot", "synchronized"])
 def test_reader_generation(MODE, device, run_wrapper, monkeypatch):
     if MODE != "synchronized" and run_wrapper:
@@ -2074,8 +2044,7 @@ def test_reader_generation(MODE, device, run_wrapper, monkeypatch):
     kernel[(1, )](MODE=MODE, num_warps=4)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("TC_COMMIT", [False, True], ids=["ordinary-arrive", "tc-commit"])
 def test_reader_visibility_across_partitions(TC_COMMIT, device, run_wrapper, monkeypatch):
     if not TC_COMMIT and run_wrapper:
@@ -2132,8 +2101,7 @@ def test_reader_visibility_across_partitions(TC_COMMIT, device, run_wrapper, mon
     kernel[(1, )](TC_COMMIT=TC_COMMIT, num_warps=4)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 def test_ws_join_write_visibility(device, monkeypatch, num_ctas):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
@@ -2165,8 +2133,7 @@ def test_ws_join_write_visibility(device, monkeypatch, num_ctas):
     torch.testing.assert_close(output, torch.full_like(output, 7))
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FENCE_LOCATION", ["producer", "consumer"])
 def test_ws_join_publishes_to_async_peer(FENCE_LOCATION, device, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
@@ -2204,8 +2171,7 @@ def test_ws_join_publishes_to_async_peer(FENCE_LOCATION, device, monkeypatch):
     torch.testing.assert_close(output, torch.full_like(output, 42))
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 def test_ws_join_read_read_no_proxy_fence(device, monkeypatch):
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
@@ -2246,8 +2212,7 @@ def test_ws_join_read_read_no_proxy_fence(device, monkeypatch):
     torch.testing.assert_close(sink, output)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("WAIT", [False, True], ids=["pending", "completed"])
 def test_ws_join_async_write_visibility(WAIT, device, run_wrapper, monkeypatch):
     if not WAIT and run_wrapper:
@@ -2297,7 +2262,7 @@ def test_ws_join_async_write_visibility(WAIT, device, run_wrapper, monkeypatch):
     torch.testing.assert_close(output, input)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -2344,7 +2309,7 @@ def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     kernel[(1, )](input, FAILURE=FAILURE, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_warpgroup_mma2(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -2393,8 +2358,7 @@ def test_warpgroup_mma2(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     kernel[(1, )](input, FAILURE=FAILURE, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("BUF_IDX", [0, 1])
 @pytest.mark.parametrize("BAR_IDX", [0, 1, 2, 3])
 def test_tcgen5_mma_multibar(BUF_IDX, BAR_IDX, device, run_wrapper, monkeypatch, num_ctas):
@@ -2466,8 +2430,7 @@ def inc_mod(x, mod):
     return (x + 1) % mod
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_multibuffered_loop(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -2591,8 +2554,7 @@ def test_multibuffered_loop(FAILURE, device, run_wrapper, monkeypatch, num_ctas)
     kernel[(1, )](a_desc, b_desc, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 def test_tma_subslice_warp_specialized_reuse(device, run_wrapper, monkeypatch):
     if run_wrapper:
         result = run_in_process(test_tma_subslice_warp_specialized_reuse, (device, False, monkeypatch))
@@ -2653,8 +2615,7 @@ def test_tma_subslice_warp_specialized_reuse(device, run_wrapper, monkeypatch):
     torch.testing.assert_close(output, input.unsqueeze(0).expand_as(output), rtol=0, atol=0)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("SPLIT_A", [False, True])
 def test_tma_tcgen05_mma_multicast_loop(FAILURE, SPLIT_A, device, run_wrapper, monkeypatch, num_ctas):
@@ -2737,8 +2698,7 @@ def test_tma_tcgen05_mma_multicast_loop(FAILURE, SPLIT_A, device, run_wrapper, m
     kernel[(1, )](a_desc, b_desc, FAILURE=FAILURE, SPLIT_A=SPLIT_A, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 def test_tma_tcgen05_mma_missing_multicast(device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas != 4:
         pytest.skip("Need 4 CTAs to exercise the missing tcgen05_mma multicast race")
@@ -2812,8 +2772,7 @@ def test_tma_tcgen05_mma_missing_multicast(device, run_wrapper, monkeypatch, num
     kernel[(1, )](a_desc, b_desc, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("OVERCOUNTED", [False, True])
 def test_tcgen5_commit_multicast_barrier_count(OVERCOUNTED, device, run_wrapper, monkeypatch):
     if run_wrapper:
@@ -2866,7 +2825,7 @@ def test_tcgen5_commit_multicast_barrier_count(OVERCOUNTED, device, run_wrapper,
     kernel[(1, )](a_desc, b_desc, OVERCOUNTED=OVERCOUNTED, num_warps=4, num_ctas=2)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -2952,7 +2911,7 @@ def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper, monkeypatch, num
     kernel[(1, )](a_desc, b_desc, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_store_wait_load(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -3006,7 +2965,7 @@ def test_ws_store_wait_load(FAILURE, device, run_wrapper, monkeypatch, num_ctas)
     ws_kernel[(1, )](output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize(
     "FENCE_LOCATION",
     ["none", "producer_after_arrive", "producer_after_arrive_cluster_barrier", "producer", "consumer"])
@@ -3086,7 +3045,7 @@ def test_fence_async_shared_across_warp_specialize(FENCE_LOCATION, device, run_w
     torch.testing.assert_close(output, torch.full_like(output, 42.0))
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_load_wait_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -3140,7 +3099,7 @@ def test_ws_load_wait_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas)
     ws_kernel[(1, )](output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("SYNCHRONIZED", [False, True], ids=["missing-local-handoff", "local-handoff"])
 def test_ws_cluster_barrier_does_not_replace_local_handoff(SYNCHRONIZED, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
@@ -3204,7 +3163,7 @@ def test_ws_cluster_barrier_does_not_replace_local_handoff(SYNCHRONIZED, device,
     kernel[(1, )](output, ready, SYNCHRONIZED=SYNCHRONIZED, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("MISSING_BAR", ["none", "1", "2"])
 def test_ws_two_loads_two_bars(MISSING_BAR, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -3268,7 +3227,7 @@ def test_ws_two_loads_two_bars(MISSING_BAR, device, run_wrapper, monkeypatch, nu
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_two_loads_one_bar(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -3329,7 +3288,7 @@ def test_ws_two_loads_one_bar(FAILURE, device, run_wrapper, monkeypatch, num_cta
     kernel[(1, )](output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("MISSING_BAR", ["none", "0", "1", "2", "3"])
 def test_ws_two_loads_two_bars_loop(MISSING_BAR, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 4 and MISSING_BAR == "3" and "H100" in torch.cuda.get_device_name(device):
@@ -3422,7 +3381,7 @@ def test_ws_two_loads_two_bars_loop(MISSING_BAR, device, run_wrapper, monkeypatc
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_load_ordering(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -3488,7 +3447,7 @@ def test_ws_load_ordering(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     kernel[(1, )](output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("MISSING_BAR", ["none", "T2", "T3"])
 def test_ws_two_producers_two_consumers(MISSING_BAR, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -3582,7 +3541,7 @@ def test_ws_two_producers_two_consumers(MISSING_BAR, device, run_wrapper, monkey
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("MISSING_BAR", ["none", "1", "2"])
 def test_ws_different_warp_sizes(MISSING_BAR, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -3655,8 +3614,7 @@ def test_ws_different_warp_sizes(MISSING_BAR, device, run_wrapper, monkeypatch, 
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_async_copy_commits(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -3723,8 +3681,7 @@ def test_ws_async_copy_commits(FAILURE, device, run_wrapper, monkeypatch, num_ct
     kernel[(1, )](input, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_async_copy_wait_visibility(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -3780,7 +3737,7 @@ def test_ws_async_copy_wait_visibility(FAILURE, device, run_wrapper, monkeypatch
     kernel[(1, )](input, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -3845,7 +3802,7 @@ def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper, monkeypatch, num
     kernel[(1, )](FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("EXPLICIT_BARRIER", [False, True], ids=["terminal-barrier", "explicit-barrier"])
 @pytest.mark.parametrize("DEFAULT_WARPS", [4, 8], ids=["four-default-warps", "eight-default-warps"])
 def test_cluster_barrier_warp_specialized_phase_snapshot(EXPLICIT_BARRIER, DEFAULT_WARPS, device, run_wrapper,
@@ -3893,7 +3850,7 @@ def test_cluster_barrier_warp_specialized_phase_snapshot(EXPLICIT_BARRIER, DEFAU
     torch.testing.assert_close(output, torch.arange(num_ctas * 16, device=device, dtype=torch.int32))
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_deadlock_two_partitions(device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_deadlock_two_partitions, (device, False, monkeypatch, num_ctas))
@@ -3925,7 +3882,7 @@ def test_deadlock_two_partitions(device, run_wrapper, monkeypatch, num_ctas):
     kernel[(1, )](num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_deadlock_with_padded_warp_specialize_partition(device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_deadlock_with_padded_warp_specialize_partition,
@@ -3959,7 +3916,7 @@ def test_deadlock_with_padded_warp_specialize_partition(device, run_wrapper, mon
     kernel[(1, )](num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("TWO_CTAS,CLUSTER_BARRIER,FAILURE", [
     pytest.param(False, False, True, id="single-cta-mbarrier"),
     pytest.param(True, False, True, id="two-cta-mbarrier"),
@@ -4014,7 +3971,7 @@ def test_deadlock_after_other_partition_returns(TWO_CTAS, CLUSTER_BARRIER, FAILU
     kernel[(1, )](TWO_CTAS, CLUSTER_BARRIER, FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("CLUSTER_PARTITION", [False, True], ids=["default-region", "partition-region"])
 @pytest.mark.parametrize("FAILURE", [True, False], ids=["deadlock", "no-deadlock"])
 def test_deadlock_user_cluster_barrier_inside_warp_specialize(CLUSTER_PARTITION, FAILURE, device, run_wrapper,
@@ -4071,7 +4028,7 @@ def test_deadlock_user_cluster_barrier_inside_warp_specialize(CLUSTER_PARTITION,
         assert compiled.asm["ptx"].count("mbarrier.arrive.release.cluster.shared::cluster") >= 2
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_deadlock_overarrival(device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_deadlock_overarrival, (device, False, monkeypatch, num_ctas))
@@ -4095,7 +4052,7 @@ def test_deadlock_overarrival(device, run_wrapper, monkeypatch, num_ctas):
     kernel[(1, )](num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_deadlock_underarrival(device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_deadlock_underarrival, (device, False, monkeypatch, num_ctas))
@@ -4129,7 +4086,7 @@ def test_deadlock_underarrival(device, run_wrapper, monkeypatch, num_ctas):
     kernel[(1, )](num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_deadlock_different_phases(device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_deadlock_different_phases, (device, False, monkeypatch, num_ctas))
@@ -4162,7 +4119,7 @@ def test_deadlock_different_phases(device, run_wrapper, monkeypatch, num_ctas):
     kernel[(1, )](num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_deadlock_exempt_when_tma_signals(device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_deadlock_exempt_when_tma_signals, (device, False, monkeypatch, num_ctas))
@@ -4205,7 +4162,7 @@ def test_deadlock_exempt_when_tma_signals(device, run_wrapper, monkeypatch, num_
     kernel[(1, )](input_desc, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_barrier_underflow(device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_barrier_underflow, (device, False, monkeypatch, num_ctas))
@@ -4238,7 +4195,7 @@ def test_barrier_underflow(device, run_wrapper, monkeypatch, num_ctas):
     kernel[(1, )](num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("ACCESS", ["generic", "async-copy", "convert-layout"])
 @pytest.mark.parametrize("INVALIDATE", [False, True], ids=["live", "invalidated"])
 def test_payload_reuse_requires_barrier_invalidation(ACCESS, INVALIDATE, device, run_wrapper, monkeypatch):
@@ -4288,7 +4245,7 @@ def test_payload_reuse_requires_barrier_invalidation(ACCESS, INVALIDATE, device,
     torch.testing.assert_close(output, expected)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("WAIT", [False, True], ids=["outstanding-copy", "waited-copy"])
 def test_barrier_init_is_generic_write(WAIT, device, run_wrapper, monkeypatch):
     if run_wrapper and not WAIT:
@@ -4323,7 +4280,7 @@ def test_barrier_init_is_generic_write(WAIT, device, run_wrapper, monkeypatch):
     kernel[(1, )](source, WAIT=WAIT, num_warps=4, num_ctas=1)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("INITIALIZE", [False, True], ids=["uninitialized", "initialized"])
 def test_async_copy_mbarrier_arrive_requires_init(INITIALIZE, device, run_wrapper, monkeypatch):
     if run_wrapper and not INITIALIZE:
@@ -4349,7 +4306,7 @@ def test_async_copy_mbarrier_arrive_requires_init(INITIALIZE, device, run_wrappe
     kernel[(1, )](INITIALIZE=INITIALIZE, num_warps=4, num_ctas=1)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("COPY_KIND", ["tma", "cp_async"])
 @pytest.mark.parametrize("WAIT", [False, True], ids=["outstanding-completion", "waited-completion"])
 def test_barrier_invalidate_requires_completion_wait(WAIT, COPY_KIND, device, run_wrapper, monkeypatch):
@@ -4389,8 +4346,7 @@ def test_barrier_invalidate_requires_completion_wait(WAIT, COPY_KIND, device, ru
     kernel[(1, )](input_desc, source, WAIT=WAIT, COPY_KIND=COPY_KIND, num_warps=4, num_ctas=1)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("WIDTH", [pytest.param(32, id="bit31"), pytest.param(64, id="bit35")])
 @pytest.mark.parametrize("WAIT", [False, True], ids=["outstanding", "waited"])
 def test_consan_visibility_high_thread_bits(WIDTH, WAIT, device, run_wrapper, monkeypatch):
@@ -4461,8 +4417,7 @@ def test_consan_visibility_high_thread_bits(WIDTH, WAIT, device, run_wrapper, mo
     torch.testing.assert_close(markers, torch.arange(num_partitions, device=device, dtype=torch.int32))
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("WITH_INVALIDATE", [False, True])
 def test_barrier_reinit_requires_invalidate(WITH_INVALIDATE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -4491,8 +4446,7 @@ def test_barrier_reinit_requires_invalidate(WITH_INVALIDATE, device, run_wrapper
     kernel[(1, )](WITH_INVALIDATE=WITH_INVALIDATE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("USE_KIND", ["wait", "arrive", "invalidate", "expect"])
 def test_barrier_use_without_init(USE_KIND, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -4519,8 +4473,7 @@ def test_barrier_use_without_init(USE_KIND, device, run_wrapper, monkeypatch, nu
     kernel[(1, )](USE_KIND=USE_KIND, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("USE_KIND", ["wait", "arrive", "expect"])
 def test_barrier_use_after_invalidate(USE_KIND, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -4547,7 +4500,7 @@ def test_barrier_use_after_invalidate(USE_KIND, device, run_wrapper, monkeypatch
     kernel[(1, )](USE_KIND=USE_KIND, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("MISSING_BAR", [True, False])
 @pytest.mark.parametrize("OVERLAP", [True, False])
 def test_aliasing_shared_visibility_outstanding_write(MISSING_BAR, OVERLAP, device, run_wrapper, monkeypatch, num_ctas):
@@ -4611,7 +4564,7 @@ def test_aliasing_shared_visibility_outstanding_write(MISSING_BAR, OVERLAP, devi
     kernel[(1, )](MISSING_BAR=MISSING_BAR, OVERLAP=OVERLAP, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_aliasing_tma_overwrite_clears_stale_write_visibility(device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_aliasing_tma_overwrite_clears_stale_write_visibility,
@@ -4666,8 +4619,7 @@ def test_aliasing_tma_overwrite_clears_stale_write_visibility(device, run_wrappe
     kernel[(1, )](input_desc, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_aliasing_tensor_visibility_outstanding_read(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
@@ -4729,8 +4681,7 @@ def test_aliasing_tensor_visibility_outstanding_read(FAILURE, device, run_wrappe
     kernel[(1, )](FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 def test_disjoint_noncontiguous_tmem_subslices(device, run_wrapper, monkeypatch):
     if run_wrapper:
         result = run_in_process(test_disjoint_noncontiguous_tmem_subslices, (device, False, monkeypatch))
@@ -4767,8 +4718,7 @@ def test_disjoint_noncontiguous_tmem_subslices(device, run_wrapper, monkeypatch)
     kernel[(1, )](num_warps=4)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 def test_same_page_tmem_slabs_with_full_page_descriptor_collision(device, run_wrapper, monkeypatch):
     if run_wrapper:
         result = run_in_process(test_same_page_tmem_slabs_with_full_page_descriptor_collision,
@@ -4809,7 +4759,7 @@ def test_same_page_tmem_slabs_with_full_page_descriptor_collision(device, run_wr
     kernel[(1, )](num_warps=4)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("MISSING_WAIT", [True, False])
 @pytest.mark.parametrize("OVERLAP", [True, False])
 def test_aliasing_commit_tracking(MISSING_WAIT, OVERLAP, device, run_wrapper, monkeypatch, num_ctas):
@@ -4908,8 +4858,7 @@ def async_copy_mma_write_after_read_kernel(a_ptr, BLOCK_M: ttgl.constexpr, BLOCK
     ampere.async_copy.async_load(a_smem, a_ptr + offs)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 def test_mma_read_async_copy_write(run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_mma_read_async_copy_write, (False, monkeypatch, num_ctas))
@@ -4966,8 +4915,7 @@ def load_local_alloc_mma_write_after_read_kernel(a_ptr, K, BLOCK_M: ttgl.constex
     mbarrier.invalidate(bar)
 
 
-@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
-                   run=False)
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 def test_mma_read_local_alloc_write(run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_mma_read_local_alloc_write, (False, monkeypatch, num_ctas))

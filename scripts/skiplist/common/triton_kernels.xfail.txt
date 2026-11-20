@@ -1,0 +1,5 @@
+# CUDA is required
+python/triton_kernels/tests/test_matmul_metadata.py::test_matmul_flops_and_bytes_from_slices_handles_large_slice_count
+python/triton_kernels/tests/test_matmul_metadata.py::test_matmul_launch_metadata_nosync_matches_old_formula
+# Only supported for capability >= 9
+python/triton_kernels/tests/test_tensor_details/test_layout_hopper.py::test_upcast_mxfp4_to_bf16

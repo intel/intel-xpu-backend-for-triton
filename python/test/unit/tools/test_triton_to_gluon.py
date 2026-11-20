@@ -711,7 +711,7 @@ def num_threads_kernel(out_ptr):
     tl.store(out_ptr + offs, 1)
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires CUDA", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_num_threads(tmp_path):
     kernel = convert_kernel(num_threads_kernel, "num_threads_kernel", tmp_path)
 
@@ -780,8 +780,7 @@ def gather_scatter_roundtrip_kernel(out_ptr, in_ptr, idx_ptr, X: tl.constexpr, Y
 
 # TODO: parametrize over _descriptor_targets once NVIDIA gather/scatter translation is supported.
 # The translator currently routes gather/scatter to AMD-specific helpers for AMD targets only.
-@pytest.mark.xfail(not (is_hip_cdna5() or is_blackwell()),
-                   reason="Requires descriptor gather/scatter support (CDNA5 or Blackwell)", run=False)
+@pytest.mark.skipif(not is_hip_cdna5() and not is_blackwell(), reason="Requires descriptor gather/scatter support")
 def test_gather_scatter_roundtrip(tmp_path):
     kernel = convert_kernel(gather_scatter_roundtrip_kernel, "gather_scatter_roundtrip_kernel", tmp_path)
 

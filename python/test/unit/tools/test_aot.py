@@ -816,7 +816,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
 
 
 @pytest.mark.parametrize("target", [GPUTarget("hip", "gfx942", 64), GPUTarget("hip", "gfx1250", 32)])
-@pytest.mark.xfail(not is_hip(), reason="Requires HIP", run=False)
+@pytest.mark.skipif(not is_hip(), reason="Requires HIP")
 def test_gluon_kernel(target):
     with tempfile.TemporaryDirectory() as tmp_dir:
         dtype = "fp16"

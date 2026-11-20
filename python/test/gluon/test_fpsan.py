@@ -2355,7 +2355,7 @@ def test_bf16_dot_sharding(device, homomorphic_casts, fresh_knobs):
     torch.testing.assert_close(whole, split, atol=0, rtol=0)
 
 
-@pytest.mark.xfail(not is_cuda(), reason="Requires NVIDIA MMA v2", run=False)
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA MMA v2")
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_m"), _MMA_V2_CASES)
 def test_mma_v2(device, type_a, type_b, acc_type, m, n, k, instr_m, fresh_knobs):
     _require_backend(device)
@@ -2473,7 +2473,7 @@ def test_dot_fma_batched(device, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not is_hopper(), reason="Requires Hopper", run=False)
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
 @pytest.mark.parametrize(("use_acc", "is_async"), [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_n"), _WARP_GROUP_MMA_CASES)
 def test_warpgroup_mma(device, use_acc, is_async, type_a, type_b, acc_type, m, n, k, instr_n, fresh_knobs):
@@ -2533,8 +2533,7 @@ def test_warpgroup_mma(device, use_acc, is_async, type_a, type_b, acc_type, m, n
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not (is_hip_cdna4() or is_hip_cdna5()), reason="Requires DotScaledOp support (CDNA4, or CDNA5)",
-                   run=False)
+@pytest.mark.skipif(not (is_hip_cdna4() or is_hip_cdna5()), reason="Requires DotScaledOp support (CDNA4, or CDNA5)")
 @pytest.mark.parametrize("type_a", ["e2m1", "e4m3", "e5m2", "bf16", "fp16"])
 @pytest.mark.parametrize("type_b", ["e2m1", "e4m3", "e5m2", "bf16", "fp16"])
 def test_dot_scaled(device, type_a, type_b, fresh_knobs):
@@ -2612,7 +2611,7 @@ def test_dot_scaled(device, type_a, type_b, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("use_acc", [False, True])
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k"), _TCGEN05_MMA_CASES)
 def test_tcgen05_mma(device, use_acc, type_a, type_b, acc_type, m, n, k, fresh_knobs):
@@ -2689,7 +2688,7 @@ def test_tcgen05_mma(device, use_acc, type_a, type_b, acc_type, m, n, k, fresh_k
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("partition_warps", [4, 2, 1])
 def test_tcgen05_mma_warp_specialize_partition(device, partition_warps, fresh_knobs):
     _require_backend(device)
@@ -2753,7 +2752,7 @@ def test_tcgen05_mma_warp_specialize_partition(device, partition_warps, fresh_kn
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("num_ctas", [1, 2, 4])
 def test_tcgen05_mma_independent_ctas(device, num_ctas, fresh_knobs):
     _require_backend(device)
@@ -2802,7 +2801,7 @@ def test_tcgen05_mma_independent_ctas(device, num_ctas, fresh_knobs):
     _assert_payload_equal(out, expected)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("use_acc", [False, True])
 def test_tcgen05_mma_two_ctas(device, use_acc, fresh_knobs):
     _require_backend(device)
@@ -2881,7 +2880,7 @@ def test_tcgen05_mma_two_ctas(device, use_acc, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize(("type_a", "type_b", "m", "n", "k", "scale_factor", "scale_type"), _TCGEN05_MMA_SCALED_CASES)
 def test_tcgen05_mma_scaled(device, type_a, type_b, m, n, k, scale_factor, scale_type, fresh_knobs):
     _require_backend(device)
@@ -3004,7 +3003,7 @@ def test_tcgen05_mma_scaled(device, type_a, type_b, m, n, k, scale_factor, scale
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tcgen05_mma_scaled_two_ctas(device, fresh_knobs):
     _require_backend(device)
 
@@ -3127,7 +3126,7 @@ def test_tcgen05_mma_scaled_two_ctas(device, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_index_subslice(device, fresh_knobs):
     _require_backend(device)
 
@@ -3173,7 +3172,7 @@ def test_tmem_index_subslice(device, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("operation,pred", [("store", False), ("store", True), ("copy", False), ("copy", True)])
 @pytest.mark.parametrize("column_slice", [False, True])
 def test_tmem_row_subslice(device, operation, pred, column_slice, fresh_knobs):
@@ -3238,7 +3237,7 @@ def test_tmem_row_subslice(device, operation, pred, column_slice, fresh_knobs):
     _assert_payload_equal(parent_out, expected_parent)
 
 
-@pytest.mark.xfail(not is_blackwell_ultra(), reason="Requires Blackwell Ultra", run=False)
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires Blackwell Ultra")
 @pytest.mark.parametrize("red_op,use_abs", [("min", False), ("max", True)])
 def test_tmem_load_reduce(device, red_op, use_abs, fresh_knobs):
     _require_backend(device)
@@ -3291,7 +3290,7 @@ def test_tmem_load_reduce(device, red_op, use_abs, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("scale_shape", [(64, 16), (256, 4)])
 @pytest.mark.parametrize("two_ctas", [False, True])
 def test_tmem_copy_scales_in_warp_specialize_partition(device, scale_shape, two_ctas, fresh_knobs):
@@ -3405,7 +3404,7 @@ def test_tmem_copy_scales_in_warp_specialize_partition(device, scale_shape, two_
     torch.testing.assert_close(out, torch.tensor(expected, device=device))
 
 
-@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_store_in_warp_specialize_partition_visible_to_parent(device, fresh_knobs):
     _require_backend(device)
 
@@ -3566,7 +3565,7 @@ def test_f32_loop_preserves_snan_payload(device, fresh_knobs):
     _assert_payload_equal(out, expected)
 
 
-@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_m", "instr_n", "instr_k", "k_width"),
                          _MFMA_DOT_CASES)
 def test_mfma_dot(device, type_a, type_b, acc_type, m, n, k, instr_m, instr_n, instr_k, k_width, fresh_knobs):
@@ -3620,7 +3619,7 @@ def test_mfma_dot(device, type_a, type_b, acc_type, m, n, k, instr_m, instr_n, i
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not is_hip_cdna5(), reason="Requires CDNA5", run=False)
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_k", "k_width"), _WMMA_DOT_CASES)
 def test_wmma_dot(device, type_a, type_b, acc_type, m, n, k, instr_k, k_width, fresh_knobs):
     _require_backend(device)
@@ -3668,7 +3667,7 @@ def test_wmma_dot(device, type_a, type_b, acc_type, m, n, k, instr_k, k_width, f
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not _hip_device_supports_fpsan(), reason="Requires AMD target", run=False)
+@pytest.mark.skipif(not _hip_device_supports_fpsan(), reason="Requires AMD target")
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 @pytest.mark.parametrize("scale_factor", [32, 64])
 def test_scaled_upcast_fp4_compact_scales(device, dtype, scale_factor, fresh_knobs):

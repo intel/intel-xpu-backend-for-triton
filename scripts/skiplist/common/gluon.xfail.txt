@@ -1,0 +1,255 @@
+# Correctness tests for special cases on AMD architectures
+python/test/gluon/test_core.py::test_in_thread_convert_layout_8bit
+# Generic linear layouts are only supported on AMD
+python/test/gluon/test_lowerings.py::test_broadcast_generic_linear
+python/test/gluon/test_lowerings.py::test_convert_layout_overlapping_identity_dims
+python/test/gluon/test_lowerings.py::test_elementwise_generic_linear
+python/test/gluon/test_lowerings.py::test_expand_dims_generic_linear
+python/test/gluon/test_lowerings.py::test_local_load_store_generic_linear
+python/test/gluon/test_lowerings.py::test_permute_generic_linear
+python/test/gluon/test_lowerings.py::test_reshape_generic_linear
+python/test/gluon/test_lowerings.py::test_split_join_generic_linear
+# NVIDIA redux instructions
+python/test/gluon/test_lowerings.py::test_reduce_broadcast_across_warps
+python/test/gluon/test_lowerings.py::test_reduce_partitioned
+# Requires AMD target
+python/test/gluon/test_fpsan.py::test_scaled_upcast_fp4_compact_scales
+# Requires Ampere
+python/test/gluon/test_core.py::test_async_copy_mbarrier
+# Requires Ampere or newer
+python/test/gluon/test_core.py::test_ldstmatrix_register_order
+python/test/gluon/test_core.py::test_mma_v2
+# Requires Ampere or newer, or AMD
+python/test/gluon/test_core.py::test_coalesced_layout
+python/test/gluon/test_core.py::test_convert_auto_layout_to_coalesced_layout
+python/test/gluon/test_core.py::test_noinline_call_preserves_live_shared_allocation
+# Requires Blackwell
+python/test/gluon/test_core.py::test_block_m_64_mma
+python/test/gluon/test_core.py::test_clc_basic
+python/test/gluon/test_core.py::test_descriptor_shape
+python/test/gluon/test_core.py::test_mma_scaled_tcgen05_copy
+python/test/gluon/test_core.py::test_packed_arith
+python/test/gluon/test_core.py::test_packed_arith_chains
+python/test/gluon/test_core.py::test_packed_arith_minmax_special_values
+python/test/gluon/test_core.py::test_packed_arith_reduction
+python/test/gluon/test_core.py::test_tcgen05_mma_collector_a
+python/test/gluon/test_core.py::test_tcgen05_mma_multicast_commit
+python/test/gluon/test_core.py::test_tcgen05_mma_projected_tmem_layout
+python/test/gluon/test_core.py::test_tcgen05_mma_scaled_direct_multicast_barrier
+python/test/gluon/test_core.py::test_tcgen05_mma_scaled_lhs_tmem
+python/test/gluon/test_core.py::test_tcgen05_mma_scaled_minimal
+python/test/gluon/test_core.py::test_tcgen05_mma_scaled_noncontiguous_accumulator
+python/test/gluon/test_core.py::test_tcgen05_mma_scaled_shared_linear_fp4
+python/test/gluon/test_core.py::test_tcgen05_mma_zero_n_bases
+python/test/gluon/test_core.py::test_tma_gather_scatter_multi_cta
+python/test/gluon/test_core.py::test_tma_gather_scatter_subslice
+python/test/gluon/test_core.py::test_tma_mma_shared_inputs_expect_order
+python/test/gluon/test_core.py::test_tmem_copy_2d
+python/test/gluon/test_core.py::test_tmem_copy_no_scales
+python/test/gluon/test_core.py::test_tmem_copy_noncontiguous_subslice
+python/test/gluon/test_core.py::test_tmem_noncontiguous_subslice_load_store
+python/test/gluon/test_core.py::test_tmem_row_slice
+python/test/gluon/test_core.py::test_tmem_same_warp_raw_then_cross_warp
+python/test/gluon/test_core.py::test_tmem_subslice_block_m_64
+python/test/gluon/test_core.py::test_tmem_subslice_unpacked_one_column
+python/test/gluon/test_core.py::test_tmem_wait_predicated_store
+python/test/gluon/test_fpsan.py::test_tcgen05_mma
+python/test/gluon/test_fpsan.py::test_tcgen05_mma_independent_ctas
+python/test/gluon/test_fpsan.py::test_tcgen05_mma_scaled
+python/test/gluon/test_fpsan.py::test_tcgen05_mma_scaled_two_ctas
+python/test/gluon/test_fpsan.py::test_tcgen05_mma_two_ctas
+python/test/gluon/test_fpsan.py::test_tcgen05_mma_warp_specialize_partition
+python/test/gluon/test_fpsan.py::test_tmem_copy_scales_in_warp_specialize_partition
+python/test/gluon/test_fpsan.py::test_tmem_index_subslice
+python/test/gluon/test_fpsan.py::test_tmem_row_subslice
+python/test/gluon/test_fpsan.py::test_tmem_store_in_warp_specialize_partition_visible_to_parent
+python/test/gluon/test_lowerings.py::test_tmem_load_store_instruction_sizes
+# Requires Blackwell Ultra
+python/test/gluon/test_core.py::test_tmem_noncontiguous_subslice_load_min
+python/test/gluon/test_fpsan.py::test_tmem_load_reduce
+# Requires Blackwell Ultra or Rubin
+python/test/gluon/test_core.py::test_tmem_reduction
+# Requires CDNA3 or CDNA4
+python/test/gluon/test_core.py::test_amd_mfma
+python/test/gluon/test_core.py::test_amd_mfma_small_k
+python/test/gluon/test_core.py::test_buffer_atomic_load_store_bounds_mask
+python/test/gluon/test_core.py::test_buffer_atomic_load_store_handoff
+python/test/gluon/test_core.py::test_buffer_descriptor_alignment_hint
+python/test/gluon/test_core.py::test_buffer_descriptor_full_range_mask
+python/test/gluon/test_core.py::test_buffer_descriptor_in_loop
+python/test/gluon/test_core.py::test_buffer_descriptor_soffset_bounds
+python/test/gluon/test_core.py::test_buffer_descriptor_tensor_soffset
+python/test/gluon/test_core.py::test_buffer_load_store_scope_cache_policy
+python/test/gluon/test_core.py::test_buffer_ops_require_descriptor
+python/test/gluon/test_core.py::test_buffer_tensor_soffset_must_be_wave_uniform
+python/test/gluon/test_core.py::test_inline_with_amdgpu_dialect
+python/test/gluon/test_fpsan.py::test_mfma_dot
+# Requires CDNA4
+python/test/gluon/test_core.py::test_amd_direct_load_to_shared
+python/test/gluon/test_core.py::test_amd_mfma_scaled
+python/test/gluon/test_core.py::test_amd_mfma_scaled_3d
+python/test/gluon/test_core.py::test_amd_mfma_scaled_small_k
+python/test/gluon/test_core.py::test_buffer_atomic_rmw_add_bf16
+python/test/gluon/test_core.py::test_buffer_load_to_shared_bounds_mask
+python/test/gluon/test_core.py::test_cache_policy_global_load_to_shared
+# Requires CDNA5
+python/test/gluon/test_fpsan.py::test_wmma_dot
+# Requires CUDA
+python/test/gluon/test_core.py::test_shared_dynamic_stage_synchronization
+# Requires CUDA PTX
+python/test/gluon/test_core.py::test_atomic_load_store_vectorization
+# Requires DotScaledOp support (CDNA4, or CDNA5)
+python/test/gluon/test_fpsan.py::test_dot_scaled
+# Requires Hopper
+python/test/gluon/test_core.py::test_copy_kernel_multi_cta
+python/test/gluon/test_core.py::test_cross_cta_tma
+python/test/gluon/test_core.py::test_device_tma_load
+python/test/gluon/test_core.py::test_device_tma_store
+python/test/gluon/test_core.py::test_device_tma_stride_alignment
+python/test/gluon/test_core.py::test_gluon_tma_round_f32_to_tf32
+python/test/gluon/test_core.py::test_local_store_sharded_to_replicated
+python/test/gluon/test_core.py::test_multibuffer_prefix_subslice
+python/test/gluon/test_core.py::test_proxy_fence_nested_multibuffer_prefix
+python/test/gluon/test_core.py::test_proxy_fence_noinline_tma_store
+python/test/gluon/test_core.py::test_shared_gather_cga
+python/test/gluon/test_core.py::test_tma
+python/test/gluon/test_core.py::test_tma_cache_policy_copy
+python/test/gluon/test_core.py::test_tma_im2col
+python/test/gluon/test_core.py::test_tma_multicast_copy
+python/test/gluon/test_core.py::test_tma_slice
+python/test/gluon/test_core.py::test_warpgroup_mma
+python/test/gluon/test_core.py::test_warpgroup_mma_wait_synchronizes_warpgroups
+python/test/gluon/test_fpsan.py::test_warpgroup_mma
+# Requires Hopper or Blackwell
+python/test/gluon/test_core.py::test_mma_shared_inputs
+python/test/gluon/test_core.py::test_tma_mma_shared_inputs
+# Requires Hopper or newer
+python/test/gluon/test_consan.py::test_consan_noinline_convert_layout_scratch
+python/test/gluon/test_consan.py::test_tma_store_convert_layout_scratch
+python/test/gluon/test_core.py::test_mbarrier_atomic_progress
+python/test/gluon/test_core.py::test_mbarrier_automatic_warp_arrivals
+python/test/gluon/test_core.py::test_mbarrier_automatic_warp_arrivals_cross_cta
+python/test/gluon/test_core.py::test_mbarrier_automatic_warp_arrivals_noinline
+python/test/gluon/test_core.py::test_mbarrier_dynamic_index_gsan
+python/test/gluon/test_core.py::test_mbarrier_multiple_tma_expectations
+python/test/gluon/test_core.py::test_mbarrier_private_indexed_counter
+python/test/gluon/test_core.py::test_mbarrier_private_phase_progress
+python/test/gluon/test_core.py::test_mbarrier_tma_progress
+python/test/gluon/test_core.py::test_mbarrier_wait_before_distributed_arrival
+# Requires NVIDIA Hopper or newer
+python/test/gluon/test_lowerings.py::test_atomic_poll_two_ctas
+python/test/gluon/test_lowerings.py::test_cluster_barrier_in_warp_specialize
+python/test/gluon/test_lowerings.py::test_convert_layout_cross_cta_in_warp_specialize
+# Requires NVIDIA MMA v2
+python/test/gluon/test_fpsan.py::test_mma_v2
+# Requires RDNA3 or RDNA4
+python/test/gluon/test_core.py::test_amd_wmma
+# Requires Rubin
+python/test/gluon/test_consan.py::test_mbarrier_arrive_multicast_completion
+python/test/gluon/test_core.py::test_mbarrier_arrive_broadcast_one_cta
+python/test/gluon/test_core.py::test_mbarrier_arrive_multicast
+python/test/gluon/test_core.py::test_tcgen05_mma_collector_ab
+# Requires SM100 or SM103
+python/test/gluon/test_core.py::test_fp6_tma_mma_operand
+python/test/gluon/test_core.py::test_fp6_tma_store_contiguous
+# Requires SM103
+python/test/gluon/test_core.py::test_fp6_host_descriptor_shape_only
+python/test/gluon/test_core.py::test_fp6_tma_store_noinline
+# Requires ampere or newer
+python/test/gluon/test_consan.py::test_async_copy
+python/test/gluon/test_consan.py::test_tma_store
+# Requires blackwell
+python/test/gluon/test_consan.py::test_clc_double_try_cancel_result_overwrite
+python/test/gluon/test_consan.py::test_clc_result_reuse_after_cluster_barrier
+python/test/gluon/test_consan.py::test_clc_result_visibility
+python/test/gluon/test_consan.py::test_clc_slot_reuse_from_cta
+python/test/gluon/test_consan.py::test_collapsed_wait_does_not_publish_peer_cta
+# Requires blackwell or newer
+python/test/gluon/test_consan.py::test_aliasing_tensor_visibility_outstanding_read
+python/test/gluon/test_consan.py::test_cluster_barrier_publishes_only_observed_tensor_reads
+python/test/gluon/test_consan.py::test_consan_initializes_allocations_with_nan
+python/test/gluon/test_consan.py::test_consan_visibility_high_thread_bits
+python/test/gluon/test_consan.py::test_disjoint_noncontiguous_tmem_subslices
+python/test/gluon/test_consan.py::test_mma_read_async_copy_write
+python/test/gluon/test_consan.py::test_mma_read_local_alloc_write
+python/test/gluon/test_consan.py::test_multibuffered_loop
+python/test/gluon/test_consan.py::test_reader_generation
+python/test/gluon/test_consan.py::test_reader_visibility_across_partitions
+python/test/gluon/test_consan.py::test_same_page_tmem_slabs_with_full_page_descriptor_collision
+python/test/gluon/test_consan.py::test_tcgen5_commit_multicast_barrier_count
+python/test/gluon/test_consan.py::test_tcgen5_copy
+python/test/gluon/test_consan.py::test_tcgen5_mma
+python/test/gluon/test_consan.py::test_tcgen5_mma_multibar
+python/test/gluon/test_consan.py::test_tma_subslice_warp_specialized_reuse
+python/test/gluon/test_consan.py::test_tma_tcgen05_mma_missing_multicast
+python/test/gluon/test_consan.py::test_tma_tcgen05_mma_multicast_loop
+# Requires hopper
+python/test/gluon/test_consan.py::test_aliasing_commit_tracking
+python/test/gluon/test_consan.py::test_aliasing_shared_visibility_outstanding_write
+python/test/gluon/test_consan.py::test_aliasing_tma_overwrite_clears_stale_write_visibility
+python/test/gluon/test_consan.py::test_async_copy_mbarrier_arrive_requires_init
+python/test/gluon/test_consan.py::test_barrier_init_is_generic_write
+python/test/gluon/test_consan.py::test_barrier_invalidate_requires_completion_wait
+python/test/gluon/test_consan.py::test_barrier_underflow
+python/test/gluon/test_consan.py::test_cache_miss_env
+python/test/gluon/test_consan.py::test_cache_miss_knob
+python/test/gluon/test_consan.py::test_cluster_barrier_warp_specialized_phase_snapshot
+python/test/gluon/test_consan.py::test_consan_uses_profile_scratch
+python/test/gluon/test_consan.py::test_deadlock_after_other_partition_returns
+python/test/gluon/test_consan.py::test_deadlock_different_phases
+python/test/gluon/test_consan.py::test_deadlock_exempt_when_tma_signals
+python/test/gluon/test_consan.py::test_deadlock_overarrival
+python/test/gluon/test_consan.py::test_deadlock_two_partitions
+python/test/gluon/test_consan.py::test_deadlock_underarrival
+python/test/gluon/test_consan.py::test_deadlock_user_cluster_barrier_inside_warp_specialize
+python/test/gluon/test_consan.py::test_deadlock_with_padded_warp_specialize_partition
+python/test/gluon/test_consan.py::test_fence_async_shared_across_warp_specialize
+python/test/gluon/test_consan.py::test_multibuffered_wgmma_loop
+python/test/gluon/test_consan.py::test_payload_reuse_requires_barrier_invalidation
+python/test/gluon/test_consan.py::test_warpgroup_mma
+python/test/gluon/test_consan.py::test_warpgroup_mma2
+python/test/gluon/test_consan.py::test_ws_cluster_barrier_does_not_replace_local_handoff
+python/test/gluon/test_consan.py::test_ws_different_warp_sizes
+python/test/gluon/test_consan.py::test_ws_load_ordering
+python/test/gluon/test_consan.py::test_ws_load_wait_store
+python/test/gluon/test_consan.py::test_ws_store_wait_load
+python/test/gluon/test_consan.py::test_ws_two_loads_one_bar
+python/test/gluon/test_consan.py::test_ws_two_loads_two_bars
+python/test/gluon/test_consan.py::test_ws_two_loads_two_bars_loop
+python/test/gluon/test_consan.py::test_ws_two_producers_two_consumers
+python/test/gluon/test_consan.py::test_ws_wgmma_wait_visibility
+# Requires hopper or newer
+python/test/gluon/test_consan.py::test_async_copy_mbarrier_completion
+python/test/gluon/test_consan.py::test_async_shared_store_completion
+python/test/gluon/test_consan.py::test_async_shared_store_expect_bytes
+python/test/gluon/test_consan.py::test_async_shared_store_proxy_handoff
+python/test/gluon/test_consan.py::test_async_shared_store_split_recipients
+python/test/gluon/test_consan.py::test_async_tma_expect_bytes_mismatch
+python/test/gluon/test_consan.py::test_async_tma_kernel
+python/test/gluon/test_consan.py::test_async_tma_kernel_2bufs_1bar
+python/test/gluon/test_consan.py::test_async_tma_multicast_kernel
+python/test/gluon/test_consan.py::test_async_tma_multicast_kernel_local_store_race
+python/test/gluon/test_consan.py::test_async_tma_multicast_kernel_reuse
+python/test/gluon/test_consan.py::test_barrier_reinit_requires_invalidate
+python/test/gluon/test_consan.py::test_barrier_use_after_invalidate
+python/test/gluon/test_consan.py::test_barrier_use_without_init
+python/test/gluon/test_consan.py::test_cluster_barrier_does_not_publish_later_read
+python/test/gluon/test_consan.py::test_local_indexed_cross_cta_visibility
+python/test/gluon/test_consan.py::test_local_scatter_conflicting_values
+python/test/gluon/test_consan.py::test_remote_shared_load_reader_visibility
+python/test/gluon/test_consan.py::test_tma_interleave_kernel
+python/test/gluon/test_consan.py::test_tma_overlapping_operations
+python/test/gluon/test_consan.py::test_tma_wait_does_not_publish_overwritten_row
+python/test/gluon/test_consan.py::test_tma_wait_tracks_only_requested_phase
+python/test/gluon/test_consan.py::test_tma_wait_tracks_only_waited_barrier
+python/test/gluon/test_consan.py::test_ws_async_copy_commits
+python/test/gluon/test_consan.py::test_ws_async_copy_mbarrier_visibility
+python/test/gluon/test_consan.py::test_ws_async_copy_wait_visibility
+python/test/gluon/test_consan.py::test_ws_join_async_write_visibility
+python/test/gluon/test_consan.py::test_ws_join_publishes_to_async_peer
+python/test/gluon/test_consan.py::test_ws_join_read_read_no_proxy_fence
+python/test/gluon/test_consan.py::test_ws_join_write_visibility
+# Requires sm103 K96 MMA
+python/test/gluon/test_core.py::test_tcgen05_mma_scaled_k96_subtiling
+# requires warp specialization and CTA clusters
+python/test/gluon/test_core.py::test_thread_regions_multi_cta_noinline_worker

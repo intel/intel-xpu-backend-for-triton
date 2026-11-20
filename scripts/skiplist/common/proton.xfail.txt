@@ -1,0 +1,4 @@
+# HW trace is only supported on Blackwell GPUs
+third_party/proton/test/test_profile.py::test_hw_trace
+# Only CUDA/HIP backend supports NVTX profiling
+third_party/proton/test/test_profile.py::test_nvtx_range_push_pop

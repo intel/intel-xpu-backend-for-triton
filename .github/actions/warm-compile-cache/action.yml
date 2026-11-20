@@ -5,7 +5,7 @@ inputs:
     description: Directory (relative to repo root) to run pytest from
     required: true
   skiplist-name:
-    description: Skiplist file stem under scripts/skiplist/<arch>/ matching the suite's TRITON_TEST_SUITE
+    description: Skiplist file stem under scripts/skiplist/<arch>/ and scripts/skiplist/common/ matching the suite's TRITON_TEST_SUITE
     required: true
   pytest-targets:
     description: Pytest target paths/filters, e.g. `language/test_core.py -k "test_scaled_dot"`
@@ -31,8 +31,15 @@ runs:
           if [[ -f "$skiplist_dir/${{ inputs.skiplist-name }}.txt" ]]; then
             skip_args+=(--skip-from-file="$skiplist_dir/${{ inputs.skiplist-name }}.txt")
           fi
-          if [[ -f "$skiplist_dir/${{ inputs.skiplist-name }}.xfail.txt" ]]; then
-            skip_args+=(--xfail-norun-from-file="$skiplist_dir/${{ inputs.skiplist-name }}.xfail.txt")
+          xfail_files=""
+          for f in "$skiplist_dir/${{ inputs.skiplist-name }}.xfail.txt" \
+              "$GITHUB_WORKSPACE/scripts/skiplist/common/${{ inputs.skiplist-name }}.xfail.txt"; do
+            if [[ -f "$f" ]]; then
+              xfail_files="${xfail_files:+$xfail_files;}$f"
+            fi
+          done
+          if [[ -n "$xfail_files" ]]; then
+            skip_args+=(--xfail-norun-from-file="$xfail_files" --xfail-overrides-skip)
           fi
           if (( ${#skip_args[@]} )); then
             skip_args+=(--select-fail-on-missing)
