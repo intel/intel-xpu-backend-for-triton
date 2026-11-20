@@ -68,6 +68,7 @@ INVALIDATING_RAW_ENV_VARS = (
 
 # Knobs reflected into the `XPUOptions` field named here.
 KNOBS_REFLECTED_IN_OPTIONS = {
+    "disable_narrow_broadcast_loads": "narrow_broadcast_loads",
     "disable_optimize_load_masks": "optimize_load_masks",
     "dynamic_shared_memory": "dynamic_shared_memory",
     "enable_code_sinking": "code_sinking",
@@ -160,3 +161,23 @@ def test_knob_changes_the_compile_cache_key(monkeypatch):
     before = _cache_key()
     monkeypatch.setenv("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", "1")
     assert _cache_key() != before
+
+
+@pytest.mark.skipif(not is_xpu(), reason="needs an XPU target to parse options")
+@pytest.mark.parametrize("env, option, expected", [
+    (None, None, True),
+    ("1", None, False),
+    ("0", None, True),
+    ("1", True, True),
+    ("0", False, False),
+])
+def test_narrow_broadcast_loads_precedence_and_hash(env, option, expected, monkeypatch):
+    # The launch option wins over TRITON_INTEL_DISABLE_NARROW_BROADCAST_LOADS, and the field is hashed.
+    if env is None:
+        monkeypatch.delenv("TRITON_INTEL_DISABLE_NARROW_BROADCAST_LOADS", raising=False)
+    else:
+        monkeypatch.setenv("TRITON_INTEL_DISABLE_NARROW_BROADCAST_LOADS", env)
+    backend = make_backend(driver.active.get_current_target())
+    opts = backend.parse_options({} if option is None else {"narrow_broadcast_loads": option})
+    assert opts.narrow_broadcast_loads is expected
+    assert opts.hash() != backend.parse_options({"narrow_broadcast_loads": not expected}).hash()

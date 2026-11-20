@@ -331,4 +331,31 @@ def TritonIntelOptimizeLoadMasks
   ];
 }
 
+def TritonIntelNarrowBroadcastLoads
+    : Pass<"triton-intel-narrow-broadcast-loads", "mlir::ModuleOp"> {
+  let summary = "Load a row-broadcast GEMM epilogue operand once and broadcast it";
+
+  let description = [{
+    A masked `tt.load` of a row-broadcast pointer (a bias row) in a dot
+    epilogue reads the same row once per tile row, and its full-size masked
+    tensor is anchored by RemoveLayoutConversions, which keeps converts to and
+    from the DPAS layout. This pass loads the 1xN row once, under the column
+    part of the mask and a scalar "some tile row is valid" guard, so it reads
+    no address the original does not, then broadcasts it and selects with the
+    original mask and `other`, so every value is unchanged.
+  }];
+
+  let options = [
+    Option<"numWarps", "num-warps", "int32_t", /*default*/"4",
+           "number of warps per CTA">,
+    Option<"threadsPerWarp", "threads-per-warp", "int32_t", /*default*/"16",
+           "number of threads per warp">,
+  ];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::triton::TritonDialect"
+  ];
+}
+
 #endif // TRITON_DIALECT_TRITON_INTEL_TRANSFORMS_PASSES

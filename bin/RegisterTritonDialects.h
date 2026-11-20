@@ -115,6 +115,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::intel::registerTritonIntelDescriptorVersioning();
   mlir::triton::intel::registerTritonIntelFuseReshape();
+  mlir::triton::intel::registerTritonIntelNarrowBroadcastLoads();
   mlir::triton::intel::registerTritonIntelRemoveMasks();
   mlir::triton::intel::registerTritonIntelStrideVersioning();
   mlir::triton::intel::registerTritonIntelSimplifySignedArithmetic();

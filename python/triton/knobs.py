@@ -613,6 +613,8 @@ class intel_knobs(base_knobs):
     enable_prefetch_cost_model: env_bool = env_bool("TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL", False)
     # Default for the `tile_barrier` option: re-align a persistent kernel's warps at every tile (issue #8719).
     pipeline_tile_barrier: env_bool = env_bool("TRITON_INTEL_PIPELINE_TILE_BARRIER", True)
+    # Kill switch for the `narrow_broadcast_loads` option: a bias row is loaded once as 1xN (issue #8813).
+    disable_narrow_broadcast_loads: env_bool = env_bool("TRITON_INTEL_DISABLE_NARROW_BROADCAST_LOADS", False)
     fast_math: _env_fast_math = _env_fast_math()
 
     enable_dump_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_KERNEL_ARGS", False)

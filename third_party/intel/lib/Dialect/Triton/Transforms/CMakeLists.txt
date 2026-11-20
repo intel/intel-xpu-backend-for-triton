@@ -2,6 +2,7 @@ add_triton_library(TritonIntelTransforms
   DescriptorVersioning.cpp
   FoldTrueCmpIOp.cpp
   FuseReshape.cpp
+  NarrowBroadcastLoads.cpp
   PrepareIfCombining.cpp
   OptimizeLoadMasks.cpp
   ReassociateDotScale.cpp
