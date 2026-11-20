@@ -4,8 +4,10 @@ Everything is derived from the per-night verdict history, so a missed night or a
 It reports new episodes only (a flag that continues is "sustained"), folds a storm into one digest line per
 family, confirms an episode after ``confirm_nights`` nights, holds back flags of a partial run, and mutes
 flip-flopping series. Every knob is configurable. 0 turns the matching rule off for ``storm_threshold``,
-``min_coverage``, ``coverage_history`` (no baseline, so no partial-run check), ``max_gap_days`` and
-``flip_episodes``; ``confirm_nights`` has a minimum of 1 and ``flip_short_share`` has no off value.
+``min_coverage``, ``coverage_history`` (no baseline, so no partial-run check), ``max_gap_days``,
+``flip_episodes`` and ``flip_days`` (no window, so no earlier episodes); ``confirm_nights`` has a minimum of 1 and
+``flip_short_share`` has no off value. A source that does not run every night (a catalog scope with
+``expected_nightly: false``) belongs in ``sparse_sources``, so that its data gaps are not read as a bad run.
 
 Episodes that start in a storm are not confirmed one by one. The family is confirmed once, as a
 ``ConfirmedFamily``, on the first later data night on which its streak reaches ``confirm_nights`` and at least
@@ -25,6 +27,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from typing import NamedTuple
 
 from benchmark_monitor.model import SeriesKey, Status, Verdict
 
@@ -50,6 +53,7 @@ class SuppressConfig:  # pylint: disable=too-many-instance-attributes
     flip_days: int = 28
     flip_short_share: float = 0.5
     family_of: Callable[[str], str] = identity  # Catalog.family_of in the pipeline
+    sparse_sources: frozenset[str] = frozenset()  # sources not expected every night: no data-gap check
 
     def __post_init__(self) -> None:
         for name in ("storm_threshold", "coverage_history", "max_gap_days", "flip_episodes", "flip_days"):
@@ -97,7 +101,7 @@ class ConfirmedFamily:
 class SuppressionResult:  # pylint: disable=too-many-instance-attributes
     """Tonight's suppressed view. ``new`` is what to alert; the rest is context."""
 
-    new: tuple[Verdict, ...] = ()  # shown new episodes (empty during a storm / for suspect sources)
+    new: tuple[Verdict, ...] = ()  # shown new episodes (storm families go to ``storms``, suspect sources to ``held``)
     confirmed: tuple[Confirmed, ...] = ()
     sustained: tuple[Verdict, ...] = ()
     muted: tuple[Verdict, ...] = ()  # new AND sustained flip-flop series (not also in ``sustained``)
@@ -219,7 +223,8 @@ def suspect_reason(h: _History, source: str, night: date, cfg: SuppressConfig) -
     if tonight <= 0:
         return None
     earlier = sorted(d for d, n in counts.items() if d < night and n > 0)
-    if cfg.max_gap_days > 0 and earlier and (gap := (night - earlier[-1]).days) > cfg.max_gap_days:
+    if cfg.max_gap_days > 0 and source not in cfg.sparse_sources and earlier and (gap := (
+            night - earlier[-1]).days) > cfg.max_gap_days:
         return f"previous data night is {gap} days back"
     recent = [counts[d] for d in earlier[-cfg.coverage_history:]] if cfg.coverage_history > 0 else []
     if cfg.min_coverage > 0 and len(recent) >= MIN_BASELINE_NIGHTS:
@@ -250,7 +255,6 @@ class _Night:  # pylint: disable=too-many-instance-attributes
     new: list[Verdict]
     today: list[Verdict]
     streaks: dict[SeriesKey, int]
-    prior: dict[SeriesKey, list[int]]
     flip: set[SeriesKey]
     suspect: dict[str, str]
     live: list[Verdict]  # new, not muted, from a source that is not suspect
@@ -268,23 +272,28 @@ def _night(history: Mapping[date, Sequence[Verdict]], cfg: SuppressConfig, night
     live = [v for v in new if v.key not in flip and v.key.source not in suspect]
     counts = Counter(cfg.family_of(v.key.benchmark) for v in live)
     storming = frozenset(f for f, n in counts.items() if cfg.storm_threshold > 0 and n >= cfg.storm_threshold)
-    return _Night(h, new, today, streaks, prior, flip, suspect, live, storming)
+    return _Night(h, new, today, streaks, flip, suspect, live, storming)
+
+
+class StormGroup(NamedTuple):
+    """Cases of one family whose episodes began in the same storm."""
+
+    source: str
+    family: str
+    night: date  # the storm night
 
 
 def _storm_started(nt: _Night, cfg: SuppressConfig, storms: Mapping[date,
-                                                                    frozenset[str]]) -> dict[tuple, list[Verdict]]:
-    """Cases regressing live on *nt*'s night whose episode began, on an earlier night, in a storm of their family.
-
-    Grouped by (source, family, storm night).
-    """
-    out: dict[tuple, list[Verdict]] = defaultdict(list)
+                                                                    frozenset[str]]) -> dict[StormGroup, list[Verdict]]:
+    """Cases regressing live on *nt*'s night whose episode began, on an earlier night, in a storm of their family."""
+    out: dict[StormGroup, list[Verdict]] = defaultdict(list)
     for v in nt.today:
         if v.key in nt.flip or v.key.source in nt.suspect:
             continue
         start = nt.h.episode(v.key)[0]
         fam = cfg.family_of(v.key.benchmark)
         if start < nt.h.tonight and fam in storms.get(start, ()):
-            out[(v.key.source, fam, start)].append(v)
+            out[StormGroup(v.key.source, fam, start)].append(v)
     return out
 
 
@@ -337,12 +346,12 @@ def apply(history: Mapping[date, Sequence[Verdict]], cfg: SuppressConfig | None,
             continue
         keys = tuple(
             sorted((v.key for v in vs), key=lambda k: (k.benchmark, k.params, k.platform, k.tag, k.compiler, k.metric)))
-        families.append(ConfirmedFamily(group[0], group[1], tonight, group[2], keys))
+        families.append(ConfirmedFamily(group.source, group.family, tonight, group.night, keys))
 
     warnings = [
-        f"{s}: latest data night is {max(d)}, not {tonight} (no report for that night)"
+        f"{s}: latest data night is {max(c)}, not {tonight} (no report for that night)"
         for s, c in sorted(h.checked.items())
-        if (d := [k for k, c2 in c.items() if c2 > 0]) and max(d) < tonight
+        if c and max(c) < tonight
     ]
     warnings += [f"{s}: {held[s]} new flag(s) held back, {r}" for s, r in sorted(suspect.items()) if s in held]
     linked = {c.key for c in confirmed}

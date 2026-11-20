@@ -41,12 +41,13 @@ def _parse_ts(text: str) -> datetime | None:
     return moment if moment.year >= 2000 else None
 
 
-def _positive(text: str) -> float | None:
+def _finite(text: str) -> float | None:
+    """The finite float in *text*; empty, unparsable, nan and inf give None."""
     try:
         value = float(text)
     except (TypeError, ValueError):
         return None
-    return value if math.isfinite(value) and value > 0 else None
+    return value if math.isfinite(value) else None
 
 
 def _params(text: str) -> str:
@@ -104,12 +105,14 @@ class CsvReportSource:
         if self.catalog.normalize_platform(row.get("gpu_device") or "") != scope.platform:
             return
         if kind == "third_party":
-            values = [(row.get("value_name") or "", _positive(row.get("value", "")))]
+            values = [(row.get("value_name") or "", _finite(row.get("value", "")))]
         else:
-            values = [(metric, _positive(row.get(col, ""))) for col, metric in WIDE_METRICS.items()]
+            values = [(metric, _finite(row.get(col, ""))) for col, metric in WIDE_METRICS.items()]
         attrs = {c: row[c] for c in ATTR_COLUMNS if row.get(c)}
         for metric, value in values:
-            if value is None or not metric:
+            # Reports write 0 for a metric a row did not measure, so <= 0 is a placeholder unless the
+            # catalog declares the metric signed (a difference of two timings can be zero or negative).
+            if value is None or not metric or (value <= 0 and not self.catalog.is_signed(metric)):
                 continue
             key = SeriesKey(kind, scope.platform,
                             row.get("tag") or "", benchmark,

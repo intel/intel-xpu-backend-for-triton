@@ -14,7 +14,7 @@ metrics:
   gbps: {higher_is_better: true}
   time_us: {higher_is_better: false}
   time_ms: {higher_is_better: false}
-  ns_per_arg: {higher_is_better: false}
+  ns_per_arg: {higher_is_better: false, signed: true}  # a timing difference: 0 and negatives are real
   cpu_mhz: {higher_is_better: true, gate: false}  # recorded, never gated
 platforms:  # normalize raw gpu_device -> label (regex search)
   b580: {match: "B580"}

@@ -432,3 +432,35 @@ def test_json_confirmed_families_keep_series_keys(tmp_path):
     fam = json.loads(path.read_text())["suppression"]["confirmed_families"][0]
     assert len(fam["keys"]) == 10 and fam["n_cases"] == 5  # per series, plus the grouped summary
     assert fam["keys"][0]["benchmark"] == "flash-attn-0" and fam["keys"][0]["metric"] == "tflops"
+
+
+def test_signed_metric_keeps_zero_and_negative_values(tmp_path, cat):
+    rows = [
+        long(value_name="ns_per_arg", value="-10.5"),
+        long(value_name="ns_per_arg", value="0"),
+        long(value_name="ns_per_arg", value="nan"),  # absent
+        long(value_name="ns_per_arg", value=""),  # absent
+        long(value_name="ns_per_arg", value="-inf"),  # non-finite
+        long(value_name="time_us", value="0"),  # placeholder for an unsigned metric
+        long(value_name="time_us", value="-3"),
+    ]
+    p = write(tmp_path / "s-report.csv", rows)
+    obs = list(CsvReportSource([p], cat).observations(scope(cat, "nightly-b580-vllm"), D1, D2))
+    assert [(o.key.metric, o.value) for o in obs] == [("ns_per_arg", -10.5), ("ns_per_arg", 0.0)]
+
+
+def test_cli_flags_negative_ns_per_arg_regression(tmp_path):
+    for day in range(1, 13):  # -10 ns for 11 nights, then -8: a lower-is-better metric got worse
+        value = "-8.0" if day == 12 else "-10.0"
+        write(tmp_path / "art" / f"n{day}-report.csv",
+              [long(run_uuid=f"r{day}", ts=f"2026-11-{day:02d}T03:00:00", value_name="ns_per_arg", value=value)])
+    out = tmp_path / "out.json"
+    argv = [
+        "--artifacts",
+        str(tmp_path / "art"), "--scope", "nightly-b580-vllm", "--as-of", "2026-11-12", "--format", "json", "--out",
+        str(out)
+    ]
+    assert main(argv) == 0
+    data = json.loads(out.read_text())
+    assert data["counts"] == {"regression": 1}
+    assert data["verdicts"][0]["key"]["metric"] == "ns_per_arg" and data["verdicts"][0]["n_history"] == 11
