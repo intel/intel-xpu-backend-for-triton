@@ -75,7 +75,11 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
     Option<"maxGRFMode", "max-grf-mode", "std::string", /*default*/"\"\"",
            "largest GRF mode (\"128\", \"256\" or \"512\") the backend's automatic escalation "
            "paths target for the device; empty (the default) means unknown, so the module "
-           "attribute is left unstamped and RegisterPressureAnalysis's own fallback applies">
+           "attribute is left unstamped and AccelerateMatmul's own fallback applies">,
+    Option<"grfRegisterSize", "grf-register-size", "unsigned", /*default*/"0",
+           "width in bytes of one GRF register on the device (32 or 64); 0 (the default) "
+           "means unknown, so the module attribute is left unstamped and "
+           "RegisterPressureAnalysis's own fallback applies">
   ];
 }
 

@@ -1278,14 +1278,10 @@ class TritonIntelGPUHoistLayoutConversionsPass
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
-    // Hoisting is gated on the budget as a *ceiling* on what may be added,
-    // so an unknown ("default"/"auto") GRF size must assume the smallest the
-    // device supports -- see UnknownGRFSizeAssumption's documentation.
+    // Hoisting is gated on the budget as a *ceiling* on what may be added.
     unsigned grfBudget =
         ttg::intel::RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(
-            grfMode, mod,
-            ttg::intel::RegisterPressureAnalysis::UnknownGRFSizeAssumption::
-                Smallest);
+            grfMode, mod);
     ttg::intel::RegisterPressureAnalysis analysis(mod);
 
     // Group the candidates by the loop they would leave, so each loop's budget

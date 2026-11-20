@@ -212,15 +212,24 @@ def TritonIntelGPU_Dialect : Dialect {
 
     /// Get the name of the attribute holding the largest GRF mode ("128",
     /// "256" or "512") the backend's automatic escalation paths target for
-    /// the device, i.e. the register-mode ceiling `ReduceVariableLiveness`'s
-    /// "default" and "auto" GRF budget resolution should assume. Mirrors the
+    /// the device, i.e. the register-mode ceiling `AccelerateMatmul` assumes
+    /// for a "default" or "auto" kernel when sizing DPAS layouts. Mirrors the
     /// same per-target policy compiler.py's `get_max_grf_mode()` computes
     /// (only "cri" gets 512-register mode; every other target caps at
-    /// 256). Absent
-    /// when unknown (e.g. a hand-written test module, or a
+    /// 256). Absent when unknown (e.g. a hand-written test module, or a
     /// `-triton-annotate-module` invocation that didn't set `max-grf-mode`).
     static constexpr llvm::StringRef getMaxGRFModeAttrName() {
       return "ttig.max_grf_mode";
+    }
+
+    /// Get the name of the attribute holding the width in bytes of one GRF
+    /// register on the device (32 or 64), the unit RegisterPressureAnalysis
+    /// multiplies a GRF mode's register count by to get its byte budget.
+    /// Mirrors compiler.py's `get_grf_register_size()`. Absent when unknown
+    /// (e.g. a hand-written test module, or a `-triton-annotate-module`
+    /// invocation that didn't set `grf-register-size`).
+    static constexpr llvm::StringRef getGRFRegisterSizeAttrName() {
+      return "ttig.grf_register_size";
     }
 
     /// Get the name of the attribute conveying the HW base-address alignment

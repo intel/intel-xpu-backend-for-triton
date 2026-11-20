@@ -168,76 +168,28 @@ public:
   /// getPerThreadSizeInBytes(w.getType())`.
   unsigned liveInContribution(Block *block, Value value) const;
 
-  /// For "default"/"auto" GRF mode, the actual GRF size the compiler will
-  /// pick is not known at the point these budget helpers run. Which bound is
-  /// safe to assume depends on how the *caller* uses the budget, so callers
-  /// must choose explicitly rather than relying on a shared default:
-  ///
-  ///   - A caller that treats the budget as a ceiling on how much it may add
-  ///     (e.g. HoistLayoutConversions, deciding how much it may safely hoist)
-  ///     wants `Smallest`: underestimating the true GRF size keeps the
-  ///     caller safely inside the real (possibly larger) limit.
-  ///   - A caller that treats the budget as a threshold whose crossing
-  ///     triggers a transform (e.g. ReduceVariableLiveness, deciding whether
-  ///     pressure is high enough to justify sinking a load) wants `Largest`:
-  ///     underestimating the true GRF size would trigger the transform more
-  ///     often than the real (possibly larger) budget actually warrants.
-  ///
-  /// There is deliberately no default value for this parameter: a new
-  /// caller must consciously pick one rather than silently inheriting
-  /// whichever direction happened to suit an earlier caller.
-  enum class UnknownGRFSizeAssumption {
-    /// Assume the smallest GRF size the device supports (128-register mode).
-    Smallest,
-    /// Assume the largest GRF size the backend's automatic escalation will
-    /// ever select for this target. This per-target ceiling applies to both
-    /// `grf_mode='default'` and `grf_mode='auto'`.
-    ///
-    /// The ceiling is per-target: only "cri" reaches 512-register mode, every
-    /// other target (including BMG and PVC) caps at 256-register mode (see
-    /// `get_max_grf_mode()` in third_party/intel/backend/compiler.py, the
-    /// single source of truth for this policy). That value is mirrored onto
-    /// the module as the `ttig.max_grf_mode` attribute (stamped by
-    /// TritonAnnotateModule) and read back here when resolving this case for
-    /// both `'default'` and `'auto'`.
-    /// Both additionally cap at `Smallest` once `num_warps > 32`: a larger
-    /// GRF mode reduces the maximum launchable work-group size, so the
-    /// kernel can never actually run at a larger mode no matter which
-    /// mechanism would have picked it; `ttig.max_grf_mode` never actually
-    /// takes effect there either way.
-    ///
-    /// If the attribute is absent (e.g. a hand-written test module that never
-    /// went through the Python compiler pipeline), the pre-existing default
-    /// applies: assume 512-register mode. ("Conservative" is avoided here
-    /// since 512, the *largest* budget, gives the *highest* sink threshold,
-    /// i.e. the *least* sinking: conservative about changing behaviour, not
-    /// about register consumption.)
-    Largest,
-  };
-
   /// Returns the per-hardware-thread GRF budget in bytes for the given GRF
   /// mode (one hardware thread executes a whole subgroup/warp of lanes sharing
   /// one register file).
   ///
-  /// Explicit sizes ("128", "160", "192", "256", "512") map to the exact
-  /// per-hardware-thread budget, ignoring `unknownAssumption`. For "default"
-  /// and "auto", returns the smallest or largest GRF size per
-  /// `unknownAssumption` (see its documentation for which one a given caller
-  /// needs, for how `Largest` uses `mod`'s `ttig.max_grf_mode` attribute, and
-  /// for the `num_warps > 32` exception).
-  static unsigned
-  getGRFBytesPerHardwareThread(StringRef grfMode, ModuleOp mod,
-                               UnknownGRFSizeAssumption unknownAssumption);
+  /// The budget is the mode's register count times the target's register
+  /// width, read from `mod`'s `ttig.grf_register_size` attribute (see
+  /// `get_grf_register_size()` in third_party/intel/backend/compiler.py),
+  /// or 32 bytes if the attribute is absent or not 32 or 64.
+  ///
+  /// Explicit sizes ("128", "160", "192", "256", "512") map to their exact
+  /// budget. "default" and "auto" map to the 128-register budget: on BMG, PVC
+  /// and DG2 a "default" kernel starts at 128 registers and is rebuilt in a
+  /// larger mode only if that build spills; "auto" uses the same budget.
+  static unsigned getGRFBytesPerHardwareThread(StringRef grfMode, ModuleOp mod);
 
-  /// Returns `getGRFBytesPerHardwareThread(grfMode, mod, unknownAssumption) /
-  /// threads-per-warp`: the per-lane figure to compare against this
-  /// analysis's (per-lane) output. When the module's ttg.threads-per-warp
-  /// attribute is absent, getThreadsPerWarp returns 32 as a default, so the
-  /// budget is divided by 32 (128 bytes/lane at default GRF mode, smallest
-  /// assumption) rather than the DPAS-typical 16 (256 bytes/lane).
-  static unsigned
-  getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod,
-                             UnknownGRFSizeAssumption unknownAssumption);
+  /// Returns `getGRFBytesPerHardwareThread(grfMode, mod) / threads-per-warp`:
+  /// the per-lane figure to compare against this analysis's (per-lane)
+  /// output. When the module's ttg.threads-per-warp attribute is absent,
+  /// getThreadsPerWarp returns 32 as a default, so the budget is divided by 32
+  /// (128 bytes/lane at default GRF mode with 32 B registers) rather than the
+  /// DPAS-typical 16 (256 bytes/lane).
+  static unsigned getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod);
 
   /// Returns the per-thread size in bytes for the given type.
   ///

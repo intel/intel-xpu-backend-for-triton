@@ -1,12 +1,13 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness | FileCheck %s
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=disable-in-loop-sink=true | FileCheck %s --check-prefix=NOSINK
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=512 | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness="disable-in-loop-sink=true grf-mode=512" | FileCheck %s --check-prefix=NOSINK
 
 // COM: A dot operand that is *already loaded inside* the loop body, but consumed by
 // COM: a dot much later in that same body, keeps its whole per-lane footprint live
-// COM: for nearly the entire iteration. With "ttg.threads-per-warp" = 16 and the
-// COM: default GRF mode the per-lane budget is 16384/16 = 1024 B/lane (see
-// COM: reduce-variable-liveness-grf-mode.mlir for why "default" maps to the largest
-// COM: GRF size). A 64x64xbf16 DPAS B operand under warpsPerCTA = [8, 1] is
+// COM: for nearly the entire iteration. With "ttg.threads-per-warp" = 16,
+// COM: grf-mode=512 on the RUN lines and no `ttig.grf_register_size` (the 32-byte
+// COM: fallback) the per-lane budget is 512 * 32 / 16 = 1024 B/lane (see
+// COM: reduce-variable-liveness-grf-mode.mlir for the budget table).
+// COM: A 64x64xbf16 DPAS B operand under warpsPerCTA = [8, 1] is
 // COM: replicated in every warp and so costs 64*64*2/16 = 512 B/lane on its own.
 // COM:
 // COM: Every peak quoted below is what

@@ -1,11 +1,6 @@
-// Pins `getGRFBytesPerHardwareThread`'s `UnknownGRFSizeAssumption::Largest`
-// resolution table end to end: every `ttig.max_grf_mode` value the Python
-// producer (`get_max_grf_mode` in compiler.py) can stamp, the values it
-// deliberately does not, and the `num_warps > 32` exception. A lit test
-// exercising the same table through `ReduceVariableLiveness`'s sink decision
-// cannot distinguish an explicit "512" from an absent attribute (both
-// resolve to the same 16384-byte budget), so this is checked directly here
-// instead.
+// Pins `getGRFBytesPerHardwareThread`'s budget table: every GRF mode times the
+// register width from `ttig.grf_register_size`, with "default" and "auto" at
+// the 128-register budget and an absent or invalid width at 32 B.
 #include "intel/include/Analysis/RegisterPressure.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/IR/Builders.h"
@@ -29,17 +24,17 @@ public:
     builder = std::make_unique<OpBuilder>(&ctx);
   }
 
-  // `maxGRFMode` is left unset when absent (the common hand-written-IR case
-  // `RegisterPressureAnalysis`'s own doc describes).
-  OwningOpRef<ModuleOp> createModule(std::optional<StringRef> maxGRFMode,
-                                     int numWarps = 4) {
+  // `registerSize` is left unset when absent (the hand-written-IR case).
+  OwningOpRef<ModuleOp> createModule(std::optional<int> registerSize,
+                                     int threadsPerWarp = 16) {
     auto loc = builder->getUnknownLoc();
     OwningOpRef<ModuleOp> module = ModuleOp::create(loc);
-    (*module)->setAttr(AttrNumWarpsName, builder->getI32IntegerAttr(numWarps));
-    (*module)->setAttr(AttrNumThreadsPerWarp, builder->getI32IntegerAttr(16));
-    if (maxGRFMode)
-      (*module)->setAttr(TritonIntelGPUDialect::getMaxGRFModeAttrName(),
-                         builder->getStringAttr(*maxGRFMode));
+    (*module)->setAttr(AttrNumWarpsName, builder->getI32IntegerAttr(4));
+    (*module)->setAttr(AttrNumThreadsPerWarp,
+                       builder->getI32IntegerAttr(threadsPerWarp));
+    if (registerSize)
+      (*module)->setAttr(TritonIntelGPUDialect::getGRFRegisterSizeAttrName(),
+                         builder->getI32IntegerAttr(*registerSize));
     return module;
   }
 
@@ -47,103 +42,72 @@ public:
   std::unique_ptr<OpBuilder> builder;
 };
 
-unsigned largestBytes(ModuleOp mod, StringRef grfMode = "default") {
-  return RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
-      grfMode, mod,
-      RegisterPressureAnalysis::UnknownGRFSizeAssumption::Largest);
+unsigned budgetBytes(ModuleOp mod, StringRef grfMode) {
+  return RegisterPressureAnalysis::getGRFBytesPerHardwareThread(grfMode, mod);
 }
 
-TEST_F(RegisterPressureGRFModeTest, AbsentAttributeFallsBackTo512Mode) {
+TEST_F(RegisterPressureGRFModeTest, ExplicitModes64ByteRegisters) {
+  auto module = createModule(64);
+  EXPECT_EQ(budgetBytes(*module, "128"), 8192u);
+  EXPECT_EQ(budgetBytes(*module, "160"), 10240u);
+  EXPECT_EQ(budgetBytes(*module, "192"), 12288u);
+  EXPECT_EQ(budgetBytes(*module, "256"), 16384u);
+  EXPECT_EQ(budgetBytes(*module, "512"), 32768u);
+}
+
+TEST_F(RegisterPressureGRFModeTest, ExplicitModes32ByteRegisters) {
+  auto module = createModule(32);
+  EXPECT_EQ(budgetBytes(*module, "128"), 4096u);
+  EXPECT_EQ(budgetBytes(*module, "256"), 8192u);
+}
+
+TEST_F(RegisterPressureGRFModeTest, DefaultAndAutoUse128Registers) {
+  // A "default" or "auto" compile starts at 128 registers.
+  auto module = createModule(64);
+  EXPECT_EQ(budgetBytes(*module, "default"), 8192u);
+  EXPECT_EQ(budgetBytes(*module, "auto"), 8192u);
+}
+
+TEST_F(RegisterPressureGRFModeTest, AbsentRegisterSizeFallsBackTo32Bytes) {
   auto module = createModule(std::nullopt);
-  EXPECT_EQ(largestBytes(*module), 16384u);
+  EXPECT_EQ(budgetBytes(*module, "default"), 4096u);
+  EXPECT_EQ(budgetBytes(*module, "256"), 8192u);
 }
 
-TEST_F(RegisterPressureGRFModeTest, ExplicitAttr256) {
-  auto module = createModule(StringRef("256"));
-  EXPECT_EQ(largestBytes(*module), 8192u);
+TEST_F(RegisterPressureGRFModeTest, InvalidRegisterSizeFallsBackTo32Bytes) {
+  // Only 32 and 64 are known widths; anything else is treated as absent.
+  auto module = createModule(48);
+  EXPECT_EQ(budgetBytes(*module, "default"), 4096u);
 }
 
-TEST_F(RegisterPressureGRFModeTest, ExplicitAttr512) {
-  auto module = createModule(StringRef("512"));
-  EXPECT_EQ(largestBytes(*module), 16384u);
+TEST_F(RegisterPressureGRFModeTest, PerLaneBudgetDividesByThreadsPerWarp) {
+  auto module16 = createModule(64, /*threadsPerWarp=*/16);
+  EXPECT_EQ(RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes("default",
+                                                                 *module16),
+            512u);
+  auto module32 = createModule(64, /*threadsPerWarp=*/32);
+  EXPECT_EQ(RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes("default",
+                                                                 *module32),
+            256u);
 }
 
-TEST_F(RegisterPressureGRFModeTest,
-       ExplicitAttr128CollapsesLargestIntoSmallest) {
-  // "128" is not a value the built-in "cri"-vs-everything-else policy ever
-  // stamps automatically (a kernel already gets 128-GRF without any
-  // escalation, so a *maximum auto-escalation target* of "128" is
-  // incoherent), though a driver- or out-of-tree-supplied override can still
-  // set it explicitly. Documented here rather than silently assumed: however
-  // it gets there, `Largest` degenerates to exactly `Smallest`'s answer.
-  auto module = createModule(StringRef("128"));
-  EXPECT_EQ(largestBytes(*module), 4096u);
-}
-
-TEST_F(RegisterPressureGRFModeTest, InvalidAttrFallsThroughToAbsenceDefault) {
-  // A typo or a future mode this table doesn't know: falls through to the
-  // same behaviour-preserving default as no attribute at all, rather than
-  // silently resolving to the wrong budget.
-  auto module = createModule(StringRef("bogus"));
-  EXPECT_EQ(largestBytes(*module), 16384u);
-}
-
-TEST_F(RegisterPressureGRFModeTest, NumWarpsOver32CapsDefaultModeAtSmallest) {
-  // A larger GRF mode halves (256) or quarters (512) the maximum launchable
-  // work-group size, so a `num_warps > 32` kernel can never actually run at
-  // a larger mode, regardless of what the attribute says.
-  auto module = createModule(StringRef("512"), /*numWarps=*/64);
-  EXPECT_EQ(largestBytes(*module, "default"), 4096u);
-}
-
-TEST_F(RegisterPressureGRFModeTest, NumWarpsOver32CapsAutoModeAtSmallestToo) {
-  // The same cap applies regardless of which mechanism would have picked
-  // the larger mode: `'auto'` is capped here just like `'default'` is.
-  auto module = createModule(StringRef("256"), /*numWarps=*/64);
-  EXPECT_EQ(largestBytes(*module, "auto"), 4096u);
-}
-
-TEST_F(RegisterPressureGRFModeTest, NumWarpsAtBoundaryIsUnaffected) {
-  // 32 itself is still launchable at a larger GRF mode, so the cap must not
-  // fire here.
-  auto module = createModule(StringRef("512"), /*numWarps=*/32);
-  EXPECT_EQ(largestBytes(*module, "default"), 16384u);
-}
-
-TEST_F(RegisterPressureGRFModeTest, NumWarpsAtBoundaryIsUnaffectedForAutoToo) {
-  auto module = createModule(StringRef("512"), /*numWarps=*/32);
-  EXPECT_EQ(largestBytes(*module, "auto"), 16384u);
-}
-
-TEST_F(RegisterPressureGRFModeTest, AutoModeRespectsMaxGRFMode) {
-  // 'auto' resolves `ttig.max_grf_mode` the same way 'default' does. A
-  // target whose max_grf_mode is "256" (non-"cri") collapses 'auto' to the
-  // same 8192-byte budget as 'default', not the unconditional 16384-byte
-  // bound an absent attribute falls back to.
-  auto module = createModule(StringRef("256"));
-  EXPECT_EQ(largestBytes(*module, "auto"), 8192u);
-}
-
-TEST_F(RegisterPressureGRFModeTest, ExplicitGRFMode160And192) {
-  // "160" and "192" (accepted on "cri" only) are explicit modes like the
-  // others: their exact budget, regardless of `ttig.max_grf_mode`.
-  auto module = createModule(StringRef("512"));
-  EXPECT_EQ(largestBytes(*module, "160"), 5120u);
-  EXPECT_EQ(largestBytes(*module, "192"), 6144u);
+TEST_F(RegisterPressureGRFModeTest, MaxGRFModeDoesNotRaiseDefaultBudget) {
+  // `ttig.max_grf_mode` bounds AccelerateMatmul only; "default" and "auto"
+  // stay at the 128-register budget whatever it says.
+  auto module = createModule(std::nullopt);
+  (*module)->setAttr(TritonIntelGPUDialect::getMaxGRFModeAttrName(),
+                     builder->getStringAttr("512"));
+  EXPECT_EQ(budgetBytes(*module, "default"), 4096u);
+  EXPECT_EQ(budgetBytes(*module, "auto"), 4096u);
 }
 
 #ifndef NDEBUG
 // The `assert()` this pins is compiled out under NDEBUG (e.g. a Release
-// build), so there is nothing for EXPECT_DEATH to observe there; guard the
-// whole test rather than let it fail on a build where the invariant it
-// checks cannot fire.
+// build), so there is nothing for EXPECT_DEATH to observe there.
 TEST_F(RegisterPressureGRFModeTest, UnrecognizedGRFModeAsserts) {
-  // A typo'd or otherwise-unrecognized grf-mode string (neither an explicit
-  // mode, "default", nor "auto") is an internal-invariant violation, not
-  // input this function is expected to recover from: every caller is
-  // supposed to have already narrowed grfMode to one of those five values.
-  auto module = createModule(/*maxGRFMode=*/std::nullopt);
-  EXPECT_DEATH(largestBytes(*module, "not-a-real-mode"),
+  // Every caller narrows grfMode to an explicit mode, "default" or "auto".
+  auto module = createModule(std::nullopt);
+  EXPECT_DEATH(budgetBytes(*module, "not-a-real-mode"),
                "grfMode must be an explicit mode");
 }
 #endif // NDEBUG

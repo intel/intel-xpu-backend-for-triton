@@ -40,76 +40,60 @@ unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
   return 0;
 }
 
-/// Per-hardware-thread GRF register width in bytes (256 bits); see
-/// hardware-reference.md's GRF Register Specifications.
-static constexpr unsigned GRFRegisterSizeBytes = 32;
+/// GRF register width in bytes assumed when the module carries no valid
+/// `ttig.grf_register_size` attribute (e.g. a hand-written test module that
+/// never went through TritonAnnotateModule). 32 B preserves the behaviour
+/// from before the attribute existed; every compile through the Python
+/// pipeline stamps the target's real size (see `get_grf_register_size()` in
+/// third_party/intel/backend/compiler.py).
+static constexpr unsigned DefaultGRFRegisterSizeBytes = 32;
 
-/// Per-hardware-thread budget of the smallest ("128") and largest ("512")
-/// explicit GRF modes, in bytes. Named so the `Smallest`/`Largest`
-/// fallbacks below express themselves in the same unit as
-/// `explicitGRFModeToBytes` rather than repeating the arithmetic as bare
-/// literals.
-static constexpr unsigned SmallestGRFModeBytes = 128 * GRFRegisterSizeBytes;
-static constexpr unsigned LargestGRFModeBytes = 512 * GRFRegisterSizeBytes;
+static unsigned getGRFRegisterSizeBytes(ModuleOp mod) {
+  if (auto sizeAttr = mod->getAttrOfType<IntegerAttr>(
+          TritonIntelGPUDialect::getGRFRegisterSizeAttrName())) {
+    uint64_t size = sizeAttr.getValue().getLimitedValue();
+    if (size == 32 || size == 64)
+      return size;
+  }
+  return DefaultGRFRegisterSizeBytes;
+}
+
+static constexpr unsigned SmallestGRFModeRegisters = 128;
 
 /// Maps an explicit GRF mode string ("128"/"160"/"192"/"256"/"512") to its
 /// exact per-hardware-thread budget in bytes (one hardware thread executes a
-/// whole subgroup/warp of lanes sharing one register file). Returns 0 for
-/// anything else ("default", "auto", empty, or an unrecognized value): 0 bytes
-/// is never a valid budget, so it is an unambiguous "not an explicit mode"
-/// signal callers can test directly, without needing std::optional.
-static unsigned explicitGRFModeToBytes(StringRef grfMode) {
+/// whole subgroup/warp of lanes sharing one register file), for registers of
+/// `registerSizeBytes` each. Returns 0 for anything else ("default", "auto",
+/// empty, or an unrecognized value): 0 bytes is never a valid budget, so it
+/// is an unambiguous "not an explicit mode" signal callers can test
+/// directly, without needing std::optional.
+static unsigned explicitGRFModeToBytes(StringRef grfMode,
+                                       unsigned registerSizeBytes) {
   unsigned mode = 0;
   if (grfMode.getAsInteger(10, mode) ||
       (mode != 128 && mode != 160 && mode != 192 && mode != 256 && mode != 512))
     return 0;
-  return mode * GRFRegisterSizeBytes;
+  return mode * registerSizeBytes;
 }
 
-unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
-    StringRef grfMode, ModuleOp mod,
-    UnknownGRFSizeAssumption unknownAssumption) {
-  if (unsigned explicitBytes = explicitGRFModeToBytes(grfMode))
+unsigned
+RegisterPressureAnalysis::getGRFBytesPerHardwareThread(StringRef grfMode,
+                                                       ModuleOp mod) {
+  unsigned registerSizeBytes = getGRFRegisterSizeBytes(mod);
+  if (unsigned explicitBytes =
+          explicitGRFModeToBytes(grfMode, registerSizeBytes))
     return explicitBytes;
   assert((grfMode == "default" || grfMode == "auto") &&
          "grfMode must be an explicit mode (\"128\"/\"256\"/\"512\"), "
          "\"default\", or \"auto\"");
-  // "default" and "auto": the compiler chooses the GRF size at JIT time, so
-  // the true value isn't known here. Which bound is safe depends on the
-  // caller; see UnknownGRFSizeAssumption's documentation.
-  if (unknownAssumption == UnknownGRFSizeAssumption::Smallest)
-    return SmallestGRFModeBytes;
-  // A larger GRF mode reduces the maximum launchable work-group size, so a
-  // num_warps > 32 kernel can never actually run at a larger mode, no matter
-  // which mechanism would have picked it: the cap applies to both
-  // `'default'` and `'auto'`.
-  if (lookupNumWarps(mod) > 32)
-    return SmallestGRFModeBytes;
-  // Largest: the true ceiling is per-target, mirrored onto the module via the
-  // ttig.max_grf_mode attribute (see UnknownGRFSizeAssumption::Largest's
-  // documentation), and applies to both `'default'` and `'auto'`. Reuse the
-  // same explicit-mode table above so a value other than exactly
-  // "256"/"512"/"128" (a typo, a future mode, or the attribute being absent)
-  // cannot silently resolve to the wrong budget: it falls through to the
-  // behaviour-preserving 512-register-mode default below.
-  if (auto maxGRFMode = mod->getAttrOfType<StringAttr>(
-          TritonIntelGPUDialect::getMaxGRFModeAttrName()))
-    if (unsigned explicitBytes = explicitGRFModeToBytes(maxGRFMode.getValue()))
-      return explicitBytes;
-  // Absence resolves to 512-register mode here, not `driver.c`'s "256" for a
-  // missing `load_binary` argument: each side preserves its own pre-existing
-  // behaviour on absence (this one hardcoded 16384 before `ttig.max_grf_mode`
-  // existed; `driver.c` already resolved a missing arg to "unknown", which
-  // already selected 256). Not a bug, but if either fallback's rationale
-  // ever changes, check whether the other one still makes sense.
-  return LargestGRFModeBytes;
+  // On BMG, PVC and DG2 "default" starts at the smallest mode and moves up
+  // only if that build spills; "auto" uses the same budget.
+  return SmallestGRFModeRegisters * registerSizeBytes;
 }
 
-unsigned RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(
-    StringRef grfMode, ModuleOp mod,
-    UnknownGRFSizeAssumption unknownAssumption) {
-  unsigned grfBudget =
-      getGRFBytesPerHardwareThread(grfMode, mod, unknownAssumption);
+unsigned RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(StringRef grfMode,
+                                                              ModuleOp mod) {
+  unsigned grfBudget = getGRFBytesPerHardwareThread(grfMode, mod);
   int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
   return grfBudget / static_cast<unsigned>(threadsPerWarp);
 }
