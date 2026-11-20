@@ -220,16 +220,20 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
 /// column, `clamp(bound - base, 0, extent)` (see `computeRowLimitHeight`), and
 /// never exceed the tile.
 ///
-/// `rowBound`/`colBound` are null when that dim carries no bound;
-/// `rowBase`/`colBase` are null when the index is a bare `arange`.
+/// `rowBound`/`colBound` are null when that dim carries no bound, else the
+/// splat's scalar or, with `allowConstBounds`, the value of a splat constant as
+/// an `IntegerAttr` of the compare's type; `rowBase`/`colBase` are null when
+/// the index is a bare `arange`.
 ///
 /// `extraPreds` are the uniform conjuncts (batch-dim predicates, or scalar
 /// flags splatted to the mask's shape), each as `extraPred` in
 /// `RowLimitMaskInfo`: the caller ANDs them into its own per-message select.
 struct BoundaryMaskInfo {
   unsigned boundedDim; // the pitch dim, as in `RowLimitMaskInfo`
-  Value rowBase, rowBound;
-  Value colBase, colBound;
+  Value rowBase;
+  OpFoldResult rowBound;
+  Value colBase;
+  OpFoldResult colBound;
   SmallVector<Value> extraPreds;
 };
 
@@ -240,11 +244,12 @@ struct BoundaryMaskInfo {
 /// compare's own type (no extension between them), and may be ANDed with
 /// `index >= 0`, which is dropped only if \p loadOp proves the index base
 /// non-negative (see `triton::valueIsNonNegative`); without it only a bare
-/// `arange` qualifies.
+/// `arange` qualifies. A splat constant bound is matched only with
+/// \p allowConstBounds.
 std::optional<BoundaryMaskInfo>
 matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
                        unsigned contiguousDim, bool pitchDimIsBroadcast,
-                       Operation *loadOp);
+                       Operation *loadOp, bool allowConstBounds = false);
 
 /// Whether a matched column bound can become a runtime `base_width`; true when
 /// \p info has none.
@@ -263,6 +268,31 @@ matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
 bool colLimitIsHWCompatible(const BoundaryMaskInfo &info,
                             triton::intel::ModuleAxisInfoAnalysis &axisInfo,
                             unsigned elemSizeInBits);
+
+/// A store mask's `base + arange(0, extent) < bound` along one surface dim, as
+/// `BoundaryMaskInfo` holds it (`base` null for a bare `arange`).
+struct StoreDimClamp {
+  Value base;
+  OpFoldResult bound;
+  int64_t extent;
+};
+
+/// The dims along which a 2D block store's surface can enforce its mask.
+struct StoreBoundaryClamp {
+  std::optional<StoreDimClamp> row, col;
+};
+
+/// The clamps for the mask of \p op, constant bounds allowed: a dim's base must
+/// be a multiple of `PowerOf2Ceil(extent)`, so `base + arange` cannot wrap, and
+/// a column must pass `colLimitIsHWCompatible`. No dim clamps for a uniform
+/// conjunct, with `TRITON_INTEL_DISABLE_STORE_BOUNDARY_CLAMP` set, or unless
+/// the constant pitch \p pitchBytes covers the widest surface: the tensor's row
+/// bytes, at least 64, plus any base alignment compensation.
+StoreBoundaryClamp
+matchStoreBoundaryClamp(triton::StoreOp op, unsigned contiguousDim,
+                        bool pitchDimIsBroadcast,
+                        std::optional<int64_t> pitchBytes,
+                        triton::intel::ModuleAxisInfoAnalysis &axisInfo);
 
 /// Return `extraPred` as a value of type \p maskTy: unchanged if it already has
 /// that shape, else broadcast to it straight from its innermost source (so
