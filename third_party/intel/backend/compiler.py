@@ -331,6 +331,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                                                                            False)
         dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = tgt_prop.get(
             'has_subgroup_scaled_matrix_multiply_accumulate', False)
+        dev_prop['has_subgroup_scaled_matrix_multiply_accumulate_fp4'] = tgt_prop.get(
+            'has_subgroup_scaled_matrix_multiply_accumulate_fp4', False)
         dev_prop['has_f4_conversions'] = tgt_prop.get('has_f4_conversions', False)
         dev_prop['has_f8_conversions'] = tgt_prop.get('has_f8_conversions', False)
         dev_prop['has_256b_prefetch'] = tgt_prop.get('has_256b_prefetch', False)
@@ -522,6 +524,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_subgroup_matrix_multiply_accumulate = properties["has_subgroup_matrix_multiply_accumulate"]
         module_opts.support_subgroup_scaled_matrix_multiply_accumulate = properties[
             "has_subgroup_scaled_matrix_multiply_accumulate"]
+        module_opts.support_subgroup_scaled_matrix_multiply_accumulate_fp4 = properties[
+            "has_subgroup_scaled_matrix_multiply_accumulate_fp4"]
         module_opts.support_f4_conversion = properties["has_f4_conversions"]
         module_opts.support_f8_conversion = properties["has_f8_conversions"]
         module_opts.support_256b_prefetch = properties["has_256b_prefetch"]

@@ -143,6 +143,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
               &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
       .def_rw("support_subgroup_scaled_matrix_multiply_accumulate",
               &gpu::intel::TritonAnnotateModuleOptions::supportBlockScaleDPAS)
+      .def_rw("support_subgroup_scaled_matrix_multiply_accumulate_fp4",
+              &gpu::intel::TritonAnnotateModuleOptions::
+                  supportBlockScaleDPASWithFP4)
       .def_rw("support_f4_conversion",
               &gpu::intel::TritonAnnotateModuleOptions::supportF4Conversion)
       .def_rw("support_f8_conversion",
