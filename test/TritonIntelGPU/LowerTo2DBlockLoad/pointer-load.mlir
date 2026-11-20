@@ -954,3 +954,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return %7 : tensor<64x32x!tt.fp4e2m1x2, #dot0>
   }
 }
+
+// -----
+
+// COM: Rank-3 pointer load whose lanes leave the row dim open. Dim 1 owns one
+// COM: unit-stride register base (2 rows) and dim 0 five (32 rows). The row dim
+// COM: is the one that gives the tallest tile, dim 0, so the pitch is its
+// COM: stride (256 x 2 B) and the height its extent: taking dim 1 instead needs
+// COM: 16x the messages.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 1, 16], warpsPerCTA = [1, 1, 4], order = [2, 0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @rank3_tallest_row_dim
+  tt.func @rank3_tallest_row_dim(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<32x2x128xf16, #blocked> {
+    %r0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>>
+    %e0a = tt.expand_dims %r0 {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>> -> tensor<32x1xi32, #ttg.slice<{dim = 2, parent = #blocked}>>
+    %e0 = tt.expand_dims %e0a {axis = 2 : i32} : tensor<32x1xi32, #ttg.slice<{dim = 2, parent = #blocked}>> -> tensor<32x1x1xi32, #blocked>
+    %s0 = arith.constant dense<256> : tensor<32x1x1xi32, #blocked>
+    %o0 = arith.muli %e0, %s0 : tensor<32x1x1xi32, #blocked>
+    %b0 = tt.broadcast %o0 : tensor<32x1x1xi32, #blocked> -> tensor<32x2x128xi32, #blocked>
+    %r1 = tt.make_range {end = 2 : i32, start = 0 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>>
+    %e1a = tt.expand_dims %r1 {axis = 0 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>> -> tensor<1x2xi32, #ttg.slice<{dim = 2, parent = #blocked}>>
+    %e1 = tt.expand_dims %e1a {axis = 2 : i32} : tensor<1x2xi32, #ttg.slice<{dim = 2, parent = #blocked}>> -> tensor<1x2x1xi32, #blocked>
+    %s1 = arith.constant dense<128> : tensor<1x2x1xi32, #blocked>
+    %o1 = arith.muli %e1, %s1 : tensor<1x2x1xi32, #blocked>
+    %b1 = tt.broadcast %o1 : tensor<1x2x1xi32, #blocked> -> tensor<32x2x128xi32, #blocked>
+    %r2 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 1, parent = #blocked}>}>>
+    %e2a = tt.expand_dims %r2 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 1, parent = #blocked}>}>> -> tensor<1x128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %e2 = tt.expand_dims %e2a {axis = 1 : i32} : tensor<1x128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<1x1x128xi32, #blocked>
+    %b2 = tt.broadcast %e2 : tensor<1x1x128xi32, #blocked> -> tensor<32x2x128xi32, #blocked>
+    %a01 = arith.addi %b0, %b1 : tensor<32x2x128xi32, #blocked>
+    %off = arith.addi %a01, %b2 : tensor<32x2x128xi32, #blocked>
+    %p = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x2x128x!tt.ptr<f16>, #blocked>
+    %ptrs = tt.addptr %p, %off : tensor<32x2x128x!tt.ptr<f16>, #blocked>, tensor<32x2x128xi32, #blocked>
+    // CHECK: %[[P:.*]] = arith.constant 512 : i32
+    // CHECK: %[[H:.*]] = arith.constant 32 : i32
+    // CHECK: %[[W:.*]] = arith.constant 64 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[P]], %[[H]], %[[W]] {row_major}
+    %v = tt.load %ptrs {ttig.block_io = "row_major"} : tensor<32x2x128x!tt.ptr<f16>, #blocked>
+    tt.return %v : tensor<32x2x128xf16, #blocked>
+  }
+}

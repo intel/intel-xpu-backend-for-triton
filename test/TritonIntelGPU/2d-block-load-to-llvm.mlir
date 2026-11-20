@@ -600,3 +600,43 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: Rank-3 ttig.2d_block_load_from_ptr whose lanes leave the row dim open:
+// COM: dim 1 owns one unit-stride register base and dim 0 five. The tile takes
+// COM: the row dim with the tallest tile, dim 0, so the 32x2x128 load is 2
+// COM: messages of 32 rows rather than 32 messages of 2 rows.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 1, 16], warpsPerCTA = [1, 1, 4], order = [2, 0, 1]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_from_ptr_rank3_tallest_row_dim
+  tt.func public @block_load_from_ptr_rank3_tallest_row_dim(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %r0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>>
+    %e0a = tt.expand_dims %r0 {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>> -> tensor<32x1xi32, #ttg.slice<{dim = 2, parent = #blocked}>>
+    %e0 = tt.expand_dims %e0a {axis = 2 : i32} : tensor<32x1xi32, #ttg.slice<{dim = 2, parent = #blocked}>> -> tensor<32x1x1xi32, #blocked>
+    %s0 = arith.constant dense<256> : tensor<32x1x1xi32, #blocked>
+    %o0 = arith.muli %e0, %s0 : tensor<32x1x1xi32, #blocked>
+    %b0 = tt.broadcast %o0 : tensor<32x1x1xi32, #blocked> -> tensor<32x2x128xi32, #blocked>
+    %r1 = tt.make_range {end = 2 : i32, start = 0 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>>
+    %e1a = tt.expand_dims %r1 {axis = 0 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>> -> tensor<1x2xi32, #ttg.slice<{dim = 2, parent = #blocked}>>
+    %e1 = tt.expand_dims %e1a {axis = 2 : i32} : tensor<1x2xi32, #ttg.slice<{dim = 2, parent = #blocked}>> -> tensor<1x2x1xi32, #blocked>
+    %s1 = arith.constant dense<128> : tensor<1x2x1xi32, #blocked>
+    %o1 = arith.muli %e1, %s1 : tensor<1x2x1xi32, #blocked>
+    %b1 = tt.broadcast %o1 : tensor<1x2x1xi32, #blocked> -> tensor<32x2x128xi32, #blocked>
+    %r2 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 1, parent = #blocked}>}>>
+    %e2a = tt.expand_dims %r2 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 1, parent = #blocked}>}>> -> tensor<1x128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %e2 = tt.expand_dims %e2a {axis = 1 : i32} : tensor<1x128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<1x1x128xi32, #blocked>
+    %b2 = tt.broadcast %e2 : tensor<1x1x128xi32, #blocked> -> tensor<32x2x128xi32, #blocked>
+    %a01 = arith.addi %b0, %b1 : tensor<32x2x128xi32, #blocked>
+    %off = arith.addi %a01, %b2 : tensor<32x2x128xi32, #blocked>
+    %p = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x2x128x!tt.ptr<f16>, #blocked>
+    %ptrs = tt.addptr %p, %off : tensor<32x2x128x!tt.ptr<f16>, #blocked>, tensor<32x2x128xi32, #blocked>
+    %pitch = arith.constant 512 : i32
+    %height = arith.constant 32 : i32
+    %width = arith.constant 64 : i32
+    // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 32, tile_width = 16, tile_height = 32, v_blocks = 1, transpose = false, vnni_transform = false, cache_control = Default}
+    // CHECK-NOT: triton_gen.2Dblockload
+    %v = ttig.2d_block_load_from_ptr %ptrs, %pitch, %height, %width {row_major} : (tensor<32x2x128x!tt.ptr<f16>, #blocked>, i32, i32, i32) -> tensor<32x2x128xf16, #blocked>
+    tt.return
+  }
+}

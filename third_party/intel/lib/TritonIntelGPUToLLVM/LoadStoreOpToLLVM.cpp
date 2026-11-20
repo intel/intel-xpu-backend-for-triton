@@ -5096,9 +5096,12 @@ struct Subgroup2DBlockLoadOpConversion
     // FIXME: Remove once IGC can split large 2D block loads.
     bool oneMatrixPerLoadForBT =
         op->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
+    // Same tile as isDescriptorLoadLowerableTo2DBlock, which only accepts
+    // one in the inner two dims.
     BlockIOTileSizeInfo sizeInfo = getBlockIOLoadTileSize(
         llEncoding.value(), contiguousDim, elemSizeInBits,
-        /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
+        /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT,
+        /*innerRowDimOnly=*/true);
     assert(sizeInfo.isValid() && "expected valid tile size");
 
     Location loc = op.getLoc();
