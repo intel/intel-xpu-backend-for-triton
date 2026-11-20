@@ -306,15 +306,6 @@ def test_a_sparse_source_still_gets_the_partial_run_check():
     assert "only 40 series" in run([verdict(10)], 10, cfg, override={10: 40}).suspect["micro"]
 
 
-def test_result_mappings_are_read_only():
-    res = run([verdict(10)], 10, override={10: 40})
-    assert res.held == {"micro": 1}
-    with pytest.raises(TypeError):
-        res.held["micro"] = 0  # type: ignore[index]
-    with pytest.raises(TypeError):
-        res.suspect["x"] = "y"  # type: ignore[index]
-
-
 def test_invalid_knobs_are_rejected():
     for bad in ({"storm_threshold": -1}, {"coverage_history": -1}, {"min_coverage": 1.5}, {"flip_short_share": -0.1}):
         with pytest.raises(ValueError):

@@ -27,7 +27,6 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from types import MappingProxyType
 from typing import NamedTuple
 
 from benchmark_monitor.model import SeriesKey, Status, Verdict
@@ -112,11 +111,6 @@ class SuppressionResult:  # pylint: disable=too-many-instance-attributes
     held: Mapping[str, int] = field(default_factory=dict)  # source -> new flags held back
     warnings: tuple[str, ...] = ()
     confirmed_families: tuple[ConfirmedFamily, ...] = ()
-
-    def __post_init__(self) -> None:
-        # frozen only stops rebinding: make the two mappings read-only as well
-        object.__setattr__(self, "suspect", MappingProxyType(dict(self.suspect)))
-        object.__setattr__(self, "held", MappingProxyType(dict(self.held)))
 
     @property
     def item_count(self) -> int:
