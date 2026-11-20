@@ -19,6 +19,10 @@ on:
         description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
         type: string
         default: ""
+      grf_comparison_refs:
+        description: JSON map of control, fixed256 and fixed256_8k commit hashes
+        type: string
+        default: ""
   workflow_call:
     inputs:
       runner_label:
@@ -36,6 +40,10 @@ on:
         default: ""
       kernels_hash:
         description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
+        type: string
+        default: ""
+      grf_comparison_refs:
+        description: JSON map of control, fixed256 and fixed256_8k commit hashes
         type: string
         default: ""
 
@@ -145,8 +153,15 @@ jobs:
           EOF
           ./scripts/capture-hw-details.sh | tee -a "$REPORTS/.env"
 
+      - name: Run controlled attention GRF comparison
+        if: ${{ steps.install-vllm.outcome == 'success' && inputs.grf_comparison_refs && !cancelled() }}
+        env:
+          GRF_COMPARISON_REFS: ${{ inputs.grf_comparison_refs }}
+        run: |
+          python scripts/vllm/compare_ua_grf.py --refs "$GRF_COMPARISON_REFS" --reports "$REPORTS" --tag "$TAG"
+
       - name: Run vllm unified attention bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: ${{ steps.install-vllm.outcome == 'success' && !inputs.grf_comparison_refs && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -154,7 +169,7 @@ jobs:
           bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
 
       - name: Run vllm unified attention fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: ${{ steps.install-vllm.outcome == 'success' && !inputs.grf_comparison_refs && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -162,7 +177,7 @@ jobs:
           FP8="1" bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
 
       - name: Run vllm batched moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: ${{ steps.install-vllm.outcome == 'success' && !inputs.grf_comparison_refs && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -171,7 +186,7 @@ jobs:
 
 
       - name: Run vllm batched moe fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: ${{ steps.install-vllm.outcome == 'success' && !inputs.grf_comparison_refs && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -179,7 +194,7 @@ jobs:
           FP8="1" bash run_benchmark.sh batched_moe --reports $REPORTS --tag $TAG
 
       - name: Run vllm fused moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        if: ${{ steps.install-vllm.outcome == 'success' && !inputs.grf_comparison_refs && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
 
@@ -187,7 +202,7 @@ jobs:
           bash run_benchmark.sh fused_moe --reports $REPORTS --tag $TAG
 
       - name: Upload benchmark reports
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ always() && steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: benchmark-reports-vllm
