@@ -580,7 +580,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @test_back_to_back
-  // CHECK-NOT: barrier
+  // CHECK-NOT: {{[bB]arrier}}
   tt.func @test_back_to_back(%arg0: tensor<32x64xf32, #blocked>, %arg1: tensor<32x64xf32, #blocked>) -> (tensor<32x64xf32, #blocked1>, tensor<32x64xf32, #blocked1>) {
     %0 = ttg.convert_layout %arg0 : tensor<32x64xf32, #blocked> -> tensor<32x64xf32, #blocked1>
     %1 = ttg.convert_layout %arg1 : tensor<32x64xf32, #blocked> -> tensor<32x64xf32, #blocked1>
@@ -681,7 +681,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_2_cont_back_2_back(
   tt.func @test_2_cont_back_2_back(%arg0: tensor<64x64xf32, #blocked>, %arg1: tensor<64x64xf32, #blocked>) -> (tensor<64x64xf32, #blocked1>, tensor<64x64xf32, #blocked1>) {
-    // CHECK-NOT: barrier
+    // CHECK-NOT: {{[bB]arrier}}
     %0 = ttg.convert_layout %arg0 : tensor<64x64xf32, #blocked> -> tensor<64x64xf32, #blocked1>
     %1 = ttg.convert_layout %arg1 : tensor<64x64xf32, #blocked> -> tensor<64x64xf32, #blocked1>
     tt.return %0, %1 : tensor<64x64xf32, #blocked1>, tensor<64x64xf32, #blocked1>

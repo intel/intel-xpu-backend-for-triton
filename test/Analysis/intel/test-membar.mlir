@@ -10,7 +10,8 @@
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
 
 // CHECK-LABEL: llvm.func spir_kernelcc @test_differing_types_inserts_barrier
-// CHECK: @_Z7barrierj
+// CHECK: [[SEM:%.*]] = llvm.mlir.constant(264 : i32) : i32
+// CHECK-NEXT: llvm.call spir_funccc @_Z22__spirv_ControlBarrieriii(%{{.*}}, %{{.*}}, [[SEM]])
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @test_differing_types_inserts_barrier(
       %arg0: tensor<32x64xf16,  #blocked>,
