@@ -7,6 +7,7 @@ import pathlib
 import triton
 import triton.language as tl
 from triton._internal_testing import is_compile_warmup, is_xpu, is_xpu_cri
+from triton.backends.intel.compiler import XPUBackend
 
 
 @pytest.mark.parametrize("M, N",
@@ -488,3 +489,51 @@ def test_tdesc_store_negative_col_misaligned_base(dtype_str, col, runtime, stays
         if is_xpu_cri():
             pytest.xfail("`stays_2d` assumes a 64-byte message (span 32 for float16); CRI's span differs")
         assert (_count_2d_calls(kernel.asm["llir"], "Store") > 0) == stays_2d
+
+
+@triton.jit
+def _wide_row_store_kernel(c_ptr, a_ptr, b_ptr, M, N, LDC: tl.constexpr, K: tl.constexpr, BM: tl.constexpr,
+                           BN: tl.constexpr, DESC: tl.constexpr):
+    rm = tl.program_id(0) * BM + tl.arange(0, BM)
+    rn = tl.program_id(1) * BN + tl.arange(0, BN)
+    rk = tl.arange(0, K)
+    a = tl.load(a_ptr + rm[:, None] * K + rk[None, :])
+    b = tl.load(b_ptr + rk[:, None] * (2 * BN) + rn[None, :])
+    c = tl.dot(a, b).to(c_ptr.dtype.element_ty)
+    if DESC:
+        desc = tl.make_tensor_descriptor(c_ptr, shape=(M, N), strides=(LDC, 1), block_shape=(BM, BN))
+        desc.store([tl.program_id(0) * BM, tl.program_id(1) * BN], c)
+    else:
+        tl.store(c_ptr + rm[:, None] * LDC + rn[None, :], c, mask=rm[:, None] < M)
+
+
+# 16-bit DPAS results are stored as 32-wide (64 B) rows, repacked per row (issue #8723). The descriptor ends 16 columns
+# into a widened row; the pointer store masks rows only. Everything outside the result must stay unchanged.
+@pytest.mark.parametrize("dtype_str", ["bfloat16", "float16"])
+@pytest.mark.parametrize("desc", [True, False])
+@pytest.mark.parametrize("BM, BN, num_warps", [(256, 64, 8), (64, 32, 4)])
+@pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+@pytest.mark.enable_warmup
+def test_tdesc_wide_row_store(dtype_str, desc, BM, BN, num_warps, device, with_allocator):
+    dtype = getattr(torch, dtype_str)
+    K, M, LDC = 32, 2 * BM - 16, 2 * BN + 32
+    N = BN + 16 if desc else 2 * BN
+    a = torch.randint(-2, 3, (2 * BM, K), dtype=torch.int8).to(dtype).to(device)
+    b = torch.randint(-2, 3, (K, 2 * BN), dtype=torch.int8).to(dtype).to(device)
+    c = torch.full((2 * BM, LDC), -7, dtype=dtype, device=device)
+    kernel = _wide_row_store_kernel[(2, 2)](c, a, b, M, N, LDC, K, BM, BN, desc, num_warps=num_warps)
+
+    expected = torch.full_like(c, -7)
+    expected[:M, :N] = (a.float() @ b.float())[:M, :N].to(dtype)
+    assert torch.equal(c, expected)
+    if is_compile_warmup():
+        return
+    llir = kernel.asm["llir"]
+    assert kernel.metadata.threads_per_warp == 16
+    assert _count_2d_calls(llir, "Store") > 0, "the store must stay on 2D block I/O"
+    if XPUBackend.is_lts(kernel.metadata.target.arch.get("driver_version")):
+        assert "SubgroupBitcastShuffle" not in llir
+        return
+    widths = {int(w) for w in re.findall(r"Subgroup2DBlockStoreINTEL\w*\(i32 (?:\w+ )*2, i32 (?:\w+ )*(\d+),", llir)}
+    assert widths == {32} and "SubgroupBitcastShuffle" in llir

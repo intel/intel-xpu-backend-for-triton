@@ -53,6 +53,86 @@ static Value packedOffsetX(TritonLLVMOpBuilder &b, Value offsetX,
   return b.sdiv(offsetX, b.i32_val(numPackedVals));
 }
 
+/// Whether math sits between \p storedVal and its dot, load, constant or
+/// argument. IGC vectorizes epilogue math from the payload's per-block element
+/// order; the interleaved payload stops it (e.g. attention's `acc / l`).
+static bool hasEpilogueMath(Value storedVal) {
+  SmallVector<Value> worklist = {storedVal};
+  SmallPtrSet<Value, 8> visited;
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (!visited.insert(v).second)
+      continue;
+    // SCF reaches this pass as CF, and block signatures are converted first:
+    // arguments and control-flow results arrive as casts of block arguments.
+    if (auto arg = dyn_cast<BlockArgument>(v)) {
+      for (BlockOperand &edge : arg.getOwner()->getUses()) {
+        auto branch = dyn_cast<BranchOpInterface>(edge.getOwner());
+        if (!branch)
+          return true;
+        Value incoming = branch.getSuccessorOperands(
+            edge.getOperandNumber())[arg.getArgNumber()];
+        if (!incoming)
+          return true;
+        worklist.push_back(incoming);
+      }
+      continue;
+    }
+    Operation *def = v.getDefiningOp();
+    if (isa<arith::TruncFOp, triton::FpToFpOp, UnrealizedConversionCastOp>(
+            def) &&
+        def->getNumOperands() == 1) {
+      worklist.push_back(def->getOperand(0));
+    } else if (!isa<arith::ConstantOp, triton::DotOp, triton::DotScaledOp,
+                    triton::LoadOp, triton::DescriptorLoadOp,
+                    triton::gpu::intel::Subgroup2DBlockLoadOp,
+                    triton::gpu::intel::Subgroup2DBlockLoadFromPtrOp>(def)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Whether 2D block stores may widen 16-bit rows (validate2DBlockStoreTile).
+/// The repack's sub-group bitcast shuffle is not implemented by the LTS driver.
+static bool allowStoreLaneInterleave(Operation *op, Value storedVal) {
+  auto mod = op->getParentOfType<ModuleOp>();
+  return !mod->hasAttr(TritonIntelGPUDialect::getIsLTSAttrName()) &&
+         !tools::getBoolEnv("TRITON_INTEL_DISABLE_WIDE_BLOCK_STORE") &&
+         !hasEpilogueMath(storedVal);
+}
+
+/// A row wider than the sub-group gives lane l columns 2l and 2l+1
+/// (SPV_INTEL_2d_block_io, "Mapping Block Data to Invocations"), while each
+/// (even, odd) payload pair holds columns l and 16+l. The values must change
+/// lanes, so a sub-group bitcast shuffle per pair redistributes them.
+static Value repackLaneInterleavedRows(ConversionPatternRewriter &rewriter,
+                                       Location loc, Value storeVal) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto vecTy = cast<VectorType>(storeVal.getType());
+  assert(vecTy.getElementType().isInteger(16) && "expecting an i16 payload");
+  auto pairTy = VectorType::get(2, vecTy.getElementType());
+  auto packedTy = VectorType::get(1, rewriter.getI32Type());
+  Value result = storeVal;
+  for (unsigned i = 0; i < vecTy.getNumElements(); i += 2) {
+    Value pair = b.undef(pairTy);
+    // Separate statements keep the op order independent of the compiler's
+    // argument evaluation order.
+    for (unsigned j = 0; j < 2; ++j) {
+      Value elem = b.extract_element(storeVal, b.i32_val(i + j));
+      pair = b.insert_element(pair, elem, b.i32_val(j));
+    }
+    Value shuffled = TritonGEN::SubGroupBitcastShuffleOp::create(
+        rewriter, loc, packedTy, pair);
+    Value unpacked = b.bitcast(shuffled, pairTy);
+    for (unsigned j = 0; j < 2; ++j) {
+      Value elem = b.extract_element(unpacked, b.i32_val(j));
+      result = b.insert_element(result, elem, b.i32_val(i + j));
+    }
+  }
+  return result;
+}
+
 /// Unpacked tensor descriptor fields: { shape[rank], stride[rank], base }.
 struct DescriptorFields {
   SmallVector<Value, 4> shapes;  // shapes[0..rank-1]
@@ -608,6 +688,18 @@ struct LoadStoreConversionBase {
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
             .getAxisInfo(idx);
     return span > 0 && (info ? info->getDivisibility(0) : 1) % span == 0;
+  }
+
+  /// Where a 2D block message of \p span columns can start relative to column
+  /// 0, given its column index \p idx (lowered: \p llIdx).
+  enum class ColumnZero { NonNegative, Aligned, MayStraddle };
+  ColumnZero classifyColumnZero(Value idx, Value llIdx, int64_t span) const {
+    std::optional<int64_t> colConst =
+        triton::intel::getFoldedConstantValue(llIdx);
+    if (colConst && *colConst >= 0)
+      return ColumnZero::NonNegative;
+    return cannotStraddleColumnZero(idx, span) ? ColumnZero::Aligned
+                                               : ColumnZero::MayStraddle;
   }
 
   // Ensure the operation doesn't have attributes that the IGC predicated
@@ -3732,10 +3824,28 @@ struct DescriptorStoreOpToBlockIOConversion
     // geometry, enforces the HW address payload restriction, rejects transpose,
     // and forces vBlocks to 1.
     BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
+    unsigned laneInterleave = 1;
     if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
                                   elemSizeInBits, tensorType, maskAxisInfo,
-                                  sizeInfo))
+                                  sizeInfo, laneInterleave,
+                                  allowStoreLaneInterleave(op, op.getSrc())))
       return failure();
+    // A widened row doubles the span checked against column 0 below; keep the
+    // narrow row when only the wider one could straddle it.
+    if (laneInterleave > 1 && needs2DBlockIOAlignmentCompensation(op)) {
+      unsigned colIdx =
+          op.getIndices().size() - tensorType.getRank() + sizeInfo.colDim;
+      int64_t span = int64_t(sizeInfo.tileWidth) * sizeInfo.numElemPerPackedVal;
+      if (classifyColumnZero(op.getIndices()[colIdx],
+                             adaptor.getIndices()[colIdx],
+                             span) == ColumnZero::MayStraddle) {
+        [[maybe_unused]] bool valid = validate2DBlockStoreTile(
+            llEncoding.value(), contiguousDim, elemSizeInBits, tensorType,
+            maskAxisInfo, sizeInfo, laneInterleave,
+            /*allowLaneInterleave=*/false);
+        assert(valid && "the narrow tile passed the same checks");
+      }
+    }
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
           isTransposeRequired, useVNNIFormat, regPackedBases] =
@@ -3857,6 +3967,9 @@ struct DescriptorStoreOpToBlockIOConversion
 
     unsigned threadsPerWarp =
         TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+    assert((laneInterleave == 1 ||
+            unsigned(tileWidth) == laneInterleave * threadsPerWarp) &&
+           "a widened row spans the sub-group laneInterleave times");
 
     Type packedType = IntegerType::get(ctx, packedElemSizeInBits);
     unsigned numPackedElemsPerStore = (tileHeight * tileWidth) / threadsPerWarp;
@@ -3884,14 +3997,12 @@ struct DescriptorStoreOpToBlockIOConversion
     // its row and leave a possibly straddling one to the masked scatter.
     bool redirectNegCol = false;
     if (needs2DBlockIOAlignmentCompensation(op)) {
-      std::optional<int64_t> colConst =
-          triton::intel::getFoldedConstantValue(baseOffsets[descColDim]);
-      if (!(colConst && *colConst >= 0)) {
-        if (!cannotStraddleColumnZero(op.getIndices()[descColDim],
-                                      int64_t(tileWidth) * numPackedVals))
-          return failure();
-        redirectNegCol = true;
-      }
+      ColumnZero colZero = classifyColumnZero(
+          op.getIndices()[descColDim], baseOffsets[descColDim],
+          int64_t(tileWidth) * numPackedVals);
+      if (colZero == ColumnZero::MayStraddle)
+        return failure();
+      redirectNegCol = colZero == ColumnZero::Aligned;
     }
 
     // --- Emit 2D block stores ---
@@ -3941,6 +4052,8 @@ struct DescriptorStoreOpToBlockIOConversion
       }
       if (store2DComposeType != store2DGenXType)
         storeVal = b.bitcast(storeVal, store2DGenXType);
+      if (laneInterleave > 1)
+        storeVal = repackLaneInterleavedRows(rewriter, loc, storeVal);
 
       auto newOp = TritonGEN::Matrix2DBlockStoreOp::create(
           rewriter, loc, addrElem, adjustedBaseWidth, adjustedBaseHeight, pitch,
@@ -4013,9 +4126,11 @@ struct StoreOpToBlockIOConversion
     BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
     MLIRContext *ctx = rewriter.getContext();
 
+    unsigned laneInterleave = 1;
     if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
                                   elemSizeInBits, tensorType, maskAxisInfo,
-                                  sizeInfo))
+                                  sizeInfo, laneInterleave,
+                                  allowStoreLaneInterleave(op, op.getValue())))
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
@@ -4116,6 +4231,9 @@ struct StoreOpToBlockIOConversion
 
     unsigned threadsPerWarp =
         TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+    assert((laneInterleave == 1 ||
+            unsigned(tileWidth) == laneInterleave * threadsPerWarp) &&
+           "a widened row spans the sub-group laneInterleave times");
 
     Type packedType =
         IntegerType::get(ctx, packedElemSizeInBits); // make it opaque type.
@@ -4204,6 +4322,8 @@ struct StoreOpToBlockIOConversion
       }
       if (store2DComposeType != store2DGenXType)
         storeVal = b.bitcast(storeVal, store2DGenXType);
+      if (laneInterleave > 1)
+        storeVal = repackLaneInterleavedRows(rewriter, loc, storeVal);
 
       auto newOp = TritonGEN::Matrix2DBlockStoreOp::create(
           rewriter, loc, addrElem, adjustedBaseWidth, adjustedBaseHeight, pitch,
