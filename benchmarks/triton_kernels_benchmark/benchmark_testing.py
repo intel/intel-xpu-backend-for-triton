@@ -835,7 +835,7 @@ class BenchmarkRunResult(_BenchmarkSummary, ABC):
         metrics_df.index.name = shape_name
         metrics_df.columns = pd.MultiIndex.from_tuples(column_tuples, names=["provider", "metric"])
         geomeans_df = pd.DataFrame(
-            [metrics_df.select_dtypes(include="number").apply(scipy.stats.gmean)],
+            [metrics_df.select_dtypes(include="number").replace(0, np.nan).apply(scipy.stats.gmean, nan_policy="omit")],
             index=["GeoMean"],
         )
         summary_df = pd.concat([metrics_df, geomeans_df])
