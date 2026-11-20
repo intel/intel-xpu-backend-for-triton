@@ -612,9 +612,9 @@ struct LoadStoreConversionBase {
              !op.getIsVolatile();
     } else if constexpr (std::is_same_v<OpType, StoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
-    } else if constexpr (std::is_same_v<OpType,
-                                        mlir::triton::gpu::intel::
-                                            DescriptorGatherOp>) {
+    } else if constexpr (std::is_same_v<
+                             OpType,
+                             mlir::triton::gpu::intel::DescriptorGatherOp>) {
       return !usePredicatedLoad.has_value() || usePredicatedLoad.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorStoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
