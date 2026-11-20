@@ -1,6 +1,6 @@
-// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,PREDICATED
-// RUN: env TRITON_INTEL_PREDICATED_LOAD=0 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,NO-PREDICATED
-// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,PREDICATED
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,PREDICATED
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 TRITON_INTEL_PREDICATED_LOAD=0 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,NO-PREDICATED
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 TRITON_INTEL_PREDICATED_LOAD=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,PREDICATED
 
 // Pin the *default* lowering of tt.descriptor_load on the non-2D-block path.
 //

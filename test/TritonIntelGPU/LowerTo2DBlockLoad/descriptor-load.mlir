@@ -282,7 +282,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // -----
 
 // COM: Positive twin of @if_divergent_padding in
-// COM: test/TritonIntelGPU/descriptor-load-divergent-padding.mlir: the two scf.if
+// COM: test/TritonIntelGPU/LowerTo2DBlockLoad/descriptor-load-divergent-padding.mlir: the two scf.if
 // COM: candidates agree on PAD_NAN, so consistentPadding() yields it and the
 // COM: conversion proceeds. `pad_nan` on the emitted op is the part that
 // COM: matters -- it shows the padding *value* survived the trace, not merely

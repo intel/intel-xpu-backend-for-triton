@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -tritonintelgpu-materialize-block-pointer="enable-descriptor-relayout=true" | FileCheck %s
 // RUN: triton-opt %s -tritonintelgpu-materialize-block-pointer | FileCheck %s
-// RUN: triton-opt %s -tritonintelgpu-lower-to-2d-block-load -verify-diagnostics
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 triton-opt %s -tritonintelgpu-lower-to-2d-block-load -verify-diagnostics
 
 // COM: A descriptor load with fewer than two indices (hand-written IR) is refused.
 // COM: Its descriptor is a function argument, so the tag is the one written here.

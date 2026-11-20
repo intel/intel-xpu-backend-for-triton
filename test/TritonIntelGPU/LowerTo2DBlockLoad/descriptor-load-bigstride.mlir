@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s
 
 // Regression tests for the surface-parameter bounds check in the
 // descriptor→2Dblockload lowering (companion to

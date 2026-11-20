@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --implicit-check-not=ttig.2d_block_load
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --implicit-check-not=ttig.2d_block_load
 // RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --check-prefix=KEEP
 
 // COM: tt.descriptor_load that cannot use a 2D block load is lowered to a masked tt.load.

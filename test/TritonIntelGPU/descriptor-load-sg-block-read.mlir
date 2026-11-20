@@ -1,6 +1,6 @@
-// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,TOLOAD
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,TOLOAD
 // RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,CONV
-// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefix=DISABLED
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefix=DISABLED
 
 // A single-row descriptor load whose bounds checks are all block-level, and whose lanes hold consecutive 32/64-bit
 // words of the row, becomes one sub-group block read per read group under a single uniform branch.

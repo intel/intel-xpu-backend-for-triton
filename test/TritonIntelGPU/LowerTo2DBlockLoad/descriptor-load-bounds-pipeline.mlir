@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonintelgpu-materialize-block-pointer --tritonintelgpu-lower-to-2d-block-load | FileCheck %s
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 triton-opt %s -split-input-file --tritonintelgpu-materialize-block-pointer --tritonintelgpu-lower-to-2d-block-load | FileCheck %s
 
 // Runs the two passes in pipeline order (MaterializeBlockPointer tags, then
 // LowerTo2DBlockLoad lowers; the real pipeline runs many other passes between

@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --implicit-check-not=ttig.2d_block_load_from_ptr --implicit-check-not=ttig.2d_block_load
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --implicit-check-not=ttig.2d_block_load_from_ptr --implicit-check-not=ttig.2d_block_load
 
 // COM: Descriptor load without ttig.block_io attribute should NOT be converted
 // COM: to ttig.2d_block_load — it is lowered to tt.load instead.

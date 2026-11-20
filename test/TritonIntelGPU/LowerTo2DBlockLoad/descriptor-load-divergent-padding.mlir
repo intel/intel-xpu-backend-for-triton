@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -verify-diagnostics --tritonintelgpu-lower-to-2d-block-load
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 triton-opt %s -split-input-file -verify-diagnostics --tritonintelgpu-lower-to-2d-block-load
 
 // COM: LowerTo2DBlockLoad rejects descriptor loads whose padding cannot be decided (#8102), as
 // COM: DescriptorLoadOpConversion does in ../descriptor-load-divergent-padding.mlir.
