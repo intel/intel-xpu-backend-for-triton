@@ -64,8 +64,9 @@ static uint32_t findKernels(llvm::Module &M,
 }
 
 void init_triton_intel_passes_ttir(py::module_ &&m) {
-  ADD_PASS_WRAPPER_0("add_rewrite_tensor_descriptor_to_pointer",
-                     intel::createTritonRewriteTensorDescriptorToPointer);
+  ADD_PASS_OPTION_WRAPPER_1("add_rewrite_tensor_descriptor_to_pointer",
+                            intel::createTritonRewriteTensorDescriptorToPointer,
+                            int32_t);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
   ADD_PASS_WRAPPER_0("add_stride_versioning",
                      intel::createTritonIntelStrideVersioning);

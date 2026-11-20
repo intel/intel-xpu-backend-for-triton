@@ -142,12 +142,9 @@ bool isDivisible(Value value, int64_t divisor) {
   return false;
 }
 
-static Attribute inferSrcEncoding(ttgi::DescriptorGatherOp op,
-                                  Attribute dstEnc) {
-  // only the offsets require the slice encoding, the base pointer is a scalar
-  // and does not require any encoding.
-  return SliceEncodingAttr::get(op->getContext(), 1,
-                                cast<DistributedEncodingTrait>(dstEnc));
+// Only the x offsets take an encoding: the slice of the result along dim 1.
+static Attribute inferGatherSrcEncoding(MLIRContext *ctx, Attribute dstEnc) {
+  return SliceEncodingAttr::get(ctx, 1, cast<DistributedEncodingTrait>(dstEnc));
 }
 
 Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
@@ -169,10 +166,19 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     }
   }
 
-  if (auto gatherOp = dyn_cast<ttgi::DescriptorGatherOp>(op))
-    return inferSrcEncoding(gatherOp, encoding);
+  if (isa<tt::DescriptorGatherOp, ttgi::DescriptorGatherOp>(op))
+    return inferGatherSrcEncoding(op->getContext(), encoding);
 
   return mlir::inferSrcEncoding(op, encoding);
+}
+
+Value buildConvertedXOffsets(OpBuilder &builder, Location loc, Value xOffsets,
+                             RankedTensorType valueType) {
+  auto xOffsetsType = cast<RankedTensorType>(xOffsets.getType());
+  Attribute enc =
+      inferGatherSrcEncoding(builder.getContext(), valueType.getEncoding());
+  return ConvertLayoutOp::create(builder, loc,
+                                 xOffsetsType.cloneWithEncoding(enc), xOffsets);
 }
 
 CachePolicy getCachePolicy(Attribute cachePolicy) {
@@ -220,10 +226,11 @@ static bool isMaskedLoadWithoutDotConsumer(Operation *op) {
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
-  assert((isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp,
-              tt::DescriptorStoreOp>(op)) &&
-         "Expecting Triton LoadOp, StoreOp, DescriptorLoadOp or "
-         "DescriptorStoreOp");
+  assert(
+      (isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp, tt::DescriptorStoreOp,
+           tt::DescriptorGatherOp, ttgi::DescriptorGatherOp>(op)) &&
+      "Expecting Triton LoadOp, StoreOp, DescriptorLoadOp, "
+      "DescriptorStoreOp or DescriptorGatherOp");
   Value base = op->getOperand(0);
 
   if (isa<tt::LoadOp, tt::StoreOp>(op)) {
@@ -255,6 +262,8 @@ bool isExpensiveLoadOrStore(Operation *op) {
     ptrType = getRankedTensorType(descLoadOp);
   } else if (auto descStoreOp = dyn_cast<tt::DescriptorStoreOp>(op)) {
     ptrType = getRankedTensorType(descStoreOp);
+  } else if (isa<tt::DescriptorGatherOp, ttgi::DescriptorGatherOp>(op)) {
+    ptrType = cast<RankedTensorType>(op->getResult(0).getType());
   } else {
     ptrType = getRankedTensorType(base.getType());
   }
