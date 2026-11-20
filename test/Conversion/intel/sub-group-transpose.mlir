@@ -16,19 +16,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_39:.*]] = llvm.zext %[[VAL_38]] : i32 to i64
-    // CHECK:           %[[VAL_40:.*]] = llvm.mlir.constant(272 : i64) : i64
+    // CHECK:           %[[VAL_40:.*]] = llvm.mlir.constant(288 : i64) : i64
     // CHECK:           %[[VAL_41:.*]] = llvm.mul %[[VAL_37]], %[[VAL_40]] : i64
     // CHECK:           %[[VAL_42:.*]] = llvm.getelementptr inbounds %[[VAL_35]]{{\[}}%[[VAL_41]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i16
     // CHECK:           llvm.call spir_funccc @_Z30intel_sub_group_block_write_usPU3AS3tt(%[[VAL_42]]
     // COM: Check offset:
-    // CHECK:           llvm.getelementptr inbounds %{{.*}}[17]
+    // CHECK:           llvm.getelementptr inbounds %{{.*}}[18]
     // COM: Check there are 15 more stores:
     // CHECK-COUNT-15:  llvm.call spir_funccc @_Z30intel_sub_group_block_write_usPU3AS3tt(
     // CHECK-NOT:       llvm.call spir_funccc @_Z30intel_sub_group_block_write_usPU3AS3tt(
-    // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
+    // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(18 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i16
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi16>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi16>
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : i16 to f16
     %0 = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
     tt.return %0 : tensor<16x16xf16, #blocked1>
@@ -44,19 +44,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_39:.*]] = llvm.zext %[[VAL_38]] : i32 to i64
-    // CHECK:           %[[VAL_40:.*]] = llvm.mlir.constant(272 : i64) : i64
+    // CHECK:           %[[VAL_40:.*]] = llvm.mlir.constant(288 : i64) : i64
     // CHECK:           %[[VAL_41:.*]] = llvm.mul %[[VAL_37]], %[[VAL_40]] : i64
     // CHECK:           %[[VAL_42:.*]] = llvm.getelementptr inbounds %[[VAL_35]]{{\[}}%[[VAL_41]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i16
     // CHECK:           llvm.call spir_funccc @_Z30intel_sub_group_block_write_usPU3AS3tt(%[[VAL_42]]
     // COM: Check offset:
-    // CHECK:           llvm.getelementptr inbounds %{{.*}}[17]
+    // CHECK:           llvm.getelementptr inbounds %{{.*}}[18]
     // COM: Check there are 15 more stores:
     // CHECK-COUNT-15:  llvm.call spir_funccc @_Z30intel_sub_group_block_write_usPU3AS3tt(
     // CHECK-NOT:       llvm.call spir_funccc @_Z30intel_sub_group_block_write_usPU3AS3tt(
-    // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
+    // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(18 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i16
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi16>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi16>
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : i16 to bf16
     %0 = ttg.convert_layout %arg0 : tensor<16x16xbf16, #blocked> -> tensor<16x16xbf16, #blocked1>
     tt.return %0 : tensor<16x16xbf16, #blocked1>
@@ -99,19 +99,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_39:.*]] = llvm.zext %[[VAL_38]] : i32 to i64
-    // CHECK:           %[[VAL_40:.*]] = llvm.mlir.constant(272 : i64) : i64
+    // CHECK:           %[[VAL_40:.*]] = llvm.mlir.constant(320 : i64) : i64
     // CHECK:           %[[VAL_41:.*]] = llvm.mul %[[VAL_37]], %[[VAL_40]] : i64
     // CHECK:           %[[VAL_42:.*]] = llvm.getelementptr inbounds %[[VAL_35]]{{\[}}%[[VAL_41]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i8
     // CHECK:           llvm.call spir_funccc @_Z30intel_sub_group_block_write_ucPU3AS3hh(%[[VAL_42]]
     // COM: Check offset:
-    // CHECK:           llvm.getelementptr inbounds %{{.*}}[17]
+    // CHECK:           llvm.getelementptr inbounds %{{.*}}[20]
     // COM: Check there are 15 more stores:
     // CHECK-COUNT-15:  llvm.call spir_funccc @_Z30intel_sub_group_block_write_ucPU3AS3hh(
     // CHECK-NOT:       llvm.call spir_funccc @_Z30intel_sub_group_block_write_ucPU3AS3hh(
-    // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
+    // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(20 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i8
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi8>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi8>
     %0 = ttg.convert_layout %arg0 : tensor<16x16xi8, #blocked> -> tensor<16x16xi8, #blocked1>
     tt.return %0 : tensor<16x16xi8, #blocked1>
   }
@@ -180,19 +180,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_39:.*]] = llvm.zext %[[VAL_38]] : i32 to i64
-    // CHECK:           %[[VAL_40:.*]] = llvm.mlir.constant(272 : i64) : i64
+    // CHECK:           %[[VAL_40:.*]] = llvm.mlir.constant(320 : i64) : i64
     // CHECK:           %[[VAL_41:.*]] = llvm.mul %[[VAL_37]], %[[VAL_40]] : i64
     // CHECK:           %[[VAL_42:.*]] = llvm.getelementptr inbounds %[[VAL_35]]{{\[}}%[[VAL_41]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i8
     // CHECK:           llvm.call spir_funccc @_Z30intel_sub_group_block_write_ucPU3AS3hh(%[[VAL_42]]
     // COM: Check offset:
-    // CHECK:           llvm.getelementptr inbounds %{{.*}}[17]
+    // CHECK:           llvm.getelementptr inbounds %{{.*}}[20]
     // COM: Check there are 15 more stores:
     // CHECK-COUNT-15:  llvm.call spir_funccc @_Z30intel_sub_group_block_write_ucPU3AS3hh(
     // CHECK-NOT:       llvm.call spir_funccc @_Z30intel_sub_group_block_write_ucPU3AS3hh(
-    // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
+    // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(20 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i8
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi8>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi8>
     // CHECK-COUNT-16:  llvm.trunc %{{.*}} : i8 to i1
     %0 = ttg.convert_layout %arg0 : tensor<16x16xi1, #blocked> -> tensor<16x16xi1, #blocked1>
     tt.return %0 : tensor<16x16xi1, #blocked1>

@@ -335,9 +335,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     int numRows = inVals.size();
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    // Add an element that won't be accessed at the end of the row to avoid bank
-    // conflicts.
-    int rowLength = threadsPerWarp + 1;
+    unsigned bytesPerElement = elementType.getIntOrFloatBitWidth() / 8;
+    // Padded rows: bank conflicts and, for sub-dword elements, dword alignment
+    // of the per-lane row loads below.
+    int rowLength =
+        intel::getSubGroupTransposeRowLength(threadsPerWarp, bytesPerElement);
     Type offsetType = getTypeConverter()->getIndexType();
     unsigned offsetBitWidth = offsetType.getIntOrFloatBitWidth();
     Value subGroupId = getValueOrCreateCastToIndexLike(
@@ -364,8 +366,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Load from matrix, non-trasposed.
 
-    // Each work-item will load a row (but the last garbage element) and go to
-    // the next row it needs to handle.
+    // Each work-item will load a row (but the padding at its end) and go to the
+    // next row it needs to handle.
 
     int32_t workItemStride =
         numContiguousRows == 1 ? rowLength * threadsPerWarp : rowLength;
@@ -386,9 +388,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     VectorType vecType = vec_ty(elementType, vecLoadWidth);
     assert(threadsPerWarp % vecLoadWidth == 0 &&
            "Column must be loadable with N loads");
+    // Rows of sub-dword elements are dword-aligned, not aligned to the vector
+    // type's natural alignment LLVM would otherwise assume: say so (#8749).
+    // Wider elements keep the load as it always was.
+    unsigned loadAlignment = bytesPerElement < 4 ? 4 : 0;
+    assert((rowLength * bytesPerElement) % 4 == 0 &&
+           "Row pitch must keep the per-lane loads dword-aligned");
     for (unsigned i = 0; i < rowsPerThread; ++i) {
       for (unsigned j = 0; j < threadsPerWarp; j += vecLoadWidth) {
-        transposedVecs.push_back(b.load(vecType, workItemBasePtr));
+        transposedVecs.push_back(
+            loadAlignment ? b.load(vecType, workItemBasePtr, loadAlignment)
+                          : b.load(vecType, workItemBasePtr));
         workItemBasePtr =
             b.gep(workItemBasePtr.getType(), vecType, workItemBasePtr,
                   ArrayRef<LLVM::GEPArg>{1}, LLVM::GEPNoWrapFlags::inbounds);

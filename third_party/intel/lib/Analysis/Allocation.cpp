@@ -25,9 +25,11 @@ unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
     assert(numElements % subGroupSize == 0 &&
            "Sub-group transposable tensors have a number of elements multiple "
            "of the sub-group size");
-    // Add an element at the end of the row that will not be accessed. This
-    // allows us to avoid bank conflicts.
-    unsigned numMatrixCells = (numElements / subGroupSize) * (subGroupSize + 1);
+    // Rows are padded (bank conflicts, dword alignment); see
+    // getSubGroupTransposeRowLength.
+    unsigned numMatrixCells = (numElements / subGroupSize) *
+                              gpu::intel::getSubGroupTransposeRowLength(
+                                  subGroupSize, bytesPerElement);
     return numMatrixCells * bytesPerElement;
   }
   if (gpu::intel::cvtIsSubGroupReinterpret(convertLayout))
