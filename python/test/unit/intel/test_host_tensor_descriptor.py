@@ -134,12 +134,13 @@ def _one_head_tile_kernel(a_desc, b_ptr, c_ptr, head, N: tl.constexpr, BLOCK_M: 
 
 # One-head tile of a (TOKENS, HEADS, HEAD_DIM) tensor. The (BLOCK_M, 1, BLOCK_D) block
 # spans dimensions 0 and 2, so 2D block I/O needs the unit middle dimension collapsed.
-# Collapsing is only correct while the tile fits one head: past that it would read the
-# next head instead of zero-padding (issues/7679, issues/7464).
-@pytest.mark.parametrize("HEAD_DIM, collapse", [(128, True), (104, False)])
+# The collapse rebases the descriptor onto the head, so a tile wider than the head
+# (104 < 128) pads the rest of its columns instead of reading the next head
+# (issues/7679, issues/7464).
+@pytest.mark.parametrize("HEAD_DIM", [128, 104])
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
-def test_host_descriptor_rank3_unit_middle_dim(HEAD_DIM, collapse, device):
+def test_host_descriptor_rank3_unit_middle_dim(HEAD_DIM, device):
     TOKENS, HEADS, N = 256, 4, 64
     BLOCK_M, BLOCK_D, HEAD = 64, 128, 1
 
@@ -157,11 +158,11 @@ def test_host_descriptor_rank3_unit_middle_dim(HEAD_DIM, collapse, device):
 
     # Check the descriptor rank, not `tt.reshape`: a rank-reducing descriptor_load also
     # leaves no reshape behind, yet nothing was collapsed.
-    ttir = kernel.asm["ttir"]
-    assert (f"!tt.tensordesc<{BLOCK_M}x1x{BLOCK_D}x" in ttir) != collapse
-    if collapse:
-        llir = kernel.asm["llir"]
-        assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
+    assert f"!tt.tensordesc<{BLOCK_M}x1x{BLOCK_D}x" not in kernel.asm["ttir"], "not fused"
+    # `b` is a 2D-eligible tl.load as well, so count nothing: check the
+    # descriptor load itself kept 2D block I/O.
+    loads = [l for l in kernel.asm["ttgir"].splitlines() if "tt.descriptor_load" in l]
+    assert loads and all("ttig.block_io" in l for l in loads), loads
 
 
 @triton.jit
@@ -184,8 +185,8 @@ def _outer_tile_kernel(a_ptr, out_ptr, row_off, B: tl.constexpr, R: tl.constexpr
 
 
 # Unit *outermost* dimension: a (B, R, C) tile whose rows run past R must pad,
-# not read the next slice. Fusion bounds the merged dimension only, so the
-# merged extent has to be this load's own (issues/8001).
+# not read the next slice. The rebased descriptor keeps R as its row extent, so
+# those rows pad (issues/8001).
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
 def test_descriptor_rank3_unit_outer_dim_pads(device, with_allocator):
@@ -281,13 +282,13 @@ def _neg_stride_kernel(a_ptr, out_ptr, batch, B: tl.constexpr, R: tl.constexpr, 
     tl.store(out_ptr + offs, acc)
 
 
-# A negative outermost stride must not fuse: the collapse divides the strides,
-# and doing that unsigned made a negative stride look like a huge positive
-# ratio. The base sits at the last slice so the negative stride walks backwards
-# inside the tensor rather than before the allocation.
+# A negative outermost stride (issues/8001, case 2): the load fuses, the collapse
+# offsets the base by the stride, and the right slice is read. The base sits at
+# the last slice so the negative stride walks backwards inside the tensor rather
+# than before the allocation.
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
-def test_descriptor_negative_outer_stride_declines(device, with_allocator):
+def test_descriptor_negative_outer_stride(device, with_allocator):
     B, R, C, BLOCK_R, BLOCK_C, BATCH = 4, 32, 64, 32, 64, 1
 
     torch.manual_seed(42)
@@ -296,9 +297,9 @@ def test_descriptor_negative_outer_stride_declines(device, with_allocator):
     kernel = _neg_stride_kernel[(1, )](a[B - 1], out, BATCH, B, R, C, BLOCK_R, BLOCK_C)
 
     torch.testing.assert_close(out, a[B - 1 - BATCH, :BLOCK_R, :].to(torch.float32))
-    # Declined, so the rank-3 descriptor survives. Check the descriptor rank and
-    # not `tt.reshape`: a rank-reducing descriptor_load leaves no reshape either.
-    assert f"!tt.tensordesc<1x{BLOCK_R}x{BLOCK_C}x" in kernel.asm["ttir"], "should not fuse"
+    assert f"!tt.tensordesc<1x{BLOCK_R}x{BLOCK_C}x" not in kernel.asm["ttir"], "not fused"
+    llir = kernel.asm["llir"]
+    assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
 
 
 @triton.jit
@@ -314,16 +315,11 @@ def _runtime_empty_kernel(a_ptr, out_ptr, heads, col_off, TOKENS: tl.constexpr, 
 
 
 # A collapsed dimension that is empty only at runtime, collapsing the *middle*
-# dimension so the merged extent is the surface width. The extent cannot be
-# forced to zero - every surface field is emitted as `extent - 1`, so a zero
-# declares a 16MB surface over a pointer to nothing - so it is forced to the
-# smallest legal surface (one 64-element block == 128 bytes) and the index is
-# forced past it, which is what makes it pad. Device-side because a host
-# TensorDescriptor asserts every shape positive and cannot express it.
-#
-# `S1 < HEAD_DIM` makes the heads overlap, which nothing rejects. That is what
-# makes this test bite: for a non-overlapping descriptor the old extent was
-# already <= 0 here, so only the overlapping form distinguishes the two.
+# dimension. The rank-3 load is pure padding; the fused one keeps the base where
+# it is and the guard forces the column index past the head width, which is what
+# makes it pad. Device-side because a host TensorDescriptor asserts every shape
+# positive and cannot express it. `S1 < HEAD_DIM` makes the heads overlap, which
+# nothing rejects.
 #
 # `col_off` selects the lowering path, and both must pad. It is the stride-one
 # index: 0 is provably divisible so `block_io` is granted and the load is a 2D
@@ -366,10 +362,8 @@ def _runtime_empty_outer_kernel(a_ptr, out_ptr, batches, R: tl.constexpr, C: tl.
     tl.store(out_ptr + offs, acc)
 
 
-# The outermost-collapse counterpart: the merged extent is the surface *height*,
-# where the hardware has no 64-byte minimum, so the floor is one block of rows
-# instead. A separate case because the two branches compute different floors and
-# the out-of-range read goes out of bounds in a different direction - past
+# The outermost-collapse counterpart: the guard forces the row index past `R`,
+# so the out-of-range read goes out of bounds in a different direction - past
 # `base_height` here, past `base_width` above.
 @pytest.mark.parametrize("padding", ["zero", "nan"])
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
@@ -395,8 +389,8 @@ def test_descriptor_runtime_empty_outer_dim_pads(device, with_allocator, padding
 @triton.jit
 def _runtime_empty_merged_kernel(a_ptr, out_ptr, n, batch, B: tl.constexpr, C: tl.constexpr, S0: tl.constexpr,
                                  BLOCK_R: tl.constexpr, BLOCK_C: tl.constexpr):
-    # `n * BLOCK_R` is a runtime extent the fusion still accepts: it is provably a
-    # multiple of the block.
+    # `n * BLOCK_R` is a runtime extent, so the fusion emits its empty-dimension
+    # floor.
     desc = tl.make_tensor_descriptor(a_ptr, shape=[B, n * BLOCK_R, C], strides=[S0, C, 1],
                                      block_shape=[1, BLOCK_R, BLOCK_C])
     a = desc.load([batch, 0, 0]).reshape(BLOCK_R, BLOCK_C)
@@ -405,13 +399,14 @@ def _runtime_empty_merged_kernel(a_ptr, out_ptr, n, batch, B: tl.constexpr, C: t
     tl.store(out_ptr + offs, acc)
 
 
-# The *merged* dimension empty at runtime (`n == 0`), with the collapsed one not.
-# The merged extent is then `clamp(batch) * ratio + 0`, which is 0 for any
-# `batch <= 0`: unless the floor and the guard key on the merged dimension too,
-# that zero declares a 16MB surface, and a negative `batch` is pushed to the
-# extent, i.e. row 0 of it, which reads real data. `batch` covers both halves of
-# the guard and the in-range case; `n == 2` checks that the extra runtime terms
-# still read the right slice (1 would be specialized to a `constexpr`).
+# The dimension after the collapsed one empty at runtime (`n == 0`), with the
+# collapsed one not. The rank-2 view's row extent is then 0, which the 2D block
+# message encodes as `0 - 1`: a 16MB surface that reads real data. The fusion
+# declares one block of rows instead, and the guard keys on the empty dimension
+# too, or an in-range `batch` would read row 0 of that block. `batch` covers both
+# halves of the guard and the in-range case; `n == 2` checks that the extra
+# runtime terms still read the right slice (1 would be specialized to a
+# `constexpr`).
 @pytest.mark.parametrize("batch", [-1, 0, 3])
 @pytest.mark.parametrize("n", [0, 2])
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
@@ -438,6 +433,49 @@ def test_descriptor_runtime_empty_merged_dim_pads(device, with_allocator, n, bat
 
 
 @triton.jit
+def _runtime_empty_merged_middle_kernel(a_ptr, out_ptr, n, head, TOKENS: tl.constexpr, HEADS: tl.constexpr,
+                                        S0: tl.constexpr, S1: tl.constexpr, BLOCK_M: tl.constexpr,
+                                        BLOCK_D: tl.constexpr):
+    # `n * BLOCK_D` is a runtime head width, so the fusion emits its
+    # empty-dimension floor - a surface width on this branch.
+    desc = tl.make_tensor_descriptor(a_ptr, shape=[TOKENS, HEADS, n * BLOCK_D], strides=[S0, S1, 1],
+                                     block_shape=[BLOCK_M, 1, BLOCK_D])
+    a = desc.load([0, head, 0]).reshape(BLOCK_M, BLOCK_D)
+    acc = tl.dot(a, _identity(BLOCK_D))
+    offs = tl.arange(0, BLOCK_M)[:, None] * BLOCK_D + tl.arange(0, BLOCK_D)[None, :]
+    tl.store(out_ptr + offs, acc)
+
+
+# The middle-collapse counterpart: the head width is empty at runtime (`n == 0`),
+# so the floor is a surface *width* and the forced index runs past `base_width`
+# rather than `base_height`. Both heads are in range, so only the guard's
+# empty-dimension term makes the load pad; `n == 2` checks that the extra runtime
+# terms still read the right head.
+@pytest.mark.parametrize("head", [0, 3])
+@pytest.mark.parametrize("n", [0, 2])
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_runtime_empty_merged_middle_dim_pads(device, with_allocator, n, head):
+    TOKENS, HEADS, BLOCK_M, BLOCK_D = 64, 4, 64, 64
+    S1 = 2 * BLOCK_D
+    S0 = HEADS * S1
+
+    torch.manual_seed(42)
+    a = torch.randn(TOKENS * S0, dtype=torch.float16, device=device) + 1.0
+    out = torch.full((BLOCK_M, BLOCK_D), -1.0, dtype=torch.float32, device=device)
+    kernel = _runtime_empty_merged_middle_kernel[(1, )](a, out, n, head, TOKENS, HEADS, S0, S1, BLOCK_M, BLOCK_D)
+
+    tile = torch.zeros((BLOCK_M, BLOCK_D), dtype=torch.float16, device=device)
+    if n > 0:
+        tile = torch.as_strided(a, (TOKENS, HEADS, S1), (S0, S1, 1))[:BLOCK_M, head, :BLOCK_D]
+    torch.testing.assert_close(out, tile.to(torch.float32))
+
+    assert f"!tt.tensordesc<{BLOCK_M}x1x{BLOCK_D}x" not in kernel.asm["ttir"], "not fused"
+    llir = kernel.asm["llir"]
+    assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
+
+
+@triton.jit
 def _overlap_outer_kernel(a_ptr, out_ptr, batch, B: tl.constexpr, R: tl.constexpr, C: tl.constexpr, S0: tl.constexpr,
                           BLOCK_R: tl.constexpr, BLOCK_C: tl.constexpr, PADDING: tl.constexpr):
     desc = tl.make_tensor_descriptor(a_ptr, shape=[B, R, C], strides=[S0, C, 1], block_shape=[1, BLOCK_R, BLOCK_C],
@@ -448,22 +486,21 @@ def _overlap_outer_kernel(a_ptr, out_ptr, batch, B: tl.constexpr, R: tl.constexp
     tl.store(out_ptr + offs, acc)
 
 
-# `S0 < R * C` makes the slices overlap, so the stride ratio (16) is smaller than
-# the merged extent's own dimension (32): an out-of-range collapsed index merges
-# to 4*16 == 64, which sits *inside* the extent (B-1)*16 + 32 == 80 and read real
-# data. The rank-3 form pads the whole tile, so the fused form must too (#8070).
+# An out-of-range collapsed index (4 of 4) clamps the base to the last slice, so
+# without the guard the load would read that slice. The rank-3 form pads the
+# whole tile, so the fused form must too (#8070). `S0 < R * C` makes the slices
+# overlap, which nothing rejects.
 #
 # `batch` is a runtime argument on purpose. A `tl.constexpr` would still catch the
-# wrong values - the guard folds to the extent, as @fuseGuardsOutOfRangeIndex-
-# OverlappingStrides shows - but it would not cover emitting the guard itself.
+# wrong values - the guard folds to the extent, as @fuseGuardsCollapsedIndex-
+# AtExtent shows - but it would not cover emitting the guard itself.
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
 def test_descriptor_overlapping_strides_out_of_range_outer_pads(device, with_allocator):
     B, R, C, S0, BLOCK_R, BLOCK_C = 4, 32, 64, 1024, 32, 64
 
     torch.manual_seed(42)
-    # Shifted away from zero so padding cannot be mistaken for real data, and
-    # sized past the pre-guard read (rows 64..95) so that read stays in-bounds.
+    # Shifted away from zero so padding cannot be mistaken for real data.
     a = torch.randn(8192, dtype=torch.float16, device=device) + 1.0
     out = torch.full((BLOCK_R, BLOCK_C), -1.0, dtype=torch.float32, device=device)
     kernel = _overlap_outer_kernel[(1, )](a, out, B, B, R, C, S0, BLOCK_R, BLOCK_C, "zero")
@@ -499,8 +536,8 @@ def test_descriptor_out_of_range_collapsed_index_pads_nan(device, with_allocator
 
 
 # A *negative* collapsed index, exercising the guard's `sge` half - the
-# out-of-range cases above only reach the `slt` half. The base is offset into the
-# allocation so that the pre-guard backwards read stayed inside it.
+# out-of-range cases above only reach the `slt` half. The clamp keeps the base
+# at slice 0, so without the guard the load would read that slice.
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
 def test_descriptor_runtime_negative_collapsed_index_pads(device, with_allocator):
@@ -562,9 +599,8 @@ def _overlap_middle_kernel(a_ptr, out_ptr, head, TOKENS: tl.constexpr, HEADS: tl
 # `block_io` depends on `isDivisible` seeing through the guard's `muli`/`addi`.
 # A failure here with the outer case passing localises that immediately.
 #
-# `S1 < HEAD_DIM` overlaps the heads, so head 4 merges to 4*64 == 256, inside the
-# extent 3*64 + 128 == 320. The pitch `S0` is promoted to the surface pitch, so
-# it has to cover that extent (320 * 2 bytes <= 512 * 2 bytes).
+# Head 4 of 4 clamps the base to head 3, so without the guard the load would read
+# it. `S1 < HEAD_DIM` overlaps the heads, which nothing rejects.
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
 def test_descriptor_overlapping_strides_out_of_range_middle_pads(device, with_allocator):
@@ -578,6 +614,142 @@ def test_descriptor_overlapping_strides_out_of_range_middle_pads(device, with_al
     torch.testing.assert_close(out, torch.zeros_like(out))
 
     assert f"!tt.tensordesc<{BLOCK_M}x1x{BLOCK_D}x" not in kernel.asm["ttir"], "not fused"
+    llir = kernel.asm["llir"]
+    assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
+
+
+# Collapsing the middle dimension makes strides[0] the 2D block pitch. Here it is
+# 32 f16 elements (64 bytes) against a 64-element (128-byte) head, so rows
+# overlap. A strided view allows that, but a 2D block message needs a pitch no
+# narrower than its width, so the load must read the right values without one.
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_middle_pitch_below_width(device, with_allocator):
+    TOKENS, HEADS, HEAD_DIM, S0, S1, HEAD = 32, 2, 64, 32, 64, 1
+
+    torch.manual_seed(42)
+    a = torch.randn((TOKENS - 1) * S0 + (HEADS - 1) * S1 + HEAD_DIM, dtype=torch.float16, device=device)
+    out = torch.full((TOKENS, HEAD_DIM), -1.0, dtype=torch.float32, device=device)
+    kernel = _overlap_middle_kernel[(1, )](a, out, HEAD, TOKENS, HEADS, HEAD_DIM, S0, S1, TOKENS, HEAD_DIM)
+
+    view = torch.as_strided(a, (TOKENS, HEADS, HEAD_DIM), (S0, S1, 1))
+    torch.testing.assert_close(out, view[:, HEAD].to(torch.float32))
+    llir = kernel.asm["llir"]
+    n2d = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
+    assert n2d == 0, "2D block load with a pitch below its width"
+
+
+@triton.jit
+def _head_tiles_kernel(a, c_ptr, tokens, heads, stride_t, stride_h, BLOCK_M: tl.constexpr, BLOCK_D: tl.constexpr):
+    # One (BLOCK_M, BLOCK_D) tile per head, from a host descriptor or one built here.
+    # The identity operand leaves the descriptor load the only 2D-eligible one.
+    if isinstance(a, tl.tensor_descriptor):
+        desc = a
+    else:
+        desc = tl.make_tensor_descriptor(a, shape=[tokens, heads, BLOCK_D], strides=[stride_t, stride_h, 1],
+                                         block_shape=[BLOCK_M, 1, BLOCK_D])
+    head = tl.program_id(0)
+    tile = desc.load([0, head, 0]).reshape(BLOCK_M, BLOCK_D)
+    offs = tl.arange(0, BLOCK_M)[:, None] * BLOCK_D + tl.arange(0, BLOCK_D)[None, :]
+    tl.store(c_ptr + head * BLOCK_M * BLOCK_D + offs, tl.dot(tile, _identity(BLOCK_D)))
+
+
+def _check_head_tiles(base, shape, strides, ref, host, device):
+    """Load the first BLOCK_M rows of every head of the (tokens, heads, head_dim)
+    tensor at `base` with `strides`, and compare against `ref`, the same tensor as
+    torch sees it (torch has no negative strides)."""
+    tokens, heads, head_dim = shape
+    BLOCK_M = 64
+    c = torch.full((heads, BLOCK_M, head_dim), float("nan"), dtype=torch.float32, device=device)
+    if host:
+        a = TensorDescriptor(base, list(shape), list(strides), [BLOCK_M, 1, head_dim])
+    else:
+        a = base
+    kernel = _head_tiles_kernel[(heads, )](a, c, tokens, heads, strides[0], strides[1], BLOCK_M, head_dim)
+
+    ref = ref[:BLOCK_M].transpose(0, 1).float()
+    wrong = [h for h in range(heads) if not torch.equal(c[h], ref[h])]
+    assert not wrong, f"wrong heads: {wrong}"
+    assert f"!tt.tensordesc<{BLOCK_M}x1x{head_dim}x" not in kernel.asm["ttir"], "not fused"
+    llir = kernel.asm["llir"]
+    assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
+
+
+# A runtime negative strides[1] (issues/8072): heads stored in reverse, the base
+# at the last one. Every head must read its own tile. A host descriptor and one
+# built from kernel arguments both carry the stride as a runtime value.
+@pytest.mark.parametrize("host", [True, False])
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_negative_middle_stride(host, device, with_allocator):
+    TOKENS, HEADS, HEAD_DIM = 128, 4, 128
+    torch.manual_seed(42)
+    a = torch.randn((TOKENS, HEADS, HEAD_DIM), dtype=torch.float16, device=device)
+    _check_head_tiles(a[:, -1], a.shape, [HEADS * HEAD_DIM, -HEAD_DIM, 1], a.flip(1), host, device)
+
+
+# A (heads, tokens, head_dim) tensor read as (tokens, heads, head_dim), e.g. BHSD
+# storage seen as BSHD, has strides [head_dim, tokens * head_dim, 1]. Heads 128
+# and 129 start 16 MiB or more into the tensor (128 * 512 * 128 * 2 bytes), past
+# what a 24-bit 2D block surface field spans, and must read their own tiles too.
+@pytest.mark.parametrize("host", [True, False])
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_wide_middle_stride(host, device, with_allocator):
+    HEADS, TOKENS, HEAD_DIM = 130, 512, 128
+    torch.manual_seed(42)
+    storage = torch.randn((HEADS, TOKENS, HEAD_DIM), dtype=torch.float16, device=device)
+    view = storage.transpose(0, 1)
+    _check_head_tiles(storage, view.shape, view.stride(), view, host, device)
+
+
+@triton.jit
+def _runtime_strides_kernel(a_ptr, out_ptr, idx, stride0, stride1, S0: tl.constexpr, S1: tl.constexpr, S2: tl.constexpr,
+                            OUTER: tl.constexpr, BLOCK_R: tl.constexpr, BLOCK_C: tl.constexpr):
+    # A unit outer ([1, R, C]) or middle ([R, 1, C]) block, collapsed at `idx`.
+    if OUTER:
+        desc = tl.make_tensor_descriptor(a_ptr, shape=[S0, S1, S2], strides=[stride0, stride1, 1],
+                                         block_shape=[1, BLOCK_R, BLOCK_C])
+        a = desc.load([idx, 0, 0]).reshape(BLOCK_R, BLOCK_C)
+    else:
+        desc = tl.make_tensor_descriptor(a_ptr, shape=[S0, S1, S2], strides=[stride0, stride1, 1],
+                                         block_shape=[BLOCK_R, 1, BLOCK_C])
+        a = desc.load([0, idx, 0]).reshape(BLOCK_R, BLOCK_C)
+    acc = tl.dot(a, _identity(BLOCK_C))
+    offs = tl.arange(0, BLOCK_R)[:, None] * BLOCK_C + tl.arange(0, BLOCK_C)[None, :]
+    tl.store(out_ptr + offs, acc)
+
+
+# A runtime collapsed stride that is a 16-byte multiple, as `make_tensor_descriptor`
+# requires, but 8 f16 elements past a multiple of 16, so it gets no divisibility
+# hint. Folding the collapsed index into the base must not leave the base provably
+# 2-byte aligned only, which keeps the load off 2D block I/O: the unfused outer load
+# had 2D block I/O, and the middle one gets it as well. Whether the load fuses is
+# not the point here, so only its values and its 2D block loads are checked; the
+# identity operand leaves it the only 2D-eligible load.
+#
+# `idx` 2 leaves the base offset a runtime product. 1 is specialized to a
+# constant and the collapsed extent is constexpr, so the offset folds to the
+# stride itself.
+@pytest.mark.parametrize("idx", [1, 2])
+@pytest.mark.parametrize("outer", [True, False])
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_unhinted_collapsed_stride_block_io(outer, idx, device, with_allocator):
+    N, R, C = 4, 32, 64
+    if outer:  # (N, R, C), slices R * C + 8 elements apart
+        shape, strides = (N, R, C), (R * C + 8, C, 1)
+    else:  # (R, N, C), heads C + 8 elements apart
+        shape, strides = (R, N, C), (N * (C + 8), C + 8, 1)
+
+    torch.manual_seed(42)
+    a = torch.randn(shape[0] * strides[0], dtype=torch.float16, device=device)
+    out = torch.full((R, C), -1.0, dtype=torch.float32, device=device)
+    kernel = _runtime_strides_kernel[(1, )](a, out, idx, strides[0], strides[1], *shape, outer, R, C)
+
+    view = torch.as_strided(a, shape, strides)
+    tile = view[idx] if outer else view[:, idx]
+    torch.testing.assert_close(out, tile.to(torch.float32))
     llir = kernel.asm["llir"]
     assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
 
