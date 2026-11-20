@@ -22,8 +22,11 @@ for c in cases/*/; do
     vn="${v%%::*}"; vf="${v#*::}"
     tmp=$(mktemp -d); ocloc compile -file "$c/kernel.spv" -spirv_input -device "$DEVICE" -options "$vf" -output "$tmp/k" > "$tmp/log" 2>&1 || { cat "$tmp/log"; echo "$name/$vn: ocloc FAILED" >> "$S"; continue; }
     cp "$tmp"/k_*.bin "results/${name}_${vn}.bin"
-    spill=$(grep -a -o 'spill_size: *[0-9]*' "results/${name}_${vn}.bin" | head -1 | grep -o '[0-9]*$' || echo '?')
-    grf=$(grep -a -o 'grf_count: *[0-9]*' "results/${name}_${vn}.bin" | head -1 | grep -o '[0-9]*$' || echo '?')
+    grf=$(grep -a -o 'grf_count: *[0-9]*' "results/${name}_${vn}.bin" | head -1 | grep -o '[0-9]*$' || true)
+    # IGC 2.43.x omits spill_size from the zebin metadata when it is zero (2.42.x printed it only when non-zero too, but
+    # also emitted a scratch buffer); a present grf_count with no spill_size therefore means no spill.
+    spill=$(grep -a -o 'spill_size: *[0-9]*' "results/${name}_${vn}.bin" | head -1 | grep -o '[0-9]*$' || true)
+    if [ -z "$grf" ]; then grf='?'; spill='?'; elif [ -z "$spill" ]; then spill=0; fi
     res=$(./repro "$c/case.cfg" --build-flags "$vf" --iters "$ITERS" --warmup "$WARMUP" | grep '^RESULT')
     echo "$name  variant=$vn  ocloc: grf=$grf spill=${spill}B  |  ${res#RESULT }" | tee -a "$S"
     rm -rf "$tmp"

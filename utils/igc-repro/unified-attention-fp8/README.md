@@ -52,8 +52,22 @@ CI measured about 16.9 TFLOPS for prefill4096 on the old stack, so the replay is
 * `gen_case.py <capture-dir> <case-dir>` turns a capture into a case directory (`case.cfg` + `kernel.spv` + index tensors).
 * `provenance/time_triton.py` times the same call through Triton for the cross-check above.
 
+## First result on the new stack (IGC 2.43.9, agama 40734.8, dut6212, CI run 44776323826)
+
+| case | variant | spill | p50 ms | TFLOPS | vs old |
+|---|---|---|---|---|---|
+| prefill4096 | grf256 | 0 B | 54.9 | 10.0 | 0.58x |
+| prefill4096 | default | 14336 B | 67.5 | 8.1 | 1.04x |
+| decode8 | grf256 | 0 B | 0.52 | 0.91 | about 0.5x |
+
+Checksums are identical to the old stack. Triton still rebuilds with 256 GRF on the new stack (the default build still spills), so
+the slowdown is in the new IGC's 256-GRF code, **not** in the rebuild decision. The only difference in the zebin metadata between the
+two IGC versions is that the old one reports `spill_size: 320` and a scratch buffer, and the new one reports no spill: the new code
+generation is spill-free but about 1.7x slower, so this is not a register-pressure problem. Diff `results/*_grf256.bin` (e.g. with
+`ocloc disasm`) to see what changed.
+
 ## Open questions this package is meant to answer
 
-1. On IGC 2.43.9, does the `grf256` build get slower, or does the `default` build change so that Triton no longer rebuilds with 256 GRF?
-   (`ocloc` spill for `default` is the signal: Triton rebuilds only when it is non-zero.)
-2. If `grf256` itself is slower, diff `results/*_grf256.bin` between the two IGC versions.
+1. Why is the spill-free 256-GRF build on IGC 2.43.9 about 1.7x slower than the old build that spilled 320 B? (Instruction scheduling,
+   2D block load/prefetch placement, or fp8 conversion sequences are candidates; none are verified.)
+2. Does the same happen with a newer agama and the old IGC, or the reverse? IGC and agama changed together here.
