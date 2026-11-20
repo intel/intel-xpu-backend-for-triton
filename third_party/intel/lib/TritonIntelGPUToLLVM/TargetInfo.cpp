@@ -341,9 +341,9 @@ bool TargetInfo::warpScan(RewriterBase &rewriter, Location loc,
     return false;
 
   // The builtin walks the lanes in lane order. A full-sub-group scan axis
-  // implies unit thread stride for every layout `ScanLoweringHelper::
-  // isSupported` admits today, but gate on it rather than assert, so widening
-  // that set cannot silently start scanning the wrong lanes in a release build.
+  // implies unit thread stride for every layout `BlockedScanLayout::get`
+  // admits today, but gate on it rather than assert, so widening that set
+  // cannot silently start scanning the wrong lanes in a release build.
   if (threadStride != 1)
     return false;
 
