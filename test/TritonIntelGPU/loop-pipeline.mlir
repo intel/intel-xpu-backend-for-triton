@@ -473,3 +473,41 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return %5 : tensor<64x256xf32, #dpas>
   }
 }
+
+// -----
+
+// COM: A boundary-check mask whose bound is loop carried keeps reaching the
+// COM: load from the prefetch's stage: a copy would read the bound at the
+// COM: wrong iteration.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: tt.func public @loop_carried_boundary_mask
+  tt.func public @loop_carried_boundary_mask(%arg0: tensor<64x32x!tt.ptr<f16>, #blocked>, %arg1: tensor<32x256x!tt.ptr<f16>, #blocked1>, %arg2: i32, %arg3: i32) -> tensor<64x256xf32, #dpas> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #blocked>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x256xf32, #dpas>
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x32xi32, #blocked>
+    // CHECK: scf.for {{.*}} iter_args(%{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %[[MASK:.*]] = %{{.*}}, %{{.*}} = %{{.*}})
+    // CHECK: tt.load %{{.*}}, %[[MASK]], %{{.*}} {{.*}} : tensor<64x32x!tt.ptr<f16>, #{{.*}}>
+    %2:2 = scf.for %arg4 = %c0_i32 to %arg2 step %c1_i32 iter_args(%arg5 = %cst_0, %rem = %arg3) -> (tensor<64x256xf32, #dpas>, i32)  : i32 {
+      %3 = tt.splat %rem : i32 -> tensor<1x32xi32, #blocked>
+      %4 = arith.cmpi slt, %1, %3 : tensor<1x32xi32, #blocked>
+      %5 = tt.broadcast %4 : tensor<1x32xi1, #blocked> -> tensor<64x32xi1, #blocked>
+      %6 = tt.load %arg0, %5, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #blocked>
+      %7 = tt.load %arg1 {ttig.block_io = "row_major"} : tensor<32x256x!tt.ptr<f16>, #blocked1>
+      %8 = ttg.convert_layout %6 : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #dot0>
+      %9 = ttg.convert_layout %7 : tensor<32x256xf16, #blocked1> -> tensor<32x256xf16, #dot1>
+      %10 = tt.dot %8, %9, %arg5, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x256xf16, #dot1> -> tensor<64x256xf32, #dpas>
+      %11 = arith.subi %rem, %c32_i32 : i32
+      scf.yield %10, %11 : tensor<64x256xf32, #dpas>, i32
+    }
+    tt.return %2#0 : tensor<64x256xf32, #dpas>
+  }
+}
