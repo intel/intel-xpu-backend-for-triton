@@ -1,65 +1,91 @@
 name: Test TritonKernelRunner
 
+# TEMPORARY, branch-only: this file is repurposed on quinnlp/igc-2.43.9-test so the IGC
+# reproducer can be dispatched (a workflow can only be dispatched if its file exists on
+# main). Do NOT merge this change. The original TritonKernelRunner test is not run here.
+#
+# Runs a standalone (Triton-free) SPIR-V + Level Zero reproducer on a chosen runner
+# and reports the driver stack it ran on, so the same package can be run on an
+# old-driver and a new-driver machine and the results compared.
+#
+# The package directory must contain a run.sh entry point that builds and runs the
+# reproducer and writes its results to ./results (see utils/igc-repro/README.md).
+
 on:
   workflow_dispatch:
-
-  pull_request:
-    branches:
-      - main
-  push:
-    branches:
-      - main
-
-concurrency:
-  group: ${{ github.workflow }}-${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.run_id || github.event.pull_request.number }}
-  cancel-in-progress: true
+    inputs:
+      runner_label:
+        description: Runner label, keep empty for default (b580). Use name:<runner> to pin one machine.
+        type: string
+        default: ""
+      package_dir:
+        description: Reproducer directory in the repository (must contain run.sh)
+        type: string
+        default: "utils/igc-repro/unified-attention-fp8"
+      iterations:
+        description: Timed iterations per case
+        type: string
+        default: "50"
 
 permissions: read-all
 
-env:
-  PYTHON_VERSION: '3.11'
-
 jobs:
-  tests:
-    name: Tests
+  repro:
+    name: IGC reproducer
     runs-on:
+      - linux
       - gpu
-      - rolling
-      - runner-0.0.22
-    timeout-minutes: 160
+      - ${{ inputs.runner_label || 'b580' }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Install Python
-        uses: actions/setup-python@v7
+      - name: Driver stack and runner
+        run: |
+          echo "Runner: ${RUNNER_NAME}"
+          ./scripts/capture-hw-details.sh | tee hw-details.txt
+          sycl-ls || true
+          ocloc --version || true
+
+      - name: Run reproducer
+        env:
+          ITERATIONS: ${{ inputs.iterations }}
+        run: |
+          cd "${{ inputs.package_dir }}"
+          test -f run.sh || { echo "::error::${{ inputs.package_dir }}/run.sh not found"; exit 1; }
+          mkdir -p results
+          bash run.sh 2>&1 | tee results/run.log
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### IGC reproducer on ${RUNNER_NAME}"
+            echo '```'
+            cat hw-details.txt
+            echo '```'
+            if [ -f "${{ inputs.package_dir }}/results/summary.txt" ]; then
+              echo '```'
+              cat "${{ inputs.package_dir }}/results/summary.txt"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Setup PyTorch
-        uses: ./.github/actions/setup-pytorch
-
-      - name: Setup Triton
-        uses: ./.github/actions/setup-triton
-
-      - name: Build TritonKernelRunner
-        run: |
-          source /opt/intel/oneapi/setvars.sh
-          set -x
-          export LLVM_DIR="$HOME/.triton/llvm/llvm-ubuntu-x64"
-          export CMAKE_PREFIX_PATH="$(python scripts/torch_cmake.py)"
-          cd utils/TritonKernelRunner
-          mkdir build
-          cd build
-          cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
-          make -j
-
-      - name: Test TritonKernelRunner
-        run: |
-          source /opt/intel/oneapi/setvars.sh
-          set -x
-          pip install pytest
-          export TRITON_KERNEL_RUNNER_PATH="$GITHUB_WORKSPACE/utils/TritonKernelRunner/build/TritonKernelRunner"
-          export TRITON_KERNEL_RUNNER_TESTS="$GITHUB_WORKSPACE/utils/TritonKernelRunner/tests"
-          cd utils/TritonKernelRunner
-          pytest tests/test_triton_kernel_runner.py
+          name: igc-repro-${{ runner.name }}
+          path: |
+            hw-details.txt
+            ${{ inputs.package_dir }}/results
