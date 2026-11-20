@@ -30,7 +30,7 @@ def run_gate(case: dict):
     obs = [
         Observation(key, o["run"], _observed_at(o["night"]), o["value"])
         for o in case["observations"]
-        if o["value"] > 0  # the source layer drops non-positive measurements before they reach the gate
+        if o["value"] > 0  # the source drops <= 0 for unsigned metrics (all corpus metrics are unsigned)
     ]  # observations after as_of stay in: evaluate(night=as_of) must ignore them itself
     series = aggregate(obs, case["unit"]) if obs else Series(key, ())
     return evaluate(series, Thresholds(**case["thresholds"]), night=as_of)

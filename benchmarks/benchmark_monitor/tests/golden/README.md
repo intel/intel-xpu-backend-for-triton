@@ -16,7 +16,8 @@ The expected values were produced by executing the reference rule from #6491 (`a
 * `unit`: `night_mean` (default) averages the observations of one UTC night first. `run` keeps one point per run.
   The point with `night == as_of` is "tonight". The corpus keeps observations dated after `as_of`; the gate itself
   must ignore them (`evaluate(night=as_of)`). Observations with value <= 0 are dropped before the gate, as the
-  source layer does when it reads reports; the gate does not filter them.
+  source layer does for a metric that is not declared `signed: true` (reports write 0 for a metric a row did
+  not measure); every corpus metric is unsigned. The gate does not filter them.
 * An observation's `night` is a date (midnight UTC) or an ISO timestamp. An offset is honoured and a timestamp without
   one is UTC; the UTC calendar date of the instant is the night (`utc-*` cases: 23:30 and 00:30 UTC, non-UTC offsets,
   and `unit` `run` ordering by time).
