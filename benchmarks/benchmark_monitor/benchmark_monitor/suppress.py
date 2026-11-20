@@ -12,7 +12,8 @@ flip-flopping series. Every knob is configurable. 0 turns the matching rule off 
 Episodes that start in a storm are not confirmed one by one. The family is confirmed once, as a
 ``ConfirmedFamily``, on the first later data night on which its streak reaches ``confirm_nights`` and at least
 one of its storm-started cases is still regressing (live, not muted). Like a case confirmation, it survives a
-missed or partial night.
+missed or partial night. A storm counts live flags only: if a broad regression first appears on a partial-run or
+data-gap night, its flags are held, that night is not a storm night, and its cases are confirmed one by one.
 
 A "source" is ``SeriesKey.source``. A "data night" of a source is a night with at least one non-missing
 verdict, so a night with no report never makes a standing flag new again. A series' own ``missing`` nights
