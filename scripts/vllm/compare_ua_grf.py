@@ -80,9 +80,10 @@ def run_comparison(repo, refs, patches, reports, tag):
                         print(f"GRF comparison: {arm}, {key}, commit {refs[arm]}", flush=True)
                         subprocess.run(
                             ["triton-benchmarks", "run", key, "--reports",
-                             str(reports / arm), "--tag", f"{tag}-{arm}"], cwd=vllm,
-                            env=dict(os.environ, TD_PATCHED="1",
-                                     TRITON_CACHE_DIR=str(temporary / arm / "cache")), check=True)
+                             str(reports / arm), "--tag", f"{tag}-{arm}"], cwd=vllm, env=dict(
+                                 os.environ, TD_PATCHED="1", FP8="1" if key.endswith("-fp8") else "0",
+                                 PYTHONPATH=os.pathsep.join(filter(None, (str(vllm), os.environ.get("PYTHONPATH")))),
+                                 TRITON_CACHE_DIR=str(temporary / arm / "cache")), check=True)
                 finally:
                     subprocess.run(["git", "apply", "--reverse", str(patch)], cwd=vllm, check=True)
                 item.update(status="complete", finished=time.time())
