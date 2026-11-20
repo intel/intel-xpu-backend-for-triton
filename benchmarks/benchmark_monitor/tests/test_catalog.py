@@ -84,6 +84,14 @@ def test_transform_results_metrics_are_declared():
     assert [cat.metric_state(m) for m in ("tflops", "cpu_mhz", "nope")] == ["gated", "ungated", "undeclared"]
 
 
+def test_signed_metrics():
+    cat = load_catalog()
+    assert [cat.is_signed(m) for m in ("ns_per_arg", "tflops", "nope")] == [True, False, False]
+    with pytest.raises(CatalogError, match="signed"):
+        load_catalog("version: 1\ndefaults: {min_drop_pct: 5, z: 3, min_history: 8, window: 20, max_cv_pct: 15, "
+                     "lock_mad_frac: 0.05}\nmetrics: {m: {higher_is_better: true, signed: 1}}\n")
+
+
 def test_undeclared_metric_raises_instead_of_defaulting():
     with pytest.raises(CatalogError, match="not declared"):
         load_catalog().resolve(key(metric="latency_furlongs"))
@@ -288,6 +296,7 @@ def test_schema_agrees_with_loader():
         good.replace("  max_cv_pct: 15.0\n", ""),  # threshold missing from defaults
         good.replace("defaults:\n", "defaults_gone:\n"),
         good.replace("expected_nightly: true", "expected_nightly: 'true'", 1),
+        good.replace("signed: true", "signed: 'yes'"),
     ]
     for text in bad:
         assert list(validator.iter_errors(yaml.safe_load(text))), text

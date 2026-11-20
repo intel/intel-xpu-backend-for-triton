@@ -34,6 +34,10 @@
           },
           "gate": {
             "type": "boolean"
+          },
+          "signed": {
+            "type": "boolean",
+            "description": "True if zero and negative values are real measurements (e.g. a difference of two timings). Otherwise a value <= 0 is an absent placeholder and is dropped."
           }
         },
         "required": [

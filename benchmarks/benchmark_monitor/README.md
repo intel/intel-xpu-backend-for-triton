@@ -22,7 +22,8 @@ Runtime dependency: `pyyaml`; Python 3.11 or newer.
 - `defaults`, `families` (benchmark-name globs), `benchmarks` (exact names) and `platforms` set the gate thresholds, resolved in
   that order. Within `families` the first match in declaration order wins.
 - `metrics` declares every metric the monitor may see and whether higher is better. `gate: false` records a
-  metric without gating it. An undeclared metric is skipped with one warning, never guessed.
+  metric without gating it. `signed: true` marks a metric whose zero and negative values are real
+  (`ns_per_arg`, a difference of two timings); for every other metric a value <= 0 is an absent placeholder and is dropped. An undeclared metric is skipped with one warning, never guessed.
 - `scopes` choose the series to monitor (source, platform, tags, benchmark globs).
 
 `catalog/schema.json` describes the file for editors. A site can add platforms, scopes and `importance` through overlays, but an
