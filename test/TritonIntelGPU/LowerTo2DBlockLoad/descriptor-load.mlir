@@ -281,7 +281,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// COM: Positive twin of @if_divergent_padding in invalid.mlir: the two scf.if
+// COM: Positive twin of @if_divergent_padding in
+// COM: test/TritonIntelGPU/LowerTo2DBlockLoad/descriptor-load-divergent-padding.mlir: the two scf.if
 // COM: candidates agree on PAD_NAN, so consistentPadding() yields it and the
 // COM: conversion proceeds. `pad_nan` on the emitted op is the part that
 // COM: matters -- it shows the padding *value* survived the trace, not merely
@@ -301,9 +302,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // COM:     stage earlier.
 // COM:
 // COM: (b) For standalone hand-written TTGIR, the divergent twin is additionally
-// COM:     rejected outright by the LLVM lowering instead of silently defaulting to
-// COM:     PAD_ZERO (issue #8102); see
-// COM:     test/TritonIntelGPU/descriptor-load-divergent-padding.mlir. Nothing about
+// COM:     rejected outright by the fallback lowering instead of silently
+// COM:     defaulting to PAD_ZERO (issue #8102). Nothing about
 // COM:     that hardening may touch THIS case: a consistent PAD_NAN provenance must
 // COM:     still reach ttig.2d_block_load with `pad_nan`.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
