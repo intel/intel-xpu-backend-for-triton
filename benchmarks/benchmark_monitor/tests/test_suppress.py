@@ -178,6 +178,7 @@ def test_a_muted_sustained_case_is_listed_as_muted():
     res = run([verdict(i) for i in (0, 1, 2, 4, 6, 8, 9)], 9, SuppressConfig(flip_short_share=0.3))
     assert [v.night for v in res.muted] == [n(9)] and not res.new  # streak 2 <= longest earlier 3
     assert not res.sustained  # a muted case is not also sustained
+    assert not res.confirmed  # and not confirmed either
 
 
 def test_confirmation_survives_a_partial_run_on_the_confirming_night():
@@ -269,6 +270,49 @@ def test_coverage_history_limits_the_baseline_and_zero_turns_the_check_off():
     assert run([], 10, override=ov).suspect == {}  # median of the last 10 nights is 20
     assert "micro" in run([], 10, SuppressConfig(coverage_history=3), override={**ov, 7: 100, 8: 100, 9: 100}).suspect
     assert run([], 10, SuppressConfig(coverage_history=0), override={**ov, 10: 1}).suspect == {}
+
+
+def test_coverage_history_uses_only_the_last_nights():
+    """Six nights at 100 then four at 20, tonight 40: suspect against the whole history, not against the last 3."""
+    ov = {i: 100 for i in range(6)} | {6: 20, 7: 20, 8: 20, 9: 20, 10: 40}
+    assert "micro" in run([], 10, override=ov).suspect  # median of the 10 earlier nights is 100
+    assert run([], 10, SuppressConfig(coverage_history=3), override=ov).suspect == {}  # median of the last 3 is 20
+
+
+def test_a_streak_beyond_confirm_nights_is_not_muted_even_if_an_earlier_episode_was_longer():
+    prior = [1, 1, 4]
+    assert is_flip_flop(prior, 2, SuppressConfig())
+    assert not is_flip_flop(prior, 3, SuppressConfig())  # 3 <= 4, but beyond confirm_nights
+    res = run([verdict(i) for i in (0, 2, 4, 5, 6, 7, 9, 10, 11)], 11)
+    assert not res.muted and len(res.confirmed) == 1  # lifted on the third night
+
+
+def test_a_source_that_is_not_nightly_is_not_held_for_data_gaps():
+    nights = (0, 7, 14, 21)
+    skip = tuple(i for i in range(22) if i not in nights)
+    flags = [verdict(i) for i in (14, 21)]
+    sparse = SuppressConfig(sparse_sources=frozenset({"micro"}))
+    res = {i: apply(history(flags, 21, skip=skip), sparse, n(i)) for i in (14, 21)}
+    assert len(res[14].new) == 1 and not res[14].suspect and not res[14].held
+    assert len(res[21].confirmed) == 1 and res[21].confirmed[0].first_night == n(14)
+    held = apply(history(flags, 21, skip=skip), SuppressConfig(), n(14))
+    assert held.held == {"micro": 1} and not held.new  # without the knob the gap holds the flag
+    other = SuppressConfig(sparse_sources=frozenset({"other"}))
+    assert "micro" in apply(history(flags, 21, skip=skip), other, n(14)).suspect  # per source
+
+
+def test_a_sparse_source_still_gets_the_partial_run_check():
+    cfg = SuppressConfig(sparse_sources=frozenset({"micro"}))
+    assert "only 40 series" in run([verdict(10)], 10, cfg, override={10: 40}).suspect["micro"]
+
+
+def test_result_mappings_are_read_only():
+    res = run([verdict(10)], 10, override={10: 40})
+    assert res.held == {"micro": 1}
+    with pytest.raises(TypeError):
+        res.held["micro"] = 0  # type: ignore[index]
+    with pytest.raises(TypeError):
+        res.suspect["x"] = "y"  # type: ignore[index]
 
 
 def test_invalid_knobs_are_rejected():
