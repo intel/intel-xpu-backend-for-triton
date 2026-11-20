@@ -240,3 +240,35 @@ def test_cli_gappy_series_keeps_enough_points_for_the_window(tmp_path):
     assert data["counts"] == {"regression": 1} and data["verdicts"][0]["n_history"] == 11
     assert main(argv + ["--history-days", "20", "--out", str(out)]) == 0  # the old behaviour: masked
     assert json.loads(out.read_text())["counts"] == {"insufficient_history": 1}
+
+
+def test_signed_metric_keeps_zero_and_negative_values(tmp_path, cat):
+    rows = [
+        long(value_name="ns_per_arg", value="-10.5"),
+        long(value_name="ns_per_arg", value="0"),
+        long(value_name="ns_per_arg", value="nan"),  # absent
+        long(value_name="ns_per_arg", value=""),  # absent
+        long(value_name="ns_per_arg", value="-inf"),  # non-finite
+        long(value_name="time_us", value="0"),  # placeholder for an unsigned metric
+        long(value_name="time_us", value="-3"),
+    ]
+    p = write(tmp_path / "s-report.csv", rows)
+    obs = list(CsvReportSource([p], cat).observations(scope(cat, "nightly-b580-vllm"), D1, D2))
+    assert [(o.key.metric, o.value) for o in obs] == [("ns_per_arg", -10.5), ("ns_per_arg", 0.0)]
+
+
+def test_cli_flags_negative_ns_per_arg_regression(tmp_path):
+    for day in range(1, 13):  # -10 ns for 11 nights, then -8: a lower-is-better metric got worse
+        value = "-8.0" if day == 12 else "-10.0"
+        write(tmp_path / "art" / f"n{day}-report.csv",
+              [long(run_uuid=f"r{day}", ts=f"2026-11-{day:02d}T03:00:00", value_name="ns_per_arg", value=value)])
+    out = tmp_path / "out.json"
+    argv = [
+        "--artifacts",
+        str(tmp_path / "art"), "--scope", "nightly-b580-vllm", "--as-of", "2026-11-12", "--format", "json", "--out",
+        str(out)
+    ]
+    assert main(argv) == 0
+    data = json.loads(out.read_text())
+    assert data["counts"] == {"regression": 1}
+    assert data["verdicts"][0]["key"]["metric"] == "ns_per_arg" and data["verdicts"][0]["n_history"] == 11
