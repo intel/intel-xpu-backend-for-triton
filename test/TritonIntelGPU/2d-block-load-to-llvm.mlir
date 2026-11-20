@@ -76,7 +76,11 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
     %pitch = arith.constant 64 : i32
     %height = arith.constant 1 : i32
-    // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
+    // COM: The pointer is broadcast along the rows (base_height 1), so the two messages that
+    // COM: differ only in their row read the same data: one 2D block load serves both.
+    // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
+    // CHECK-NOT: triton_gen.2Dblockload
+    // CHECK: llvm.return
     %width = arith.constant 64 : i32
     %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height, %width {row_major} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32, i32) -> tensor<64x32xf16, #dot0>
     tt.return

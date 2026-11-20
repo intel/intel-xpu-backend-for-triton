@@ -204,8 +204,8 @@ bool isVolatileOrCVLoad(Operation *op) {
 /// for nothing, and the mask bounds the resulting tile besides. Keep such a
 /// load anchored -- it can still lower to a 2D block message, just in the
 /// encoding the memory access itself wants. A broadcast load whose result is
-/// combined with a DPAS value (e.g. a GEMM bias) is the exception: it is costed
-/// by its distinct addresses below, see feedsDpasValue.
+/// combined with a DPAS value (e.g. a GEMM bias) is the exception: it is never
+/// an anchor, see feedsDpasValue.
 static bool isMaskedLoadWithoutDotConsumer(Operation *op) {
   auto loadOp = dyn_cast<tt::LoadOp>(op);
   if (!loadOp)
@@ -298,9 +298,8 @@ computeUniformDims(Value value, UniformDimsCache &cache, unsigned depth) {
   // An elementwise result is uniform along a dimension when every operand is.
   // Inline asm is excluded: it receives packed elements, so an output element
   // can depend on its neighbours and uniform operands prove nothing.
-  if (isa<tt::AddPtrOp>(def) ||
-      (def->hasTrait<OpTrait::Elementwise>() && isPure(def) &&
-       def->getNumResults() == 1 && !isa<tt::ElementwiseInlineAsmOp>(def))) {
+  if (def->hasTrait<OpTrait::Elementwise>() && isPure(def) &&
+      def->getNumResults() == 1 && !isa<tt::ElementwiseInlineAsmOp>(def)) {
     SmallVector<bool> result = allUniform();
     for (Value operand : def->getOperands()) {
       std::optional<SmallVector<bool>> operandUniform = fromOperand(operand);
@@ -440,19 +439,19 @@ bool isExpensiveLoadOrStore(Operation *op) {
     auto mod = op->getParentOfType<ModuleOp>();
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     // A load whose pointer is broadcast along some dimensions, such as an
-    // addmm bias with stride (0, 1), reads each distinct address repeatedly;
-    // only the distinct addresses cost memory traffic. When it feeds a DPAS
-    // value, counting the logical elements instead would anchor the load in its
-    // coalesced encoding and keep a convert of the whole tile to DPAS through
-    // shared memory, although its repeated reads are cache hits. Other loads,
-    // and stores, keep the logical count.
-    int64_t numElements = ptrType.getNumElements();
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      int64_t numDistinct = getNumDistinctElements(base);
-      if (numDistinct < numElements && feedsDpasValue(loadOp))
-        numElements = numDistinct;
-    }
-    return numElements >= numWarps * threadsPerWarp;
+    // addmm bias with stride (0, 1), and whose result feeds a DPAS value is
+    // never an anchor. Anchoring it keeps a convert of the whole tile to DPAS
+    // (and usually one of the output back) through shared memory, whose live
+    // values can also push the kernel into spilling. Rematerialized in the
+    // DPAS encoding, the load reads only its distinct row: the 2D block load
+    // lowering issues one message per distinct column block and shares it
+    // across the replicated rows. Other loads, and stores, keep the logical
+    // element count.
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
+      if (getNumDistinctElements(base) < ptrType.getNumElements() &&
+          feedsDpasValue(loadOp))
+        return false;
+    return ptrType.getNumElements() >= numWarps * threadsPerWarp;
   }
 
   return false;

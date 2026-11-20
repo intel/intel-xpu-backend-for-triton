@@ -5215,23 +5215,108 @@ static LogicalResult lowerBlockLoad2D(
       mlir::gpu::SubgroupIdOp::create(rewriter, loc,
                                       /*upperBound=*/nullptr));
 
-  SmallVector<Value> unpackedLoadedVals(cfg.numElems);
+  // A stride=0 (broadcast-row) load reads only row 0 of a 1-row surface, so
+  // messages that differ only in their row read the same data. Group them by
+  // their static offsets along the other dimensions and issue one 2D block
+  // load per group instead of one per message.
+  bool broadcastRows = staticBaseHeight && *staticBaseHeight == 1 &&
+                       cfg.tileHeight > 1 && !cfg.isTransposeRequired;
+  SmallVector<size_t> msgElemIdxs;
   for (size_t elemIdx = 0; elemIdx < cfg.numElems;
-       elemIdx += cfg.numElemsPerLoad) {
+       elemIdx += cfg.numElemsPerLoad)
+    msgElemIdxs.push_back(elemIdx);
+  // groupOf[i] is the index of the first message of message i's group.
+  SmallVector<size_t> groupOf(msgElemIdxs.size());
+  {
+    std::map<SmallVector<int32_t>, size_t> firstMsgOfKey;
+    for (auto [i, elemIdx] : llvm::enumerate(msgElemIdxs)) {
+      groupOf[i] = i;
+      if (!broadcastRows)
+        continue;
+      unsigned registerIdx =
+          cfg.regMapping.apply({{kRegister, elemIdx}})[0].second;
+      auto staticOffsets = llEncoding.apply(
+          {{kRegister, registerIdx}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+      SmallVector<int32_t> key;
+      for (auto [dim, offset] : llvm::enumerate(staticOffsets))
+        if (static_cast<int>(dim) != cfg.rowDim)
+          key.push_back(offset.second);
+      auto [it, inserted] = firstMsgOfKey.try_emplace(key, i);
+      groupOf[i] = it->second;
+    }
+  }
+  SmallVector<unsigned> groupSize(msgElemIdxs.size(), 0);
+  for (size_t g : groupOf)
+    ++groupSize[g];
+
+  auto addressOf = [&](size_t elemIdx) {
     unsigned registerIdx =
         cfg.regMapping.apply({{kRegister, elemIdx}})[0].second;
-
     auto offsets = applyLinearLayout(loc, rewriter, llEncoding,
                                      {{kRegister, b.i32_val(registerIdx)},
                                       {kLane, b.i32_val(0)},
                                       {kWarp, warpId},
                                       {kBlock, b.i32_val(0)}});
+    return computeAddress(registerIdx, offsets);
+  };
+  bool anyShared = llvm::any_of(groupSize, [](unsigned n) { return n > 1; });
+  // With shared loads, the addresses of every message come first: a shared
+  // load needs the predicates of all its members. Otherwise each address is
+  // computed right before its load, as before.
+  SmallVector<SubTileAddress> addrs(msgElemIdxs.size());
+  if (anyShared)
+    for (auto [i, elemIdx] : llvm::enumerate(msgElemIdxs))
+      addrs[i] = addressOf(elemIdx);
+  // A shared load reads when any member's predicate holds, so it reads no
+  // address the per-message loads would not; each member then applies its
+  // own predicate when it is unpacked.
+  SmallVector<Value> groupPred(msgElemIdxs.size());
+  for (auto [i, g] : llvm::enumerate(groupOf)) {
+    if (groupSize[g] < 2)
+      continue;
+    if (static_cast<size_t>(g) == i) {
+      groupPred[g] = addrs[i].pred;
+    } else if (groupPred[g] && addrs[i].pred) {
+      groupPred[g] = b.or_(groupPred[g], addrs[i].pred);
+    } else {
+      groupPred[g] = Value(); // a member without a predicate always reads
+    }
+  }
+  for (auto [i, g] : llvm::enumerate(groupOf))
+    if (groupSize[g] >= 2 && !addrs[i].pred)
+      groupPred[g] = Value();
 
-    auto addr = computeAddress(registerIdx, offsets);
+  SmallVector<Value> unpackedLoadedVals(cfg.numElems);
+  SmallVector<Value> groupRet(msgElemIdxs.size());
+  for (auto [msgIdx, elemIdx] : llvm::enumerate(msgElemIdxs)) {
+    size_t group = groupOf[msgIdx];
+    bool shared = groupSize[group] >= 2;
+    if (!anyShared)
+      addrs[msgIdx] = addressOf(elemIdx);
+    const SubTileAddress &addr = addrs[msgIdx];
+    if (shared && groupRet[group]) {
+      // Reuse the group's load; this member's own predicate applies below.
+      SmallVector<Value> memberOther(otherElems);
+      if (addr.pred && memberOther.empty()) {
+        // The shared load may have read for another member: zero-fill
+        // explicitly instead of relying on the hardware's out-of-bounds fill.
+        Type elemTy = getElementTypeOrSelf(cfg.unpackedType);
+        memberOther.assign(cfg.numElems, LLVM::ConstantOp::create(
+                                             rewriter, loc, elemTy,
+                                             rewriter.getZeroAttr(elemTy)));
+      }
+      BlockIOConversionBase::unpackBlockLoadResult(
+          groupRet[group], unpackedLoadedVals, elemIdx, cfg.regMapping,
+          cfg.shuffleMapping, cfg.packedDPASOperandType, cfg.unpackedType,
+          cfg.numValuesPerLoad, cfg.numPackedVals, addr.pred, memberOther,
+          nanMaskElems, loc, rewriter, ctx, padWithZero);
+      continue;
+    }
 
+    Value loadPred = shared ? groupPred[group] : addr.pred;
     Value offsetY = addr.offsetY;
-    if (addr.pred)
-      offsetY = b.select(addr.pred, offsetY, addr.adjustedBaseHeight);
+    if (loadPred)
+      offsetY = b.select(loadPred, offsetY, addr.adjustedBaseHeight);
 
     Value ret = TritonGEN::Matrix2DBlockLoadOp::create(
         rewriter, loc, cfg.load2DGenXType,
@@ -5285,10 +5370,20 @@ static LogicalResult lowerBlockLoad2D(
                                           firstIndexVec, firstIndexVec, attr);
     }
 
+    SmallVector<Value> memberOther(otherElems);
+    if (shared) {
+      groupRet[group] = ret;
+      if (addr.pred && memberOther.empty() && addr.pred != loadPred) {
+        Type elemTy = getElementTypeOrSelf(cfg.unpackedType);
+        memberOther.assign(cfg.numElems, LLVM::ConstantOp::create(
+                                             rewriter, loc, elemTy,
+                                             rewriter.getZeroAttr(elemTy)));
+      }
+    }
     BlockIOConversionBase::unpackBlockLoadResult(
         ret, unpackedLoadedVals, elemIdx, cfg.regMapping, cfg.shuffleMapping,
         cfg.packedDPASOperandType, cfg.unpackedType, cfg.numValuesPerLoad,
-        cfg.numPackedVals, addr.pred, otherElems, nanMaskElems, loc, rewriter,
+        cfg.numPackedVals, addr.pred, memberOther, nanMaskElems, loc, rewriter,
         ctx, padWithZero);
   }
 
