@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --implicit-check-not=ttig.2d_block_load
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --check-prefix=KEEP
 
 // COM: tt.descriptor_load that cannot use a 2D block load is lowered to a masked tt.load.
 
@@ -31,6 +32,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: %[[NAN:.*]] = arith.constant dense<0x7E00> : tensor<64x32xf16
   // CHECK: tt.load %{{.*}}, %[[MASK]], %[[NAN]]
   // CHECK-NOT: tt.descriptor_load
+  // COM: With the env var the load is left to DescriptorLoadOpConversion.
+  // KEEP-LABEL: tt.func @per_element_pad_nan(
+  // KEEP-NOT: tt.load
+  // KEEP: tt.descriptor_load
   tt.func @per_element_pad_nan(%base: !tt.ptr<f16>, %m: i32, %n: i32, %stride: i64, %i: i32, %j: i32) -> tensor<64x32xf16, #blocked> {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %base, [%m, %n], [%stride, %c1_i64] {padding = 2 : i32} : <f16>, <64x32xf16>

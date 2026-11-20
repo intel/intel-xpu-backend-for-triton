@@ -668,6 +668,8 @@ def TritonIntelGPULowerTo2DBlockLoad
     lacks 2D block IO support, is lowered to a masked `tt.load` of a tensor of
     pointers; one with no valid lowering (e.g. divergent padding) is an error.
     After this pass every load is a 2D block load or a `tt.load`.
+    `TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=1` leaves those descriptor
+    loads unchanged for the LLVM lowering instead.
   }];
 
   let dependentDialects = [

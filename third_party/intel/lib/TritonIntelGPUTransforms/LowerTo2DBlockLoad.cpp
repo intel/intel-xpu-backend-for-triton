@@ -94,9 +94,16 @@ public:
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
-    // Without 2D block IO every tt.descriptor_load still becomes a tt.load.
+    hasFailed = false;
     bool has2DBlockIO = mod->hasAttr(
         ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName());
+    // A tt.descriptor_load that cannot become a 2D block load (every one,
+    // without 2D block IO) is lowered to a tt.load, unless the env var leaves
+    // it to DescriptorLoadOpConversion.
+    bool lowerToLoad =
+        !tt::tools::getBoolEnv("TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD");
+    if (!has2DBlockIO && !lowerToLoad)
+      return;
 
     // FIXME: Remove once IGC can split large 2D block loads.
     // Read the env var once and materialize it as an attribute on the ops
@@ -121,27 +128,36 @@ public:
     DominanceInfo domInfo(mod);
     if (!has2DBlockIO) {
       for (auto op : descLoadOps)
-        if (failed(lowerDescriptorLoadToLoad(op, domInfo)))
-          signalPassFailure();
-      return;
-    }
+        hasFailed |= failed(lowerDescriptorLoadToLoad(op, domInfo));
+    } else {
+      tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+      tt::intel::ModuleStrideAnalysis strideAnalysis(mod, axisInfoAnalysis);
+      for (auto op : descLoadOps) {
+        if (convertDescriptorLoadOp(op, axisInfoAnalysis) || !lowerToLoad)
+          continue;
+        hasFailed |= failed(lowerDescriptorLoadToLoad(op, domInfo));
+      }
 
-    tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
-    tt::intel::ModuleStrideAnalysis strideAnalysis(mod, axisInfoAnalysis);
-    for (auto op : descLoadOps) {
-      if (convertDescriptorLoadOp(op, axisInfoAnalysis))
-        continue;
-      if (failed(lowerDescriptorLoadToLoad(op, domInfo)))
+      SmallVector<tt::LoadOp> loadOps;
+      mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
+      for (auto op : loadOps)
+        convertLoadOp(op, strideAnalysis, axisInfoAnalysis);
+    }
+    if (hasFailed)
+      return signalPassFailure();
+
+    // After this pass every load is a 2D block load or a tt.load.
+    if (lowerToLoad)
+      mod.walk([&](tt::DescriptorLoadOp op) {
+        op.emitError("tt.descriptor_load was not lowered");
         signalPassFailure();
-    }
-
-    SmallVector<tt::LoadOp> loadOps;
-    mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
-    for (auto op : loadOps)
-      convertLoadOp(op, strideAnalysis, axisInfoAnalysis);
+      });
   }
 
 private:
+  /// Set once a load has been diagnosed, so it is not reported as unlowered.
+  bool hasFailed = false;
+
   /// Convert a tt.descriptor_load to ttig.2d_block_load. Returns false if the
   /// load needs another lowering.
   bool
@@ -181,7 +197,7 @@ private:
         op->emitOpError("descriptor pitch of ")
             << *stride * elemBytesConst
             << " bytes is not a multiple of 16 bytes";
-        signalPassFailure();
+        hasFailed = true;
         return true;
       }
     }
