@@ -6,7 +6,13 @@ set +e
 source "$GITHUB_WORKSPACE/scripts/capture-hw-details.sh" > /dev/null 2>&1   # needed by the CLI's report step
 cd "$GITHUB_WORKSPACE/vllm" || exit 1
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+state() {  # cheap telemetry to compare good vs bad jobs (concurrent load, memory)
+  echo "STATE $1: $(uptime | sed 's/.*load average/load average/') | free-mem-MB $(free -m | awk '/Mem:/{print $4"/"$2}')"
+  python -c "import torch; f,t=torch.xpu.mem_get_info(); print('STATE $1: xpu free/total GiB %.2f/%.2f'%(f/2**30,t/2**30))" 2>&1 | tail -1
+  ps -eo pid,etimes,pcpu,comm --sort=-pcpu | head -6 | sed 's/^/STATE ps: /'
+}
 run() {  # label, UA_ONLY value
+  state "before-$1"
   local t0=$SECONDS
   UA_ONLY="$2" TD_PATCHED=0 triton-benchmarks run vllm-unified-attention --reports "$REPORTS" --tag "$1" > "/tmp/ua_$1.log" 2>&1
   local rc=$?
