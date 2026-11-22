@@ -38,9 +38,10 @@
 // COM: `TritonAnnotateModule` from compiler.py's `get_max_grf_mode()`) and pins
 // COM: that it does not raise the "default"/"auto" budget.
 // COM:
-// COM: The sixth module sets `ttig.grf_register_size = 64` as well (the 64-byte
-// COM: registers of PVC/BMG/CRI, see compiler.py's `get_grf_register_size()`),
-// COM: which doubles every budget above. Modules 1-5 have no such attribute and
+// COM: The sixth and seventh modules set `ttig.grf_register_size = 64` as well
+// COM: (the 64-byte registers of PVC/BMG/CRI, see compiler.py's
+// COM: `get_grf_register_size()`), which doubles every budget above. Modules
+// COM: 1-5 have no such attribute and
 // COM: get the 32-byte fallback the budgets above are computed with.
 
 // COM: Peak 2564 B/lane, above every budget, so the A operand's load sinks in all
@@ -243,8 +244,8 @@ module attributes {ttig.support_2d_block_io, ttig.max_grf_mode = "512", "ttg.num
 
 // -----
 
-// COM: Peak 644 B/lane, the same shape and `ttig.max_grf_mode = "256"` as
-// COM: @max_grf_mode_attr_gate above, but with `ttig.grf_register_size = 64`, so
+// COM: Peak 644 B/lane, the shape of @max_grf_mode_attr_gate above, with
+// COM: `ttig.max_grf_mode = "256"` and `ttig.grf_register_size = 64`, so
 // COM: every budget doubles: 512 B/lane for "128", "default" and "auto", 640 for
 // COM: "160", 768 for "192", 1024 for "256", 2048 for "512". The A load now stays
 // COM: put in "192" and "256", where with 32-byte registers it sank.

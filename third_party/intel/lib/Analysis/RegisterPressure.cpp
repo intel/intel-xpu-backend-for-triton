@@ -42,8 +42,8 @@ unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
 
 /// GRF register width in bytes assumed when the module carries no valid
 /// `ttig.grf_register_size` attribute (e.g. a hand-written test module that
-/// never went through TritonAnnotateModule). 32 B preserves the behaviour
-/// from before the attribute existed; every compile through the Python
+/// never went through TritonAnnotateModule). 32 B is the width assumed before
+/// the attribute existed; every compile through the Python
 /// pipeline stamps the target's real size (see `get_grf_register_size()` in
 /// third_party/intel/backend/compiler.py).
 static constexpr unsigned DefaultGRFRegisterSizeBytes = 32;
@@ -86,8 +86,6 @@ RegisterPressureAnalysis::getGRFBytesPerHardwareThread(StringRef grfMode,
   assert((grfMode == "default" || grfMode == "auto") &&
          "grfMode must be an explicit mode (\"128\"/\"256\"/\"512\"), "
          "\"default\", or \"auto\"");
-  // On BMG, PVC and DG2 "default" starts at the smallest mode and moves up
-  // only if that build spills; "auto" uses the same budget.
   return SmallestGRFModeRegisters * registerSizeBytes;
 }
 

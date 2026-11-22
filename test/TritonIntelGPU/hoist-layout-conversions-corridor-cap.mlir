@@ -50,5 +50,5 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 }
 
 // COM: An unwalked corridor counts as a fallback rejection, not an exact one.
-// STATS1: [HoistLayoutConversions] considered=2 hoisted=0 rejected_pressure=0 rejected_function_peak_exact=0 rejected_function_peak_fallback=2 skipped_other=0
-// STATS3: [HoistLayoutConversions] considered=2 hoisted=1 rejected_pressure=0 rejected_function_peak_exact=0 rejected_function_peak_fallback=1 skipped_other=0
+// STATS1: [HoistLayoutConversions] considered=2 hoisted=0 rejected_function_peak_exact=0 rejected_function_peak_fallback=2 skipped_other=0
+// STATS3: [HoistLayoutConversions] considered=2 hoisted=1 rejected_function_peak_exact=0 rejected_function_peak_fallback=1 skipped_other=0

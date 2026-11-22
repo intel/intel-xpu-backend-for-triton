@@ -118,8 +118,9 @@ registers). `'default'` and `'auto'` get the `'128'` budget: on BMG, PVC and
 DG2 a `'default'` compile starts at 128 registers and is rebuilt larger only if
 that build spills, so sinking against a larger budget would leave the pressure
 that pushes it there; `'auto'` uses the same budget. `HoistLayoutConversions`
-uses the same budget (80% of it) as a ceiling on what it may hoist. There is no fixed tensor-size floor; sizes only matter through their
-contribution to the measured pressure.
+gates on the same budget, against the function's peak: a hoist may not raise
+it past `max(current peak, budget)`. There is no fixed tensor-size floor; sizes
+only matter through their contribution to the measured pressure.
 
 Peak, not live-in, pressure is the gate: `liveInPressure` derives from
 `LivenessBlockInfo::in()`, which excludes block arguments and so never counts the
