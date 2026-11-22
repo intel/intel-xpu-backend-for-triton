@@ -48,11 +48,8 @@ struct ExtBF16 : ConvertOpToLLVMPattern<arith::ExtFOp> {
         !isF32OrTensorOf(op.getOut().getType()))
       return failure();
 
-    bool allowFPExt =
-        llvm::none_of(op->getUsers(), llvm::IsaPred<arith::RemFOp>);
-    rewriter.replaceOp(op,
-                       intel::convertBf16ToFp32(op.getLoc(), rewriter,
-                                                adaptor.getIn(), allowFPExt));
+    rewriter.replaceOp(
+        op, intel::convertBf16ToFp32(op.getLoc(), rewriter, adaptor.getIn()));
     return success();
   }
 };
@@ -90,11 +87,11 @@ static bool hasNativeBF16(ConversionPatternRewriter &rewriter) {
 
 namespace mlir::triton::intel {
 Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
-                        Value v, bool allowFPExt) {
+                        Value v) {
   TritonLLVMIRRewriter b(loc, rewriter);
   // A plain fpext (SPV_KHR_bfloat16), unlike the builtin call, lets LLVM hoist
   // the extension past selects as it does for fp16.
-  if (allowFPExt && hasNativeBF16(rewriter))
+  if (hasNativeBF16(rewriter))
     return LLVM::FPExtOp::create(rewriter, loc,
                                  getTypeWithSameShape(v.getType(), f32_ty), v);
 

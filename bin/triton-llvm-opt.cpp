@@ -85,6 +85,12 @@ static cl::opt<bool> ExpandFmaToContractPair(
                    "fmul/fadd pair (multiply first)"),
     cl::init(false));
 
+static cl::opt<bool> ExpandBF16FPExtUnderFabs(
+    "expand-bf16-fpext-under-fabs",
+    llvm::cl::desc("rewrite bf16 -> f32 fpext next to an llvm.fabs or frem as "
+                   "an integer shift"),
+    cl::init(false));
+
 static cl::opt<bool> NVPTXVectorize(
     "nvptx-vectorize",
     llvm::cl::desc("run hardware-aware NVPTX arithmetic vectorization"),
@@ -124,6 +130,8 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
       mpm.addPass(LegalizeI1VectorMemoryPass());
     if (ExpandFmaToContractPair)
       mpm.addPass(ExpandFmaToContractPairPass());
+    if (ExpandBF16FPExtUnderFabs)
+      mpm.addPass(ExpandBF16FPExtUnderFabsPass());
     llvm::FunctionPassManager fpm;
     if (BreakStructPhiNodes)
       fpm.addPass(BreakStructPhiNodesPass());

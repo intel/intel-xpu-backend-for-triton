@@ -6,6 +6,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 
@@ -439,6 +440,62 @@ void expandFmaToContractPair(Module &module) {
   }
 }
 
+// W/A for IGC < 2.43, which drops the abs of an `llvm.fabs` applied to a
+// bf16 -> f32 `fpext`, in either order: `fabs(fpext(x))` or the
+// `fpext(fabs(x))` that InstCombine turns it into. Any fabs of an upcast bf16
+// value hits it, including the one inside libdevice `isnan`, and so does the
+// abs IGC takes of an frem divisor.
+//
+// Rewrite those extensions as the bit shift that the
+// __spirv_ConvertBF16ToFINTEL builtin lowers to, applying the fabs in f32.
+static bool isFabs(Value *v) {
+  auto *intr = dyn_cast<IntrinsicInst>(v);
+  return intr && intr->getIntrinsicID() == Intrinsic::fabs;
+}
+
+static bool takesAbs(User *user) {
+  auto *inst = dyn_cast<Instruction>(user);
+  return isFabs(user) || (inst && inst->getOpcode() == Instruction::FRem);
+}
+
+void expandBF16FPExtUnderFabs(Module &module) {
+  SmallVector<FPExtInst *> exts;
+  for (auto &func : module)
+    for (auto &block : func)
+      for (auto &inst : block)
+        if (auto *ext = dyn_cast<FPExtInst>(&inst))
+          if (ext->getSrcTy()->getScalarType()->isBFloatTy() &&
+              (isFabs(ext->getOperand(0)) ||
+               llvm::any_of(ext->users(), takesAbs)))
+            exts.push_back(ext);
+
+  for (FPExtInst *ext : exts) {
+    IRBuilder<> builder(ext);
+    builder.SetCurrentDebugLocation(ext->getDebugLoc());
+    Value *src = ext->getOperand(0);
+    auto *innerFabs = isFabs(src) ? cast<IntrinsicInst>(src) : nullptr;
+    if (innerFabs)
+      src = innerFabs->getArgOperand(0);
+
+    Type *srcTy = src->getType();
+    Type *dstTy = ext->getType();
+    Value *bits =
+        builder.CreateBitCast(src, srcTy->getWithNewType(builder.getInt16Ty()));
+    Value *wide =
+        builder.CreateZExt(bits, dstTy->getWithNewType(builder.getInt32Ty()));
+    Value *shifted =
+        builder.CreateShl(wide, ConstantInt::get(wide->getType(), 16));
+    Value *result = builder.CreateBitCast(shifted, dstTy);
+    if (innerFabs)
+      result = builder.CreateUnaryIntrinsic(Intrinsic::fabs, result, innerFabs);
+
+    ext->replaceAllUsesWith(result);
+    ext->eraseFromParent();
+    if (innerFabs && innerFabs->use_empty())
+      innerFabs->eraseFromParent();
+  }
+}
+
 void postProcessLLVMIR(llvm::Module &mod) {
   // __devicelib_assert_fail must be a declaration so that
   // IGC can replace it with a runtime assert function.
@@ -466,6 +523,9 @@ void postProcessLLVMIR(llvm::Module &mod) {
 
   // IGC register allocation W/A for `llvm.fma` (#8626).
   expandFmaToContractPair(mod);
+
+  // IGC < 2.43 W/A for fabs of a bf16 -> f32 fpext.
+  expandBF16FPExtUnderFabs(mod);
 }
 
 } // namespace mlir::triton::intel
@@ -503,5 +563,11 @@ PreservedAnalyses LegalizeI1VectorMemoryPass::run(Module &M,
 PreservedAnalyses ExpandFmaToContractPairPass::run(Module &M,
                                                    ModuleAnalysisManager &) {
   mlir::triton::intel::expandFmaToContractPair(M);
+  return PreservedAnalyses::none();
+}
+
+PreservedAnalyses ExpandBF16FPExtUnderFabsPass::run(Module &M,
+                                                    ModuleAnalysisManager &) {
+  mlir::triton::intel::expandBF16FPExtUnderFabs(M);
   return PreservedAnalyses::none();
 }

@@ -133,16 +133,6 @@ module attributes {"ttig.support_bfloat16_arithmetic", "ttig.support_bfloat16_co
     tt.return %0 : tensor<128xf32, #b8>
   }
 
-  // An extension feeding remf keeps the builtin (IGC < 2.43 frem bug).
-  // CHECK-LABEL: llvm.func spir_kernelcc @extf_remf(
-  // CHECK-COUNT-8: @_Z27__spirv_ConvertBF16ToFINTELs(
-  // CHECK-NOT:     llvm.fpext
-  // CHECK:         llvm.return
-  tt.func @extf_remf(%arg0: tensor<128xf32, #b8>, %arg1: tensor<128xbf16, #b8>) -> tensor<128xf32, #b8> {
-    %0 = arith.extf %arg1 : tensor<128xbf16, #b8> to tensor<128xf32, #b8>
-    %1 = arith.remf %arg0, %0 : tensor<128xf32, #b8>
-    tt.return %1 : tensor<128xf32, #b8>
-  }
 }
 
 // -----
