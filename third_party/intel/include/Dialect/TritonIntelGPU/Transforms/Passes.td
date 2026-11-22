@@ -418,6 +418,20 @@ def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-blo
   ];
 }
 
+def TritonIntelGPUTailUnalignedWidthLoads : Pass<"tritonintelgpu-tail-unaligned-width-loads", "mlir::ModuleOp"> {
+  let summary = "load an unaligned-width descriptor through its granule-aligned prefix";
+
+  let description = [{
+    Load a zero-padded descriptor whose constant width is not whole 2D block granules through a descriptor of width
+    alignDown(W, granule); merge the dropped columns in the middle of an innermost scf.for split in three, else under an scf.if.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+}
+
 def TritonIntelGPUWidenLoadStoreEncoding : Pass<"tritonintelgpu-widen-load-store-encoding", "mlir::ModuleOp"> {
   let summary = "Widen a load/store's blocked encoding from 128b to 256b per thread";
 

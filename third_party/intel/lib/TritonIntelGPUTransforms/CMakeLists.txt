@@ -21,6 +21,7 @@ add_triton_library(TritonIntelGPUTransforms
   RewriteDescriptorGatherScatter.cpp
   RewriteStackPtr.cpp
   StageLargeFMADotsViaSLM.cpp
+  TailUnalignedWidthLoads.cpp
   Utility.cpp
   WidenLoadStoreEncoding.cpp
 
