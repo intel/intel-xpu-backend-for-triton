@@ -1988,7 +1988,10 @@ struct ExtFOpConversion
     if (inElemTy.isBF16()) {
       auto outElemTy = getElementType(op.getOut());
       assert(outElemTy.isF32() && "unsupported conversion");
-      return {intel::convertBf16ToFp32(loc, rewriter, operands[0][0])};
+      bool allowFPExt =
+          llvm::none_of(op->getUsers(), llvm::IsaPred<arith::RemFOp>);
+      return {
+          intel::convertBf16ToFp32(loc, rewriter, operands[0][0], allowFPExt)};
     }
 
     return {LLVM::FPExtOp::create(rewriter, loc, elemTy, operands[0][0])};

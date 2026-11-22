@@ -129,8 +129,11 @@ vectorize(std::function<Value(TritonLLVMIRRewriter &, Value)> func,
 
 namespace mlir::triton::intel {
 
+/// `allowFPExt = false` keeps the builtin call even with native bf16
+/// arithmetic: IGC < 2.43 miscompiles `frem(x, fpext(bf16 y))`, returning x
+/// for y < 0.
 Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
-                        Value v);
+                        Value v, bool allowFPExt = true);
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
                         Value v, RoundingMode rounding);
 
