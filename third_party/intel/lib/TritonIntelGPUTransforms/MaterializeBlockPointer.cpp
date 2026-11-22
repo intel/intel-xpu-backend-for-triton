@@ -36,6 +36,10 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
+/// Set by `tl.range(..., flatten=True)`; FuseNestedLoops fuses a loop nest
+/// whose outer loop carries it.
+constexpr llvm::StringLiteral kFlattenAttr = "tt.flatten";
+
 /// True if `TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS` is explicitly set to a
 /// falsy value. When that env var is "0" (e.g. on the CRI simulator to avoid
 /// a hang), `LoadStoreOpToLLVM.cpp::isBlockIOCandidate()` rejects non-DPAS
@@ -446,6 +450,27 @@ private:
                   StringAttr::get(op.getContext(),
                                   ttgi::stringifyBlockIOMode(
                                       ttgi::BlockIOMode::ColumnMajor)));
+
+    if constexpr (std::is_same_v<OpType, tt::LoadOp>)
+      if (isRowMajor || isColMajor)
+        keepLoopNestUnfused(op, strideInfo, isColMajor ? rank - 1 : rank - 2);
+  }
+
+  /// Loop fusion moves the body of a `tt.flatten` loop into the fused loop. A
+  /// row stride defined there, between the two loops, can then change between
+  /// iterations of the fused loop, so the 2D lowering finds no pitch for a
+  /// load in the inner loop that uses it (#8687). Drop `tt.flatten` from such
+  /// an outer loop so the nest is not fused.
+  static void keepLoopNestUnfused(tt::LoadOp op, tt::intel::StrideInfo *info,
+                                  unsigned pitchDim) {
+    Value pitch = info ? info->getStrideValue(pitchDim) : Value();
+    auto inner = op->getParentOfType<scf::ForOp>();
+    auto outer = inner ? inner->getParentOfType<scf::ForOp>() : scf::ForOp();
+    if (!pitch || !outer || !inner.isDefinedOutsideOfLoop(pitch) ||
+        outer.isDefinedOutsideOfLoop(pitch))
+      return;
+    if (outer->removeAttr(kFlattenAttr))
+      LDBG("Row stride defined in the outer loop; dropped " << kFlattenAttr);
   }
 
   /// A 2D block message carries a single predicate for the whole tile, so
