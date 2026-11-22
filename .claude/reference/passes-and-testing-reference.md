@@ -85,6 +85,7 @@ Module attributes for device capabilities are listed in `intel-gpu-hardware.md` 
 - **isSPVBuiltinAvailable()**: `is_lts`, `use_genisa_2d_block_io`
 - **ArithEmulation**: `support_bfloat16_arithmetic`
 - **Type conversion lowering**: `support_bfloat16_conversion`, `support_f8_conversion`, `support_f4_conversion`
+- **bf16 -> f32 as `fpext`** (`convertBf16ToFp32`): `support_bfloat16_arithmetic` and `use_bf16_fpext` (IGC >= 2.43)
 - **AtomicOpLowering**: `support_16bit_atomics`
 
 ### Complete Pass Inventory

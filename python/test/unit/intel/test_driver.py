@@ -325,6 +325,29 @@ def test_2d_block_io_lowering_follows_driver_version(device, fresh_knobs, versio
         assert spirv_loads > 0 and genisa_loads == 0
 
 
+@pytest.mark.parametrize("version, uses_fpext", [("1.18.40196+8", False),  # compute-runtime 26.40.40196.8 (IGC 2.42.6)
+                                                 ("1.18.40627", True),  # IGC 2.43.9
+                                                 ])
+def test_bf16_upcast_lowering_follows_driver_version(device, fresh_knobs, version, uses_fpext):
+    """bf16 -> f32 lowers to `fpext` only for a driver with IGC >= 2.43."""
+    fresh_knobs.intel.gen_native_code = False
+
+    @triton.jit
+    def _kernel(in_ptr, out_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(out_ptr + offs, tl.load(in_ptr + offs).to(tl.float32))
+
+    src = triton.compiler.ASTSource(_kernel, signature={"in_ptr": "*bf16", "out_ptr": "*fp32", "BLOCK": "constexpr"},
+                                    constexprs={"BLOCK": 128})
+    llir = triton.compile(src, target=_target_with_driver_version(version)).asm["llir"]
+    fpexts = llir.count("fpext bfloat")
+    builtins = llir.count("ConvertBF16ToFINTEL")
+    if uses_fpext:
+        assert fpexts > 0 and builtins == 0
+    else:
+        assert builtins > 0 and fpexts == 0
+
+
 @pytest.mark.parametrize("native, ocloc_version, driver_version, expected", [
     (False, "26.18.38308.1", "1.17.39122+11", True),  # JIT: the driver's IGC consumes the SPIR-V
     (False, "26.27.39122.11", "1.15.38308+1", False),

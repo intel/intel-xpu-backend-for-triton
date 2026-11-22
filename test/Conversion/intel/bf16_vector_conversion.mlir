@@ -151,9 +151,10 @@ module attributes {"ttig.support_bfloat16_arithmetic", "ttig.support_bfloat16_co
 
 // -----
 
-// Conversion support only (LTS): bf16 -> f32 uses the builtin.
+// No native bf16 arithmetic (LTS): bf16 -> f32 uses the builtin, even with
+// `ttig.use_bf16_fpext`, which an AOT compile takes from the `ocloc` version.
 #b8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
-module attributes {"ttig.support_bfloat16_conversion", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttig.use_bf16_fpext", "ttig.support_bfloat16_conversion", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @extf_lts(
   // CHECK-COUNT-8: @_Z27__spirv_ConvertBF16ToFINTELs(
   // CHECK-NOT:     llvm.fpext
