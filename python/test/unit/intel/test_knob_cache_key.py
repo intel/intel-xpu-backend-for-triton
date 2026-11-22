@@ -60,6 +60,10 @@ INVALIDATING_RAW_ENV_VARS = (
     # Gates `add_assign_latencies` / `add_schedule_loops` in `make_ttgir`, and
     # `annotationsAreUsable` in MatmulLoopPipeline.cpp.
     "TRITON_INTEL_ANNOTATE_LATENCIES",
+    # Leaves descriptor loads that cannot use 2D block IO to
+    # DescriptorLoadOpConversion instead of lowering them to tt.load in
+    # LowerTo2DBlockLoad.
+    "TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD",
     # Turns off sub-group block reads in DescriptorLoadOpConversion and
     # LoadOpConversion.
     "TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ",

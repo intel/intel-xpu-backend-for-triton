@@ -506,11 +506,13 @@ private:
   /// range instead, which is what makes it pad on both lowering paths.
   ///
   /// The floor is a multiple of the merged dimension's block extent so that
-  /// `DescriptorLoadOpConversion`'s static mask classification is unchanged: it
-  /// asks `ttgi::isDivisible` about the emitted shape and index, `arith.addi`
-  /// is an AND over its operands there, and a floor that is not a multiple of
-  /// the block would demote the dimension to per-element masking for every
-  /// fused load with a dynamic collapsed shape - not just the empty ones.
+  /// the static mask classification of the descriptor-load fallbacks
+  /// (LowerTo2DBlockLoad's tt.load lowering and DescriptorLoadOpConversion) is
+  /// unchanged: they ask `ttgi::isDivisible` about the emitted shape and index,
+  /// `arith.addi` is an AND over its operands there, and a floor that is not a
+  /// multiple of the block would demote the dimension to per-element masking
+  /// for every fused load with a dynamic collapsed shape - not just the empty
+  /// ones.
   static std::optional<int64_t> emptyExtentFloor(RankedTensorType tensorTy,
                                                  unsigned collapsedDim) {
     int64_t blockExtent = tensorTy.getDimSize(collapsedDim + 1);
