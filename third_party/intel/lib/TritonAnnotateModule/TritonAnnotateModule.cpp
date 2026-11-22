@@ -61,6 +61,10 @@ struct TritonAnnotateModule
     mod->setAttr(ttgi::TritonIntelGPUDialect::getTargetArchAttrName(),
                  builder.getStringAttr(targetArch));
 
+    if (storeL1WriteBack)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getStoreL1WriteBackAttrName(),
+                   builder.getUnitAttr());
+
     mod->setAttr(
         ttgi::TritonIntelGPUDialect::get2DBlockIOBaseAlignmentAttrName(),
         builder.getI32IntegerAttr(blockIOBaseAlignment));
@@ -101,6 +105,11 @@ struct TritonAnnotateModule
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportPredicatedIOAttrName(),
           builder.getUnitAttr());
+
+    if (supportSubgroupBitcastShuffle)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::
+                       getSupportSubgroupBitcastShuffleAttrName(),
+                   builder.getUnitAttr());
 
     if (supportRoundedDivideSqrt)
       mod->setAttr(

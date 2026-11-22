@@ -81,6 +81,20 @@ llvm.func @triton_gen.dpas.f16(%c : vector<8xf32>, %a : vector<8xi16>, %b : vect
 
 // -----
 
+// CHECK: llvm.func spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i32) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
+
+llvm.func @triton_gen.dpas.hf8.bf8(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>) {
+  // COM: A and B are encoded with their own fp8 format: 0x4000 (hf8) | 0x10000 << 1 (bf8).
+  // CHECK:     llvm.func @triton_gen.dpas.hf8.bf8(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
+  // CHECK-DAG:  [[C32:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK-DAG:  [[C147456:%.*]] = llvm.mlir.constant(147456 : i32) : i32
+  // CHECK-NEXT: llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi([[C32]], %arg1, %arg2, %arg0, [[C147456]]) {{.*}} : (i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i32) -> vector<8xf32>
+  %0 = triton_gen.dpas %c, %a, %b {pa = hf8, pb = bf8, rc = 8} : (vector<8xf32>, vector<8xi16>, vector<8xi32>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
 // CHECK: llvm.func spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv4_fDv8_fS0_i(i32, vector<4xf32>, vector<8xf32>, vector<8xf32>, i32) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vector<8xf32>) {
@@ -135,8 +149,19 @@ llvm.func @triton_gen.dpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b
 
 llvm.func @triton_gen.sub_group_block_read(%ptr: !llvm.ptr<3>) {
   // CHECK:     llvm.func @triton_gen.sub_group_block_read(%arg0: !llvm.ptr<3>) {
-  // CHECK:       llvm.call spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(%arg0) {convergent, {{.*}} : (!llvm.ptr<3>) -> vector<2xi16>
-  %ret = triton_gen.sub_group_block_read %ptr : !llvm.ptr<3> -> vector<2xi16>
+  // CHECK:       llvm.call spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(%arg0) {convergent,
+  // CHECK-NOT:   triton_gen.DecorationCacheControlINTEL
+  // CHECK-SAME:  : (!llvm.ptr<3>) -> vector<2xi16>
+  %ret = triton_gen.sub_group_block_read %ptr {cache_control = Default} : !llvm.ptr<3> -> vector<2xi16>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.sub_group_block_read(%ptr: !llvm.ptr<1>) {
+  // CHECK:     llvm.func @triton_gen.sub_group_block_read(%arg0: !llvm.ptr<1>) {
+  // CHECK:       llvm.call spir_funccc @_Z29intel_sub_group_block_read_uiPU3AS1j(%arg0) {{{.*}}, triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<1, Cached, 0>>, {{.*}}} : (!llvm.ptr<1>) -> i32
+  %ret = triton_gen.sub_group_block_read %ptr {cache_control = L1UC_L3C} : !llvm.ptr<1> -> i32
   llvm.return
 }
 
@@ -355,9 +380,35 @@ llvm.func @triton_gen.sub_group_bitcast_shuffle(%val : vector<4xi8>) -> vector<2
 
 // -----
 
+module attributes {ttig.support_subgroup_bitcast_shuffle} {
+  // CHECK-DAG: llvm.func spir_funccc @_Z44__spirv_SubgroupBitcastShuffleINTEL_Rushort8Dv16_c(vector<16xi8>) -> vector<8xi16> attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z42__spirv_SubgroupBitcastShuffleINTEL_Ruint4Dv16_c(vector<16xi8>) -> vector<4xi32> attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z44__spirv_SubgroupBitcastShuffleINTEL_Rushort4l(i64) -> vector<4xi16> attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z42__spirv_SubgroupBitcastShuffleINTEL_RulongDv4_s(vector<4xi16>) -> i64 attributes {convergent, no_unwind, will_return}
+  // CHECK-LABEL: llvm.func @triton_gen.sub_group_bitcast_shuffle_spirv(
+  // CHECK-SAME:    [[VAL:%.*]]: vector<16xi8>, [[VAL1:%.*]]: vector<4xi16>, [[VAL2:%.*]]: vector<1xi64>
+  llvm.func @triton_gen.sub_group_bitcast_shuffle_spirv(%val : vector<16xi8>, %val1 : vector<4xi16>, %val2 : vector<1xi64>) -> vector<1xi64> {
+    // CHECK: llvm.call spir_funccc @_Z44__spirv_SubgroupBitcastShuffleINTEL_Rushort8Dv16_c([[VAL]]) {{.*}} : (vector<16xi8>) -> vector<8xi16>
+    %0 = triton_gen.sub_group_bitcast_shuffle %val : vector<16xi8> -> vector<8xi16>
+    // CHECK: llvm.call spir_funccc @_Z42__spirv_SubgroupBitcastShuffleINTEL_Ruint4Dv16_c([[VAL]]) {{.*}} : (vector<16xi8>) -> vector<4xi32>
+    %1 = triton_gen.sub_group_bitcast_shuffle %val : vector<16xi8> -> vector<4xi32>
+    // CHECK: [[SCALAR:%.*]] = llvm.bitcast [[VAL2]] : vector<1xi64> to i64
+    // CHECK: llvm.call spir_funccc @_Z44__spirv_SubgroupBitcastShuffleINTEL_Rushort4l([[SCALAR]]) {{.*}} : (i64) -> vector<4xi16>
+    %2 = triton_gen.sub_group_bitcast_shuffle %val2 : vector<1xi64> -> vector<4xi16>
+    // CHECK: [[RES:%.*]] = llvm.call spir_funccc @_Z42__spirv_SubgroupBitcastShuffleINTEL_RulongDv4_s([[VAL1]]) {{.*}} : (vector<4xi16>) -> i64
+    // CHECK: [[VEC:%.*]] = llvm.bitcast [[RES]] : i64 to vector<1xi64>
+    // CHECK: llvm.return [[VEC]]
+    %3 = triton_gen.sub_group_bitcast_shuffle %val1 : vector<4xi16> -> vector<1xi64>
+    llvm.return %3 : vector<1xi64>
+  }
+}
+
+// -----
+
 llvm.func @triton_gen.sub_group_gather_load(%addrs: vector<32xi64>, %preds: vector<32xi1>) -> vector<1xi64> {
   // CHECK-LABEL: llvm.func @triton_gen.sub_group_gather_load(
-  // CHECK: [[RET:%.*]] = llvm.inline_asm{{.*}}"{{.*}}lsc_load.ugm{{.*}}", "=rw,rw.u,rw.u" {{.*}} : (vector<32xi64>, vector<32xi1>) -> vector<1xi64>
+  // Predicated-off channels are zeroed after the load, from a predicate computed before it.
+  // CHECK: [[RET:%.*]] = llvm.inline_asm{{.*}}"{{.*}}cmp.ne (M1_NM, 32) NPRED 0x1:b $2{{.*}}lsc_load.ugm{{.*}}\0A  (NPRED) mov (M1_NM, 32) RET(0, 0)<1> 0x0:uq\0A}", "=rw,rw.u,rw.u" {{.*}} : (vector<32xi64>, vector<32xi1>) -> vector<1xi64>
   // CHECK: llvm.return [[RET]] : vector<1xi64>
   %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> vector<1xi64>
   llvm.return %0 : vector<1xi64>

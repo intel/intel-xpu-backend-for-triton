@@ -5621,6 +5621,25 @@ def test_full(dtype_str, shape, device):
     assert torch.all(out_dynamic == 2)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("value, dtype_str, expected", [
+    (0xFF, "int8", -1),
+    (0x8000, "int16", -32768),
+    (0xFFFFFFFF, "int32", -1),
+    (0x1FF, "uint8", 0xFF),
+])
+def test_full_int_constant_out_of_range(value, dtype_str, expected, device):
+    # An integer constant keeps its low bits, as arith.constant does.
+
+    @triton.jit
+    def kernel(out, VALUE: tl.constexpr, DTYPE: tl.constexpr):
+        tl.store(out + tl.arange(0, 4), tl.full([4], VALUE, DTYPE))
+
+    out = torch.zeros(4, dtype=getattr(torch, dtype_str), device=device)
+    kernel[(1, )](out, value, getattr(tl, dtype_str))
+    assert torch.all(out == expected)
+
+
 @pytest.mark.parametrize("value", [1e-8, 3e-7, -2.5e-7, 1.5e-6, 1e-40, 0.1, 3.14159265])
 def test_full_bf16_small_constant(value, device):
     check_type_supported(torch.bfloat16, device)
@@ -5782,7 +5801,7 @@ def test_arange(start, num_ctas, device):
                                                                for dtype_str in torch_dtypes
                                                                for size in [128, 512]
                                                                for size_diff in [0, 1, 2, 3, 4]
-                                                               for other in [None, 0, 1]])
+                                                               for other in [None, 0, 1, -2]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 @pytest.mark.enable_warmup
 def test_masked_load(dtype_str, size, size_diff, other, num_ctas, device):

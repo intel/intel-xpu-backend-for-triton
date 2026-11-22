@@ -16,13 +16,12 @@ paths:
 Two lowering paths exist for TritonGEN operations:
 
 1. **SPIR-V builtins** (preferred) — used with newer (non-LTS) drivers
-2. **GenISA intrinsics** (fallback) — used with LTS drivers or unsupported SPIR-V signatures
+2. **GenISA intrinsics** (fallback) — used with LTS drivers and with drivers older than compute-runtime 26.27.39122 (IGC < 2.38)
 
 ### `isSPVBuiltinAvailable()` Decision Logic
 Returns `false` (use GenISA) when:
 - Module has the `ttig.is_lts` attribute (LTS driver)
-- The specific operation signature is not valid in the SPIR-V interface (see below)
-- Subgroup size ≠ 16 (SPIR-V 2D block operations only support subgroup size 16)
+- Module has the `ttig.use_genisa_2d_block_io` attribute (IGC < 2.38, i.e. compute-runtime < 26.27.39122; set in `make_llir`)
 
 ## DPAS Lowering
 
@@ -100,7 +99,7 @@ For SPIR-V stores, the value is first stored to a local alloca, then a pointer t
 
 **GenISA path**: `llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid`
 
-Prefetch always uses SPIR-V (never falls back to GenISA) — `isSPVBuiltinAvailableImpl` returns `true` unconditionally for prefetch.
+Prefetch is gated by `isSPVBuiltinAvailable()` like load and store.
 
 ### 64-Byte Alignment Compensation
 Hardware requires 64-byte aligned base addresses. The lowering compensates non-aligned addresses:

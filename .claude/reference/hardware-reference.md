@@ -99,6 +99,7 @@ Capabilities queried via Level Zero and set as module attributes:
 | `has_256b_prefetch` | `ttig.support_prefetch_256b` | 256-byte 2D block prefetch |
 | `max_grf_mode` (derived, `get_max_grf_mode()`) | `ttig.max_grf_mode` | Largest GRF mode ("256"/"512") this target's automatic escalation paths select; read by `AccelerateMatmul` (`getMaxGRFEntries`) to bound the GRF a `'default'` or `'auto'` kernel can end up with |
 | `grf_register_size` (derived, `get_grf_register_size()`) | `ttig.grf_register_size` | Width in bytes of one GRF register (32 or 64); read by `RegisterPressureAnalysis` to turn a GRF mode's register count into a byte budget (32 if absent or not 32/64) |
+| `l1_store_write_bypass` (derived: `device_arch == "bmg"`) | `ttig.store_l1_write_back` | Driver default L1 store policy is write-bypass (BMG): narrow-row 2D block stores are written back through L1, unless `TRITON_INTEL_DISABLE_STORE_L1_WRITE_BACK` is set |
 
 ### DPAS Hardware Constants
 
