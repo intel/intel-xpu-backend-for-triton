@@ -39,6 +39,16 @@ define float @frem_divisor(float %x, bfloat %y) {
   ret float %r
 }
 
+; CHECK-LABEL: @frem_divisor_f64
+define double @frem_divisor_f64(double %x, bfloat %y) {
+; CHECK:     [[F:%.*]] = bitcast i32 %{{.*}} to float
+; CHECK-NEXT:[[D:%.*]] = fpext float [[F]] to double
+; CHECK-NEXT:[[R:%.*]] = frem double %x, [[D]]
+  %e = fpext bfloat %y to double
+  %r = frem double %x, %e
+  ret double %r
+}
+
 ; An fpext without an fabs, and fp16, are not touched.
 ; CHECK-LABEL: @untouched
 define float @untouched(bfloat %x, half %y) {

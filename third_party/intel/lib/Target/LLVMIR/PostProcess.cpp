@@ -482,10 +482,14 @@ void expandBF16FPExtUnderFabs(Module &module) {
     Value *bits =
         builder.CreateBitCast(src, srcTy->getWithNewType(builder.getInt16Ty()));
     Value *wide =
-        builder.CreateZExt(bits, dstTy->getWithNewType(builder.getInt32Ty()));
+        builder.CreateZExt(bits, srcTy->getWithNewType(builder.getInt32Ty()));
     Value *shifted =
         builder.CreateShl(wide, ConstantInt::get(wide->getType(), 16));
-    Value *result = builder.CreateBitCast(shifted, dstTy);
+    // The extension may go past f32 (bf16 -> f64 after InstCombine).
+    Value *result = builder.CreateFPExt(
+        builder.CreateBitCast(shifted,
+                              srcTy->getWithNewType(builder.getFloatTy())),
+        dstTy);
     if (innerFabs)
       result = builder.CreateUnaryIntrinsic(Intrinsic::fabs, result, innerFabs);
 
