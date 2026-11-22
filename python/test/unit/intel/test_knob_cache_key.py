@@ -48,6 +48,7 @@ INVALIDATING_KNOBS = {
     "disable_annotate_cache_control",
     "disable_canonicalize_pointers",
     "disable_igc_opt",
+    "disable_store_l1_write_back",
     "dump_shader_info",
     "fast_math",
     "opt_reduction_locality",
