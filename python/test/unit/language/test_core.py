@@ -2719,6 +2719,7 @@ def test_tensor_atomic_xchg(dtype_str, use_result, device):
                          [(dtype_x, dtype_z, False, 1024) for dtype_x in dtypes for dtype_z in dtypes] + [
                              ('float32', 'bfloat16', False, 1024),
                              ('bfloat16', 'float32', False, 1024),
+                             ('bfloat16', 'int32', False, 1024),
                              ('float32', 'int32', True, 1024),
                              ('float32', 'bool', False, 1024),
                              ('int8', 'bfloat16', False, 1024),

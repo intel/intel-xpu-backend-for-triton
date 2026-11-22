@@ -50,10 +50,4 @@ struct ExpandFmaToContractPairPass
   static StringRef name() { return "ExpandFmaToContractPairPass"; }
 };
 
-struct ExpandBF16FPExtUnderFabsPass
-    : OptionalPassInfoMixin<ExpandBF16FPExtUnderFabsPass> {
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
-  static StringRef name() { return "ExpandBF16FPExtUnderFabsPass"; }
-};
-
 } // namespace llvm

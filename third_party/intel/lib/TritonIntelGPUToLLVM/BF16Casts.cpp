@@ -76,12 +76,15 @@ struct TruncBF16 : ConvertOpToLLVMPattern<arith::TruncFOp> {
   }
 };
 
-static bool hasNativeBF16(ConversionPatternRewriter &rewriter) {
-  auto mod =
-      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  return mod &&
-         mod->hasAttr(
-             TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName());
+// SPV_KHR_bfloat16 comes with native bf16 arithmetic; IGC < 2.43 drops an abs
+// applied to the fpext.
+static bool canUseBF16FPExt(ConversionPatternRewriter &rewriter) {
+  Operation *op = rewriter.getInsertionBlock()->getParentOp();
+  return mlir::LLVM::intel::hasModuleAttr(
+             op,
+             TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName()) &&
+         mlir::LLVM::intel::hasModuleAttr(
+             op, TritonIntelGPUDialect::getUseBF16FPExtAttrName());
 }
 } // namespace
 
@@ -91,7 +94,7 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
   TritonLLVMIRRewriter b(loc, rewriter);
   // A plain fpext (SPV_KHR_bfloat16), unlike the builtin call, lets LLVM hoist
   // the extension past selects as it does for fp16.
-  if (hasNativeBF16(rewriter))
+  if (canUseBF16FPExt(rewriter))
     return LLVM::FPExtOp::create(rewriter, loc,
                                  getTypeWithSameShape(v.getType(), f32_ty), v);
 

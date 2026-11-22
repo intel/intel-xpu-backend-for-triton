@@ -17,7 +17,7 @@ from triton.backends.intel import extension_utils
 from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
 from triton.backends.compiler import GPUTarget
 from triton.backends.intel import compiler as intel_compiler
-from triton.backends.intel.driver import find_sycl_icpx, has_spirv_2d_block_io
+from triton.backends.intel.driver import find_sycl_icpx, has_bf16_fpext, has_spirv_2d_block_io
 from triton.backends.intel.errors import IntelGPUError
 from triton.runtime.errors import OutOfResources
 
@@ -280,6 +280,19 @@ def test_find_sycl_uses_oneapi_root(monkeypatch, no_icpx, recwarn, tmp_path: pat
 ])
 def test_has_spirv_2d_block_io(version, expected):
     assert has_spirv_2d_block_io(version) is expected
+
+
+@pytest.mark.parametrize("version, expected", [
+    ("1.18.40196+8", False),  # compute-runtime 26.40.40196.8 (IGC 2.42.6), drops the abs of an fpext
+    ("1.18.40627", True),  # IGC 2.43.9, first verified
+    ("26.43.40627.1", True),  # an `ocloc` version
+    ("1.6.35096+9", False),  # LTS
+    ("garbage", False),  # unknown: keep the builtin
+    ("", False),
+    (None, False),
+])
+def test_has_bf16_fpext(version, expected):
+    assert has_bf16_fpext(version) is expected
 
 
 def _target_with_driver_version(version):

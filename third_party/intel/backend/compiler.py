@@ -1,7 +1,7 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm
 from .native import intel
-from .driver import compile_module_from_src, get_ocloc_version, has_spirv_2d_block_io, is_lts
+from .driver import compile_module_from_src, get_ocloc_version, has_bf16_fpext, has_spirv_2d_block_io, is_lts
 from .track import track
 from .errors import IntelGPUError, WorkGroupSizeOutOfResources
 from .extension_utils import query_device_extensions
@@ -75,6 +75,8 @@ class XPUOptions:
     is_lts: bool = True
     # Whether the SPIR-V 2D block I/O builtins can be used (#8858); see `has_spirv_2d_block_io`.
     has_spirv_2d_block_io: bool = True
+    # Whether bf16 -> f32 can be a plain `fpext`; see `has_bf16_fpext`.
+    has_bf16_fpext: bool = False
     # Whether these SPIR-V extensions are allowed; overwritten with the
     # ground-truth probe result in `parse_options`.
     allow_long_vector: bool = True
@@ -415,6 +417,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Like the probes above: `ocloc` consumes the SPIR-V of an AOT compile, the driver that of a JIT one.
         igc_version = (get_ocloc_version() if native else None) or self.target.arch.get("driver_version")
         options.has_spirv_2d_block_io = has_spirv_2d_block_io(igc_version)
+        options.has_bf16_fpext = has_bf16_fpext(igc_version)
         return options
 
     @staticmethod
@@ -716,6 +719,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.set_is_lts(mod)
         # Set for every input, including Gluon and `.ttgir`, which bypass `make_ttgir`.
         intel.set_use_genisa_2d_block_io(mod, not options.has_spirv_2d_block_io)
+        intel.set_use_bf16_fpext(mod, options.has_bf16_fpext)
 
         # `getGlobalTimer` counts core clock cycles and needs the rate to report
         # nanoseconds.
