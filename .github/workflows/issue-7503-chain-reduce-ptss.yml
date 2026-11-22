@@ -1,0 +1,281 @@
+# Investigation workflow for https://github.com/intel/intel-xpu-backend-for-triton/issues/7503 -- not for merge.
+#
+# `test_chain_reduce[1-max-src_layout2-256-*]` exceeds the per-thread scratch space (PTSS) limit on the A770 and the
+# B580 in the nightly Windows runs, and is skipped on both GPUs, on Windows and on Linux alike. No pull-request job
+# runs the Intel unit tests on these GPUs, so this workflow does, on the pull request that carries it. Each job runs:
+#   - the sweep in scripts/issue-7503: every test_chain_reduce case, once per GRF mode and compile path;
+#   - test_chain_reduce itself, the way that OS's nightly runs it;
+#   - the two failing cases again, with IGC shader dumps and Triton IR dumps, uploaded with the reports.
+# The Linux jobs are the control: the Linux nightly skips the test too, so nobody knows whether it fails there.
+name: Issue 7503 chain_reduce PTSS
+run-name: ${{ inputs.run_name || 'Issue 7503 chain_reduce PTSS' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_name:
+        description: Custom run name
+        type: string
+        default: ""
+  pull_request:
+    branches:
+      - main
+
+permissions: read-all
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  PYTHONIOENCODING: utf-8
+  # As in the nightly runs of the intel suite.
+  TRITON_DISABLE_LINE_INFO: "1"
+  # Build every case afresh, bypassing both Triton's cache and the driver's, so each one leaves its own build log
+  # and dumps.
+  TRITON_ALWAYS_COMPILE: "1"
+  NEO_CACHE_PERSISTENT: "0"
+  PYTEST_ARGS: -v -rfEx --timeout=600
+
+jobs:
+  windows:
+    name: Windows ${{ matrix.gpu }}
+    strategy:
+      fail-fast: false
+      matrix:
+        gpu: [b580, a770]
+    runs-on:
+      - windows
+      - ${{ matrix.gpu }}
+    timeout-minutes: 240
+    env:
+      NEW_WORKSPACE: C:\gh${{ github.run_id }}
+    # Set up as in pip-test-windows.yml: PyTorch nightly wheels, which avoid build-test-windows.yml's hours-long
+    # PyTorch source build. The PTSS overflow happens in the driver's IGC, which PyTorch does not take part in.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Clean up old workspaces
+        shell: bash
+        run: |
+          rm -rf /c/gh*
+
+      # Copy workspace to a temporary location with a shorter name.
+      - name: Copy workspace
+        run: |
+          Copy-Item -Path ${{ github.workspace }} -Destination ${{ env.NEW_WORKSPACE }} -Recurse
+
+      - name: Create venv
+        run:
+          python -m venv .venv --upgrade-deps
+
+      - name: Install PyTorch (wheels)
+        run: |
+          .venv\Scripts\activate.ps1
+          pip install torch --index-url https://download.pytorch.org/whl/nightly/xpu
+
+      # Since pytorch/pytorch#202206 (first in torch 2.16.0.dev20261104) `import torch` fails with "DLL load
+      # failed while importing _C" unless the directory the pip runtime packages (intel-sycl-rt, mkl, ...)
+      # install their DLLs into is on PATH; registering it with os.add_dll_directory is not enough.
+      - name: Add the Intel runtime DLLs to PATH
+        run: |
+          $bin = (Resolve-Path .venv\Library\bin).Path
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+
+      - name: PyTorch version
+        run: |
+          .venv\Scripts\activate.ps1
+          python -c 'import torch;print(torch.__version__)'
+
+      # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
+      # version in pypi, so instead of installing ninja with pip we use a preinstalled 1.12.1 on the
+      # runner.
+      - name: Build and install Triton
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
+          pip install -r python\requirements.txt
+          pip install -U intel-sycl-rt==2026.2.0
+          # `build` can't determine that Ninja is already installed.
+          # similar issue: https://github.com/pypa/build/issues/506
+          $env:MAX_JOBS = $env:NUMBER_OF_PROCESSORS
+          python -m build --wheel --no-isolation --skip-dependency-check
+          pip install (Get-Item ${{ env.NEW_WORKSPACE }}\dist\*.whl)
+          python -c 'import triton; print(triton.__version__)'
+
+      - name: Install test dependencies
+        run: |
+          .venv\Scripts\activate.ps1
+          pip install -r scripts\requirements-test.txt
+          pip uninstall pytest_forked -y
+
+      # A PTSS overflow is reported as XFAIL, with the numbers; the step fails only on a wrong result or another
+      # error.
+      - name: Sweep GRF modes and compile paths
+        env:
+          ISSUE_7503_RESULTS_DIR: ${{ env.NEW_WORKSPACE }}\reports\sweep
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
+          $pytestArgs = $env:PYTEST_ARGS -split ' '
+          python -m pytest @pytestArgs --junitxml=reports\sweep.xml scripts\issue-7503\test_chain_reduce_ptss.py
+
+      # The failure itself, run the way the Windows nightly runs the intel suite: JIT, default GRF mode.
+      - name: Run test_chain_reduce
+        if: ${{ !cancelled() }}
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}\python\test\unit
+          $pytestArgs = $env:PYTEST_ARGS -split ' '
+          python -m pytest @pytestArgs --device xpu --junitxml=${{ env.NEW_WORKSPACE }}\reports\test_chain_reduce.xml intel/test_core.py::test_chain_reduce
+
+      # One process per case, since IGC reads its options once per process. Whether the release driver honours the
+      # IGC_* variables on Windows is unverified: an empty `igc` directory means it does not.
+      - name: Dump the failing cases
+        if: ${{ !cancelled() }}
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
+          $pytestArgs = $env:PYTEST_ARGS -split ' '
+          $env:IGC_ShaderDumpEnable = "1"
+          $env:TRITON_KERNEL_DUMP = "1"
+          foreach ($shape in "256-128", "256-256") {
+            foreach ($grf in "default", "128", "256") {
+              foreach ($path in "jit", "aot") {
+                $case = "1-max-src_layout2-$shape-grf-$grf-$path"
+                $dir = "${{ env.NEW_WORKSPACE }}\reports\dumps\$case"
+                New-Item -ItemType Directory -Force -Path "$dir\igc", "$dir\triton" | Out-Null
+                $env:IGC_DumpToCustomDir = "$dir\igc\"
+                $env:TRITON_DUMP_DIR = "$dir\triton"
+                python -m pytest @pytestArgs -k $case scripts\issue-7503\test_chain_reduce_ptss.py
+              }
+            }
+          }
+          exit 0
+
+      - name: Summarize the sweep
+        if: ${{ !cancelled() }}
+        run: |
+          .venv\Scripts\activate.ps1
+          cd ${{ env.NEW_WORKSPACE }}
+          python scripts\issue-7503\summarize.py --title "Windows ${{ matrix.gpu }}" reports\sweep
+
+      - name: Upload reports and dumps
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: issue-7503-windows-${{ matrix.gpu }}
+          path: ${{ env.NEW_WORKSPACE }}\reports
+          include-hidden-files: true
+          if-no-files-found: warn
+
+      - name: Clean up workspace
+        if: ${{ always() }}
+        run: |
+          Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
+
+      - name: Clean up temporary files
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -rf /tmp/triton-* /tmp/tmp*
+
+  linux:
+    name: Linux ${{ matrix.gpu }}
+    strategy:
+      fail-fast: false
+      matrix:
+        gpu: [b580, a770]
+    runs-on:
+      - linux
+      - gpu
+      - ${{ matrix.gpu }}
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    # Set up as in build-test-reusable.yml, which the Linux nightly on these GPUs runs.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Python
+        uses: ./.github/actions/setup-python
+        with:
+          python_version: "3.11"
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+
+      - name: Build Triton
+        uses: ./.github/actions/setup-triton
+        with:
+          command: >
+            DEBUG=1
+            python -m build --wheel --no-isolation && pip install dist/*.whl
+
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt
+
+      - name: Report environment details
+        timeout-minutes: 1
+        run: |
+          ./scripts/capture-hw-details.sh
+
+      # A PTSS overflow is reported as XFAIL, with the numbers; the step fails only on a wrong result or another
+      # error.
+      - name: Sweep GRF modes and compile paths
+        env:
+          ISSUE_7503_RESULTS_DIR: ${{ github.workspace }}/reports/sweep
+        run: |
+          python -m pytest $PYTEST_ARGS --junitxml=reports/sweep.xml scripts/issue-7503/test_chain_reduce_ptss.py
+
+      # The failure itself, run the way the Linux nightly runs the intel suite: AOT, default GRF mode.
+      - name: Run test_chain_reduce
+        if: ${{ !cancelled() }}
+        env:
+          TRITON_XPU_GEN_NATIVE_CODE: "1"
+        run: |
+          cd python/test/unit
+          python -m pytest $PYTEST_ARGS --device xpu --junitxml=$GITHUB_WORKSPACE/reports/test_chain_reduce.xml intel/test_core.py::test_chain_reduce
+
+      # One process per case, since IGC reads its options once per process. The AOT path passes them on to `ocloc`.
+      - name: Dump the failing cases
+        if: ${{ !cancelled() }}
+        run: |
+          for shape in 256-128 256-256; do
+            for grf in default 128 256; do
+              for path in jit aot; do
+                case="1-max-src_layout2-$shape-grf-$grf-$path"
+                dir="$GITHUB_WORKSPACE/reports/dumps/$case"
+                mkdir -p "$dir/igc" "$dir/triton"
+                IGC_ShaderDumpEnable=1 IGC_DumpToCustomDir="$dir/igc/" TRITON_KERNEL_DUMP=1 TRITON_DUMP_DIR="$dir/triton" \
+                  python -m pytest $PYTEST_ARGS -k "$case" scripts/issue-7503/test_chain_reduce_ptss.py || true
+              done
+            done
+          done
+
+      - name: Summarize the sweep
+        if: ${{ !cancelled() }}
+        run: |
+          python scripts/issue-7503/summarize.py --title "Linux ${{ matrix.gpu }}" reports/sweep
+
+      - name: Upload reports and dumps
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: issue-7503-linux-${{ matrix.gpu }}
+          path: reports
+          include-hidden-files: true
+          if-no-files-found: warn
