@@ -33,6 +33,10 @@ bool isDivisible(Value value, int64_t divisor);
 // Infers the encoding of the source of op given the result encoding.
 Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 
+/// Convert gather/scatter x offsets to the dim-1 slice of `valueType`.
+Value buildConvertedXOffsets(OpBuilder &builder, Location loc, Value xOffsets,
+                             RankedTensorType valueType);
+
 // Retuns true if the operation is an expensive load or store operation.
 bool isExpensiveLoadOrStore(Operation *op);
 
@@ -46,6 +50,11 @@ struct CachePolicy {
 // Cache policies defined by another target carry no meaning for Intel GPUs, so
 // they decode to the hardware default.
 CachePolicy getCachePolicy(Attribute cachePolicy);
+
+// Returns true if `op` is a load that must read memory afresh, as a poll of a
+// flag set by another work-group does: it is volatile or has the `.cv` cache
+// modifier.
+bool isVolatileOrCVLoad(Operation *op);
 
 // Returns true if the tensor type has a dot dpas encoding.
 bool hasDotDpasEncoding(RankedTensorType tensorType);

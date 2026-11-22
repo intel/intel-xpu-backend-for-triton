@@ -443,9 +443,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// COM: Companion negative case for the row-limit mask test above: a mask
-// COM: that varies along BOTH dims (also bounded along K) is not a row-limit
-// COM: pattern, so it still falls back to a masked tt.load.
+// COM: Companion negative case for the row-limit mask test above: the column
+// COM: bound is an opaque runtime scalar, so the width granularity the message
+// COM: needs (2 elements for f16) is not provable and the load keeps its mask.
+// COM: See `boundary_check_mask` below for the same shape with a bound the
+// COM: `tt.divisibility` hint makes provable.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -472,6 +474,83 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // CHECK: tt.load
     %13 = tt.load %4, %mask, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %13 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+// COM: The mask `RewriteTensorDescriptorToPointer` emits for an expanded
+// COM: descriptor load: a per-dimension boundary check with i64 descriptor
+// COM: shapes as bounds, a lower bound on the pitch dim, and other=0. Both
+// COM: bounds become surface clamps, so no mask operand is left.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @boundary_check_mask
+  tt.func @boundary_check_mask(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+                               %rows: i32, %cols: i32 {tt.divisibility = 16 : i32}) -> tensor<64x32xf16, #dot0> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    // Tile origin from the program id, so both bases are provably >= 0.
+    %pid = tt.get_program_id x : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %offm = arith.muli %pid, %c64_i32 : i32
+    %offk = arith.muli %pid, %c32_i32 : i32
+    %zero = arith.constant dense<0> : tensor<64x1xi64, #dot0>
+    %cst_stride = arith.constant dense<32> : tensor<64x1xi32, #dot0>
+    %rows64 = arith.extsi %rows : i32 to i64
+    %cols64 = arith.extsi %cols : i32 to i64
+    %offm64 = arith.extsi %offm : i32 to i64
+    %offk64 = arith.extsi %offk : i32 to i64
+
+    // row index = offm + arange(0, 64), col index = offk + arange(0, 32)
+    %r = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %re = arith.extsi %r : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> to tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %rb = tt.splat %offm64 : i64 -> tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %ri = arith.addi %rb, %re : tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %ri2d = tt.expand_dims %ri {axis = 1 : i32} : tensor<64xi64, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi64, #dot0>
+    %c = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %ce = arith.extsi %c : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> to tensor<32xi64, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %cb = tt.splat %offk64 : i64 -> tensor<32xi64, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %ci = arith.addi %cb, %ce : tensor<32xi64, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %ci2d = tt.expand_dims %ci {axis = 0 : i32} : tensor<32xi64, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi64, #dot0>
+
+    // mask = (row >= 0 && row < rows) && (col < cols)
+    %lo = arith.cmpi sge, %ri2d, %zero : tensor<64x1xi64, #dot0>
+    %rs = tt.splat %rows64 : i64 -> tensor<64x1xi64, #dot0>
+    %hi = arith.cmpi slt, %ri2d, %rs : tensor<64x1xi64, #dot0>
+    %rowmask = arith.andi %lo, %hi : tensor<64x1xi1, #dot0>
+    %rowmask2d = tt.broadcast %rowmask : tensor<64x1xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    %cs = tt.splat %cols64 : i64 -> tensor<1x32xi64, #dot0>
+    %colmask = arith.cmpi slt, %ci2d, %cs : tensor<1x32xi64, #dot0>
+    %colmask2d = tt.broadcast %colmask : tensor<1x32xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    %mask = arith.andi %rowmask2d, %colmask2d : tensor<64x32xi1, #dot0>
+
+    // ptr[i, j] = arg0 + i * 32 + j
+    %row = tt.expand_dims %r {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+    %rowoff = arith.muli %row, %cst_stride : tensor<64x1xi32, #dot0>
+    %rowoffb = tt.broadcast %rowoff : tensor<64x1xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %col = tt.expand_dims %c {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %coloffb = tt.broadcast %col : tensor<1x32xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %off = arith.addi %rowoffb, %coloffb : tensor<64x32xi32, #dot0>
+    %bp = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %ptr = tt.addptr %bp, %off : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+
+    // COM: Both clamps are relative to the tensor: base_height is
+    // COM: clamp(rows - offm, 0, 64) rows and base_width is
+    // COM: clamp(cols - offk, 0, 32) elements, in bytes. No mask is left.
+    // COM: The bounds are i64, so both take computeRowLimitHeight's
+    // COM: overflow-safe form.
+    // CHECK: %[[RCLAMP:.*]] = arith.minui %{{.*}}, %c64_i64 : i64
+    // CHECK: %[[RSEL:.*]] = arith.select %{{.*}}, %{{.*}}, %[[RCLAMP]] : i64
+    // CHECK: %[[H:.*]] = arith.trunci %[[RSEL]] : i64 to i32
+    // CHECK: %[[CCLAMP:.*]] = arith.minui %{{.*}}, %c32_i64 : i64
+    // CHECK: %[[CSEL:.*]] = arith.select %{{.*}}, %{{.*}}, %[[CCLAMP]] : i64
+    // CHECK: %[[CELEMS:.*]] = arith.trunci %[[CSEL]] : i64 to i32
+    // CHECK: %[[W:.*]] = arith.muli %[[CELEMS]], %c2_i32 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %{{.*}}, %[[H]], %[[W]] {row_major} {ttig.block_io_runtime_col_limit, ttig.block_io_runtime_row_limit}
+    %v = tt.load %ptr, %mask, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+    tt.return %v : tensor<64x32xf16, #dot0>
   }
 }
 

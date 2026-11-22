@@ -583,4 +583,25 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
+unsigned ModuleAxisInfoAnalysis::getDescriptorAlignment(Value desc,
+                                                        unsigned dim,
+                                                        Value index,
+                                                        unsigned elemBits) {
+  AxisInfo *descInfo = getAxisInfo(desc);
+  if (!descInfo || dim >= static_cast<unsigned>(descInfo->getRank()))
+    return 1;
+  // A non-power-of-two hint such as 24 proves only its largest power-of-two
+  // divisor (8), not its floor (16), as for the index (#7990).
+  auto pow2Divisor = [](int64_t v) -> int64_t { return v <= 0 ? 1 : v & -v; };
+  // Divisibility is in bytes; other dims are already folded into it.
+  int64_t elemBytes = std::max(1u, elemBits / 8);
+  int64_t ptrAlign = std::max<int64_t>(
+      1, pow2Divisor(descInfo->getDivisibility(dim)) / elemBytes);
+  // A constant 0 index reports kMaxDivisor.
+  AxisInfo *idxInfo = getAxisInfo(index);
+  int64_t idxDiv = idxInfo ? idxInfo->getDivisibility(0) : 1;
+  return std::min({pow2Divisor(descInfo->getContiguity(dim)), ptrAlign,
+                   pow2Divisor(idxDiv)});
+}
+
 } // namespace mlir::triton::intel

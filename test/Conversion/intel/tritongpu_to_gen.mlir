@@ -266,17 +266,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
     %7 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
-    // Load 4 elements from vector0
-    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
-    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
-    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
-    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
-
-    // Load 4 elements from vector1
-    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
-    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
-    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
-    // CHECK: llvm.load %{{.*}} <alignment = 4> : !llvm.ptr<1> -> i32
+    // Each lane holds one f32 of a contiguous row: 4 sub-group block reads per
+    // vector instead of per-lane loads.
+    // CHECK-COUNT-8: llvm.call spir_funccc @_Z29intel_sub_group_block_read_uiPU3AS1j
+    // CHECK-NOT: llvm.load
     %9 = tt.load %6 : tensor<256x!tt.ptr<f32>, #blocked0>
     %10 = tt.load %8 : tensor<256x!tt.ptr<f32>, #blocked0>
     %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>

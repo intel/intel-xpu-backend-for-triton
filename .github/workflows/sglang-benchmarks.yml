@@ -34,7 +34,7 @@ on:
 permissions: read-all
 
 env:
-  PYTHON_VERSION: "3.12"
+  PYTHON_VERSION: "3.11"
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   HF_TOKEN: ${{ secrets.HF_TOKEN || '' }}
 
