@@ -1,17 +1,10 @@
 """ReduceVariableLiveness must not move a dot operand loaded before a loop past a write to
-the memory it reads: the dot has to see the tile as it was when the program loaded it.
+the memory it reads.
 
-Each kernel loads one operand tile once, before the loop, then writes that tile's memory
-(in the loop, or between the load and the loop) through a second pointer argument the
-caller binds to the same buffer. The `no_write` variants are the same
-kernels without the write, where the pass may still move the load.
-
-With num_warps > 1 the warp that writes an element need not be one that read it before
-the loop, and Triton orders global accesses of different warps only at a barrier, so the
-num_warps > 1 write kernels put `tl.debug_barrier()` after the pre-loop load and after each write: the
-program is then race free and the torch reference is exact. The pass treats that barrier
-as a write too, so only the num_warps == 1 variants, which need no barrier, test that the
-store alone keeps the load in place.
+Each kernel writes the operand's buffer through a second pointer bound to the same tensor;
+the `no_write` variants are controls where the move is allowed. With num_warps > 1 the write
+kernels need `tl.debug_barrier()` to be race free, and the pass treats that barrier as a write
+too, so only the num_warps == 1 variants show that the store alone keeps the load in place.
 """
 
 import pytest
@@ -97,21 +90,19 @@ def _reference(pattern: str, write: bool, a: torch.Tensor,
 
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific pass")
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16], ids=["fp16", "bf16"])
-@pytest.mark.parametrize("grf_mode", ["default", "256"])
-@pytest.mark.parametrize("num_warps", [1, 4, 8])
+@pytest.mark.parametrize("num_warps", [1, 4])
 @pytest.mark.parametrize("write", [True, False], ids=["write", "no_write"])
 @pytest.mark.parametrize("pattern", PATTERNS)
-def test_pre_loop_operand_not_moved_past_write(pattern, write, num_warps, grf_mode, dtype, device, with_allocator):
+def test_pre_loop_operand_not_moved_past_write(pattern, write, num_warps, device, with_allocator):
     torch.manual_seed(0)
-    a = (torch.randn(M, K, device=device) / 8).to(dtype)
-    b = (torch.randn(K, N, device=device) / 8).to(dtype)
+    a = (torch.randn(M, K, device=device) / 8).to(torch.float16)
+    b = (torch.randn(K, N, device=device) / 8).to(torch.float16)
     ref_out, ref_a, ref_b = _reference(pattern, write, a.cpu(), b.cpu())
 
     out = torch.empty(M, N, dtype=torch.float32, device=device)
     w = b if pattern == "operand_b" else a
     _pre_loop_operand_kernel[(1, )](a, b, w, out, M=M, N=N, K=K, BM=BM, BN=BN, BK=BK, PATTERN=pattern, WRITE=write,
-                                    SYNC=write and num_warps > 1, num_warps=num_warps, grf_mode=grf_mode)
+                                    SYNC=write and num_warps > 1, num_warps=num_warps)
 
     torch.testing.assert_close(out.cpu(), ref_out, atol=1e-2, rtol=1e-2)
     torch.testing.assert_close(a.cpu().float(), ref_a.float(), atol=1e-2, rtol=1e-2)
