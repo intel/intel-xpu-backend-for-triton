@@ -1,11 +1,11 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
-from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import compile_module_from_src, get_ocloc_version, has_spirv_2d_block_io, is_lts
-from triton.backends.intel.track import track
-from triton.backends.intel.errors import IntelGPUError, WorkGroupSizeOutOfResources
-from triton.backends.intel.extension_utils import query_device_extensions
-from triton.backends.intel.spirv_probes import (accepts_long_vector, accepts_maximum_registers,
-                                                accepts_subgroup_bitcast_shuffle)
+from triton._C.libtriton import ir, passes, llvm
+from .native import intel
+from .driver import compile_module_from_src, get_ocloc_version, has_spirv_2d_block_io, is_lts
+from .track import track
+from .errors import IntelGPUError, WorkGroupSizeOutOfResources
+from .extension_utils import query_device_extensions
+from .spirv_probes import accepts_long_vector, accepts_maximum_registers, accepts_subgroup_bitcast_shuffle
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import OutOfResources
@@ -547,7 +547,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+        intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm, opt.num_warps)
         passes.common.add_cse(pm)
         intel.passes.ttir.add_reassociate_dot_scale(pm, knobs.intel.fast_math)
         passes.ttir.add_triton_licm(pm)

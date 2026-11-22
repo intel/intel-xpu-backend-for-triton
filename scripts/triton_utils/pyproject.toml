@@ -1,6 +1,6 @@
 [project]
 name = "triton_utils"
-version = "0.6.0"
+version = "0.6.1"
 requires-python = ">=3.11"
 dependencies = ["packaging", "typing_extensions", "defusedxml", "pandas"]
 
