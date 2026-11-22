@@ -5801,7 +5801,7 @@ def test_arange(start, num_ctas, device):
                                                                for dtype_str in torch_dtypes
                                                                for size in [128, 512]
                                                                for size_diff in [0, 1, 2, 3, 4]
-                                                               for other in [None, 0, 1]])
+                                                               for other in [None, 0, 1, -2]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 @pytest.mark.enable_warmup
 def test_masked_load(dtype_str, size, size_diff, other, num_ctas, device):
