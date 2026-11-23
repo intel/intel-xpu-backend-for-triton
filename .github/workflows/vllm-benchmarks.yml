@@ -20,7 +20,7 @@ on:
         type: string
         default: ""
       grf_comparison_refs:
-        description: JSON map of control, fixed256 and fixed256_8k commit hashes
+        description: JSON map of control and decode_pruned commit hashes
         type: string
         default: ""
   workflow_call:
@@ -43,7 +43,7 @@ on:
         type: string
         default: ""
       grf_comparison_refs:
-        description: JSON map of control, fixed256 and fixed256_8k commit hashes
+        description: JSON map of control and decode_pruned commit hashes
         type: string
         default: ""
 

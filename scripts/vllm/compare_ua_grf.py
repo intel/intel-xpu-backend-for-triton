@@ -1,4 +1,4 @@
-"""Benchmark three attention search spaces with one compiler and GPU job."""
+"""Benchmark attention decode pruning with one compiler and GPU job."""
 
 import argparse
 import hashlib
@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import time
 
-ARMS = ("control", "fixed256", "fixed256_8k")
+ARMS = ("control", "decode_pruned")
 PATCH = "benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
 KEYS = ("vllm-unified-attention", "vllm-unified-attention-fp8")
 
