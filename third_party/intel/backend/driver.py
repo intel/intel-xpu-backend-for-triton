@@ -536,7 +536,10 @@ PEAK_DRAM_GBPS = {
     "Intel(R) Data Center GPU Max 1550": 3276.8,
     "Intel(R) Arc(TM) B580 Graphics": 456.0,
     "Intel(R) Arc(TM) B570 Graphics": 380.0,
-    "Intel(R) Arc(TM) B560 Graphics": 456.0,
+    "Intel(R) Arc(TM) Pro B50 Graphics": 224.0,
+    "Intel(R) Arc(TM) Pro B60 Graphics": 456.0,
+    "Intel(R) Arc(TM) Pro B65 Graphics": 608.0,
+    "Intel(R) Arc(TM) Pro B70 Graphics": 608.0,
 }
 
 
