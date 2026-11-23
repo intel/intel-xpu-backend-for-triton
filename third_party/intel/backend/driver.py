@@ -1,4 +1,5 @@
 import importlib.metadata
+import importlib.util
 import mmap
 import os
 import json
@@ -277,7 +278,8 @@ def _linked_libraries(path: str) -> list[str] | None:
 
 # The file name the dynamic loader resolves a SYCL runtime by: `libsycl.so.N` (its soname) on Linux,
 # `syclN.dll` on Windows.
-_SYCL_RUNTIME = re.compile(r"sycl\d*\.dll", re.IGNORECASE) if os.name == "nt" else re.compile(r"libsycl\.so(\.\d+)*")
+_WINDOWS_SYCL_RUNTIME = re.compile(r"sycl\d*\.dll", re.IGNORECASE)
+_SYCL_RUNTIME = _WINDOWS_SYCL_RUNTIME if os.name == "nt" else re.compile(r"libsycl\.so(\.\d+)*")
 
 # The PyTorch libraries that link the SYCL runtime; both carry the dependency.
 _TORCH_XPU_LIBRARIES = ("torch_xpu.dll", "c10_xpu.dll") if os.name == "nt" else ("libtorch_xpu.so", "libc10_xpu.so")
@@ -288,8 +290,24 @@ def _torch_xpu_libraries() -> list[str]:
     try:
         files = importlib.metadata.files("torch")
     except importlib.metadata.PackageNotFoundError:
-        return []
-    return [str(f.locate()) for f in files or [] if f.name in _TORCH_XPU_LIBRARIES]
+        files = None
+    libraries = [str(f.locate()) for f in files or [] if f.name in _TORCH_XPU_LIBRARIES]
+    if libraries:
+        return libraries
+    # The metadata of an editable install (`pip install -e`, `setup.py develop`) lists only the files
+    # that redirect to the source tree, and a tree on `PYTHONPATH` has no metadata at all. Look in the
+    # package itself then, where `torch/lib` holds the libraries; finding a top-level package does
+    # not import it.
+    try:
+        spec = importlib.util.find_spec("torch")
+    except (ImportError, ValueError):
+        spec = None
+    for location in (spec.submodule_search_locations or []) if spec else []:
+        for name in _TORCH_XPU_LIBRARIES:
+            library = os.path.join(location, "lib", name)
+            if os.path.isfile(library):
+                libraries.append(library)
+    return libraries
 
 
 def _torch_sycl_runtime() -> str | None:
@@ -299,10 +317,11 @@ def _torch_sycl_runtime() -> str | None:
     runtime's soname at build time (`libsycl.so.8` for 2025.x, `libsycl.so.9` for 2026.x) and the
     dynamic loader resolves it. That soname is read from the files here, so it needs neither PyTorch
     imported nor its runtime loaded yet. None if PyTorch is not installed or has no XPU support,
-    or if its libraries disagree.
+    or if its libraries do not tell or disagree; the last two warn, as the search then ignores PyTorch.
     """
     runtimes = {}
-    for library in _torch_xpu_libraries():
+    libraries = _torch_xpu_libraries()
+    for library in libraries:
         linked = _linked_libraries(library)
         if linked is None:
             continue
@@ -310,6 +329,14 @@ def _torch_sycl_runtime() -> str | None:
         if len(found) == 1:
             runtimes[library] = found.pop()
     if not runtimes:
+        if libraries:
+            warnings.warn(
+                "Cannot tell which SYCL runtime PyTorch's XPU libraries link (" +
+                ", ".join(os.path.basename(library) for library in libraries) +
+                " could not be read, or link none or several). Triton builds its helpers as if PyTorch were not "
+                "installed, which crashes if the SYCL runtime it picks has another ABI than PyTorch's.",
+                stacklevel=3,
+            )
         return None
     if len(set(runtimes.values())) > 1:
         warnings.warn(
@@ -322,6 +349,25 @@ def _torch_sycl_runtime() -> str | None:
     return next(iter(runtimes.values()))
 
 
+def _windows_runtime_in(sycl_dir: str) -> str | None:
+    """Returns the `syclN.dll` of the Windows SYCL installation whose library directory is `sycl_dir`.
+
+    The DLL is beside the import library, or in the sibling `bin`: that is where oneAPI and the
+    `intel-sycl-rt` wheel keep it, with only `sycl.lib` in `lib`. The wheel's finder returns both
+    directories, `icpx`'s and `ONEAPI_ROOT`'s `lib` alone. None if there is no DLL, or several:
+    the names do not tell which one `sycl.lib` links.
+    """
+    sycl_dir = os.path.normpath(sycl_dir)
+    for directory in (sycl_dir, os.path.join(os.path.dirname(sycl_dir), "bin")):
+        try:
+            dlls = [name for name in os.listdir(directory) if _WINDOWS_SYCL_RUNTIME.fullmatch(name)]
+        except OSError:
+            continue
+        if dlls:
+            return dlls[0] if len(dlls) == 1 else None
+    return None
+
+
 def _runtime_in(sycl_dirs: list[str]) -> str | None:
     """Returns the SYCL runtime `-lsycl` in `sycl_dirs` links, as the loader names it.
 
@@ -329,16 +375,13 @@ def _runtime_in(sycl_dirs: list[str]) -> str | None:
     loader reuses a loaded library with the same one, whatever directory either comes from. The
     directory may hold other runtimes too, and a wheel ships `libsycl.so` as a copy, so neither the
     directory nor the file name says which. None if `libsycl.so` is missing or unreadable, e.g. a
-    symlink left dangling by an uninstall. On Windows it is the `syclN.dll` next to the import library.
+    symlink left dangling by an uninstall. On Windows it is the `syclN.dll` of the installation.
     """
     for sycl_dir in sycl_dirs:
         if os.name == "nt":
-            try:
-                dlls = [name for name in os.listdir(sycl_dir) if _SYCL_RUNTIME.fullmatch(name)]
-            except OSError:
-                dlls = []
-            if len(dlls) == 1:
-                return dlls[0]
+            dll = _windows_runtime_in(sycl_dir)
+            if dll is not None:
+                return dll
         else:
             soname = _soname(os.path.join(sycl_dir, "libsycl.so"))
             if soname is not None:
@@ -744,6 +787,10 @@ def get_hasher_common(eventless_submit: bool = True):
         # helper is linked against one soname, so it must be rebuilt then.
         for sycl_dir in COMPILATION_HELPER.libsycl_dir:
             hasher.update(str(_soname(os.path.join(sycl_dir, "libsycl.so"))).encode("utf-8"))
+        # Releases of one SYCL major share a soname, and a runtime only runs code built against its
+        # own headers or older ones. So a helper must also be rebuilt when the headers change under
+        # the same directory and soname, e.g. when `intel-sycl-rt` is replaced by an older release.
+        hasher.update(str(_sycl_header_version(COMPILATION_HELPER.include_dir)).encode("utf-8"))
     if eventless_submit:
         hasher.update("eventless_submit=True".encode("utf-8"))
     return hasher

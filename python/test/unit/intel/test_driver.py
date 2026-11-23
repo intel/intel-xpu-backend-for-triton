@@ -1,3 +1,6 @@
+import importlib.machinery
+import importlib.metadata
+import importlib.util
 import io
 import os
 import re
@@ -526,6 +529,104 @@ def test_helper_cache_key_follows_runtime_upgrade_in_place(monkeypatch, request,
 
     assert dirs_before == dirs_after == [str(oneapi / "lib")]
     assert key_before != key_after
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
+def test_helper_cache_key_follows_sycl_headers(monkeypatch, request, tmp_path: pathlib.Path):
+    """A cached helper is not reused after the SYCL headers it was built against change.
+
+    Releases of one SYCL major share a soname (`libsycl.so.9` for 2026.0, 2026.1 and 2026.2), so
+    replacing the `intel-sycl-rt` wheel by an older one changes neither the directory nor the soname
+    in the cache key. The helper built against the newer headers would then run on the older runtime,
+    which is the one direction the runtime's ABI does not allow.
+    """
+    oneapi, _, _ = _fake_sycl_setup(monkeypatch, tmp_path, None, icpx_soname="libsycl.so.9", icpx_version=20260930)
+    request.addfinalizer(intel_driver.get_hasher_common.cache_clear)
+
+    def cache_key() -> tuple[list[str], str]:
+        monkeypatch.setattr(intel_driver, "COMPILATION_HELPER", CompilationHelper())
+        intel_driver.get_hasher_common.cache_clear()
+        return intel_driver.COMPILATION_HELPER.libsycl_dir, intel_driver.get_hasher_common().hexdigest()
+
+    dirs_before, key_before = cache_key()
+    assert cache_key() == (dirs_before, key_before)
+    version_header = oneapi.with_name("2025.3") / "include" / "sycl" / "version.hpp"
+    version_header.write_text(version_header.read_text().replace("20260930", "20260331"))
+    dirs_after, key_after = cache_key()
+
+    assert dirs_before == dirs_after == [str(oneapi / "lib")]
+    assert key_before != key_after
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
+@pytest.mark.parametrize("recorded", [False, None])
+def test_torch_xpu_libraries_of_editable_pytorch(monkeypatch, tmp_path: pathlib.Path, recorded):
+    """PyTorch's XPU libraries are found when its metadata does not list them, or is missing.
+
+    An editable install (`pip install -e`, `setup.py develop`) records only the files that redirect to
+    the source tree, where `torch/lib` holds the libraries; a tree on `PYTHONPATH` has no metadata at
+    all. Without them the runtime PyTorch links is unknown and the search silently ignores it.
+    """
+    package = tmp_path / "src" / "torch"
+    (package / "lib").mkdir(parents=True)
+    for name in ("libtorch_xpu.so", "libc10_xpu.so"):
+        _write_shared_library(package / "lib" / name, name, ("libc.so.6", "libsycl.so.9"))
+    (package / "lib" / "libtorch_cpu.so").touch()
+
+    def files(name):
+        assert name == "torch"
+        if recorded is None:
+            raise importlib.metadata.PackageNotFoundError(name)
+        return [
+            importlib.metadata.PackagePath("__editable__.torch-2.16.0.pth"),
+            importlib.metadata.PackagePath("torch-2.16.0.dist-info/RECORD")
+        ]
+
+    spec = importlib.machinery.ModuleSpec("torch", None, is_package=True)
+    spec.submodule_search_locations = [str(package)]
+    monkeypatch.setattr(importlib.metadata, "files", files)
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: spec if name == "torch" else None)
+
+    assert sorted(intel_driver._torch_xpu_libraries()) == sorted(
+        str(package / "lib" / name) for name in ("libtorch_xpu.so", "libc10_xpu.so"))
+    assert intel_driver._torch_sycl_runtime() == "libsycl.so.9"
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
+def test_find_sycl_warns_when_pytorch_runtime_is_unreadable(monkeypatch, recwarn, tmp_path: pathlib.Path):
+    """PyTorch has XPU libraries but none tells its SYCL runtime: the search is unchanged, and says so."""
+    oneapi, _, _ = _fake_sycl_setup(monkeypatch, tmp_path, "libsycl.so.9")
+    _fake_torch(monkeypatch, tmp_path, (None, None))
+
+    helper = CompilationHelper()
+
+    assert helper.libsycl_dir == [str(oneapi / "lib")]
+    warned = [str(w.message) for w in recwarn]
+    assert len(warned) == 1 and "libtorch_xpu.so" in warned[0] and "SYCL runtime" in warned[0], warned
+
+
+def test_windows_runtime_next_to_import_library(tmp_path: pathlib.Path):
+    """On Windows the runtime of a SYCL install is the `syclN.dll` beside its import library, or in `bin`.
+
+    The wheel's finder returns both directories; oneAPI's return `lib` only, which holds the import
+    library, while the DLL is in the sibling `bin`.
+    """
+    oneapi = tmp_path / "compiler" / "latest"
+    (oneapi / "lib").mkdir(parents=True)
+    (oneapi / "bin").mkdir()
+    (oneapi / "lib" / "sycl8.lib").touch()
+    assert intel_driver._windows_runtime_in(str(oneapi / "lib")) is None
+    for name in ("sycl8.dll", "sycl8d.dll", "sycl-jit.dll", "icx.exe"):
+        (oneapi / "bin" / name).touch()
+    assert intel_driver._windows_runtime_in(str(oneapi / "lib")) == "sycl8.dll"
+    assert intel_driver._windows_runtime_in(str(oneapi / "bin")) == "sycl8.dll"
+    # Two runtimes in one place: which one `sycl.lib` links cannot be told from the names.
+    (oneapi / "bin" / "sycl9.dll").touch()
+    assert intel_driver._windows_runtime_in(str(oneapi / "lib")) is None
+    # A DLL beside the import library wins over the sibling directory.
+    (oneapi / "lib" / "sycl9.dll").touch()
+    assert intel_driver._windows_runtime_in(str(oneapi / "lib")) == "sycl9.dll"
+    assert intel_driver._windows_runtime_in(str(tmp_path / "missing" / "lib")) is None
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the libraries mapped into this process")
