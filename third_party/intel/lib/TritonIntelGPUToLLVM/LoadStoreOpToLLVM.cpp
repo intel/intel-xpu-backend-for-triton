@@ -4185,7 +4185,8 @@ struct StoreOpToBlockIOConversion
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
-  /// A store's surface clamps and the pitch their C6 check was proven for.
+  /// A store's surface clamps and the pitch they were proven for: at least
+  /// max(row bytes, 64), plus 63 when the target needs alignment compensation.
   struct SurfaceClamp : StoreBoundaryClamp {
     int64_t pitchBytes;
   };
