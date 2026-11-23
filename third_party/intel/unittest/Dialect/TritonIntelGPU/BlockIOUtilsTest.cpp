@@ -1077,14 +1077,14 @@ TEST_F(MatchBoundaryCheckMaskTest, LowerBoundWithBaseNeedsLoadOp) {
                    .has_value());
 }
 
-// 2.4: a splat constant bound is matched only with `allowConstBounds`.
+// A splat constant bound is matched only with `allowConstBounds`.
 TEST_F(MatchBoundaryCheckMaskTest, ConstBoundNeedsOptIn) {
   SmallVector<int64_t, 2> shape = {256, 32};
   Value mask = buildConstBoundedMask(arange(256), /*varyDim=*/0, shape, 100);
   EXPECT_FALSE(match(mask, shape).has_value());
 }
 
-// 2.4: each constant bound comes back as an IntegerAttr of the compare's type.
+// Each constant bound comes back as an IntegerAttr of the compare's type.
 TEST_F(MatchBoundaryCheckMaskTest, ConstBoundsAccepted) {
   SmallVector<int64_t, 2> shape = {256, 32};
   Value colBase = constI(64, 32);
@@ -1102,7 +1102,7 @@ TEST_F(MatchBoundaryCheckMaskTest, ConstBoundsAccepted) {
   EXPECT_TRUE(result->extraPreds.empty());
 }
 
-// 2.4: a scalar bound stays a Value next to a constant one.
+// A scalar bound stays a Value next to a constant one.
 TEST_F(MatchBoundaryCheckMaskTest, ScalarAndConstBoundsKeepTheirForms) {
   SmallVector<int64_t, 2> shape = {256, 32};
   Value rowBound = constI(100, 32);
@@ -1116,7 +1116,7 @@ TEST_F(MatchBoundaryCheckMaskTest, ScalarAndConstBoundsKeepTheirForms) {
   EXPECT_EQ(result->colBound, OpFoldResult(builder.getI32IntegerAttr(24)));
 }
 
-// 2.4: one upper bound per dim also when one is a constant, in either order.
+// One upper bound per dim also when one is a constant, in either order.
 TEST_F(MatchBoundaryCheckMaskTest, SecondRowBoundRejectedWhenConst) {
   SmallVector<int64_t, 2> shape = {256, 32};
   Value scalar =
@@ -1126,7 +1126,7 @@ TEST_F(MatchBoundaryCheckMaskTest, SecondRowBoundRejectedWhenConst) {
   EXPECT_FALSE(matchConst(andI(constant, scalar), shape).has_value());
 }
 
-// 2.4: a constant bound has to be a splat.
+// A constant bound has to be a splat.
 TEST_F(MatchBoundaryCheckMaskTest, NonSplatConstBoundRejected) {
   SmallVector<int64_t, 2> shape = {256, 32};
   SmallVector<int64_t, 2> narrow = {1, 32};
@@ -1140,7 +1140,7 @@ TEST_F(MatchBoundaryCheckMaskTest, NonSplatConstBoundRejected) {
   EXPECT_FALSE(matchConst(mask, shape).has_value());
 }
 
-// 2.4: an i64 constant bound keeps its width.
+// An i64 constant bound keeps its width.
 TEST_F(MatchBoundaryCheckMaskTest, I64ConstBoundKeepsWidth) {
   SmallVector<int64_t, 2> shape = {256, 32};
   auto i64TensorTy = RankedTensorType::get({256}, builder.getI64Type());
@@ -1261,7 +1261,7 @@ protected:
   int numFuncs = 0;
 };
 
-// 2.2: the #8813 store mask clamps each dim at its constant bound.
+// The #8813 store mask clamps each dim at its constant bound.
 TEST_F(MatchStoreBoundaryClampTest, KernelMaskClampsBothDims) {
   StoreBoundaryClamp c = matchStore({}, /*pitch=*/1008);
   ASSERT_TRUE(c.row.has_value());
@@ -1274,47 +1274,49 @@ TEST_F(MatchStoreBoundaryClampTest, KernelMaskClampsBothDims) {
   EXPECT_EQ(c.col->extent, 128);
 }
 
-// C1: a uniform extra conjunct refuses every dim.
+// A uniform extra conjunct refuses every dim.
 TEST_F(MatchStoreBoundaryClampTest, UniformConjunctRefused) {
   EXPECT_EQ(clampedDims({.flag = true}), "none");
 }
 
-// C1: an unsigned compare is no boundary check, so nothing clamps.
+// An unsigned compare is no boundary check, so nothing clamps.
 TEST_F(MatchStoreBoundaryClampTest, UnsignedCompareRefused) {
   EXPECT_EQ(clampedDims({.colUlt = true}), "none");
 }
 
-// C3: a base not provably a multiple of PowerOf2Ceil(extent) may wrap.
+// A base not provably a multiple of PowerOf2Ceil(extent) may wrap.
 TEST_F(MatchStoreBoundaryClampTest, UnalignedBaseRefused) {
   EXPECT_EQ(clampedDims({.rowMul = 32}), "col");
   EXPECT_EQ(clampedDims({.colMul = 64}), "row");
 }
 
-// C3 needs both provers: only AxisInfo admits `<< 6`, only isDivisible `& 0`.
+// Proving the row base a multiple of 64 needs both provers: only AxisInfo
+// admits `<< 6`, only isDivisible `& 0`.
 TEST_F(MatchStoreBoundaryClampTest, RowBaseNeedsBothProvers) {
   EXPECT_EQ(clampedDims({.rowShl = true}), "col");
   EXPECT_EQ(clampedDims({.rowAndZero = true}), "col");
 }
 
-// C4: 505 f16 columns are no whole number of 4-byte granules; f32 ones are.
+// 505 f16 columns are no whole number of 4-byte granules; f32 ones are.
 TEST_F(MatchStoreBoundaryClampTest, OddColumnBoundNeedsGranule) {
   EXPECT_EQ(clampedDims({.colBound = 505}), "row");
   EXPECT_EQ(clampedDims({.colBound = 505, .f32 = true}), "row+col");
 }
 
-// C4: an i1 width has no exact byte count, so even a bound of 512, a whole
+// An i1 width has no exact byte count, so even a bound of 512, a whole
 // number of 4-byte granules of i1, is refused.
 TEST_F(MatchStoreBoundaryClampTest, SubByteColumnRefused) {
   EXPECT_EQ(clampedDims({.colBound = 512, .intBits = 1}), "row");
 }
 
-// C4 on the base: two i8 columns at `pid_n * 2` may start mid-granule, which
-// the base's PowerOf2Ceil(extent) proof alone admits.
+// The column base must start on a 4-byte granule: two i8 columns at
+// `pid_n * 2` may start mid-granule, which the base's PowerOf2Ceil(extent)
+// proof alone admits.
 TEST_F(MatchStoreBoundaryClampTest, UnalignedColumnBaseRefused) {
   EXPECT_EQ(clampedDims({.numCols = 2, .intBits = 8}), "row");
 }
 
-// C6 with compensation: a 128-column f16 tile needs a pitch of 256 + 63 bytes
+// With compensation, a 128-column f16 tile needs a pitch of 256 + 63 bytes
 // on every dim; an unknown pitch or a contiguous dim past the rank refuses.
 TEST_F(MatchStoreBoundaryClampTest, PitchMustCoverCompensatedTile) {
   EXPECT_EQ(clampedDims({.colBound = 120}, /*pitch=*/240), "none");
@@ -1327,24 +1329,24 @@ TEST_F(MatchStoreBoundaryClampTest, PitchMustCoverCompensatedTile) {
   EXPECT_EQ(clampedDims({.contiguousDim = 2}), "none");
 }
 
-// C6 without compensation (base alignment 4): a pitch of 256 bytes suffices.
+// Without compensation (base alignment 4), a pitch of 256 bytes suffices.
 TEST_F(MatchStoreBoundaryClampTest, TilePitchSufficesWithoutCompensation) {
   EXPECT_EQ(clampedDims({.alignment = 4}, /*pitch=*/256), "row+col");
 }
 
-// C6's 64-byte floor: a 32-byte row with compensation needs a pitch of 127.
+// The pitch floor is 64 bytes: a 32-byte row with compensation needs 127.
 TEST_F(MatchStoreBoundaryClampTest, NarrowRowNeedsPitchFloor) {
   EXPECT_EQ(clampedDims({.numCols = 16}, /*pitch=*/112), "none");
   EXPECT_EQ(clampedDims({.numCols = 16}, /*pitch=*/128), "row+col");
 }
 
-// C6 is exact in bytes: 128 f32 columns need a pitch of 512 + 63.
+// The minimum pitch is exact in bytes: 128 f32 columns need 512 + 63.
 TEST_F(MatchStoreBoundaryClampTest, CompensationIs63Bytes) {
   EXPECT_EQ(clampedDims({.f32 = true}, /*pitch=*/574), "none");
   EXPECT_EQ(clampedDims({.f32 = true}, /*pitch=*/575), "row+col");
 }
 
-// C7: the kill switch refuses every dim.
+// The kill switch refuses every dim.
 TEST_F(MatchStoreBoundaryClampTest, KillSwitchRefused) {
   setEnv(kKillSwitch, "1");
   EXPECT_EQ(clampedDims({}), "none");

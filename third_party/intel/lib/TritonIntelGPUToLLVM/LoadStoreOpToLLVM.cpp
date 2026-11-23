@@ -4185,12 +4185,13 @@ struct StoreOpToBlockIOConversion
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
-  /// A store's surface clamps and the pitch their C6 check was proven for.
+  /// A store's surface clamps and the pitch they were proven for: at least
+  /// max(row bytes, 64), plus 63 when the target needs alignment compensation.
   struct SurfaceClamp : StoreBoundaryClamp {
     int64_t pitchBytes;
   };
 
-  /// For a store whose tile the mask's constancy rejects or keeps to one row,
+  /// For a store whose tile the mask's constancy rejects or shortens,
   /// the mask's clamps (remapped) along the dims it relaxes, and in \p sizeInfo
   /// the relaxed tile. Builds no IR and sets \p sizeInfo only on success.
   std::optional<SurfaceClamp>
@@ -4200,10 +4201,6 @@ struct StoreOpToBlockIOConversion
                     ConversionPatternRewriter &rewriter) const {
     auto tensorType = cast<RankedTensorType>(op.getValue().getType());
     if (!op.getMask() || !maskAxisInfo || tensorType.getRank() != 2)
-      return std::nullopt;
-    // A block store carries no cache control, so a store asking for one stays
-    // on the generic path, which honours it.
-    if (tritonToIntelCacheModifier(op) != TritonGEN::StoreCacheControl::DEFAULT)
       return std::nullopt;
 
     // The pitch `matchAndRewrite` emits via `getPitch`, narrowed so that no
@@ -4222,8 +4219,8 @@ struct StoreOpToBlockIOConversion
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass));
 
     // Only a column constancy below the unmasked tile's width, or a row one
-    // below 2, is relaxed; any other keeps today's checks, e.g. a non-power of
-    // two from a `tt.constancy` hint.
+    // below its height, is relaxed; any other keeps today's checks, e.g. a
+    // non-power of two from a `tt.constancy` hint.
     auto unmasked = BlockIOTileSizeInfo::unknown();
     if (!validate2DBlockStoreTile(ll, contiguousDim, elemSizeInBits, tensorType,
                                   /*maskAxisInfo=*/nullptr, unmasked))
@@ -4232,7 +4229,7 @@ struct StoreOpToBlockIOConversion
     if (constancy[contiguousDim] >=
         unmasked.tileWidth * unmasked.numElemPerPackedVal)
       clamp.col.reset();
-    if (constancy[pitchTensorDim] >= 2)
+    if (constancy[pitchTensorDim] >= unmasked.tileHeight)
       clamp.row.reset();
     if (!clamp.col && !clamp.row)
       return std::nullopt;
@@ -4326,10 +4323,16 @@ struct StoreOpToBlockIOConversion
     bool tileIsValid = validate2DBlockStoreTile(
         llEncoding.value(), contiguousDim, elemSizeInBits, tensorType,
         maskAxisInfo, sizeInfo);
-    // A valid tile whose mask is constant over two rows is lowered as it is.
+    // A valid tile whose mask is constant over the unmasked tile's height is
+    // lowered as it is.
+    auto unmasked = BlockIOTileSizeInfo::unknown();
     std::optional<SurfaceClamp> clamp;
-    if (!tileIsValid || (rank == 2 && maskAxisInfo &&
-                         maskAxisInfo->getConstancy(1 - contiguousDim) < 2))
+    if (!tileIsValid ||
+        (rank == 2 && maskAxisInfo &&
+         validate2DBlockStoreTile(*llEncoding, contiguousDim, elemSizeInBits,
+                                  tensorType, /*maskAxisInfo=*/nullptr,
+                                  unmasked) &&
+         maskAxisInfo->getConstancy(1 - contiguousDim) < unmasked.tileHeight))
       clamp = matchSurfaceClamp(op, *llEncoding, contiguousDim, elemSizeInBits,
                                 maskAxisInfo, sizeInfo, rewriter);
     if (!tileIsValid && !clamp)
