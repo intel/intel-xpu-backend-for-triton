@@ -33,16 +33,6 @@ def get_cuda_matmul_autotune_configs() -> List[triton.Config]:
     ]
 
 
-def expand_matmul_autotune_configs(configs):
-    configs += [
-        triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': n, 'BLOCK_SIZE_K': 32,
-             'GROUP_SIZE_M': g, 'grf_mode': '256'}, num_stages=s, num_warps=32)
-        for n in [128, 256] for s in [2, 3, 4] for g in [1, 2, 4, 8]
-    ]
-    return list({tuple(sorted(config.all_kwargs().items())): config for config in configs}.values())
-
-
 def get_matmul_autotune_configs() -> List[triton.Config]:
     if DEVICE == 'cuda':
         return get_cuda_matmul_autotune_configs()
@@ -74,7 +64,11 @@ def get_matmul_autotune_configs() -> List[triton.Config]:
             num_stages=2, num_warps=4),
     ]
 
-    return expand_matmul_autotune_configs(configs)
+    configs.append(
+        triton.Config(
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'grf_mode': '256'},
+            num_stages=2, num_warps=32))
+    return configs
 
 
 @triton.autotune(
@@ -179,7 +173,7 @@ def get_matmul_batched_autotune_configs() -> List[triton.Config]:
             {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': '256'},
             num_stages=s, num_warps=4) for s in [2]
     ]
-    return expand_matmul_autotune_configs(configs)
+    return configs
 
 
 def is_xpu_cri() -> bool:
@@ -355,6 +349,7 @@ X_VALS = [  #
     [1, 1024, 8192, 16384],
     [1, 1024, 8192, 28672],
     [1, 2048, 2048, 2048],
+    [1, 2048, 6144, 24576],
     [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
     [1, 4096, 4096, 4096],
     [1, 4096, 8192, 16384],
@@ -362,6 +357,7 @@ X_VALS = [  #
     [1, 8192, 4096, 4096],
     [1, 8192, 4096, 16384],
     [1, 8192, 6144, 12288],
+    [1, 8192, 6144, 24576],
     [1, 8192, 6656, 16384],
     [1, 8192, 8192, 8192],
     [1, 8192, 49152, 12288],
