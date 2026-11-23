@@ -49,6 +49,7 @@ class Config:  # pylint: disable=R0902
         default_factory=lambda: [re.compile(r"^(?!)$")]  # Match nothing by default
     )
     merge_test_results: bool = False
+    allow_multiple_outcome_tags: bool = False
 
     error_on_failures: bool = False
     tests_with_multiple_testsuites: bool = False
@@ -187,6 +188,12 @@ class Config:  # pylint: disable=R0902
             action="store_true",
             dest="merge_test_results",
             required=False,
+        )
+        parser.add_argument(
+            "--allow-multiple-outcome-tags",
+            action="store_true",
+            required=False,
+            help="Count a test with multiple failure/error tags as failed instead of erroring out",
         )
         parser.add_argument(
             "--long-names",
@@ -588,6 +595,7 @@ class ReportActionRunner(ActionRunner):
                     include_patterns=config.include_subdir_patterns,
                     exclude_patterns=config.exclude_subdir_patterns,
                 ),
+                allow_multiple_outcome_tags=config.allow_multiple_outcome_tags,
             )
             test_report = test_report.filter_test_instances(
                 status_filter=config.status_filter,

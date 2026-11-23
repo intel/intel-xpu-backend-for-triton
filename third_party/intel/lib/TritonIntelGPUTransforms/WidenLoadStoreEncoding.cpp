@@ -1,6 +1,7 @@
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -31,7 +32,10 @@ Attribute tryWidenEncoding(Operation *op,
                            tt::intel::ModuleAxisInfoAnalysis &axisInfo) {
   RankedTensorType valTy;
   Value ptr;
-  if (auto st = dyn_cast<tt::StoreOp>(op)) {
+  auto gather = dyn_cast<ttgi::DescriptorGatherOp>(op);
+  if (gather) {
+    valTy = gather.getType();
+  } else if (auto st = dyn_cast<tt::StoreOp>(op)) {
     valTy = dyn_cast<RankedTensorType>(st.getValue().getType());
     ptr = st.getPtr();
   } else if (auto ld = dyn_cast<tt::LoadOp>(op)) {
@@ -62,19 +66,33 @@ Attribute tryWidenEncoding(Operation *op,
 
   int64_t newSizePerThread = 2 * curSizePerThread;
 
-  // getDivisibility and getContiguity are in elements, not bytes.
-  tt::AxisInfo *info = axisInfo.getAxisInfo(ptr);
-  if (!info)
-    return nullptr;
-  if (info->getDivisibility(fastAxis) < newSizePerThread) {
-    LDBG("skip: divisibility " << info->getDivisibility(fastAxis) << " < "
+  if (gather) {
+    // A gather row is contiguous along dim 1, the descriptor's unit-stride dim;
+    // prove the widened access from the descriptor and y offset alignment.
+    unsigned align =
+        fastAxis == 1 ? axisInfo.getDescriptorAlignment(
+                            gather.getDesc(), 1, gather.getYOffset(), elemBits)
+                      : 1;
+    if (align < newSizePerThread) {
+      LDBG("skip: gather alignment " << align << " < " << newSizePerThread
+                                     << " needed");
+      return nullptr;
+    }
+  } else {
+    // getDivisibility and getContiguity are in elements, not bytes.
+    tt::AxisInfo *info = axisInfo.getAxisInfo(ptr);
+    if (!info)
+      return nullptr;
+    if (info->getDivisibility(fastAxis) < newSizePerThread) {
+      LDBG("skip: divisibility " << info->getDivisibility(fastAxis) << " < "
+                                 << newSizePerThread << " needed");
+      return nullptr;
+    }
+    if (info->getContiguity(fastAxis) < newSizePerThread) {
+      LDBG("skip: contiguity " << info->getContiguity(fastAxis) << " < "
                                << newSizePerThread << " needed");
-    return nullptr;
-  }
-  if (info->getContiguity(fastAxis) < newSizePerThread) {
-    LDBG("skip: contiguity " << info->getContiguity(fastAxis) << " < "
-                             << newSizePerThread << " needed");
-    return nullptr;
+      return nullptr;
+    }
   }
 
   // Shape gate: the widened tile must fit in the per-CTA shape along
@@ -100,6 +118,23 @@ Attribute tryWidenEncoding(Operation *op,
       enc.getWarpsPerCTA(), order, enc.getCGALayout());
 }
 
+// Re-emit `op` with result encoding `newEnc` and convert back to its type, so
+// consumers are unchanged until RLC folds the converts.
+void widenGather(ttgi::DescriptorGatherOp op, Attribute newEnc) {
+  OpBuilder builder(op);
+  Location loc = op.getLoc();
+  RankedTensorType oldTy = op.getType();
+  RankedTensorType newTy = oldTy.cloneWithEncoding(newEnc);
+  Value xOffsets =
+      ttgi::buildConvertedXOffsets(builder, loc, op.getXOffsets(), newTy);
+  auto newOp = ttgi::DescriptorGatherOp::create(
+      builder, loc, newTy, op.getDesc(), xOffsets, op.getYOffset());
+  newOp->setDiscardableAttrs(op->getDiscardableAttrDictionary());
+  op.replaceAllUsesWith(
+      ttg::ConvertLayoutOp::create(builder, loc, oldTy, newOp).getResult());
+  op.erase();
+}
+
 struct TritonIntelGPUWidenLoadStoreEncodingPass
     : public ttgi::impl::TritonIntelGPUWidenLoadStoreEncodingBase<
           TritonIntelGPUWidenLoadStoreEncodingPass> {
@@ -119,14 +154,18 @@ struct TritonIntelGPUWidenLoadStoreEncodingPass
     // op in place (erasing the old op), which would invalidate a walk.
     SmallVector<std::pair<Operation *, Attribute>> rewrites;
     mod.walk([&](Operation *op) {
-      if (!isa<tt::LoadOp, tt::StoreOp>(op))
+      if (!isa<tt::LoadOp, tt::StoreOp, ttgi::DescriptorGatherOp>(op))
         return;
       if (Attribute newEnc = tryWidenEncoding(op, axisInfoAnalysis))
         rewrites.emplace_back(op, newEnc);
     });
 
-    for (auto &[op, newEnc] : rewrites)
-      convertDistributedOpEncoding(newEnc, op);
+    for (auto &[op, newEnc] : rewrites) {
+      if (auto gather = dyn_cast<ttgi::DescriptorGatherOp>(op))
+        widenGather(gather, newEnc);
+      else
+        convertDistributedOpEncoding(newEnc, op);
+    }
   }
 };
 
