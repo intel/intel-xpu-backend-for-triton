@@ -64,10 +64,6 @@ def get_matmul_autotune_configs() -> List[triton.Config]:
             num_stages=2, num_warps=4),
     ]
 
-    configs.append(
-        triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'grf_mode': '256'},
-            num_stages=2, num_warps=32))
     return configs
 
 
