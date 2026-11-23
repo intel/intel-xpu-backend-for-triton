@@ -182,6 +182,59 @@ Value buildConvertedXOffsets(OpBuilder &builder, Location loc, Value xOffsets,
                                  xOffsetsType.cloneWithEncoding(enc), xOffsets);
 }
 
+std::optional<SmallVector<ScatterBlockWriteRun>>
+getScatterBlockWriteRuns(RankedTensorType srcTy) {
+  int elemBits = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
+  if (srcTy.getRank() != 2 || (elemBits != 16 && elemBits != 32))
+    return std::nullopt;
+
+  MLIRContext *ctx = srcTy.getContext();
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kWarp = StringAttr::get(ctx, "warp");
+  auto kBlock = StringAttr::get(ctx, "block");
+  LinearLayout ll = toLinearLayout(srcTy);
+  int32_t tpw = ll.getInDimSize(kLane);
+  if (tpw * elemBits / 8 < 16 || !isPermutationMatrixLayout(ll))
+    return std::nullopt;
+  for (int32_t i = 0; i < ll.getInDimSizeLog2(kLane); ++i) {
+    ArrayRef<int32_t> basis = ll.getBasis(kLane, i);
+    if (basis[0] != 0 || basis[1] != (1 << i))
+      return std::nullopt;
+  }
+
+  // (row, col, register) of each canonical register, sorted by row then col.
+  SmallVector<std::tuple<int32_t, int32_t, unsigned>> elems;
+  int32_t freeRegs = ll.getFreeVariableMasks().lookup(kRegister);
+  for (int32_t reg = 0; reg < ll.getInDimSize(kRegister); ++reg) {
+    if (reg & freeRegs)
+      continue;
+    SmallVector<std::pair<StringAttr, int32_t>> pos =
+        ll.apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    elems.emplace_back(pos[0].second, pos[1].second, reg);
+  }
+  llvm::sort(elems);
+
+  SmallVector<ScatterBlockWriteRun> runs;
+  for (size_t begin = 0; begin < elems.size();) {
+    // [begin, end) is a maximal sequence of one row whose columns step by tpw.
+    int32_t row = std::get<0>(elems[begin]);
+    size_t end = begin + 1;
+    while (end < elems.size() && std::get<0>(elems[end]) == row &&
+           std::get<1>(elems[end]) == std::get<1>(elems[end - 1]) + tpw)
+      ++end;
+    for (size_t len : {8, 4, 2, 1}) {
+      for (; end - begin >= len; begin += len) {
+        ScatterBlockWriteRun run{{}, row, std::get<1>(elems[begin])};
+        for (size_t i = begin; i < begin + len; ++i)
+          run.regs.push_back(std::get<2>(elems[i]));
+        runs.push_back(std::move(run));
+      }
+    }
+  }
+  return runs;
+}
+
 CachePolicy getCachePolicy(Attribute cachePolicy) {
   auto policy = dyn_cast_if_present<tt::CachePolicyAttr>(cachePolicy);
   if (!policy)
