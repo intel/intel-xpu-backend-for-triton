@@ -68,16 +68,9 @@ def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
-def candidate_configs(key):
+def candidate_configs(_key):
     """Generate candidate configs before legality pruning."""
-    # MAX preserves the model's full GQA group, including non-power-of-two ratios.
-    heads = ["MAX"] + [
-        h
-        for h in (1, 2, 4, 8)
-        if h < key.num_queries_per_kv and key.num_queries_per_kv % h == 0
-    ]
-    return [{"block_m": m, "tile_size": t, "num_warps": w, "num_stages": s, "grf_mode": g, "heads_per_program": h}
-            for h in heads
+    return [{"block_m": m, "tile_size": t, "num_warps": w, "num_stages": s, "grf_mode": g}
             for m in (16, 32, 64, 128)
             for t in (16, 32, 64, 128)
             for w in (2, 4, 8, 16)
