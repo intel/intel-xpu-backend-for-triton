@@ -402,3 +402,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %0 : tensor<32xf16, #ttg.slice<{dim = 1, parent = #blocked1}>>
   }
 }
+
+// -----
+
+// Fewer registers than sub-group lanes (16 elements, sub-group size 32): the
+// conversion is not a sub-group shuffle and must go through shared memory.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_fewer_registers_than_lanes(
+  // CHECK-NOT:       sub_group_shuffle
+  tt.func @test_fewer_registers_than_lanes(%arg0: tensor<16x1xi32, #blocked>) -> tensor<16x1xi32, #blocked1> {
+    %0 = ttg.convert_layout %arg0 : tensor<16x1xi32, #blocked> -> tensor<16x1xi32, #blocked1>
+    tt.return %0 : tensor<16x1xi32, #blocked1>
+  }
+}

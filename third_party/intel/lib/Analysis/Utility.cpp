@@ -213,6 +213,13 @@ bool cvtIsSubGroupShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   // With N >= M.
   int32_t registerInDimSize = conversion->getInDimSize(kRegister);
   int32_t laneOutDimSize = conversion->getOutDimSize(kLane);
+  // Both patterns above assume at least as many registers as lanes (N >= M).
+  // With fewer registers than lanes (e.g. a 16x1 tensor with a sub-group size
+  // of 32) the contiguous pattern still matches, but shuffling lanes of a
+  // partially broadcast source gives wrong results once IGC optimizes the
+  // kernel. Use the generic path through shared memory instead.
+  if (registerInDimSize < laneOutDimSize)
+    return false;
   return conversion->sublayoutIsZero({kLane}, {kRegister, kLane}) &&
          (conversion->getBases().lookup(kRegister) ==
               buildSubGroupShuffleRegisterBases(registerInDimSize,
