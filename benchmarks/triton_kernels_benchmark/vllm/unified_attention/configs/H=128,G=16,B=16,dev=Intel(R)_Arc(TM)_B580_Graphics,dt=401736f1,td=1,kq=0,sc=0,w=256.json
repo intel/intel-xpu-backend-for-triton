@@ -5,7 +5,6 @@
       "config": {
         "block_m": 64,
         "grf_mode": "default",
-        "heads_per_program": "MAX",
         "num_stages": 3,
         "num_warps": 8,
         "tile_size": 16
@@ -22,7 +21,6 @@
       "config": {
         "block_m": 16,
         "grf_mode": "256",
-        "heads_per_program": "MAX",
         "num_stages": 2,
         "num_warps": 8,
         "tile_size": 16
@@ -39,7 +37,6 @@
       "config": {
         "block_m": 16,
         "grf_mode": "256",
-        "heads_per_program": "MAX",
         "num_stages": 2,
         "num_warps": 8,
         "tile_size": 16
