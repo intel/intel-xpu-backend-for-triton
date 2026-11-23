@@ -627,7 +627,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   let hasVerifier = 1;
 }
 
-def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [TMAStoreLikeOpInterface]> {
+def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [AtomicOpInterface, TMAStoreLikeOpInterface]> {
   let summary = "reduce result in gmem based on a TMA descriptor";
 
   let description = [{
@@ -649,6 +649,10 @@ def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [TMAStoreLikeOpInterface
     attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
   }];
   let extraClassDeclaration = [{
+    ::mlir::Value getPtr() { return getDesc(); }
+    ::mlir::triton::MemSemantic getMemSemantic() {
+      return ::mlir::triton::MemSemantic::RELAXED;
+    }
     static bool isSupportedReduceKind(::mlir::triton::DescriptorReduceKind kind,
                                       ::mlir::Type elementType);
   }];
@@ -906,9 +910,14 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
 
   let description = [{
     The `ttng.tc_gen5_commit` is an asynchronous operation that makes the
-    mbarrier object track the completion of all prior asynchronous tcgen5
-    operations. Upon completion of all asynchronous operations, the mbarrier
+    mbarrier object track the completion of prior asynchronous tcgen5
+    operations. Upon completion of the asynchronous operations, the mbarrier
     arrive operation is performed on the mbarrier with a count of 1.
+
+    By default, this operation tracks completion of all prior asynchronous
+    tcgen5 operations. On Rubin, `early_a_release` modifies the operation
+    to track only the completion of the A operand read from shared memory for
+    a tcgen5 MMA operation.
 
     If `descs` are provided, the commit will be multicast across the CTA cluster
     based on the shared layouts of those descriptors. This should be used when
@@ -934,7 +943,8 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
   let arguments = (ins
     Arg<TTG_MemDescType, "", BarrierSharedWrite>:$barrier,
     Optional<I1>:$pred,
-    Variadic<TTG_MemDescType>:$descs
+    Variadic<TTG_MemDescType>:$descs,
+    UnitAttr:$early_a_release
   );
 
   let assemblyFormat = [{

@@ -250,6 +250,10 @@ bool isNonNegative(Value v, Operation *useOp, unsigned depth,
 
 } // namespace
 
+bool valueIsNonNegative(Value v, Operation *useOp) {
+  return isNonNegative(v, useOp, /*depth=*/0, /*assumed=*/{});
+}
+
 bool dividendIsNonNegative(Operation *op) {
   if (isa<arith::DivUIOp, arith::RemUIOp>(op))
     return true;

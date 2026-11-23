@@ -69,8 +69,26 @@ def get_matmul_autotune_configs() -> List[triton.Config]:
     return configs
 
 
+def is_xpu_cri() -> bool:
+    return DEVICE == 'xpu' and triton.runtime.driver.active.get_current_target().arch.get('arch') == 'cri'
+
+
+def get_cri_matmul_autotune_configs() -> List[triton.Config]:
+    # Only CRI accepts these GRF modes.
+    if not is_xpu_cri():
+        return []
+    return [
+        triton.Config(
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '192'},
+            num_stages=3, num_warps=32),
+        triton.Config(
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 1024, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'grf_mode': '512'},
+            num_stages=2, num_warps=32),
+    ]
+
+
 @triton.autotune(
-    configs=get_matmul_autotune_configs(),
+    configs=get_matmul_autotune_configs() + get_cri_matmul_autotune_configs(),
     key=['M', 'N', 'K'],
     restore_value=['c_ptr'],
 )
@@ -85,7 +103,8 @@ def grouped_tile_gemm_kernel(
         stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+        TRANSPOSE_A: tl.constexpr, TRANSPOSE_B: tl.constexpr):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -96,15 +115,15 @@ def grouped_tile_gemm_kernel(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
-    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
+    a_desc = make_matrix_tile_ptr(a_ptr, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K, TRANSPOSE_A)
+    b_desc = make_matrix_tile_ptr(b_ptr, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N, TRANSPOSE_B)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
         a = load_matrix_tile(a_desc, M, K, stride_am, stride_ak, pid_m * BLOCK_SIZE_M, off_k, BLOCK_SIZE_M,
-                             BLOCK_SIZE_K)
+                             BLOCK_SIZE_K, TRANSPOSE_A)
         b = load_matrix_tile(b_desc, K, N, stride_bk, stride_bn, off_k, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_K,
-                             BLOCK_SIZE_N)
+                             BLOCK_SIZE_N, TRANSPOSE_B)
         accumulator = tl.dot(a, b, accumulator)
         off_k += BLOCK_SIZE_K
     c = accumulator.to(tl.float32)
@@ -143,17 +162,18 @@ def get_matmul_batched_autotune_configs() -> List[triton.Config]:
     return configs
 
 
-def is_xpu_cri() -> bool:
-    return DEVICE == 'xpu' and triton.runtime.driver.active.get_current_target().arch.get('arch') == 'cri'
-
-
 def get_cri_matmul_batched_autotune_configs() -> List[triton.Config]:
+    # Only CRI accepts these GRF modes.
     if not is_xpu_cri():
         return []
     return [
         triton.Config(
             {'BLOCK_SIZE_M': m, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '512'},
             num_stages=2, num_warps=32) for m in [256, 64]
+    ] + [
+        triton.Config(
+            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '192'},
+            num_stages=2, num_warps=32)
     ]
 
 
@@ -174,7 +194,8 @@ def grouped_tile_gemm_kernel_batched(
         stride_bz: tl.constexpr, stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cz: tl.constexpr, stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+        TRANSPOSE_A: tl.constexpr, TRANSPOSE_B: tl.constexpr):
     bid = tl.program_id(axis=1)
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -189,15 +210,15 @@ def grouped_tile_gemm_kernel_batched(
     offset_a = bid.to(tl.int64) * stride_az
     offset_b = bid.to(tl.int64) * stride_bz
 
-    a_desc = make_matrix_tile_ptr(a_ptr + offset_a, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K)
-    b_desc = make_matrix_tile_ptr(b_ptr + offset_b, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N)
+    a_desc = make_matrix_tile_ptr(a_ptr + offset_a, M, K, stride_am, stride_ak, BLOCK_SIZE_M, BLOCK_SIZE_K, TRANSPOSE_A)
+    b_desc = make_matrix_tile_ptr(b_ptr + offset_b, K, N, stride_bk, stride_bn, BLOCK_SIZE_K, BLOCK_SIZE_N, TRANSPOSE_B)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
     for _ in range(0, K, BLOCK_SIZE_K):
         a = load_matrix_tile(a_desc, M, K, stride_am, stride_ak, pid_m * BLOCK_SIZE_M, off_k, BLOCK_SIZE_M,
-                             BLOCK_SIZE_K)
+                             BLOCK_SIZE_K, TRANSPOSE_A)
         b = load_matrix_tile(b_desc, K, N, stride_bk, stride_bn, off_k, pid_n * BLOCK_SIZE_N, BLOCK_SIZE_K,
-                             BLOCK_SIZE_N)
+                             BLOCK_SIZE_N, TRANSPOSE_B)
         accumulator = tl.dot(a, b, accumulator)
         off_k += BLOCK_SIZE_K
     c = accumulator.to(tl.float32)
@@ -243,7 +264,8 @@ def matmul(
             B, M, N, K,  #
             a.stride(0), a.stride(a_major), a.stride(a_minor),  #
             b.stride(0), b.stride(b_minor), b.stride(b_major),  #
-            c.stride(0), c.stride(1), c.stride(2))
+            c.stride(0), c.stride(1), c.stride(2),  #
+            TRANSPOSE_A=transpose_a, TRANSPOSE_B=transpose_b)
     elif len(a.shape) == 2 and len(b.shape) == 2:
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
         matmul_kernel[grid](
@@ -251,7 +273,8 @@ def matmul(
             M, N, K,  #
             a.stride(a_major), a.stride(a_minor),  #
             b.stride(b_minor), b.stride(b_major),  #
-            c.stride(0), c.stride(1))
+            c.stride(0), c.stride(1),  #
+            TRANSPOSE_A=transpose_a, TRANSPOSE_B=transpose_b)
     else:
         assert False, 'Input matrixs dimensions mismatch'
     return c

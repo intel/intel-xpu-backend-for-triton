@@ -800,7 +800,7 @@ emitPredicated(RewriterBase &rewriter, Location loc, Value pred,
 /// acquire/release semantics and any ordering already provided by result
 /// staging.
 void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
-                                  RewriterBase &rewriter,
+                                  MemSyncScope memScope, RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo);
 
 void shuffleFromCanonicalLane(Location loc, MutableArrayRef<Value> values,
@@ -826,6 +826,14 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
+
+// Use storePred is supplied to skip selected producer lanes.
+SmallVector<Value> convertLayoutViaSharedMemory(
+    Location loc, ConversionPatternRewriter &rewriter,
+    const LinearLayout &srcLayout, const LinearLayout &dstLayout,
+    ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
+    Operation *sourceOp, const TargetInfoBase &targetInfo,
+    Value storePred = {});
 
 void transferSwizzlingLocalMem(triton::gpu::ConvertLayoutOp op, Value src,
                                const TargetInfoBase &targetInfo,

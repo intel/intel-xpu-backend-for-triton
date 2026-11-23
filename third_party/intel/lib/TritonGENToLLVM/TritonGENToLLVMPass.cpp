@@ -140,6 +140,10 @@ static bool isSPVBuiltinAvailable(OpTy op) {
   if (m->hasAttr(intel::TritonIntelGPUDialect::getIsLTSAttrName()))
     return false;
 
+  // IGC < 2.38 cannot build every SPIR-V 2D block shape (issue #8858).
+  if (m->hasAttr(intel::TritonIntelGPUDialect::getUseGenISA2DBlockIOAttrName()))
+    return false;
+
   return true;
 }
 
@@ -784,7 +788,7 @@ struct TritonMatrixDPASLowering
     SmallVector<Value> args{
         kDim, a, b, c,
         builder.i32_val(getMatrixMultiplyAccumulateOperandsVal(
-            cOrigTy.getElementType(), precisionA, precisionA))};
+            cOrigTy.getElementType(), precisionA, op.getPb()))};
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::NoModRef,
@@ -1242,6 +1246,12 @@ struct TritonSubGroupBlockReadLowering
     funcAttrs.memEffectsAttr = memAttr;
     LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, funcName, type, {ptrTy}, {op.getPtr()}, {}, funcAttrs, {});
+    if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
+            loadCacheControlToCacheControls(rewriter, op.getCacheControl(),
+                                            /*ptrOperandIndex=*/0)) {
+      call->setAttr(TritonGEN::TritonGENDialect::getCacheControlsAttrName(),
+                    *optCacheControls);
+    }
 
     rewriter.replaceOp(op, call.getResult());
     return success();
@@ -1354,12 +1364,17 @@ struct TritonSubGroupGatherLoadLowering
     if (!typeSyntax)
       llvm_unreachable("Unsupported scalar type");
 
+    // Predicated-off channels are zeroed after the load: `RET` has no
+    // early-clobber, so it must not be written before the inputs are read.
     constexpr StringLiteral asmFormat = R"({
   .decl RET v_type=G type={0} num_elts=32 align=wordx32 alias=<$0, 0>
   .decl ADDR v_type=G type=uq num_elts=32 align=wordx32 alias=<$1, 0>
   .decl PRED v_type=P num_elts=32
+  .decl NPRED v_type=P num_elts=32
   cmp.eq (M1_NM, 32) PRED 0x1:b $2(0, 0)<1;1,0>
+  cmp.ne (M1_NM, 32) NPRED 0x1:b $2(0, 0)<1;1,0>
   (PRED) lsc_load.ugm (M1_NM, 32)  RET:d{1}  flat[ADDR]:a64
+  (NPRED) mov (M1_NM, 32) RET(0, 0)<1> 0x0:{0}
 })";
     std::string asmText =
         llvm::formatv(asmFormat.data(), *typeSyntax, loadBits).str();
@@ -1449,6 +1464,13 @@ struct TritonSubGroupBitcastShuffleLowering
   LogicalResult
   matchAndRewrite(TritonGEN::SubGroupBitcastShuffleOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    if (mod->hasAttr(intel::TritonIntelGPUDialect::
+                         getSupportSubgroupBitcastShuffleAttrName())) {
+      rewriter.replaceOp(op, createSPIRVBuiltin(op, rewriter));
+      return success();
+    }
+
     Type inputType = op.getValue().getType();
     Type resultType = op.getResult().getType();
 
@@ -1461,6 +1483,39 @@ struct TritonSubGroupBitcastShuffleLowering
         intel::convergentNoUnwindWillReturnAttrs);
     rewriter.replaceOp(op, call.getResult());
     return success();
+  }
+
+private:
+  // The extension takes integer scalars or vectors of 2, 4, 8 or 16 elements,
+  // so a single-element vector is passed as a scalar.
+  static Type getSPIRVType(VectorType type) {
+    return type.getNumElements() == 1 ? type.getElementType() : Type(type);
+  }
+
+  static Value createSPIRVBuiltin(TritonGEN::SubGroupBitcastShuffleOp op,
+                                  ConversionPatternRewriter &rewriter) {
+    auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+    VectorType resultType = op.getResult().getType();
+    Type spvInputType = getSPIRVType(op.getValue().getType());
+    Type spvResultType = getSPIRVType(resultType);
+
+    Value input = op.getValue();
+    if (spvInputType != input.getType())
+      input = b.bitcast(input, spvInputType);
+
+    // The mangled name only encodes the input type, so the result type postfix
+    // keeps shuffles with the same input type and different result types apart.
+    std::string fnName =
+        intel::mangle("__spirv_SubgroupBitcastShuffleINTEL" +
+                          intel::getResultTypePostfix(spvResultType),
+                      {spvInputType});
+    Value result = intel::createDeviceFunctionCall(
+                       rewriter, fnName, spvResultType, {spvInputType}, {input},
+                       {}, intel::convergentNoUnwindWillReturnAttrs)
+                       .getResult();
+    if (spvResultType != resultType)
+      result = b.bitcast(result, resultType);
+    return result;
   }
 };
 

@@ -48,6 +48,13 @@ public:
   virtual void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
                             Value value, Value pred,
                             MemSyncScope scope) const = 0;
+  // Release in every thread/warp before the CTA or cluster barrier that
+  // precedes a release atomic at `scope`; the atomic itself may run in a single
+  // thread after that barrier. Targets whose release by one thread does not
+  // cover global writes made earlier by other warps must release this thread's
+  // writes at `scope` here.
+  virtual void releaseBeforeAtomicBarrier(Location loc, RewriterBase &rewriter,
+                                          MemSyncScope scope) const {}
 
   // Emit a block/CTA level barrier that guarantees visibility for the
   // target address space
@@ -105,14 +112,6 @@ public:
                           SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned reduceLaneIdMask,
                           unsigned broadcastLaneIdMask) const = 0;
-
-  // Lets the target lower the in-warp phase of a scan, updating |acc| in
-  // place. Returns false, leaving |acc| untouched, to use the generic lowering.
-  virtual bool warpScan(RewriterBase &rewriter, Location loc,
-                        SmallVector<Value> &acc, triton::ScanOp op,
-                        unsigned scanDim, unsigned threadStride) const {
-    return false;
-  }
 
   // Emits LLVM code with |rewriter| to print a message following the given
   // format from the device. |formatStrStart| is the pointer to the start of

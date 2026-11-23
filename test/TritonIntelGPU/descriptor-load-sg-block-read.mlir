@@ -1,5 +1,6 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
-// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefix=DISABLED
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,TOLOAD
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,CONV
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefix=DISABLED
 
 // A single-row descriptor load whose bounds checks are all block-level, and whose lanes hold consecutive 32/64-bit
 // words of the row, becomes one sub-group block read per read group under a single uniform branch.
@@ -14,16 +15,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c128 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
     %desc = tt.make_tensor_descriptor %base, [%rows, %c128], [%c128_i64, %c1_i64] : <f32>, <1x128xf32>
-    // CHECK: %[[FILL:.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
+    // COM: Through tt.load the fill is its zero `other`, packed and unpacked.
+    // CONV: %[[FILL:.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
+    // TOLOAD: %[[ZBC:.*]] = llvm.bitcast %{{.*}} : f32 to f32
+    // TOLOAD: %[[ZS:.*]] = llvm.insertvalue %[[ZBC]], %{{.*}}[0]
+    // TOLOAD: %[[FILL:.*]] = llvm.extractvalue %[[ZS]][0]
     // CHECK: llvm.cond_br %{{.*}}, ^[[READ:bb[0-9]+]], ^[[END:bb[0-9]+]](%[[FILL]] : f32)
     // CHECK: ^[[READ]]:
-    // CHECK: %[[WORD:.*]] = triton_gen.sub_group_block_read %{{.*}} : !llvm.ptr<1> -> i32
+    // CHECK: %[[WORD:.*]] = triton_gen.sub_group_block_read %{{.*}} {cache_control = Default} : !llvm.ptr<1> -> i32
     // CHECK: %[[VAL:.*]] = llvm.bitcast %[[WORD]] : i32 to f32
     // CHECK: llvm.br ^[[END]](%[[VAL]] : f32)
     // CHECK-NOT: triton_gen.predicated_load
     // DISABLED-NOT: triton_gen.sub_group_block_read
     // DISABLED: triton_gen.predicated_load
     %x = tt.descriptor_load %desc[%row, %c0] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x128xf32> -> tensor<1x128xf32, #blocked>
+    tt.return %x : tensor<1x128xf32, #blocked>
+  }
+}
+
+// -----
+
+// The load's cache policy carries over to the block read.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: @row_cache_control
+  tt.func public @row_cache_control(%base: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %rows: i32, %row: i32) -> tensor<1x128xf32, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c128 = arith.constant 128 : i32
+    %c128_i64 = arith.constant 128 : i64
+    %desc = tt.make_tensor_descriptor %base, [%rows, %c128], [%c128_i64, %c1_i64] : <f32>, <1x128xf32>
+    // CHECK: triton_gen.sub_group_block_read %{{.*}} {cache_control = L1UC_L3C} : !llvm.ptr<1> -> i32
+    %x = tt.descriptor_load %desc[%row, %c0] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>, ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x128xf32> -> tensor<1x128xf32, #blocked>
     tt.return %x : tensor<1x128xf32, #blocked>
   }
 }
@@ -40,7 +63,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c256 = arith.constant 256 : i32
     %c256_i64 = arith.constant 256 : i64
     %desc = tt.make_tensor_descriptor %base, [%rows, %c256], [%c256_i64, %c1_i64] : <f32>, <1x256xf32>
-    // CHECK: %[[WORD:.*]] = triton_gen.sub_group_block_read %{{.*}} : !llvm.ptr<1> -> i64
+    // CHECK: %[[WORD:.*]] = triton_gen.sub_group_block_read %{{.*}} {cache_control = Default} : !llvm.ptr<1> -> i64
     // CHECK: llvm.bitcast %[[WORD]] : i64 to vector<2xf32>
     %x = tt.descriptor_load %desc[%row, %c0] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x256xf32> -> tensor<1x256xf32, #blocked>
     tt.return %x : tensor<1x256xf32, #blocked>
@@ -59,7 +82,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c256 = arith.constant 256 : i32
     %c256_i64 = arith.constant 256 : i64
     %desc = tt.make_tensor_descriptor %base, [%rows, %c256], [%c256_i64, %c1_i64] : <f32>, <1x256xf32>
-    // CHECK: triton_gen.sub_group_block_read %{{.*}} : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK: triton_gen.sub_group_block_read %{{.*}} {cache_control = Default} : !llvm.ptr<1> -> vector<2xi32>
     %x = tt.descriptor_load %desc[%row, %c0] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x256xf32> -> tensor<1x256xf32, #linear>
     tt.return %x : tensor<1x256xf32, #linear>
   }
@@ -77,16 +100,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c128 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
     %desc = tt.make_tensor_descriptor %base, [%rows, %c128], [%c128_i64, %c1_i64] : <f32>, <1x128xf32>
-    // CHECK: %[[P0:.*]] = llvm.getelementptr
-    // CHECK: triton_gen.sub_group_block_read %[[P0]] : !llvm.ptr<1> -> i32
-    // The second group sits 64 elements further along the row.
+    // The second group sits 64 elements further along the row. Through tt.load
+    // each read takes its own register's address, moved back to lane 0.
+    // CONV: %[[P0:.*]] = llvm.getelementptr
+    // CONV: triton_gen.sub_group_block_read %[[P0]] {cache_control = Default} : !llvm.ptr<1> -> i32
     // CHECK: %[[C64:.*]] = llvm.mlir.constant(64 : i32) : i32
-    // CHECK: %[[COL:.*]] = llvm.xor %[[C64]], %{{.*}} : i32
-    // CHECK: %[[IDX:.*]] = llvm.add %{{.*}}, %[[COL]] : i32
-    // CHECK: %[[SCALED:.*]] = llvm.mul %[[IDX]], %{{.*}} : i32
-    // CHECK: %[[OFF:.*]] = llvm.add %{{.*}}, %[[SCALED]] : i32
-    // CHECK: %[[P1:.*]] = llvm.getelementptr %{{.*}}[%[[OFF]]]
-    // CHECK: triton_gen.sub_group_block_read %[[P1]] : !llvm.ptr<1> -> i32
+    // CONV: %[[COL:.*]] = llvm.xor %[[C64]], %{{.*}} : i32
+    // CONV: %[[IDX:.*]] = llvm.add %{{.*}}, %[[COL]] : i32
+    // CONV: %[[SCALED:.*]] = llvm.mul %[[IDX]], %{{.*}} : i32
+    // CONV: %[[OFF:.*]] = llvm.add %{{.*}}, %[[SCALED]] : i32
+    // CONV: %[[P1:.*]] = llvm.getelementptr %{{.*}}[%[[OFF]]]
+    // TOLOAD: llvm.xor %{{.*}}, %[[C64]] : i32
+    // TOLOAD: %[[LANE0:.*]] = llvm.sub %{{.*}}, %{{.*}} : i32
+    // TOLOAD: %[[P0:.*]] = llvm.getelementptr %{{.*}}[%[[LANE0]]]
+    // TOLOAD: triton_gen.sub_group_block_read %[[P0]] {cache_control = Default} : !llvm.ptr<1> -> i32
+    // TOLOAD: %[[P1:.*]] = llvm.getelementptr %{{.*}}[%[[LANE0]]]
+    // CHECK: triton_gen.sub_group_block_read %[[P1]] {cache_control = Default} : !llvm.ptr<1> -> i32
     // CHECK-NOT: triton_gen.sub_group_block_read
     %x = tt.descriptor_load %desc[%row, %c0] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x128xf32> -> tensor<1x128xf32, #linear>
     tt.return %x : tensor<1x128xf32, #linear>
@@ -105,7 +134,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c512 = arith.constant 512 : i32
     %c512_i64 = arith.constant 512 : i64
     %desc = tt.make_tensor_descriptor %base, [%rows, %c512], [%c512_i64, %c1_i64] : <f32>, <1x512xf32>
-    // CHECK: %[[WORDS:.*]] = triton_gen.sub_group_block_read %{{.*}} : !llvm.ptr<1> -> vector<2xi64>
+    // CHECK: %[[WORDS:.*]] = triton_gen.sub_group_block_read %{{.*}} {cache_control = Default} : !llvm.ptr<1> -> vector<2xi64>
     // CHECK: %[[IW0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: %[[W0:.*]] = llvm.extractelement %[[WORDS]][%[[IW0]] : i32] : vector<2xi64>
     // CHECK-NEXT: %[[V0:.*]] = llvm.bitcast %[[W0]] : i64 to vector<2xf32>
@@ -139,7 +168,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c256 = arith.constant 256 : i32
     %c256_i64 = arith.constant 256 : i64
     %desc = tt.make_tensor_descriptor %base, [%rows, %c256], [%c256_i64, %c1_i64] : <f32>, <1x256xf32>
-    // CHECK: triton_gen.sub_group_block_read %{{.*}} : !llvm.ptr<1> -> i64
+    // CHECK: triton_gen.sub_group_block_read %{{.*}} {cache_control = Default} : !llvm.ptr<1> -> i64
     %x = tt.descriptor_load %desc[%row, %c0] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x256xf32> -> tensor<256xf32, #blocked1>
     tt.return %x : tensor<256xf32, #blocked1>
   }
@@ -151,7 +180,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c128_i64 = arith.constant 128 : i64
     %c4096_i64 = arith.constant 4096 : i64
     %desc = tt.make_tensor_descriptor %base, [%d0, %d1, %c128], [%c4096_i64, %c128_i64, %c1_i64] : <f32>, <1x1x128xf32>
-    // CHECK: triton_gen.sub_group_block_read %{{.*}} : !llvm.ptr<1> -> i32
+    // CHECK: triton_gen.sub_group_block_read %{{.*}} {cache_control = Default} : !llvm.ptr<1> -> i32
     %x = tt.descriptor_load %desc[%i0, %i1, %c0] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x1x128xf32> -> tensor<1x1x128xf32, #blocked3>
     tt.return %x : tensor<1x1x128xf32, #blocked3>
   }
@@ -170,7 +199,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c128_i64 = arith.constant 128 : i64
     %desc = tt.make_tensor_descriptor %base, [%rows, %c128], [%c128_i64, %c1_i64] {padding = 2 : i32} : <f32>, <1x128xf32>
     // CHECK: %[[NAN:.*]] = llvm.mlir.constant(0x7FC00000 : f32) : f32
-    // CHECK: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^{{bb[0-9]+}}(%[[NAN]] : f32)
+    // CONV: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^{{bb[0-9]+}}(%[[NAN]] : f32)
+    // TOLOAD: %[[NBC:.*]] = llvm.bitcast %[[NAN]] : f32 to f32
+    // TOLOAD: %[[NS:.*]] = llvm.insertvalue %[[NBC]], %{{.*}}[0]
+    // TOLOAD: %[[NFILL:.*]] = llvm.extractvalue %[[NS]][0]
+    // TOLOAD: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^{{bb[0-9]+}}(%[[NFILL]] : f32)
     %x = tt.descriptor_load %desc[%row, %c0] {ttig.desc_padding = 2 : i32} : !tt.tensordesc<1x128xf32> -> tensor<1x128xf32, #blocked>
     tt.return %x : tensor<1x128xf32, #blocked>
   }

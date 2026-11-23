@@ -406,3 +406,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return %g : tensor<32xf32, #blocked>
   }
 }
+
+// -----
+
+// COM: The CI `prefix_sums` 32x64 tile scanned along the rows: two lanes, four
+// COM: warps and four register blocks hold the axis. The in-warp phase only shifts
+// COM: lanes by a fixed distance, and one shared-memory round with a single barrier
+// COM: combines the warps and the blocks: no shuffle with a computed lane index
+// COM: and no butterfly exchange of the totals.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @scan_2d_axis0_warps_and_blocks
+  tt.func public @scan_2d_axis0_warps_and_blocks(%f : tensor<32x64xf32, #blocked>) -> tensor<32x64xf32, #blocked> {
+    // CHECK-NOT: sub_group_shuffle_xor
+    // CHECK-NOT: @_Z17sub_group_shufflefj
+    // CHECK:     llvm.call spir_funccc @_Z20sub_group_shuffle_upfj
+    // CHECK-NOT: sub_group_shuffle_xor
+    // CHECK-NOT: @_Z17sub_group_shufflefj
+    // CHECK:     llvm.call spir_funccc @_Z7barrierj
+    // CHECK-NOT: sub_group_shuffle_xor
+    // CHECK-NOT: @_Z17sub_group_shufflefj
+    // CHECK-NOT: @_Z7barrierj
+    %g = "tt.scan" (%f) ({
+    ^bb0(%a: f32, %b: f32):
+      %r = arith.addf %a, %b : f32
+      tt.scan.return %r : f32
+    }) {axis = 0 : i32, reverse = false} : (tensor<32x64xf32, #blocked>) -> tensor<32x64xf32, #blocked>
+    // CHECK: llvm.return
+    tt.return %g : tensor<32x64xf32, #blocked>
+  }
+}

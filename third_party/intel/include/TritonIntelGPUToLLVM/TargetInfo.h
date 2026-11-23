@@ -80,7 +80,7 @@ public:
   /// builtin walks them in lane order.
   bool warpScan(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
                 triton::ScanOp op, unsigned scanDim,
-                unsigned threadStride) const override;
+                unsigned threadStride) const;
 
   unsigned getReductionTreeArity(Operation *combinerOp) const override;
 

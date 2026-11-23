@@ -17,7 +17,9 @@ def TritonIntelGPUAccelerateMatmul
 
   let description = [{
     Optimize the input/output layout of the `tl.dot` operation to make them
-    compatible with the Intel DPAS instruction requirements.
+    compatible with the Intel DPAS instruction requirements. With `fold-trans`,
+    first fold a `tt.trans` of a computed tile that feeds a dot as operand A
+    into its producers, so the tile is computed transposed.
   }];
 
   let dependentDialects = [
@@ -32,6 +34,9 @@ def TritonIntelGPUAccelerateMatmul
   let options = [
     Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
          "GRF mode the kernel is compiled with">,
+    Option<"foldTrans", "fold-trans", "bool", /*default*/"false",
+         "Fold a tt.trans of a computed tile that feeds a dot as operand A "
+         "into its producers">,
   ];
 }
 
@@ -415,10 +420,11 @@ def TritonIntelGPUWidenLoadStoreEncoding : Pass<"tritonintelgpu-widen-load-store
 
   let description = [{
     On Xe3P (gated by the `ttig.support_256b_load_store` module attribute), this pass
-    rewrites `tt.load` and `tt.store` operations whose tensor uses a `BlockedEncodingAttr`
-    with a 128-bit-per-thread contiguous tile into a 256-bit-per-thread contiguous tile,
-    when pointer alignment, contiguity, and tensor shape allow it. Descriptor-based
-    loads/stores (`tt.descriptor_load`, `tt.descriptor_store`) and atomic ops
+    rewrites `tt.load`, `tt.store` and `ttig.descriptor_gather` operations whose tensor
+    uses a `BlockedEncodingAttr` with a 128-bit-per-thread contiguous tile into a
+    256-bit-per-thread contiguous tile, when alignment (of the pointer, or of the
+    descriptor and y offset for a gather), contiguity, and tensor shape allow it.
+    Descriptor loads/stores (`tt.descriptor_load`, `tt.descriptor_store`) and atomic ops
     (`tt.atomic_rmw`) are out of scope. The pass relies on the downstream
     `tritonintelgpu-remove-layout-conversions` pass to absorb any `ttg.convert_layout`
     ops introduced by the rewrite.
@@ -656,14 +662,19 @@ def TritonIntelGPUAnnotateCacheControl
 
 def TritonIntelGPULowerTo2DBlockLoad
     : Pass<"tritonintelgpu-lower-to-2d-block-load", "mlir::ModuleOp"> {
-  let summary = "Lower eligible loads to ttig.2d_block_load ops";
+  let summary = "Lower loads to ttig.2d_block_load ops or tt.load";
 
   let description = [{
     Converts eligible `tt.load` and `tt.descriptor_load` operations into
     `ttig.2d_block_load` operations with decomposed surface parameters. This
     separates the decision to use 2D block I/O from the LLVM lowering mechanics.
-    Loads that cannot be converted remain unchanged and are handled by existing
-    LLVM lowering patterns.
+    A `tt.load` that cannot be converted remains unchanged. A
+    `tt.descriptor_load` that cannot be converted, or every one when the module
+    lacks 2D block IO support, is lowered to a masked `tt.load` of a tensor of
+    pointers; one with no valid lowering (e.g. divergent padding) is an error.
+    After this pass every load is a 2D block load or a `tt.load`.
+    `TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=1` leaves those descriptor
+    loads unchanged for the LLVM lowering instead.
   }];
 
   let dependentDialects = [
@@ -717,6 +728,23 @@ def TritonIntelGPULoopDistribute
   let dependentDialects = [
     "mlir::triton::TritonDialect",
     "mlir::scf::SCFDialect"
+  ];
+}
+
+def TritonIntelGPURewriteDescriptorGatherScatter
+    : Pass<"tritonintelgpu-rewrite-descriptor-gather-scatter", "mlir::ModuleOp"> {
+  let summary = "Rewrite tt descriptor gather/scatter to ttig descriptor gather/scatter";
+
+  let description = [{
+    Rewrites `tt.descriptor_gather` and `tt.descriptor_scatter` operations to
+    `ttig.descriptor_gather` and `ttig.descriptor_scatter` operations.
+    This pass is intended to run after descriptor-to-pointer rewriting.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::gpu::intel::TritonIntelGPUDialect"
   ];
 }
 
