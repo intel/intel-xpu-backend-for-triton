@@ -270,6 +270,9 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
 
     Notes:
       - coordinate is provided in elements, while width and pitch are provided in bytes.
+      - `triton_gen.genisa_row_layout` marks a 16-bit SG16 32-wide store with
+        columns l and 16+l per lane and row. It lowers to GenISA, not the
+        SPIR-V block-store builtin.
   }];
 
   let assemblyFormat = [{

@@ -1,5 +1,25 @@
 // RUN: triton-opt -split-input-file -verify-diagnostics %s
 
+module attributes {"ttg.threads-per-warp" = 16 : i32} {
+llvm.func @invalid_genisa_row_store(%ptr: !llvm.ptr<1>, %width: i32, %height: i32, %pitch: i32, %x: i32, %y: i32, %value: vector<8xi16>) {
+  // expected-error @+1 {{'triton_gen.2Dblockstore' op invalid GenISA row-oriented store payload}}
+  triton_gen.2Dblockstore %ptr, %width, %height, %pitch, %x, %y, %value {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default} {triton_gen.genisa_row_layout} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
+  llvm.return
+}
+}
+
+// -----
+
+module attributes {"ttg.threads-per-warp" = 32 : i32} {
+llvm.func @invalid_genisa_row_store_sg32(%ptr: !llvm.ptr<1>, %width: i32, %height: i32, %pitch: i32, %x: i32, %y: i32, %value: vector<16xi16>) {
+  // expected-error @+1 {{'triton_gen.2Dblockstore' op invalid GenISA row-oriented store payload}}
+  triton_gen.2Dblockstore %ptr, %width, %height, %pitch, %x, %y, %value {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default} {triton_gen.genisa_row_layout} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<16xi16>)
+  llvm.return
+}
+}
+
+// -----
+
 llvm.func @triton_gen.duplicated_cache_controls(%arg0: !llvm.ptr) {
   // expected-error @+1 {{'triton_gen.decoration_cache_controls' cannot specify more than one cache control decoration of the same nature for the same cache level}}
   %0 = llvm.load %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<0, Cached, 0>>} : !llvm.ptr -> i32

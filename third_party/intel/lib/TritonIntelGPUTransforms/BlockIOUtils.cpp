@@ -818,8 +818,7 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
 
 // Folds the first column v-block of a 16-wide, 16-bit SG16 store tile into a
 // 32-wide row by moving its register basis ahead of the row bases, so each
-// lane's registers are ordered [r0 blk0, r0 blk1, r1 blk0, ...]. The caller
-// must still repack each row across lanes (see validate2DBlockStoreTile).
+// lane's registers are ordered [r0 blk0, r0 blk1, r1 blk0, ...].
 static bool foldColumnBlockIntoRow(const LinearLayout &ll,
                                    BlockIOTileSizeInfo &sizeInfo,
                                    unsigned elemSizeInBits, MLIRContext *ctx) {
@@ -856,8 +855,8 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
                               RankedTensorType tensorType,
                               AxisInfo *maskAxisInfo,
                               BlockIOTileSizeInfo &sizeInfoOut,
-                              unsigned &laneInterleaveOut,
-                              bool allowLaneInterleave) {
+                              bool &foldedColumnBlockOut,
+                              bool allowColumnBlockFold) {
   // Compute the store tile geometry and reject configurations the 2D block
   // store cannot express. This mirrors the checks the store lowering applies;
   // keeping them here (rather than duplicated inline in each store lowering
@@ -880,11 +879,9 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
   if (sizeInfo.vnni)
     return false;
 
-  laneInterleaveOut = allowLaneInterleave && foldColumnBlockIntoRow(
-                                                 ll, sizeInfo, elemSizeInBits,
-                                                 tensorType.getContext())
-                          ? 2
-                          : 1;
+  foldedColumnBlockOut = allowColumnBlockFold &&
+                         foldColumnBlockIntoRow(ll, sizeInfo, elemSizeInBits,
+                                                tensorType.getContext());
 
   // The store always issues a single v-block per message.
   sizeInfo.vBlocks = 1;

@@ -94,43 +94,11 @@ static bool hasEpilogueMath(Value storedVal) {
 }
 
 /// Whether 2D block stores may widen 16-bit rows (validate2DBlockStoreTile).
-/// The repack's sub-group bitcast shuffle is not implemented by the LTS driver.
-static bool allowStoreLaneInterleave(Operation *op, Value storedVal) {
+static bool allowStoreColumnBlockFold(Operation *op, Value storedVal) {
   auto mod = op->getParentOfType<ModuleOp>();
   return !mod->hasAttr(TritonIntelGPUDialect::getIsLTSAttrName()) &&
          !tools::getBoolEnv("TRITON_INTEL_DISABLE_WIDE_BLOCK_STORE") &&
          !hasEpilogueMath(storedVal);
-}
-
-/// A row wider than the sub-group gives lane l columns 2l and 2l+1
-/// (SPV_INTEL_2d_block_io, "Mapping Block Data to Invocations"), while each
-/// (even, odd) payload pair holds columns l and 16+l. The values must change
-/// lanes, so a sub-group bitcast shuffle per pair redistributes them.
-static Value repackLaneInterleavedRows(ConversionPatternRewriter &rewriter,
-                                       Location loc, Value storeVal) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto vecTy = cast<VectorType>(storeVal.getType());
-  assert(vecTy.getElementType().isInteger(16) && "expecting an i16 payload");
-  auto pairTy = VectorType::get(2, vecTy.getElementType());
-  auto packedTy = VectorType::get(1, rewriter.getI32Type());
-  Value result = storeVal;
-  for (unsigned i = 0; i < vecTy.getNumElements(); i += 2) {
-    Value pair = b.undef(pairTy);
-    // Separate statements keep the op order independent of the compiler's
-    // argument evaluation order.
-    for (unsigned j = 0; j < 2; ++j) {
-      Value elem = b.extract_element(storeVal, b.i32_val(i + j));
-      pair = b.insert_element(pair, elem, b.i32_val(j));
-    }
-    Value shuffled = TritonGEN::SubGroupBitcastShuffleOp::create(
-        rewriter, loc, packedTy, pair);
-    Value unpacked = b.bitcast(shuffled, pairTy);
-    for (unsigned j = 0; j < 2; ++j) {
-      Value elem = b.extract_element(unpacked, b.i32_val(j));
-      result = b.insert_element(result, elem, b.i32_val(i + j));
-    }
-  }
-  return result;
 }
 
 static constexpr unsigned kCacheLineBytes = 64;
@@ -4054,15 +4022,15 @@ struct DescriptorStoreOpToBlockIOConversion
     // geometry, enforces the HW address payload restriction, rejects transpose,
     // and forces vBlocks to 1.
     BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
-    unsigned laneInterleave = 1;
+    bool foldedColumnBlock = false;
     if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
                                   elemSizeInBits, tensorType, maskAxisInfo,
-                                  sizeInfo, laneInterleave,
-                                  allowStoreLaneInterleave(op, op.getSrc())))
+                                  sizeInfo, foldedColumnBlock,
+                                  allowStoreColumnBlockFold(op, op.getSrc())))
       return failure();
     // A widened row doubles the span checked against column 0 below; keep the
     // narrow row when only the wider one could straddle it.
-    if (laneInterleave > 1 && needs2DBlockIOAlignmentCompensation(op)) {
+    if (foldedColumnBlock && needs2DBlockIOAlignmentCompensation(op)) {
       unsigned colIdx =
           op.getIndices().size() - tensorType.getRank() + sizeInfo.colDim;
       int64_t span = int64_t(sizeInfo.tileWidth) * sizeInfo.numElemPerPackedVal;
@@ -4071,8 +4039,8 @@ struct DescriptorStoreOpToBlockIOConversion
                              span) == ColumnZero::MayStraddle) {
         [[maybe_unused]] bool valid = validate2DBlockStoreTile(
             llEncoding.value(), contiguousDim, elemSizeInBits, tensorType,
-            maskAxisInfo, sizeInfo, laneInterleave,
-            /*allowLaneInterleave=*/false);
+            maskAxisInfo, sizeInfo, foldedColumnBlock,
+            /*allowColumnBlockFold=*/false);
         assert(valid && "the narrow tile passed the same checks");
       }
     }
@@ -4197,9 +4165,8 @@ struct DescriptorStoreOpToBlockIOConversion
 
     unsigned threadsPerWarp =
         TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
-    assert((laneInterleave == 1 ||
-            unsigned(tileWidth) == laneInterleave * threadsPerWarp) &&
-           "a widened row spans the sub-group laneInterleave times");
+    assert((!foldedColumnBlock || unsigned(tileWidth) == 2 * threadsPerWarp) &&
+           "a widened row spans the sub-group twice");
 
     Type packedType = IntegerType::get(ctx, packedElemSizeInBits);
     unsigned numPackedElemsPerStore = (tileHeight * tileWidth) / threadsPerWarp;
@@ -4276,19 +4243,30 @@ struct DescriptorStoreOpToBlockIOConversion
 
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
 
-      // Compose the matrix by stacking the scalars into a vector.
+      // Build the payload in register order, then permute it into tile order.
+      SmallVector<unsigned> registerIndices;
+      registerIndices.reserve(numElemsPerStore);
+      for (size_t i = 0; i < numElemsPerStore; ++i)
+        registerIndices.push_back(
+            regMapping.apply({{kRegister, valIdx + i}})[0].second);
+      SmallVector<unsigned> orderedIndices(registerIndices);
+      llvm::sort(orderedIndices);
       Value storeVal = LLVM::UndefOp::create(rewriter, loc, store2DComposeType);
-      for (size_t i = 0; i < numElemsPerStore; ++i) {
-        unsigned registerIdx =
-            regMapping.apply({{kRegister, valIdx + i}})[0].second;
+      for (auto [i, registerIdx] : llvm::enumerate(orderedIndices))
         storeVal =
             b.insert_element(storeVal, valElems[registerIdx], b.i32_val(i));
+      if (registerIndices != orderedIndices) {
+        SmallVector<int32_t> indices;
+        indices.reserve(numElemsPerStore);
+        for (unsigned registerIdx : registerIndices)
+          indices.push_back(llvm::lower_bound(orderedIndices, registerIdx) -
+                            orderedIndices.begin());
+        storeVal = LLVM::ShuffleVectorOp::create(
+            rewriter, loc, store2DComposeType, storeVal, storeVal,
+            rewriter.getDenseI32ArrayAttr(indices));
       }
       if (store2DComposeType != store2DGenXType)
         storeVal = b.bitcast(storeVal, store2DGenXType);
-      if (laneInterleave > 1)
-        storeVal = repackLaneInterleavedRows(rewriter, loc, storeVal);
-
       auto newOp = TritonGEN::Matrix2DBlockStoreOp::create(
           rewriter, loc, addrElem, adjustedBaseWidth, adjustedBaseHeight, pitch,
           // offsetX was in terms of original elements. The 2D block IO requires
@@ -4296,6 +4274,8 @@ struct DescriptorStoreOpToBlockIOConversion
           packedOffsetX(b, offsetX, numPackedVals, redirectNegCol), offsetY,
           packedElemSizeInBits, tileWidth, tileHeight,
           /*v_blocks, only 1 supported*/ 1, storeVal, cacheControl);
+      if (foldedColumnBlock)
+        newOp->setAttr("triton_gen.genisa_row_layout", rewriter.getUnitAttr());
 
       if (failed(newOp.verify())) {
         // Delete the op so that the verifier will not abort the pass
@@ -4360,11 +4340,11 @@ struct StoreOpToBlockIOConversion
     BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
     MLIRContext *ctx = rewriter.getContext();
 
-    unsigned laneInterleave = 1;
+    bool foldedColumnBlock = false;
     if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
                                   elemSizeInBits, tensorType, maskAxisInfo,
-                                  sizeInfo, laneInterleave,
-                                  allowStoreLaneInterleave(op, op.getValue())))
+                                  sizeInfo, foldedColumnBlock,
+                                  allowStoreColumnBlockFold(op, op.getValue())))
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
@@ -4465,9 +4445,8 @@ struct StoreOpToBlockIOConversion
 
     unsigned threadsPerWarp =
         TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
-    assert((laneInterleave == 1 ||
-            unsigned(tileWidth) == laneInterleave * threadsPerWarp) &&
-           "a widened row spans the sub-group laneInterleave times");
+    assert((!foldedColumnBlock || unsigned(tileWidth) == 2 * threadsPerWarp) &&
+           "a widened row spans the sub-group twice");
 
     Type packedType =
         IntegerType::get(ctx, packedElemSizeInBits); // make it opaque type.
@@ -4566,9 +4545,6 @@ struct StoreOpToBlockIOConversion
       }
       if (store2DComposeType != store2DGenXType)
         storeVal = b.bitcast(storeVal, store2DGenXType);
-      if (laneInterleave > 1)
-        storeVal = repackLaneInterleavedRows(rewriter, loc, storeVal);
-
       auto newOp = TritonGEN::Matrix2DBlockStoreOp::create(
           rewriter, loc, addrElem, adjustedBaseWidth, adjustedBaseHeight, pitch,
           // offsetX was in terms of original elements. The 2d block io requires
@@ -4576,6 +4552,8 @@ struct StoreOpToBlockIOConversion
           b.udiv(offsetX, b.i32_val(numPackedVals)), offsetY,
           packedElemSizeInBits, tileWidth, tileHeight,
           /*v_blocks, only 1 supported*/ 1, storeVal, cacheControl);
+      if (foldedColumnBlock)
+        newOp->setAttr("triton_gen.genisa_row_layout", rewriter.getUnitAttr());
 
       if (failed(newOp.verify())) {
         // delete the op so that the verifier will not abort the pass

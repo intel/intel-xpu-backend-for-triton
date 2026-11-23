@@ -1,5 +1,27 @@
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
+module attributes {ttig.2d_block_io_base_alignment = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+llvm.func @genisa_row_store(%ptr: !llvm.ptr<1>, %width: i32, %height: i32, %pitch: i32, %x: i32, %y: i32, %value: vector<16xi16>) {
+  // CHECK-LABEL: llvm.func @genisa_row_store(
+  // CHECK-SAME:  %[[VALUE:[a-zA-Z0-9_]+]]: vector<16xi16>
+  // CHECK:       %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK:       %[[PTR:.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<1> to i64
+  // CHECK-DAG:   %[[WIDTH:.*]] = llvm.sub %arg1, %[[ONE]]
+  // CHECK-DAG:   %[[HEIGHT:.*]] = llvm.sub %arg2, %[[ONE]]
+  // CHECK-DAG:   %[[PITCH:.*]] = llvm.sub %arg3, %[[ONE]]
+  // CHECK-DAG:   %[[ELEM:.*]] = llvm.mlir.constant(16 : i32)
+  // CHECK-DAG:   %[[TILEWIDTH:.*]] = llvm.mlir.constant(32 : i32)
+  // CHECK-DAG:   %[[TILEHEIGHT:.*]] = llvm.mlir.constant(8 : i32)
+  // CHECK-NOT:   SubgroupBitcastShuffle
+  // CHECK-NOT:   __spirv_Subgroup2DBlockStoreINTEL
+  // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v16i16(%[[PTR]], %[[WIDTH]], %[[HEIGHT]], %[[PITCH]], %arg4, %arg5, %[[ELEM]], %[[TILEWIDTH]], %[[TILEHEIGHT]], {{.*}}, %[[VALUE]])
+  triton_gen.2Dblockstore %ptr, %width, %height, %pitch, %x, %y, %value {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default} {triton_gen.genisa_row_layout} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<16xi16>)
+  llvm.return
+}
+}
+
+// -----
+
 module attributes {"ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<8xi16>) {
   // CHECK:         llvm.mlir.undef : vector<2xi32>
