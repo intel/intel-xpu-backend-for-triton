@@ -1990,8 +1990,10 @@ static unsigned getCostFactor(Value result, Attribute rematEncoding) {
 }
 
 /// Determine whether rematerializing \p slice into the encodings in \p layout
-/// is beneficial given that it will eliminate \p convertOp and require creating
-/// new convert ops with cost \p newCvtCost.
+/// is beneficial given that it will eliminate \p convertOp. \p newCvtCost is
+/// the cost the caller adds on top of what is priced here: the new convert ops
+/// it creates, and any other work the relabeled slice does that this function
+/// does not see (it prices a load only when the load is duplicated).
 static bool isRematBeneficial(
     ttg::ConvertLayoutOp convertOp, const SetVector<Value> &slice,
     const DenseMap<Value, Attribute> &layout, int64_t newCvtCost,
@@ -2274,11 +2276,13 @@ static bool feedsDotScaledScale(ttg::ConvertLayoutOp convertOp) {
 // blocked by anchors, relabel single-use rank-1 loads into that layout and
 // convert the other anchors defined outside the loop once.
 //
-// The scale operands of a tt.dot_scaled are handled the same way: a scale load
-// in the loop whose only use is the convert is relabeled into the scale layout
-// (#8931). Left alone, its convert goes from the load's blocked layout to a
-// layout that replicates the scales across lanes and warps, which is a round
-// trip through SLM between two work-group barriers in every iteration.
+// The scale operands of a tt.dot_scaled are handled the same way (#8931). Left
+// alone, their convert goes from a blocked layout to a layout that replicates
+// the scales across lanes and warps, which is a round trip through SLM between
+// two work-group barriers in every iteration. When the convert's source is a
+// load whose only use is the convert, that load is relabeled into the scale
+// layout, wherever it is. When the source is computed from other values, the
+// rules above apply to them: a load before the loop is converted once there.
 LogicalResult LayoutRematerialization::rematerializeUpToAnchors(
     ttg::ConvertLayoutOp convertOp) {
   auto loop = convertOp->getParentOfType<scf::ForOp>();
@@ -2288,11 +2292,14 @@ LogicalResult LayoutRematerialization::rematerializeUpToAnchors(
   Attribute parentEnc = targetEnc;
   if (auto sliceEnc = dyn_cast<ttg::SliceEncodingAttr>(targetEnc))
     parentEnc = sliceEnc.getParent();
-  Operation *scaleLoad = feedsDotScaledScale(convertOp)
-                             ? convertOp.getSrc().getDefiningOp()
-                             : nullptr;
-  if (!isa<ttg::MmaEncodingTrait>(parentEnc) && !scaleLoad)
+  bool isScale = feedsDotScaledScale(convertOp);
+  if (!isa<ttg::MmaEncodingTrait>(parentEnc) && !isScale)
     return failure();
+  // The load a scale convert takes its source from directly, if any.
+  Operation *scaleLoad = nullptr;
+  if (Operation *def = convertOp.getSrc().getDefiningOp();
+      isScale && isa_and_nonnull<tt::LoadOp, tt::DescriptorLoadOp>(def))
+    scaleLoad = def;
 
   auto isRelabeledLoad = [&](Operation *op) {
     if (!isa<tt::LoadOp, tt::DescriptorLoadOp>(op) ||

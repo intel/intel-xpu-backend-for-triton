@@ -379,3 +379,113 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
     tt.return
   }
 }
+
+// -----
+
+// COM: The scale layout holds 128 elements per thread where the load holds one, so relabeling the
+// COM: load would read every scale 128 times: that costs more than the convert, which stays.
+// COM: The pointer chain is splats and addptrs only, so the reads the load adds are the whole
+// COM: rematerialization cost.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 2], warpsPerCTA = [16, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [0, 1]], lane = [[64, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[16, 0], [0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0], [0, 0]], block = []}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [4, 2], A = [32, 32], B = [32, 32], C = [32, 32]}>
+
+module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-DAG: #[[$REPLICATED_LAYOUT:.+]] = #ttg.linear<{register = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [0, 1]], lane = {{\[\[}}64, 0], [0, 0], [0, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
+  // CHECK-LABEL: @dot_scaled_scale_replicated_128_times_keeps_convert
+  // CHECK: scf.for
+  // CHECK: %[[SCALE_A:.*]] = tt.load {{.*}} : tensor<128x2x!tt.ptr<i8>, #blocked>
+  // CHECK: %[[SCALE_A_CVT:.*]] = ttg.convert_layout %[[SCALE_A]] : tensor<128x2xi8, #blocked> -> tensor<128x2xi8, #[[$REPLICATED_LAYOUT]]>
+  // CHECK: tt.dot_scaled %{{.*}} scale %[[SCALE_A_CVT]],
+  // CHECK: scf.yield
+  tt.func @dot_scaled_scale_replicated_128_times_keeps_convert(%a: tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, %b: tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>, %A_scale: !tt.ptr<i8>, %b_scl: tensor<128x2xi8, #linear1>, %K: i32, %out: tensor<128x128x!tt.ptr<f32>, #mma>) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
+    %a_ptr = tt.splat %A_scale : !tt.ptr<i8> -> tensor<128x2x!tt.ptr<i8>, #blocked>
+    %r = scf.for %k = %c0 to %K step %c64 iter_args(%acc = %cst) -> (tensor<128x128xf32, #mma>) : i32 {
+      %ks = tt.splat %k : i32 -> tensor<128x2xi32, #blocked>
+      %a_p = tt.addptr %a_ptr, %ks : tensor<128x2x!tt.ptr<i8>, #blocked>, tensor<128x2xi32, #blocked>
+      %a_sc = tt.load %a_p : tensor<128x2x!tt.ptr<i8>, #blocked>
+      %a_scl = ttg.convert_layout %a_sc : tensor<128x2xi8, #blocked> -> tensor<128x2xi8, #linear>
+      %d = tt.dot_scaled %a scale %a_scl, %b scale %b_scl, %acc lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, tensor<128x2xi8, #linear> * tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>, tensor<128x2xi8, #linear1> -> tensor<128x128xf32, #mma>
+      scf.yield %d : tensor<128x128xf32, #mma>
+    }
+    tt.store %out, %r : tensor<128x128x!tt.ptr<f32>, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Only a scale operand of a tt.dot_scaled gets its load relabeled into a linear layout. The
+// COM: same convert feeding a store keeps the load in its blocked layout: nothing prices the
+// COM: access pattern of a load relabeled into an arbitrary linear layout.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 2], warpsPerCTA = [16, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[8, 0], [16, 0], [0, 1]], lane = [[1, 0], [2, 0], [4, 0], [0, 0]], warp = [[0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
+
+module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-DAG: #[[$SCALE_A_LAYOUT:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
+  // CHECK-LABEL: @linear_convert_feeding_a_store_keeps_blocked_load
+  // CHECK: scf.for
+  // CHECK: %[[X:.*]] = tt.load {{.*}} : tensor<128x2x!tt.ptr<i8>, #blocked>
+  // CHECK: %[[X_CVT:.*]] = ttg.convert_layout %[[X]] : tensor<128x2xi8, #blocked> -> tensor<128x2xi8, #[[$SCALE_A_LAYOUT]]>
+  // CHECK: tt.store %{{.*}}, %[[X_CVT]]
+  tt.func @linear_convert_feeding_a_store_keeps_blocked_load(%src: !tt.ptr<i8>, %dst: tensor<128x2x!tt.ptr<i8>, #linear>, %K: i32) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    %ptr = tt.splat %src : !tt.ptr<i8> -> tensor<128x2x!tt.ptr<i8>, #blocked>
+    scf.for %k = %c0 to %K step %c64 : i32 {
+      %ks = tt.splat %k : i32 -> tensor<128x2xi32, #blocked>
+      %p = tt.addptr %ptr, %ks : tensor<128x2x!tt.ptr<i8>, #blocked>, tensor<128x2xi32, #blocked>
+      %x = tt.load %p : tensor<128x2x!tt.ptr<i8>, #blocked>
+      %xl = ttg.convert_layout %x : tensor<128x2xi8, #blocked> -> tensor<128x2xi8, #linear>
+      tt.store %dst, %xl : tensor<128x2x!tt.ptr<i8>, #linear>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The convert's source need not be a load. Here the A scale is loaded once before the loop
+// COM: and adjusted in it: the load is an anchor outside the loop, so it is converted once before
+// COM: the loop and the adjustment is done in the scale layout. No convert is left in the loop.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 2], warpsPerCTA = [16, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[8, 0], [16, 0], [0, 1]], lane = [[1, 0], [2, 0], [4, 0], [0, 0]], warp = [[0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[16, 0], [0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0], [0, 0]], block = []}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [4, 2], A = [32, 32], B = [32, 32], C = [32, 32]}>
+
+module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-DAG: #[[$SCALE_A_LAYOUT:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
+  // CHECK-LABEL: @dot_scaled_scale_computed_from_load_before_loop
+  // CHECK: %[[SCALE:.*]] = tt.load {{.*}} : tensor<128x2x!tt.ptr<i8>, #blocked>
+  // CHECK: %[[SCALE_CVT:.*]] = ttg.convert_layout %[[SCALE]] : tensor<128x2xi8, #blocked> -> tensor<128x2xi8, #[[$SCALE_A_LAYOUT]]>
+  // CHECK: scf.for
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: %[[ADJUSTED:.*]] = arith.addi %[[SCALE_CVT]], %{{.*}} : tensor<128x2xi8, #[[$SCALE_A_LAYOUT]]>
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.dot_scaled %{{.*}} scale %[[ADJUSTED]],
+  // CHECK: scf.yield
+  tt.func @dot_scaled_scale_computed_from_load_before_loop(%a: tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, %b: tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>, %A_scale: !tt.ptr<i8>, %b_scl: tensor<128x2xi8, #linear1>, %K: i32, %out: tensor<128x128x!tt.ptr<f32>, #mma>) {
+    %c0 = arith.constant 0 : i32
+    %c64 = arith.constant 64 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
+    %a_ptr = tt.splat %A_scale : !tt.ptr<i8> -> tensor<128x2x!tt.ptr<i8>, #blocked>
+    %a_sc = tt.load %a_ptr : tensor<128x2x!tt.ptr<i8>, #blocked>
+    %r = scf.for %k = %c0 to %K step %c64 iter_args(%acc = %cst) -> (tensor<128x128xf32, #mma>) : i32 {
+      %k8 = arith.trunci %k : i32 to i8
+      %ks = tt.splat %k8 : i8 -> tensor<128x2xi8, #blocked>
+      %a_adj = arith.addi %a_sc, %ks : tensor<128x2xi8, #blocked>
+      %a_scl = ttg.convert_layout %a_adj : tensor<128x2xi8, #blocked> -> tensor<128x2xi8, #linear>
+      %d = tt.dot_scaled %a scale %a_scl, %b scale %b_scl, %acc lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, tensor<128x2xi8, #linear> * tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>, tensor<128x2xi8, #linear1> -> tensor<128x128xf32, #mma>
+      scf.yield %d : tensor<128x128xf32, #mma>
+    }
+    tt.store %out, %r : tensor<128x128x!tt.ptr<f32>, #mma>
+    tt.return
+  }
+}

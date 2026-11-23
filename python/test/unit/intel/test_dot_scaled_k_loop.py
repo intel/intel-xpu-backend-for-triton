@@ -18,6 +18,12 @@ import triton
 import triton.language as tl
 from triton._internal_testing import is_xpu
 
+# What the native lowering of this kernel needs from the target: e4m3 x e4m3 on the block scaled DPAS,
+# with the A and B tiles read by 2D block loads (which is what gets prefetched).
+_NATIVE_PATH_CAPABILITIES = ("has_subgroup_matrix_multiply_accumulate",
+                             "has_subgroup_matrix_multiply_accumulate_bfloat8",
+                             "has_subgroup_scaled_matrix_multiply_accumulate", "has_subgroup_2d_block_io")
+
 
 @triton.jit
 def _scaled_gemm(A, B, A_scale, B_scale, C, M, N, K, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
@@ -44,8 +50,9 @@ def _scaled_gemm(A, B, A_scale, B_scale, C, M, N, K, BM: tl.constexpr, BN: tl.co
                                                                (256, 256, 64, 32, 3)])
 def test_dot_scaled_k_loop(BM, BN, BK, num_warps, num_stages, device):
     arch = triton.runtime.driver.active.get_current_target().arch
-    if not arch.get("has_subgroup_scaled_matrix_multiply_accumulate", False):
-        pytest.skip("target has no block scaled DPAS")
+    missing = [capability for capability in _NATIVE_PATH_CAPABILITIES if not arch.get(capability, False)]
+    if missing:
+        pytest.skip(f"tt.dot_scaled is not lowered to the block scaled DPAS on this target: no {', '.join(missing)}")
 
     M = N = 512
     K = 1024
@@ -65,8 +72,9 @@ def test_dot_scaled_k_loop(BM, BN, BK, num_warps, num_stages, device):
     assert ((c - ref).norm() / ref.norm()).item() < 1e-5
 
     ttgir, llir = kernel.asm["ttgir"], kernel.asm["llir"]
-    if "ScaledMatrixMultiplyAccumulateINTEL" not in llir:
-        pytest.skip("tt.dot_scaled is not lowered to the block scaled DPAS on this target")
+    # The target has everything the native path needs, so falling back to the decomposed one is a
+    # regression, not a reason to skip.
+    assert "ScaledMatrixMultiplyAccumulateINTEL" in llir
     # The K loop is pipelined: the A and B tiles are prefetched.
     assert "ttig.descriptor_prefetch" in ttgir
     # The scales are loaded in the layout the DPAS takes them in: no conversion in the loop, so no
