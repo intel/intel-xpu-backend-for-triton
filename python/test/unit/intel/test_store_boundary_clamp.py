@@ -194,7 +194,6 @@ def _skip_unsupported_sub_group(sg):
 @pytest.mark.parametrize("arm", list(ARMS))
 @pytest.mark.parametrize("case", CASES, ids=lambda c: "-".join(map(str, c)))
 def test_store_boundary_clamp(case, arm, device, tmp_path, monkeypatch, with_allocator):
-    # UNSURE: that a 32-lane DPAS store gets 2D block stores at all; no lit test covers it.
     _skip_unsupported_sub_group(case[6])
     env = _set_env(monkeypatch, tmp_path, arm)
     if arm != "assert":
