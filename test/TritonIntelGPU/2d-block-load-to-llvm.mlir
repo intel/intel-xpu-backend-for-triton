@@ -316,6 +316,46 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// COM: A row mask of constancy 4 clamps the operand-C tile to 4 rows; the
+// COM: 8x16 C-instruction message is only used when the clamped tile holds it.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_from_ptr_dpas_c_row_constancy
+  tt.func public @block_load_from_ptr_dpas_c_row_constancy(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<8x32xf16, #dpas>
+    %c4 = arith.constant dense<4> : tensor<8xi32, #ttg.slice<{dim = 1, parent = #dpas}>>
+    %c8 = arith.constant dense<8> : tensor<8xi32, #ttg.slice<{dim = 1, parent = #dpas}>>
+    %ld = arith.constant dense<32> : tensor<8x1xi32, #dpas>
+    %r = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #ttg.slice<{dim = 1, parent = #dpas}>>
+    %r2 = tt.expand_dims %r {axis = 1 : i32} : tensor<8xi32, #ttg.slice<{dim = 1, parent = #dpas}>> -> tensor<8x1xi32, #dpas>
+    %ro = arith.muli %r2, %ld : tensor<8x1xi32, #dpas>
+    %rob = tt.broadcast %ro : tensor<8x1xi32, #dpas> -> tensor<8x32xi32, #dpas>
+    %c = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dpas}>>
+    %c2 = tt.expand_dims %c {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dpas}>> -> tensor<1x32xi32, #dpas>
+    %cob = tt.broadcast %c2 : tensor<1x32xi32, #dpas> -> tensor<8x32xi32, #dpas>
+    %off = arith.addi %rob, %cob : tensor<8x32xi32, #dpas>
+    %ps = tt.splat %arg0 : !tt.ptr<f16> -> tensor<8x32x!tt.ptr<f16>, #dpas>
+    %ptr = tt.addptr %ps, %off : tensor<8x32x!tt.ptr<f16>, #dpas>, tensor<8x32xi32, #dpas>
+    %pitch = arith.constant 64 : i32
+    %height = arith.constant 8 : i32
+    %width = arith.constant 64 : i32
+    %m4 = arith.cmpi slt, %r, %c4 : tensor<8xi32, #ttg.slice<{dim = 1, parent = #dpas}>>
+    %m4e = tt.expand_dims %m4 {axis = 1 : i32} : tensor<8xi1, #ttg.slice<{dim = 1, parent = #dpas}>> -> tensor<8x1xi1, #dpas>
+    %mask4 = tt.broadcast %m4e : tensor<8x1xi1, #dpas> -> tensor<8x32xi1, #dpas>
+    // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 2,
+    %v4 = ttig.2d_block_load_from_ptr %ptr, %pitch, %height, %width, %mask4, %cst {row_major} : (tensor<8x32x!tt.ptr<f16>, #dpas>, i32, i32, i32, tensor<8x32xi1, #dpas>, tensor<8x32xf16, #dpas>) -> tensor<8x32xf16, #dpas>
+    %m8 = arith.cmpi slt, %r, %c8 : tensor<8xi32, #ttg.slice<{dim = 1, parent = #dpas}>>
+    %m8e = tt.expand_dims %m8 {axis = 1 : i32} : tensor<8xi1, #ttg.slice<{dim = 1, parent = #dpas}>> -> tensor<8x1xi1, #dpas>
+    %mask8 = tt.broadcast %m8e : tensor<8x1xi1, #dpas> -> tensor<8x32xi1, #dpas>
+    // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1,
+    // CHECK-NOT: triton_gen.2Dblockload
+    %v8 = ttig.2d_block_load_from_ptr %ptr, %pitch, %height, %width, %mask8, %cst {row_major} : (tensor<8x32x!tt.ptr<f16>, #dpas>, i32, i32, i32, tensor<8x32xi1, #dpas>, tensor<8x32xf16, #dpas>) -> tensor<8x32xf16, #dpas>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Test ttig.2d_block_load_from_ptr with 1D->2D reshape stride attribute.
 // COM: The blocked encoding + ttig.block_io_stride triggers the manual tile
 // COM: construction path in the LLVM lowering.
