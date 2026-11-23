@@ -168,7 +168,9 @@ LogicalResult Subgroup2DBlockLoadFromPtrOp::verify() {
     return emitOpError("'other' must be present when 'mask' is present");
 
   // The lowering derives an X shift from a column-limit width, so it must be
-  // a whole number of granules. Only a constant width can be checked here.
+  // a whole number of granules. Only a constant width can be checked here; a
+  // runtime one is the producer's responsibility (see
+  // ttgi::colLimitIsHWCompatible).
   if ((*this)->hasAttr(
           TritonIntelGPUDialect::getBlockIORuntimeColLimitAttrName())) {
     unsigned elemBits = getIntOrFloatOrPtrBitWidth(resultType.getElementType());
@@ -177,7 +179,7 @@ LogicalResult Subgroup2DBlockLoadFromPtrOp::verify() {
              << elemBits << "-bit elements";
     APInt width;
     if (matchPattern(getBaseWidth(), m_ConstantInt(&width))) {
-      int64_t granule = std::max<int64_t>(4, elemBits / 8);
+      int64_t granule = get2DBlockIOWidthGranuleBytes(elemBits);
       if (width.isNegative() || width.getSExtValue() % granule != 0)
         return emitOpError("column-limit width must be a non-negative "
                            "multiple of ")
@@ -248,6 +250,16 @@ static LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
 }
 
 LogicalResult DescriptorGatherOp::verify() {
+  // The lowering reads each row's offset from the lane that owns the row.
+  if (Attribute resultEnc = getResult().getType().getEncoding()) {
+    auto offsetsEnc = dyn_cast_or_null<SliceEncodingAttr>(
+        getXOffsets().getType().getEncoding());
+    if (!offsetsEnc || offsetsEnc.getDim() != 1 ||
+        offsetsEnc.getParent() != resultEnc)
+      return emitOpError("x offsets must be sliced along dim 1 from the result "
+                         "encoding, but got ")
+             << getXOffsets().getType();
+  }
   return intel::verifyGatherScatterOp(
       *this, getDesc().getType().getSignlessBlockType(), getResult().getType(),
       getXOffsets().getType());

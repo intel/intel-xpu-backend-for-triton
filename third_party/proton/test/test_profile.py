@@ -2044,8 +2044,6 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
-    if is_xpu():
-        pytest.skip("FIXME: #5844")
     fresh_knobs.proton.profile_buffer_size = buffer_size
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
     session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
@@ -2077,6 +2075,97 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
         assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
         num_scopes += len(data[0]["children"])
     assert num_scopes == 5000
+
+
+@pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
+def test_periodic_flushing_multithread(tmp_path, fresh_knobs, data_format, device: str):
+    # A phase must not be flushed while a record of a kernel launched into it
+    # by another thread is still outstanding, even if records of later phases
+    # have already arrived.
+    fresh_knobs.proton.profile_buffer_size = 256 * 1024
+    temp_file = tmp_path / f"test_periodic_flushing_multithread.{data_format}"
+    session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
+
+    def worker():
+        with proton.scope("worker"):
+            torch.ones((100), device=device)
+        getattr(torch, device).synchronize()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+    proton.data.advance_phase(session=session)
+    # Fill this thread's activity buffers with records of phase 1.
+    for i in range(3000):
+        with proton.scope(f"test_{i}"):
+            torch.zeros((100), device=device)
+
+    proton.finalize(output_format=data_format)
+
+    import msgpack
+    phase0_file = tmp_path / f"test_periodic_flushing_multithread.part_0.{data_format}"
+    if data_format == "hatchet_msgpack":
+        with open(phase0_file, "rb") as f:
+            data = msgpack.load(f, raw=False, strict_map_key=False)
+    else:
+        with open(phase0_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    worker_frame = _find_frame_by_name(data[0], "worker")
+    assert worker_frame is not None
+    assert any(child["metrics"].get("time (ns)", 0) > 0 for child in worker_frame["children"])
+
+
+@pytest.mark.skipif(not is_xpu(), reason="Only the XPU profiler holds back the phase of an open launch op")
+def test_periodic_flushing_hook_multithread(tmp_path, fresh_knobs, device: str):
+    # A phase must not be flushed while a launch op entered into it is still
+    # open, even if its kernel has not been launched yet.
+    fresh_knobs.proton.profile_buffer_size = 256 * 1024
+    entered = threading.Event()
+    resume = threading.Event()
+
+    class PausingHook(proton_launch.LaunchHook):
+        _instance = None
+
+        def enter(self, metadata):
+            super().enter(metadata)
+            if threading.current_thread() is not threading.main_thread():
+                entered.set()
+                resume.wait(timeout=60)
+
+    @triton.jit
+    def foo(x, y):
+        tl.store(y, tl.load(x) + 1)
+
+    x = torch.ones((1, ), device=device)
+    y = torch.empty((1, ), device=device)
+    foo[(1, )](x, y)
+    temp_file = tmp_path / "test_periodic_flushing_hook_multithread.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), mode="periodic_flushing:format=hatchet", hook=PausingHook())
+
+    def worker():
+        with proton.scope("worker"):
+            foo[(1, )](x, y)
+        getattr(torch, device).synchronize()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    try:
+        assert entered.wait(timeout=60)
+        proton.data.advance_phase(session=session)
+        # Fill this thread's activity buffers with records of phase 1.
+        for i in range(3000):
+            with proton.scope(f"test_{i}"):
+                torch.zeros((100), device=device)
+    finally:
+        resume.set()
+        thread.join()
+        proton.finalize()
+
+    with open(tmp_path / "test_periodic_flushing_hook_multithread.part_0.hatchet", "r", encoding="utf-8") as f:
+        data = json.load(f)
+    worker_frame = _find_frame_by_name(data[0], "worker")
+    assert worker_frame is not None
+    assert any(child["metrics"].get("time (ns)", 0) > 0 for child in worker_frame["children"])
 
 
 @pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs", run=False)

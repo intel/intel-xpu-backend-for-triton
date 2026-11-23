@@ -55,8 +55,8 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
     callOp->setLoc(loc);
     return callOp.getResult();
   };
-  Value sliceId = call("__builtin_IB_slice_id");
-  Value dssId = call("__builtin_IB_dual_subslice_id");
+  Value sliceId = call("_Z18intel_get_slice_idv");
+  Value dssId = call("_Z26intel_get_dual_subslice_idv");
   return b.add(b.mul(sliceId, b.i32_val(kXeCoresPerSlice)), dssId);
 }
 
