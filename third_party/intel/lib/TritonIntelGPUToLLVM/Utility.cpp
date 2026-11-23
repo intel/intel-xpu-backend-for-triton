@@ -101,6 +101,12 @@ Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i) {
                        mlir::gpu::ShuffleMode::UP);
 }
 
+Value shuffleDown(Location loc, RewriterBase &rewriter, Value val, int i) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  return shuffleCommon(loc, rewriter, val, b.i32_val(i),
+                       mlir::gpu::ShuffleMode::DOWN);
+}
+
 SmallVector<Value> getSmemBases(Operation *op, TypeRange elemTypes,
                                 unsigned elems,
                                 const TypeConverter &typeConverter,
