@@ -632,6 +632,74 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+// Test transposition of sub-dword elements with sub-group size 32: rows are padded to a dword
+// multiple (36 bytes for i8, 68 for i16) and both per-lane row loads carry the dword alignment (#8749).
+
+#blocked = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_32_i8(
+  tt.func @test_32_i8(%arg0: tensor<32x32xi8, #blocked>) -> tensor<32x32xi8, #blocked1> {
+    // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
+    // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
+    // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
+    // CHECK:           %[[VAL_39:.*]] = llvm.zext %[[VAL_38]] : i32 to i64
+    // COM: 32 rows of 36 bytes per sub-group:
+    // CHECK:           %[[VAL_40:.*]] = llvm.mlir.constant(1152 : i64) : i64
+    // CHECK:           %[[VAL_41:.*]] = llvm.mul %[[VAL_37]], %[[VAL_40]] : i64
+    // CHECK:           %[[VAL_42:.*]] = llvm.getelementptr inbounds %[[VAL_35]]{{\[}}%[[VAL_41]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i8
+    // CHECK:           llvm.call spir_funccc @_Z30intel_sub_group_block_write_ucPU3AS3hh(%[[VAL_42]]
+    // COM: Check offset:
+    // CHECK:           llvm.getelementptr inbounds %{{.*}}[36]
+    // COM: Check there are 31 more stores:
+    // CHECK-COUNT-31:  llvm.call spir_funccc @_Z30intel_sub_group_block_write_ucPU3AS3hh(
+    // CHECK-NOT:       llvm.call spir_funccc @_Z30intel_sub_group_block_write_ucPU3AS3hh(
+    // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(36 : i64) : i64
+    // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
+    // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i8
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi8>
+    // CHECK:           %[[VAL_62:.*]] = llvm.getelementptr inbounds %[[VAL_61]][1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<16xi8>
+    // CHECK:           llvm.load %[[VAL_62]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi8>
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi8, #blocked> -> tensor<32x32xi8, #blocked1>
+    tt.return %0 : tensor<32x32xi8, #blocked1>
+  }
+
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_32_i16(
+  tt.func @test_32_i16(%arg0: tensor<32x32xi16, #blocked>) -> tensor<32x32xi16, #blocked1> {
+    // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
+    // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
+    // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
+    // CHECK:           %[[VAL_39:.*]] = llvm.zext %[[VAL_38]] : i32 to i64
+    // COM: 32 rows of 34 elements (68 bytes) per sub-group:
+    // CHECK:           %[[VAL_40:.*]] = llvm.mlir.constant(1088 : i64) : i64
+    // CHECK:           %[[VAL_41:.*]] = llvm.mul %[[VAL_37]], %[[VAL_40]] : i64
+    // CHECK:           %[[VAL_42:.*]] = llvm.getelementptr inbounds %[[VAL_35]]{{\[}}%[[VAL_41]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i16
+    // CHECK:           llvm.call spir_funccc @_Z30intel_sub_group_block_write_usPU3AS3tt(%[[VAL_42]]
+    // COM: Check offset:
+    // CHECK:           llvm.getelementptr inbounds %{{.*}}[34]
+    // COM: Check there are 31 more stores:
+    // CHECK-COUNT-31:  llvm.call spir_funccc @_Z30intel_sub_group_block_write_usPU3AS3tt(
+    // CHECK-NOT:       llvm.call spir_funccc @_Z30intel_sub_group_block_write_usPU3AS3tt(
+    // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(34 : i64) : i64
+    // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
+    // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i16
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi16>
+    // CHECK:           %[[VAL_62:.*]] = llvm.getelementptr inbounds %[[VAL_61]][1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<16xi16>
+    // CHECK:           llvm.load %[[VAL_62]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi16>
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi16, #blocked> -> tensor<32x32xi16, #blocked1>
+    tt.return %0 : tensor<32x32xi16, #blocked1>
+  }
+}
+
+// -----
+
 // Test transposition with two contiguous rows.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [16, 1], warpsPerCTA = [4, 2], order = [0, 1]}>

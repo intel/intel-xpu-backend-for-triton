@@ -390,7 +390,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
            "Column must be loadable with N loads");
     // Rows of sub-dword elements are dword-aligned, not aligned to the vector
     // type's natural alignment LLVM would otherwise assume: say so (#8749).
-    // Wider elements keep the load as it always was.
+    // Wider elements deliberately keep the bare load: LLVM then assumes the
+    // vector type's natural alignment (64 bytes for vector<16xi32>, 128 for
+    // vector<16xi64>), which the 68- and 136-byte pitches do not provide
+    // either (they only guarantee `bytesPerElement`). IGC has handled it
+    // correctly on every target so far, and stating the real alignment would
+    // change f32/i64 transpose codegen on PVC/BMG unmeasured. Revisit once
+    // that is measured.
     unsigned loadAlignment = bytesPerElement < 4 ? 4 : 0;
     assert((rowLength * bytesPerElement) % 4 == 0 &&
            "Row pitch must keep the per-lane loads dword-aligned");

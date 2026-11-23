@@ -71,6 +71,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+// 8-bit elements, sub-group size 32: 32 rows padded to 36 bytes (#8749).
+
+// CHECK-LABEL: module attributes
+// CHECK-SAME: ttg.shared = 1152 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @test_i8_sg32(%arg0: tensor<32x32xi8, #blocked>) -> tensor<32x32xi8, #blocked1> {
+    // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 1152 : i32
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi8, #blocked> -> tensor<32x32xi8, #blocked1>
+    tt.return %0 : tensor<32x32xi8, #blocked1>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+// 16-bit elements, sub-group size 32: 32 rows padded to 34 elements (68 bytes) (#8749).
+
+// CHECK-LABEL: module attributes
+// CHECK-SAME: ttg.shared = 2176 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @test_i16_sg32(%arg0: tensor<32x32xi16, #blocked>) -> tensor<32x32xi16, #blocked1> {
+    // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 2176 : i32
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi16, #blocked> -> tensor<32x32xi16, #blocked1>
+    tt.return %0 : tensor<32x32xi16, #blocked1>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
 
