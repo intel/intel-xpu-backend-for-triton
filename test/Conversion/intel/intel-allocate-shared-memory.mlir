@@ -146,3 +146,22 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return %0, %1 : tensor<16x16xf32, #blocked>, tensor<16x16xf16, #blocked>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+// Check no scratch memory is allocated for a sub-group transpose-like layout
+// conversion marked `force_warp_shuffle`: it is lowered with shuffles.
+
+// CHECK-LABEL: module attributes
+// CHECK-SAME: ttg.shared = 0 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK: tt.func @test_force_warp_shuffle
+  // CHECK-NOT: allocation.offset
+  tt.func @test_force_warp_shuffle(%arg0: tensor<16x16xf32, #blocked>) -> tensor<16x16xf32, #blocked1> {
+    %0 = ttg.convert_layout %arg0 {force_warp_shuffle} : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #blocked1>
+    tt.return %0 : tensor<16x16xf32, #blocked1>
+  }
+}
