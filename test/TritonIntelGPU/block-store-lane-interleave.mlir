@@ -17,7 +17,9 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
   // CHECK-NOT:     llvm.insertelement
   // CHECK:         llvm.insertelement %[[E1]], %{{.*}} : vector<16xf16>
   // CHECK:         llvm.insertelement %[[E8]], %{{.*}} : vector<16xf16>
-  // CHECK:         %[[SHUFFLED:.*]] = llvm.shufflevector %{{.*}}, %{{.*}} [0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15] : vector<16xf16>
+  // CHECK:         %[[I15:.*]] = llvm.mlir.constant(15 : i32) : i32
+  // CHECK-NEXT:    %[[LAST:.*]] = llvm.insertelement %{{.*}}, %{{.*}}[%[[I15]] : i32] : vector<16xf16>
+  // CHECK:         %[[SHUFFLED:.*]] = llvm.shufflevector %[[LAST]], %{{.*}} [0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15] : vector<16xf16>
   // CHECK:         %[[P:.*]] = llvm.bitcast %[[SHUFFLED]] : vector<16xf16> to vector<16xi16>
   // CHECK-NOT:     triton_gen.sub_group_bitcast_shuffle
   // CHECK:         triton_gen.2Dblockstore {{.*}}, %[[P]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default} {triton_gen.genisa_row_layout} : ({{.*}}, vector<16xi16>)
@@ -28,7 +30,16 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
   // OFF-COUNT-8:   triton_gen.2Dblockstore {{.*}} tile_width = 16
   // GENISA-LABEL: llvm.func spir_kernelcc @fold_tdesc
   // GENISA-NOT:   SubgroupBitcastShuffle
-  // GENISA-COUNT-4: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v16i16
+  // GENISA:       %[[MASK:.*]] = llvm.mlir.constant(-64 : i64) : i64
+  // GENISA-NEXT:  %[[ALIGNED:.*]] = llvm.and %{{.*}}, %[[MASK]] : i64
+  // GENISA-NEXT:  %[[BASE:.*]] = llvm.inttoptr %[[ALIGNED]] : i64 to !llvm.ptr<1>
+  // GENISA:       %[[WIDTH:.*]] = llvm.add %{{.*}}, %{{.*}} : i32
+  // GENISA:       %[[X:.*]] = llvm.add %{{.*}}, %{{.*}} : i32
+  // GENISA-NEXT:  %[[PTR:.*]] = llvm.ptrtoint %[[BASE]] : !llvm.ptr<1> to i64
+  // GENISA-NEXT:  %[[WM1:.*]] = llvm.sub %[[WIDTH]], %{{.*}} : i32
+  // GENISA:       %[[CC:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // GENISA-NEXT:  llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v16i16(%[[PTR]], %[[WM1]], %{{[^,]*}}, %{{[^,]*}}, %[[X]], {{.*}}, %[[CC]], %{{[^,]*}})
+  // GENISA-COUNT-3: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v16i16
   // GENISA-NOT:   __spirv_Subgroup2DBlockStoreINTEL
   // SPV-LABEL:    llvm.func spir_kernelcc @fold_tdesc
   // SPV-NOT:      GenISA.LSC2DBlockWrite
@@ -49,6 +60,16 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [2, 2]}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: llvm.func spir_kernelcc @fold_ptr
+  // CHECK:         %[[A0:.*]] = llvm.extractvalue %{{.*}}[0] : !llvm.struct<(f16
+  // CHECK:         %[[A1:.*]] = llvm.extractvalue %{{.*}}[1] : !llvm.struct<(f16
+  // CHECK:         %[[B0:.*]] = llvm.extractvalue %{{.*}}[8] : !llvm.struct<(f16
+  // CHECK:         llvm.mlir.undef : vector<16xf16>
+  // CHECK-NEXT:    %[[I0:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT:    %[[V0:.*]] = llvm.insertelement %[[A0]], %{{.*}}[%[[I0]] : i32] : vector<16xf16>
+  // CHECK-NEXT:    %[[I1:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT:    %[[V1:.*]] = llvm.insertelement %[[B0]], %[[V0]][%[[I1]] : i32] : vector<16xf16>
+  // CHECK-NEXT:    %[[I2:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-NEXT:    llvm.insertelement %[[A1]], %[[V1]][%[[I2]] : i32] : vector<16xf16>
   // CHECK-NOT:     triton_gen.sub_group_bitcast_shuffle
   // CHECK-COUNT-2: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default}
   // GENISA-LABEL: llvm.func spir_kernelcc @fold_ptr
@@ -81,6 +102,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: llvm.func spir_kernelcc @fold_four_blocks_tdesc
+  // GENISA-LABEL: llvm.func spir_kernelcc @fold_four_blocks_tdesc
   // CHECK-COUNT-8: triton_gen.2Dblockstore {{.*}} tile_width = 32, tile_height = 8
   // CHECK-NOT:     triton_gen.2Dblockstore
   tt.func public @fold_four_blocks_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %val: tensor<32x64xf16, #dpas>) {

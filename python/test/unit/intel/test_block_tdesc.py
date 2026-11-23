@@ -1,4 +1,5 @@
 import functools
+import os
 import re
 import pytest
 import torch
@@ -507,8 +508,9 @@ def _wide_row_store_kernel(c_ptr, a_ptr, b_ptr, M, N, LDC: tl.constexpr, K: tl.c
         tl.store(c_ptr + rm[:, None] * LDC + rn[None, :], c, mask=rm[:, None] < M)
 
 
-# 16-bit DPAS results are stored as 32-wide (64 B) rows, repacked per row (issue #8723). The descriptor ends 16 columns
-# into a widened row; the pointer store masks rows only. Everything outside the result must stay unchanged.
+# 16-bit DPAS results are stored as 32-wide (64 B) rows through GenISA, with the register image as-is (issue #8723).
+# The descriptor ends 16 columns into a widened row; the pointer store masks rows only. Everything outside the result
+# must stay unchanged.
 @pytest.mark.parametrize("dtype_str", ["bfloat16", "float16"])
 @pytest.mark.parametrize("desc", [True, False])
 @pytest.mark.parametrize("BM, BN, num_warps", [(256, 64, 8), (64, 32, 4)])
@@ -535,5 +537,8 @@ def test_tdesc_wide_row_store(dtype_str, desc, BM, BN, num_warps, device, with_a
     if XPUBackend.is_lts(kernel.metadata.target.arch.get("driver_version")):
         assert "SubgroupBitcastShuffle" not in llir
         return
-    widths = {int(w) for w in re.findall(r"Subgroup2DBlockStoreINTEL\w*\(i32 (?:\w+ )*2, i32 (?:\w+ )*(\d+),", llir)}
-    assert widths == {32} and "SubgroupBitcastShuffle" in llir
+    assert "SubgroupBitcastShuffle" not in llir
+    if os.environ.get("TRITON_INTEL_DISABLE_WIDE_BLOCK_STORE", "").lower() in ("1", "true", "on"):
+        return  # the kill switch keeps 16-wide rows
+    shapes = re.findall(r"GenISA\.LSC2DBlockWrite\.\w+\((?:[^,]+, ){6}i32 (\d+), i32 (\d+), i32 (\d+),", llir)
+    assert set(shapes) == {("16", "32", "8")} and len(shapes) == _count_2d_calls(llir, "Store")

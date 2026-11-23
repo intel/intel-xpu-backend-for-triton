@@ -332,7 +332,7 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   // └────┴────┴────┴────┴────┴────┴────┴────┘
   // We will pack the R0 and R2 as the first matrix. R1 and R3 as the second matrix with vBlocks=2 for 2 matrixes.
   // Block store only supports vBlocks=1, so for 16-bit SG16 tiles foldColumnBlockIntoRow produces the tile shape below
-  // (lanes shown as in the layout; the store lowering then repacks each row across lanes).
+  // (lanes shown as in the layout; a folded store sends this register image to the GenISA block write unchanged).
   //               tileWidth=32
   //                     ^
   // ┌───────────────────┬───────────────────┐

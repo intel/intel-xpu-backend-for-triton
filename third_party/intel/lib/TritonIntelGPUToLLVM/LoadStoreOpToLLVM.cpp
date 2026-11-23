@@ -94,6 +94,7 @@ static bool hasEpilogueMath(Value storedVal) {
 }
 
 /// Whether 2D block stores may widen 16-bit rows (validate2DBlockStoreTile).
+/// LTS keeps narrow rows because the fold is untested on the LTS driver.
 static bool allowStoreColumnBlockFold(Operation *op, Value storedVal) {
   auto mod = op->getParentOfType<ModuleOp>();
   return !mod->hasAttr(TritonIntelGPUDialect::getIsLTSAttrName()) &&
