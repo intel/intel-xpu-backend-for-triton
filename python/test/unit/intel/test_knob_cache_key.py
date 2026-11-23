@@ -61,6 +61,8 @@ INVALIDATING_RAW_ENV_VARS = (
     "TRITON_INTEL_ANNOTATE_LATENCIES",
     # Turns off sub-group block reads in DescriptorLoadOpConversion.
     "TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ",
+    # Turns off the store boundary clamp in `matchStoreBoundaryClamp` (BlockIOUtils.cpp).
+    "TRITON_INTEL_DISABLE_STORE_BOUNDARY_CLAMP",
     # Picks `runSpirvBackend` over `writeSpirv` in SPIRVTranslation.cpp.
     "TRITON_USE_SPIRV_BACKEND",
 )

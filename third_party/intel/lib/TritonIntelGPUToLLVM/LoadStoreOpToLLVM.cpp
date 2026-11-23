@@ -4095,7 +4095,7 @@ struct StoreOpToBlockIOConversion
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
-  /// A store's surface clamps and the pitch their C6 check was proven for.
+  /// A store's surface clamps and the pitch proven to cover the widest surface.
   struct SurfaceClamp : StoreBoundaryClamp {
     int64_t pitchBytes;
   };
@@ -4124,7 +4124,7 @@ struct StoreOpToBlockIOConversion
         pitch % 16 == 0)
       pitchBytes = pitch;
     StoreBoundaryClamp clamp = matchStoreBoundaryClamp(
-        op, contiguousDim, /*pitchDimIsBroadcast=*/rowStride == 0, pitchBytes,
+        op, contiguousDim, pitchBytes,
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass));
 
     // Only a column constancy below the unmasked tile's width, or a row one

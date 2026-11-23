@@ -1,4 +1,4 @@
-"""Gate G1 of the store boundary clamp, and its rows: a masked pointer store whose column bound is not a multiple of
+"""On-device test of the store boundary clamp: a masked pointer store whose column bound is not a multiple of
 the 16-column message, or whose row bound leaves a row constancy of 1, is lowered to 2D block stores whose surface
 ends at the bounds, shifted left when narrower than 64 bytes."""
 
@@ -41,8 +41,8 @@ def _gemm_store(a_ptr, b_ptr, c_ptr, M_RT, M: tl.constexpr, N: tl.constexpr, NB:
 
 
 # (store dtype, N, M, output start residue mod 64 in bytes, STRIDE, extra programs per grid dim, sub-group size).
-# The last column tile has N % 128 valid columns; the origin shifts when they span fewer than 64 bytes. C6's minimum
-# STRIDE is 160 for 16-bit and 144 for f32 stores; only N % 16 == 0 (N = 160) gets block stores today.
+# The last column tile has N % 128 valid columns; the origin shifts when they span fewer than 64 bytes. The least STRIDE
+# with pitch >= row bytes + 63 is 160 for 16-bit and 144 for f32; only N % 16 == 0 (N = 160) gets block stores today.
 CASES = [
     ("float16", 158, 128, 0, 160, 0, 16),  # 30 valid columns: 60 bytes, shifted
     ("float16", 136, 128, 0, 160, 0, 16),  # 8 columns, shifted
@@ -50,7 +50,7 @@ CASES = [
     ("float16", 30, 128, 0, 160, 0, 16),  # first tile: row 0's shifted origin lies in the guard before the output
     ("float32", 136, 128, 0, 144, 0, 16),  # 8 columns: 32 bytes, shifted
     ("float32", 130, 128, 0, 144, 0, 16),  # 2 columns, shifted
-    ("float16", 248, 128, 0, 248, 0, 16),  # 120 columns: 240 bytes, no shift; STRIDE >= N rules out C6's minimum
+    ("float16", 248, 128, 0, 248, 0, 16),  # 120 columns: 240 bytes, no shift; STRIDE >= N rules out the least STRIDE
     ("float16", 160, 128, 4, 160, 0, 16),  # 32 columns: works today
     ("float16", 8, 72, 4, 264, 1, 16),
     ("float16", 2, 128, 60, 160, 0, 32),
@@ -204,8 +204,8 @@ def test_store_boundary_clamp(case, arm, device, tmp_path, monkeypatch, with_all
     _run_in_child(device, case, arm, env)
 
 
-# Not contract validation: each keeps the scalar path. Pitches 304 and 256 (rows only) fail C6 only with alignment
-# compensation.
+# Not contract validation: each keeps the scalar path. Pitches 304 and 256 (rows only) are below row bytes + 63, so
+# they fail only where alignment compensation adds the 63 bytes.
 @pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
                    reason="Block stores not supported on this architecture", run=False)
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
@@ -217,6 +217,6 @@ def test_store_boundary_clamp_declines(N, M, stride, res, device, tmp_path, monk
     stamped, block, scalar = _lowering(kernel)
     align = re.search(r"ttig\.2d_block_io_base_alignment = (\d+)", kernel.asm["ttgir"])
     if align and int(align.group(1)) <= 4 and N % 2 == 0 and stride * 2 >= 256:
-        pytest.skip("no alignment compensation on this device, so C6 accepts this pitch")
+        pytest.skip("no alignment compensation on this device, so pitch >= row bytes suffices")
     # An odd N or M has a constancy of 1, which MaterializeBlockPointer stamps only for a clamp.
     assert (stamped, block, scalar) == (N % 2 == 0 and M % 2 == 0, False, True)
