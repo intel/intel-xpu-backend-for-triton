@@ -28,3 +28,31 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return
   }
 }
+
+// -----
+
+// COM: Same shared-pointer setup, but the store value is a tt.load, which
+// COM: can't be retyped in place; it should get a convert_layout instead.
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [2], order = [0]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#slice = #ttg.slice<{dim = 1, parent = #mma}>
+
+module attributes {"ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @load_store_shares_ptr_with_mma_derived_store
+  tt.func @load_store_shares_ptr_with_mma_derived_store(%ptr_scalar: !tt.ptr<f32>, %cond: i1, %mma_val: tensor<16xf32, #slice>) {
+    %ptr = tt.splat %ptr_scalar : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>, #blocked>
+    %converted = ttg.convert_layout %mma_val : tensor<16xf32, #slice> -> tensor<16xf32, #blocked>
+    cf.cond_br %cond, ^bb1, ^bb2
+  ^bb1:
+    // CHECK: %[[LOADED:.*]] = tt.load %{{.*}} : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #mma}>>
+    // CHECK: tt.store %{{.*}}, %[[LOADED]] : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #mma}>>
+    %loaded = tt.load %ptr : tensor<16x!tt.ptr<f32>, #blocked>
+    tt.store %ptr, %loaded : tensor<16x!tt.ptr<f32>, #blocked>
+    tt.return
+  ^bb2:
+    // CHECK: tt.store %{{.*}}, %{{.*}} : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #mma}>>
+    tt.store %ptr, %converted : tensor<16x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
