@@ -27,7 +27,7 @@ _THRESHOLD_KEYS = _REQUIRED_KEYS | {"improvement_lock_pct", "lock_window"}
 _TOP_KEYS = {"version", "defaults", "metrics", "platforms", "families", "benchmarks", "scopes", "importance"}
 _SCOPE_KEYS = {"source", "platform", "tags", "benchmarks", "groups", "expected_nightly"}
 _SOURCE_KINDS = {"micro", "third_party", "artifact"}
-_METRIC_KEYS = {"higher_is_better", "gate"}
+_METRIC_KEYS = {"higher_is_better", "gate", "signed"}
 # key -> (integer?, minimum, minimum is exclusive?)
 _RULES: dict[str, tuple[bool, float, bool]] = {
     "min_drop_pct": (False, 0, False),
@@ -72,6 +72,7 @@ class Catalog:  # pylint: disable=too-many-instance-attributes
     scopes: Mapping[str, Scope] = field(default_factory=dict)
     importance: Mapping[str, Any] = field(default_factory=dict)
     ungated_metrics: frozenset[str] = frozenset()  # declared, but never gated (`gate: false`)
+    signed_metrics: frozenset[str] = frozenset()  # zero and negative values are real measurements (`signed: true`)
 
     def normalize_platform(self, gpu_device: str) -> str | None:
         """Map a raw gpu_device string to a platform label, or None if no platform matches."""
@@ -97,6 +98,10 @@ class Catalog:  # pylint: disable=too-many-instance-attributes
         if metric not in self.metrics:
             return "undeclared"
         return "ungated" if metric in self.ungated_metrics else "gated"
+
+    def is_signed(self, metric: str) -> bool:
+        """True if *metric* is declared ``signed: true``: zero and negative values are valid measurements."""
+        return metric in self.signed_metrics
 
     def is_gated(self, metric: str) -> bool:
         """True if *metric* is gated; False for ``gate: false``. An undeclared metric raises."""
@@ -312,15 +317,17 @@ def _build(raw: Mapping[str, Any]) -> Catalog:
     missing = _REQUIRED_KEYS - set(defaults)
     if missing:
         raise CatalogError(f"defaults: missing {sorted(missing)}")
-    metrics, ungated = {}, set()
+    metrics, ungated, signed = {}, set(), set()
     for name, spec in _as_mapping("metrics", raw.get("metrics")).items():
         spec = _spec(f"metric {name!r}", spec)
         if "higher_is_better" not in spec or set(spec) - _METRIC_KEYS or not all(
                 isinstance(v, bool) for v in spec.values()):
-            raise CatalogError(f"metric {name!r}: expected boolean higher_is_better and optional boolean gate")
+            raise CatalogError(f"metric {name!r}: expected boolean higher_is_better and optional boolean gate/signed")
         metrics[name] = spec["higher_is_better"]
         if spec.get("gate") is False:
             ungated.add(name)
+        if spec.get("signed") is True:
+            signed.add(name)
     platforms = _as_mapping("platforms", raw.get("platforms"))
     for name, spec in platforms.items():
         spec = _spec(f"platform {name!r}", spec)
@@ -339,7 +346,7 @@ def _build(raw: Mapping[str, Any]) -> Catalog:
         _check_thresholds(f"benchmark {name!r}", _spec(f"benchmark {name!r}", spec))
     catalog = Catalog(defaults, metrics, platforms, families, benchmarks,
                       _parse_scopes(_as_mapping("scopes", raw.get("scopes"))),
-                      _as_mapping("importance", raw.get("importance")), frozenset(ungated))
+                      _as_mapping("importance", raw.get("importance")), frozenset(ungated), frozenset(signed))
     catalog.validate()
     return catalog
 
