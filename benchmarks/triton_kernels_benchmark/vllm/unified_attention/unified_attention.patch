@@ -2,7 +2,18 @@ diff --git a/tests/kernels/attention/test_triton_unified_attention.py b/tests/ke
 index 26e80f09e7..a6aeeb1dc9 100644
 --- a/tests/kernels/attention/test_triton_unified_attention.py
 +++ b/tests/kernels/attention/test_triton_unified_attention.py
-@@ -445,7 +445,9 @@ def test_speculative_splitk_matches_reference(
+@@ -206,6 +206,10 @@ def test_window_aware_segments_gate(
+         num_seqs=num_seqs,
+         **options,
+     )
++    # The tdesc patch launches the 2D kernel for sliding windows <= 1024.
++    window = options["window_size"][0] + 1
++    if 0 < window <= 1024:
++        expect_3d = expect_window_segments = False
+     assert kernel["IS_3D"] is expect_3d
+     assert kernel["WINDOW_SEGMENTS"] is expect_window_segments
+     if expect_3d:
+@@ -445,7 +449,9 @@ def test_speculative_splitk_matches_reference(
          q_dtype=q_dtype,
          seq_threshold_3D=32,
      )
@@ -13,7 +24,7 @@ index 26e80f09e7..a6aeeb1dc9 100644
  
  
  def test_speculative_splitk_bf16_query_fp8_kv(monkeypatch):
-@@ -934,6 +936,7 @@ def test_triton_unified_attn(
+@@ -934,6 +940,7 @@ def test_triton_unified_attn(
          softmax_segm_max=softmax_segm_max,
          softmax_segm_expsum=softmax_segm_expsum,
          kv_quant_mode=kv_quant_mode,
@@ -21,7 +32,7 @@ index 26e80f09e7..a6aeeb1dc9 100644
      )
  
      ref_output = ref_paged_attn(
-@@ -1057,6 +1060,7 @@ def test_triton_unified_attn_bf16_query_fp8_kv(
+@@ -1057,6 +1064,7 @@ def test_triton_unified_attn_bf16_query_fp8_kv(
          softmax_segm_max=softmax_segm_max,
          softmax_segm_expsum=softmax_segm_expsum,
          kv_quant_mode=KVQuantMode.FP8_PER_TENSOR,
@@ -29,7 +40,7 @@ index 26e80f09e7..a6aeeb1dc9 100644
      )
  
      ref_output = ref_paged_attn(
-@@ -1176,6 +1180,7 @@ def test_triton_unified_attn_fp16_input_fp8_output(
+@@ -1176,6 +1184,7 @@ def test_triton_unified_attn_fp16_input_fp8_output(
          softmax_segm_output=softmax_segm_output,
          softmax_segm_max=softmax_segm_max,
          softmax_segm_expsum=softmax_segm_expsum,
