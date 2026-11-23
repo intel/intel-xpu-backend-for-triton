@@ -117,25 +117,14 @@ def _restore_dynamic_source(python_function, src):
             )
 
 
-@dataclass(frozen=True)
-class _SourceLocation:
-    file_name: str
-    starting_line_number: int
-    def_file_line_number: int
-    def_file_col_number: int
-
-
-def _make_dynamic_jit_callable(callable_type, args, src, source_location: _SourceLocation):
+def _make_dynamic_jit_callable(callable_type, args, src, starting_line_number):
     python_function = args[0]
     if isinstance(python_function, _CodeGenFunction):
         python_function = python_function.jit_function.fn
     _restore_dynamic_source(python_function, src)
     function = callable_type(*args)
     function._unsafe_update_src(src)
-    function.file_name = source_location.file_name
-    function.starting_line_number = source_location.starting_line_number
-    function.def_file_line_number = source_location.def_file_line_number
-    function.def_file_col_number = source_location.def_file_col_number
+    function.starting_line_number = starting_line_number
     return function
 
 
@@ -189,9 +178,7 @@ class _JITFunctionPickler(CloudPickler):
             obj._repr,
             obj.launch_metadata,
         )
-        source_location = _SourceLocation(obj.file_name, obj.starting_line_number, obj.def_file_line_number,
-                                          obj.def_file_col_number)
-        return _make_dynamic_jit_callable, (type(obj), args, obj.src, source_location)
+        return _make_dynamic_jit_callable, (type(obj), args, obj.src, obj.starting_line_number)
 
 
 def _jit_dumps(obj):
