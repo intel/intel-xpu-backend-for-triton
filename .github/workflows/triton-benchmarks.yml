@@ -313,8 +313,8 @@ jobs:
           python run_benchmarks.py --reports $REPORTS
 
           # Convert raw descriptor-vs-load CSVs to *-report.csv.
-          for plot in copy-1d gelu-1d copy-2d permute-3d row-sum-2d layer-norm-2d matmul-desc cat-reduce-2d \
-                      grouped-matmul-row-limit batched-grouped-matmul-row-limit; do
+          # Plot names come from the benchmark definitions, so new benchmarks are picked up automatically.
+          for plot in $(python list_plot_names.py core_ops/descriptor_load.py); do
             [ -f "$REPORTS/$plot.csv" ] || { echo "::warning::$plot.csv not found, skipping"; continue; }
             python ../transform_results.py $REPORTS/$plot.csv $REPORTS/$plot-report.csv \
               --tag $TAG \
