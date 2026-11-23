@@ -1474,6 +1474,10 @@ matchStoreBoundaryClamp(triton::StoreOp op, unsigned contiguousDim,
   // Read on every call: a cached value would outlive a change to it.
   if (triton::tools::getBoolEnv("TRITON_INTEL_DISABLE_STORE_BOUNDARY_CLAMP"))
     return {};
+  // The block store lowering does not forward a cache modifier.
+  if (getCachePolicy(op.getCachePolicyAttr()).cacheModifier !=
+      triton::CacheModifier::NONE)
+    return {};
   auto tensorTy = dyn_cast<RankedTensorType>(op.getValue().getType());
   if (!tensorTy || !pitchBytes)
     return {};

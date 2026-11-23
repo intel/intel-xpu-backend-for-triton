@@ -4111,10 +4111,6 @@ struct StoreOpToBlockIOConversion
     auto tensorType = cast<RankedTensorType>(op.getValue().getType());
     if (!op.getMask() || !maskAxisInfo || tensorType.getRank() != 2)
       return std::nullopt;
-    // A block store carries no cache control, so a store asking for one stays
-    // on the generic path, which honours it.
-    if (tritonToIntelCacheModifier(op) != TritonGEN::StoreCacheControl::DEFAULT)
-      return std::nullopt;
 
     // The pitch `matchAndRewrite` emits via `getPitch`, narrowed so that no
     // failure can follow: no stride-0 or annotated row, and only a pitch the

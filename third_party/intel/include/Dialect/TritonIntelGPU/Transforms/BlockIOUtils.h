@@ -285,9 +285,9 @@ struct StoreBoundaryClamp {
 /// The clamps for the mask of \p op, constant bounds allowed: a dim's base must
 /// be a multiple of `PowerOf2Ceil(extent)`, so `base + arange` cannot wrap, and
 /// a column must pass `colLimitIsHWCompatible`. No dim clamps for a uniform
-/// conjunct, with `TRITON_INTEL_DISABLE_STORE_BOUNDARY_CLAMP` set, or unless
-/// the constant pitch \p pitchBytes covers the widest surface: the tensor's row
-/// bytes, at least 64, plus any base alignment compensation.
+/// conjunct, a cache modifier, with `TRITON_INTEL_DISABLE_STORE_BOUNDARY_CLAMP`
+/// set, or unless the constant pitch \p pitchBytes covers the widest surface:
+/// the tensor's row bytes, at least 64, plus any base alignment compensation.
 StoreBoundaryClamp
 matchStoreBoundaryClamp(triton::StoreOp op, unsigned contiguousDim,
                         bool pitchDimIsBroadcast,
