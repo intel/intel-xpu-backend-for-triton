@@ -320,3 +320,35 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// With ttig.store_l1_write_back, a widened 64 B row is a whole line and keeps
+// the default policy; the kill switch's 32 B rows are written back through L1.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io", "ttig.store_l1_write_back"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @fold_l1wb_tdesc
+  // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default}
+  // CHECK-NOT:     triton_gen.2Dblockstore
+  // OFF-LABEL:     llvm.func spir_kernelcc @fold_l1wb_tdesc
+  // OFF-COUNT-8:   triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = L1WB_L3WB}
+  // OFF-NOT:       triton_gen.2Dblockstore
+  tt.func public @fold_l1wb_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %val: tensor<32x32xf16, #dpas>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <32x32xf16, #dpas>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32], %val {ttig.block_io = "row_major"} : !tt.tensordesc<32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+
+  // tt.store picks the same policy; ttig.block_io_stride stands in for the pitch.
+  // CHECK-LABEL: llvm.func spir_kernelcc @fold_l1wb_ptr
+  // CHECK:         triton_gen.2Dblockstore {{.*}} tile_width = 32, {{.*}} cache_control = Default
+  // OFF-LABEL:     llvm.func spir_kernelcc @fold_l1wb_ptr
+  // OFF:           triton_gen.2Dblockstore {{.*}} tile_width = 16, {{.*}} cache_control = L1WB_L3WB
+  tt.func public @fold_l1wb_ptr(%ptrs: tensor<32x32x!tt.ptr<f16>, #dpas>, %val: tensor<32x32xf16, #dpas>) {
+    tt.store %ptrs, %val {ttig.block_io = "row_major", ttig.block_io_stride = 32 : i64} : tensor<32x32x!tt.ptr<f16>, #dpas>
+    tt.return
+  }
+}
