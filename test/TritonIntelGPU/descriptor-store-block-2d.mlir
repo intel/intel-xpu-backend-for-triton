@@ -292,7 +292,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-COUNT-16:  llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<16xf16>
 
     // The 2D block store: base ptr from descriptor, computed width/height/pitch.
-    // CHECK:           triton_gen.2Dblockstore %[[EX_BASE]], %[[BASE_WIDTH]], %[[BASE_HEIGHT]], %[[PITCH]], {{.*}}, %[[OFF_ROW]], {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<16xi16>)
+    // CHECK:           triton_gen.2Dblockstore %[[EX_BASE]], %[[BASE_WIDTH]], %[[BASE_HEIGHT]], %[[PITCH]], {{.*}}, %[[OFF_ROW]], {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default} {triton_gen.genisa_row_layout} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<16xi16>)
 
     // Remaining 3 stores (repCluster [4,2], two column blocks per 32-wide row => 4 total stores).
     // CHECK-COUNT-3: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default}
