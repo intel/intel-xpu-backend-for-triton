@@ -489,6 +489,13 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 // Register:  {{0,1}}
 // Lane:      {{1,0}, {2,0}, {4,0}, {0,0}}
 //
+// With repeat_count < 8 (M < 8), the lowering pads the scaled dot to 8-row
+// bdpas instructions (see DPAS.cpp). Lane l still holds the scale of row
+// l % repeat_count, so lanes repeat_count..7 hold copies of real scales, which
+// the instruction only applies to the padding rows.
+// Example of repeat_count=4, operands_per_chan=4 for warp size 16:
+// Lane:      {{1,0}, {2,0}, {0,0}, {0,0}}
+//
 // clang-format on
 std::vector<std::vector<int32_t>>
 BlockScaledDPASRegBasesScaleA(int opsPerChannel) {
@@ -504,7 +511,8 @@ BlockScaledDPASRegBasesScaleA(int opsPerChannel) {
 
 std::vector<std::vector<int32_t>>
 BlockScaledDPASLaneBasesScaleA(int repeatCount, int threadsPerWarp) {
-  assert((repeatCount == 8) && "invalid repeatCount number for bdpas.");
+  assert(llvm::isPowerOf2_32(repeatCount) && repeatCount <= 8 &&
+         "invalid repeatCount number for bdpas.");
 
   std::vector<std::vector<int32_t>> laneBases;
   int tid = 1;
@@ -576,8 +584,10 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
                                            int scaleKIndex) {
   assert(opIdx < 5 && "opIdx must be 0, 1, 2, 3, or 4");
   auto dpas = cast<DpasEncodingAttr>(layout);
+  // A repeat count below 8 is padded to 8-row bdpas at lowering (DPAS.cpp).
   [[maybe_unused]] unsigned rc = dpas.getRepeatCount();
-  assert(rc == 8 && "block scaled dpas only supports repeatCount=8");
+  assert(llvm::isPowerOf2_32(rc) && rc <= 8 &&
+         "block scaled dpas only supports a power-of-2 repeatCount up to 8");
   if (opIdx < 3)
     return DPAStoLinearLayout(shape, layout, opIdx);
 

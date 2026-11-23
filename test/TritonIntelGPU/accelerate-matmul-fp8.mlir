@@ -440,3 +440,23 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
     tt.return
   }
 }
+
+// -----
+
+// COM: tt.dot_scaled with M < 8 (issue #8773) keeps a small-M DPAS encoding (repeatCount = 4). Block scaled DPAS only
+// COM: has 8 rows: lane l of the scale A layout holds the scale of row l % 4, and the lowering pads the dot to 8 rows.
+// CHECK: #[[$LINEAR_SCALE_A:.+]] = #ttg.linear<{register = {{\[\[}}0, 1], [0, 2]], lane = {{\[\[}}1, 0], [2, 0], [0, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0]], block = []}>
+// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 4, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 1], A = [4, 16], B = [16, 16], C = [4, 16]}>
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func public @kernel_small_m_dot_scaled(
+  tt.func public @kernel_small_m_dot_scaled(%a: tensor<4x128xf8E4M3FN, #blocked>, %scale_a: tensor<4x4xi8, #blocked1>, %b: tensor<64x64xi8, #blocked>, %scale_b: tensor<64x4xi8, #blocked1>) -> tensor<4x64xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<4x64xf32, #blocked>
+    // CHECK: ttg.convert_layout %{{.*}} : tensor<4x4xi8, #{{.*}}> -> tensor<4x4xi8, #[[$LINEAR_SCALE_A]]>
+    // CHECK: tt.dot_scaled {{.*}} lhs = bf16 rhs = bf16 {fastMath = false} : tensor<4x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>, tensor<4x4xi8, #[[$LINEAR_SCALE_A]]> * tensor<128x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #[[$DPAS]], kWidth = 2}>>, tensor<64x4xi8, #{{.*}}> -> tensor<4x64xf32, #[[$DPAS]]>
+    %0 = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e4m3 rhs = e2m1 {fastMath = false} : tensor<4x128xf8E4M3FN, #blocked>, tensor<4x4xi8, #blocked1> * tensor<64x64xi8, #blocked>, tensor<64x4xi8, #blocked1> -> tensor<4x64xf32, #blocked>
+    tt.return %0 : tensor<4x64xf32, #blocked>
+  }
+}
