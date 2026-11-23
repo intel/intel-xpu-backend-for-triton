@@ -158,6 +158,7 @@ jobs:
         env:
           GRF_COMPARISON_REFS: ${{ inputs.grf_comparison_refs }}
         run: |
+          source ./scripts/capture-hw-details.sh
           python scripts/vllm/compare_ua_grf.py --refs "$GRF_COMPARISON_REFS" --reports "$REPORTS" --tag "$TAG"
 
       - name: Run vllm unified attention bf16
