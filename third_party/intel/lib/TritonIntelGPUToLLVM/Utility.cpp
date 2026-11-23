@@ -16,6 +16,9 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 
+#include <algorithm>
+#include <numeric>
+
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -96,6 +99,29 @@ Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   return shuffleCommon(loc, rewriter, val, b.i32_val(i),
                        mlir::gpu::ShuffleMode::UP);
+}
+
+SmallVector<Value> getSmemBases(Operation *op, TypeRange elemTypes,
+                                unsigned elems,
+                                const TypeConverter &typeConverter,
+                                RewriterBase &rewriter,
+                                const TargetInfoBase &targetInfo) {
+  Location loc = op->getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  std::vector<unsigned> indices(elemTypes.size());
+  std::iota(indices.begin(), indices.end(), 0);
+  std::sort(indices.begin(), indices.end(), [&](unsigned i, unsigned j) {
+    return getIntOrFloatOrPtrBitWidth(elemTypes[i]) >
+           getIntOrFloatOrPtrBitWidth(elemTypes[j]);
+  });
+  SmallVector<Value> smemBases(elemTypes.size());
+  Value basePtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+  smemBases[indices[0]] = basePtr;
+  for (unsigned i = 1; i < elemTypes.size(); ++i)
+    smemBases[indices[i]] = b.gep(
+        basePtr.getType(), typeConverter.convertType(elemTypes[indices[i - 1]]),
+        smemBases[indices[i - 1]], b.i32_val(elems));
+  return smemBases;
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
