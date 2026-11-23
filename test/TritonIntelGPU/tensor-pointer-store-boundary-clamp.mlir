@@ -90,11 +90,13 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
     tt.return
   }
 
-  // COM: 8450x504: only the column is relaxed, so the 2-row constancy still sets the tile.
+  // COM: 8450x504: row constancy 2, below the unmasked tile's 8 rows, relaxes the row as well.
   // CHECK-LABEL: llvm.func spir_kernelcc @s2(
   // GEN-LABEL: llvm.func spir_kernelcc @s2(
+  // CHECK: llvm.mlir.constant(8450 : i64) : i64
   // CHECK: llvm.intr.umin
-  // CHECK-COUNT-16: triton_gen.2Dblockstore {{.*}}tile_height = 2,
+  // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}}tile_height = 8,
+  // CHECK-NOT: triton_gen.{{2Dblockstore|predicated_store}}
   tt.func @s2(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #mma>) {
     %ld = arith.constant dense<504> : tensor<64x1xi32, #mma>
     %mb = arith.constant dense<8450> : tensor<64x1xi32, #mma>
@@ -339,6 +341,43 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
     %cst = arith.constant dense<512> : tensor<64x1xi32, #mma>
     %cst_0 = arith.constant dense<512> : tensor<1x128xi32, #mma>
     %cst_1 = arith.constant dense<8449> : tensor<64x1xi32, #mma>
+    %c128_i32 = arith.constant 128 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %acc = arith.muli %pid_m, %c64_i32 : i32
+    %acc_9 = arith.muli %pid_n, %c128_i32 : i32
+    %rm = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #r>
+    %rm_11 = tt.splat %acc : i32 -> tensor<64xi32, #r>
+    %rm_12 = arith.addi %rm_11, %rm : tensor<64xi32, #r>
+    %rn = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #c>
+    %rn_13 = tt.splat %acc_9 : i32 -> tensor<128xi32, #c>
+    %rn_14 = arith.addi %rn_13, %rn : tensor<128xi32, #c>
+    %mask = tt.expand_dims %rm_12 {axis = 1 : i32} : tensor<64xi32, #r> -> tensor<64x1xi32, #mma>
+    %mask_15 = arith.cmpi slt, %mask, %cst_1 : tensor<64x1xi32, #mma>
+    %mask_16 = tt.expand_dims %rn_14 {axis = 0 : i32} : tensor<128xi32, #c> -> tensor<1x128xi32, #mma>
+    %mask_17 = arith.cmpi slt, %mask_16, %cst_0 : tensor<1x128xi32, #mma>
+    %mask_18 = tt.broadcast %mask_15 : tensor<64x1xi1, #mma> -> tensor<64x128xi1, #mma>
+    %mask_19 = tt.broadcast %mask_17 : tensor<1x128xi1, #mma> -> tensor<64x128xi1, #mma>
+    %mask_20 = arith.andi %mask_18, %mask_19 : tensor<64x128xi1, #mma>
+    %0 = arith.muli %mask, %cst : tensor<64x1xi32, #mma>
+    %1 = tt.splat %c_ptr : !tt.ptr<f16> -> tensor<64x1x!tt.ptr<f16>, #mma>
+    %2 = tt.addptr %1, %0 : tensor<64x1x!tt.ptr<f16>, #mma>, tensor<64x1xi32, #mma>
+    %3 = tt.broadcast %2 : tensor<64x1x!tt.ptr<f16>, #mma> -> tensor<64x128x!tt.ptr<f16>, #mma>
+    %4 = tt.broadcast %mask_16 : tensor<1x128xi32, #mma> -> tensor<64x128xi32, #mma>
+    %5 = tt.addptr %3, %4 : tensor<64x128x!tt.ptr<f16>, #mma>, tensor<64x128xi32, #mma>
+    tt.store %5, %val, %mask_20 {ttig.block_io = "row_major"} : tensor<64x128x!tt.ptr<f16>, #mma>
+    tt.return
+  }
+
+  // COM: 8450x512: a two-row tile that is already valid still takes the row clamp at row constancy 2.
+  // CHECK-LABEL: llvm.func spir_kernelcc @s7(
+  // CHECK: llvm.mlir.constant(8450 : i64) : i64
+  // CHECK-NOT: tile_height = 2,
+  // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}}tile_height = 8,
+  // CHECK-NOT: triton_gen.{{2Dblockstore|predicated_store}}
+  tt.func public @s7(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf16, #mma>, %pid_m: i32, %pid_n: i32) {
+    %cst = arith.constant dense<512> : tensor<64x1xi32, #mma>
+    %cst_0 = arith.constant dense<512> : tensor<1x128xi32, #mma>
+    %cst_1 = arith.constant dense<8450> : tensor<64x1xi32, #mma>
     %c128_i32 = arith.constant 128 : i32
     %c64_i32 = arith.constant 64 : i32
     %acc = arith.muli %pid_m, %c64_i32 : i32

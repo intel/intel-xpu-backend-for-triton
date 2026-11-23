@@ -1,6 +1,6 @@
 """End-to-end tests of the store boundary clamp: a masked pointer store whose column bound is not a multiple of
-the 16-column message, or whose row bound leaves a row constancy of 1, is lowered to 2D block stores whose surface
-ends at the bounds, shifted left when narrower than 64 bytes."""
+the 16-column message, or whose row bound leaves a row constancy below the message height, is lowered to 2D block
+stores whose surface ends at the bounds, shifted left when narrower than 64 bytes."""
 
 import os
 import re
@@ -71,13 +71,14 @@ CASES = [
     ("float32", 8, 128, 60, 144, 0, 16),
     ("float32", 2, 128, 4, 260, 0, 32),
     ("float32", 130, 72, 32, 144, 1, 32),
-    # Rows: an odd M leaves M % 64 valid rows in the last row tile at a row constancy of 1, with no block store today.
-    # "runtime_m" passes M as M_RT, whose divisibility Triton specializes for 16 only.
+    # Rows: an M that is not a multiple of 8 leaves M % 64 valid rows in the last row tile at a row constancy below 8.
+    # Odd M has no block store today; "runtime_m" passes M as M_RT, whose divisibility Triton specializes for 16 only.
     ("float16", 128, 129, 0, 160, 0, 16),
     ("bfloat16", 128, 135, 4, 264, 0, 32),
     ("float32", 128, 137, 60, 144, 0, 16),
     ("bfloat16", 128, 135, 32, 160, 1, 16),  # H = 0 in the extra row of programs
     ("float16", 136, 137, 0, 160, 0, 16),  # a ragged row and column edge together
+    ("float16", 128, 138, 0, 160, 0, 16),  # row constancy 2: two-row block stores today
     ("float16", 128, 135, 4, 160, 0, 16, "runtime_m"),
 ]
 
