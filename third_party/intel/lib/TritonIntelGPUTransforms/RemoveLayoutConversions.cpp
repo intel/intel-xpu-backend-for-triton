@@ -2257,9 +2257,28 @@ void LayoutRematerialization::backwardRematerialization(
   forwardPropagateRemat(forwardPropagateCandidates);
 }
 
+/// Whether \p convertOp produces a scale operand of a tt.dot_scaled and
+/// nothing else. Such a convert targets the linear layout the block scaled DPAS
+/// takes its scales in, which no other op can consume in place of it.
+static bool feedsDotScaledScale(ttg::ConvertLayoutOp convertOp) {
+  Value result = convertOp.getResult();
+  if (!result.hasOneUse() ||
+      !isa<ttg::LinearEncodingAttr>(convertOp.getType().getEncoding()))
+    return false;
+  auto dotScaled = dyn_cast<tt::DotScaledOp>(*result.getUsers().begin());
+  return dotScaled &&
+         (dotScaled.getAScale() == result || dotScaled.getBScale() == result);
+}
+
 // When the backward slice of a convert in a loop to an MMA-derived layout is
 // blocked by anchors, relabel single-use rank-1 loads into that layout and
 // convert the other anchors defined outside the loop once.
+//
+// The scale operands of a tt.dot_scaled are handled the same way: a scale load
+// in the loop whose only use is the convert is relabeled into the scale layout
+// (#8931). Left alone, its convert goes from the load's blocked layout to a
+// layout that replicates the scales across lanes and warps, which is a round
+// trip through SLM between two work-group barriers in every iteration.
 LogicalResult LayoutRematerialization::rematerializeUpToAnchors(
     ttg::ConvertLayoutOp convertOp) {
   auto loop = convertOp->getParentOfType<scf::ForOp>();
@@ -2269,7 +2288,10 @@ LogicalResult LayoutRematerialization::rematerializeUpToAnchors(
   Attribute parentEnc = targetEnc;
   if (auto sliceEnc = dyn_cast<ttg::SliceEncodingAttr>(targetEnc))
     parentEnc = sliceEnc.getParent();
-  if (!isa<ttg::MmaEncodingTrait>(parentEnc))
+  Operation *scaleLoad = feedsDotScaledScale(convertOp)
+                             ? convertOp.getSrc().getDefiningOp()
+                             : nullptr;
+  if (!isa<ttg::MmaEncodingTrait>(parentEnc) && !scaleLoad)
     return failure();
 
   auto isRelabeledLoad = [&](Operation *op) {
@@ -2278,8 +2300,13 @@ LogicalResult LayoutRematerialization::rematerializeUpToAnchors(
         !ttgi::isExpensiveLoadOrStore(op))
       return false;
     Value result = op->getResult(0);
+    if (!result.hasOneUse())
+      return false;
+    // The scale load's single use is the convert itself.
+    if (op == scaleLoad)
+      return true;
     auto type = dyn_cast<RankedTensorType>(result.getType());
-    return type && type.getRank() == 1 && result.hasOneUse() &&
+    return type && type.getRank() == 1 &&
            isUnconstrainedShapeOp(*result.getUsers().begin());
   };
   auto isLoopInvariantAnchor = [&](Operation *op) {
@@ -2338,9 +2365,18 @@ LogicalResult LayoutRematerialization::rematerializeUpToAnchors(
   int64_t anchorCvtCost = 0;
   for (Value anchor : anchors)
     anchorCvtCost += getConvertCost(anchor, layout[anchor], convertCostCache);
+  // isRematBeneficial prices a load only when it is duplicated. The scale
+  // layout replicates the tensor, so the relabeled scale load reads each
+  // element once per replica: charge the reads it adds.
+  int64_t scaleLoadCost = 0;
+  if (scaleLoad && slice.contains(scaleLoad->getResult(0))) {
+    Value scale = scaleLoad->getResult(0);
+    scaleLoadCost = 8 * getByteCount(scale) *
+                    (getCostFactor(scale, layout.lookup(scale)) - 1);
+  }
   if (anchorCvtCost >
           getConvertCost(convertOp.getSrc(), targetEnc, convertCostCache) ||
-      !isRematBeneficial(convertOp, slice, layout, /*newCvtCost=*/0,
+      !isRematBeneficial(convertOp, slice, layout, scaleLoadCost,
                          convertCostCache))
     return failure();
 
