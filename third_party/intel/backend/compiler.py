@@ -260,8 +260,15 @@ def min_dot_size(device_props: Union[Dict, GPUTarget]):
     return backend.min_dot_size(device_props)
 
 
+@functools.cache
+def _parse_device_arch(architecture: int) -> str:
+    dirname = os.path.dirname(os.path.realpath(__file__))
+    parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(), name="arch_utils")
+    return parser.parse_device_arch(architecture)
+
+
 class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
-    arch_to_impl = {}  # Architecture id to backend implementation class mapping
+    arch_to_impl = {}  # Device arch name to backend implementation class mapping
     binary_ext = "spv"
     target_arch = "spir64"
 
@@ -274,21 +281,16 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             raise TypeError("target.arch is not a dict")
         if cls is not XPUBackend:
             return super().__new__(cls)
-        arch = target.arch.get("architecture", 0)
-        if (impl := cls.arch_to_impl.get(arch, None)) is None:
+        dev_arch = knobs.intel.device_arch or _parse_device_arch(target.arch.get("architecture", 0))
+        if (impl := cls.arch_to_impl.get(dev_arch, None)) is None:
             # Try to find an arch-specific implementation in the .arch.<name> submodule.
-            if not (dev_arch := knobs.intel.device_arch):
-                dirname = os.path.dirname(os.path.realpath(__file__))
-                parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
-                                                 name="arch_utils")
-                dev_arch = parser.parse_device_arch(target.arch.get('architecture', 0))
             mod_name = f"{__package__}.arch.{dev_arch}"
             try:
                 impl = __import__(mod_name, fromlist=["XPUBackendImpl"]).XPUBackendImpl
             except ImportError:
                 impl = type(f"{mod_name}.XPUBackendImpl", (cls, ), {})
             impl.device_arch = dev_arch
-            cls.arch_to_impl[arch] = impl
+            cls.arch_to_impl[dev_arch] = impl
         return super().__new__(impl)
 
     def __init__(self, target: GPUTarget) -> None:
