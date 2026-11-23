@@ -537,7 +537,7 @@ std::optional<BlockedScanLayout> BlockedScanLayout::get(triton::ScanOp op) {
   s.order = llvm::to_vector(blocked.getOrder());
   s.shape = llvm::to_vector(srcTy.getShape());
   s.axis = op.getAxis();
-  if (getCTASplitNum(s.encoding)[s.axis] != 1)
+  if (getCTASplitNum(s.encoding, s.shape)[s.axis] != 1)
     return std::nullopt;
 
   SmallVector<unsigned> contig = s.encoding.getContigPerThread();
