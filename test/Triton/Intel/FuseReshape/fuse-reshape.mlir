@@ -578,8 +578,8 @@ tt.func public @fuseDynamicCollapsedShape(%arg0: tensor<16x16xf32>, %arg1: !tt.p
 // COM: guard keys on `shapes[1] > 0` too: without it an in-range `%off` would
 // COM: read row 0 of that block. Multiplies, never an `arith.select`:
 // COM: `ttgi::isDivisible` understands `muli` (either operand) and `addi`
-// COM: (both) but not `select`, so a select would change what
-// COM: `DescriptorLoadOpConversion` decides about the emitted shape and index.
+// COM: (both) but not `select`, so a select would change what the
+// COM: descriptor-load fallback decides about the emitted shape and index.
 tt.func public @fuseDynamicMergedShape(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %n: i32, %off: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i64 = arith.constant 1 : i64

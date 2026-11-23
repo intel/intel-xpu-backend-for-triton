@@ -317,10 +317,11 @@ private:
     // followed it to that dimension's extent, which no element of the block
     // can fall below, so the fused load pads too (issue #8070). Written as
     // multiplies and not as `select(inRange, idx, extent)`: a top-level
-    // `arith.select` is invisible to `ttgi::isDivisible`, which
-    // `DescriptorLoadOpConversion` asks about the emitted index to classify
-    // the mask statically, and its `muli` case is an OR over the operands and
-    // its `addi` case an AND. An empty merged dimension makes the rank-3 load
+    // `arith.select` is invisible to `ttgi::isDivisible`, which the
+    // descriptor-load fallbacks (LowerTo2DBlockLoad's tt.load lowering and
+    // DescriptorLoadOpConversion) ask about the emitted index to classify the
+    // mask statically, and its `muli` case is an OR over the operands and its
+    // `addi` case an AND. An empty merged dimension makes the rank-3 load
     // pure padding, so it counts as out of range too: an in-range index would
     // otherwise read the floor declared above.
     builder.setInsertionPoint(descLoadOp);
