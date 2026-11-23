@@ -168,6 +168,47 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// COM: A stride=0 (broadcast) load whose row mask changes between the two
+// COM: messages of a warp (%lo is a multiple of 16, so each 8-row message has
+// COM: one predicate). The messages share one 2D block load, predicated on the
+// COM: OR of their predicates, and each message selects its own rows with its
+// COM: own predicate, so a message whose rows are masked off gets `other`.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_from_ptr_broadcast_masked_rows
+  tt.func public @block_load_from_ptr_broadcast_masked_rows(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %lo: i32 {tt.divisibility = 16 : i32}) {
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
+    %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
+    %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %rows = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %lo_splat = tt.splat %lo : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %in_rows = arith.cmpi sge, %rows, %lo_splat : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %in_rows_2d = tt.expand_dims %in_rows {axis = 1 : i32} : tensor<64xi1, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi1, #dot0>
+    %mask = tt.broadcast %in_rows_2d : tensor<64x1xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    %other = arith.constant dense<3.000000e+00> : tensor<64x32xf16, #dot0>
+    %pitch = arith.constant 64 : i32
+    %height = arith.constant 1 : i32
+    %width = arith.constant 64 : i32
+    // CHECK: [[ANY:%.*]] = llvm.or [[PRED0:%.*]], [[PRED1:%.*]] : i1
+    // CHECK: [[Y:%.*]] = llvm.select [[ANY]], {{.*}} : i1, i32
+    // CHECK: triton_gen.2Dblockload {{.*}}, [[Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
+    // CHECK-NOT: triton_gen.2Dblockload
+    // CHECK: llvm.select [[PRED0]], {{.*}} : i1, vector<8xf16>
+    // CHECK: llvm.select [[PRED0]], {{.*}} : i1, vector<8xf16>
+    // CHECK: llvm.select [[PRED1]], {{.*}} : i1, vector<8xf16>
+    // CHECK: llvm.select [[PRED1]], {{.*}} : i1, vector<8xf16>
+    // CHECK-NOT: triton_gen.2Dblockload
+    // CHECK: llvm.return
+    %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height, %width, %mask, %other {row_major} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32, i32, tensor<64x32xi1, #dot0>, tensor<64x32xf16, #dot0>) -> tensor<64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Runtime (non-foldable) base_height; the tile splits into 2 sub-tile
 // COM: messages (row offsets 0, 8). The CHECK-NOT on message 1 (scoped to
 // COM: the icmp, not the sub, so it isn't shadowed by CHECK-NOT's
