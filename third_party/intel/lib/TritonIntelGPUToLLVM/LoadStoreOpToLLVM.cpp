@@ -5218,9 +5218,15 @@ static LogicalResult lowerBlockLoad2D(
   // A stride=0 (broadcast-row) load reads only row 0 of a 1-row surface, so
   // messages that differ only in their row read the same data. Group them by
   // their static offsets along the other dimensions and issue one 2D block
-  // load per group instead of one per message.
-  bool broadcastRows = staticBaseHeight && *staticBaseHeight == 1 &&
-                       cfg.tileHeight > 1 && !cfg.isTransposeRequired;
+  // load per group instead of one per message. A tile height of 1 is not a
+  // broadcast: a non-broadcast load whose messages are single rows also gets
+  // base_height 1, and each of its messages reads a different row.
+  bool broadcastRows =
+      staticBaseHeight && *staticBaseHeight == 1 && cfg.tileHeight > 1;
+  // A broadcast row has a zero row stride, so its memory is row major
+  // (LowerTo2DBlockLoad only makes a broadcast load from a row-major tile).
+  assert((!broadcastRows || !cfg.isTransposeRequired) &&
+         "a broadcast-row 2D block load is never transposed");
   SmallVector<size_t> msgElemIdxs;
   for (size_t elemIdx = 0; elemIdx < cfg.numElems;
        elemIdx += cfg.numElemsPerLoad)
@@ -5262,7 +5268,7 @@ static LogicalResult lowerBlockLoad2D(
   bool anyShared = llvm::any_of(groupSize, [](unsigned n) { return n > 1; });
   // With shared loads, the addresses of every message come first: a shared
   // load needs the predicates of all its members. Otherwise each address is
-  // computed right before its load, as before.
+  // computed right before its load.
   SmallVector<SubTileAddress> addrs(msgElemIdxs.size());
   if (anyShared)
     for (auto [i, elemIdx] : llvm::enumerate(msgElemIdxs))
@@ -5282,9 +5288,22 @@ static LogicalResult lowerBlockLoad2D(
       groupPred[g] = Value(); // a member without a predicate always reads
     }
   }
-  for (auto [i, g] : llvm::enumerate(groupOf))
-    if (groupSize[g] >= 2 && !addrs[i].pred)
-      groupPred[g] = Value();
+
+  // A shared load may have read for another member: a member with a predicate
+  // and no `other` zero-fills explicitly instead of relying on the hardware's
+  // out-of-bounds fill. `otherElems` is empty for `other = None` and for a
+  // zero `other` (isZeroFillConst drops it), so those loads always take this.
+  SmallVector<Value> zeroElems;
+  if (anyShared && otherElems.empty()) {
+    Type elemTy = getElementTypeOrSelf(cfg.unpackedType);
+    zeroElems.assign(cfg.numElems,
+                     LLVM::ConstantOp::create(rewriter, loc, elemTy,
+                                              rewriter.getZeroAttr(elemTy)));
+  }
+  auto memberOtherOf = [&](const SubTileAddress &addr) -> ArrayRef<Value> {
+    return addr.pred && otherElems.empty() ? ArrayRef<Value>(zeroElems)
+                                           : otherElems;
+  };
 
   SmallVector<Value> unpackedLoadedVals(cfg.numElems);
   SmallVector<Value> groupRet(msgElemIdxs.size());
@@ -5296,20 +5315,11 @@ static LogicalResult lowerBlockLoad2D(
     const SubTileAddress &addr = addrs[msgIdx];
     if (shared && groupRet[group]) {
       // Reuse the group's load; this member's own predicate applies below.
-      SmallVector<Value> memberOther(otherElems);
-      if (addr.pred && memberOther.empty()) {
-        // The shared load may have read for another member: zero-fill
-        // explicitly instead of relying on the hardware's out-of-bounds fill.
-        Type elemTy = getElementTypeOrSelf(cfg.unpackedType);
-        memberOther.assign(cfg.numElems, LLVM::ConstantOp::create(
-                                             rewriter, loc, elemTy,
-                                             rewriter.getZeroAttr(elemTy)));
-      }
       BlockIOConversionBase::unpackBlockLoadResult(
           groupRet[group], unpackedLoadedVals, elemIdx, cfg.regMapping,
           cfg.shuffleMapping, cfg.packedDPASOperandType, cfg.unpackedType,
-          cfg.numValuesPerLoad, cfg.numPackedVals, addr.pred, memberOther,
-          nanMaskElems, loc, rewriter, ctx, padWithZero);
+          cfg.numValuesPerLoad, cfg.numPackedVals, addr.pred,
+          memberOtherOf(addr), nanMaskElems, loc, rewriter, ctx, padWithZero);
       continue;
     }
 
@@ -5370,21 +5380,13 @@ static LogicalResult lowerBlockLoad2D(
                                           firstIndexVec, firstIndexVec, attr);
     }
 
-    SmallVector<Value> memberOther(otherElems);
-    if (shared) {
+    if (shared)
       groupRet[group] = ret;
-      if (addr.pred && memberOther.empty() && addr.pred != loadPred) {
-        Type elemTy = getElementTypeOrSelf(cfg.unpackedType);
-        memberOther.assign(cfg.numElems, LLVM::ConstantOp::create(
-                                             rewriter, loc, elemTy,
-                                             rewriter.getZeroAttr(elemTy)));
-      }
-    }
     BlockIOConversionBase::unpackBlockLoadResult(
         ret, unpackedLoadedVals, elemIdx, cfg.regMapping, cfg.shuffleMapping,
         cfg.packedDPASOperandType, cfg.unpackedType, cfg.numValuesPerLoad,
-        cfg.numPackedVals, addr.pred, memberOther, nanMaskElems, loc, rewriter,
-        ctx, padWithZero);
+        cfg.numPackedVals, addr.pred, shared ? memberOtherOf(addr) : otherElems,
+        nanMaskElems, loc, rewriter, ctx, padWithZero);
   }
 
   Value resultStruct =

@@ -334,7 +334,8 @@ static SmallVector<bool> getUniformDims(Value value, UniformDimsCache &cache,
 /// such a load should anchor a layout is a separate question. A dimension the
 /// walk cannot prove uniform (an unhandled op, or the depth limit) counts as
 /// varying: that is safe for the uniformity proof, but it can make a fully
-/// uniform tile look like a broadcast and cost it by the remaining extent.
+/// uniform tile look like a broadcast, and such a load that feeds DPAS is then
+/// never an anchor (see isExpensiveLoadOrStore).
 static int64_t getNumDistinctElements(Value ptr) {
   auto ptrTy = cast<RankedTensorType>(ptr.getType());
   UniformDimsCache cache;
@@ -439,19 +440,32 @@ bool isExpensiveLoadOrStore(Operation *op) {
     auto mod = op->getParentOfType<ModuleOp>();
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     // A load whose pointer is broadcast along some dimensions, such as an
-    // addmm bias with stride (0, 1), and whose result feeds a DPAS value is
-    // never an anchor. Anchoring it keeps a convert of the whole tile to DPAS
-    // (and usually one of the output back) through shared memory, whose live
-    // values can also push the kernel into spilling. Rematerialized in the
-    // DPAS encoding, the load reads only its distinct row: the 2D block load
-    // lowering issues one message per distinct column block and shares it
-    // across the replicated rows. Other loads, and stores, keep the logical
-    // element count.
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
-      if (getNumDistinctElements(base) < ptrType.getNumElements() &&
-          feedsDpasValue(loadOp))
-        return false;
-    return ptrType.getNumElements() >= numWarps * threadsPerWarp;
+    // addmm bias with stride (0, 1), reads each distinct address repeatedly;
+    // when its result feeds a DPAS value, anchoring it keeps a convert of the
+    // whole tile to DPAS (and usually one of the output back) through shared
+    // memory, whose live values can also push the kernel into spilling.
+    // - A broadcast row that becomes a row-major 2D block load is never an
+    //   anchor: rematerialized in the DPAS encoding, the lowering issues one
+    //   message per distinct column block and shares it across the
+    //   replicated rows.
+    // - Any other such load (a column broadcast, or a row whose mask makes it
+    //   a gather, e.g. an M that is not a multiple of the message height) is
+    //   not shared, so it is costed by its distinct addresses: it stops being
+    //   an anchor only with fewer of them than threads.
+    // Other loads, and stores, keep the logical element count.
+    int64_t numElements = ptrType.getNumElements();
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+      int64_t numDistinct = getNumDistinctElements(base);
+      if (numDistinct < numElements && feedsDpasValue(loadOp)) {
+        auto blockIO = loadOp->getAttrOfType<StringAttr>(
+            TritonIntelGPUDialect::getBlockIOAttrName());
+        if (blockIO &&
+            blockIO.getValue() == stringifyBlockIOMode(BlockIOMode::RowMajor))
+          return false;
+        numElements = numDistinct;
+      }
+    }
+    return numElements >= numWarps * threadsPerWarp;
   }
 
   return false;

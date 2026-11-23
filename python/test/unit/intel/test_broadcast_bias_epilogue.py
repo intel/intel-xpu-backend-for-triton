@@ -113,7 +113,10 @@ def test_broadcast_bias_epilogue(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps, 
                                                 num_stages=2)
 
     torch.testing.assert_close(c.float(), torch.addmm(bias, a, b).float(), atol=5e-2, rtol=1e-2)
-    _bias_load_feeds_dot_in_dpas(kernel.asm["ttgir"])
+    # With an M that is not a multiple of 16 the row mask changes within a block load message, so the bias is not a
+    # 2D block load whose messages share one load; costed by its distinct addresses, it may stay an anchor.
+    if M % 16 == 0:
+        _bias_load_feeds_dot_in_dpas(kernel.asm["ttgir"])
 
 
 @pytest.mark.skipif(not _has_dpas_and_2d_block_io(), reason="the bias is loaded in the DPAS encoding")
@@ -129,7 +132,9 @@ def test_broadcast_bias_masked_rows(BLOCK_M, BLOCK_N, BLOCK_K, num_warps, other,
     # Rows below row_lo and from row_hi on are masked off inside a tile, and so are the last columns. All bounds are
     # multiples of 16: the column bound keeps the bias a 2D block load (an unaligned one makes it a gather), and the
     # row bounds keep the mask constant over each block load message, so the messages that share one broadcast-row
-    # load have different predicates (with other row bounds each message is a single row and nothing is shared).
+    # load can have different predicates (with other row bounds each message is a single row and nothing is shared).
+    # They do where a warp's rows span a bound: in (64, 128, 64, 16) each warp holds 16 contiguous rows, so its
+    # messages always share a predicate; that config covers a shared load whose members are all on or all off.
     row_lo, row_hi, n_valid = 16, 208, N - 16
     torch.manual_seed(0)
     a = torch.randn((M, K), dtype=torch.float16, device=device)
