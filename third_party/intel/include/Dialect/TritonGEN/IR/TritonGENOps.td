@@ -413,7 +413,7 @@ def TritonGEN_SubGroupBlockWriteOp : TritonGEN_Op<"sub_group_block_write"> {
   }];
 
   let arguments = (ins
-      Arg<TritonGEN_SubGroupBlockMemoryAccessPointerType, "", [MemRead]>:$ptr,
+      Arg<TritonGEN_SubGroupBlockMemoryAccessPointerType, "", [MemWrite]>:$ptr,
       TritonGEN_SubGroupBlockMemoryAccessType:$val);
 
   let results = (outs);
