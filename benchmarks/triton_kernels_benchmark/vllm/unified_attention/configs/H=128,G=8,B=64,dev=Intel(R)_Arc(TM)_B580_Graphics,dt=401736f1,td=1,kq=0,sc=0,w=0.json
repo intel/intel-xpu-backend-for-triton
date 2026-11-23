@@ -2,14 +2,7 @@
   "device_name": "Intel(R) Arc(TM) B580 Graphics",
   "entries": [
     {
-      "config": {
-        "block_m": 128,
-        "grf_mode": "256",
-        "heads_per_program": 1,
-        "num_stages": 2,
-        "num_warps": 16,
-        "tile_size": 32
-      },
+      "config": null,
       "key": {
         "is_3d": false,
         "kv_len_bucket": 2,
@@ -22,7 +15,6 @@
       "config": {
         "block_m": 16,
         "grf_mode": "default",
-        "heads_per_program": "MAX",
         "num_stages": 2,
         "num_warps": 8,
         "tile_size": 64
@@ -39,7 +31,6 @@
       "config": {
         "block_m": 16,
         "grf_mode": "256",
-        "heads_per_program": "MAX",
         "num_stages": 2,
         "num_warps": 8,
         "tile_size": 16
@@ -53,14 +44,7 @@
       }
     },
     {
-      "config": {
-        "block_m": 128,
-        "grf_mode": "default",
-        "heads_per_program": 1,
-        "num_stages": 2,
-        "num_warps": 16,
-        "tile_size": 32
-      },
+      "config": null,
       "key": {
         "is_3d": false,
         "kv_len_bucket": 2,
@@ -73,7 +57,6 @@
       "config": {
         "block_m": 16,
         "grf_mode": "256",
-        "heads_per_program": "MAX",
         "num_stages": 2,
         "num_warps": 4,
         "tile_size": 32
