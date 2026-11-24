@@ -1,7 +1,3 @@
-from typing import Optional, Union
-import importlib.metadata
-import pathlib
-import os
 import functools
 import triton
 
@@ -11,24 +7,13 @@ from .flags import flags
 from .hooks import HookManager, LaunchHook, InstrumentationHook
 from .hooks.hook import Hook
 from .mode import BaseMode
+from typing import Optional, Union
 
 DEFAULT_PROFILE_NAME = "proton"
-UTILS_CACHE_PATH = None
 
 
 def _select_backend() -> str:
     backend = triton.runtime.driver.active.get_current_target().backend
-    if backend == "xpu":
-        global UTILS_CACHE_PATH
-        UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib()
-        try:
-            if (files := importlib.metadata.files('intel-pti')) is not None:
-                for f in files:
-                    if 'libpti_view.so' in f.name:
-                        os.environ["TRITON_XPUPTI_LIB_PATH"] = str(pathlib.Path(f.locate()).parent.resolve())
-                        break
-        except importlib.metadata.PackageNotFoundError:
-            pass
     return libproton.select_profiler_from_triton_backend(backend)
 
 
@@ -132,15 +117,8 @@ def start(
 
     sycl_queue = 0
     utils_cache_path = ""
-    if hasattr(triton.runtime.driver.active.utils, "get_sycl_queue"):
-        sycl_queue = triton.runtime.driver.active.utils.get_sycl_queue()
-        # `_select_backend()` normally lazily builds this, but it's only called when
-        # `backend` is left to auto-select; callers that pass an explicit `backend=`
-        # (e.g. `backend="instrumentation"`) would otherwise see this still as `None`.
-        global UTILS_CACHE_PATH
-        if UTILS_CACHE_PATH is None:
-            UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib()
-        utils_cache_path = UTILS_CACHE_PATH
+    if hasattr(triton.runtime.driver.active, "prepare_proton_session"):
+        sycl_queue, utils_cache_path = triton.runtime.driver.active.prepare_proton_session()
 
     _check_env(backend)
 
