@@ -14,6 +14,10 @@
 
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 
+namespace mlir::triton {
+class ScanOp;
+} // namespace mlir::triton
+
 namespace mlir::triton::intel {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:

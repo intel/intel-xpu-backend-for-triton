@@ -1,6 +1,7 @@
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"

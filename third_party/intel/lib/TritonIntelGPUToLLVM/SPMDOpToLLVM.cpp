@@ -1,4 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 namespace {
 
