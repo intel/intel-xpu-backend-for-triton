@@ -272,26 +272,32 @@ class ArchParser:
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
-# The compile metadata of the kernels whose launcher was created on this thread and whose binary is not loaded yet.
-# Core's CompiledKernel creates the launcher from the metadata just before it calls load_binary(name, kernel, shared,
-# device), which lacks the build flags, the binary kind and the GRF mode the loader needs (see SpirvUtils.load_binary).
-_launcher_metadata = threading.local()
+# The compile metadata of the kernels whose launcher was created on this thread and whose binary is not loaded yet,
+# by kernel name. Core's CompiledKernel._init_handles creates the launcher from the metadata, then calls
+# load_binary(name, kernel, shared, device), which lacks the build flags, the binary kind and the GRF mode the loader
+# needs (see SpirvUtils.load_binary). If core raises in between, the record stays until the kernel's next launcher
+# replaces it.
+class _LauncherMetadata(threading.local):
+
+    def __init__(self):
+        self.pending = {}
+
+
+_launcher_metadata = _LauncherMetadata()
 
 
 def _load_binary_args(args):
-    """(name, kernel, shared, build_flags, is_spv, device, max_grf_mode) for the loader, from either form of the
-    call: that one (max_grf_mode optional), or core's (name, kernel, shared, device), completed from the metadata
-    the kernel's launcher recorded."""
-    pending = getattr(_launcher_metadata, "pending", None)
-    if pending is None:
-        pending = _launcher_metadata.pending = {}
+    """Return the loader's (name, kernel, shared, build_flags, is_spv, device, max_grf_mode). Core's four-argument
+    call is completed from the metadata this thread's launcher recorded; other forms pass through."""
+    pending = _launcher_metadata.pending
     if len(args) != 4:
-        pending.pop(args[0], None)
+        pending.pop(args[0] if args else None, None)
         return args
     name, kernel, shared, device = args
     metadata = pending.pop(name, None)
     if metadata is None:
-        raise RuntimeError(f"load_binary('{name}'): no compile metadata; the kernel's launcher was not created first")
+        raise RuntimeError(f"load_binary('{name}'): no compile metadata recorded on this thread; create the kernel's "
+                           "launcher (driver.active.launcher_cls) first")
     max_grf_mode = getattr(metadata, "max_grf_mode", None)
     # Metadata without max_grf_mode implies a "cri" target retries at 512 GRFs.
     legacy_arch = getattr(metadata.target, "arch", None)
@@ -749,10 +755,6 @@ def serialize_args(args, constants, signature, dir_path):
 class XPULauncher(object):
 
     def __init__(self, src, metadata):
-        pending = getattr(_launcher_metadata, "pending", None)
-        if pending is None:
-            pending = _launcher_metadata.pending = {}
-        pending[getattr(metadata, "name", None)] = metadata
         constants = src.constants if hasattr(src, "constants") else dict()
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
@@ -776,6 +778,8 @@ class XPULauncher(object):
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
+        # Last, so that a launcher whose construction fails leaves no record.
+        _launcher_metadata.pending[metadata.name] = metadata
 
     def _resolve_dump_dir(self, cache_dir):
         dump_dir_root = knobs.intel.dump_kernel_args_dir
