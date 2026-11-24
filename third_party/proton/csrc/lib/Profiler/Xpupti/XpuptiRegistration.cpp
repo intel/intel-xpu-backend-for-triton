@@ -11,9 +11,13 @@
 // libproton.start() (Session.cpp).
 #ifdef PROTON_XPU_EXTERNAL
 
-#include <Python.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/string.h>
 
-#include <stdexcept>
+#include <cstdint>
+#include <string>
+#include <utility>
 
 #include "Backend/Backend.h"
 #include "Driver/GPU/XpuApi.h"
@@ -24,48 +28,23 @@ namespace proton {
 
 namespace {
 
+namespace nb = nanobind;
+
 // Runs under Proton's session lock with the GIL held, so it must not call
 // Proton. If the Python call hands the GIL to a thread that then waits for the
 // lock in a Proton scope or op, the start hangs. Fixing that needs Proton to
 // call registered factories outside the lock.
+// A Python error leaves as nb::python_error, which libproton's nanobind
+// bindings raise again from proton.start().
 void prepareSession() {
-  if (!Py_IsInitialized())
-    throw std::runtime_error(
-        "[PROTON] Could not prepare the XPU profiler session: no Python");
-  PyGILState_STATE gil = PyGILState_Ensure();
-  // triton.runtime.driver.active.prepare_proton_session() -> (queue, path)
-  PyObject *result = nullptr;
-  if (PyObject *runtime = PyImport_ImportModule("triton.runtime")) {
-    if (PyObject *driver = PyObject_GetAttrString(runtime, "driver")) {
-      if (PyObject *active = PyObject_GetAttrString(driver, "active")) {
-        result = PyObject_CallMethod(active, "prepare_proton_session", nullptr);
-        Py_DECREF(active);
-      }
-      Py_DECREF(driver);
-    }
-    Py_DECREF(runtime);
-  }
-  bool prepared = false;
-  if (result && PyTuple_Check(result) && PyTuple_Size(result) == 2) {
-    void *queue = PyLong_AsVoidPtr(PyTuple_GetItem(result, 0));
-    const char *path = PyErr_Occurred()
-                           ? nullptr
-                           : PyUnicode_AsUTF8(PyTuple_GetItem(result, 1));
-    if (path && !PyErr_Occurred()) {
-      XpuRuntime::instance().setSyclQueue(queue);
-      xpu::PROTON_UTILS = path;
-      prepared = true;
-    }
-  }
-  Py_XDECREF(result);
-  // Print and clear the Python error: left pending, it would surface in an
-  // unrelated frame. The exception below makes proton.start() raise instead.
-  if (PyErr_Occurred())
-    PyErr_Print();
-  PyGILState_Release(gil);
-  if (!prepared)
-    throw std::runtime_error(
-        "[PROTON] Could not prepare the XPU profiler session");
+  nb::gil_scoped_acquire gil;
+  auto [queue, path] = nb::cast<std::pair<uintptr_t, std::string>>(
+      nb::module_::import_("triton.runtime")
+          .attr("driver")
+          .attr("active")
+          .attr("prepare_proton_session")());
+  XpuRuntime::instance().setSyclQueue(reinterpret_cast<void *>(queue));
+  xpu::PROTON_UTILS = path;
 }
 
 BackendRegistration makeRegistration() {
