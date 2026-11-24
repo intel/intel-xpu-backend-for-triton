@@ -640,8 +640,9 @@ private:
   /// when LowerTo2DBlockLoad would reject the row pitch
   /// (`ttgi::isBlockPitchSupported`) or the column bound's granularity
   /// (`ttgi::colLimitIsHWCompatible`). A `tt::StoreOp` is also permitted along
-  /// a dim of constancy below 2 where StoreOpToBlockIOConversion clamps the
-  /// surface to the mask's bound instead (`ttgi::matchStoreBoundaryClamp`).
+  /// a dim of constancy below 2 where its mask's bound lets
+  /// StoreOpToBlockIOConversion clamp the surface instead
+  /// (`ttgi::matchStoreBoundaryClamp`); the lowering may still refuse.
   template <typename OpType>
   bool maskPermitsBlockTile(OpType op,
                             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -717,8 +718,10 @@ private:
     return true;
   }
 
-  /// Whether StoreOpToBlockIOConversion clamps the surface of \p op along
-  /// \p dim to its mask's bound, at the constant pitch it would emit.
+  /// Whether the mask and constant pitch of \p op let
+  /// StoreOpToBlockIOConversion clamp its surface along \p dim. The lowering
+  /// still checks the tile in the store's final layout, unknown here, and may
+  /// refuse.
   static bool
   isStoreSurfaceClamped(tt::StoreOp op, unsigned dim,
                         tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
