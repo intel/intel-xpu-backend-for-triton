@@ -1039,8 +1039,9 @@ struct TritonMatrix2DBlockStoreLowering
                   ConversionPatternRewriter &rewriter) const override {
     create2DBlockAsserts(op, rewriter, emitter);
 
-    if (!isSPVBuiltinAvailable(op)) {
-      // Fallback to GenISA interface.
+    if (op->hasAttr("triton_gen.genisa_row_layout") ||
+        !isSPVBuiltinAvailable(op)) {
+      // Row-oriented payloads and LTS use the GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
       return success();
     }

@@ -270,6 +270,9 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
 
     Notes:
       - coordinate is provided in elements, while width and pitch are provided in bytes.
+      - `triton_gen.genisa_row_layout` marks a 16-bit SG16 32-wide store with
+        columns l and 16+l per lane and row. It lowers to GenISA, not the
+        SPIR-V block-store builtin.
   }];
 
   let assemblyFormat = [{
@@ -389,7 +392,7 @@ def TritonGEN_SubGroupBlockReadOp: TritonGEN_Op<"sub_group_block_read"> {
 }
 
 def TritonGEN_SubGroupBlockWriteOp : TritonGEN_Op<"sub_group_block_write"> {
-  let summary = "simd block write";
+  let summary = "Sub-group block write.";
 
   let description = [{
     The `triton_gen.sub_group_block_write` writes the scalar or vector `val` of
@@ -403,6 +406,8 @@ def TritonGEN_SubGroupBlockWriteOp : TritonGEN_Op<"sub_group_block_write"> {
     ptr[sub_group_local_id + sub_group_size]
     ```
     etc.
+
+    `ptr` must be 16-byte aligned.
 
      Example:
      ```mlir

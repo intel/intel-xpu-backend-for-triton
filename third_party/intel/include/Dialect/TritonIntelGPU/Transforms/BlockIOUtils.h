@@ -106,11 +106,17 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
 /// This is the single source of truth for 2D block store eligibility, shared
 /// by the store lowering patterns in LoadStoreOpToLLVM.cpp so their tile
 /// validation cannot drift.
+///
+/// When \p allowColumnBlockFold is set, a 16-bit SG16 tile with a second
+/// column block may be widened to 32-element rows by reordering register
+/// bases. \p foldedColumnBlockOut reports whether this occurred.
 bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
                               unsigned elemSizeInBits,
                               RankedTensorType tensorType,
                               AxisInfo *maskAxisInfo,
-                              BlockIOTileSizeInfo &sizeInfoOut);
+                              BlockIOTileSizeInfo &sizeInfoOut,
+                              bool &foldedColumnBlockOut,
+                              bool allowColumnBlockFold);
 
 /// Return a blocked layout under which a row-major rank-2 load of \p type
 /// passes validate2DBlockLoadTile, or std::nullopt. Lanes span at most 64

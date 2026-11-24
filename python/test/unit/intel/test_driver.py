@@ -337,6 +337,19 @@ def test_get_properties_error(device):
         driver.active.utils.get_device_properties(device_count)
 
 
+@pytest.mark.parametrize("mem_clock_rate", [None, 0], ids=["reported_clock", "no_clock"])
+def test_get_dram_gbps_known_bandwidth(device, monkeypatch, mem_clock_rate):
+    utils = driver.active.utils
+    device_id = driver.active.get_current_device()
+    if (expected := utils.get_bandwidth(device_id)) is None:
+        pytest.skip("no known DRAM bandwidth for this device")
+    if mem_clock_rate is not None:
+        props = utils._device_properties(device_id)
+        monkeypatch.setattr(utils, "_device_properties", lambda _: {**props, "mem_clock_rate": mem_clock_rate})
+        monkeypatch.setattr(utils, "_dram", {})
+    assert triton.testing.get_dram_gbps(device_id) == pytest.approx(expected, rel=1e-4)
+
+
 def test_load_binary_error_device_error(device, tmp_path: pathlib.Path):
     ir = """
     module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64"} {

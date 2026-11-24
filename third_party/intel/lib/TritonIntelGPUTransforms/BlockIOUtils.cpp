@@ -313,7 +313,8 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   // Note: we only walk thru register packing order by increasing the
   // tileHeight and vBlocks for simplicity. This may cause low efficiency in
   // block store for some cases because the block store doesn't support
-  // vBlocks > 1. Illustration of the tile shape and register packing:
+  // vBlocks > 1 (foldColumnBlockIntoRow handles the 16-bit SG16 case).
+  // Illustration of the tile shape and register packing:
   // clang-format off
   //                 vBlocks=2
   //                     ^
@@ -330,7 +331,8 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   // │    │    │    │    │    │    │    │    │
   // └────┴────┴────┴────┴────┴────┴────┴────┘
   // We will pack the R0 and R2 as the first matrix. R1 and R3 as the second matrix with vBlocks=2 for 2 matrixes.
-  // But the tile shape following maybe more efficient for block store because block store only supports vBlocks=1.
+  // Block store only supports vBlocks=1, so for 16-bit SG16 tiles foldColumnBlockIntoRow produces the tile shape below
+  // (lanes shown as in the layout; a folded store sends this register image to the GenISA block write unchanged).
   //               tileWidth=32
   //                     ^
   // ┌───────────────────┬───────────────────┐
@@ -814,11 +816,47 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
   return true;
 }
 
+// Folds the first column v-block of a 16-wide, 16-bit SG16 store tile into a
+// 32-wide row by moving its register basis ahead of the row bases, so each
+// lane's registers are ordered [r0 blk0, r0 blk1, r1 blk0, ...].
+static bool foldColumnBlockIntoRow(const LinearLayout &ll,
+                                   BlockIOTileSizeInfo &sizeInfo,
+                                   unsigned elemSizeInBits, MLIRContext *ctx) {
+  constexpr int kSubGroupSize = 16;
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  if (elemSizeInBits != 16 || sizeInfo.vBlocks < 2 ||
+      !sizeInfo.regPackedBases ||
+      ll.getInDimSize(StringAttr::get(ctx, "lane")) != kSubGroupSize)
+    return false;
+
+  // The tile walk orders the bases [packed..., rows..., v-blocks..., rest...];
+  // a 16-column first v-block right after the rows means unpacked lanes.
+  const SetVector<unsigned> &bases = *sizeInfo.regPackedBases;
+  auto basisOf = [&](unsigned regBit) {
+    return ll.getBasis(kRegister, llvm::Log2_32(regBit));
+  };
+  unsigned numRows = 0;
+  while (numRows < bases.size() && basisOf(bases[numRows])[sizeInfo.rowDim] > 0)
+    ++numRows;
+  if (numRows == bases.size() ||
+      basisOf(bases[numRows])[sizeInfo.colDim] != kSubGroupSize)
+    return false;
+
+  SetVector<unsigned> reordered;
+  reordered.insert(bases[numRows]);
+  reordered.insert(bases.begin(), bases.end());
+  sizeInfo.regPackedBases = std::move(reordered);
+  sizeInfo.tileWidth *= 2;
+  return true;
+}
+
 bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
                               unsigned elemSizeInBits,
                               RankedTensorType tensorType,
                               AxisInfo *maskAxisInfo,
-                              BlockIOTileSizeInfo &sizeInfoOut) {
+                              BlockIOTileSizeInfo &sizeInfoOut,
+                              bool &foldedColumnBlockOut,
+                              bool allowColumnBlockFold) {
   // Compute the store tile geometry and reject configurations the 2D block
   // store cannot express. This mirrors the checks the store lowering applies;
   // keeping them here (rather than duplicated inline in each store lowering
@@ -840,6 +878,10 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
   // 2D block store does not support vnni packing.
   if (sizeInfo.vnni)
     return false;
+
+  foldedColumnBlockOut = allowColumnBlockFold &&
+                         foldColumnBlockIntoRow(ll, sizeInfo, elemSizeInBits,
+                                                tensorType.getContext());
 
   // The store always issues a single v-block per message.
   sizeInfo.vBlocks = 1;
