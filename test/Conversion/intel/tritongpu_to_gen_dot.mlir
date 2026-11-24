@@ -693,6 +693,101 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+// COM: Block scaled DPAS only has 8 rows, so a scaled dot with M < 8 (issue #8773) is padded to 8-row instructions:
+// COM: A and C are zero-padded behind their real rows, the K loop chains the full 8-row C, and only the leading rows
+// COM: of the result are kept.
+#dpas = #ttig.dpas<{repeatCount = 4, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=4}>
+#linear = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [0, 0], [0, 0]], warp = [], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @scale_dot_small_m_hf8(
+  // CHECK-SAME:      %[[A:.*]]: !llvm.struct<({{.*}})>, %[[B:.*]]: !llvm.struct<({{.*}})>, %[[C:.*]]: !llvm.struct<(f32, f32, f32, f32)>, %[[SCALE_A:.*]]: !llvm.struct<(i8, i8)>, %[[SCALE_B:.*]]: !llvm.struct<(i8, i8)>,
+  // CHECK-DAG:     %[[C0:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-DAG:     %[[C1:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG:     %[[C2:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-DAG:     %[[C3:.*]] = llvm.mlir.constant(3 : i32) : i32
+  // CHECK-DAG:     %[[C7:.*]] = llvm.mlir.constant(7 : i32) : i32
+  // CHECK-DAG:     %[[ZERO_C:.*]] = llvm.mlir.zero : vector<8xf32>
+  // CHECK-DAG:     %[[ZERO_A:.*]] = llvm.mlir.zero : vector<16xi8>
+  // COM: Each K step of A: 4 rows x 2 bytes in the leading 8 bytes of 16.
+  // CHECK:         llvm.insertelement %{{.*}}, %[[ZERO_A]][%[[C0]] : i32] : vector<16xi8>
+  // CHECK-COUNT-6: llvm.insertelement %{{.*}} : vector<16xi8>
+  // CHECK:         %[[PAD_A0:.*]] = llvm.insertelement %{{.*}}[%[[C7]] : i32] : vector<16xi8>
+  // CHECK-NEXT:    llvm.insertelement %{{.*}}, %[[ZERO_A]][%[[C0]] : i32] : vector<16xi8>
+  // CHECK-COUNT-6: llvm.insertelement %{{.*}} : vector<16xi8>
+  // CHECK:         %[[PAD_A1:.*]] = llvm.insertelement %{{.*}}[%[[C7]] : i32] : vector<16xi8>
+  // CHECK-NOT:     vector<16xi8>
+  // CHECK:         %[[C_0:.*]] = llvm.extractvalue %[[C]][0]
+  // CHECK:         %[[C_1:.*]] = llvm.extractvalue %[[C]][1]
+  // CHECK:         %[[C_2:.*]] = llvm.extractvalue %[[C]][2]
+  // CHECK:         %[[C_3:.*]] = llvm.extractvalue %[[C]][3]
+  // CHECK:         %[[PAD_C0:.*]] = llvm.insertelement %[[C_0]], %[[ZERO_C]][%[[C0]] : i32] : vector<8xf32>
+  // CHECK:         %[[PAD_C1:.*]] = llvm.insertelement %[[C_1]], %[[PAD_C0]][%[[C1]] : i32] : vector<8xf32>
+  // CHECK:         %[[PAD_C2:.*]] = llvm.insertelement %[[C_2]], %[[PAD_C1]][%[[C2]] : i32] : vector<8xf32>
+  // CHECK:         %[[PAD_C:.*]] = llvm.insertelement %[[C_3]], %[[PAD_C2]][%[[C3]] : i32] : vector<8xf32>
+  // CHECK-NOT:     llvm.insertelement {{.*}} : vector<8xf32>
+  // CHECK:         %[[SA0:.*]] = llvm.extractvalue %[[SCALE_A]][0]
+  // CHECK:         %[[SA1:.*]] = llvm.extractvalue %[[SCALE_A]][1]
+  // CHECK:         %[[A0:.*]] = llvm.bitcast %[[PAD_A0]] : vector<16xi8> to vector<8xi16>
+  // CHECK:         %[[D0:.*]] = llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci(%{{.*}}, %[[A0]], %{{.*}}, %[[PAD_C]], %[[SA0]], %{{.*}}, %{{.*}}) {{.*}} : (i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i8, i8, i32) -> vector<8xf32>
+  // CHECK:         %[[A1:.*]] = llvm.bitcast %[[PAD_A1]] : vector<16xi8> to vector<8xi16>
+  // CHECK:         %[[D1:.*]] = llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci(%{{.*}}, %[[A1]], %{{.*}}, %[[D0]], %[[SA1]], %{{.*}}, %{{.*}}) {{.*}} : (i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i8, i8, i32) -> vector<8xf32>
+  // CHECK:         llvm.extractelement %[[D1]][%[[C0]] : i32] : vector<8xf32>
+  // CHECK:         llvm.extractelement %[[D1]][%[[C1]] : i32] : vector<8xf32>
+  // CHECK:         llvm.extractelement %[[D1]][%[[C2]] : i32] : vector<8xf32>
+  // CHECK:         llvm.extractelement %[[D1]][%[[C3]] : i32] : vector<8xf32>
+  // CHECK-NOT:     llvm.extractelement %[[D1]]
+  tt.func @scale_dot_small_m_hf8(%a: tensor<4x64xf8E4M3FN, #dot_operand_a>, %b: tensor<64x16xf8E4M3FN, #dot_operand_b>, %c: tensor<4x16xf32, #dpas>, %scale_a: tensor<4x2xi8, #linear>, %scale_b: tensor<16x2xi8, #linear1>, %ptr: !tt.ptr<f32>) {
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %c lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<4x64xf8E4M3FN, #dot_operand_a>, tensor<4x2xi8, #linear> * tensor<64x16xf8E4M3FN, #dot_operand_b>, tensor<16x2xi8, #linear1> -> tensor<4x16xf32, #dpas>
+    %p = tt.splat %ptr : !tt.ptr<f32> -> tensor<4x16x!tt.ptr<f32>, #dpas>
+    tt.store %p, %d : tensor<4x16x!tt.ptr<f32>, #dpas>
+    tt.return
+  }
+}
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 1, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
+#linear = #ttg.linear<{register = [], lane = [[0, 0], [0, 0], [0, 0], [0, 0]], warp = [], block = []}>
+#linear1 = #ttg.linear<{register = [], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @scale_dot_small_m_bf16(
+  // CHECK-SAME:      %[[A:.*]]: !llvm.struct<(bf16, bf16)>, %[[B:.*]]: !llvm.struct<({{.*}})>, %[[C:.*]]: !llvm.struct<(f32)>, %[[SCALE_A:.*]]: !llvm.struct<(i8)>, %[[SCALE_B:.*]]: !llvm.struct<(i8)>,
+  // CHECK-DAG:     %[[C0:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-DAG:     %[[ZERO_C:.*]] = llvm.mlir.zero : vector<8xf32>
+  // CHECK-DAG:     %[[ZERO_A:.*]] = llvm.mlir.zero : vector<8xbf16>
+  // CHECK:         %[[A_0:.*]] = llvm.extractvalue %[[A]][0]
+  // CHECK:         %[[A_1:.*]] = llvm.extractvalue %[[A]][1]
+  // CHECK:         %[[PAD_A0:.*]] = llvm.insertelement %[[A_0]], %[[ZERO_A]][%[[C0]] : i32] : vector<8xbf16>
+  // CHECK:         %[[PAD_A1:.*]] = llvm.insertelement %[[A_1]], %[[ZERO_A]][%[[C0]] : i32] : vector<8xbf16>
+  // CHECK-NOT:     vector<8xbf16>
+  // CHECK:         %[[C_0:.*]] = llvm.extractvalue %[[C]][0]
+  // CHECK:         %[[PAD_C:.*]] = llvm.insertelement %[[C_0]], %[[ZERO_C]][%[[C0]] : i32] : vector<8xf32>
+  // CHECK-NOT:     llvm.insertelement {{.*}} : vector<8xf32>
+  // CHECK:         %[[SA:.*]] = llvm.extractvalue %[[SCALE_A]][0]
+  // CHECK:         %[[SB:.*]] = llvm.extractvalue %[[SCALE_B]][0]
+  // CHECK:         %[[A0:.*]] = llvm.bitcast %[[PAD_A0]] : vector<8xbf16> to vector<8xi16>
+  // CHECK:         %[[D0:.*]] = llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci(%{{.*}}, %[[A0]], %{{.*}}, %[[PAD_C]], %[[SA]], %[[SB]], %{{.*}}) {{.*}} : (i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i8, i8, i32) -> vector<8xf32>
+  // CHECK:         %[[A1:.*]] = llvm.bitcast %[[PAD_A1]] : vector<8xbf16> to vector<8xi16>
+  // CHECK:         %[[D1:.*]] = llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci(%{{.*}}, %[[A1]], %{{.*}}, %[[D0]], %[[SA]], %[[SB]], %{{.*}}) {{.*}} : (i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i8, i8, i32) -> vector<8xf32>
+  // CHECK:         llvm.extractelement %[[D1]][%[[C0]] : i32] : vector<8xf32>
+  // CHECK-NOT:     llvm.extractelement %[[D1]]
+  tt.func @scale_dot_small_m_bf16(%a: tensor<1x32xbf16, #dot_operand_a>, %b: tensor<32x16xbf16, #dot_operand_b>, %c: tensor<1x16xf32, #dpas>, %scale_a: tensor<1x1xi8, #linear>, %scale_b: tensor<16x1xi8, #linear1>, %ptr: !tt.ptr<f32>) {
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %c lhs = bf16 rhs = bf16 {fastMath = false} : tensor<1x32xbf16, #dot_operand_a>, tensor<1x1xi8, #linear> * tensor<32x16xbf16, #dot_operand_b>, tensor<16x1xi8, #linear1> -> tensor<1x16xf32, #dpas>
+    %p = tt.splat %ptr : !tt.ptr<f32> -> tensor<1x16x!tt.ptr<f32>, #dpas>
+    tt.store %p, %d : tensor<1x16x!tt.ptr<f32>, #dpas>
+    tt.return
+  }
+}
+
+// -----
+
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, fp4KPack = 2, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [4, 4]}>
 #dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>
 #dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 4}>

@@ -94,9 +94,27 @@ public:
 
     auto dpasType = ttgi::DPASAnalysis<DPASEngineType>::getDPASType(op);
     auto dpasEncoding = cast<DpasEncodingAttr>(DTensorTy.getEncoding());
+    // Block scaled DPAS only has an 8-row form, so a scaled dot with M < 8
+    // keeps its small-M encoding and is computed with 8-row instructions: A and
+    // C are zero-padded to 8 rows and the leading rows of the result are kept.
+    // The real rows lead every A, C and D vector (the extra rows are the most
+    // significant register bits of the 8-row layout), the rows are independent,
+    // and the scale A layout gives the padding rows copies of real scales only.
+    DpasEncodingAttr instEncoding = dpasEncoding;
+    if constexpr (std::is_same_v<OpTy, DotScaledOp>)
+      instEncoding = DpasEncodingAttr::get(
+          op.getContext(), DpasEncodingAttr::DPASCapability::repeatCount,
+          dpasEncoding.getSystolicDepth(), dpasEncoding.getExecutionSize(),
+          dpasEncoding.getOpsPerChannel(), dpasEncoding.getWarpsPerCTA(),
+          dpasEncoding.getRepCluster(), dpasEncoding.getThreadsPerWarp(),
+          dpasEncoding.getFp4KPack());
+    assert(instEncoding.getRepeatCount() % dpasEncoding.getRepeatCount() == 0 &&
+           "the instruction repeat count must be a multiple of the layout's");
+    unsigned rowFactor =
+        instEncoding.getRepeatCount() / dpasEncoding.getRepeatCount();
     Type aTy, bTy, cTy, dTy;
     std::tie(dTy, cTy, aTy, bTy) = getDPASOperandsType<DPASEngineType>(
-        dpasType, op.getContext(), dpasEncoding);
+        dpasType, op.getContext(), instEncoding);
     // An fp8 operand that is extended to fp16 for DPAS (see
     // decomposeMixedModeDotOp) is converted here, one DPAS operand at a time,
     // instead of in full by the `tt.fp_to_fp` lowering ahead of the dot.
@@ -112,7 +130,7 @@ public:
               : getValuesFromDotOperandLayoutStruct(
                     loadedA, ATensorTy, repBatch, repM, repK,
                     typeConverter->convertType(ATensorTy.getElementType()),
-                    DpasEncodingAttr::OpIdx::OperandA);
+                    DpasEncodingAttr::OpIdx::OperandA, rowFactor);
     ValueTable hb =
         lazyB ? ValueTable()
               : getValuesFromDotOperandLayoutStruct(
@@ -128,7 +146,7 @@ public:
     ValueTable fc = getValuesFromDotOperandLayoutStruct(
         loadedC, CTensorTy, repBatch, repM, repN,
         typeConverter->convertType(CTensorTy.getElementType()),
-        DpasEncodingAttr::OpIdx::OperandC);
+        DpasEncodingAttr::OpIdx::OperandC, rowFactor);
 
     ValueTable scaleA, scaleB;
     if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
@@ -197,7 +215,7 @@ public:
       TritonGEN::PrecisionTypeAttr pB =
           TritonGEN::PrecisionTypeAttr::get(B.getContext(), BPrecision);
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
-                                 dpasEncoding.getRepeatCount());
+                                 instEncoding.getRepeatCount());
 
       if constexpr (std::is_same<OpTy, DotOp>::value) {
         fc.at({b, m, n}) = TritonGEN::MatrixDPASOp::create(
@@ -275,8 +293,8 @@ public:
       generateDPASOp(b, m, n, k);
     }
 
-    Value res = composeValuesToDotOperandLayoutStruct(fc, DTensorTy, repBatch,
-                                                      repM, repN, resElemTy);
+    Value res = composeValuesToDotOperandLayoutStruct(
+        fc, DTensorTy, repBatch, repM, repN, resElemTy, rowFactor);
 
     rewriter.replaceOp(op, res);
     for (std::optional<LazyFp8Operand> *lazy : {&lazyA, &lazyB})
@@ -533,11 +551,14 @@ private:
     }
   }
 
+  /// Pack the DPAS results into the result struct. With `rowFactor` > 1, each
+  /// result holds `rowFactor` times the rows of the layout (see convertDot),
+  /// and only its leading rows are kept.
   Value composeValuesToDotOperandLayoutStruct(const ValueTable &vals,
                                               RankedTensorType tensorTy,
                                               int64_t dimBatch, int64_t dimRow,
-                                              int64_t dimCol,
-                                              Type elemTy) const {
+                                              int64_t dimCol, Type elemTy,
+                                              unsigned rowFactor = 1) const {
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     size_t rank = repCluster.size();
@@ -551,7 +572,9 @@ private:
                                       k * repCluster[rank - 1] + repCol});
               VectorType vecType = cast<mlir::VectorType>(matVal.getType());
               Type valTy = vecType.getElementType();
-              for (int i = 0; i < vecType.getNumElements(); ++i) {
+              assert(vecType.getNumElements() % rowFactor == 0 &&
+                     "unexpected DPAS result size");
+              for (int i = 0; i < vecType.getNumElements() / rowFactor; ++i) {
                 Value val = tb.extract_element(valTy, matVal, tb.i32_val(i));
                 elems.push_back(val);
               }
@@ -569,9 +592,17 @@ private:
                               tensorTy);
   }
 
-  ValueTable getValuesFromDotOperandLayoutStruct(
-      Value val, RankedTensorType tensorTy, int64_t batch, int64_t outer,
-      int64_t inner, Type elemTy, DpasEncodingAttr::OpIdx opIdx) const {
+  /// Split the operand struct into DPAS operands. With `rowFactor` > 1 (A and C
+  /// only), each operand is zero-padded to `rowFactor` times the rows of the
+  /// layout, behind its real rows (see convertDot).
+  ValueTable getValuesFromDotOperandLayoutStruct(Value val,
+                                                 RankedTensorType tensorTy,
+                                                 int64_t batch, int64_t outer,
+                                                 int64_t inner, Type elemTy,
+                                                 DpasEncodingAttr::OpIdx opIdx,
+                                                 unsigned rowFactor = 1) const {
+    assert((rowFactor == 1 || opIdx != DpasEncodingAttr::OpIdx::OperandB) &&
+           "operand B has no rows to pad");
     SmallVector<Value> elems =
         unpackTensorElements(loc, val, rewriter, tensorTy);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
@@ -617,13 +648,22 @@ private:
         for (int j = 0; j < inner; ++j) {
           for (int repOuter = 0; repOuter < repClusterOuter; ++repOuter) {
             for (int repInner = 0; repInner < repClusterInner; ++repInner) {
-              Value matVal = LLVM::UndefOp::create(rewriter, loc, dotOpTy);
-              if (numElemsPerOperand != 1)
+              Value matVal;
+              if (rowFactor != 1) {
+                VectorType paddedTy =
+                    vec_ty(elemTy, numElemsPerOperand * rowFactor);
+                matVal = LLVM::ZeroOp::create(rewriter, loc, paddedTy);
+                for (int k = 0; k < numElemsPerOperand; ++k)
+                  matVal = tb.insert_element(paddedTy, matVal, elems[offset++],
+                                             tb.i32_val(k));
+              } else if (numElemsPerOperand != 1) {
+                matVal = LLVM::UndefOp::create(rewriter, loc, dotOpTy);
                 for (int k = 0; k < numElemsPerOperand; ++k)
                   matVal = tb.insert_element(dotOpTy, matVal, elems[offset++],
                                              tb.i32_val(k));
-              else
+              } else {
                 matVal = elems[offset++];
+              }
               if (isFToTF32Enabled)
                 matVal = TritonGEN::FToTf32Op::create(rewriter, loc, matVal)
                              .getResult();

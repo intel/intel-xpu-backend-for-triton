@@ -300,6 +300,45 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleA) {
           {S("dim0"), S("dim1"), S("dim2")}));
 }
 
+// With M < 8 the repeat count is M; lanes past it hold copies of real rows'
+// scales, which the 8-row bdpas the dot is padded to applies to padding rows.
+TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleA_SmallM) {
+  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
+                {4, 4}, dpas({1, 4}, 4, 8, 16, 2, {1, 1}, 16), 3),
+            LinearLayout(
+                {
+                    {S("register"), {{0, 1}, {0, 2}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {0, 0}, {0, 0}}},
+                    {S("warp"), {{0, 0}, {0, 0}}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
+                {2, 4},
+                dpas({1, 1}, 2, 8, 16, 4, {1, 1}, 16, std::make_optional(2)),
+                3),
+            LinearLayout(
+                {
+                    {S("register"), {{0, 1}, {0, 2}}},
+                    {S("lane"), {{1, 0}, {0, 0}, {0, 0}, {0, 0}}},
+                    {S("warp"), {}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
+                {1, 2}, dpas({1, 1}, 1, 8, 16, 4, {1, 1}, 16), 3),
+            LinearLayout(
+                {
+                    {S("register"), {{0, 1}}},
+                    {S("lane"), {{0, 0}, {0, 0}, {0, 0}, {0, 0}}},
+                    {S("warp"), {}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
+}
+
 TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleB) {
   EXPECT_EQ(BlockScaledDPAStoLinearLayout(
                 {128, 2}, dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 32), 4),
