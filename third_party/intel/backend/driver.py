@@ -572,7 +572,10 @@ PEAK_DRAM_GBPS = {
     "Intel(R) Data Center GPU Max 1550": 3276.8,
     "Intel(R) Arc(TM) B580 Graphics": 456.0,
     "Intel(R) Arc(TM) B570 Graphics": 380.0,
-    "Intel(R) Arc(TM) B560 Graphics": 456.0,
+    "Intel(R) Arc(TM) Pro B50 Graphics": 224.0,
+    "Intel(R) Arc(TM) Pro B60 Graphics": 456.0,
+    "Intel(R) Arc(TM) Pro B65 Graphics": 608.0,
+    "Intel(R) Arc(TM) Pro B70 Graphics": 608.0,
 }
 
 
@@ -605,7 +608,8 @@ class XPUUtils(object):
         # ARG_KERNEL = mod.ARG_KERNEL
         # ARG_TUPLE = mod.ARG_TUPLE
         self.load_binary = mod.load_binary
-        self.get_device_properties = mod.get_device_properties
+        self._device_properties = mod.get_device_properties
+        self._dram = {}
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
         self.get_last_selected_build_flags = mod.get_last_selected_build_flags
@@ -636,6 +640,17 @@ class XPUUtils(object):
     def get_bandwidth(self, device):
         import torch
         return PEAK_DRAM_GBPS.get(torch.xpu.get_device_name(device))
+
+    def get_device_properties(self, device):
+        # Core's `triton.testing.get_dram_gbps` computes mem_clock_rate * mem_bus_width * 2 / 1e6 / 8, while Level Zero
+        # reports the memory data rate as the clock (0 if the driver doesn't know it) and NEO the address width as the
+        # bus width. For the devices `get_bandwidth` knows, report values that give its bandwidth through that formula.
+        props = self._device_properties(device)
+        if device not in self._dram:
+            gbps, clock = self.get_bandwidth(device), props["mem_clock_rate"] or 1_000_000
+            self._dram[device] = {"mem_clock_rate": clock, "mem_bus_width": round(gbps * 4e6 / clock)} if gbps else {}
+        props.update(self._dram[device])
+        return props
 
 
 # ------------------------

@@ -313,7 +313,8 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   // Note: we only walk thru register packing order by increasing the
   // tileHeight and vBlocks for simplicity. This may cause low efficiency in
   // block store for some cases because the block store doesn't support
-  // vBlocks > 1. Illustration of the tile shape and register packing:
+  // vBlocks > 1 (foldColumnBlockIntoRow handles the 16-bit SG16 case).
+  // Illustration of the tile shape and register packing:
   // clang-format off
   //                 vBlocks=2
   //                     ^
@@ -330,7 +331,8 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   // │    │    │    │    │    │    │    │    │
   // └────┴────┴────┴────┴────┴────┴────┴────┘
   // We will pack the R0 and R2 as the first matrix. R1 and R3 as the second matrix with vBlocks=2 for 2 matrixes.
-  // But the tile shape following maybe more efficient for block store because block store only supports vBlocks=1.
+  // Block store only supports vBlocks=1, so for 16-bit SG16 tiles foldColumnBlockIntoRow produces the tile shape below
+  // (lanes shown as in the layout; a folded store sends this register image to the GenISA block write unchanged).
   //               tileWidth=32
   //                     ^
   // ┌───────────────────┬───────────────────┐
@@ -814,11 +816,47 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
   return true;
 }
 
+// Folds the first column v-block of a 16-wide, 16-bit SG16 store tile into a
+// 32-wide row by moving its register basis ahead of the row bases, so each
+// lane's registers are ordered [r0 blk0, r0 blk1, r1 blk0, ...].
+static bool foldColumnBlockIntoRow(const LinearLayout &ll,
+                                   BlockIOTileSizeInfo &sizeInfo,
+                                   unsigned elemSizeInBits, MLIRContext *ctx) {
+  constexpr int kSubGroupSize = 16;
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  if (elemSizeInBits != 16 || sizeInfo.vBlocks < 2 ||
+      !sizeInfo.regPackedBases ||
+      ll.getInDimSize(StringAttr::get(ctx, "lane")) != kSubGroupSize)
+    return false;
+
+  // The tile walk orders the bases [packed..., rows..., v-blocks..., rest...];
+  // a 16-column first v-block right after the rows means unpacked lanes.
+  const SetVector<unsigned> &bases = *sizeInfo.regPackedBases;
+  auto basisOf = [&](unsigned regBit) {
+    return ll.getBasis(kRegister, llvm::Log2_32(regBit));
+  };
+  unsigned numRows = 0;
+  while (numRows < bases.size() && basisOf(bases[numRows])[sizeInfo.rowDim] > 0)
+    ++numRows;
+  if (numRows == bases.size() ||
+      basisOf(bases[numRows])[sizeInfo.colDim] != kSubGroupSize)
+    return false;
+
+  SetVector<unsigned> reordered;
+  reordered.insert(bases[numRows]);
+  reordered.insert(bases.begin(), bases.end());
+  sizeInfo.regPackedBases = std::move(reordered);
+  sizeInfo.tileWidth *= 2;
+  return true;
+}
+
 bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
                               unsigned elemSizeInBits,
                               RankedTensorType tensorType,
                               AxisInfo *maskAxisInfo,
-                              BlockIOTileSizeInfo &sizeInfoOut) {
+                              BlockIOTileSizeInfo &sizeInfoOut,
+                              bool &foldedColumnBlockOut,
+                              bool allowColumnBlockFold) {
   // Compute the store tile geometry and reject configurations the 2D block
   // store cannot express. This mirrors the checks the store lowering applies;
   // keeping them here (rather than duplicated inline in each store lowering
@@ -840,6 +878,10 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
   // 2D block store does not support vnni packing.
   if (sizeInfo.vnni)
     return false;
+
+  foldedColumnBlockOut = allowColumnBlockFold &&
+                         foldColumnBlockIntoRow(ll, sizeInfo, elemSizeInBits,
+                                                tensorType.getContext());
 
   // The store always issues a single v-block per message.
   sizeInfo.vBlocks = 1;
@@ -1252,7 +1294,7 @@ varyingDims(Value v, ArrayRef<int64_t> tensorShape) {
   return dims;
 }
 
-/// One side of a pitch-dim boundary check.
+/// One side of a per-dimension boundary check.
 struct LimitCmp {
   bool isUpperBound; // `index < bound` rather than `index >= 0`
   Value base;        // null for a bare `arange`
@@ -1342,8 +1384,8 @@ matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
   SmallVector<Value> conjuncts;
   collectConjuncts(mask, visited, conjuncts);
 
-  BoundaryMaskInfo info{pitchDim, {}, {}, {}};
-  bool seenLower = false;
+  BoundaryMaskInfo info{pitchDim, {}, {}, {}, {}, {}};
+  bool seenRowLower = false, seenColLower = false;
   for (Value conjunct : conjuncts) {
     std::optional<SmallVector<unsigned>> varying =
         varyingDims(conjunct, tensorShape);
@@ -1358,24 +1400,27 @@ matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
       continue;
     }
 
-    // Anything else has to be a bound along the pitch dim alone, the one the
+    // Anything else has to be a bound along exactly one of the two dims the
     // hardware clamps.
-    if (dims.size() != 1 || dims.front() != pitchDim)
+    if (dims.size() != 1)
       return std::nullopt;
-    std::optional<LimitCmp> limit =
-        matchLimitCmp(conjunct, tensorShape[pitchDim]);
+    unsigned dim = dims.front();
+    std::optional<LimitCmp> limit = matchLimitCmp(conjunct, tensorShape[dim]);
     if (!limit)
       return std::nullopt;
 
-    // The two bounds must agree on where the index starts, or they are not
-    // the two halves of one boundary check.
-    if ((info.rowBound || seenLower) && info.rowBase != limit->base)
+    Value &base = (dim == pitchDim) ? info.rowBase : info.colBase;
+    Value &bound = (dim == pitchDim) ? info.rowBound : info.colBound;
+    bool &seenLower = (dim == pitchDim) ? seenRowLower : seenColLower;
+    // A dim's two bounds must agree on where the index starts, or they are
+    // not the two halves of one boundary check.
+    if ((bound || seenLower) && base != limit->base)
       return std::nullopt;
-    info.rowBase = limit->base;
+    base = limit->base;
     if (limit->isUpperBound) {
-      if (info.rowBound)
+      if (bound)
         return std::nullopt;
-      info.rowBound = limit->bound;
+      bound = limit->bound;
     } else {
       if (seenLower)
         return std::nullopt;
@@ -1383,17 +1428,24 @@ matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
     }
   }
 
-  // A lone lower bound has nothing for the surface to clamp to, and
-  // `base_height` cannot express a bound when every row is the same row.
-  if (!info.rowBound || pitchDimIsBroadcast)
+  // A lone lower bound has nothing for the surface to clamp to.
+  if ((seenRowLower && !info.rowBound) || (seenColLower && !info.colBound))
+    return std::nullopt;
+  if (!info.rowBound && !info.colBound)
+    return std::nullopt;
+  // `base_height` cannot express a row bound when every row is the same row.
+  if (info.rowBound && pitchDimIsBroadcast)
     return std::nullopt;
 
-  // The surface starts at the tensor's first row, so a row before it is read
-  // like any other. A lower bound is therefore only dropped where it is
-  // vacuous, i.e. where the index provably cannot be negative at the load. A
-  // null base is a bare `arange`, which starts at zero.
-  if (seenLower && info.rowBase &&
-      (!loadOp || !valueIsNonNegative(info.rowBase, loadOp)))
+  // Both surfaces start at the tensor, so an index before it is read like any
+  // other. A lower bound is therefore only dropped where it is vacuous, i.e.
+  // where the index provably cannot be negative at the load. A null base is a
+  // bare `arange`, which starts at zero.
+  auto isNonNegative = [&](Value base) {
+    return !base || (loadOp && valueIsNonNegative(base, loadOp));
+  };
+  if ((seenRowLower && !isNonNegative(info.rowBase)) ||
+      (seenColLower && !isNonNegative(info.colBase)))
     return std::nullopt;
 
   return info;
@@ -1406,11 +1458,36 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
   std::optional<BoundaryMaskInfo> m = matchBoundaryCheckMask(
       mask, other, tensorShape, contiguousDim, pitchDimIsBroadcast,
       /*loadOp=*/nullptr);
-  if (!m || m->extraPreds.size() > 1)
+  if (!m || m->colBound || m->extraPreds.size() > 1)
     return std::nullopt;
   return RowLimitMaskInfo{m->boundedDim, m->rowBase, m->rowBound,
                           m->extraPreds.empty() ? Value()
                                                 : m->extraPreds.front()};
+}
+
+bool colLimitIsHWCompatible(const BoundaryMaskInfo &info,
+                            triton::intel::ModuleAxisInfoAnalysis &axisInfo,
+                            unsigned elemSizeInBits) {
+  if (!info.colBound)
+    return true;
+  // The width is counted in bytes, so a sub-byte element has no exact one.
+  if (elemSizeInBits < 8 || elemSizeInBits % 8 != 0)
+    return false;
+  unsigned divisor =
+      get2DBlockIOWidthGranuleBytes(elemSizeInBits) / (elemSizeInBits / 8);
+  // Both checks are needed, as in `isDescriptorIndexAligned`: the dataflow
+  // analysis trusts `tt.divisibility` hints, and `isDivisible` refuses some
+  // induction variables the analysis admits, so the conjunction only refuses
+  // more than either alone.
+  auto isAligned = [&](Value v) {
+    if (!v)
+      return true; // a bare `arange` starts at zero
+    const AxisInfo *axis = axisInfo.getAxisInfo(v);
+    int64_t div = axis ? axis->getDivisibility(0) : 1;
+    return div % divisor == 0 &&
+           isDivisible(triton::intel::getFinalValue(v), divisor);
+  };
+  return isAligned(info.colBound) && isAligned(info.colBase);
 }
 
 Value materializeExtraPred(OpBuilder &builder, Location loc, Value extraPred,
@@ -1460,6 +1537,15 @@ Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
   Value clamped = arith::MinUIOp::create(builder, loc, diff64, extent64);
   clamped = arith::SelectOp::create(builder, loc, empty, zero64, clamped);
   return arith::TruncIOp::create(builder, loc, i32Ty, clamped);
+}
+
+Value computeColLimitWidth(OpBuilder &builder, Location loc, Value bound,
+                           Value colBase, int64_t colExtent,
+                           unsigned elemSizeInBytes) {
+  Value elems = computeRowLimitHeight(builder, loc, bound, colBase, colExtent);
+  Value elemBytes = arith::ConstantOp::create(
+      builder, loc, builder.getI32IntegerAttr(elemSizeInBytes));
+  return arith::MulIOp::create(builder, loc, elems, elemBytes);
 }
 
 } // namespace mlir::triton::gpu::intel

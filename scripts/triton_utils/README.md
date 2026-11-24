@@ -136,6 +136,14 @@ CLI will error out by default if a test has multiple results for different test 
 --ignore-testsuite <test_suite_name>
 ```
 
+##### Tests with multiple outcome tags
+
+CLI will error out by default if a testcase has more than one `failure`/`error`/`skipped` tag (common scenario: an xdist worker crash in teardown of a failed test). To count such a test once as failed:
+
+```bash
+--allow-multiple-outcome-tags
+```
+
 ##### Status filtering
 
 Filter test results by status (can be added multiple times):

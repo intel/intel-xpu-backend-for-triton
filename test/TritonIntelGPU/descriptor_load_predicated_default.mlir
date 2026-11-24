@@ -1,6 +1,6 @@
-// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,PREDICATED
-// RUN: env TRITON_INTEL_PREDICATED_LOAD=0 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,NO-PREDICATED
-// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,PREDICATED
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,PREDICATED
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 TRITON_INTEL_PREDICATED_LOAD=0 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,NO-PREDICATED
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD=0 TRITON_INTEL_PREDICATED_LOAD=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,PREDICATED
 
 // Pin the *default* lowering of tt.descriptor_load on the non-2D-block path.
 //
@@ -32,8 +32,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // The mask IR is bit-for-bit identical in both arms, so the predicate
     // operand is intentionally left as a wildcard; the load form is what
     // discriminates them.
-    // CHECK:              %[[PTR0:.*]] = llvm.bitcast %{{.*}} : !llvm.ptr<1> to !llvm.ptr<1>
     // CHECK:              %[[OTHER0:.*]] = llvm.bitcast %{{.*}} : vector<1xf32> to i32
+    // CHECK:              %[[PTR0:.*]] = llvm.bitcast %{{.*}} : !llvm.ptr<1> to !llvm.ptr<1>
     // PREDICATED-NEXT:    %[[V0:.*]] = triton_gen.predicated_load %[[PTR0]], %{{.*}}, %[[OTHER0]] {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED-NEXT: llvm.cond_br %{{.*}}, ^[[BB_LOAD:bb[0-9]+]], ^[[BB_MERGE:bb[0-9]+]](%[[OTHER0]] : i32)
     // NO-PREDICATED-NEXT: ^[[BB_LOAD]]:
@@ -63,8 +63,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %c4_i32 = arith.constant 4 : i32
     %0 = tt.make_tensor_descriptor %arg0, [%c8_i32, %c8_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
 
-    // CHECK:              %[[PTR0:.*]] = llvm.bitcast %{{.*}} : !llvm.ptr<1> to !llvm.ptr<1>
     // CHECK:              %[[OTHER0:.*]] = llvm.bitcast %{{.*}} : vector<1xf32> to i32
+    // CHECK:              %[[PTR0:.*]] = llvm.bitcast %{{.*}} : !llvm.ptr<1> to !llvm.ptr<1>
     // PREDICATED-NEXT:    %[[V0:.*]] = triton_gen.predicated_load %[[PTR0]], %{{.*}}, %[[OTHER0]] {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
     // NO-PREDICATED-NEXT: llvm.cond_br %{{.*}}, ^[[BB_LOAD:bb[0-9]+]], ^[[BB_MERGE:bb[0-9]+]](%[[OTHER0]] : i32)
     // NO-PREDICATED-NEXT: ^[[BB_LOAD]]:
@@ -93,8 +93,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
 
     // CHECK-NOT:  triton_gen.predicated_load
-    // CHECK:      %[[PTR:.*]] = llvm.bitcast %{{.*}} : !llvm.ptr<1> to !llvm.ptr<1>
     // CHECK:      %[[OTHER:.*]] = llvm.bitcast %{{.*}} : vector<1xf32> to i32
+    // CHECK:      %[[PTR:.*]] = llvm.bitcast %{{.*}} : !llvm.ptr<1> to !llvm.ptr<1>
     // CHECK-NEXT: llvm.cond_br %{{.*}}, ^[[BB_LOAD:bb[0-9]+]], ^[[BB_MERGE:bb[0-9]+]](%[[OTHER]] : i32)
     // CHECK-NEXT: ^[[BB_LOAD]]:
     // CHECK-NEXT: %[[LOADED:.*]] = llvm.load %[[PTR]] <alignment = 4> : !llvm.ptr<1> -> i32
