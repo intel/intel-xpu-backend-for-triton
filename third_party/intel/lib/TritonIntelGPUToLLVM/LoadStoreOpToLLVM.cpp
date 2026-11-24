@@ -2936,6 +2936,34 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
     config.offMapping = valueToOffsetMap.concatIns(laneMapping);
     return config;
   }
+
+  // Each lane loads or stores `vec` registers that are adjacent columns of one
+  // row with one predicated vector access, as tt.load and tt.store do. `vec`
+  // divides shape[1] and is aligned with y, so a chunk is either wholly in or
+  // wholly out of bounds and its first column's predicate covers it.
+  struct VectorizedAccess {
+    unsigned vec;
+    Type type;
+    unsigned alignment;
+  };
+
+  VectorizedAccess getVectorizedAccess(Operation *op, Value desc, Value yOffset,
+                                       RankedTensorType tensorTy,
+                                       Type valueElemTy) const {
+    SmallVector<Value> fastDimIndex{yOffset, yOffset};
+    unsigned vec =
+        getDescriptorVecSize(hasSupport256bLoadStore(op), desc, fastDimIndex,
+                             tensorTy, valueElemTy, nullptr);
+    if (triton::gpu::toGenericLinearEncoding(tensorTy).getOrder()[0] != 1)
+      vec = 1;
+    unsigned elemBits = std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+    unsigned totalWidth = elemBits * vec;
+    unsigned width = std::min(totalWidth, std::max(32u, elemBits));
+    unsigned nWords = std::max(1u, totalWidth / width);
+    Type wordTy = IntegerType::get(tensorTy.getContext(), width);
+    Type type = nWords > 1 ? vec_ty(wordTy, nWords) : wordTy;
+    return {vec, type, nWords * width / 8};
+  }
 };
 
 struct DescriptorGatherOpConversion
@@ -3131,23 +3159,11 @@ private:
         unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
     DescriptorFields desc = unpackDescriptor(llDesc, descRank, loc, rewriter);
 
-    // Each lane loads `vec` registers that are adjacent columns of one row with
-    // one predicated vector load, as tt.load does. `vec` divides shape[1] and
-    // is aligned with y, so a chunk is either wholly in or wholly out of bounds
-    // and its first column's predicate covers it.
     auto emitVectorized = [&]() -> Value {
-      SmallVector<Value> fastDimIndex{op.getYOffset(), op.getYOffset()};
-      unsigned vec =
-          getDescriptorVecSize(hasSupport256bLoadStore(op), op.getDesc(),
-                               fastDimIndex, resultType, valueElemTy, nullptr);
-      if (triton::gpu::toGenericLinearEncoding(resultType).getOrder()[0] != 1)
-        vec = 1;
-      unsigned elemBits = std::max(8u, valueElemTy.getIntOrFloatBitWidth());
-      unsigned totalWidth = elemBits * vec;
-      unsigned width = std::min(totalWidth, std::max(32u, elemBits));
-      unsigned nWords = std::max(1u, totalWidth / width);
-      Type wordTy = IntegerType::get(ctx, width);
-      Type retTy = nWords > 1 ? vec_ty(wordTy, nWords) : wordTy;
+      VectorizedAccess access = getVectorizedAccess(
+          op, op.getDesc(), op.getYOffset(), resultType, valueElemTy);
+      unsigned vec = access.vec;
+      Type retTy = access.type;
       Value zero = LLVM::ZeroOp::create(rewriter, loc, retTy);
       bool predicated = canUsePredicatedInstructions(op);
       unsigned regMask = getFreeVariableMasks(resultType)[kRegister];
@@ -3184,7 +3200,7 @@ private:
         } else {
           auto createLoad = [&]() {
             return SmallVector<Value>{
-                b.load(retTy, gatherAddr.addr, nWords * width / 8)};
+                b.load(retTy, gatherAddr.addr, access.alignment)};
           };
           ret = *LLVM::intel::createPredicatedBlock(
                      rewriter, loc, gatherAddr.pred,
@@ -3497,18 +3513,9 @@ private:
     StringAttr kDim1 = S("dim1");
     RankedTensorType srcTy = op.getSrc().getType();
 
-    SmallVector<Value> fastDimIndex{op.getYOffset(), op.getYOffset()};
-    unsigned vec =
-        getDescriptorVecSize(hasSupport256bLoadStore(op), op.getDesc(),
-                             fastDimIndex, srcTy, s.valueElemTy, nullptr);
-    if (triton::gpu::toGenericLinearEncoding(srcTy).getOrder()[0] != 1)
-      vec = 1;
-    unsigned elemBits = std::max(8u, s.valueElemTy.getIntOrFloatBitWidth());
-    unsigned totalWidth = elemBits * vec;
-    unsigned width = std::min(totalWidth, std::max(32u, elemBits));
-    unsigned nWords = std::max(1u, totalWidth / width);
-    Type wordTy = IntegerType::get(ctx, width);
-    Type storeTy = nWords > 1 ? vec_ty(wordTy, nWords) : wordTy;
+    VectorizedAccess access = getVectorizedAccess(
+        op, op.getDesc(), op.getYOffset(), srcTy, s.valueElemTy);
+    unsigned vec = access.vec;
 
     llvm::MapVector<StringAttr, int32_t> freeVarMasks =
         getFreeVariableMasks(srcTy);
@@ -3538,8 +3545,8 @@ private:
       for (unsigned i = 0; i < vec; ++i)
         packed =
             b.insert_element(packed, s.srcElems[vecStart + i], b.i32_val(i));
-      Value val = b.bitcast(packed, storeTy);
-      emitStore(op, rewriter, loc, addr, val, pred, nWords * width / 8);
+      Value val = b.bitcast(packed, access.type);
+      emitStore(op, rewriter, loc, addr, val, pred, access.alignment);
     }
   }
 };
