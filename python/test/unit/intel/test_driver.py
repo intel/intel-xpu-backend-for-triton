@@ -1,4 +1,6 @@
+import importlib.metadata
 import io
+import os
 import re
 import shutil
 import sys
@@ -407,6 +409,29 @@ def test_wait_on_sycl_queue_error(device):
     # Pass an invalid (non-pointer) value to trigger conversion error
     with pytest.raises(RuntimeError, match=r"Failed to convert PyObject to void\* for queue.*"):
         driver.active.utils.wait_on_sycl_queue("invalid_queue_pointer")
+
+
+def test_prepare_proton_session(device, monkeypatch, tmp_path: pathlib.Path):
+    # What the out-of-tree XPU profiler (XpuptiRegistration.cpp) reads when a Proton session starts.
+    pti = tmp_path / "pti" / "libpti_view.so"
+
+    class File:
+        name = pti.name
+
+        def locate(self):
+            return pti
+
+    monkeypatch.setattr(importlib.metadata, "files", lambda dist: [File()])
+    # setenv records the original state first, so teardown also undoes what prepare_proton_session() sets
+    monkeypatch.setenv("TRITON_XPUPTI_LIB_PATH", "")
+    monkeypatch.delenv("TRITON_XPUPTI_LIB_PATH")
+    queue, path = driver.active.prepare_proton_session()
+    assert isinstance(queue, int) and queue != 0
+    assert pathlib.Path(path).is_file()
+    assert os.environ["TRITON_XPUPTI_LIB_PATH"] == str(pti.parent.resolve())
+    monkeypatch.setenv("TRITON_XPUPTI_LIB_PATH", str(tmp_path / "user"))
+    driver.active.prepare_proton_session()
+    assert os.environ["TRITON_XPUPTI_LIB_PATH"] == str(tmp_path / "user")
 
 
 def test_has_opencl_extension_error(device):

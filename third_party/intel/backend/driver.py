@@ -891,12 +891,14 @@ class XPUDriver(DriverBase):
 
     def prepare_proton_session(self):
         """What the XPU profiler needs from Python when a session starts, if it is built as a library of its own
-        (third_party/proton/.../XpuptiRegistration.cpp): the SYCL queue and the path of its helper library. Like
-        proton/profile.py in the in-tree build, it also points TRITON_XPUPTI_LIB_PATH at the intel-pti package."""
+        (third_party/proton/.../XpuptiRegistration.cpp): the SYCL queue and the path of its helper library. If
+        TRITON_XPUPTI_LIB_PATH isn't set, it also points it at the intel-pti package.
+        It runs under Proton's session lock, so it must not call Proton, and a start can hang while another thread is
+        in a Proton scope or op. Fixing that needs Proton to call registered factories outside the lock."""
         try:
             for f in importlib.metadata.files("intel-pti") or ():
                 if "libpti_view.so" in f.name:
-                    os.environ["TRITON_XPUPTI_LIB_PATH"] = str(Path(f.locate()).parent.resolve())
+                    os.environ.setdefault("TRITON_XPUPTI_LIB_PATH", str(Path(f.locate()).parent.resolve()))
                     break
         except importlib.metadata.PackageNotFoundError:
             pass

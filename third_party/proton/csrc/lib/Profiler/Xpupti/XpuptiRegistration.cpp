@@ -3,11 +3,12 @@
 // contain it. libproton compiles the XPU profiler in and does not use this
 // file.
 //
-// Loading the library registers the profiler through proton::registerBackend(),
-// which gives it DeviceType::EXTERNAL. The two values the profiler needs from
-// Python, the SYCL queue and the path of the helper library, come from the
-// active Triton driver when a session creates the profiler, where libproton
-// takes them from libproton.start() (Session.cpp).
+// On Linux, loading the library registers the profiler, device and runtime
+// through proton::registerBackend(), with xpu::kDeviceType, which is
+// DeviceType::EXTERNAL here. The two values the profiler needs from Python, the
+// SYCL queue and the path of the helper library, come from the active Triton
+// driver when a session creates the profiler, where libproton takes them from
+// libproton.start() (Session.cpp).
 #ifdef PROTON_XPU_EXTERNAL
 
 #include <Python.h>
@@ -23,9 +24,14 @@ namespace proton {
 
 namespace {
 
+// Runs under Proton's session lock with the GIL held, so it must not call
+// Proton. If the Python call hands the GIL to a thread that then waits for the
+// lock in a Proton scope or op, the start hangs. Fixing that needs Proton to
+// call registered factories outside the lock.
 void prepareSession() {
   if (!Py_IsInitialized())
-    return;
+    throw std::runtime_error(
+        "[PROTON] Could not prepare the XPU profiler session: no Python");
   PyGILState_STATE gil = PyGILState_Ensure();
   // triton.runtime.driver.active.prepare_proton_session() -> (queue, path)
   PyObject *result = nullptr;
@@ -42,7 +48,9 @@ void prepareSession() {
   bool prepared = false;
   if (result && PyTuple_Check(result) && PyTuple_Size(result) == 2) {
     void *queue = PyLong_AsVoidPtr(PyTuple_GetItem(result, 0));
-    const char *path = PyUnicode_AsUTF8(PyTuple_GetItem(result, 1));
+    const char *path = PyErr_Occurred()
+                           ? nullptr
+                           : PyUnicode_AsUTF8(PyTuple_GetItem(result, 1));
     if (path && !PyErr_Occurred()) {
       XpuRuntime::instance().setSyclQueue(queue);
       xpu::PROTON_UTILS = path;
@@ -81,10 +89,13 @@ BackendRegistration makeRegistration() {
 extern "C" {
 
 // Idempotent; also called from Python where there is no load-time constructor.
-bool proton_xpu_register() {
-  static const bool registered = [] {
+#if defined(_WIN32)
+__declspec(dllexport)
+#endif
+int proton_xpu_register() {
+  static const int registered = [] {
     ::proton::registerBackend(::proton::makeRegistration());
-    return true;
+    return 1;
   }();
   return registered;
 }
