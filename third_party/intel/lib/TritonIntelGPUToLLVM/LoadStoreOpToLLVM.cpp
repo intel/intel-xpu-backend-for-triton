@@ -3415,14 +3415,10 @@ struct DescriptorScatterOpConversion
 
     // The alignment that isAlignedNativeScatter checks in TTIR: rows and y are
     // 16-byte aligned and stride1 is 1.
-    constexpr unsigned kAlignBytes = 16;
     unsigned bits = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
     std::optional<SmallVector<ScatterBlockWriteRun>> runs;
     if (const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-                .getDescriptorAlignment(op.getDesc(), 1, op.getYOffset(),
-                                        bits) *
-            (bits / 8) >=
-        kAlignBytes)
+            .isDescriptorRow16ByteAligned(op.getDesc(), op.getYOffset(), bits))
       runs = getScatterBlockWriteRuns(srcTy);
 
     s.desc = unpackDescriptor(adaptor.getDesc(), /*rank=*/2, loc, rewriter);
@@ -3434,7 +3430,7 @@ struct DescriptorScatterOpConversion
     if (runs)
       emitBlockWrites(op, *runs, s, rewriter);
     else
-      emitScalarStores(op, s, rewriter);
+      emitPerLaneStores(op, s, rewriter);
     rewriter.eraseOp(op);
     return success();
   }
@@ -3561,9 +3557,9 @@ private:
   }
 
   // The gather's vectorized path (emitVectorized), with stores.
-  void emitScalarStores(mlir::triton::gpu::intel::DescriptorScatterOp op,
-                        const ScatterOperands &s,
-                        ConversionPatternRewriter &rewriter) const {
+  void emitPerLaneStores(mlir::triton::gpu::intel::DescriptorScatterOp op,
+                         const ScatterOperands &s,
+                         ConversionPatternRewriter &rewriter) const {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();

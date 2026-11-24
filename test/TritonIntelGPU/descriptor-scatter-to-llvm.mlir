@@ -1,8 +1,8 @@
 // RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
-// ttig.descriptor_scatter stores each row run that getScatterBlockWriteRuns finds with one
-// sub-group block write under a uniform warp, row and window predicate, and stores a run the
-// window rejects per element. Other layouts and unaligned descriptors store per lane.
+// COM: ttig.descriptor_scatter stores each row run that getScatterBlockWriteRuns finds with one
+// COM: sub-group block write under a uniform warp, row and window predicate, and stores a run the
+// COM: window rejects per element. Other layouts and unaligned descriptors store per lane.
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
 #x = #ttg.slice<{dim = 1, parent = #dpas}>
@@ -11,7 +11,7 @@
 #strided = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #xs = #ttg.slice<{dim = 1, parent = #strided}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_predicated_io} {
-  // fast_bf16: each row a thread holds is one run of 2 registers 16 columns apart (N = 8).
+  // COM: fast_bf16: each row a thread holds is one run of 2 registers 16 columns apart (N = 8).
   // CHECK-LABEL: llvm.func spir_kernelcc @fast_bf16
   // CHECK-DAG:   %[[SHAPE0:.*]] = llvm.extractvalue %[[DESC:.*]][0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
   // CHECK-DAG:   %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
@@ -32,6 +32,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
   // CHECK-DAG:   %[[LIMIT:.*]] = llvm.sub %[[SHAPE1]], %[[WIDTH]] : i64
   // CHECK-DAG:   %[[LE:.*]] = llvm.icmp "sle" %[[C0:[^,]*]], %[[LIMIT]] : i64
   // CHECK-DAG:   %[[C0]] = llvm.add %[[Y64:[^,]*]], %{{.*}} : i64
+  // COM: Run 0 starts at lane 0's column, so its layout input packs the warp id at bit 0.
+  // CHECK-DAG:   %[[SG:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id()
+  // CHECK-DAG:   %[[SG64:.*]] = llvm.zext %[[SG]] : i32 to i64
+  // CHECK-DAG:   %[[WID:.*]] = llvm.trunc %[[SG64]] : i64 to i32
+  // CHECK-DAG:   llvm.shl %[[WID]], %[[WID_SHIFT:.*]] : i32
+  // CHECK-DAG:   %[[WID_SHIFT]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:   %[[GE:.*]] = llvm.icmp "sge" %[[C0]], %{{.*}} : i64
   // CHECK-DAG:   %[[WIN:.*]] = llvm.and %[[GE]], %[[LE]] : i1
   // CHECK:       %[[GUARD:.*]] = llvm.and %[[ROW_OK]], %[[WIN]] : i1
@@ -78,7 +84,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 
-  // fast_f32: a blocked layout whose lanes are adjacent columns: 2 rows of 4 registers (N = 2).
+  // COM: fast_f32: a blocked layout whose lanes are adjacent columns: 2 rows of 4 registers (N = 2).
   // CHECK-LABEL: llvm.func spir_kernelcc @fast_f32
   // CHECK-COUNT-2: triton_gen.sub_group_block_write %{{.*}}, %{{.*}} : !llvm.ptr<1>, vector<4xi32>
   // CHECK-NOT:   triton_gen.sub_group_block_write
@@ -93,7 +99,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 
-  // window_signed: a negative y must fail the window, so y is sign-extended.
+  // COM: window_signed: a negative y must fail the window, so y is sign-extended.
   // CHECK-LABEL: llvm.func spir_kernelcc @window_signed
   // CHECK-NOT:   llvm.zext %arg2
   // CHECK:       %[[Y64:.*]] = llvm.sext %arg2 : i32 to i64
@@ -110,7 +116,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 
-  // warp_replicated: an 8x16 tile repeats registers 8-15 and every warp: one warp writes 8 runs.
+  // COM: warp_replicated: an 8x16 tile repeats registers 8-15 and every warp: one warp writes 8 runs.
   // CHECK-LABEL: llvm.func spir_kernelcc @warp_replicated
   // CHECK:       %[[SG:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id()
   // CHECK:       %[[SG64:.*]] = llvm.zext %[[SG]] : i32 to i64
@@ -130,7 +136,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 
-  // fast_requires_unit_stride: fast_bf16 with stride1 = 2, which leaves one contiguous element.
+  // COM: fast_requires_unit_stride: fast_bf16 with stride1 = 2, which leaves one contiguous element.
   // CHECK-LABEL: llvm.func spir_kernelcc @fast_requires_unit_stride
   // CHECK:       %[[STRIDE1:.*]] = llvm.extractvalue %{{.*}}[3] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
   // CHECK:       llvm.mul %{{.*}}, %[[STRIDE1]] : i64
@@ -147,7 +153,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 
-  // scalar_arm_blocked: lanes 2 columns apart, and lanes 8-15 repeat lanes 0-7.
+  // COM: scalar_arm_blocked: lanes 2 columns apart, and lanes 8-15 repeat lanes 0-7.
   // CHECK-LABEL: llvm.func spir_kernelcc @scalar_arm_blocked
   // CHECK:       %[[NOT_DUP:.*]] = llvm.icmp "eq" %{{.*}}, %{{.*}} : i32
   // CHECK:       %[[ROW_OK:.*]] = llvm.icmp "ult" %{{.*}}, %{{.*}} : i64
@@ -169,7 +175,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 
-  // scalar_unaligned_y: warp_replicated with an unaligned y: 8 stores per lane, not 16.
+  // COM: scalar_unaligned_y: warp_replicated with an unaligned y: 8 stores per lane, not 16.
   // CHECK-LABEL: llvm.func spir_kernelcc @scalar_unaligned_y
   // CHECK:       llvm.sext %arg2 : i32 to i64
   // CHECK-NOT:   {{llvm.zext %arg2|sub_group_block_write}}
@@ -188,7 +194,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// no_predicated_io: fast_bf16 without ttig.support_predicated_io.
+// COM: no_predicated_io: fast_bf16 without ttig.support_predicated_io.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
 #x = #ttg.slice<{dim = 1, parent = #dpas}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
@@ -211,7 +217,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// scalar_arm_tpw32: with 32 lanes, lane 16 starts the next row.
+// COM: scalar_arm_tpw32: with 32 lanes, lane 16 starts the next row.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [2, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
 #x = #ttg.slice<{dim = 1, parent = #dpas}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_predicated_io} {
@@ -234,7 +240,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
 
 // -----
 
-// two_runs_per_row: fast_bf16 with 128 columns, so each row's second run starts at column 64.
+// COM: two_runs_per_row: fast_bf16 with 128 columns, so each row's second run starts at column 64.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
 #x = #ttg.slice<{dim = 1, parent = #dpas}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_predicated_io} {
@@ -257,7 +263,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
-// fast_tpw32: with 32 lanes, each run's 2 registers are 32 columns apart (64 wide).
+// COM: fast_tpw32: with 32 lanes, each run's 2 registers are 32 columns apart (64 wide).
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #xb = #ttg.slice<{dim = 1, parent = #blocked}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_predicated_io} {

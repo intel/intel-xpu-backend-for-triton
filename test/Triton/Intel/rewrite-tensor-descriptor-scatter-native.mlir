@@ -84,6 +84,21 @@ module {
     tt.descriptor_scatter %desc[%x, %c0_i32], %t : !tt.tensordesc<1x64xbf16>, tensor<32xi32>, i32, tensor<32x64xbf16>
     tt.return
   }
+  // COM: So is an scf.for result that the loop yields through arithmetic.
+  tt.func public @reject_loop_addf(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %x: tensor<32xi32>, %a: tensor<32x64xbf16>, %b: tensor<64x64xbf16>, %c: tensor<32x64xf32>, %m: i32 {tt.divisibility = 16 : i32}, %s: i64 {tt.divisibility = 16 : i32}, %n: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%m, %m], [%s, %c1_i64] : <bf16>, <1x64xbf16>
+    %acc = scf.for %i = %c0_i32 to %n step %c1_i32 iter_args(%k = %c) -> (tensor<32x64xf32>) : i32 {
+      %d = tt.dot %a, %b, %k : tensor<32x64xbf16> * tensor<64x64xbf16> -> tensor<32x64xf32>
+      %e = arith.addf %d, %c : tensor<32x64xf32>
+      scf.yield %e : tensor<32x64xf32>
+    }
+    %t = arith.truncf %acc : tensor<32x64xf32> to tensor<32x64xbf16>
+    tt.descriptor_scatter %desc[%x, %c0_i32], %t : !tt.tensordesc<1x64xbf16>, tensor<32xi32>, i32, tensor<32x64xbf16>
+    tt.return
+  }
   // COM: 8-bit elements are rejected; the verifier refuses scatters wider than 32 bits.
   tt.func public @reject_width(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %x: tensor<32xi32>, %a: tensor<32x64xi8>, %b: tensor<64x64xi8>, %c: tensor<32x64xi32>, %m: i32 {tt.divisibility = 16 : i32}, %s: i64 {tt.divisibility = 16 : i32}) {
     %c0_i32 = arith.constant 0 : i32
@@ -108,6 +123,9 @@ module {
 // CHECK-NOT:   tt.descriptor_scatter
 // CHECK:       tt.store
 // CHECK-LABEL: @reject_not_dot_addf
+// CHECK-NOT:   tt.descriptor_scatter
+// CHECK:       tt.store
+// CHECK-LABEL: @reject_loop_addf
 // CHECK-NOT:   tt.descriptor_scatter
 // CHECK:       tt.store
 // CHECK-LABEL: @reject_width

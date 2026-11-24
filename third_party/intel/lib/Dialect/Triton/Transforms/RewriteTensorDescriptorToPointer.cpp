@@ -1397,11 +1397,8 @@ static bool isAlignedNativeScatter(triton::DescriptorScatterOp op,
       getIntOrFloatOrPtrBitWidth(op.getSrc().getType().getElementType());
   if (bits != 16 && bits != 32)
     return false;
-  constexpr unsigned kAlignBytes = 16;
-  return axisInfo.getDescriptorAlignment(op.getDesc(), 1, op.getYOffset(),
-                                         bits) *
-             (bits / 8) >=
-         kAlignBytes;
+  return axisInfo.isDescriptorRow16ByteAligned(op.getDesc(), op.getYOffset(),
+                                               bits);
 }
 
 // Scatter admission, source: a tt.dot result reached only through element
