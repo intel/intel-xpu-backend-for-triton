@@ -389,7 +389,7 @@ def TritonGEN_SubGroupBlockReadOp: TritonGEN_Op<"sub_group_block_read"> {
 }
 
 def TritonGEN_SubGroupBlockWriteOp : TritonGEN_Op<"sub_group_block_write"> {
-  let summary = "simd block write";
+  let summary = "Sub-group block write.";
 
   let description = [{
     The `triton_gen.sub_group_block_write` writes the scalar or vector `val` of
