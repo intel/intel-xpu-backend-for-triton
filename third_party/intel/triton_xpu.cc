@@ -89,9 +89,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
   ADD_PASS_OPTION_WRAPPER_1(
       "add_to_llvmir", gpu::intel::createConvertTritonIntelGPUToLLVM, bool);
   ADD_PASS_WRAPPER_0("add_gen_to_llvm", createConvertTritonGENToLLVM);
-  ADD_PASS_OPTION_WRAPPER_1("add_accelerate_matmul",
+  ADD_PASS_OPTION_WRAPPER_2("add_accelerate_matmul",
                             gpu::intel::createTritonIntelGPUAccelerateMatmul,
-                            std::string);
+                            std::string, bool);
   ADD_PASS_WRAPPER_0("add_fold_fp_to_fp",
                      gpu::intel::createTritonIntelGPUFoldFpToFp);
   ADD_PASS_OPTION_WRAPPER_2(
@@ -144,6 +144,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
               &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
       .def_rw("support_subgroup_scaled_matrix_multiply_accumulate",
               &gpu::intel::TritonAnnotateModuleOptions::supportBlockScaleDPAS)
+      .def_rw("support_subgroup_scaled_matrix_multiply_accumulate_fp4",
+              &gpu::intel::TritonAnnotateModuleOptions::
+                  supportBlockScaleDPASWithFP4)
       .def_rw("support_f4_conversion",
               &gpu::intel::TritonAnnotateModuleOptions::supportF4Conversion)
       .def_rw("support_f8_conversion",
@@ -162,6 +165,8 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
       .def_rw("target_arch",
               &gpu::intel::TritonAnnotateModuleOptions::targetArch)
       .def_rw("is_lts", &gpu::intel::TritonAnnotateModuleOptions::isLTS)
+      .def_rw("store_l1_write_back",
+              &gpu::intel::TritonAnnotateModuleOptions::storeL1WriteBack)
       .def_rw("is_fast_math",
               &gpu::intel::TritonAnnotateModuleOptions::isFastMath)
       .def_rw("sub_32_dpas",

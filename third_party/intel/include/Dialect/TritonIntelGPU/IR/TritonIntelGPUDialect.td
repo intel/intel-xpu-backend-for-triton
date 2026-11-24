@@ -89,6 +89,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_subgroup_scaled_matrix_multiply_accumulate";
     }
 
+    /// Get the name of the attribute used to indicate whether the Block Scale DPAS
+    /// operation supports FP4 (E2M1) operands.
+    static constexpr llvm::StringRef getSupportBlockScaleDPASWithFP4AttrName() {
+      return "ttig.support_subgroup_scaled_matrix_multiply_accumulate_fp4";
+    }
+
     /// Get the name of the attribute used to indicate whether the F4 conversion
     /// operation is available.
     static constexpr llvm::StringRef getSupportF4ConversionAttrName() {
@@ -151,6 +157,14 @@ def TritonIntelGPU_Dialect : Dialect {
     /// GenISA interface instead of the SPIR-V builtins (set for IGC < 2.38).
     static constexpr llvm::StringRef getUseGenISA2DBlockIOAttrName() {
       return "ttig.use_genisa_2d_block_io";
+    }
+
+    /// Name of the module attribute that lets narrow 2D block-store rows be
+    /// written back through L1. Set where the driver's default L1 store policy
+    /// is write-bypass (BMG) unless TRITON_INTEL_DISABLE_STORE_L1_WRITE_BACK
+    /// is set.
+    static constexpr llvm::StringRef getStoreL1WriteBackAttrName() {
+      return "ttig.store_l1_write_back";
     }
 
     /// Get the name of the attribute holding the core clock rate in kHz, used

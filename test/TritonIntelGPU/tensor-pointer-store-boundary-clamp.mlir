@@ -1,6 +1,7 @@
-// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
-// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --check-prefixes=GEN,SPV
-// RUN: sed 's/ttig.support_predicated_io}/ttig.support_predicated_io, ttig.use_genisa_2d_block_io}/' %s | env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --check-prefixes=GEN,GENISA
+// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 TRITON_INTEL_DISABLE_WIDE_BLOCK_STORE=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
+// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 TRITON_INTEL_DISABLE_WIDE_BLOCK_STORE=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --check-prefixes=GEN,SPV
+// RUN: sed 's/ttig.support_predicated_io}/ttig.support_predicated_io, ttig.use_genisa_2d_block_io}/' %s | env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 TRITON_INTEL_DISABLE_WIDE_BLOCK_STORE=1 triton-opt -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --check-prefixes=GEN,GENISA
+// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefix=WIDE
 
 // COM: A column bound that alone rejects a block store tile clamps the surface; other masks stay generic.
 
@@ -59,6 +60,14 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   // SPV: llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTEL{{.*}}, %[[W2]], %{{[0-9]+}}, %{{[0-9]+}}, %[[V]])
   // GENISA: %[[WM1:.*]] = llvm.sub %[[W2]], %{{.*}} : i32
   // GENISA: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8i16(%{{[0-9]+}}, %[[WM1]], %{{[0-9]+}}, %{{[0-9]+}}, %[[X2]],
+  // COM: With wide rows, the relaxed tile folds even though the masked one does not.
+  // WIDE-LABEL: llvm.func spir_kernelcc @s1(
+  // WIDE: %[[UN:.*]] = llvm.intr.umin(
+  // WIDE-NEXT: %[[BW:.*]] = llvm.add %[[UN]], %{{.*}} : i32
+  // WIDE: triton_gen.2Dblockstore %{{.*}}, %[[BW]], {{.*}}tile_width = 32, tile_height = 8, {{.*}}{triton_gen.genisa_row_layout}
+  // WIDE: triton_gen.2Dblockstore {{.*}}tile_width = 32, tile_height = 8, {{.*}}{triton_gen.genisa_row_layout}
+  // WIDE-NOT: triton_gen.{{2Dblockstore|predicated_store}}
+  // WIDE-LABEL: llvm.func spir_kernelcc @s2(
   tt.func public @s1(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf16, #mma>, %pid_m: i32, %pid_n: i32) {
     %cst = arith.constant dense<504> : tensor<64x1xi32, #mma>
     %cst_0 = arith.constant dense<504> : tensor<1x128xi32, #mma>

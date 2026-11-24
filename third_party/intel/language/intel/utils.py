@@ -7,8 +7,8 @@ _READ_CLOCK = "_Z27__spirv_ReadClockKHR_Rulongi"
 _SCOPE_DEVICE = 1
 # The LTS driver does not implement the standard builtin.
 _READ_CYCLE_COUNTER = "__builtin_IB_read_cycle_counter"
-_SLICE_ID = "__builtin_IB_slice_id"
-_DUAL_SUBSLICE_ID = "__builtin_IB_dual_subslice_id"
+_SLICE_ID = "_Z18intel_get_slice_idv"
+_DUAL_SUBSLICE_ID = "_Z26intel_get_dual_subslice_idv"
 
 # Widest sub-slice field across supported architectures is 5 bits (Xe2).
 _SUBSLICE_ID_BITS = 8
