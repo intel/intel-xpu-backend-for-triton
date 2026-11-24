@@ -405,6 +405,27 @@ module attributes {ttig.support_subgroup_bitcast_shuffle} {
 
 // -----
 
+// The builtin takes at most 16 elements per side, so wider shuffles are split
+// into consecutive chunks.
+module attributes {ttig.support_subgroup_bitcast_shuffle} {
+  // CHECK-LABEL: llvm.func @triton_gen.sub_group_bitcast_shuffle_spirv_split(
+  // CHECK-SAME:    [[VAL:%.*]]: vector<128xi8>, [[VAL1:%.*]]: vector<64xi16>
+  llvm.func @triton_gen.sub_group_bitcast_shuffle_spirv_split(%val : vector<128xi8>, %val1 : vector<64xi16>) -> vector<128xi8> {
+    // CHECK-NOT: (vector<128xi8>) ->
+    // CHECK:     [[C0:%.*]] = llvm.shufflevector [[VAL]], [[VAL]] [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] : vector<128xi8>
+    // CHECK:     llvm.call spir_funccc @_Z42__spirv_SubgroupBitcastShuffleINTEL_Ruint4Dv16_c([[C0]]) {{.*}} : (vector<16xi8>) -> vector<4xi32>
+    // CHECK:     [[C1:%.*]] = llvm.shufflevector [[VAL]], [[VAL]] [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31] : vector<128xi8>
+    // CHECK:     llvm.call spir_funccc @_Z42__spirv_SubgroupBitcastShuffleINTEL_Ruint4Dv16_c([[C1]]) {{.*}} : (vector<16xi8>) -> vector<4xi32>
+    // CHECK-COUNT-6: llvm.call spir_funccc @_Z42__spirv_SubgroupBitcastShuffleINTEL_Ruint4Dv16_c({{.*}}) {{.*}} : (vector<16xi8>) -> vector<4xi32>
+    %0 = triton_gen.sub_group_bitcast_shuffle %val : vector<128xi8> -> vector<32xi32>
+    // CHECK-COUNT-8: llvm.call spir_funccc @_Z44__spirv_SubgroupBitcastShuffleINTEL_Ruchar16Dv8_s({{.*}}) {{.*}} : (vector<8xi16>) -> vector<16xi8>
+    %1 = triton_gen.sub_group_bitcast_shuffle %val1 : vector<64xi16> -> vector<128xi8>
+    llvm.return %1 : vector<128xi8>
+  }
+}
+
+// -----
+
 llvm.func @triton_gen.sub_group_gather_load(%addrs: vector<32xi64>, %preds: vector<32xi1>) -> vector<1xi64> {
   // CHECK-LABEL: llvm.func @triton_gen.sub_group_gather_load(
   // Predicated-off channels are zeroed after the load, from a predicate computed before it.
