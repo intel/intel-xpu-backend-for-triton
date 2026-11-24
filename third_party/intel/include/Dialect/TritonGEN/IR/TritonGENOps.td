@@ -404,6 +404,8 @@ def TritonGEN_SubGroupBlockWriteOp : TritonGEN_Op<"sub_group_block_write"> {
     ```
     etc.
 
+    `ptr` must be 16-byte aligned.
+
      Example:
      ```mlir
      triton_gen.sub_group_block_write %ptr, %val : !llvm.ptr<1>, vector<4xi32>

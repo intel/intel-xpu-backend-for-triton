@@ -136,7 +136,7 @@ ptr[sub_group_local_id + i × sub_group_size]
 - **Element types**: i8, i16, i32, i64
 - **Vector lengths**: 2, 4, 8 (16 only for i8)
 - **Address spaces**: global (1) or local/SLM (3)
-- **Alignment**: pointer must be aligned to element type size
+- **Alignment**: pointer must be aligned to element type size; writes need 16-byte alignment
 
 ### Predicated I/O
 
