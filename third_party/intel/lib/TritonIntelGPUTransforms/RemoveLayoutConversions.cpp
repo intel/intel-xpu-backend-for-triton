@@ -2377,7 +2377,7 @@ LogicalResult LayoutRematerialization::rematerializeUpToAnchors(
   // isRematBeneficial prices a load only when it is duplicated. The scale
   // layout replicates the tensor, so a load relabeled into it, or into a
   // layout inferred from it through shape ops, reads each element once per
-  // replica: charge the reads that adds for every relabeled load. Each
+  // replica: charge every relabeled load for the reads this adds. Each
   // replicated element is a per-lane gather, so it is priced at 32 bits at
   // least, as the convert it replaces is.
   int64_t scaleLoadCost = 0;
