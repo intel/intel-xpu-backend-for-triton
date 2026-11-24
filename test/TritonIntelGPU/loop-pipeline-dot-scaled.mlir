@@ -2,9 +2,11 @@
 
 // COM: A K loop whose only matmul is a tt.dot_scaled is pipelined like a tt.dot loop: the 2D block
 // COM: loads of the A and B operands are prefetched num-stages - 1 iterations ahead (issue #8931).
-// COM: The scale operands are not prefetched, not even one loaded in the loop with a `ttig.block_io`
-// COM: load, as the B scale is here: a scale has a linear layout, not a dot-operand one, so its load
-// COM: does not feed the dot as an operand tile (`ttig.prefetch` is the implicit CHECK-NOT of the RUN line).
+// COM: The scale operands are not prefetched as dot operands, not even one loaded in the loop with a
+// COM: `ttig.block_io` load, as the B scale is here: a scale has a linear layout, not a dot-operand one,
+// COM: so its load does not feed the dot as an operand tile (`ttig.prefetch` is the implicit CHECK-NOT
+// COM: of the RUN line). This module has no `ttig.support_prefetch_256b`: with it (Xe3P and later),
+// COM: the B scale load would be prefetched as an elementwise load instead.
 
 #linear = #ttg.linear<{register = [[8, 0], [16, 0], [0, 1]], lane = [[1, 0], [2, 0], [4, 0], [0, 0]], warp = [[0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
 #linear1 = #ttg.linear<{register = [[16, 0], [0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0], [0, 0]], block = []}>

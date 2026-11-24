@@ -273,10 +273,12 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
   let summary = "Pipeline loops";
 
   let description = [{
-    Apply software pipelinining to loops containing `tt.dot` or `tt.dot_scaled` operations.
-    The pass supports prefetching their A and B operands (not the scales of a `tt.dot_scaled`).
-    The `num-stages` argument controls
-    the prefetching and distance (i.e. the number of iterations to prefetch in advance).
+    Apply software pipelining to loops containing `tt.dot` or `tt.dot_scaled` operations.
+    The pass supports prefetching their A and B operands. The scales of a `tt.dot_scaled`
+    are not prefetched as dot operands, but on a module with `ttig.support_prefetch_256b`
+    (Xe3P and later) a `ttig.block_io` scale load can still be prefetched as an elementwise
+    load. The `num-stages` argument controls the prefetching and distance (i.e. the number
+    of iterations to prefetch in advance).
     On a device for which the prefetch cost model has constants (`device-arch`) and
     whose facts are given (`core-clock-khz`, `mem-clock-mhz`), the
     prefetch of one dot operand is dropped when the model predicts that demand-loading

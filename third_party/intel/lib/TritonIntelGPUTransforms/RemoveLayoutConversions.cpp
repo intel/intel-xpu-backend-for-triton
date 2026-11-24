@@ -2283,6 +2283,8 @@ static bool feedsDotScaledScale(ttg::ConvertLayoutOp convertOp) {
 // load whose only use is the convert, that load is relabeled into the scale
 // layout, wherever it is. When the source is computed from other values, the
 // rules above apply to them: a load before the loop is converted once there.
+// Every load relabeled for a scale, directly or through shape ops, is charged
+// for the reads that the replication of the scale layout adds.
 LogicalResult LayoutRematerialization::rematerializeUpToAnchors(
     ttg::ConvertLayoutOp convertOp) {
   auto loop = convertOp->getParentOfType<scf::ForOp>();
@@ -2373,13 +2375,22 @@ LogicalResult LayoutRematerialization::rematerializeUpToAnchors(
   for (Value anchor : anchors)
     anchorCvtCost += getConvertCost(anchor, layout[anchor], convertCostCache);
   // isRematBeneficial prices a load only when it is duplicated. The scale
-  // layout replicates the tensor, so the relabeled scale load reads each
-  // element once per replica: charge the reads it adds.
+  // layout replicates the tensor, so a load relabeled into it, or into a
+  // layout inferred from it through shape ops, reads each element once per
+  // replica: charge the reads that adds for every relabeled load. Each
+  // replicated element is a per-lane gather, so it is priced at 32 bits at
+  // least, as the convert it replaces is.
   int64_t scaleLoadCost = 0;
-  if (scaleLoad && slice.contains(scaleLoad->getResult(0))) {
-    Value scale = scaleLoad->getResult(0);
-    scaleLoadCost = 8 * getByteCount(scale) *
-                    (getCostFactor(scale, layout.lookup(scale)) - 1);
+  if (isScale) {
+    for (Value v : slice) {
+      Operation *op = v.getDefiningOp();
+      if (!op || !isRelabeledLoad(op))
+        continue;
+      scaleLoadCost += 8 *
+                       getByteCount(v, /*minElementCount=*/0,
+                                    /*minBitWidth=*/32) *
+                       (getCostFactor(v, layout.lookup(v)) - 1);
+    }
   }
   if (anchorCvtCost >
           getConvertCost(convertOp.getSrc(), targetEnc, convertCostCache) ||
