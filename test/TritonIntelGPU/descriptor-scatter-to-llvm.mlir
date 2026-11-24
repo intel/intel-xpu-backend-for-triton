@@ -49,12 +49,20 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
   // CHECK:       %[[TAIL:.*]] = llvm.and %[[ROW_OK]], %[[NOT_WIN]] : i1
   // CHECK:       llvm.cond_br %[[TAIL]], ^
   // CHECK:       %[[LANE_COL:.*]] = llvm.add %[[C0]], %[[LANE64]] : i64
+  // CHECK-DAG:   %[[COL0:.*]] = llvm.add %[[LANE_COL]], %{{.*}} : i64
+  // CHECK-DAG:   %[[OFF0:.*]] = llvm.add %[[ROW_OFF]], %[[COL0]] : i64
+  // CHECK-DAG:   %[[ADDR0:.*]] = llvm.getelementptr %[[BASE]][%[[OFF0]]] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, bf16
+  // CHECK-DAG:   %[[VAL0:.*]] = llvm.bitcast %[[E0]] : bf16 to i16
+  // CHECK:       triton_gen.predicated_store %[[ADDR0]], %[[VAL0]], %{{.*}}
   // CHECK:       %[[STEP:.*]] = llvm.mlir.constant(16 : i64) : i64
   // CHECK:       %[[COL1:.*]] = llvm.add %[[LANE_COL]], %[[STEP]] : i64
-  // CHECK:       %[[GE1:.*]] = llvm.icmp "sge" %[[COL1]], %{{.*}} : i64
-  // CHECK:       %[[LT1:.*]] = llvm.icmp "slt" %[[COL1]], %[[SHAPE1]] : i64
-  // CHECK:       %[[OK1:.*]] = llvm.and %[[GE1]], %[[LT1]] : i1
-  // CHECK:       triton_gen.predicated_store %{{.*}}, %{{.*}}, %[[OK1]]
+  // CHECK-DAG:   %[[OFF1:.*]] = llvm.add %[[ROW_OFF]], %[[COL1]] : i64
+  // CHECK-DAG:   %[[ADDR1:.*]] = llvm.getelementptr %[[BASE]][%[[OFF1]]] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, bf16
+  // CHECK-DAG:   %[[GE1:.*]] = llvm.icmp "sge" %[[COL1]], %{{.*}} : i64
+  // CHECK-DAG:   %[[LT1:.*]] = llvm.icmp "slt" %[[COL1]], %[[SHAPE1]] : i64
+  // CHECK-DAG:   %[[OK1:.*]] = llvm.and %[[GE1]], %[[LT1]] : i1
+  // CHECK-DAG:   %[[VAL1:.*]] = llvm.bitcast %[[E8]] : bf16 to i16
+  // CHECK:       triton_gen.predicated_store %[[ADDR1]], %[[VAL1]], %[[OK1]]
   // CHECK:       llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[XOFF1]],
   // CHECK:       llvm.add %[[Y64]], %{{.*}} : i64
   // CHECK-COUNT-7: triton_gen.sub_group_block_write %{{.*}}, %{{.*}} : !llvm.ptr<1>, vector<2xi16>
@@ -246,3 +254,25 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 // CHECK:       %[[COL:.*]] = llvm.mlir.constant(64 : i32) : i32
 // CHECK:       %[[DIM1:.*]] = llvm.xor %[[COL]], %{{.*}} : i32
 // CHECK:       llvm.zext %[[DIM1]] : i32 to i64
+
+// -----
+
+// fast_tpw32: with 32 lanes, each run's 2 registers are 32 columns apart (64 wide).
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#xb = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_predicated_io} {
+  tt.func public @fast_tpw32(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: tensor<4xi32, #xb>, %arg2: tensor<4x64xbf16, #blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c4096_i32 = arith.constant 4096 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c128_i64 = arith.constant 128 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c4096_i32, %c128_i32], [%c128_i64, %c1_i64] : <bf16>, <1x64xbf16>
+    ttig.descriptor_scatter %desc[%arg1, %c0_i32], %arg2 : !tt.tensordesc<1x64xbf16>, tensor<4xi32, #xb>, i32, tensor<4x64xbf16, #blocked>
+    tt.return
+  }
+}
+
+// CHECK-LABEL: llvm.func spir_kernelcc @fast_tpw32
+// CHECK:       llvm.mlir.constant(64 : i64) : i64
+// CHECK:       llvm.mlir.constant(32 : i64) : i64

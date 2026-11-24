@@ -48,6 +48,8 @@ struct ScatterBlockWriteRun {
 // nullopt unless rank 2, 16- or 32-bit elements, tpw * elemBytes >= 16,
 // lane bases exactly {0,1},{0,2},...,{0,tpw/2}, and
 // isPermutationMatrixLayout. Covers every canonical register exactly once.
+// Canonical means no free-variable bit. Each row's chains of columns tpw apart
+// are cut greedily into runs of 8, 4, 2, 1. srcTy needs a distributed encoding.
 std::optional<SmallVector<ScatterBlockWriteRun>>
 getScatterBlockWriteRuns(RankedTensorType srcTy);
 

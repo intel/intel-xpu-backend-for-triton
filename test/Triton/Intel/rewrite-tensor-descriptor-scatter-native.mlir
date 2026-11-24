@@ -190,3 +190,23 @@ module {
 // OFF-LABEL:   @shared_load_region
 // OFF:         tt.store
 // OFF:         tt.load
+
+// -----
+
+// COM: A descriptor_reduce expands its makers, so a scatter sharing one expands too.
+module {
+  tt.func public @shared_with_reduce(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %x: tensor<32xi32>, %a: tensor<32x64xbf16>, %b: tensor<64x64xbf16>, %c: tensor<32x64xf32>, %m: i32 {tt.divisibility = 16 : i32}, %s: i64 {tt.divisibility = 16 : i32}, %r: tensor<1x64xbf16>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%m, %m], [%s, %c1_i64] : <bf16>, <1x64xbf16>
+    %d = tt.dot %a, %b, %c : tensor<32x64xbf16> * tensor<64x64xbf16> -> tensor<32x64xf32>
+    %t = arith.truncf %d : tensor<32x64xf32> to tensor<32x64xbf16>
+    tt.descriptor_scatter %desc[%x, %c0_i32], %t : !tt.tensordesc<1x64xbf16>, tensor<32xi32>, i32, tensor<32x64xbf16>
+    tt.descriptor_reduce add, %desc[%c0_i32, %c0_i32], %r : !tt.tensordesc<1x64xbf16>, tensor<1x64xbf16>
+    tt.return
+  }
+}
+
+// CHECK-LABEL: @shared_with_reduce
+// CHECK-NOT:   tt.descriptor_scatter
+// CHECK:       tt.store
