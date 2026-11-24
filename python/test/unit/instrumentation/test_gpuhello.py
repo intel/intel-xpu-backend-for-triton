@@ -45,4 +45,6 @@ def test_op(capfd, device: str):
     func(x, y)
     stdout, stderr = capfd.readouterr()
     if 'LLVM_PASS_PLUGIN_PATH' in os.environ:
+        # Workaround: hwloc may print a topology warning on stderr when sysfs is not visible in the CI container.
+        stderr = ''.join(line for line in stderr.splitlines(keepends=True) if not line.startswith('hwloc/'))
         assert repr(stderr) == repr(test_stdout)
