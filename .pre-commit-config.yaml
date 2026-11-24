@@ -66,6 +66,13 @@ repos:
       files: ^.github/workflows/integration-tests.yml.*
       pass_filenames: false
 
+    - id: check-copied-sources
+      name: Check that copies of upstream files are in sync
+      language: python
+      entry: python scripts/check_copied_sources.py
+      pass_filenames: false
+      always_run: true
+
   - repo: https://github.com/pycqa/pylint
     rev: v3.3.6
     hooks:

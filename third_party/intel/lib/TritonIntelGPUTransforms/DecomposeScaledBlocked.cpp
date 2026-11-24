@@ -1,3 +1,7 @@
+// clang-format off
+// copied-from: lib/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.cpp
+// copied-from-sha256: 55e0d732201cb63c5246cd9b070fbf4c62846d3587790f041c4e3ddc2d3c83f0
+// clang-format on
 #include "Dialect/TritonIntelGPU/Transforms/DecomposeScaledBlocked.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 

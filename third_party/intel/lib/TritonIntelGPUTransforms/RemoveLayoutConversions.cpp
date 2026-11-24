@@ -1,3 +1,7 @@
+// clang-format off
+// copied-from: lib/Dialect/TritonGPU/Transforms/RemoveLayoutConversions.cpp
+// copied-from-sha256: 47b66e5a3bfa9032076f2b3f304b7f47806b121f744a4083f09c2b19b4545c24
+// clang-format on
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"

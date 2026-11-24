@@ -1,3 +1,7 @@
+// clang-format off
+// copied-from: lib/Dialect/Triton/Transforms/RewriteTensorDescriptorToPointer.cpp
+// copied-from-sha256: 4f86ed9c7888b2e5a943bd2532777f21d09b1ecb4e80119695af9ec6960989be
+// clang-format on
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
