@@ -2803,37 +2803,7 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
          {dim1Attr, llEncoding.getOutDimSize(dim1Attr)}},
         /*requireSurjective=*/false);
   }
-};
 
-struct DescriptorGatherOpConversion
-    : public ConvertOpToLLVMPattern<
-          mlir::triton::gpu::intel::DescriptorGatherOp>,
-      public DescriptorGatherConversionBase {
-  using ConvertOpToLLVMPattern<
-      mlir::triton::gpu::intel::DescriptorGatherOp>::ConvertOpToLLVMPattern;
-
-  DescriptorGatherOpConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
-      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
-      triton::intel::ModuleStrideAnalysis &strideAnalysis,
-      PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<mlir::triton::gpu::intel::DescriptorGatherOp>(
-            converter, benefit),
-        DescriptorGatherConversionBase(targetInfo, axisAnalysisPass,
-                                       strideAnalysis) {}
-
-  LogicalResult
-  matchAndRewrite(mlir::triton::gpu::intel::DescriptorGatherOp op,
-                  OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (succeeded(lowerDescriptorGather(op, adaptor, rewriter)))
-      return success();
-
-    return rewriter.notifyMatchFailure(
-        op, "failed to lower ttig.descriptor_gather");
-  }
-
-private:
   struct GatherAddressAndPred {
     Value pred;
     Value addr;
@@ -2847,22 +2817,6 @@ private:
     bool chunksSpanColumns = false;
     LinearLayout regMapping;
     LinearLayout offMapping;
-  };
-
-  struct GatherLoadCommon {
-    const DescriptorFields &desc;
-    ArrayRef<Value> offsetsX;
-    Value basicOffsetY;
-    Type valueElemTy;
-    Type unpackedType;
-  };
-
-  struct GatherStringAttrs {
-    StringAttr kRegister;
-    StringAttr kLane;
-    StringAttr kPtrs;
-    StringAttr kOffIdx;
-    StringAttr kDim1;
   };
 
   static Value
@@ -2978,6 +2932,52 @@ private:
     config.offMapping = valueToOffsetMap.concatIns(laneMapping);
     return config;
   }
+};
+
+struct DescriptorGatherOpConversion
+    : public ConvertOpToLLVMPattern<
+          mlir::triton::gpu::intel::DescriptorGatherOp>,
+      public DescriptorGatherConversionBase {
+  using ConvertOpToLLVMPattern<
+      mlir::triton::gpu::intel::DescriptorGatherOp>::ConvertOpToLLVMPattern;
+
+  DescriptorGatherOpConversion(
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
+      PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<mlir::triton::gpu::intel::DescriptorGatherOp>(
+            converter, benefit),
+        DescriptorGatherConversionBase(targetInfo, axisAnalysisPass,
+                                       strideAnalysis) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::gpu::intel::DescriptorGatherOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (succeeded(lowerDescriptorGather(op, adaptor, rewriter)))
+      return success();
+
+    return rewriter.notifyMatchFailure(
+        op, "failed to lower ttig.descriptor_gather");
+  }
+
+private:
+  struct GatherLoadCommon {
+    const DescriptorFields &desc;
+    ArrayRef<Value> offsetsX;
+    Value basicOffsetY;
+    Type valueElemTy;
+    Type unpackedType;
+  };
+
+  struct GatherStringAttrs {
+    StringAttr kRegister;
+    StringAttr kLane;
+    StringAttr kPtrs;
+    StringAttr kOffIdx;
+    StringAttr kDim1;
+  };
 
   Value generatePerLaneLoad(Location loc, ConversionPatternRewriter &rewriter,
                             const GatherLoadCommon &common,
