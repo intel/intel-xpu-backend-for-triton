@@ -21,8 +21,8 @@ tt.func @no_licm_attr_blocks_hoist(%arg0: i32, %arg1: i32, %lb: i32, %ub: i32, %
 // -----
 
 // COM: Case B: The same loop-invariant arith.addi without the {tt.no_licm}
-// COM: attribute is hoisted out of the loop by triton-licm. It appears before
-// COM: scf.for in the output.
+// COM: attribute is hoisted out of the loop by triton-intel-licm. It appears
+// COM: before scf.for in the output.
 
 // CHECK-LABEL: @no_attr_gets_hoisted
 tt.func @no_attr_gets_hoisted(%arg0: i32, %arg1: i32, %lb: i32, %ub: i32, %step: i32) -> i32 {

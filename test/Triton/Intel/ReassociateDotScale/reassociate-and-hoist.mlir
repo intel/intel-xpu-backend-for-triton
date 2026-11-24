@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -triton-intel-reassociate-dot-scale=fast-math=true -triton-licm | FileCheck %s
+// RUN: triton-opt %s -triton-intel-reassociate-dot-scale=fast-math=true -triton-intel-licm | FileCheck %s
 
 //===----------------------------------------------------------------------===//
 // COMBINED HOIST CHECK — verify the reassociation enables LICM

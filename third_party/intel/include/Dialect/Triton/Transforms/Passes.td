@@ -239,7 +239,7 @@ def TritonIntelReassociateDotScale
     invariant code motion opportunity: the dot must be inside a loop, the dot
     itself loop-variant, the scalar and the chosen operand loop-invariant, and
     the other operand loop-variant. After the rewrite the scaled operand is
-    hoisted out of the loop by `triton-licm`.
+    hoisted out of the loop by `triton-intel-licm`.
 
     The transformation requires a zero accumulator: the algebra
     `c * (a @ b) = (c * a) @ b` only holds when the dot accumulator is zero.
