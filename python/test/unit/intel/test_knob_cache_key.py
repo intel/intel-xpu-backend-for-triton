@@ -48,6 +48,7 @@ INVALIDATING_KNOBS = {
     "disable_annotate_cache_control",
     "disable_canonicalize_pointers",
     "disable_igc_opt",
+    "disable_store_l1_write_back",
     "dump_shader_info",
     "fast_math",
     "opt_reduction_locality",
@@ -59,10 +60,17 @@ INVALIDATING_RAW_ENV_VARS = (
     # Gates `add_assign_latencies` / `add_schedule_loops` in `make_ttgir`, and
     # `annotationsAreUsable` in MatmulLoopPipeline.cpp.
     "TRITON_INTEL_ANNOTATE_LATENCIES",
-    # Turns off sub-group block reads in DescriptorLoadOpConversion.
+    # Leaves descriptor loads that cannot use 2D block IO to
+    # DescriptorLoadOpConversion instead of lowering them to tt.load in
+    # LowerTo2DBlockLoad.
+    "TRITON_INTEL_DISABLE_DESCRIPTOR_LOAD_TO_LOAD",
+    # Turns off sub-group block reads in DescriptorLoadOpConversion and
+    # LoadOpConversion.
     "TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ",
     # Turns off the store boundary clamp in `matchStoreBoundaryClamp` (BlockIOUtils.cpp).
     "TRITON_INTEL_DISABLE_STORE_BOUNDARY_CLAMP",
+    # Keeps 16-bit 2D block stores at 16 columns in `allowStoreColumnBlockFold`.
+    "TRITON_INTEL_DISABLE_WIDE_BLOCK_STORE",
     # Picks `runSpirvBackend` over `writeSpirv` in SPIRVTranslation.cpp.
     "TRITON_USE_SPIRV_BACKEND",
 )

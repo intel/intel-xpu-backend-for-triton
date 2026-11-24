@@ -6,6 +6,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include <functional>
 #include <memory>
+#include <utility>
 
 namespace mlir::triton {
 enum class ProgramIDDim : uint32_t;
@@ -93,8 +94,13 @@ public:
 
   virtual Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
-  virtual Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                          int i) const = 0;
+  // Return the shuffled value and whether the source lane is in bounds.
+  virtual std::pair<Value, Value> shuffleUp(RewriterBase &rewriter,
+                                            Location loc, Value val,
+                                            int delta) const = 0;
+  virtual std::pair<Value, Value> shuffleDown(RewriterBase &rewriter,
+                                              Location loc, Value val,
+                                              int delta) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
@@ -112,14 +118,6 @@ public:
                           SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned reduceLaneIdMask,
                           unsigned broadcastLaneIdMask) const = 0;
-
-  // Lets the target lower the in-warp phase of a scan, updating |acc| in
-  // place. Returns false, leaving |acc| untouched, to use the generic lowering.
-  virtual bool warpScan(RewriterBase &rewriter, Location loc,
-                        SmallVector<Value> &acc, triton::ScanOp op,
-                        unsigned scanDim, unsigned threadStride) const {
-    return false;
-  }
 
   // Emits LLVM code with |rewriter| to print a message following the given
   // format from the device. |formatStrStart| is the pointer to the start of
