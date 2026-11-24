@@ -624,8 +624,10 @@ public:
     if (!oldRetType.getEncoding() ||
         isa<ttgi::DpasEncodingAttr>(oldRetType.getEncoding()))
       return failure();
-    // The upcast only prepares the operands for the block scaled DPAS; with
-    // scales it cannot take, the tt.dot_scaled is decomposed.
+    // The upcast only prepares the operands for the block scaled DPAS, so with
+    // scales it cannot take, leave the tt.dot_scaled to the decomposition.
+    // Without this check the rebuilt tt.dot_scaled keeps the same scales,
+    // BlockedToDPAS rejects it, and it is upcast again, forever.
     if (!hasBlockScaleDPASScales(scaledDotOp))
       return rewriter.notifyMatchFailure(
           scaledDotOp, "scales are not E8M0 with one scale per 32 elements");
