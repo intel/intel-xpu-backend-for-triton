@@ -856,7 +856,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 // -----
 
 // COM: A store mask of row constancy 1 (bound 8449) is stamped when the row bound clamps the surface (pitch 320
-// COM: bytes); not with base pid * 48 (no multiple of 64), pitch 256 < 256 + 63, or a cg store.
+// COM: bytes), also for a cg store; not with base pid * 48 (no multiple of 64) or pitch 256 < 256 + 63.
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [16, 1], order = [1, 0]}>
 #rows = #ttg.slice<{dim = 1, parent = #blocked}>
 #cols = #ttg.slice<{dim = 0, parent = #blocked}>
@@ -865,7 +865,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
   // CHECK: tt.store {{.*}} {ttig.block_io = "row_major"} :
   // CHECK-NEXT: tt.store %{{[0-9]+}}, %arg1, %{{[0-9]+}} :
   // CHECK-NEXT: tt.store %{{[0-9]+}}, %arg1, %{{[0-9]+}} :
-  // CHECK-NEXT: tt.store %{{[0-9]+}}, %arg1, %{{[0-9]+}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} :
+  // CHECK-NEXT: tt.store %{{[0-9]+}}, %arg1, %{{[0-9]+}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>, ttig.block_io = "row_major"} :
   tt.func public @store_row_clamp(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #blocked>, %pid: i32) {
     %c48 = arith.constant 48 : i32
     %c64 = arith.constant 64 : i32

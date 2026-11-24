@@ -208,13 +208,14 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
     tt.return
   }
 
-  // CHECK-LABEL: llvm.func spir_kernelcc @no_clamp_cache_modifier_or_hint(
+  // CHECK-LABEL: llvm.func spir_kernelcc @clamp_cache_modifier_no_clamp_hint(
+  // COM: The cg store clamps like any other store; its block stores drop the cache modifier.
+  // CHECK-NOT: triton_gen.predicated_store
+  // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}}tile_height = 8, v_blocks = 1, cache_control = Default}
   // CHECK-NOT: triton_gen.2Dblockstore
-  // COM: The cg store: a cache modifier keeps the generic path, which honours it.
-  // CHECK-COUNT-32: triton_gen.predicated_store {{.*}}cache_control = L1UC_L3WB
   // COM: The hinted store: a non-power-of-two column constancy at or above the tile width is not relaxed.
   // CHECK-COUNT-32: triton_gen.predicated_store {{.*}}cache_control = Default
-  tt.func @no_clamp_cache_modifier_or_hint(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #mma>) {
+  tt.func @clamp_cache_modifier_no_clamp_hint(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #mma>) {
     %ld = arith.constant dense<504> : tensor<64x1xi32, #mma>
     %nb = arith.constant dense<504> : tensor<1x128xi32, #mma>
     %ar = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #r>
