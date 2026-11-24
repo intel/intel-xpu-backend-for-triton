@@ -39,12 +39,40 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: @no_dpas
+  // CHECK-LABEL: @keeps_strided_lanes
   // CHECK-NEXT: %[[C:.*]] = ttg.convert_layout %arg3 : tensor<32x64xbf16, #blocked1> -> tensor<32x64xbf16, #blocked>
   // CHECK-NEXT: ttig.descriptor_scatter %arg0[%arg1, %arg2], %[[C]] : {{.*}}, tensor<32x64xbf16, #blocked>
-  tt.func @no_dpas(%desc: !tt.tensordesc<1x64xbf16>, %x: tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked}>>, %y: i32, %v: tensor<32x64xbf16, #blocked1>) {
+  tt.func @keeps_strided_lanes(%desc: !tt.tensordesc<1x64xbf16>, %x: tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked}>>, %y: i32, %v: tensor<32x64xbf16, #blocked1>) {
     %c = ttg.convert_layout %v : tensor<32x64xbf16, #blocked1> -> tensor<32x64xbf16, #blocked>
     ttig.descriptor_scatter %desc[%x, %y], %c : !tt.tensordesc<1x64xbf16>, tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked}>>, i32, tensor<32x64xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A blocked source is adopted too when its lanes hold consecutive columns.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @adopts_blocked
+  // CHECK-NEXT: %[[X:.*]] = ttg.convert_layout %arg1 : {{.*}} -> tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+  // CHECK-NEXT: ttig.descriptor_scatter %arg0[%[[X]], %arg2], %arg3 : {{.*}}, tensor<32x64xbf16, #blocked1>
+  tt.func @adopts_blocked(%desc: !tt.tensordesc<1x64xbf16>, %x: tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked}>>, %y: i32, %v: tensor<32x64xbf16, #blocked1>) {
+    %c = ttg.convert_layout %v : tensor<32x64xbf16, #blocked1> -> tensor<32x64xbf16, #blocked>
+    ttig.descriptor_scatter %desc[%x, %y], %c : !tt.tensordesc<1x64xbf16>, tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked}>>, i32, tensor<32x64xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The verifier accepts a scatter without encodings, and RLC leaves it as is.
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @no_encoding
+  // CHECK-NEXT: ttig.descriptor_scatter %arg0[%arg1, %arg2], %arg3 : !tt.tensordesc<1x64xbf16>, tensor<32xi32>, i32, tensor<32x64xbf16>
+  tt.func @no_encoding(%desc: !tt.tensordesc<1x64xbf16>, %x: tensor<32xi32>, %y: i32, %v: tensor<32x64xbf16>) {
+    ttig.descriptor_scatter %desc[%x, %y], %v : !tt.tensordesc<1x64xbf16>, tensor<32xi32>, i32, tensor<32x64xbf16>
     tt.return
   }
 }

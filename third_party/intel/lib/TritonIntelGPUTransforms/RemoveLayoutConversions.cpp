@@ -1053,7 +1053,8 @@ bool LayoutPropagation::rewriteDescriptorScatterOp(
   assert(info.encodings.size() == 1 &&
          "we should have resolved to a single encoding");
   Attribute targetEncoding = info.encodings[0];
-  // Also keeps an encoding-less source away from the helper.
+  // Nothing to sink; this also keeps encoding-less sources (null anchors) away
+  // from the helper.
   if (getEncodingBeforeRewrite(src) == targetEncoding)
     return false;
   RankedTensorType newSrcType =
@@ -1061,12 +1062,7 @@ bool LayoutPropagation::rewriteDescriptorScatterOp(
   if (!ttgi::getScatterBlockWriteRuns(newSrcType))
     return false;
 
-  Value newSrc = src;
-  if (auto convertOp = src.getDefiningOp<ttg::ConvertLayoutOp>();
-      convertOp &&
-      getEncodingBeforeRewrite(convertOp.getSrc()) == targetEncoding)
-    newSrc = convertOp.getSrc();
-  scatterOp.getSrcMutable().assign(getValueAs(newSrc, targetEncoding));
+  scatterOp.getSrcMutable().assign(getValueAs(src, targetEncoding));
 
   Value x = scatterOp.getXOffsets();
   OpBuilder builder(scatterOp);
