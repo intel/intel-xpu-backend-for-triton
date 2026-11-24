@@ -392,12 +392,12 @@ def TritonGEN_SubGroupBlockReadOp: TritonGEN_Op<"sub_group_block_read"> {
 }
 
 def TritonGEN_SubGroupBlockWriteOp : TritonGEN_Op<"sub_group_block_write"> {
-  let summary = "simd block write";
+  let summary = "Sub-group block write.";
 
   let description = [{
-    The `triton_gen.sub_group_block_write` writes a scalar or vector for each
-    work-item in the sub-group from pointer `ptr` as a block operation.
-    The data is read strided, so the first value is written to:
+    The `triton_gen.sub_group_block_write` writes the scalar or vector `val` of
+    each work-item in the sub-group to pointer `ptr` as a block operation.
+    The data is written strided, so the first value is written to:
     ```
     ptr[sub_group_local_id]
     ```
@@ -407,16 +407,16 @@ def TritonGEN_SubGroupBlockWriteOp : TritonGEN_Op<"sub_group_block_write"> {
     ```
     etc.
 
-    `ptr` must be aligned to the size of the element type of `res`.
+    `ptr` must be 16-byte aligned.
 
      Example:
      ```mlir
-     %0 = triton_gen.sub_group_block_write %ptr, %val : !llvm.ptr<1>, vector<4xi32>
+     triton_gen.sub_group_block_write %ptr, %val : !llvm.ptr<1>, vector<4xi32>
      ```
   }];
 
   let arguments = (ins
-      Arg<TritonGEN_SubGroupBlockMemoryAccessPointerType, "", [MemRead]>:$ptr,
+      Arg<TritonGEN_SubGroupBlockMemoryAccessPointerType, "", [MemWrite]>:$ptr,
       TritonGEN_SubGroupBlockMemoryAccessType:$val);
 
   let results = (outs);
