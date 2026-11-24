@@ -466,8 +466,11 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
   ttg::DotOperandEncodingAttr attr{nullptr};
   LDBG("Checking users of " << val);
   for (Operation *user : val.getUsers()) {
+    // A tt.dot_scaled takes its A and B operands in the same dot-operand
+    // layouts as a tt.dot; its scale operands have a linear layout and are
+    // rejected by the cast below.
     ttg::DotOperandEncodingAttr dotAttr =
-        isa<triton::DotOp>(user)
+        isa<triton::DotOp, triton::DotScaledOp>(user)
             ? dyn_cast<ttg::DotOperandEncodingAttr>(
                   cast<RankedTensorType>(val.getType()).getEncoding())
             : getDotEncodingFromUser(user);

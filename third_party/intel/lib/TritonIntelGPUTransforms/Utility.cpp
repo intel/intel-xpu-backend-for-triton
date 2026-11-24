@@ -204,8 +204,9 @@ bool isVolatileOrCVLoad(Operation *op) {
 /// for nothing, and the mask bounds the resulting tile besides. Keep such a
 /// load anchored -- it can still lower to a 2D block message, just in the
 /// encoding the memory access itself wants. A broadcast load whose result is
-/// combined with a DPAS value (e.g. a GEMM bias) is the exception: it is costed
-/// by its distinct addresses below, see feedsDpasValue.
+/// combined with a DPAS value (e.g. a GEMM bias) is the exception: it is
+/// costed by its distinct addresses, and never an anchor when the lowering
+/// shares it (see feedsDpasValue and isExpensiveLoadOrStore).
 static bool isMaskedLoadWithoutDotConsumer(Operation *op) {
   auto loadOp = dyn_cast<tt::LoadOp>(op);
   if (!loadOp)
@@ -298,9 +299,8 @@ computeUniformDims(Value value, UniformDimsCache &cache, unsigned depth) {
   // An elementwise result is uniform along a dimension when every operand is.
   // Inline asm is excluded: it receives packed elements, so an output element
   // can depend on its neighbours and uniform operands prove nothing.
-  if (isa<tt::AddPtrOp>(def) ||
-      (def->hasTrait<OpTrait::Elementwise>() && isPure(def) &&
-       def->getNumResults() == 1 && !isa<tt::ElementwiseInlineAsmOp>(def))) {
+  if (def->hasTrait<OpTrait::Elementwise>() && isPure(def) &&
+      def->getNumResults() == 1 && !isa<tt::ElementwiseInlineAsmOp>(def)) {
     SmallVector<bool> result = allUniform();
     for (Value operand : def->getOperands()) {
       std::optional<SmallVector<bool>> operandUniform = fromOperand(operand);
@@ -441,16 +441,32 @@ bool isExpensiveLoadOrStore(Operation *op) {
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     // A load whose pointer is broadcast along some dimensions, such as an
     // addmm bias with stride (0, 1), reads each distinct address repeatedly;
-    // only the distinct addresses cost memory traffic. When it feeds a DPAS
-    // value, counting the logical elements instead would anchor the load in its
-    // coalesced encoding and keep a convert of the whole tile to DPAS through
-    // shared memory, although its repeated reads are cache hits. Other loads,
-    // and stores, keep the logical count.
+    // when its result feeds a DPAS value, anchoring it keeps a convert of the
+    // whole tile to DPAS (and usually one of the output back) through shared
+    // memory, whose live values can also push the kernel into spilling.
+    // - A broadcast row that becomes a row-major 2D block load is never an
+    //   anchor: rematerialized in the DPAS encoding, the lowering issues one
+    //   message per distinct column block and shares it across the
+    //   replicated rows. A volatile or `.cv` load is tagged too, but
+    //   LowerTo2DBlockLoad leaves it a gather, so it is not shared.
+    // - Any other such load (a column broadcast, a row whose mask makes it
+    //   a gather, e.g. an M that is not a multiple of the message height, or
+    //   a volatile or `.cv` load) is not shared, so it is costed by its
+    //   distinct addresses: it stops being an anchor only with fewer of them
+    //   than threads.
+    // Other loads, and stores, keep the logical element count.
     int64_t numElements = ptrType.getNumElements();
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       int64_t numDistinct = getNumDistinctElements(base);
-      if (numDistinct < numElements && feedsDpasValue(loadOp))
+      if (numDistinct < numElements && feedsDpasValue(loadOp)) {
+        auto blockIO = loadOp->getAttrOfType<StringAttr>(
+            TritonIntelGPUDialect::getBlockIOAttrName());
+        if (blockIO &&
+            blockIO.getValue() == stringifyBlockIOMode(BlockIOMode::RowMajor) &&
+            !isVolatileOrCVLoad(loadOp))
+          return false;
         numElements = numDistinct;
+      }
     }
     return numElements >= numWarps * threadsPerWarp;
   }

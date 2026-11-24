@@ -36,6 +36,14 @@ def get_flex_attn_fwd_configs(*args, **kwargs):  # pylint: disable=unused-argume
 
 def get_flex_attn_bwd_configs(*args, **kwargs):  # pylint: disable=unused-argument
     configs = [FlexBwDConfig(BLOCK, BLOCK, BLOCK, BLOCK, s, w) for BLOCK in [32, 64] for s in [1, 2] for w in ([4])]
+    # The 4-warp configs above spill heavily at D_HEAD=128 even with 256 GRF; these 8/16-warp, 2-stage configs
+    # do not (issue #8845).
+    configs += [
+        FlexBwDConfig(16, 64, 64, 16, 2, 8),
+        FlexBwDConfig(32, 32, 32, 32, 2, 8),
+        FlexBwDConfig(32, 64, 64, 32, 2, 16),
+        FlexBwDConfig(64, 64, 64, 64, 2, 16),
+    ]
     return configs
 
 

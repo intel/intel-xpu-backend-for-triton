@@ -14,7 +14,10 @@ unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
   RankedTensorType dstTy = convertLayout.getResult().getType();
   if (gpu::intel::cvtIsSubGroupShuffle(srcTy, dstTy))
     return 0;
-  if (gpu::intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
+  // A forced warp shuffle is never lowered through SLM; leave its sizing to
+  // the default analysis.
+  if (!convertLayout.getForceWarpShuffle() &&
+      gpu::intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
     Type elemTy = srcTy.getElementType();
     unsigned bytesPerElement =
         std::max<int>(8, getIntOrFloatOrPtrBitWidth(elemTy)) / 8;
@@ -46,6 +49,12 @@ unsigned allocationAnalysisScratchSizeFn(Operation *op) {
       .Case<ReduceOp>([](auto op) {
         ReduceOpHelper helper(op);
         return ttgi::getScratchSizeInBytesOld(helper, op);
+      })
+      .Case<ScanOp>([](ScanOp op) {
+        // The Intel lowering takes blocked layouts, core's the others.
+        if (auto blocked = ttgi::BlockedScanLayout::get(op))
+          return blocked->scratchBytes;
+        return defaultAllocationAnalysisScratchSizeFn(op);
       })
       .Case<HistogramOp>([](HistogramOp op) {
         // The Intel lowering always counts in shared memory, including the
