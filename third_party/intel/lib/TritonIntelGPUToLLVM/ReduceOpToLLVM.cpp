@@ -1,3 +1,4 @@
+#include "Utility.h"
 #include "lib/Conversion/TritonGPUToLLVM/ReduceScanCommon.h"
 
 #include <memory>
@@ -29,13 +30,11 @@ using ::mlir::triton::gpu::DistributedEncodingTrait;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
-struct ReduceOpConversion
-    : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
+struct ReduceOpConversion : public ConvertOpToLLVMPattern<triton::ReduceOp> {
 public:
   ReduceOpConversion(LLVMTypeConverter &typeConverter,
                      const TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(typeConverter,
-                                                                  benefit),
+      : ConvertOpToLLVMPattern<triton::ReduceOp>(typeConverter, benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
@@ -91,6 +90,12 @@ public:
 
 private:
   const TargetInfoBase &targetInfo;
+
+  // Return the pointee type of the shared memory pointer for operand i.
+  Type getElementType(triton::ReduceOp op, int i) const {
+    auto ty = op.getInputTypes()[i].getElementType();
+    return getTypeConverter()->convertType(ty);
+  }
 
   // Reduce values using a tree of the given arity. Arity=3 generates
   // combine(combine(a, b), c) groups that LLVM folds into ternary
@@ -754,8 +759,9 @@ private:
 
     // Compute a shared memory base per operand.
     auto smemShape = ttgi::getScratchRepShape(helper, op);
-    SmallVector<Value> smemBases =
-        getSmemBases(op, product<unsigned>(smemShape), rewriter, targetInfo);
+    SmallVector<Value> smemBases = LLVM::intel::getSmemBases(
+        op, op.getElementTypes(), product<unsigned>(smemShape),
+        *getTypeConverter(), rewriter, targetInfo);
 
     storeWarpReduceToSharedMemory(op, helper, accs, indices, smemBases,
                                   rewriter, regLl);

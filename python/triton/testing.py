@@ -680,11 +680,7 @@ def get_dram_gbps(device=None):
     from .runtime import driver
     if device is None:
         device = driver.active.get_device_interface().current_device()
-    utils = driver.active.utils
-    get_bandwidth = getattr(utils, "get_bandwidth", None)
-    if get_bandwidth is not None and (bw_gbps := get_bandwidth(device)) is not None:
-        return bw_gbps
-    properties = utils.get_device_properties(device)
+    properties = driver.active.utils.get_device_properties(device)
     mem_clock_khz = properties["mem_clock_rate"]  # in kHz
     bus_width = properties["mem_bus_width"]
     target = driver.active.get_current_target()
