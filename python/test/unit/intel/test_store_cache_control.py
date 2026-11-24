@@ -11,6 +11,13 @@ import triton.language as tl
 from triton._internal_testing import is_xpu
 
 
+@pytest.fixture(autouse=True)
+def narrow_block_store_rows(monkeypatch):
+    # These tests cover the narrow-row policy, so 16-bit stores keep their 16-wide (32 B) rows.
+    monkeypatch.setenv("TRITON_INTEL_DISABLE_WIDE_BLOCK_STORE", "1")
+    yield
+
+
 def _has_2d_block_io():
     if not is_xpu():
         return False
