@@ -1,5 +1,5 @@
-#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_TYPECONVERTER_H_
-#define TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_TYPECONVERTER_H_
+#ifndef TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_TYPECONVERTER_H
+#define TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_TYPECONVERTER_H
 
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
@@ -38,10 +38,6 @@ public:
     addConversion([&](TensorDescType type) -> std::optional<Type> {
       return convertTensorDescType(type);
     });
-    // A buffer descriptor is the buffer resource the intrinsics take.
-    addConversion([ctx](amdgpu::BufferDescType type) -> std::optional<Type> {
-      return LLVM::LLVMPointerType::get(ctx, llvm::AMDGPUAS::BUFFER_RESOURCE);
-    });
   }
 
   Type convertTensorDescType(triton::TensorDescType type) {
@@ -58,4 +54,4 @@ public:
   }
 };
 
-#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_TYPECONVERTER_H_
+#endif

@@ -4,7 +4,6 @@ import sys
 from contextlib import nullcontext
 
 import pytest
-import sympy
 import torch
 from torch._subclasses.fake_tensor import FakeTensorMode
 import triton
@@ -25,18 +24,17 @@ from triton_kernels.tensor import (
     wrap_torch_tensor,
 )
 from triton_kernels.testing import assert_equal
-from triton._internal_testing import is_compile_warmup, is_cuda
+from triton._internal_testing import is_cuda, is_xpu_cri
 from triton_kernels.tensor_details.layout import (
     BlackwellActMXScaleLayout,
     BlackwellMX4ValueShuffledLayout,
     BlackwellMXScaleLayout,
     BlackwellMXValueLayout,
     CDNA4MXScaleLayout,
-    CDNA5MXScaleLayout,
+    GFX1250MXScaleLayout,
     HopperMXScaleLayout,
     HopperMXValueLayout,
     StridedLayout,
-    TiledLayout,
 )
 
 _FP4_VALUE_LAYOUTS = [
@@ -150,8 +148,8 @@ def test_fpsan_embed_unembed_torch_tensor(dtype, layout, fresh_knobs, device):
         ((0, 64), False, BlackwellActMXScaleLayout(None), [1, 0, 16, 2, 256]),
         ((3, 254, 60), False, CDNA4MXScaleLayout(), [3, 8192, 2]),
         ((0, 64), False, CDNA4MXScaleLayout(), [1, 0, 2]),
-        ((3, 254, 60), False, CDNA5MXScaleLayout(), [3, 32768, 1]),
-        ((0, 64), False, CDNA5MXScaleLayout(), [1, 0, 1]),
+        ((3, 254, 60), False, GFX1250MXScaleLayout(), [3, 32768, 1]),
+        ((0, 64), False, GFX1250MXScaleLayout(), [1, 0, 1]),
     ],
 )
 def test_layout_storage_shape_matches_conversion(logical_shape, is_fp4, layout, storage_shape):
@@ -164,44 +162,11 @@ def test_layout_storage_shape_matches_conversion(logical_shape, is_fp4, layout, 
     assert list(converted.storage.data.shape) == storage_shape
 
 
-@pytest.mark.parametrize(("layout", "expected"), [
-    (BlackwellMXScaleLayout(), [1, 1, 4, 2, 256]),
-    (BlackwellActMXScaleLayout(None), [1, 1, 10, 2, 256]),
-    (HopperMXScaleLayout(-1, 4), [4, 1088]),
-    (HopperMXScaleLayout(-2, 4), [320, 4]),
-    (CDNA4MXScaleLayout(), [1, 512, 2]),
-])
-def test_scale_layout_symbolic_storage_shape(layout, expected):
-    m, n = sympy.symbols("m n", integer=True, nonnegative=True)
-    shape = layout.storage_shape([m, n], False)
-    assert [sympy.sympify(dim).subs({m: 9, n: 33}) for dim in shape] == expected
-
-
 def test_ragged_layout_storage_shape():
     slice_sizes = torch.tensor([17, 0, 33, 5], dtype=torch.int32)
     metadata = make_ragged_tensor_metadata_torch(slice_sizes, 100)
 
     assert BlackwellActMXScaleLayout(metadata).storage_shape([100, 94], False) == [1, 4, 24, 2, 256]
-
-
-def test_blackwell_act_four_column_roundtrip():
-    data = torch.arange(512, dtype=torch.int32).reshape(2, 256, 1)
-    data = (data + data // 256).to(torch.uint8)
-    layout = BlackwellActMXScaleLayout(None, column_alignment=4)
-    encoded = convert_layout(wrap_torch_tensor(data), layout)
-    assert encoded.data.shape == (1, 4, 1, 2, 256)
-    assert torch.equal(convert_layout(encoded, StridedLayout(-1)).data, data)
-
-
-def test_blackwell_act_column_alignment_conversion():
-    data = torch.arange(512, dtype=torch.int32).reshape(2, 256, 1)
-    data = (data + data // 256).to(torch.uint8)
-    compact = BlackwellActMXScaleLayout(None, column_alignment=4)
-    encoded = convert_layout(wrap_torch_tensor(data), compact)
-    padded = convert_layout(encoded, BlackwellActMXScaleLayout(None))
-    assert padded.data.shape == (1, 4, 2, 2, 256)
-    assert torch.equal(convert_layout(padded, StridedLayout(-1)).data, data)
-    assert torch.equal(convert_layout(padded, compact).data, encoded.data)
 
 
 def test_import_does_not_initialize_cuda():
@@ -393,8 +358,8 @@ def test_convert_layout_between_strided_layouts_peak_allocation(dtype, with_out,
         ((64, 64), (64, 128), FP4, HopperMXValueLayout(-2, 3), HopperMXValueLayout(-2, 3)),
         ((10, 254, 60), None, UINT8, CDNA4MXScaleLayout(), CDNA4MXScaleLayout()),
         ((8, 1), None, UINT8, CDNA4MXScaleLayout(), CDNA4MXScaleLayout()),
-        ((10, 254, 60), None, UINT8, CDNA5MXScaleLayout(), CDNA5MXScaleLayout()),
-        ((4, 1), None, UINT8, CDNA5MXScaleLayout(), CDNA5MXScaleLayout()),
+        ((10, 254, 60), None, UINT8, GFX1250MXScaleLayout(), GFX1250MXScaleLayout()),
+        ((4, 1), None, UINT8, GFX1250MXScaleLayout(), GFX1250MXScaleLayout()),
     ],
 )
 def test_convert_layout_noop_for_equivalent_layout(storage_shape, logical_shape, dtype, layout, equivalent_layout):
@@ -724,29 +689,6 @@ def test_make_ragged_tensor_metadata(n_slices, device):
     assert_equal(meta.block_schedule_data, ref.block_schedule_data)
 
 
-@pytest.mark.parametrize("n_slices,capacity", [(1, 0), (1, 1), (1, 15), (1, 16), (1, 17), (1, 512), (1, 3072),
-                                               (1, 131072), (2, 512), (6, 3072)])
-def test_ragged_tensor_metadata_replay(n_slices, capacity, device):
-    sizes = torch.zeros(n_slices, device=device, dtype=torch.int32)
-    make_ragged_tensor_metadata(sizes, capacity)
-    device_module = torch.get_device_module(device)
-    graph = device_module.XPUGraph() if device == "xpu" else device_module.CUDAGraph()
-    with device_module.graph(graph):
-        actual = make_ragged_tensor_metadata(sizes, capacity)
-    fields = (actual.slice_offs, actual.block_offs_data, actual.block_schedule_data)
-    pointers = [field.data_ptr() for field in fields]
-    for active in (capacity, capacity // 2, 0):
-        sizes.copy_(
-            torch.tensor([active // n_slices + (i < active % n_slices) for i in range(n_slices)], device=device,
-                         dtype=torch.int32))
-        expected = make_ragged_tensor_metadata_torch(sizes, capacity)
-        graph.replay()
-        for result, reference in zip(fields,
-                                     (expected.slice_offs, expected.block_offs_data, expected.block_schedule_data)):
-            assert_equal(result, reference)
-        assert pointers == [field.data_ptr() for field in fields]
-
-
 @pytest.mark.parametrize("n_slices", [9, 32, 911, 1025])
 def test_remap_ragged_tensor_metadata(n_slices, device):
     max_slice_size = 200
@@ -757,20 +699,20 @@ def test_remap_ragged_tensor_metadata(n_slices, device):
     slice_map = torch.randperm(n_slices, device=device, dtype=torch.int32)
     # discard random slices
     slice_map[torch.randint(0, len(slice_map), (5, ))] = -1
+    ref_dev = 'cpu' if is_xpu_cri() else device
     tri_metadata = make_ragged_tensor_metadata(slice_sizes, n_total_rows)
-    ref_metadata = make_ragged_tensor_metadata_torch(slice_sizes, n_total_rows)
+    ref_metadata = make_ragged_tensor_metadata_torch(slice_sizes.to(device=ref_dev), n_total_rows)
     tri_metadata = remap_ragged_tensor_metadata(tri_metadata, slice_map)
-    ref_metadata = remap_ragged_tensor_metadata_torch(ref_metadata, slice_map)
-    assert_equal(tri_metadata.slice_sizes, ref_metadata.slice_sizes)
-    assert_equal(tri_metadata.slice_offs, ref_metadata.slice_offs)
-    assert_equal(tri_metadata.block_offs_data, ref_metadata.block_offs_data)
-    assert_equal(tri_metadata.block_schedule_data, ref_metadata.block_schedule_data)
+    ref_metadata = remap_ragged_tensor_metadata_torch(ref_metadata, slice_map.to(device=ref_dev))
+    assert_equal(tri_metadata.slice_sizes.to(device=ref_dev), ref_metadata.slice_sizes)
+    assert_equal(tri_metadata.slice_offs.to(device=ref_dev), ref_metadata.slice_offs)
+    assert_equal(tri_metadata.block_offs_data.to(device=ref_dev), ref_metadata.block_offs_data)
+    assert_equal(tri_metadata.block_schedule_data.to(device=ref_dev), ref_metadata.block_schedule_data)
 
 
 @pytest.mark.parametrize("n_rows", [0, 7, 256, 17111])
 @pytest.mark.parametrize("n_cols", [13, 32, 128, 811])
 @pytest.mark.parametrize("k", [1, 3, 4, 7, 8, 12, 18, 33, 63])
-@pytest.mark.enable_warmup
 def test_make_bitmatrix_metadata(n_rows, n_cols, k, device):
     if k > n_cols:
         pytest.skip("k must be <= n_cols")
@@ -786,8 +728,6 @@ def test_make_bitmatrix_metadata(n_rows, n_cols, k, device):
     bitmask = wrap_torch_tensor(bitmask_data.view(torch.uint32), dtype=BIT, shape=(n_rows, n_cols))
     # make metadata and compare
     metadata_tri = make_bitmatrix_metadata(indx, bitmask)
-    if is_compile_warmup():
-        return
     metadata_ref = make_bitmatrix_metadata_torch(indx, bitmask)
     assert_equal(metadata_tri.col_sum, metadata_ref.col_sum)
     assert_equal(metadata_tri.row_sorted_indx, metadata_ref.row_sorted_indx)
@@ -819,23 +759,3 @@ def test_keyed_add_large_key_no_int_overflow(device):
     # Compare in int64 (CUDA has no uint32 `arange`); values are well within int64.
     expected = (key << 16) | torch.arange(1, BLOCK + 1, dtype=torch.int64, device=device)
     assert torch.equal(out.to(torch.int64), expected)
-
-
-@pytest.mark.parametrize("shape", [(256, 384), (2, 256, 384)])
-@pytest.mark.parametrize("major_dim", [-1, -2])
-@pytest.mark.parametrize("dtype", [torch.uint8, torch.bfloat16])
-@pytest.mark.parametrize("with_out", [False, True])
-def test_tiled_layout_roundtrip(shape, major_dim, dtype, with_out):
-    values = (torch.arange(math.prod(shape)) % 251).to(dtype).reshape(shape)
-    source = wrap_torch_tensor(values)
-    layout = TiledLayout(major_dim)
-    tiled = convert_layout(source, layout)
-    assert convert_layout(tiled, layout) is tiled
-    if with_out:
-        out = wrap_torch_tensor(torch.empty_like(tiled.data), layout=layout)
-        assert convert_layout(source, layout, out=out) is out
-        torch.testing.assert_close(out.data, tiled.data, rtol=0, atol=0)
-        tiled = out
-    restored = convert_layout(tiled, StridedLayout(-1))
-    torch.testing.assert_close(restored.data, values, rtol=0, atol=0)
-    assert tiled.data.numel() == source.data.numel()

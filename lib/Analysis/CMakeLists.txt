@@ -4,7 +4,6 @@ add_triton_library(TritonAnalysis
   BufferRegion.cpp
   BufferIndexAnalysis.cpp
   Membar.cpp
-  Signedness.cpp
   Alias.cpp
   Utility.cpp
 
@@ -17,6 +16,7 @@ add_triton_library(TritonAnalysis
 
   LINK_LIBS PUBLIC
   MLIRAnalysis
+  MLIRLLVMDialect
   TritonIR
   TritonGPUIR
   GluonIR

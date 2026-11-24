@@ -60,9 +60,7 @@ static bool crossWriteSideEffectingOp(Operation *start, Operation *end) {
     return true;
   Operation *nextOp = start->getNextNode();
   while (nextOp) {
-    if (nextOp == end)
-      return false;
-    if (hasWriteSideEffect(nextOp))
+    if ((hasWriteSideEffect(nextOp)))
       return true;
     if (nextOp == ancestor)
       return false;
@@ -133,9 +131,6 @@ public:
       // Don't hoist alloc if the src is a scalar as this may increase smem
       // pressure for no benefits.
       if (isa<arith::ConstantOp, triton::SplatOp>(argOp))
-        return;
-      // Keep the store after waits that complete earlier asynchronous reads.
-      if (crossWriteSideEffectingOp(argOp, op))
         return;
       moveAfter(op, argOp);
     });

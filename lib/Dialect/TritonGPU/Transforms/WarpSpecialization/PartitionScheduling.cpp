@@ -177,23 +177,6 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
               for (auto &op : block)
                 visitOperation(node, &op);
 
-        } else if (auto scanOp = dyn_cast<tt::ScanOp>(op)) {
-          // Like tt.reduce, but a scan can carry several operands and results
-          // (tl.associative_scan over a tuple), so give each one a port.
-          auto node =
-              graph->addNode(op, op->getNumOperands(), op->getNumResults());
-          nodes[op] = node;
-          for (size_t idx = 0; idx < op->getNumOperands(); idx++)
-            operands[std::make_pair(op, idx)] = InputPort(node, idx);
-          for (auto result : scanOp.getResults())
-            values.push_back(std::make_pair(
-                OutputPort(node, result.getResultNumber()), result));
-
-          for (auto &region : op->getRegions())
-            for (auto &block : region)
-              for (auto &op : block)
-                visitOperation(node, &op);
-
         } else if (isa<scf::ConditionOp>(op)) {
           assert(isa<scf::WhileOp>(op->getParentOp()));
           auto node = graph->addNode(op, 1, 0);
@@ -245,7 +228,7 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
     for (auto &use : value.getUses()) {
       auto op = use.getOwner();
       auto key = std::make_pair(op, use.getOperandNumber());
-      if (operands.contains(key)) {
+      if (operands.find(key) != operands.end()) {
         auto inputPort = operands[key];
         Node::addEdge(outputPort, inputPort);
       }
@@ -296,7 +279,7 @@ void propagateDataValues(const SmallVector<OutputPort> &values) {
 
   auto add = [&](OutputPort value) {
     value.getNode()->setDataValue(value.getIdx());
-    if (!seen.contains(value)) {
+    if (seen.find(value) == seen.end()) {
       stack.push_back(value);
       seen.insert(value);
     }
@@ -357,7 +340,7 @@ void deserializeManualPartitions(Operation *region, Graph *graph) {
             cast<DenseI32ArrayAttr>(op->getAttr(kPartitionAttrName))
                 .asArrayRef();
         for (auto id : partitionIds) {
-          if (!manual_partitions.contains(id)) {
+          if (manual_partitions.find(id) == manual_partitions.end()) {
             auto partition = graph->addPartition();
             partition->addFlag(Flags::MANUAL);
             manual_partitions[id] = partition;
@@ -1043,7 +1026,7 @@ void propagatePartitions(Graph *graph, std::string funcName,
             node->addPartitions(partitions);
             auto numPartitionsAfter = node->getPartitions().size();
             changed |= (numPartitionsBefore != numPartitionsAfter);
-            if (!seen.contains(node)) {
+            if (seen.count(node) == 0) {
               stack.push_back(node);
               seen.insert(node);
             }
@@ -1097,9 +1080,9 @@ void propagatePartitions(Graph *graph, std::string funcName,
 
   visualize(funcName, "propagate", "propagate forward", graph, vis_info);
 
-  // propagate partitions of tt.reduce and tt.scan into their bodies
+  // propagate partitions of tt.reduce into its body
   graph->walk([&](Node *node) {
-    if (node->isOp() && isa<tt::ReduceOp, tt::ScanOp>(node->getOp())) {
+    if (node->isOp() && isa<tt::ReduceOp>(node->getOp())) {
       auto partitions = node->getPartitions();
       node->walk(
           [&](Node *child_node) { child_node->addPartitions(partitions); });
@@ -1165,7 +1148,7 @@ void propagatePartitions(Graph *graph, std::string funcName,
           continue;
         fromNode->addPartitions(partitions);
 
-        if (!seen.contains(edge.getFromNode())) {
+        if (seen.count(edge.getFromNode()) == 0) {
           stack.push_back(fromNode);
           seen.insert(fromNode);
         }
@@ -1230,7 +1213,7 @@ void duplicateCheapOps(Graph *graph, std::string funcName,
                 } else if (child->getPartition() == startPartition) {
                   // found a path, set all nodes on the path to the partition
                   node->addPartition(startPartition);
-                  while (parentMap.contains(node)) {
+                  while (parentMap.find(node) != parentMap.end()) {
                     node = parentMap[node];
                     node->addPartition(startPartition);
                   }
@@ -1334,11 +1317,6 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
         // result of a reduce
         auto reduce = node->getParent()->getOp();
         setPartitionOutputsAttr(reduce, 0, 1, node);
-      } else if (isa<tt::ScanReturnOp>(node->getOp())) {
-        // results of a scan
-        auto scan = node->getParent()->getOp();
-        for (size_t idx = 0; idx < scan->getNumResults(); idx++)
-          setPartitionOutputsAttr(scan, idx, scan->getNumResults(), node);
       }
 
     } else {

@@ -212,7 +212,7 @@ public:
     DenseMap<Operation *, int> mmaSelfLatency;
     // Check if the load op (mma operand) is pipelineable.
     auto isLoadToBePipelined = [&](Operation *op) {
-      return opLatency.contains(op) && opLatency[op] > 0;
+      return opLatency.count(op) && opLatency[op] > 0;
     };
     for (auto &op : forOp.getBody()->without_terminator()) {
       // If the acc can not be multibuffered, do not pipeline the uses of
@@ -288,9 +288,6 @@ private:
   }
 
   bool isWarpSpecialized(scf::ForOp forOp) {
-    // Automatic warp specialization is disabled for two-CTA kernels.
-    if (ttng::getModuleTwoCTAs(forOp))
-      return false;
     scf::ForOp current = forOp;
     do {
       if (current->hasAttr(kWarpSpecializeAttrName)) {
@@ -349,13 +346,13 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
 
   std::function<void(Operation *, Operation *, int)> dfs =
       [&](Operation *op, Operation *finalUser, int distance) {
-        if (!seen.insert(op).second || excluded.contains(op))
+        if (!seen.insert(op).second || excluded.count(op))
           return;
         if (isa<tt::LoadOp, tt::DescriptorLoadLikeOpInterface>(op)) {
           if (!AssignLoadLatencies::isPipeliningBeneficial(
                   op, finalUser, axisInfoAnalysis, filterSmall))
             return;
-          if (loadOpToIndLevel.contains(op)) {
+          if (loadOpToIndLevel.count(op)) {
             int level = loadOpToIndLevel[op].first;
             if (level != distance) {
               // If we have multiple uses at different distances, we don't

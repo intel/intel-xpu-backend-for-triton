@@ -6,11 +6,9 @@ from triton._C.libtriton import gsan_testing as _gsan_testing
 
 from triton._C.libtriton.gsan_testing import (
     ShadowCell,
-    ScalarClock,
     GlobalState,
     ThreadState,
     shadow_cell_address,
-    shadow_cell_size,
     thread_state_stride_bytes,
     decode_shadow_cell,
     SHADOW_CELL_SIZE_BYTES,
@@ -19,7 +17,7 @@ from triton._C.libtriton.gsan_testing import (
 
 
 def shadow_cell(real_address: int) -> tuple[int, int]:
-    return shadow_cell_address(real_address), shadow_cell_size(real_address)
+    return shadow_cell_address(real_address), SHADOW_CELL_SIZE_BYTES
 
 
 def decode_global_state(data: bytes | bytearray | memoryview) -> GlobalState:
@@ -33,14 +31,12 @@ def decode_global_state_tensor(state_bytes: Any) -> GlobalState:
     return decode_global_state(bytes(state_bytes))
 
 
-def decode_shadow_cell_tensor(cell_bytes: Any, *, write_once: bool = False) -> ShadowCell | ScalarClock:
-    decoder = _gsan_testing.decode_write_once_clock if write_once else decode_shadow_cell
-    size = 4 if write_once else SHADOW_CELL_SIZE_BYTES
+def decode_shadow_cell_tensor(cell_bytes: Any) -> ShadowCell:
     # Accept a torch.Tensor without importing torch at module import time.
     if hasattr(cell_bytes, "detach"):
         tensor = cell_bytes.detach().cpu().contiguous().view(-1)
-        return decoder(bytes(tensor[:size].tolist()))
-    return decoder(bytes(cell_bytes))
+        return decode_shadow_cell(bytes(tensor[:SHADOW_CELL_SIZE_BYTES].tolist()))
+    return decode_shadow_cell(bytes(cell_bytes))
 
 
 def decode_thread_state(data: bytes | bytearray | memoryview, num_threads: int, clock_buffer_size: int) -> ThreadState:

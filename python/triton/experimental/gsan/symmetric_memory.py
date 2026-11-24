@@ -24,8 +24,7 @@ import torch.distributed.distributed_c10d as c10d
 from . import _stream_sync
 from ._allocator import (ShareableHandleType, configure as _configure, create_mem_pool, export_allocation_handles,
                          export_allocation_memhandle_regions, export_runtime_state_handle, free_allocation,
-                         import_allocation_handles, import_runtime_state_handle, _resolve_shadow_granularity,
-                         is_write_once_allocation)
+                         import_allocation_handles, import_runtime_state_handle)
 from ._utils import uint8_cuda_tensor_from_ptr
 
 _RendezvousCacheKey: TypeAlias = tuple[int, int, int]
@@ -42,8 +41,8 @@ def _normalize_size(size: tuple[object, ...]) -> tuple[int, ...]:
 
 
 @functools.lru_cache()
-def _get_mem_pool(shadow_granularity: int, write_once: bool):
-    return create_mem_pool(shadow_granularity=shadow_granularity, write_once=write_once)
+def _get_mem_pool():
+    return create_mem_pool()
 
 
 @atexit.register
@@ -51,13 +50,7 @@ def _clear_mem_pool_cache() -> None:
     _get_mem_pool.cache_clear()
 
 
-def empty(*size, dtype: torch.dtype | None = None, device: torch.device | str | None = None,
-          shadow_granularity: int | None = None, write_once: bool = False) -> torch.Tensor:
-    """Allocates symmetric storage using the requested GSan shadow granularity.
-
-    See :func:`triton.experimental.gsan.create_mem_pool` for access restrictions.
-    """
-    shadow_granularity = _resolve_shadow_granularity(shadow_granularity, write_once)
+def empty(*size, dtype: torch.dtype | None = None, device: torch.device | str | None = None) -> torch.Tensor:
     shape = _normalize_size(size)
     if dtype is None:
         dtype = torch.get_default_dtype()
@@ -72,7 +65,7 @@ def empty(*size, dtype: torch.dtype | None = None, device: torch.device | str | 
     device_index = torch.cuda.current_device() if dev.index is None else dev.index
     dev = torch.device("cuda", device_index)
 
-    with torch.cuda.use_mem_pool(_get_mem_pool(shadow_granularity, write_once), device=device_index):
+    with torch.cuda.use_mem_pool(_get_mem_pool()):
         return torch.empty(shape, dtype=dtype, device=dev)
 
 
@@ -155,8 +148,6 @@ def _import_peer_ptrs(
                 int(metas[peer]["alloc_size"]),
                 device_index,
                 ShareableHandleType.POSIX_FILE_DESCRIPTOR,
-                write_once=metas[peer]["write_once"],
-                shadow_granularity=metas[peer]["shadow_granularity"],
             )
             peer_ptrs[peer] = ptr
             if peer_runtime_state_fd is not None:
@@ -365,9 +356,7 @@ def rendezvous(tensor: torch.Tensor, group, *, _create_barrier: bool = True) -> 
     }
 
     with contextlib.ExitStack() as stack:
-        write_once = is_write_once_allocation(base_ptr)
-        real_fd, shadow_fd, alloc_size, shadow_granularity = export_allocation_handles(
-            base_ptr, ShareableHandleType.POSIX_FILE_DESCRIPTOR, include_granularity=True, write_once=write_once)
+        real_fd, shadow_fd, alloc_size = export_allocation_handles(base_ptr, ShareableHandleType.POSIX_FILE_DESCRIPTOR)
         allocation_base, _, _, _ = export_allocation_memhandle_regions(base_ptr)
         allocation_offset = base_ptr - allocation_base
 
@@ -388,8 +377,6 @@ def rendezvous(tensor: torch.Tensor, group, *, _create_barrier: bool = True) -> 
             "device_index": int(device_index),
             "nbytes": buffer_size,
             "alloc_size": int(alloc_size),
-            "write_once": write_once,
-            "shadow_granularity": shadow_granularity,
             "allocation_offset": allocation_offset,
             "runtime_state_alloc_size": (None if runtime_state_alloc_size is None else int(runtime_state_alloc_size)),
         }

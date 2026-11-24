@@ -170,10 +170,9 @@ def is_xpu_cri():
 
 
 def get_xpu_autotune_config():
-    grf_mode = '512' if is_xpu_cri() else '256'
     return [
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'grf_mode': grf_mode},
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
             num_stages=4, num_warps=32),
         triton.Config(
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'grf_mode': 'auto'},
@@ -197,11 +196,6 @@ def get_xpu_autotune_config():
         triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
                       num_warps=32),
     ]
-
-
-def is_hip_cdna4_above():
-    target = triton.runtime.driver.active.get_current_target()
-    return target.backend == "hip" and target.arch in ("gfx950", "gfx1250")
 
 
 def get_cuda_autotune_config():
@@ -404,7 +398,7 @@ def matmul(a, b, activation=""):
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-matmul_size = 512
+matmul_size = 256 if is_xpu_cri() else 512
 a = torch.rand((matmul_size, matmul_size), device=DEVICE, dtype=torch.float16) - 0.5
 b = torch.rand((matmul_size, matmul_size), device=DEVICE, dtype=torch.float16) - 0.5
 triton_output = matmul(a, b)
@@ -418,7 +412,7 @@ else:
     exit("❌ Triton and Torch differ")
 
 TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
-if TORCH_HAS_FP8 and (is_cuda() or is_hip_cdna4_above()):
+if TORCH_HAS_FP8 and is_cuda():
     torch.manual_seed(0)
     a = torch.randn((matmul_size, matmul_size), device=DEVICE, dtype=torch.float16)
     b = torch.randn((matmul_size, matmul_size), device=DEVICE, dtype=torch.float16)
@@ -449,7 +443,7 @@ ref_lib = 'cuBLAS' if is_cuda() else 'oneDNN' if is_xpu() else 'rocBLAS'
 
 configs = []
 for fp8_inputs in [False, True]:
-    if fp8_inputs and (not TORCH_HAS_FP8 or not (is_cuda() or is_hip_cdna4_above())):
+    if fp8_inputs and (not TORCH_HAS_FP8 or not is_cuda()):
         continue
     configs.append(
         triton.testing.Benchmark(

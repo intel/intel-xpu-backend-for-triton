@@ -5,7 +5,7 @@ import torch
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip, is_hip_cdna5, is_xpu
+from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip, is_hip_gfx1250, is_xpu, is_xpu_cri
 
 
 def check_capabilities():
@@ -148,7 +148,7 @@ def mxfp_to_bf16_kernel(
     tl.static_assert(scale.dtype == tl.uint8)
     tl.static_assert(x.dtype == tl.uint8)
 
-    scale_bf16 = tl.maximum(scale.to(tl.uint16) << 7, 0x0040).to(tl.uint16).to(tl.bfloat16, bitcast=True)
+    scale_bf16 = (scale.to(tl.uint16) << 7).to(tl.bfloat16, bitcast=True)
     if is_fp8:
         if e_bits == 5 and m_bits == 2:
             x_f8 = x.to(tl.float8e5, bitcast=True)
@@ -225,6 +225,8 @@ def test_pipeline_matmul(scale, device):
     if scale and not (is_cuda() or is_hip_cdna() or is_xpu()):
         pytest.skip("NYI: scale_dot just implemented in CUDA/HIP/XPU")
     M, N, K = 512, 512, 128
+    if is_xpu_cri():
+        M, N = 128, 128
     BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
     NUM_STAGES = 4 if is_cuda() else 2
 
@@ -544,11 +546,11 @@ def matmul_kernel_persistent_scatter(a_ptr, b_ptr, c_ptr,  #
 def _supports_descriptor_scatter():
     if is_cuda():
         return torch.cuda.get_device_capability()[0] == 10
-    return is_hip_cdna5()
+    return is_hip_gfx1250()
 
 
 @pytest.mark.skipif(not _supports_descriptor_scatter(),
-                    reason="TMA/TDM Scatter only works on cloud Blackwell Chips or AMD CDNA5")
+                    reason="TMA/TDM Scatter only works on cloud Blackwell Chips or AMD gfx1250")
 def test_scatter_pipeline(device):
     if is_xpu():
         pytest.xfail("XPU does not support TMA scatter")

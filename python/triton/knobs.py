@@ -217,6 +217,7 @@ class env_nvidia_tool(env_base[str, NvidiaTool]):
         binary += sysconfig.get_config_var("EXE")
         self.binary = binary
         self.default_path = os.path.join(os.path.dirname(__file__), "backends", "nvidia", "bin", binary)
+        # Convert ptxas-blackwell to PTXAS_BLACKWELL, not PTXAS-BLACKWELL
         super().__init__(f"TRITON_{binary.upper().replace('-', '_')}_PATH")
 
     def get(self) -> NvidiaTool:
@@ -455,7 +456,6 @@ class autotuning_knobs(base_knobs):
     cache: env_bool = env_bool("TRITON_CACHE_AUTOTUNING")
     print: env_bool = env_bool("TRITON_PRINT_AUTOTUNING")
     listener: Union[AutotuneListener, None] = None
-    warmup_workers: env_int = env_int("TRITON_AUTOTUNE_WARMUP_WORKERS", 0)
 
 
 class LaunchHook(Protocol):
@@ -568,19 +568,15 @@ class runtime_knobs(base_knobs):
 class language_knobs(base_knobs):
     fp32_default: env_opt_str = env_opt_str("TRITON_F32_DEFAULT")
     default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", True)
-    allow_fp_fusion: env_bool = env_bool("TRITON_ALLOW_FP_FUSION", True)
-
-    def fp_fusion_enabled(self, requested: Optional[bool]) -> bool:
-        return self.allow_fp_fusion and (self.default_fp_fusion if requested is None else requested)
 
 
 class nvidia_knobs(base_knobs):
     cuobjdump: env_nvidia_tool = env_nvidia_tool("cuobjdump")
     nvdisasm: env_nvidia_tool = env_nvidia_tool("nvdisasm")
     ptxas: env_nvidia_tool = env_nvidia_tool("ptxas")
+    ptxas_blackwell: env_nvidia_tool = env_nvidia_tool("ptxas-blackwell")
 
     dump_nvptx: env_bool = env_bool("NVPTX_ENABLE_DUMP")
-    use_slp_vectorizer: env_bool = env_bool("TRITON_USE_SLP_VECTORIZER", False)
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")
     ptxas_options: env_opt_str = env_opt_str("PTXAS_OPTIONS")
     mock_ptx_version: env_opt_str = env_opt_str("TRITON_MOCK_PTX_VERSION")
@@ -597,21 +593,19 @@ class intel_knobs(base_knobs):
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
-    # Disabled on Windows after the regressions tracked in issue #7495. The harmful
-    # `cg`-to-`!nontemporal` lowering (an L3 bypass) was removed in issue #7901, so
-    # the pass is enabled on every OS again. See issue #7945.
-    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", False)
+    # Enable the AnnotateCacheControl pass by default everywhere except Windows,
+    # where it triggers E2E performance regressions (see issue #7495).
+    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", os.name == "nt")
     enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
-    in_loop_sink: env_bool = env_bool("TRITON_INTEL_IN_LOOP_SINK", True)
-    disable_optimize_load_masks: env_bool = env_bool("TRITON_INTEL_DISABLE_OPTIMIZE_LOAD_MASKS", False)
+    disable_optimize_load_masks: env_bool = env_bool("TRITON_INTEL_DISABLE_OPTIMIZE_LOAD_MASKS", True)
     disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", True)
     enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)
     enable_sub_32_dpas: env_bool = env_bool("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32", False)
     fast_math: _env_fast_math = _env_fast_math()
 
-    enable_dump_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_KERNEL_ARGS", False)
-    dump_kernel_args_dir: env_opt_str = env_opt_str("TRITON_XPU_DUMP_KERNEL_ARGS_DIR")
-    print_dump_kernel_args_info: env_bool = env_bool("TRITON_XPU_PRINT_DUMP_KERNEL_ARGS_INFO", False)
+    enable_dump_spirv_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS", False)
+    dump_spirv_kernel_args_dir: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS_DIR")
+    print_dump_spirv_kernel_args_info: env_bool = env_bool("TRITON_XPU_PRINT_DUMP_SPIRV_KERNEL_ARGS_INFO", False)
 
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
 
@@ -629,11 +623,7 @@ class intel_knobs(base_knobs):
 
 
 class amd_knobs(base_knobs):
-    codegen_path: env_opt_str = env_opt_str("TRITON_AMD_CODEGEN_PATH")
-    bitcode_path: env_opt_str = env_opt_str("TRITON_AMD_BITCODE_PATH")
-    # use_buffer_ops is read once per tensor arg on the kernel launch critical path
-    # avoid repeated reads from env-var by calling get directly
-    use_buffer_ops: bool = env_bool("AMDGCN_USE_BUFFER_OPS", True).get()
+    use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     # Note: This requires use_buffer_ops be true to have any effect
     use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)
     # Note: This requires use_buffer_ops be true to have any effect
@@ -647,6 +637,8 @@ class amd_knobs(base_knobs):
     use_async_copy: env_opt_bool = env_opt_bool("TRITON_HIP_USE_ASYNC_COPY")
     use_coexec_scheduler: env_opt_bool = env_opt_bool("TRITON_HIP_USE_COEXEC_SCHEDULER")
     use_expert_scheduling: env_opt_bool = env_opt_bool("TRITON_HIP_USE_EXPERT_SCHEDULING")
+
+    scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
 
     # Path to dump MIR files for debugging/analysis
     dump_mir: env_opt_str = env_opt_str("TRITON_DUMP_MIR")
@@ -712,4 +704,3 @@ proton = proton_knobs()
 def refresh_knobs():
     runtime.debug = env_bool("TRITON_DEBUG").get()
     compilation.instrumentation_mode = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
-    amd.use_buffer_ops = env_bool("AMDGCN_USE_BUFFER_OPS", True).get()

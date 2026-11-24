@@ -548,7 +548,8 @@ tt::LoadOp Propagator::findRedundantLoad(tt::LoadOp load, Value mask) {
     // chains.
     if (candidate.getPtr() != load.getPtr() ||
         candidate.getType() != load.getType() ||
-        candidate.getCachePolicyAttr() != load.getCachePolicyAttr())
+        candidate.getCache() != load.getCache() ||
+        candidate.getEvict() != load.getEvict())
       continue;
     // The candidate has to read exactly the weakened mask's lanes.
     if (wantUnmasked ? static_cast<bool>(candidate.getMask())

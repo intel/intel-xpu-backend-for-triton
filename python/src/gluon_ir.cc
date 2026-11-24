@@ -33,8 +33,6 @@
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -142,50 +140,71 @@ private:
   std::string arch;
 };
 
-py::object getLayoutClass(StringRef name) {
-  struct LayoutImport {
-    const char *module;
-    const char *className = nullptr;
-  };
-  static constexpr auto common = "triton.experimental.gluon.language._layouts";
-  static constexpr auto amd = "triton.experimental.gluon.language.amd._layouts";
-  static constexpr auto cdna5 =
-      "triton.experimental.gluon.language.amd.cdna5._layouts";
-  static constexpr auto blackwell =
-      "triton.experimental.gluon.language.nvidia.blackwell";
-  static constexpr auto rubin =
-      "triton.experimental.gluon.language.nvidia.rubin";
-  static constexpr auto intel =
-      "triton.experimental.gluon.language.intel._layouts";
-  static const llvm::SmallDenseMap<llvm::StringRef, LayoutImport, 32> imports =
-      {
-          {"AutoLayout", {common}},
-          {"CoalescedLayout", {common}},
-          {"BlockedLayout", {common}},
-          {"SliceLayout", {common}},
-          {"DistributedLinearLayout", {common}},
-          {"DotOperandLayout", {common}},
-          {"NVMMADistributedLayout", {common}},
-          {"NVMMASharedLayout", {common}},
-          {"SwizzledSharedLayout", {common}},
-          {"SharedLinearLayout", {common}},
-          {"PaddedSharedLayout", {common}},
-          {"AMDMFMALayout", {amd}},
-          {"AMDWMMALayout", {amd}},
-          {"PartitionedSharedLayout", {cdna5}},
-          {"TensorMemoryLayout", {blackwell}},
-          {"TensorMemoryScalesLayout", {blackwell}},
-          {"RubinTensorMemoryScalesLayout",
-           {rubin, "TensorMemoryScalesLayout"}},
-          {"IntelDPASLayout", {intel}},
-      };
-  auto it = imports.find(name);
-  if (it == imports.end())
-    llvm_unreachable("Unhandled Gluon layout class");
-  const auto &entry = it->second;
-  return py::module_::import_(entry.module)
-      .attr(entry.className ? entry.className : it->first.data());
-}
+struct GluonLayouts {
+  py::handle AutoLayout;
+  py::handle CoalescedLayout;
+  py::handle BlockedLayout;
+  py::handle SliceLayout;
+  py::handle DistributedLinearLayout;
+  py::handle DotOperandLayout;
+  py::handle NVMMADistributedLayout;
+  py::handle RubinTensorMemoryScalesLayout;
+  py::handle TensorMemoryScalesLayout;
+  py::handle TensorMemoryLayout;
+  py::handle NVMMASharedLayout;
+  py::handle SwizzledSharedLayout;
+  py::handle SharedLinearLayout;
+  py::handle AMDMFMALayout;
+  py::handle AMDWMMALayout;
+  py::handle PaddedSharedLayout;
+  py::handle PartitionedSharedLayout;
+  py::handle IntelDPASLayout;
+
+  GluonLayouts() {
+    auto layouts =
+        py::module_::import_("triton.experimental.gluon.language._layouts");
+    auto amdLayouts =
+        py::module_::import_("triton.experimental.gluon.language.amd._layouts");
+    auto intelLayouts = py::module_::import_(
+        "triton.experimental.gluon.language.intel._layouts");
+    auto blackwellLayouts = py::module_::import_(
+        "triton.experimental.gluon.language.nvidia.blackwell");
+    auto rubinLayouts =
+        py::module_::import_("triton.experimental.gluon.language.nvidia.rubin");
+    AutoLayout = py::object(layouts.attr("AutoLayout")).release();
+    CoalescedLayout = py::object(layouts.attr("CoalescedLayout")).release();
+    BlockedLayout = py::object(layouts.attr("BlockedLayout")).release();
+    SliceLayout = py::object(layouts.attr("SliceLayout")).release();
+    DistributedLinearLayout =
+        py::object(layouts.attr("DistributedLinearLayout")).release();
+    DotOperandLayout = py::object(layouts.attr("DotOperandLayout")).release();
+    NVMMADistributedLayout =
+        py::object(layouts.attr("NVMMADistributedLayout")).release();
+    TensorMemoryScalesLayout =
+        py::object(blackwellLayouts.attr("TensorMemoryScalesLayout")).release();
+    RubinTensorMemoryScalesLayout =
+        py::object(rubinLayouts.attr("TensorMemoryScalesLayout")).release();
+    TensorMemoryLayout =
+        py::object(blackwellLayouts.attr("TensorMemoryLayout")).release();
+    NVMMASharedLayout = py::object(layouts.attr("NVMMASharedLayout")).release();
+    SwizzledSharedLayout =
+        py::object(layouts.attr("SwizzledSharedLayout")).release();
+    SharedLinearLayout =
+        py::object(layouts.attr("SharedLinearLayout")).release();
+    AMDMFMALayout = py::object(amdLayouts.attr("AMDMFMALayout")).release();
+    AMDWMMALayout = py::object(amdLayouts.attr("AMDWMMALayout")).release();
+    PaddedSharedLayout =
+        py::object(layouts.attr("PaddedSharedLayout")).release();
+    auto cdna5Layouts = py::module_::import_(
+        "triton.experimental.gluon.language.amd.cdna5._layouts");
+    PartitionedSharedLayout =
+        py::object(cdna5Layouts.attr("PartitionedSharedLayout")).release();
+    IntelDPASLayout =
+        py::object(intelLayouts.attr("IntelDPASLayout")).release();
+
+    auto core = py::module_::import_("triton.language.core");
+  }
+};
 
 bool isConvertLayoutTrivial(RankedTensorType dstTy, Value value) {
   auto srcTy = cast<RankedTensorType>(value.getType());
@@ -209,16 +228,16 @@ std::vector<llvm::ValueTypeFromRangeType<R>> toStdVector(R &&range) {
 }
 
 py::object layoutToGluon(Attribute layout, bool isRubin = false) {
+  static GluonLayouts layouts;
   if (auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
     auto cgaBases = getCgaLayoutBases(blocked.getCGALayout());
-    return getLayoutClass("BlockedLayout")(
-        toStdVector(blocked.getSizePerThread()),
-        toStdVector(blocked.getThreadsPerWarp()),
-        toStdVector(blocked.getWarpsPerCTA()), toStdVector(blocked.getOrder()),
-        cgaBases);
+    return layouts.BlockedLayout(toStdVector(blocked.getSizePerThread()),
+                                 toStdVector(blocked.getThreadsPerWarp()),
+                                 toStdVector(blocked.getWarpsPerCTA()),
+                                 toStdVector(blocked.getOrder()), cgaBases);
   } else if (auto sliced = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
-    return getLayoutClass("SliceLayout")(
-        sliced.getDim(), layoutToGluon(sliced.getParent(), isRubin));
+    return layouts.SliceLayout(sliced.getDim(),
+                               layoutToGluon(sliced.getParent(), isRubin));
   } else if (auto linearEnc = dyn_cast<ttg::LinearEncodingTrait>(layout)) {
     const auto &ll = linearEnc.getLinearLayout();
     auto ctx = layout.getContext();
@@ -226,34 +245,31 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
     auto kLane = mlir::StringAttr::get(ctx, "lane");
     auto kWarp = mlir::StringAttr::get(ctx, "warp");
     auto kBlock = mlir::StringAttr::get(ctx, "block");
-    return getLayoutClass("DistributedLinearLayout")(
+    return layouts.DistributedLinearLayout(
         ll.getBases().lookup(kReg), ll.getBases().lookup(kLane),
         ll.getBases().lookup(kWarp), ll.getBases().lookup(kBlock),
         toStdVector(ll.getOutDimSizes()));
   } else if (auto dotOp = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
-    return getLayoutClass("DotOperandLayout")(
-        dotOp.getOpIdx(), layoutToGluon(dotOp.getParent(), isRubin),
-        dotOp.getKWidth());
+    return layouts.DotOperandLayout(dotOp.getOpIdx(),
+                                    layoutToGluon(dotOp.getParent(), isRubin),
+                                    dotOp.getKWidth());
   } else if (auto mma = dyn_cast<ttg::NvidiaMmaEncodingAttr>(layout)) {
     auto cgaBases = getCgaLayoutBases(mma.getCGALayout());
-    return getLayoutClass("NVMMADistributedLayout")(
+    return layouts.NVMMADistributedLayout(
         std::vector<unsigned>{mma.getVersionMajor(), mma.getVersionMinor()},
         toStdVector(mma.getWarpsPerCTA()), toStdVector(mma.getInstrShape()),
         cgaBases);
   } else if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(layout)) {
     auto cgaLayout = nvmma.getCGALayout();
     auto cgaBases = getCgaLayoutBases(cgaLayout);
-    return getLayoutClass("NVMMASharedLayout")(
-        nvmma.getSwizzlingByteWidth(), nvmma.getElementBitWidth(),
-        cgaLayout.getRank(), nvmma.getTransposed(), nvmma.isPaddedFp4(),
-        cgaBases,
-        nvmma.getPadding() == ttg::NVMmaPadding::None
-            ? py::none()
-            : py::cast(ttg::stringifyNVMmaPadding(nvmma.getPadding()).str()));
+    return layouts.NVMMASharedLayout(nvmma.getSwizzlingByteWidth(),
+                                     nvmma.getElementBitWidth(),
+                                     cgaLayout.getRank(), nvmma.getTransposed(),
+                                     nvmma.getFp4Padded(), cgaBases);
   } else if (auto swizzled =
                  dyn_cast<ttg::SwizzledSharedEncodingAttr>(layout)) {
     auto cgaBases = getCgaLayoutBases(swizzled.getCGALayout());
-    return getLayoutClass("SwizzledSharedLayout")(
+    return layouts.SwizzledSharedLayout(
         swizzled.getVec(), swizzled.getPerPhase(), swizzled.getMaxPhase(),
         toStdVector(swizzled.getOrder()), cgaBases);
   } else if (auto sharedLl = dyn_cast<ttg::SharedLinearEncodingAttr>(layout)) {
@@ -261,16 +277,16 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
     auto ctx = layout.getContext();
     auto kOffset = mlir::StringAttr::get(ctx, "offset");
     auto kBlock = mlir::StringAttr::get(ctx, "block");
-    return getLayoutClass("SharedLinearLayout")(
+    return layouts.SharedLinearLayout(
         toStdVector(ll.getBases().lookup(kOffset)),
         toStdVector(ll.getBases().lookup(kBlock)), sharedLl.getAlignment());
   } else if (auto autoEnc = dyn_cast<gluon::AutoEncodingAttr>(layout)) {
-    return getLayoutClass("AutoLayout")();
+    return layouts.AutoLayout();
   } else if (auto autoEnc = dyn_cast<gluon::CoalescedEncodingAttr>(layout)) {
-    return getLayoutClass("CoalescedLayout")();
+    return layouts.CoalescedLayout();
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
     auto cgaBases = getCgaLayoutBases(amdMfma.getCGALayout());
-    return getLayoutClass("AMDMFMALayout")(
+    return layouts.AMDMFMALayout(
         amdMfma.getVersion(), toStdVector(amdMfma.getInstrShape()),
         amdMfma.getIsTransposed(), toStdVector(amdMfma.getWarpsPerCTA()),
         amdMfma.getElementBitWidth(), toStdVector(amdMfma.getTilesPerWarp()),
@@ -281,7 +297,7 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
     auto ctx = layout.getContext();
     auto kReg = mlir::StringAttr::get(ctx, "register");
     auto kWarp = mlir::StringAttr::get(ctx, "warp");
-    return getLayoutClass("AMDWMMALayout")(
+    return layouts.AMDWMMALayout(
         amdWmma.getVersion(), amdWmma.getIsTransposed(),
         ctaLayout.getBases().lookup(kWarp), ctaLayout.getBases().lookup(kReg),
         toStdVector(amdWmma.getInstrShape()), cgaBases, amdWmma.getRank());
@@ -304,17 +320,17 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
     assert(blkLL.has_value());
     auto blkBases = blkLL->getBases().lookup(kBlock);
     auto shape = toStdVector(ll.getOutDimSizes());
-    return getLayoutClass("PaddedSharedLayout")(intervalPaddingPairs, ofstBases,
-                                                blkBases, shape);
+    return layouts.PaddedSharedLayout(intervalPaddingPairs, ofstBases, blkBases,
+                                      shape);
   } else if (auto partitioned =
                  dyn_cast<ttg::PartitionedSharedEncodingAttr>(layout)) {
     py::object partitionLayout =
         layoutToGluon(partitioned.getPartitionLayout(), isRubin);
-    return getLayoutClass("PartitionedSharedLayout")(
+    return layouts.PartitionedSharedLayout(
         partitioned.getNumPartitions(), partitioned.getNumGroups(),
         partitioned.getPartitionDim(), partitionLayout);
   } else if (auto intelDpas = dyn_cast<ttg::intel::DpasEncodingAttr>(layout)) {
-    return getLayoutClass("IntelDPASLayout")(
+    return layouts.IntelDPASLayout(
         intelDpas.getRepeatCount(), intelDpas.getSystolicDepth(),
         intelDpas.getExecutionSize(), intelDpas.getOpsPerChannel(),
         toStdVector(intelDpas.getWarpsPerCTA()),
@@ -328,12 +344,11 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
                   ttng::TensorMemoryScalesBlockRepOrder::K_THEN_MN
               ? "kThenMn"
               : "mnThenK";
-      return getLayoutClass("RubinTensorMemoryScalesLayout")(cgaLayout,
-                                                             blockRepOrder);
+      return layouts.RubinTensorMemoryScalesLayout(cgaLayout, blockRepOrder);
     }
-    return getLayoutClass("TensorMemoryScalesLayout")(cgaLayout);
+    return layouts.TensorMemoryScalesLayout(cgaLayout);
   } else if (auto tmem = dyn_cast<ttng::TensorMemoryEncodingAttr>(layout)) {
-    return getLayoutClass("TensorMemoryLayout")(
+    return layouts.TensorMemoryLayout(
         std::vector<unsigned>{tmem.getBlockM(), tmem.getBlockN()},
         tmem.getColStride(), getCgaLayoutBases(tmem.getCGALayout()),
         tmem.getTwoCTAs(), tmem.getFp4Padded());
@@ -345,21 +360,6 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
 template <typename CondT> void check(CondT &&cond, const char *msg) {
   if (!std::forward<CondT>(cond))
     throw py::value_error(msg);
-}
-
-tt::MemSyncScopeAttr getScopeAttr(MLIRContext *ctx,
-                                  std::optional<tt::MemSyncScope> scope) {
-  return scope ? tt::MemSyncScopeAttr::get(ctx, *scope)
-               : tt::MemSyncScopeAttr();
-}
-
-ttag::CachePolicyGfx12Attr
-getGfx12CachePolicy(std::optional<Attribute> cachePolicy) {
-  if (!cachePolicy || !*cachePolicy)
-    return {};
-  auto policy = dyn_cast<ttag::CachePolicyGfx12Attr>(*cachePolicy);
-  check(policy, "expected a gfx12 cache policy");
-  return policy;
 }
 
 } // namespace
@@ -377,61 +377,6 @@ void init_gluon_ir(py::module_ &m) {
       .def(py::init<MLIRContext *, std::string>(), py::arg("context"),
            py::arg("arch") = "")
       .def("get_op_builder", &GluonOpBuilder::getBuilder, ret::reference)
-      .def("get_cache_policy",
-           [](GluonOpBuilder &self, const std::string &cacheModifier,
-              const std::string &evictionPolicy) -> Attribute {
-             auto modifier = tt::symbolizeCacheModifier(cacheModifier);
-             if (!modifier)
-               throw std::invalid_argument("invalid cache modifier '" +
-                                           cacheModifier + "'");
-             auto eviction = tt::symbolizeEvictionPolicy(evictionPolicy);
-             if (!eviction)
-               throw std::invalid_argument("invalid eviction policy '" +
-                                           evictionPolicy + "'");
-             return buildCachePolicy(self.getBuilder(), *modifier, *eviction);
-           })
-      .def(
-          "get_nvidia_cache_policy",
-          [](GluonOpBuilder &self, std::optional<std::string> cacheModifier,
-             std::optional<std::string> l1,
-             std::optional<std::string> l2Primary,
-             std::optional<std::string> l2Secondary,
-             std::optional<double> l2Fraction,
-             std::optional<int32_t> l2PrefetchSize) -> Attribute {
-            auto *ctx = self.getContext();
-            auto parseModifier = [](const std::optional<std::string> &value) {
-              if (!value)
-                return tt::CacheModifier::NONE;
-              auto parsed = tt::symbolizeCacheModifier(*value);
-              if (!parsed)
-                throw std::invalid_argument("invalid cache modifier '" +
-                                            *value + "'");
-              return *parsed;
-            };
-            auto parsePriority = [](const std::optional<std::string> &value) {
-              if (!value)
-                return ttng::CacheEvictionPriority::NONE;
-              auto parsed = ttng::symbolizeCacheEvictionPriority(*value);
-              if (!parsed)
-                throw std::invalid_argument(
-                    "invalid cache eviction priority '" + *value + "'");
-              return *parsed;
-            };
-            FloatAttr fractionAttr;
-            if (l2Fraction)
-              fractionAttr = FloatAttr::get(Float32Type::get(ctx), *l2Fraction);
-            IntegerAttr prefetchSizeAttr;
-            if (l2PrefetchSize)
-              prefetchSizeAttr =
-                  IntegerAttr::get(IntegerType::get(ctx, 32), *l2PrefetchSize);
-            return self.getChecked<ttng::CachePolicyAttr>(
-                ctx, parseModifier(cacheModifier), parsePriority(l1),
-                parsePriority(l2Primary), parsePriority(l2Secondary),
-                fractionAttr, prefetchSizeAttr);
-          },
-          py::arg("cacheModifier").none(), py::arg("l1").none(),
-          py::arg("l2Primary").none(), py::arg("l2Secondary").none(),
-          py::arg("l2Fraction").none(), py::arg("l2PrefetchSize").none())
       .def("get_distributed_ty",
            [](GluonOpBuilder &self, Type &elementType,
               std::vector<int64_t> &shape, Attribute layout) -> Type {
@@ -640,18 +585,14 @@ void init_gluon_ir(py::module_ &m) {
            })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
-              unsigned elementBitwidth, bool transposed,
-              const std::string &padding,
+              unsigned elementBitwidth, bool transposed, bool fp4Padded,
               std::vector<std::vector<int32_t>> &cgaBases,
               unsigned rank) -> Attribute {
              auto ctx = self.getContext();
-             auto mode = ttg::symbolizeNVMmaPadding(padding);
-             if (!mode)
-               throw std::invalid_argument(
-                   "invalid NVIDIA shared memory padding");
+             auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, rank);
              return self.getChecked<ttg::NVMMASharedEncodingAttr>(
-                 ctx, swizzleByteWidth, transposed, elementBitwidth, *mode,
-                 buildCgaLayoutAttr(ctx, cgaBases, rank));
+                 ctx, swizzleByteWidth, transposed, elementBitwidth, fp4Padded,
+                 cgaLayout);
            })
       .def("get_auto_layout",
            [](GluonOpBuilder &self) -> Attribute {
@@ -720,33 +661,6 @@ void init_gluon_ir(py::module_ &m) {
              auto ty = dyn_cast<RankedTensorType>(tensor.getType());
              check(ty.getEncoding(), "expected a tensor with an encoding");
              return layoutToGluon(ty.getEncoding(), self.isRubin());
-           })
-      .def("get_scaled_upcast_fp4_scale_layout",
-           [](GluonOpBuilder &self, Value input, int64_t scaleSize,
-              Type elemType, int32_t axis) -> py::object {
-             auto inputTy = cast<RankedTensorType>(input.getType());
-             auto resultTy = ttg::inferFp4ToFpResultType(
-                 inputTy, elemType, axis, self.getLastLoc());
-             check(succeeded(resultTy),
-                   "failed to infer scaled_upcast_fp4 result type");
-
-             SmallVector<int64_t> scaleShape(resultTy->getShape());
-             scaleShape[axis] = scaleSize;
-             auto scaleLayout = ttag::inferScaledUpcastFp4ScaleLayout(
-                 ttg::toLinearLayout(*resultTy), scaleShape, axis,
-                 [&]() { return mlir::emitError(self.getLastLoc()); });
-             check(succeeded(scaleLayout),
-                   "failed to infer scaled_upcast_fp4 scale layout");
-
-             auto *ctx = self.getContext();
-             Attribute encoding;
-             if (ttg::isPermutationMatrixLayout(*scaleLayout))
-               encoding =
-                   ttg::LinearEncodingAttr::get(ctx, std::move(*scaleLayout));
-             else
-               encoding = ttg::GenericLinearEncodingAttr::get(
-                   ctx, std::move(*scaleLayout));
-             return layoutToGluon(encoding, self.isRubin());
            })
       .def("get_gluon_layout_from_memdesc",
            [](GluonOpBuilder &self, Value memdesc) -> py::object {
@@ -826,26 +740,21 @@ void init_gluon_ir(py::module_ &m) {
              return self.create<ttg::Fp4ToFpOp>(
                  cast<TypedValue<RankedTensorType>>(src), elemType, axis);
            })
-      .def(
-          "create_async_copy_global_to_local",
-          [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
-             Value other, Attribute cachePolicy, bool isVolatile) {
-            self.create<ttg::AsyncCopyGlobalToLocalOp>(
-                pointer, smem, mask, other, cachePolicy, isVolatile,
-                /*contiguity=*/1);
-          },
-          py::arg("smem"), py::arg("pointer"), py::arg("mask"),
-          py::arg("other"), py::arg("cachePolicy"), py::arg("isVolatile"))
-      .def(
-          "create_async_copy_local_to_global",
-          [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
-             Attribute cachePolicy, std::optional<tt::MemSyncScope> scope) {
-            self.create<ttag::AsyncCopyLocalToGlobalOp>(
-                smem, pointer, mask, cachePolicy, /*contiguity=*/1,
-                getScopeAttr(self.getContext(), scope));
-          },
-          py::arg("smem"), py::arg("pointer"), py::arg("mask"),
-          py::arg("cachePolicy"), py::arg("scope").none() = py::none())
+      .def("create_async_copy_global_to_local",
+           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
+              Value other, tt::CacheModifier cacheModifier,
+              tt::EvictionPolicy evictionPolicy, bool isVolatile) {
+             self.create<ttg::AsyncCopyGlobalToLocalOp>(
+                 pointer, smem, mask, other, cacheModifier, evictionPolicy,
+                 isVolatile);
+           })
+      .def("create_async_copy_local_to_global",
+           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
+              tt::CacheModifier cacheModifier,
+              tt::EvictionPolicy evictionPolicy) {
+             self.create<ttag::AsyncCopyLocalToGlobalOp>(
+                 smem, pointer, mask, cacheModifier, evictionPolicy);
+           })
       .def("create_async_copy_mbarrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {
              self.create<ttng::AsyncCopyMbarrierArriveOp>(mbarrier,
@@ -974,17 +883,6 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
              return self.create<ttg::MemDescReinterpretOp>(resultType, src);
            })
-      .def("get_total_elems_per_thread",
-           [](GluonOpBuilder &, Type type) {
-             return ttg::getTotalElemsPerThread(type);
-           })
-      .def("create_threadwise_inline_asm",
-           [](GluonOpBuilder &self, const std::string &assembly,
-              const std::string &constraints, const std::vector<Value> &args,
-              const std::vector<Type> &resultTypes, bool isPure) -> OpState {
-             return self.create<ttg::InlineAsmOp>(resultTypes, assembly,
-                                                  constraints, isPure, args);
-           })
       .def("create_set_auto_layout",
            [](GluonOpBuilder &self, Attribute layout, Value value) -> Value {
              return self.create<gluon::SetAutoLayoutOp>(layout, value);
@@ -1072,8 +970,8 @@ void init_gluon_ir(py::module_ &m) {
           (py::arg("redOp").none() = py::none()), py::arg("useAbs") = false,
           py::arg("propagateNan") = tt::PropagateNan::NONE)
       .def("create_tmem_copy",
-           [](GluonOpBuilder &self, Value src, Value dst, Value pred) {
-             self.create<ttng::TMEMCopyOp>(src, dst, pred);
+           [](GluonOpBuilder &self, Value src, Value dst) {
+             self.create<ttng::TMEMCopyOp>(src, dst);
            })
       .def("create_tmem_subslice",
            [](GluonOpBuilder &self, Type resultTy, Value memDesc, int offset,
@@ -1141,28 +1039,17 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Value clcResult, int dim) -> Value {
              return self.create<ttng::CLCGetProgramIdOp>(clcResult, dim);
            })
-      .def(
-          "create_tcgen05_mma",
-          [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
-             Value pred, std::vector<Value> &mbarriers,
-             std::vector<Value> &mbarrier_preds, bool two_ctas, bool multicast,
-             std::optional<tt::ScaleDotElemType> aType,
-             std::optional<tt::ScaleDotElemType> bType) {
-            Value accDep;
-            auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-            self.create<ttng::TCGen5MMAOp>(
-                tokType, a, b, acc, accDep, useAcc, pred, two_ctas, multicast,
-                mbarriers, mbarrier_preds,
-                /*isAsync=*/true, /*isUnsigned=*/false,
-                aType ? tt::ScaleDotElemTypeAttr::get(self.getContext(), *aType)
-                      : tt::ScaleDotElemTypeAttr{},
-                bType ? tt::ScaleDotElemTypeAttr::get(self.getContext(), *bType)
-                      : tt::ScaleDotElemTypeAttr{});
-          },
-          py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("useAcc"),
-          py::arg("pred"), py::arg("mbarriers"), py::arg("mbarrier_preds"),
-          py::arg("two_ctas"), py::arg("multicast"), py::arg("a_type").none(),
-          py::arg("b_type").none())
+      .def("create_tcgen05_mma",
+           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
+              Value pred, std::vector<Value> &mbarriers,
+              std::vector<Value> &mbarrier_preds, bool two_ctas,
+              bool multicast) {
+             Value accDep;
+             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+             self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
+                                            pred, two_ctas, multicast,
+                                            mbarriers, mbarrier_preds);
+           })
       .def("create_tcgen05_mma_scaled",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
               Value bScale, tt::ScaleDotElemType aType,
@@ -1174,7 +1061,7 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttng::TCGen5MMAScaledOp>(
                  tokType, a, b, acc, accDep, aScale, bScale, aType, bType,
                  useAcc, pred, mbarriers, mbarrier_preds, two_ctas,
-                 /*isAsync=*/true, multicast);
+                 /*isAsync=*/false, multicast);
            })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier, Value &pred,
@@ -1186,27 +1073,23 @@ void init_gluon_ir(py::module_ &m) {
           "create_async_tma_copy_global_to_local",
           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
              Value barrier, Value result, Value pred, bool multicast,
-             std::optional<std::vector<Value>> offsets, Attribute cachePolicy) {
+             std::optional<std::vector<Value>> offsets) {
             multicast &=
                 ttng::hasCGABroadcast(cast<ttg::MemDescType>(result.getType()));
             ValueRange offsetsRange =
                 offsets.has_value() ? ValueRange(*offsets) : ValueRange{};
             self.create<ttng::AsyncTMACopyGlobalToLocalOp>(
-                descPtr, coord, offsetsRange, barrier, result, pred, multicast,
-                cachePolicy, false);
+                descPtr, coord, offsetsRange, barrier, result, pred, multicast);
           },
           py::arg("descPtr"), py::arg("coord"), py::arg("barrier"),
           py::arg("result"), py::arg("pred"), py::arg("multicast"),
-          py::arg("offsets").none(), py::arg("cachePolicy") = Attribute())
-      .def(
-          "create_async_tma_copy_local_to_global",
-          [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
-             Value src, Attribute cachePolicy) {
-            self.create<ttng::AsyncTMACopyLocalToGlobalOp>(descPtr, coord, src,
-                                                           cachePolicy);
-          },
-          py::arg("descPtr"), py::arg("coord"), py::arg("src"),
-          py::arg("cachePolicy") = Attribute())
+          py::arg("offsets").none())
+      .def("create_async_tma_copy_local_to_global",
+           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
+              Value src) {
+             self.create<ttng::AsyncTMACopyLocalToGlobalOp>(descPtr, coord,
+                                                            src);
+           })
       .def("create_async_tma_reduce",
            [](GluonOpBuilder &self, triton::DescriptorReduceKind kind,
               Value descPtr, std::vector<Value> &coord, Value src) {
@@ -1219,26 +1102,18 @@ void init_gluon_ir(py::module_ &m) {
       .def(
           "create_async_tma_gather",
           [](GluonOpBuilder &self, Value descPtr, Value xOffsets, Value yOffset,
-             Value barrier, Value result, Value pred, bool multicast,
-             Attribute cachePolicy) {
+             Value barrier, Value result, Value pred, bool multicast) {
             multicast &=
                 ttng::hasCGABroadcast(cast<ttg::MemDescType>(result.getType()));
-            self.create<ttng::AsyncTMAGatherOp>(descPtr, xOffsets, yOffset,
-                                                barrier, result, pred,
-                                                multicast, cachePolicy);
-          },
-          py::arg("descPtr"), py::arg("xOffsets"), py::arg("yOffset"),
-          py::arg("barrier"), py::arg("result"), py::arg("pred"),
-          py::arg("multicast"), py::arg("cachePolicy") = Attribute())
-      .def(
-          "create_async_tma_scatter",
-          [](GluonOpBuilder &self, Value descPtr, Value xOffsets, Value yOffset,
-             Value src, Attribute cachePolicy) {
-            self.create<ttng::AsyncTMAScatterOp>(descPtr, xOffsets, yOffset,
-                                                 src, cachePolicy);
-          },
-          py::arg("descPtr"), py::arg("xOffsets"), py::arg("yOffset"),
-          py::arg("src"), py::arg("cachePolicy") = Attribute())
+            self.create<ttng::AsyncTMAGatherOp>(
+                descPtr, xOffsets, yOffset, barrier, result, pred, multicast);
+          })
+      .def("create_async_tma_scatter",
+           [](GluonOpBuilder &self, Value descPtr, Value xOffsets,
+              Value yOffset, Value src) {
+             self.create<ttng::AsyncTMAScatterOp>(descPtr, xOffsets, yOffset,
+                                                  src);
+           })
       .def("create_fence_async_shared",
            [](GluonOpBuilder &self, bool bCluster) -> OpState {
              return self.create<ttng::FenceAsyncSharedOp>(bCluster);
@@ -1273,90 +1148,18 @@ void init_gluon_ir(py::module_ &m) {
              return self.create<ttg::WarpSpecializeOp>(resultTypes,
                                                        partitionNumWarps);
            })
-      .def(
-          "create_buffer_desc_load",
-          [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
-             Value mask, Value other, Attribute cachePolicy, Value soffset,
-             std::optional<tt::MemSyncScope> scope) -> Value {
-            auto scopeAttr =
-                scope ? tt::MemSyncScopeAttr::get(self.getContext(), *scope)
-                      : tt::MemSyncScopeAttr();
-            return self.create<ttag::BufferLoadOp>(
-                resultType, ptr, offsets, Value() /*stride*/, cachePolicy, mask,
-                other, /*contiguity=*/1, soffset, scopeAttr);
-          },
-          py::arg("resultType"), py::arg("ptr"), py::arg("offsets"),
-          py::arg("mask"), py::arg("other"), py::arg("cachePolicy"),
-          py::arg("soffset"), py::arg("scope").none())
-      .def(
-          "create_buffer_desc_store",
-          [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,
-             Value mask, Attribute cachePolicy, Value soffset,
-             std::optional<tt::MemSyncScope> scope) {
-            auto scopeAttr =
-                scope ? tt::MemSyncScopeAttr::get(self.getContext(), *scope)
-                      : tt::MemSyncScopeAttr();
-            self.create<ttag::BufferStoreOp>(
-                storedValue, ptr, offsets, Value() /*stride*/, cachePolicy,
-                mask, /*contiguity=*/1, soffset, scopeAttr);
-          },
-          py::arg("storedValue"), py::arg("ptr"), py::arg("offsets"),
-          py::arg("mask"), py::arg("cachePolicy"), py::arg("soffset"),
-          py::arg("scope").none())
-      .def("create_buffer_atomic_load",
-           [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
-              Value mask, Value soffset, tt::MemSemantic sem,
-              tt::MemSyncScope scope) -> Value {
-             return self.create<ttag::BufferAtomicLoadOp>(
-                 resultType, ptr, offsets, mask, soffset, sem, scope);
-           })
-      .def("create_buffer_atomic_store",
-           [](GluonOpBuilder &self, Value value, Value ptr, Value offsets,
-              Value mask, Value soffset, tt::MemSemantic sem,
-              tt::MemSyncScope scope) {
-             self.create<ttag::BufferAtomicStoreOp>(value, ptr, offsets, mask,
-                                                    soffset, sem, scope);
-           })
-      .def("create_make_buffer_desc",
-           [](GluonOpBuilder &self, Value base, Value numRecords) -> Value {
-             auto ptrType = cast<tt::PointerType>(base.getType());
-             auto descType = ttag::BufferDescType::get(
-                 self.getContext(), ptrType.getPointeeType());
-             return self.create<ttag::MakeBufferDescOp>(descType, base,
-                                                        numRecords);
-           })
-      .def("get_buffer_desc_type",
-           [](GluonOpBuilder &self, Type elementType) -> Type {
-             return ttag::BufferDescType::get(self.getContext(), elementType);
-           })
       .def("create_buffer_load",
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
-              Value mask, Value other,
-              tt::CacheModifier cacheModifier) -> Value {
-             return self.create<ttag::BufferLoadOp>(
-                 resultType, ptr, offsets, Value() /*stride*/,
-                 buildCachePolicy(self.getBuilder(), cacheModifier), mask,
-                 other, /*contiguity=*/1, /*soffset=*/Value(),
-                 /*scope=*/tt::MemSyncScopeAttr());
+              Value mask, Value other, tt::CacheModifier cache) -> Value {
+             return self.create<ttag::BufferLoadOp>(resultType, ptr, offsets,
+                                                    Value() /*stride*/, cache,
+                                                    mask, other);
            })
       .def("create_buffer_store",
            [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,
-              Value mask, tt::CacheModifier cacheModifier) {
-             self.create<ttag::BufferStoreOp>(
-                 storedValue, ptr, offsets, Value() /*stride*/,
-                 buildCachePolicy(self.getBuilder(), cacheModifier), mask,
-                 /*contiguity=*/1, /*soffset=*/Value(),
-                 /*scope=*/tt::MemSyncScopeAttr());
-           })
-      .def("create_buffer_load_to_local",
-           [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
-              Value mask, Value other, Value stride,
-              tt::CacheModifier cacheModifier) {
-             self.create<ttag::BufferLoadToLocalOp>(
-                 dest, ptr, offsets, mask, other, stride,
-                 buildCachePolicy(self.getBuilder(), cacheModifier),
-                 /*contiguity=*/1, /*soffset=*/Value(),
-                 /*scope=*/tt::MemSyncScopeAttr());
+              Value mask, tt::CacheModifier cache) {
+             self.create<ttag::BufferStoreOp>(storedValue, ptr, offsets,
+                                              Value() /*stride*/, cache, mask);
            })
       .def("create_buffer_atomic_rmw",
            [](GluonOpBuilder &self, tt::RMWOp op, Value ptr, Value offsets,
@@ -1366,32 +1169,12 @@ void init_gluon_ir(py::module_ &m) {
                  value.getType(), op, ptr, offsets, value, Value() /*stride*/,
                  sem, scope, mask);
            })
-      .def(
-          "create_buffer_desc_load_to_local",
-          [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
-             Value mask, Value other, Value stride, Attribute cachePolicy,
-             Value soffset, std::optional<tt::MemSyncScope> scope) {
-            auto scopeAttr =
-                scope ? tt::MemSyncScopeAttr::get(self.getContext(), *scope)
-                      : tt::MemSyncScopeAttr();
-            self.create<ttag::BufferLoadToLocalOp>(
-                dest, ptr, offsets, mask, other, stride, cachePolicy,
-                /*contiguity=*/1, soffset, scopeAttr);
-          },
-          py::arg("dest"), py::arg("ptr"), py::arg("offsets"), py::arg("mask"),
-          py::arg("other"), py::arg("stride"), py::arg("cachePolicy"),
-          py::arg("soffset"), py::arg("scope").none())
-      .def("get_amd_cache_policy_gfx9",
-           [](GluonOpBuilder &self, bool nontemporal) -> Attribute {
-             return ttag::CachePolicyGfx9Attr::get(self.getContext(),
-                                                   nontemporal);
-           })
-      .def("get_amd_cache_policy_gfx12",
-           [](GluonOpBuilder &self, const std::string &temporal) -> Attribute {
-             auto hint = ttag::symbolizeTemporalHintGfx12(temporal);
-             if (!hint)
-               throw std::invalid_argument("unknown temporal hint " + temporal);
-             return ttag::CachePolicyGfx12Attr::get(self.getContext(), *hint);
+      .def("create_buffer_load_to_local",
+           [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
+              Value mask, Value other, Value stride,
+              tt::CacheModifier cacheModifier) {
+             self.create<ttag::BufferLoadToLocalOp>(
+                 dest, ptr, offsets, mask, other, stride, cacheModifier);
            })
       .def("create_local_load_packed_transposed",
            [](GluonOpBuilder &self, Type resultType, Value memDesc) -> Value {
@@ -1439,57 +1222,36 @@ void init_gluon_ir(py::module_ &m) {
           "create_async_tdm_copy_global_to_local",
           [](GluonOpBuilder &self, Value descPtr, Value result, Value barrier,
              tt::CacheModifier cacheModifier,
-             std::optional<uint32_t> warpUsedHint,
-             std::optional<Attribute> cachePolicy,
-             std::optional<tt::MemSyncScope> scope) {
+             std::optional<uint32_t> warpUsedHint) {
             IntegerAttr hintAttr;
             if (warpUsedHint.has_value())
               hintAttr = self.getBuilder().getI32IntegerAttr(
                   static_cast<int32_t>(*warpUsedHint));
             self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(
-                descPtr, result, barrier, cacheModifier, hintAttr,
-                getGfx12CachePolicy(cachePolicy),
-                getScopeAttr(self.getContext(), scope));
+                descPtr, result, barrier, cacheModifier, hintAttr);
           },
           py::arg("descPtr"), py::arg("result"), py::arg("barrier"),
           py::arg("cacheModifier"),
-          (py::arg("warpUsedHint").none() = py::none()),
-          (py::arg("cachePolicy").none() = py::none()),
-          (py::arg("scope").none() = py::none()))
+          (py::arg("warpUsedHint").none() = py::none()))
       .def(
           "create_async_tdm_fused_copy_global_to_local",
           [](GluonOpBuilder &self, std::vector<Value> &descs,
              std::vector<Value> &dests, std::vector<int32_t> &warpUsedHints,
-             tt::CacheModifier cacheModifier,
-             std::optional<Attribute> cachePolicy,
-             std::optional<tt::MemSyncScope> scope) {
+             tt::CacheModifier cacheModifier) {
             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
             auto hintAttr =
                 self.getBuilder().getDenseI32ArrayAttr(warpUsedHints);
             self.create<ttag::AsyncTDMFusedCopyGlobalToLocalOp>(
-                tokType, descs, dests, hintAttr, cacheModifier,
-                getGfx12CachePolicy(cachePolicy),
-                getScopeAttr(self.getContext(), scope));
+                tokType, descs, dests, hintAttr, cacheModifier);
           },
           py::arg("descs"), py::arg("dests"), py::arg("warpUsedHints"),
-          py::arg("cacheModifier") = tt::CacheModifier::NONE,
-          (py::arg("cachePolicy").none() = py::none()),
-          (py::arg("scope").none() = py::none()))
-      .def(
-          "create_async_tdm_copy_local_to_global",
-          [](GluonOpBuilder &self, Value descPtr, Value src, Value barrier,
-             tt::CacheModifier cacheModifier,
-             std::optional<Attribute> cachePolicy,
-             std::optional<tt::MemSyncScope> scope) {
-            self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(
-                descPtr, src, barrier, cacheModifier,
-                getGfx12CachePolicy(cachePolicy),
-                getScopeAttr(self.getContext(), scope));
-          },
-          py::arg("descPtr"), py::arg("src"), py::arg("barrier"),
-          py::arg("cacheModifier"),
-          (py::arg("cachePolicy").none() = py::none()),
-          (py::arg("scope").none() = py::none()))
+          py::arg("cacheModifier") = tt::CacheModifier::NONE)
+      .def("create_async_tdm_copy_local_to_global",
+           [](GluonOpBuilder &self, Value descPtr, Value src, Value barrier,
+              tt::CacheModifier cacheModifier) {
+             self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(
+                 descPtr, src, barrier, cacheModifier);
+           })
       .def("create_update_tensor_descriptor",
            [](GluonOpBuilder &self, Value descPtr,
               std::vector<Value> &addOffsets, std::vector<Value> &setBounds,
@@ -1502,32 +1264,18 @@ void init_gluon_ir(py::module_ &m) {
                                             self.getBuilder().getUnitAttr());
              return res;
            })
-      .def(
-          "create_async_tdm_scatter",
-          [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,
-             Value src, Value barrier, std::optional<Attribute> cachePolicy,
-             std::optional<tt::MemSyncScope> scope) {
-            self.create<ttag::AsyncTDMScatterOp>(
-                descPtr, dstRowIndices, src, barrier,
-                getGfx12CachePolicy(cachePolicy),
-                getScopeAttr(self.getContext(), scope));
-          },
-          py::arg("descPtr"), py::arg("dstRowIndices"), py::arg("src"),
-          py::arg("barrier"), (py::arg("cachePolicy").none() = py::none()),
-          (py::arg("scope").none() = py::none()))
-      .def(
-          "create_async_tdm_gather",
-          [](GluonOpBuilder &self, Value descPtr, Value srcRowIndices,
-             Value dst, Value barrier, std::optional<Attribute> cachePolicy,
-             std::optional<tt::MemSyncScope> scope) {
-            self.create<ttag::AsyncTDMGatherOp>(
-                descPtr, srcRowIndices, dst, barrier,
-                getGfx12CachePolicy(cachePolicy),
-                getScopeAttr(self.getContext(), scope));
-          },
-          py::arg("descPtr"), py::arg("srcRowIndices"), py::arg("dst"),
-          py::arg("barrier"), (py::arg("cachePolicy").none() = py::none()),
-          (py::arg("scope").none() = py::none()))
+      .def("create_async_tdm_scatter",
+           [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,
+              Value src, Value barrier) {
+             self.create<ttag::AsyncTDMScatterOp>(descPtr, dstRowIndices, src,
+                                                  barrier);
+           })
+      .def("create_async_tdm_gather",
+           [](GluonOpBuilder &self, Value descPtr, Value srcRowIndices,
+              Value dst, Value barrier) {
+             self.create<ttag::AsyncTDMGatherOp>(descPtr, srcRowIndices, dst,
+                                                 barrier);
+           })
       .def("create_tdm_prefetch",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
               Value pred, bool speculative, bool returnOffsets) -> Value {
@@ -1564,14 +1312,6 @@ void init_gluon_ir(py::module_ &m) {
       .def("create_amd_cluster_wait",
            [](GluonOpBuilder &self) {
              self.create<ttag::ClusterBarrierWaitOp>();
-           })
-      .def("create_amd_sched_barrier",
-           [](GluonOpBuilder &self, uint32_t mask) {
-             auto schedMask = ROCDL::symbolizeSchedGroupMask(mask);
-             if (!schedMask)
-               throw std::invalid_argument("invalid scheduling barrier mask " +
-                                           std::to_string(mask));
-             self.create<ROCDL::SchedBarrier>(*schedMask);
            })
       .def("create_warp_pipeline_border",
            [](GluonOpBuilder &self, const std::string &marker, int priority) {

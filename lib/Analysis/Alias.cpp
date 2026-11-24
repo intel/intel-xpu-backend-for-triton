@@ -2,7 +2,6 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
-#include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -19,23 +18,6 @@ AliasInfo AliasInfo::join(const AliasInfo &lhs, const AliasInfo &rhs) {
     ret.insert(value);
   }
   return ret;
-}
-
-void SharedMemoryAliasAnalysis::visitCallableOperation(
-    CallableOpInterface callable,
-    ArrayRef<dataflow::AbstractSparseLattice *> arguments) {
-  dataflow::SparseForwardDataFlowAnalysis<
-      dataflow::Lattice<AliasInfo>>::visitCallableOperation(callable,
-                                                            arguments);
-  // Keep the incoming allocation roots and this callee's formal identity.
-  for (auto *argument : arguments) {
-    auto *lattice = static_cast<dataflow::Lattice<AliasInfo> *>(argument);
-    Value value = lattice->getAnchor();
-    auto memory = dyn_cast<triton::gpu::MemDescType>(value.getType());
-    if (memory &&
-        isa<triton::gpu::SharedMemorySpaceAttr>(memory.getMemorySpace()))
-      propagateIfChanged(lattice, lattice->join(AliasInfo(value)));
-  }
 }
 
 LogicalResult SharedMemoryAliasAnalysis::visitOperation(

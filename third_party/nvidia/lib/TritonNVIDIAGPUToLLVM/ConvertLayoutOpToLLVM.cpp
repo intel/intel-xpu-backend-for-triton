@@ -97,7 +97,7 @@ struct ConvertLayoutOpSwizzlingConversion
           transferWithinBlockSwizzling(loc, rewriter, srcLayout, dstLayout,
                                        newInVals, i8ElemTy, smemBase, sourceOp);
       for (auto &v : outVals) {
-        v = b.trunc(llvmElemTy, v, LLVM::IntegerOverflowFlags::nuw);
+        v = b.trunc(llvmElemTy, v);
       }
       return outVals;
     }
@@ -122,7 +122,7 @@ struct ConvertLayoutOpSwizzlingConversion
     auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
 
     auto totalStoreCvt = srcLayout.invertAndCompose(smem);
-    auto totalLoadCvt = invertAndComposeLocal(smem, dstLayout, {kBlock});
+    auto totalLoadCvt = invertAndComposeBlockLocal(smem, dstLayout);
 
     // The permutation exists by construction of the reps dimension in
     // optimalSwizzling

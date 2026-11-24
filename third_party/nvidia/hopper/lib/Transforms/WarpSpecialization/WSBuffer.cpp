@@ -398,7 +398,7 @@ Value updateAccumLoopCount(SmallVector<Operation *> &opList,
   }
   for (unsigned i = 0; i < opList.size(); i++) {
     auto *oldOp = opList[i];
-    if (oldToNew.contains(oldOp))
+    if (oldToNew.find(oldOp) != oldToNew.end())
       opList[i] = oldToNew[oldOp];
   }
   return prevAccum;

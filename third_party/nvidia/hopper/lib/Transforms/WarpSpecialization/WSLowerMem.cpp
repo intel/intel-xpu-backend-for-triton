@@ -76,7 +76,7 @@ createAsyncCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *c,
   Operation *copy =
       builder.createWithAsyncTaskIds<ttg::AsyncCopyGlobalToLocalOp>(
           loadOp.getLoc(), loadOp.getPtr(), view, loadOp.getMask(),
-          loadOp.getOther(), loadOp.getCachePolicyAttr(),
+          loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
           loadOp.getIsVolatile());
 
   // Extract part.
@@ -215,8 +215,7 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
                                                     buffer, bufferIdx, true);
     copy = builder.createWithAsyncTaskIds<ttng::AsyncTMACopyGlobalToLocalOp>(
         loc, tmaLoad.getDesc(), tmaLoad.getIndices(), prodBarrier,
-        pipelineBuffer, pred, /*multicast=*/false,
-        tmaLoad.getCachePolicyAttr());
+        pipelineBuffer, pred);
   }
 
   // Create a wait_barrier before the first consumer.

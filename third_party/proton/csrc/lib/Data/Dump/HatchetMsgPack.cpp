@@ -1,4 +1,3 @@
-#include "Backend/Backend.h"
 #include "Device.h"
 #include "DeviceType.h"
 #include "Dump/TreeDataDump.h"
@@ -103,14 +102,15 @@ countMetricEntries(const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
   }
   if (isRoot) {
     if (metricSummary.hasKernelMetric &&
-        !metrics.contains(MetricKind::Kernel)) {
+        metrics.find(MetricKind::Kernel) == metrics.end()) {
       metricEntries += kKernelInclusiveCount;
     }
     if (metricSummary.hasPCSamplingMetric &&
-        !metrics.contains(MetricKind::PCSampling)) {
+        metrics.find(MetricKind::PCSampling) == metrics.end()) {
       metricEntries += PCSamplingMetric::Count;
     }
-    if (metricSummary.hasCycleMetric && !metrics.contains(MetricKind::Cycle)) {
+    if (metricSummary.hasCycleMetric &&
+        metrics.find(MetricKind::Cycle) == metrics.end()) {
       metricEntries += kCycleInclusiveCount;
     }
   }
@@ -203,14 +203,14 @@ void packMetrics(MsgPackWriter &writer,
   }
   if (isRoot) {
     if (metricSummary.hasKernelMetric &&
-        !metrics.contains(MetricKind::Kernel)) {
+        metrics.find(MetricKind::Kernel) == metrics.end()) {
       writer.appendBytes(kKernelDurationKey);
       writer.packUInt(0);
       writer.appendBytes(kKernelInvocationsKey);
       writer.packUInt(0);
     }
     if (metricSummary.hasPCSamplingMetric &&
-        !metrics.contains(MetricKind::PCSampling)) {
+        metrics.find(MetricKind::PCSampling) == metrics.end()) {
       PCSamplingMetric pcSamplingMetric;
       for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
         const auto valueName = pcSamplingMetric.getValueName(i);
@@ -218,7 +218,8 @@ void packMetrics(MsgPackWriter &writer,
         writer.packUInt(0);
       }
     }
-    if (metricSummary.hasCycleMetric && !metrics.contains(MetricKind::Cycle)) {
+    if (metricSummary.hasCycleMetric &&
+        metrics.find(MetricKind::Cycle) == metrics.end()) {
       writer.packStr(CycleMetric::getValueName(CycleMetric::Duration));
       writer.packUInt(0);
       writer.packStr(
@@ -297,9 +298,10 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   }
   std::array<std::string, static_cast<size_t>(DeviceType::COUNT)>
       deviceTypeNames;
-  for (const auto &device : getDeviceRegistrations()) {
-    deviceTypeNames[static_cast<size_t>(device.getDeviceType())] =
-        device.getName();
+  for (size_t deviceType = 0;
+       deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
+    deviceTypeNames[deviceType] =
+        getDeviceTypeString(static_cast<DeviceType>(deviceType));
   }
   std::unordered_map<std::string_view, std::vector<uint8_t>> frameHeaderCache;
   auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,
@@ -348,7 +350,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     linkedChildren.reserve(virtualNode.children.size());
     for (const auto &child : virtualNode.children) {
       const auto &childNode = virtualTree->getNode(child.id);
-      if (!childNode.children.empty() || linkedMetrics.contains(child.id)) {
+      if (!childNode.children.empty() ||
+          linkedMetrics.find(child.id) != linkedMetrics.end()) {
         linkedChildren.push_back(child.id);
       }
     }

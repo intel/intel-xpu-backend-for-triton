@@ -8,21 +8,24 @@
 namespace mlir {
 
 struct WmmaIntrinsic {
-  static FailureOr<WmmaIntrinsic>
-  selectFor(int version, unsigned mDim, unsigned nDim, unsigned inputKDim,
-            Type aElemType, Type bElemType, Type dElemType,
-            ArrayRef<StringRef> unsupportedFeatures = {});
+  // Chooses a suitable wmma instrinsic for the given input case.
+  static FailureOr<WmmaIntrinsic> selectFor(int version, unsigned mDim,
+                                            unsigned nDim, unsigned inputKDim,
+                                            Type aElemType, Type bElemType,
+                                            Type dElemType);
   // Gets the wmma intrinsic based on exact match of all parameters.
   static FailureOr<WmmaIntrinsic> get(int version, unsigned mDim, unsigned nDim,
                                       unsigned kDim, Type aElemType,
                                       Type bElemType, Type dElemType);
 
   WmmaIntrinsic(StringRef symbol, unsigned m, unsigned n, unsigned k,
-                unsigned kB, Type aET, Type bET, Type dET,
-                StringRef requiredFeature = "")
+                unsigned kB, Type aET, Type bET, Type dET)
       : name(symbol), mDim(m), nDim(n), kDim(k), kBase(kB), aElementType(aET),
-        bElementType(bET), dElementType(dET), requiredFeature(requiredFeature) {
-  }
+        bElementType(bET), dElementType(dET) {}
+  WmmaIntrinsic(const WmmaIntrinsic &other) = default;
+  WmmaIntrinsic(WmmaIntrinsic &&other) = default;
+  WmmaIntrinsic() = default;
+  WmmaIntrinsic &operator=(WmmaIntrinsic &&other) = default;
 
   llvm::StringRef name;
 
@@ -39,8 +42,6 @@ struct WmmaIntrinsic {
   Type aElementType;
   Type bElementType;
   Type dElementType;
-
-  StringRef requiredFeature;
 };
 
 struct WmmaScaleIntrinsic {
@@ -51,10 +52,13 @@ struct WmmaScaleIntrinsic {
                                            bool isScale16, bool isTransposed);
 
   WmmaScaleIntrinsic(StringRef symbol, unsigned m, unsigned n, unsigned kDim,
-                     unsigned kBaseAVal, unsigned kBaseBVal, Type dET,
-                     StringRef requiredFeature = "")
+                     unsigned kBaseAVal, unsigned kBaseBVal, Type dET)
       : name(symbol), mDim(m), nDim(n), kDim(kDim), kBaseA(kBaseAVal),
-        kBaseB(kBaseBVal), dElemType(dET), requiredFeature(requiredFeature) {}
+        kBaseB(kBaseBVal), dElemType(dET) {}
+  WmmaScaleIntrinsic(const WmmaScaleIntrinsic &other) = default;
+  WmmaScaleIntrinsic(WmmaScaleIntrinsic &&other) = default;
+  WmmaScaleIntrinsic() = default;
+  WmmaScaleIntrinsic &operator=(WmmaScaleIntrinsic &&other) = default;
 
   llvm::StringRef name;
   // m, n, and k refer to the shapes of the two operands of an wmma intrinsic:
@@ -66,8 +70,6 @@ struct WmmaScaleIntrinsic {
   unsigned kBaseA;
   unsigned kBaseB;
   Type dElemType;
-
-  StringRef requiredFeature;
 };
 } // namespace mlir
 

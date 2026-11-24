@@ -7,7 +7,7 @@ import tempfile
 import triton
 from triton.compiler import ASTSource, make_backend
 from triton.backends.compiler import GPUTarget
-from triton.experimental.gluon import GluonASTSource
+from triton.experimental.gluon._runtime import GluonASTSource
 from triton.runtime.jit import create_function_from_signature
 from triton._C.libtriton import ir
 
@@ -77,12 +77,12 @@ def run_parser(kernel_fn, args=(), kwargs={}, target=stub_target):
     return module
 
 
-def run_filecheck_test(kernel_fn, args=(), kwargs={}, target=stub_target):
+def run_filecheck_test(kernel_fn, args=(), kwargs={}):
     assert isinstance(kernel_fn, triton.runtime.JITFunction)
     check_template = inspect.getsource(kernel_fn.fn)
     if check_template is None:
         raise ValueError("kernel function must have a docstring with FileCheck template")
-    mlir_module = run_parser(kernel_fn, args=args, kwargs=kwargs, target=target)
+    mlir_module = run_parser(kernel_fn, args=args, kwargs=kwargs)
 
     run_filecheck("placeholder", mlir_module.str_nodebug(), check_template)
 

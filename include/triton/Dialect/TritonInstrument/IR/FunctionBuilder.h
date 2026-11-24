@@ -165,12 +165,10 @@ public:
                                         Value effectCTAs);
   // setReadVisibility: record the actual reader in the visibility columns of
   // each observer, including any synthetic peers.
-  // bufferIndex is optional and requires a proven one-hot bufferMask.
   void createSetReadVisibilityCall(ImplicitLocOpBuilder &b, Value bufferMask,
                                    int reader, uint64_t observerMask,
                                    Value pred, MemType memType,
-                                   Operation *insertPoint, Value effectCTAs,
-                                   Value bufferIndex = nullptr);
+                                   Operation *insertPoint, Value effectCTAs);
   // trackVisibleAccesses: snapshot the available read and write visibility
   // frontiers into their independent tracking tables for the barrier's current
   // phase.
@@ -186,10 +184,6 @@ public:
                                             Operation *insertPoint,
                                             Value barrierCTAs,
                                             Value effectCTAs);
-  void createTrackAsyncCopiesForBarrierCall(ImplicitLocOpBuilder &b, Value mbar,
-                                            int thread, Value pred,
-                                            Operation *insertPoint,
-                                            Value barrierCTAs);
   // transferVisibleAccesses: transfer the requested barrier phase's
   // independently tracked write and read visibility to all threads in
   // threadMask.
@@ -234,11 +228,10 @@ public:
                                           bool partitionScoped, MemType memType,
                                           Operation *insertPoint);
   // setProxyAccess: record a generic-proxy access by the current base thread
-  // and invalidate prior proxy-fence coverage for that source and access kind.
+  // and invalidate prior proxy-fence coverage for that source thread.
   void createSetProxyAccessCall(ImplicitLocOpBuilder &b, Value bufferMask,
-                                int thread, bool isWrite, Value pred,
-                                Operation *insertPoint, Value effectCTAs,
-                                Value bufferIndex = {});
+                                int thread, Value pred, Operation *insertPoint,
+                                Value effectCTAs);
   // fenceProxyAccesses: mark all generic accesses visible to the current base
   // thread as covered by fence.proxy.async. A CTA fence covers the current
   // buffer row; a cluster fence covers every cluster buffer row.
@@ -262,12 +255,12 @@ public:
   void createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b, Value mbar,
                                      Value phase, int thread, Value pred,
                                      Operation *insertPoint);
-  // verifyProxyAccess: assert that every conflicting generic-proxy access
-  // visible to the issuing base thread has crossed fence.proxy.async.
+  // verifyProxyAccess: assert that every generic-proxy access visible to the
+  // issuing base thread has crossed fence.proxy.async.
   void createVerifyProxyAccessCall(ImplicitLocOpBuilder &b, Value bufferMask,
-                                   int thread, bool isWrite,
-                                   StringRef operandName, Value pred,
-                                   Operation *insertPoint, Value effectCTAs);
+                                   int thread, StringRef operandName,
+                                   Value pred, Operation *insertPoint,
+                                   Value effectCTAs);
   // copyProxyAccesses: copy a parent base thread's packed proxy frontier to
   // warp-specialization partition threads.
   void createCopyProxyAccessesCall(ImplicitLocOpBuilder &b, int sourceThread,
@@ -293,30 +286,27 @@ public:
                                 Operation *insertPoint);
   // clearOutstandingCommitsTransferWrites: clear entries farther than
   // outstandingNum from the thread and set write visibility for threads in
-  // transferThreadMask. If includeStaged is true, also clear staged entries,
-  // which have not been committed to a group yet.
+  // transferThreadMask.
   void createClearOutstandingCommitsTransferWritesCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
       int outstandingNum, Value pred, CommitKind::Kind commitKind,
-      MemType memType, Operation *insertPoint, bool includeStaged = false);
+      MemType memType, Operation *insertPoint);
   // clearOutstandingCommitsTransferReads: clear entries farther than
   // outstandingNum from the thread and set read visibility for threads in
-  // transferThreadMask. If includeStaged is true, also clear staged entries,
-  // which have not been committed to a group yet.
+  // transferThreadMask.
   void createClearOutstandingCommitsTransferReadsCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
       int outstandingNum, Value pred, CommitKind::Kind commitKind,
-      MemType memType, Operation *insertPoint, bool includeStaged = false);
+      MemType memType, Operation *insertPoint);
   // clearOutstandingCommitsTransferBoth: clear entries farther than
   // outstandingNum from the thread and set both write and read visibility
-  // for threads in transferThreadMask.
-  // If only one visibility table exists, update that table.
-  // If includeStaged is true, also clear staged entries, which have not been
-  // committed to a group yet.
+  // for threads in transferThreadMask. Handles the partial case gracefully:
+  // if only one visibility table exists, delegates to the corresponding
+  // single-transfer function.
   void createClearOutstandingCommitsTransferBothCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
       int outstandingNum, Value pred, CommitKind::Kind commitKind,
-      MemType memType, Operation *insertPoint, bool includeStaged = false);
+      MemType memType, Operation *insertPoint);
   // checkOutstandingCommits: assert that the outstanding commit row for the
   // buffer is zero before the access described by pendingAccessType.
   // When excludeSelf is true, the calling thread's own column is masked out
@@ -340,8 +330,8 @@ private:
   void createClearOutstandingCommitsTransferCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
       int outstandingNum, Value pred, CommitKind::Kind commitKind,
-      MemType memType, Operation *insertPoint, bool includeStaged,
-      bool transferWrites, bool transferReads);
+      MemType memType, Operation *insertPoint, bool transferWrites,
+      bool transferReads);
 
   void createTrackProxyAccessesCallImpl(ImplicitLocOpBuilder &b, Value mbar,
                                         int thread, Value pred,

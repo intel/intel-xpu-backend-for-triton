@@ -201,7 +201,7 @@ void ScopeIdAllocation::reachability() {
       }
     }
     // Skip successor propagation if the output state is unchanged.
-    if (outputBlockInfoMap.contains(virtualBlock) &&
+    if (outputBlockInfoMap.count(virtualBlock) &&
         inputBlockInfo == outputBlockInfoMap[virtualBlock]) {
       continue;
     }

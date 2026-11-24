@@ -182,9 +182,9 @@ struct TensorScatterLowering : public OpRewritePattern<DescriptorScatterOp> {
   }
 };
 
-struct TritonAMDGPUConvertToTensorOpsPass
-    : impl::TritonAMDGPUConvertToTensorOpsBase<
-          TritonAMDGPUConvertToTensorOpsPass> {
+struct TritonAMDGPUConvertToTensorOps
+    : impl::TritonAMDGPUConvertToTensorOpsBase<TritonAMDGPUConvertToTensorOps> {
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();

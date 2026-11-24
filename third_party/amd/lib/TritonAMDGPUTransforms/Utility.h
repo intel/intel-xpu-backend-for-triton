@@ -71,7 +71,8 @@ Value createUpdateTDMDescriptorOp(OpBuilder &builder, Location loc, Value desc,
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // and |vecSize| with which dot operand |inputValue| is fed into if possible.
 template <class T>
-T getDotEncoding(Value inputValue, unsigned *opIdx, unsigned *vecSize) {
+T getDotEncoding(Value inputValue, unsigned *opIdx, unsigned *vecSize,
+                 T *dummy = nullptr) {
   if (!llvm::hasSingleElement(inputValue.getUses()))
     return nullptr;
 
@@ -92,4 +93,4 @@ T getDotEncoding(Value inputValue, unsigned *opIdx, unsigned *vecSize) {
   return getDotEncoding<T>(user->getResult(0), opIdx, vecSize);
 }
 
-#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTRANSFORMS_UTILITY_H_
+#endif
