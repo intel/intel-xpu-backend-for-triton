@@ -9,7 +9,9 @@
 // copied-from-sha256: 688fa8418ad8393d4e63835751e60db5adadf243989b8a63598bfce25a14c51b
 // clang-format on
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Transforms/LoopInvariantCodeMotionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
