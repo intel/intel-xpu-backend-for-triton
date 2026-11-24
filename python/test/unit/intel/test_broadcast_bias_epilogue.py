@@ -94,8 +94,8 @@ def _bias_load_feeds_dot_in_dpas(ttgir):
     (128, 128, 32, 8),
     (64, 128, 64, 16),
 ])
-# Full tiles only, and partial M and N tiles.
-@pytest.mark.parametrize("M, N, K", [(256, 256, 128), (65, 129, 64), (200, 300, 96)])
+# Full tiles only, partial M and N tiles, and partial N tiles only.
+@pytest.mark.parametrize("M, N, K", [(256, 256, 128), (65, 129, 64), (200, 300, 96), (256, 300, 96)])
 def test_broadcast_bias_epilogue(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps, desc_store, device, with_allocator):
     torch.manual_seed(0)
     # Descriptors need 16-byte aligned row pitches: pad B and C to a multiple of 8 columns.
@@ -113,10 +113,14 @@ def test_broadcast_bias_epilogue(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps, 
                                                 num_stages=2)
 
     torch.testing.assert_close(c.float(), torch.addmm(bias, a, b).float(), atol=5e-2, rtol=1e-2)
-    # With an M that is not a multiple of 16 the row mask changes within a block load message, so the bias is not a
-    # 2D block load whose messages share one load; costed by its distinct addresses, it may stay an anchor.
-    if M % 16 == 0:
-        _bias_load_feeds_dot_in_dpas(kernel.asm["ttgir"])
+    # M and N are runtime values here. With an M that is not a multiple of 16 the row mask changes within a block load
+    # message, and with an N that is not one the column mask does too, so the bias is not a row-major 2D block load
+    # whose messages share one load: costed by its distinct addresses, it may stay an anchor.
+    ttgir = kernel.asm["ttgir"]
+    if M % 16 == 0 and N % 16 == 0:
+        _bias_load_feeds_dot_in_dpas(ttgir)
+    else:
+        assert 'ttig.block_io = "row_major"' not in re.search(r"= tt\.load .*", ttgir).group(0)
 
 
 @pytest.mark.skipif(not _has_dpas_and_2d_block_io(), reason="the bias is loaded in the DPAS encoding")

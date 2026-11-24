@@ -204,8 +204,9 @@ bool isVolatileOrCVLoad(Operation *op) {
 /// for nothing, and the mask bounds the resulting tile besides. Keep such a
 /// load anchored -- it can still lower to a 2D block message, just in the
 /// encoding the memory access itself wants. A broadcast load whose result is
-/// combined with a DPAS value (e.g. a GEMM bias) is the exception: it is never
-/// an anchor, see feedsDpasValue.
+/// combined with a DPAS value (e.g. a GEMM bias) is the exception: it is
+/// costed by its distinct addresses, and never an anchor when the lowering
+/// shares it (see feedsDpasValue and isExpensiveLoadOrStore).
 static bool isMaskedLoadWithoutDotConsumer(Operation *op) {
   auto loadOp = dyn_cast<tt::LoadOp>(op);
   if (!loadOp)
@@ -334,8 +335,7 @@ static SmallVector<bool> getUniformDims(Value value, UniformDimsCache &cache,
 /// such a load should anchor a layout is a separate question. A dimension the
 /// walk cannot prove uniform (an unhandled op, or the depth limit) counts as
 /// varying: that is safe for the uniformity proof, but it can make a fully
-/// uniform tile look like a broadcast, and such a load that feeds DPAS is then
-/// never an anchor (see isExpensiveLoadOrStore).
+/// uniform tile look like a broadcast and cost it by the remaining extent.
 static int64_t getNumDistinctElements(Value ptr) {
   auto ptrTy = cast<RankedTensorType>(ptr.getType());
   UniformDimsCache cache;
@@ -447,11 +447,13 @@ bool isExpensiveLoadOrStore(Operation *op) {
     // - A broadcast row that becomes a row-major 2D block load is never an
     //   anchor: rematerialized in the DPAS encoding, the lowering issues one
     //   message per distinct column block and shares it across the
-    //   replicated rows.
-    // - Any other such load (a column broadcast, or a row whose mask makes it
-    //   a gather, e.g. an M that is not a multiple of the message height) is
-    //   not shared, so it is costed by its distinct addresses: it stops being
-    //   an anchor only with fewer of them than threads.
+    //   replicated rows. A volatile or `.cv` load is tagged too, but
+    //   LowerTo2DBlockLoad leaves it a gather, so it is not shared.
+    // - Any other such load (a column broadcast, a row whose mask makes it
+    //   a gather, e.g. an M that is not a multiple of the message height, or
+    //   a volatile or `.cv` load) is not shared, so it is costed by its
+    //   distinct addresses: it stops being an anchor only with fewer of them
+    //   than threads.
     // Other loads, and stores, keep the logical element count.
     int64_t numElements = ptrType.getNumElements();
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
@@ -460,7 +462,8 @@ bool isExpensiveLoadOrStore(Operation *op) {
         auto blockIO = loadOp->getAttrOfType<StringAttr>(
             TritonIntelGPUDialect::getBlockIOAttrName());
         if (blockIO &&
-            blockIO.getValue() == stringifyBlockIOMode(BlockIOMode::RowMajor))
+            blockIO.getValue() == stringifyBlockIOMode(BlockIOMode::RowMajor) &&
+            !isVolatileOrCVLoad(loadOp))
           return false;
         numElements = numDistinct;
       }

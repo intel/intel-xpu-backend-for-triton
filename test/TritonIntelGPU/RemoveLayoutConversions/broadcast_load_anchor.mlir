@@ -2,10 +2,12 @@
 
 // COM: Issue #8819: a load whose pointer is broadcast along a dimension, such as an addmm
 // COM: bias with strides (0, 1), reads each distinct address once per row. When it feeds a
-// COM: DPAS value it is not an anchor, however many logical elements it has: the load is
-// COM: rematerialized into the DPAS accumulator's encoding and the blocked -> DPAS convert,
-// COM: which goes through shared memory, disappears. The store shares the load's mask, so it
-// COM: follows into DPAS and the DPAS -> blocked convert of the output disappears too.
+// COM: DPAS value it is costed by its distinct addresses, and when it is a row-major 2D block
+// COM: load (which the lowering shares across the replicated rows) it is not an anchor at all,
+// COM: however many logical elements it has: the load is rematerialized into the DPAS
+// COM: accumulator's encoding and the blocked -> DPAS convert, which goes through shared
+// COM: memory, disappears. The store shares the load's mask, so it follows into DPAS and the
+// COM: DPAS -> blocked convert of the output disappears too.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1]}>
@@ -283,24 +285,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// COM: At the distinct-address threshold: a broadcast bias row with exactly as many distinct
-// COM: addresses as threads (64 = 4 warps x 16) feeding a DPAS value is rematerialized as well
-// COM: when it is a row-major 2D block load.
+// COM: At the distinct-address threshold: a masked broadcast bias row with exactly as many
+// COM: distinct addresses as threads (64 = 4 warps x 16) feeding a DPAS value is rematerialized
+// COM: as well when it is a row-major 2D block load.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate} {
   // CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<{{.*}}warpsPerCTA = [4, 1]
   // CHECK-LABEL: tt.func public @threshold_broadcast_bias_load_is_remat
-  tt.func public @threshold_broadcast_bias_load_is_remat(%acc: tensor<64x64xf32, #dpas>, %bias_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<64x64xf32, #dpas> {
+  tt.func public @threshold_broadcast_bias_load_is_remat(%acc: tensor<64x64xf32, #dpas>, %bias_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %n: i32) -> tensor<64x64xf32, #dpas> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #blocked>
     %rn = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %n_splat = tt.splat %n : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %mask_n = arith.cmpi slt, %rn, %n_splat : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %mask_n_2d = tt.expand_dims %mask_n {axis = 0 : i32} : tensor<64xi1, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi1, #blocked>
+    %mask = tt.broadcast %mask_n_2d : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
     %rn_2d = tt.expand_dims %rn {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
     %base = tt.splat %bias_ptr : !tt.ptr<f16> -> tensor<1x64x!tt.ptr<f16>, #blocked>
     %row = tt.addptr %base, %rn_2d : tensor<1x64x!tt.ptr<f16>, #blocked>, tensor<1x64xi32, #blocked>
     %ptrs = tt.broadcast %row : tensor<1x64x!tt.ptr<f16>, #blocked> -> tensor<64x64x!tt.ptr<f16>, #blocked>
     // CHECK: %[[BIAS:.*]] = tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>, #[[$DPAS]]>
     // CHECK-NOT: ttg.convert_layout %[[BIAS]]
-    %bias = tt.load %ptrs {ttig.block_io = "row_major"} : tensor<64x64x!tt.ptr<f16>, #blocked>
+    %bias = tt.load %ptrs, %mask, %cst {ttig.block_io = "row_major"} : tensor<64x64x!tt.ptr<f16>, #blocked>
     %bias_dpas = ttg.convert_layout %bias : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dpas>
     %bias_f32 = arith.extf %bias_dpas : tensor<64x64xf16, #dpas> to tensor<64x64xf32, #dpas>
     %sum = arith.addf %acc, %bias_f32 : tensor<64x64xf32, #dpas>
@@ -337,23 +344,95 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// COM: A column broadcast (a per-row term, stride (1, 0)) is not shared by the lowering, so it
-// COM: is costed by its distinct addresses: with as many of them as threads it stays an anchor.
+// COM: A column broadcast (a per-row term, stride (1, 0)) is tagged `column_major` by
+// COM: MaterializeBlockPointer but is not shared by the lowering, so it is costed by its distinct
+// COM: addresses: with as many of them as threads it stays an anchor. Masked, so the row-major
+// COM: rule, not the unmasked block-IO early return, is what keeps it anchored.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate} {
   // CHECK-DAG: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
   // CHECK-LABEL: tt.func public @column_broadcast_load_at_threshold_stays_anchored
-  tt.func public @column_broadcast_load_at_threshold_stays_anchored(%acc: tensor<64x64xf32, #dpas>, %bias_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<64x64xf32, #dpas> {
+  tt.func public @column_broadcast_load_at_threshold_stays_anchored(%acc: tensor<64x64xf32, #dpas>, %bias_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %m: i32) -> tensor<64x64xf32, #dpas> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #blocked>
     %rm = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %m_splat = tt.splat %m : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %mask_m = arith.cmpi slt, %rm, %m_splat : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %mask_m_2d = tt.expand_dims %mask_m {axis = 1 : i32} : tensor<64xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi1, #blocked>
+    %mask = tt.broadcast %mask_m_2d : tensor<64x1xi1, #blocked> -> tensor<64x64xi1, #blocked>
     %rm_2d = tt.expand_dims %rm {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi32, #blocked>
     %base = tt.splat %bias_ptr : !tt.ptr<f16> -> tensor<64x1x!tt.ptr<f16>, #blocked>
     %col = tt.addptr %base, %rm_2d : tensor<64x1x!tt.ptr<f16>, #blocked>, tensor<64x1xi32, #blocked>
     %ptrs = tt.broadcast %col : tensor<64x1x!tt.ptr<f16>, #blocked> -> tensor<64x64x!tt.ptr<f16>, #blocked>
     // CHECK: %[[BIAS:.*]] = tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>, #[[$BLOCKED]]>
     // CHECK: ttg.convert_layout %[[BIAS]]
-    %bias = tt.load %ptrs : tensor<64x64x!tt.ptr<f16>, #blocked>
+    %bias = tt.load %ptrs, %mask, %cst {ttig.block_io = "column_major"} : tensor<64x64x!tt.ptr<f16>, #blocked>
+    %bias_dpas = ttg.convert_layout %bias : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dpas>
+    %bias_f32 = arith.extf %bias_dpas : tensor<64x64xf16, #dpas> to tensor<64x64xf32, #dpas>
+    %sum = arith.addf %acc, %bias_f32 : tensor<64x64xf32, #dpas>
+    tt.return %sum : tensor<64x64xf32, #dpas>
+  }
+}
+
+// -----
+
+// COM: A masked broadcast bias row tagged `row_major` that is volatile: LowerTo2DBlockLoad leaves
+// COM: it a gather, so it is not shared and is costed by its distinct addresses; with as many of
+// COM: them as threads it stays an anchor. (A volatile load also has a write effect, so it is never
+// COM: rematerialized anyway; the `.cv` case below is the one the cost rule decides.)
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate} {
+  // CHECK-DAG: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+  // CHECK-LABEL: tt.func public @volatile_broadcast_load_stays_anchored
+  tt.func public @volatile_broadcast_load_stays_anchored(%acc: tensor<64x64xf32, #dpas>, %bias_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %n: i32) -> tensor<64x64xf32, #dpas> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #blocked>
+    %rn = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %n_splat = tt.splat %n : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %mask_n = arith.cmpi slt, %rn, %n_splat : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %mask_n_2d = tt.expand_dims %mask_n {axis = 0 : i32} : tensor<64xi1, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi1, #blocked>
+    %mask = tt.broadcast %mask_n_2d : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
+    %rn_2d = tt.expand_dims %rn {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    %base = tt.splat %bias_ptr : !tt.ptr<f16> -> tensor<1x64x!tt.ptr<f16>, #blocked>
+    %row = tt.addptr %base, %rn_2d : tensor<1x64x!tt.ptr<f16>, #blocked>, tensor<1x64xi32, #blocked>
+    %ptrs = tt.broadcast %row : tensor<1x64x!tt.ptr<f16>, #blocked> -> tensor<64x64x!tt.ptr<f16>, #blocked>
+    // CHECK: %[[BIAS:.*]] = tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>, #[[$BLOCKED]]>
+    // CHECK: ttg.convert_layout %[[BIAS]]
+    %bias = tt.load %ptrs, %mask, %cst {isVolatile = true, ttig.block_io = "row_major"} : tensor<64x64x!tt.ptr<f16>, #blocked>
+    %bias_dpas = ttg.convert_layout %bias : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dpas>
+    %bias_f32 = arith.extf %bias_dpas : tensor<64x64xf16, #dpas> to tensor<64x64xf32, #dpas>
+    %sum = arith.addf %acc, %bias_f32 : tensor<64x64xf32, #dpas>
+    tt.return %sum : tensor<64x64xf32, #dpas>
+  }
+}
+
+// -----
+
+// COM: A masked broadcast bias row tagged `row_major` that is a `.cv` load: LowerTo2DBlockLoad leaves
+// COM: it a gather, so it is not shared and is costed by its distinct addresses; with as many of
+// COM: them as threads it stays an anchor.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate} {
+  // CHECK-DAG: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+  // CHECK-LABEL: tt.func public @cv_broadcast_load_stays_anchored
+  tt.func public @cv_broadcast_load_stays_anchored(%acc: tensor<64x64xf32, #dpas>, %bias_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %n: i32) -> tensor<64x64xf32, #dpas> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #blocked>
+    %rn = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %n_splat = tt.splat %n : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %mask_n = arith.cmpi slt, %rn, %n_splat : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %mask_n_2d = tt.expand_dims %mask_n {axis = 0 : i32} : tensor<64xi1, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi1, #blocked>
+    %mask = tt.broadcast %mask_n_2d : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
+    %rn_2d = tt.expand_dims %rn {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    %base = tt.splat %bias_ptr : !tt.ptr<f16> -> tensor<1x64x!tt.ptr<f16>, #blocked>
+    %row = tt.addptr %base, %rn_2d : tensor<1x64x!tt.ptr<f16>, #blocked>, tensor<1x64xi32, #blocked>
+    %ptrs = tt.broadcast %row : tensor<1x64x!tt.ptr<f16>, #blocked> -> tensor<64x64x!tt.ptr<f16>, #blocked>
+    // CHECK: %[[BIAS:.*]] = tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>, #[[$BLOCKED]]>
+    // CHECK: ttg.convert_layout %[[BIAS]]
+    %bias = tt.load %ptrs, %mask, %cst {cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal>, ttig.block_io = "row_major"} : tensor<64x64x!tt.ptr<f16>, #blocked>
     %bias_dpas = ttg.convert_layout %bias : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dpas>
     %bias_f32 = arith.extf %bias_dpas : tensor<64x64xf16, #dpas> to tensor<64x64xf32, #dpas>
     %sum = arith.addf %acc, %bias_f32 : tensor<64x64xf32, #dpas>
@@ -393,7 +472,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %bias_base = tt.splat %bias_ptr : !tt.ptr<f16> -> tensor<64x128x!tt.ptr<f16>, #blocked>
     %bias_ptrs = tt.addptr %bias_base, %offs : tensor<64x128x!tt.ptr<f16>, #blocked>, tensor<64x128xi32, #blocked>
     // CHECK: %[[BIAS:.*]] = tt.load {{.*}} : tensor<64x128x!tt.ptr<f16>, #[[$DPAS]]>
+    // CHECK-NOT: ttg.convert_layout
     // CHECK: arith.extf %[[BIAS]] : tensor<64x128xf16, #[[$DPAS]]>
+    // CHECK-NOT: ttg.convert_layout
     // CHECK: tt.store {{.*}} : tensor<64x128x!tt.ptr<f16>, #[[$DPAS]]>
     // CHECK-NOT: ttg.convert_layout
     // CHECK: tt.return
