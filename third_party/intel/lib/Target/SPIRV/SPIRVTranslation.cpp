@@ -176,11 +176,6 @@ getAllowedExtensions(bool isLTS,
     AllowedExtensions.push_back(
         SPIRV::ExtensionID::SPV_INTEL_maximum_registers);
 
-  if (isProbedExtensionAllowed(probedExtensions,
-                               "SPV_INTEL_subgroup_bitcast_shuffle"))
-    AllowedExtensions.push_back(
-        SPIRV::ExtensionID::SPV_INTEL_subgroup_bitcast_shuffle);
-
   return AllowedExtensions;
 }
 

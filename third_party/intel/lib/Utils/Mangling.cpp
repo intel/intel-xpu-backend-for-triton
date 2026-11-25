@@ -2,7 +2,6 @@
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -43,29 +42,6 @@ std::string getTypeMangling(Type ty, bool isUnsigned) {
           llvm_unreachable("unhandled integer type");
         }
       });
-}
-
-std::string getResultTypePostfix(Type type) {
-  std::string name;
-  switch (getElementTypeOrSelf(type).getIntOrFloatBitWidth()) {
-  case 8:
-    name = "uchar";
-    break;
-  case 16:
-    name = "ushort";
-    break;
-  case 32:
-    name = "uint";
-    break;
-  case 64:
-    name = "ulong";
-    break;
-  default:
-    llvm_unreachable("unexpected element width");
-  }
-  if (auto vecType = dyn_cast<VectorType>(type))
-    name += std::to_string(vecType.getNumElements());
-  return "_R" + name;
 }
 
 std::string mangle(StringRef baseName, ArrayRef<Type> types,
