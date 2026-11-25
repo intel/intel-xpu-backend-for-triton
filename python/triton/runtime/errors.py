@@ -46,9 +46,11 @@ class AutotunerError(TritonError):
         return f"Autotuner error: {error_message}"
 
 
-def __getattr__(name):
-    # Deprecated alias, remove once PyTorch imports it from triton.backends.intel.errors.
-    if name == "IntelGPUError":
-        from triton.backends.intel.errors import IntelGPUError
-        return IntelGPUError
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+class IntelGPUError(TritonError):
+    """
+    Exception raised for Intel GPU/Level Zero errors.
+
+    This exception is used to indicate errors specific to Intel GPU backends,
+    particularly those related to Level Zero.
+    """
+    pass

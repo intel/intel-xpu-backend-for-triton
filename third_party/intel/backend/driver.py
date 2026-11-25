@@ -22,6 +22,12 @@ from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase, TensorDescABI, decompose_descriptor
 from triton.backends.driver import expand_signature, get_kernel_argument_layout, wrap_handle_tensordesc_impl
 
+# PTI's default collection mode is Local (mode 2), which with an event-less launcher hangs or
+# reports zero kernel times on the Level Zero v1 adapter (PVC); v2 (BMG and newer) is fine. Full
+# (mode 0) is the workaround. Set at import, because PTI reads this when a collection session starts,
+# and via setdefault so an explicit choice by the user still wins.
+os.environ.setdefault("PTI_COLLECTION_MODE", "0")
+
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
 # library has been updated as a result of updated dependencies.
@@ -318,8 +324,7 @@ class SpirvUtils:
         try:
             return self.shared_library.load_binary(args)
         except Exception as e:
-            from triton.backends.intel.errors import IntelGPUError
-            from triton.runtime.errors import OutOfResources
+            from triton.runtime.errors import IntelGPUError, OutOfResources
             if isinstance(e, OutOfResources):
                 raise
             if str(e).startswith("ZE_"):
@@ -387,33 +392,6 @@ class ExtensionUtils:
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
-class SpirvProbeUtils:
-    """Ground-truth probe for whether a SPIR-V capability is accepted by the driver's own JIT."""
-
-    def __init__(self, cache_path: str):
-        self.shared_library = ctypes.PyDLL(cache_path)
-        self.shared_library.probe_spirv_module.restype = ctypes.py_object
-        self.shared_library.probe_spirv_module.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_size_t)
-
-    def probe_spirv_module(self, device_id: int, spirv: bytes) -> bool | None:
-        return self.shared_library.probe_spirv_module(device_id, spirv, len(spirv))
-
-    if os.name != 'nt':
-
-        def __del__(self):
-            if hasattr(self, "shared_library"):
-                handle = self.shared_library._handle
-                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-                self.shared_library.dlclose(handle)
-    else:
-
-        def __del__(self):
-            if hasattr(self, "shared_library"):
-                handle = self.shared_library._handle
-                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-                ctypes.windll.kernel32.FreeLibrary(handle)
-
-
 _VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?')
 
 
@@ -426,36 +404,8 @@ def is_lts(ver) -> bool:
     return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
 
 
-def has_spirv_2d_block_io(ver: str | None) -> bool:
-    """
-    Whether the SPIR-V 2D block I/O builtins can be used with this driver (#8858).
-
-    IGC before 2.38 (compute-runtime 26.27.39122) only has a fixed table of `intel_sub_group_2d_block_*` builtins, so
-    other shapes fail to build; 2.38 added a generic resolver. `ver` is the driver version
-    (`1.<minor>.<build>[+<patch>]`) or the `ocloc` version (`26.18.38308.1`); either way the compute-runtime build
-    number is the third field. A missing or unparsable version keeps the SPIR-V default.
-    """
-    if not ver:
-        return True
-    m = _VERSION_PATTERN.match(ver)
-    if not m:
-        return True
-    return int(m.group(3)) >= 39122
-
-
 @lru_cache
-def get_ocloc_version() -> str | None:
-    """The version of the `ocloc` on PATH, e.g. `26.18.38308.1`, or None if it can't be determined."""
-    try:
-        proc = subprocess.run(['ocloc', '--version'], capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    m = re.search(r'\d+\.\d+\.\d+(?:\.\d+)?', proc.stdout)
-    return m.group(0) if m else None
-
-
-@lru_cache
-def get_hasher_common(eventless_submit: bool = True):
+def get_hasher_common(is_lts: bool = False):
     hasher = hashlib.sha256((__CACHE_VERSION + platform_key()).encode("utf-8"))
     # Include libsycl_dir in the hash to prevent cache collisions across
     # environments with different oneAPI versions (e.g. 2025.3 vs 2026.0).
@@ -464,13 +414,13 @@ def get_hasher_common(eventless_submit: bool = True):
     # share the same cache entry and load an incompatible .so.
     if COMPILATION_HELPER.libsycl_dir:
         hasher.update(str(COMPILATION_HELPER.libsycl_dir).encode("utf-8"))
-    if eventless_submit:
-        hasher.update("eventless_submit=True".encode("utf-8"))
+    if is_lts:
+        hasher.update("is_lts=True".encode("utf-8"))
     return hasher
 
 
-def compile_module_from_src(src: str, name: str, eventless_submit: bool = True):
-    hasher = get_hasher_common(eventless_submit).copy()
+def compile_module_from_src(src: str, name: str, is_lts: bool = False):
+    hasher = get_hasher_common(is_lts).copy()
     hasher.update(src.encode("utf-8"))
     # `spirv_utils` is compiled with `-DTRITON_INTEL_INJECT_PYTORCH=1` when
     # `INJECT_PYTORCH=True` (see below), which wraps kernel launches in a
@@ -501,7 +451,7 @@ def compile_module_from_src(src: str, name: str, eventless_submit: bool = True):
                 else:
                     extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1", "-std=c++20"]
 
-            if name == "spirv_utils" and eventless_submit:
+            if name == "spirv_utils" and not is_lts:
                 if os.name == "nt":
                     extra_compiler_args += ["/DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
                 else:
@@ -518,8 +468,6 @@ def compile_module_from_src(src: str, name: str, eventless_submit: bool = True):
         return SpirvUtils(cache_path)
     if name == 'extension_utils_impl':
         return ExtensionUtils(cache_path)
-    if name == 'spirv_probes_impl':
-        return SpirvProbeUtils(cache_path)
     if name == 'proton_utils':
         return cache_path
 
@@ -554,8 +502,9 @@ class XPUUtils(object):
         dirname = os.path.dirname(os.path.realpath(__file__))
         # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
         # and can cause `Fatal Python error: Segmentation fault`
+        is_lts = self._is_lts()
         mod = compile_module_from_src(src=Path(os.path.join(dirname, "driver.c")).read_text(), name="spirv_utils",
-                                      eventless_submit=self._use_eventless_submit())
+                                      is_lts=is_lts)
         global PyKernelArg
         global ARG_CONSTEXPR
         global ARG_KERNEL
@@ -582,12 +531,10 @@ class XPUUtils(object):
         import torch
         return torch.xpu.current_stream().sycl_queue
 
-    def _use_eventless_submit(self):
+    def _is_lts(self):
         import torch
         properties = torch.xpu.get_device_capability(torch.xpu.current_device())
-        # Event-less submission only saves time on the Level Zero v2 adapter, whose platform name ends in "V2". On v1
-        # (PVC's default) it does not, and PTI's default collection mode then reports zero kernel times or hangs.
-        return not is_lts(properties.get('driver_version')) and properties.get('platform_name', '').endswith(' V2')
+        return is_lts(properties.get('driver_version'))
 
     def wait(self):
         self.wait_on_sycl_queue(self.get_sycl_queue())
@@ -620,11 +567,10 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        # Pass 16-bit floating-point scalars as raw bit patterns.
-        "fp16": "uint16_t",
-        "bf16": "uint16_t",
-        "fp32": "float",
-        "f32": "float",
+        "fp16": "double",
+        "bf16": "double",
+        "fp32": "double",
+        "f32": "double",
         "fp64": "double",
     }[ty]
 
@@ -666,10 +612,7 @@ def serialize_args(args, constants, signature, dir_path):
         args_dict['threads_per_warp'] = arg.threads_per_warp
         args_dict['shared_memory'] = arg.shared
         args_dict['kernel_name'] = arg.name
-        is_native_binary = bool(getattr(arg, "generate_native_code", False))
-        binary_ext = "zebin" if is_native_binary else "spv"
-        args_dict['binary_name'] = f"{arg.name}.{binary_ext}"
-        args_dict['is_native_binary'] = is_native_binary
+        args_dict['spv_name'] = f"{arg.name}.spv"
         args_dict['build_flags'] = arg.build_flags
 
     cnt = 0
@@ -729,11 +672,11 @@ class XPULauncher(object):
             ([ty for _, ty in get_kernel_argument_layout(signature.values(), TensorDescABI.DECOMPOSED)], ))
         self.launch = wrap_handle_tensordesc(utils.launch, signature, tensordesc_meta=[])
 
-        # Serialize KernelArguments for TritonKernelRunner
-        self.serialize_kernel_args = knobs.intel.enable_dump_kernel_args
+        # Serialize KernelArguments for SPIR-V Runner
+        self.serialize_kernel_args = knobs.intel.enable_dump_spirv_kernel_args
         self.cache_dir = metadata.cache_dir
         self.dump_dir = self._resolve_dump_dir(metadata.cache_dir)
-        self.print_dump_kernel_args_info = knobs.intel.print_dump_kernel_args_info
+        self.print_dump_spirv_kernel_args_info = knobs.intel.print_dump_spirv_kernel_args_info
         self.constants = constants
         self.signature = signature
         self.dump_launch_params = os.environ.get("TRITON_DUMP_LAUNCH_PARAMS") == "1"
@@ -743,7 +686,7 @@ class XPULauncher(object):
         self.profile_scratch_align = metadata.profile_scratch_align
 
     def _resolve_dump_dir(self, cache_dir):
-        dump_dir_root = knobs.intel.dump_kernel_args_dir
+        dump_dir_root = knobs.intel.dump_spirv_kernel_args_dir
         if not dump_dir_root:
             return cache_dir
         cache_dir_name = os.path.basename(os.path.normpath(cache_dir))
@@ -813,7 +756,7 @@ class XPULauncher(object):
             profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
 
         if self.serialize_kernel_args:
-            if self.print_dump_kernel_args_info:
+            if self.print_dump_spirv_kernel_args_info:
                 print(
                     f"Triton kernel dump info: kernel_name={kernel_metadata.name}, cache_dir={self.cache_dir}, dump_dir={self.dump_dir}"
                 )

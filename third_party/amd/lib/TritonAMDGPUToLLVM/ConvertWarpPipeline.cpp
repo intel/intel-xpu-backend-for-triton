@@ -34,10 +34,8 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "llvm/ADT/SmallPtrSet.h"
 
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "triton/Analysis/BufferIndexAnalysis.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -55,42 +53,12 @@ namespace mlir::triton {
 
 namespace {
 
-// Find the slot selection through descriptor views and single-block stage
-// yields. Unsupported producers, including loop-carried values, stay unknown.
-static triton::gpu::MemDescIndexOp resolveMemDescIndex(Value value) {
-  llvm::SmallPtrSet<Value, 8> seen;
-  while (value && seen.insert(value).second) {
-    Operation *def = value.getDefiningOp();
-    if (!def)
-      return {};
-    if (auto index = dyn_cast<triton::gpu::MemDescIndexOp>(def))
-      return index;
-    if (auto exec = dyn_cast<scf::ExecuteRegionOp>(def)) {
-      if (!llvm::hasSingleElement(exec.getRegion()))
-        return {};
-      auto yield =
-          dyn_cast<scf::YieldOp>(exec.getRegion().front().getTerminator());
-      unsigned resultNumber = cast<OpResult>(value).getResultNumber();
-      if (!yield || resultNumber >= yield.getNumOperands())
-        return {};
-      value = yield.getOperand(resultNumber);
-      continue;
-    }
-    if (!def->hasTrait<OpTrait::MemDescViewTrait>())
-      return {};
-    value = def->getOperand(0);
-  }
-  return {};
-}
-
 // Construct a virtual block describing a pipeline cluster's buffer R/W set.
 // Walks recursively so that LDS effects inside nested non-loop regions
 // (scf.if / tt.reduce / tt.scan / etc.) are accounted for.  Loops (scf.for /
 // scf.while) cannot legally appear inside a cluster, so this walk never has
 // to reason about iteration-multiplied effects.
-static BlockInfo
-buildBlockInfoFromBlock(Block *block, Allocation *allocation,
-                        BufferIndexAnalysis *bufferIndex = nullptr) {
+static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
   BlockInfo info;
   block->walk([&](MemoryEffectOpInterface mei) {
     Operation *op = mei.getOperation();
@@ -105,14 +73,6 @@ buildBlockInfoFromBlock(Block *block, Allocation *allocation,
           continue;
         auto interval = allocation->getAllocatedInterval(bufId);
         auto slice = AllocationSlice(v, interval, bufId);
-        // Retain the access's physical footprint and subview restrictions;
-        // recover only its slot expression through descriptor and stage views.
-        if (bufferIndex) {
-          if (auto indexed = resolveMemDescIndex(v))
-            slice.bufferIndexExpr =
-                bufferIndex->makeSlice(indexed.getResult(), interval, bufId)
-                    .bufferIndexExpr;
-        }
         if (isa<MemoryEffects::Write>(eff.getEffect()))
           info.syncWriteSlices[slice].insert(op);
         else if (isa<MemoryEffects::Read>(eff.getEffect()))
@@ -318,8 +278,10 @@ static void emitClusterPriority(OpBuilder &r, Location loc,
   }
 }
 
-// Fence a pre-existing cluster-boundary barrier or wait and emit the cluster's
-// priority before it. Group waits also need an explicit local rendezvous.
+// Wrap a pre-existing barrier op (e.g. async_wait) with sched_barriers so the
+// backend scheduler cannot move ops across it, and emit the cluster's
+// priority just before the barrier.  Used in place of inserting a fresh
+// cluster barrier when one already exists at the cluster boundary.
 static void wrapExistingBarrier(OpBuilder &b, Location loc,
                                 Operation *clusterOp,
                                 Operation *existingBarrier, bool anyHasPriority,
@@ -329,12 +291,6 @@ static void wrapExistingBarrier(OpBuilder &b, Location loc,
     emitClusterPriority(b, loc, clusterOp, anyHasPriority);
   ROCDL::SchedBarrier::create(b, loc, ROCDL::SchedGroupMask::none);
   b.setInsertionPointAfter(existingBarrier);
-  // Group waits lower to per-thread completion waits. Place the rendezvous
-  // here so Membar cannot defer it into the next stage. The trailing scheduling
-  // fence also prevents ScheduleMembar from moving it to a global-load use.
-  if (isa<triton::gpu::AsyncWaitOp, triton::amdgpu::AsyncWaitOp>(
-          existingBarrier))
-    triton::gpu::BarrierOp::create(b, loc, triton::gpu::AddrSpace::Local);
   ROCDL::SchedBarrier::create(b, loc, ROCDL::SchedGroupMask::none);
 }
 
@@ -468,11 +424,9 @@ private:
       }
     }
 
-    BufferIndexAnalysis bufferIndex(forOp->getParentOfType<triton::FuncOp>());
     SmallVector<BlockInfo> clusterInfo;
     for (auto cb : clusterBlocks)
-      clusterInfo.push_back(
-          buildBlockInfoFromBlock(cb, allocation, &bufferIndex));
+      clusterInfo.push_back(buildBlockInfoFromBlock(cb, allocation));
     int numClusters = clusterInfo.size();
 
     // Check if any cluster has explicit priority.
@@ -540,9 +494,10 @@ private:
 
       if (auto exBar = existingBarrierMap.find(i);
           exBar != existingBarrierMap.end()) {
-        // FIXME: Non-LOCAL barriers other than group waits do not acquire
-        // a local fence in wrapExistingBarrier. They must occur only where
-        // bars[i] is false.
+        // FIXME: If bars[i] is true, wrapping a non-LOCAL pre-existing
+        // barrier is not enough to satisfy LDS ordering.  For now we rely on
+        // the producer to place such barriers only where no local fence is
+        // needed.
         wrapExistingBarrier(b, loc, clusterOps[i], exBar->second,
                             anyHasPriority, emitPriorityAtBoundary);
       } else {
@@ -650,12 +605,9 @@ static void emitPipelinedFlat(SmallVector<scf::ExecuteRegionOp> &clusterOps,
     clusterBlocks.push_back(&exec->getRegion(0).front());
   }
 
-  BufferIndexAnalysis bufferIndex(
-      clusterOps.front()->getParentOfType<triton::FuncOp>());
   SmallVector<BlockInfo> clusterInfo;
   for (auto *cb : clusterBlocks)
-    clusterInfo.push_back(
-        buildBlockInfoFromBlock(cb, allocation, &bufferIndex));
+    clusterInfo.push_back(buildBlockInfoFromBlock(cb, allocation));
 
   bool anyHasPriority = llvm::any_of(clusterOps, [](scf::ExecuteRegionOp op) {
     return op->hasAttr("triton.warp_pipeline.priority");
@@ -683,9 +635,9 @@ static void emitPipelinedFlat(SmallVector<scf::ExecuteRegionOp> &clusterOps,
     }
 
     if (existingBarrier) {
-      // FIXME: Non-LOCAL barriers other than group waits do not acquire
-      // a local fence in wrapExistingBarrier. They must occur only where
-      // bars[i] is false.
+      // FIXME: If bars[i] is true, wrapping a non-LOCAL pre-existing barrier
+      // is not enough to satisfy LDS ordering.  For now we rely on the
+      // producer to place such barriers only where no local fence is needed.
       wrapExistingBarrier(b, loc, clusterOps[i], existingBarrier,
                           anyHasPriority);
     } else {

@@ -142,14 +142,7 @@ void *XpuRuntime::getDevice() {
   return keyFn(q);
 }
 
-void *XpuRuntime::getPriorityStream() {
-  // Unlike CUDA/HIP, SYCL has no separate priority-queue concept here, and
-  // queues are owned by the Triton driver (see `destroyStream`); reuse the
-  // one queue XpuRuntime tracks (see `syclQueue_` in XpuRuntime.h -- single
-  // GPU only) so callers that need *a* valid stream (e.g.
-  // `processHostBuffer`) don't get a null one.
-  return requireSyclQueue();
-}
+void *XpuRuntime::getPriorityStream() { return nullptr; }
 
 void XpuRuntime::synchronizeStream(void *stream) {
   static auto waitFn =
@@ -171,18 +164,7 @@ void XpuRuntime::processHostBuffer(
     uint8_t *hostBuffer, size_t hostBufferSize, uint8_t *deviceBuffer,
     size_t deviceBufferSize, void *stream,
     std::function<void(uint8_t *, size_t)> callback) {
-  int64_t chunkSize = std::min(hostBufferSize, deviceBufferSize);
-  int64_t sizeLeftOnDevice = deviceBufferSize;
-  while (chunkSize > 0) {
-    copyDeviceToHostAsync(reinterpret_cast<void *>(hostBuffer), deviceBuffer,
-                          chunkSize, stream);
-    synchronizeStream(stream);
-    callback(hostBuffer, chunkSize);
-    hostBuffer += chunkSize;
-    deviceBuffer += chunkSize;
-    sizeLeftOnDevice -= chunkSize;
-    chunkSize =
-        std::min(static_cast<int64_t>(hostBufferSize), sizeLeftOnDevice);
-  }
+  throw std::runtime_error(
+      "[PROTON] XpuRuntime::processHostBuffer is not implemented on XPU.");
 }
 } // namespace proton

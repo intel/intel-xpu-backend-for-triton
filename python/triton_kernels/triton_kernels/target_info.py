@@ -9,7 +9,7 @@ from triton.language.target_info import (
     is_hip_cdna4,
     is_xpu,
     is_xpu_cri,
-    is_hip_cdna5,
+    is_hip_gfx1250,
 )
 
 __all__ = [
@@ -26,7 +26,7 @@ __all__ = [
     "is_hip_cdna4",
     "is_xpu",
     "is_xpu_cri",
-    "is_hip_cdna5",
+    "is_hip_gfx1250",
     "num_sms",
 ]
 
