@@ -346,11 +346,20 @@ if(TRITON_BUILD_PYTHON_MODULE)
   # On Windows, Python3::Module links python3XX.lib, which pins the extension
   # to one Python version. Python3::SABIModule links python3.lib instead.
   # Other platforms do not link libpython, so Python3::Module is fine there.
+  # Minimum Python version of the stable-ABI wheel; single source for both
+  # find_package and Py_LIMITED_API.
+  set(TRITON_STABLE_ABI_MIN_PYTHON_MAJOR 3)
+  set(TRITON_STABLE_ABI_MIN_PYTHON_MINOR 12)
+  set(TRITON_STABLE_ABI_MIN_PYTHON
+      "${TRITON_STABLE_ABI_MIN_PYTHON_MAJOR}.${TRITON_STABLE_ABI_MIN_PYTHON_MINOR}")
+  math(EXPR TRITON_PY_LIMITED_API
+       "(${TRITON_STABLE_ABI_MIN_PYTHON_MAJOR} << 24) | (${TRITON_STABLE_ABI_MIN_PYTHON_MINOR} << 16)"
+       OUTPUT_FORMAT HEXADECIMAL)
   if(TRITON_STABLE_ABI AND WIN32)
     if(CMAKE_VERSION VERSION_LESS 3.26)
       message(FATAL_ERROR "TRITON_STABLE_ABI on Windows requires CMake >= 3.26 (Development.SABIModule)")
     endif()
-    find_package(Python3 3.12 REQUIRED COMPONENTS Development.Module Development.SABIModule Interpreter)
+    find_package(Python3 ${TRITON_STABLE_ABI_MIN_PYTHON} REQUIRED COMPONENTS Development.Module Development.SABIModule Interpreter)
     set(TRITON_PYTHON_MODULE_LIB Python3::SABIModule)
   else()
     find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
@@ -363,7 +372,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     add_executable(Python::Interpreter ALIAS Python3::Interpreter)
   endif()
   if(NOT TARGET Python::Module)
-    add_library(Python::Module ALIAS Python3::Module)
+    add_library(Python::Module ALIAS ${TRITON_PYTHON_MODULE_LIB})
     set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
     set(Python_INCLUDE_DIRS "${Python3_INCLUDE_DIRS}")
     set(Python_SOABI "${Python3_SOABI}")
@@ -374,7 +383,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
   nanobind_build_library(nanobind-static)
   if(TRITON_STABLE_ABI)
-    target_compile_definitions(nanobind-static PUBLIC Py_LIMITED_API=0x030C0000)
+    target_compile_definitions(nanobind-static PUBLIC Py_LIMITED_API=${TRITON_PY_LIMITED_API})
   endif()
   target_link_libraries(nanobind-static PRIVATE ${TRITON_PYTHON_MODULE_LIB})
 
