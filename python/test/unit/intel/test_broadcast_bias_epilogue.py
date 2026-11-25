@@ -15,7 +15,7 @@ from triton._internal_testing import is_xpu
 @triton.jit
 def _addmm_broadcast_bias_kernel(a_ptr, b_ptr, c_ptr, bias_ptr, M, N, K, stride_am, stride_bk, stride_cm,
                                  stride_bias_m: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
-                                 BLOCK_K: tl.constexpr, DESC_STORE: tl.constexpr):
+                                 BLOCK_K: tl.constexpr, DESC_STORE: tl.constexpr, ROW_BIAS: tl.constexpr = False):
     pid_n = tl.program_id(0)
     pid_m = tl.program_id(1)
     a_desc = tl.make_tensor_descriptor(a_ptr, (M, K), (stride_am, 1), (BLOCK_M, BLOCK_K))
@@ -29,9 +29,13 @@ def _addmm_broadcast_bias_kernel(a_ptr, b_ptr, c_ptr, bias_ptr, M, N, K, stride_
     rm = row + tl.arange(0, BLOCK_M)
     rn = col + tl.arange(0, BLOCK_N)
     mask = (rm < M)[:, None] & (rn < N)[None, :]
-    # stride_bias_m is 0: every row of the pointer tensor repeats the same BLOCK_N addresses.
-    bias = tl.load(bias_ptr + rm[:, None] * stride_bias_m + rn[None, :], mask=mask, other=0,
-                   eviction_policy="evict_last").to(tl.float32)
+    if ROW_BIAS:
+        # A [1, BLOCK_N] row: in the DPAS encoding a thread holds each of its bias elements in several registers.
+        bias = tl.load(bias_ptr + rn[None, :]).to(tl.float32)
+    else:
+        # stride_bias_m is 0: every row of the pointer tensor repeats the same BLOCK_N addresses.
+        bias = tl.load(bias_ptr + rm[:, None] * stride_bias_m + rn[None, :], mask=mask, other=0,
+                       eviction_policy="evict_last").to(tl.float32)
     result = (acc + bias).to(c_ptr.dtype.element_ty)
     if DESC_STORE:
         c_desc = tl.make_tensor_descriptor(c_ptr, (M, N), (stride_cm, 1), (BLOCK_M, BLOCK_N))
@@ -121,6 +125,25 @@ def test_broadcast_bias_epilogue(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps, 
         _bias_load_feeds_dot_in_dpas(ttgir)
     else:
         assert 'ttig.block_io = "row_major"' not in re.search(r"= tt\.load .*", ttgir).group(0)
+
+
+@pytest.mark.skipif(not _has_dpas_and_2d_block_io(), reason="the bias is loaded in the DPAS encoding")
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_warps", [(64, 64, 64, 16), (64, 64, 64, 4), (64, 256, 64, 16)])
+@pytest.mark.parametrize("M, N, K", [(256, 256, 128), (65, 129, 64), (200, 300, 96), (256, 300, 96)])
+def test_row_bias_epilogue(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps, device, with_allocator):
+    torch.manual_seed(0)
+    n_pitch = triton.cdiv(N, 8) * 8
+    a = torch.randn((M, K), dtype=torch.float16, device=device)
+    b = torch.randn((K, n_pitch), dtype=torch.float16, device=device)[:, :N]
+    c = torch.empty((M, n_pitch), dtype=torch.float16, device=device)[:, :N]
+    # The row load is unmasked, so the last column tile reads past N: allocate whole BLOCK_N tiles.
+    bias = torch.randn((triton.cdiv(N, BLOCK_N) * BLOCK_N, ), dtype=torch.float16, device=device)[:N]
+
+    grid = (triton.cdiv(N, BLOCK_N), triton.cdiv(M, BLOCK_M))
+    _addmm_broadcast_bias_kernel[grid](a, b, c, bias, M, N, K, a.stride(0), b.stride(0), c.stride(0), stride_bias_m=0,
+                                       BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, DESC_STORE=True,
+                                       ROW_BIAS=True, num_warps=num_warps, num_stages=2)
+    torch.testing.assert_close(c.float(), torch.addmm(bias, a, b).float(), atol=5e-2, rtol=1e-2)
 
 
 @pytest.mark.skipif(not _has_dpas_and_2d_block_io(), reason="the bias is loaded in the DPAS encoding")

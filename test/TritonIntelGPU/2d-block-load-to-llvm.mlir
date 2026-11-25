@@ -192,7 +192,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %pitch = arith.constant 64 : i32
     %height = arith.constant 1 : i32
     %width = arith.constant 64 : i32
-    // CHECK: [[ANY:%.*]] = llvm.or [[PRED0:%.*]], [[PRED1:%.*]] : i1
+    // CHECK: [[PRED0:%.*]] = llvm.trunc {{.*}} : i8 to i1
+    // CHECK: [[PRED1:%.*]] = llvm.trunc {{.*}} : i8 to i1
+    // CHECK: [[ANY:%.*]] = llvm.or [[PRED0]], [[PRED1]] : i1
     // CHECK: [[Y:%.*]] = llvm.select [[ANY]], {{.*}} : i1, i32
     // CHECK: triton_gen.2Dblockload {{.*}}, [[Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2
     // CHECK-NOT: triton_gen.2Dblockload
@@ -252,6 +254,57 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-NOT: triton_gen.2Dblockload
     // CHECK: llvm.return
     %5 = ttig.2d_block_load_from_ptr %4, %pitch, %height, %width, %mask, %other {row_major} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, i32, i32, tensor<64x32xi1, #dot0>, tensor<64x32xf16, #dot0>) -> tensor<64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Messages at equal offsets in every dim share one load and one address:
+// COM: the 16 registers that replicate this [1, 64] DPAS row (#8829) would
+// COM: otherwise each shuffle the address and re-read the same row.
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 1], A = [16, 16], B = [16, 16], C = [16, 16]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [16, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_from_ptr_replicated_row
+  tt.func public @block_load_from_ptr_replicated_row(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %col: i32) {
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma}>>
+    %1 = tt.splat %col : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma}>>
+    %2 = arith.addi %1, %0 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma}>>
+    %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma}>> -> tensor<1x64xi32, #mma>
+    %4 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<1x64x!tt.ptr<bf16>, #mma>
+    %5 = tt.addptr %4, %3 : tensor<1x64x!tt.ptr<bf16>, #mma>, tensor<1x64xi32, #mma>
+    %pitch = arith.constant 192 : i32
+    %height = arith.constant 1 : i32
+    %width = arith.constant 32 : i32
+    // CHECK: llvm.call spir_funccc @_Z17sub_group_shufflelj
+    // CHECK-NOT: @_Z17sub_group_shufflelj
+    // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 1, v_blocks = 1
+    // CHECK-NOT: triton_gen.2Dblockload
+    // CHECK-NOT: @_Z17sub_group_shufflelj
+    // CHECK: llvm.return
+    %6 = ttig.2d_block_load_from_ptr %5, %pitch, %height, %width {row_major} : (tensor<1x64x!tt.ptr<bf16>, #mma>, i32, i32, i32) -> tensor<1x64xbf16, #mma>
+    tt.return
+  }
+
+  // COM: A non-broadcast load of single-row messages also has base_height 1,
+  // COM: but its messages read different rows (w and w + 16): no shared load.
+  // CHECK-LABEL: @block_load_from_ptr_single_row_messages
+  tt.func @block_load_from_ptr_single_row_messages(%ptrs: tensor<32x16x!tt.ptr<bf16>, #blocked>, %pitch: i32, %width: i32) {
+    %height = arith.constant 1 : i32
+    // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} tile_height = 1,
+    %0 = ttig.2d_block_load_from_ptr %ptrs, %pitch, %height, %width {row_major} : (tensor<32x16x!tt.ptr<bf16>, #blocked>, i32, i32, i32) -> tensor<32x16xbf16, #blocked>
+    tt.return
+  }
+
+  // COM: Copies of one message share its predicate, so a predicated descriptor
+  // COM: load keeps its NaN padding instead of the broadcast-row zero fill.
+  // CHECK-LABEL: @block_load_replicated_row_pad_nan
+  tt.func public @block_load_replicated_row_pad_nan(%arg0: !tt.ptr<bf16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32) {
+    // CHECK: llvm.select {{.*}} : vector<1xi1>, vector<1xbf16>
+    // CHECK-NOT: triton_gen.2Dblockload
+    // CHECK: llvm.return
+    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] batch_offsets[%arg6] batch_shapes[%arg7] {row_major, pad_nan} : !tt.ptr<bf16> -> tensor<1x64xbf16, #mma>
     tt.return
   }
 }
