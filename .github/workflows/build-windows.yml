@@ -33,7 +33,7 @@ jobs:
       - name: Install Python
         uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: '3.12'  # TEMP: abi3 diagnostics
 
       - name: Clean up old workspaces
         shell: bash
@@ -53,13 +53,37 @@ jobs:
       # version in pypi, so instead of installing ninja with pip we use a preinstalled 1.12.1 on the
       # runner.
       - name: Setup Triton
+        env:
+          TRITON_STABLE_ABI: 'ON'  # TEMP: abi3 diagnostics
+          TRITON_APPEND_CMAKE_ARGS: -DCMAKE_VERBOSE_MAKEFILE=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  # TEMP
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
-          pip install -U pybind11 cmake
+          pip install -U pybind11 cmake pefile
           $env:MAX_JOBS = $env:NUMBER_OF_PROCESSORS
-          pip install -v .
+          pip wheel -v . --no-deps -w dist
+
+      # TEMP: abi3 diagnostics
+      - name: Inspect abi3 wheel
+        if: ${{ always() }}
+        run: |
+          .venv\Scripts\activate.ps1
+          cd ${{ env.NEW_WORKSPACE }}
+          python scripts\tmp_abi3_diag.py dist build
+
+      # TEMP: abi3 diagnostics
+      - name: Install Python 3.13
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      # TEMP: abi3 diagnostics
+      - name: Import wheel on newer Python
+        run: |
+          python -m venv ..\venv313
+          ..\venv313\Scripts\python -m pip install (Get-Item ${{ env.NEW_WORKSPACE }}\dist\*.whl)
+          ..\venv313\Scripts\python -c "import triton; print(triton.__version__)"
 
       - name: Clean
         if: ${{ always() }}
