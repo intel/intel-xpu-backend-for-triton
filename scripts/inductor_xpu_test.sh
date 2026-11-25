@@ -53,6 +53,35 @@ if (( $EUID == 0 )); then
     ulimit -n 1048576
 fi
 
+# TEST BRANCH ONLY: issue-style performance runs (batch size 2, cold-start latency), repeated sequentially
+# with fresh Triton/Inductor caches; both the compiled (Triton) and eager times are logged per repetition.
+if [[ $SCENARIO == "performance" && -n "$MODEL_ONLY" ]]; then
+    case $DT in
+        amp_bf16) dt_flags="--amp --amp-dtype=bfloat16" ;;
+        amp_fp16) dt_flags="--amp --amp-dtype=float16" ;;
+        *) dt_flags="--${DT}" ;;
+    esac
+    BS2_REPS=${BS2_REPS:-6}
+    BS2_ITERS=${BS2_ITERS:-30}
+    SUMMARY=${LOG_DIR}/bs2_summary.csv
+    echo "model,dtype,mode,rep,host,compiled_ms,eager_ms,speedup" > ${SUMMARY}
+    for rep in $(seq 1 ${BS2_REPS}); do
+        export TRITON_CACHE_DIR=${WORKSPACE}/.bs2_cache/triton_${rep}
+        export TORCHINDUCTOR_CACHE_DIR=${WORKSPACE}/.bs2_cache/inductor_${rep}
+        rm -rf ${TRITON_CACHE_DIR} ${TORCHINDUCTOR_CACHE_DIR}
+        REP_CSV=${LOG_DIR}/${LOG_NAME}_rep${rep}.csv
+        ZE_AFFINITY_MASK=${CARD} python benchmarks/dynamo/${SUITE}.py --${SCENARIO} ${dt_flags} -d${DEVICE} -n${BS2_ITERS} ${Mode_extra} ${Shape_extra} ${partition_flags} ${Model_only_extra} --cold-start-latency --batch-size=2 --backend=inductor --timeout=4800 --output=${REP_CSV} 2>&1 | tee ${LOG_DIR}/${LOG_NAME}_rep${rep}.log
+        awk -F, -v m="${MODEL_ONLY}" -v d="${DT}" -v mode="${MODE}" -v r="${rep}" -v h="$(hostname)" \
+            'NR>1 && $2!="geomean" && $4+0>0 {sp=$4; lat=$5} END{printf "%s,%s,%s,%s,%s,%.4f,%.4f,%.4f\n", m, d, mode, r, h, lat, lat*sp, sp}' \
+            ${REP_CSV} >> ${SUMMARY}
+    done
+    # keep the canonical names so the later CI steps find a result
+    cp ${LOG_DIR}/${LOG_NAME}_rep${BS2_REPS}.csv ${LOG_DIR}/${LOG_NAME}.csv
+    cp ${LOG_DIR}/${LOG_NAME}_rep${BS2_REPS}.log ${LOG_DIR}/${LOG_NAME}.log
+    cat ${SUMMARY}
+    exit 0
+fi
+
 if [[ $DT == "amp_bf16" ]]; then
     ZE_AFFINITY_MASK=${CARD} python benchmarks/dynamo/${SUITE}.py --${SCENARIO} --amp --disable-cudagraphs -d${DEVICE} -n10 --dashboard ${Mode_extra} ${Shape_extra} ${partition_flags} ${Model_only_extra} --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv 2>&1 | tee ${LOG_DIR}/${LOG_NAME}.log
 elif [[ $DT == "amp_fp16" ]]; then
