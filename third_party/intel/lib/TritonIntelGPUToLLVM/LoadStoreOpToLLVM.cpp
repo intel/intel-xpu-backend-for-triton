@@ -489,11 +489,6 @@ struct LoadStoreConversionBase {
                                         boundaryCheck.end());
     SetVector<unsigned> blockLevelProtect(blockLevelCheck.begin(),
                                           blockLevelCheck.end());
-    // Element offsets are computed in i64 so an element 2^31 or more elements
-    // past the base does not wrap.
-    auto toI64 = [&](Value v) -> Value {
-      return v.getType().isInteger(64) ? v : b.sext(i64_ty, v);
-    };
     SmallVector<Value> ptrElems(numElems);
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
@@ -508,10 +503,10 @@ struct LoadStoreConversionBase {
 
       // Get the LLVM values for pointers
       Value offset = linearize(
-          indicesInTensor, strides, b.i64_val(0),
+          indicesInTensor, strides, b.i32_val(0),
           [&](const Value &index, const Value &stride, const Value &off) {
             // off = off + index * stride
-            return b.add(b.mul(toI64(index), toI64(stride)), off);
+            return b.add(b.mul(index, b.trunc(i32_ty, stride)), off);
           });
 
       ptrElems[i] = b.gep(ptr_ty(rewriter.getContext(), 1 /*global*/),
