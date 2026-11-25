@@ -17,6 +17,7 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
@@ -1338,8 +1339,67 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
   });
 }
 
+// One of the gather admission checks (all are listed at the DescriptorGatherOp
+// case below): column offset 0, elements of at least 8 bits (so no i1), and a
+// row access proven 16-byte aligned.
+// Power-of-two divisors, not floors, keep non-power-of-two hints from
+// overclaiming.
+static bool isAlignedNativeGather(triton::DescriptorGatherOp op,
+                                  intel::ModuleAxisInfoAnalysis &axisInfo) {
+  if (!matchPattern(op.getYOffset(), m_Zero()))
+    return false;
+  Type elemTy = getElementTypeOrSelf(op.getType());
+  if (!elemTy.isIntOrFloat() || elemTy.getIntOrFloatBitWidth() < 8)
+    return false;
+  AxisInfo *info = axisInfo.getAxisInfo(op.getDesc());
+  if (!info || info->getRank() < 2)
+    return false;
+  constexpr int64_t kAlignBytes = 16;
+  auto pow2Divisor = [](int64_t v) { return v & -v; };
+  int64_t elemBytes = elemTy.getIntOrFloatBitWidth() / 8;
+  return pow2Divisor(info->getDivisibility(1)) >= kAlignBytes &&
+         pow2Divisor(info->getContiguity(1)) * elemBytes >= kAlignBytes;
+}
+
+// The two classes where IGC was shown to schedule the native lowering better
+// than the pointer expansion (B580), within their measured ranges: f16/bf16
+// tiles used only as tt.dot A operands, whose loads reach SLM unconverted, up
+// to 8 KiB per warp on 2 or 4 warps; and f8E4M3FN tiles used only by
+// tt.fp_to_fp at 2-4 KiB per warp on 4 warps.
+static bool isMeasuredNativeGatherClass(triton::DescriptorGatherOp op,
+                                        int numWarps) {
+  auto type = cast<RankedTensorType>(op.getType());
+  Type elemTy = type.getElementType();
+  int64_t bytesPerWarp = type.getNumElements() *
+                         elemTy.getIntOrFloatBitWidth() / 8 /
+                         std::max(numWarps, 1);
+  Value result = op.getResult();
+  if (elemTy.isF16() || elemTy.isBF16())
+    return (numWarps == 2 || numWarps == 4) && bytesPerWarp <= 8192 &&
+           !result.use_empty() &&
+           llvm::all_of(result.getUses(), [](OpOperand &use) {
+             return isa<triton::DotOp>(use.getOwner()) &&
+                    use.getOperandNumber() == 0;
+           });
+  return isa<Float8E4M3FNType>(elemTy) && numWarps == 4 &&
+         bytesPerWarp >= 2048 && bytesPerWarp <= 4096 && !result.use_empty() &&
+         llvm::all_of(result.getUsers(), [](Operation *user) {
+           return isa<triton::FpToFpOp>(user);
+         });
+}
+
 static llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
-collectCandidateMakeTensorDescOps(Operation *op) {
+collectCandidateMakeTensorDescOps(Operation *op, int numWarps,
+                                  bool nativeGatherClasses) {
+  const bool keepNativeGathers =
+      !tools::getBoolEnv("TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER");
+  // Built on the IR as it is now (after the greedy pre-rewrites), and only if
+  // a gather may stay native.
+  std::optional<intel::ModuleAxisInfoAnalysis> axisInfo;
+  if (keepNativeGathers && op->walk([](triton::DescriptorGatherOp) {
+                               return WalkResult::interrupt();
+                             }).wasInterrupted())
+    axisInfo.emplace(cast<ModuleOp>(op));
   llvm::SmallSetVector<triton::MakeTensorDescOp, 4> candidateMakeTensorDescOps;
   llvm::SmallSetVector<triton::MakeTensorDescOp, 4> unhandledMakeTensorDescOps;
   SmallVector<llvm::SmallSetVector<triton::MakeTensorDescOp, 4>> descGroups;
@@ -1368,12 +1428,33 @@ collectCandidateMakeTensorDescOps(Operation *op) {
                triton::intel::findDescriptorDefinitions(op.getDesc()))
             candidateMakeTensorDescOps.insert(d);
         })
-        .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
-              triton::DescriptorReduceOp>([&](auto op) {
-          for (triton::MakeTensorDescOp d :
-               triton::intel::findDescriptorDefinitions(op.getDesc()))
-            unhandledMakeTensorDescOps.insert(d);
+        .Case<triton::DescriptorGatherOp>([&](triton::DescriptorGatherOp op) {
+          // A gather stays native (lowered as ttig.descriptor_gather) only
+          // where that lowering matches the pointer expansion: zero padding,
+          // a unit last stride, isAlignedNativeGather and
+          // isMeasuredNativeGatherClass.
+          triton::intel::DescriptorDefinitions defs =
+              triton::intel::findDescriptorDefinitions(op.getDesc());
+          bool keepNative =
+              keepNativeGathers &&
+              defs.consistentPadding() == triton::PaddingOption::PAD_ZERO &&
+              defs.allSatisfy([](triton::MakeTensorDescOp d) {
+                return matchPattern(d.getStrides().back(), m_One());
+              }) &&
+              isAlignedNativeGather(op, *axisInfo) &&
+              (!nativeGatherClasses ||
+               isMeasuredNativeGatherClass(op, numWarps));
+          for (triton::MakeTensorDescOp d : defs)
+            (keepNative ? candidateMakeTensorDescOps
+                        : unhandledMakeTensorDescOps)
+                .insert(d);
         })
+        .Case<triton::DescriptorScatterOp, triton::DescriptorReduceOp>(
+            [&](auto op) {
+              for (triton::MakeTensorDescOp d :
+                   triton::intel::findDescriptorDefinitions(op.getDesc()))
+                unhandledMakeTensorDescOps.insert(d);
+            })
         .Case<triton::CallOp, triton::ReturnOp>([&](auto op) {
           // A descriptor in a function signature is unconditionally illegal
           // (see the `FuncOp` legality below), so a descriptor crossing a
@@ -1520,6 +1601,9 @@ static bool splitDirectDescriptorUses(
 class TritonRewriteTensorDescriptorToPointerPass
     : public triton::intel::impl::TritonRewriteTensorDescriptorToPointerBase<
           TritonRewriteTensorDescriptorToPointerPass> {
+public:
+  using Base::Base;
+
   void runOnOperation() override {
     Operation *op = getOperation();
 
@@ -1559,9 +1643,11 @@ class TritonRewriteTensorDescriptorToPointerPass
     // Split after the greedy pre-rewrites: they replace gathers/scatters with
     // new direct descriptor loads/stores, which the split must see.
     llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
-        candidateMakeTensorDescOps = collectCandidateMakeTensorDescOps(op);
+        candidateMakeTensorDescOps = collectCandidateMakeTensorDescOps(
+            op, numWarps, nativeGatherClasses);
     if (splitDirectDescriptorUses(op, candidateMakeTensorDescOps))
-      candidateMakeTensorDescOps = collectCandidateMakeTensorDescOps(op);
+      candidateMakeTensorDescOps =
+          collectCandidateMakeTensorDescOps(op, numWarps, nativeGatherClasses);
 
     mlir::ConversionTarget target(getContext());
     target.addDynamicallyLegalDialect<mlir::arith::ArithDialect,

@@ -457,6 +457,19 @@ LogicalResult tt::TritonGEN::Matrix2DBlockStoreOp::verify() {
   if (vBlocks != 1)
     return emitOpError("expecting v_blocks to be 1");
 
+  if (Attribute layout = (*this)->getAttr("triton_gen.genisa_row_layout")) {
+    auto module = (*this)->getParentOfType<ModuleOp>();
+    auto threadsPerWarp =
+        module->getAttrOfType<IntegerAttr>("ttg.threads-per-warp");
+    VectorType payloadType = getStoredVal().getType();
+    if (!isa<UnitAttr>(layout) || getElemSizeInBits() != 16 ||
+        getTileWidth() != 32 || !threadsPerWarp ||
+        threadsPerWarp.getInt() != 16 ||
+        !payloadType.getElementType().isInteger(16) ||
+        payloadType.getNumElements() != 2 * tileHeight)
+      return emitOpError("invalid GenISA row-oriented store payload");
+  }
+
   return success();
 }
 

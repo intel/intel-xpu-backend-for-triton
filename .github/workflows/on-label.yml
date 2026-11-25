@@ -69,7 +69,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'run-sglang-benchmarks')
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
-      python-version: "3.12"
+      python-version: "3.11"
 
   # ---- vLLM benchmarks ----
 

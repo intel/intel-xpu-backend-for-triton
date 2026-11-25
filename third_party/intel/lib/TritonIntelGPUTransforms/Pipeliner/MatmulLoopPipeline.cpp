@@ -2,6 +2,7 @@
 #include "Schedule.h"
 #include "include/triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/SCF/Transforms/Transforms.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
@@ -465,8 +466,11 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
   ttg::DotOperandEncodingAttr attr{nullptr};
   LDBG("Checking users of " << val);
   for (Operation *user : val.getUsers()) {
+    // A tt.dot_scaled takes its A and B operands in the same dot-operand
+    // layouts as a tt.dot; its scale operands have a linear layout and are
+    // rejected by the cast below.
     ttg::DotOperandEncodingAttr dotAttr =
-        isa<triton::DotOp>(user)
+        isa<triton::DotOp, triton::DotScaledOp>(user)
             ? dyn_cast<ttg::DotOperandEncodingAttr>(
                   cast<RankedTensorType>(val.getType()).getEncoding())
             : getDotEncodingFromUser(user);
@@ -731,6 +735,57 @@ createSchedule(scf::ForOp forOp, int numStages) {
   return schedule;
 }
 
+/// Give a load with a boundary-check mask (see `ttgi::matchBoundaryCheckMask`)
+/// its own copy of the mask computation. The load and its prefetch otherwise
+/// share the mask, which the schedule puts in the prefetch's stage, so the
+/// expander carries it into the load's stage as a loop iteration argument.
+/// LowerTo2DBlockLoad cannot see the compare through that, and keeps the
+/// per-element mask instead of absorbing it into the 2D block surface. The
+/// copy lands in the load's stage, where the expander offsets the induction
+/// variable to the load's own iteration.
+static void rematerializeBoundaryMask(scf::ForOp forOp, tt::LoadOp loadOp) {
+  Value mask = loadOp.getMask();
+  auto tensorTy = dyn_cast<RankedTensorType>(loadOp.getType());
+  if (!mask || forOp.isDefinedOutsideOfLoop(mask) || !tensorTy ||
+      tensorTy.getRank() < 2 ||
+      !loadOp->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
+    return;
+  unsigned rank = tensorTy.getRank();
+  unsigned contiguousDim = ttgi::isMemoryRowMajor(loadOp) ? rank - 1 : rank - 2;
+  // A broadcast pitch dim only refuses a row bound, which LowerTo2DBlockLoad
+  // checks again; assuming none here at worst copies a mask it keeps.
+  if (!ttgi::matchBoundaryCheckMask(mask, loadOp.getOther(),
+                                    tensorTy.getShape(), contiguousDim,
+                                    /*pitchDimIsBroadcast=*/false, loadOp))
+    return;
+
+  // The in-loop slice of the mask. Each value it reads must be the induction
+  // variable or defined outside the loop: another iteration argument would
+  // be read in the load's stage at a different iteration than the mask was.
+  Block *body = forOp.getBody();
+  DenseSet<Operation *> slice;
+  SmallVector<Value> worklist{mask};
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (forOp.isDefinedOutsideOfLoop(v) || v == forOp.getInductionVar())
+      continue;
+    Operation *def = v.getDefiningOp();
+    if (!def || def->getBlock() != body || def->getNumRegions() != 0 ||
+        !isMemoryEffectFree(def))
+      return;
+    if (slice.insert(def).second)
+      llvm::append_range(worklist, def->getOperands());
+  }
+
+  OpBuilder builder(loadOp);
+  IRMapping mapping;
+  for (Operation &op : body->without_terminator())
+    if (slice.contains(&op))
+      builder.clone(op, mapping);
+  loadOp.getMaskMutable().assign(mapping.lookup(mask));
+  LDBG("Rematerialized boundary-check mask for: " << *loadOp);
+}
+
 bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
                                         const PipelineTarget &target,
                                         mlir::scf::PipeliningOption &options) {
@@ -777,6 +832,9 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
 
   // 2. Create the prefetching operations for the loads collected.
   createPrefetchOps(forOp, candidates, useAnnotations);
+  for (const PrefetchCandidate &candidate : candidates)
+    if (auto loadOp = dyn_cast<tt::LoadOp>(candidate.op))
+      rematerializeBoundaryMask(forOp, loadOp);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.

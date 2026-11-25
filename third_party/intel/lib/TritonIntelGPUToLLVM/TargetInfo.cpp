@@ -230,9 +230,25 @@ Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
   return LLVM::intel::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                            int i) const {
-  return LLVM::intel::shuffleUp(loc, rewriter, val, i);
+std::pair<Value, Value> TargetInfo::shuffleUp(RewriterBase &rewriter,
+                                              Location loc, Value val,
+                                              int delta) const {
+  // The SPIR-V lowering of `gpu.shuffle` does not compute its `valid` result,
+  // so derive the bounds predicate from the lane id.
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value sourceInBounds = b.icmp_sge(getLaneId(rewriter, loc), b.i32_val(delta));
+  return {LLVM::intel::shuffleUp(loc, rewriter, val, delta), sourceInBounds};
+}
+
+std::pair<Value, Value> TargetInfo::shuffleDown(RewriterBase &rewriter,
+                                                Location loc, Value val,
+                                                int delta) const {
+  // As for shuffleUp, derive the bounds predicate from the lane id.
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  unsigned warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
+  Value sourceInBounds =
+      b.icmp_ult(getLaneId(rewriter, loc), b.i32_val(warpSize - delta));
+  return {LLVM::intel::shuffleDown(loc, rewriter, val, delta), sourceInBounds};
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
@@ -341,9 +357,9 @@ bool TargetInfo::warpScan(RewriterBase &rewriter, Location loc,
     return false;
 
   // The builtin walks the lanes in lane order. A full-sub-group scan axis
-  // implies unit thread stride for every layout `ScanLoweringHelper::
-  // isSupported` admits today, but gate on it rather than assert, so widening
-  // that set cannot silently start scanning the wrong lanes in a release build.
+  // implies unit thread stride for every layout `BlockedScanLayout::get`
+  // admits today, but gate on it rather than assert, so widening that set
+  // cannot silently start scanning the wrong lanes in a release build.
   if (threadStride != 1)
     return false;
 

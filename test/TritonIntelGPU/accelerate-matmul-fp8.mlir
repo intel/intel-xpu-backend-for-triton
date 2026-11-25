@@ -51,7 +51,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [16, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 4], order = [1, 0]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate_fp4, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: tt.func public @kernel_fp4_bdpas(
   // CHECK-SAME:      %[[A:.*]]: tensor<128x64xi8, #blocked>,
   // CHECK-SAME:      %[[SCALE_A:.*]]: tensor<128x4xi8, #blocked1>,
@@ -402,7 +402,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [16, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 4], order = [1, 0]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate_fp4, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: tt.func public @kernel_fp4x2_bdpas(
   // CHECK-SAME:      %[[A:.*]]: tensor<128x64x!tt.fp4e2m1x2, #blocked>,
   // CHECK-SAME:      %[[SCALE_A:.*]]: tensor<128x4xi8, #blocked1>,
@@ -438,5 +438,54 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
     %52 = ttg.convert_layout %res : tensor<128x128xf32, #blocked> -> tensor<128x128xf32, #blocked1>
     tt.store %arg3, %52 : tensor<128x128x!tt.ptr<f32>, #blocked1>
     tt.return
+  }
+}
+
+// -----
+
+// COM: Scaled and BF8 DPAS without the FP4 feature: FP4 x FP4 (i8 or !tt.fp4e2m1x2) is decomposed into a tt.dot.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [16, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 4], order = [1, 0]}>
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func public @kernel_fp4_decomposed_without_fp4(
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.dot {{.*}} -> tensor<128x128xf32, #mma{{[0-9]*}}>
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func public @kernel_fp4_decomposed_without_fp4(%a: tensor<128x64xi8, #blocked2>, %scale_a: tensor<128x4xi8, #blocked1>, %b: tensor<64x128xi8, #blocked>, %scale_b: tensor<128x4xi8, #blocked1>) -> tensor<128x128xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %0 = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<128x64xi8, #blocked2>, tensor<128x4xi8, #blocked1> * tensor<64x128xi8, #blocked>, tensor<128x4xi8, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.return %0 : tensor<128x128xf32, #blocked>
+  }
+
+  // CHECK-LABEL: tt.func public @kernel_fp4x2_decomposed_without_fp4(
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.dot {{.*}} -> tensor<128x128xf32, #mma{{[0-9]*}}>
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func public @kernel_fp4x2_decomposed_without_fp4(%a: tensor<128x64x!tt.fp4e2m1x2, #blocked2>, %scale_a: tensor<128x4xi8, #blocked1>, %b: tensor<64x128x!tt.fp4e2m1x2, #blocked>, %scale_b: tensor<128x4xi8, #blocked1>) -> tensor<128x128xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %0 = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<128x64x!tt.fp4e2m1x2, #blocked2>, tensor<128x4xi8, #blocked1> * tensor<64x128x!tt.fp4e2m1x2, #blocked>, tensor<128x4xi8, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.return %0 : tensor<128x128xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: Scaled DPAS without BF8: FP4 x FP4 is decomposed instead of reaching the Xe2 DPAS lowering, which has no FP4 case.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [16, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 4], order = [1, 0]}>
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func public @kernel_fp4_decomposed_without_bf8(
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.dot {{.*}} -> tensor<128x128xf32, #mma{{[0-9]*}}>
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func public @kernel_fp4_decomposed_without_bf8(%a: tensor<128x64xi8, #blocked2>, %scale_a: tensor<128x4xi8, #blocked1>, %b: tensor<64x128xi8, #blocked>, %scale_b: tensor<128x4xi8, #blocked1>) -> tensor<128x128xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %0 = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<128x64xi8, #blocked2>, tensor<128x4xi8, #blocked1> * tensor<64x128xi8, #blocked>, tensor<128x4xi8, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.return %0 : tensor<128x128xf32, #blocked>
   }
 }

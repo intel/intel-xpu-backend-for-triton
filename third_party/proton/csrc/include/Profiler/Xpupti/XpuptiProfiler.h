@@ -13,6 +13,9 @@ public:
 private:
   struct XpuptiProfilerPimpl;
 
+  void startOp(const Scope &scope) override;
+  void stopOp(const Scope &scope) override;
+
   virtual void
   doSetMode(const std::vector<std::string> &modeAndOptions) override;
 };

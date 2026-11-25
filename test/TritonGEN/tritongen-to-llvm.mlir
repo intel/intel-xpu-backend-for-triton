@@ -167,11 +167,12 @@ llvm.func @triton_gen.sub_group_block_read(%ptr: !llvm.ptr<1>) {
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z31intel_sub_group_block_write_us2PU3AS3tDv2_t(!llvm.ptr<3>, vector<2xi16>) attributes {memory_effects = #llvm.memory_effects<other = none, argMem = readwrite, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
+// CHECK: llvm.func spir_funccc @_Z31intel_sub_group_block_write_us2PU3AS3tDv2_t(!llvm.ptr<3>, vector<2xi16>) attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = readwrite, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.sub_group_block_write(%ptr: !llvm.ptr<3>, %val : vector<2xi16>) {
   // CHECK:     llvm.func @triton_gen.sub_group_block_write(%arg0: !llvm.ptr<3>, %arg1: vector<2xi16>) {
-  // CHECK:       llvm.call spir_funccc @_Z31intel_sub_group_block_write_us2PU3AS3tDv2_t(%arg0, %arg1) {{.*}} : (!llvm.ptr<3>, vector<2xi16>) -> ()
+  // CHECK:       llvm.call spir_funccc @_Z31intel_sub_group_block_write_us2PU3AS3tDv2_t(%arg0, %arg1) {convergent,
+  // CHECK-SAME:  : (!llvm.ptr<3>, vector<2xi16>) -> ()
   triton_gen.sub_group_block_write %ptr, %val : !llvm.ptr<3>, vector<2xi16>
   llvm.return
 }
@@ -407,7 +408,8 @@ module attributes {ttig.support_subgroup_bitcast_shuffle} {
 
 llvm.func @triton_gen.sub_group_gather_load(%addrs: vector<32xi64>, %preds: vector<32xi1>) -> vector<1xi64> {
   // CHECK-LABEL: llvm.func @triton_gen.sub_group_gather_load(
-  // CHECK: [[RET:%.*]] = llvm.inline_asm{{.*}}"{{.*}}lsc_load.ugm{{.*}}", "=rw,rw.u,rw.u" {{.*}} : (vector<32xi64>, vector<32xi1>) -> vector<1xi64>
+  // Predicated-off channels are zeroed after the load, from a predicate computed before it.
+  // CHECK: [[RET:%.*]] = llvm.inline_asm{{.*}}"{{.*}}cmp.ne (M1_NM, 32) NPRED 0x1:b $2{{.*}}lsc_load.ugm{{.*}}\0A  (NPRED) mov (M1_NM, 32) RET(0, 0)<1> 0x0:uq\0A}", "=rw,rw.u,rw.u" {{.*}} : (vector<32xi64>, vector<32xi1>) -> vector<1xi64>
   // CHECK: llvm.return [[RET]] : vector<1xi64>
   %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> vector<1xi64>
   llvm.return %0 : vector<1xi64>

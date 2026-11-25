@@ -17,39 +17,6 @@ using namespace mlir::triton::gpu::intel;
 
 namespace {
 
-class CachingBuilder : public TritonLLVMOpBuilder {
-public:
-  CachingBuilder(Location loc, OpBuilder &builder)
-      : TritonLLVMOpBuilder(loc, builder) {}
-
-  Value dense_val(ShapedType type, ArrayRef<Attribute> values) const {
-    auto attr = DenseElementsAttr::get(type, values);
-    return getOrCreateConstant(type, attr);
-  }
-
-  Value i8_val(int64_t val) const { return int_val(8, val); }
-  Value i32_val(int64_t val) const { return int_val(32, val); }
-
-  Value int_val(unsigned bitwidth, int64_t val) const {
-    IntegerType type = builder->getIntegerType(bitwidth);
-    IntegerAttr attr = builder->getIntegerAttr(type, val);
-    return getOrCreateConstant(type, attr);
-  }
-
-private:
-  mutable DenseMap<std::pair<Type, TypedAttr>, Value> cache;
-
-  Value getOrCreateConstant(Type type, TypedAttr attr) const {
-    auto key = std::make_pair(type, attr);
-    auto it = cache.find(key);
-    if (it != cache.end())
-      return it->second;
-    auto cst = LLVM::ConstantOp::create(*builder, loc, type, attr);
-    cache[key] = cst;
-    return cst;
-  }
-};
-
 class Fp4ToFpOpPattern : public ConvertOpToLLVMPattern<Fp4ToFpOp> {
 public:
   Fp4ToFpOpPattern(LLVMTypeConverter &typeConverter, PatternBenefit benefit)
@@ -62,8 +29,8 @@ public:
     assert(elemTy == f16_ty || elemTy == bf16_ty);
 
     Location loc = op.getLoc();
-    Value src = adaptor.getSrc();
-    auto i8Ty = rewriter.getI8Type();
+    SmallVector<Value> srcVals =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
 
     if (hasModuleAttr(
             op.getOperation(),
@@ -81,8 +48,7 @@ public:
         return convertWithFunctionCall(rw, v, baseName, i4Ty, elemTy);
       };
 
-      auto res = vectorize(convertFn, loc, rewriter,
-                           unpackLLElements(loc, src, rewriter), 8);
+      auto res = vectorize(convertFn, loc, rewriter, srcVals, 8);
       if (!res.empty()) {
         rewriter.replaceOp(op, packLLElements(loc, getTypeConverter(), res,
                                               rewriter, op.getType()));
@@ -90,226 +56,51 @@ public:
       }
     }
 
-    CachingBuilder b(loc, rewriter);
-    // Create a constant vector containing all the possible values.
-    Value table;
-    {
-      SmallVector<Attribute, 16> values;
-      for (double v : {0., 0.5, 1., 1.5, 2., 3., 4., 6., -0., -0.5, -1., -1.5,
-                       -2., -3., -4., -6.})
-        values.push_back(b.builder->getFloatAttr(elemTy, v));
-      table = b.dense_val(VectorType::get({16}, elemTy), values);
-    }
-
-    SmallVector<Value> values;
-    collectValues(b, src, values);
-
-    SmallVector<Value> results;
-    for (Value value : values) {
-      if (auto vecTy = dyn_cast_or_null<VectorType>(value.getType()); !vecTy) {
-        assert(value.getType() == i8Ty);
-        Value idx1 = b.and_(value, b.i8_val(15));
-        Value idx2 = b.lshr(value, b.i8_val(4));
-        results.push_back(b.extract_element(table, idx1));
-        results.push_back(b.extract_element(table, idx2));
-      } else if (vecTy.getElementType() == b.builder->getI32Type()) {
-        VectorType i8VecTy = VectorType::get(4, i8Ty);
-        int32_t numI8Elements = i8VecTy.getNumElements();
-        Value andVect =
-            b.dense_val(vecTy, b.builder->getI32IntegerAttr(0x0F0F0F0F));
-        Value shVec = b.dense_val(vecTy, b.builder->getI32IntegerAttr(4));
-        Value i32IdxVec1 = b.and_(value, andVect);
-        Value i32IdxVec2 = b.and_(b.lshr(value, shVec), andVect);
-        // Extract each value from i32 vectors and cast to i8 vectors
-        for (int32_t i = 0, n = vecTy.getNumElements(); i < n; ++i) {
-          Value idx = b.i32_val(i);
-          Value i1 = b.extract_element(i32IdxVec1, idx);
-          Value i2 = b.extract_element(i32IdxVec2, idx);
-          Value idxVec1 = b.bitcast(i1, i8VecTy);
-          Value idxVec2 = b.bitcast(i2, i8VecTy);
-          extractFloats(b, idxVec1, idxVec2, numI8Elements, results, table);
-        }
-      } else {
-        assert(vecTy.getElementType() == i8Ty);
-        Value andVect = b.dense_val(vecTy, b.builder->getI8IntegerAttr(0x0F));
-        Value shVec = b.dense_val(vecTy, b.builder->getI8IntegerAttr(4));
-        Value idxVec1 = b.and_(value, andVect);
-        Value idxVec2 = b.lshr(value, shVec);
-        extractFloats(b, idxVec1, idxVec2, vecTy.getNumElements(), results,
-                      table);
-      }
-    }
-
-    rewriter.replaceOp(op, packLLElements(loc, getTypeConverter(), results,
-                                          rewriter, op.getType()));
+    rewriter.replaceOp(op,
+                       packLLElements(loc, getTypeConverter(),
+                                      decode(loc, rewriter, srcVals, elemTy),
+                                      rewriter, op.getType()));
     return success();
   }
 
 private:
-  static void collectValues(CachingBuilder &b, Value src,
-                            SmallVector<Value> &values) {
-    auto structTy = dyn_cast_or_null<LLVM::LLVMStructType>(src.getType());
-    if (!structTy) {
-      values.emplace_back(src);
-      return;
-    }
-
-    // If the entire struct consists of subsequent insertvalue:
-    // %str = llvm.mlir.undef : !llvm.struct<(i8, i8)>
-    // %str0 = llvm.insertvalue %v0, %str[0] : !llvm.struct<(i8, i8)>
-    // %str1 = llvm.insertvalue %v1, %str0[1] : !llvm.struct<(i8, i8)>
-    // use the inserted values (%v0 and %v1) instead of adding the
-    // extractvalue operations.
-    IntegerType i8Ty = b.builder->getI8Type();
-    size_t remaining = structTy.getBody().size();
-    values.resize(remaining);
-    for (auto ins = src.getDefiningOp<LLVM::InsertValueOp>();
-         ins && ins.getPosition()[0] == remaining - 1;
-         ins = ins.getContainer().getDefiningOp<LLVM::InsertValueOp>()) {
-      values[--remaining] = ins.getValue();
-      assert(values[remaining].getType() == i8Ty);
-    }
-
-    // Add the remaining values, if any.
-    if (remaining) {
-      for (auto [i, type] : llvm::enumerate(
-               llvm::make_range(structTy.getBody().begin(),
-                                structTy.getBody().begin() + remaining))) {
-        assert(type == i8Ty);
-        values[i] = b.extract_val(type, src, i);
+  // Decodes the two e2m1 values of each byte with integer operations. A
+  // nibble is shifted to bits [31:28], and an arithmetic shift right by 6
+  // moves its exponent and mantissa bits to f32 bits [24:22] and keeps the
+  // sign at bit 31; the mask clears the sign copies in between. That f32 value
+  // is 2^-126 times the e2m1 value (0.5 becomes a denormal), so multiplying it
+  // by 2^126 gives the exact value. Every e2m1 value is exact in fp16 and
+  // bf16, so the bf16 result is the upper half of the f32 value.
+  //
+  // This avoids a lookup into a constant table of the 16 values: its per-lane
+  // dynamic vector index is lowered by IGC to indirect register moves that
+  // occupy the address register.
+  static SmallVector<Value> decode(Location loc,
+                                   ConversionPatternRewriter &rewriter,
+                                   ArrayRef<Value> srcVals, FloatType elemTy) {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value mask = b.i32_val(0x81C00000);
+    Value shiftRight = b.i32_val(6);
+    Value upperHalf = b.i32_val(16);
+    Value scale = b.f32_val(0x1p126f);
+    // The low nibble holds the first element, the high nibble the second.
+    Value shiftLeft[] = {b.i32_val(28), b.i32_val(24)};
+    SmallVector<Value> results;
+    for (Value packed : srcVals) {
+      assert(packed.getType().isInteger(8) && "expected packed e2m1 bytes");
+      Value x = b.zext(i32_ty, packed);
+      for (Value shift : shiftLeft) {
+        Value bits = b.and_(b.ashr(b.shl(x, shift), shiftRight), mask);
+        Value val = b.fmul(b.bitcast(bits, f32_ty), scale);
+        if (elemTy.isBF16())
+          results.push_back(b.bitcast(
+              b.trunc(i16_ty, b.lshr(b.bitcast(val, i32_ty), upperHalf)),
+              bf16_ty));
+        else
+          results.push_back(b.fptrunc(f16_ty, val));
       }
     }
-
-    // Detect subsequent extractions of all vallues from an i8 vector:
-    // %c0 = llvm.mlir.constant(0 : i32) : i32
-    // %e0 = llvm.extractelement %i8vec[%c0 : i32] : vector<2xi8>
-    // %c1 = llvm.mlir.constant(1 : i32) : i32
-    // %e1 = llvm.extractelement %i8vec[%c1 : i32] : vector<2xi8>
-    // If values[i] == e0 and values[i + 1] == e1, replace them with i8vec.
-    if (replaceVectorExtracts(b, src, values)) {
-      // Detect subsequent extractions from i32 vector and casts to i8 vector:
-      // %c0 = llvm.mlir.constant(0 : i32) : i32
-      // %i0 = llvm.extractelement %i32vec[%c0 : i32] : vector<2xi32>
-      // %i8vec0 = llvm.bitcast %i0 : i32 to vector<4xi8>
-      // %c1 = llvm.mlir.constant(1 : i32) : i32
-      // %i1 = llvm.extractelement %i32vec[%c1 : i32] : vector<2xi32>
-      // %i8vec1 = llvm.bitcast %i1 : i32 to vector<4xi8>
-      // If values[i] == i8vec0 and values[i + 1] == i8vec1, replace them with
-      // i32vec.
-      replaceVectorCastExtracts(b, src, values);
-    }
-  }
-
-  // Extract floats from the lookup table by indices.
-  static void extractFloats(CachingBuilder &b, Value idxVec1, Value idxVec2,
-                            int32_t size, SmallVector<Value> &results,
-                            Value table) {
-    size_t off = results.size();
-    results.resize(off + size * 2);
-    for (int32_t i = 0; i < size; ++i) {
-      Value idx = b.extract_element(idxVec1, b.i32_val(i));
-      results[off + 2 * i] = b.extract_element(table, idx);
-    }
-    for (int32_t i = 0; i < size; ++i) {
-      Value idx = b.extract_element(idxVec2, b.i32_val(i));
-      results[off + 2 * i + 1] = b.extract_element(table, idx);
-    }
-  }
-
-  // Detect the subsequent extractions of all vallues from an i8 vector and
-  // replace them with the vector.
-  static bool replaceVectorExtracts(CachingBuilder &b, Value src,
-                                    SmallVector<Value> &values) {
-    bool replaced = false;
-    for (size_t i = 0; i < values.size(); ++i) {
-      // If the value is an extractelement from a vector and the index is 0
-      // and the subsequent values are the extraction of all values from the
-      // same vector, replace all these values with the original vector.
-      if (Value vec = isVectorExtract(values[i], 0);
-          vec && replaceValues(
-                     values, i,
-                     dyn_cast<VectorType>(vec.getType()).getNumElements() - 1,
-                     vec, isVectorExtract)) {
-        assert(dyn_cast<VectorType>(vec.getType()).getElementType() ==
-               b.builder->getI8Type());
-        replaced = true;
-      }
-    }
-    return replaced;
-  }
-
-  // If a value is a bitcast of a value extracted from an i32 vector and the
-  // subsequent values are also extracts from the same vector, replace all
-  // them with the original vector.
-  static void replaceVectorCastExtracts(CachingBuilder &b, Value src,
-                                        SmallVector<Value> &values) {
-    auto isCastExtract =
-        [i8Ty = b.builder->getI8Type(),
-         i32Ty = b.builder->getI32Type()](Value &value, unsigned pos) -> Value {
-      if (auto bitcast = value.getDefiningOp<LLVM::BitcastOp>()) {
-        if (auto vecTy = dyn_cast_or_null<VectorType>(bitcast.getType());
-            vecTy && vecTy.getElementType() == i8Ty &&
-            vecTy.getNumElements() == 4) {
-          Value operand = bitcast.getOperand();
-          if (Value vec = isVectorExtract(operand, pos)) {
-            if (auto elType =
-                    dyn_cast<VectorType>(vec.getType()).getElementType();
-                elType == i32Ty) {
-              return vec;
-            }
-          }
-        }
-      }
-      return {};
-    };
-
-    for (unsigned i = 0; i < values.size(); i++) {
-      if (auto vec = isCastExtract(values[i], 0)) {
-        replaceValues(values, i,
-                      dyn_cast<VectorType>(vec.getType()).getNumElements() - 1,
-                      vec, isCastExtract);
-      }
-    }
-  }
-
-  // Check if the value is an extraction from a vector at the specified
-  // position and the vector size is > 1, return the vector.
-  static Value isVectorExtract(Value value, unsigned pos) {
-    if (auto extract = value.getDefiningOp<LLVM::ExtractElementOp>()) {
-      Value operand = extract.getOperand(0);
-      if (auto vecTy = dyn_cast_or_null<VectorType>(operand.getType());
-          vecTy && vecTy.getNumElements() > 1) {
-        if (auto idx =
-                extract.getPosition().getDefiningOp<LLVM::ConstantOp>()) {
-          if (auto attr = dyn_cast_or_null<IntegerAttr>(idx.getValue());
-              attr && attr.getInt() == pos) {
-            return operand;
-          }
-        }
-      }
-    }
-    return {};
-  }
-
-  // Replace the value at the `position` with the `replacement` and erase the
-  // `count` values after it, if the `map` function returns the `replacement`
-  // for all these values.
-  static bool
-  replaceValues(SmallVector<Value> &values, unsigned position, unsigned count,
-                Value replacement,
-                const std::function<Value(Value &, unsigned)> &map) {
-    if (position + count + 1 > values.size())
-      return false;
-    for (auto [i, v] : llvm::enumerate(
-             llvm::make_range(values.begin() + position + 1,
-                              values.begin() + position + 1 + count))) {
-      if (map(v, i + 1) != replacement)
-        return false;
-    }
-    values[position] = replacement;
-    values.erase(values.begin() + position + 1,
-                 values.begin() + position + 1 + count);
-    return true;
+    return results;
   }
 };
 } // anonymous namespace
