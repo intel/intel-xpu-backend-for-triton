@@ -101,11 +101,6 @@ unsigned getAtomicResultScratchSize(Value result) {
 }
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
-  if (auto handoff = dyn_cast<gpu::ThreadHandoffOp>(op)) {
-    if (handoff.getSource().hasSameWarpAndBlock(handoff.getDestination()))
-      return 0;
-    return gpu::getSharedMemorySize(handoff.getType());
-  }
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
     return ReduceOpHelper(reduceOp).getScratchSizeInBytes();
   }
@@ -157,10 +152,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   return 0;
 }
 
-std::optional<uint16_t> getResultScratchBroadcastMask(Operation *op) {
-  if (auto handoff = dyn_cast<gpu::ThreadHandoffOp>(op))
-    return handoff.getSource().getBlock() &
-           ~handoff.getDestination().getBlock();
+std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
   if (!isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op))
     return std::nullopt;
   if (op->getNumResults() == 0)
@@ -177,9 +169,6 @@ std::optional<uint16_t> getResultScratchBroadcastMask(Operation *op) {
 bool hasCrossCTAScratch(Operation *op) {
   if (gpu::lookupNumCTAs(op) == 1)
     return false;
-  if (auto handoff = dyn_cast<gpu::ThreadHandoffOp>(op))
-    return handoff.getSource().getBlock() !=
-           handoff.getDestination().getBlock();
   if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
     auto block = StringAttr::get(op->getContext(), "block");
     return !isCvtDimSync(gpu::toLinearLayout(cvt.getSrc().getType()),
@@ -198,9 +187,20 @@ bool hasCrossCTAScratch(Operation *op) {
   }
   if (auto poll = dyn_cast<AtomicPollOp>(op))
     return poll.getTimeout() && !poll.getResult().use_empty() &&
-           getResultScratchBroadcastMask(op).value_or(0) != 0;
-  if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op))
-    return atomicResultHasCTABroadcast(op);
+           getAtomicScratchBroadcastMask(op).value_or(0) != 0;
+  if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op)) {
+    if (op->getNumResults() == 0)
+      return false;
+    Value result = op->getResult(0);
+    if (result.use_empty())
+      return false;
+    auto resultTy = dyn_cast<RankedTensorType>(result.getType());
+    if (!resultTy)
+      return true;
+    auto block = StringAttr::get(op->getContext(), "block");
+    return gpu::toLinearLayout(resultTy).getFreeVariableMasks().lookup(block) !=
+           0;
+  }
   return false;
 }
 

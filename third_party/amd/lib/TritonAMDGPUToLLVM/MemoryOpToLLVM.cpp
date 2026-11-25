@@ -43,7 +43,7 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
   const auto numElemsI32 = (vTy.getNumElements() * physicalBitWidth / 32);
   const auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
 
-  // CDNA5 uses opaque LLVM intrinsic calls; their results cannot be cast to
+  // GFX1250 uses opaque LLVM intrinsic calls; their results cannot be cast to
   // AliasAnalysisOpInterface, so no no-alias scope is attached.
   auto callIntrinsic = [&](StringRef name, VectorType retTy) -> Value {
     return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, {retTy},
@@ -52,7 +52,7 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
   };
 
   switch (isaFamily) {
-  case ISAFamily::CDNA5:
+  case ISAFamily::GFX1250:
     if (logicalBitWidth == 16)
       return callIntrinsic("llvm.amdgcn.ds.load.tr16.b128", vTy);
     if (logicalBitWidth == 8)
@@ -63,14 +63,11 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
   case ISAFamily::CDNA4: {
     Value dsReadTr;
     if (logicalBitWidth == 16)
-      dsReadTr = ROCDL::ds_read_tr16_b64::create(
-          rewriter, loc, vTy, vecAddr, ROCDL::ds_read_tr16_b64::Properties{});
+      dsReadTr = ROCDL::ds_read_tr16_b64::create(rewriter, loc, vTy, vecAddr);
     else if (logicalBitWidth == 8)
-      dsReadTr = ROCDL::ds_read_tr8_b64::create(
-          rewriter, loc, vTyI32, vecAddr, ROCDL::ds_read_tr8_b64::Properties{});
+      dsReadTr = ROCDL::ds_read_tr8_b64::create(rewriter, loc, vTyI32, vecAddr);
     else if (logicalBitWidth == 4)
-      dsReadTr = ROCDL::ds_read_tr4_b64::create(
-          rewriter, loc, vTyI32, vecAddr, ROCDL::ds_read_tr4_b64::Properties{});
+      dsReadTr = ROCDL::ds_read_tr4_b64::create(rewriter, loc, vTyI32, vecAddr);
     else
       return {};
     AMD::addLocalLoadNoAliasScope(
@@ -282,7 +279,7 @@ lowerDsReadTr(Operation *op,
     // source lane issuing the load. For ds_read_tr* the hardware shuffles
     // data across lanes, so the two differ: we need to remap.
     //
-    // Example: ds_load_tr8_b64 on CDNA5, from the test
+    // Example: ds_load_tr8_b64 on gfx1250, from the test
     // `ds_transpose_partitioned_remaps_lane`.
     //
     //  fullTile:
@@ -611,8 +608,8 @@ struct LocalAtomicScatterRMWOpConversion
       return success();
     }
 
-    finalizeAtomicResults(op, rewriter, results, info.threadPred, targetInfo,
-                          getTypeConverter());
+    finalizeAtomicResults(op, rewriter, results, info.llvmElemTy, b,
+                          info.threadPred, targetInfo, getTypeConverter());
     return success();
   }
 
@@ -632,13 +629,7 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // A local-only fence omits the vector cache invalidate. This is safe only
-    // when all waves share one L0, so an acquire in one wave covers the others.
-    auto isaFamily = targetInfo.getISAFamily();
-    bool workgroupSharesOneL0 =
-        mlir::triton::amdgpu::isCDNA(isaFamily) ||
-        (mlir::triton::amdgpu::isRDNA(isaFamily) && targetInfo.isCuMode());
-    if (op.isWarp() || !workgroupSharesOneL0)
+    if (!mlir::triton::amdgpu::isCDNA(targetInfo.getISAFamily()))
       return failure();
     // Check no other memory addrspaces are selected.
     // TensorRead/Write are allowed but noop.

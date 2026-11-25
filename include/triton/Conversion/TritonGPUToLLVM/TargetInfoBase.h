@@ -106,14 +106,6 @@ public:
                           unsigned reduceLaneIdMask,
                           unsigned broadcastLaneIdMask) const = 0;
 
-  // Lets the target lower the in-warp phase of a scan, updating |acc| in
-  // place. Returns false, leaving |acc| untouched, to use the generic lowering.
-  virtual bool warpScan(RewriterBase &rewriter, Location loc,
-                        SmallVector<Value> &acc, triton::ScanOp op,
-                        unsigned scanDim, unsigned threadStride) const {
-    return false;
-  }
-
   // Emits LLVM code with |rewriter| to print a message following the given
   // format from the device. |formatStrStart| is the pointer to the start of
   // the format string global variable; |args| are the arguments to fill
@@ -137,15 +129,6 @@ public:
                           StringRef message, StringRef file, StringRef func,
                           int line) const = 0;
 
-  // Returns true if the target does not abort the kernel in |assertFail| and
-  // requires |assertTrap| to be emitted instead. The trap is emitted after a
-  // block-wide barrier so that all failing threads finish reporting first.
-  virtual bool requiresAssertTrap() const { return false; }
-
-  // Emits LLVM code with |rewriter| to abort the kernel after a failed
-  // assertion. Only called if |requiresAssertTrap| returns true.
-  virtual void assertTrap(RewriterBase &rewriter, Location loc) const = 0;
-
   virtual int getSharedMemoryBanks() const { return 32; }
 
   virtual int getSharedAddressSpace() const = 0;
@@ -153,7 +136,6 @@ public:
   virtual int getAddressSpace(Attribute addressSpace) const = 0;
 
   virtual bool supportVectorizedAtomics() const = 0;
-  virtual bool supportNativeBF16AtomicAdd() const { return false; }
 
   virtual bool supportLdMatrix() const { return false; }
   virtual bool supportStMatrix() const { return false; }

@@ -145,7 +145,8 @@ static unsigned getTensorNumI32Regs(RankedTensorType ty) {
   unsigned numElems = getTotalElemsPerThread(ty) *
                       product(getThreadsPerWarp(ty)) *
                       product(getWarpsPerCTA(ty));
-  unsigned elSize = getIntOrFloatOrPtrBitWidth(ty.getElementType());
+  unsigned elSize =
+      isa<PointerType>(ty.getElementType()) ? 64 : ty.getElementTypeBitWidth();
   return numElems * elSize / 32;
 }
 

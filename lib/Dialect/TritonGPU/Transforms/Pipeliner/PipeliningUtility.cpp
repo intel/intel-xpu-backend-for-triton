@@ -179,8 +179,6 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (isa<LLVM::AssumeOp, ttng::FenceAsyncSharedOp>(op))
     return op;
-  if (isa<ttng::ClusterBarrierOp>(op))
-    return op;
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;
   if (op->hasTrait<OpTrait::LocalLoadTrait>())
@@ -312,7 +310,7 @@ int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
   auto sharedLayout = triton::gpu::toLinearLayout(shape, sharedEnc);
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
   const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
-  return vecElems * getIntOrFloatOrPtrBitWidth(registerTy.getElementType()) / 8;
+  return vecElems * registerTy.getElementTypeBitWidth() / 8;
 }
 
 bool mlir::triton::canBeConvertedToAsyncLoad(
@@ -326,9 +324,11 @@ bool mlir::triton::canBeConvertedToAsyncLoad(
   unsigned width = 0;
   if (tensorTy) {
     auto ty = cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
-    width = vec * getIntOrFloatOrPtrBitWidth(ty);
+    width = vec * ty.getIntOrFloatBitWidth();
   } else {
-    width = tt::getPointeeBitWidth(ptr.getType());
+    width = cast<tt::PointerType>(ptr.getType())
+                .getPointeeType()
+                .getIntOrFloatBitWidth();
   }
 
   // We do not pipeline all loads for the following reasons:
@@ -371,34 +371,28 @@ DenseMap<Operation *, int> mlir::triton::deserializeLatencies(Operation *op) {
 }
 
 Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
-                                      unsigned numBuffers, bool twoCTAs) {
-  unsigned numCTAs =
-      triton::gpu::lookupNumCTAs(rewriter.getBlock()->getParentOp());
+                                      unsigned numBuffers) {
   MLIRContext *ctx = rewriter.getContext();
-  Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto dim = tt::standardOutDimNames(ctx, /*rank=*/1)[0];
-  auto barrierCGALayout =
-      twoCTAs
-          ? ttg::CGAEncodingAttr::get(
-                ctx, tt::LinearLayout::zeros1D(2, kBlock, dim) *
-                         tt::LinearLayout::identity1D(numCTAs / 2, kBlock, dim))
-          : ttg::CGAEncodingAttr::get1DLayout(ctx, numCTAs);
+  unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
+      rewriter.getBlock()->getParentOp()->getParentOfType<ModuleOp>());
+  Attribute sharedMemorySpace =
+      ttg::SharedMemorySpaceAttr::get(rewriter.getContext());
+  auto barrierCGALayout = ttg::CGAEncodingAttr::get1DLayout(ctx, numCTAs);
   auto barrierEncoding =
       ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCGALayout);
-  int numBarrierSlots = twoCTAs ? numCTAs / 2 : numCTAs;
   ttg::MemDescType memDescType = ttg::MemDescType::get(
-      {numBuffers, numBarrierSlots}, type, barrierEncoding, sharedMemorySpace,
+      {numBuffers, numCTAs}, type, barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
   return ttg::LocalAllocOp::create(rewriter, memDescType, Value());
 }
 
 // Create an allocation and init the mbarriers.
 Value mlir::triton::createBarrierAlloc(Operation *op, int numBarriers,
-                                       int arriveCount, bool twoCTAs) {
+                                       int arriveCount) {
   ImplicitLocOpBuilder rewriter(op->getLoc(), op);
+
   Value barrierAlloc =
-      createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers, twoCTAs);
+      createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
     ttng::InitBarrierOp::create(rewriter, barrierView, arriveCount);
@@ -437,7 +431,7 @@ bool mlir::triton::canPipelineTMALoad(Operation *op) {
   auto sharedEncoding = getSharedEncoding(op);
   int64_t stageSizeInBits =
       ttg::getAllocationElems(sharedEncoding, tensorTy.getShape()) *
-      getIntOrFloatOrPtrBitWidth(tensorTy.getElementType());
+      tensorTy.getElementTypeBitWidth();
   return stageSizeInBits % (ttng::TMA_ALIGN * 8) == 0;
 }
 

@@ -29,9 +29,6 @@ def TritonNvidiaGPU_Dialect : Dialect {
 
   let cppNamespace = "::mlir::triton::nvidia_gpu";
 
-  // Preserve the existing attr-dict syntax for inherent attributes.
-  let useStrictPropertiesInAssemblyFormat = 0;
-
   let hasOperationAttrVerify = 1;
   let hasCanonicalizer = 1;
 

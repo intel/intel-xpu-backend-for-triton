@@ -245,8 +245,7 @@ static Value replayChain(OpBuilder &builder, Location loc, Value v,
     if (auto fp = dyn_cast<tt::FpToFpOp>(op)) {
       v = tt::FpToFpOp::create(builder, loc, newOutTy, v, fp.getRoundingAttr());
     } else if (auto ex = dyn_cast<arith::ExtFOp>(op)) {
-      v = arith::ExtFOp::create(builder, loc, newOutTy, v,
-                                arith::FastMathFlagsAttr{});
+      v = arith::ExtFOp::create(builder, loc, newOutTy, v);
     }
   }
   return v;

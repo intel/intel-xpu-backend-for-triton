@@ -76,12 +76,13 @@ public:
     return std::nullopt;
   }
 
-  SmallVector<WaitOpInfo> getWaitOpInfo(Operation *op) const override {
+  std::optional<WaitOpInfo>
+  getWaitOpInfo(Operation *op, const tti::AuxDataMap &) const override {
     if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op))
-      return {WaitOpInfo{tti::CommitKind::TmaStore,
-                         static_cast<int>(tmaStoreWaitOp.getPendings()),
-                         /*transferWrites=*/false, /*transferReads=*/true}};
-    return {};
+      return WaitOpInfo{tti::CommitKind::TmaStore,
+                        static_cast<int>(tmaStoreWaitOp.getPendings()),
+                        /*transferWrites=*/false, /*transferReads=*/true};
+    return std::nullopt;
   }
 
   std::optional<AsyncProxyFenceInfo>
@@ -127,7 +128,8 @@ public:
     if (auto storeOp = dyn_cast<ttng::TMAStoreLikeOpInterface>(op))
       mask = getBlockBroadcastMask(storeOp.getSrc().getType());
     if (op->hasAttr("allocation.size"))
-      mask = getResultScratchBroadcastMask(op).value_or(mask);
+      if (auto scratchMask = getAtomicScratchBroadcastMask(op))
+        mask = *scratchMask;
     if (isa<ttng::CLCTryCancelOp>(op) && ttg::lookupNumCTAs(op) > 1) {
       Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
       return arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId,
@@ -154,7 +156,7 @@ public:
     if (isa<ClusterBarrierOp>(op))
       return true;
     return op->hasAttr("allocation.size") &&
-           getResultScratchBroadcastMask(op).value_or(0) != 0;
+           getAtomicScratchBroadcastMask(op).value_or(0) != 0;
   }
 
   std::optional<MemEffectsOpInfo>
@@ -174,12 +176,10 @@ public:
       info->pred = expectOp.getPred();
       info->barriers.push_back(
           {expectOp.getBarrier(), nullptr,
-           expectOp.getPerWarp() ? ttg::lookupNumWarps(expectOp) : 1,
-           MemEffectsOpInfo::BarrierTrackingMode::Frontier,
+           /*count=*/1, MemEffectsOpInfo::BarrierTrackingMode::Frontier,
            /*txCount=*/static_cast<int>(expectOp.getSize())});
     }
     if (auto copyOp = dyn_cast<ttng::TMEMCopyOp>(op)) {
-      info->pred = copyOp.getPred();
       namedOperands = {{copyOp.getSrc(), "Src"}, {copyOp.getDst(), "Dst"}};
     }
     if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
@@ -273,7 +273,8 @@ public:
     return info;
   }
 
-  SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const override {
+  SmallVector<CommitKindDesc>
+  getOutstandingReadCommitKinds(const tti::AuxDataMap &) const override {
     return {{tti::CommitKind::Wgmma, "warpgroup_mma operand read"},
             {tti::CommitKind::TmaStore, "async_copy_shared_to_global"}};
   }

@@ -40,11 +40,11 @@ def test_metadata() -> None:
 
 
 @pytest.mark.xfail(not is_cuda(), reason="max_occupancy requires CUDA", run=False)
-@pytest.mark.parametrize("max_occupancy", [None, *range(1, 33), 1024])
-@pytest.mark.parametrize("num_warps", [1, 4])
+@pytest.mark.parametrize("max_occupancy", [None, 1, 2, 4])
 @pytest.mark.parametrize("num_ctas", [1, 2])
-def test_max_occupancy_launch(max_occupancy, num_warps, num_ctas, device, monkeypatch, fresh_triton_cache):
+def test_max_occupancy_launch(max_occupancy, num_ctas, device, monkeypatch, fresh_triton_cache):
     import ctypes
+    from triton.backends.nvidia.driver import libcuda_dirs
 
     if num_ctas > 1 and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("CTA clusters require Hopper or newer")
@@ -55,7 +55,7 @@ def test_max_occupancy_launch(max_occupancy, num_warps, num_ctas, device, monkey
         tl.store(ptr, tl.load(ptr) + 1)
 
     out = torch.zeros(16, device=device, dtype=torch.int32)
-    compiled = kernel.warmup(out, grid=(16, ), num_warps=num_warps, num_ctas=num_ctas, max_occupancy=max_occupancy)
+    compiled = kernel.warmup(out, grid=(16, ), num_warps=4, num_ctas=num_ctas, max_occupancy=max_occupancy)
     assert compiled.metadata.shared == 0
     assert compiled.packed_metadata[2] == 0
 
@@ -74,19 +74,17 @@ def test_max_occupancy_launch(max_occupancy, num_warps, num_ctas, device, monkey
         assert launcher.shared == 0
     else:
         properties = utils.get_device_properties(triton.runtime.driver.active.get_current_device())
-        assert 0 <= launcher.shared <= properties["max_shared_mem"]
+        assert (max_occupancy + 1) * launcher.shared > properties["max_shared_mem_per_multiprocessor"]
         if num_ctas == 1:
             # Check CUDA's occupancy calculation, independently of the reservation formula.
-            # Match the runtime loader's driver selection, including CUDA compatibility libraries.
-            cuda = ctypes.CDLL("libcuda.so.1")
+            cuda = ctypes.CDLL(os.path.join(libcuda_dirs()[0], "libcuda.so.1"))
             occupancy = cuda.cuOccupancyMaxActiveBlocksPerMultiprocessor
             occupancy.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t]
             occupancy.restype = ctypes.c_int
-            unlimited_blocks = ctypes.c_int()
-            assert occupancy(ctypes.byref(unlimited_blocks), compiled.function, num_warps * 32, 0) == 0
             blocks = ctypes.c_int()
-            assert occupancy(ctypes.byref(blocks), compiled.function, num_warps * 32, launcher.shared) == 0
-            assert blocks.value == min(max_occupancy, unlimited_blocks.value)
+            assert occupancy(ctypes.byref(blocks), compiled.function, compiled.metadata.num_warps * 32,
+                             launcher.shared) == 0
+            assert 0 < blocks.value <= max_occupancy
 
     shared_sizes = []
     original_launch = launcher.launch
@@ -98,7 +96,7 @@ def test_max_occupancy_launch(max_occupancy, num_warps, num_ctas, device, monkey
     monkeypatch.setattr(launcher, "launch", launch)
     compiled[(16, 1, 1)](out)
     graph = torch.cuda.CUDAGraph()
-    with triton.testing.cuda_graph_without_gc(graph):
+    with torch.cuda.graph(graph):
         compiled[(16, 1, 1)](out)
     graph.replay()
     graph.replay()
@@ -127,7 +125,7 @@ def test_max_occupancy_preserves_required_shared_memory(device):
 
     inp = torch.randn(16384, device=device)
     out = torch.empty_like(inp)
-    compiled = kernel[(1, )](inp, out, max_occupancy=8)
+    compiled = kernel[(1, )](inp, out, max_occupancy=4)
     assert compiled.metadata.shared == 65536
     assert compiled.run.shared == compiled.metadata.shared
     torch.testing.assert_close(out, inp)
@@ -310,30 +308,6 @@ def test_launch_with_options(options, monkeypatch) -> None:
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("keyword", [False, True])
-def test_callable_grid_launch_arguments(device, keyword):
-
-    @triton.jit
-    def kernel(X, N, VALUE: tl.constexpr = 7):
-        offset = tl.program_id(0) * N + tl.program_id(1)
-        tl.store(X + offset, VALUE)
-
-    x = torch.zeros((2, 4), dtype=torch.int32, device=device)
-
-    def grid(args):
-        assert args["X"] is x
-        assert isinstance(args["N"], int)
-        assert args["VALUE"] == 7
-        return (args["X"].numel() // args["N"], args["X"].shape[1])
-
-    if keyword:
-        kernel[grid](N=x.shape[1], X=x)
-    else:
-        kernel[grid](x, x.shape[1])
-    torch.testing.assert_close(x, torch.full_like(x, 7))
-
-
-@pytest.mark.interpreter
 def test_pre_run_hooks(device):
 
     @triton.jit
@@ -371,7 +345,7 @@ def test_interpreter_implicit_cvt_bool() -> None:
 @pytest.mark.xfail(not is_hip(), reason="requires HIP", run=False)
 def test_wgp_cu_mode_launch_argument():
     arch = triton.runtime.driver.active.get_current_target().arch
-    if not arch.startswith(("gfx11", "gfx120")):
+    if not arch.startswith(("gfx10", "gfx11", "gfx120")):
         pytest.skip("target has no WGP/CU mode distinction")
 
     @triton.jit

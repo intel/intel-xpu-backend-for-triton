@@ -26,7 +26,6 @@ include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
-include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "NVGPUDialect.td"
 include "NVGPUAttrDefs.td"
 
@@ -117,8 +116,7 @@ def NVGPU_WarpGroupBarrierIdOp : NVGPU_Op<"warp_group_barrier_id"> {
   let assemblyFormat = "attr-dict";
 }
 
-def NVGPU_LoadAcquireOp : NVGPU_Op<"ld_acquire", [FoldTruePredicate,
-    MemoryEffects<[MemRead, MemWrite]>]> {
+def NVGPU_LoadAcquireOp : NVGPU_Op<"ld_acquire", [MemoryEffects<[MemRead, MemWrite]>]> {
   let arguments = (
     ins LLVM_PointerGlobal:$addr,
     Optional<I1>:$mask,
