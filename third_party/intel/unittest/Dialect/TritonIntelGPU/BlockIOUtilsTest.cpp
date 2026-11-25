@@ -1165,6 +1165,7 @@ protected:
     bool rowShl = false;              // row base `pid_m << 6` instead
     bool rowAndZero = false;          // adds `pid_n & 0` to the row base
     bool f32 = false;                 // f16 otherwise
+    unsigned intBits = 0;             // iN elements if nonzero, else f16/f32
     bool colUlt = false;              // unsigned column compare
     bool flag = false;                // ANDs in a splatted i1 argument
     std::optional<int32_t> alignment; // ttig.2d_block_io_base_alignment
@@ -1175,6 +1176,8 @@ protected:
   StoreBoundaryClamp matchStore(const Spec &s, std::optional<int64_t> pitch) {
     SmallVector<int64_t, 2> shape = {64, s.numCols};
     Type elemTy = s.f32 ? builder.getF32Type() : builder.getF16Type();
+    if (s.intBits)
+      elemTy = builder.getIntegerType(s.intBits);
     Type i32 = builder.getI32Type();
     SmallVector<Type> args = {
         RankedTensorType::get(shape, triton::PointerType::get(elemTy)),
@@ -1215,7 +1218,9 @@ protected:
     else
       (*module)->removeAttr(attrName);
     triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
-    return matchStoreBoundaryClamp(store, s.contiguousDim, pitch, axisInfo);
+    return matchStoreBoundaryClamp(store, s.contiguousDim,
+                                   /*pitchDimIsBroadcast=*/false, pitch,
+                                   axisInfo);
   }
 
   // The dims `matchStore` clamps: "row+col", "row", "col" or "none".
@@ -1285,7 +1290,8 @@ TEST_F(MatchStoreBoundaryClampTest, UnalignedBaseRefused) {
   EXPECT_EQ(clampedDims({.colMul = 64}), "row");
 }
 
-// A base needs both provers: AxisInfo alone admits `<< 6`, isDivisible `& 0`.
+// Proving the row base a multiple of 64 needs both provers: only AxisInfo
+// admits `<< 6`, only isDivisible `& 0`.
 TEST_F(MatchStoreBoundaryClampTest, RowBaseNeedsBothProvers) {
   EXPECT_EQ(clampedDims({.rowShl = true}), "col");
   EXPECT_EQ(clampedDims({.rowAndZero = true}), "col");
@@ -1295,6 +1301,19 @@ TEST_F(MatchStoreBoundaryClampTest, RowBaseNeedsBothProvers) {
 TEST_F(MatchStoreBoundaryClampTest, OddColumnBoundNeedsGranule) {
   EXPECT_EQ(clampedDims({.colBound = 505}), "row");
   EXPECT_EQ(clampedDims({.colBound = 505, .f32 = true}), "row+col");
+}
+
+// An i1 width has no exact byte count, so even a bound of 512, a whole
+// number of 4-byte granules of i1, is refused.
+TEST_F(MatchStoreBoundaryClampTest, SubByteColumnRefused) {
+  EXPECT_EQ(clampedDims({.colBound = 512, .intBits = 1}), "row");
+}
+
+// The column base must start on a 4-byte granule: two i8 columns at
+// `pid_n * 2` may start mid-granule, which the base's PowerOf2Ceil(extent)
+// proof alone admits.
+TEST_F(MatchStoreBoundaryClampTest, UnalignedColumnBaseRefused) {
+  EXPECT_EQ(clampedDims({.numCols = 2, .intBits = 8}), "row");
 }
 
 // With compensation, a 128-column f16 tile needs a pitch of 256 + 63 bytes
@@ -1315,13 +1334,13 @@ TEST_F(MatchStoreBoundaryClampTest, TilePitchSufficesWithoutCompensation) {
   EXPECT_EQ(clampedDims({.alignment = 4}, /*pitch=*/256), "row+col");
 }
 
-// A 32-byte row counts as 64 bytes: with compensation it needs a pitch of 127.
+// The pitch floor is 64 bytes: a 32-byte row with compensation needs 127.
 TEST_F(MatchStoreBoundaryClampTest, NarrowRowNeedsPitchFloor) {
   EXPECT_EQ(clampedDims({.numCols = 16}, /*pitch=*/112), "none");
   EXPECT_EQ(clampedDims({.numCols = 16}, /*pitch=*/128), "row+col");
 }
 
-// The pitch check is exact in bytes: 128 f32 columns need a pitch of 512 + 63.
+// The minimum pitch is exact in bytes: 128 f32 columns need 512 + 63.
 TEST_F(MatchStoreBoundaryClampTest, CompensationIs63Bytes) {
   EXPECT_EQ(clampedDims({.f32 = true}, /*pitch=*/574), "none");
   EXPECT_EQ(clampedDims({.f32 = true}, /*pitch=*/575), "row+col");
