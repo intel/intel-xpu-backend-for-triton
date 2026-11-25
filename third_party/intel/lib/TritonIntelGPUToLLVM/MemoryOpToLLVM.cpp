@@ -156,6 +156,10 @@ struct AtomicPollOpConversion
       return rewriter.notifyMatchFailure(
           op, "multi-CTA atomic_poll requires cross-CTA shared memory");
 
+    insertAtomicOrderingBarriers(op, op.getSem(),
+                                 /*emitBarrierAfter=*/false, rewriter,
+                                 targetInfo);
+
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
@@ -276,8 +280,10 @@ struct AtomicLoadOpConversion
           op, "defer to upstream atomic_load lowering");
 
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     MemSemantic sem = op.getSem();
-    insertAtomicOrderingBarriers(op, sem, rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
+                                 rewriter, targetInfo);
     StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
 
     SmallVector<Value> ptrElements =
@@ -302,8 +308,8 @@ struct AtomicLoadOpConversion
     if (sem == MemSemantic::ACQUIRE)
       LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
                             syncScope);
-    finalizeAtomicResults(op, rewriter, resultVals, threadPred, targetInfo,
-                          getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
+                          targetInfo, getTypeConverter());
     return success();
   }
 
@@ -329,7 +335,8 @@ struct AtomicStoreOpConversion
           op, "defer to upstream atomic_store lowering");
 
     Location loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), /*emitBarrierAfter=*/true,
+                                 rewriter, targetInfo);
     StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
 
     SmallVector<Value> ptrElements =

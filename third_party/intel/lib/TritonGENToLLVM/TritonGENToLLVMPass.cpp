@@ -140,10 +140,6 @@ static bool isSPVBuiltinAvailable(OpTy op) {
   if (m->hasAttr(intel::TritonIntelGPUDialect::getIsLTSAttrName()))
     return false;
 
-  // IGC < 2.38 cannot build every SPIR-V 2D block shape (issue #8858).
-  if (m->hasAttr(intel::TritonIntelGPUDialect::getUseGenISA2DBlockIOAttrName()))
-    return false;
-
   return true;
 }
 
@@ -1373,7 +1369,6 @@ struct TritonSubGroupGatherLoadLowering
         "=rw,rw.u,rw.u",
         /*has_side_effects=*/false,
         /*is_align_stack=*/false, LLVM::TailCallKind::None,
-        /*convergent=*/false,
         LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
         ArrayAttr::get(ctx, {}));
 

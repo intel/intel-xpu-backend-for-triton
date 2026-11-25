@@ -52,10 +52,7 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   });
 
   convertFP8Type<mlir::Float8E4M3FNUZType, mlir::Float8E4M3FNType,
-                 mlir::Float8E5M2Type, mlir::Float8E5M2FNUZType,
-                 mlir::Float8E8M0FNUType>();
-  addConversion(
-      [ctx](PackedFloat4E2M1Type) -> Type { return IntegerType::get(ctx, 8); });
+                 mlir::Float8E5M2Type, mlir::Float8E5M2FNUZType>();
 }
 
 Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(

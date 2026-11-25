@@ -19,9 +19,7 @@
 // default can define TRITON_AMD_SKIP_LLVM_ABI_GUARD and match NDEBUG itself.
 //
 // One translation unit including this is enough; it checks properties of the
-// target, not of a file. It is deliberately not included from DAGBuilder.h,
-// which Triton's core library also compiles against a different LLVM whose
-// NDEBUG state this project does not control.
+// target, not of a file.
 //
 //===----------------------------------------------------------------------===//
 

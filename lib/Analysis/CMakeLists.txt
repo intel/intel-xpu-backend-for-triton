@@ -4,7 +4,6 @@ add_triton_library(TritonAnalysis
   BufferRegion.cpp
   BufferIndexAnalysis.cpp
   Membar.cpp
-  Signedness.cpp
   Alias.cpp
   Utility.cpp
 

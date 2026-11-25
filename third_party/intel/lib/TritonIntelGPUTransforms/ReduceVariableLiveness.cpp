@@ -172,15 +172,12 @@ bool sinkInLoopDotOperandLoads(
     if (crossesAliasingWrite(loadOp, firstUse))
       continue;
 
-    // Highest pressure over the live range this sink would remove, nested
-    // regions included: the load stays live through them.
+    // Highest pressure over the live range this sink would remove.
     ttg::intel::RegisterPressureAnalysis::QueryCache queryCache;
     unsigned rangePressure = 0;
     for (Operation *op = loadOp; op && op != firstUse; op = op->getNextNode())
-      op->walk([&](Operation *nested) {
-        rangePressure =
-            std::max(rangePressure, analysis.pressureAt(nested, queryCache));
-      });
+      rangePressure =
+          std::max(rangePressure, analysis.pressureAt(op, queryCache));
     if (rangePressure < perLaneGRFBudget) {
       LDBG("Keeping in-loop dot operand load in place: its live range peaks at "
            << rangePressure << " B/lane, within the " << perLaneGRFBudget

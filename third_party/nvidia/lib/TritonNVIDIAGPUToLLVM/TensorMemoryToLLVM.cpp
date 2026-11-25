@@ -582,7 +582,7 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
   // This subtlely handles subviews
   auto cvt = tmemLl.invertAndCompose(shmemLl);
 
-  unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
+  auto bitwidth = srcTy.getElementType().getIntOrFloatBitWidth();
   uint64_t holeMask = 0;
   // Zero col bases are physical holes. Compact them for the SMEM descriptor,
   // then skip the corresponding physical TMEM ranges when issuing copies.
@@ -668,9 +668,6 @@ struct TensorMemoryCopyOpConversion
       Value cluster0 = LLVM::NVIDIA::createLeadCTAPredicate(loc, rewriter);
       pred = TritonLLVMOpBuilder(loc, rewriter).and_(pred, cluster0);
     }
-
-    if (adaptor.getPred())
-      pred = TritonLLVMOpBuilder(loc, rewriter).and_(pred, adaptor.getPred());
 
     if (failed(copySharedToTmem(rewriter, loc, typeConverter, op,
                                 adaptor.getSrc(), adaptor.getDst(), pred)))

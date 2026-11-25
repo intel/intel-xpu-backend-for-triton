@@ -1,7 +1,6 @@
 #include "triton/Tools/LLVMOptions.h"
 
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/raw_ostream.h"
 
 #include <condition_variable>
 #include <map>
@@ -22,9 +21,10 @@ struct Registry {
   std::mutex mutex;
   std::condition_variable changed;
 
-  // The override set currently applied to LLVM's registries. Empty whenever
-  // `users` is zero.
+  // The override set currently applied to LLVM's registry and the options it
+  // actually touched. Both are empty whenever `users` is zero.
   Settings active;
+  std::vector<llvm::cl::Option *> applied;
   // Live scopes sharing `active`.
   unsigned users = 0;
   // Scopes waiting to replace `active`. While any is pending, new scopes do not
@@ -65,7 +65,8 @@ void unlockRegistryInParent() {
 // The prepare handler locked the registry, so its containers are consistent.
 void resetRegistryInChild() {
   Registry &reg = registry();
-  llvm::cl::ResetAllOptionOccurrences();
+  for (llvm::cl::Option *option : reg.applied)
+    option->reset();
   std::uint64_t generation = reg.generation + 1;
   new (&reg) Registry();
   reg.generation = generation;
@@ -88,26 +89,30 @@ Registry &registry() {
 void applySettings(Registry &reg, Settings settings) {
   // Allocate before mutating any options so allocation failure cannot leave
   // the process-wide registry partially overridden.
-  std::vector<std::string> arguments{"triton"};
-  arguments.reserve(settings.size() + 1);
-  for (const auto &[name, value] : settings)
-    arguments.push_back("--" + name + "=" + value);
-  std::vector<const char *> argv;
-  argv.reserve(arguments.size());
-  for (const std::string &argument : arguments)
-    argv.push_back(argument.c_str());
-
-  // getRegisteredOptions() only exposes cl::opt. The command-line parser also
-  // handles TableGen library options, including codegen's start/stop passes,
-  // and owns any argument strings retained by those options. Keep ignoring
-  // unknown options, which may differ between LLVM revisions.
-  llvm::cl::ParseCommandLineOptions(argv.size(), argv.data(), "",
-                                    &llvm::nulls());
+  reg.applied.reserve(settings.size());
+  auto &options = llvm::cl::getRegisteredOptions();
+  for (const auto &[name, value] : settings) {
+    auto it = options.find(name);
+    if (it == options.end())
+      continue;
+    llvm::cl::Option *option = it->second;
+    // Start from a pristine option so that passes gated on getNumOccurrences()
+    // see exactly one explicit occurrence.
+    option->reset();
+    if (option->addOccurrence(0, name, value)) {
+      // The option has already reported the malformed value.
+      option->reset();
+      continue;
+    }
+    reg.applied.push_back(option);
+  }
   reg.active = std::move(settings);
 }
 
 void restoreSettings(Registry &reg) {
-  llvm::cl::ResetAllOptionOccurrences();
+  for (llvm::cl::Option *option : reg.applied)
+    option->reset();
+  reg.applied.clear();
   reg.active.clear();
 }
 

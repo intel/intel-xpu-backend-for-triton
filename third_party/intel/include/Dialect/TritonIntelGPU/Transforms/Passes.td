@@ -25,11 +25,6 @@ def TritonIntelGPUAccelerateMatmul
     "mlir::triton::gpu::intel::TritonIntelGPUDialect",
     "mlir::arith::ArithDialect"
   ];
-
-  let options = [
-    Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
-         "GRF mode the kernel is compiled with">,
-  ];
 }
 
 def TritonIntelGPUFoldFpToFp
@@ -392,7 +387,7 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
 #blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
 tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>> {
-  %0 = tt.reshape %arg0 efficient_layout : tensor<16x32xf32, #mma> -> tensor<16x8x2x2x1x1x1xf32, #blocked>
+  %0 = tt.reshape %arg0 allow_reorder efficient_layout : tensor<16x32xf32, #mma> -> tensor<16x8x2x2x1x1x1xf32, #blocked>
   %1 = "tt.reduce"(%0) <{axis = 2 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
     %9 = arith.addf %arg1, %arg2 : f32
@@ -404,7 +399,7 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
     tt.reduce.return %9 : f32
   }) : (tensor<16x8x2x1x1x1xf32, #ttg.slice<{dim = 2, parent = #blocked}>>) -> tensor<16x8x2x1x1xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>>
   %3 = ttg.convert_layout %2 : tensor<16x8x2x1x1xf32, #ttg.slice<{dim = 4, parent = #ttg.slice<{dim = 2, parent = #blocked}>}>> -> tensor<16x8x2x1x1xf32, #blocked1>
-  %4 = tt.reshape %3 efficient_layout : tensor<16x8x2x1x1xf32, #blocked1> -> tensor<16x16x1x1xf32, #blocked2>
+  %4 = tt.reshape %3 allow_reorder efficient_layout : tensor<16x8x2x1x1xf32, #blocked1> -> tensor<16x16x1x1xf32, #blocked2>
   %5 = "tt.reduce"(%4) <{axis = 0 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
     %9 = arith.addf %arg1, %arg2 : f32
@@ -415,7 +410,7 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
     %9 = arith.addf %arg1, %arg2 : f32
     tt.reduce.return %9 : f32
   }) : (tensor<16x1x1xf32, #ttg.slice<{dim = 0, parent = #blocked2}>>) -> tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #blocked2}>}>>
-  %7 = tt.reshape %6 efficient_layout : tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #blocked2}>}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked3}>>
+  %7 = tt.reshape %6 allow_reorder efficient_layout : tensor<16x1xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #blocked2}>}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked3}>>
   %8 = ttg.convert_layout %7 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked3}>> -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>>
   tt.return %8 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>>
 }
@@ -479,15 +474,12 @@ def TritonIntelGPUReduceVariableLiveness
     hardware thread's GRF size divided by "ttg.threads-per-warp", because the
     analysis weighs each live tensor by its per-work-item element count.
 
-    For loads defined outside the loop the decision is per loop: once the loop
-    is over budget every eligible one is sunk. Sinking trades one extra
-    (prefetched, and so normally cache-resident) 2D block load per iteration for
-    a shorter live range, which is only worth doing when the loop would
-    otherwise spill. The pass does not model spill cost against reload cost, and
-    does not take the loop trip count into account.
-
-    A dot operand load inside the loop is sunk to its first use only if the
-    pressure between the two, nested regions included, reaches the budget.
+    The decision is per loop, not per load: once a loop is over budget every
+    eligible load in it is sunk. Sinking trades one extra (prefetched, and so
+    normally cache-resident) 2D block load per iteration for a shorter live
+    range, which is only worth doing when the loop would otherwise spill. The
+    pass does not model spill cost against reload cost, and does not take the
+    loop trip count into account.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
@@ -532,14 +524,13 @@ def TritonIntelGPUCodeSinking
 
 def TritonIntelGPUAnnotateCacheControl
     : Pass<"tritonintelgpu-annotate-cache-control", "mlir::ModuleOp"> {
-  let summary = "Annotate tt.load ops with .cg cache control unless reuse analysis indicates L1 reuse";
+  let summary = "Annotate tt.load ops with .cg cache control unless the load's encoding indicates cross-subgroup L1 reuse";
   let description = [{
-    Sets `.cg` (L1UC_L3C) cache control on `tt.load` operations for which
-    reuse analysis finds no evidence of L1 reuse: streaming / elementwise
-    loads bypass L1 to avoid thrashing. Loads with reuse (typically GEMM
-    operand loads) keep the default cache modifier, and loads with proven
-    reuse may be promoted to EVICT_LAST. User-specified cache modifiers and
-    eviction policies are never overridden.
+    Sets `.cg` (L1UC_L3C) cache control on `tt.load` operations whose result
+    does not participate in a matrix multiply. GEMM operand loads benefit from
+    L1 reuse and are left with the default cache modifier; streaming /
+    elementwise loads bypass L1 to avoid thrashing. User-specified cache
+    modifiers are never overridden.
 
     `.cg` on loads is always coherence-safe: it reads from the shared coherent
     L3 rather than the incoherent per-core L1. The filters below are
@@ -547,16 +538,16 @@ def TritonIntelGPUAnnotateCacheControl
     from L1 reuse (e.g. matmul operand loads in complex kernels).
 
     The pass runs **after** `remove_layout_conversions`, so load-result
-    encodings are stable. Reuse is decided by `ReuseAnalysis` on the load's
-    result layout, not by its encoding kind:
-      - spatial (`SpatialReuseAnalysis`): an axis of the result is shared by
-        all warps (zero warp basis in the LinearLayout), e.g. the K axis of a
-        DPAS dot operand broadcast across warps, or a dot_scaled scale
-        operand. A layout with a single warp has no other subgroup to share
-        with, so it reports no spatial reuse;
-      - temporal (`TemporalReuseAnalysis`): an enclosing loop re-reads the
-        same addresses (loop-invariant or overlapping per-iteration tiles).
-    Loads whose lanes broadcast the same address are also left unannotated.
+    encodings are stable. The heuristic inspects each `tt.load`'s result
+    encoding: if it is a `DotOperandEncodingAttr` whose parent implements
+    `MmaEncodingTrait` (DPAS / Subgroup2DBlockEncoding), annotation is
+    suppressed — the HW access pattern already yields cross-subgroup L1 reuse
+    because the K dimension is broadcast across warps. Nested
+    `SliceEncodingAttr` layers are unwrapped before the dot-operand check.
+    The load is also suppressed when its result feeds the `aScale`/`bScale`
+    operand of a `tt.dot_scaled` — a single-hop use-site check suffices
+    because AccelerateMatmul materialises scale encodings immediately before
+    the consumer, with no `scf.for` / `convert_layout` in between.
 
     To avoid unnecessary L1 bypass, loads are additionally skipped when their
     pointer root-traces to a kernel argument that falls into any of the

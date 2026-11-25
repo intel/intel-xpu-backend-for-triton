@@ -1,7 +1,6 @@
 add_triton_library(TritonNvidiaGPUIR
   Dialect.cpp
   TensorMemoryUtils.cpp
-  TMAUtils.cpp
   NvmmaSmemAttrs.cpp
   Ops.cpp
 

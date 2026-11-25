@@ -12,16 +12,13 @@ namespace mlir::triton::nvidia_gpu {
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-bool isCrossCTALoadStore(ttg::MemDescType memDescTy, RankedTensorType regTy,
-                         bool isStore) {
+bool isCrossCTALoadStore(ttg::MemDescType memDescTy, RankedTensorType regTy) {
   auto kRegister = StringAttr::get(memDescTy.getContext(), "register");
   auto kBlock = StringAttr::get(memDescTy.getContext(), "block");
   LinearLayout regLayout =
       ttg::toLinearLayout(regTy).removeZeroBasesAlongDim(kRegister);
-  LinearLayout sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
-  LinearLayout conversion =
-      isStore ? invertAndComposeStore(sharedLayout, regLayout)
-              : invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
+  LinearLayout conversion = invertAndComposeLocal(
+      ttg::toLinearLayoutIgnoringPadding(memDescTy), regLayout, {kBlock});
   return !conversion.isIdentityOnOutDim(kBlock);
 }
 
@@ -67,12 +64,10 @@ std::optional<bool> hasCrossCTASharedAccess(Operation *op) {
     return isCrossCTALoadStore(load.getSrc().getType(), load.getType());
   if (auto store = dyn_cast<ttg::LocalStoreOp>(op))
     return isCrossCTALoadStore(store.getDst().getType(),
-                               store.getSrc().getType(),
-                               /*isStore=*/true);
+                               store.getSrc().getType());
   if (auto alloc = dyn_cast<ttg::LocalAllocOp>(op))
     return alloc.getSrc() &&
-           isCrossCTALoadStore(alloc.getType(), alloc.getSrc().getType(),
-                               /*isStore=*/true);
+           isCrossCTALoadStore(alloc.getType(), alloc.getSrc().getType());
   if (auto gather = dyn_cast<ttg::LocalGatherOp>(op))
     return isCrossCTAGatherScatter(gather.getSrc().getType(), gather.getType(),
                                    gather.getAxis());

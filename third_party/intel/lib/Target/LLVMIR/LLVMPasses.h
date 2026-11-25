@@ -3,51 +3,42 @@
 
 namespace llvm {
 
-struct GuardMaskedDivRemPass : OptionalPassInfoMixin<GuardMaskedDivRemPass> {
+struct GuardMaskedDivRemPass : PassInfoMixin<GuardMaskedDivRemPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
   static StringRef name() { return "GuardMaskedDivRemPass"; }
 };
 
-struct ScalarizePtrVectorsPass
-    : OptionalPassInfoMixin<ScalarizePtrVectorsPass> {
+struct ScalarizePtrVectorsPass : PassInfoMixin<ScalarizePtrVectorsPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
   static StringRef name() { return "ScalarizePtrVectorsPass"; }
 };
 
-struct ExpandSaddWithOverflowPass
-    : OptionalPassInfoMixin<ExpandSaddWithOverflowPass> {
+struct ExpandSaddWithOverflowPass : PassInfoMixin<ExpandSaddWithOverflowPass> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
   static StringRef name() { return "ExpandSaddWithOverflowPass"; }
 };
 
 struct ExpandSubByteBitReversePass
-    : OptionalPassInfoMixin<ExpandSubByteBitReversePass> {
+    : PassInfoMixin<ExpandSubByteBitReversePass> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
   static StringRef name() { return "ExpandSubByteBitReversePass"; }
 };
 
 struct ExpandSubByteBitwiseAndPass
-    : OptionalPassInfoMixin<ExpandSubByteBitwiseAndPass> {
+    : PassInfoMixin<ExpandSubByteBitwiseAndPass> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
   static StringRef name() { return "ExpandSubByteBitwiseAndPass"; }
 };
 
 struct ExpandSubByteVectorBitcastPass
-    : OptionalPassInfoMixin<ExpandSubByteVectorBitcastPass> {
+    : PassInfoMixin<ExpandSubByteVectorBitcastPass> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
   static StringRef name() { return "ExpandSubByteVectorBitcastPass"; }
 };
 
-struct LegalizeI1VectorMemoryPass
-    : OptionalPassInfoMixin<LegalizeI1VectorMemoryPass> {
+struct LegalizeI1VectorMemoryPass : PassInfoMixin<LegalizeI1VectorMemoryPass> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
   static StringRef name() { return "LegalizeI1VectorMemoryPass"; }
-};
-
-struct ExpandFmaToContractPairPass
-    : OptionalPassInfoMixin<ExpandFmaToContractPairPass> {
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
-  static StringRef name() { return "ExpandFmaToContractPairPass"; }
 };
 
 } // namespace llvm
