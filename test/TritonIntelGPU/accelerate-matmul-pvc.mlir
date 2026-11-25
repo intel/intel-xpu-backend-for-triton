@@ -917,3 +917,56 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     tt.return %result : tensor<128x128xf32, #blocked>
   }
 }
+
+// -----
+
+// COM: mxfp4 x mxfp4 dots that the emulation does not take are decomposed.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate} {
+  // COM: A packed along M: the lowering only decodes K-packed operands.
+  // CHECK-LABEL: tt.func @dot_scaled_fp4_fp4_m_packed(
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: ttg.fp4_to_fp
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func @dot_scaled_fp4_fp4_m_packed(%a: tensor<64x64xi8, #blocked2>, %scale_a: tensor<128x2xi8, #blocked1>, %b: tensor<32x128xi8, #blocked>, %scale_b: tensor<128x2xi8, #blocked1>) -> tensor<128x128xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %result = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = false} : tensor<64x64xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<32x128xi8, #blocked>, tensor<128x2xi8, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.return %result : tensor<128x128xf32, #blocked>
+  }
+  // COM: N = 8 is below the 16 columns of one tile.
+  // CHECK-LABEL: tt.func @dot_scaled_fp4_fp4_n8(
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: ttg.fp4_to_fp
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func @dot_scaled_fp4_fp4_n8(%a: tensor<128x32xi8, #blocked2>, %scale_a: tensor<128x2xi8, #blocked1>, %b: tensor<32x8xi8, #blocked>, %scale_b: tensor<8x2xi8, #blocked1>) -> tensor<128x8xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x8xf32, #blocked>
+    %result = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<128x32xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<32x8xi8, #blocked>, tensor<8x2xi8, #blocked1> -> tensor<128x8xf32, #blocked>
+    tt.return %result : tensor<128x8xf32, #blocked>
+  }
+  // COM: M = 4 is below the 8 rows of one tile.
+  // CHECK-LABEL: tt.func @dot_scaled_fp4_fp4_m4(
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: ttg.fp4_to_fp
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func @dot_scaled_fp4_fp4_m4(%a: tensor<4x32xi8, #blocked2>, %scale_a: tensor<4x2xi8, #blocked1>, %b: tensor<32x128xi8, #blocked>, %scale_b: tensor<128x2xi8, #blocked1>) -> tensor<4x128xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<4x128xf32, #blocked>
+    %result = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<4x32xi8, #blocked2>, tensor<4x2xi8, #blocked1> * tensor<32x128xi8, #blocked>, tensor<128x2xi8, #blocked1> -> tensor<4x128xf32, #blocked>
+    tt.return %result : tensor<4x128xf32, #blocked>
+  }
+  // COM: K = 32 fp4 values is below the 64 of one tile.
+  // CHECK-LABEL: tt.func @dot_scaled_fp4_fp4_k32(
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: ttg.fp4_to_fp
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func @dot_scaled_fp4_fp4_k32(%a: tensor<128x16xi8, #blocked2>, %scale_a: tensor<128x1xi8, #blocked1>, %b: tensor<16x128xi8, #blocked>, %scale_b: tensor<128x1xi8, #blocked1>) -> tensor<128x128xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %result = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<128x16xi8, #blocked2>, tensor<128x1xi8, #blocked1> * tensor<16x128xi8, #blocked>, tensor<128x1xi8, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.return %result : tensor<128x128xf32, #blocked>
+  }
+}

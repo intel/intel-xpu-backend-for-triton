@@ -38,15 +38,16 @@ public:
     if (!attrName.starts_with("triton_gen"))
       return success();
 
-    if (instructions.size() != 1)
-      return op->emitOpError("Expecting a single instruction");
-
+    // A floating-point op of constants is folded and leaves no instruction.
     if (attrName ==
         triton::TritonGEN::TritonGENDialect::getKeepFPMathAttrName()) {
-      llvm::Instruction *inst = instructions.front();
-      inst->setMetadata(attrName, llvm::MDNode::get(inst->getContext(), {}));
+      for (llvm::Instruction *inst : instructions)
+        inst->setMetadata(attrName, llvm::MDNode::get(inst->getContext(), {}));
       return success();
     }
+
+    if (instructions.size() != 1)
+      return op->emitOpError("Expecting a single instruction");
 
     if (attrName ==
         triton::TritonGEN::TritonGENDialect::getFPRoundingModeAttrName()) {

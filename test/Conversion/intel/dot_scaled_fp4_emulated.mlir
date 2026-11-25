@@ -83,3 +83,66 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %d : tensor<64x64xf32, #mma>
   }
 }
+
+// -----
+
+// COM: One int8-shaped tile (one warp, repCluster 1): the bytes, nibbles and scales of the bf16 DPAS operands.
+#linear = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 1]], warp = [], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 32], B = [32, 16], C = [8, 16]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @emulated_fp4_dot_scaled_one_tile(
+  // NEG-LABEL: llvm.func spir_kernelcc @emulated_fp4_dot_scaled_one_tile(
+  // NEG-NOT: triton_gen.bdpas
+  // CHECK-DAG: [[A0:%.*]] = llvm.extractvalue %arg0[0]
+  // CHECK-DAG: [[B0:%.*]] = llvm.extractvalue %arg2[0]
+  // CHECK-DAG: [[B2:%.*]] = llvm.extractvalue %arg2[2]
+  // CHECK-DAG: [[SA0:%.*]] = llvm.extractvalue %arg1[0]
+  // CHECK-DAG: [[SB0:%.*]] = llvm.extractvalue %arg3[0]
+  // COM: A of bf16 DPAS j = 0, row 0: nibble 0 (moved to bits [31:28]) of byte 0, times the scale of row 0.
+  // CHECK: [[A0B:%.*]] = llvm.bitcast [[A0]] : i8 to i8
+  // CHECK-NEXT: [[A0W:%.*]] = llvm.zext [[A0B]] : i8 to i32
+  // CHECK-NEXT: [[C28:%.*]] = llvm.mlir.constant(28 : i32) : i32
+  // CHECK-NEXT: llvm.shl [[A0W]], [[C28]] : i32
+  // CHECK: [[SA0B:%.*]] = llvm.bitcast [[SA0]] : i8 to i8
+  // CHECK-NEXT: [[SA0W:%.*]] = llvm.zext [[SA0B]] : i8 to i32
+  // CHECK-NEXT: [[C23:%.*]] = llvm.mlir.constant(23 : i32) : i32
+  // CHECK-NEXT: [[SBITS:%.*]] = llvm.shl [[SA0W]], [[C23]] : i32
+  // COM: Byte 0 is 2^-127, the f32 denormal 0x00400000.
+  // CHECK-NEXT: [[FLOOR:%.*]] = llvm.mlir.constant(4194304 : i32) : i32
+  // CHECK-NEXT: [[SNORM:%.*]] = llvm.intr.umax([[SBITS]], [[FLOOR]]) : (i32, i32) -> i32
+  // CHECK-NEXT: [[F:%.*]] = llvm.bitcast [[SNORM]] : i32 to f32
+  // COM: Byte 255 is NaN.
+  // CHECK-NEXT: [[C255:%.*]] = llvm.mlir.constant(255 : i32) : i32
+  // CHECK-NEXT: [[IS255:%.*]] = llvm.icmp "eq" [[SA0W]], [[C255]] : i32
+  // CHECK-NEXT: [[NAN:%.*]] = llvm.mlir.constant(0x7FC00000 : f32) : f32
+  // CHECK-NEXT: llvm.select [[IS255]], [[NAN]], [[F]] : i1, f32
+  // COM: B of bf16 DPAS j = 0, dword 0: nibble 0 of bytes 0 (low half) and 2 (high half), times the scale of column 0.
+  // CHECK: [[B0B:%.*]] = llvm.bitcast [[B0]] : i8 to i8
+  // CHECK-NEXT: [[B0W:%.*]] = llvm.zext [[B0B]] : i8 to i32
+  // CHECK-NEXT: [[C28B:%.*]] = llvm.mlir.constant(28 : i32) : i32
+  // CHECK-NEXT: llvm.shl [[B0W]], [[C28B]] : i32
+  // CHECK: llvm.bitcast [[SB0]] : i8 to i8
+  // CHECK: [[LOF:%.*]] = llvm.fmul {{%.*}}, [[SBF:%.*]] {triton_gen.keep_fp_math} : f32
+  // CHECK-NEXT: [[LO:%.*]] = llvm.bitcast [[LOF]] : f32 to i32
+  // CHECK-NEXT: [[B2B:%.*]] = llvm.bitcast [[B2]] : i8 to i8
+  // CHECK-NEXT: [[B2W:%.*]] = llvm.zext [[B2B]] : i8 to i32
+  // CHECK-NEXT: [[C28C:%.*]] = llvm.mlir.constant(28 : i32) : i32
+  // CHECK-NEXT: llvm.shl [[B2W]], [[C28C]] : i32
+  // CHECK: [[HIF:%.*]] = llvm.fmul {{%.*}}, [[SBF]] {triton_gen.keep_fp_math} : f32
+  // CHECK-NEXT: [[HI:%.*]] = llvm.bitcast [[HIF]] : f32 to i32
+  // CHECK-NEXT: [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT: [[LOH:%.*]] = llvm.lshr [[LO]], [[C16]] : i32
+  // CHECK-NEXT: [[UPPER:%.*]] = llvm.mlir.constant(-65536 : i32) : i32
+  // CHECK-NEXT: [[HIH:%.*]] = llvm.and [[HI]], [[UPPER]] : i32
+  // CHECK-NEXT: llvm.or [[HIH]], [[LOH]] : i32
+  // COM: A of bf16 DPAS j = 1, row 0: nibble 1 of the same byte (decoded one DPAS call ahead).
+  // CHECK: [[C24:%.*]] = llvm.mlir.constant(24 : i32) : i32
+  // CHECK-NEXT: llvm.shl [[A0W]], [[C24]] : i32
+  // CHECK-COUNT-4: triton_gen.dpas {{.*}} {pa = bf16, pb = bf16, rc = 8}
+  // CHECK-NOT: triton_gen.dpas
+  tt.func public @emulated_fp4_dot_scaled_one_tile(%a: tensor<8x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, %sa: tensor<8x2xi8, #linear>, %b: tensor<32x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>, %sb: tensor<16x2xi8, #linear1>, %c: tensor<8x16xf32, #mma>) -> tensor<8x16xf32, #mma> {
+    %d = tt.dot_scaled %a scale %sa, %b scale %sb, %c lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<8x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, tensor<8x2xi8, #linear> * tensor<32x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>, tensor<16x2xi8, #linear1> -> tensor<8x16xf32, #mma>
+    tt.return %d : tensor<8x16xf32, #mma>
+  }
+}

@@ -331,17 +331,8 @@ static bool isEmulatedFp4ScaledDot(tt::DotScaledOp op, ModuleOp mod) {
   int64_t kBytes = op.getA().getType().getShape()[1];
   if (m < 8 || n < 16 || kBytes % 32 != 0)
     return false;
-  // mx scales: one e8m0 byte per 32 fp4 values along K.
-  for (Value scale : {op.getAScale(), op.getBScale()}) {
-    if (!scale)
-      continue;
-    auto scaleTy = cast<RankedTensorType>(scale.getType());
-    if (!isa<Float8E8M0FNUType>(scaleTy.getElementType()) &&
-        !scaleTy.getElementType().isInteger(8))
-      return false;
-    if (scaleTy.getShape()[1] * 16 != kBytes)
-      return false;
-  }
+  // The scales are mx ones, e8m0 with one byte per 32 fp4 values along K:
+  // hasBlockScaleDPASScales checks that before this is called.
   return true;
 }
 

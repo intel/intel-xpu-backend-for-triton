@@ -59,3 +59,16 @@ llvm.func @triton_gen.keep_fp_math(%arg0: !llvm.ptr) {
 }
 
 // CHECK: ![[#KEEP]] = !{}
+
+// -----
+
+// CHECK-LABEL: define void @triton_gen.keep_fp_math_folded(
+llvm.func @triton_gen.keep_fp_math_folded(%arg0: !llvm.ptr) {
+  // COM: A multiply of constants is folded and leaves no instruction to mark.
+  %0 = llvm.mlir.constant(2.0 : f32) : f32
+  %1 = llvm.mlir.constant(3.0 : f32) : f32
+  // CHECK: store float 6.000000e+00, ptr %[[#]]
+  %2 = llvm.fmul %0, %1 {triton_gen.keep_fp_math} : f32
+  llvm.store %2, %arg0 : f32, !llvm.ptr
+  llvm.return
+}

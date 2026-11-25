@@ -69,10 +69,13 @@ public:
                                 ttgi::DPASEngineTypeXe3P>::value>>
   LogicalResult convertDot(OpTy op, typename OpTy::Adaptor adaptor) const {
     // Without block-scaled DPAS, a tt.dot_scaled with a DPAS layout is an
-    // mxfp4 dot that is emulated with bf16 DPAS.
+    // mxfp4 dot that is emulated with bf16 DPAS (see isEmulatedFp4ScaledDot in
+    // AccelerateMatmul).
     if constexpr (std::is_same_v<OpTy, DotScaledOp> &&
                   std::is_same_v<DPASEngineType, ttgi::DPASEngineTypeXe2>)
-      return convertEmulatedFp4ScaledDot(op, adaptor);
+      if (!op->template getParentOfType<ModuleOp>()->hasAttr(
+              ttgi::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName()))
+        return convertEmulatedFp4ScaledDot(op, adaptor);
 
     Value A = op.getA(), B = op.getB(), C = op.getC(), D = op.getResult();
     Value loadedA = adaptor.getA(), loadedB = adaptor.getB(),
@@ -311,7 +314,8 @@ public:
   /// Each value is decoded as in the tt.fp4_to_fp lowering, multiplied by its
   /// scale in f32 and truncated to bf16, which is exact: an e2m1 value times a
   /// power of two has at most 2 significant bits. A scale of byte 255 is NaN
-  /// unless fast math is on (as in DecomposeScaledBlocked); byte 0 is 2^-127.
+  /// unless the op's `fastMath` is set (as in DecomposeScaledBlocked); byte 0
+  /// is 2^-127.
   /// The scales have the layout of their operand with K divided by the 16
   /// bytes of a scale block (getEmulatedFp4ScaleLayout), so every thread holds
   /// the scales of its bytes.
@@ -429,7 +433,7 @@ public:
     TileRegs aTiles = getTileRegs(ATensorTy, /*isA=*/true, aVals.size());
     TileRegs bTiles = getTileRegs(BTensorTy, /*isA=*/false, bVals.size());
 
-    // The f32 factor of each scale byte, computed once per byte value.
+    // The f32 factor of each scale, computed once per scale value.
     Value two126 = tb.f32_val(0x1p126f);
     DenseMap<Value, Value> scaleFactors;
     auto getScaleFactor = [&](Value scale) -> Value {
@@ -450,12 +454,14 @@ public:
       }
       return it->second = factor;
     };
-    // The f32 bits of the scaled value of nibble `nibble` of `byte`.
     // The loaded word that holds `byte` and the bit offset of the byte in it:
     // the 2D block loads of the operands give vectors of i16 or i32 that are
     // bitcast to i8 elements, and taking the nibbles from the words directly
     // saves extracting and extending every byte.
     DenseMap<Value, std::pair<Value, unsigned>> wordOfByte;
+    // The value inserted at each field of the struct an operand was packed
+    // into, found by one walk of its insertvalue chain.
+    DenseMap<Value, DenseMap<int64_t, Value>> structFields;
     auto getWord = [&](Value byte) -> std::pair<Value, unsigned> {
       auto [it, inserted] = wordOfByte.try_emplace(byte);
       if (!inserted)
@@ -463,16 +469,18 @@ public:
       Value v = byte;
       // Look through the struct the operand was packed into.
       if (auto extract = v.getDefiningOp<LLVM::ExtractValueOp>()) {
-        int64_t pos = extract.getPosition()[0];
-        for (auto insert =
-                 extract.getContainer().getDefiningOp<LLVM::InsertValueOp>();
-             insert;
-             insert =
-                 insert.getContainer().getDefiningOp<LLVM::InsertValueOp>())
-          if (insert.getPosition()[0] == pos) {
-            v = insert.getValue();
-            break;
-          }
+        Value container = extract.getContainer();
+        auto [fieldsIt, newStruct] = structFields.try_emplace(container);
+        if (newStruct)
+          for (auto insert = container.getDefiningOp<LLVM::InsertValueOp>();
+               insert;
+               insert =
+                   insert.getContainer().getDefiningOp<LLVM::InsertValueOp>())
+            // The last insert of a field wins: keep the first one found.
+            fieldsIt->second.try_emplace(insert.getPosition()[0],
+                                         insert.getValue());
+        if (Value field = fieldsIt->second.lookup(extract.getPosition()[0]))
+          v = field;
       }
       if (auto extract = v.getDefiningOp<LLVM::ExtractElementOp>()) {
         auto bitcast = extract.getVector().getDefiningOp<LLVM::BitcastOp>();
@@ -494,6 +502,7 @@ public:
       }
       return it->second = {tb.zext(i32_ty, tb.bitcast(byte, i8_ty)), 0u};
     };
+    // The f32 bits of the scaled value of nibble `nibble` of `byte`.
     auto decode = [&](Value byte, unsigned nibble, Value scale) -> Value {
       auto [word, offset] = getWord(byte);
       // Move the nibble to bits [31:28]: the sign to bit 31.

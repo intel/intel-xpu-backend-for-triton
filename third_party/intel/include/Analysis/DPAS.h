@@ -169,16 +169,23 @@ public:
           if constexpr (std::is_same_v<OpTy, DotScaledOp>) {
             ScaleDotElemType aElemType = op.getAElemType();
             ScaleDotElemType bElemType = op.getBElemType();
-            // FP4 operands need their own feature; the scaled and BF8 features
-            // do not cover them. Without the block scaled DPAS, an mxfp4 x
-            // mxfp4 dot is emulated with plain DPAS instead.
+            // FP4 operands need their own feature of the block scaled DPAS;
+            // the scaled and BF8 features do not cover them. Without the block
+            // scaled DPAS, an mxfp4 x mxfp4 dot is emulated with plain DPAS
+            // instead, on targets without BF8 DPAS (see isEmulatedFp4ScaledDot
+            // in AccelerateMatmul).
             auto mod = op->template getParentOfType<ModuleOp>();
+            bool blockScaled = mod->hasAttr(
+                TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName());
+            bool fp4 = blockScaled
+                           ? mod->hasAttr(
+                                 TritonIntelGPUDialect::
+                                     getSupportBlockScaleDPASWithFP4AttrName())
+                           : !mod->hasAttr(TritonIntelGPUDialect::
+                                               getSupportDPASWithBF8AttrName());
             if ((aElemType == ScaleDotElemType::E2M1 ||
                  bElemType == ScaleDotElemType::E2M1) &&
-                mod->hasAttr(TritonIntelGPUDialect::
-                                 getSupportBlockScaleDPASAttrName()) &&
-                !mod->hasAttr(TritonIntelGPUDialect::
-                                  getSupportBlockScaleDPASWithFP4AttrName()))
+                !fp4)
               return DPASAnalysisResult::False;
 
             if constexpr (std::is_same_v<DPASEngineType, DPASEngineTypeXe3P>) {
