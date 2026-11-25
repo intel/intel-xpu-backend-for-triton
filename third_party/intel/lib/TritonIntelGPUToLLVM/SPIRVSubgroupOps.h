@@ -66,7 +66,6 @@ template <> struct SPIRVGroupOp<arith::XOrIOp> {
 template <typename OpTy>
 using SPIRVGroupOpTy = typename SPIRVGroupOp<OpTy>::type;
 
-// i1 add is mod 2 (xor); signed i1 true is -1, so maxsi is and, minsi is or.
 template <typename OpTy> struct SPIRVLogicalGroupOp {};
 
 template <> struct SPIRVLogicalGroupOp<arith::AndIOp> {
@@ -79,7 +78,7 @@ template <> struct SPIRVLogicalGroupOp<arith::XOrIOp> {
   using type = spirv::GroupNonUniformLogicalXorOp;
 };
 template <> struct SPIRVLogicalGroupOp<arith::AddIOp> {
-  using type = spirv::GroupNonUniformLogicalXorOp;
+  using type = spirv::GroupNonUniformLogicalOrOp;
 };
 template <> struct SPIRVLogicalGroupOp<arith::MulIOp> {
   using type = spirv::GroupNonUniformLogicalAndOp;
@@ -88,13 +87,13 @@ template <> struct SPIRVLogicalGroupOp<arith::MaxUIOp> {
   using type = spirv::GroupNonUniformLogicalOrOp;
 };
 template <> struct SPIRVLogicalGroupOp<arith::MaxSIOp> {
-  using type = spirv::GroupNonUniformLogicalAndOp;
+  using type = spirv::GroupNonUniformLogicalOrOp;
 };
 template <> struct SPIRVLogicalGroupOp<arith::MinUIOp> {
   using type = spirv::GroupNonUniformLogicalAndOp;
 };
 template <> struct SPIRVLogicalGroupOp<arith::MinSIOp> {
-  using type = spirv::GroupNonUniformLogicalOrOp;
+  using type = spirv::GroupNonUniformLogicalAndOp;
 };
 
 template <typename OpTy>

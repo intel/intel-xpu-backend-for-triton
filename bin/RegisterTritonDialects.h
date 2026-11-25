@@ -17,7 +17,6 @@
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/Passes.h"
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h"
-#include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/ProtonIntelGPUToLLVM/Passes.h"
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h"
 #include "proton/Dialect/include/Conversion/ProtonToProtonGPU/Passes.h"
 #include "proton/Dialect/include/Dialect/Proton/IR/Dialect.h"
@@ -66,7 +65,6 @@ namespace test {
 namespace intel {
 void registerTestAxisInfoPass();
 void registerTestRangeAnalysisPass();
-void registerTestSymbolicBoundsPass();
 void registerTestStrideInfoPass();
 } // namespace intel
 
@@ -97,7 +95,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::nvidia_gpu::registerConSanNVIDIAHooks();
   mlir::test::intel::registerTestAxisInfoPass();
   mlir::test::intel::registerTestRangeAnalysisPass();
-  mlir::test::intel::registerTestSymbolicBoundsPass();
   mlir::test::intel::registerTestStrideInfoPass();
   mlir::triton::instrument::registerTritonInstrumentPasses();
   mlir::triton::gluon::registerGluonPasses();
@@ -118,6 +115,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::intel::registerTritonIntelRemoveMasks();
   mlir::triton::intel::registerTritonIntelStrideVersioning();
   mlir::triton::intel::registerTritonIntelSimplifySignedArithmetic();
+  mlir::triton::intel::registerTritonIntelSpeculateSignedDivRem();
   mlir::triton::intel::registerTritonRewriteTensorDescriptorToPointer();
   mlir::triton::intel::registerTritonIntelGPUFoldTrueCmpI();
   mlir::triton::intel::registerTritonIntelGPUPrepareIfCombining();
@@ -180,7 +178,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUWarpPipeline();
   mlir::registerTritonAMDFoldTrueCmpI();
   mlir::registerTritonAMDGPUFpSanitizer();
-  mlir::registerTritonAMDGPUOptimizeDotOperands();
+  mlir::triton::amdgpu::registerTritonAMDGPUOptimizeDotOperands();
   mlir::registerConSanAMDHooks();
 
   // NVWS passes
@@ -194,7 +192,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::proton::registerConvertProtonToProtonGPU();
   mlir::triton::proton::gpu::registerConvertProtonNvidiaGPUToLLVM();
   mlir::triton::proton::gpu::registerConvertProtonAMDGPUToLLVM();
-  mlir::triton::proton::gpu::registerConvertProtonIntelGPUToLLVM();
   mlir::triton::proton::gpu::registerAllocateProtonSharedMemoryPass();
   mlir::triton::proton::gpu::registerScheduleBufferStorePass();
   mlir::triton::proton::gpu::registerAddSchedBarriersPass();

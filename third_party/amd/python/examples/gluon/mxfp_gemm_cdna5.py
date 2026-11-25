@@ -2320,11 +2320,10 @@ def test_runtime_mxgemm_tdm_8warps_pipeline(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, 
         if TRANSPOSE_B:
             assert 'ds_load_u8' not in k.asm['amdgcn']
 
-        # Entry code can contain global_prefetch_b8 even with prefetching disabled.
         if L2_PREFETCH_DISTANCE >= 0:
-            assert 'llvm.amdgcn.global.prefetch' in k.asm['llir']
+            assert 'global_prefetch_b8' in k.asm['amdgcn']
         else:
-            assert 'llvm.amdgcn.global.prefetch' not in k.asm['llir']
+            assert 'global_prefetch_b8' not in k.asm['amdgcn']
 
         torch.testing.assert_close(c_d.cpu(), c_ref.cpu(), rtol=1e-5, atol=1e-8)
         print('✅Pass')
@@ -2510,11 +2509,10 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
         if TRANSPOSE_B:
             assert 'ds_load_u8' not in k.asm['amdgcn']
 
-        # Entry code can contain global_prefetch_b8 even with prefetching disabled.
         if L2_PREFETCH_DISTANCE >= 0:
-            assert 'llvm.amdgcn.global.prefetch' in k.asm['llir']
+            assert 'global_prefetch_b8' in k.asm['amdgcn']
         else:
-            assert 'llvm.amdgcn.global.prefetch' not in k.asm['llir']
+            assert 'global_prefetch_b8' not in k.asm['amdgcn']
 
         is_fp4fp4 = DTYPE_A == "float4" and DTYPE_B == "float4"
         if is_fp4fp4:

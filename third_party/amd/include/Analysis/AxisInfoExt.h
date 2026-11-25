@@ -1,7 +1,7 @@
-#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_AXISINFOEXT_H_
-#define TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_AXISINFOEXT_H_
+#ifndef TRITONAMD_ANALYSIS_AXIS_INFO_EXT_H
+#define TRITONAMD_ANALYSIS_AXIS_INFO_EXT_H
 
-#include "triton/Analysis/AxisInfo.h"
+#include "include/triton/Analysis/AxisInfo.h"
 
 namespace mlir::triton::AMD {
 
@@ -20,4 +20,4 @@ public:
 };
 } // namespace mlir::triton::AMD
 
-#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_AXISINFOEXT_H_
+#endif

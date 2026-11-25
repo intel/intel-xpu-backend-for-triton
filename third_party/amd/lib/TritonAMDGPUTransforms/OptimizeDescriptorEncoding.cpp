@@ -4,7 +4,6 @@
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "mlir/Pass/PassManager.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -145,7 +144,7 @@ Attribute AMDGPUAssignDescriptorMemoryLayouts::buildFallbackSharedEncoding(
     ttg::CGAEncodingAttr cgaLayout, Type elementType) {
   auto blockShapePerCTA =
       triton::gpu::getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
-  auto elemWidth = getIntOrFloatOrPtrBitWidth(elementType);
+  auto elemWidth = elementType.getIntOrFloatBitWidth();
   unsigned padAmount = 128 / elemWidth;
   // Restrict pad interval (calculated from TDM descriptor's pad
   // interval field) Fallback to swizzled encoding if the interval
@@ -188,9 +187,10 @@ bool AMDGPUAssignDescriptorMemoryLayouts::isCompatibleSharedEncoding(
 //     scf.yield %di                    ; same encoding is propagated
 //   }
 //
-struct TritonAMDGPUOptimizeDescriptorEncodingPass
-    : impl::TritonAMDGPUOptimizeDescriptorEncodingBase<
+class TritonAMDGPUOptimizeDescriptorEncodingPass
+    : public impl::TritonAMDGPUOptimizeDescriptorEncodingBase<
           TritonAMDGPUOptimizeDescriptorEncodingPass> {
+public:
   void runOnOperation() override {
     mlir::ModuleOp m = getOperation();
 
