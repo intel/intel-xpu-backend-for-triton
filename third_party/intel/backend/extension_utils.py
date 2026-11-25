@@ -4,7 +4,7 @@ This allows checking device capabilities during compilation without requiring
 a full PyTorch/SYCL runtime initialization.
 """
 
-from triton.backends.intel.driver import compile_module_from_src
+from .driver import compile_module_from_src
 
 import functools
 import os

@@ -416,9 +416,10 @@ index 92f7ba64c2..03ce390e4f 100644
  if not is_flashmla_dense_supported()[0]:
      BACKENDS_TO_TEST.remove(AttentionBackendEnum.FLASHMLA)
 diff --git a/tests/v1/kv_connector/unit/test_nixl_connector.py b/tests/v1/kv_connector/unit/test_nixl_connector.py
+index c035b76369..63bcb628c4 100644
 --- a/tests/v1/kv_connector/unit/test_nixl_connector.py
 +++ b/tests/v1/kv_connector/unit/test_nixl_connector.py
-@@ -5305,6 +5305,12 @@
+@@ -5305,6 +5305,12 @@ def test_pp_rejects_mamba_with_shared_error(
  ):
      """Both transfer modes explain the shared Mamba PP restriction."""
      monkeypatch.setenv("VLLM_SSM_CONV_STATE_LAYOUT", "DS")
@@ -699,18 +700,9 @@ index 1107cc9f4a..570254ab02 100644
      reduced_precision_val = (
          (False, False) if is_torch_equal_or_newer("2.10.0") else False
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
-index 7b729a1f1e..e1150d40b5 100644
+index 7b729a1f1e..b31d5e8619 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
-@@ -620,7 +620,7 @@ def fused_moe_kernel(
-                 elif SWAP_AB:
-                     accumulator += tl.dot(b, a) * b_scale[:, None] * a_scale[None, :]
-                 else:
--                    accumulator += tl.dot(a, b) * a_scale[:, None] * b_scale[None, :]
-+                    accumulator += tl.dot(a, b) * a_scale[:, None] * b_scale_n
-             else:
-                 if use_fp8_w8a8:
-                     # acc used to enable fp8_fast_accum
 @@ -785,6 +785,9 @@ def invoke_fused_moe_wna16_triton_kernel(
          * triton.cdiv(B.size(1), META["BLOCK_SIZE_N"]),
      )
