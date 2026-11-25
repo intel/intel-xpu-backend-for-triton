@@ -35,6 +35,14 @@ def TritonGEN_Dialect : Dialect {
     static constexpr ::llvm::StringRef getFPRoundingModeAttrName() {
       return ::llvm::StringLiteral("triton_gen.FPRoundingMode");
     }
+
+    /// Get the name for the attribute that keeps a floating-point operation
+    /// out of fast math (TRITON_INTEL_FAST_MATH). It becomes metadata of the
+    /// same name on the LLVM instruction, which set_fast_math gives the flags
+    /// of the default math instead.
+    static constexpr ::llvm::StringRef getKeepFPMathAttrName() {
+      return ::llvm::StringLiteral("triton_gen.keep_fp_math");
+    }
   }];
 }
 

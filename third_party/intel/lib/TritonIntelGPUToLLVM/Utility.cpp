@@ -14,6 +14,7 @@
 
 #include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 
 #include <algorithm>
@@ -218,6 +219,13 @@ Type getTypeWithSameShape(Type type, Type elementType) {
 bool hasModuleAttr(Operation *op, StringRef attrName) {
   auto mod = op->getParentOfType<ModuleOp>();
   return mod && mod->hasAttr(attrName);
+}
+
+Value keepFPMath(Value v) {
+  Operation *op = v.getDefiningOp();
+  op->setAttr(triton::TritonGEN::TritonGENDialect::getKeepFPMathAttrName(),
+              UnitAttr::get(op->getContext()));
+  return v;
 }
 
 SmallVector<Value>

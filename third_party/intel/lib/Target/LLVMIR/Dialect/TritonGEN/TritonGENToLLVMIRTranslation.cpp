@@ -42,6 +42,13 @@ public:
       return op->emitOpError("Expecting a single instruction");
 
     if (attrName ==
+        triton::TritonGEN::TritonGENDialect::getKeepFPMathAttrName()) {
+      llvm::Instruction *inst = instructions.front();
+      inst->setMetadata(attrName, llvm::MDNode::get(inst->getContext(), {}));
+      return success();
+    }
+
+    if (attrName ==
         triton::TritonGEN::TritonGENDialect::getFPRoundingModeAttrName()) {
       auto roundingModeAttr = dyn_cast<IntegerAttr>(attribute.getValue());
       if (!roundingModeAttr)

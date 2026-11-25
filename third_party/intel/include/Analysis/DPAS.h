@@ -170,12 +170,15 @@ public:
             ScaleDotElemType aElemType = op.getAElemType();
             ScaleDotElemType bElemType = op.getBElemType();
             // FP4 operands need their own feature; the scaled and BF8 features
-            // do not cover them.
+            // do not cover them. Without the block scaled DPAS, an mxfp4 x
+            // mxfp4 dot is emulated with plain DPAS instead.
+            auto mod = op->template getParentOfType<ModuleOp>();
             if ((aElemType == ScaleDotElemType::E2M1 ||
                  bElemType == ScaleDotElemType::E2M1) &&
-                !op->template getParentOfType<ModuleOp>()->hasAttr(
-                    TritonIntelGPUDialect::
-                        getSupportBlockScaleDPASWithFP4AttrName()))
+                mod->hasAttr(TritonIntelGPUDialect::
+                                 getSupportBlockScaleDPASAttrName()) &&
+                !mod->hasAttr(TritonIntelGPUDialect::
+                                  getSupportBlockScaleDPASWithFP4AttrName()))
               return DPASAnalysisResult::False;
 
             if constexpr (std::is_same_v<DPASEngineType, DPASEngineTypeXe3P>) {

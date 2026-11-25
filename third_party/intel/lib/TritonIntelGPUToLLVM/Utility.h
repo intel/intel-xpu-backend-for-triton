@@ -127,6 +127,11 @@ Type getTypeWithSameShape(Type type, Type elementType);
 
 bool hasModuleAttr(Operation *op, StringRef attrName);
 
+/// Keep the operation that defines \p v out of fast math
+/// (TRITON_INTEL_FAST_MATH), for a result that relies on the operation not
+/// being reassociated with the ones around it. Returns \p v.
+Value keepFPMath(Value v);
+
 // Pack the values in vectors, call func on each vector and unpack the returned
 // vectors. The vector sizes are powers of 2 <= maxVecSize. If the input
 // contains a single value, it's not packed. If func returns a null value, empty

@@ -103,3 +103,41 @@ def test_fast_cos(N, device):
     # Graphics-grade tolerance: max abs error <= 1e-3
     max_err = torch.max(torch.abs(out - ref)).item()
     assert max_err <= 1e-3, f"Max absolute error {max_err} exceeds tolerance 1e-3"
+
+
+@triton.jit
+def fp4_dot_scaled_kernel(a_ptr, a_scale_ptr, b_ptr, b_scale_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr,
+                          K: tl.constexpr):
+    rm = tl.arange(0, M)
+    rn = tl.arange(0, N)
+    rk = tl.arange(0, K // 2)
+    rs = tl.arange(0, K // 32)
+    a = tl.load(a_ptr + rm[:, None] * (K // 2) + rk[None, :])
+    b = tl.load(b_ptr + rk[:, None] * N + rn[None, :])
+    a_scale = tl.load(a_scale_ptr + rm[:, None] * (K // 32) + rs[None, :])
+    b_scale = tl.load(b_scale_ptr + rn[:, None] * (K // 32) + rs[None, :])
+    c = tl.dot_scaled(a, a_scale, "e2m1", b, b_scale, "e2m1")
+    tl.store(c_ptr + rm[:, None] * N + rn[None, :], c)
+
+
+@pytest.mark.skipif(not is_xpu(), reason="XPU-only test")
+def test_fp4_dot_scaled_fast_math(device, monkeypatch):
+    # Without fp4 DPAS, each e2m1 value is decoded with a multiply by 2^126 and then multiplied by its scale. Under
+    # fast math the two multiplies could be reassociated into one by 2^126 times the scale, which overflows for scales
+    # above 2^1 and turned zeros into NaN. Every product and sum here is exact in f32.
+    monkeypatch.setenv("TRITON_INTEL_FAST_MATH", "1")
+    M, N, K = 64, 64, 128
+    e2m1 = torch.tensor([0, .5, 1, 1.5, 2, 3, 4, 6, -0., -.5, -1, -1.5, -2, -3, -4, -6], dtype=torch.float64)
+    torch.manual_seed(0)
+    a = torch.randint(0, 256, (M, K // 2), dtype=torch.uint8)
+    b = torch.randint(0, 256, (K // 2, N), dtype=torch.uint8)
+    a_scale = torch.randint(129, 134, (M, K // 32), dtype=torch.uint8)
+    b_scale = torch.randint(129, 134, (N, K // 32), dtype=torch.uint8)
+    # The low nibble holds the first element along K.
+    a_f = torch.stack([e2m1[(a & 0xF).long()], e2m1[(a >> 4).long()]], dim=2).reshape(M, K)
+    b_f = torch.stack([e2m1[(b & 0xF).long()], e2m1[(b >> 4).long()]], dim=1).reshape(K, N)
+    a_f = a_f * torch.exp2(a_scale.double() - 127).repeat_interleave(32, dim=1)
+    b_f = b_f * torch.exp2(b_scale.double() - 127).repeat_interleave(32, dim=1).T
+    c = torch.empty(M, N, dtype=torch.float32, device=device)
+    fp4_dot_scaled_kernel[(1, )](a.to(device), a_scale.to(device), b.to(device), b_scale.to(device), c, M, N, K)
+    torch.testing.assert_close(c.cpu(), (a_f @ b_f).float(), rtol=0, atol=0)
