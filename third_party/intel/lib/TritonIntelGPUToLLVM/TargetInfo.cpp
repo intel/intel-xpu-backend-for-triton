@@ -13,6 +13,7 @@
 #include "Utils/LLVMIntr.h"
 #include "Utils/Mangling.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 #include <limits>
 #include <numeric>

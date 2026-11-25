@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 
 /// Map a `!tt.ptr` address space to the SPIR-V/OpenCL storage class Intel
 /// lowers to: global memory is 1, everything else is generic (0).
