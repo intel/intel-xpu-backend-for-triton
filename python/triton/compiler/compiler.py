@@ -90,7 +90,7 @@ class IRSource:
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
-        self.language = Language.GLUON if self.ext == "glir" else Language.TRITON
+        self.language = Language.TRITON
         self.src = path.read_text()
         ir.load_dialects(context)
         backend.load_dialects(context)
@@ -112,14 +112,14 @@ class IRSource:
             self.signature = {k: ty for k, ty in enumerate(func_ty)}
 
     def hash(self):
-        return hashlib.sha256(f"{self.ext}-{self.src}".encode("utf-8")).hexdigest()
+        return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
         self.module.context = context
         return self.module
 
     def parse_options(self):
-        if self.ext in ("glir", "ttgir"):
+        if self.ext == "ttgir":
             num_warps = self.module.get_int_attr("ttg.num-warps")
             assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
             options = {'num_warps': num_warps}
@@ -136,7 +136,7 @@ def max_shared_mem(device):
 
 
 def parse(full_name, ext, context):
-    if ext in ("ttir", "glir", "ttgir"):
+    if ext == "ttir" or ext == "ttgir":
         module = ir.parse_mlir_module(full_name, context)
         module.context = context
         return module
@@ -408,7 +408,7 @@ class AsmDict(dict):
 
         if key == "sass":
             value = get_sass(self["cubin"])
-        elif key == "spvdis":
+        if key == "spvdis":
             value = get_spvdis(self["spv"])
         else:
             raise KeyError("Unknown key: '%s'" % key)
@@ -481,12 +481,10 @@ class CompiledKernel:
         device = driver.active.get_current_device()
         # create launcher
         self._run = driver.active.launcher_cls(self.src, self.metadata)
-        # Backends may reserve additional shared memory at launch time.
-        shared = getattr(self._run, "shared", self.metadata.shared)
         # not enough shared memory to run the kernel
         max_shared = max_shared_mem(device)
-        if shared > max_shared:
-            raise_(OutOfResources(shared, max_shared, "shared memory"))
+        if self.metadata.shared > max_shared:
+            raise_(OutOfResources(self.metadata.shared, max_shared, "shared memory"))
         if hasattr(self.metadata, "tmem_size") and self.metadata.tmem_size is not None:
             # Use blackwell max tmem size for now, this should be moved in device properties
             max_tmem_size = 512  # tmem size in number of columns
@@ -497,33 +495,29 @@ class CompiledKernel:
         if knobs.runtime.kernel_load_start_hook is not None:
             knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        # `build_flags`/`generate_native_code`/`max_grf_mode` are Intel/XPU-specific metadata fields.
+        # `build_flags`/`generate_native_code` are Intel/XPU-specific metadata fields.
         # Backends that don't define them (e.g. NVIDIA/CUDA) use the plain load_binary signature.
         if hasattr(self.metadata, "build_flags"):
-            max_grf_mode = getattr(self.metadata, "max_grf_mode", None)
-            # Metadata without max_grf_mode implies a "cri" target retries at 512 GRFs.
-            legacy_arch = getattr(self.metadata.target, "arch", None)
-            if max_grf_mode is None and isinstance(legacy_arch, dict) and legacy_arch.get("arch") == "cri":
-                max_grf_mode = "512"
+            device_arch = "unknown"
+            if isinstance(self.metadata.target.arch, dict):
+                device_arch = self.metadata.target.arch.get("arch", "unknown")
             self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
-                self.name, self.kernel, shared, self.metadata.build_flags, not self.metadata.generate_native_code,
-                device, max_grf_mode)
+                self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
+                not self.metadata.generate_native_code, device, device_arch)
             # PyTorch could use the updated build flags in load binary.
             if hasattr(driver.active.utils, "get_last_selected_build_flags"):
                 new_build_flags = driver.active.utils.get_last_selected_build_flags()
                 if new_build_flags != self.metadata.build_flags:
                     self.metadata = self.metadata._replace(build_flags=new_build_flags)
-                    # self.packed_metadata is what actually gets launched (see
-                    # __getitem__) and dumped for repro tooling (e.g.
-                    # TritonKernelRunner) -- keep it in sync so both reflect the
-                    # GRF mode load_binary actually settled on. `backend.pack_metadata`
-                    # is a no-op for XPU, so just rebind the reference.
-                    self.packed_metadata = self.metadata
         else:
             self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
-                self.name, self.kernel, shared, device)
+                self.name, self.kernel, self.metadata.shared, device)
         self._module_pid = os.getpid()
-        warp_size = self.metadata.warp_size
+
+        if hasattr(self.metadata, "threads_per_warp"):
+            warp_size = self.metadata.threads_per_warp
+        else:
+            warp_size = driver.active.get_current_target().warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise_(OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads"))
         if knobs.runtime.kernel_load_end_hook is not None:

@@ -152,10 +152,12 @@ private:
   size_t getSessionId(const std::string &path) { return sessionPaths[path]; }
 
   bool hasSession(const std::string &path) {
-    return sessionPaths.contains(path);
+    return sessionPaths.find(path) != sessionPaths.end();
   }
 
-  bool hasSession(size_t sessionId) { return sessions.contains(sessionId); }
+  bool hasSession(size_t sessionId) {
+    return sessions.find(sessionId) != sessions.end();
+  }
 
   void removeSession(size_t sessionId);
 

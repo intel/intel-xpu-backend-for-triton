@@ -29,7 +29,7 @@ public:
     vector.emplace_back(std::forward<Args>(args)...);
   }
 
-  bool contains(const Value &value) {
+  bool contain(const Value &value) {
     std::shared_lock<std::shared_mutex> lock(mutex);
     return std::find(vector.begin(), vector.end(), value) != vector.end();
   }

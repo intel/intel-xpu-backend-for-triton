@@ -137,6 +137,7 @@ namespace mlir::LLVM::AMD {
 
 Value AtomicRMWEmitter::emitAtomicRMW(RewriterBase &rewriter, Value rmwPtr,
                                       Value valElem, Value rmwMask,
+                                      std::optional<Value> sharedMemBase,
                                       bool enableIntraWaveReduce) const {
   auto loc = rmwPtr.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -195,6 +196,10 @@ Value AtomicRMWEmitter::emitAtomicRMW(RewriterBase &rewriter, Value rmwPtr,
                                       memOrder, scopeStr.c_str())
                 .getResult();
 
+  if (sharedMemBase.has_value()) {
+    Value atomPtr = *sharedMemBase;
+    b.store(atom, atomPtr);
+  }
   LLVM::BrOp::create(rewriter, loc, atom, endBlock);
   rewriter.setInsertionPointToStart(endBlock);
 
@@ -275,6 +280,8 @@ Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(RewriterBase &rewriter,
   auto *regularBlock = rewriter.createBlock(
       atomicBlock->getParent(), std::next(Region::iterator(atomicBlock)));
   rewriter.setInsertionPointToEnd(atomicBlock);
+
+  // If `checkPairs` was set to `false`, `packedBlock` must be removed by DCE
   LLVM::CondBrOp::create(rewriter, loc, enablePackedOpt, packedBlock,
                          regularBlock);
 

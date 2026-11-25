@@ -1,7 +1,6 @@
 #include "Schedule.h"
 #include "include/triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/SCF/Transforms/Transforms.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -228,12 +227,9 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp,
                              bool useAnnotations) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
-  ttgi::CachePolicy cachePolicy =
-      ttgi::getCachePolicy(loadOp.getCachePolicyAttr());
   auto prefetchOp = ttgi::PrefetchOp::create(
       builder, loadOp->getLoc(), loadOp.getPtr(), loadOp.getMask(),
-      cachePolicy.cacheModifier, cachePolicy.evictionPolicy,
-      loadOp.getIsVolatile());
+      loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
 
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();
@@ -275,11 +271,9 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::DescriptorLoadOp loadOp,
                              bool useAnnotations) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
-  ttgi::CachePolicy cachePolicy =
-      ttgi::getCachePolicy(loadOp.getCachePolicyAttr());
   auto prefetchOp = ttgi::DescriptorPrefetchOp::create(
       builder, loadOp->getLoc(), loadOp.getDesc(), loadOp.getIndices(),
-      cachePolicy.cacheModifier, cachePolicy.evictionPolicy);
+      loadOp.getCache(), loadOp.getEvict());
 
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();

@@ -16,8 +16,7 @@ protected:
                            PatternRewriter &rewriter) const;
   TypedValue<RankedTensorType> scaleTo16(PatternRewriter &rewriter,
                                          TypedValue<RankedTensorType> scale,
-                                         FloatType computeType,
-                                         bool handleNan) const;
+                                         FloatType computeType) const;
   TypedValue<RankedTensorType>
   broadcastScale(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
                  TypedValue<RankedTensorType> scale, int dim,
@@ -38,7 +37,7 @@ protected:
   extendAndBroadcastScale(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
                           TypedValue<RankedTensorType> &scale,
                           FloatType computeType, RankedTensorType dstType,
-                          int opIdx, bool handleNan) const;
+                          int opIdx) const;
   static SmallVector<int, 2> getTransposeOrder(int rank);
 };
 

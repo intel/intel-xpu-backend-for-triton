@@ -4,12 +4,12 @@ add_executable(triton-opt triton-opt.cpp)
 
 target_compile_options(triton-opt PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 target_link_libraries(triton-opt PRIVATE
+  TritonIntelLLVMIR
   ${triton_libs}
   # tests
   TritonTestAnalysis
   TritonTestDialect
   TritonAMDGPUTestAnalysis
-  TritonIntelTestAnalysis
   TritonTestProton
   # MLIR core
   MLIROptLib
@@ -31,7 +31,6 @@ target_link_libraries(triton-reduce PRIVATE
   TritonTestAnalysis
   TritonTestDialect
   TritonAMDGPUTestAnalysis
-  TritonIntelTestAnalysis
   TritonTestProton
   # MLIR core
   MLIRReduceLib
@@ -52,7 +51,6 @@ target_link_libraries(triton-lsp PRIVATE
   TritonTestAnalysis
   TritonTestDialect
   TritonAMDGPUTestAnalysis
-  TritonIntelTestAnalysis
   TritonTestProton
   # MLIR core
   MLIRLspServerLib
@@ -90,7 +88,6 @@ target_link_libraries(triton-tensor-layout PRIVATE
   TritonTestDialect
   TritonTestProton
   TritonAMDGPUTestAnalysis
-  TritonIntelTestAnalysis
   MLIRRegisterAllDialects
   MLIRRegisterAllPasses
   MLIRTransforms

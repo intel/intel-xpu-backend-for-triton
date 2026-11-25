@@ -8,7 +8,6 @@ enum class DeviceType {
   HIP,
   CUDA,
 @BACKEND_DEVICE_TAGS@
-  EXTERNAL, // The device of a backend added with registerBackend().
   COUNT
 };
 

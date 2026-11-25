@@ -104,6 +104,7 @@ static SmallVector<Value> computeCrossWarpHistogram(
     b.store(b.i32_val(0), sharedMemPtr);
   }
   b.barrier(triton::gpu::AddrSpace::Local);
+  Block *afterAtomics = nullptr;
   // Apply atomic add to update the histogram in shared memory.
   for (int i = 0; i < warpLevelHistogram.size(); ++i) {
     Value warpLevelHistogramValue = warpLevelHistogram[i];
@@ -112,6 +113,10 @@ static SmallVector<Value> computeCrossWarpHistogram(
     Value sharedMemPtr =
         b.gep(baseSharedMemPtr.getType(), i32_ty, baseSharedMemPtr, offset);
     atomicAdd(sharedMemPtr, warpLevelHistogramValue, loc, rewriter);
+  }
+  if (afterAtomics) {
+    LLVM::BrOp::create(rewriter, loc, afterAtomics);
+    rewriter.setInsertionPointToStart(afterAtomics);
   }
   b.barrier(triton::gpu::AddrSpace::Local);
   // load the histogram to register with the right layout.
@@ -139,10 +144,6 @@ public:
   LogicalResult
   matchAndRewrite(triton::HistogramOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // The common lowering handles small histograms without atomics.
-    if (canUseWarpBallotHistogram(op))
-      return failure();
-
     Location loc = op.getLoc();
     auto *ctx = op.getContext();
     Value input = adaptor.getSrc();
@@ -197,8 +198,10 @@ public:
     auto threadsPerWarp = getThreadsPerWarp(srcType);
     auto warpsPerCTA =
         getWarpsPerCTA(srcType.getEncoding(), srcType.getShape());
-    replicationFactor /= product(threadsPerWarp);
-    replicationFactor /= product(warpsPerCTA);
+    replicationFactor /= std::accumulate(
+        threadsPerWarp.begin(), threadsPerWarp.end(), 1, std::multiplies<>());
+    replicationFactor /= std::accumulate(warpsPerCTA.begin(), warpsPerCTA.end(),
+                                         1, std::multiplies<>());
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     for (auto i = 0; i < histogramValue.size(); ++i) {

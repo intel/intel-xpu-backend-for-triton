@@ -122,7 +122,9 @@ private:
     }
 
     // Must be able to find the defining MakeTensorDescOp.
-    if (tt::intel::findDescriptorDefinitions(descLoadOp.getDesc()).empty())
+    SmallVector<tt::MakeTensorDescOp> allDescs =
+        tt::intel::findAllMakeTensorDescOps(descLoadOp.getDesc());
+    if (allDescs.empty())
       return false;
 
     // Only fuse if the descriptor load carries block_io = "row_major", which
@@ -163,7 +165,7 @@ private:
                               transposedType.getEncoding());
     auto newLoad = tt::DescriptorLoadOp::create(
         builder, descLoadOp.getLoc(), newResultType, descLoadOp.getDesc(),
-        descLoadOp.getIndices(), descLoadOp.getCachePolicyAttr());
+        descLoadOp.getIndices(), descLoadOp.getCache(), descLoadOp.getEvict());
 
     // Copy any discardable attributes from the original load,
     // except block_io which we set explicitly below.

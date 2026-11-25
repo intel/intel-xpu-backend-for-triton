@@ -14,12 +14,12 @@ using ::mlir::triton::gpu::toLinearLayout;
 
 LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
-                         ConversionPatternRewriter &rewriter);
+                         ConversionPatternRewriter &rewriter, bool isTuring);
 
 LogicalResult convertMMA(triton::instrument::DotI8Op op,
                          triton::instrument::DotI8Op::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
-                         ConversionPatternRewriter &rewriter);
+                         ConversionPatternRewriter &rewriter, bool isTuring);
 
 LogicalResult convertMMADotScaled(triton::DotScaledOp op,
                                   triton::DotScaledOp::Adaptor adaptor,
@@ -74,8 +74,9 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     NvidiaMmaEncodingAttr mmaLayout =
         dyn_cast<NvidiaMmaEncodingAttr>(dEncoding);
     if (mmaLayout) {
-      if (mmaLayout.getVersionMajor() == 2 && !mmaLayout.isTuring()) {
-        return convertMMA(op, adaptor, getTypeConverter(), rewriter);
+      if (mmaLayout.getVersionMajor() == 2) {
+        return convertMMA(op, adaptor, getTypeConverter(), rewriter,
+                          mmaLayout.isTuring());
       }
 
       llvm::report_fatal_error(
@@ -110,10 +111,11 @@ struct DotI8OpConversion
               "layout");
 
     auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dEncoding);
-    if (!mmaLayout || mmaLayout.getVersionMajor() != 2 || mmaLayout.isTuring())
-      return rewriter.notifyMatchFailure(
-          op, "DotI8Op requires an Ampere MMA layout");
-    return convertMMA(op, adaptor, getTypeConverter(), rewriter);
+    if (!mmaLayout || mmaLayout.getVersionMajor() != 2)
+      return rewriter.notifyMatchFailure(op,
+                                         "DotI8Op requires an MMAv2 layout");
+    return convertMMA(op, adaptor, getTypeConverter(), rewriter,
+                      mmaLayout.isTuring());
   }
 };
 
@@ -201,7 +203,16 @@ struct WarpGroupDotWaitOpConversion
                                                         op.getPendings());
     auto outputs =
         unpackOutput(loc, rewriter, wait.getResult(), inputs.getTypes());
+    bool synchronizeWarpGroups =
+        !op.getWarpGroupLocal() && triton::gpu::lookupNumWarps(op) > 4;
     rewriter.replaceOp(op, outputs);
+
+    // WGMMA waits only synchronize the issuing warp group. Synchronize all
+    // warp groups before releasing shared-memory dependencies.
+    if (synchronizeWarpGroups) {
+      triton::gpu::BarrierOp::create(rewriter, loc,
+                                     triton::gpu::AddrSpace::Local);
+    }
     return success();
   }
 };

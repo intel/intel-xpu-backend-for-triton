@@ -51,8 +51,6 @@ static bool isBlockIOForAllLayoutsExplicitlyDisabled() {
 // means the alignment is unknown; we trust the 16-byte make_tensor_descriptor
 // contract rather than reject the 2D block IO path. This silently miscompiles
 // if a caller breaks that contract, so the LDBG traces when we rely on it.
-// For values the contract says nothing about - the load/store index - use
-// isDescriptorIndexAligned instead, which refuses an unknown divisibility.
 static bool isDescriptorAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo,
                                 Value v, unsigned divisor) {
   if (matchPattern(v, m_Constant()))
@@ -68,63 +66,6 @@ static bool isDescriptorAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo,
   return div % divisor == 0;
 }
 
-// Check a descriptor's load/store-time index in the stride-one dimension.
-// Unlike isDescriptorAligned (base pointer / pitch), an unknown divisibility
-// must refuse here: make_tensor_descriptor makes no alignment promise about the
-// indices, so there is no contract to fall back on. ttgi::isDivisible alone was
-// once unsound because tt::intel::getFinalValue resolved an scf.for iteration
-// argument to its init operand without looking at the yielded update, so an
-// index initialized to zero and advanced by an odd step was proved from the
-// zero and an odd offsetX reached the 2D block message (issue #7990).
-// getFinalValue now stops at such an argument, and the dataflow analysis -
-// which trusts tt.divisibility hints - must still agree; being a conjunction it
-// can only refuse more. ttgi::isDivisible is kept rather than replaced because
-// it also refuses a nested-loop induction variable that the analysis would
-// admit, so dropping it would widen the gate; it is not kept for soundness.
-static bool
-isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
-                         unsigned divisor) {
-  // Note for future callers: an unknown divisibility is reported as 1, so
-  // calling this with divisor == 1 degrades it to a no-op. That is the correct
-  // answer at that divisor - everything is 1-aligned - but it is not a check.
-  const tt::AxisInfo *info = axisInfo.getAxisInfo(v);
-  int64_t div = info ? info->getDivisibility(0) : 1;
-  if (div % divisor != 0) {
-    LDBG("Index " << v << " has divisibility " << div << ", need " << divisor);
-    return false;
-  }
-  return ttgi::isDivisible(tt::intel::getFinalValue(v), divisor);
-}
-
-// Folding a leading index into the base keeps it 4-byte aligned, as every 2D
-// block access needs (see satisfies2DBlockReadAlignment), only if each
-// candidate's stride is a 4-byte multiple (an unknown runtime stride is trusted
-// as the pitch is) or the index is constant 0. Leading strides are indexed by
-// block rank, so the shape count must match.
-static bool isLeadingRebaseAligned(
-    tt::DescriptorStoreOp op, const tt::intel::DescriptorDefinitions &defs,
-    unsigned shapeRank, tt::intel::ModuleAxisInfoAnalysis &axisInfo) {
-  RankedTensorType srcType = op.getSrc().getType();
-  unsigned srcRank = srcType.getRank();
-  unsigned descRank = op.getDesc().getType().getBlockType().getRank();
-  if (srcRank >= descRank)
-    return true;
-  unsigned elementWidth = srcType.getElementTypeBitWidth();
-  if (elementWidth % 8 != 0 || shapeRank != descRank)
-    return false;
-  unsigned strideDivisor = std::max(1u, 4 / (elementWidth / 8));
-  for (unsigned d = 0, e = descRank - srcRank; d < e; ++d) {
-    if (tt::intel::isConstant(op.getIndices()[d], 0))
-      continue;
-    if (!defs.allSatisfy([&](tt::MakeTensorDescOp m) {
-          return isDescriptorAligned(axisInfo, m.getStrides()[d],
-                                     strideDivisor);
-        }))
-      return false;
-  }
-  return true;
-}
-
 struct TritonIntelGPUMaterializeBlockPointerPass
     : public triton::gpu::intel::impl::
           TritonIntelGPUMaterializeBlockPointerBase<
@@ -136,24 +77,13 @@ public:
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
-    MLIRContext *context = &getContext();
-
-    // Padding propagation does not depend on 2D block I/O and must run even
-    // when the gate below closes: the generic masked lowering reads
-    // `ttig.desc_padding` and treats its absence as PAD_ZERO, so without this a
-    // PAD_NAN descriptor gets a zero fill on a target lacking the capability
-    // (#8102).
-    mod.walk(
-        [&](tt::DescriptorLoadOp op) { propagateDescPadding(op, context); });
-    mod.walk(
-        [&](tt::DescriptorStoreOp op) { propagateDescPadding(op, context); });
-
     if (!mod->hasAttr(
             ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
       return;
 
     tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     tt::intel::ModuleStrideAnalysis strideAnalysis(mod, axisInfoAnalysis);
+    MLIRContext *context = &getContext();
     mod.walk([&](tt::LoadOp op) {
       visit(op, axisInfoAnalysis, strideAnalysis, context);
     });
@@ -169,20 +99,6 @@ public:
   }
 
 private:
-  // Record the descriptor's out-of-bounds fill mode on `op`, so the LLVM
-  // lowering can still read it once the defining MakeTensorDescOp has been
-  // converted. Stamps nothing when provenance is untraceable or disagrees --
-  // consistentPadding() is nullopt for both, and the lowering handles them.
-  template <typename OpType>
-  void propagateDescPadding(OpType op, MLIRContext *context) const {
-    std::optional<tt::PaddingOption> padding =
-        tt::intel::findDescriptorDefinitions(op.getDesc()).consistentPadding();
-    if (!padding)
-      return;
-    op->setAttr(ttgi::TritonIntelGPUDialect::getDescPaddingAttrName(),
-                tt::PaddingOptionAttr::get(context, *padding));
-  }
-
   // Visit method for descriptor operations
   void visit(tt::DescriptorLoadOp op,
              tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -205,43 +121,36 @@ private:
 
     Value desc = op.getDesc();
     // Find all MakeTensorDescOps that could define this descriptor.
-    tt::intel::DescriptorDefinitions defs =
-        tt::intel::findDescriptorDefinitions(desc);
-    if (defs.empty()) {
+    SmallVector<tt::MakeTensorDescOp> allDescs =
+        tt::intel::findAllMakeTensorDescOps(desc);
+    if (allDescs.empty()) {
       LDBG("Could not find any make tensor desc op for: " << *op);
       return;
     }
 
-    // A 2D block load carries one compile-time fill value, so candidates that
-    // disagree cannot take this path. `ttig.desc_padding` is stamped by
-    // propagateDescPadding, ahead of this pass' capability gate, not here.
-    if (!defs.consistentPadding()) {
+    tt::MakeTensorDescOp makeTensorDescOp = allDescs[0];
+    LDBG("Make tensor desc op: " << makeTensorDescOp);
+
+    // All candidates must have the same padding.
+    tt::PaddingOption padding = makeTensorDescOp.getPadding();
+    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+          return d.getPadding() == padding;
+        })) {
       LDBG("Inconsistent padding across candidates");
       return;
     }
 
-    // Take the rank from the shape operands rather than the descriptor type:
-    // the stride indexing below subscripts EVERY candidate at rank-1/rank-2,
-    // and nothing ties the block-type rank to a candidate's operand count.
-    // An identical shape range across candidates plus SameVariadicOperandSize
-    // does, making both subscripts in bounds by construction.
-    std::optional<Operation::operand_range> shape = defs.consistentShape();
-    if (!shape) {
-      LDBG("Inconsistent shape across candidates");
-      return;
-    }
-    unsigned rank = shape->size();
-    LDBG("Rank: " << rank);
-    // rank is unsigned, so rank 0 would wrap rank-1 and rank-2 below.
-    if (rank < 2)
-      return;
+    // Propagate padding from MakeTensorDescOp unconditionally so the LLVM
+    // lowering can read it even after MakeTensorDescOp has been converted
+    // in the same applyPartialConversion phase.
+    op->setAttr(ttgi::TritonIntelGPUDialect::getDescPaddingAttrName(),
+                tt::PaddingOptionAttr::get(context, padding));
 
-    if constexpr (std::is_same_v<OpType, tt::DescriptorStoreOp>) {
-      if (!isLeadingRebaseAligned(op, defs, rank, axisInfoAnalysis)) {
-        LDBG("Leading index rebase not provably 4-byte aligned: " << *op);
-        return;
-      }
-    }
+    Operation::operand_range shape = makeTensorDescOp.getShape();
+    unsigned rank = shape.size();
+    LDBG("Rank: " << rank);
+    if (rank == 1)
+      return;
 
     if (!satisfies2DBlockReadAlignment(op, axisInfoAnalysis)) {
       LDBG("Alignment checks failed for: " << *op);
@@ -251,26 +160,25 @@ private:
     unsigned elementWidth = tensorType.getElementTypeBitWidth();
     LDBG("elementWidth: " << elementWidth);
 
-    // The row_major attribute stamped below requires a unit last stride. The
-    // dialect does not guarantee one, and the attribute covers every
-    // candidate, so every candidate must have it.
-    if (!defs.allSatisfy([&](tt::MakeTensorDescOp d) {
-          return tt::intel::isConstant(d.getStrides()[rank - 1], 1);
-        })) {
-      LDBG("Last stride is not 1 for every candidate: " << *op);
-      return;
-    }
+    Operation::operand_range strides = makeTensorDescOp.getStrides();
+    // For tensor descriptors, the last stride is always one (row major).
+    unsigned strideOneDimVal = rank - 1;
+
+    // Verify that tensor descriptor has stride=1 in last dimension.
+    Value fastChangeStride = strides[strideOneDimVal];
+    assert(tt::intel::isConstant(fastChangeStride, 1) &&
+           "Tensor descriptor must have stride=1 in last dimension");
 
     // Across Intel platforms, the strictest pitch restriction is to be a
     // multiple of OWord(128 bits). All candidates must satisfy this.
     unsigned pitchDivisor = llvm::divideCeil(128, elementWidth);
-    if (!defs.allSatisfy([&](tt::MakeTensorDescOp d) {
+    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
           return isDescriptorAligned(axisInfoAnalysis, d.getStrides()[rank - 2],
                                      pitchDivisor);
         }))
       return;
 
-    // Every candidate was checked to have a unit last stride above.
+    // Tensor descriptors are always row major.
     op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
                 StringAttr::get(context, "row_major"));
   }
@@ -340,6 +248,9 @@ private:
       return;
     }
 
+    if (!maskPermitsBlockTile(op, axisInfoAnalysis, rank))
+      return;
+
     // Determine if LoadOp is row-major or column-major.
     tt::intel::StrideInfo *strideInfo = strideAnalysis.getStrideInfo(ptr);
     auto isMajor = [rank, &strideInfo](RankedTensorType tensorTy,
@@ -384,29 +295,18 @@ private:
       return true;
     };
 
-    // Needed before the mask gate: maskPermitsBlockTile's row-limit bypass
-    // checks the mask is bounded along the complementary (pitch) dim.
-    const bool isRowMajor =
-        isMajor(tensorTy, rank - 1 /*fastChangeDim*/, *axisInfo);
-    const bool isColMajor =
-        isMajor(tensorTy, rank - 2 /*fastChangeDim*/, *axisInfo);
-    std::optional<unsigned> contiguousDim;
-    if (isRowMajor)
-      contiguousDim = rank - 1;
-    if (isColMajor)
-      contiguousDim = rank - 2;
-
-    if (!maskPermitsBlockTile(op, axisInfoAnalysis, strideInfo, rank,
-                              contiguousDim))
-      return;
-
     const StringRef blockIOAttrName =
         ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
+    const bool isRowMajor =
+        isMajor(tensorTy, rank - 1 /*fastChangeDim*/, *axisInfo);
     if (isRowMajor)
       op->setAttr(blockIOAttrName,
                   StringAttr::get(
                       op.getContext(),
                       ttgi::stringifyBlockIOMode(ttgi::BlockIOMode::RowMajor)));
+
+    const bool isColMajor =
+        isMajor(tensorTy, rank - 2 /*fastChangeDim*/, *axisInfo);
     if (isColMajor)
       op->setAttr(blockIOAttrName,
                   StringAttr::get(op.getContext(),
@@ -432,55 +332,13 @@ private:
   /// count in a grouped GEMM, `offs_am < tl.load(offsets_ptr + g)` — has
   /// constancy 1 along the M dim, because the compare visitor can only derive
   /// constancy from the divisibility of both sides.
-  ///
-  /// For a `tt::LoadOp`, such a mask may still be a `ttgi::matchRowLimitMask`
-  /// row-limit pattern, so permit block IO here too.
-  /// `contiguousDim`/`strideInfo` must match what LowerTo2DBlockLoad later
-  /// uses, or stamping `ttig.block_io` here de-anchors the load without it
-  /// gaining a real 2D block read. For the same reason the bypass is skipped
-  /// when LowerTo2DBlockLoad would reject the row pitch
-  /// (`ttgi::isBlockPitchSupported`). Stores aren't covered: nothing
-  /// downstream consumes a store-side row limit.
   template <typename OpType>
   bool maskPermitsBlockTile(OpType op,
                             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                            tt::intel::StrideInfo *strideInfo, unsigned rank,
-                            std::optional<unsigned> contiguousDim) const {
+                            unsigned rank) const {
     Value mask = op.getMask();
     if (!mask || matchPattern(mask, m_One()))
       return true;
-
-    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
-      if (rank >= 2 && contiguousDim) {
-        auto maskTy = cast<RankedTensorType>(mask.getType());
-        unsigned pitchDim = (*contiguousDim == rank - 1) ? rank - 2 : rank - 1;
-        bool pitchDimIsBroadcast =
-            strideInfo && strideInfo->getStride(pitchDim) == 0;
-        if (ttgi::matchRowLimitMask(mask, op.getOther(), maskTy.getShape(),
-                                    *contiguousDim, pitchDimIsBroadcast)) {
-          // Skip the bypass if LowerTo2DBlockLoad would reject the pitch.
-          unsigned elemBits = cast<tt::PointerType>(
-                                  cast<RankedTensorType>(op.getPtr().getType())
-                                      .getElementType())
-                                  .getPointeeType()
-                                  .getIntOrFloatBitWidth();
-          int64_t stride = strideInfo ? strideInfo->getStride(pitchDim) : -1;
-          bool pitchOk = ttgi::isBlockPitchSupported(
-              stride >= 0 ? std::optional<int64_t>(stride * elemBits / 8)
-                          : std::nullopt,
-              strideInfo && strideInfo->getStrideValue(pitchDim),
-              maskTy.getDimSize(*contiguousDim) * elemBits / 8);
-          if (pitchOk) {
-            LDBG(
-                "Mask is a row-limit pattern; permitting block IO for: " << op);
-            return true;
-          }
-          LDBG("Row-limit mask, but LowerTo2DBlockLoad would reject the "
-               "pitch; skip the bypass for: "
-               << op);
-        }
-      }
-    }
 
     const tt::AxisInfo *maskAxisInfo = axisInfoAnalysis.getAxisInfo(mask);
     if (!maskAxisInfo) {
@@ -504,9 +362,6 @@ private:
 
   /// Look through cast wrappers (index_cast, extui, extsi, trunci, etc.)
   /// to find the underlying arithmetic operation.
-  /// NOTE: BlockIOUtils.cpp has a stricter twin (`lookThroughCasts` /
-  /// `matchBaseAndRange`, widening casts only) used by `matchRowLimitMask`,
-  /// whose result feeds a `base_height` clamp. Keep the two in sync.
   static Value lookThroughCasts(Value val) {
     while (Operation *def = val.getDefiningOp()) {
       if (!isa<CastOpInterface>(def) || def->getNumOperands() != 1)
@@ -827,7 +682,7 @@ private:
         cast<tt::DialectInferLayoutInterface>(&origEnc.getDialect());
     Attribute dstEnc;
     if (failed(interface->inferReshapeOpEncoding(srcShape, origEnc, dstShape,
-                                                 dstEnc,
+                                                 dstEnc, /*allowReorder=*/false,
                                                  /*loc=*/std::nullopt)))
       return std::nullopt;
     return dstEnc;
@@ -921,9 +776,11 @@ private:
     }
 
     // Reshape pointer and value to [H, W] with their natural 2D encodings
-    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr);
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr,
+                                            /*allowReorder=*/false);
     auto valReshape =
-        tt::ReshapeOp::create(builder, loc, newShape, op.getValue());
+        tt::ReshapeOp::create(builder, loc, newShape, op.getValue(),
+                              /*allowReorder=*/false);
 
     // Build HW delivery encoding and convert both ptr and val into it.
     auto storeEnc =
@@ -939,9 +796,8 @@ private:
         ttg::ConvertLayoutOp::create(builder, loc, storeValTy, valReshape);
 
     // Create the new 2D store.
-    auto newStore =
-        tt::StoreOp::create(builder, loc, storePtr, storeVal, /*mask=*/Value(),
-                            op.getCachePolicyAttr(), op.getIgnoreCta());
+    auto newStore = tt::StoreOp::create(builder, loc, storePtr, storeVal,
+                                        op.getCache(), op.getEvict());
 
     setBlockIOAttrs(newStore, ctx, info->S);
     copyNonBlockIOAttrs(op, newStore);
@@ -1029,7 +885,8 @@ private:
     // (allow_reorder + efficient_layout) would be incorrect: that reshape
     // lowers to a no-op, so the registers would still hold the pointers laid
     // out per the 1D source encoding while the type claims HW delivery order.
-    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr);
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr,
+                                            /*allowReorder=*/false);
     auto loadPtrTy =
         RankedTensorType::get(newShape, ptrTensorTy.getElementType(), loadEnc);
     Value loadPtr =
@@ -1039,7 +896,8 @@ private:
     Value mask2d;
     if (Value mask = op.getMask()) {
       auto maskTy = cast<RankedTensorType>(mask.getType());
-      auto maskReshape = tt::ReshapeOp::create(builder, loc, newShape, mask);
+      auto maskReshape = tt::ReshapeOp::create(builder, loc, newShape, mask,
+                                               /*allowReorder=*/false);
       auto loadMaskTy =
           RankedTensorType::get(newShape, maskTy.getElementType(), loadEnc);
       mask2d =
@@ -1058,14 +916,15 @@ private:
     // carry the load encoding rather than the 1D source encoding.
     Value other2d;
     if (Value other = op.getOther()) {
-      auto otherReshape = tt::ReshapeOp::create(builder, loc, newShape, other);
+      auto otherReshape = tt::ReshapeOp::create(builder, loc, newShape, other,
+                                                /*allowReorder=*/false);
       other2d = ttg::ConvertLayoutOp::create(builder, loc, loadResultTy,
                                              otherReshape);
     }
 
     auto newLoad =
         tt::LoadOp::create(builder, loc, loadResultTy, loadPtr, mask2d, other2d,
-                           op.getCachePolicyAttr(), op.getIsVolatile());
+                           op.getCache(), op.getEvict(), op.getIsVolatile());
 
     // Set block IO attributes.
     setBlockIOAttrs(newLoad, ctx, info->S);
@@ -1077,19 +936,11 @@ private:
     auto converted =
         ttg::ConvertLayoutOp::create(builder, loc, consumerResultTy, newLoad);
 
-    // Reshape back to 1D with original result type.  Deliberately *not* marked
-    // `efficient_layout`: that flag means "a pass computed this destination
-    // layout, do not undo the choice", but `origResultTy` is simply the
-    // encoding the original 1D load already had — nothing was computed here to
-    // protect. The flag would also be inert on a reshape without
-    // `allow_reorder`, whose result encoding the verifier pins to the relabel
-    // of its operand anyway. What keeps the 2D block load's HW-delivery
-    // encoding intact is `isExpensiveLoadOrStore` anchoring the load, not this
-    // reshape.
+    // Reshape back to 1D with original result type.
     auto origResultTy = cast<RankedTensorType>(op.getType());
-    auto reshapeBack =
-        tt::ReshapeOp::create(builder, loc, origResultTy, converted,
-                              /*efficientLayout=*/false);
+    auto reshapeBack = tt::ReshapeOp::create(builder, loc, origResultTy,
+                                             converted, /*allowReorder=*/false,
+                                             /*efficientLayout=*/true);
 
     LDBG("Created 2D block load with layout conversion: " << *newLoad);
 
@@ -1106,30 +957,31 @@ private:
     Value desc = op.getDesc();
 
     // Find all MakeTensorDescOps that could define this descriptor.
-    tt::intel::DescriptorDefinitions defs =
-        tt::intel::findDescriptorDefinitions(desc);
-    if (defs.empty())
+    SmallVector<tt::MakeTensorDescOp> allDescs =
+        tt::intel::findAllMakeTensorDescOps(desc);
+    if (allDescs.empty())
       return false;
 
-    std::optional<Operation::operand_range> shape = defs.consistentShape();
-    if (!shape) {
+    tt::MakeTensorDescOp makeTensorDescOp = allDescs[0];
+    Operation::operand_range shape = makeTensorDescOp.getShape();
+    // All candidates must have the same shape operands.
+    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+          return d.getShape() == shape;
+        })) {
       LDBG("Inconsistent shape across descriptor candidates");
       return false;
     }
 
-    unsigned rank = shape->size();
-    // rank is unsigned, so rank 0 would wrap rank-1 below.
-    if (rank < 2)
+    unsigned rank = shape.size();
+    if (rank == 1)
       return false;
 
-    // A descriptor is only stamped row major if its last stride is one, which
-    // visitDescriptor checks separately.
+    // For tensor descriptors, the last stride is always one (row major).
     unsigned strideOneDimVal = rank - 1;
 
-    // Take the element width from the descriptor the op actually consumes, not
-    // from a candidate: the tracer follows a one-input unrealized cast without
-    // comparing its input and result types, so a candidate's type can differ.
-    tt::TensorDescType descType = cast<tt::TensorDescType>(desc.getType());
+    // Get the tensor type from the descriptor
+    tt::TensorDescType descType =
+        cast<tt::TensorDescType>(makeTensorDescOp.getType());
     RankedTensorType tensorType = descType.getBlockType();
     unsigned elementWidth = tensorType.getElementTypeBitWidth();
     LDBG("strideOneDim: " << strideOneDimVal);
@@ -1137,7 +989,7 @@ private:
     // Ensure the base ptr is 4-byte aligned.
     // Note: the HW requires the address to be 64-byte aligned, however we will
     // compensate by imposing restrictions on the offsetX and baseWidth.
-    if (!defs.allSatisfy([&](tt::MakeTensorDescOp d) {
+    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
           return isDescriptorAligned(axisInfoAnalysis, d.getBase(), 4);
         })) {
       LDBG("Found non 4 bytes aligned base");
@@ -1146,7 +998,7 @@ private:
 
     // Analyze the shape of the stride one dimension to ensure it satisfies HW
     // constraints.
-    Value baseWidth = tt::intel::getFinalValue((*shape)[strideOneDimVal]);
+    Value baseWidth = tt::intel::getFinalValue(shape[strideOneDimVal]);
     unsigned divisor = llvm::divideCeil(32u, elementWidth);
     if (!ttgi::isDivisible(baseWidth, divisor)) {
       LLVM_DEBUG({
@@ -1160,8 +1012,8 @@ private:
 
     // Analyze the load/store-time index in the stride-one dimension to ensure
     // it satisfies HW constraints.
-    Value offset = op.getIndices()[strideOneDimVal];
-    if (!isDescriptorIndexAligned(axisInfoAnalysis, offset, divisor)) {
+    Value offset = tt::intel::getFinalValue(op.getIndices()[strideOneDimVal]);
+    if (!ttgi::isDivisible(offset, divisor)) {
       LLVM_DEBUG({
         llvm::dbgs() << "descriptor index does not satisfy HW constraints: ";
         offset.printAsOperand(llvm::dbgs(), {});

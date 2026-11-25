@@ -127,8 +127,7 @@ def _cdiv_pow2(n, log2_k):
 
 @triton.jit
 def _ragged_tensor_metadata_memset(SliceSizes, n_slices, BlockOffs, slice_offs_stride_m, BlockSchedule,
-                                   first_block_size_log2, SIZES: tl.constexpr, BLOCK: tl.constexpr,
-                                   SCHEDULE_STRIDE: tl.constexpr = 0):
+                                   first_block_size_log2, SIZES: tl.constexpr, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     if pid <= SIZES:
         BlockOffs += pid * slice_offs_stride_m
@@ -149,16 +148,10 @@ def _ragged_tensor_metadata_memset(SliceSizes, n_slices, BlockOffs, slice_offs_s
             tl.store(BlockOffsPtrs, block_starts - n_blocks)
             BlockOffsPtrs += BLOCK
     else:
-        # initialize block schedule
+        # initialize block schedule to -1
         pid -= (SIZES + 1)
         offs = pid * BLOCK + tl.arange(0, BLOCK)
-        if SCHEDULE_STRIDE > 0:
-            schedule_log2 = first_block_size_log2 + offs // SCHEDULE_STRIDE
-            block = offs % SCHEDULE_STRIDE
-            n_blocks = _cdiv_pow2(tl.load(SliceSizes), schedule_log2)
-            tl.store(BlockSchedule + offs, tl.where(block < n_blocks, block << 16, -1))
-        else:
-            tl.store(BlockSchedule + offs, 0xffffffff)
+        tl.store(BlockSchedule + offs, 0xffffffff)
 
 
 @triton.jit
@@ -206,14 +199,13 @@ def make_ragged_tensor_metadata(slice_sizes, n_total_rows):
         slice_offs_combined, slice_offs_combined.stride(0),  #
         block_schedule_data,  #
         block_sizes_log2[0], SIZES=len(block_sizes_log2), BLOCK=MEMSET_BLOCK,  # optimization parameters
-        SCHEDULE_STRIDE=block_schedule_data.stride(0) if n_slices == 1 else 0, num_warps=4)
+        num_warps=4)
 
-    if n_slices != 1:
-        _ragged_tensor_metadata_compute[(block_size_num * n_slices, )](
-            slice_sizes, block_offs_data, block_offs_data.stride(0), block_schedule_data,
-            block_schedule_data.stride(0),  # outputs
-            block_sizes_log2[0], SIZES=len(block_sizes_log2), BLOCK=512,  # optimization parameters
-            num_warps=4)
+    _ragged_tensor_metadata_compute[(block_size_num * n_slices, )](
+        slice_sizes, block_offs_data, block_offs_data.stride(0), block_schedule_data,
+        block_schedule_data.stride(0),  # outputs
+        block_sizes_log2[0], SIZES=len(block_sizes_log2), BLOCK=512,  # optimization parameters
+        num_warps=4)
 
     return RaggedTensorMetadata(slice_sizes, slice_offs, block_offs_data, block_schedule_data)
 

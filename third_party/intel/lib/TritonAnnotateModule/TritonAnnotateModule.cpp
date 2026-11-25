@@ -65,10 +65,6 @@ struct TritonAnnotateModule
         ttgi::TritonIntelGPUDialect::get2DBlockIOBaseAlignmentAttrName(),
         builder.getI32IntegerAttr(blockIOBaseAlignment));
 
-    if (!maxGRFMode.empty())
-      mod->setAttr(ttgi::TritonIntelGPUDialect::getMaxGRFModeAttrName(),
-                   builder.getStringAttr(maxGRFMode));
-
     if (support16BitAtomics)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),

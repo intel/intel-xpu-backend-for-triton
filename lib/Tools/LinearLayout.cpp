@@ -1074,22 +1074,14 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   //   to the same input element) to take advantage of broadcasting in shared
   //   memory and avoid saving repeated elements in shared memory
 
-  // Only factor dimensions whose output bits are untouched by other inputs.
-  auto isIndependent = [&](const LinearLayout &layout, StringAttr dim) {
-    auto otherDims = llvm::to_vector(layout.getInDimNames());
-    llvm::erase(otherDims, dim);
-    return llvm::all_of(outDims, [&](StringAttr outDim) {
-      return !(getOutputBasisMask(layout, {dim}, outDim) &
-               getOutputBasisMask(layout, otherDims, outDim));
-    });
-  };
+  // FIXME: We should check that the other dimensions don't touch the image of
+  // this dimension.
   SmallVector<StringAttr> identityDims;
   for (auto dim : A.getInDimNames()) {
     if (B.hasInDim(dim)) {
       auto aSub = A.sublayout(dim, outDims);
       auto bSub = B.sublayout(dim, outDims);
-      if (aSub.equalIgnoringOutDimSizes(bSub) && isIndependent(A, dim) &&
-          isIndependent(B, dim))
+      if (aSub.equalIgnoringOutDimSizes(bSub))
         identityDims.push_back(dim);
     }
   }
@@ -1109,6 +1101,8 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   auto AReduced = A.sublayout(ANonIdentityInDims, outDims);
   auto BReduced = B.sublayout(BNonIdentityInDims, outDims);
 
+  // If one is empty, the other must be empty as well.
+  assert((ANonIdentityInDims.empty()) == (BNonIdentityInDims.empty()));
   auto maybeRet = lstsq(AReduced, BReduced);
   assert(maybeRet && "outer layout does not cover this layout's image");
   auto ret = std::move(*maybeRet);
@@ -1189,7 +1183,7 @@ LinearLayout::getFreeVariableMasks() const {
   for (StringAttr dim : getInDimNames()) {
     int32_t mask = 0;
     for (int i = 0; i < getInDimSizeLog2(dim); i++, c++) {
-      if (!basicVars.contains(c)) {
+      if (basicVars.count(c) == 0) {
         mask |= (1 << i);
       }
     }

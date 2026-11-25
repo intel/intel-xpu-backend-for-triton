@@ -17,9 +17,12 @@ public:
     set.insert(key);
   }
 
-  bool contains(const Key &key) const {
+  bool contain(const Key &key) const {
     std::shared_lock<std::shared_mutex> lock(mutex);
-    return set.contains(key);
+    auto it = set.find(key);
+    if (it == set.end())
+      return false;
+    return true;
   }
 
   bool erase(const Key &key) {

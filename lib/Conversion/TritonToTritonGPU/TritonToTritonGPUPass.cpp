@@ -40,9 +40,8 @@ template <class Op> struct GenericOpPattern : public OpConversionPattern<Op> {
     if (failed(this->getTypeConverter()->convertTypes(op->getResultTypes(),
                                                       retTypes)))
       return failure();
-    rewriter.replaceOpWithNewOp<Op>(
-        op, retTypes, adaptor.getOperands(), op.getProperties(),
-        op->getDiscardableAttrDictionary().getValue());
+    rewriter.replaceOpWithNewOp<Op>(op, retTypes, adaptor.getOperands(),
+                                    op->getAttrs());
 
     return success();
   }
@@ -444,7 +443,6 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
   patterns.insert< // TODO: view should have custom pattern that views the
                    // layout
       // clang-format off
-      GenericOpPattern<triton::AnnotateOp>,
       GenericOpPattern<triton::ReshapeOp>,
       GenericOpPattern<triton::BitcastOp>,
       GenericOpPattern<triton::FpToFpOp>,
@@ -459,7 +457,6 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::ClampFOp>,
       GenericOpPattern<triton::PreciseSqrtOp>,
       GenericOpPattern<triton::PreciseDivFOp>,
-      GenericOpPattern<triton::ApproxDivFOp>,
       GenericOpPattern<triton::MulhiUIOp>,
       GenericOpPattern<triton::ElementwiseInlineAsmOp>,
       TritonReducePattern,
@@ -480,9 +477,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::ExternElementwiseOp>,
       GenericOpPattern<triton::PrintOp>,
       GenericOpPattern<triton::AssertOp>,
-      GenericOpPattern<triton::AtomicLoadOp>,
       GenericOpPattern<triton::AtomicPollOp>,
-      GenericOpPattern<triton::AtomicStoreOp>,
       GenericOpPattern<triton::AtomicCASOp>,
       GenericOpPattern<triton::AtomicRMWOp>,
       GenericOpPattern<triton::DescriptorLoadOp>,

@@ -24,17 +24,13 @@ def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-intel-rewri
 
 def TritonIntelRemoveMasks
     : Pass<"triton-intel-remove-masks", "mlir::ModuleOp"> {
-  let summary = "Remove masks from tt.load and arith.select operations";
+  let summary = "Remove masks from tt.load and tt.store operations";
 
   let description = [{
-    This pass attempts to remove the mask of tt.load operations and the
-    condition of arith.select operations. Stores are not handled.
+    This pass attempts to remove the mask for tt.load and tt.store operations.
     If the masked operation is in a loop, the pass attempts to find a loop
     invariant condition equivalent to the mask condition, and then use it to
     version the loop.
-    With TRITON_INTEL_SYMBOLIC_MASKS=1, the symbolic bounds prover decides the
-    masks instead, with no fallback to the pattern-based validators; the
-    versioning condition is then sufficient for the mask, not equivalent to it.
   }];
 
   let dependentDialects = [
@@ -46,7 +42,7 @@ def TritonIntelRemoveMasks
 
 def TritonIntelFuseReshape
     : Pass<"triton-intel-fuse-reshape", "mlir::ModuleOp"> {
-  let summary = "Fuse tt.reshape operations into tensor-descriptor loads and stores";
+  let summary = "Fuse a tt.reshape operation with a tt.load operation (tensor descriptors only)";
 
   let description = [{
     This pass attempts to fuse a tt.reshape operation with a tt.descriptor_load operation.
@@ -65,22 +61,6 @@ def TritonIntelFuseReshape
         %A = tt.descriptor_load %desc[%x * %div + %y, %z]
                                 : !tt.tensordesc<512x64xf16> -> tensor<512x64xf16>
         dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
-
-    Before fusing, a reshape that drops the leading unit dimension of a 3-dim tensor is moved
-    up until it uses the tt.descriptor_load result directly, even without a dot user, in which
-    case Combine rank-reduces the load instead. It crosses single-use elementwise operations,
-    retyped in place, whose other tensor operands must be constants or splats, and tt.trans
-    operations that keep dimension 0 in place; those operands and the tt.trans operations are
-    rebuilt at rank 2. Inline asm, multi-result operations, and any operation or load carrying
-    tt.contiguity, tt.divisibility or tt.constancy block the move.
-
-    It also folds a tt.reshape that only prepends unit dimensions to a value of rank 2 or more
-    into the tt.descriptor_store of its result, which then stores the value directly (a
-    rank-reduced store):
-        %r = tt.reshape %x : tensor<128x64xf16> -> tensor<1x128x64xf16>
-        tt.descriptor_store %desc[%b, %y, %z], %r : !tt.tensordesc<1x128x64xf16>, tensor<1x128x64xf16>
-    becomes:
-        tt.descriptor_store %desc[%b, %y, %z], %x : !tt.tensordesc<1x128x64xf16>, tensor<128x64xf16>
   }];
 
   let dependentDialects = [
@@ -187,6 +167,34 @@ def TritonIntelSimplifySignedArithmetic
   ];
 }
 
+def TritonIntelSpeculateSignedDivRem
+    : Pass<"triton-intel-speculate-signed-div-rem", "mlir::ModuleOp"> {
+  let summary = "Convert signed div/rem to unsigned under a runtime assertion";
+
+  let description = [{
+    Converts arith.divsi/arith.remsi to arith.divui/arith.remui under a
+    tt.assert that the dividend is non-negative. This recovers the AxisInfo
+    constancy and contiguity deductions, which are disabled for the signed
+    operations because their floor-division argument only holds for a
+    non-negative dividend. A negative dividend then aborts with a diagnostic
+    instead of silently producing a wrong answer.
+
+    An operation is converted only when the deduction would have fired on it and
+    the check it needs is worth its cost; anything else is left signed, keeping
+    the sound but weaker lattice. SpeculateSignedDivRem.cpp documents each of
+    those conditions at the site that applies it.
+
+    Runs after TritonIntelSimplifySignedArithmetic, whose simpler prover has
+    already converted the operations that need no runtime check to be sound.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::triton::TritonDialect"
+  ];
+}
+
 def TritonIntelGPUFoldTrueCmpI
     : Pass<"triton-intel-fold-true-cmpi", "mlir::ModuleOp"> {
   let summary = "Fold provably true/false arith.cmpi to constants";
@@ -202,18 +210,9 @@ def TritonIntelGPUPrepareIfCombining
     : Pass<"triton-intel-prepare-if-combining", "mlir::triton::FuncOp"> {
   let summary = "Move ops between scf.if pairs to enable combining";
   let description = [{
-    Moves operations from between scf.if pairs that share the same condition
-    (the pass first runs CSE on the whole function, so guards computed by
-    identical expressions are the same value), enabling canonicalization to
-    combine them into a single scf.if.
-    Pure operations that do not depend on the first if are moved above it; the
-    others are copied into both of its branches when the condition is uniform
-    across the program. An operation containing an scf.if is never copied.
+    Moves pure operations from between scf.if pairs that share the same
+    condition, enabling canonicalization to combine them into a single scf.if.
   }];
-  let options = [
-    Option<"maxClonedOps", "max-cloned-ops", "unsigned", /*default*/"32",
-           "maximum source operations cloned per if pair, including nested ones">,
-  ];
   let dependentDialects = ["mlir::scf::SCFDialect"];
 }
 
@@ -245,80 +244,6 @@ def TritonIntelReassociateDotScale
   let dependentDialects = [
     "mlir::arith::ArithDialect",
     "mlir::scf::SCFDialect",
-    "mlir::triton::TritonDialect"
-  ];
-}
-
-def TritonIntelOptimizeLoadMasks
-    : Pass<"triton-intel-optimize-load-masks", "mlir::ModuleOp"> {
-  let summary = "Reduce masked-load work using the conditions selects carry";
-
-  let description = [{
-    Removes memory reads that Inductor-generated kernels perform but do not
-    need.
-
-    Inductor typically asks "is this index in range?" twice -- once as the mask
-    of a `tt.load`, once as an `arith.select` on the loaded value afterwards --
-    and emits the two independently. Two costs follow, and a kernel may show
-    either alone: the same addresses are read twice under masks differing only
-    by a condition the select already establishes, and a read fetches lanes
-    whose values a downstream select discards. Neither is visible to CSE, which
-    compares mask operands for identity, or to canonicalization, which has no
-    rule relating a select's condition to a nearby load's mask.
-
-    This pass relates the two -- what LLVM's GVN does for a conditional branch
-    (`propagateEquality`), applied to the branch-free form Triton emits. On the
-    lanes an arm decides, the select's condition holds (true arm) or does not
-    (false arm), and the rule that pays off is that `%c & %w` is just `%w` in
-    the true arm of `select %c`, and false in the false arm.
-
-    Weakening a mask lets a load coincide with one already present:
-
-        %cst = arith.constant dense<0.000000e+00>
-        %m   = arith.andi %c, %w
-        %v0  = tt.load %ptr, %w
-        %v1  = tt.load %ptr, %m, %cst
-        %r   = arith.select %c, %v1, %v0
-
-    `%v1` is observed only where `%c` holds, and there `%m` is `%w`, so `%v1` is
-    `%v0`. The arm's use is redirected to `%v0`; `%v1` and the select are then
-    dead and the pass erases them, leaving one predicated read where there were
-    two. This needs the two loads to agree on their masked-off lanes -- an
-    absent `other` counts as zero -- and nothing that writes memory in between.
-
-    Strengthening a mask stops a load reading lanes nothing observes. Following
-    a load's single-use chain through pure elementwise operations and selects:
-
-        %v = tt.load %ptr, %w, %cst
-        %r = arith.select %c, %v, %z
-
-    `%v` is read only where `%c` holds, so the mask becomes `%w & %c` -- and
-    `%w & !%c` for the false arm. The condition usually sits after the load and
-    is hoisted above it when the mask arithmetic that computes it can be moved.
-    Where the strengthened mask is provably false the load contributes only its
-    `other` on every lane observed, so it is dropped outright; that applies at
-    any rank, whereas ANDing a routinely data-dependent condition into the mask
-    of a load of rank 2 or more would cost the `ttig.block_io` tile a later pass
-    grants on the strength of the mask's per-dimension constancy, so that
-    rewrite is limited to rank < 2.
-
-    Only strengthening may be applied to an existing load's mask: it reads a
-    subset of what the load already read, so it can neither fault nor change an
-    observed value, where weakening one would read addresses the program never
-    read. The reuse direction therefore never edits a mask; it only redirects a
-    use to a load already present.
-
-    Reuse runs first, because dropping an unobserved load would retire one reuse
-    would have retired anyway, and because reuse gives the load it keeps an extra
-    consumer -- narrowing first would forfeit the reuse and see fewer loads as
-    unobserved. A clean-up runs in between: reuse can duplicate the operations
-    between a load and the select arm it feeds, and until those are unified the
-    load has several consumers and the single-use walk cannot reach the
-    condition on the far end.
-  }];
-
-  let dependentDialects = [
-    "mlir::arith::ArithDialect",
     "mlir::triton::TritonDialect"
   ];
 }

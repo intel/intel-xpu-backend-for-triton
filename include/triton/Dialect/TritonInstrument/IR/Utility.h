@@ -24,15 +24,8 @@ constexpr int numMemTypes = getMaxEnumValForMemType() + 1;
 constexpr int MAX_NUM_BASE_THREADS = 16;
 
 namespace CommitKind {
-enum Kind {
-  None = -1,
-  AsyncCp = 0,
-  Wgmma,
-  TmaStore,
-  AsyncCpRead,
-  NumCommitKinds
-};
-} // namespace CommitKind
+enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
+}
 
 // -- ConSan capture-count constants -----------------------------------------
 // Each constant corresponds to specific passToWarpSpecialize() calls in
@@ -85,15 +78,12 @@ inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasMBarriers,
 
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
                           StringRef message);
-// Strides are in elements; an empty list uses contiguous column-major storage.
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType,
                                     bool currentCTAOnly = false,
-                                    Value storeMask = nullptr,
-                                    ArrayRef<int64_t> strides = {});
+                                    Value storeMask = nullptr);
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
-                              RankedTensorType tensorType,
-                              ArrayRef<int64_t> strides = {});
+                              RankedTensorType tensorType);
 gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
                              int64_t sizeInBytes, int64_t alignment,
@@ -110,8 +100,6 @@ TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   RankedTensorType tensorType,
                                                   bool isSigned = false);
 uint32_t getMemDescLength(Value buf);
-// Permute a CTA bitset by XORing each CTA ID with the translation.
-uint32_t translateXorMask(uint32_t mask, uint32_t translation, int numCTAs);
 FuncOp getEntryPoint(ModuleOp module);
 
 inline Value maybeAnd(ImplicitLocOpBuilder &b, Value lhs, Value rhs) {
@@ -143,18 +131,6 @@ struct BufferStateCandidates {
   bool unknown = false;
 };
 
-struct BufferAccessRegion {
-  uint32_t candidateCTAs;
-  unsigned issuer;
-  triton::BufferRegion region;
-
-  bool operator<(const BufferAccessRegion &other) const {
-    return std::tie(region.baseOffset, candidateCTAs, issuer, region) <
-           std::tie(other.region.baseOffset, other.candidateCTAs, other.issuer,
-                    other.region);
-  }
-};
-
 // Map from IR region to ConSan auxiliary data.
 //
 // Aux data is created in the entry function and then either rematerialized or
@@ -182,7 +158,7 @@ struct AuxDataMap {
   struct RegionToValueMap {
     DenseMap<Region *, ValueType> values;
     ValueType at(Region *region) {
-      if (!values.contains(region)) {
+      if (values.find(region) == values.end()) {
         assert(false && "Region not found in AuxDataMap");
       }
       return values[region];
@@ -209,8 +185,6 @@ struct AuxDataMap {
   //   P = base-thread columns used by commit and proxy state, power-of-two
   //       padded.
   //   F = mbarrier phase parity slots, with extent 2.
-  //   V = visibility mask width: 32 bits for at most 32 logical threads,
-  //       otherwise 64 bits.
   //
   // Storage notation:
   //   tensor  = distributed tensor value.
@@ -227,7 +201,7 @@ struct AuxDataMap {
   // current arrival count, and bits [41..61] hold a signed tx-count.
   RegionToValueMap barrierStates;
 
-  // scratch, <Cbuf x B x Cmask x iV>
+  // scratch, <Cbuf x B x Cmask x i64>
   // Per-memory-type write frontier. Bit i means logical ConSan thread i can see
   // the latest write to the buffer row.
   RegionToValueMap writeVisibility[numMemTypes];
@@ -236,22 +210,21 @@ struct AuxDataMap {
   // Per-memory-type buffer/barrier/phase map for writes that a barrier tracks.
   RegionToValueMap writeTracking[numMemTypes];
 
-  // scratch, <Cbuf x B x Cthr x T x Cmask x iV>
+  // scratch, <Cbuf x B x Cthr x T x Cmask x i64>
   // Per-memory-type read frontier. For each buffer and logical thread lane, the
-  // value is a bitmask of reads visible to that lane's thread.
+  // i64 value is a bitmask of reads visible to that lane's thread.
   RegionToValueMap readVisibility[numMemTypes];
 
-  // scratch, <Cbuf x B x Cbar x K x Cmask x F x iV>
+  // scratch, <Cbuf x B x Cbar x K x Cmask x F x i64>
   // Per-memory-type buffer/barrier/phase map for read visibility masks that a
   // barrier tracks.
   RegionToValueMap readTracking[numMemTypes];
 
   // scratch, <Cbuf x B x Cthr x P x Cmask x i64>
   // Generic-proxy shared-memory accesses visible to each base thread. The low
-  // 16 bits contain source base-thread ids that have written the buffer; bits
-  // [16..31] track readers. The high 32 bits contain the respective subsets
-  // covered by fence.proxy.async on the path to that consumer. CTA dimensions
-  // distinguish source and consumer CTAs.
+  // 16 bits contain source base-thread ids that have accessed the buffer; bits
+  // [16..31] contain the subset covered by fence.proxy.async on the path to
+  // that consumer. CTA dimensions distinguish source and consumer CTAs.
   RegionToValueMap proxyAccessVisibility;
 
   // scratch, <Cbuf x B x Cbar x K x Cmask x F x i64>
@@ -263,12 +236,9 @@ struct AuxDataMap {
   // Per-commit-kind outstanding commit counters for shared-memory buffers.
   // Entries are 0 for none, -1 for staged but uncommitted, and positive for a
   // committed access with an outstanding-group distance.
-  // With async-copy mbarriers, -2 retains a completed copy's issuer for later
-  // barrier arrivals. Visibility distinguishes completed from pending copies.
   // Just one C dimension as ampere async_copy, WGMMA and TMA store are
   // intra-CTA.
   RegionToValueMap commits[CommitKind::NumCommitKinds];
-  bool hasAsyncCopyMbarriers = false;
 
   // State-lane plans and analysis-derived runtime-base, state-mask, and CTA
   // cases for each memdesc. bufferRegions preserves the ordered region list
@@ -276,10 +246,6 @@ struct AuxDataMap {
   triton::BufferStatePlan bufferStatePlans[numMemTypes];
   SmallVector<triton::BufferRegion> bufferRegions[numMemTypes];
   DenseMap<Value, BufferStateCandidates> bufferCandidates[numMemTypes];
-  // Operation-specific footprints retain the correlation between an issuing
-  // CTA, each physical target, and the selected descriptor candidate.
-  DenseMap<std::pair<Operation *, Value>, SmallVector<BufferAccessRegion>>
-      bufferAccessRegions;
 
   // Shared-memory state lanes occupied by each physical mbarrier. Virtual
   // cluster barriers have no storage and therefore do not appear here.
@@ -313,6 +279,7 @@ struct AuxDataMap {
   // present; TMA/TC/CLC peer ranges are added only when the module uses them.
   ThreadLayout threadLayout;
 
+  bool hasAsyncCopyReads = false;
   bool hasAsyncProxyFenceTracking = false;
 
   LogicalResult populateAndPassToWarpSpecialize(ModuleOp module,
@@ -321,11 +288,6 @@ struct AuxDataMap {
                                                 const ConSanTargetHooks &hooks);
 
   int getClusterBarrierSlot(Operation *op) const;
-
-  // Resolve a registered access to its candidate index and shared state mask.
-  std::pair<unsigned, const llvm::SmallBitVector &>
-  getBufferAccessState(const BufferAccessRegion &access,
-                       const BufferStateCandidates &candidates) const;
 
 private:
   LogicalResult

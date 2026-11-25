@@ -10,8 +10,9 @@ namespace mlir {
 #define GEN_PASS_DEF_TRITONAMDFOLDTRUECMPI
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
-struct TritonAMDFoldTrueCmpIPass
-    : impl::TritonAMDFoldTrueCmpIBase<TritonAMDFoldTrueCmpIPass> {
+struct TritonAMDFoldTrueCmpIOpPass
+    : impl::TritonAMDFoldTrueCmpIBase<TritonAMDFoldTrueCmpIOpPass> {
+
   void runOnOperation() override {
     DenseMap<Value, SetVector<Operation *>> assumptions =
         AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());

@@ -16,7 +16,7 @@ computeHistogram(Location loc, ConversionPatternRewriter &rewriter,
                  Value baseSharedMemPtr, const SmallVector<Value> &srcValues,
                  const SmallVector<Value> &maskValues, int numBins,
                  int numThreadPerWarp, const SmallVector<Value> &indices,
-                 Value threadId, Value threadPred, int numWarps) {
+                 Value threadId, int numWarps) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> histogramValues;
   // Initialize the shared memory with zeros.
@@ -36,7 +36,6 @@ computeHistogram(Location loc, ConversionPatternRewriter &rewriter,
   Value numBinsValue = b.i32_val(numBins);
   for (int i = 0; i < srcValues.size(); ++i) {
     Value updatePred = b.icmp_ult(srcValues[i], numBinsValue);
-    updatePred = maybeAnd(rewriter, loc, updatePred, threadPred);
     if (!maskValues.empty())
       updatePred = b.and_(updatePred, maskValues[i]);
 
@@ -63,15 +62,16 @@ computeHistogram(Location loc, ConversionPatternRewriter &rewriter,
 
 namespace {
 struct HistogramOpConversion
-    : public ConvertOpToLLVMPattern<triton::HistogramOp> {
+    : public ConvertTritonGPUOpToLLVMPattern<triton::HistogramOp> {
 public:
-  using ConvertOpToLLVMPattern<triton::HistogramOp>::ConvertOpToLLVMPattern;
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::HistogramOp>::ConvertTritonGPUOpToLLVMPattern;
 
   explicit HistogramOpConversion(LLVMTypeConverter &typeConverter,
                                  const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
-  }
+      : ConvertTritonGPUOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::HistogramOp op, OpAdaptor adaptor,
@@ -98,11 +98,6 @@ public:
     int numWarps = triton::gpu::lookupNumWarps(op);
     Value threadId = getThreadId(rewriter, loc);
     auto srcType = op.getSrc().getType();
-    auto freeVarMasks = getFreeVariableMasks(srcType);
-    // Each CTA computes its own histogram.
-    freeVarMasks[str_attr("block")] = 0;
-    Value threadPred =
-        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
     // Use atomic adds to update the histogram in shared memory.
     Value baseSharedMemPtr =
@@ -121,7 +116,25 @@ public:
       innerDimIndices.push_back(indices[i][0]);
     SmallVector<Value> histogramValue = computeHistogram(
         loc, rewriter, baseSharedMemPtr, srcValues, maskValues, numBins,
-        numThreadsPerWarp, innerDimIndices, threadId, threadPred, numWarps);
+        numThreadsPerWarp, innerDimIndices, threadId, numWarps);
+
+    // Depending on the layout, some threads may have duplicate data. We can
+    // account for this by calculating a "replication factor" and dividing the
+    // results by it to avoid overcounting.
+    auto replicationFactor = numWarps * numThreadsPerWarp;
+    auto threadsPerWarp = getThreadsPerWarp(srcType);
+    auto warpsPerCTA =
+        getWarpsPerCTA(srcType.getEncoding(), srcType.getShape());
+    replicationFactor /= std::accumulate(
+        threadsPerWarp.begin(), threadsPerWarp.end(), 1, std::multiplies<>());
+    replicationFactor /= std::accumulate(warpsPerCTA.begin(), warpsPerCTA.end(),
+                                         1, std::multiplies<>());
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    for (auto i = 0; i < histogramValue.size(); ++i) {
+      histogramValue[i] =
+          b.sdiv(histogramValue[i], b.i32_val(replicationFactor));
+    }
 
     Value results = packUniqueTensorElements(loc, typeConverter, histogramValue,
                                              rewriter, op.getType());

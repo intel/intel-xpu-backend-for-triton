@@ -9,7 +9,6 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     BarrierOpToLLVM.cpp
-    Membar.cpp
     TritonGPUToLLVM.cpp
     TMAToLLVM.cpp
     SPMDOpToLLVM.cpp

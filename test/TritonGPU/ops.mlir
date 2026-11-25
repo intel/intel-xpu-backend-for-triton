@@ -98,16 +98,8 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
 #shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
-#fp6 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, padding = "b6x16_p32"}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @memdesc_reinterpret_fp6
-  tt.func @memdesc_reinterpret_fp6(%arg: !ttg.memdesc<8x128xi8, #fp6, #smem>) {
-    // CHECK: ttg.memdesc_reinterpret
-    %0 = ttg.memdesc_reinterpret %arg : !ttg.memdesc<8x128xi8, #fp6, #smem> -> !ttg.memdesc<8x64xi16, #shared_a, #smem>
-    tt.return
-  }
-
   // CHECK-LABEL: @memdesc_reinterpret_multibuffer_prefix_subview
   tt.func @memdesc_reinterpret_multibuffer_prefix_subview(%arg0: !ttg.memdesc<3x8x32xf16, #shared_a, #smem, 8x8x32>) {
     // CHECK: ttg.memdesc_reinterpret
@@ -331,7 +323,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @tmem_reinterpret_packed_subview_owns_column
   tt.func @tmem_reinterpret_packed_subview_owns_column(%arg0: !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory, mutable>) {
     %view = ttng.tmem_subslice %arg0 {offset = 0 : i32} : !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x2xi8, #tmem, #ttng.tensor_memory, mutable, 128x4>
-    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<128x2xi8, #tmem, #ttng.tensor_memory, mutable, 128x4> -> !ttg.memdesc<128x4xi8, #ttng.tensor_memory_encoding<blockM = 128, blockN = 4, colStride = 1>, #ttng.tensor_memory, mutable>
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<128x2xi8, #tmem, #ttng.tensor_memory, mutable, 128x4> -> !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory, mutable>
     tt.return
   }
 

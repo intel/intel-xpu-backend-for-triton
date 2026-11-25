@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Any, Optional
-from triton._utils import canonicalize_dtype, fp6_logical_shape, get_primitive_bitwidth, validate_block_shape, validate_fp6_box
+from triton._utils import validate_block_shape, canonicalize_dtype, get_primitive_bitwidth
 from triton.experimental.gluon.language._layouts import NVMMASharedLayout
 import triton.language as tl
 
@@ -32,10 +32,6 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
     min_block = layout.swizzle_byte_width // (elem_bytes * padding_factor)
     assert block_shape[-1] >= min_block, \
         f"Expected block_shape[-1] to be at least {min_block} but got {block_shape[-1]}"
-    if layout.padding in ("b6x16_p32", "b6p2x16"):
-        validate_fp6_box(block_shape[-1], shape[-1], strides[:-1], padding, host=True)
-        if dtype_str != "u8" or layout.swizzle_byte_width not in (0, 128) or tensor.data_ptr() % 32:
-            raise ValueError("FP6 requires 32-byte aligned uint8 storage and 0/128-byte swizzling")
     if layout.fp4_padded:
         assert tensor.data_ptr() % 32 == 0, "For fp4_padded, base must 32-byte aligned"
         for stride in strides[:-1]:
@@ -100,10 +96,9 @@ class TensorDescriptor:
             padding: "zero" (default) or "nan" for out-of-bounds padding
             round_f32_to_tf32: Round float32 to TF32 precision (default False)
         """
-        shape = fp6_logical_shape(tensor.shape) if layout.padding in ("b6x16_p32", "b6p2x16") else tensor.shape
         return TensorDescriptor(
             tensor,
-            shape,
+            tensor.shape,
             tensor.stride(),
             block_shape,
             layout,

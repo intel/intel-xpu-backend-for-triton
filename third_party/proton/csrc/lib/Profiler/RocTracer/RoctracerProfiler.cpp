@@ -99,7 +99,7 @@ void processActivityKernel(
     const roctracer_record_t *activity) {
   if (externId == Scope::DummyScopeId)
     return;
-  bool isGraph = corrIdToIsHipGraph.contains(activity->correlation_id);
+  bool isGraph = corrIdToIsHipGraph.contain(activity->correlation_id);
   auto &state = externIdToState[externId];
   if (!isGraph) {
     for (auto [data, entry] : state.dataToEntry) {
@@ -309,9 +309,9 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
         hipGraphExec_t GraphExec = data->args.hipGraphLaunch.graphExec;
         numInstances = std::numeric_limits<size_t>::max();
         bool findGraph = false;
-        if (pImpl->graphExecToGraph.contains(GraphExec)) {
+        if (pImpl->graphExecToGraph.contain(GraphExec)) {
           hipGraph_t Graph = pImpl->graphExecToGraph[GraphExec];
-          if (pImpl->graphToNumInstances.contains(Graph)) {
+          if (pImpl->graphToNumInstances.contain(Graph)) {
             numInstances = pImpl->graphToNumInstances[Graph];
             findGraph = true;
           }
@@ -346,31 +346,31 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       }
       case HIP_API_ID_hipLaunchKernel: {
         hipStream_t Stream = data->args.hipLaunchKernel.stream;
-        if (pImpl->streamToCapture.contains(Stream))
+        if (pImpl->streamToCapture.contain(Stream))
           pImpl->streamToCaptureCount[Stream]++;
         break;
       }
       case HIP_API_ID_hipExtLaunchKernel: {
         hipStream_t Stream = data->args.hipExtLaunchKernel.stream;
-        if (pImpl->streamToCapture.contains(Stream))
+        if (pImpl->streamToCapture.contain(Stream))
           pImpl->streamToCaptureCount[Stream]++;
         break;
       }
       case HIP_API_ID_hipLaunchCooperativeKernel: {
         hipStream_t Stream = data->args.hipLaunchCooperativeKernel.stream;
-        if (pImpl->streamToCapture.contains(Stream))
+        if (pImpl->streamToCapture.contain(Stream))
           pImpl->streamToCaptureCount[Stream]++;
         break;
       }
       case HIP_API_ID_hipModuleLaunchKernel: {
         hipStream_t Stream = data->args.hipModuleLaunchKernel.stream;
-        if (pImpl->streamToCapture.contains(Stream))
+        if (pImpl->streamToCapture.contain(Stream))
           pImpl->streamToCaptureCount[Stream]++;
         break;
       }
       case HIP_API_ID_hipModuleLaunchCooperativeKernel: {
         hipStream_t Stream = data->args.hipModuleLaunchCooperativeKernel.stream;
-        if (pImpl->streamToCapture.contains(Stream))
+        if (pImpl->streamToCapture.contain(Stream))
           pImpl->streamToCaptureCount[Stream]++;
         break;
       }
