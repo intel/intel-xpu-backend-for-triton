@@ -154,11 +154,6 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getSupportPredicatedIOAttrName(),
           builder.getUnitAttr());
 
-    if (supportSubgroupBitcastShuffle)
-      mod->setAttr(ttgi::TritonIntelGPUDialect::
-                       getSupportSubgroupBitcastShuffleAttrName(),
-                   builder.getUnitAttr());
-
     if (supportRoundedDivideSqrt)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportRoundedDivideSqrtAttrName(),

@@ -65,12 +65,6 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_predicated_io";
     }
 
-    /// Get the name of the attribute used to indicate whether the
-    /// SPV_INTEL_subgroup_bitcast_shuffle extension is available.
-    static constexpr llvm::StringRef getSupportSubgroupBitcastShuffleAttrName() {
-      return "ttig.support_subgroup_bitcast_shuffle";
-    }
-
     /// Get the name of the attribute used to indicate whether the DPAS
     /// operation is available.
     static constexpr llvm::StringRef getSupportDPASAttrName() {

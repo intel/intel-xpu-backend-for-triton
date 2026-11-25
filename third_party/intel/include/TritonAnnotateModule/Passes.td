@@ -49,8 +49,6 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "whether bfloat16 arithmetic is supported">,
     Option<"supportPredicatedIO", "support-predicated-io", "bool", /*default*/"false",
            "whether predicated io is supported">,
-    Option<"supportSubgroupBitcastShuffle", "support-subgroup-bitcast-shuffle", "bool", /*default*/"false",
-           "whether SPV_INTEL_subgroup_bitcast_shuffle is supported">,
     Option<"threadsPerWarp", "threads-per-warp",
            "unsigned", /*default*/"32",
            "number of threads per warp (aka subgroup size)">,
