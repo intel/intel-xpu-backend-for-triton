@@ -66,8 +66,15 @@ two IGC versions is that the old one reports `spill_size: 320` and a scratch buf
 generation is spill-free but about 1.7x slower, so this is not a register-pressure problem. Diff `results/*_grf256.bin` (e.g. with
 `ocloc disasm`) to see what changed.
 
+## IGC or runtime? (native zebins)
+
+`./repro <case.cfg> --native <zebin>` loads a precompiled device binary instead of the SPIR-V. `cases/prefill4096/zebins/` holds the
+256-GRF zebins that `ocloc` produced for `bmg` with IGC 2.42.6 and IGC 2.43.9. Run on the same machine and the same 2.43.9
+compute runtime (26.44.40734.8), the 2.42.6 zebin gives 16.9 tflops (32.4 ms) and the 2.43.9 zebin gives 10.2 tflops (54.0 ms), with
+identical output checksums. The slowdown therefore follows the IGC-compiled code, not the runtime executing it.
+
 ## Open questions this package is meant to answer
 
 1. Why is the spill-free 256-GRF build on IGC 2.43.9 about 1.7x slower than the old build that spilled 320 B? (Instruction scheduling,
    2D block load/prefetch placement, or fp8 conversion sequences are candidates; none are verified.)
-2. Does the same happen with a newer agama and the old IGC, or the reverse? IGC and agama changed together here.
+2. (Answered, see above: the compiled code is the cause, not the runtime.)

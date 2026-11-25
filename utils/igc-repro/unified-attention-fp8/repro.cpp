@@ -31,10 +31,11 @@ static inline uint32_t rnd() { xs ^= xs << 13; xs ^= xs >> 17; xs ^= xs << 5; re
 
 int main(int argc, char **argv) {
   if (argc < 2) { std::fprintf(stderr, "usage: %s case.cfg [--build-flags F] [--iters N] [--warmup N]\n", argv[0]); return 1; }
-  std::string cfgPath = argv[1], flags; int iters = 50, warmup = 10;
+  std::string cfgPath = argv[1], flags, native; int iters = 50, warmup = 10;
   for (int i = 2; i < argc; i++) {
     std::string a = argv[i];
     if (a == "--build-flags" && i + 1 < argc) flags = argv[++i];
+    else if (a == "--native" && i + 1 < argc) native = argv[++i];
     else if (a == "--iters" && i + 1 < argc) iters = std::atoi(argv[++i]);
     else if (a == "--warmup" && i + 1 < argc) warmup = std::atoi(argv[++i]);
   }
@@ -77,8 +78,8 @@ int main(int argc, char **argv) {
     ZE(zeCommandListAppendMemoryCopy(cl, t.dev, h.data(), t.bytes, nullptr, 0, nullptr)); ZE(zeCommandListHostSynchronize(cl, UINT64_MAX));
   }
 
-  auto il = readFile(dir + spv);
-  ze_module_desc_t md{ZE_STRUCTURE_TYPE_MODULE_DESC}; md.format = ZE_MODULE_FORMAT_IL_SPIRV; md.inputSize = il.size();
+  auto il = readFile(native.empty() ? dir + spv : native);
+  ze_module_desc_t md{ZE_STRUCTURE_TYPE_MODULE_DESC}; md.format = native.empty() ? ZE_MODULE_FORMAT_IL_SPIRV : ZE_MODULE_FORMAT_NATIVE; md.inputSize = il.size();
   md.pInputModule = (const uint8_t *)il.data(); md.pBuildFlags = flags.c_str();
   ze_module_handle_t mod; ze_module_build_log_handle_t log = nullptr; ze_result_t mr = zeModuleCreate(ctx, dev, &md, &mod, &log);
   if (mr != ZE_RESULT_SUCCESS) { size_t n = 0; if (log) { zeModuleBuildLogGetString(log, &n, nullptr); std::string s(n, 0); zeModuleBuildLogGetString(log, &n, s.data()); std::fprintf(stderr, "build log: %s\n", s.c_str()); }
