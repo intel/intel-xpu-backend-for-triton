@@ -343,7 +343,18 @@ if(TRITON_BUILD_PYTHON_MODULE)
   include_directories(${PYTHON_SRC_PATH})
 
   # Python Interpreter is used to run lit tests
-  find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
+  if(TRITON_STABLE_ABI)
+    if(CMAKE_VERSION VERSION_LESS 3.26)
+      message(FATAL_ERROR "TRITON_STABLE_ABI requires CMake >= 3.26 (Development.SABIModule)")
+    endif()
+    find_package(Python3 3.12 REQUIRED COMPONENTS Development.Module Development.SABIModule Interpreter)
+    # On Windows, Python3::Module links python3XX.lib, which pins the extension
+    # to one Python version. Python3::SABIModule links python3.lib instead.
+    set(TRITON_PYTHON_MODULE_LIB Python3::SABIModule)
+  else()
+    find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
+    set(TRITON_PYTHON_MODULE_LIB Python3::Module)
+  endif()
   # nanobind expects find_package(Python) which sets Python::Module target
   # and Python_* variables. Triton uses find_package(Python3) instead.
   # Bridge the two by aliasing the target and forwarding variables.
@@ -364,7 +375,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   if(TRITON_STABLE_ABI)
     target_compile_definitions(nanobind-static PUBLIC Py_LIMITED_API=0x030C0000)
   endif()
-  target_link_libraries(nanobind-static PRIVATE Python3::Module)
+  target_link_libraries(nanobind-static PRIVATE ${TRITON_PYTHON_MODULE_LIB})
 
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
@@ -426,7 +437,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     LLVMAMDGPUCodeGen
     LLVMAMDGPUAsmParser
 
-    Python3::Module
+    ${TRITON_PYTHON_MODULE_LIB}
     nanobind-static
   )
 
