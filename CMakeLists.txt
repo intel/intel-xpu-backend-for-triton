@@ -343,13 +343,14 @@ if(TRITON_BUILD_PYTHON_MODULE)
   include_directories(${PYTHON_SRC_PATH})
 
   # Python Interpreter is used to run lit tests
-  if(TRITON_STABLE_ABI)
+  # On Windows, Python3::Module links python3XX.lib, which pins the extension
+  # to one Python version. Python3::SABIModule links python3.lib instead.
+  # Other platforms do not link libpython, so Python3::Module is fine there.
+  if(TRITON_STABLE_ABI AND WIN32)
     if(CMAKE_VERSION VERSION_LESS 3.26)
-      message(FATAL_ERROR "TRITON_STABLE_ABI requires CMake >= 3.26 (Development.SABIModule)")
+      message(FATAL_ERROR "TRITON_STABLE_ABI on Windows requires CMake >= 3.26 (Development.SABIModule)")
     endif()
     find_package(Python3 3.12 REQUIRED COMPONENTS Development.Module Development.SABIModule Interpreter)
-    # On Windows, Python3::Module links python3XX.lib, which pins the extension
-    # to one Python version. Python3::SABIModule links python3.lib instead.
     set(TRITON_PYTHON_MODULE_LIB Python3::SABIModule)
   else()
     find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
