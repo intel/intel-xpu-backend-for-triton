@@ -53,7 +53,7 @@ LinearLayout getInterWarpReductionLayout(triton::ReduceOp op,
                                          const LinearLayout &srcLayout);
 
 /// Reserve all swizzled repetitions at once rather than reusing a single tile.
-ReduceOpHelper::ScratchConfig
+LayoutConversionScratchConfig
 getReductionScratchConfig(triton::ReduceOp op, const LinearLayout &srcLayout,
                           const LinearLayout &dstLayout);
 

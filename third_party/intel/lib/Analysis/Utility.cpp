@@ -481,7 +481,7 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   // case.
   Type elemType = srcTy.getElementType();
   unsigned bitsPerElement =
-    std::max<int>(8, getIntOrFloatOrPtrBitWidth(elemType));
+      std::max<int>(8, getIntOrFloatOrPtrBitWidth(elemType));
   if ((packedRegisterSize * bitsPerElement >= 128) && packedRegisterSize > 4)
     return false;
 
@@ -563,13 +563,13 @@ LinearLayout getInterWarpReductionLayout(triton::ReduceOp op,
                       /*requireSurjective=*/true);
 }
 
-ReduceOpHelper::ScratchConfig
+LayoutConversionScratchConfig
 getReductionScratchConfig(triton::ReduceOp op, const LinearLayout &srcLayout,
                           const LinearLayout &dstLayout) {
   // Count the full swizzled footprint, including repetitions. The common
   // scratch helper also assigns aligned byte offsets for mixed-width operands.
-  return ReduceOpHelper(op).getScratchConfig(
-      srcLayout, dstLayout,
+  return getLayoutConversionScratchConfig(
+      srcLayout, dstLayout, op.getElementTypes(),
       [](const LinearLayout &src, const LinearLayout &dst, unsigned bitwidth) {
         return optimalSwizzlingLdSt(src, dst, bitwidth).getTotalOutDimSize();
       });
