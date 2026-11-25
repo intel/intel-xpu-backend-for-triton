@@ -9,7 +9,7 @@
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate_fp4, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<
   // CHECK-LABEL: tt.func public @nvfp4_e4m3_scales_are_decomposed(
   // CHECK-NOT:     tt.dot_scaled
@@ -29,7 +29,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate_fp4, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<
   // CHECK-LABEL: tt.func public @e8m0_scales_per_16_elements_are_decomposed(
   // CHECK-NOT:     tt.dot_scaled
@@ -49,7 +49,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate_fp4, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<
   // CHECK-LABEL: tt.func public @e4m3_scales_per_32_elements_are_decomposed(
   // CHECK-NOT:     tt.dot_scaled
@@ -71,7 +71,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate_fp4, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<
   // CHECK-LABEL: tt.func public @nvfp4_packed_along_n_is_decomposed(
   // CHECK-NOT:     tt.dot_scaled
@@ -91,7 +91,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate_fp4, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<
   // CHECK-LABEL: tt.func public @mxfp4_e8m0_scales_use_block_scaled_dpas(
   // CHECK:         tt.dot_scaled {{.*}} -> tensor<32x32xf32, #[[$DPAS]]>
@@ -109,7 +109,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate_fp4, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<
   // CHECK-LABEL: tt.func public @e8m0_a_e4m3_b_scales_are_decomposed(
   // CHECK-NOT:     tt.dot_scaled
@@ -129,7 +129,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate_fp4, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<
   // CHECK-LABEL: tt.func public @e4m3_a_e8m0_b_scales_are_decomposed(
   // CHECK-NOT:     tt.dot_scaled
@@ -150,7 +150,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_matrix_multiply_accumulate_bf8, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate_fp4, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<
   // CHECK-LABEL: tt.func public @mxfp4_f8e8m0fnu_scales_use_block_scaled_dpas(
   // CHECK:         tt.dot_scaled {{.*}} -> tensor<32x32xf32, #[[$DPAS]]>
