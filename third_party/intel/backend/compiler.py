@@ -288,7 +288,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             try:
                 impl = __import__(mod_name, fromlist=["XPUBackendImpl"]).XPUBackendImpl
             except ModuleNotFoundError as e:
-                if e.name != mod_name:  # the chip has a module, but it fails to import
+                # A chip module that fails to import raises. A dotted name (an IP version) cannot name a module.
+                if e.name != mod_name and "." not in dev_arch:
                     raise
                 impl = type(f"{mod_name}.XPUBackendImpl", (cls, ), {})
             impl.device_arch = dev_arch

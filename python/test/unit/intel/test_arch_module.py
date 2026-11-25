@@ -45,11 +45,11 @@ def chip_modules(monkeypatch, tmp_path):
         delattr(arch_pkg, CHIP)
 
 
-def test_chip_without_module_keeps_base_properties(monkeypatch):
-    monkeypatch.setenv("TRITON_INTEL_DEVICE_ARCH", "no_such_chip")
+@pytest.mark.parametrize("name", ["no_such_chip", "no.such.chip"])
+def test_chip_without_module_keeps_base_properties(monkeypatch, name):
+    monkeypatch.setenv("TRITON_INTEL_DEVICE_ARCH", name)
     backend = XPUBackend(TARGET)
-    assert type(backend).__bases__ == (XPUBackend, )
-    assert backend.properties == XPUBackend.parse_target(backend, TARGET.arch)
+    assert (backend.device_arch, type(backend).parse_target) == (name, XPUBackend.parse_target)
 
 
 def test_backend_follows_a_device_arch_change(monkeypatch, chip_modules):
