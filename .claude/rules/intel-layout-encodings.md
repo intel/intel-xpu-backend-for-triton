@@ -178,9 +178,9 @@ scratchBytes = numMatrixCells * bytesPerElement
 
 The padding keeps adjacent rows on different SLM banks (the pitch in dwords is odd for 1-, 2- and
 4-byte elements; 8-byte elements keep their 136-byte pitch) and, for sub-dword element types, keeps
-every row dword-aligned: each lane loads its row as one vector and, for those types, the load
-carries that alignment explicitly (issue #8749: a 17-byte i8 pitch returned data shifted by
-`address % 4`).
+every row dword-aligned. Each lane loads its row as one vector, and the load states the alignment
+the pitch guarantees, `max(4, bytesPerElement)`, rather than the vector type's natural alignment
+(issue #8749: a 17-byte i8 pitch returned data shifted by `address % 4`).
 
 ### Shared Memory Order
 

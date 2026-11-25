@@ -84,7 +84,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : i32 to f32
     %0 = ttg.convert_layout %arg0 : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #blocked1>
     tt.return %0 : tensor<16x16xf32, #blocked1>
@@ -137,7 +137,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i64
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi64>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 8> : !llvm.ptr<3> -> vector<16xi64>
     %0 = ttg.convert_layout %arg0 : tensor<16x16xi64, #blocked> -> tensor<16x16xi64, #blocked1>
     tt.return %0 : tensor<16x16xi64, #blocked1>
   }
@@ -164,7 +164,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i64
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi64>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 8> : !llvm.ptr<3> -> vector<16xi64>
     // CHECK-COUNT-16:  llvm.inttoptr %{{.*}} : i64 to !llvm.ptr<1>
     %0 = ttg.convert_layout %arg0 : tensor<16x16x!tt.ptr<f32>, #blocked> -> tensor<16x16x!tt.ptr<f32>, #blocked1>
     tt.return %0 : tensor<16x16x!tt.ptr<f32>, #blocked1>
@@ -229,7 +229,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : i32 to f32
     %0 = ttg.convert_layout %arg0 : tensor<32x16xf32, #blocked> -> tensor<32x16xf32, #blocked1>
     tt.return %0 : tensor<32x16xf32, #blocked1>
@@ -266,7 +266,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : i32 to f32
     %0 = ttg.convert_layout %arg0 : tensor<16x32xf32, #blocked> -> tensor<16x32xf32, #blocked1>
     tt.return %0 : tensor<16x32xf32, #blocked1>
@@ -303,7 +303,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : i32 to f32
     %0 = ttg.convert_layout %arg0 : tensor<64x64xf32, #blocked> -> tensor<64x64xf32, #blocked1>
     tt.return %0 : tensor<64x64xf32, #blocked1>
@@ -340,7 +340,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : i32 to f32
     %0 = ttg.convert_layout %arg0 : tensor<64x64x1xf32, #blocked> -> tensor<64x64x1xf32, #blocked1>
     tt.return %0 : tensor<64x64x1xf32, #blocked1>
@@ -376,7 +376,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : i32 to f32
     %0 = ttg.convert_layout %arg0 : tensor<64x64xf32, #ttg.slice<{dim = 2, parent = #blocked}>> -> tensor<64x64xf32, #blocked1>
     tt.return %0 : tensor<64x64xf32, #blocked1>
@@ -413,7 +413,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : i32 to f32
     %0 = ttg.convert_layout %arg0 : tensor<16x16x1xf32, #ttg.slice<{dim = 2, parent = #ttg.slice<{dim = 4, parent = #blocked}>}>> -> tensor<16x16x1xf32, #blocked1>
     tt.return %0 : tensor<16x16x1xf32, #blocked1>
@@ -450,7 +450,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : i32 to f32
     %0 = ttg.convert_layout %arg0 : tensor<64x16x4xf32, #ttg.slice<{dim = 2, parent = #ttg.slice<{dim = 4, parent = #blocked}>}>> -> tensor<64x16x4xf32, #blocked1>
     tt.return %0 : tensor<64x16x4xf32, #blocked1>
@@ -488,7 +488,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : i32 to f32
     %0 = ttg.convert_layout %arg0 : tensor<32x16xf32, #blocked> -> tensor<32x16xf32, #blocked1>
     tt.return %0 : tensor<32x16xf32, #blocked1>
@@ -526,7 +526,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : i32 to f32
     %0 = ttg.convert_layout %arg0 : tensor<16x32xf32, #blocked> -> tensor<16x32xf32, #blocked1>
     tt.return %0 : tensor<16x32xf32, #blocked1>
@@ -564,7 +564,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(17 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : i32 to f32
     %0 = ttg.convert_layout %arg0 : tensor<32x64xf32, #blocked> -> tensor<32x64xf32, #blocked1>
     tt.return %0 : tensor<32x64xf32, #blocked1>
@@ -619,9 +619,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(33 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK:           %[[VAL_62:.*]] = llvm.getelementptr inbounds %[[VAL_61]][1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<16xi32>
-    // CHECK:           llvm.load %[[VAL_62]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_62]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK:           %[[VAL_63:.*]] = llvm.getelementptr inbounds %[[VAL_62]][1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<16xi32>
     // CHECK:           %[[VAL_64:.*]] = llvm.getelementptr inbounds %[[VAL_63]][1024] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
     // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : i32 to f32
@@ -729,10 +729,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(34 : i64) : i64
     // CHECK:           %[[VAL_60:.*]] = llvm.mul %[[VAL_39]], %[[VAL_59]] : i64
     // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_42]]{{\[}}%[[VAL_60]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_61]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_61]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK:           %[[VAL_62:.*]] = llvm.getelementptr inbounds %[[VAL_61]][1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<16xi32>
     // CHECK:           %[[VAL_64:.*]] = llvm.getelementptr inbounds %[[VAL_62]][1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
-    // CHECK:           llvm.load %[[VAL_64]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           llvm.load %[[VAL_64]] <alignment = 4> : !llvm.ptr<3> -> vector<16xi32>
     // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : i32 to f32
     %0 = ttg.convert_layout %arg0 : tensor<64x64xf32, #blocked> -> tensor<64x64xf32, #blocked1>
     tt.return %0 : tensor<64x64xf32, #blocked1>

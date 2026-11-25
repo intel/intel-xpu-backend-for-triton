@@ -388,23 +388,19 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     VectorType vecType = vec_ty(elementType, vecLoadWidth);
     assert(threadsPerWarp % vecLoadWidth == 0 &&
            "Column must be loadable with N loads");
-    // Rows of sub-dword elements are dword-aligned, not aligned to the vector
-    // type's natural alignment LLVM would otherwise assume: say so (#8749).
-    // Wider elements deliberately keep the bare load: LLVM then assumes the
-    // vector type's natural alignment (64 bytes for vector<16xi32>, 128 for
-    // vector<16xi64>), which the 68- and 136-byte pitches do not provide
-    // either (they only guarantee `bytesPerElement`). IGC has handled it
-    // correctly on every target so far, and stating the real alignment would
-    // change f32/i64 transpose codegen on PVC/BMG unmeasured. Revisit once
-    // that is measured.
-    unsigned loadAlignment = bytesPerElement < 4 ? 4 : 0;
-    assert((rowLength * bytesPerElement) % 4 == 0 &&
-           "Row pitch must keep the per-lane loads dword-aligned");
+    // The row pitch only guarantees the per-lane row loads 4-byte alignment, or
+    // 8-byte for 8-byte elements (scratch buffers start 128-byte aligned).
+    // State it, rather than let LLVM assume the vector type's natural
+    // alignment of 16 to 128 bytes: with the former 17- and 34-byte rows of 8-
+    // and 16-bit elements, that over-claim read wrong data on CRI, PVC and BMG
+    // (#8749).
+    unsigned loadAlignment = std::max(4u, bytesPerElement);
+    assert((rowLength * bytesPerElement) % loadAlignment == 0 &&
+           "Row pitch must keep the per-lane loads aligned");
     for (unsigned i = 0; i < rowsPerThread; ++i) {
       for (unsigned j = 0; j < threadsPerWarp; j += vecLoadWidth) {
         transposedVecs.push_back(
-            loadAlignment ? b.load(vecType, workItemBasePtr, loadAlignment)
-                          : b.load(vecType, workItemBasePtr));
+            b.load(vecType, workItemBasePtr, loadAlignment));
         workItemBasePtr =
             b.gep(workItemBasePtr.getType(), vecType, workItemBasePtr,
                   ArrayRef<LLVM::GEPArg>{1}, LLVM::GEPNoWrapFlags::inbounds);
