@@ -4,6 +4,7 @@
 // wherever ttig.support_bfloat16_conversion allows the scalar builtin, in full
 // groups of 8 only.
 
+#b1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
 #b4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
 #b8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
 #b16 = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
@@ -90,6 +91,16 @@ module attributes {"ttig.support_bfloat16_conversion", "ttg.num-ctas" = 1 : i32,
   tt.func @fp_to_fp_rtz(%arg0: tensor<256xf32, #b16>) -> tensor<256xbf16, #b16> {
     %0 = tt.fp_to_fp %arg0, rounding = rtz : tensor<256xf32, #b16> -> tensor<256xbf16, #b16>
     tt.return %0 : tensor<256xbf16, #b16>
+  }
+
+  // f64 -> bf16 RTZ truncates to f32 toward zero first.
+  // CHECK-LABEL: llvm.func spir_kernelcc @fp_to_fp_f64_rtz(
+  // CHECK:         llvm.intr.experimental.constrained.fptrunc {{.*}} towardzero ignore : f64 to f32
+  // CHECK-NOT:     ConvertFToBF16INTEL
+  // CHECK:         llvm.return
+  tt.func @fp_to_fp_f64_rtz(%arg0: tensor<16xf64, #b1>) -> tensor<16xbf16, #b1> {
+    %0 = tt.fp_to_fp %arg0, rounding = rtz : tensor<16xf64, #b1> -> tensor<16xbf16, #b1>
+    tt.return %0 : tensor<16xbf16, #b1>
   }
 
   // f64 keeps its round-to-odd step and the scalar call.

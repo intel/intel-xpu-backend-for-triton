@@ -6,7 +6,7 @@ import triton.language as tl
 
 from triton.language.extra import libdevice
 from triton.language.extra.libdevice import fast_dividef as my_fast_dividef
-from triton._internal_testing import is_cuda
+from triton._internal_testing import is_cuda, is_xpu
 
 
 @pytest.mark.parametrize("dtype_str", ["float32", "float64"])
@@ -144,7 +144,7 @@ def test_isinf(device, dtype_str):
     assert torch.equal(y.cpu(), res)
 
 
-@pytest.mark.xfail(not is_cuda(), reason="NVIDIA libdevice functions", run=False)
+@pytest.mark.xfail(not (is_cuda() or is_xpu()), reason="NVIDIA or Intel libdevice functions", run=False)
 @pytest.mark.parametrize(
     "fn, x, ret_dtype, expected",
     [

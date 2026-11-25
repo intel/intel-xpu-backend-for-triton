@@ -1633,6 +1633,22 @@ struct FpToFpOpConversion
       return outVals;
     }
 
+    // Every bf16 value is exact in f32, so truncating through f32 rounds once.
+    if (srcElementType.isF64() && dstElementType.isBF16() &&
+        roundingMode == RoundingMode::RTZ) {
+      MLIRContext *ctx = rewriter.getContext();
+      SmallVector<Value> outVals;
+      for (Value v : operands[0]) {
+        Value f32 = LLVM::ConstrainedFPTruncIntr::create(
+            rewriter, loc, f32_ty, v,
+            LLVM::RoundingModeAttr::get(ctx, LLVM::RoundingMode::TowardZero),
+            arith::getLLVMDefaultFPExceptionBehavior(*ctx));
+        outVals.push_back(
+            intel::convertFp32ToBf16(loc, rewriter, f32, RoundingMode::RTZ));
+      }
+      return outVals;
+    }
+
     if (srcElementType.isF32() && dstElementType.isBF16()) {
       assert(roundingMode.has_value() &&
              "rounding mode must be specified for fp32->bf16 conversion");
