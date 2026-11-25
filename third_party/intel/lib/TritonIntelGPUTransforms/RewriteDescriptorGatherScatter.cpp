@@ -29,19 +29,6 @@ SmallVector<NamedAttribute> filterSegmentSizes(ArrayRef<NamedAttribute> attrs) {
   return result;
 }
 
-/// Builds converted x-offsets using source encoding inferred from `value`.
-/// This is shared by descriptor gather/scatter rewrites.
-Value buildConvertedXOffsets(PatternRewriter &rewriter, Location loc,
-                             Value xOffsets, RankedTensorType valueType) {
-  Attribute newEncoding = ttg::SliceEncodingAttr::get(
-      rewriter.getContext(), 1,
-      cast<ttg::DistributedEncodingTrait>(valueType.getEncoding()));
-  auto xOffsetsType = cast<RankedTensorType>(xOffsets.getType());
-  RankedTensorType newXOffsetsType =
-      xOffsetsType.cloneWithEncoding(newEncoding);
-  return ConvertLayoutOp::create(rewriter, loc, newXOffsetsType, xOffsets);
-}
-
 struct RewriteDescriptorGatherPattern
     : OpRewritePattern<mlir::triton::DescriptorGatherOp> {
   using OpRewritePattern::OpRewritePattern;

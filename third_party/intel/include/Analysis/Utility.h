@@ -57,6 +57,34 @@ SmallVector<unsigned> getOrderWithAxisAtBeginning(ReduceOpHelper &helper,
 /// reduction.
 unsigned getScratchSizeInBytesOld(ReduceOpHelper &helper, triton::ReduceOp op);
 
+/// A scan over a blocked layout, as core's scan lowering from before
+/// triton-lang/triton#12184 measured it. The Intel backend keeps that lowering
+/// for blocked layouts, see TritonIntelGPUToLLVM/ScanOpToLLVM.cpp.
+struct BlockedScanLayout {
+  /// std::nullopt for other layouts and for scans whose axis spans CTAs.
+  static std::optional<BlockedScanLayout> get(triton::ScanOp op);
+
+  /// The operand layout without broadcast registers, and the blocked order.
+  LinearEncodingAttr encoding;
+  SmallVector<unsigned> order;
+  SmallVector<int64_t> shape;
+  unsigned axis;
+  /// Axis elements a thread holds contiguously, and their register distance.
+  unsigned elemsPerThread, elemStride;
+  /// Lanes along the axis, and their lane id distance.
+  unsigned lanes, laneStride;
+  unsigned warps;
+  /// Repetitions of the CTA tile along the axis, and their register distance
+  /// in units of the repetitions along the other dimensions.
+  unsigned blocks, blockStride;
+  unsigned parallelElemsPerThread, parallelBlocks;
+  /// Threads holding other scans, per warp and per CTA.
+  unsigned parallelLanesPerWarp, parallelThreads;
+  /// Shared memory elements each operand needs when the axis spans warps, and
+  /// the bytes all operands need.
+  unsigned scratchElems, scratchBytes;
+};
+
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_INTEL_ANALYSIS_UTILITY_H

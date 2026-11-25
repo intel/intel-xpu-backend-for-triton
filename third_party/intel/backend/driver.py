@@ -21,6 +21,7 @@ from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase, TensorDescABI, decompose_descriptor
 from triton.backends.driver import expand_signature, get_kernel_argument_layout, wrap_handle_tensordesc_impl
+from . import native
 
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
@@ -318,7 +319,7 @@ class SpirvUtils:
         try:
             return self.shared_library.load_binary(args)
         except Exception as e:
-            from triton.backends.intel.errors import IntelGPUError
+            from .errors import IntelGPUError
             from triton.runtime.errors import OutOfResources
             if isinstance(e, OutOfResources):
                 raise
@@ -535,7 +536,10 @@ PEAK_DRAM_GBPS = {
     "Intel(R) Data Center GPU Max 1550": 3276.8,
     "Intel(R) Arc(TM) B580 Graphics": 456.0,
     "Intel(R) Arc(TM) B570 Graphics": 380.0,
-    "Intel(R) Arc(TM) B560 Graphics": 456.0,
+    "Intel(R) Arc(TM) Pro B50 Graphics": 224.0,
+    "Intel(R) Arc(TM) Pro B60 Graphics": 456.0,
+    "Intel(R) Arc(TM) Pro B65 Graphics": 608.0,
+    "Intel(R) Arc(TM) Pro B70 Graphics": 608.0,
 }
 
 
@@ -568,7 +572,8 @@ class XPUUtils(object):
         # ARG_KERNEL = mod.ARG_KERNEL
         # ARG_TUPLE = mod.ARG_TUPLE
         self.load_binary = mod.load_binary
-        self.get_device_properties = mod.get_device_properties
+        self._device_properties = mod.get_device_properties
+        self._dram = {}
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
         self.get_last_selected_build_flags = mod.get_last_selected_build_flags
@@ -599,6 +604,17 @@ class XPUUtils(object):
     def get_bandwidth(self, device):
         import torch
         return PEAK_DRAM_GBPS.get(torch.xpu.get_device_name(device))
+
+    def get_device_properties(self, device):
+        # Core's `triton.testing.get_dram_gbps` computes mem_clock_rate * mem_bus_width * 2 / 1e6 / 8, while Level Zero
+        # reports the memory data rate as the clock (0 if the driver doesn't know it) and NEO the address width as the
+        # bus width. For the devices `get_bandwidth` knows, report values that give its bandwidth through that formula.
+        props = self._device_properties(device)
+        if device not in self._dram:
+            gbps, clock = self.get_bandwidth(device), props["mem_clock_rate"] or 1_000_000
+            self._dram[device] = {"mem_clock_rate": clock, "mem_bus_width": round(gbps * 4e6 / clock)} if gbps else {}
+        props.update(self._dram[device])
+        return props
 
 
 # ------------------------
@@ -857,7 +873,7 @@ class XPUDriver(DriverBase):
     @lru_cache
     def _construct_target(self, device):
         import torch
-        from triton.backends.intel.extension_utils import query_device_extensions
+        from .extension_utils import query_device_extensions
 
         dev_property = torch.xpu.get_device_capability(device)
 
@@ -885,8 +901,6 @@ class XPUDriver(DriverBase):
         return self._construct_target(device)
 
     def build_proton_help_lib(self):
-        from triton.backends.intel.driver import compile_module_from_src
-
         dirname = os.path.dirname(os.path.realpath(__file__))
         return compile_module_from_src(src=Path(dirname).joinpath("proton_utils.cpp").read_text(), name="proton_utils")
 
@@ -912,6 +926,8 @@ class XPUDriver(DriverBase):
 
     @staticmethod
     def is_active():
+        if native.error:  # the backend's C++ module could not be loaded (native.py)
+            return False
         try:
             import torch
             return torch.xpu.is_available()

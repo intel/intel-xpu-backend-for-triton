@@ -2,6 +2,9 @@
 
 #include "LLVMSPIRVLib.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -203,6 +206,55 @@ getSPIRVOpts(bool isLTS, const std::map<std::string, bool> &probedExtensions) {
   return SPIRVOpts;
 }
 
+/// The SPIR-V translator has no lowering for `llvm.clmul` (emitted for
+/// `tl.clmul`) and rejects it as an unknown intrinsic. Expand it into shifts,
+/// ANDs and XORs:
+///   clmul(x, y) = XOR over i of ((x << i) & -((y >> i) & 1))
+/// This is done here rather than in `postProcessLLVMIR` so that the LLVM IR
+/// kept as the `llir` stage still contains the intrinsic. Handles scalar iN and
+/// <K x iN> vectors uniformly; i1 becomes a plain AND.
+static void expandClmul(llvm::Module &module) {
+  llvm::SmallVector<llvm::Function *> decls;
+  llvm::SmallVector<llvm::CallInst *> calls;
+  for (llvm::Function &func : module) {
+    if (func.getIntrinsicID() != llvm::Intrinsic::clmul)
+      continue;
+    decls.push_back(&func);
+    for (llvm::User *user : func.users())
+      if (auto *call = llvm::dyn_cast<llvm::CallInst>(user))
+        calls.push_back(call);
+  }
+
+  for (llvm::CallInst *call : calls) {
+    llvm::IRBuilder<> builder(call);
+    llvm::Type *ty = call->getType();
+    llvm::Value *x = call->getArgOperand(0);
+    llvm::Value *y = call->getArgOperand(1);
+    unsigned bits = ty->getScalarSizeInBits();
+    if (bits == 1) {
+      // SPIR-V has no shifts or arithmetic on booleans; clmul on i1 is AND.
+      call->replaceAllUsesWith(builder.CreateAnd(x, y));
+      call->eraseFromParent();
+      continue;
+    }
+    llvm::Value *one = llvm::ConstantInt::get(ty, 1);
+    llvm::Value *result = llvm::Constant::getNullValue(ty);
+    for (unsigned i = 0; i < bits; ++i) {
+      llvm::Value *shift = llvm::ConstantInt::get(ty, i);
+      llvm::Value *bit = builder.CreateAnd(builder.CreateLShr(y, shift), one);
+      llvm::Value *term = builder.CreateAnd(builder.CreateShl(x, shift),
+                                            builder.CreateNeg(bit));
+      result = builder.CreateXor(result, term);
+    }
+    call->replaceAllUsesWith(result);
+    call->eraseFromParent();
+  }
+
+  for (llvm::Function *decl : decls)
+    if (decl->use_empty())
+      decl->eraseFromParent();
+}
+
 std::string
 translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS,
                        const std::map<std::string, bool> &probedExtensions) {
@@ -219,6 +271,8 @@ translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS,
     std::string result(buffer.begin(), buffer.end());
     return result;
   }
+
+  expandClmul(module);
 
   // emit
   SmallVectorBuffer StreamBuf(buffer);

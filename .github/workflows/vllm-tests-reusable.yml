@@ -22,7 +22,7 @@ on:
       python_version:
         description: Python version
         type: string
-        default: "3.12"
+        default: "3.11"
       ignore_errors:
         description: Ignore test errors
         type: boolean
