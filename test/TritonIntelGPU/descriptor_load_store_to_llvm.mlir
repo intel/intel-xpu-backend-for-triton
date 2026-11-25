@@ -29,7 +29,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-DAG: %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // Verify pointer arithmetic uses the base pointer from the descriptor
-    // CHECK: llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f32
+    // CHECK: llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f32
 
     // Verify boundary checking: index0 >= 0 AND index0 < shape0
     // CHECK: %[[ZERO0:.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -91,7 +91,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-DAG: %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // Verify pointer arithmetic uses the base pointer from the descriptor
-    // CHECK: %[[GEP:.*]] = llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f32
+    // CHECK: %[[GEP:.*]] = llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f32
 
     // Verify boundary checking: index0 >= 0 AND index0 < shape0
     // CHECK: %[[ZERO0:.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -145,7 +145,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-DAG: %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // Verify pointer arithmetic uses the base pointer
-    // CHECK: llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f32
+    // CHECK: llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f32
 
     // Verify boundary checking: index0 >= 0 AND index0 < shape0
     // CHECK: %[[S_ZERO0:.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -212,7 +212,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-DAG: %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // Verify pointer arithmetic uses the base pointer
-    // CHECK: %[[S_GEP:.*]] = llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f32
+    // CHECK: %[[S_GEP:.*]] = llvm.getelementptr %[[BASE_PTR]][%{{.*}}] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f32
 
     // Verify boundary checking: index0 >= 0 AND index0 < shape0
     // CHECK: %[[S_ZERO0:.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -933,10 +933,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-DAG: %[[STRIDE1:.*]] = llvm.extractvalue %arg0[3] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // COM: Bind the per-element indices from the GEP offset computation.
-    // CHECK: %[[IDX0_I64:.*]] = llvm.sext %[[IDX0:[0-9]+]] : i32 to i64
-    // CHECK: llvm.mul %[[IDX0_I64]], %[[STRIDE0]] : i64
-    // CHECK: %[[IDX1_I64:.*]] = llvm.sext %[[IDX1:[0-9]+]] : i32 to i64
-    // CHECK: llvm.mul %[[IDX1_I64]], %[[STRIDE1]] : i64
+    // CHECK: %[[STRIDE0_I32:.*]] = llvm.trunc %[[STRIDE0]] : i64 to i32
+    // CHECK: llvm.mul %[[IDX0:[0-9]+]], %[[STRIDE0_I32]] : i32
+    // CHECK: %[[STRIDE1_I32:.*]] = llvm.trunc %[[STRIDE1]] : i64 to i32
+    // CHECK: llvm.mul %[[IDX1:[0-9]+]], %[[STRIDE1_I32]] : i32
 
     // COM: The same per-element indices -- not offsets[dim] -- are what the mask
     // COM: compares. This is the assertion that a vacuous allSatisfy would break.
@@ -970,10 +970,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-DAG: %[[STRIDE0:.*]] = llvm.extractvalue %arg0[2] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
     // CHECK-DAG: %[[STRIDE1:.*]] = llvm.extractvalue %arg0[3] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
-    // CHECK: %[[IDX0_I64:.*]] = llvm.sext %[[IDX0:[0-9]+]] : i32 to i64
-    // CHECK: llvm.mul %[[IDX0_I64]], %[[STRIDE0]] : i64
-    // CHECK: %[[IDX1_I64:.*]] = llvm.sext %[[IDX1:[0-9]+]] : i32 to i64
-    // CHECK: llvm.mul %[[IDX1_I64]], %[[STRIDE1]] : i64
+    // CHECK: %[[STRIDE0_I32:.*]] = llvm.trunc %[[STRIDE0]] : i64 to i32
+    // CHECK: llvm.mul %[[IDX0:[0-9]+]], %[[STRIDE0_I32]] : i32
+    // CHECK: %[[STRIDE1_I32:.*]] = llvm.trunc %[[STRIDE1]] : i64 to i32
+    // CHECK: llvm.mul %[[IDX1:[0-9]+]], %[[STRIDE1_I32]] : i32
 
     // CHECK: llvm.icmp "sge" %[[IDX0]], %{{.*}} : i32
     // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
