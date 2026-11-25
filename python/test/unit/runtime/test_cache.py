@@ -19,8 +19,6 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.experimental import gluon
-from triton.experimental.gluon import language as gl
 from triton._internal_testing import is_hip
 from triton.runtime.cache import FileCacheManager, RemoteCacheManager
 
@@ -62,6 +60,27 @@ def test_file_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_pat
 
     os.remove(artifact_path)
     assert manager.get_group("kernel.json") is None
+
+
+def test_file_cache_manager_get_group_relocated_dir(fresh_knobs, tmp_path):
+    original, copy = tmp_path / "original", tmp_path / "copy"
+    fresh_knobs.cache.dir = str(original)
+    manager = FileCacheManager("key")
+    metadata_path = manager.put("{}", "kernel.json", binary=False)
+    artifact_path = manager.put("binary", "kernel.cubin", binary=False)
+    manager.put_group("kernel.json", {
+        "kernel.json": metadata_path,
+        "kernel.cubin": artifact_path,
+    })
+
+    shutil.copytree(original, copy)
+    shutil.rmtree(original)
+    fresh_knobs.cache.dir = str(copy)
+    manager = FileCacheManager("key")
+    assert manager.get_group("kernel.json") == {
+        "kernel.json": os.path.join(manager.cache_dir, "kernel.json"),
+        "kernel.cubin": os.path.join(manager.cache_dir, "kernel.cubin"),
+    }
 
 
 def test_remote_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):
@@ -326,6 +345,7 @@ def test_invalid_constexpr_fn():
 
 
 def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
+    temp_file.parent.mkdir(parents=True, exist_ok=True)
     temp_file.write_text(('# extra line\n' * num_extra_lines) + code)
     spec = importlib.util.spec_from_file_location("module.name", str(temp_file))
     module = importlib.util.module_from_spec(spec)
@@ -333,22 +353,51 @@ def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
     return module
 
 
-def test_changed_line_numbers_invalidate_cache(tmp_path: pathlib.Path):
-    from textwrap import dedent
-    code = dedent("""
-        import triton
-        @triton.jit
-        def test_kernel(i):
-            i = i + 1
-    """)
-    temp_file0 = tmp_path / "test_changed_line_numbers_invalidate_cache0.py"
-    orig_mod = write_and_load_module(temp_file0, code, 0)
-    orig_cache_key = orig_mod.test_kernel.cache_key
+@pytest.mark.parametrize("change_line_info", [False, True])
+@pytest.mark.parametrize("filename, extra_lines, decorators, indentation", [
+    ("kernel.py", 0, 1, 4),
+    ("other.py", 0, 1, 4),
+    ("kernel.py", 1, 1, 4),
+    ("kernel.py", 0, 2, 4),
+    ("kernel.py", 0, 1, 8),
+], ids=["unchanged", "file", "line", "decorator", "column"])
+def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, fresh_triton_cache, change_line_info,
+                                           filename, extra_lines, decorators, indentation):
+    from textwrap import dedent, indent
 
-    temp_file1 = tmp_path / "test_changed_line_numbers_invalidate_cache1.py"
-    updated_mod = write_and_load_module(temp_file1, code, 1)
-    updated_cache_key = updated_mod.test_kernel.cache_key
-    assert orig_cache_key != updated_cache_key
+    fresh_knobs.compilation.disable_line_info = False
+
+    def load_kernel(filename="kernel.py", extra_lines=0, decorators=1, indentation=4):
+        code = dedent("""\
+            import triton
+            import triton.language as tl
+            def identity(fn):
+                return fn
+            def make_kernel():
+        """)
+        body = "@identity\n" * decorators + dedent("""\
+            @triton.jit
+            def test_kernel(X):
+                tl.store(X, 1)
+            return test_kernel
+        """)
+        code += indent(body, " " * indentation) + "test_kernel = make_kernel()\n"
+        return write_and_load_module(tmp_path / filename, code, extra_lines).test_kernel
+
+    original = load_kernel()
+    original_key = original.cache_key
+    original_compiled = triton.compile(triton.compiler.ASTSource(original, {"X": "*i32"}))
+
+    fresh_knobs.compilation.disable_line_info = change_line_info
+    updated = load_kernel(filename, extra_lines, decorators, indentation)
+    updated_compiled = triton.compile(triton.compiler.ASTSource(updated, {"X": "*i32"}))
+    source_changed = (filename, extra_lines, decorators, indentation) != ("kernel.py", 0, 1, 4)
+    assert original.src == updated.src
+    assert (original_key != updated.cache_key) == source_changed
+    # Column-only changes may produce identical binary bytes.
+    assert (original_compiled.hash != updated_compiled.hash) == (source_changed or change_line_info)
+    if change_line_info:
+        assert original_compiled.kernel != updated_compiled.kernel
 
 
 def test_reuse(device, fresh_triton_cache):
@@ -759,11 +808,6 @@ def _preload_function():
     return 17
 
 
-@gluon.jit
-def _preload_gluon_function():
-    return 17
-
-
 def _serialize_constants(constants):
     from triton.runtime.jit import serialize_specialization_data
     return serialize_specialization_data("reference_kernel", {}, constants, {}, SimpleNamespace(), "reference-key",
@@ -783,9 +827,7 @@ def _preload_constants(specialization_data, monkeypatch):
     return jit.JITFunction.preload(kernel, specialization_data)
 
 
-@pytest.mark.parametrize(
-    "constant",
-    [int, _PreloadClass, _PreloadClass.Nested, _PreloadAggregate, _preload_function, _preload_gluon_function])
+@pytest.mark.parametrize("constant", [int, _PreloadClass, _PreloadClass.Nested, _PreloadAggregate, _preload_function])
 def test_preload_reference_constants(constant, monkeypatch):
     specialization_data = _serialize_constants({(0, ): constant})
     constants = _preload_constants(specialization_data, monkeypatch)
@@ -879,35 +921,6 @@ def test_preload_class_kernel(cls, device, fresh_triton_cache, fresh_knobs):
     assert preloaded.hash == compiled.hash
     output.zero_()
     assert kernel[(1, )](output, cls) is preloaded
-    assert output.item() == 17
-    assert len(specializations) == 4
-
-
-def test_preload_gluon_function_kernel(device, fresh_triton_cache, fresh_knobs):
-
-    @gluon.jit
-    def kernel(out, fn: gl.constexpr):
-        gl.store(out, fn())
-
-    specializations = []
-
-    def cache_hook(**kwargs):
-        specializations.append(kwargs["compile"]["specialization_data"])
-
-    fresh_knobs.runtime.jit_cache_hook = cache_hook
-    fresh_knobs.runtime.jit_post_compile_hook = cache_hook
-    output = torch.empty((), device=device, dtype=torch.int32)
-    compiled = kernel[(1, )](output, _preload_gluon_function)
-    assert output.item() == 17
-    assert len(specializations) == 2
-    assert specializations[0] == specializations[1]
-
-    shutil.rmtree(fresh_triton_cache)
-    kernel.device_caches.clear()
-    preloaded = kernel.preload(specializations[0])
-    assert preloaded.hash == compiled.hash
-    output.zero_()
-    assert kernel[(1, )](output, _preload_gluon_function) is preloaded
     assert output.item() == 17
     assert len(specializations) == 4
 
@@ -1062,7 +1075,7 @@ def test_hooks(device, fresh_triton_cache) -> None:
 
 @pytest.mark.xfail(reason="within_2g is a HIP specific optimization", condition=not is_hip(), run=False)
 def test_within_2gb(device, fresh_triton_cache) -> None:
-    default_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS")
+    default_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0")
     try:
         use_buffer_ops_opts = ["1", "0"]
         # The ranges should only be available when buffer ops are enabled
@@ -1070,7 +1083,6 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
         for use_buffer_ops, pointer_range in zip(use_buffer_ops_opts, pointer_ranges):
             # Set AMDGCN_USE_BUFFER_OPS
             os.environ["AMDGCN_USE_BUFFER_OPS"] = use_buffer_ops
-            triton.knobs.refresh_knobs()
 
             @triton.jit
             def kernel_add(a):
@@ -1096,11 +1108,7 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
             kernel_add[(1, 0)](torch.empty(2**31 - 1, dtype=torch.int8, device=device))
             assert pointer_range_32 == pointer_range
     finally:
-        if default_buffer_ops is None:
-            os.environ.pop("AMDGCN_USE_BUFFER_OPS", None)
-        else:
-            os.environ["AMDGCN_USE_BUFFER_OPS"] = default_buffer_ops
-        triton.knobs.refresh_knobs()
+        os.environ["AMDGCN_USE_BUFFER_OPS"] = default_buffer_ops
 
 
 def test_function_arguments(device):

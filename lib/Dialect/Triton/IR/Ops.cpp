@@ -135,12 +135,35 @@ LogicalResult LoadOp::verify() {
                            CachePolicyOperation::Load);
 }
 
-LogicalResult LoadOp::canonicalize(LoadOp op, PatternRewriter &rewriter) {
-  // Without "other", a false-masked load produces an undefined value.
-  if (!op.getOther() || !op.getMask() || !matchPattern(op.getMask(), m_Zero()))
-    return failure();
-  rewriter.replaceOp(op, op.getOther());
-  return success();
+// load(ptr, splat(1), ...)        -> load(ptr, ...)
+// load(ptr, splat(0), other, ...) -> other
+struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
+  CanonicalizeMaskedLoadPattern(MLIRContext *context)
+      : OpRewritePattern<LoadOp>(context, 1) {}
+
+  LogicalResult matchAndRewrite(LoadOp loadOp,
+                                PatternRewriter &rewriter) const override {
+    auto mask = loadOp.getMask();
+    if (!mask)
+      return failure();
+
+    if (matchPattern(mask, m_One())) {
+      rewriter.replaceOpWithNewOp<LoadOp>(
+          loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
+          loadOp.getCachePolicyAttr(), loadOp.getIsVolatile());
+      return success();
+    }
+    // Without "other", a false-masked load produces an undefined value.
+    if (!matchPattern(mask, m_Zero()) || !loadOp.getOther())
+      return failure();
+    rewriter.replaceOp(loadOp, loadOp.getOther());
+    return success();
+  }
+};
+
+void LoadOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                         MLIRContext *context) {
+  results.add<CanonicalizeMaskedLoadPattern>(context);
 }
 
 //-- StoreOp --
@@ -167,9 +190,25 @@ LogicalResult StoreOp::verify() {
                            CachePolicyOperation::Store);
 }
 
-LogicalResult StoreOp::canonicalize(StoreOp op, PatternRewriter &rewriter) {
-  return eraseIfPredicateIsFalse(op, rewriter);
-}
+// store(ptr, value, splat(1), ...) -> store(ptr, value, ...)
+// store(ptr, value, splat(0), ...) -> [none]
+struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
+  CanonicalizeMaskedStorePattern(MLIRContext *context)
+      : OpRewritePattern<StoreOp>(context, 1) {}
+
+  LogicalResult matchAndRewrite(StoreOp storeOp,
+                                PatternRewriter &rewriter) const override {
+    if (succeeded(eraseIfPredicateIsFalse(storeOp, rewriter)))
+      return success();
+    auto mask = storeOp.getMask();
+    if (!mask || !matchPattern(mask, m_One()))
+      return failure();
+    rewriter.replaceOpWithNewOp<StoreOp>(
+        storeOp, storeOp.getPtr(), storeOp.getValue(), Value(),
+        storeOp.getCachePolicyAttr(), storeOp.getIgnoreCta());
+    return success();
+  }
+};
 
 Value AtomicRMWOp::getPredicateOperand() { return getMask(); }
 
@@ -231,6 +270,11 @@ LogicalResult AtomicPollOp::verify() {
     return emitOpError(
         "only supports integer elements with width {16, 32, 64}");
   return success();
+}
+
+void StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                          MLIRContext *context) {
+  results.add<CanonicalizeMaskedStorePattern>(context);
 }
 
 //-- TransOp --
@@ -1055,18 +1099,19 @@ std::optional<unsigned> ReshapeOp::getExpandDimsAxis() {
 }
 
 void ReshapeOp::build(OpBuilder &builder, OperationState &state,
-                      ArrayRef<int64_t> shape, Value src) {
+                      ArrayRef<int64_t> shape, Value src, bool allowReorder) {
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto srcEnc = srcTy.getEncoding();
   Attribute dstEnc;
   if (srcEnc) {
-    auto result = cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-                      ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape,
-                                               dstEnc, state.location);
+    auto result =
+        cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+            ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape, dstEnc,
+                                     allowReorder, state.location);
     assert(succeeded(result));
   }
   auto dstTy = RankedTensorType::get(shape, srcTy.getElementType(), dstEnc);
-  build(builder, state, dstTy, src, false);
+  build(builder, state, dstTy, src, allowReorder);
 }
 
 LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
@@ -1080,7 +1125,8 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
 
   // reshape(expand_dims(x)) -> x
   if (auto expandDims = dyn_cast<ExpandDimsOp>(definingOp)) {
-    if (op.getType() == expandDims.getSrc().getType()) {
+    if (!op.getAllowReorder() &&
+        op.getType() == expandDims.getSrc().getType()) {
       rewriter.replaceOp(op, expandDims.getSrc());
       return success();
     }
@@ -1088,8 +1134,12 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
 
   // reshape(reshape) -> reshape
   if (auto parentReshape = dyn_cast<ReshapeOp>(definingOp)) {
-    rewriter.replaceOpWithNewOp<ReshapeOp>(
-        op, op.getType(), parentReshape.getSrc(), op.getEfficientLayout());
+    // Allow reorder if either reshape allowed it
+    const bool allowReorder =
+        (op.getAllowReorder() || parentReshape.getAllowReorder());
+    rewriter.replaceOpWithNewOp<ReshapeOp>(op, op.getType(),
+                                           parentReshape.getSrc(), allowReorder,
+                                           op.getEfficientLayout());
     return success();
   }
 
@@ -1103,7 +1153,7 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
 }
 
 OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
-  if (getType() == getSrc().getType()) {
+  if (getType() == getSrc().getType() && !getAllowReorder()) {
     // no-op
     return getSrc();
   }
@@ -1131,12 +1181,15 @@ LogicalResult ReshapeOp::verify() {
   }
 
   // Check that we can infer the dst encoding from the src encoding and that the
-  // inferred dst encoding is the same as the given dst encoding.
-  Attribute inferredDstEnc;
+  // inferred dst encoding is the same as the given dst encoding. We pass the
+  // current dst encoding as a hint so that allowReorder reshapes are guaranteed
+  // to produce the current encoding iff it is valid.
+  Attribute inferredDstEnc = dstEnc;
   auto layoutInterface =
       cast<DialectInferLayoutInterface>(&srcEnc.getDialect());
   auto result = layoutInterface->inferReshapeOpEncoding(
-      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc, getLoc());
+      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc,
+      getAllowReorder(), getLoc());
   if (failed(result))
     return failure();
   return layoutInterface->verifyLayoutsAreEqual(

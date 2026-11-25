@@ -655,9 +655,9 @@ static LogicalResult verifyTMABarrierLayout(Operation *op, Value barrier) {
   if (twoCTAsAttr.getValue()) {
     auto kBlock = StringAttr::get(ctx, "block");
     auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
-    auto twoCTACGALayout = CGAEncodingAttr::get(
-        ctx, LinearLayout::zeros1D(2, kBlock, dim) *
-                 LinearLayout::identity1D(numCTAs / 2, kBlock, dim));
+    auto layout = LinearLayout::zeros1D(2, kBlock, dim) *
+                  LinearLayout::identity1D(numCTAs / 2, kBlock, dim);
+    auto twoCTACGALayout = CGAEncodingAttr::get(ctx, std::move(layout));
     if (actualCGALayout == twoCTACGALayout)
       return success();
     return op->emitOpError() << "TMA barrier cga_layout must be "
@@ -685,30 +685,10 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
   if (!descEnc || descEnc.getTransposed() != nvmma.getTransposed() ||
       descEnc.getSwizzlingByteWidth() != nvmma.getSwizzlingByteWidth() ||
       descEnc.getElementBitWidth() != nvmma.getElementBitWidth() ||
-      descEnc.isPaddedFp4() != nvmma.isPaddedFp4()) {
+      descEnc.getFp4Padded() != nvmma.getFp4Padded()) {
     return op->emitOpError("TMA descriptor layout must match shared layout, "
                            "but got descriptor layout ")
            << descEnc << " and shared memory layout " << nvmma;
-  }
-  bool store = isa<AsyncTMACopyLocalToGlobalOp>(op);
-  // TMA loads put 16 packed codes and 4 pad bytes in each shared atom.
-  // Stores read the low 6 bits of each byte and compact 16 bytes to 12.
-  if (descEnc.getPadding() != nvmma.getPadding())
-    return op->emitOpError(
-        "TMA descriptor and shared memory packing must match");
-  if (descEnc.isPaddedFp6()) {
-    auto required = store ? NVMmaPadding::B6P2x16 : NVMmaPadding::B6x16P32;
-    if (nvmma.getPadding() != required)
-      return op->emitOpError(
-          "FP6 loads require b6x16_p32 and stores require b6p2x16");
-    if (!memDesc.getElementType().isInteger(8) || !isa<TensorDescType>(desc) ||
-        (!store && !isa<AsyncTMACopyGlobalToLocalOp>(op)))
-      return op->emitOpError(
-          "FP6 only supports tiled TMA loads and stores with byte storage");
-    auto swizzle = descEnc.getSwizzlingByteWidth();
-    auto width = gpu::getShapePerCTA(descEnc, desc.getShape()).back();
-    if (width < 128 || (swizzle ? swizzle : width) != 128)
-      return op->emitOpError("FP6 TMA requires a 128-value box");
   }
   if (nvmma.getTransposed())
     return op->emitOpError("TMA descriptor layout must not be transposed");
@@ -739,7 +719,7 @@ static LogicalResult verifyAsyncTMALoadOp(Operation *op,
       toLinearLayout(barrier.getType()).getFreeVariableMasks().lookup(block);
   auto shape =
       dropPipeliningDim(resultType.getShape(), resultType.getEncoding());
-  auto allocation = toLinearLayoutIgnoringPadding(resultType);
+  auto allocation = toLinearLayout(resultType);
   for (auto [bit, basis] : llvm::enumerate(allocation.getBases().lookup(block)))
     for (auto [component, size] : llvm::zip_equal(basis, shape))
       if (component >= size && (bit || barrierMask > 1))
@@ -758,7 +738,7 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
   if (isFp4Padded(srcEnc))
     return op->emitOpError("does not support fp4_padded operands");
   auto shape = dropPipeliningDim(srcType.getShape(), srcEnc);
-  auto allocation = toLinearLayoutIgnoringPadding(srcType);
+  auto allocation = toLinearLayout(srcType);
   auto block = StringAttr::get(op->getContext(), "block");
   for (const auto &basis : allocation.getBases().lookup(block))
     for (auto [component, size] : llvm::zip_equal(basis, shape))
@@ -1155,47 +1135,6 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
   return success();
 }
 
-static Type getMMAFormatType(MLIRContext *ctx, ScaleDotElemType scaleType) {
-  switch (scaleType) {
-  case ScaleDotElemType::E4M3:
-    return Float8E4M3FNType::get(ctx);
-  case ScaleDotElemType::E5M2:
-    return Float8E5M2Type::get(ctx);
-  case ScaleDotElemType::E2M3:
-    return Float6E2M3FNType::get(ctx);
-  case ScaleDotElemType::E3M2:
-    return Float6E3M2FNType::get(ctx);
-  case ScaleDotElemType::E2M1:
-    return Float4E2M1FNType::get(ctx);
-  case ScaleDotElemType::BF16:
-    return BFloat16Type::get(ctx);
-  case ScaleDotElemType::FP16:
-    return Float16Type::get(ctx);
-  }
-  llvm_unreachable("Unsupported type.");
-}
-
-Type TCGen5MMAOp::getAElementType() {
-  return getAType() ? getMMAFormatType(getContext(), *getAType())
-                    : getA().getType().getElementType();
-}
-
-Type TCGen5MMAOp::getBElementType() {
-  return getBType() ? getMMAFormatType(getContext(), *getBType())
-                    : getB().getType().getElementType();
-}
-
-static LogicalResult verifyMMAOperandPacking(Operation *op, MemDescType mem,
-                                             Type type) {
-  auto enc = dyn_cast<NVMMASharedEncodingAttr>(mem.getEncoding());
-  if ((enc && enc.getPadding() == NVMmaPadding::B6P2x16) ||
-      NVMMASharedEncodingAttr::isPackedFp6(mem.getEncoding()) !=
-          isa<Float6E2M3FNType, Float6E3M2FNType>(type))
-    return op->emitOpError("FP6 MMA operands require b6x16_p32 storage and an "
-                           "explicit FP6 format");
-  return success();
-}
-
 LogicalResult TCGen5MMAOp::verify() {
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();
@@ -1203,20 +1142,8 @@ LogicalResult TCGen5MMAOp::verify() {
     if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
       return failure();
   }
-  Type atype = getAElementType();
-  Type btype = getBElementType();
-  for (auto [mem, type, format] :
-       {std::tuple{getA().getType(), atype, getAType()},
-        std::tuple{getB().getType(), btype, getBType()}}) {
-    if (failed(verifyMMAOperandPacking(*this, mem, type)))
-      return failure();
-    if (format &&
-        (!isa<Float6E2M3FNType, Float6E3M2FNType, Float8E4M3FNType,
-              Float8E5M2Type>(type) ||
-         (!mem.getElementType().isInteger(8) && mem.getElementType() != type)))
-      return emitOpError(
-          "explicit MMA format must match the FP6 or FP8 operand storage");
-  }
+  Type atype = getA().getType().getElementType();
+  Type btype = getB().getType().getElementType();
   Type dtype = getD().getType().getElementType();
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
@@ -1281,8 +1208,8 @@ LogicalResult TCGen5MMAOp::verify() {
     }
   }
 
-  auto aLayout = toLinearLayoutIgnoringPadding(getA().getType());
-  auto bLayout = toLinearLayoutIgnoringPadding(getB().getType());
+  auto aLayout = toLinearLayout(getA().getType());
+  auto bLayout = toLinearLayout(getB().getType());
   auto dLayout = toLinearLayout(getD().getType());
   auto log2nCTAs = dLayout.getInDimSizeLog2(kBlock);
   for (int i = 0; i < log2nCTAs; i++) {
@@ -1375,9 +1302,7 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
                         Value a, Value b, Value d, Value accDep, Value useD,
                         Value pred, bool twoCtas, bool multicast,
                         ValueRange barriers, ValueRange barrierPreds,
-                        bool isAsync, bool isUnsigned,
-                        ScaleDotElemTypeAttr aType,
-                        ScaleDotElemTypeAttr bType) {
+                        bool isAsync, bool isUnsigned) {
   if (!barriers.empty()) {
     isAsync = true;
   }
@@ -1385,7 +1310,7 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
         barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
         twoCtas ? builder.getUnitAttr() : UnitAttr(),
         multicast ? builder.getUnitAttr() : UnitAttr(),
-        isUnsigned ? builder.getUnitAttr() : UnitAttr(), aType, bType);
+        isUnsigned ? builder.getUnitAttr() : UnitAttr());
 }
 
 bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
@@ -1421,11 +1346,27 @@ Type TCGen5CommitOp::getPredicateOperandTypeLike() {
 
 static Type getScaledMMAOperandType(Type elementType,
                                     ScaleDotElemType scaleType) {
-  if (scaleType != ScaleDotElemType::E2M3 &&
-      scaleType != ScaleDotElemType::E3M2 && isa<FloatType>(elementType))
+  MLIRContext *ctx = elementType.getContext();
+  if (isa<FloatType>(elementType))
     return elementType;
-  return getMMAFormatType(elementType.getContext(), scaleType);
-}
+  switch (scaleType) {
+  case ScaleDotElemType::E4M3:
+    return Float8E4M3FNType::get(ctx);
+  case ScaleDotElemType::E5M2:
+    return Float8E5M2Type::get(ctx);
+  case ScaleDotElemType::E2M3:
+    return Float6E2M3FNType::get(ctx);
+  case ScaleDotElemType::E3M2:
+    return Float6E3M2FNType::get(ctx);
+  case ScaleDotElemType::E2M1:
+    return Float4E2M1FNType::get(ctx);
+  case ScaleDotElemType::BF16:
+    return BFloat16Type::get(ctx);
+  case ScaleDotElemType::FP16:
+    return Float16Type::get(ctx);
+  }
+  llvm_unreachable("Unsupported type.");
+};
 
 static bool isScaledMMATransposed(MemDescType type, bool isLhs) {
   auto shared = getNvmmaSmemAttrs(type);
@@ -1517,11 +1458,6 @@ LogicalResult TCGen5MMAScaledOp::verify() {
       getScaledMMAOperandType(getA().getType().getElementType(), getAType());
   Type btype =
       getScaledMMAOperandType(getB().getType().getElementType(), getBType());
-  for (auto [mem, type] : {std::pair{getA().getType(), atype},
-                           std::pair{getB().getType(), btype}}) {
-    if (failed(verifyMMAOperandPacking(*this, mem, type)))
-      return failure();
-  }
   Type dtype = getD().getType().getElementType();
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
@@ -1917,7 +1853,7 @@ LogicalResult TMEMCopyOp::verify() {
   // Fp4 we could lift if we needed
   auto nvmmaEnc =
       dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
-  if (nvmmaEnc && (nvmmaEnc.getTransposed() || nvmmaEnc.isPaddedFp4())) {
+  if (nvmmaEnc && (nvmmaEnc.getTransposed() || nvmmaEnc.getFp4Padded())) {
     return emitOpError("The source should not be transposed or padded");
   }
   if (isa<TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding())) {

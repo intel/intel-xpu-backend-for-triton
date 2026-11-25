@@ -13,9 +13,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/CheckedArithmetic.h"
 #include "llvm/Support/Debug.h"
-#include <algorithm>
 #include <optional>
 
 #define DEBUG_TYPE "triton-intel-range-analysis"
@@ -452,14 +450,10 @@ IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) const {
   if (stepVal.isZero())
     stepVal = stepValDefault;
 
-  if (max.slt(min))
-    return std::nullopt;
-  // The difference of two i64 bounds can overflow: the count is then unknown.
-  std::optional<int64_t> diff =
-      llvm::checkedSub(max.getSExtValue(), min.getSExtValue());
-  if (!diff)
-    return std::nullopt;
-  return llvm::divideCeilSigned(*diff, stepVal.getSExtValue());
+  if (max.sge(min))
+    return llvm::divideCeilSigned(max.getSExtValue() - min.getSExtValue(),
+                                  stepVal.getSExtValue());
+  return std::nullopt;
 }
 
 LogicalResult IntegerRangeAnalysis::visitOperationHelper(
@@ -617,21 +611,6 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
   return success();
 }
 
-// A lattice of `loop` changes once per iteration, but also once for every step
-// a nested loop needs to converge (#8604).
-static uint64_t getLoopSimulationSteps(LoopLikeOpInterface loop,
-                                       IntegerRangeAnalysis &analysis) {
-  uint64_t steps = getTotalTripCount(loop, analysis);
-  loop->walk([&](LoopLikeOpInterface nested) {
-    if (nested == loop)
-      return;
-    uint64_t nestedSteps = getTotalTripCount(nested, analysis);
-    if (nestedSteps <= kDefaultMaxTripCount)
-      steps = std::max(steps, nestedSteps);
-  });
-  return steps;
-}
-
 void IntegerRangeAnalysis::visitRegionSuccessors(
     ProgramPoint *point, RegionBranchOpInterface branch,
     RegionSuccessor successor,
@@ -649,34 +628,29 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
     lattices.push_back(
         static_cast<dataflow::IntegerValueRangeLattice *>(lattice));
 
-  // Initialize loop simulation steps.
+  // Initialize loop trip counts.
   auto loop = dyn_cast<LoopLikeOpInterface>(branch.getOperation());
   if (loop) {
-    if (!loopSimulationSteps.contains(loop)) {
-      loopSimulationSteps[loop] = 0;
+    if (!loopTripCounts.contains(loop)) {
+      loopTripCounts[loop] = std::numeric_limits<int64_t>::max();
       for (auto lattice : lattices)
         loopVisits[{loop, lattice}] = 0ll;
     }
 
-    // Every count above the limit takes the max range path below.
-    int64_t steps = std::min<uint64_t>(getLoopSimulationSteps(loop, *this),
-                                       kDefaultMaxTripCount + 1);
+    uint64_t loopTripCount = getTotalTripCount(loop, *this);
 
     LLVM_DEBUG({
-      DBGS() << "Simulation steps for ";
+      DBGS() << "Total trip count for ";
       OpPrintingFlags flags;
       flags.skipRegions(true);
       loop->print(llvm::dbgs(), flags);
       llvm::dbgs() << "\n";
-      DBGS() << " --> " << steps << '\n';
+      DBGS() << " --> " << loopTripCount << '\n';
     });
 
-    // Bound ranges widen as the analysis progresses, so keep the largest count.
-    loopSimulationSteps[loop] = std::max(loopSimulationSteps[loop], steps);
+    if (loopTripCount < loopTripCounts[loop])
+      loopTripCounts[loop] = loopTripCount;
   }
-
-  // Iter_args see the init values plus N - 1 backedges.
-  int64_t maxBackedges = loop ? loopSimulationSteps[loop] - 1 : 0;
 
   const auto *predecessors =
       getOrCreateFor<dataflow::PredecessorState>(point, point);
@@ -706,10 +680,6 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
   //
   for (Operation *op : predecessors->getKnownPredecessors()) {
     std::optional<OperandRange> operands;
-    // Only backedges into iter_args are limited: they bound what the loop
-    // yields, and a result's count is spent early while an init converges.
-    bool isLimited =
-        loop && op != branch.getOperation() && !successor.isOperation();
     if (op == branch)
       operands = branch.getEntrySuccessorOperands(successor);
     else if (auto regionTerminator =
@@ -757,12 +727,19 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
     for (auto [oper, argLat] :
          llvm::zip(*operands, ArrayRef(lattices).drop_front(firstIndex))) {
       std::pair loopArgLat = {loop, argLat};
-      // If we've "run the loop" #maxBackedges times, stop propagating.
-      if (isLimited && loopVisits[loopArgLat] >= maxBackedges)
+      // If we've "run the loop" #tripcount times, stop propagating.
+      bool reachedTripCount =
+          loop && loopVisits[loopArgLat] >= loopTripCounts[loop];
+      // However, if trip count is 0, we still need to initialize loop-carried
+      // values from the initial iter_args (so loop results equal initial
+      // values).
+      bool needsZeroTripInit = loop && loopTripCounts[loop] == 0 &&
+                               argLat->getValue().isUninitialized();
+      if (reachedTripCount && !needsZeroTripInit)
         continue;
 
       ChangeResult changed;
-      if (loop && loopSimulationSteps[loop] > kDefaultMaxTripCount) {
+      if (loop && loopTripCounts[loop] > kDefaultMaxTripCount) {
         // If the loop's tripcount is too large, infer the maximum range for
         // the arg lattices. This will have the effect that all users will
         // also be inferred to have maximum range and end the analysis will
@@ -788,7 +765,9 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
       // lattice because otherwise we will over count the number of visits
       // (since not all iter_arg lattices are updated/propagated on each
       // visit).
-      if (isLimited && changed == ChangeResult::Change)
+      // For initial iterations of zero trip count loops we do not increment
+      // the visit count to avoid overcounting.
+      if (loop && changed == ChangeResult::Change && !needsZeroTripInit)
         ++loopVisits[loopArgLat];
     }
   }
@@ -916,12 +895,10 @@ uint64_t getTotalTripCount(LoopLikeOpInterface loop,
     parentOp = parentOp->getParentOp();
   }
 
-  // Saturate: a wrapped product could be smaller than the real count.
-  return std::accumulate(loops.begin(), loops.end(), uint64_t(1),
+  return std::accumulate(loops.begin(), loops.end(), 1ll,
                          [&analysis](uint64_t accum, LoopLikeOpInterface loop) {
-                           return llvm::SaturatingMultiply(
-                               accum, analysis.getTripCount(loop).value_or(
-                                          kDefaultMaxTripCount + 1));
+                           return accum * analysis.getTripCount(loop).value_or(
+                                              kDefaultMaxTripCount + 1);
                          });
 }
 

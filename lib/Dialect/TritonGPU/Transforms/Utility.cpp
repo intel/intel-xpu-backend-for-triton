@@ -521,20 +521,23 @@ static Attribute inferSrcEncoding(triton::TransposeOpInterface op,
 
 static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
                                            Attribute srcEnc,
-                                           ArrayRef<int64_t> dstShape) {
-  Attribute dstEnc;
+                                           ArrayRef<int64_t> dstShape,
+                                           Attribute dstEncHint = {},
+                                           bool allowReorder = false) {
+  Attribute dstEnc = dstEncHint;
   auto result =
       srcEnc.getDialect()
           .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferReshapeOpEncoding(srcShape, srcEnc, dstShape, dstEnc,
-                                   /*loc=*/std::nullopt);
+                                   allowReorder, /*loc=*/std::nullopt);
   assert(succeeded(result));
   return dstEnc;
 }
 
 static Attribute inferDstEncoding(triton::ReshapeOp op, Attribute encoding) {
-  return inferReshapeOpDstEncoding(op.getSrc().getType().getShape(), encoding,
-                                   op.getType().getShape());
+  return inferReshapeOpDstEncoding(
+      op.getSrc().getType().getShape(), encoding, op.getType().getShape(),
+      op.getType().getEncoding(), op.getAllowReorder());
 }
 
 static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
@@ -549,8 +552,9 @@ static Attribute inferSrcEncoding(triton::ReshapeOp op, Attribute encoding) {
   // as the encoding of x given the encoding of y in `reshape(y) -> x`.  It's an
   // invariant of inferReshapeOpNoReorderEncoding that it's symmetric in this
   // way.
-  return inferReshapeOpDstEncoding(op.getType().getShape(), encoding,
-                                   op.getSrc().getType().getShape());
+  return inferReshapeOpDstEncoding(
+      op.getType().getShape(), encoding, op.getSrc().getType().getShape(),
+      op.getSrc().getType().getEncoding(), op.getAllowReorder());
 }
 
 static bool isSingleValue(Value value) {
@@ -676,6 +680,15 @@ canUseResultEncoding(Operation *op, Attribute targetEncoding) {
     return SmallVector<OpOperand *>{};
   }
 
+  if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
+    auto reshapeDstType = reshape.getType();
+    RankedTensorType newDstType =
+        reshapeDstType.cloneWithEncoding(targetEncoding);
+    if (!reshape.getAllowReorder() || reshape.getEfficientLayout() ||
+        triton::gpu::isExpensiveView(reshape.getSrc().getType(), newDstType))
+      return std::nullopt;
+    return SmallVector<OpOperand *>{&reshape.getSrcMutable()};
+  }
   if (isa<arith::ConstantOp, triton::MakeRangeOp, triton::SplatOp,
           triton::HistogramOp, triton::gpu::LocalAllocOp,
           triton::gpu::LocalLoadOp, triton::gpu::LocalStoreOp>(op))

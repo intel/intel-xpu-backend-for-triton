@@ -40,9 +40,8 @@ template <class Op> struct GenericOpPattern : public OpConversionPattern<Op> {
     if (failed(this->getTypeConverter()->convertTypes(op->getResultTypes(),
                                                       retTypes)))
       return failure();
-    rewriter.replaceOpWithNewOp<Op>(
-        op, retTypes, adaptor.getOperands(), op.getProperties(),
-        op->getDiscardableAttrDictionary().getValue());
+    rewriter.replaceOpWithNewOp<Op>(op, retTypes, adaptor.getOperands(),
+                                    op->getAttrs());
 
     return success();
   }

@@ -66,9 +66,11 @@ bool supportsI8DotDecomposition(PatternRewriter &rewriter,
                                 IntegerType accElem) {
   auto moduleOp =
       rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  // The decomposition emits NVIDIA MMA layouts.
-  auto target = moduleOp->getAttrOfType<StringAttr>(ttg::AttrTargetName);
-  if (target && target.getValue().split(':').first != "cuda")
+  if (getAMDArch(moduleOp))
+    return false;
+  if (auto targetAttr =
+          moduleOp->getAttrOfType<StringAttr>(ttg::AttrTargetName);
+      targetAttr && targetAttr.strref().split(':').first == "xpu")
     return false;
   return llvm::is_contained({16, 32, 64}, accElem.getWidth());
 }
@@ -2702,7 +2704,7 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     }
     {
       OpBuilder::InsertionGuard guard(rewriter);
-      if (Value pred = op.getPred()) {
+      if (Value pred = op.getPred(); pred && !matchPattern(pred, m_One())) {
         auto ifOp = scf::IfOp::create(rewriter, loc, pred, false);
         rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
       }

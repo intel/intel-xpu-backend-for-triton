@@ -69,9 +69,8 @@ void refineGlobalLoadLayout(PatternRewriter &rewriter, Attribute encoding,
   }
 
   // Construct new load with the new encoding
-  auto newLoad =
-      tt::LoadOp::create(rewriter, loc, newArgs, load.getProperties(),
-                         load->getDiscardableAttrDictionary().getValue());
+  auto attrs = load->getAttrs();
+  auto newLoad = tt::LoadOp::create(rewriter, loc, newArgs, attrs);
 
   // Cast the results back to the original layout
   auto loadType = load.getType();

@@ -96,35 +96,6 @@ isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
   return ttgi::isDivisible(tt::intel::getFinalValue(v), divisor);
 }
 
-// Folding a leading index into the base keeps it 4-byte aligned, as every 2D
-// block access needs (see satisfies2DBlockReadAlignment), only if each
-// candidate's stride is a 4-byte multiple (an unknown runtime stride is trusted
-// as the pitch is) or the index is constant 0. Leading strides are indexed by
-// block rank, so the shape count must match.
-static bool isLeadingRebaseAligned(
-    tt::DescriptorStoreOp op, const tt::intel::DescriptorDefinitions &defs,
-    unsigned shapeRank, tt::intel::ModuleAxisInfoAnalysis &axisInfo) {
-  RankedTensorType srcType = op.getSrc().getType();
-  unsigned srcRank = srcType.getRank();
-  unsigned descRank = op.getDesc().getType().getBlockType().getRank();
-  if (srcRank >= descRank)
-    return true;
-  unsigned elementWidth = srcType.getElementTypeBitWidth();
-  if (elementWidth % 8 != 0 || shapeRank != descRank)
-    return false;
-  unsigned strideDivisor = std::max(1u, 4 / (elementWidth / 8));
-  for (unsigned d = 0, e = descRank - srcRank; d < e; ++d) {
-    if (tt::intel::isConstant(op.getIndices()[d], 0))
-      continue;
-    if (!defs.allSatisfy([&](tt::MakeTensorDescOp m) {
-          return isDescriptorAligned(axisInfo, m.getStrides()[d],
-                                     strideDivisor);
-        }))
-      return false;
-  }
-  return true;
-}
-
 struct TritonIntelGPUMaterializeBlockPointerPass
     : public triton::gpu::intel::impl::
           TritonIntelGPUMaterializeBlockPointerBase<
@@ -236,13 +207,6 @@ private:
     if (rank < 2)
       return;
 
-    if constexpr (std::is_same_v<OpType, tt::DescriptorStoreOp>) {
-      if (!isLeadingRebaseAligned(op, defs, rank, axisInfoAnalysis)) {
-        LDBG("Leading index rebase not provably 4-byte aligned: " << *op);
-        return;
-      }
-    }
-
     if (!satisfies2DBlockReadAlignment(op, axisInfoAnalysis)) {
       LDBG("Alignment checks failed for: " << *op);
       return;
@@ -340,6 +304,9 @@ private:
       return;
     }
 
+    if (!maskPermitsBlockTile(op, axisInfoAnalysis, rank))
+      return;
+
     // Determine if LoadOp is row-major or column-major.
     tt::intel::StrideInfo *strideInfo = strideAnalysis.getStrideInfo(ptr);
     auto isMajor = [rank, &strideInfo](RankedTensorType tensorTy,
@@ -384,29 +351,18 @@ private:
       return true;
     };
 
-    // Needed before the mask gate: maskPermitsBlockTile's row-limit bypass
-    // checks the mask is bounded along the complementary (pitch) dim.
-    const bool isRowMajor =
-        isMajor(tensorTy, rank - 1 /*fastChangeDim*/, *axisInfo);
-    const bool isColMajor =
-        isMajor(tensorTy, rank - 2 /*fastChangeDim*/, *axisInfo);
-    std::optional<unsigned> contiguousDim;
-    if (isRowMajor)
-      contiguousDim = rank - 1;
-    if (isColMajor)
-      contiguousDim = rank - 2;
-
-    if (!maskPermitsBlockTile(op, axisInfoAnalysis, strideInfo, rank,
-                              contiguousDim))
-      return;
-
     const StringRef blockIOAttrName =
         ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
+    const bool isRowMajor =
+        isMajor(tensorTy, rank - 1 /*fastChangeDim*/, *axisInfo);
     if (isRowMajor)
       op->setAttr(blockIOAttrName,
                   StringAttr::get(
                       op.getContext(),
                       ttgi::stringifyBlockIOMode(ttgi::BlockIOMode::RowMajor)));
+
+    const bool isColMajor =
+        isMajor(tensorTy, rank - 2 /*fastChangeDim*/, *axisInfo);
     if (isColMajor)
       op->setAttr(blockIOAttrName,
                   StringAttr::get(op.getContext(),
@@ -432,55 +388,13 @@ private:
   /// count in a grouped GEMM, `offs_am < tl.load(offsets_ptr + g)` — has
   /// constancy 1 along the M dim, because the compare visitor can only derive
   /// constancy from the divisibility of both sides.
-  ///
-  /// For a `tt::LoadOp`, such a mask may still be a `ttgi::matchRowLimitMask`
-  /// row-limit pattern, so permit block IO here too.
-  /// `contiguousDim`/`strideInfo` must match what LowerTo2DBlockLoad later
-  /// uses, or stamping `ttig.block_io` here de-anchors the load without it
-  /// gaining a real 2D block read. For the same reason the bypass is skipped
-  /// when LowerTo2DBlockLoad would reject the row pitch
-  /// (`ttgi::isBlockPitchSupported`). Stores aren't covered: nothing
-  /// downstream consumes a store-side row limit.
   template <typename OpType>
   bool maskPermitsBlockTile(OpType op,
                             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                            tt::intel::StrideInfo *strideInfo, unsigned rank,
-                            std::optional<unsigned> contiguousDim) const {
+                            unsigned rank) const {
     Value mask = op.getMask();
     if (!mask || matchPattern(mask, m_One()))
       return true;
-
-    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
-      if (rank >= 2 && contiguousDim) {
-        auto maskTy = cast<RankedTensorType>(mask.getType());
-        unsigned pitchDim = (*contiguousDim == rank - 1) ? rank - 2 : rank - 1;
-        bool pitchDimIsBroadcast =
-            strideInfo && strideInfo->getStride(pitchDim) == 0;
-        if (ttgi::matchRowLimitMask(mask, op.getOther(), maskTy.getShape(),
-                                    *contiguousDim, pitchDimIsBroadcast)) {
-          // Skip the bypass if LowerTo2DBlockLoad would reject the pitch.
-          unsigned elemBits = cast<tt::PointerType>(
-                                  cast<RankedTensorType>(op.getPtr().getType())
-                                      .getElementType())
-                                  .getPointeeType()
-                                  .getIntOrFloatBitWidth();
-          int64_t stride = strideInfo ? strideInfo->getStride(pitchDim) : -1;
-          bool pitchOk = ttgi::isBlockPitchSupported(
-              stride >= 0 ? std::optional<int64_t>(stride * elemBits / 8)
-                          : std::nullopt,
-              strideInfo && strideInfo->getStrideValue(pitchDim),
-              maskTy.getDimSize(*contiguousDim) * elemBits / 8);
-          if (pitchOk) {
-            LDBG(
-                "Mask is a row-limit pattern; permitting block IO for: " << op);
-            return true;
-          }
-          LDBG("Row-limit mask, but LowerTo2DBlockLoad would reject the "
-               "pitch; skip the bypass for: "
-               << op);
-        }
-      }
-    }
 
     const tt::AxisInfo *maskAxisInfo = axisInfoAnalysis.getAxisInfo(mask);
     if (!maskAxisInfo) {
@@ -504,9 +418,6 @@ private:
 
   /// Look through cast wrappers (index_cast, extui, extsi, trunci, etc.)
   /// to find the underlying arithmetic operation.
-  /// NOTE: BlockIOUtils.cpp has a stricter twin (`lookThroughCasts` /
-  /// `matchBaseAndRange`, widening casts only) used by `matchRowLimitMask`,
-  /// whose result feeds a `base_height` clamp. Keep the two in sync.
   static Value lookThroughCasts(Value val) {
     while (Operation *def = val.getDefiningOp()) {
       if (!isa<CastOpInterface>(def) || def->getNumOperands() != 1)
@@ -827,7 +738,7 @@ private:
         cast<tt::DialectInferLayoutInterface>(&origEnc.getDialect());
     Attribute dstEnc;
     if (failed(interface->inferReshapeOpEncoding(srcShape, origEnc, dstShape,
-                                                 dstEnc,
+                                                 dstEnc, /*allowReorder=*/false,
                                                  /*loc=*/std::nullopt)))
       return std::nullopt;
     return dstEnc;
@@ -921,9 +832,11 @@ private:
     }
 
     // Reshape pointer and value to [H, W] with their natural 2D encodings
-    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr);
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr,
+                                            /*allowReorder=*/false);
     auto valReshape =
-        tt::ReshapeOp::create(builder, loc, newShape, op.getValue());
+        tt::ReshapeOp::create(builder, loc, newShape, op.getValue(),
+                              /*allowReorder=*/false);
 
     // Build HW delivery encoding and convert both ptr and val into it.
     auto storeEnc =
@@ -1029,7 +942,8 @@ private:
     // (allow_reorder + efficient_layout) would be incorrect: that reshape
     // lowers to a no-op, so the registers would still hold the pointers laid
     // out per the 1D source encoding while the type claims HW delivery order.
-    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr);
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr,
+                                            /*allowReorder=*/false);
     auto loadPtrTy =
         RankedTensorType::get(newShape, ptrTensorTy.getElementType(), loadEnc);
     Value loadPtr =
@@ -1039,7 +953,8 @@ private:
     Value mask2d;
     if (Value mask = op.getMask()) {
       auto maskTy = cast<RankedTensorType>(mask.getType());
-      auto maskReshape = tt::ReshapeOp::create(builder, loc, newShape, mask);
+      auto maskReshape = tt::ReshapeOp::create(builder, loc, newShape, mask,
+                                               /*allowReorder=*/false);
       auto loadMaskTy =
           RankedTensorType::get(newShape, maskTy.getElementType(), loadEnc);
       mask2d =
@@ -1058,7 +973,8 @@ private:
     // carry the load encoding rather than the 1D source encoding.
     Value other2d;
     if (Value other = op.getOther()) {
-      auto otherReshape = tt::ReshapeOp::create(builder, loc, newShape, other);
+      auto otherReshape = tt::ReshapeOp::create(builder, loc, newShape, other,
+                                                /*allowReorder=*/false);
       other2d = ttg::ConvertLayoutOp::create(builder, loc, loadResultTy,
                                              otherReshape);
     }
@@ -1087,9 +1003,9 @@ private:
     // encoding intact is `isExpensiveLoadOrStore` anchoring the load, not this
     // reshape.
     auto origResultTy = cast<RankedTensorType>(op.getType());
-    auto reshapeBack =
-        tt::ReshapeOp::create(builder, loc, origResultTy, converted,
-                              /*efficientLayout=*/false);
+    auto reshapeBack = tt::ReshapeOp::create(builder, loc, origResultTy,
+                                             converted, /*allowReorder=*/false,
+                                             /*efficientLayout=*/false);
 
     LDBG("Created 2D block load with layout conversion: " << *newLoad);
 

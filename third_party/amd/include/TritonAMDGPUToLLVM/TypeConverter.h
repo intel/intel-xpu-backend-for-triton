@@ -38,10 +38,6 @@ public:
     addConversion([&](TensorDescType type) -> std::optional<Type> {
       return convertTensorDescType(type);
     });
-    // A buffer descriptor is the buffer resource the intrinsics take.
-    addConversion([ctx](amdgpu::BufferDescType type) -> std::optional<Type> {
-      return LLVM::LLVMPointerType::get(ctx, llvm::AMDGPUAS::BUFFER_RESOURCE);
-    });
   }
 
   Type convertTensorDescType(triton::TensorDescType type) {

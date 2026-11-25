@@ -107,13 +107,6 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.block_io_stride";
     }
 
-    /// Get the name of the attribute marking a `ttig.2d_block_load_from_ptr`
-    /// (or prefetch) whose `base_height` is a runtime row-limit bound, not a
-    /// fixed per-message tile height (see ttgi::matchRowLimitMask).
-    static constexpr llvm::StringRef getBlockIORuntimeRowLimitAttrName() {
-      return "ttig.block_io_runtime_row_limit";
-    }
-
     /// Get the name of the attribute used to specify the target architecture. This
     /// attribute matches architecture in a target triple used for the resulting LLVM
     /// IR module.
@@ -125,12 +118,6 @@ def TritonIntelGPU_Dialect : Dialect {
     /// Please use this attribute with caution, this is intended for temporary use.
     static constexpr llvm::StringRef getIsLTSAttrName() {
       return "ttig.is_lts";
-    }
-
-    /// Get the name of the attribute that makes 2D block I/O lower through the
-    /// GenISA interface instead of the SPIR-V builtins (set for IGC < 2.38).
-    static constexpr llvm::StringRef getUseGenISA2DBlockIOAttrName() {
-      return "ttig.use_genisa_2d_block_io";
     }
 
     /// Get the name of the attribute holding the core clock rate in kHz, used

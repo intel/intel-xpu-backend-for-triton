@@ -209,7 +209,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       metadata["elem_type"] = *elemType;
       metadata["block_size"] =
           std::vector<int>(blockSize.begin(), blockSize.end());
-      metadata["fp4_padded"] = mmaEncoding && mmaEncoding.isPaddedFp4();
+      metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
       metadata["is_im2col"] = isIm2Col;
     } else {
       auto blockShape = descTy.getShape();
@@ -1292,7 +1292,7 @@ void init_triton_ir(py::module_ &m) {
                   RoundingModeAttr::get(self.getBuilder().getContext(),
                                         roundingMode.value()));
             else
-              return self.create<FpToFpOp>(dstType, src, RoundingModeAttr{});
+              return self.create<FpToFpOp>(dstType, src);
           },
           py::arg("src"), py::arg("dstType"), py::arg("roundingMode").none())
       // Conversions for standard LLVM builtin types
@@ -1318,8 +1318,7 @@ void init_triton_ir(py::module_ &m) {
            })
       .def("create_fp_ext",
            [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
-             return self.create<arith::ExtFOp>(dstType, src,
-                                               arith::FastMathFlagsAttr{});
+             return self.create<arith::ExtFOp>(dstType, src);
            })
       .def("create_fp_trunc",
            [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
@@ -1674,8 +1673,10 @@ void init_triton_ir(py::module_ &m) {
              self.create<DescriptorScatterOp>(desc, x_indices, y_index, value);
            })
       .def("create_reshape",
-           [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape)
-               -> Value { return self.create<ReshapeOp>(shape, arg); })
+           [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,
+              bool allowReorder) -> Value {
+             return self.create<ReshapeOp>(shape, arg, allowReorder);
+           })
       .def("create_expand_dims",
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
              return self.create<ExpandDimsOp>(arg, axis);

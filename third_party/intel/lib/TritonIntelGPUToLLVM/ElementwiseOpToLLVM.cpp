@@ -2126,7 +2126,6 @@ struct PreciseSqrtOpConversion
             op, intel::TritonIntelGPUDialect::
                     getUseClRoundedDivideSqrtAttrName())) {
       return {LLVM::SqrtOp::create(rewriter, loc, elemTy, operandsRanges[0],
-                                   LLVM::SqrtOp::Properties{},
                                    adaptor.getAttributes().getValue())};
     }
 
@@ -2347,10 +2346,6 @@ void populateElementwiseOpToLLVMPatterns(
   assert(benefit > 0);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, benefit.getBenefit() - 1);
-  patterns.add<gpu::ElementwiseOpConversion<arith::UIToFPOp, LLVM::UIToFPOp>,
-               gpu::ElementwiseOpConversion<math::SqrtOp, math::SqrtOp>,
-               gpu::ElementwiseOpConversion<math::RsqrtOp, math::RsqrtOp>>(
-      typeConverter, axisInfoAnalysis, benefit.getBenefit() - 1);
 
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SigmoidConversion>(typeConverter, benefit.getBenefit() + 10);

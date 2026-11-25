@@ -1,6 +1,5 @@
 import pytest
 
-from triton._C.libtriton import llvm
 from triton.backends.amd import compiler
 
 
@@ -68,7 +67,9 @@ define amdgpu_kernel void @alias_scope_kernel(ptr addrspace(1) %a, ptr addrspace
 
 @pytest.mark.parametrize("arch", ["gfx90a", "gfx942", "gfx950", "gfx1250", "gfx1250-strict"])
 @pytest.mark.parametrize("enable_misched", [False, True])
-def test_mir_roundtrip(arch, enable_misched, tmp_path):
+def test_mir_roundtrip(arch, enable_misched, tmp_path, monkeypatch):
+    from triton._C.libtriton import llvm
+
     triple = compiler.amd.get_target_triple(arch)
     source = f'''
 target triple = "{triple}"
@@ -82,21 +83,21 @@ define amdgpu_kernel void @mir_kernel(ptr addrspace(1) %out, i32 %a, i32 %b) {{
   ret void
 }}
 '''
-    mir = compiler.translate_to_mir(source, triple, arch, "", [], False, "mir_kernel", str(tmp_path), "", False)
+    llvm.init_targets()
+    monkeypatch.setenv("TRITON_DUMP_MIR", str(tmp_path))
+    mir = llvm.translate_to_mir(source, triple, arch, "", [], False, "mir_kernel")
     assert mir.startswith("---")
     assert "S_BARRIER" in mir
     assert "S_WAIT" not in mir
     path = tmp_path / "mir_kernel.txt"
-    assert compiler.MIR_DAG_MARKER in path.read_text()
+    assert "========== SCHEDULING DAG ==========" in path.read_text()
     path.write_text(mir)
-    assembly = compiler.translate_mir_to_asm(str(path), triple, arch, "", [], False, False, enable_misched, False)
+    assembly = llvm.translate_mir_to_asm(str(path), triple, arch, "", [], False, False, enable_misched)
     assert "mir_kernel:" in assembly
     assert "s_barrier" in assembly
 
 
 def test_strict_target_triple():
-    # has_architected_sgprs looks the triple up in core LLVM's target registry.
-    llvm.init_targets()
     assert compiler.amd.get_target_triple("gfx1250-strict") == "amdgpu12.50s-amd-amdhsa"
     assert not compiler.amd.has_architected_sgprs("gfx942")
     assert compiler.amd.has_architected_sgprs("gfx1250-strict")

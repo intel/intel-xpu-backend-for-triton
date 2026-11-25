@@ -363,7 +363,7 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
 
 def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
-    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "wait until the mbarrier phase completes.";
   let hasCanonicalizeMethod = 1;
 
@@ -411,7 +411,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
 
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier", "isPerWarp"]>,
-    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "perform the arrive operation on an mbarrier";
   let description = [{
     The `ttng.arrive_barrier` operation performs the "arrive" operation on an
@@ -787,9 +787,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     UnitAttr:$is_async,
     UnitAttr:$two_ctas,
     UnitAttr:$multicast,
-    UnitAttr:$is_unsigned,
-    OptionalAttr<TT_ScaleDotElemTypeAttr>:$a_type,
-    OptionalAttr<TT_ScaleDotElemTypeAttr>:$b_type
+    UnitAttr:$is_unsigned
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -801,9 +799,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
       CArg<"ValueRange", "{}">:$barriers,
       CArg<"ValueRange", "{}">:$barrier_preds,
       CArg<"bool", "false">:$is_async,
-      CArg<"bool", "false">:$is_unsigned,
-      CArg<"::mlir::triton::ScaleDotElemTypeAttr", "{}">:$a_type,
-      CArg<"::mlir::triton::ScaleDotElemTypeAttr", "{}">:$b_type)>
+      CArg<"bool", "false">:$is_unsigned)>
   ];
 
   let assemblyFormat = [{
@@ -813,10 +809,6 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     qualified(type($d)) (`,` qualified(type($barriers))^)?
   }];
 
-  let extraClassDeclaration = [{
-    Type getAElementType();
-    Type getBElementType();
-  }];
   let hasVerifier = 1;
 }
 
@@ -900,7 +892,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
 
 def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
-    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
   let hasCanonicalizeMethod = 1;
 
@@ -1149,7 +1141,7 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
 }
 
 def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy", [
-    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Initiate an asynchronous copy operation from shared memory to tensor memory.";
 
   let description = [{

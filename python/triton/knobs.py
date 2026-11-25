@@ -568,10 +568,10 @@ class runtime_knobs(base_knobs):
 class language_knobs(base_knobs):
     fp32_default: env_opt_str = env_opt_str("TRITON_F32_DEFAULT")
     default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", True)
-    allow_fp_fusion: env_bool = env_bool("TRITON_ALLOW_FP_FUSION", True)
+    force_disable_fp_fusion: env_bool = env_bool("TRITON_FORCE_DISABLE_FP_FUSION")
 
     def fp_fusion_enabled(self, requested: Optional[bool]) -> bool:
-        return self.allow_fp_fusion and (self.default_fp_fusion if requested is None else requested)
+        return not self.force_disable_fp_fusion and (self.default_fp_fusion if requested is None else requested)
 
 
 class nvidia_knobs(base_knobs):
@@ -631,9 +631,7 @@ class intel_knobs(base_knobs):
 class amd_knobs(base_knobs):
     codegen_path: env_opt_str = env_opt_str("TRITON_AMD_CODEGEN_PATH")
     bitcode_path: env_opt_str = env_opt_str("TRITON_AMD_BITCODE_PATH")
-    # use_buffer_ops is read once per tensor arg on the kernel launch critical path
-    # avoid repeated reads from env-var by calling get directly
-    use_buffer_ops: bool = env_bool("AMDGCN_USE_BUFFER_OPS", True).get()
+    use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     # Note: This requires use_buffer_ops be true to have any effect
     use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)
     # Note: This requires use_buffer_ops be true to have any effect
@@ -712,4 +710,3 @@ proton = proton_knobs()
 def refresh_knobs():
     runtime.debug = env_bool("TRITON_DEBUG").get()
     compilation.instrumentation_mode = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
-    amd.use_buffer_ops = env_bool("AMDGCN_USE_BUFFER_OPS", True).get()

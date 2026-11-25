@@ -49,10 +49,11 @@ class DependenciesFinder(ast.NodeVisitor):
     otherwise we could recompile).
     """
 
-    def __init__(self, name, globals, nonlocals, src) -> None:
+    def __init__(self, name, globals, nonlocals, src, source_location) -> None:
         super().__init__()
         self.name = name
         self.hasher = hashlib.sha256(src.encode("utf-8"))
+        self.hasher.update(str(source_location).encode("utf-8"))
 
         # This function's __globals__ dict.
         self.globals = globals
@@ -384,7 +385,7 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
             return str(value)
         if value.__class__.__name__ == "constexpr":
             return {"constexpr": value.value}
-        if isinstance(value, JITFunction):
+        if value.__class__.__name__ == "JITFunction":
             return {"jit_function": f"{value.module}:{value.fn.__qualname__}"}
         if isinstance(value, type):
             return {"class": f"{value.__module__}:{value.__qualname__}"}
@@ -537,10 +538,12 @@ class JITCallable:
             # transitively calls itself. The full hash is set after.
             self.hash = f"recursion:{self._fn_name}"
             nonlocals = inspect.getclosurevars(self.fn).nonlocals
-            dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals,
-                                                     src=self.src)
+            dependencies_finder = DependenciesFinder(
+                name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals, src=self.src,
+                source_location=(self.file_name, self.starting_line_number, self.def_file_line_number,
+                                 self.def_file_col_number))
             dependencies_finder.visit(self.parse())
-            self.hash = dependencies_finder.ret + str(self.starting_line_number)
+            self.hash = dependencies_finder.ret
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
 
             from triton.language.core import constexpr
@@ -1002,11 +1005,6 @@ def jit(
     :note: When a jit'd function is called, arguments are
         implicitly converted to pointers if they have a :code:`.data_ptr()` method
         and a `.dtype` attribute.
-
-    :note: Namedtuple argument classes can set ``__triton_do_not_specialize__``
-        to a tuple of field names. These fields and their nested tuple elements
-        skip value and alignment specialization. Explicit ``constexpr`` values
-        still specialize.
 
     :note: This function will be compiled and run on the GPU. It will only have access to:
 

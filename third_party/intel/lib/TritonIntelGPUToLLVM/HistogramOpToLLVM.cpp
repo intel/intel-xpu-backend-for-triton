@@ -63,15 +63,16 @@ computeHistogram(Location loc, ConversionPatternRewriter &rewriter,
 
 namespace {
 struct HistogramOpConversion
-    : public ConvertOpToLLVMPattern<triton::HistogramOp> {
+    : public ConvertTritonGPUOpToLLVMPattern<triton::HistogramOp> {
 public:
-  using ConvertOpToLLVMPattern<triton::HistogramOp>::ConvertOpToLLVMPattern;
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::HistogramOp>::ConvertTritonGPUOpToLLVMPattern;
 
   explicit HistogramOpConversion(LLVMTypeConverter &typeConverter,
                                  const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
-  }
+      : ConvertTritonGPUOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::HistogramOp op, OpAdaptor adaptor,

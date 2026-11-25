@@ -735,6 +735,7 @@ struct RewriteMultiRangeGather
             triton::TransOp::create(rewriter, loc, joined, transOrder);
         next.push_back(triton::ReshapeOp::create(rewriter, loc, catTy,
                                                  transposed,
+                                                 /*allowReorder=*/false,
                                                  /*efficientLayout=*/false));
       }
       current = std::move(next);

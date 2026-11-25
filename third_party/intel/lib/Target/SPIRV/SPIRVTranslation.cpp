@@ -106,15 +106,6 @@ public:
   SmallVectorBuffer(llvm::SmallVectorImpl<char> &O) : OS(O) {}
 };
 
-/// Whether `extension` was confirmed usable by a ground-truth probe (see
-/// `compiler.py`'s `has_spirv_capability`/`ocloc_accepts_*`).
-static bool
-isProbedExtensionAllowed(const std::map<std::string, bool> &probedExtensions,
-                         llvm::StringRef extension) {
-  auto It = probedExtensions.find(extension.str());
-  return It != probedExtensions.end() && It->second;
-}
-
 /// Returns the list of SPIR-V extensions the translator is allowed to use.
 /// Ideally the driver would be queried for the extensions it supports, however
 /// no such query is available yet, therefore extensions that are not supported
@@ -124,9 +115,7 @@ isProbedExtensionAllowed(const std::map<std::string, bool> &probedExtensions,
 /// knows about; it can be refreshed for a newer LTS by extracting the extension
 /// names from the shipped compiler library, e.g.:
 ///   strings -a libigc.so.<version> | grep -oE 'SPV_[A-Za-z0-9_]+' | sort -u
-static llvm::SmallVector<SPIRV::ExtensionID>
-getAllowedExtensions(bool isLTS,
-                     const std::map<std::string, bool> &probedExtensions) {
+static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
   llvm::SmallVector<SPIRV::ExtensionID> AllowedExtensions{
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float16_add,
@@ -149,6 +138,7 @@ getAllowedExtensions(bool isLTS,
   if (!isLTS) {
     AllowedExtensions.append(
         {SPIRV::ExtensionID::SPV_EXT_float8,
+         SPIRV::ExtensionID::SPV_EXT_long_vector,
          SPIRV::ExtensionID::SPV_EXT_ocp_microscaling_types,
          SPIRV::ExtensionID::SPV_INTEL_16bit_atomics,
          SPIRV::ExtensionID::SPV_INTEL_bfloat16_arithmetic,
@@ -162,22 +152,14 @@ getAllowedExtensions(bool isLTS,
          SPIRV::ExtensionID::
              SPV_INTEL_subgroup_scaled_matrix_multiply_accumulate,
          SPIRV::ExtensionID::SPV_KHR_bfloat16});
+  } else {
+    AllowedExtensions.push_back(SPIRV::ExtensionID::SPV_INTEL_vector_compute);
   }
-
-  AllowedExtensions.push_back(
-      isProbedExtensionAllowed(probedExtensions, "SPV_EXT_long_vector")
-          ? SPIRV::ExtensionID::SPV_EXT_long_vector
-          : SPIRV::ExtensionID::SPV_INTEL_vector_compute);
-
-  if (isProbedExtensionAllowed(probedExtensions, "SPV_INTEL_maximum_registers"))
-    AllowedExtensions.push_back(
-        SPIRV::ExtensionID::SPV_INTEL_maximum_registers);
 
   return AllowedExtensions;
 }
 
-static SPIRV::TranslatorOpts
-getSPIRVOpts(bool isLTS, const std::map<std::string, bool> &probedExtensions) {
+static SPIRV::TranslatorOpts getSPIRVOpts(bool isLTS) {
   SPIRV::TranslatorOpts SPIRVOpts{SPIRV::VersionNumber::SPIRV_1_4};
 
   SPIRVOpts.setMemToRegEnabled(true);
@@ -193,14 +175,12 @@ getSPIRVOpts(bool isLTS, const std::map<std::string, bool> &probedExtensions) {
     SPIRVOpts.setAllowExtraDIExpressionsEnabled(true);
   }
 
-  for (SPIRV::ExtensionID Ext : getAllowedExtensions(isLTS, probedExtensions))
+  for (SPIRV::ExtensionID Ext : getAllowedExtensions(isLTS))
     SPIRVOpts.setAllowedToUseExtension(Ext, true);
   return SPIRVOpts;
 }
 
-std::string
-translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS,
-                       const std::map<std::string, bool> &probedExtensions) {
+std::string translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS) {
   llvm::SmallVector<char, 0> buffer;
 
   // verify and store llvm
@@ -220,7 +200,7 @@ translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS,
   std::ostream OS(&StreamBuf);
   std::string Err;
 
-  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOpts(isLTS, probedExtensions);
+  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOpts(isLTS);
 
 #if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
   int SpvTranslateMode = 0;

@@ -1205,8 +1205,7 @@ BarrierStages getAtomicBarrierStages(MemSemantic semantic,
 }
 
 std::optional<int32_t> getAtomicResultShuffleMask(Value result) {
-  if (result.use_empty() ||
-      result.getDefiningOp()->getParentOfType<gpu::ThreadScopeOp>())
+  if (result.use_empty())
     return 0;
 
   int32_t laneMask, warpMask, blockMask;
@@ -1230,10 +1229,13 @@ std::optional<int32_t> getAtomicResultShuffleMask(Value result) {
 }
 
 bool atomicResultHasCTABroadcast(Operation *op) {
-  if (op->getNumResults() != 1 || op->getResult(0).use_empty() ||
-      op->getParentOfType<gpu::ThreadScopeOp>())
+  if (op->getNumResults() != 1 || op->getResult(0).use_empty())
     return false;
-  return getResultScratchBroadcastMask(op).value_or(0) != 0;
+  auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+  if (!tensorTy)
+    return gpu::lookupNumCTAs(op) > 1;
+  auto kBlock = StringAttr::get(op->getContext(), "block");
+  return gpu::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
 }
 
 } // namespace triton
@@ -1244,8 +1246,7 @@ static bool atomicNeedsClusterBarrier(Operation *op) {
   if (isa<AtomicPollOp>(op))
     return gpu::lookupNumCTAs(op) != 1;
   auto atomic = dyn_cast<AtomicOpInterface>(op);
-  if (!atomic || gpu::lookupNumCTAs(op) == 1 ||
-      op->getParentOfType<gpu::ThreadScopeOp>())
+  if (!atomic || gpu::lookupNumCTAs(op) == 1)
     return false;
 
   auto stages = getAtomicBarrierStages(atomic.getMemSemantic(),
@@ -1256,8 +1257,14 @@ static bool atomicNeedsClusterBarrier(Operation *op) {
 bool needsClusterBarrier(Operation *op) {
   if (isa<ClusterBarrierOp>(op))
     return true;
-  if (isa<gpu::ConvertLayoutOp, ReduceOp, HistogramOp, gpu::ThreadHandoffOp>(
-          op))
+  if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
+    auto kBlock = StringAttr::get(op->getContext(), "block");
+    return !isCvtDimSync(gpu::toLinearLayout(cvt.getSrc().getType()),
+                         gpu::toLinearLayout(cvt.getType()), kBlock);
+  }
+  if (auto reduce = dyn_cast<ReduceOp>(op))
+    return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (isa<HistogramOp>(op))
     return hasCrossCTAScratch(op);
   return atomicNeedsClusterBarrier(op);
 }
