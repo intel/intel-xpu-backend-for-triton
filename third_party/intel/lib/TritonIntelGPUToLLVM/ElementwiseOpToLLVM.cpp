@@ -11,6 +11,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "llvm/Support/FormatVariadic.h"
 #include <cmath>
 #include <numeric>
 
@@ -455,6 +456,43 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
           b.extract_element(i8_ty, b1, b.i32_val(3))};
 }
 
+/// True if the fp8 -> fp16 upcast of \p op must keep its rebias multiply apart
+/// from the multiplies that use its result. Under TRITON_INTEL_FAST_MATH=1 (the
+/// `ttig.fast_math` module attribute) every floating-point instruction gets
+/// `fast`, and the multiply by 256.0 would then be reassociated with a
+/// multiply of the converted value: `x.to(f16) * s` becomes `x * (256 * s)`
+/// (the NaN compare and select are dropped under `nnan`), and `256 * s`
+/// overflows fp16 for s >= 256, turning every result, zeros included, into inf
+/// or NaN. An upcast whose result only reaches DPAS dots (directly, or through
+/// a layout conversion or shared memory) feeds no such multiply and keeps the
+/// faster sequence; a dot with another layout lowers to multiply-adds.
+static bool needsFastMathReassocBarrier(Operation *op) {
+  if (!mlir::LLVM::intel::hasModuleAttr(
+          op, triton::gpu::intel::TritonIntelGPUDialect::getFastMathAttrName()))
+    return false;
+  SmallVector<Value> worklist(op->getResults());
+  while (!worklist.empty()) {
+    Value val = worklist.pop_back_val();
+    for (Operation *user : val.getUsers()) {
+      if (isa<triton::DotOp, triton::DotScaledOp>(user)) {
+        auto resultTy = cast<RankedTensorType>(user->getResult(0).getType());
+        if (isa<triton::gpu::intel::DpasEncodingAttr>(resultTy.getEncoding()))
+          continue;
+        return true;
+      }
+      // A dealloc of a buffer does no arithmetic.
+      if (isa<triton::gpu::LocalDeallocOp>(user))
+        continue;
+      // A local_store hides the loads of its buffer, so it is not followed.
+      if (!isa<triton::gpu::ConvertLayoutOp, triton::gpu::LocalAllocOp,
+               triton::gpu::LocalLoadOp>(user))
+        return true;
+      llvm::append_range(worklist, user->getResults());
+    }
+  }
+  return false;
+}
+
 /* ----- FP8E4M3 ------ */
 // Note: when handled by software, this format
 // has more than a single NaN values.
@@ -506,16 +544,43 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 // Not used on LTS drivers, where the previous float sequence triggered an IGC
 // compile-time blowup; see Fp8E4M3Nv_to_Fp16Int below and the dispatch in
 // getConverter().
+// A copy of the bits of `v` (an integer) that neither LLVM nor IGC can look
+// through: an inline-asm mov. A floating-point value passed through it cannot
+// be reassociated with the operations on either side, whatever is known about
+// it (see needsFastMathReassocBarrier); an integer operation that leaves the
+// value unchanged would be folded away when LLVM can prove that it does.
+static Value opaqueCopy(Location loc, ConversionPatternRewriter &rewriter,
+                        Value v) {
+  auto mod =
+      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
+  unsigned simd = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  std::string asmText =
+      llvm::formatv("mov (M1, {0}) $0(0,0)<1> $1(0,0)<1;1,0>", simd).str();
+  MLIRContext *ctx = rewriter.getContext();
+  return LLVM::InlineAsmOp::create(
+             rewriter, loc, v.getType(), ValueRange{v}, asmText, "=rw,rw",
+             /*has_side_effects=*/false, /*is_align_stack=*/false,
+             LLVM::TailCallKind::None, /*convergent=*/false,
+             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
+             ArrayAttr::get(ctx, {}))
+      .getRes();
+}
+
+// With `reassocBarrier` (see needsFastMathReassocBarrier), the product goes
+// through opaqueCopy before the reserved bytes are turned into NaN.
 static Value rebiasFp8E4M3ToFp16(Location loc,
                                  ConversionPatternRewriter &rewriter,
-                                 Value aligned) {
+                                 Value aligned, bool reassocBarrier) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value h = b.fmul(b.bitcast(aligned, f16_ty), b.f16_val(256.0f));
+  if (reassocBarrier)
+    h = b.bitcast(opaqueCopy(loc, rewriter, b.bitcast(h, i16_ty)), f16_ty);
   Value mag = LLVM::FAbsOp::create(rewriter, loc, f16_ty, h);
   Value isReserved = b.fcmp_ogt(mag, b.f16_val(448.0f));
   return b.select(isReserved, b.bitcast(b.i16_val(0x7E00), f16_ty), h);
 }
 
+template <bool ReassocBarrier>
 static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) {
@@ -524,13 +589,15 @@ static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
   for (Value fp8 : v) {
     Value shifted = b.shl(i16_ty, b.sext(i16_ty, fp8), b.i16_val(7));
     ret.push_back(rebiasFp8E4M3ToFp16(
-        loc, rewriter, b.and_(i16_ty, shifted, b.i16_val(0xBFFF))));
+        loc, rewriter, b.and_(i16_ty, shifted, b.i16_val(0xBFFF)),
+        ReassocBarrier));
   }
   return ret;
 }
 
 // Fp8E4M3Nv_to_Fp16 in pairs, for dot operands with K < 64: the packing costs
 // movs, but it keeps register pressure down.
+template <bool ReassocBarrier>
 static SmallVector<Value>
 Fp8E4M3Nv_to_Fp16Pairs(Location loc, ConversionPatternRewriter &rewriter,
                        const SmallVector<Value> &v) {
@@ -590,6 +657,9 @@ Fp8E4M3Nv_to_Fp16Pairs(Location loc, ConversionPatternRewriter &rewriter,
                        splatI16(0x4000));
   aligned = b.or_(i16x2VecTy, aligned, carry);
   Value h = b.fmul(b.bitcast(aligned, fp16x2VecTy), splatF16(256.0f));
+  // See needsFastMathReassocBarrier and opaqueCopy.
+  if constexpr (ReassocBarrier)
+    h = b.bitcast(opaqueCopy(loc, rewriter, b.bitcast(h, i32_ty)), fp16x2VecTy);
 
   return {b.extract_element(f16_ty, h, b.i32_val(0)),
           b.extract_element(f16_ty, h, b.i32_val(1))};
@@ -601,11 +671,12 @@ Fp8E4M3Nv_to_Fp16Pairs(Location loc, ConversionPatternRewriter &rewriter,
 // in from it.
 static Value Fp8E4M3Nv_to_Fp16FromHighByte(Location loc,
                                            ConversionPatternRewriter &rewriter,
-                                           Value lane) {
+                                           Value lane, bool reassocBarrier) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value shifted = b.ashr(i16_ty, lane, b.i16_val(1));
   return rebiasFp8E4M3ToFp16(loc, rewriter,
-                             b.and_(i16_ty, shifted, b.i16_val(0xBF80)));
+                             b.and_(i16_ty, shifted, b.i16_val(0xBF80)),
+                             reassocBarrier);
 }
 
 // Fp8E4M3 -> Fp16 (packed), integer domain. Used only on LTS drivers.
@@ -642,6 +713,10 @@ static Value Fp8E4M3Nv_to_Fp16FromHighByte(Location loc,
 // sign, matching the AMD and NVIDIA software converters. This differs from
 // Fp8E4M3Nv_to_Fp16, which yields 0x7E00 for both -- both are NaN, and the
 // payload is unspecified.
+// With `ReassocBarrier` (see needsFastMathReassocBarrier), the product goes
+// through opaqueCopy: the integer operations after it can be folded away when
+// LLVM can prove that the input has no sign and is never a reserved byte.
+template <bool ReassocBarrier>
 static SmallVector<Value>
 Fp8E4M3Nv_to_Fp16Int(Location loc, ConversionPatternRewriter &rewriter,
                      const SmallVector<Value> &v) {
@@ -676,6 +751,9 @@ Fp8E4M3Nv_to_Fp16Int(Location loc, ConversionPatternRewriter &rewriter,
   mul256 = b.insert_element(fp16x2VecTy, mul256, c256, b.i32_val(0));
   mul256 = b.insert_element(fp16x2VecTy, mul256, c256, b.i32_val(1));
   Value hOut = b.fmul(hIn, mul256);
+  if constexpr (ReassocBarrier)
+    hOut = b.bitcast(opaqueCopy(loc, rewriter, b.bitcast(hOut, i32_ty)),
+                     fp16x2VecTy);
 
   // OR the sign bits back in (i32 positions 15 and 31, which is exactly
   // where the fp16 sign bits go).
@@ -1484,7 +1562,7 @@ struct FpToFpOpConversion
             {{F8E4M3TyID, F16TyID, undefRounding},
              {HasAttr<SUPPORT_F8_CONV>,
               {BuiltinConvert<BUILTIN_HF8TOHF, Float16Type>, 1, 16},
-              {Fp8E4M3Nv_to_Fp16, 2}}},
+              {Fp8E4M3Nv_to_Fp16<false>, 2}}},
             {{F8E5M2TyID, F16TyID, undefRounding},
              {HasAttr<SUPPORT_F8_CONV>,
               {BuiltinConvert<BUILTIN_BF8TOHF, Float16Type>, 1, 16},
@@ -1575,13 +1653,20 @@ struct FpToFpOpConversion
     // driver pin is bumped.
     if (srcTy.getTypeID() == F8E4M3TyID && dstTy.getTypeID() == F16TyID &&
         !HasAttr<SUPPORT_F8_CONV>(op)) {
+      bool barrier = needsFastMathReassocBarrier(op);
       if (HasAttr<IS_LTS>(op)) {
-        static Converter c{Fp8E4M3Nv_to_Fp16Int, 2};
-        return c;
+        static Converter c{Fp8E4M3Nv_to_Fp16Int<false>, 2};
+        static Converter cBarrier{Fp8E4M3Nv_to_Fp16Int<true>, 2};
+        return barrier ? cBarrier : c;
       }
       if (int64_t k = getDotOperandK(op);
           (k && k < 64) || isDotBInEveryWarp(op)) {
-        static Converter c{Fp8E4M3Nv_to_Fp16Pairs, 2};
+        static Converter c{Fp8E4M3Nv_to_Fp16Pairs<false>, 2};
+        static Converter cBarrier{Fp8E4M3Nv_to_Fp16Pairs<true>, 2};
+        return barrier ? cBarrier : c;
+      }
+      if (barrier) {
+        static Converter c{Fp8E4M3Nv_to_Fp16<true>, 2};
         return c;
       }
     }
@@ -1818,7 +1903,8 @@ Fp8ToFp16Lowering::convert(ArrayRef<unsigned> indices,
       Value window = b.trunc(i16_ty, dword);
       if (idx % 2 == 0)
         window = b.shl(i16_ty, window, b.i16_val(8));
-      results.push_back(Fp8E4M3Nv_to_Fp16FromHighByte(loc, rewriter, window));
+      results.push_back(Fp8E4M3Nv_to_Fp16FromHighByte(
+          loc, rewriter, window, needsFastMathReassocBarrier(op)));
     }
     return results;
   }

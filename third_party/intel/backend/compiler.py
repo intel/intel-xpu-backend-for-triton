@@ -720,6 +720,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.set_is_lts(mod)
         # Set for every input, including Gluon and `.ttgir`, which bypass `make_ttgir`.
         intel.set_use_genisa_2d_block_io(mod, not options.has_spirv_2d_block_io)
+        intel.set_fast_math_attr(mod, knobs.intel.fast_math)
 
         # `getGlobalTimer` counts core clock cycles and needs the rate to report
         # nanoseconds.

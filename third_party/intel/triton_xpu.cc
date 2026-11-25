@@ -441,6 +441,18 @@ void init_triton_intel(py::module_ &m) {
       mod->setAttr(name, mlir::Builder(mod.getContext()).getUnitAttr());
   });
 
+  // Mirrors TRITON_INTEL_FAST_MATH, which set_fast_math applies to every
+  // input, on the module: Gluon and `.ttgir` inputs bypass annotate_module.
+  m.def("set_fast_math_attr", [](mlir::ModuleOp &mod, bool fastMath) {
+    using namespace mlir::triton::gpu::intel;
+    constexpr llvm::StringRef name =
+        TritonIntelGPUDialect::getFastMathAttrName();
+    if (!fastMath)
+      mod->removeAttr(name);
+    else if (!mod->hasAttr(name))
+      mod->setAttr(name, mlir::Builder(mod.getContext()).getUnitAttr());
+  });
+
   m.def("set_is_lts", [](mlir::ModuleOp &mod) {
     using namespace mlir::triton::gpu::intel;
     if (!mod->hasAttr(TritonIntelGPUDialect::getIsLTSAttrName())) {
