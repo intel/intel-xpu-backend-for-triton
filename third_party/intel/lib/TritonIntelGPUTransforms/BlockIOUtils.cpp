@@ -1510,7 +1510,6 @@ bool colLimitIsHWCompatible(const BoundaryMaskInfo &info,
 
 StoreBoundaryClamp
 matchStoreBoundaryClamp(triton::StoreOp op, unsigned contiguousDim,
-                        bool pitchDimIsBroadcast,
                         std::optional<int64_t> pitchBytes,
                         triton::intel::ModuleAxisInfoAnalysis &axisInfo) {
   // Read on every call: a cached value would outlive a change to it.
@@ -1532,9 +1531,10 @@ matchStoreBoundaryClamp(triton::StoreOp op, unsigned contiguousDim,
   if (*pitchBytes < std::max<int64_t>(rowBytes, 64) + compensation)
     return {};
 
+  // A pitch is given only for a positive stride.
   std::optional<BoundaryMaskInfo> m = matchBoundaryCheckMask(
       op.getMask(), /*other=*/Value(), shape, contiguousDim,
-      pitchDimIsBroadcast, op, /*allowConstBounds=*/true);
+      /*pitchDimIsBroadcast=*/false, op, /*allowConstBounds=*/true);
   if (!m || !m->extraPreds.empty())
     return {};
 

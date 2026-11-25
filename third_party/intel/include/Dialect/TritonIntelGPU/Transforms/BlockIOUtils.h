@@ -296,7 +296,6 @@ struct StoreBoundaryClamp {
 /// bytes, at least 64, plus any base alignment compensation.
 StoreBoundaryClamp
 matchStoreBoundaryClamp(triton::StoreOp op, unsigned contiguousDim,
-                        bool pitchDimIsBroadcast,
                         std::optional<int64_t> pitchBytes,
                         triton::intel::ModuleAxisInfoAnalysis &axisInfo);
 
