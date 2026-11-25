@@ -14,6 +14,7 @@
 // rejected it.
 
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
+#include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
@@ -24,6 +25,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/Signals.h"
+#include <cstdlib>
 #include <gtest/gtest.h>
 
 using namespace mlir;
@@ -801,12 +803,19 @@ TEST_F(ComputeRowLimitHeightTest, I64InputsUseOverflowSafeClamp) {
 class MatchBoundaryCheckMaskTest : public MatchRowLimitMaskTest {
 protected:
   std::optional<BoundaryMaskInfo> match(Value mask, ArrayRef<int64_t> shape,
-                                        Value other = Value()) {
+                                        Value other = Value(),
+                                        bool allowConstBounds = false) {
     // The mask's own op stands in for the load as the point the index base's
     // sign is asked at.
     return matchBoundaryCheckMask(mask, other, shape, /*contiguousDim=*/1,
                                   /*pitchDimIsBroadcast=*/false,
-                                  mask.getDefiningOp());
+                                  mask.getDefiningOp(), allowConstBounds);
+  }
+
+  // `match` with constant bounds allowed.
+  std::optional<BoundaryMaskInfo> matchConst(Value mask,
+                                             ArrayRef<int64_t> shape) {
+    return match(mask, shape, Value(), /*allowConstBounds=*/true);
   }
 
   Value cmpSge(Value lhs, Value rhs) {
@@ -823,6 +832,23 @@ protected:
     Value zero = splatTo(constI(0, 32), narrowShape);
     return broadcastTo(cmpSge(indexND, zero), tensorShape);
   }
+
+  // `index < dense<bound>` along `varyDim`, the constant of the index's type,
+  // broadcast to `tensorShape`; `ult` compares unsigned.
+  Value buildConstBoundedMask(Value index1D, unsigned varyDim,
+                              ArrayRef<int64_t> tensorShape, int64_t bound,
+                              bool ult = false) {
+    SmallVector<int64_t> narrowShape(tensorShape.size(), 1);
+    narrowShape[varyDim] = tensorShape[varyDim];
+    Value indexND = expandToShape(index1D, varyDim, narrowShape);
+    auto ty = cast<RankedTensorType>(indexND.getType());
+    IntegerAttr attr = builder.getIntegerAttr(ty.getElementType(), bound);
+    Value boundND = arith::ConstantOp::create(builder, loc(), ty,
+                                              DenseElementsAttr::get(ty, attr));
+    auto pred = ult ? arith::CmpIPredicate::ult : arith::CmpIPredicate::slt;
+    Value cmp = arith::CmpIOp::create(builder, loc(), pred, indexND, boundND);
+    return broadcastTo(cmp, tensorShape);
+  }
 };
 
 TEST_F(MatchBoundaryCheckMaskTest, BothDimsBoundedAccepted) {
@@ -835,9 +861,9 @@ TEST_F(MatchBoundaryCheckMaskTest, BothDimsBoundedAccepted) {
 
   auto result = match(andI(rowMask, colMask), shape);
   ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result->rowBound, rowBound);
+  EXPECT_EQ(result->rowBound, OpFoldResult(rowBound));
   EXPECT_FALSE(result->rowBase); // bare arange
-  EXPECT_EQ(result->colBound, colBound);
+  EXPECT_EQ(result->colBound, OpFoldResult(colBound));
   EXPECT_EQ(result->colBase, colBase);
   EXPECT_TRUE(result->extraPreds.empty());
 }
@@ -850,7 +876,7 @@ TEST_F(MatchBoundaryCheckMaskTest, ColBoundAloneAccepted) {
   auto result = match(colMask, shape);
   ASSERT_TRUE(result.has_value());
   EXPECT_FALSE(result->rowBound);
-  EXPECT_EQ(result->colBound, colBound);
+  EXPECT_EQ(result->colBound, OpFoldResult(colBound));
 }
 
 // Both surfaces start at the tensor, so a column before it is read like any
@@ -892,7 +918,7 @@ TEST_F(MatchBoundaryCheckMaskTest, SeveralUniformConjunctsKept) {
 
   auto result = match(andI(flagA, andI(rowMask, flagB)), shape);
   ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result->rowBound, rowBound);
+  EXPECT_EQ(result->rowBound, OpFoldResult(rowBound));
   ASSERT_EQ(result->extraPreds.size(), 2u);
   EXPECT_EQ(result->extraPreds[0], flagA);
   EXPECT_EQ(result->extraPreds[1], flagB);
@@ -942,7 +968,7 @@ TEST_F(MatchBoundaryCheckMaskTest, SharedAndVisitedOnce) {
 
   auto result = match(mask, shape);
   ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result->rowBound, rowBound);
+  EXPECT_EQ(result->rowBound, OpFoldResult(rowBound));
   ASSERT_EQ(result->extraPreds.size(), 1u);
   EXPECT_EQ(result->extraPreds.front(), flag);
 }
@@ -958,7 +984,7 @@ TEST_F(MatchBoundaryCheckMaskTest, SwappedComparisonAccepted) {
 
   auto result = match(mask, shape);
   ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result->rowBound, rowBound);
+  EXPECT_EQ(result->rowBound, OpFoldResult(rowBound));
 }
 
 // `index > bound` is a lower bound, which base_height cannot express.
@@ -981,7 +1007,7 @@ TEST_F(MatchBoundaryCheckMaskTest, LowerBoundDroppedNextToUpperBound) {
 
   auto result = match(rowMask, shape);
   ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result->rowBound, rowBound);
+  EXPECT_EQ(result->rowBound, OpFoldResult(rowBound));
   EXPECT_TRUE(result->extraPreds.empty());
 }
 
@@ -1027,7 +1053,7 @@ TEST_F(MatchBoundaryCheckMaskTest, SwappedLowerBoundAccepted) {
 
   auto result = match(andI(lower, upper), shape);
   ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result->rowBound, rowBound);
+  EXPECT_EQ(result->rowBound, OpFoldResult(rowBound));
 }
 
 // matchRowLimitMask has no load to ask the sign at, so it drops a lower
@@ -1049,6 +1075,281 @@ TEST_F(MatchBoundaryCheckMaskTest, LowerBoundWithBaseNeedsLoadOp) {
                                  /*contiguousDim=*/1,
                                  /*pitchDimIsBroadcast=*/false)
                    .has_value());
+}
+
+// A splat constant bound is matched only with `allowConstBounds`.
+TEST_F(MatchBoundaryCheckMaskTest, ConstBoundNeedsOptIn) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value mask = buildConstBoundedMask(arange(256), /*varyDim=*/0, shape, 100);
+  EXPECT_FALSE(match(mask, shape).has_value());
+}
+
+// Each constant bound comes back as an IntegerAttr of the compare's type.
+TEST_F(MatchBoundaryCheckMaskTest, ConstBoundsAccepted) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value colBase = constI(64, 32);
+  Value colIndex = addI32(splatTo(colBase, {32}), arange(32));
+  Value mask =
+      andI(buildConstBoundedMask(arange(256), /*varyDim=*/0, shape, 100),
+           buildConstBoundedMask(colIndex, /*varyDim=*/1, shape, 24));
+
+  auto result = matchConst(mask, shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, OpFoldResult(builder.getI32IntegerAttr(100)));
+  EXPECT_FALSE(result->rowBase); // bare arange
+  EXPECT_EQ(result->colBound, OpFoldResult(builder.getI32IntegerAttr(24)));
+  EXPECT_EQ(result->colBase, colBase);
+  EXPECT_TRUE(result->extraPreds.empty());
+}
+
+// A scalar bound stays a Value next to a constant one.
+TEST_F(MatchBoundaryCheckMaskTest, ScalarAndConstBoundsKeepTheirForms) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value rowBound = constI(100, 32);
+  Value mask =
+      andI(buildBoundedMask(arange(256), /*varyDim=*/0, shape, rowBound),
+           buildConstBoundedMask(arange(32), /*varyDim=*/1, shape, 24));
+
+  auto result = matchConst(mask, shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, OpFoldResult(rowBound));
+  EXPECT_EQ(result->colBound, OpFoldResult(builder.getI32IntegerAttr(24)));
+}
+
+// One upper bound per dim also when one is a constant, in either order.
+TEST_F(MatchBoundaryCheckMaskTest, SecondRowBoundRejectedWhenConst) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  Value scalar =
+      buildBoundedMask(arange(256), /*varyDim=*/0, shape, constI(100, 32));
+  Value constant = buildConstBoundedMask(arange(256), /*varyDim=*/0, shape, 90);
+  EXPECT_FALSE(matchConst(andI(scalar, constant), shape).has_value());
+  EXPECT_FALSE(matchConst(andI(constant, scalar), shape).has_value());
+}
+
+// A constant bound has to be a splat.
+TEST_F(MatchBoundaryCheckMaskTest, NonSplatConstBoundRejected) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  SmallVector<int64_t, 2> narrow = {1, 32};
+  SmallVector<int32_t> limits(32, 24);
+  limits.back() = 25;
+  auto ty = RankedTensorType::get(narrow, builder.getI32Type());
+  auto attr = DenseElementsAttr::get(ty, ArrayRef<int32_t>(limits));
+  Value bound = arith::ConstantOp::create(builder, loc(), ty, attr);
+  Value index2D = expandDims(arange(32), /*axis=*/0, narrow);
+  Value mask = broadcastTo(cmpSlt(index2D, bound), shape);
+  EXPECT_FALSE(matchConst(mask, shape).has_value());
+}
+
+// An i64 constant bound keeps its width.
+TEST_F(MatchBoundaryCheckMaskTest, I64ConstBoundKeepsWidth) {
+  SmallVector<int64_t, 2> shape = {256, 32};
+  auto i64TensorTy = RankedTensorType::get({256}, builder.getI64Type());
+  Value idx64 =
+      arith::ExtSIOp::create(builder, loc(), i64TensorTy, arange(256));
+  int64_t bound = int64_t(1) << 40;
+  Value mask = buildConstBoundedMask(idx64, /*varyDim=*/0, shape, bound);
+
+  auto result = matchConst(mask, shape);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->rowBound, OpFoldResult(builder.getI64IntegerAttr(bound)));
+}
+
+// matchStoreBoundaryClamp on the 64x128 store of #8813: rows
+// `pid_m * rowMul + arange(64)` below `rowBound` and columns
+// `pid_n * colMul + arange(numCols)` below `colBound`, both splat constants.
+class MatchStoreBoundaryClampTest : public MatchBoundaryCheckMaskTest {
+protected:
+  struct Spec {
+    std::optional<int64_t> rowBound = 8450, colBound = 504;
+    int64_t rowMul = 64, numCols = 128, colMul = numCols;
+    bool rowShl = false;              // row base `pid_m << 6` instead
+    bool rowAndZero = false;          // adds `pid_n & 0` to the row base
+    bool f32 = false;                 // f16 otherwise
+    unsigned intBits = 0;             // iN elements if nonzero, else f16/f32
+    bool colUlt = false;              // unsigned column compare
+    bool flag = false;                // ANDs in a splatted i1 argument
+    std::optional<int32_t> alignment; // ttig.2d_block_io_base_alignment
+    unsigned contiguousDim = 1;
+  };
+
+  // Builds the store in a new function and matches it.
+  StoreBoundaryClamp matchStore(const Spec &s, std::optional<int64_t> pitch) {
+    SmallVector<int64_t, 2> shape = {64, s.numCols};
+    Type elemTy = s.f32 ? builder.getF32Type() : builder.getF16Type();
+    if (s.intBits)
+      elemTy = builder.getIntegerType(s.intBits);
+    Type i32 = builder.getI32Type();
+    SmallVector<Type> args = {
+        RankedTensorType::get(shape, triton::PointerType::get(elemTy)),
+        RankedTensorType::get(shape, elemTy), i32, i32, builder.getI1Type()};
+    builder.setInsertionPointToEnd(module->getBody());
+    auto funcOp = triton::FuncOp::create(builder, loc(),
+                                         "store" + std::to_string(numFuncs++),
+                                         builder.getFunctionType(args, {}));
+    builder.setInsertionPointToStart(funcOp.addEntryBlock());
+    auto ret = triton::ReturnOp::create(builder, loc(), ValueRange{});
+    builder.setInsertionPoint(ret);
+
+    Value pidM = funcOp.getArgument(2), pidN = funcOp.getArgument(3);
+    rowBase = mulI32(pidM, constI(s.rowMul, 32));
+    if (s.rowShl)
+      rowBase = arith::ShLIOp::create(builder, loc(), pidM, constI(6, 32));
+    if (s.rowAndZero)
+      rowBase = addI32(rowBase, andI(pidN, constI(0, 32)));
+    colBase = mulI32(pidN, constI(s.colMul, 32));
+    Value rows = addI32(splatTo(rowBase, {64}), arange(64));
+    Value cols = addI32(splatTo(colBase, {s.numCols}), arange(s.numCols));
+    Value mask;
+    auto andWith = [&](Value c) { mask = mask ? andI(mask, c) : c; };
+    if (s.rowBound)
+      andWith(buildConstBoundedMask(rows, /*varyDim=*/0, shape, *s.rowBound));
+    if (s.colBound)
+      andWith(buildConstBoundedMask(cols, /*varyDim=*/1, shape, *s.colBound,
+                                    s.colUlt));
+    if (s.flag)
+      andWith(splatTo(funcOp.getArgument(4), shape));
+    auto store = triton::StoreOp::create(builder, loc(), funcOp.getArgument(0),
+                                         funcOp.getArgument(1), mask);
+
+    StringRef attrName =
+        TritonIntelGPUDialect::get2DBlockIOBaseAlignmentAttrName();
+    if (s.alignment)
+      (*module)->setAttr(attrName, builder.getI32IntegerAttr(*s.alignment));
+    else
+      (*module)->removeAttr(attrName);
+    triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
+    return matchStoreBoundaryClamp(store, s.contiguousDim,
+                                   /*pitchDimIsBroadcast=*/false, pitch,
+                                   axisInfo);
+  }
+
+  // The dims `matchStore` clamps: "row+col", "row", "col" or "none".
+  std::string clampedDims(const Spec &s, std::optional<int64_t> pitch = 1008) {
+    StoreBoundaryClamp c = matchStore(s, pitch);
+    if (c.row && c.col)
+      return "row+col";
+    return c.row ? "row" : c.col ? "col" : "none";
+  }
+
+  // Sets `name` to `value`, or unsets it for a null `value`.
+  static void setEnv(const char *name, const char *value) {
+#ifdef _WIN32
+    _putenv_s(name, value ? value : "");
+#else
+    if (value)
+      setenv(name, value, /*overwrite=*/1);
+    else
+      unsetenv(name);
+#endif
+  }
+
+  // Each test starts with the kill switch unset; TearDown restores it.
+  void SetUp() override {
+    MatchBoundaryCheckMaskTest::SetUp();
+    if (const char *old = std::getenv(kKillSwitch))
+      savedKillSwitch = old;
+    setEnv(kKillSwitch, nullptr);
+  }
+  void TearDown() override {
+    setEnv(kKillSwitch, savedKillSwitch ? savedKillSwitch->c_str() : nullptr);
+  }
+
+  static constexpr const char *kKillSwitch =
+      "TRITON_INTEL_DISABLE_STORE_BOUNDARY_CLAMP";
+  std::optional<std::string> savedKillSwitch;
+  Value rowBase, colBase; // of the last `matchStore`
+  int numFuncs = 0;
+};
+
+// The #8813 store mask clamps each dim at its constant bound.
+TEST_F(MatchStoreBoundaryClampTest, KernelMaskClampsBothDims) {
+  StoreBoundaryClamp c = matchStore({}, /*pitch=*/1008);
+  ASSERT_TRUE(c.row.has_value());
+  ASSERT_TRUE(c.col.has_value());
+  EXPECT_EQ(c.row->base, rowBase);
+  EXPECT_EQ(c.row->bound, OpFoldResult(builder.getI32IntegerAttr(8450)));
+  EXPECT_EQ(c.row->extent, 64);
+  EXPECT_EQ(c.col->base, colBase);
+  EXPECT_EQ(c.col->bound, OpFoldResult(builder.getI32IntegerAttr(504)));
+  EXPECT_EQ(c.col->extent, 128);
+}
+
+// A uniform extra conjunct refuses every dim.
+TEST_F(MatchStoreBoundaryClampTest, UniformConjunctRefused) {
+  EXPECT_EQ(clampedDims({.flag = true}), "none");
+}
+
+// An unsigned compare is no boundary check, so nothing clamps.
+TEST_F(MatchStoreBoundaryClampTest, UnsignedCompareRefused) {
+  EXPECT_EQ(clampedDims({.colUlt = true}), "none");
+}
+
+// A base not provably a multiple of PowerOf2Ceil(extent) may wrap.
+TEST_F(MatchStoreBoundaryClampTest, UnalignedBaseRefused) {
+  EXPECT_EQ(clampedDims({.rowMul = 32}), "col");
+  EXPECT_EQ(clampedDims({.colMul = 64}), "row");
+}
+
+// Proving the row base a multiple of 64 needs both provers: only AxisInfo
+// admits `<< 6`, only isDivisible `& 0`.
+TEST_F(MatchStoreBoundaryClampTest, RowBaseNeedsBothProvers) {
+  EXPECT_EQ(clampedDims({.rowShl = true}), "col");
+  EXPECT_EQ(clampedDims({.rowAndZero = true}), "col");
+}
+
+// 505 f16 columns are no whole number of 4-byte granules; f32 ones are.
+TEST_F(MatchStoreBoundaryClampTest, OddColumnBoundNeedsGranule) {
+  EXPECT_EQ(clampedDims({.colBound = 505}), "row");
+  EXPECT_EQ(clampedDims({.colBound = 505, .f32 = true}), "row+col");
+}
+
+// An i1 width has no exact byte count, so even a bound of 512, a whole
+// number of 4-byte granules of i1, is refused.
+TEST_F(MatchStoreBoundaryClampTest, SubByteColumnRefused) {
+  EXPECT_EQ(clampedDims({.colBound = 512, .intBits = 1}), "row");
+}
+
+// The column base must start on a 4-byte granule: two i8 columns at
+// `pid_n * 2` may start mid-granule, which the base's PowerOf2Ceil(extent)
+// proof alone admits.
+TEST_F(MatchStoreBoundaryClampTest, UnalignedColumnBaseRefused) {
+  EXPECT_EQ(clampedDims({.numCols = 2, .intBits = 8}), "row");
+}
+
+// With compensation, a 128-column f16 tile needs a pitch of 256 + 63 bytes
+// on every dim; an unknown pitch or a contiguous dim past the rank refuses.
+TEST_F(MatchStoreBoundaryClampTest, PitchMustCoverCompensatedTile) {
+  EXPECT_EQ(clampedDims({.colBound = 120}, /*pitch=*/240), "none");
+  Spec rowOnly{.colBound = std::nullopt};
+  EXPECT_EQ(clampedDims(rowOnly, /*pitch=*/256), "none");
+  rowOnly.alignment = 64;
+  EXPECT_EQ(clampedDims(rowOnly, /*pitch=*/256), "none");
+  EXPECT_EQ(clampedDims({.colBound = 120}, /*pitch=*/320), "row+col");
+  EXPECT_EQ(clampedDims({}, /*pitch=*/std::nullopt), "none");
+  EXPECT_EQ(clampedDims({.contiguousDim = 2}), "none");
+}
+
+// Without compensation (base alignment 4), a pitch of 256 bytes suffices.
+TEST_F(MatchStoreBoundaryClampTest, TilePitchSufficesWithoutCompensation) {
+  EXPECT_EQ(clampedDims({.alignment = 4}, /*pitch=*/256), "row+col");
+}
+
+// The pitch floor is 64 bytes: a 32-byte row with compensation needs 127.
+TEST_F(MatchStoreBoundaryClampTest, NarrowRowNeedsPitchFloor) {
+  EXPECT_EQ(clampedDims({.numCols = 16}, /*pitch=*/112), "none");
+  EXPECT_EQ(clampedDims({.numCols = 16}, /*pitch=*/128), "row+col");
+}
+
+// The minimum pitch is exact in bytes: 128 f32 columns need 512 + 63.
+TEST_F(MatchStoreBoundaryClampTest, CompensationIs63Bytes) {
+  EXPECT_EQ(clampedDims({.f32 = true}, /*pitch=*/574), "none");
+  EXPECT_EQ(clampedDims({.f32 = true}, /*pitch=*/575), "row+col");
+}
+
+// The kill switch refuses every dim.
+TEST_F(MatchStoreBoundaryClampTest, KillSwitchRefused) {
+  setEnv(kKillSwitch, "1");
+  EXPECT_EQ(clampedDims({}), "none");
 }
 
 // The pitch policy shared by MaterializeBlockPointer and LowerTo2DBlockLoad.
