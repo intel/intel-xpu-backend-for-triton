@@ -342,24 +342,21 @@ if(TRITON_BUILD_PYTHON_MODULE)
   set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
   include_directories(${PYTHON_SRC_PATH})
 
-  # Python Interpreter is used to run lit tests
-  # On Windows, Python3::Module links python3XX.lib, which pins the extension
-  # to one Python version. Python3::SABIModule links python3.lib instead.
-  # Other platforms do not link libpython, so Python3::Module is fine there.
-  # Minimum Python version of the stable-ABI wheel; single source for both
-  # find_package and Py_LIMITED_API.
-  set(TRITON_STABLE_ABI_MIN_PYTHON_MAJOR 3)
-  set(TRITON_STABLE_ABI_MIN_PYTHON_MINOR 12)
-  set(TRITON_STABLE_ABI_MIN_PYTHON
-      "${TRITON_STABLE_ABI_MIN_PYTHON_MAJOR}.${TRITON_STABLE_ABI_MIN_PYTHON_MINOR}")
-  math(EXPR TRITON_PY_LIMITED_API
-       "(${TRITON_STABLE_ABI_MIN_PYTHON_MAJOR} << 24) | (${TRITON_STABLE_ABI_MIN_PYTHON_MINOR} << 16)"
+  # Minimum Python 3.<minor> of the stable-ABI wheel; single source for both
+  # find_package and Py_LIMITED_API (0x030C0000 for 3.12).
+  set(TRITON_STABLE_ABI_MIN_MINOR 12)
+  math(EXPR TRITON_PY_LIMITED_API "(3 << 24) | (${TRITON_STABLE_ABI_MIN_MINOR} << 16)"
        OUTPUT_FORMAT HEXADECIMAL)
+  # On Windows, Python3::Module links python3XX.lib, which pins the extension
+  # to one Python version; Python3::SABIModule links python3.lib instead.
+  # Other platforms do not link libpython, so Python3::Module is fine there.
+  # Python Interpreter is used to run lit tests.
   if(TRITON_STABLE_ABI AND WIN32)
     if(CMAKE_VERSION VERSION_LESS 3.26)
       message(FATAL_ERROR "TRITON_STABLE_ABI on Windows requires CMake >= 3.26 (Development.SABIModule)")
     endif()
-    find_package(Python3 ${TRITON_STABLE_ABI_MIN_PYTHON} REQUIRED COMPONENTS Development.Module Development.SABIModule Interpreter)
+    find_package(Python3 3.${TRITON_STABLE_ABI_MIN_MINOR} REQUIRED
+                 COMPONENTS Development.Module Development.SABIModule Interpreter)
     set(TRITON_PYTHON_MODULE_LIB Python3::SABIModule)
   else()
     find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
