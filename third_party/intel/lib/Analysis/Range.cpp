@@ -5,7 +5,6 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
-#include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/InferIntRangeInterface.h"
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "mlir/Support/LLVM.h"
@@ -13,9 +12,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/CheckedArithmetic.h"
 #include "llvm/Support/Debug.h"
-#include <algorithm>
 #include <optional>
 
 #define DEBUG_TYPE "triton-intel-range-analysis"
@@ -104,68 +101,17 @@ static void inferResultRange(arith::BitcastOp op,
   setResultRange(op.getResult(), argRanges[0]);
 }
 
-// Whether `op` is certain to finish and pass control to the next op.
-static bool transfersExecution(Operation *op) {
-  // May abort or may not return.
-  if (isa<tt::AssertOp>(op) || isa<CallOpInterface>(op))
-    return false;
-  // Regionless and not CallOpInterface, yet a poll may spin until the
-  // expected value appears (its timeout is a runtime value and may be
-  // unbounded), and an impure external call or inline asm may never return.
-  if (isa<tt::AtomicPollOp>(op))
-    return false;
-  if (auto ext = dyn_cast<tt::ExternElementwiseOp>(op); ext && !ext.getPure())
-    return false;
-  if (auto asmOp = dyn_cast<tt::ElementwiseInlineAsmOp>(op);
-      asmOp && !asmOp.getPure())
-    return false;
-  if (op->getNumRegions() == 0)
-    return true;
-  // These run single-block regions a bounded number of times, so they finish
-  // if their nested ops do. Loops are not modelled, and `tt.map_elementwise`
-  // regions may hold CFG cycles.
-  if (!isa<scf::IfOp, tt::ReduceOp, tt::ScanOp>(op))
-    return false;
-  for (Region &region : op->getRegions())
-    for (Operation &nested : region.getOps())
-      if (!transfersExecution(&nested))
-        return false;
-  return true;
-}
-
-bool assumeApplies(LLVM::AssumeOp assume, Operation *useOp,
-                   const DominanceInfo &domInfo) {
-  // Forward case: the assume runs before useOp on every path to useOp.
-  if (domInfo.properlyDominates(assume.getOperation(), useOp))
-    return true;
-  // Backward case: the assume comes later. Take the op in the assume's block
-  // that is useOp or encloses it; it must precede the assume, and everything
-  // from it (inclusive) up to the assume must be certain to transfer
-  // execution. Block dominance is not enough: a parent block dominates a loop
-  // body nested in it, which would let an assume after a loop apply inside it.
-  Block *ab = assume->getBlock();
-  Operation *anc = ab->findAncestorOpInBlock(*useOp);
-  if (!anc || !anc->isBeforeInBlock(assume.getOperation()))
-    return false;
-  for (Operation *op = anc; op != assume.getOperation(); op = op->getNextNode())
-    if (!transfersExecution(op))
-      return false;
-  return true;
-}
-
 static std::optional<ConstantIntRanges>
 getAssumedRange(const IntegerRangeAnalysis::AssumptionsOps &assumptions,
-                Value val, Operation *useOp, const DominanceInfo &domInfo) {
+                Value val, Block *useBlock, const DominanceInfo &domInfo) {
   std::optional<ConstantIntRanges> result;
   for (Operation *assumption : assumptions) {
-    auto assumeOp = dyn_cast<LLVM::AssumeOp>(assumption);
-    arith::CmpIOp cmpOp =
-        assumeOp ? assumeOp.getCond().getDefiningOp<arith::CmpIOp>() : nullptr;
+    arith::CmpIOp cmpOp = dyn_cast<arith::CmpIOp>(assumption);
     if (!cmpOp) {
       emitRemark(assumption->getLoc(), "unsupported operation");
       continue;
     }
-    if (!useOp || !tt::intel::assumeApplies(assumeOp, useOp, domInfo))
+    if (!useBlock || !domInfo.dominates(cmpOp->getBlock(), useBlock))
       continue;
 
     if (auto assumedRange = tt::getBoundFromCmpOp(cmpOp, val)) {
@@ -209,13 +155,13 @@ static bool isEmpty(ConstantIntRanges range) {
 /// the range of `val` is:
 ///   [0, INT_MAX] ∩ [INT_MIN, 128] = [0, 128]
 static std::optional<ConstantIntRanges> getAssumedRange(
-    Value val, Operation *useOp,
+    Value val, Block *useBlock,
     const llvm::DenseMap<Value, IntegerRangeAnalysis::AssumptionsOps>
         &assumptions,
     const DominanceInfo &domInfo) {
   if (!assumptions.contains(val))
     return std::nullopt;
-  return getAssumedRange(assumptions.lookup(val), val, useOp, domInfo);
+  return getAssumedRange(assumptions.lookup(val), val, useBlock, domInfo);
 }
 
 ///*****************************************************************************/
@@ -259,15 +205,8 @@ void IntegerRangeAnalysis::setToEntryState(
   IntegerValueRange range = IntegerValueRange::getMaxRange(anchor);
   Block *entryBlock = &funcOp->getBody().front();
 
-  // The entry state holds at every use, so an assume constrains it only if it
-  // is certain to execute once the value exists: from just after the defining
-  // op for an op result (from the op itself if it is last in its block, which
-  // verified IR does not produce), else from the start of the function.
-  Operation *from = &entryBlock->front();
-  if (Operation *def = anchor.getDefiningOp())
-    from = def->getNextNode() ? def->getNextNode() : def;
   if (std::optional<ConstantIntRanges> assumedRange =
-          getAssumedRange(anchor, from, assumptions, domInfo))
+          getAssumedRange(anchor, entryBlock, assumptions, domInfo))
     range = *assumedRange;
 
   if (!lattice->getValue().isUninitialized() && !range.isUninitialized()) {
@@ -301,11 +240,13 @@ LogicalResult IntegerRangeAnalysis::visitOperation(
     Operation *op,
     ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
     ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices) {
+  Block *block = op->getBlock();
+
   // Figure out the implied range of result and source operands.
   opResultAssumption.clear();
   for (OpResult result : op->getResults()) {
     if (std::optional<ConstantIntRanges> assumedRange =
-            getAssumedRange(result, op, assumptions, domInfo))
+            getAssumedRange(result, block, assumptions, domInfo))
       opResultAssumption.insert(std::pair(result, *assumedRange));
   }
 
@@ -315,7 +256,7 @@ LogicalResult IntegerRangeAnalysis::visitOperation(
 
   for (auto [index, opnd] : llvm::enumerate(op->getOperands())) {
     std::optional<ConstantIntRanges> assumedRange =
-        getAssumedRange(opnd, op, assumptions, domInfo);
+        getAssumedRange(opnd, block, assumptions, domInfo);
     if (!assumedRange) {
       opndRanges.push_back(operands[index]);
       continue;
@@ -369,19 +310,10 @@ IntegerRangeAnalysis::collectAssumptions(Operation *top, bool filterConstants) {
   DenseMap<Value, AssumptionsOps> assumptions;
   top->walk([&](LLVM::AssumeOp op) {
     Operation *defOp = op.getCond().getDefiningOp();
-    if (!defOp)
-      return; // e.g. an assume on a block argument: nothing to anchor on
     for (auto operand : defOp->getOperands()) {
-      // Wider than 64 bits is unknown: getConstantIntValue and
-      // tt::getBoundFromCmpOp narrow to int64_t.
-      if (ConstantIntRanges::getStorageBitwidth(operand.getType()) > 64)
-        continue;
       if (filterConstants && getConstantIntValue(operand))
         continue;
-      // Store the assume, not its comparison: applicability is decided by
-      // where the assume executes, and a comparison can be hoisted far above
-      // it (see assumeApplies).
-      assumptions[operand].insert(op.getOperation());
+      assumptions[operand].insert(defOp);
     }
   });
   return assumptions;
@@ -394,9 +326,6 @@ IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) const {
     return std::nullopt;
 
   const unsigned width = ConstantIntRanges::getStorageBitwidth(iv->getType());
-  // The trip count is computed in int64_t: wider than 64 bits is unknown.
-  if (width > 64)
-    return std::nullopt;
 
   auto getLoopRangeInfo = [&](std::optional<OpFoldResult> loopBound,
                               Block *block, bool getUpper,
@@ -452,14 +381,10 @@ IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) const {
   if (stepVal.isZero())
     stepVal = stepValDefault;
 
-  if (max.slt(min))
-    return std::nullopt;
-  // The difference of two i64 bounds can overflow: the count is then unknown.
-  std::optional<int64_t> diff =
-      llvm::checkedSub(max.getSExtValue(), min.getSExtValue());
-  if (!diff)
-    return std::nullopt;
-  return llvm::divideCeilSigned(*diff, stepVal.getSExtValue());
+  if (max.sge(min))
+    return llvm::divideCeilSigned(max.getSExtValue() - min.getSExtValue(),
+                                  stepVal.getSExtValue());
+  return std::nullopt;
 }
 
 LogicalResult IntegerRangeAnalysis::visitOperationHelper(
@@ -493,9 +418,12 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
     // TODO: I think this is bit conservative, the better way is:
     //  final_range = (old_range ∪ incomingRange) ∩ assume_range
     auto iter = opResultAssumption.find(resultVal);
-    if (iter != opResultAssumption.end())
-      newRange =
-          IntegerValueRange(newRange.getValue().intersection(iter->second));
+    if (iter != opResultAssumption.end()) {
+      const ConstantIntRanges &range = iter->second;
+      if (std::optional<ConstantIntRanges> assumedRange =
+              getAssumedRange(resultVal, op->getBlock(), assumptions, domInfo))
+        newRange = IntegerValueRange(newRange.getValue().intersection(range));
+    }
 
     // Update the range. Note that we are using `join` operation which means
     // `union`. Transfer function must be monotone! The resolver would otherwise
@@ -617,21 +545,6 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
   return success();
 }
 
-// A lattice of `loop` changes once per iteration, but also once for every step
-// a nested loop needs to converge (#8604).
-static uint64_t getLoopSimulationSteps(LoopLikeOpInterface loop,
-                                       IntegerRangeAnalysis &analysis) {
-  uint64_t steps = getTotalTripCount(loop, analysis);
-  loop->walk([&](LoopLikeOpInterface nested) {
-    if (nested == loop)
-      return;
-    uint64_t nestedSteps = getTotalTripCount(nested, analysis);
-    if (nestedSteps <= kDefaultMaxTripCount)
-      steps = std::max(steps, nestedSteps);
-  });
-  return steps;
-}
-
 void IntegerRangeAnalysis::visitRegionSuccessors(
     ProgramPoint *point, RegionBranchOpInterface branch,
     RegionSuccessor successor,
@@ -649,34 +562,29 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
     lattices.push_back(
         static_cast<dataflow::IntegerValueRangeLattice *>(lattice));
 
-  // Initialize loop simulation steps.
+  // Initialize loop trip counts.
   auto loop = dyn_cast<LoopLikeOpInterface>(branch.getOperation());
   if (loop) {
-    if (!loopSimulationSteps.contains(loop)) {
-      loopSimulationSteps[loop] = 0;
+    if (!loopTripCounts.contains(loop)) {
+      loopTripCounts[loop] = std::numeric_limits<int64_t>::max();
       for (auto lattice : lattices)
         loopVisits[{loop, lattice}] = 0ll;
     }
 
-    // Every count above the limit takes the max range path below.
-    int64_t steps = std::min<uint64_t>(getLoopSimulationSteps(loop, *this),
-                                       kDefaultMaxTripCount + 1);
+    uint64_t loopTripCount = getTotalTripCount(loop, *this);
 
     LLVM_DEBUG({
-      DBGS() << "Simulation steps for ";
+      DBGS() << "Total trip count for ";
       OpPrintingFlags flags;
       flags.skipRegions(true);
       loop->print(llvm::dbgs(), flags);
       llvm::dbgs() << "\n";
-      DBGS() << " --> " << steps << '\n';
+      DBGS() << " --> " << loopTripCount << '\n';
     });
 
-    // Bound ranges widen as the analysis progresses, so keep the largest count.
-    loopSimulationSteps[loop] = std::max(loopSimulationSteps[loop], steps);
+    if (loopTripCount < loopTripCounts[loop])
+      loopTripCounts[loop] = loopTripCount;
   }
-
-  // Iter_args see the init values plus N - 1 backedges.
-  int64_t maxBackedges = loop ? loopSimulationSteps[loop] - 1 : 0;
 
   const auto *predecessors =
       getOrCreateFor<dataflow::PredecessorState>(point, point);
@@ -706,10 +614,6 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
   //
   for (Operation *op : predecessors->getKnownPredecessors()) {
     std::optional<OperandRange> operands;
-    // Only backedges into iter_args are limited: they bound what the loop
-    // yields, and a result's count is spent early while an init converges.
-    bool isLimited =
-        loop && op != branch.getOperation() && !successor.isOperation();
     if (op == branch)
       operands = branch.getEntrySuccessorOperands(successor);
     else if (auto regionTerminator =
@@ -757,12 +661,19 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
     for (auto [oper, argLat] :
          llvm::zip(*operands, ArrayRef(lattices).drop_front(firstIndex))) {
       std::pair loopArgLat = {loop, argLat};
-      // If we've "run the loop" #maxBackedges times, stop propagating.
-      if (isLimited && loopVisits[loopArgLat] >= maxBackedges)
+      // If we've "run the loop" #tripcount times, stop propagating.
+      bool reachedTripCount =
+          loop && loopVisits[loopArgLat] >= loopTripCounts[loop];
+      // However, if trip count is 0, we still need to initialize loop-carried
+      // values from the initial iter_args (so loop results equal initial
+      // values).
+      bool needsZeroTripInit = loop && loopTripCounts[loop] == 0 &&
+                               argLat->getValue().isUninitialized();
+      if (reachedTripCount && !needsZeroTripInit)
         continue;
 
       ChangeResult changed;
-      if (loop && loopSimulationSteps[loop] > kDefaultMaxTripCount) {
+      if (loop && loopTripCounts[loop] > kDefaultMaxTripCount) {
         // If the loop's tripcount is too large, infer the maximum range for
         // the arg lattices. This will have the effect that all users will
         // also be inferred to have maximum range and end the analysis will
@@ -788,7 +699,9 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
       // lattice because otherwise we will over count the number of visits
       // (since not all iter_arg lattices are updated/propagated on each
       // visit).
-      if (isLimited && changed == ChangeResult::Change)
+      // For initial iterations of zero trip count loops we do not increment
+      // the visit count to avoid overcounting.
+      if (loop && changed == ChangeResult::Change && !needsZeroTripInit)
         ++loopVisits[loopArgLat];
     }
   }
@@ -805,8 +718,8 @@ void IntegerRangeAnalysis::initializeModule(ModuleOp &mod) {
           getLatticeElement(argument);
 
       IntegerValueRange range = IntegerValueRange::getMaxRange(argument);
-      if (auto assumedRange = getAssumedRange(argument, &entryBlock->front(),
-                                              assumptions, domInfo))
+      if (auto assumedRange =
+              getAssumedRange(argument, entryBlock, assumptions, domInfo))
         range = *assumedRange;
 
       // The lattice must be in the "bottom" state, the join() operation is to
@@ -866,9 +779,6 @@ collectLoopIVRange(scf::ForOp forOp, const DataFlowSolver &solver) {
   std::optional<Value> iv = forOp.getSingleInductionVar();
   if (!iv)
     return std::nullopt;
-  // The bounds are narrowed to int64_t below: wider than 64 bits is unknown.
-  if (ConstantIntRanges::getStorageBitwidth(iv->getType()) > 64)
-    return std::nullopt;
 
   auto getRange =
       [&](OpFoldResult loopBound) -> std::optional<ConstantIntRanges> {
@@ -916,12 +826,10 @@ uint64_t getTotalTripCount(LoopLikeOpInterface loop,
     parentOp = parentOp->getParentOp();
   }
 
-  // Saturate: a wrapped product could be smaller than the real count.
-  return std::accumulate(loops.begin(), loops.end(), uint64_t(1),
+  return std::accumulate(loops.begin(), loops.end(), 1ll,
                          [&analysis](uint64_t accum, LoopLikeOpInterface loop) {
-                           return llvm::SaturatingMultiply(
-                               accum, analysis.getTripCount(loop).value_or(
-                                          kDefaultMaxTripCount + 1));
+                           return accum * analysis.getTripCount(loop).value_or(
+                                              kDefaultMaxTripCount + 1);
                          });
 }
 

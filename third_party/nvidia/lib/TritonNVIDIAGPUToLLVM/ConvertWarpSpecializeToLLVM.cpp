@@ -81,10 +81,7 @@ public:
     if (numThreads == 32) {
       LLVM::NVIDIA::createSyncWarp(b.getLoc(), b);
     } else {
-      // Only this warp partition participates, so the barrier is not
-      // CTA-aligned.
-      NVVM::BarrierOp::create(b, b.getLoc(), handle, b.i32_val(numThreads),
-                              /*aligned=*/false);
+      NVVM::BarrierOp::create(b, b.getLoc(), handle, b.i32_val(numThreads));
     }
   }
 
@@ -215,8 +212,8 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   WarpSpecializeCallbacks callbacks;
   callbacks.createAllBarrier = [](TritonLLVMIRRewriter &b, unsigned barIdx) {
     assert(barIdx < kNumBarriers && "not enough barriers");
-    NVVM::BarrierOp::create(b, b.getLoc(), b.i32_val(barIdx), Value{},
-                            /*aligned=*/false);
+    LLVM::createLLVMIntrinsicCallOp(
+        b, b.getLoc(), "llvm.nvvm.barrier.cta.sync.all", {}, b.i32_val(barIdx));
   };
 
   callbacks.reallocRegisters = [&](TritonLLVMIRRewriter &b, WarpSpecializeOp ws,
