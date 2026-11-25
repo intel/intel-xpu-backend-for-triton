@@ -38,11 +38,6 @@ def TMALoadLikeOpInterface : OpInterface<"TMALoadLikeOpInterface", [TMAOpInterfa
       /*methodName=*/"getBarrier",
       /*args=*/(ins)>,
     InterfaceMethod<
-      /*desc=*/"Get the completion barrier operand",
-      /*retType=*/"::mlir::OpOperand&",
-      /*methodName=*/"getBarrierMutable",
-      /*args=*/(ins)>,
-    InterfaceMethod<
       /*desc=*/"Get the predicate",
       /*retType=*/"::mlir::Value",
       /*methodName=*/"getPred",

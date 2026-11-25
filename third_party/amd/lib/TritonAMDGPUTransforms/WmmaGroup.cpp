@@ -229,7 +229,7 @@ WmmaIntrinsic::selectFor(int version, unsigned mDim, unsigned nDim,
   if (values.empty())
     return failure();
 
-  // If we have more than one intrinsic, prefer those with a larger K.
+  // If We have more than one instrinsics, prefer those with a larger K.
   for (const auto [symbol, k, kBase, feature] : llvm::drop_end(values)) {
     if (inputKDim >= k)
       return WmmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType,
@@ -320,12 +320,15 @@ WmmaScaleDatabase::WmmaScaleDatabase(MLIRContext *context) {
 
   // Reference: llvm/include/llvm/IR/IntrinsicsAMDGPU.td
   wmmaScaleMap = {
-      TRITON_WMMA_SCALE_v(3, 16, 16, f32T, 0u /*isScale16*/,
-                          WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4,
-                          "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4", 128),
-      TRITON_WMMA_SCALE_v(3, 16, 16, f32T, 1u /*isScale16*/,
-                          WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4,
-                          "llvm.amdgcn.wmma.scale16.f32.16x16x128.f8f6f4", 128),
+      TRITON_WMMA_SCALE_v_feature(3, 16, 16, f32T, 0u /*isScale16*/,
+                                  WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4,
+                                  "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4",
+                                  128, kWmmaRestrictedInstsFeature),
+      TRITON_WMMA_SCALE_v_feature(
+          3, 16, 16, f32T, 1u /*isScale16*/,
+          WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4,
+          "llvm.amdgcn.wmma.scale16.f32.16x16x128.f8f6f4", 128,
+          kWmmaRestrictedInstsFeature),
       TRITON_WMMA_SCALE_v_feature(3, 32, 16, f32T, 0u /*isScale16*/,
                                   WmmaScaleIntrinsic::IntrinsicFamily::F4,
                                   "llvm.amdgcn.wmma.scale.f32.32x16x128.f4",

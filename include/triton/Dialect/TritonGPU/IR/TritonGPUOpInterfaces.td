@@ -78,16 +78,6 @@ def MBarrierOpInterface : OpInterface<"MBarrierOpInterface"> {
           return {barrier};
         return {};
       }]
-    >,
-    InterfaceMethod<
-      /*desc=*/"Whether each warp publishes its prior effects through its own arrival.",
-      /*retType=*/"bool",
-      /*methodName=*/"isPerWarp",
-      /*args=*/(ins),
-      /*methodBody=*/[{}],
-      /*defaultImplementation=*/[{
-        return false;
-      }]
     >
   ];
 }

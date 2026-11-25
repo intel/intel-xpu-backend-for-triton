@@ -1,4 +1,3 @@
-#include "Backend/Backend.h"
 #include "Device.h"
 #include "DeviceType.h"
 #include "Dump/TreeDataDump.h"
@@ -297,9 +296,10 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   }
   std::array<std::string, static_cast<size_t>(DeviceType::COUNT)>
       deviceTypeNames;
-  for (const auto &device : getDeviceRegistrations()) {
-    deviceTypeNames[static_cast<size_t>(device.getDeviceType())] =
-        device.getName();
+  for (size_t deviceType = 0;
+       deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
+    deviceTypeNames[deviceType] =
+        getDeviceTypeString(static_cast<DeviceType>(deviceType));
   }
   std::unordered_map<std::string_view, std::vector<uint8_t>> frameHeaderCache;
   auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,

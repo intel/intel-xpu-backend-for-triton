@@ -87,14 +87,15 @@ SPIRVTargetInfo::matchSupportedWarpScanOp(triton::ScanOp op) const {
 Value SPIRVTargetInfo::genWarpScan(RewriterBase &rewriter, Location loc,
                                    Value acc, Operation *combineOp,
                                    unsigned warpSize) const {
-  // Every op `matchEligibleSubgroupScan` admits needs a case below: an
-  // unmatched `TypeSwitch` hits `llvm_unreachable`.
+  // The op sets below must stay a subset of what `matchEligibleSubgroupScan`
+  // admits: an unmatched `TypeSwitch` returns a null `Value`.
   Type resultType = combineOp->getResult(0).getType();
   if (resultType.isInteger(1))
+    // Only the logical mappings that are correct for `i1`; the gate rejects
+    // `addi`/`maxsi`/`minsi`, whose entries in the shared map are wrong.
     return TypeSwitch<mlir::Operation *, Value>(combineOp)
-        .Case<arith::AddIOp, arith::MulIOp, arith::MaxSIOp, arith::MaxUIOp,
-              arith::MinSIOp, arith::MinUIOp, arith::AndIOp, arith::OrIOp,
-              arith::XOrIOp>([&](auto groupOp) {
+        .Case<arith::MulIOp, arith::MaxUIOp, arith::MinUIOp, arith::AndIOp,
+              arith::OrIOp, arith::XOrIOp>([&](auto groupOp) {
           return createSPIRVGroupOp<SPIRVLogicalGroupOpTy<decltype(groupOp)>>(
               rewriter, loc, resultType, acc,
               spirv::GroupOperation::InclusiveScan);

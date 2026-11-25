@@ -6,7 +6,6 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include <memory>
 #include <vector>
 
@@ -71,16 +70,11 @@ public:
   /// edges, whose reducibility is not established by this analysis.
   bool isBackedgeSuccessor(Operation *terminator, Block *successor) const;
 
-  /// Whether a branch enters a natural loop from outside its header's
-  /// dominance region. Restricted to the analyzed function-level CFG.
-  bool entersLoop(Operation *terminator) const;
-
 private:
   void attachBufferIndex(AllocationSlice &slice, Value value);
   const BufferIndexExpr *intern(BufferIndexExpr expr);
 
   DominanceInfo dominanceInfo;
-  llvm::SmallPtrSet<Block *, 4> loopHeaders;
   bool hasReducibleCFG;
   std::vector<std::unique_ptr<BufferIndexExpr>> expressions;
 };

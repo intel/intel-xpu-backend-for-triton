@@ -4,10 +4,6 @@
 #include "mlir/IR/Operation.h"
 #include "triton/Analysis/Allocation.h"
 
-namespace mlir {
-struct AllocationSlice;
-}
-
 namespace mlir::triton::AMD {
 
 // Filter function used in the AMDGPU backend to filter unnecessary barriers
@@ -37,8 +33,7 @@ namespace mlir::triton::AMD {
 // 2) Do not create barriers between two async loads. The synchronization
 // between them do not make sense.
 bool membarFilter(Operation *op1, Operation *op2, bool op1IsRead,
-                  bool op2IsRead, Allocation *allocation,
-                  const AllocationSlice &, const AllocationSlice &);
+                  bool op2IsRead, Allocation *allocation);
 } // namespace mlir::triton::AMD
 
-#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_MEMBARUTILITY_H_
+#endif

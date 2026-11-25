@@ -100,16 +100,11 @@ public:
   void assertFail(RewriterBase &rewriter, Location loc, StringRef message,
                   StringRef file, StringRef func, int line) const override;
 
-  void assertTrap(RewriterBase &rewriter, Location loc) const override;
-
   int getSharedAddressSpace() const override;
 
   int getAddressSpace(Attribute addressSpace) const override;
 
   bool supportVectorizedAtomics() const override;
-  bool supportNativeBF16AtomicAdd() const override {
-    return getComputeCapability() >= 90;
-  }
 
   int getPtxVersion() const { return ptxVersion; }
   int getComputeCapability() const {

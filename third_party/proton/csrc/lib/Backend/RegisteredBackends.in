@@ -6,19 +6,11 @@
 
 namespace proton {
 
-static std::vector<BackendRegistration> &registrations() {
-  static std::vector<BackendRegistration> registrations = {
+const std::vector<BackendRegistration> &getBackendRegistrations() {
+  static const std::vector<BackendRegistration> registrations = {
       @BACKEND_REGISTRATION_HOOKS@
   };
   return registrations;
-}
-
-const std::vector<BackendRegistration> &getBackendRegistrations() {
-  return registrations();
-}
-
-void registerBackend(BackendRegistration registration) {
-  registrations().push_back(std::move(registration));
 }
 
 } // namespace proton

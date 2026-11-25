@@ -34,22 +34,13 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
       }
     }
     llAssert(op, condition, adaptor.getMessage(), rewriter);
-    bool requiresTrap = targetInfo.requiresAssertTrap();
-    if (isa<RankedTensorType>(op.getCondition().getType()) || requiresTrap) {
+    if (isa<RankedTensorType>(op.getCondition().getType())) {
       // Add a barrier to avoid a race condition in case an assert is followed
       // by an op that may trap if the assert condition is true. Since the
       // tensor in those two operations may have different layout we need to
       // make sure all the threads are done executing the assert before going to
-      // the next op. This also lets all failing threads report the failure
-      // before any of them aborts the kernel.
+      // the next op.
       b.barrier(triton::gpu::AddrSpace::None);
-    }
-    if (requiresTrap) {
-      auto [prevBlock, ifBlock, thenBlock] =
-          createIfBlock(rewriter, loc, condition);
-      rewriter.setInsertionPointToStart(ifBlock);
-      targetInfo.assertTrap(rewriter, loc);
-      rewriter.setInsertionPointToStart(thenBlock);
     }
     rewriter.eraseOp(op);
     return success();

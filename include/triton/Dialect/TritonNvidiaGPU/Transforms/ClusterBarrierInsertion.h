@@ -6,15 +6,12 @@
 
 namespace mlir {
 namespace triton {
-class BufferRegionAnalysis;
 namespace nvidia_gpu {
 
 /// Inserts cluster barriers (cluster_barrier) using the provided
 /// shared-memory allocation analysis.
-/// Regions must be an AllMemory solve using moduleAllocation.
 void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
-                                int computeCapability,
-                                BufferRegionAnalysis &regions);
+                                int computeCapability);
 
 /// Inserts the mbarrier-init sequencing ops
 /// (fence_mbarrier_init_release_cluster + cluster_barrier(relaxed=true))
