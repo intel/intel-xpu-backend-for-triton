@@ -37,6 +37,12 @@ def TritonIntelGPUAccelerateMatmul
     Option<"foldTrans", "fold-trans", "bool", /*default*/"false",
          "Fold a tt.trans of a computed tile that feeds a dot as operand A "
          "into its producers">,
+    Option<"splitChainedDotsAlongN", "split-chained-dots-along-n", "bool",
+         /*default*/"false",
+         "Move one factor of two of the warps of a chain of dots along A from "
+         "M to N when, with every warp on M, a dot of the chain holds more than "
+         "the GRF per warp. When false, only mark the module with "
+         "ttig.chained_dot_split_candidate if such a chain exists">,
   ];
 }
 

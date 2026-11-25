@@ -122,6 +122,10 @@ class XPUOptions:
 # `accepts_default_grf`.
 REBUILD_SPILL_BYTES_PER_THREAD = 1024
 
+# Module attribute AccelerateMatmul sets when a chain of dots along A would move warps from M to N
+# (`getChainedDotSplitCandidateAttrName`); see `make_ttgir_choosing_chain_split`.
+CHAINED_DOT_SPLIT_CANDIDATE_ATTR = "ttig.chained_dot_split_candidate"
+
 # IGC build flag for each explicit `grf_mode` that has one. Only LTS passes these; elsewhere the mode is
 # requested through the kernel's SPV_INTEL_maximum_registers execution mode (see `make_llir`). '160' and '192'
 # have no such flag, so they require the execution mode.
@@ -589,7 +593,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @classmethod
     @track
-    def make_ttgir(cls, mod, metadata, opt, properties):
+    def make_ttgir(cls, mod, metadata, opt, properties, split_chained_dots_along_n=False):
         # Annotate module with information required by subsequent transformations.
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -623,7 +627,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.passes.ttgpuir.add_canonicalize_pointers(pm, True)
             passes.common.add_canonicalizer(pm)
 
-        intel.passes.ttgpuir.add_accelerate_matmul(pm, opt.grf_mode, opt.fold_trans)
+        intel.passes.ttgpuir.add_accelerate_matmul(pm, opt.grf_mode, opt.fold_trans, split_chained_dots_along_n)
         intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm, metadata["target"].arch.get("local_mem_size") or 0,
                                                               True)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm, knobs.intel.descriptor_block_io_relayout)
@@ -950,17 +954,94 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                 zebin = f.read()
         return zebin
 
+    def make_ttgir_choosing_chain_split(self, mod, metadata, options, trial):
+        """
+        Builds the TTGIR, moving warps of chains of dots along A from M to N only where that kernel would spill.
+
+        AccelerateMatmul marks the module when its register estimate says a chain of dots along A cannot hold the B
+        operand every warp gets a copy of. The estimate also fires on kernels that hold it without spilling, where
+        the split is slower, so the marked kernel is first built to a binary. Only if that binary still spills at
+        least `REBUILD_SPILL_BYTES_PER_THREAD` is the TTGIR rebuilt with the split. Otherwise the trial's products are
+        kept in `trial`, keyed by the stage that produces them, so the later stages reuse them.
+
+        Arguments:
+          mod: the TTIR module; consumed, like by `make_ttgir`.
+          metadata: the compilation metadata.
+          options: the compilation options.
+          trial: an empty dict, shared with the later stages of the same compilation.
+
+        Returns:
+          the TTGIR module.
+        """
+        # Like the large-GRF rebuild in `make_zebin`, only the default GRF mode reacts to spills.
+        may_split = options.grf_mode == "default" and options.generate_native_code
+        ttir = mod.str() if may_split else None
+        context = mod.context
+        mod = self.make_ttgir(mod, metadata, options, self.properties)
+        if not may_split or not mod.get_int_attr(CHAINED_DOT_SPLIT_CANDIDATE_ATTR):
+            return mod
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            def parse_module(text, file_name):
+                path = Path(temp_dir) / file_name
+                path.write_text(text)
+                parsed = ir.parse_mlir_module(str(path), context)
+                parsed.context = context
+                return parsed
+
+            # `make_llir` lowers its input in place. Lower `mod` itself, so a kept trial is the binary the plain
+            # pipeline builds, and return a copy as the TTGIR: a text round trip shifts a few debug locations.
+            ttgir = parse_module(mod.str(), "kernel.ttgir")
+            trial_metadata = dict(metadata)
+            llir = self.make_llir(mod, trial_metadata, options)
+            llir_metadata = dict(trial_metadata)
+            spirv = self.make_spv(llir, trial_metadata, options)
+            spv_metadata = dict(trial_metadata)
+            zebin = self.make_zebin(spirv, trial_metadata, options)
+            zebin_path = Path(temp_dir) / "trial.zebin"
+            zebin_path.write_bytes(zebin)
+            if extract_spill_size_from_zebin(zebin_path) >= REBUILD_SPILL_BYTES_PER_THREAD:
+                return self.make_ttgir(parse_module(ttir, "kernel.ttir"), metadata, options, self.properties,
+                                       split_chained_dots_along_n=True)
+
+        trial["llir"] = (ttgir, llir, llir_metadata)
+        trial["spv"] = (llir, spirv, spv_metadata)
+        trial["zebin"] = (spirv, zebin, dict(trial_metadata))
+        return ttgir
+
+    @staticmethod
+    def reuse_trial(trial, stage, src, metadata):
+        """
+        Returns the trial product of `stage` if `src` is the very input the trial built it from, else None.
+
+        On a hit, `metadata` is restored to what the trial left after `stage`. Matching by identity rather than by
+        content means an input replaced in between, e.g. by `TRITON_KERNEL_OVERRIDE`, is always rebuilt.
+        """
+        entry = trial.get(stage)
+        if entry is None or entry[0] is not src:
+            return None
+        metadata.clear()
+        metadata.update(entry[2])
+        return entry[1]
+
     def add_stages(self, stages, options, language):
+        # Products of the trial build `make_ttgir_choosing_chain_split` may run, for the later stages to reuse.
+        trial = {}
+
+        def stage(name, make):
+            return lambda src, metadata: (self.reuse_trial(trial, name, src, metadata) or make(src, metadata))
+
         if language == Language.TRITON:
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-            stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
+            stages["ttgir"] = lambda src, metadata: self.make_ttgir_choosing_chain_split(src, metadata, options, trial)
         elif language == Language.GLUON:
             stages["glir"] = lambda src, metadata: src
             stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
-        stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options)
+        stages["llir"] = stage("llir", lambda src, metadata: self.make_llir(src, metadata, options))
+        stages["spv"] = stage("spv", lambda src, metadata: self.make_spv(src, metadata, options))
         if options.generate_native_code:
-            stages["zebin"] = lambda src, metadata: self.make_zebin(src, metadata, options)
+            stages["zebin"] = stage("zebin", lambda src, metadata: self.make_zebin(src, metadata, options))
         if knobs.runtime.add_stages_inspection_hook is not None:
             knobs.runtime.add_stages_inspection_hook(self, stages, options, language, None)
 

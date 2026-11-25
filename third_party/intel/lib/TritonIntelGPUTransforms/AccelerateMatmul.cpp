@@ -286,8 +286,12 @@ class BlockedToDPAS : public OpRewritePattern<OpTy> {
   using TensorValue = TypedValue<RankedTensorType>;
 
 public:
-  BlockedToDPAS(MLIRContext *context, int benefit, StringRef grfMode)
-      : OpRewritePattern<OpTy>(context, benefit), grfMode(grfMode) {}
+  BlockedToDPAS(MLIRContext *context, int benefit, StringRef grfMode,
+                bool splitChainedDotsAlongN = false,
+                bool *splitCandidate = nullptr)
+      : OpRewritePattern<OpTy>(context, benefit), grfMode(grfMode),
+        splitChainedDotsAlongN(splitChainedDotsAlongN),
+        splitCandidate(splitCandidate) {}
 
   LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
@@ -430,6 +434,9 @@ public:
 
 private:
   std::string grfMode;
+  bool splitChainedDotsAlongN;
+  /// Set when a chain would be split but splitChainedDotsAlongN is false.
+  bool *splitCandidate;
 
   /// True if B plus the accumulator of the dot do not fit in \p grfEntries.
   static bool exceedsRegistersWhenDuplicated(
@@ -481,6 +488,61 @@ private:
       auto type = cast<RankedTensorType>(consumer->getResult(0).getType());
       return exceedsRegistersWhenDuplicated(consumer, type.getShape(), dpasCap,
                                             grfEntries);
+    });
+  }
+
+  /// Bytes one warp holds for the A and B operands and the accumulator of the
+  /// rank-2 \p dotOp when it is spread over \p warpsM x \p warpsN warps. B is
+  /// split only along N, so with one warp along N every warp holds all of B.
+  static int64_t getBytesPerWarp(tt::DotOp dotOp, unsigned warpsM,
+                                 unsigned warpsN) {
+    RankedTensorType aType = dotOp.getA().getType();
+    RankedTensorType bType = dotOp.getB().getType();
+    RankedTensorType cType = dotOp.getType();
+    int64_t m = mlir::ceil<int64_t>(cType.getShape()[0], warpsM);
+    int64_t n = mlir::ceil<int64_t>(cType.getShape()[1], warpsN);
+    int64_t k = bType.getShape()[0];
+    return (m * k * aType.getElementTypeBitWidth() +
+            k * n * bType.getElementTypeBitWidth() +
+            m * n * cType.getElementTypeBitWidth()) /
+           8;
+  }
+
+  /// Dots connected to \p dotOp through chains along A, \p dotOp included.
+  /// The relation is symmetric, so every dot of a chain gets the same set.
+  static SetVector<Operation *> getChainAlongA(Operation *dotOp) {
+    SetVector<Operation *> chain;
+    SmallVector<Operation *> worklist{dotOp};
+    while (!worklist.empty()) {
+      Operation *op = worklist.pop_back_val();
+      if (!chain.insert(op))
+        continue;
+      llvm::append_range(worklist, getChainedDotOps(getDotOperands(op).first));
+      llvm::append_range(worklist, getConsumersAlongA(op));
+    }
+    return chain;
+  }
+
+  /// Whether a rank-2 dot of the chain along A through \p dotOp, at the warp
+  /// split a chain along A gets, holds more than \p grfEntries per warp.
+  static bool
+  chainExceedsRegisters(Operation *dotOp, unsigned numWarps,
+                        const ttgi::DpasEncodingAttr::DPASCapability &dpasCap,
+                        unsigned grfEntries) {
+    // A GRF entry holds one 32-bit value per lane of the DPAS sub-group.
+    int64_t grfBytes = int64_t(grfEntries) * dpasCap.executionSize * 4;
+    return llvm::any_of(getChainAlongA(dotOp), [&](Operation *op) {
+      auto dot = dyn_cast<tt::DotOp>(op);
+      if (!dot || dot.getType().getRank() != 2)
+        return false;
+      ArrayRef<int64_t> shape = dot.getType().getShape();
+      unsigned warpsM = std::min(clampToPowerOfTwo(mlir::ceil<unsigned>(
+                                     shape[0], dpasCap.repeatCount)),
+                                 numWarps);
+      unsigned warpsN = std::min(clampToPowerOfTwo(mlir::ceil<unsigned>(
+                                     shape[1], dpasCap.executionSize)),
+                                 mlir::ceil<unsigned>(numWarps, warpsM));
+      return getBytesPerWarp(dot, warpsM, warpsN) > grfBytes;
     });
   }
 
@@ -580,6 +642,28 @@ private:
           ret[rank - 1] *= remainingWarps;
         } else {
           ret[rank - 2] *= remainingWarps;
+        }
+      }
+
+      // Keeping the warps on M copies all of B into every warp. When a dot of
+      // the chain cannot hold that copy in registers, moving one factor of two
+      // to N pays for the per-iteration exchange of the intermediate in kernels
+      // that then spill (1.2x to 1.6x on flex attention at head dim 128 and
+      // 192); moving a second factor measured slower. The estimate alone also
+      // fires on kernels that hold B without spilling, where the split costs up
+      // to 26% (flash attention, head dim 128), so the split is only applied on
+      // request. The backend requests it after a build without it spilled.
+      // Measured on PVC; limited to 16-wide DPAS execution, which BMG shares.
+      if (isa<tt::DotOp>(dotOp) &&
+          chainedDotKind == ChainedDotKind::ChainedAlongA && rank == 2 &&
+          dpasCap.executionSize == 16 && ret[0] > 1 &&
+          ret[1] * 2 <= maxNumWarpsAlongN &&
+          chainExceedsRegisters(dotOp, numWarps, dpasCap, grfEntries)) {
+        if (splitChainedDotsAlongN) {
+          ret[0] /= 2;
+          ret[1] *= 2;
+        } else if (splitCandidate) {
+          *splitCandidate = true;
         }
       }
 
@@ -1564,8 +1648,10 @@ public:
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     constexpr int benefitDefault = 1;
-    patterns.add<BlockedToDPAS<tt::DotOp>>(context, benefitDefault + 1,
-                                           grfMode);
+    bool splitCandidate = false;
+    patterns.add<BlockedToDPAS<tt::DotOp>>(context, benefitDefault + 1, grfMode,
+                                           splitChainedDotsAlongN,
+                                           &splitCandidate);
     if (supportBlockScaleDPAS) {
       patterns.add<BlockedToDPAS<tt::DotScaledOp>>(context, benefitDefault + 1,
                                                    grfMode);
@@ -1574,6 +1660,13 @@ public:
     ttgi::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
+
+    // An integer rather than a unit attribute: the Python module binding only
+    // reads integer attributes.
+    if (splitCandidate)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getChainedDotSplitCandidateAttrName(),
+          IntegerAttr::get(IntegerType::get(context, 32), 1));
 
     // Chained-dot kind is temporary analysis metadata and should not leak.
     clearChainedDotKindAttrs(mod);
