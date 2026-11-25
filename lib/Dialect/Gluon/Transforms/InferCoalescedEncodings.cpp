@@ -40,7 +40,6 @@ bool isCoalescedEncodingTensorType(Type ty) {
 
 LogicalResult inferCoalescedLayout(ModuleOp &mod) {
   ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
-  ttg::CoalescedEncodingAnalysis coalescedEncodingAnalysis(axisInfoAnalysis);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
 
   // infer function-level coalesced layout
@@ -74,8 +73,9 @@ LogicalResult inferCoalescedLayout(ModuleOp &mod) {
       auto cgaLayout = getDefaultCGALayout(tensorType, numCTAs);
       auto shapePerCTA = ttg::getShapePerCTA(cgaLayout.getCTASplitNum(),
                                              tensorType.getShape());
-      auto layout = coalescedEncodingAnalysis.getEncoding(
-          curr, numWarps, threadsPerWarp, cgaLayout, shapePerCTA);
+      auto layout =
+          ttg::buildCoalescedEncoding(axisInfoAnalysis, curr, numWarps,
+                                      threadsPerWarp, cgaLayout, shapePerCTA);
       // set seed value
       for (auto value : curr->getOperands())
         seedEncodings.push_back({value, layout});

@@ -69,9 +69,8 @@ void refineGlobalLoadLayout(PatternRewriter &rewriter, Attribute encoding,
   }
 
   // Construct new load with the new encoding
-  auto newLoad =
-      tt::LoadOp::create(rewriter, loc, newArgs, load.getProperties(),
-                         load->getDiscardableAttrDictionary().getValue());
+  auto attrs = load->getAttrs();
+  auto newLoad = tt::LoadOp::create(rewriter, loc, newArgs, attrs);
 
   // Cast the results back to the original layout
   auto loadType = load.getType();
@@ -112,7 +111,7 @@ Attribute createNewSharedEncoding(RankedTensorType operandType) {
   auto dotOperandEnc =
       cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding());
   auto cgaLayout = ttg::getCGALayout(dotOperandEnc);
-  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(operandType.getElementType());
+  auto bitWidth = operandType.getElementTypeBitWidth();
   SmallVector<unsigned> order{1, 0};
   if (dotOperandEnc.getOpIdx() == 1)
     std::swap(order[0], order[1]);
@@ -486,7 +485,7 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
   // because we can visit one value in two directions
   SetVector<Value> visitedValsForward;
   SetVector<Value> visitedValsBackward;
-  // breadth-first search for reachable operations
+  // breadth-first search for reachable opeations
   GlobalToSharedMemoryOpChain foundNetwork;
   SmallVector<Operation *> traversalStep{root};
   while (!traversalStep.empty()) {
@@ -515,15 +514,15 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
       } else if (isa<ttg::LocalLoadOp, ttg::LocalDeallocOp>(candidate)) {
         smemOperand = candidate->getOperand(0);
       } else if (candidate->hasTrait<mlir::OpTrait::GlobalToLocalCopyTrait>()) {
-        // InThreadTranspose cannot be used with direct-to-lds loads
+        // InTheadTranspose cannot be used with direct-to-lds loads
         LDBG(" skip because of direct-to-lds load");
         return failure();
       } else {
         // this operation is not part of shared memory def-use network,
         // algorithm should not reach this point
-        LDBG("  caught operation unrelated to shared memory" << *candidate);
+        LDBG("  catched operation unrelated to shared memory" << *candidate);
         // this is critical error, assert in debug mode.
-        assert(false && "  caught operation unrelated to shared memory");
+        assert(false && "  catched operation unrelated to shared memory");
         return failure();
       }
 
@@ -590,9 +589,10 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
     return failure();
 
   int kDimNum = opDotOpEnc.getOpIdx() == 0 ? 1 : 0;
+  // TODO: support wmma
   if (!isa<ttg::AMDMfmaEncodingAttr, ttg::AMDWmmaEncodingAttr>(
           opDotOpEnc.getParent())) {
-    LDBG("Operand's parent encoding is not MFMA or WMMA");
+    LDBG("Operand's parent encoding is not MFMA");
     return failure();
   }
 
@@ -600,7 +600,7 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
   // operations
   auto sharedMemSearch = findReachableSMemOps(lLoad);
   if (failed(sharedMemSearch)) {
-    LDBG("Failed to traverse shared memory operation network");
+    LDBG("Failed to traverse shared memmory operation network");
     return failure();
   }
   auto pattern = sharedMemSearch.value();
@@ -711,7 +711,7 @@ ttg::BlockedEncodingAttr getTransposableBlockedEnc(int dotOperandIdx,
   auto blockedEnc = cast<ttg::BlockedEncodingAttr>(loadEnc);
 
   auto maxkDimSizePerThread = getMaxSizePerThread(loadType, kDimNum);
-  unsigned elemBitwidth = getIntOrFloatOrPtrBitWidth(loadType.getElementType());
+  auto elemBitwidth = loadType.getElementType().getIntOrFloatBitWidth();
   // Current the widest is set to ds_write_b64
   // In some cases b64 works best, in others 128
   // TODO introduce a heuristic
@@ -780,9 +780,11 @@ public:
 
 } // anonymous namespace
 
-struct TritonAMDGPUInThreadTransposePass
-    : impl::TritonAMDGPUInThreadTransposeBase<
+class TritonAMDGPUInThreadTransposePass
+    : public impl::TritonAMDGPUInThreadTransposeBase<
           TritonAMDGPUInThreadTransposePass> {
+
+public:
   void runOnOperation() override {
     tt::FuncOp f = getOperation();
 

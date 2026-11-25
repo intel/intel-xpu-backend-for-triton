@@ -147,7 +147,7 @@ struct CoalesceAsyncCopyWrites
       // tensor indices. This mapping might reorder elements resulting in
       // scattered writes into LDS which is not supported on GFX9. To ensure
       // coalesced writes we change the src layout to a linear encoding which
-      // effectively copies/mimics the linear_component so each warp (reg+lane
+      // effectivly copies/mimicks the linear_component so each warp (reg+lane
       // bases) map to consecutive LDS offsets resulting in coalesced writes
       // The new linear encoding is build by taking bases from the
       // linear_component and assigning them to reg/lane/warp bases in the
@@ -252,9 +252,10 @@ private:
 
 } // anonymous namespace
 
-struct TritonAMDGPUCoalesceAsyncCopyPass
-    : impl::TritonAMDGPUCoalesceAsyncCopyBase<
+class TritonAMDGPUCoalesceAsyncCopyPass
+    : public impl::TritonAMDGPUCoalesceAsyncCopyBase<
           TritonAMDGPUCoalesceAsyncCopyPass> {
+public:
   using Base::Base;
 
   void runOnOperation() override {

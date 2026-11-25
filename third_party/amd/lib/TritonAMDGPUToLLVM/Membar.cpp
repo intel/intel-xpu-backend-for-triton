@@ -1,7 +1,6 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
 #include "AsyncUtility.h"
-#include "ScheduleMembar.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "third_party/amd/include/Analysis/AMDGPUAllocation.h"
@@ -41,9 +40,6 @@ struct TritonAMDGPUMembar
 
     ModuleMembarAnalysis membarPass(allocation, AMD::membarFilter);
     membarPass.run();
-    // Reschedule local rendezvous while waits and memory effects are explicit,
-    // before ConSan and LLVM lowering.
-    AMD::scheduleMembarBarriers(mod);
   }
 };
 

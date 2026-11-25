@@ -21,13 +21,13 @@
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
-namespace mlir {
+namespace mlir::triton::amdgpu {
 
 namespace {
 
 // This pattern creates LocalAllocOp and LocalLoadOp with unswizzled shared
 // layout for the scale operand used in ScaledUpcastFp4Op/ScaledUpcastFp8Op.
-// The AMD pipeliner will respect the layout created here and pipeline ops
+// StreamPipeliner will respect the layout created here and pipeline ops
 // according to the need.
 //
 // It matches
@@ -111,9 +111,10 @@ private:
 #define GEN_PASS_DEF_TRITONAMDGPUOPTIMIZEDOTOPERANDS
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
-struct TritonAMDGPUOptimizeDotOperandsPass
-    : impl::TritonAMDGPUOptimizeDotOperandsBase<
-          TritonAMDGPUOptimizeDotOperandsPass> {
+class TritonAMDGPUOptimizeDotOperands
+    : public impl::TritonAMDGPUOptimizeDotOperandsBase<
+          TritonAMDGPUOptimizeDotOperands> {
+public:
   using Base::Base;
 
   void runOnOperation() override {
@@ -121,7 +122,7 @@ struct TritonAMDGPUOptimizeDotOperandsPass
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    triton::amdgpu::TargetFeatures targetFeatures{llvm::StringRef(gfxArch)};
+    TargetFeatures targetFeatures{llvm::StringRef(gfxArch)};
     patterns
         .add<AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp8Op>,
              AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp4Op>>(
@@ -132,4 +133,10 @@ struct TritonAMDGPUOptimizeDotOperandsPass
   }
 };
 
-} // namespace mlir
+void registerTritonAMDGPUOptimizeDotOperands() {
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return createTritonAMDGPUOptimizeDotOperands();
+  });
+}
+
+} // namespace mlir::triton::amdgpu

@@ -837,28 +837,3 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
   llvm.return
 }
 }
-
-// -----
-
-// COM: "ttig.use_genisa_2d_block_io" selects GenISA for every shape (#8858).
-module attributes {"ttg.threads-per-warp" = 32 : i32, ttig.use_genisa_2d_block_io} {
-llvm.func @triton_gen.2Dblockload_use_genisa_sg32(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // CHECK-LABEL: llvm.func @triton_gen.2Dblockload_use_genisa_sg32
-  // CHECK-NOT:   __spirv_Subgroup2DBlockLoad
-  // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.
-  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=64, tile_width=2, tile_height=16, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<1xi64>
-  llvm.return
-}
-}
-
-// -----
-
-module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.use_genisa_2d_block_io} {
-llvm.func @triton_gen.2Dblockload_use_genisa_sg16(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // CHECK-LABEL: llvm.func @triton_gen.2Dblockload_use_genisa_sg16
-  // CHECK-NOT:   __spirv_Subgroup2DBlockLoad
-  // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.
-  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=8, tile_height=8, v_blocks=2, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<4xi16>
-  llvm.return
-}
-}

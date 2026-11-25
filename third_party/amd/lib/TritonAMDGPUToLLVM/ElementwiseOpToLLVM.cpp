@@ -61,8 +61,22 @@ struct PackedArithOpConversion
       packedOperands.push_back(
           packLLVector(loc, {operands[0][i], operands[1][i]}, rewriter));
     Value vr = LLVMOp::create(rewriter, loc, packedOperands[0].getType(),
-                              packedOperands, typename LLVMOp::Properties{});
+                              packedOperands);
     return unpackLLVector(loc, vr, rewriter);
+  }
+};
+
+struct FDivOpConversion
+    : ElementwiseOpConversionBase<arith::DivFOp, FDivOpConversion> {
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
+
+  SmallVector<Value> createDestOps(arith::DivFOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+
+    return {LLVM::FDivOp::create(rewriter, loc, elemTy, operands[0][0],
+                                 operands[0][1])};
   }
 };
 
@@ -278,8 +292,7 @@ struct Exp2OpConversion
     if (ftz)
       return {ROCDL::ROCDLExp2::create(rewriter, loc, elemTy, operands[0])};
 
-    return {LLVM::Exp2Op::create(rewriter, loc, elemTy, operands[0],
-                                 LLVM::Exp2Op::Properties{})};
+    return {LLVM::Exp2Op::create(rewriter, loc, elemTy, operands[0])};
   }
 
 private:
@@ -379,7 +392,7 @@ struct SqrtOpConversion
     }
 
     // llvm.amdgcn.sqrt.f32 provides direct access to v_sqrt_f32, which provides
-    // 1ULP accuracy and flushes denorms.
+    // 1ULP accuracy and flushs denorms.
     Value intrinsicsOutput =
         ROCDL::ROCDLSqrt::create(rewriter, loc, elemTy, scaledSrc);
 
@@ -482,20 +495,19 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<ElementwiseOpConversion<triton::PreciseSqrtOp, LLVM::SqrtOp>>(
       typeConverter, axisInfoAnalysis, benefit);
 
-  if (targetInfo.getISAFamily() == ISAFamily::CDNA5) {
-    auto cdna5Benefit = benefit.getBenefit() + 1;
+  if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
+    auto gfx1250Benefit = benefit.getBenefit() + 1;
     patterns.add<PackedArithOpConversion<arith::SubFOp, LLVM::FSubOp>>(
-        typeConverter, axisInfoAnalysis, cdna5Benefit);
+        typeConverter, axisInfoAnalysis, gfx1250Benefit);
     patterns.add<PackedArithOpConversion<arith::AddFOp, LLVM::FAddOp>>(
-        typeConverter, axisInfoAnalysis, cdna5Benefit);
+        typeConverter, axisInfoAnalysis, gfx1250Benefit);
     patterns.add<PackedArithOpConversion<arith::MulFOp, LLVM::FMulOp>>(
-        typeConverter, axisInfoAnalysis, cdna5Benefit);
+        typeConverter, axisInfoAnalysis, gfx1250Benefit);
     patterns.add<PackedArithOpConversion<math::FmaOp, LLVM::FMAOp>>(
-        typeConverter, axisInfoAnalysis, cdna5Benefit);
+        typeConverter, axisInfoAnalysis, gfx1250Benefit);
   }
 
-  patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
-      typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
@@ -505,8 +517,6 @@ void populateElementwiseOpToLLVMPatterns(
                                    targetInfo.getISAFamily(), benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<ElementwiseOpConversion<arith::UIToFPOp, LLVM::UIToFPOp>>(
-      typeConverter, axisInfoAnalysis, benefit);
 
   // ExpOpConversionApprox will try using __ocml_exp2_f32 if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
@@ -520,9 +530,6 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<RsqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz,
                                   benefit);
   patterns.add<SqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
-  patterns.add<ElementwiseOpConversion<math::SqrtOp, math::SqrtOp>,
-               ElementwiseOpConversion<math::RsqrtOp, math::RsqrtOp>>(
-      typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
                                    benefit.getBenefit() + 1);
   triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
