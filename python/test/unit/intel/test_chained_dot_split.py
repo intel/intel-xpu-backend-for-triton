@@ -30,16 +30,35 @@ def chained_dot_kernel(a_ptr, b_ptr, c_ptr, out_ptr, M: tl.constexpr, K: tl.cons
     tl.store(out_ptr + offs_m[:, None] * D + offs_d[None, :], out)
 
 
+_THRESHOLD = intel_compiler.REBUILD_SPILL_BYTES_PER_THREAD
+
+
 @pytest.mark.skipif(not _has_16_wide_dpas(), reason="Chained dot split needs 16-wide DPAS")
-@pytest.mark.parametrize("spill_size, warps_per_cta, num_llir_builds", [
-    (0, "[8, 1]", 1),
-    (4 * intel_compiler.REBUILD_SPILL_BYTES_PER_THREAD, "[4, 2]", 2),
-])
-def test_chained_dot_split_follows_spill(spill_size, warps_per_cta, num_llir_builds, device, fresh_triton_cache,
-                                         monkeypatch):
+@pytest.mark.parametrize(
+    "spill_size, options, warps_per_cta, num_llir_builds",
+    [
+        # A trial that spills less than the large-GRF rebuild threshold is kept and reused.
+        (0, {}, "[8, 1]", 1),
+        (_THRESHOLD - 1, {}, "[8, 1]", 1),
+        # From the threshold on, the TTGIR is rebuilt with the split.
+        (_THRESHOLD, {}, "[4, 2]", 2),
+        (4 * _THRESHOLD, {}, "[4, 2]", 2),
+        # Only default-GRF native-code builds get a trial: an explicit GRF mode or a JIT build keeps the layout.
+        (4 * _THRESHOLD, {"grf_mode": "256"}, "[8, 1]", 1),
+        (4 * _THRESHOLD, {"generate_native_code": False}, "[8, 1]", 1),
+    ],
+    ids=["no-spill", "below-threshold", "at-threshold", "spills", "grf-256", "jit"],
+)
+def test_chained_dot_split_follows_spill(spill_size, options, warps_per_cta, num_llir_builds, device,
+                                         fresh_triton_cache, monkeypatch):
     # With 8 warps all on M, each warp would hold the whole 128x64 B of the first dot, so AccelerateMatmul marks the
     # module and the backend builds it once to see whether it spills. Pin the spill size the trial build reports.
     monkeypatch.setattr(intel_compiler, "extract_spill_size_from_zebin", lambda _: spill_size)
+    launch_options = {"generate_native_code": True, **options}
+    if not launch_options["generate_native_code"]:
+        # CI forces native code through the environment, so a JIT build needs these off too.
+        monkeypatch.delenv("TRITON_XPU_GEN_NATIVE_CODE", raising=False)
+        monkeypatch.delenv("TRITON_INTEL_ENABLE_IGC_SHADER_DUMP", raising=False)
     llir_builds = []
     make_llir = intel_compiler.XPUBackend.make_llir
 
@@ -57,12 +76,13 @@ def test_chained_dot_split_follows_spill(spill_size, warps_per_cta, num_llir_bui
     out = torch.empty((M, D), device=device, dtype=torch.float32)
     # The split is decided on a native-code build, the path inductor compiles on; drop kernels built by other cases.
     chained_dot_kernel.device_caches[triton.runtime.driver.active.get_current_device()][0].clear()
-    kernel = chained_dot_kernel[(1, )](a, b, c, out, M, K, N, D, num_warps=8, generate_native_code=True)
+    kernel = chained_dot_kernel[(1, )](a, b, c, out, M, K, N, D, num_warps=8, **launch_options)
 
-    # A trial that does not spill is reused by the later stages instead of being lowered again.
+    # A kept trial is reused by the later stages instead of being lowered again; a build without a trial is lowered
+    # once.
     assert len(llir_builds) == num_llir_builds
     assert f"warpsPerCTA = {warps_per_cta}" in kernel.asm["ttgir"]
-    # The kept TTGIR is the marked module itself; the split rebuild is not marked again.
-    assert ("chained_dot_split_candidate" in kernel.asm["ttgir"]) == (spill_size == 0)
+    # Every module that keeps its layout is the marked one; the split rebuild is not marked again.
+    assert ("chained_dot_split_candidate" in kernel.asm["ttgir"]) == (warps_per_cta == "[8, 1]")
     ref = (a.float() @ b.float()).half().float() @ c.float()
     torch.testing.assert_close(out, ref, rtol=1e-2, atol=1e-3)
