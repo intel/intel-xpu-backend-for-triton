@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm --canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm --canonicalize | FileCheck %s --implicit-check-not=llvm.inline_asm
 
 // COM: Software fp8e4m3(OCP e4m3fn) -> fp16 upcast: sext, shl, and, bitcast, one exact
 // COM: fmul x256 and a fabs/fcmp/select that turns the reserved bytes 0x7F/0xFF (which

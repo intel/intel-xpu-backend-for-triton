@@ -138,6 +138,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %z = arith.mulf %cvt, %ss : tensor<16x16xf16, #blocked>
     tt.return %z : tensor<16x16xf16, #blocked>
   }
+
+  // COM: A result that reaches both a DPAS dot and a multiply gets the barrier.
+  // CHECK-LABEL: @fp8_upcast_to_dpas_and_multiply_fast_math
+  tt.func public @fp8_upcast_to_dpas_and_multiply_fast_math(%a: tensor<8x16xf16, #dot0>, %src: tensor<16x16xf8E4M3FN, #blocked>, %c: tensor<8x16xf32, #mma>, %s: f16) -> (tensor<8x16xf32, #mma>, tensor<16x16xf16, #blocked>) {
+    // CHECK: [[M:%.*]] = llvm.fmul {{%.*}} : f16
+    // CHECK-NEXT: [[MI:%.*]] = llvm.bitcast [[M]] : f16 to i16
+    // CHECK-NEXT: llvm.inline_asm {{.*}} [[MI]] : (i16) -> i16
+    %b = tt.fp_to_fp %src : tensor<16x16xf8E4M3FN, #blocked> -> tensor<16x16xf16, #blocked>
+    %buf = ttg.local_alloc %b : (tensor<16x16xf16, #blocked>) -> !ttg.memdesc<16x16xf16, #shared, #smem>
+    %bd = ttg.local_load %buf : !ttg.memdesc<16x16xf16, #shared, #smem> -> tensor<16x16xf16, #dot1>
+    %d = tt.dot %a, %bd, %c : tensor<8x16xf16, #dot0> * tensor<16x16xf16, #dot1> -> tensor<8x16xf32, #mma>
+    %ss = tt.splat %s : f16 -> tensor<16x16xf16, #blocked>
+    %z = arith.mulf %b, %ss : tensor<16x16xf16, #blocked>
+    tt.return %d, %z : tensor<8x16xf32, #mma>, tensor<16x16xf16, #blocked>
+  }
+
+  // COM: An upcast to f32 goes through f16, but feeds f32 multiplies, where 256 * s does not overflow.
+  // CHECK-LABEL: @fp8_upcast_to_f32_times_scale_fast_math
+  tt.func public @fp8_upcast_to_f32_times_scale_fast_math(%src: tensor<16x16xf8E4M3FN, #blocked>, %s: f32) -> tensor<16x16xf32, #blocked> {
+    // CHECK-NOT: llvm.inline_asm
+    // CHECK: llvm.return
+    %b = tt.fp_to_fp %src : tensor<16x16xf8E4M3FN, #blocked> -> tensor<16x16xf32, #blocked>
+    %ss = tt.splat %s : f32 -> tensor<16x16xf32, #blocked>
+    %z = arith.mulf %b, %ss : tensor<16x16xf32, #blocked>
+    tt.return %z : tensor<16x16xf32, #blocked>
+  }
 }
 
 // -----

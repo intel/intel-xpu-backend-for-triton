@@ -465,16 +465,20 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 /// overflows fp16 for s >= 256, turning every result, zeros included, into inf
 /// or NaN. An upcast whose result only reaches DPAS dots (directly, or through
 /// a layout conversion or shared memory) feeds no such multiply and keeps the
-/// faster sequence; a dot with another layout lowers to multiply-adds.
+/// faster sequence; a dot with another layout lowers to multiply-adds. An
+/// upcast to f32 (through f16) feeds f32 multiplies, where `256 * s` does not
+/// overflow.
 static bool needsFastMathReassocBarrier(Operation *op) {
   if (!mlir::LLVM::intel::hasModuleAttr(
           op, triton::gpu::intel::TritonIntelGPUDialect::getFastMathAttrName()))
+    return false;
+  if (!getElementTypeOrSelf(op->getResult(0).getType()).isF16())
     return false;
   SmallVector<Value> worklist(op->getResults());
   while (!worklist.empty()) {
     Value val = worklist.pop_back_val();
     for (Operation *user : val.getUsers()) {
-      if (isa<triton::DotOp, triton::DotScaledOp>(user)) {
+      if (isa<triton::DotOp>(user)) {
         auto resultTy = cast<RankedTensorType>(user->getResult(0).getType());
         if (isa<triton::gpu::intel::DpasEncodingAttr>(resultTy.getEncoding()))
           continue;
@@ -483,7 +487,8 @@ static bool needsFastMathReassocBarrier(Operation *op) {
       // A dealloc of a buffer does no arithmetic.
       if (isa<triton::gpu::LocalDeallocOp>(user))
         continue;
-      // A local_store hides the loads of its buffer, so it is not followed.
+      // A local_store is not followed (the loads of its buffer are not
+      // tracked), so it counts as a multiply.
       if (!isa<triton::gpu::ConvertLayoutOp, triton::gpu::LocalAllocOp,
                triton::gpu::LocalLoadOp>(user))
         return true;
@@ -544,6 +549,7 @@ static bool needsFastMathReassocBarrier(Operation *op) {
 // Not used on LTS drivers, where the previous float sequence triggered an IGC
 // compile-time blowup; see Fp8E4M3Nv_to_Fp16Int below and the dispatch in
 // getConverter().
+
 // A copy of the bits of `v` (an integer) that neither LLVM nor IGC can look
 // through: an inline-asm mov. A floating-point value passed through it cannot
 // be reassociated with the operations on either side, whatever is known about
@@ -1895,6 +1901,7 @@ Fp8ToFp16Lowering::convert(ArrayRef<unsigned> indices,
   SmallVector<Value> results;
   if (readsDwords()) {
     // Each byte is read from its dword as the high byte of a 16-bit window.
+    bool barrier = needsFastMathReassocBarrier(op);
     for (unsigned i : indices) {
       auto [vec, idx] = bytes[i];
       Value dword = b.extract_element(i32_ty, vec, b.i32_val(idx / 4));
@@ -1903,8 +1910,8 @@ Fp8ToFp16Lowering::convert(ArrayRef<unsigned> indices,
       Value window = b.trunc(i16_ty, dword);
       if (idx % 2 == 0)
         window = b.shl(i16_ty, window, b.i16_val(8));
-      results.push_back(Fp8E4M3Nv_to_Fp16FromHighByte(
-          loc, rewriter, window, needsFastMathReassocBarrier(op)));
+      results.push_back(
+          Fp8E4M3Nv_to_Fp16FromHighByte(loc, rewriter, window, barrier));
     }
     return results;
   }
