@@ -2,6 +2,7 @@ import io
 import re
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import torch
@@ -414,6 +415,81 @@ def test_load_binary_does_not_leak_kernel_capsule(device):
         "kernel.module capsule has a reference beyond the attribute and this local -- it leaked"
     assert sys.getrefcount(function) == baseline + 1, \
         "kernel.function capsule has a reference beyond the attribute and this local -- it leaked"
+
+
+def _backend_driver_module():
+    # In tree triton.backends.intel.driver; out of tree the extension's own package.
+    return sys.modules[type(driver.active.utils).__module__]
+
+
+@pytest.mark.parametrize("grf_mode", ["default", "256"])
+@pytest.mark.parametrize("generate_native_code", [False, True], ids=["spv", "zebin"])
+def test_load_binary_completes_core_call(device, monkeypatch, generate_native_code, grf_mode, fresh_knobs):
+    """Upstream's core creates the launcher and then calls `load_binary(name, kernel, shared, device)`. The backend
+    completes that call from the metadata the launcher recorded: the loader gets what the fork's core passes."""
+    fresh_knobs.intel.gen_native_code = False
+
+    @triton.jit
+    def _completed_kernel(x_ptr):
+        tl.store(x_ptr, 1)
+
+    x = torch.zeros(1, dtype=torch.int32, device=device)
+    kernel = _completed_kernel.warmup(x, grid=(1, ), grf_mode=grf_mode, generate_native_code=generate_native_code)
+    metadata = kernel.metadata
+    device = driver.active.get_current_device()
+    launcher = driver.active.launcher_cls(kernel.src, metadata)
+    shared = getattr(launcher, "shared", metadata.shared)
+
+    loader = driver.active.utils.load_binary.__self__.shared_library
+    received = []
+    c_load_binary = loader.load_binary
+
+    def recording_load_binary(args):
+        received.append(args)
+        return c_load_binary(args)
+
+    monkeypatch.setattr(loader, "load_binary", recording_load_binary)
+    _, _, n_regs, n_spills, n_max_threads = driver.active.utils.load_binary(kernel.name, kernel.kernel, shared, device)
+
+    full = (kernel.name, kernel.kernel, shared, metadata.build_flags, not metadata.generate_native_code, device,
+            metadata.max_grf_mode)
+    assert received == [full]
+    assert _backend_driver_module()._launcher_metadata.pending == {}
+    assert driver.active.utils.load_binary(*full)[2:] == (n_regs, n_spills, n_max_threads)
+
+
+def test_load_binary_core_call_needs_launcher(device):
+    """Without a launcher created on this thread, core's four-argument call raises instead of guessing."""
+
+    @triton.jit
+    def _kernel_without_launcher(x_ptr):
+        tl.store(x_ptr, 1)
+
+    x = torch.zeros(1, dtype=torch.int32, device=device)
+    kernel = _kernel_without_launcher.warmup(x, grid=(1, ))
+    device = driver.active.get_current_device()
+
+    with pytest.raises(RuntimeError, match="no compile metadata"):
+        driver.active.utils.load_binary(kernel.name, kernel.kernel, kernel.metadata.shared, device)
+
+
+def test_load_binary_core_call_uses_this_threads_launcher(device):
+    """The launcher's record is per thread: core's call on another thread raises, and the creating thread's call
+    still completes from it."""
+
+    @triton.jit
+    def _kernel_across_threads(x_ptr):
+        tl.store(x_ptr, 1)
+
+    x = torch.zeros(1, dtype=torch.int32, device=device)
+    kernel = _kernel_across_threads.warmup(x, grid=(1, ))
+    args = (kernel.name, kernel.kernel, kernel.metadata.shared, driver.active.get_current_device())
+    driver.active.launcher_cls(kernel.src, kernel.metadata)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with pytest.raises(RuntimeError, match="no compile metadata"):
+            pool.submit(driver.active.utils.load_binary, *args).result()
+    driver.active.utils.load_binary(*args)
 
 
 def test_wait_on_sycl_queue_error(device):

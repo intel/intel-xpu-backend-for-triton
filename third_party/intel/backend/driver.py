@@ -9,6 +9,7 @@ import ctypes
 import subprocess
 import sysconfig
 import tempfile
+import threading
 import warnings
 from pathlib import Path
 from functools import cached_property, lru_cache
@@ -271,6 +272,40 @@ class ArchParser:
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
+# The compile metadata of the kernels whose launcher was created on this thread and whose binary is not loaded yet,
+# by kernel name. Core's CompiledKernel._init_handles creates the launcher from the metadata, then calls
+# load_binary(name, kernel, shared, device), which lacks the build flags, the binary kind and the GRF mode the loader
+# needs (see SpirvUtils.load_binary). If core raises in between, the record stays until the kernel's next launcher
+# replaces it.
+class _LauncherMetadata(threading.local):
+
+    def __init__(self):
+        self.pending = {}
+
+
+_launcher_metadata = _LauncherMetadata()
+
+
+def _load_binary_args(args):
+    """Return the loader's (name, kernel, shared, build_flags, is_spv, device, max_grf_mode). Core's four-argument
+    call is completed from the metadata this thread's launcher recorded; other forms pass through."""
+    pending = _launcher_metadata.pending
+    if len(args) != 4:
+        pending.pop(args[0] if args else None, None)
+        return args
+    name, kernel, shared, device = args
+    metadata = pending.pop(name, None)
+    if metadata is None:
+        raise RuntimeError(f"load_binary('{name}'): no compile metadata recorded on this thread; create the kernel's "
+                           "launcher (driver.active.launcher_cls) first")
+    max_grf_mode = getattr(metadata, "max_grf_mode", None)
+    # Metadata without max_grf_mode implies a "cri" target retries at 512 GRFs.
+    legacy_arch = getattr(metadata.target, "arch", None)
+    if max_grf_mode is None and isinstance(legacy_arch, dict) and legacy_arch.get("arch") == "cri":
+        max_grf_mode = "512"
+    return (name, kernel, shared, metadata.build_flags, not metadata.generate_native_code, device, max_grf_mode)
+
+
 class SpirvUtils:
 
     def __init__(self, cache_path: str):
@@ -316,6 +351,7 @@ class SpirvUtils:
         # IGC build log carries a PTSS marker, OutOfResources is raised
         # directly so triton.runtime.autotuner can skip the offending tile.
         # No per-launch overhead on the success path.
+        args = _load_binary_args(args)
         try:
             return self.shared_library.load_binary(args)
         except Exception as e:
@@ -757,6 +793,8 @@ class XPULauncher(object):
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
+        # Last, so that a launcher whose construction fails leaves no record.
+        _launcher_metadata.pending[metadata.name] = metadata
 
     def _resolve_dump_dir(self, cache_dir):
         dump_dir_root = knobs.intel.dump_kernel_args_dir
