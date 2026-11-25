@@ -8,6 +8,7 @@
 #include "Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Analysis/RegisterPressure.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
@@ -104,6 +105,41 @@ bool crossesAliasingWrite(Operation *start, Operation *end) {
     if (ttgi::mayWriteMemory(op, /*ignoreSharedMemory=*/true))
       return true;
   return false;
+}
+
+/// As `ttgi::mayWriteMemory` (shared memory ignored), but a barrier counts only
+/// if it orders global writes (`ttg.barrier all`, from `tl.debug_barrier`);
+/// split barriers, which the pipeliner adds for performance, never count.
+bool mayWriteGlobalMemory(Operation *op) {
+  if (isa<tt::TritonGEN::SplitBarrierArriveOp,
+          tt::TritonGEN::SplitBarrierWaitOp>(op))
+    return false;
+  if (auto barrier = dyn_cast<ttg::BarrierOp>(op))
+    return barrier.hasGlobalWrite();
+  if (!op->hasTrait<OpTrait::HasRecursiveMemoryEffects>() ||
+      isa<MemoryEffectOpInterface>(op))
+    return ttgi::mayWriteMemory(op, /*ignoreSharedMemory=*/true);
+  for (Region &region : op->getRegions())
+    for (Operation &nestedOp : region.getOps())
+      if (mayWriteGlobalMemory(&nestedOp))
+        return true;
+  return false;
+}
+
+/// Return true if a write between \p loadOp and a copy of it in or right after
+/// \p forOp may change what the copy reads. The op of the load's block holding
+/// \p forOp is checked whole: an enclosing loop runs its later ops in between.
+/// No alias analysis: any op `mayWriteGlobalMemory` reports counts.
+bool movedLoadCrossesAliasingWrite(tt::DescriptorLoadOp loadOp,
+                                   scf::ForOp forOp) {
+  Operation *loopAncestor =
+      loadOp->getBlock()->findAncestorOpInBlock(*forOp.getOperation());
+  if (!loopAncestor)
+    return true;
+  return llvm::any_of(
+      llvm::make_range(std::next(Block::iterator(loadOp)),
+                       std::next(Block::iterator(loopAncestor))),
+      [](Operation &op) { return mayWriteGlobalMemory(&op); });
 }
 
 /// Sink 2D dot-operand loads that already sit in \p forOp's body down to just
@@ -411,6 +447,20 @@ bool optimizeDotOperands(scf::ForOp forOp,
                     << perLaneGRFBudget << " B/lane GRF budget");
     return false;
   }
+
+  // After the gate, so loops it rejects are not scanned; once per load.
+  DenseMap<Operation *, bool> crossesWrite;
+  llvm::erase_if(candidates, [&](const Candidate &c) {
+    auto [it, inserted] = crossesWrite.try_emplace(c.loadOp, false);
+    if (inserted) {
+      it->second = movedLoadCrossesAliasingWrite(c.loadOp, forOp);
+      if (it->second)
+        LDBG("Keeping dot operand load in place: a write may change the "
+             "memory it reads before the loop or in it: "
+             << *c.loadOp);
+    }
+    return it->second;
+  });
 
   LDBG("Shortening dot operand live ranges ("
        << candidates.size() << " operand(s) to sink into the loop): peak "

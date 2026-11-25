@@ -43,6 +43,11 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName(),
           builder.getUnitAttr());
 
+    if (supportBlockScaleDPASWithFP4)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::
+                       getSupportBlockScaleDPASWithFP4AttrName(),
+                   builder.getUnitAttr());
+
     if (supportBF16Conversion)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName(),

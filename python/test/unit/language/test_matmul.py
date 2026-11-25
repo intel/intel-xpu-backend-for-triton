@@ -1286,8 +1286,7 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
     elif is_xpu_cri():
-        if scale_type != 'float8_e8m0fnu':
-            pytest.xfail("XPU only supports E8M0 scale")
+        # E4M3 scales (NVFP4) are decomposed: the block scaled DPAS only takes E8M0 scales (#8881).
         if not pack_along_k:
             pytest.xfail("Packing along M, N is not supported on XPU")
         if not (with_a_scale and with_b_scale):
