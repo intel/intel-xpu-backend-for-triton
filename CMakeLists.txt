@@ -342,15 +342,13 @@ if(TRITON_BUILD_PYTHON_MODULE)
   set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
   include_directories(${PYTHON_SRC_PATH})
 
-  # Minimum Python 3.<minor> of the stable-ABI wheel; single source for both
-  # find_package and Py_LIMITED_API (0x030C0000 for 3.12).
+  # Stable-ABI floor: Python 3.<minor>; drives find_package and Py_LIMITED_API.
   set(TRITON_STABLE_ABI_MIN_MINOR 12)
   math(EXPR TRITON_PY_LIMITED_API "(3 << 24) | (${TRITON_STABLE_ABI_MIN_MINOR} << 16)"
        OUTPUT_FORMAT HEXADECIMAL)
-  # On Windows, Python3::Module links python3XX.lib, which pins the extension
-  # to one Python version; Python3::SABIModule links python3.lib instead.
-  # Other platforms do not link libpython, so Python3::Module is fine there.
-  # Python Interpreter is used to run lit tests.
+  # Windows: Python3::Module links python3XX.lib (pins one Python version);
+  # Python3::SABIModule links python3.lib. Other platforms don't link libpython.
+  # Interpreter is used to run lit tests.
   if(TRITON_STABLE_ABI AND WIN32)
     if(CMAKE_VERSION VERSION_LESS 3.26)
       message(FATAL_ERROR "TRITON_STABLE_ABI on Windows requires CMake >= 3.26 (Development.SABIModule)")
