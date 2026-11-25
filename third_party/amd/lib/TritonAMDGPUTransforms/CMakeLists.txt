@@ -14,12 +14,10 @@ add_triton_library(TritonAMDGPUTransforms
   SinkLayoutConversions.cpp
   PrepareIfCombining.cpp
   MoveUpPrologueLoads.cpp
-  Pipeliner/Pipeline.cpp
-  Pipeliner/ScheduleLoops.cpp
-  Pipeliner/LowerLoops.cpp
-  Pipeliner/LDSEncoding.cpp
-  Pipeliner/StreamOps.cpp
-  Pipeliner/TDMStoresPipeline.cpp
+  Pipeline.cpp
+  ScheduleLoops.cpp
+  LowerLoops.cpp
+  TDMStoresPipeline.cpp
   MfmaGroup.cpp
   WmmaGroup.cpp
   InThreadTranspose.cpp

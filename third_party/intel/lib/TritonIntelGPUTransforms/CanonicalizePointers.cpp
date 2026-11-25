@@ -240,7 +240,7 @@ bool isTensorIntZero(Value v) {
     return false;
   if (auto splatOp = v.getDefiningOp<tt::SplatOp>())
     return isScalarIntZero(splatOp.getSrc());
-  return isZeroFillConst(v);
+  return isZeroConst(v);
 }
 
 bool isIntZero(Value v) { return isTensorIntZero(v) || isScalarIntZero(v); }
@@ -1644,12 +1644,10 @@ public:
 
     if (op->getNumResults())
       rewriter.replaceOpWithNewOp<SourceOp>(
-          op, op->getResultTypes(), ValueRange{operands}, op.getProperties(),
-          op->getDiscardableAttrDictionary().getValue());
+          op, op->getResultTypes(), ValueRange{operands}, op->getAttrs());
     else
       rewriter.replaceOpWithNewOp<SourceOp>(
-          op, TypeRange{}, ValueRange{operands}, op.getProperties(),
-          op->getDiscardableAttrDictionary().getValue());
+          op, TypeRange{}, ValueRange{operands}, op->getAttrs());
     return success();
   }
 };
@@ -1681,9 +1679,8 @@ public:
       operands[i] = newPtr;
     }
 
-    rewriter.replaceOpWithNewOp<SourceOp>(
-        op, op->getResultTypes(), ValueRange{operands}, op.getProperties(),
-        op->getDiscardableAttrDictionary().getValue());
+    rewriter.replaceOpWithNewOp<SourceOp>(op, op->getResultTypes(),
+                                          ValueRange{operands}, op->getAttrs());
     return success();
   }
 };

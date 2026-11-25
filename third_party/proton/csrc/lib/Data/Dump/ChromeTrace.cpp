@@ -205,7 +205,6 @@ void dumpCpuToGpuFlowEvents(
     }
   }
 
-  uint64_t nextFlowId = 0;
   for (const auto &[streamId, events] : kernelEvents) {
     auto prevLaunchEventId = details::kNoLaunchEventId;
     for (const auto &event : events) {
@@ -224,7 +223,6 @@ void dumpCpuToGpuFlowEvents(
       }
 
       const auto *launchEvent = launchEventIt->second;
-      const auto flowId = nextFlowId++;
       json startElement;
       startElement["name"] = "launch->kernel";
       startElement["cat"] = "flow";
@@ -233,7 +231,7 @@ void dumpCpuToGpuFlowEvents(
       startElement["tid"] = details::getCpuLaneId(launchEvent->threadId);
       startElement["ts"] =
           static_cast<double>(launchEvent->startTimeNs - minTimeStamp) / 1000.0;
-      startElement["id"] = flowId;
+      startElement["id"] = event.launchEventId;
       startElement["bp"] = "e";
       object["traceEvents"].push_back(std::move(startElement));
 
@@ -245,7 +243,7 @@ void dumpCpuToGpuFlowEvents(
       finishElement["tid"] = details::getGpuLaneId(streamId);
       finishElement["ts"] =
           static_cast<double>(event.startTimeNs - minTimeStamp) / 1000.0;
-      finishElement["id"] = flowId;
+      finishElement["id"] = event.launchEventId;
       finishElement["bp"] = "e";
       object["traceEvents"].push_back(std::move(finishElement));
       prevLaunchEventId = event.launchEventId;

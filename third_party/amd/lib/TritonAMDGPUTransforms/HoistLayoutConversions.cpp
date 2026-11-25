@@ -40,8 +40,9 @@ static void hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp) {
 } // anonymous namespace
 
 struct TritonAMDGPUHoistLayoutConversionsPass
-    : impl::TritonAMDGPUHoistLayoutConversionsBase<
+    : public impl::TritonAMDGPUHoistLayoutConversionsBase<
           TritonAMDGPUHoistLayoutConversionsPass> {
+
   void runOnOperation() override {
     tt::FuncOp funcOp = getOperation();
 

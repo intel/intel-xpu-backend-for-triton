@@ -190,7 +190,9 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 }
 
 Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
-  return NVVM::GlobalTimerOp::create(rewriter, loc, i64_ty);
+  return LLVM::createLLVMIntrinsicCallOp(
+             rewriter, loc, "llvm.nvvm.read.ptx.sreg.globaltimer", i64_ty, {})
+      .getResult(0);
 }
 
 StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
