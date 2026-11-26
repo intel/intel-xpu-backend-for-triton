@@ -384,7 +384,7 @@ tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_at
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn[8-q_dtype1-2048-50.0-dtype0-256-16-256-num_heads2-seq_lens0]
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn[8-q_dtype1-2048-50.0-dtype0-256-16-256-num_heads2-seq_lens1]
 
-# Reference moe_sum kernel requires contiguous input and output (slice/transpose inputs unsupported): https://github.com/intel/intel-xpu-backend-for-triton/issues/7455
+# moe_sum produces incorrect results for non-contiguous input #7455 https://github.com/intel/intel-xpu-backend-for-triton/issues/7455
 tests/kernels/moe/test_moe.py::test_moe_sum[transpose-dtype0-128-2-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[transpose-dtype0-128-2-33]
 tests/kernels/moe/test_moe.py::test_moe_sum[transpose-dtype0-128-2-222]
