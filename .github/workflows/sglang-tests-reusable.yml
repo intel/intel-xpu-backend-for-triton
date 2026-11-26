@@ -89,6 +89,7 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           lts: ${{ inputs.runner_label == 'lts' }}
+          upload_artifact: pytorch-sglang-${{ inputs.python_version }}-${{ inputs.runner_label || 'default' }}
 
       - name: Build Triton wheel
         run: |
@@ -231,6 +232,7 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           lts: ${{ inputs.runner_label == 'lts' }}
+          download_artifact: pytorch-sglang-${{ inputs.python_version }}-${{ inputs.runner_label || 'default' }}
 
       # sglang imports torchvision.io at module level and install-sglang.sh strips
       # torch* from its pyproject, so it has to be installed here, from the PyTorch pin.
