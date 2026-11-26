@@ -217,6 +217,8 @@ runs:
         if-no-files-found: error
         # A wheel is already compressed
         compression-level: 0
+        # Only jobs of the same run use it; 7 days still covers re-runs
+        retention-days: 7
 
     # A tree from download_artifact has no submodules and no build directory, keep it out of the cache
     - name: Save PyTorch to a cache
