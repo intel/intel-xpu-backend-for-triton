@@ -1469,8 +1469,11 @@ struct TritonSubGroupBitcastShuffleLowering
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     if (mod->hasAttr(intel::TritonIntelGPUDialect::
                          getSupportSubgroupBitcastShuffleAttrName())) {
-      rewriter.replaceOp(op, createSPIRVBuiltin(op, rewriter));
-      return success();
+      if (unsigned numChunks = getNumSPIRVChunks(op.getValue().getType(),
+                                                 op.getResult().getType())) {
+        rewriter.replaceOp(op, createSPIRVBuiltin(op, numChunks, rewriter));
+        return success();
+      }
     }
 
     Type inputType = op.getValue().getType();
@@ -1494,14 +1497,64 @@ private:
     return type.getNumElements() == 1 ? type.getElementType() : Type(type);
   }
 
+  static constexpr unsigned maxSPIRVVectorSize = 16;
+
+  // The op reinterprets the sub-group's registers, so each wider element only
+  // reads (or writes) its own group of narrower elements. Both vectors can
+  // therefore be split into equal consecutive chunks. Returns the number of
+  // chunks that fit the builtin, or 0 if it cannot express the op.
+  static unsigned getNumSPIRVChunks(VectorType inputType,
+                                    VectorType resultType) {
+    auto hasSupportedWidth = [](VectorType type) {
+      return llvm::is_contained({8u, 16u, 32u, 64u},
+                                type.getElementTypeBitWidth());
+    };
+    if (!hasSupportedWidth(inputType) || !hasSupportedWidth(resultType))
+      return 0;
+    int64_t numIn = inputType.getNumElements();
+    int64_t numRes = resultType.getNumElements();
+    int64_t numChunks =
+        llvm::divideCeil(std::max(numIn, numRes), maxSPIRVVectorSize);
+    if (numIn % numChunks || numRes % numChunks ||
+        !llvm::isPowerOf2_64(numIn / numChunks) ||
+        !llvm::isPowerOf2_64(numRes / numChunks))
+      return 0;
+    return numChunks;
+  }
+
   static Value createSPIRVBuiltin(TritonGEN::SubGroupBitcastShuffleOp op,
+                                  unsigned numChunks,
                                   ConversionPatternRewriter &rewriter) {
-    auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+    Location loc = op.getLoc();
+    Value input = op.getValue();
     VectorType resultType = op.getResult().getType();
-    Type spvInputType = getSPIRVType(op.getValue().getType());
+    if (numChunks == 1)
+      return createSPIRVCall(loc, input, resultType, rewriter);
+
+    int32_t inChunkSize = op.getValue().getType().getNumElements() / numChunks;
+    auto resChunkType = VectorType::get(resultType.getNumElements() / numChunks,
+                                        resultType.getElementType());
+    SmallVector<Value> resultElems;
+    for (unsigned i = 0; i < numChunks; ++i) {
+      auto mask = llvm::to_vector(
+          llvm::seq<int32_t>(i * inChunkSize, (i + 1) * inChunkSize));
+      Value chunk =
+          LLVM::ShuffleVectorOp::create(rewriter, loc, input, input, mask);
+      llvm::append_range(
+          resultElems,
+          unpackLLVector(loc,
+                         createSPIRVCall(loc, chunk, resChunkType, rewriter),
+                         rewriter));
+    }
+    return packLLVector(loc, resultElems, rewriter);
+  }
+
+  static Value createSPIRVCall(Location loc, Value input, VectorType resultType,
+                               ConversionPatternRewriter &rewriter) {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Type spvInputType = getSPIRVType(cast<VectorType>(input.getType()));
     Type spvResultType = getSPIRVType(resultType);
 
-    Value input = op.getValue();
     if (spvInputType != input.getType())
       input = b.bitcast(input, spvInputType);
 
