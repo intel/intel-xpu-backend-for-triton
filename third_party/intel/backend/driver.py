@@ -444,6 +444,22 @@ def has_spirv_2d_block_io(ver: str | None) -> bool:
     return int(m.group(3)) >= 39122
 
 
+def has_dp4a_operand_order_fix(ver: str | None) -> bool:
+    """
+    Whether this driver's IGC folds integer mul/add chains into `dp4a` without mis-pairing the operands (#7854).
+
+    The fix (intel/intel-graphics-compiler@53cab49e2) is first in IGC 2.42.6, built into compute-runtime 26.40.40196;
+    26.35.39758 is built with IGC 2.41.5. `ver` is read as in `has_spirv_2d_block_io`. A missing or unparsable version
+    keeps the explicit dp4a lowering, which is correct with every IGC.
+    """
+    if not ver:
+        return False
+    m = _VERSION_PATTERN.match(ver)
+    if not m:
+        return False
+    return int(m.group(3)) >= 40196
+
+
 @lru_cache
 def get_ocloc_version() -> str | None:
     """The version of the `ocloc` on PATH, e.g. `26.18.38308.1`, or None if it can't be determined."""

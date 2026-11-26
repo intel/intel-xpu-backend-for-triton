@@ -17,7 +17,7 @@ from triton.backends.intel import extension_utils
 from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
 from triton.backends.compiler import GPUTarget
 from triton.backends.intel import compiler as intel_compiler
-from triton.backends.intel.driver import find_sycl_icpx, has_spirv_2d_block_io
+from triton.backends.intel.driver import find_sycl_icpx, has_dp4a_operand_order_fix, has_spirv_2d_block_io
 from triton.backends.intel.errors import IntelGPUError
 from triton.runtime.errors import OutOfResources
 
@@ -282,6 +282,22 @@ def test_has_spirv_2d_block_io(version, expected):
     assert has_spirv_2d_block_io(version) is expected
 
 
+@pytest.mark.parametrize("version, expected", [
+    ("1.17.39758+10", False),  # compute-runtime 26.35.39758.10 (IGC 2.41.5), mis-pairs dp4a operands (#7854)
+    ("1.17.40195+99", False),
+    ("1.17.40196+8", True),  # 26.40.40196.8 (IGC 2.42.6), the first release with the IGC fix
+    ("1.17.40500+1", True),
+    ("26.35.39758.10", False),  # an `ocloc` version
+    ("26.40.40196.8", True),
+    ("1.6.35096+9", False),  # the LTS threshold release
+    ("garbage", False),  # unknown: keep the explicit dp4a lowering, correct with every IGC
+    ("", False),
+    (None, False),
+])
+def test_has_dp4a_operand_order_fix(version, expected):
+    assert has_dp4a_operand_order_fix(version) is expected
+
+
 def _target_with_driver_version(version):
     target = driver.active.get_current_target()
     return GPUTarget(target.backend, {**target.arch, "driver_version": version}, target.warp_size)
@@ -310,6 +326,36 @@ def test_2d_block_io_lowering_follows_driver_version(device, fresh_knobs, versio
         assert genisa_loads > 0 and spirv_loads == 0
     else:
         assert spirv_loads > 0 and genisa_loads == 0
+
+
+@pytest.mark.parametrize("version, uses_dp4a", [("1.17.39758+10", True),  # compute-runtime 26.35.39758.10 (IGC 2.41.5)
+                                                ("1.17.40196+8", False),  # 26.40.40196.8 (IGC 2.42.6)
+                                                ])
+def test_int8_fma_dot_lowering_follows_driver_version(device, fresh_knobs, version, uses_dp4a):
+    """An INT8 dot on the FMA path is lowered to dp4a where IGC predates 2.42 (#7854)."""
+    fresh_knobs.intel.gen_native_code = False
+
+    @triton.jit
+    def _kernel(a_ptr, b_ptr, c_ptr, x_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        idx = offs[:, None] * BLOCK + offs[None, :]
+        a = tl.load(a_ptr + idx)
+        b = tl.load(b_ptr + idx)
+        tl.store(c_ptr + idx, tl.dot(a, b, acc=tl.load(c_ptr + idx), out_dtype=tl.int32))
+        # An IEEE f32 dot cannot use DPAS, so every dot of the function takes the FMA path.
+        x = tl.load(x_ptr + idx)
+        tl.store(x_ptr + idx, tl.dot(x, x, input_precision="ieee"))
+
+    src = triton.compiler.ASTSource(
+        _kernel, signature={"a_ptr": "*i8", "b_ptr": "*i8", "c_ptr": "*i32", "x_ptr": "*fp32", "BLOCK": "constexpr"},
+        constexprs={"BLOCK": 32})
+    compiled = triton.compile(src, target=_target_with_driver_version(version))
+    assert "#ttig.dpas" not in compiled.asm["ttgir"]
+    dp4a = compiled.asm["llir"].count("GenISA.dp4a")
+    if uses_dp4a:
+        assert dp4a > 0
+    else:
+        assert dp4a == 0
 
 
 @pytest.mark.parametrize("native, ocloc_version, driver_version, expected", [

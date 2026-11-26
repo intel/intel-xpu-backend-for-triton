@@ -159,6 +159,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.use_genisa_2d_block_io";
     }
 
+    /// Get the name of the attribute that lowers integer FMA dots to explicit
+    /// dp4a instructions (set for IGC < 2.42, issue #7854).
+    static constexpr llvm::StringRef getUseDp4aIntegerFMAAttrName() {
+      return "ttig.use_dp4a_integer_fma";
+    }
+
     /// Name of the module attribute that lets narrow 2D block-store rows be
     /// written back through L1. Set where the driver's default L1 store policy
     /// is write-bypass (BMG) unless TRITON_INTEL_DISABLE_STORE_L1_WRITE_BACK

@@ -1,7 +1,8 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm
 from .native import intel
-from .driver import compile_module_from_src, get_ocloc_version, has_spirv_2d_block_io, is_lts
+from .driver import (compile_module_from_src, get_ocloc_version, has_dp4a_operand_order_fix, has_spirv_2d_block_io,
+                     is_lts)
 from .track import track
 from .errors import IntelGPUError, WorkGroupSizeOutOfResources
 from .extension_utils import query_device_extensions
@@ -75,6 +76,8 @@ class XPUOptions:
     is_lts: bool = True
     # Whether the SPIR-V 2D block I/O builtins can be used (#8858); see `has_spirv_2d_block_io`.
     has_spirv_2d_block_io: bool = True
+    # Whether IGC folds integer mul/add chains into dp4a correctly (#7854); see `has_dp4a_operand_order_fix`.
+    has_dp4a_operand_order_fix: bool = True
     # Whether these SPIR-V extensions are allowed; overwritten with the
     # ground-truth probe result in `parse_options`.
     allow_long_vector: bool = True
@@ -417,6 +420,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Like the probes above: `ocloc` consumes the SPIR-V of an AOT compile, the driver that of a JIT one.
         igc_version = (get_ocloc_version() if native else None) or self.target.arch.get("driver_version")
         options.has_spirv_2d_block_io = has_spirv_2d_block_io(igc_version)
+        options.has_dp4a_operand_order_fix = has_dp4a_operand_order_fix(igc_version)
         return options
 
     @staticmethod
@@ -720,6 +724,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.set_is_lts(mod)
         # Set for every input, including Gluon and `.ttgir`, which bypass `make_ttgir`.
         intel.set_use_genisa_2d_block_io(mod, not options.has_spirv_2d_block_io)
+        intel.set_use_dp4a_integer_fma(mod, not options.has_dp4a_operand_order_fix)
 
         # `getGlobalTimer` counts core clock cycles and needs the rate to report
         # nanoseconds.

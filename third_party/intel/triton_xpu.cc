@@ -441,6 +441,17 @@ void init_triton_intel(py::module_ &m) {
       mod->setAttr(name, mlir::Builder(mod.getContext()).getUnitAttr());
   });
 
+  // Also clears the attribute, so a stale one is never kept.
+  m.def("set_use_dp4a_integer_fma", [](mlir::ModuleOp &mod, bool useDp4a) {
+    using namespace mlir::triton::gpu::intel;
+    constexpr llvm::StringRef name =
+        TritonIntelGPUDialect::getUseDp4aIntegerFMAAttrName();
+    if (!useDp4a)
+      mod->removeAttr(name);
+    else if (!mod->hasAttr(name))
+      mod->setAttr(name, mlir::Builder(mod.getContext()).getUnitAttr());
+  });
+
   m.def("set_is_lts", [](mlir::ModuleOp &mod) {
     using namespace mlir::triton::gpu::intel;
     if (!mod->hasAttr(TritonIntelGPUDialect::getIsLTSAttrName())) {
