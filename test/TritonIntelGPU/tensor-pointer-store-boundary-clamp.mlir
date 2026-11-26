@@ -15,7 +15,7 @@
 #c1 = #ttg.slice<{dim = 0, parent = #b1}>
 module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io, ttig.support_predicated_io} {
   // COM: 8448x504 (#8813): W = clamp(504 - colBase, 0, 128) * 2, s = max(64 - W, 0).
-  // CHECK-LABEL: llvm.func spir_kernelcc @s1(
+  // CHECK-LABEL: llvm.func spir_kernelcc @col_clamp(
   // CHECK: %[[CB:.*]] = llvm.mul %arg3, %{{.*}} : i32
   // CHECK: %[[PITCH:.*]] = llvm.mlir.constant(1008 : i32) : i32
   // CHECK: %[[Z:.*]] = llvm.mlir.constant(0 : i64) : i64
@@ -46,7 +46,7 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   // CHECK-NEXT: triton_gen.2Dblockstore %[[A]], %[[BW]], %{{.*}}, %[[PITCH]], %[[XU]], %[[Y]], %{{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1
   // CHECK-COUNT-3: triton_gen.2Dblockstore {{.*}}tile_height = 8,
   // CHECK-NOT: triton_gen.{{2Dblockstore|predicated_store}}
-  // GEN-LABEL: llvm.func spir_kernelcc @s1(
+  // GEN-LABEL: llvm.func spir_kernelcc @col_clamp(
   // GEN: %[[S:.*]] = llvm.intr.smax(%{{.*}}) : (i32, i32) -> i32
   // GEN: %[[SE:.*]] = llvm.udiv %[[S]], %{{.*}} : i32
   // GEN: %[[X:.*]] = llvm.add %{{.*}}, %[[SE]] : i32
@@ -61,14 +61,14 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   // GENISA: %[[WM1:.*]] = llvm.sub %[[W2]], %{{.*}} : i32
   // GENISA: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8i16(%{{[0-9]+}}, %[[WM1]], %{{[0-9]+}}, %{{[0-9]+}}, %[[X2]],
   // COM: With wide rows, the relaxed tile folds even though the masked one does not.
-  // WIDE-LABEL: llvm.func spir_kernelcc @s1(
+  // WIDE-LABEL: llvm.func spir_kernelcc @col_clamp(
   // WIDE: %[[UN:.*]] = llvm.intr.umin(
   // WIDE-NEXT: %[[BW:.*]] = llvm.add %[[UN]], %{{.*}} : i32
   // WIDE: triton_gen.2Dblockstore %{{.*}}, %[[BW]], {{.*}}tile_width = 32, tile_height = 8, {{.*}}{triton_gen.genisa_row_layout}
   // WIDE: triton_gen.2Dblockstore {{.*}}tile_width = 32, tile_height = 8, {{.*}}{triton_gen.genisa_row_layout}
   // WIDE-NOT: triton_gen.{{2Dblockstore|predicated_store}}
-  // WIDE-LABEL: llvm.func spir_kernelcc @s2(
-  tt.func public @s1(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf16, #mma>, %pid_m: i32, %pid_n: i32) {
+  // WIDE-LABEL: llvm.func spir_kernelcc @row_and_col_clamp_row_constancy_2(
+  tt.func public @col_clamp(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf16, #mma>, %pid_m: i32, %pid_n: i32) {
     %cst = arith.constant dense<504> : tensor<64x1xi32, #mma>
     %cst_0 = arith.constant dense<504> : tensor<1x128xi32, #mma>
     %cst_1 = arith.constant dense<8448> : tensor<64x1xi32, #mma>
@@ -100,13 +100,13 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   }
 
   // COM: 8450x504: row constancy 2, below the unmasked tile's 8 rows, relaxes the row as well.
-  // CHECK-LABEL: llvm.func spir_kernelcc @s2(
-  // GEN-LABEL: llvm.func spir_kernelcc @s2(
+  // CHECK-LABEL: llvm.func spir_kernelcc @row_and_col_clamp_row_constancy_2(
+  // GEN-LABEL: llvm.func spir_kernelcc @row_and_col_clamp_row_constancy_2(
   // CHECK: llvm.mlir.constant(8450 : i64) : i64
   // CHECK: llvm.intr.umin
   // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}}tile_height = 8,
   // CHECK-NOT: triton_gen.{{2Dblockstore|predicated_store}}
-  tt.func @s2(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #mma>) {
+  tt.func @row_and_col_clamp_row_constancy_2(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #mma>) {
     %ld = arith.constant dense<504> : tensor<64x1xi32, #mma>
     %mb = arith.constant dense<8450> : tensor<64x1xi32, #mma>
     %nb = arith.constant dense<504> : tensor<1x128xi32, #mma>
@@ -130,10 +130,10 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   }
 
   // COM: An f32 width granule is one element, so the odd bound 121 still clamps.
-  // CHECK-LABEL: llvm.func spir_kernelcc @s3(
+  // CHECK-LABEL: llvm.func spir_kernelcc @col_clamp_f32_odd_bound(
   // CHECK: llvm.intr.umin
   // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}}elem_size_in_bits = 32,
-  tt.func @s3(%p: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf32, #mma>) {
+  tt.func @col_clamp_f32_odd_bound(%p: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf32, #mma>) {
     %ld = arith.constant dense<504> : tensor<64x1xi32, #mma>
     %nb = arith.constant dense<121> : tensor<1x128xi32, #mma>
     %ar = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #r>
@@ -153,10 +153,10 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   }
 
   // COM: A blocked layout whose unmasked tile is valid clamps as well.
-  // CHECK-LABEL: llvm.func spir_kernelcc @s4(
+  // CHECK-LABEL: llvm.func spir_kernelcc @col_clamp_blocked(
   // CHECK: llvm.intr.umin
   // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}}tile_height = 8,
-  tt.func @s4(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #ba>) {
+  tt.func @col_clamp_blocked(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #ba>) {
     %ld = arith.constant dense<504> : tensor<64x1xi32, #ba>
     %nb = arith.constant dense<120> : tensor<1x128xi32, #ba>
     %ar = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #ba}>>
@@ -176,11 +176,11 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   }
 
   // COM: f16 packed into 64-bit elements cannot shift by a 2-element granule, only by whole packed elements.
-  // CHECK-LABEL: llvm.func spir_kernelcc @n4(
+  // CHECK-LABEL: llvm.func spir_kernelcc @no_clamp_packed_64bit(
   // CHECK-NOT: triton_gen.2Dblockstore
   // CHECK-COUNT-8: triton_gen.predicated_store
   // CHECK-NOT: triton_gen.2Dblockstore
-  tt.func @n4(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #bq>) {
+  tt.func @no_clamp_packed_64bit(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #bq>) {
     %ld = arith.constant dense<504> : tensor<64x1xi32, #bq>
     %nb = arith.constant dense<120> : tensor<1x128xi32, #bq>
     %ar = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #bq}>>
@@ -200,11 +200,11 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   }
 
   // COM: A row constancy of 3 still rejects the tile once the column is relaxed.
-  // CHECK-LABEL: llvm.func spir_kernelcc @n7(
+  // CHECK-LABEL: llvm.func spir_kernelcc @no_clamp_row_constancy_3(
   // CHECK-NOT: triton_gen.2Dblockstore
   // CHECK-COUNT-32: triton_gen.predicated_store
   // CHECK-NOT: triton_gen.2Dblockstore
-  tt.func @n7(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #mma>) {
+  tt.func @no_clamp_row_constancy_3(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #mma>) {
     %ld = arith.constant dense<504> : tensor<64x1xi32, #mma>
     %nb = arith.constant dense<504> : tensor<1x128xi32, #mma>
     %ar = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #r>
@@ -223,14 +223,14 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
     tt.return
   }
 
-  // CHECK-LABEL: llvm.func spir_kernelcc @c1g1(
+  // CHECK-LABEL: llvm.func spir_kernelcc @clamp_cache_modifier_no_clamp_hint(
   // COM: The cg store: a cache modifier is only a hint, so it clamps like any other store.
   // CHECK-NOT: triton_gen.predicated_store
   // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}}tile_height = 8, v_blocks = 1, cache_control = Default}
   // CHECK-NOT: triton_gen.2Dblockstore
   // COM: The hinted store: a non-power-of-two column constancy at or above the tile width is not relaxed.
   // CHECK-COUNT-32: triton_gen.predicated_store {{.*}}cache_control = Default
-  tt.func @c1g1(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #mma>) {
+  tt.func @clamp_cache_modifier_no_clamp_hint(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #mma>) {
     %ld = arith.constant dense<504> : tensor<64x1xi32, #mma>
     %nb = arith.constant dense<504> : tensor<1x128xi32, #mma>
     %ar = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #r>
@@ -252,12 +252,12 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   }
 
   // COM: A second store of the same mask with pitch 240, below its 256 row bytes, lowers as it would alone.
-  // CHECK-LABEL: llvm.func spir_kernelcc @r2(
+  // CHECK-LABEL: llvm.func spir_kernelcc @clamp_pitch_per_store(
   // CHECK-COUNT-4: triton_gen.2Dblockstore
   // CHECK-NOT: triton_gen.2Dblockstore
   // CHECK-COUNT-32: triton_gen.predicated_store
   // CHECK-NOT: triton_gen.2Dblockstore
-  tt.func @r2(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #mma>) {
+  tt.func @clamp_pitch_per_store(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #mma>) {
     %ld = arith.constant dense<504> : tensor<64x1xi32, #mma>
     %ld2 = arith.constant dense<120> : tensor<64x1xi32, #mma>
     %nb = arith.constant dense<120> : tensor<1x128xi32, #mma>
@@ -283,8 +283,8 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   }
 
   // COM: 8449x504: row constancy 1 relaxes the row as well, H = clamp(8449 - rowBase, 0, 64).
-  // COM: Each message gets base_height = max(H - rowOffset, 1), next to @s1's column clamp.
-  // CHECK-LABEL: llvm.func spir_kernelcc @s5(
+  // COM: Each message gets base_height = max(H - rowOffset, 1), next to @col_clamp's column clamp.
+  // CHECK-LABEL: llvm.func spir_kernelcc @row_and_col_clamp(
   // CHECK: %[[RB:.*]] = llvm.mul %arg2, %{{.*}} : i32
   // CHECK: %[[PITCH:.*]] = llvm.mlir.constant(1008 : i32) : i32
   // CHECK: %[[K:.*]] = llvm.mlir.constant(64 : i32) : i32
@@ -307,7 +307,7 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   // CHECK: triton_gen.2Dblockstore %{{.*}}, %[[BW]], %[[BH]], %[[PITCH]], %{{.*}}, %[[Y]], %{{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1
   // CHECK-COUNT-3: triton_gen.2Dblockstore {{.*}}tile_height = 8,
   // CHECK-NOT: triton_gen.{{2Dblockstore|predicated_store}}
-  tt.func public @s5(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf16, #mma>, %pid_m: i32, %pid_n: i32) {
+  tt.func public @row_and_col_clamp(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf16, #mma>, %pid_m: i32, %pid_n: i32) {
     %cst = arith.constant dense<504> : tensor<64x1xi32, #mma>
     %cst_0 = arith.constant dense<504> : tensor<1x128xi32, #mma>
     %cst_1 = arith.constant dense<8449> : tensor<64x1xi32, #mma>
@@ -339,7 +339,7 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   }
 
   // COM: 8449x512: a one-row tile that is already valid still takes the row clamp at row constancy 1.
-  // CHECK-LABEL: llvm.func spir_kernelcc @s6(
+  // CHECK-LABEL: llvm.func spir_kernelcc @row_clamp_valid_one_row_tile(
   // CHECK: llvm.mlir.constant(8449 : i64) : i64
   // CHECK: %[[H:.*]] = llvm.trunc %{{.*}} : i64 to i32
   // CHECK: %[[HR:.*]] = llvm.sub %[[H]], %{{.*}} : i32
@@ -347,7 +347,7 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   // CHECK: triton_gen.2Dblockstore %{{.*}}, %{{.*}}, %[[BH]], {{.*}}tile_height = 8,
   // CHECK-COUNT-3: triton_gen.2Dblockstore {{.*}}tile_height = 8,
   // CHECK-NOT: triton_gen.{{2Dblockstore|predicated_store}}
-  tt.func public @s6(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf16, #mma>, %pid_m: i32, %pid_n: i32) {
+  tt.func public @row_clamp_valid_one_row_tile(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf16, #mma>, %pid_m: i32, %pid_n: i32) {
     %cst = arith.constant dense<512> : tensor<64x1xi32, #mma>
     %cst_0 = arith.constant dense<512> : tensor<1x128xi32, #mma>
     %cst_1 = arith.constant dense<8449> : tensor<64x1xi32, #mma>
@@ -379,12 +379,12 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   }
 
   // COM: 8450x512: a two-row tile that is already valid still takes the row clamp at row constancy 2.
-  // CHECK-LABEL: llvm.func spir_kernelcc @s7(
+  // CHECK-LABEL: llvm.func spir_kernelcc @row_clamp_valid_two_row_tile(
   // CHECK: llvm.mlir.constant(8450 : i64) : i64
   // CHECK-NOT: tile_height = 2,
   // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}}tile_height = 8,
   // CHECK-NOT: triton_gen.{{2Dblockstore|predicated_store}}
-  tt.func public @s7(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf16, #mma>, %pid_m: i32, %pid_n: i32) {
+  tt.func public @row_clamp_valid_two_row_tile(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf16, #mma>, %pid_m: i32, %pid_n: i32) {
     %cst = arith.constant dense<512> : tensor<64x1xi32, #mma>
     %cst_0 = arith.constant dense<512> : tensor<1x128xi32, #mma>
     %cst_1 = arith.constant dense<8450> : tensor<64x1xi32, #mma>
@@ -416,10 +416,10 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
   }
 
   // COM: 8449x512: a layout that caps the tile at one row keeps one-row tiles and gets no row clamp.
-  // CHECK-LABEL: llvm.func spir_kernelcc @h1(
+  // CHECK-LABEL: llvm.func spir_kernelcc @one_row_layout_no_row_clamp(
   // CHECK-NOT: llvm.intr.smax
   // CHECK-COUNT-32: triton_gen.2Dblockstore {{.*}}tile_height = 1,
-  tt.func public @h1(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf16, #b1>, %pid_m: i32, %pid_n: i32) {
+  tt.func public @one_row_layout_no_row_clamp(%c_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf16, #b1>, %pid_m: i32, %pid_n: i32) {
     %cst = arith.constant dense<1024> : tensor<64x1xi32, #b1>
     %cst_0 = arith.constant dense<512> : tensor<1x128xi32, #b1>
     %cst_1 = arith.constant dense<8449> : tensor<64x1xi32, #b1>
@@ -447,6 +447,93 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
     %4 = tt.broadcast %mask_16 : tensor<1x128xi32, #b1> -> tensor<64x128xi32, #b1>
     %5 = tt.addptr %3, %4 : tensor<64x128x!tt.ptr<f16>, #b1>, tensor<64x128xi32, #b1>
     tt.store %5, %val, %mask_20 {ttig.block_io = "row_major"} : tensor<64x128x!tt.ptr<f16>, #b1>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+#r = #ttg.slice<{dim = 1, parent = #mma}>
+#c = #ttg.slice<{dim = 0, parent = #mma}>
+module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io, ttig.support_predicated_io} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @runtime_bounds(
+  // COM: Argument bounds clamp the row and column; f32, as the lowering cannot prove an argument divisible.
+  // CHECK: %[[RB:.*]] = llvm.mul %arg2, %{{.*}} : i32
+  // CHECK-NEXT: %[[CB:.*]] = llvm.mul %arg3, %{{.*}} : i32
+  // CHECK: %[[PITCH:.*]] = llvm.mlir.constant(2016 : i32) : i32
+  // CHECK-NEXT: %[[ZW:.*]] = llvm.mlir.constant(0 : i64) : i64
+  // CHECK-NEXT: %[[EW:.*]] = llvm.mlir.constant(128 : i64) : i64
+  // CHECK-NEXT: %[[NB:.*]] = llvm.sext %arg5 : i32 to i64
+  // CHECK-NEXT: %[[CB64:.*]] = llvm.sext %[[CB]] : i32 to i64
+  // CHECK-NEXT: %[[DW:.*]] = llvm.sub %[[NB]], %[[CB64]] : i64
+  // CHECK-NEXT: %[[MXW:.*]] = llvm.intr.smax(%[[DW]], %[[ZW]]) : (i64, i64) -> i64
+  // CHECK-NEXT: %[[MNW:.*]] = llvm.intr.smin(%[[MXW]], %[[EW]]) : (i64, i64) -> i64
+  // CHECK-NEXT: %[[T:.*]] = llvm.trunc %[[MNW]] : i64 to i32
+  // CHECK-NEXT: %[[EB:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK-NEXT: %[[W:.*]] = llvm.mul %[[T]], %[[EB]] : i32
+  // CHECK: %[[K:.*]] = llvm.mlir.constant(64 : i32) : i32
+  // CHECK-NEXT: %[[NS:.*]] = llvm.sub %[[K]], %[[W]] : i32
+  // CHECK: %[[S:.*]] = llvm.intr.smax(%[[NS]], %{{.*}}) : (i32, i32) -> i32
+  // CHECK: %[[ZH:.*]] = llvm.mlir.constant(0 : i64) : i64
+  // CHECK-NEXT: %[[EH:.*]] = llvm.mlir.constant(64 : i64) : i64
+  // CHECK-NEXT: %[[MB:.*]] = llvm.sext %arg4 : i32 to i64
+  // CHECK-NEXT: %[[RB64:.*]] = llvm.sext %[[RB]] : i32 to i64
+  // CHECK-NEXT: %[[DH:.*]] = llvm.sub %[[MB]], %[[RB64]] : i64
+  // CHECK-NEXT: %[[MXH:.*]] = llvm.intr.smax(%[[DH]], %[[ZH]]) : (i64, i64) -> i64
+  // CHECK-NEXT: %[[MNH:.*]] = llvm.intr.smin(%[[MXH]], %[[EH]]) : (i64, i64) -> i64
+  // CHECK-NEXT: %[[H:.*]] = llvm.trunc %[[MNH]] : i64 to i32
+  // CHECK: %[[UN:.*]] = llvm.intr.umin(%{{.*}}, %[[W]]) : (i32, i32) -> i32
+  // CHECK-NEXT: %[[BW:.*]] = llvm.add %[[UN]], %[[S]] : i32
+  // CHECK-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG: %[[HR:.*]] = llvm.sub %[[H]], %{{.*}} : i32
+  // CHECK: %[[BH:.*]] = llvm.intr.smax(%[[HR]], %[[ONE]]) : (i32, i32) -> i32
+  // CHECK: %[[Y:.*]] = llvm.select %{{.*}}, %{{.*}}, %[[BH]] : i1, i32
+  // CHECK: triton_gen.2Dblockstore %{{.*}}, %[[BW]], %[[BH]], %[[PITCH]], %{{.*}}, %[[Y]], %{{.*}} {elem_size_in_bits = 32, tile_width = 16, tile_height = 8, v_blocks = 1
+  // CHECK-COUNT-3: triton_gen.2Dblockstore {{.*}}tile_height = 8,
+  // CHECK-NOT: triton_gen.{{2Dblockstore|predicated_store}}
+  // COM: A row-only argument bound clamps the row alone and still relaxes the tile to 8 rows.
+  // CHECK: %[[MB2:.*]] = llvm.sext %arg4 : i32 to i64
+  // CHECK-NEXT: %[[RB2:.*]] = llvm.sext %[[RB]] : i32 to i64
+  // CHECK-NEXT: %[[DH2:.*]] = llvm.sub %[[MB2]], %[[RB2]] : i64
+  // CHECK-NEXT: %[[MX2:.*]] = llvm.intr.smax(%[[DH2]], %{{.*}}) : (i64, i64) -> i64
+  // CHECK-NEXT: %[[MN2:.*]] = llvm.intr.smin(%[[MX2]], %{{.*}}) : (i64, i64) -> i64
+  // CHECK-NEXT: %[[RH2:.*]] = llvm.trunc %[[MN2]] : i64 to i32
+  // CHECK: %[[HR2:.*]] = llvm.sub %[[RH2]], %{{.*}} : i32
+  // CHECK: %[[BH2:.*]] = llvm.intr.smax(%[[HR2]], %{{.*}}) : (i32, i32) -> i32
+  // CHECK: triton_gen.2Dblockstore %{{[^,]*}}, %{{[^,]*}}, %[[BH2]], {{.*}}tile_height = 8,
+  // CHECK-COUNT-3: triton_gen.2Dblockstore {{.*}}tile_height = 8,
+  // CHECK-NOT: triton_gen.{{2Dblockstore|predicated_store}}
+  // CHECK: llvm.return
+  tt.func public @runtime_bounds(%c_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %val: tensor<64x128xf32, #mma>, %pid_m: i32, %pid_n: i32, %M: i32, %N: i32) {
+    %ld = arith.constant dense<504> : tensor<64x1xi32, #mma>
+    %c128_i32 = arith.constant 128 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %rb = arith.muli %pid_m, %c64_i32 : i32
+    %cb = arith.muli %pid_n, %c128_i32 : i32
+    %ar = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #r>
+    %rs = tt.splat %rb : i32 -> tensor<64xi32, #r>
+    %rows = arith.addi %rs, %ar : tensor<64xi32, #r>
+    %ac = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #c>
+    %cs = tt.splat %cb : i32 -> tensor<128xi32, #c>
+    %cols = arith.addi %cs, %ac : tensor<128xi32, #c>
+    %er = tt.expand_dims %rows {axis = 1 : i32} : tensor<64xi32, #r> -> tensor<64x1xi32, #mma>
+    %ec = tt.expand_dims %cols {axis = 0 : i32} : tensor<128xi32, #c> -> tensor<1x128xi32, #mma>
+    %mb = tt.splat %M : i32 -> tensor<64x1xi32, #mma>
+    %nb = tt.splat %N : i32 -> tensor<1x128xi32, #mma>
+    %mr = arith.cmpi slt, %er, %mb : tensor<64x1xi32, #mma>
+    %mc = arith.cmpi slt, %ec, %nb : tensor<1x128xi32, #mma>
+    %br = tt.broadcast %mr : tensor<64x1xi1, #mma> -> tensor<64x128xi1, #mma>
+    %bc = tt.broadcast %mc : tensor<1x128xi1, #mma> -> tensor<64x128xi1, #mma>
+    %m = arith.andi %br, %bc : tensor<64x128xi1, #mma>
+    %o = arith.muli %er, %ld : tensor<64x1xi32, #mma>
+    %b = tt.splat %c_ptr : !tt.ptr<f32> -> tensor<64x1x!tt.ptr<f32>, #mma>
+    %pr = tt.addptr %b, %o : tensor<64x1x!tt.ptr<f32>, #mma>, tensor<64x1xi32, #mma>
+    %pb = tt.broadcast %pr : tensor<64x1x!tt.ptr<f32>, #mma> -> tensor<64x128x!tt.ptr<f32>, #mma>
+    %co = tt.broadcast %ec : tensor<1x128xi32, #mma> -> tensor<64x128xi32, #mma>
+    %ptr = tt.addptr %pb, %co : tensor<64x128x!tt.ptr<f32>, #mma>, tensor<64x128xi32, #mma>
+    tt.store %ptr, %val, %m {ttig.block_io = "row_major"} : tensor<64x128x!tt.ptr<f32>, #mma>
+    tt.store %ptr, %val, %br {ttig.block_io = "row_major"} : tensor<64x128x!tt.ptr<f32>, #mma>
     tt.return
   }
 }

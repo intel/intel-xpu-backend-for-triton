@@ -739,8 +739,7 @@ private:
     if (!ttgi::isBlockPitchSupported(pitchBytes, /*hasRuntimeStride=*/false, 0))
       return false;
     ttgi::StoreBoundaryClamp clamp = ttgi::matchStoreBoundaryClamp(
-        op, contiguousDim, /*pitchDimIsBroadcast=*/stride == 0, pitchBytes,
-        axisInfoAnalysis);
+        op, contiguousDim, pitchBytes, axisInfoAnalysis);
     return dim == contiguousDim ? clamp.col.has_value() : clamp.row.has_value();
   }
 
