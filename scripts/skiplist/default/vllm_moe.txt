@@ -163,7 +163,7 @@ tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-2-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-2-33]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-2-222]
 
-# Reference moe_sum kernel requires contiguous input and output (slice/transpose inputs unsupported): https://github.com/intel/intel-xpu-backend-for-triton/issues/7811
+# Reference moe_sum kernel requires contiguous input and output (slice/transpose inputs unsupported): https://github.com/intel/intel-xpu-backend-for-triton/issues/7455
 tests/kernels/moe/test_moe.py::test_moe_sum[transpose-dtype0-128-6-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[transpose-dtype0-128-6-33]
 tests/kernels/moe/test_moe.py::test_moe_sum[transpose-dtype0-128-6-222]

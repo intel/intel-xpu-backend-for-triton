@@ -101,7 +101,7 @@ tests/kernels/moe/test_moe_layer.py::test_moe_layer[False-allgather_reducescatte
 tests/kernels/moe/test_moe_layer.py::test_moe_layer[False-allgather_reducescatter-2-1-True]
 tests/kernels/moe/test_moe_layer.py::test_moe_layer[True-allgather_reducescatter-2-1-True]
 
-# Reference moe_sum kernel requires contiguous input and output (slice/transpose inputs unsupported): https://github.com/intel/intel-xpu-backend-for-triton/issues/7811
+# Reference moe_sum kernel requires contiguous input and output (slice/transpose inputs unsupported): https://github.com/intel/intel-xpu-backend-for-triton/issues/7455
 tests/kernels/moe/test_moe.py::test_moe_sum[transpose-dtype0-128-6-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[transpose-dtype0-128-6-33]
 tests/kernels/moe/test_moe.py::test_moe_sum[transpose-dtype0-128-6-222]
