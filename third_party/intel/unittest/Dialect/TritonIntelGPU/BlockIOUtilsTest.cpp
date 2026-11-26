@@ -1218,9 +1218,7 @@ protected:
     else
       (*module)->removeAttr(attrName);
     triton::intel::ModuleAxisInfoAnalysis axisInfo(*module);
-    return matchStoreBoundaryClamp(store, s.contiguousDim,
-                                   /*pitchDimIsBroadcast=*/false, pitch,
-                                   axisInfo);
+    return matchStoreBoundaryClamp(store, s.contiguousDim, pitch, axisInfo);
   }
 
   // The dims `matchStore` clamps: "row+col", "row", "col" or "none".
