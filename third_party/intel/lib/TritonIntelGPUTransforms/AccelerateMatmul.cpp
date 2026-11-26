@@ -280,6 +280,22 @@ static bool isDPASDotShape(ArrayRef<int64_t> retShape, int64_t k,
          nSupported;
 }
 
+/// Whether the scales of \p op are what the block scaled DPAS takes: E8M0
+/// (stored as i8 or f8E8M0FNU), one per 32 elements along K. The SPIR-V
+/// extension it lowers to has no other scale format, and the lowering passes
+/// each scale byte to it as an E8M0 exponent, so other scales (e.g. the E4M3
+/// ones of NVFP4, one per 16 elements) must be decomposed instead (#8881).
+static bool hasBlockScaleDPASScales(tt::DotScaledOp op) {
+  auto isE8M0 = [](TypedValue<RankedTensorType> scale) {
+    if (!scale)
+      return true;
+    Type elemTy = scale.getType().getElementType();
+    return elemTy.isInteger(8) || isa<Float8E8M0FNUType>(elemTy);
+  };
+  return isE8M0(op.getAScale()) && isE8M0(op.getBScale()) &&
+         op.deduceScaleFactor() == 32;
+}
+
 template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
                              OpTy, tt::DotOp, tt::DotScaledOp>::value>>
 class BlockedToDPAS : public OpRewritePattern<OpTy> {
@@ -295,6 +311,11 @@ public:
     if (!oldRetType.getEncoding() ||
         isa<ttgi::DpasEncodingAttr>(oldRetType.getEncoding()))
       return failure();
+    if constexpr (std::is_same_v<OpTy, tt::DotScaledOp>) {
+      if (!hasBlockScaleDPASScales(op))
+        return rewriter.notifyMatchFailure(
+            op, "scales are not E8M0 with one scale per 32 elements");
+    }
 
     auto funcOp = op->template getParentOfType<FunctionOpInterface>();
     ModuleOp mod = funcOp->template getParentOfType<ModuleOp>();
@@ -603,6 +624,13 @@ public:
     if (!oldRetType.getEncoding() ||
         isa<ttgi::DpasEncodingAttr>(oldRetType.getEncoding()))
       return failure();
+    // The upcast only prepares the operands for the block scaled DPAS, so with
+    // scales it cannot take, leave the tt.dot_scaled to the decomposition.
+    // Without this check the rebuilt tt.dot_scaled keeps the same scales,
+    // BlockedToDPAS rejects it, and it is upcast again, forever.
+    if (!hasBlockScaleDPASScales(scaledDotOp))
+      return rewriter.notifyMatchFailure(
+          scaledDotOp, "scales are not E8M0 with one scale per 32 elements");
 
     tt::ScaleDotElemType precA;
     tt::ScaleDotElemType precB;

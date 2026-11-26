@@ -1296,9 +1296,9 @@ varyingDims(Value v, ArrayRef<int64_t> tensorShape) {
 
 /// One side of a per-dimension boundary check.
 struct LimitCmp {
-  bool isUpperBound; // `index < bound` rather than `index >= 0`
-  Value base;        // null for a bare `arange`
-  Value bound;       // null for a lower bound
+  bool isUpperBound;  // `index < bound` rather than `index >= 0`
+  Value base;         // null for a bare `arange`
+  OpFoldResult bound; // null for a lower bound
 };
 
 /// Match a single boundary-check conjunct along a dim of extent \p extent:
@@ -1306,7 +1306,9 @@ struct LimitCmp {
 /// left or swapped, where `index` is `base + arange(0, extent)` (see
 /// `matchBaseAndRange`). Signed only: an unsigned comparison means something
 /// else for a negative index, which is the case the lower bound covers.
-std::optional<LimitCmp> matchLimitCmp(Value conjunct, int64_t extent) {
+/// With \p allowConstBounds the bound may also be a splat constant.
+std::optional<LimitCmp> matchLimitCmp(Value conjunct, int64_t extent,
+                                      bool allowConstBounds) {
   Value cmpCandidate = stripExpandDims(peelBroadcasts(conjunct));
   auto cmpOp = cmpCandidate.getDefiningOp<arith::CmpIOp>();
   if (!cmpOp)
@@ -1346,11 +1348,17 @@ std::optional<LimitCmp> matchLimitCmp(Value conjunct, int64_t extent) {
 
   // computeRowLimitHeight handles i32 and i64 (e.g. an index promoted to i64
   // by `.to(tl.int64)`, issue #8565).
-  auto boundSplat = bound.getDefiningOp<triton::SplatOp>();
-  if (!boundSplat || !boundSplat.getSrc().getType().isInteger(32) &&
-                         !boundSplat.getSrc().getType().isInteger(64))
+  Type boundTy = getElementTypeOrSelf(bound.getType());
+  if (!boundTy.isInteger(32) && !boundTy.isInteger(64))
     return std::nullopt;
-  return LimitCmp{/*isUpperBound=*/true, *base, boundSplat.getSrc()};
+  if (auto boundSplat = bound.getDefiningOp<triton::SplatOp>())
+    return LimitCmp{/*isUpperBound=*/true, *base, boundSplat.getSrc()};
+  DenseElementsAttr constBound;
+  if (allowConstBounds && matchPattern(bound, m_Constant(&constBound)) &&
+      constBound.isSplat())
+    return LimitCmp{/*isUpperBound=*/true, *base,
+                    constBound.getSplatValue<IntegerAttr>()};
+  return std::nullopt;
 }
 
 } // namespace
@@ -1373,7 +1381,7 @@ bool isZeroFillOther(Value other) {
 std::optional<BoundaryMaskInfo>
 matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
                        unsigned contiguousDim, bool pitchDimIsBroadcast,
-                       Operation *loadOp) {
+                       Operation *loadOp, bool allowConstBounds) {
   if (!mask || tensorShape.size() < 2 || !isZeroFillOther(other))
     return std::nullopt;
 
@@ -1405,12 +1413,13 @@ matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
     if (dims.size() != 1)
       return std::nullopt;
     unsigned dim = dims.front();
-    std::optional<LimitCmp> limit = matchLimitCmp(conjunct, tensorShape[dim]);
+    std::optional<LimitCmp> limit =
+        matchLimitCmp(conjunct, tensorShape[dim], allowConstBounds);
     if (!limit)
       return std::nullopt;
 
     Value &base = (dim == pitchDim) ? info.rowBase : info.colBase;
-    Value &bound = (dim == pitchDim) ? info.rowBound : info.colBound;
+    OpFoldResult &bound = (dim == pitchDim) ? info.rowBound : info.colBound;
     bool &seenLower = (dim == pitchDim) ? seenRowLower : seenColLower;
     // A dim's two bounds must agree on where the index starts, or they are
     // not the two halves of one boundary check.
@@ -1460,9 +1469,29 @@ std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
       /*loadOp=*/nullptr);
   if (!m || m->colBound || m->extraPreds.size() > 1)
     return std::nullopt;
-  return RowLimitMaskInfo{m->boundedDim, m->rowBase, m->rowBound,
+  // Without `allowConstBounds` a bound is always a scalar.
+  return RowLimitMaskInfo{m->boundedDim, m->rowBase, cast<Value>(m->rowBound),
                           m->extraPreds.empty() ? Value()
                                                 : m->extraPreds.front()};
+}
+
+/// Whether \p v is a multiple of \p divisor: a constant by its value, a null
+/// one being a bare `arange`'s zero base. A scalar needs both checks, as in
+/// `isDescriptorIndexAligned`: the dataflow analysis trusts `tt.divisibility`
+/// hints, and `isDivisible` refuses some induction variables the analysis
+/// admits, so the conjunction only refuses more than either alone.
+static bool
+isProvablyMultipleOf(OpFoldResult v, int64_t divisor,
+                     triton::intel::ModuleAxisInfoAnalysis &axisInfo) {
+  if (!v)
+    return true;
+  if (auto attr = dyn_cast<Attribute>(v))
+    return cast<IntegerAttr>(attr).getValue().srem(divisor) == 0;
+  auto scalar = cast<Value>(v);
+  const AxisInfo *axis = axisInfo.getAxisInfo(scalar);
+  int64_t div = axis ? axis->getDivisibility(0) : 1;
+  return div % divisor == 0 &&
+         isDivisible(triton::intel::getFinalValue(scalar), divisor);
 }
 
 bool colLimitIsHWCompatible(const BoundaryMaskInfo &info,
@@ -1475,19 +1504,54 @@ bool colLimitIsHWCompatible(const BoundaryMaskInfo &info,
     return false;
   unsigned divisor =
       get2DBlockIOWidthGranuleBytes(elemSizeInBits) / (elemSizeInBits / 8);
-  // Both checks are needed, as in `isDescriptorIndexAligned`: the dataflow
-  // analysis trusts `tt.divisibility` hints, and `isDivisible` refuses some
-  // induction variables the analysis admits, so the conjunction only refuses
-  // more than either alone.
-  auto isAligned = [&](Value v) {
-    if (!v)
-      return true; // a bare `arange` starts at zero
-    const AxisInfo *axis = axisInfo.getAxisInfo(v);
-    int64_t div = axis ? axis->getDivisibility(0) : 1;
-    return div % divisor == 0 &&
-           isDivisible(triton::intel::getFinalValue(v), divisor);
+  return isProvablyMultipleOf(info.colBound, divisor, axisInfo) &&
+         isProvablyMultipleOf(info.colBase, divisor, axisInfo);
+}
+
+StoreBoundaryClamp
+matchStoreBoundaryClamp(triton::StoreOp op, unsigned contiguousDim,
+                        bool pitchDimIsBroadcast,
+                        std::optional<int64_t> pitchBytes,
+                        triton::intel::ModuleAxisInfoAnalysis &axisInfo) {
+  // Read on every call: a cached value would outlive a change to it.
+  if (triton::tools::getBoolEnv("TRITON_INTEL_DISABLE_STORE_BOUNDARY_CLAMP"))
+    return {};
+  auto tensorTy = dyn_cast<RankedTensorType>(op.getValue().getType());
+  if (!tensorTy || !pitchBytes)
+    return {};
+  ArrayRef<int64_t> shape = tensorTy.getShape();
+  if (shape.size() < 2 || contiguousDim >= shape.size())
+    return {};
+  unsigned elemSizeInBits =
+      getIntOrFloatOrPtrBitWidth(tensorTy.getElementType());
+
+  // A message the clamp enables is new and needs pitch >= base_width, which is
+  // at most max(rowBytes, 64) plus 63 bytes of alignment compensation.
+  int64_t rowBytes = llvm::divideCeil(shape[contiguousDim] * elemSizeInBits, 8);
+  int64_t compensation = needs2DBlockIOAlignmentCompensation(op) ? 63 : 0;
+  if (*pitchBytes < std::max<int64_t>(rowBytes, 64) + compensation)
+    return {};
+
+  std::optional<BoundaryMaskInfo> m = matchBoundaryCheckMask(
+      op.getMask(), /*other=*/Value(), shape, contiguousDim,
+      pitchDimIsBroadcast, op, /*allowConstBounds=*/true);
+  if (!m || !m->extraPreds.empty())
+    return {};
+
+  // `INT_MAX` is `P - 1` modulo a power of two `P`, so a base that is a
+  // multiple of `P >= extent` leaves room for `base + arange(0, extent)`.
+  auto clampDim = [&](Value base, OpFoldResult bound,
+                      int64_t extent) -> std::optional<StoreDimClamp> {
+    if (!bound ||
+        !isProvablyMultipleOf(base, llvm::PowerOf2Ceil(extent), axisInfo))
+      return std::nullopt;
+    return StoreDimClamp{base, bound, extent};
   };
-  return isAligned(info.colBound) && isAligned(info.colBase);
+  StoreBoundaryClamp clamp;
+  clamp.row = clampDim(m->rowBase, m->rowBound, shape[m->boundedDim]);
+  if (colLimitIsHWCompatible(*m, axisInfo, elemSizeInBits))
+    clamp.col = clampDim(m->colBase, m->colBound, shape[contiguousDim]);
+  return clamp;
 }
 
 Value materializeExtraPred(OpBuilder &builder, Location loc, Value extraPred,

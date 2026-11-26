@@ -757,6 +757,7 @@ class XPULauncher(object):
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
+        self.needs_scratch = self.global_scratch_size > 0 or self.profile_scratch_size > 0
 
     def _resolve_dump_dir(self, cache_dir):
         dump_dir_root = knobs.intel.dump_kernel_args_dir
@@ -806,27 +807,33 @@ class XPULauncher(object):
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
-        active_driver = triton.runtime.driver.active
+        global_scratch = None
+        profile_scratch = None
+        # Most kernels need no scratch memory; skip the allocator setup on the launch hot path for them.
+        if self.needs_scratch:
+            active_driver = triton.runtime.driver.active
 
-        def allocate_scratch(size, align, allocator):
-            if size > 0:
-                grid_size = gridX * gridY * gridZ
-                alloc_fn = allocator.get()
-                return alloc_fn(grid_size * size, align, stream)
-            return None
+            def allocate_scratch(size, align, allocator):
+                if size > 0:
+                    grid_size = gridX * gridY * gridZ
+                    alloc_fn = allocator.get()
+                    return alloc_fn(grid_size * size, align, stream)
+                return None
 
-        def allocate_default_profile_scratch(size, align):
-            if size > 0:
-                grid_size = gridX * gridY * gridZ
-                return active_driver.allocate_default_profile_scratch(grid_size * size, align, stream)
-            return None
+            def allocate_default_profile_scratch(size, align):
+                if size > 0:
+                    grid_size = gridX * gridY * gridZ
+                    return active_driver.allocate_default_profile_scratch(grid_size * size, align, stream)
+                return None
 
-        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
-        if _allocation.has_profile_allocator():
-            profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
-                                               _allocation._profile_allocator)
-        else:
-            profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
+            global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align,
+                                              _allocation._allocator)
+            if _allocation.has_profile_allocator():
+                profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                                   _allocation._profile_allocator)
+            else:
+                profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size,
+                                                                   self.profile_scratch_align)
 
         if self.serialize_kernel_args:
             if self.print_dump_kernel_args_info:

@@ -19,7 +19,7 @@ add_triton_plugin(TritonXPU
   TritonIntelGPUTransforms
 )
 
-target_link_libraries(TritonXPU PRIVATE Python3::Module nanobind-static)
+target_link_libraries(TritonXPU PRIVATE ${TRITON_PYTHON_MODULE_LIB} nanobind-static)
 
 add_subdirectory(test)
 

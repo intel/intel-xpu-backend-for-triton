@@ -85,9 +85,12 @@ endif()
 
 # ============ Dependencies =============
 find_package(Python3 REQUIRED Interpreter Development.Module)
+if(NOT DEFINED TRITON_PYTHON_MODULE_LIB)
+  set(TRITON_PYTHON_MODULE_LIB Python3::Module)
+endif()
 if(NOT TARGET nanobind-static)
   if(NOT TARGET Python::Module)
-    add_library(Python::Module ALIAS Python3::Module)
+    add_library(Python::Module ALIAS ${TRITON_PYTHON_MODULE_LIB})
     set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
     set(Python_INCLUDE_DIRS "${Python3_INCLUDE_DIRS}")
     set(Python_SOABI "${Python3_SOABI}")
@@ -97,7 +100,7 @@ if(NOT TARGET nanobind-static)
 
   find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
   nanobind_build_library(nanobind-static)
-  target_link_libraries(nanobind-static PRIVATE Python3::Module)
+  target_link_libraries(nanobind-static PRIVATE ${TRITON_PYTHON_MODULE_LIB})
 endif()
 
 # ============ Define a GLOBAL property to store object-libraries ============
@@ -107,7 +110,7 @@ set_property(GLOBAL PROPERTY PROTON_LIBS "")
 function(add_proton_library name)
   add_library(${name} OBJECT ${ARGN})
 
-  target_link_libraries(${name} PRIVATE Python3::Module nanobind-static)
+  target_link_libraries(${name} PRIVATE ${TRITON_PYTHON_MODULE_LIB} nanobind-static)
 
   # Use system to skip warnings caused by legacy clang compilers
   target_include_directories(${name}
@@ -192,7 +195,7 @@ endforeach()
 
 add_library(proton SHARED ${_proton_obj_sources})
 
-target_link_libraries(proton PRIVATE Python3::Module nanobind-static)
+target_link_libraries(proton PRIVATE ${TRITON_PYTHON_MODULE_LIB} nanobind-static)
 if(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE)
   target_link_libraries(proton PRIVATE
     "${PROTON_AMD_COMGR_LIBRARY}"
