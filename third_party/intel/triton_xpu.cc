@@ -79,6 +79,8 @@ void init_triton_intel_passes_ttir(py::module_ &&m) {
                      intel::createTritonIntelSimplifySignedArithmetic);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi",
                      intel::createTritonIntelGPUFoldTrueCmpI);
+  ADD_PASS_WRAPPER_0("add_triton_licm",
+                     intel::createTritonIntelLoopInvariantCodeMotion);
   ADD_FUNC_PASS_WRAPPER_0("add_prepare_if_combining",
                           intel::createTritonIntelGPUPrepareIfCombining);
   ADD_PASS_OPTION_WRAPPER_1("add_reassociate_dot_scale",

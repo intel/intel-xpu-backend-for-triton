@@ -2,9 +2,11 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=3" | FileCheck %s --check-prefixes=CHECK,CAP3
 // RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=1" 2>&1 | FileCheck %s --check-prefix=STATS1
 // RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=3" 2>&1 | FileCheck %s --check-prefix=STATS3
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=1" -triton-intel-licm | FileCheck %s --check-prefixes=CHECK,CAP1
 
 // COM: cap=1 charges both corridors conservatively and refuses both; cap=3
-// COM: prices the second loop's corridor and accepts it.
+// COM: prices the second loop's corridor and accepts it. The refusals must
+// COM: survive triton-intel-licm, which the pipeline runs after this pass.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>

@@ -195,6 +195,17 @@ def TritonIntelSimplifySignedArithmetic
   ];
 }
 
+def TritonIntelLoopInvariantCodeMotion
+    : Pass<"triton-intel-licm", "mlir::ModuleOp"> {
+  let summary = "Core's triton-licm, leaving ops marked tt.no_licm in their loop";
+  let description = [{
+    A copy of core's triton-licm (lib/Dialect/Triton/Transforms/LoopInvariantCodeMotion.cpp) that does not move
+    an op carrying the `tt.no_licm` attribute out of its loop. TritonIntelGPUHoistLayoutConversions stamps that
+    attribute on the layout conversions it decides to leave in place.
+  }];
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
 def TritonIntelGPUFoldTrueCmpI
     : Pass<"triton-intel-fold-true-cmpi", "mlir::ModuleOp"> {
   let summary = "Fold provably true/false arith.cmpi to constants";
@@ -236,7 +247,7 @@ def TritonIntelReassociateDotScale
     invariant code motion opportunity: the dot must be inside a loop, the dot
     itself loop-variant, the scalar and the chosen operand loop-invariant, and
     the other operand loop-variant. After the rewrite the scaled operand is
-    hoisted out of the loop by `triton-licm`.
+    hoisted out of the loop by `triton-intel-licm`.
 
     The transformation requires a zero accumulator: the algebra
     `c * (a @ b) = (c * a) @ b` only holds when the dot accumulator is zero.
