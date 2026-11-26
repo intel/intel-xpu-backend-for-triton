@@ -757,6 +757,7 @@ class XPULauncher(object):
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
+        self.needs_scratch = self.global_scratch_size > 0 or self.profile_scratch_size > 0
 
     def _resolve_dump_dir(self, cache_dir):
         dump_dir_root = knobs.intel.dump_kernel_args_dir
@@ -809,7 +810,7 @@ class XPULauncher(object):
         global_scratch = None
         profile_scratch = None
         # Most kernels need no scratch memory; skip the allocator setup on the launch hot path for them.
-        if self.global_scratch_size > 0 or self.profile_scratch_size > 0:
+        if self.needs_scratch:
             active_driver = triton.runtime.driver.active
 
             def allocate_scratch(size, align, allocator):
