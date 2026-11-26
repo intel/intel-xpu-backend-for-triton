@@ -12,19 +12,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 64 : i32, "ttg.th
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // 2nd round inter-warp reduce with problem size 64 with threads_per_warp 32
-  // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
+  // CHECK: triton_gen.barrier {mem_fence = Local}
   // CHECK: [[PARTIAL_REDUCE_0:%.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // 3rd round inter-warp reduce with problem size 2 with threads_per_warp 32
-  // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
+  // CHECK: triton_gen.barrier {mem_fence = Local}
   // CHECK: [[PARTIAL_REDUCE_1:%.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiijj(%{{.*}}) {{.*}} : (i32, i32, i32, i32) -> i32
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // get final result
-  // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
+  // CHECK: triton_gen.barrier {mem_fence = Local}
   // CHECK: [[FINAL_RESULT:%.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
 
     %g = "tt.reduce" (%f) ({
@@ -48,7 +48,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.tar
     // CHECK:     llvm.call spir_funccc @_Z27__spirv_GroupNonUniformFAddiif
     // CHECK:     llvm.store
     // CHECK-NOT: llvm.load
-    // CHECK:     llvm.call spir_funccc @_Z7barrierj
+    // CHECK:     triton_gen.barrier {mem_fence = Local}
     %1 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
     ^bb0(%arg2: f32, %arg3: f32):
       %2 = arith.addf %arg2, %arg3 : f32
@@ -74,13 +74,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // 2nd round: inter-warp reduce with problem size 32 using 16-wide subgroups (3 args = full Reduce)
-  // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
+  // CHECK: triton_gen.barrier {mem_fence = Local}
   // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // 3rd round: inter-warp reduce with remaining 2 values using ClusteredReduce (4 args)
-  // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
+  // CHECK: triton_gen.barrier {mem_fence = Local}
   // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiijj(%{{.*}}) {{.*}} : (i32, i32, i32, i32) -> i32
 
@@ -109,7 +109,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // 2nd round: inter-warp reduce with 4 warps using ClusteredReduce (4 args)
-  // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
+  // CHECK: triton_gen.barrier {mem_fence = Local}
   // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformSMaxiijj(%{{.*}}) {{.*}} : (i32, i32, i32, i32) -> i32
 
@@ -139,7 +139,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // Store partial results to shared memory (may be vectorized or scalarized)
   // CHECK:     llvm.store %{{.*}}, %{{.*}} : {{.*}}, !llvm.ptr<3>
-  // CHECK:     llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
+  // CHECK:     triton_gen.barrier {mem_fence = Local}
 
   // Inter-warp reduce: load from shared memory and ClusteredReduce with cluster_size=4 (4 args)
   // CHECK:     llvm.load %{{.*}} : !llvm.ptr<3> -> {{.*}}
