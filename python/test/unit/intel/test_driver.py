@@ -7,6 +7,7 @@ import re
 import shutil
 import struct
 import sys
+import types
 
 import pytest
 import torch
@@ -21,6 +22,7 @@ from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import driver as intel_driver
 from triton.backends.intel import extension_utils
+from triton.backends.intel import sycl_runtime
 from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
 from triton.backends.compiler import GPUTarget
 from triton.backends.intel import compiler as intel_compiler
@@ -355,7 +357,7 @@ def _fake_torch(monkeypatch, tmp_path: pathlib.Path, runtimes: tuple[str | None,
         library.parent.mkdir(parents=True, exist_ok=True)
         _write_shared_library(library, library.name, ("libc.so.6", ) + ((runtime, ) if runtime else ()))
         libraries.append(str(library))
-    monkeypatch.setattr(intel_driver, "_torch_xpu_libraries", lambda: libraries)
+    monkeypatch.setattr(sycl_runtime, "_torch_xpu_libraries", lambda: libraries)
 
 
 def _fake_sycl_setup(monkeypatch, tmp_path: pathlib.Path, torch_runtime: str | None, torch_headers: bool = True,
@@ -501,8 +503,8 @@ def test_find_sycl_checks_which_runtime_links(monkeypatch, recwarn, tmp_path: pa
 
     (lib / "libsycl.so").unlink()
     (lib / "libsycl.so").symlink_to("libsycl.so.11")
-    assert intel_driver._runtime_in([str(lib)]) is None
-    assert not intel_driver._links_runtime([str(lib)], "libsycl.so.9")
+    assert sycl_runtime._runtime_in([str(lib)]) is None
+    assert not sycl_runtime._links_runtime([str(lib)], "libsycl.so.9")
 
 
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
@@ -559,37 +561,53 @@ def test_helper_cache_key_follows_sycl_headers(monkeypatch, request, tmp_path: p
 
 
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
-@pytest.mark.parametrize("recorded", [False, None])
-def test_torch_xpu_libraries_of_editable_pytorch(monkeypatch, tmp_path: pathlib.Path, recorded):
-    """PyTorch's XPU libraries are found when its metadata does not list them, or is missing.
+@pytest.mark.parametrize("in_package, recorded", [
+    pytest.param(True, True, id="wheel"),
+    pytest.param(True, False, id="editable"),
+    pytest.param(True, None, id="source_tree"),
+    pytest.param(False, True, id="only_in_metadata"),
+])
+def test_torch_xpu_libraries_found_in_package_first(monkeypatch, tmp_path: pathlib.Path, in_package, recorded):
+    """PyTorch's XPU libraries are looked up in the package's `torch/lib`, and in its metadata only if not there.
 
-    An editable install (`pip install -e`, `setup.py develop`) records only the files that redirect to
-    the source tree, where `torch/lib` holds the libraries; a tree on `PYTHONPATH` has no metadata at
-    all. Without them the runtime PyTorch links is unknown and the search silently ignores it.
+    The metadata lists every file the wheel installed, about 15,000 for PyTorch, and reading it took
+    most of the discovery's time; the package lookup checks two paths. It also covers
+    what the metadata does not: an editable install (`pip install -e`, `setup.py develop`) records only
+    the files that redirect to the source tree, and a tree on `PYTHONPATH` has no metadata at all.
     """
     package = tmp_path / "src" / "torch"
     (package / "lib").mkdir(parents=True)
-    for name in ("libtorch_xpu.so", "libc10_xpu.so"):
-        _write_shared_library(package / "lib" / name, name, ("libc.so.6", "libsycl.so.9"))
     (package / "lib" / "libtorch_cpu.so").touch()
+    installed = tmp_path / "site-packages"
+    library_dir = package / "lib" if in_package else installed / "torch" / "lib"
+    library_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("libtorch_xpu.so", "libc10_xpu.so"):
+        _write_shared_library(library_dir / name, name, ("libc.so.6", "libsycl.so.9"))
+
+    read_metadata = []
 
     def files(name):
         assert name == "torch"
+        read_metadata.append(name)
         if recorded is None:
             raise importlib.metadata.PackageNotFoundError(name)
-        return [
-            importlib.metadata.PackagePath("__editable__.torch-2.16.0.pth"),
-            importlib.metadata.PackagePath("torch-2.16.0.dist-info/RECORD")
-        ]
+        listed = ["__editable__.torch-2.16.0.pth", "torch-2.16.0.dist-info/RECORD"]
+        if recorded:
+            listed += ["torch/lib/libtorch_xpu.so", "torch/lib/libc10_xpu.so"]
+        paths = [importlib.metadata.PackagePath(path) for path in listed]
+        for path in paths:
+            path.dist = types.SimpleNamespace(locate_file=lambda path: installed / path)
+        return paths
 
     spec = importlib.machinery.ModuleSpec("torch", None, is_package=True)
     spec.submodule_search_locations = [str(package)]
     monkeypatch.setattr(importlib.metadata, "files", files)
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: spec if name == "torch" else None)
 
-    assert sorted(intel_driver._torch_xpu_libraries()) == sorted(
-        str(package / "lib" / name) for name in ("libtorch_xpu.so", "libc10_xpu.so"))
-    assert intel_driver._torch_sycl_runtime() == "libsycl.so.9"
+    assert sorted(sycl_runtime._torch_xpu_libraries()) == sorted(
+        str(library_dir / name) for name in ("libtorch_xpu.so", "libc10_xpu.so"))
+    assert read_metadata == ([] if in_package else ["torch"])
+    assert sycl_runtime._torch_sycl_runtime() == "libsycl.so.9"
 
 
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
@@ -615,18 +633,18 @@ def test_windows_runtime_next_to_import_library(tmp_path: pathlib.Path):
     (oneapi / "lib").mkdir(parents=True)
     (oneapi / "bin").mkdir()
     (oneapi / "lib" / "sycl8.lib").touch()
-    assert intel_driver._windows_runtime_in(str(oneapi / "lib")) is None
+    assert sycl_runtime._windows_runtime_in(str(oneapi / "lib")) is None
     for name in ("sycl8.dll", "sycl8d.dll", "sycl-jit.dll", "icx.exe"):
         (oneapi / "bin" / name).touch()
-    assert intel_driver._windows_runtime_in(str(oneapi / "lib")) == "sycl8.dll"
-    assert intel_driver._windows_runtime_in(str(oneapi / "bin")) == "sycl8.dll"
+    assert sycl_runtime._windows_runtime_in(str(oneapi / "lib")) == "sycl8.dll"
+    assert sycl_runtime._windows_runtime_in(str(oneapi / "bin")) == "sycl8.dll"
     # Two runtimes in one place: which one `sycl.lib` links cannot be told from the names.
     (oneapi / "bin" / "sycl9.dll").touch()
-    assert intel_driver._windows_runtime_in(str(oneapi / "lib")) is None
+    assert sycl_runtime._windows_runtime_in(str(oneapi / "lib")) is None
     # A DLL beside the import library wins over the sibling directory.
     (oneapi / "lib" / "sycl9.dll").touch()
-    assert intel_driver._windows_runtime_in(str(oneapi / "lib")) == "sycl9.dll"
-    assert intel_driver._windows_runtime_in(str(tmp_path / "missing" / "lib")) is None
+    assert sycl_runtime._windows_runtime_in(str(oneapi / "lib")) == "sycl9.dll"
+    assert sycl_runtime._windows_runtime_in(str(tmp_path / "missing" / "lib")) is None
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the libraries mapped into this process")
@@ -642,11 +660,11 @@ def test_elf_dynamic_of_a_real_library():
     if libc is None:
         pytest.skip(f"no glibc mapped into this process: {sorted(mapped)}")
 
-    soname, needed = intel_driver._elf_dynamic(libc)
+    soname, needed = sycl_runtime._elf_dynamic(libc)
     assert soname == "libc.so.6"
     assert any(name.startswith("ld-linux") for name in needed), needed
-    assert intel_driver._soname(libc) == "libc.so.6"
-    assert intel_driver._pe_imports(libc) is None
+    assert sycl_runtime._soname(libc) == "libc.so.6"
+    assert sycl_runtime._pe_imports(libc) is None
 
 
 def test_pe_imports(tmp_path: pathlib.Path):
@@ -654,22 +672,22 @@ def test_pe_imports(tmp_path: pathlib.Path):
     image = tmp_path / "torch_xpu.dll"
     _write_pe_image(image, ("KERNEL32.dll", "sycl9.dll", "c10_xpu.dll"))
 
-    assert intel_driver._pe_imports(str(image)) == ["KERNEL32.dll", "sycl9.dll", "c10_xpu.dll"]
-    assert [name for name in intel_driver._pe_imports(str(image))
+    assert sycl_runtime._pe_imports(str(image)) == ["KERNEL32.dll", "sycl9.dll", "c10_xpu.dll"]
+    assert [name for name in sycl_runtime._pe_imports(str(image))
             if re.fullmatch(r"sycl\d*\.dll", name)] == ["sycl9.dll"]
     _write_pe_image(image, ())
-    assert intel_driver._pe_imports(str(image)) == []
+    assert sycl_runtime._pe_imports(str(image)) == []
     (tmp_path / "not_pe.dll").write_bytes(b"\x7fELF" + bytes(64))
-    assert intel_driver._pe_imports(str(tmp_path / "not_pe.dll")) is None
+    assert sycl_runtime._pe_imports(str(tmp_path / "not_pe.dll")) is None
 
 
 def test_torch_sycl_runtime_of_installed_pytorch():
     """The runtime PyTorch links is read from the installed PyTorch's own libraries, without importing it."""
-    libraries = intel_driver._torch_xpu_libraries()
+    libraries = sycl_runtime._torch_xpu_libraries()
     if not libraries:
         pytest.skip("the installed PyTorch has no XPU libraries")
 
-    runtime = intel_driver._torch_sycl_runtime()
+    runtime = sycl_runtime._torch_sycl_runtime()
     assert runtime is not None and re.fullmatch(r"libsycl\.so(\.\d+)*|sycl\d*\.dll", runtime, re.IGNORECASE), runtime
 
 
@@ -699,26 +717,66 @@ def test_helpers_built_without_icpx_for_pytorch_runtime(monkeypatch, request, tm
 
 
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="host compilers are looked up as on Linux")
-def test_build_explains_skipped_sycl_compiler(monkeypatch, recwarn, tmp_path: pathlib.Path):
-    """When `icpx` may not build the helpers, the user is told why a host C++ compiler is needed."""
-    compilers = {"icpx": "/opt/intel/oneapi/compiler/latest/bin/icpx", "gcc": shutil.which("gcc") or "/usr/bin/gcc"}
+@pytest.mark.parametrize("sycl_compiler", [None, "icpx"])
+@pytest.mark.parametrize("use_sycl_compiler", [True, False])
+def test_build_uses_host_compiler_when_asked(monkeypatch, tmp_path: pathlib.Path, sycl_compiler, use_sycl_compiler):
+    """`use_sycl_compiler=False` makes `_build` use the host C++ compiler, even with a SYCL compiler at hand.
+
+    Also when `TRITON_INTEL_SYCL_COMPILER` names one: the caller has decided, and warned if it ignored it.
+    """
+    compilers = {"gcc": shutil.which("gcc") or "/usr/bin/gcc"}  # what `_find_compiler` finds; never run here
+    for name in ("icpx", "g++"):
+        compiler = tmp_path / "bin" / name
+        compiler.parent.mkdir(exist_ok=True)
+        compiler.write_text(f"#!/bin/sh\ntouch '{tmp_path / name}.ran'\nexit 1\n")
+        compiler.chmod(0o755)
+        compilers[name] = str(compiler)
     monkeypatch.setattr(build.shutil, "which", lambda name, *a, **k: compilers.get(name))
     monkeypatch.setattr(build, "is_xpu", lambda: True)
     monkeypatch.delenv("CXX", raising=False)
-    monkeypatch.delenv("TRITON_INTEL_SYCL_COMPILER", raising=False)
+    if sycl_compiler:
+        monkeypatch.setenv("TRITON_INTEL_SYCL_COMPILER", sycl_compiler)
+    else:
+        monkeypatch.delenv("TRITON_INTEL_SYCL_COMPILER", raising=False)
     source = tmp_path / "helper.c"
-    source.write_text("#error never compiled\n")
+    source.write_text("")
 
-    with pytest.raises(RuntimeError, match=r"Failed to find C\+\+ compiler.*icpx was not used.*host C\+\+ compiler"):
-        build._build("helper", str(source), str(tmp_path), [], [], [], [], use_sycl_compiler=False)
+    with pytest.raises(RuntimeError):  # both fake compilers fail
+        build._build("helper", str(source), str(tmp_path), [], [], [], [], use_sycl_compiler=use_sycl_compiler)
 
-    # A compiler the user asked for by `TRITON_INTEL_SYCL_COMPILER` is skipped with a warning, not silently.
-    compilers["g++"] = shutil.which("g++") or "/usr/bin/g++"
+    ran = {name for name in ("icpx", "g++") if (tmp_path / f"{name}.ran").exists()}
+    assert ran == ({"icpx"} if use_sycl_compiler else {"g++"})
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="the fixtures are ELF shared libraries")
+@pytest.mark.parametrize("torch_runtime, icpx_installed, warns", [
+    pytest.param("libsycl.so.9", True, True, id="icpx_passed_over"),
+    pytest.param("libsycl.so.8", True, False, id="icpx_used"),
+    pytest.param("libsycl.so.9", False, False, id="icpx_not_installed"),
+])
+def test_find_sycl_warns_when_sycl_compiler_knob_is_not_used(monkeypatch, recwarn, tmp_path: pathlib.Path,
+                                                             torch_runtime, icpx_installed, warns):
+    """`TRITON_INTEL_SYCL_COMPILER` is not ignored silently when PyTorch's runtime rules its compiler out.
+
+    The search warns once, when it chooses, and `_build` then only does as told. A compiler that is
+    not installed was not passed over, so there is nothing to warn about.
+    """
+    _fake_sycl_setup(monkeypatch, tmp_path, torch_runtime)
     monkeypatch.setenv("TRITON_INTEL_SYCL_COMPILER", "icpx")
-    with pytest.raises(RuntimeError):  # the host compiler then fails on `#error`
-        build._build("helper", str(source), str(tmp_path), [], [], [], [], use_sycl_compiler=False)
+    if not icpx_installed:
+        real_which = shutil.which
+        monkeypatch.setattr(shutil, "which", lambda cmd, *args, **kwargs: None
+                            if cmd == "icpx" else real_which(cmd, *args, **kwargs))
+
+    helper = CompilationHelper()
+
+    assert helper.use_sycl_compiler == (torch_runtime == "libsycl.so.8")
     warned = [str(w.message) for w in recwarn]
-    assert any("TRITON_INTEL_SYCL_COMPILER=icpx is not used" in m for m in warned), warned
+    if warns:
+        assert len(warned) == 1 and "TRITON_INTEL_SYCL_COMPILER=icpx is not used" in warned[0] and \
+            "intel-sycl-rt" in warned[0], warned
+    else:
+        assert not warned, f"unexpected warnings: {warned}"
 
 
 @pytest.mark.parametrize("version, expected", [
