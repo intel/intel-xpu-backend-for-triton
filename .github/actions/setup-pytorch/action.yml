@@ -29,6 +29,11 @@ inputs:
   upload_artifact:
     description: Upload the PyTorch wheel as an artifact with this name (source mode), keep empty to skip
     default: ""
+  upload_retention_days:
+    description: >
+      Days to keep the uploaded wheel, keep empty for the repository default (90). Set a short value when only jobs
+      of the same run install it.
+    default: ""
   download_artifact:
     description: >
       On a cache miss, install the PyTorch wheel from the artifact with this name instead of building it
@@ -217,8 +222,7 @@ runs:
         if-no-files-found: error
         # A wheel is already compressed
         compression-level: 0
-        # Only jobs of the same run use it; 7 days still covers re-runs
-        retention-days: 7
+        retention-days: ${{ inputs.upload_retention_days }}
 
     # A tree from download_artifact has no submodules and no build directory, keep it out of the cache
     - name: Save PyTorch to a cache
