@@ -622,9 +622,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   // JIT time and has no access to the module attributes the compile-time
   // consumers read. Default "256" preserves this call's own pre-existing
   // behaviour on a missing argument (it previously resolved to "unknown",
-  // which already selected 256) -- the same absence-preserves-status-quo
-  // principle as `RegisterPressure.cpp`'s divergent 512 default; see that
-  // file's comment if either fallback's rationale ever changes.
+  // which already selected 256).
   const char *resolvedMaxGRFMode =
       (maxGRFMode != nullptr && maxGRFMode[0] != '\0') ? maxGRFMode : "256";
 

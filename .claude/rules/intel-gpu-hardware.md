@@ -102,30 +102,24 @@ When `is_lts=true`, certain lowering paths use GenISA intrinsics instead of SPIR
 
 ### ReduceVariableLiveness Pass
 Activated when `opt.reduce_variable_liveness = true`. Takes a `grf-mode` option
-(`'default'`, `'auto'`, `'128'`, `'256'`, `'512'`) that must match the `grf_mode`
+(`'default'`, `'auto'`, `'128'`, `'160'`, `'192'`, `'256'`, `'512'`) that must match the `grf_mode`
 the kernel is compiled with.
 
 Gate: a 2D operand load that is live-in to a loop is sunk into it (leaving a
 prefetch behind) when the loop body's **peak** register pressure, from
 `RegisterPressureAnalysis::peakPressure(loop)`, is at or above the **per-lane**
-GRF budget, `getPerLaneGRFBudgetInBytes(grfMode, mod, UnknownGRFSizeAssumption::Largest)`.
-At `threads-per-warp = 16` that is 256 B/lane for `'128'`, 512 for `'256'`, and
-1024 for `'512'`. The true GRF size for `'default'`/`'auto'` isn't known at
-this point in the pipeline, and this gate treats the budget as a threshold to
-sink rather than a ceiling, so the safe assumption under uncertainty is the
-*largest* mode reachable, per `RegisterPressureAnalysis`'s
-`UnknownGRFSizeAssumption` (see why `HoistLayoutConversions` correctly
-assumes the opposite, `Smallest`, for the same unknown modes).
-
-Both `'default'` and `'auto'` get a target-specific ceiling here: the
-`ttig.max_grf_mode` module attribute (512 B/lane on every non-`cri` target,
-1024 B/lane on `cri`, or 1024 B/lane if the attribute is absent, e.g.
-hand-written TTGIR that never went through `TritonAnnotateModule`).
-Both additionally cap at `Smallest` once `num_warps > 32`: a larger GRF mode
-is unlaunchable there regardless of which mechanism would have picked it (see
-the `num_warps ≤ 32` constraint above), so `ttig.max_grf_mode` never actually
-takes effect either way. There is no fixed tensor-size floor; sizes only
-matter through their contribution to the measured pressure.
+GRF budget, `getPerLaneGRFBudgetInBytes(grfMode, mod)`.
+The budget is the mode's register count times the target's register width
+(`ttig.grf_register_size`, 4 B times the smallest sub-group size: 64 B on
+PVC/BMG/LNL/PTL/NVL/CRI, 32 B on DG2/MTL/ARL, 32 B if the attribute is absent or
+not 32/64). At `threads-per-warp = 16` with 64 B registers that is 512 B/lane
+for `'128'`, 1024 for `'256'`, and 2048 for `'512'` (half that with 32 B
+registers). `'default'` and `'auto'` get the `'128'` budget: on BMG, PVC and
+DG2 a `'default'` compile starts at 128 registers and is rebuilt larger only if
+that build spills, so sinking against a larger budget would leave the pressure
+that pushes it there; `'auto'` uses the same budget. `HoistLayoutConversions`
+uses the same budget (80% of it) as a ceiling on what it may hoist. There is no fixed tensor-size floor; sizes only matter through their
+contribution to the measured pressure.
 
 Peak, not live-in, pressure is the gate: `liveInPressure` derives from
 `LivenessBlockInfo::in()`, which excludes block arguments and so never counts the

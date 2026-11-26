@@ -26,18 +26,22 @@ Key performance characteristics per Xe-core:
 - **Xe-HPG**: 128 FP32 ops/cycle, 2048 FP16/BF16 ops/cycle (via XMX)
 
 ### GRF Register Specifications
-- **Register width**: 32 bytes (256 bits)
-- **Effective GRF payload** (SIMD16): 64 bytes (16 lanes × 4 bytes)
+- **Register width**: 4 bytes times the smallest sub-group size (the native SIMD
+  width): 32 bytes on DG2, MTL and ARL (SIMD8); 64 bytes on PVC, BMG, LNL, PTL, NVL
+  and CRI (SIMD16). See `get_grf_register_size()` in
+  `third_party/intel/backend/compiler.py`.
 
 ### GRF Modes
 
-| Mode | Registers | Total Size | Threads per XVE | Build Flag |
+Total Size is per hardware thread: registers × register width.
+
+| Mode | Registers | Total Size (32 B / 64 B registers) | Threads per XVE | Build Flag |
 |------|-----------|------------|-----------------|------------|
-| Small GRF (128) | 128 | 4 KB | 8 (max occupancy) | `-cl-intel-128-GRF-per-thread` |
-| GRF (160, CRI only) | 160 | 5 KB | Reduced (not measured) | None (SPIR-V execution mode only) |
-| GRF (192, CRI only) | 192 | 6 KB | Reduced (not measured) | None (SPIR-V execution mode only) |
-| Large GRF (256) | 256 | 8 KB | 4 (halved occupancy) | `-cl-intel-256-GRF-per-thread` |
-| XLarge GRF (512, CRI only) | 512 | 16 KB | 2 (quartered occupancy) | `-cl-intel-512-GRF-per-thread` |
+| Small GRF (128) | 128 | 4 KB / 8 KB | 8 (max occupancy) | `-cl-intel-128-GRF-per-thread` |
+| GRF (160, CRI only) | 160 | 10 KB (64 B) | Reduced (not measured) | None (SPIR-V execution mode only) |
+| GRF (192, CRI only) | 192 | 12 KB (64 B) | Reduced (not measured) | None (SPIR-V execution mode only) |
+| Large GRF (256) | 256 | 8 KB / 16 KB | 4 (halved occupancy) | `-cl-intel-256-GRF-per-thread` |
+| XLarge GRF (512, CRI only) | 512 | 32 KB (64 B) | 2 (quartered occupancy) | `-cl-intel-512-GRF-per-thread` |
 | Auto Large GRF | Auto | Auto | Auto | `-cl-intel-enable-auto-large-GRF-mode` |
 
 The largest GRF mode the *automatic* escalation paths (spill-triggered ocloc
@@ -93,7 +97,8 @@ Capabilities queried via Level Zero and set as module attributes:
 | `has_f4_conversions` | `ttig.support_f4_conversion` | FP4 (E2M1) conversions |
 | `has_predicated_io` | `ttig.support_predicated_io` | Predicated load/store |
 | `has_256b_prefetch` | `ttig.support_prefetch_256b` | 256-byte 2D block prefetch |
-| `max_grf_mode` (derived, `get_max_grf_mode()`) | `ttig.max_grf_mode` | Largest GRF mode ("256"/"512") this target's automatic escalation paths select; read by `RegisterPressureAnalysis::getGRFBytesPerHardwareThread` to resolve `UnknownGRFSizeAssumption::Largest` for both `'default'` and `'auto'` GRF mode |
+| `max_grf_mode` (derived, `get_max_grf_mode()`) | `ttig.max_grf_mode` | Largest GRF mode ("256"/"512") this target's automatic escalation paths select; read by `AccelerateMatmul` (`getMaxGRFEntries`) to bound the GRF a `'default'` or `'auto'` kernel can end up with |
+| `grf_register_size` (derived, `get_grf_register_size()`) | `ttig.grf_register_size` | Width in bytes of one GRF register (32 or 64); read by `RegisterPressureAnalysis` to turn a GRF mode's register count into a byte budget (32 if absent or not 32/64) |
 | `l1_store_write_bypass` (derived: `device_arch == "bmg"`) | `ttig.store_l1_write_back` | Driver default L1 store policy is write-bypass (BMG): narrow-row 2D block stores are written back through L1, unless `TRITON_INTEL_DISABLE_STORE_L1_WRITE_BACK` is set |
 
 ### DPAS Hardware Constants

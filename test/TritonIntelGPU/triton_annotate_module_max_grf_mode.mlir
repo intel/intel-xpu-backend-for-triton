@@ -1,9 +1,9 @@
 // RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 max-grf-mode=256' | FileCheck %s --check-prefix=CHECK-SET
 // RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16' | FileCheck %s --check-prefix=CHECK-UNSET
 
-// COM: Dedicated coverage for the 'max-grf-mode' option: RegisterPressureAnalysis
-// COM: reads the 'ttig.max_grf_mode' module attribute this stamps to resolve
-// COM: UnknownGRFSizeAssumption::Largest for both "default" and "auto" GRF mode.
+// COM: Dedicated coverage for the 'max-grf-mode' option: AccelerateMatmul reads
+// COM: the 'ttig.max_grf_mode' module attribute this stamps to bound the GRF a
+// COM: "default" or "auto" kernel can end up with.
 
 module {
   // COM: Ensure 'max-grf-mode' is stamped as the 'ttig.max_grf_mode' module attribute
@@ -11,7 +11,7 @@ module {
   // CHECK-SET: module attributes {{.*}}ttig.max_grf_mode = "256"{{.*}}
   // COM: The default (unset) case must leave the attribute unstamped, not stamp some
   //      fallback value: callers must not assume the attribute is always present, and
-  //      RegisterPressureAnalysis's own fallback owns that case instead.
+  //      each reader's own fallback owns that case instead.
   // CHECK-UNSET-NOT: ttig.max_grf_mode
 
   tt.func @kernel() {

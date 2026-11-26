@@ -1,6 +1,10 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness -cse | FileCheck %s --check-prefixes=CHECK,SINK
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=disable-in-loop-sink=true -cse | FileCheck %s --check-prefixes=CHECK,NOSINK
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness | FileCheck %s --check-prefix=NOCSE
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=512 -cse | FileCheck %s --check-prefixes=CHECK,SINK
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness="disable-in-loop-sink=true grf-mode=512" -cse | FileCheck %s --check-prefixes=CHECK,NOSINK
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=512 | FileCheck %s --check-prefix=NOCSE
+
+// COM: grf-mode=512 with no `ttig.grf_register_size` (the 32-byte fallback) gives
+// COM: 512 * 32 / 16 = 1024 B/lane at "ttg.threads-per-warp" = 16: the budget the
+// COM: peaks quoted below are compared with.
 
 // CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
