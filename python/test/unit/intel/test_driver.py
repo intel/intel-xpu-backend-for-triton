@@ -13,6 +13,7 @@ import triton.language as tl
 import pathlib
 
 from elftools.elf.elffile import ELFFile
+from triton import knobs
 from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
@@ -750,5 +751,38 @@ def test_benchmarker_nested(device, monkeypatch):
     drv.get_benchmarker()(run)
     assert used[0] == "default"  # the inner benchmark
     assert used[-1] == "256"  # the outer one
+    assert drv._benchmark_state.flush_grf_mode == "default"
+    assert drv._benchmark_state.launched_grf_modes is None
+
+
+def test_clear_cache_flush_kernel_is_hidden_from_launch_hooks(device):
+    # A launch hook (for example the profiler) would treat the flush kernel as a kernel of the user.
+    drv = driver.active
+    cache = drv.get_empty_cache_for_benchmark()
+    cache.fill_(1)
+    seen = []
+    state = drv._benchmark_state
+    knobs.runtime.launch_enter_hook.add(seen.append)
+    knobs.runtime.launch_exit_hook.add(seen.append)
+    state.flush_grf_mode = "256"
+    try:
+        drv.clear_cache(cache)
+    finally:
+        state.flush_grf_mode = "default"
+        knobs.runtime.launch_enter_hook.remove(seen.append)
+        knobs.runtime.launch_exit_hook.remove(seen.append)
+    assert seen == []
+    assert int(torch.count_nonzero(cache)) == 0
+
+
+def test_benchmarker_restores_state_on_error(device):
+    # Autotuning takes this path for every config that raises `OutOfResources`.
+    drv = driver.active
+
+    def run():
+        raise RuntimeError("config failed")
+
+    with pytest.raises(RuntimeError):
+        drv.get_benchmarker()(run)
     assert drv._benchmark_state.flush_grf_mode == "default"
     assert drv._benchmark_state.launched_grf_modes is None

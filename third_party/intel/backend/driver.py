@@ -1010,7 +1010,9 @@ class XPUDriver(DriverBase):
 
     def clear_cache(self, cache):
         grf_mode = self._benchmark_state.flush_grf_mode
-        if grf_mode == "default":
+        hooked = knobs.runtime.launch_enter_hook.calls or knobs.runtime.launch_exit_hook.calls
+        if grf_mode == "default" or hooked:
+            # A launch hook (for example the profiler) would treat the flush kernel as a kernel of the user.
             cache.zero_()
         else:
             block = 1024
