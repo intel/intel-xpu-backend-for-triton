@@ -6,9 +6,11 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <limits>
 #include <numeric>
 #include <optional>
 
@@ -66,6 +68,15 @@ public:
                 llvm::is_one_of<DPASEngineType, ttgi::DPASEngineTypeXe2,
                                 ttgi::DPASEngineTypeXe3P>::value>>
   LogicalResult convertDot(OpTy op, typename OpTy::Adaptor adaptor) const {
+    // Without block-scaled DPAS, a tt.dot_scaled with a DPAS layout is an
+    // mxfp4 dot that is emulated with bf16 DPAS (see isEmulatedFp4ScaledDot in
+    // AccelerateMatmul).
+    if constexpr (std::is_same_v<OpTy, DotScaledOp> &&
+                  std::is_same_v<DPASEngineType, ttgi::DPASEngineTypeXe2>)
+      if (!op->template getParentOfType<ModuleOp>()->hasAttr(
+              ttgi::TritonIntelGPUDialect::getSupportBlockScaleDPASAttrName()))
+        return convertEmulatedFp4ScaledDot(op, adaptor);
+
     Value A = op.getA(), B = op.getB(), C = op.getC(), D = op.getResult();
     Value loadedA = adaptor.getA(), loadedB = adaptor.getB(),
           loadedC = adaptor.getC();
@@ -283,6 +294,321 @@ public:
       if (*lazy && (*lazy)->cast->use_empty())
         rewriter.eraseOp((*lazy)->cast);
 
+    return success();
+  }
+
+  /// Lowers an mxfp4 x mxfp4 tt.dot_scaled on a target without block-scaled
+  /// DPAS (see isEmulatedFp4ScaledDot in AccelerateMatmul) to bf16 DPAS.
+  ///
+  /// The packed operands have the int8 DPAS operand layouts, so one int8 DPAS
+  /// tile, M=8 x N=16 x K=32 bytes, holds K=64 fp4 values and takes 4 bf16 DPAS
+  /// (K=16 each). In a tile, lane l holds bytes 2l and 2l+1 of each row of A,
+  /// i.e. fp4 values 4l..4l+3, and lane n holds the 32 bytes of column n of B
+  /// as 8 dwords of 4 bytes, i.e. dword c holds fp4 values 8c..8c+7. bf16 DPAS
+  /// j (0..3) takes K index 4i+j of the tile as its K index i, the same for A
+  /// and B, so no value moves between lanes:
+  ///   - A: lane l holds K index l of each row: fp4 value 4l+j, nibble j%2 of
+  ///     byte 2l+j/2;
+  ///   - B: dword c holds K indices 2c and 2c+1: fp4 values 8c+j and 8c+4+j,
+  ///     nibble j%2 of bytes 4c+j/2 and 4c+2+j/2.
+  /// Each value is decoded as in the tt.fp4_to_fp lowering, multiplied by its
+  /// scale in f32 and truncated to bf16, which is exact: an e2m1 value times a
+  /// power of two has at most 2 significant bits. A scale of byte 255 is NaN
+  /// unless the op's `fastMath` is set (as in DecomposeScaledBlocked); byte 0
+  /// is 2^-127.
+  /// The scales have the layout of their operand with K divided by the 16
+  /// bytes of a scale block (getEmulatedFp4ScaleLayout), so every thread holds
+  /// the scales of its bytes.
+  ///
+  /// Each bf16 DPAS operand is decoded one DPAS call ahead of its first use, as
+  /// for lazy fp8 operands, so that only a few decoded operands are live.
+  LogicalResult
+  convertEmulatedFp4ScaledDot(DotScaledOp op,
+                              DotScaledOp::Adaptor adaptor) const {
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
+    auto ATensorTy = cast<RankedTensorType>(op.getA().getType()),
+         BTensorTy = cast<RankedTensorType>(op.getB().getType()),
+         CTensorTy = cast<RankedTensorType>(op.getC().getType()),
+         DTensorTy = cast<RankedTensorType>(op.getResult().getType());
+    auto dpasEncoding = cast<DpasEncodingAttr>(DTensorTy.getEncoding());
+    if (DTensorTy.getRank() != 2 || dpasEncoding.getRepeatCount() != 8 ||
+        dpasEncoding.getSystolicDepth() != 8 ||
+        dpasEncoding.getExecutionSize() != 16 ||
+        dpasEncoding.getOpsPerChannel() != 4 ||
+        dpasEncoding.getThreadsPerWarp() != 16 ||
+        op.getAElemType() != triton::ScaleDotElemType::E2M1 ||
+        op.getBElemType() != triton::ScaleDotElemType::E2M1)
+      llvm::report_fatal_error("unexpected tt.dot_scaled without block-scaled "
+                               "DPAS: expected an emulated mxfp4 dot");
+
+    SmallVector<int64_t> repA = dpasEncoding.getDPASRepetitions(
+        ATensorTy.getShape(), DpasEncodingAttr::OpIdx::OperandA);
+    SmallVector<int64_t> repB = dpasEncoding.getDPASRepetitions(
+        BTensorTy.getShape(), DpasEncodingAttr::OpIdx::OperandB);
+    ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
+    ArrayRef<unsigned> warpsPerCTA = dpasEncoding.getWarpsPerCTA();
+    unsigned repM = repA[1], repN = repB[2], repK = repA[2];
+    unsigned repNumM = repM * repCluster[0], repNumN = repN * repCluster[1];
+
+    SmallVector<Value> aVals =
+        unpackTensorElements(loc, adaptor.getA(), rewriter, ATensorTy);
+    SmallVector<Value> bVals =
+        unpackTensorElements(loc, adaptor.getB(), rewriter, BTensorTy);
+    // The scale register of each operand register: the scales have the
+    // operand layout with K divided by the 16 bytes of a scale block and the
+    // registers that only move within a block dropped (see
+    // getEmulatedFp4ScaleLayout in AccelerateMatmul).
+    auto getScales = [&](Value scale, RankedTensorType operandTy, bool isA,
+                         size_t numOperandRegs) {
+      SmallVector<Value> scales;
+      if (!scale)
+        return scales;
+      SmallVector<Value> vals = unpackLLElements(loc, scale, rewriter);
+      LinearLayout layout = triton::gpu::toLinearLayout(operandTy);
+      unsigned kDim = isA ? 1 : 0;
+      SmallVector<unsigned> keptBits;
+      for (auto [bit, basis] :
+           llvm::enumerate(layout.getBases().lookup(str_attr("register"))))
+        if (basis[1 - kDim] != 0 || (basis[kDim] >> 4) != 0)
+          keptBits.push_back(bit);
+      if (vals.size() != (size_t(1) << keptBits.size()))
+        llvm::report_fatal_error(
+            "emulated mxfp4 dot: the scale layout does not match the "
+            "operand layout (" +
+            Twine(vals.size()) + " scales for " + Twine(numOperandRegs) +
+            " operand bytes)");
+      for (size_t reg = 0; reg < numOperandRegs; ++reg) {
+        size_t scaleReg = 0;
+        for (auto [i, bit] : llvm::enumerate(keptBits))
+          scaleReg |= ((reg >> bit) & 1) << i;
+        scales.push_back(vals[scaleReg]);
+      }
+      return scales;
+    };
+    SmallVector<Value> aScales =
+        getScales(adaptor.getAScale(), ATensorTy, /*isA=*/true, aVals.size());
+    SmallVector<Value> bScales =
+        getScales(adaptor.getBScale(), BTensorTy, /*isA=*/false, bVals.size());
+
+    // The registers of each tile: A by (m, k) tile, row * 2 + byte; B by
+    // (n, k) tile, byte. Found from the operand layouts at lane 0 of warp 0,
+    // where a tile starts at a multiple of the tile shape.
+    using TileRegs = std::map<std::pair<unsigned, unsigned>, SmallVector<int>>;
+    auto getTileRegs = [&](RankedTensorType tensorTy, bool isA,
+                           size_t numRegs) {
+      LinearLayout layout = triton::gpu::toLinearLayout(tensorTy);
+      StringAttr kReg = str_attr("register"), kLane = str_attr("lane"),
+                 kWarp = str_attr("warp"), kBlock = str_attr("block");
+      unsigned tileOuter = isA ? 8 : 16;
+      unsigned cluster = isA ? repCluster[0] : repCluster[1];
+      unsigned outerPerRep = tileOuter * cluster * warpsPerCTA[isA ? 0 : 1];
+      unsigned regsPerTile = isA ? 16 : 32;
+      TileRegs tiles;
+      for (unsigned reg = 0; reg < numRegs; ++reg) {
+        auto coords =
+            layout.apply({{kReg, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+        unsigned outer = coords[isA ? 0 : 1].second;
+        unsigned kBytes = coords[isA ? 1 : 0].second;
+        unsigned inTile = outer % outerPerRep;
+        unsigned outerTile = outer / outerPerRep * cluster + inTile / tileOuter;
+        unsigned row = inTile % tileOuter;
+        unsigned byte = kBytes % 32;
+        if ((isA && byte >= 2) || (!isA && row != 0))
+          llvm::report_fatal_error(
+              "emulated mxfp4 dot: unexpected operand layout");
+        SmallVector<int> &regs = tiles[{outerTile, kBytes / 32}];
+        regs.resize(regsPerTile, -1);
+        int &slot = regs[isA ? row * 2 + byte : byte];
+        if (slot != -1)
+          llvm::report_fatal_error(
+              "emulated mxfp4 dot: unexpected operand layout");
+        slot = reg;
+      }
+      for (auto &[key, regs] : tiles)
+        if (llvm::is_contained(regs, -1))
+          llvm::report_fatal_error(
+              "emulated mxfp4 dot: unexpected operand layout");
+      return tiles;
+    };
+    TileRegs aTiles = getTileRegs(ATensorTy, /*isA=*/true, aVals.size());
+    TileRegs bTiles = getTileRegs(BTensorTy, /*isA=*/false, bVals.size());
+
+    // The f32 factor of each scale, computed once per scale value.
+    Value two126 = tb.f32_val(0x1p126f);
+    DenseMap<Value, Value> scaleFactors;
+    auto getScaleFactor = [&](Value scale) -> Value {
+      auto [it, inserted] = scaleFactors.try_emplace(scale);
+      if (!inserted)
+        return it->second;
+      Value s = tb.zext(i32_ty, tb.bitcast(scale, i8_ty));
+      Value bits = tb.shl(s, tb.i32_val(23));
+      // Byte 0 is 2^-127, a denormal.
+      bits = tb.umax(bits, tb.i32_val(0x00400000));
+      Value factor = tb.bitcast(bits, f32_ty);
+      // One op per statement, so that the order of the ops does not depend on
+      // the order in which C++ evaluates arguments.
+      if (!op.getFastMath()) {
+        Value is255 = tb.icmp_eq(s, tb.i32_val(255));
+        Value nan = tb.f32_val(std::numeric_limits<float>::quiet_NaN());
+        factor = tb.select(is255, nan, factor);
+      }
+      return it->second = factor;
+    };
+    // The loaded word that holds `byte` and the bit offset of the byte in it:
+    // the 2D block loads of the operands give vectors of i16 or i32 that are
+    // bitcast to i8 elements, and taking the nibbles from the words directly
+    // saves extracting and extending every byte.
+    DenseMap<Value, std::pair<Value, unsigned>> wordOfByte;
+    // The value inserted at each field of the struct an operand was packed
+    // into, found by one walk of its insertvalue chain.
+    DenseMap<Value, DenseMap<int64_t, Value>> structFields;
+    auto getWord = [&](Value byte) -> std::pair<Value, unsigned> {
+      auto [it, inserted] = wordOfByte.try_emplace(byte);
+      if (!inserted)
+        return it->second;
+      Value v = byte;
+      // Look through the struct the operand was packed into.
+      if (auto extract = v.getDefiningOp<LLVM::ExtractValueOp>()) {
+        Value container = extract.getContainer();
+        auto [fieldsIt, newStruct] = structFields.try_emplace(container);
+        if (newStruct)
+          for (auto insert = container.getDefiningOp<LLVM::InsertValueOp>();
+               insert;
+               insert =
+                   insert.getContainer().getDefiningOp<LLVM::InsertValueOp>())
+            // The last insert of a field wins: keep the first one found.
+            fieldsIt->second.try_emplace(insert.getPosition()[0],
+                                         insert.getValue());
+        if (Value field = fieldsIt->second.lookup(extract.getPosition()[0]))
+          v = field;
+      }
+      if (auto extract = v.getDefiningOp<LLVM::ExtractElementOp>()) {
+        auto bitcast = extract.getVector().getDefiningOp<LLVM::BitcastOp>();
+        auto idx = extract.getPosition().getDefiningOp<LLVM::ConstantOp>();
+        VectorType srcTy =
+            bitcast ? dyn_cast<VectorType>(bitcast.getArg().getType())
+                    : nullptr;
+        if (srcTy && idx && srcTy.getElementType().isInteger() &&
+            (srcTy.getElementTypeBitWidth() == 16 ||
+             srcTy.getElementTypeBitWidth() == 32)) {
+          int64_t index = cast<IntegerAttr>(idx.getValue()).getInt();
+          unsigned bytesPerWord = srcTy.getElementTypeBitWidth() / 8;
+          Value word = tb.extract_element(bitcast.getArg(),
+                                          tb.i32_val(index / bytesPerWord));
+          if (bytesPerWord == 2)
+            word = tb.zext(i32_ty, word);
+          return it->second = {word, unsigned(index % bytesPerWord) * 8};
+        }
+      }
+      return it->second = {tb.zext(i32_ty, tb.bitcast(byte, i8_ty)), 0u};
+    };
+    // The f32 bits of the scaled value of nibble `nibble` of `byte`.
+    auto decode = [&](Value byte, unsigned nibble, Value scale) -> Value {
+      auto [word, offset] = getWord(byte);
+      // Move the nibble to bits [31:28]: the sign to bit 31.
+      unsigned shift = 28 - offset - 4 * nibble;
+      Value top = shift ? tb.shl(word, tb.i32_val(shift)) : word;
+      Value mask = tb.i32_val(0x81C00000);
+      Value shifted = tb.ashr(top, tb.i32_val(6));
+      Value bits = tb.and_(shifted, mask);
+      // Both multiplies are kept out of fast math (TRITON_INTEL_FAST_MATH):
+      // with `fast` they would be reassociated into one multiply by 2^126
+      // times the scale, which overflows to infinity for scales above 2^1 and
+      // turns a zero into NaN.
+      Value val = mlir::LLVM::intel::keepFPMath(
+          tb.fmul(tb.bitcast(bits, f32_ty), two126));
+      if (scale)
+        val =
+            mlir::LLVM::intel::keepFPMath(tb.fmul(val, getScaleFactor(scale)));
+      return tb.bitcast(val, i32_ty);
+    };
+
+    // The bf16 DPAS operand j of the A tile (m, k): row r is the upper half
+    // of the f32 value of its nibble.
+    std::map<std::array<unsigned, 3>, Value> aDecoded, bDecoded;
+    VectorType aTy = vec_ty(i16_ty, 8), bTy = vec_ty(i32_ty, 8);
+    VectorType halvesTy = vec_ty(i16_ty, 2);
+    auto getA = [&](unsigned m, unsigned k, unsigned j) -> Value {
+      auto [it, inserted] = aDecoded.try_emplace({m, k, j});
+      if (!inserted)
+        return it->second;
+      const SmallVector<int> &regs = aTiles.at({m, k});
+      Value vec = LLVM::UndefOp::create(rewriter, loc, aTy);
+      for (unsigned row = 0; row < 8; ++row) {
+        int reg = regs[row * 2 + j / 2];
+        Value bits =
+            decode(aVals[reg], j % 2, aScales.empty() ? Value() : aScales[reg]);
+        Value upper = tb.extract_element(i16_ty, tb.bitcast(bits, halvesTy),
+                                         tb.i32_val(1));
+        vec = tb.insert_element(aTy, vec, upper, tb.i32_val(row));
+      }
+      return it->second = vec;
+    };
+    // The bf16 DPAS operand j of the B tile (n, k): dword c packs the upper
+    // halves of the f32 values of its two nibbles.
+    auto getB = [&](unsigned n, unsigned k, unsigned j) -> Value {
+      auto [it, inserted] = bDecoded.try_emplace({n, k, j});
+      if (!inserted)
+        return it->second;
+      const SmallVector<int> &regs = bTiles.at({n, k});
+      auto decodeAt = [&](unsigned byte) {
+        int reg = regs[byte];
+        return decode(bVals[reg], j % 2,
+                      bScales.empty() ? Value() : bScales[reg]);
+      };
+      Value vec = LLVM::UndefOp::create(rewriter, loc, bTy);
+      for (unsigned c = 0; c < 8; ++c) {
+        Value lo = decodeAt(4 * c + j / 2);
+        Value hi = decodeAt(4 * c + 2 + j / 2);
+        Value dword = tb.or_(tb.and_(hi, tb.i32_val(0xFFFF0000)),
+                             tb.lshr(lo, tb.i32_val(16)));
+        vec = tb.insert_element(bTy, vec, dword, tb.i32_val(c));
+      }
+      return it->second = vec;
+    };
+
+    ValueTable fc = getValuesFromDotOperandLayoutStruct(
+        adaptor.getC(), CTensorTy, /*batch=*/1, repM, repN,
+        typeConverter->convertType(CTensorTy.getElementType()),
+        DpasEncodingAttr::OpIdx::OperandC);
+
+    // As in convertDot, K is outermost, then the smaller of M and N; each of
+    // the 4 bf16 DPAS of a tile is a K slice of its own, so that only the
+    // decoded operands of one slice are live at once.
+    SmallVector<std::array<unsigned, 4>> dpasOrder;
+    unsigned repOuter = std::min(repNumM, repNumN);
+    unsigned repInner = std::max(repNumM, repNumN);
+    for (unsigned k = 0; k < repK; ++k)
+      for (unsigned j = 0; j < 4; ++j)
+        for (unsigned outer = 0; outer < repOuter; ++outer)
+          for (unsigned inner = 0; inner < repInner; ++inner)
+            dpasOrder.push_back(
+                repNumM > repNumN
+                    ? std::array<unsigned, 4>{inner, outer, k, j}
+                    : std::array<unsigned, 4>{outer, inner, k, j});
+
+    Type dTy = vec_ty(f32_ty, 8);
+    auto bf16 =
+        TritonGEN::PrecisionTypeAttr::get(ctx, TritonGEN::PrecisionType::BF16);
+    auto rc = IntegerAttr::get(rewriter.getIntegerType(32), 8);
+    // As for lazy fp8 operands, an operand is decoded one DPAS call ahead of
+    // its first use.
+    for (size_t i = 0; i < dpasOrder.size(); ++i) {
+      for (size_t next = i; next < std::min(i + 2, dpasOrder.size()); ++next) {
+        auto [m, n, k, j] = dpasOrder[next];
+        getA(m, k, j);
+        getB(n, k, j);
+      }
+      auto [m, n, k, j] = dpasOrder[i];
+      Value &acc = fc.at({0, m, n});
+      acc = TritonGEN::MatrixDPASOp::create(rewriter, loc, dTy, acc,
+                                            getA(m, k, j), getB(n, k, j), bf16,
+                                            bf16, rc);
+    }
+
+    rewriter.replaceOp(op, composeValuesToDotOperandLayoutStruct(
+                               fc, DTensorTy, /*dimBatch=*/1, repM, repN,
+                               DTensorTy.getElementType()));
     return success();
   }
 

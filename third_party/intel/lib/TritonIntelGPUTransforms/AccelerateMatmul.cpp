@@ -16,6 +16,9 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Tools/LayoutUtils.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
@@ -296,14 +299,87 @@ static bool hasBlockScaleDPASScales(tt::DotScaledOp op) {
          op.deduceScaleFactor() == 32;
 }
 
+// Whether \p op, an mxfp4 x mxfp4 `tt.dot_scaled` on a target without
+// block-scaled DPAS, is lowered with bf16 DPAS that decode the packed fp4
+// operands themselves (see the DPAS lowering of tt.dot_scaled on Xe2). The
+// packed operands then take the int8 DPAS operand layouts, so they are loaded
+// as they are and never take a decoded bf16 copy through registers or shared
+// memory; otherwise the dot is decomposed into an upcast and a bf16 tt.dot.
+static bool isEmulatedFp4ScaledDot(tt::DotScaledOp op, ModuleOp mod) {
+  if (tt::tools::getBoolEnv("TRITON_INTEL_DISABLE_EMULATED_FP4_DPAS"))
+    return false;
+  // A target with bf8 DPAS lowers its DPAS as Xe3P, which does not emulate.
+  if (mod->hasAttr(
+          ttgi::TritonIntelGPUDialect::getSupportDPASWithBF8AttrName()))
+    return false;
+  if (op.getAElemType() != tt::ScaleDotElemType::E2M1 ||
+      op.getBElemType() != tt::ScaleDotElemType::E2M1 || !op.getLhsKPack() ||
+      !op.getRhsKPack())
+    return false;
+  RankedTensorType retTy = op.getType();
+  if (retTy.getRank() != 2 || !retTy.getElementType().isF32())
+    return false;
+  if (ttg::TritonGPUDialect::getThreadsPerWarp(mod) != 16)
+    return false;
+  std::optional<ttgi::DpasEncodingAttr::DPASCapability> dpasCap =
+      ttgi::DpasEncodingAttr::getDPASCapability(mod);
+  if (!dpasCap || dpasCap->executionSize != 16 || dpasCap->systolicDepth != 8 ||
+      dpasCap->repeatCount != 8)
+    return false;
+  // One emulated instruction is an int8-shaped M=8 x N=16 x K=64 (fp4) tile.
+  int64_t m = retTy.getShape()[0], n = retTy.getShape()[1];
+  int64_t kBytes = op.getA().getType().getShape()[1];
+  if (m < 8 || n < 16 || kBytes % 32 != 0)
+    return false;
+  // The scales are mx ones, e8m0 with one byte per 32 fp4 values along K:
+  // hasBlockScaleDPASScales checks that before this is called.
+  return true;
+}
+
+// The layout of a scale of an emulated mxfp4 dot (see isEmulatedFp4ScaledDot)
+// that gives every thread the scales of the bytes it holds of the packed
+// operand of type \p operandTy: the operand layout with the K coordinate (in
+// bytes) divided by 16, the 16 bytes of one scale block. Lanes and warps that
+// only move within a block hold the same scales; registers that do are
+// dropped, so the scale of an operand register is the scale register whose
+// index is the operand register index without the bits of the dropped
+// registers (the DPAS lowering computes the same). A scale is
+// [non-K, K / 32] for both operands.
+static tt::LinearLayout
+getEmulatedFp4ScaleLayout(RankedTensorType operandTy, unsigned opIdx,
+                          ArrayRef<int64_t> scaleShape) {
+  tt::LinearLayout operandLayout = ttg::toLinearLayout(operandTy);
+  unsigned kDim = opIdx == 0 ? 1 : 0;
+  StringAttr kRegister = StringAttr::get(operandTy.getContext(), "register");
+  tt::LinearLayout::BasesT bases;
+  for (const auto &[inDim, inDimBases] : operandLayout.getBases()) {
+    std::vector<std::vector<int32_t>> newBases;
+    for (const std::vector<int32_t> &basis : inDimBases) {
+      std::vector<int32_t> newBasis = {basis[1 - kDim], basis[kDim] >> 4};
+      if (inDim == kRegister && newBasis[0] == 0 && newBasis[1] == 0)
+        continue;
+      newBases.push_back(std::move(newBasis));
+    }
+    bases[inDim] = std::move(newBases);
+  }
+  SmallVector<StringAttr> outDims =
+      tt::standardOutDimNames(operandTy.getContext(), 2);
+  return tt::LinearLayout(std::move(bases),
+                          {{outDims[0], int32_t(scaleShape[0])},
+                           {outDims[1], int32_t(scaleShape[1])}},
+                          /*requireSurjective=*/true);
+}
+
 template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
                              OpTy, tt::DotOp, tt::DotScaledOp>::value>>
 class BlockedToDPAS : public OpRewritePattern<OpTy> {
   using TensorValue = TypedValue<RankedTensorType>;
 
 public:
-  BlockedToDPAS(MLIRContext *context, int benefit, StringRef grfMode)
-      : OpRewritePattern<OpTy>(context, benefit), grfMode(grfMode) {}
+  BlockedToDPAS(MLIRContext *context, int benefit, StringRef grfMode,
+                bool emulateScaledFp4 = false)
+      : OpRewritePattern<OpTy>(context, benefit), grfMode(grfMode),
+        emulateScaledFp4(emulateScaledFp4) {}
 
   LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
@@ -319,6 +395,12 @@ public:
 
     auto funcOp = op->template getParentOfType<FunctionOpInterface>();
     ModuleOp mod = funcOp->template getParentOfType<ModuleOp>();
+    if constexpr (std::is_same_v<OpTy, tt::DotScaledOp>) {
+      if (emulateScaledFp4 && !isEmulatedFp4ScaledDot(op, mod))
+        return rewriter.notifyMatchFailure(
+            op, "dot_scaled is not an emulated mxfp4 dot");
+    }
+
     auto dpasAnalysis = ttgi::DPASAnalysisFactory::createDPASAnalysis(mod);
 
     // Ensure function-wide DPAS applicability.
@@ -414,24 +496,22 @@ public:
     Value res = nullptr;
     if constexpr (std::is_same<OpTy, tt::DotScaledOp>::value) {
       MLIRContext *ctx = rewriter.getContext();
-      TensorValue scaleA = op.getAScale();
-      if (scaleA) {
-        tt::LinearLayout scaleALayout = BlockScaledDPAStoLinearLayout(
-            scaleA.getType().getShape(), dpasEnc, 3);
-        RankedTensorType newScaleAType = scaleA.getType().cloneWithEncoding(
-            ttg::LinearEncodingAttr::get(ctx, scaleALayout));
-        scaleA = ttg::ConvertLayoutOp::create(rewriter, scaleA.getLoc(),
-                                              newScaleAType, scaleA);
-      }
-      TensorValue scaleB = op.getBScale();
-      if (scaleB) {
-        tt::LinearLayout scaleBLayout = BlockScaledDPAStoLinearLayout(
-            scaleB.getType().getShape(), dpasEnc, 4);
-        RankedTensorType newScaleBType = scaleB.getType().cloneWithEncoding(
-            ttg::LinearEncodingAttr::get(ctx, scaleBLayout));
-        scaleB = ttg::ConvertLayoutOp::create(rewriter, scaleB.getLoc(),
-                                              newScaleBType, scaleB);
-      }
+      auto convertScale = [&](TensorValue scale, unsigned opIdx,
+                              RankedTensorType operandTy) -> TensorValue {
+        if (!scale)
+          return scale;
+        ArrayRef<int64_t> shape = scale.getType().getShape();
+        tt::LinearLayout layout =
+            emulateScaledFp4
+                ? getEmulatedFp4ScaleLayout(operandTy, opIdx, shape)
+                : BlockScaledDPAStoLinearLayout(shape, dpasEnc, opIdx + 3);
+        RankedTensorType newType = scale.getType().cloneWithEncoding(
+            ttg::LinearEncodingAttr::get(ctx, layout));
+        return ttg::ConvertLayoutOp::create(rewriter, scale.getLoc(), newType,
+                                            scale);
+      };
+      TensorValue scaleA = convertScale(op.getAScale(), 0, newAType);
+      TensorValue scaleB = convertScale(op.getBScale(), 1, newBType);
       auto newOp = tt::DotScaledOp::create(
           rewriter, op.getLoc(), newRetType, a, b, newAcc, scaleA, scaleB,
           op.getAElemType(), op.getBElemType(), op.getFastMath());
@@ -451,6 +531,9 @@ public:
 
 private:
   std::string grfMode;
+  // Whether tt.dot_scaled ops are only converted when they are emulated
+  // mxfp4 dots (targets without block-scaled DPAS).
+  bool emulateScaledFp4;
 
   /// True if B plus the accumulator of the dot do not fit in \p grfEntries.
   static bool exceedsRegistersWhenDuplicated(
@@ -1598,6 +1681,9 @@ public:
       patterns.add<BlockedToDPAS<tt::DotScaledOp>>(context, benefitDefault + 1,
                                                    grfMode);
       patterns.add<UpcastScaledBlocked>(context, benefitDefault + 1);
+    } else {
+      patterns.add<BlockedToDPAS<tt::DotScaledOp>>(
+          context, benefitDefault + 1, grfMode, /*emulateScaledFp4=*/true);
     }
     ttgi::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())

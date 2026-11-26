@@ -1292,7 +1292,12 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         if not (with_a_scale and with_b_scale):
             pytest.xfail("None aScale/bScale is only tested on AMD backend for now")
     elif is_xpu():
-        pytest.xfail("XPU does not natively support scaled fp4 matmul")
+        # Without the block scaled DPAS, K-packed mxfp4 x mxfp4 is emulated with plain DPAS.
+        if not pack_along_k or scale_type != "float8_e8m0fnu" or not (with_a_scale and with_b_scale):
+            pytest.xfail("XPU does not natively support scaled fp4 matmul")
+        if BLOCK_M == 128 and BLOCK_N == 256:
+            # The accumulator spills with 4 warps, and IGC before 2.43.9 miscompiles the spills (#8517).
+            pytest.xfail("IGC miscompiles the spills of the emulated fp4 dot before 2.43.9")
 
     NUM_STAGES = 1
     torch.manual_seed(42)

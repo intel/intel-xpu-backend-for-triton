@@ -44,3 +44,31 @@ llvm.func @triton_gen.fp_rounding_mode(%arg0: !llvm.ptr) {
 
 // CHECK-DAG: ![[#ROUNDING0]] = !{![[#ROUNDING1:]]}
 // CHECK-DAG: ![[#ROUNDING1]] = !{i32 39, i32 0}
+
+// -----
+
+// CHECK-LABEL: define void @triton_gen.keep_fp_math(
+llvm.func @triton_gen.keep_fp_math(%arg0: !llvm.ptr) {
+  %0 = llvm.load %arg0 : !llvm.ptr -> f32
+  // CHECK: fmul float %[[#]], %[[#]], !triton_gen.keep_fp_math ![[#KEEP:]]
+  %1 = llvm.fmul %0, %0 {triton_gen.keep_fp_math} : f32
+  // CHECK: fadd float %[[#]], %[[#]]{{$}}
+  %2 = llvm.fadd %1, %0 : f32
+  llvm.store %2, %arg0 : f32, !llvm.ptr
+  llvm.return
+}
+
+// CHECK: ![[#KEEP]] = !{}
+
+// -----
+
+// CHECK-LABEL: define void @triton_gen.keep_fp_math_folded(
+llvm.func @triton_gen.keep_fp_math_folded(%arg0: !llvm.ptr) {
+  // COM: A multiply of constants is folded and leaves no instruction to mark.
+  %0 = llvm.mlir.constant(2.0 : f32) : f32
+  %1 = llvm.mlir.constant(3.0 : f32) : f32
+  // CHECK: store float 6.000000e+00, ptr %[[#]]
+  %2 = llvm.fmul %0, %1 {triton_gen.keep_fp_math} : f32
+  llvm.store %2, %arg0 : f32, !llvm.ptr
+  llvm.return
+}

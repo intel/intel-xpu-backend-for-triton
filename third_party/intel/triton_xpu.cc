@@ -464,14 +464,23 @@ void init_triton_intel(py::module_ &m) {
   // The fastMath parameter is resolved by the Python layer from
   // TRITON_INTEL_FAST_MATH and TORCHINDUCTOR_USE_FAST_MATH env vars.
   // https://github.com/intel/intel-xpu-backend-for-triton/issues/3862
+  // Instructions with triton_gen.keep_fp_math metadata get the flags of the
+  // default math even under fast math: their results rely on them not being
+  // reassociated with the instructions around them.
+  static constexpr llvm::StringRef keepFPMathName =
+      mlir::triton::TritonGEN::TritonGENDialect::getKeepFPMathAttrName();
   m.def("set_fast_math",
         [](llvm::Module *mod, bool enableFpFusion, bool fastMath) {
           using namespace llvm;
+          unsigned keepFPMath = mod->getContext().getMDKindID(keepFPMathName);
           for (Function &func : *mod) {
             for (Instruction &inst : instructions(func)) {
+              bool keep = inst.getMetadata(keepFPMath);
+              if (keep)
+                inst.setMetadata(keepFPMath, nullptr);
               if (auto *op = dyn_cast<FPMathOperator>(&inst)) {
                 FastMathFlags FMF;
-                if (fastMath) {
+                if (fastMath && !keep) {
                   FMF.setFast(true);
                 } else if (enableFpFusion) {
                   if (op->getOpcode() == Instruction::FAdd ||
