@@ -1388,17 +1388,57 @@ static bool isMeasuredNativeGatherClass(triton::DescriptorGatherOp op,
          });
 }
 
+// Scatter admission, width and alignment: 16- or 32-bit elements (the
+// block-write widths) and a row access at column y proven 16-byte aligned.
+// The contiguity term of that proof also implies a unit last stride.
+static bool isAlignedNativeScatter(triton::DescriptorScatterOp op,
+                                   intel::ModuleAxisInfoAnalysis &axisInfo) {
+  unsigned bits =
+      getIntOrFloatOrPtrBitWidth(op.getSrc().getType().getElementType());
+  if (bits != 16 && bits != 32)
+    return false;
+  return axisInfo.isDescriptorRow16ByteAligned(op.getDesc(), op.getYOffset(),
+                                               bits);
+}
+
+// Scatter admission, source: a tt.dot result reached only through element
+// casts and scf.for results, so it likely gets a DPAS layout. A wrong guess
+// costs only speed.
+static bool isDotFedScatterSource(Value src) {
+  while (Operation *def = src.getDefiningOp()) {
+    if (isa<triton::DotOp>(def))
+      return true;
+    if (auto forOp = dyn_cast<scf::ForOp>(def))
+      src = forOp.getYieldedValues()[cast<OpResult>(src).getResultNumber()];
+    else if (isa<arith::TruncFOp, arith::ExtFOp, triton::FpToFpOp,
+                 triton::BitcastOp, arith::BitcastOp, arith::TruncIOp,
+                 arith::ExtSIOp, arith::ExtUIOp, arith::SIToFPOp,
+                 arith::UIToFPOp, arith::FPToSIOp, arith::FPToUIOp>(def))
+      src = def->getOperand(0);
+    else
+      return false;
+  }
+  return false;
+}
+
 static llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
 collectCandidateMakeTensorDescOps(Operation *op, int numWarps,
                                   bool nativeGatherClasses) {
   const bool keepNativeGathers =
       !tools::getBoolEnv("TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_GATHER");
+  const bool keepNativeScatters =
+      !tools::getBoolEnv("TRITON_INTEL_DISABLE_NATIVE_DESCRIPTOR_SCATTER");
   // Built on the IR as it is now (after the greedy pre-rewrites), and only if
-  // a gather may stay native.
+  // a gather or a scatter may stay native.
   std::optional<intel::ModuleAxisInfoAnalysis> axisInfo;
-  if (keepNativeGathers && op->walk([](triton::DescriptorGatherOp) {
-                               return WalkResult::interrupt();
-                             }).wasInterrupted())
+  auto mayStayNative = [&](Operation *access) {
+    return (keepNativeGathers && isa<triton::DescriptorGatherOp>(access)) ||
+           (keepNativeScatters && isa<triton::DescriptorScatterOp>(access));
+  };
+  if (op->walk([&](Operation *access) {
+          return mayStayNative(access) ? WalkResult::interrupt()
+                                       : WalkResult::advance();
+        }).wasInterrupted())
     axisInfo.emplace(cast<ModuleOp>(op));
   llvm::SmallSetVector<triton::MakeTensorDescOp, 4> candidateMakeTensorDescOps;
   llvm::SmallSetVector<triton::MakeTensorDescOp, 4> unhandledMakeTensorDescOps;
@@ -1449,12 +1489,24 @@ collectCandidateMakeTensorDescOps(Operation *op, int numWarps,
                         : unhandledMakeTensorDescOps)
                 .insert(d);
         })
-        .Case<triton::DescriptorScatterOp, triton::DescriptorReduceOp>(
-            [&](auto op) {
-              for (triton::MakeTensorDescOp d :
-                   triton::intel::findDescriptorDefinitions(op.getDesc()))
-                unhandledMakeTensorDescOps.insert(d);
-            })
+        .Case<triton::DescriptorScatterOp>([&](triton::DescriptorScatterOp op) {
+          // A scatter stays native (lowered as ttig.descriptor_scatter) where
+          // that lowering should take its block-write arm:
+          // isDotFedScatterSource and isAlignedNativeScatter.
+          bool keepNative = keepNativeScatters &&
+                            isDotFedScatterSource(op.getSrc()) &&
+                            isAlignedNativeScatter(op, *axisInfo);
+          for (triton::MakeTensorDescOp d :
+               triton::intel::findDescriptorDefinitions(op.getDesc()))
+            (keepNative ? candidateMakeTensorDescOps
+                        : unhandledMakeTensorDescOps)
+                .insert(d);
+        })
+        .Case<triton::DescriptorReduceOp>([&](triton::DescriptorReduceOp op) {
+          for (triton::MakeTensorDescOp d :
+               triton::intel::findDescriptorDefinitions(op.getDesc()))
+            unhandledMakeTensorDescOps.insert(d);
+        })
         .Case<triton::CallOp, triton::ReturnOp>([&](auto op) {
           // A descriptor in a function signature is unconditionally illegal
           // (see the `FuncOp` legality below), so a descriptor crossing a

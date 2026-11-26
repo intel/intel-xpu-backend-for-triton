@@ -198,6 +198,7 @@ public:
   void rewriteAssertOp(tt::AssertOp assertOp);
   bool rewriteStoreOp(tt::StoreOp storeOp);
   bool rewriteDescriptorStoreOp(tt::DescriptorStoreOp storeOp);
+  bool rewriteDescriptorScatterOp(ttgi::DescriptorScatterOp scatterOp);
   Attribute getEncodingBeforeRewrite(Value value) const;
   void setEncodingInPlace(Value value, Attribute encoding);
   void rewriteGenericOpInPlace(Operation *op, Attribute encoding);
@@ -780,6 +781,10 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           if (rewriteDescriptorStoreOp(descStoreOp))
             continue;
         }
+        if (auto scatterOp = dyn_cast<ttgi::DescriptorScatterOp>(&op)) {
+          if (rewriteDescriptorScatterOp(scatterOp))
+            continue;
+        }
         // If we don't need to rewrite the op we still need to remap the
         // operands.
         for (OpOperand &operand : op.getOpOperands()) {
@@ -1032,6 +1037,38 @@ bool LayoutPropagation::rewriteDescriptorStoreOp(
 
   Value newSrc = getValueAs(src, targetEncoding);
   storeOp.getSrcMutable().assign(newSrc);
+  return true;
+}
+
+// The scatter takes the analysis encoding only if that layout admits sub-group
+// block writes; otherwise the caller converts both operands back.
+bool LayoutPropagation::rewriteDescriptorScatterOp(
+    ttgi::DescriptorScatterOp scatterOp) {
+  Value src = scatterOp.getSrc();
+  auto it = layouts.find(src);
+  if (it == layouts.end())
+    return false;
+
+  LayoutInfo &info = it->second;
+  assert(info.encodings.size() == 1 &&
+         "we should have resolved to a single encoding");
+  Attribute targetEncoding = info.encodings[0];
+  // Nothing to sink; this also keeps encoding-less sources (null anchors) away
+  // from the helper.
+  if (getEncodingBeforeRewrite(src) == targetEncoding)
+    return false;
+  RankedTensorType newSrcType =
+      scatterOp.getSrc().getType().cloneWithEncoding(targetEncoding);
+  if (!ttgi::getScatterBlockWriteRuns(newSrcType))
+    return false;
+
+  scatterOp.getSrcMutable().assign(getValueAs(src, targetEncoding));
+
+  Value x = scatterOp.getXOffsets();
+  OpBuilder builder(scatterOp);
+  scatterOp.getXOffsetsMutable().assign(ttgi::buildConvertedXOffsets(
+      builder, scatterOp.getLoc(), getValueAs(x, getEncodingBeforeRewrite(x)),
+      newSrcType));
   return true;
 }
 
