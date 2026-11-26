@@ -45,8 +45,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         return success();
       }
       // If the operation is a supported sub-group transposition, perform via
-      // SLM.
-      if (intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
+      // SLM. A forced warp shuffle has no SLM allocated (lowerings create it
+      // after the allocation analysis ran), so it must stay in registers.
+      if (!op.getForceWarpShuffle() &&
+          intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
         performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter);
         return success();
       }
@@ -623,7 +625,8 @@ struct ConvertLayoutOpGuard : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
     auto dstTy = op.getType();
     assert(!intel::cvtIsSubGroupShuffle(srcTy, dstTy) &&
            "Failed to lower layout conversion through sub-group shuffles");
-    assert(!intel::cvtIsSubGroupTranspose(srcTy, dstTy) &&
+    assert((op.getForceWarpShuffle() ||
+            !intel::cvtIsSubGroupTranspose(srcTy, dstTy)) &&
            "Failed to lower layout conversion through sub-group transpose");
     assert(
         !intel::cvtIsSubGroupReinterpret(op) &&

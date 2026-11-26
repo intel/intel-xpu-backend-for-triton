@@ -167,6 +167,17 @@ public:
           }
 
           if constexpr (std::is_same_v<OpTy, DotScaledOp>) {
+            ScaleDotElemType aElemType = op.getAElemType();
+            ScaleDotElemType bElemType = op.getBElemType();
+            // FP4 operands need their own feature; the scaled and BF8 features
+            // do not cover them.
+            if ((aElemType == ScaleDotElemType::E2M1 ||
+                 bElemType == ScaleDotElemType::E2M1) &&
+                !op->template getParentOfType<ModuleOp>()->hasAttr(
+                    TritonIntelGPUDialect::
+                        getSupportBlockScaleDPASWithFP4AttrName()))
+              return DPASAnalysisResult::False;
+
             if constexpr (std::is_same_v<DPASEngineType, DPASEngineTypeXe3P>) {
               DPASEngineType dpasType = analysis.getDPASType(op);
 
@@ -188,8 +199,6 @@ public:
               }
             }
 
-            ScaleDotElemType aElemType = op.getAElemType();
-            ScaleDotElemType bElemType = op.getBElemType();
             bool isBothFP8 = (aElemType == ScaleDotElemType::E4M3 ||
                               aElemType == ScaleDotElemType::E5M2) &&
                              (bElemType == ScaleDotElemType::E4M3 ||

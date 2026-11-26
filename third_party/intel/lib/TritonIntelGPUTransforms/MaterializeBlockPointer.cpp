@@ -631,15 +631,18 @@ private:
   /// constancy from the divisibility of both sides.
   ///
   /// For a `tt::LoadOp`, such a mask may still be a
-  /// `ttgi::matchBoundaryCheckMask` row-limit pattern, so permit block IO here
-  /// too. It is the matcher LowerTo2DBlockLoad uses, so a mask with several
-  /// uniform conjuncts is permitted exactly when it will become `base_height`.
+  /// `ttgi::matchBoundaryCheckMask` pattern, whose bounds LowerTo2DBlockLoad
+  /// turns into the message's own `base_height`/`base_width` clamps, so permit
+  /// block IO here too.
   /// `contiguousDim`/`strideInfo` must match what LowerTo2DBlockLoad later
   /// uses, or stamping `ttig.block_io` here de-anchors the load without it
   /// gaining a real 2D block read. For the same reason the bypass is skipped
   /// when LowerTo2DBlockLoad would reject the row pitch
-  /// (`ttgi::isBlockPitchSupported`). Stores aren't covered: nothing
-  /// downstream consumes a store-side row limit.
+  /// (`ttgi::isBlockPitchSupported`) or the column bound's granularity
+  /// (`ttgi::colLimitIsHWCompatible`). A `tt::StoreOp` is also permitted along
+  /// a dim of constancy below 2 where its mask's bound lets
+  /// StoreOpToBlockIOConversion clamp the surface instead
+  /// (`ttgi::matchStoreBoundaryClamp`); the lowering may still refuse.
   template <typename OpType>
   bool maskPermitsBlockTile(OpType op,
                             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -655,9 +658,10 @@ private:
         unsigned pitchDim = (*contiguousDim == rank - 1) ? rank - 2 : rank - 1;
         bool pitchDimIsBroadcast =
             strideInfo && strideInfo->getStride(pitchDim) == 0;
-        if (ttgi::matchBoundaryCheckMask(mask, op.getOther(), maskTy.getShape(),
-                                         *contiguousDim, pitchDimIsBroadcast,
-                                         op)) {
+        if (std::optional<ttgi::BoundaryMaskInfo> boundary =
+                ttgi::matchBoundaryCheckMask(mask, op.getOther(),
+                                             maskTy.getShape(), *contiguousDim,
+                                             pitchDimIsBroadcast, op)) {
           // Skip the bypass if LowerTo2DBlockLoad would reject the pitch.
           unsigned elemBits = getIntOrFloatOrPtrBitWidth(
               cast<tt::PointerType>(
@@ -670,14 +674,16 @@ private:
                           : std::nullopt,
               strideInfo && strideInfo->getStrideValue(pitchDim),
               maskTy.getDimSize(*contiguousDim) * elemBits / 8);
-          if (pitchOk) {
-            LDBG(
-                "Mask is a row-limit pattern; permitting block IO for: " << op);
+          bool colOk = ttgi::colLimitIsHWCompatible(*boundary, axisInfoAnalysis,
+                                                    elemBits);
+          if (pitchOk && colOk) {
+            LDBG("Mask is a boundary-check pattern; permitting block IO for: "
+                 << op);
             return true;
           }
-          LDBG("Row-limit mask, but LowerTo2DBlockLoad would reject the "
-               "pitch; skip the bypass for: "
-               << op);
+          LDBG("Boundary-check mask, but LowerTo2DBlockLoad would reject the "
+               << (pitchOk ? "column bound" : "pitch")
+               << "; skip the bypass for: " << op);
         }
       }
     }
@@ -692,6 +698,16 @@ private:
     // outright and clamps each tile dimension to the constancy along it.
     for (unsigned dim : {rank - 2, rank - 1}) {
       int64_t constancy = maskAxisInfo->getConstancy(dim);
+      if constexpr (std::is_same_v<OpType, tt::StoreOp>) {
+        if (constancy < 2 && contiguousDim &&
+            isStoreSurfaceClamped(op, dim, axisInfoAnalysis, strideInfo, rank,
+                                  *contiguousDim)) {
+          LDBG("Mask constancy along dim "
+               << dim << " is " << constancy
+               << ", but the store's surface is clamped along it");
+          continue;
+        }
+      }
       if (constancy < 2 || !llvm::isPowerOf2_64(constancy)) {
         LDBG("Mask constancy along dim " << dim << " is " << constancy
                                          << ", which degenerates the 2D block "
@@ -700,6 +716,32 @@ private:
       }
     }
     return true;
+  }
+
+  /// Whether the mask and constant pitch of \p op let
+  /// StoreOpToBlockIOConversion clamp its surface along \p dim. The lowering
+  /// still checks the tile in the store's final layout, unknown here, and may
+  /// refuse.
+  static bool
+  isStoreSurfaceClamped(tt::StoreOp op, unsigned dim,
+                        tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                        tt::intel::StrideInfo *strideInfo, unsigned rank,
+                        unsigned contiguousDim) {
+    if (rank != 2)
+      return false;
+    unsigned pitchDim = (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+    int64_t stride = strideInfo ? strideInfo->getStride(pitchDim) : -1;
+    unsigned elemBits = getIntOrFloatOrPtrBitWidth(
+        cast<RankedTensorType>(op.getValue().getType()).getElementType());
+    std::optional<int64_t> pitchBytes;
+    if (stride > 0)
+      pitchBytes = stride * elemBits / 8;
+    if (!ttgi::isBlockPitchSupported(pitchBytes, /*hasRuntimeStride=*/false, 0))
+      return false;
+    ttgi::StoreBoundaryClamp clamp = ttgi::matchStoreBoundaryClamp(
+        op, contiguousDim, /*pitchDimIsBroadcast=*/stride == 0, pitchBytes,
+        axisInfoAnalysis);
+    return dim == contiguousDim ? clamp.col.has_value() : clamp.row.has_value();
   }
 
   /// Look through cast wrappers (index_cast, extui, extsi, trunci, etc.)
