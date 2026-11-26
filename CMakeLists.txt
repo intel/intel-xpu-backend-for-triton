@@ -342,8 +342,24 @@ if(TRITON_BUILD_PYTHON_MODULE)
   set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
   include_directories(${PYTHON_SRC_PATH})
 
-  # Python Interpreter is used to run lit tests
-  find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
+  # Stable-ABI floor: Python 3.<minor>; drives find_package and Py_LIMITED_API.
+  set(TRITON_STABLE_ABI_MIN_MINOR 12)
+  math(EXPR TRITON_PY_LIMITED_API "(3 << 24) | (${TRITON_STABLE_ABI_MIN_MINOR} << 16)"
+       OUTPUT_FORMAT HEXADECIMAL)
+  # Windows: Python3::Module links python3XX.lib (pins one Python version);
+  # Python3::SABIModule links python3.lib. Other platforms don't link libpython.
+  # Interpreter is used to run lit tests.
+  if(TRITON_STABLE_ABI AND WIN32)
+    if(CMAKE_VERSION VERSION_LESS 3.26)
+      message(FATAL_ERROR "TRITON_STABLE_ABI on Windows requires CMake >= 3.26 (Development.SABIModule)")
+    endif()
+    find_package(Python3 3.${TRITON_STABLE_ABI_MIN_MINOR} REQUIRED
+                 COMPONENTS Development.Module Development.SABIModule Interpreter)
+    set(TRITON_PYTHON_MODULE_LIB Python3::SABIModule)
+  else()
+    find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
+    set(TRITON_PYTHON_MODULE_LIB Python3::Module)
+  endif()
   # nanobind expects find_package(Python) which sets Python::Module target
   # and Python_* variables. Triton uses find_package(Python3) instead.
   # Bridge the two by aliasing the target and forwarding variables.
@@ -351,7 +367,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     add_executable(Python::Interpreter ALIAS Python3::Interpreter)
   endif()
   if(NOT TARGET Python::Module)
-    add_library(Python::Module ALIAS Python3::Module)
+    add_library(Python::Module ALIAS ${TRITON_PYTHON_MODULE_LIB})
     set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
     set(Python_INCLUDE_DIRS "${Python3_INCLUDE_DIRS}")
     set(Python_SOABI "${Python3_SOABI}")
@@ -362,9 +378,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
   find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
   nanobind_build_library(nanobind-static)
   if(TRITON_STABLE_ABI)
-    target_compile_definitions(nanobind-static PUBLIC Py_LIMITED_API=0x030C0000)
+    target_compile_definitions(nanobind-static PUBLIC Py_LIMITED_API=${TRITON_PY_LIMITED_API})
   endif()
-  target_link_libraries(nanobind-static PRIVATE Python3::Module)
+  target_link_libraries(nanobind-static PRIVATE ${TRITON_PYTHON_MODULE_LIB})
 
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
@@ -426,7 +442,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     LLVMAMDGPUCodeGen
     LLVMAMDGPUAsmParser
 
-    Python3::Module
+    ${TRITON_PYTHON_MODULE_LIB}
     nanobind-static
   )
 

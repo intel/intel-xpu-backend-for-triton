@@ -10,6 +10,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     ${CMAKE_CURRENT_SOURCE_DIR}/python/triton_amd.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/python/dylib_utils.cc
     LINK_LIBS TritonAMDGPUToLLVM TritonAMDGPUTransforms TritonAMDGPUDialectToLLVM TritonAMDMFMASchedule)
-  target_link_libraries(TritonAMD PRIVATE Python3::Module nanobind-static lldCommon lldELF)
+  target_link_libraries(TritonAMD PRIVATE ${TRITON_PYTHON_MODULE_LIB} nanobind-static lldCommon lldELF)
 endif()
 add_subdirectory(test)
