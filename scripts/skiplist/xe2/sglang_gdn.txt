@@ -1,0 +1,4 @@
+# Segmentation fault in Intel driver load_binary: https://github.com/intel/intel-xpu-backend-for-triton/issues/8959
+registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::test_dim_k_gt_v
+registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::test_heads_32
+registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::test_heads_4
