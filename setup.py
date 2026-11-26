@@ -455,6 +455,10 @@ def get_packages():
     for backend in backends:
         yield f"triton.backends.{backend.name}"
 
+        if os.path.isfile(os.path.join(backend.backend_dir, "arch", "__init__.py")):
+            # Install the backend's per-chip modules.
+            yield f"triton.backends.{backend.name}.arch"
+
         if backend.language_dir:
             # Install the contents of each backend's `language` directory into
             # `triton.language.extra`.
