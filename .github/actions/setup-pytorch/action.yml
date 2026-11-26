@@ -145,17 +145,16 @@ runs:
           exit 0
         fi
         # A separate venv keeps triton-utils dependencies out of the job's environment
-        VENV="$RUNNER_TEMP/triton-utils-venv"
-        if ! python -m venv "$VENV" || ! "$VENV/bin/pip" install "$GITHUB_WORKSPACE/scripts/triton_utils"; then
-          echo "::notice::Could not install triton-utils, building PyTorch from source"
-          exit 0
-        fi
-        if ! "$VENV/bin/triton-utils" wheels \
+        if ! {
+          python -m venv "$RUNNER_TEMP/triton-utils-venv" &&
+          "$RUNNER_TEMP/triton-utils-venv/bin/pip" install "$GITHUB_WORKSPACE/scripts/triton_utils" &&
+          "$RUNNER_TEMP/triton-utils-venv/bin/triton-utils" wheels \
             --latest-wf-run-pattern .github/workflows/wheels-pytorch-linux.yml \
             --wheel-set torch \
             --python-version "$PYTHON_VERSION" \
             -D "$RUNNER_TEMP/pytorch-main-wheel" \
-            -R "$GITHUB_REPOSITORY"; then
+            -R "$GITHUB_REPOSITORY"
+        }; then
           echo "::notice::PyTorch wheel lookup on main failed, building from source"
           exit 0
         fi
