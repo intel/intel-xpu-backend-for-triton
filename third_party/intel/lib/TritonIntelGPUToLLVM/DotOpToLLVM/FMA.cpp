@@ -105,11 +105,25 @@ public:
 };
 
 /// \returns whether \p operand is an 8-bit integer tensor extended to a wider
-/// type, and whether that extension is signed. Layout conversions are looked
-/// through: they do not change the value.
+/// type, and whether that extension is signed. Layout conversions and a
+/// shared-memory round trip (a local_load of a local_alloc initialized from a
+/// value, so the buffer is immutable) are looked through: they do not change
+/// the value.
 std::optional<bool> getInt8ExtensionKind(Value operand) {
-  while (auto cvt = operand.getDefiningOp<ConvertLayoutOp>())
-    operand = cvt.getSrc();
+  while (true) {
+    if (auto cvt = operand.getDefiningOp<ConvertLayoutOp>()) {
+      operand = cvt.getSrc();
+      continue;
+    }
+    if (auto load = operand.getDefiningOp<LocalLoadOp>()) {
+      auto alloc = load.getSrc().getDefiningOp<LocalAllocOp>();
+      if (alloc && alloc.getSrc()) {
+        operand = alloc.getSrc();
+        continue;
+      }
+    }
+    break;
+  }
 
   Operation *def = operand.getDefiningOp();
   bool isSigned;

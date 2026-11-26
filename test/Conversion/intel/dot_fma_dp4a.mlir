@@ -97,3 +97,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+// COM: The i8 extension can stay ahead of the shared-memory round trip (a dot
+// COM: without a loaded accumulator): the dot still lowers to dp4a.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#blocked}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttig.is_lts"} {
+  // CHECK-LABEL: matmul_int8_fmadot_extended_before_local_alloc
+  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.dp4a.ss.i32
+  tt.func @matmul_int8_fmadot_extended_before_local_alloc(%ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32},
+                                                          %a: tensor<32x16xi8, #blocked>,
+                                                          %b: tensor<16x32xi8, #blocked>) {
+    %cst = arith.constant dense<0> : tensor<32x32xi32, #blocked>
+    %a_i32 = arith.extsi %a : tensor<32x16xi8, #blocked> to tensor<32x16xi32, #blocked>
+    %b_i32 = arith.extsi %b : tensor<16x32xi8, #blocked> to tensor<16x32xi32, #blocked>
+    %a_smem = ttg.local_alloc %a_i32 : (tensor<32x16xi32, #blocked>) -> !ttg.memdesc<32x16xi32, #shared, #smem>
+    %b_smem = ttg.local_alloc %b_i32 : (tensor<16x32xi32, #blocked>) -> !ttg.memdesc<16x32xi32, #shared, #smem>
+    %a_mat = ttg.local_load %a_smem : !ttg.memdesc<32x16xi32, #shared, #smem> -> tensor<32x16xi32, #dot_operand_a>
+    %b_mat = ttg.local_load %b_smem : !ttg.memdesc<16x32xi32, #shared, #smem> -> tensor<16x32xi32, #dot_operand_b>
+    %d = tt.dot %a_mat, %b_mat, %cst : tensor<32x16xi32, #dot_operand_a> * tensor<16x32xi32, #dot_operand_b> -> tensor<32x32xi32, #blocked>
+    %30 = tt.splat %ptr : !tt.ptr<i32> -> tensor<32x1x!tt.ptr<i32>, #blocked>
+    %36 = tt.broadcast %30 : tensor<32x1x!tt.ptr<i32>, #blocked> -> tensor<32x32x!tt.ptr<i32>, #blocked>
+    tt.store %36, %d : tensor<32x32x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
