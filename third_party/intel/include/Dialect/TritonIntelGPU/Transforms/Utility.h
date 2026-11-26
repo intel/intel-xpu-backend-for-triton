@@ -83,7 +83,8 @@ std::optional<DotOperandEncodingAttr>
 getDotEncoding(RankedTensorType tensorType);
 
 // Get backward slice of tensor values starting from the root node along with
-// encoding propagation.
+// encoding propagation. The traversal stops at an operand for which
+// `getExistingConversion` returns an existing converted value.
 LogicalResult getConvertBackwardSlice(
     OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
     DenseMap<Value, Attribute> &layout,
