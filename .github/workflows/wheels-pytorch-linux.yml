@@ -1,11 +1,12 @@
 name: PyTorch wheels (Linux)
 
-# Builds the PyTorch wheel at the pin for the CI Python version.
-# On a cache miss, setup-pytorch installs the wheel from the latest successful run of this workflow on main,
-# if its cache key matches the runner's. Only runs on main of this repository are trusted, so keep it to main.
-# If the key has not changed, a run reuses the previous wheel instead of building.
-# Only successful runs count: after a failure, re-run the failed jobs.
-# After a oneAPI update on the runners, run this workflow manually so the key matches again.
+# Builds the PyTorch wheel at the pin on main for the CI Python version.
+# setup-pytorch installs it from the latest successful run when its cache key matches the runner's,
+# else it builds as before. Keep it to main: setup-pytorch trusts the runs of this workflow on main
+# of this repository.
+# A run carries the wheel of the previous successful run forward when the key matches and builds otherwise.
+# A run counts only when it succeeds; after a failure, re-run its failed jobs.
+# After a oneAPI update on the runners, dispatch this workflow so the wheel's key matches again.
 
 on:
   workflow_dispatch:
