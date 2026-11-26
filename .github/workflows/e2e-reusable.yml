@@ -46,11 +46,16 @@ on:
         description: TORCH_COMPILE_DEBUG
         type: string
         default: ""
+      pytorch_artifact:
+        description: Artifact with the PyTorch wheel from build-pytorch-reusable.yml, keep empty to build PyTorch here
+        type: string
+        default: ""
 
 permissions: read-all
 
 env:
   TRITON_DISABLE_LINE_INFO: 1
+  # Must match the python_version default in build-pytorch-reusable.yml
   PYTHON_VERSION: "3.11"
   BENCHMARK_REPO: pytorch/benchmark
 
@@ -97,6 +102,7 @@ jobs:
         with:
           ref: ${{ inputs.pytorch_ref }}
           lts: ${{ inputs.runner_label == 'lts' }}
+          download_artifact: ${{ inputs.pytorch_artifact }}
 
       - name: Identify pinned versions
         run: |

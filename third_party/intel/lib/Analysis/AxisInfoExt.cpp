@@ -604,4 +604,12 @@ unsigned ModuleAxisInfoAnalysis::getDescriptorAlignment(Value desc,
                    pow2Divisor(idxDiv)});
 }
 
+bool ModuleAxisInfoAnalysis::isDescriptorRow16ByteAligned(Value desc,
+                                                          Value yOffset,
+                                                          unsigned elemBits) {
+  constexpr unsigned kAlignBytes = 16;
+  return getDescriptorAlignment(desc, 1, yOffset, elemBits) * (elemBits / 8) >=
+         kAlignBytes;
+}
+
 } // namespace mlir::triton::intel

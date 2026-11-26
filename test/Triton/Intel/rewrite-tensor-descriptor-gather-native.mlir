@@ -154,7 +154,7 @@ module {
 
 // -----
 
-// COM: A maker shared with a scatter (no native lowering) expands for both.
+// COM: A maker shared with a scatter (not dot-fed, so not kept native) expands for both.
 module {
   tt.func public @shared_with_scatter(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %idx: tensor<32xi32>) -> tensor<32x64xbf16> {
     %c0_i32 = arith.constant 0 : i32
