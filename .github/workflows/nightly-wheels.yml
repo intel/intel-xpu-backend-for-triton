@@ -53,6 +53,7 @@ jobs:
     permissions:
       id-token: write   # required for keyless Sigstore/OIDC signing
       contents: read
+      actions: read     # setup-pytorch installs the PyTorch wheel from wheels-pytorch-linux.yml when the key matches
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"

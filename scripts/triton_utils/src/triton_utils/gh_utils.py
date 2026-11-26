@@ -161,8 +161,10 @@ class GHAWorkflow(GHAObj):
                 "per_page=100",
             ]
         )
+        # A fork PR run reports the fork's branch name, so also require the run to come from this repository
         runs = [
             run for run in data["workflow_runs"] if run["head_branch"] == self.branch and run["conclusion"] == "success"
+            and ((run.get("head_repository") or {}).get("full_name") or "").lower() == self.repo.lower()
         ]
         if not runs:
             raise RuntimeError(
