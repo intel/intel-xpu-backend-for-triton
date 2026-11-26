@@ -4591,7 +4591,7 @@ struct StoreOpToBlockIOConversion
         pitch % 16 == 0)
       pitchBytes = pitch;
     StoreBoundaryClamp clamp = matchStoreBoundaryClamp(
-        op, contiguousDim, /*pitchDimIsBroadcast=*/rowStride == 0, pitchBytes,
+        op, contiguousDim, pitchBytes,
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass));
 
     // Only a column constancy below the unmasked tile's width, or a row one

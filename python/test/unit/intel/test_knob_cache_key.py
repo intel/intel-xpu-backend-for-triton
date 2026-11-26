@@ -67,6 +67,8 @@ INVALIDATING_RAW_ENV_VARS = (
     # Turns off sub-group block reads in DescriptorLoadOpConversion and
     # LoadOpConversion.
     "TRITON_INTEL_DISABLE_DESCRIPTOR_SG_BLOCK_READ",
+    # Turns off the store boundary clamp in `matchStoreBoundaryClamp` (BlockIOUtils.cpp).
+    "TRITON_INTEL_DISABLE_STORE_BOUNDARY_CLAMP",
     # Keeps 16-bit 2D block stores at 16 columns in `allowStoreColumnBlockFold`.
     "TRITON_INTEL_DISABLE_WIDE_BLOCK_STORE",
     # Picks `runSpirvBackend` over `writeSpirv` in SPIRVTranslation.cpp.
