@@ -1,16 +1,17 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-remove-layout-conversions | FileCheck %s
 
 // COM: A dot-operand convert that the hoist leaves on a single-use tile load is folded into the load.
-// COM: The scale's convert stays outside the loop: its target is a slice, not a dot operand.
+// COM: The scale's convert is kept: its target is a slice, not a dot operand.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [4, 2]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @scaled_tile_load_folded
+  // CHECK: scf.for
+  // CHECK-NOT: ttg.convert_layout
   // CHECK: %[[BETA:.*]] = tt.load {{.*}} : tensor<64x!tt.ptr<bf16>, #ttg.slice<{dim = 1, parent = #blocked}>>
   // CHECK: ttg.convert_layout %[[BETA]] : {{.*}} -> tensor<64xbf16, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>}>>
-  // CHECK: scf.for
   // CHECK-NOT: ttg.convert_layout
   // CHECK-NOT: tt.load
   // CHECK: tt.load %{{.*}}, %{{.*}}, %{{.*}} {ttig.block_io = "row_major"} : tensor<64x64x!tt.ptr<bf16>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
@@ -26,11 +27,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %stride = arith.constant dense<128> : tensor<64x1xi32, #blocked>
     %cols = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
     %rows = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %bsplat = tt.splat %beta_ptr : !tt.ptr<bf16> -> tensor<64x!tt.ptr<bf16>, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %bptrs = tt.addptr %bsplat, %rows : tensor<64x!tt.ptr<bf16>, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %beta = tt.load %bptrs : tensor<64x!tt.ptr<bf16>, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %beta2 = tt.expand_dims %beta {axis = 1 : i32} : tensor<64xbf16, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xbf16, #blocked>
-    %scale = tt.broadcast %beta2 : tensor<64x1xbf16, #blocked> -> tensor<64x64xbf16, #blocked>
     %rows2 = tt.expand_dims %rows {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi32, #blocked>
     %roff = arith.muli %rows2, %stride : tensor<64x1xi32, #blocked>
     %vsplat = tt.splat %v_ptr : !tt.ptr<bf16> -> tensor<64x1x!tt.ptr<bf16>, #blocked>
@@ -42,6 +38,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %r = scf.for %iv = %c0 to %c128 step %c64 iter_args(%acc = %acc0) -> (tensor<64x64xf32, #dpas>) : i32 {
       %offs = tt.splat %iv : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
       %c = arith.addi %offs, %cols : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+      %koffs = tt.splat %iv : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %rk = arith.addi %koffs, %rows : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %bsplat = tt.splat %beta_ptr : !tt.ptr<bf16> -> tensor<64x!tt.ptr<bf16>, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %bptrs = tt.addptr %bsplat, %rk : tensor<64x!tt.ptr<bf16>, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %beta = tt.load %bptrs : tensor<64x!tt.ptr<bf16>, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %beta2 = tt.expand_dims %beta {axis = 1 : i32} : tensor<64xbf16, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xbf16, #blocked>
+      %scale = tt.broadcast %beta2 : tensor<64x1xbf16, #blocked> -> tensor<64x64xbf16, #blocked>
       %c2d = tt.expand_dims %c {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
       %cb = tt.broadcast %c2d : tensor<1x64xi32, #blocked> -> tensor<64x64xi32, #blocked>
       %ptrs = tt.addptr %vbase, %cb : tensor<64x64x!tt.ptr<bf16>, #blocked>, tensor<64x64xi32, #blocked>
