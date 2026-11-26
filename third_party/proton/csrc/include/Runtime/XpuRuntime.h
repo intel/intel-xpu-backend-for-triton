@@ -1,6 +1,7 @@
 #ifndef PROTON_RUNTIME_XPU_RUNTIME_H_
 #define PROTON_RUNTIME_XPU_RUNTIME_H_
 
+#include "Driver/GPU/XpuApi.h"
 #include "Runtime.h"
 #include "Utility/Singleton.h"
 
@@ -8,11 +9,11 @@ namespace proton {
 
 class XpuRuntime : public Singleton<XpuRuntime>, public Runtime {
 public:
-  XpuRuntime() : Runtime(DeviceType::XPU) {}
+  XpuRuntime() : Runtime(xpu::kDeviceType) {}
   ~XpuRuntime() = default;
 
-  // Set by Session::makeProfiler for any XPU session. There is exactly one
-  // queue process-wide, set once at session start -- not one per device --
+  // Set at each XPU session start (libproton: Session::makeProfiler; out of
+  // tree: the registered factory). One queue process-wide, not per device --
   // so XPU instrumentation only supports a single GPU today. `getDevice()`
   // still reports a distinct ordinal per visible device (see
   // `proton_utils.cpp`'s `getDeviceKey`), but every call that resolves a

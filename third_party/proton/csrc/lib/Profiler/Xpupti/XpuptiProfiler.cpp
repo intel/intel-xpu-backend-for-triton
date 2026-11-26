@@ -66,7 +66,7 @@ convertActivityToMetric(xpupti::Pti_Activity *activity) {
           static_cast<uint64_t>(kernel->_start_timestamp),
           static_cast<uint64_t>(kernel->_end_timestamp), 1,
           static_cast<uint64_t>(getDeviceIdxFromUUID(kernel->_device_uuid)),
-          static_cast<uint64_t>(DeviceType::XPU),
+          static_cast<uint64_t>(xpu::kDeviceType),
           static_cast<uint64_t>(kernel->_sycl_queue_id));
     } // else: not a valid kernel activity
     break;
