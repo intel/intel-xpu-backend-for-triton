@@ -65,6 +65,21 @@ public:
         return;
       if (!cvtNeedsSharedMemory(cvtOp))
         return;
+      // A tile loaded in the conversion's loop is stored on every iteration
+      // anyway, and staging it through a buffer in its load order makes a dot
+      // operand that needs another order read it one element at a time: a
+      // K-contiguous A tile read along M is 1.5x slower that way than through
+      // the generic conversion lowering (#8890). Other sources keep the
+      // buffer: one defined before the loop is stored once (see
+      // getLoopInvariantAllocAnchor), and a computed one, such as a transposed
+      // DPAS result, measured 2% slower without it.
+      if (!isa<triton::gpu::intel::DpasEncodingAttr>(srcEncoding)) {
+        auto loop = cvtOp->getParentOfType<LoopLikeOpInterface>();
+        Operation *srcDef = cvtOp.getSrc().getDefiningOp();
+        if (loop && isa_and_nonnull<triton::LoadOp>(srcDef) &&
+            loop->isAncestor(srcDef))
+          return;
+      }
       auto srcOrder = triton::gpu::getOrder(srcType);
       auto rank = srcOrder.size(); // TODO: maybe we can use upstream code.
       if (auto srcDpasEncoding =

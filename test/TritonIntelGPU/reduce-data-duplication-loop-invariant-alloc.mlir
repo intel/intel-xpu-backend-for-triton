@@ -46,8 +46,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.tar
 
 // -----
 
-// COM: Control: the source is defined in the loop, so the allocation stays at
-// COM: the conversion, not before the scf.if.
+// COM: Control: the source is loaded in the loop, so it would be stored on every
+// COM: iteration anyway; the conversion is left to the generic lowering instead
+// COM: of being staged through a buffer (#8890).
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [16, 1], order = [1, 0]}>
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate} {
@@ -56,8 +57,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.tar
   // RDD:       scf.for
   // RDD:       %[[DO:.*]] = tt.load
   // RDD-NEXT:  scf.if
-  // RDD-NEXT:  %[[ALLOC:.*]] = ttg.local_alloc %[[DO]] :
-  // RDD-NEXT:  ttg.local_load %[[ALLOC]] :
+  // RDD-NEXT:  ttg.convert_layout %[[DO]] :
+  // RDD-NOT:   ttg.local_alloc
+  // RDD:       tt.return
   tt.func public @loop_variant_cvt_src_in_if(%do_ptr: tensor<64x128x!tt.ptr<f16>, #blocked>, %vT: tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, %n: i32, %cond: i1) -> tensor<64x64xf32, #mma> {
     %c0 = arith.constant 0 : i32
     %c1 = arith.constant 1 : i32

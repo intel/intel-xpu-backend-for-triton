@@ -77,13 +77,13 @@ def test_fold_trans_reaches_accelerate_matmul(fold_trans, mask, device, with_all
                                                 num_warps=8, num_stages=2, fold_trans=fold_trans)
 
     ttgir = kernel.asm["ttgir"]
-    # Without the fold, each of the two f32 transposes feeding a dot's A stays a tt.trans and is
-    # staged through SLM by a ttg.local_alloc; with it, both are gone. With the mask, the fold
-    # transposes the mask once, as i32.
+    # Without the fold, each of the two f32 transposes feeding a dot's A stays a tt.trans and its
+    # conversion to the DPAS operand layout goes through SLM; with it, both are gone. With the
+    # mask, the fold transposes the mask once, as i32.
     f32_trans = re.findall(r"tt\.trans .*: tensor<\d+x\d+xf32", ttgir)
     i32_trans = re.findall(r"tt\.trans .*: tensor<\d+x\d+xi32", ttgir)
     assert bool(f32_trans) != fold_trans
-    assert ("ttg.local_alloc" in ttgir) != fold_trans
+    assert (kernel.metadata.shared > 0) != fold_trans
     assert bool(i32_trans) == (fold_trans and mask)
 
     p = torch.exp2(qk - m[:, None])
