@@ -13,8 +13,8 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include <TritonIntelGPUToLLVM/XeAsmFormat.h>
 #include <cmath>
-#include <numeric>
 #include <llvm/Support/FormatVariadic.h>
+#include <numeric>
 
 using mlir::triton::gpu::ElementwiseOpConversionBase;
 using mlir::triton::gpu::MultipleOperandsRange;
@@ -2512,12 +2512,23 @@ struct ImplicitVectorizeMathElementwiseOpConversion
     // Get linear layout from distributed layout.
     auto linearLayout = distributed.toLinearLayout(tensorTy.getShape());
     auto ctx = op.getContext();
-    if (!linearLayout.sublayoutIsZero(str_attr("lane"),
-                                      to_vector(linearLayout.getOutDimNames())))
-      return failure();
+    auto kLane = str_attr("lane");
+    unsigned numReplicateLanes = 1;
+    auto laneBases = linearLayout.getBases().lookup(kLane);
+    for (auto &base : laneBases) {
+      if (llvm::all_of(base, [](int b) { return b == 0; })) {
+        numReplicateLanes <<= 1;
+      } else {
+        break;
+      }
+    }
 
     unsigned threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
         op->template getParentOfType<ModuleOp>());
+
+    unsigned numValuePerElem = threadsPerWarp / numReplicateLanes;
+    if (numValuePerElem > 2)
+      return failure();
 
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -2525,21 +2536,22 @@ struct ImplicitVectorizeMathElementwiseOpConversion
     auto resultElementTy = getElementTypeOrSelf(resultTy);
     Type elemTy = this->getTypeConverter()->convertType(resultElementTy);
     SmallVector<SmallVector<Value>> allOperands;
-    unsigned numOperandsGrouped;
+    unsigned numElemsGrouped;
     for (auto operand : adaptor.getOperands()) {
-      auto subOperands = unpackLLElements(loc, operand, rewriter);
-      // change the uniform operands to the non-uniform operands to match the
-      // number of threads per warp
-      unsigned numOperands = subOperands.size();
-      unsigned numNonUniformOperands = mlir::ceil(numOperands, threadsPerWarp);
-      numOperandsGrouped = std::min(threadsPerWarp, numOperands);
+      auto elems = unpackLLElements(loc, operand, rewriter);
+      // change the uniform/compact operands to the non-uniform operands to
+      // match the number of threads per warp.
+      unsigned numElems = elems.size();
+      unsigned numActualValues = numElems * numValuePerElem;
+      unsigned numNonUniformOperands =
+          mlir::ceil(numActualValues, threadsPerWarp);
+      numElemsGrouped = std::min(threadsPerWarp / numValuePerElem, numElems);
       SmallVector<Value> nonUniformOperands(numNonUniformOperands);
       for (size_t i = 0; i < numNonUniformOperands; ++i) {
-        Value groupedOperand = b.undef(vec_ty(elemTy, numOperandsGrouped));
-        for (size_t j = 0; j < numOperandsGrouped; ++j) {
-          groupedOperand = b.insert_element(groupedOperand,
-                                            subOperands[i * threadsPerWarp + j],
-                                            b.i32_val(j));
+        Value groupedOperand = b.undef(vec_ty(elemTy, numElemsGrouped));
+        for (size_t j = 0; j < numElemsGrouped; ++j) {
+          groupedOperand = b.insert_element(
+              groupedOperand, elems[i * numElemsGrouped + j], b.i32_val(j));
         }
 
         constexpr StringLiteral asmCode = R"({
@@ -2548,15 +2560,16 @@ struct ImplicitVectorizeMathElementwiseOpConversion
   mov (M1_NM, {2}) OUT(0,0)<1>  IN(0,0)<1;1,0>
 })";
 
-        std::string simdAsm = llvm::formatv(asmCode.data(), "f", threadsPerWarp,
-                                            numOperandsGrouped)
-                                  .str();
+        std::string simdAsm =
+            llvm::formatv(asmCode.data(), "f",
+                          numElemsGrouped * numValuePerElem, threadsPerWarp)
+                .str();
         ;
         XeBuilder xeBuilder;
         XeInstr &transNonUniform = *xeBuilder.create<XeInstr>(simdAsm);
         XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
-        XeBuilder::Operand *input =
-            xeBuilder.newOperand(groupedOperand, "rw.u");
+        XeBuilder::Operand *input = xeBuilder.newOperand(
+            groupedOperand, numValuePerElem == 1 ? "rw.u" : "rw.c");
         SmallVector<XeBuilder::Operand *> args{res, input};
         transNonUniform(args, /*onlyAttachMLIRArgs=*/true);
         nonUniformOperands[i] = xeBuilder.launch(rewriter, loc, elemTy, false);
@@ -2584,10 +2597,21 @@ struct ImplicitVectorizeMathElementwiseOpConversion
     }
     SmallVector<Value> ungroupedResults;
 
+    Value laneId, warpId;
+    std::tie(laneId, warpId) = getLaneAndWarpId(rewriter, loc);
     for (auto v : resultVals) {
-      for (unsigned j = 0; j < numOperandsGrouped; ++j) {
-        ungroupedResults.push_back(
-            LLVM::intel::shuffleIdx(loc, rewriter, v, b.i32_val(j)));
+      for (unsigned j = 0; j < numElemsGrouped; ++j) {
+        if (numValuePerElem == 1) {
+          ungroupedResults.push_back(
+              LLVM::intel::shuffleIdx(loc, rewriter, v, b.i32_val(j)));
+        } else {
+          // rebuild the replicated values to match the number of threads per
+          // warp.
+          ungroupedResults.push_back(LLVM::intel::shuffleIdx(
+              loc, rewriter, v,
+              b.add(b.lshr(laneId, b.i32_val(llvm::Log2_32(numReplicateLanes))),
+                    b.i32_val(j * numValuePerElem))));
+        }
       }
     }
     ungroupedResults = Base::maybeDeduplicate(op, ungroupedResults);
