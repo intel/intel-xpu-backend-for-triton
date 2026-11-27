@@ -375,6 +375,19 @@ def test_has_spirv_2d_block_io_option_source(device, monkeypatch, fresh_knobs, n
     assert options.has_spirv_2d_block_io is expected
 
 
+@pytest.mark.parametrize("native, ocloc_version, driver_version, expected", [
+    (True, "26.35.39758.10", "1.17.40196+8", False),  # AOT: `ocloc`'s IGC 2.41.5 consumes the SPIR-V
+    (False, "26.35.39758.10", "1.17.40196+8", True),  # JIT: the driver's IGC 2.42.6 does
+])
+def test_has_dp4a_operand_order_fix_option_source(device, monkeypatch, fresh_knobs, native, ocloc_version,
+                                                  driver_version, expected):
+    fresh_knobs.intel.gen_native_code = False
+    monkeypatch.setattr(intel_compiler, "get_ocloc_version", lambda: ocloc_version)
+    backend = intel_compiler.XPUBackend(_target_with_driver_version(driver_version))
+    options = backend.parse_options({"generate_native_code": native})
+    assert options.has_dp4a_operand_order_fix is expected
+
+
 def test_get_properties_error(device):
     device_count, = driver.active.utils.device_count
 
