@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --convert-triton-intel-gpu-to-llvm --canonicalize | FileCheck %s --implicit-check-not=llvm.fcmp --implicit-check-not=llvm.select
+// RUN: triton-opt %s --convert-triton-intel-gpu-to-llvm --canonicalize | FileCheck %s --implicit-check-not=llvm.inline_asm --implicit-check-not=llvm.fcmp --implicit-check-not=llvm.select
 
 // COM: A dot operand with K < 64 is upcast in pairs: both bytes of a pair in the high
 // COM: halves of a <2 x i16>. The reserved bytes 0x7F/0xFF become NaN by integer ops
