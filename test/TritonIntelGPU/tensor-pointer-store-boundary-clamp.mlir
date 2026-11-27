@@ -199,12 +199,13 @@ module attributes {"ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32
     tt.return
   }
 
-  // COM: A row constancy of 3 still rejects the tile once the column is relaxed.
-  // CHECK-LABEL: llvm.func spir_kernelcc @no_clamp_row_constancy_3(
+  // COM: Once the column is relaxed, a row constancy of 3 caps the tile at one row: a taller one could straddle the constancy groups.
+  // CHECK-LABEL: llvm.func spir_kernelcc @col_clamp_row_constancy_3(
+  // CHECK-NOT: triton_gen.predicated_store
+  // CHECK-COUNT-32: triton_gen.2Dblockstore {{.*}}tile_width = 16, tile_height = 1, v_blocks = 1
   // CHECK-NOT: triton_gen.2Dblockstore
-  // CHECK-COUNT-32: triton_gen.predicated_store
-  // CHECK-NOT: triton_gen.2Dblockstore
-  tt.func @no_clamp_row_constancy_3(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #mma>) {
+  // CHECK-NOT: triton_gen.predicated_store
+  tt.func @col_clamp_row_constancy_3(%p: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %v: tensor<64x128xf16, #mma>) {
     %ld = arith.constant dense<504> : tensor<64x1xi32, #mma>
     %nb = arith.constant dense<504> : tensor<1x128xi32, #mma>
     %ar = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #r>
