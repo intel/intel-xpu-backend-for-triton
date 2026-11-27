@@ -106,9 +106,8 @@ public:
 
 /// \returns whether \p operand is an 8-bit integer tensor extended to a wider
 /// type, and whether that extension is signed. Layout conversions and a
-/// shared-memory round trip (a local_load of a local_alloc initialized from a
-/// value, so the buffer is immutable) are looked through: they do not change
-/// the value.
+/// shared-memory round trip (a local_load of an immutable local_alloc
+/// initialized from a value) are looked through: they do not change the value.
 std::optional<bool> getInt8ExtensionKind(Value operand) {
   while (true) {
     if (auto cvt = operand.getDefiningOp<ConvertLayoutOp>()) {
@@ -117,7 +116,7 @@ std::optional<bool> getInt8ExtensionKind(Value operand) {
     }
     if (auto load = operand.getDefiningOp<LocalLoadOp>()) {
       auto alloc = load.getSrc().getDefiningOp<LocalAllocOp>();
-      if (alloc && alloc.getSrc()) {
+      if (alloc && alloc.getSrc() && !alloc.getType().getMutableMemory()) {
         operand = alloc.getSrc();
         continue;
       }
