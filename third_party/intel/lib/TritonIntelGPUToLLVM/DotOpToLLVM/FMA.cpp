@@ -104,25 +104,25 @@ public:
   }
 };
 
+/// \returns the value \p v is an unchanged copy of, or null: the source of a
+/// layout conversion, or of a local_load of an immutable local_alloc
+/// initialized from a value.
+Value getCopiedValue(Value v) {
+  if (auto cvt = v.getDefiningOp<ConvertLayoutOp>())
+    return cvt.getSrc();
+  if (auto load = v.getDefiningOp<LocalLoadOp>())
+    if (auto alloc = load.getSrc().getDefiningOp<LocalAllocOp>())
+      if (alloc.getSrc() && !alloc.getType().getMutableMemory())
+        return alloc.getSrc();
+  return {};
+}
+
 /// \returns whether \p operand is an 8-bit integer tensor extended to a wider
-/// type, and whether that extension is signed. Layout conversions and a
-/// shared-memory round trip (a local_load of an immutable local_alloc
-/// initialized from a value) are looked through: they do not change the value.
+/// type, and whether that extension is signed. Copies (see `getCopiedValue`)
+/// are looked through: they do not change the value.
 std::optional<bool> getInt8ExtensionKind(Value operand) {
-  while (true) {
-    if (auto cvt = operand.getDefiningOp<ConvertLayoutOp>()) {
-      operand = cvt.getSrc();
-      continue;
-    }
-    if (auto load = operand.getDefiningOp<LocalLoadOp>()) {
-      auto alloc = load.getSrc().getDefiningOp<LocalAllocOp>();
-      if (alloc && alloc.getSrc() && !alloc.getType().getMutableMemory()) {
-        operand = alloc.getSrc();
-        continue;
-      }
-    }
-    break;
-  }
+  while (Value src = getCopiedValue(operand))
+    operand = src;
 
   Operation *def = operand.getDefiningOp();
   bool isSigned;
