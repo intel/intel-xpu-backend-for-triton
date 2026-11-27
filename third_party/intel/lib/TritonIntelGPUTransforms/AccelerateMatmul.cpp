@@ -2,6 +2,8 @@
 #include "Dialect/TritonIntelGPU/Transforms/DecomposeScaledBlocked.h"
 #include "Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"

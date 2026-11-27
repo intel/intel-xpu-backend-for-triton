@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::gpu::intel {
 

@@ -1,4 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "mlir/Dialect/Arith/Utils/Utils.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 #include "llvm/ADT/TypeSwitch.h"
 

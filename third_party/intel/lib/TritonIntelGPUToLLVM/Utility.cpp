@@ -13,6 +13,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 
