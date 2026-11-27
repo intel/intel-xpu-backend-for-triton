@@ -26,13 +26,16 @@ namespace {
 
 // XPU profiling needs a SYCL queue handle and the path to the helper lib
 // before the profiler instance is touched. They are threaded through
-// libproton.start() and applied to the XPU runtime here.
+// libproton.start() and applied to the XPU runtime here. This isn't
+// xpupti-specific: the "instrumentation" session (GPU-side profiling via
+// InstrumentationProfiler) also resolves host-buffer helpers through
+// XpuRuntime, so set these unconditionally -- on non-XPU backends
+// `sycl_queue`/`utils_cache_path` are left at their empty defaults, so this
+// is a no-op there.
 Profiler *makeProfiler(const std::string &name, void *sycl_queue = nullptr,
                        const std::string &utils_cache_path = "") {
-  if (proton::toLower(name) == "xpupti") {
-    xpu::PROTON_UTILS = utils_cache_path;
-    XpuRuntime::instance().setSyclQueue(sycl_queue);
-  }
+  xpu::PROTON_UTILS = utils_cache_path;
+  XpuRuntime::instance().setSyclQueue(sycl_queue);
   const auto profilers = getProfilerRegistrations();
   auto itr = std::find_if(profilers.begin(), profilers.end(),
                           [&](const ProfilerRegistration &entry) {

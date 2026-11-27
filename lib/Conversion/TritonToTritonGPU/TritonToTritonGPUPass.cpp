@@ -1,5 +1,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -40,8 +42,9 @@ template <class Op> struct GenericOpPattern : public OpConversionPattern<Op> {
     if (failed(this->getTypeConverter()->convertTypes(op->getResultTypes(),
                                                       retTypes)))
       return failure();
-    rewriter.replaceOpWithNewOp<Op>(op, retTypes, adaptor.getOperands(),
-                                    op->getAttrs());
+    rewriter.replaceOpWithNewOp<Op>(
+        op, retTypes, adaptor.getOperands(), op.getProperties(),
+        op->getDiscardableAttrDictionary().getValue());
 
     return success();
   }
@@ -443,6 +446,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
   patterns.insert< // TODO: view should have custom pattern that views the
                    // layout
       // clang-format off
+      GenericOpPattern<triton::AnnotateOp>,
       GenericOpPattern<triton::ReshapeOp>,
       GenericOpPattern<triton::BitcastOp>,
       GenericOpPattern<triton::FpToFpOp>,
@@ -455,9 +459,13 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       TritonJoinOpPattern,
       TritonSplitOpPattern,
       GenericOpPattern<triton::ClampFOp>,
+      GenericOpPattern<triton::FpSanBarrierOp>,
+      GenericOpPattern<triton::FpSanCompactExp2Op>,
+      GenericOpPattern<triton::FpSanHomomorphicCastOp>,
       GenericOpPattern<triton::PreciseSqrtOp>,
       GenericOpPattern<triton::PreciseDivFOp>,
       GenericOpPattern<triton::ApproxDivFOp>,
+      GenericOpPattern<triton::ClMulOp>,
       GenericOpPattern<triton::MulhiUIOp>,
       GenericOpPattern<triton::ElementwiseInlineAsmOp>,
       TritonReducePattern,

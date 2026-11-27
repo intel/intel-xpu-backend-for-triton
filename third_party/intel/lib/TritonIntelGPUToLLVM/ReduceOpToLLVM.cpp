@@ -1,3 +1,4 @@
+#include "Utility.h"
 #include "lib/Conversion/TritonGPUToLLVM/ReduceScanCommon.h"
 
 #include <memory>
@@ -29,13 +30,11 @@ using ::mlir::triton::gpu::DistributedEncodingTrait;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
-struct ReduceOpConversion
-    : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
+struct ReduceOpConversion : public ConvertOpToLLVMPattern<triton::ReduceOp> {
 public:
   ReduceOpConversion(LLVMTypeConverter &typeConverter,
                      const TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(typeConverter,
-                                                                  benefit),
+      : ConvertOpToLLVMPattern<triton::ReduceOp>(typeConverter, benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
@@ -91,6 +90,12 @@ public:
 
 private:
   const TargetInfoBase &targetInfo;
+
+  // Return the pointee type of the shared memory pointer for operand i.
+  Type getElementType(triton::ReduceOp op, int i) const {
+    auto ty = op.getInputTypes()[i].getElementType();
+    return getTypeConverter()->convertType(ty);
+  }
 
   // Reduce values using a tree of the given arity. Arity=3 generates
   // combine(combine(a, b), c) groups that LLVM folds into ternary
@@ -197,26 +202,27 @@ private:
     return createOp(builder, loc, lhs, rhs);
   }
 
-  std::unique_ptr<Region> createVectorCombineRegion(
-      Location loc, Type elemTy,
-      ReduceOpHelper::InThreadVectorizeOpKind vectorizeKind,
-      ConversionPatternRewriter &rewriter) const {
-    if (vectorizeKind == ReduceOpHelper::InThreadVectorizeOpKind::None)
+  std::unique_ptr<Region>
+  createVectorCombineRegion(triton::ReduceOp op,
+                            bool supportBitwidth32Elementwise) const {
+    auto kind = ReduceOpHelper(op).getInThreadVectorizeOpKind(
+        targetInfo.supportBitwidth16Elementwise(),
+        supportBitwidth32Elementwise);
+    if (kind == InThreadVectorizeOpKind::None)
       return nullptr;
-    MLIRContext *ctx = rewriter.getContext();
-    auto vecTy = vec_ty(elemTy, 2);
 
+    auto loc = op.getLoc();
+    auto vecTy = vec_ty(op.getInputTypes().front().getElementType(), 2);
     auto storage = std::make_unique<Region>();
     auto *block = new Block();
     storage->push_back(block);
-    block->addArgument(vecTy, loc);
-    block->addArgument(vecTy, loc);
+    Value lhs = block->addArgument(vecTy, loc);
+    Value rhs = block->addArgument(vecTy, loc);
 
-    OpBuilder builder(ctx);
+    OpBuilder builder(op.getContext());
     builder.setInsertionPointToStart(block);
-    Value result = createInThreadVectorizedCombineOp(
-        builder, loc, vectorizeKind, block->getArgument(0),
-        block->getArgument(1));
+    Value result =
+        createInThreadVectorizedCombineOp(builder, loc, kind, lhs, rhs);
     triton::ReduceReturnOp::create(builder, loc, ValueRange{result});
     return storage;
   }
@@ -259,12 +265,12 @@ private:
       return {std::move(layout), std::move(accs)};
     }
 
-    ReduceOpHelper helper(op);
-    auto vectorizeKind = helper.getInThreadVectorizeOpKind(
-        axisPack, targetInfo.supportBitwidth16Elementwise(),
-        targetInfo.supportBitwidth32Elementwise());
-    bool vectorize =
-        vectorizeKind != ReduceOpHelper::InThreadVectorizeOpKind::None;
+    // Create the vectorized region if needed
+    auto vectorCombineRegion =
+        axisPack >= 4 ? createVectorCombineRegion(
+                            op, targetInfo.supportBitwidth32Elementwise())
+                      : nullptr;
+    bool vectorize = vectorCombineRegion != nullptr;
 
     // Bring the registers that move the axis to the front
     auto perm = ReduceOpHelper::moveAxisBasesToFront(layout, axis, vectorize);
@@ -285,11 +291,6 @@ private:
     if (packAlongAxis)
       axisPack /= 2;
 
-    // Create the vectorized region if needed
-    auto elemTy =
-        cast<RankedTensorType>(op.getOperandTypes().front()).getElementType();
-    std::unique_ptr<Region> vectorCombineRegion =
-        createVectorCombineRegion(loc, elemTy, vectorizeKind, rewriter);
     Region &combineRegion =
         vectorCombineRegion ? *vectorCombineRegion : op.getCombineOp();
 
@@ -358,17 +359,7 @@ private:
       return {std::move(layout), std::move(accs)};
     }
 
-    unsigned regs = accs.front().size();
-    for (unsigned reg = 0; reg < regs; ++reg) {
-      SmallVector<Value> acc(op.getNumOperands());
-      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        acc[i] = accs[i][reg];
-      }
-      warpReduce(op, reduceLaneIdMask, broadcastLaneIdMask, acc, rewriter);
-      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        accs[i][reg] = acc[i];
-      }
-    }
+    warpReduce(op, reduceLaneIdMask, broadcastLaneIdMask, accs, rewriter);
 
     layout = ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, op.getAxis(),
                                                          kLane);
@@ -376,8 +367,45 @@ private:
   }
 
   void warpReduce(triton::ReduceOp op, unsigned reduceLaneIdMask,
-                  unsigned broadcastLaneIdMask, SmallVector<Value> &acc,
+                  unsigned broadcastLaneIdMask,
+                  SmallVector<SmallVector<Value>> &accs,
                   ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto vectorCombineRegion =
+        createVectorCombineRegion(op, /*supportBitwidth32Elementwise=*/false);
+    unsigned regs = accs.front().size();
+    for (unsigned reg = 0; reg < regs; ++reg) {
+      SmallVector<Value> acc(op.getNumOperands());
+      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        acc[i] = accs[i][reg];
+      }
+      if (!targetInfo.warpReduce(rewriter, loc, acc, op, reduceLaneIdMask,
+                                 broadcastLaneIdMask)) {
+        if (vectorCombineRegion && reg + 1 < regs) {
+          for (unsigned i = 0; i < op.getNumOperands(); ++i)
+            acc[i] = packLLVector(loc, {acc[i], accs[i][reg + 1]}, rewriter);
+          shuffleAndCombine(op, reduceLaneIdMask, acc, *vectorCombineRegion,
+                            rewriter);
+          for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+            auto values = unpackLLVector(loc, acc[i], rewriter);
+            accs[i][reg] = values[0];
+            accs[i][reg + 1] = values[1];
+          }
+          ++reg;
+          continue;
+        }
+        shuffleAndCombine(op, reduceLaneIdMask, acc, op.getCombineOp(),
+                          rewriter);
+      }
+      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        accs[i][reg] = acc[i];
+      }
+    }
+  }
+
+  void shuffleAndCombine(triton::ReduceOp op, unsigned reduceLaneIdMask,
+                         SmallVector<Value> &acc, Region &combineRegion,
+                         ConversionPatternRewriter &rewriter) const {
     // No reduction to do
     if (reduceLaneIdMask == 0)
       return;
@@ -386,11 +414,6 @@ private:
         triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp);
     assert(reduceLaneIdMask < warpSize &&
            "expected reduce lane ID mask to be strictly less than warp size");
-    // Try to use the redux op if it is supported by the target
-    if (targetInfo.warpReduce(rewriter, op.getLoc(), acc, op, reduceLaneIdMask,
-                              broadcastLaneIdMask)) {
-      return;
-    }
     // Not that it matters a lot, but a more reasonable iteration order would be
     // from bit 0 to bit llvm::Log2_32(warpSize) - 1. Changing this breaks a ton
     // of bitwise comparisons so we stick with the legacy inverse order
@@ -400,9 +423,24 @@ private:
         continue;
       SmallVector<Value> shfl(op.getNumOperands());
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        shfl[i] = targetInfo.shuffleXor(rewriter, op.getLoc(), acc[i], mask);
+        auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+        Value value = acc[i];
+        if (auto ty = dyn_cast<VectorType>(value.getType())) {
+          assert(ty.getNumElements() * ty.getElementTypeBitWidth() == 32);
+          value = b.bitcast(value, i32_ty);
+        }
+        shfl[i] = targetInfo.shuffleXor(rewriter, op.getLoc(), value, mask);
+        shfl[i] = b.bitcast(shfl[i], acc[i].getType());
       }
-      accumulate(op.getLoc(), rewriter, op.getCombineOp(), acc, shfl);
+      accumulate(op.getLoc(), rewriter, combineRegion, acc, shfl);
+    }
+    if (!op.isCommutative()) {
+      // Broadcast the leader lane result so all lanes agree.
+      auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+      Value leader = b.and_(getLaneId(rewriter, op.getLoc()),
+                            b.i32_val(~reduceLaneIdMask));
+      for (Value &value : acc)
+        value = targetInfo.shuffleIdx(rewriter, op.getLoc(), value, leader);
     }
   }
 
@@ -721,8 +759,9 @@ private:
 
     // Compute a shared memory base per operand.
     auto smemShape = ttgi::getScratchRepShape(helper, op);
-    SmallVector<Value> smemBases =
-        getSmemBases(op, product<unsigned>(smemShape), rewriter, targetInfo);
+    SmallVector<Value> smemBases = LLVM::intel::getSmemBases(
+        op, op.getElementTypes(), product<unsigned>(smemShape),
+        *getTypeConverter(), rewriter, targetInfo);
 
     storeWarpReduceToSharedMemory(op, helper, accs, indices, smemBases,
                                   rewriter, regLl);

@@ -22,7 +22,7 @@ on:
       python_version:
         description: Python version
         type: string
-        default: "3.12"
+        default: "3.11"
       ignore_errors:
         description: Ignore test errors
         type: boolean
@@ -44,8 +44,8 @@ env:
 jobs:
   setup:
     name: Setup
-    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
-    timeout-minutes: 300
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "gpu", "{0}"]', inputs.runner_label)) }}
+    timeout-minutes: 360
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -88,6 +88,7 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           lts: ${{ inputs.runner_label == 'lts' }}
+          upload_artifact: pytorch-vllm-${{ inputs.python_version }}-${{ inputs.runner_label || 'default' }}
 
       - name: Build Triton wheel
         run: |
@@ -143,8 +144,8 @@ jobs:
           - vllm-rest
           # Currently vllm-omni suite only installs the framework, no tests are running yet
           - vllm-omni
-    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
-    timeout-minutes: 300
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "gpu", "{0}"]', inputs.runner_label)) }}
+    timeout-minutes: 360
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -191,14 +192,15 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           lts: ${{ inputs.runner_label == 'lts' }}
+          download_artifact: pytorch-vllm-${{ inputs.python_version }}-${{ inputs.runner_label || 'default' }}
 
       - name: Identify torchvision pin
-        if: ${{ matrix.suite == 'vllm-spec-decode' || matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' || matrix.suite == 'vllm-omni' }}
+        if: ${{ matrix.suite == 'vllm-spec-decode' || matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' || matrix.suite == 'vllm-omni' || matrix.suite == 'vllm-mamba' }}
         run: |
           echo "TORCHVISION_COMMIT_ID=$(<pytorch/.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
 
       - name: Install torchvision package
-        if: ${{ matrix.suite == 'vllm-spec-decode' || matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' || matrix.suite == 'vllm-omni' }}
+        if: ${{ matrix.suite == 'vllm-spec-decode' || matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' || matrix.suite == 'vllm-omni' || matrix.suite == 'vllm-mamba' }}
         uses: ./.github/actions/install-dependency
         with:
           package: torchvision
@@ -282,7 +284,7 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-kda
 
-      # vllm-rest groups short suites: gdn-attn, linear-attn, deepgemm
+      # vllm-rest groups short suites: gdn-attn, linear-attn, deepgemm, inductor, lora, batch-invariant, model-ops
       - name: Run gdn-attn tests
         if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
@@ -302,6 +304,21 @@ jobs:
         if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-inductor
+
+      - name: Run lora tests
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-lora
+
+      - name: Run batch-invariant tests
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-batch-invariant
+
+      - name: Run model-ops tests
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-model-ops
 
       - name: Run tdesc tests
         if: ${{ matrix.suite == 'vllm-tdesc' && steps.install-vllm.outcome == 'success' && !cancelled() }}

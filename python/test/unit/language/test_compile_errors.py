@@ -239,6 +239,27 @@ def test_returns_branched_on_non_constexpr():
     assert "at 1:0:" in str(e.value.__cause__), "error should point to function definition"
 
 
+@triton.jit
+def returns_tuples_of_different_lengths(N: int):
+    values = tl.arange(0, 4)
+    if N == 0:
+        return values, values + 1
+    else:
+        return (values, )
+
+
+def test_returns_tuples_of_different_lengths():
+
+    @triton.jit
+    def kernel(N: int):
+        returns_tuples_of_different_lengths(N)
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'N': 'i32'}, constexprs={}))
+
+    assert "Return type mismatch" in str(e.value.__cause__)
+
+
 def test_power_of_two_shapes():
 
     @triton.jit
@@ -411,9 +432,8 @@ def test_min_dot_size(dtype):
         # hip supports arbitrary sizes
         error_msg = None
     elif is_xpu():
-        # invalid DPAS INT8 dots are rejected, other dots
-        # fallback to FMA.
-        error_msg = "Input shapes should have " if dtype.is_int8() else None
+        # dots that DPAS cannot handle fall back to FMA.
+        error_msg = None
     else:
         pytest.skip("Test only supported on CUDA, HIP and XPU")
 
@@ -608,3 +628,19 @@ def test_err_histogram_non_32bit_int(ptr_ty):
             triton.compiler.ASTSource(fn=kernel, signature={"x_ptr": ptr_ty, "z_ptr": "*i32", "N": "constexpr"},
                                       constexprs={"N": 4}))
     assert "histogram only supports 32-bit integer input" in str(e.value.__cause__)
+
+
+def test_err_range_zero_step():
+
+    @triton.jit
+    def kernel(ptr, STEP: tl.constexpr):
+        acc = 0
+        for i in tl.range(0, 10, STEP):
+            acc += 1
+        tl.store(ptr, acc)
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={"ptr": "*i32"}, constexprs={"STEP": 0}))
+
+    err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+    assert "must not be zero" in err_msg, "error should explain the zero step"

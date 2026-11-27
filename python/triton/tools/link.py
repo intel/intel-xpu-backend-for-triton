@@ -4,7 +4,24 @@ from typing import Sequence, Union
 
 from dataclasses import dataclass
 
-from triton._internal_testing import is_cuda, is_xpu
+# Backend named by the `tt-linker-backend` line of the headers ("intel", "cuda" or "hip"), set by `main()`.
+# This keeps the CLI from importing torch and initialising the driver (~1.7s) just to ask the device.
+# In-process callers that leave it unset get the current device's backend.
+_BACKEND = None
+
+
+def is_cuda():
+    if _BACKEND is not None:
+        return _BACKEND == "cuda"
+    from triton._internal_testing import is_cuda as device_is_cuda
+    return device_is_cuda()
+
+
+def is_xpu():
+    if _BACKEND is not None:
+        return _BACKEND == "intel"
+    from triton._internal_testing import is_xpu as device_is_xpu
+    return device_is_xpu()
 
 
 def _exists(x):
@@ -192,22 +209,12 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
     src += (f"TT_ResultTy {name}(TT_StreamTy stream, {gen_signature_with_full_args(metas[-1])}){{")
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        if is_xpu():
-            cond_fn = (  #
-                lambda val, hint: f"(reinterpret_cast<uintptr_t>({val}) % {hint} == 0)"  #
-                if val in ('A', 'B', 'C')  #
-                else f"({val} % {hint} == 0)"  #
-                if hint == 16  #
-                else f"({val} == {hint})"  #
-                if hint == 1  #
-                else None)
-        else:
-            cond_fn = (  #
-                lambda val, hint: f"((uintptr_t){val} % {hint} == 0)"  #
-                if hint == 16  #
-                else f"({val} == {hint})"  #
-                if hint == 1  #
-                else None)
+        cond_fn = (  #
+            lambda val, hint: f"((uintptr_t){val} % {hint} == 0)"  #
+            if hint == 16  #
+            else f"({val} == {hint})"  #
+            if hint == 1  #
+            else None)
         conds = " && ".join([  #
             cond_fn(val, hint)  #
             for val, hint in zip(meta.arg_names, meta.sizes)  #
@@ -324,6 +331,8 @@ if __name__ == "__main__":
         h_str = h_path.read_text()
         includes.append(h_path.name)
         parser.extract_linker_meta(h_str)
+
+    _BACKEND = parser.backend_name
 
     # generate headers
     algo_decls = [make_algo_decls(name, meta) for name, meta in parser.kernels.items()]

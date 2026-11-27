@@ -2,16 +2,17 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="grf-mode=128" | FileCheck %s --check-prefixes=CHECK,GRF128
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="grf-mode=256" | FileCheck %s --check-prefixes=CHECK,GRF256
 // RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="grf-mode=default" 2>&1 | FileCheck %s --check-prefix=STATS
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="grf-mode=default" -tritonintelgpu-remove-layout-conversions | FileCheck %s --check-prefix=MERGE
 
-// COM: The statistics counters are process-global and are printed once per
-// COM: -split-input-file section, so the figures accumulate down the file. The
-// COM: first directive pins the field set and its order against any output line;
-// COM: the second pins the exact totals, which only the final section's line can
-// COM: carry. Update the totals whenever a case is added or a verdict changes,
-// COM: and check the sum: hoisted + the three rejected counters + skipped_other
-// COM: must equal considered.
+// COM: MERGE chains remove_layout_conversions to show the twin merge the credit
+// COM: relies on (@shared_source_joint_over_peak, @no_twin_credit_for_different_result_type).
+
+// COM: Counters are process-global and print once per section. The second STATS
+// COM: line pins the final totals (hoisted + rejected + skipped_other = considered);
+// COM: STATS-NOT forbids a later line. Update the totals when a verdict changes.
 // STATS: [HoistLayoutConversions] considered={{[0-9]+}} hoisted={{[0-9]+}} rejected_pressure={{[0-9]+}} rejected_function_peak_exact={{[0-9]+}} rejected_function_peak_fallback={{[0-9]+}} skipped_other={{[0-9]+}}
-// STATS: [HoistLayoutConversions] considered=39 hoisted=23 rejected_pressure=2 rejected_function_peak_exact=4 rejected_function_peak_fallback=4 skipped_other=6
+// STATS: [HoistLayoutConversions] considered=85 hoisted=36 rejected_pressure=14 rejected_function_peak_exact=10 rejected_function_peak_fallback=16 skipped_other=9
+// STATS-NOT: [HoistLayoutConversions]
 
 // COM: Case 1: Hoist ConvertLayoutOp with DotOperandEncoding out of scf.for loop.
 // COM: The source of the convert_layout is defined outside the loop, so the pass
@@ -185,15 +186,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM:
 // COM: The moment where source and result are both live does move out of the
 // COM: loop and into the straight-line code before it, and the loop-level gate
-// COM: does not measure that program point. What the move costs is measured
-// COM: separately, by the second veto on the whole *function's* peak -- and here
-// COM: it costs nothing. Measured whole-function peak: 5248 bytes/lane both
-// COM: before and after the hoist. Only the block reporting it changes; the loop
-// COM: body block drops 5248 -> 4224 while the function block rises 4224 -> 5248.
-// COM: The veto's projection reproduces that: prePeak=5248, corridor=4224 over
-// COM: 1 op, newPoint=5248, ceiling 5248 -> accepted.
-// COM: Case 17 is the shape in which the same move does raise the function peak,
-// COM: and is refused for it.
+// COM: does not measure that program point.
+// COM: The peak gate accepts too: the hoist lowers the function peak
+// COM: (no_spanning_in_loop / no_spanning_hoisted in register-pressure.mlir).
 
 #blocked6 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpas6 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -345,29 +340,9 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 11: Exercise the divide-by-32 default in
-// COM: RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes. This module
-// COM: deliberately omits ttg.threads-per-warp, so getThreadsPerWarp returns its
-// COM: 32 default and the per-hardware-thread budget is divided by 32 rather than
-// COM: the DPAS-typical 16. All layouts here are 32-lane so the module still
-// COM: verifies (deleting the attribute from a SIMD16 module would not).
-// COM:
-// COM: Measured pressure: live-in 144 bytes/lane (arg0 #blocked 128 + arg1
-// COM: #dot_b 16; the iter args are block arguments, so they are not live-in),
-// COM: plus 16 bytes/lane for the hoisted #dot_a value = 160 bytes/lane total.
-// COM:
-// COM: %arg0 is deliberately also consumed by the in-loop arith.addf, so the
-// COM: hoist does NOT retire it and the cost is genuinely additive (this is also
-// COM: the coverage for the not-retired branch of the substitution model). Were
-// COM: the convert_layout its only in-loop use, the hoist would instead swap a
-// COM: 128-byte source for a 16-byte result and pass at every GRF mode.
-// COM:
-// COM: Thresholds are 80% of the per-lane budget:
-// COM:   grf-mode=default -> 4096/32 = 128 B/lane -> threshold 102 -> reject
-// COM:   grf-mode=256     -> 8192/32 = 256 B/lane -> threshold 204 -> hoist
-// COM: Were the divisor wrongly 16, the thresholds would be 204 and 409 and this
-// COM: case would hoist at both modes, so the GRF128 rejection below is what pins
-// COM: the divide-by-32 behavior.
+// COM: Case 11: no ttg.threads-per-warp, so the budget is divided by 32. The
+// COM: hoist retires nothing and the loop gate refuses it at 128-GRF only; a
+// COM: divisor of 16 would take it. %h1..%h4 keep the peak gate from deciding.
 
 #blocked11 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpas11 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
@@ -376,13 +351,17 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 module attributes {"ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: tt.func @default_threads_per_warp
   tt.func @default_threads_per_warp(%arg0: tensor<16x16xf16, #blocked11>, %arg1: tensor<16x16xf16, #dot_b11>, %arg2: tensor<16x16xf32, #dpas11>) -> tensor<16x16xf32, #dpas11> {
+    %h1 = arith.addf %arg0, %arg0 : tensor<16x16xf16, #blocked11>
+    %h2 = arith.addf %h1, %arg0 : tensor<16x16xf16, #blocked11>
+    %h3 = arith.addf %h2, %h1 : tensor<16x16xf16, #blocked11>
+    %h4 = arith.addf %h3, %h2 : tensor<16x16xf16, #blocked11>
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
+    // GRF128: scf.for
+    // GRF128-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
     // GRF256: ttg.convert_layout %{{.*}} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
     // GRF256-NEXT: scf.for
-    // GRF128: scf.for
-    // GRF128: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
     %result:2 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2, %bacc = %arg0) -> (tensor<16x16xf32, #dpas11>, tensor<16x16xf16, #blocked11>) : i32 {
       %cvt = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked11> -> tensor<16x16xf16, #dot_a11>
       %dot = tt.dot %cvt, %arg1, %acc, inputPrecision = tf32 : tensor<16x16xf16, #dot_a11> * tensor<16x16xf16, #dot_b11> -> tensor<16x16xf32, #dpas11>
@@ -572,45 +551,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 16: One loop-invariant source feeding a conversion in each of two
-// COM: *sibling* loops. This is the shape _attn_bwd has at HEAD_DIM=128, where
-// COM: every hoisting source (k, v, q, do) is read by an adjacent pair of loops.
-// COM:
-// COM: The credit for retiring %src is real for both loops, but only if the
-// COM: question "is %src still read below this loop?" is asked of the IR as it
-// COM: stands rather than of the frozen liveness analysis. For the *earlier* loop
-// COM: the honest answer depends on the later loop's conversion having already
-// COM: moved out from under it, so the pass decides loops last-to-first: loop 2 is
-// COM: credited first (nothing below it reads %src), its conversion moves above
-// COM: loop 1, and loop 1 is then credited too.
-// COM:
-// COM: Per-lane bytes: %src is 256, each #dot_a result is 64, each loop body's
-// COM: live-in is 256 (%src) + 32 (%argB) = 288 (the accumulators are iter args,
-// COM: hence block arguments, hence not live-in). So each hoist projects
-// COM: 288 + 64 - 256 = 96, under the 128-GRF threshold of 204, and both are
-// COM: taken. Deciding first-to-last instead denied loop 1 the credit purely
-// COM: because loop 2 had not been reached yet, projecting 288 + 64 = 352 and
-// COM: rejecting it -- an outcome that depended on nothing but the walk order.
-// COM: See https://github.com/intel/intel-xpu-backend-for-triton/issues/7993.
-// COM:
-// COM: %src is produced by an arith.addf rather than passed in as a function
-// COM: argument on purpose: a conversion whose source has no defining op is
-// COM: hoisted to immediately before its own loop, which for loop 1 is still
-// COM: below loop 2's original position, so the credit could not be collected.
-// COM: That limitation is recorded as a non-goal in the pass description.
-// COM:
-// COM: Both hoists also clear the whole-function peak veto, and the %t chain in
-// COM: loop 1's body is what makes that a real test rather than a formality.
-// COM: Five 128-byte #dpas values are live at once at %t4, which puts the
-// COM: function's peak (736) inside loop 1's body -- on loop 2's corridor. The
-// COM: corridor steps over a nested region as one operation instead of descending
-// COM: into it, because a value that spans the region unused is not reported live
-// COM: at the operations inside it; charging loop 2's arriving result at %t4 would
-// COM: price that point at 736 + 64 = 800 and veto a hoist that costs nothing.
-// COM: The chain sits *below* %cvt1 so that it stays off loop 1's own corridor.
-// COM: Measured: loop 2 projects 736 (prePeak=736, corridor=608 over 2 ops,
-// COM: newPoint=480) and loop 1 then projects 736 (prePeak=736, corridor=544 over
-// COM: 2 ops, newPoint=480); the ceiling is 736 both times.
+// COM: Case 16: one source, a conversion in each of two sibling loops. Loop 2
+// COM: is refused alone by the peak, loop 1 hoists past that refused twin, and
+// COM: the shared-source phase then hoists loop 2 (measured peak 800).
+// COM: The order of the two hoisted conversions differs by mode.
 
 #blocked16 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas16 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -625,10 +569,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %c1_i32 = arith.constant 1 : i32
     %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked16>
     // CHECK: arith.addf
-    // CHECK-NEXT: ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
-    // CHECK-NEXT: ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
     // CHECK-NEXT: scf.for
     // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.dot
     %r1 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<128x16xf32, #dpas16>) : i32 {
       %cvt1 = ttg.convert_layout %src : tensor<128x16xf16, #blocked16> -> tensor<128x16xf16, #dot_a16>
       %t1 = arith.addf %acc, %acc : tensor<128x16xf32, #dpas16>
@@ -640,6 +585,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
       %d1 = tt.dot %cvt1, %argB, %t6, inputPrecision = tf32 : tensor<128x16xf16, #dot_a16> * tensor<16x16xf16, #dot_b16> -> tensor<128x16xf32, #dpas16>
       scf.yield %d1 : tensor<128x16xf32, #dpas16>
     }
+    // CHECK: scf.for
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.dot
     %r2 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r1) -> (tensor<128x16xf32, #dpas16>) : i32 {
       %cvt2 = ttg.convert_layout %src : tensor<128x16xf16, #blocked16> -> tensor<128x16xf16, #dot_a16>
       %d2 = tt.dot %cvt2, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a16> * tensor<16x16xf16, #dot_b16> -> tensor<128x16xf32, #dpas16>
@@ -652,25 +600,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Case 17: the motivating case for the whole-function peak veto, and the
-// COM: shape gap (b) of
-// COM: https://github.com/intel/intel-xpu-backend-for-triton/issues/7993
-// COM: describes: a fat value that spans the loop without being read inside it.
-// COM: %span is not the conversion's source. Its job is to be live *around* the
-// COM: loop, so that the program point just above the loop -- where the hoist
-// COM: makes source and result simultaneously live -- is already carrying more
-// COM: than the loop body ever does.
-// COM: Per-lane bytes (warpsPerCTA=[1,1]): %arg0 and the #dot_a result are both
-// COM: 2048, %span 2048, %arg1 128, %arg2 128.
-// COM: Measured: prePeak=6272, corridor=6272 over 1 op, newPoint=7296 -- the
-// COM: new program point dominates, so hoisting would raise the reported
-// COM: whole-function peak 6272 -> 7296. That exceeds the ceiling
-// COM: max(prePeak, threshold) = 6272 and the hoist is refused in every GRF
-// COM: mode (a bigger GRF budget raises only the threshold, and the threshold is
-// COM: already far below prePeak here).
-// COM: The loop-level gate has no say: this hoist is break-even on the loop
-// COM: body's live-in pressure (2176 + 2048 - 2048), exactly case 6's
-// COM: arithmetic, so before this veto existed the conversion was hoisted.
+// COM: Case 17: %span lives across the loop unread. It is charged through the
+// COM: loop body, so prePeak binds and the hoist is accepted at the ceiling.
 
 #blocked17 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpas17 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -678,35 +609,30 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 #dot_b17 = #ttg.dot_op<{opIdx = 1, parent = #dpas17, kWidth = 2}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
 
-  // CHECK-LABEL: tt.func @no_hoist_spanning_value
-  tt.func @no_hoist_spanning_value(%arg0: tensor<256x64xf16, #blocked17>, %arg1: tensor<64x16xf16, #dot_b17>, %arg2: tensor<256x16xf32, #dpas17>) -> (tensor<256x16xf32, #dpas17>, tensor<256x64xf16, #blocked17>) {
+  // CHECK-LABEL: tt.func @hoist_with_spanning_value
+  tt.func @hoist_with_spanning_value(%arg0: tensor<256x64xf16, #blocked17>, %arg1: tensor<64x16xf16, #dot_b17>, %arg2: tensor<256x16xf32, #dpas17>) -> (tensor<256x16xf32, #dpas17>, tensor<256x64xf32, #blocked17>) {
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
-    %span = arith.addf %arg0, %arg0 : tensor<256x64xf16, #blocked17>
-    // CHECK: scf.for
-    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<256x64xf16, #{{.*}}> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %span = arith.extf %arg0 : tensor<256x64xf16, #blocked17> to tensor<256x64xf32, #blocked17>
+    // CHECK: ttg.convert_layout %{{.*}} : tensor<256x64xf16, #{{.*}}> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: scf.for
+    // CHECK-NOT: ttg.convert_layout
     %result = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<256x16xf32, #dpas17>) : i32 {
       %cvt = ttg.convert_layout %arg0 : tensor<256x64xf16, #blocked17> -> tensor<256x64xf16, #dot_a17>
       %dot = tt.dot %cvt, %arg1, %acc, inputPrecision = tf32 : tensor<256x64xf16, #dot_a17> * tensor<64x16xf16, #dot_b17> -> tensor<256x16xf32, #dpas17>
       scf.yield %dot : tensor<256x16xf32, #dpas17>
     }
-    tt.return %result, %span : tensor<256x16xf32, #dpas17>, tensor<256x64xf16, #blocked17>
+    tt.return %result, %span : tensor<256x16xf32, #dpas17>, tensor<256x64xf32, #blocked17>
   }
 }
 
 // -----
 
 
-// COM: Case 18: unsound-credit regression. %heavy reads the conversion's source
-// COM: between the source's definition and the loop, so at %heavy the source is
-// COM: still live no matter where the conversion goes and the corridor may not
-// COM: credit it there.
-// COM: Measured: prePeak=6272, corridor=7296 over 2 ops (%heavy and the loop) --
-// COM: this time the *corridor* dominates -- newPoint=5248. Crediting the source
-// COM: at %heavy would have produced 7296 - 2048 = 5248 there, i.e. a projection
-// COM: of 6272 == prePeak, and the hoist would have been accepted while the
-// COM: reported peak really does rise to 7296.
+// COM: Case 18: %heavy reads %src before the loop, so %src is not credited
+// COM: there: corridor 7296 > prePeak 6272, refused. A wrong credit gives 5248.
+// COM: %heavy2 only gives %heavy a reader, so %heavy keeps its weight.
 
 #blocked18 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpas18 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -715,20 +641,21 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
 
   // CHECK-LABEL: tt.func @no_credit_while_source_still_read
-  tt.func @no_credit_while_source_still_read(%arg0: tensor<256x64xf16, #blocked18>, %arg1: tensor<64x16xf16, #dot_b18>, %arg2: tensor<256x16xf32, #dpas18>) -> (tensor<256x16xf32, #dpas18>, tensor<256x64xf16, #blocked18>) {
+  tt.func @no_credit_while_source_still_read(%arg0: tensor<256x64xf16, #blocked18>, %arg1: tensor<64x16xf16, #dot_b18>, %arg2: tensor<256x16xf32, #dpas18>) -> tensor<256x16xf32, #dpas18> {
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
     %src = arith.addf %arg0, %arg0 : tensor<256x64xf16, #blocked18>
-    %heavy = arith.addf %src, %src : tensor<256x64xf16, #blocked18>
     // CHECK: scf.for
     // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<256x64xf16, #{{.*}}> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %heavy = arith.addf %src, %src : tensor<256x64xf16, #blocked18>
+    %heavy2 = arith.addf %heavy, %heavy : tensor<256x64xf16, #blocked18>
     %result = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<256x16xf32, #dpas18>) : i32 {
       %cvt = ttg.convert_layout %src : tensor<256x64xf16, #blocked18> -> tensor<256x64xf16, #dot_a18>
       %dot = tt.dot %cvt, %arg1, %acc, inputPrecision = tf32 : tensor<256x64xf16, #dot_a18> * tensor<64x16xf16, #dot_b18> -> tensor<256x16xf32, #dpas18>
       scf.yield %dot : tensor<256x16xf32, #dpas18>
     }
-    tt.return %result, %heavy : tensor<256x16xf32, #dpas18>, tensor<256x64xf16, #blocked18>
+    tt.return %result : tensor<256x16xf32, #dpas18>
   }
 }
 
@@ -822,16 +749,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Case 21: an intervening scf.if with high local pressure that reads
-// COM: neither the source nor the result. The corridor steps over the region as
-// COM: one operation and does not descend into it.
-// COM: That rule is load-bearing here: the function's peak (1184) lives *inside*
-// COM: the if body, at %h3, where four 256-byte values are live at once. The
-// COM: hoisted result spans that region unused, so the metric this projection
-// COM: bounds does not report it there; charging it anyway would price %h3 at
-// COM: 1184 + 64 = 1248 and veto the hoist on a term the metric never reports.
-// COM: Measured: prePeak=1184, corridor=737 over 2 ops, newPoint=865,
-// COM: ceiling 1184.
+// COM: Case 21: an scf.if with a high internal peak is on the corridor. Its
+// COM: peak plus the result refuses; pricing the if at its own point accepts.
+// COM: %v reads %src after the if, so %src is not credited there.
 
 #blocked21 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas21 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -845,9 +765,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
     %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked21>
-    // CHECK: arith.addf
-    // CHECK-NEXT: ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
-    // CHECK-NEXT: scf.if
     %hot = scf.if %cond -> (tensor<128x16xf32, #dpas21>) {
       %h1 = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked21>
       %h2 = arith.addf %h1, %arg0 : tensor<128x16xf16, #blocked21>
@@ -860,8 +777,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     } else {
       scf.yield %acc1 : tensor<128x16xf32, #dpas21>
     }
+    %v = arith.addf %src, %src : tensor<128x16xf16, #blocked21>
     // CHECK: scf.for
-    // CHECK-NOT: ttg.convert_layout
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
     %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas21>) : i32 {
       %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked21> -> tensor<128x16xf16, #dot_a21>
       %d = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a21> * tensor<16x16xf16, #dot_b21> -> tensor<128x16xf32, #dpas21>
@@ -917,18 +835,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Case 23: the source is read inside an intervening loop that *encloses*
-// COM: the corridor, at a point lexically before the hoist's anchor. Position
-// COM: says nothing here -- %u runs again on the next iteration, after the inner
-// COM: loop -- so the credit is withheld for every operation of the enclosing
-// COM: loop's body rather than only for those below the last user.
-// COM: Measured: prePeak=1312, corridor=1376 over 1 op, newPoint=1248, ceiling
-// COM: 1312. Crediting on lexical position gives 1120 and accepts.
-// COM: The rejection lands in the fallback bucket. Withholding the credit is
-// COM: physically right, but the metric being gated is back-edge blind -- it ends
-// COM: %src's range at its last lexical use -- so it reports a post-hoist peak of
-// COM: 1248, below both the projection and prePeak. The projection cannot be
-// COM: called measured against a number it exceeds.
+// COM: Case 23: the outer loop re-reads %src above the anchor after the inner
+// COM: loop, so the credit is withheld: refused. A credit would hoist. The dot
+// COM: result is unused so the inner body's peak stays below the corridor term.
 
 #blocked23 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas23 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -937,27 +846,24 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
 
   // CHECK-LABEL: tt.func @no_credit_for_recurring_use_before_anchor
-  tt.func @no_credit_for_recurring_use_before_anchor(%src: tensor<128x16xf16, #blocked23>, %arg1: tensor<128x16xf16, #blocked23>, %argB: tensor<16x16xf16, #dot_b23>, %acc0: tensor<128x16xf32, #dpas23>) -> (tensor<128x16xf32, #dpas23>, tensor<128x16xf16, #blocked23>) {
+  tt.func @no_credit_for_recurring_use_before_anchor(%src: tensor<128x16xf16, #blocked23>, %argB: tensor<16x16xf16, #dot_b23>, %acc0: tensor<128x16xf32, #dpas23>) -> tensor<128x16xf32, #dpas23> {
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
     // CHECK: scf.for
-    %outer:2 = scf.for %i = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%o = %acc0, %p = %arg1) -> (tensor<128x16xf32, #dpas23>, tensor<128x16xf16, #blocked23>) : i32 {
-      %u = arith.addf %src, %p : tensor<128x16xf16, #blocked23>
-      %w = arith.addf %src, %u : tensor<128x16xf16, #blocked23>
-      %x = arith.addf %src, %w : tensor<128x16xf16, #blocked23>
-      // CHECK: scf.for
+    %outer = scf.for %i = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%o = %acc0) -> (tensor<128x16xf32, #dpas23>) : i32 {
+      %u = arith.addf %src, %src : tensor<128x16xf16, #blocked23>
+      // CHECK: arith.addf
+      // CHECK-NEXT: scf.for
       // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
       %r = scf.for %j = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %o) -> (tensor<128x16xf32, #dpas23>) : i32 {
         %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked23> -> tensor<128x16xf16, #dot_a23>
         %d = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a23> * tensor<16x16xf16, #dot_b23> -> tensor<128x16xf32, #dpas23>
-        scf.yield %d : tensor<128x16xf32, #dpas23>
+        scf.yield %a : tensor<128x16xf32, #dpas23>
       }
-      %y = arith.addf %u, %w : tensor<128x16xf16, #blocked23>
-      %z = arith.addf %y, %x : tensor<128x16xf16, #blocked23>
-      scf.yield %r, %z : tensor<128x16xf32, #dpas23>, tensor<128x16xf16, #blocked23>
+      scf.yield %r : tensor<128x16xf32, #dpas23>
     }
-    tt.return %outer#0, %outer#1 : tensor<128x16xf32, #dpas23>, tensor<128x16xf16, #blocked23>
+    tt.return %outer : tensor<128x16xf32, #dpas23>
   }
 }
 
@@ -1148,28 +1054,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 
-// COM: Case 28: an unstructured CFG cycle on the region path above the corridor.
-// COM: The credit test bails out on any enclosing region that is not a single
-// COM: block whose terminator has no CFG successors, because inside a cycle
-// COM: lexical position carries no information about what runs again.
-// COM: ^body has exactly one predecessor and the back edge leaves from it, so a
-// COM: multi-predecessor test on the corridor's own block would miss this. %src
-// COM: has no user other than the conversion, so without the bail-out the credit
-// COM: would be granted unconditionally at every corridor operation.
-// COM: Measured: prePeak=549, corridor=613 over 1 op, newPoint=485, ceiling 549,
-// COM: "conservatively charged". With the credit taken the corridor term is 357
-// COM: and the hoist is accepted.
-// COM: The %u = arith.addi anchor keeps the pre-loop operations *lean* on
-// COM: purpose. Inside a CFG cycle every value used anywhere in the cycle is
-// COM: reported live at every operation of it, including values read only on a
-// COM: later iteration, so a fat operation before the loop would outrank the loop
-// COM: itself and move prePeak away from the point this case is about.
-// COM:
-// COM: The degenerate companion -- a single block whose *own* terminator has CFG
-// COM: successors, which pins the second half of the same bail-out -- has no test
-// COM: because it cannot be written: the entry block of a region is not a valid
-// COM: branch target, so `cf.br ^bb0` in a one-block tt.func is rejected by the
-// COM: parser with "reference to an undefined block".
+// COM: Case 28: the loop sits in a cf.br cycle, so %src is not credited:
+// COM: corridor 613 > prePeak 549, refused; a wrong credit gives 357. The dot
+// COM: result is unused so the body peak stays below the corridor term.
 
 #blocked28 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas28 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -1187,12 +1074,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     cf.cond_br %c, ^body, ^exit
   ^body:
     %u = arith.addi %n, %n : i32
-    // CHECK: scf.for
+    // CHECK: arith.addi
+    // CHECK-NEXT: scf.for
     // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
     %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc) -> (tensor<128x16xf32, #dpas28>) : i32 {
       %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked28> -> tensor<128x16xf16, #dot_a28>
       %d = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a28> * tensor<16x16xf16, #dot_b28> -> tensor<128x16xf32, #dpas28>
-      scf.yield %d : tensor<128x16xf32, #dpas28>
+      scf.yield %a : tensor<128x16xf32, #dpas28>
     }
     cf.br ^header(%r, %u : tensor<128x16xf32, #dpas28>, i32)
   ^exit:
@@ -1453,5 +1341,991 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
       scf.yield %d2, %c : tensor<128x16xf32, #dpas33>, tensor<128x16xf16, #blocked33>
     }
     tt.return %r#0, %r#1 : tensor<128x16xf32, #dpas33>, tensor<128x16xf16, #blocked33>
+  }
+}
+
+// -----
+
+// COM: Case 34: %cvt's only use opens an scf.if branch; the rest of the branch
+// COM: is priced with %src credited: accepted. The whole-region fallback refuses.
+
+#blocked34 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas34 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a34 = #ttg.dot_op<{opIdx = 0, parent = #dpas34, kWidth = 1}>
+#dot_b34 = #ttg.dot_op<{opIdx = 1, parent = #dpas34, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+  // CHECK-LABEL: tt.func @price_tail_after_nested_last_use
+  tt.func @price_tail_after_nested_last_use(%arg0: tensor<128x16xf16, #blocked34>, %argB: tensor<16x16xf16, #dot_b34>, %acc0: tensor<128x16xf32, #dpas34>, %cond: i1) -> tensor<128x16xf32, #dpas34> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK: %[[SRC:.*]] = arith.addf
+    // CHECK-NEXT: %[[CVT:.*]] = ttg.convert_layout %[[SRC]] : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: scf.for
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked34>
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas34>) : i32 {
+      %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked34> -> tensor<128x16xf16, #dot_a34>
+      // CHECK: scf.if
+      // CHECK-NOT: ttg.convert_layout
+      // CHECK: tt.dot %[[CVT]]
+      %hot = scf.if %cond -> (tensor<128x16xf32, #dpas34>) {
+        %use = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a34> * tensor<16x16xf16, #dot_b34> -> tensor<128x16xf32, #dpas34>
+        %h1 = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked34>
+        %h2 = arith.addf %h1, %arg0 : tensor<128x16xf16, #blocked34>
+        %h3 = arith.addf %h2, %arg0 : tensor<128x16xf16, #blocked34>
+        %h4 = arith.addf %h3, %h1 : tensor<128x16xf16, #blocked34>
+        %h5 = arith.addf %use, %use : tensor<128x16xf32, #dpas34>
+        %h6 = ttg.convert_layout %h4 : tensor<128x16xf16, #blocked34> -> tensor<128x16xf16, #dot_a34>
+        %h7 = tt.dot %h6, %argB, %h5, inputPrecision = tf32 : tensor<128x16xf16, #dot_a34> * tensor<16x16xf16, #dot_b34> -> tensor<128x16xf32, #dpas34>
+        scf.yield %h7 : tensor<128x16xf32, #dpas34>
+      } else {
+        scf.yield %a : tensor<128x16xf32, #dpas34>
+      }
+      scf.yield %hot : tensor<128x16xf32, #dpas34>
+    }
+    tt.return %r : tensor<128x16xf32, #dpas34>
+  }
+}
+
+// -----
+
+
+// COM: Case 35: %cvt is used in both branches, so there is no single last use
+// COM: and the whole-region fallback refuses. The then-branch filler keeps
+// COM: prePeak from masking the charge.
+
+#blocked35 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas35 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a35 = #ttg.dot_op<{opIdx = 0, parent = #dpas35, kWidth = 1}>
+#dot_b35 = #ttg.dot_op<{opIdx = 1, parent = #dpas35, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+  // CHECK-LABEL: tt.func @no_precise_tail_for_multi_branch_use
+  tt.func @no_precise_tail_for_multi_branch_use(%arg0: tensor<128x16xf16, #blocked35>, %argB: tensor<16x16xf16, #dot_b35>, %acc0: tensor<128x16xf32, #dpas35>, %cond: i1) -> tensor<128x16xf32, #dpas35> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked35>
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas35>) : i32 {
+      %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked35> -> tensor<128x16xf16, #dot_a35>
+      %hot = scf.if %cond -> (tensor<128x16xf32, #dpas35>) {
+        %use1 = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a35> * tensor<16x16xf16, #dot_b35> -> tensor<128x16xf32, #dpas35>
+        %h1 = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked35>
+        %h2 = arith.addf %h1, %arg0 : tensor<128x16xf16, #blocked35>
+        %h3 = arith.addf %h2, %arg0 : tensor<128x16xf16, #blocked35>
+        %h4 = arith.addf %h3, %h1 : tensor<128x16xf16, #blocked35>
+        %h5 = arith.addf %use1, %use1 : tensor<128x16xf32, #dpas35>
+        %h6 = ttg.convert_layout %h4 : tensor<128x16xf16, #blocked35> -> tensor<128x16xf16, #dot_a35>
+        %h7 = tt.dot %h6, %argB, %h5, inputPrecision = tf32 : tensor<128x16xf16, #dot_a35> * tensor<16x16xf16, #dot_b35> -> tensor<128x16xf32, #dpas35>
+        scf.yield %h7 : tensor<128x16xf32, #dpas35>
+      } else {
+        %use2 = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a35> * tensor<16x16xf16, #dot_b35> -> tensor<128x16xf32, #dpas35>
+        scf.yield %use2 : tensor<128x16xf32, #dpas35>
+      }
+      scf.yield %hot : tensor<128x16xf32, #dpas35>
+    }
+    tt.return %r : tensor<128x16xf32, #dpas35>
+  }
+}
+
+// -----
+
+
+// COM: Case 36: %cvt's only use is in the then-branch; hoisted, it is live
+// COM: through the heavy else-branch, which refuses. %post keeps %src read.
+
+#blocked36 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas36 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a36 = #ttg.dot_op<{opIdx = 0, parent = #dpas36, kWidth = 1}>
+#dot_b36 = #ttg.dot_op<{opIdx = 1, parent = #dpas36, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+  // CHECK-LABEL: tt.func @price_sibling_else_of_nested_last_use
+  tt.func @price_sibling_else_of_nested_last_use(%arg0: tensor<128x16xf16, #blocked36>, %argB: tensor<16x16xf16, #dot_b36>, %acc0: tensor<128x16xf32, #dpas36>, %cond: i1) -> (tensor<128x16xf32, #dpas36>, tensor<128x16xf16, #blocked36>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked36>
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas36>) : i32 {
+      %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked36> -> tensor<128x16xf16, #dot_a36>
+      %hot = scf.if %cond -> (tensor<128x16xf32, #dpas36>) {
+        %use = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a36> * tensor<16x16xf16, #dot_b36> -> tensor<128x16xf32, #dpas36>
+        scf.yield %use : tensor<128x16xf32, #dpas36>
+      } else {
+        %h1 = arith.addf %a, %a : tensor<128x16xf32, #dpas36>
+        %h2 = arith.addf %h1, %a : tensor<128x16xf32, #dpas36>
+        %h3 = arith.addf %h2, %h1 : tensor<128x16xf32, #dpas36>
+        %h4 = arith.addf %h3, %h2 : tensor<128x16xf32, #dpas36>
+        %h5 = arith.addf %h4, %h3 : tensor<128x16xf32, #dpas36>
+        %h6 = arith.addf %h5, %h1 : tensor<128x16xf32, #dpas36>
+        %h7 = arith.addf %h6, %h2 : tensor<128x16xf32, #dpas36>
+        %h8 = arith.addf %h7, %h3 : tensor<128x16xf32, #dpas36>
+        %h9 = arith.addf %h8, %h4 : tensor<128x16xf32, #dpas36>
+        %h10 = arith.addf %h9, %h5 : tensor<128x16xf32, #dpas36>
+        %h11 = arith.addf %h10, %h6 : tensor<128x16xf32, #dpas36>
+        %h12 = arith.addf %h11, %h7 : tensor<128x16xf32, #dpas36>
+        %h13 = arith.addf %h12, %h8 : tensor<128x16xf32, #dpas36>
+        %h14 = arith.addf %h13, %h9 : tensor<128x16xf32, #dpas36>
+        %h15 = arith.addf %h14, %h10 : tensor<128x16xf32, #dpas36>
+        %h16 = arith.addf %h15, %h11 : tensor<128x16xf32, #dpas36>
+        %h17 = arith.addf %h16, %h12 : tensor<128x16xf32, #dpas36>
+        scf.yield %h17 : tensor<128x16xf32, #dpas36>
+      }
+      scf.yield %hot : tensor<128x16xf32, #dpas36>
+    }
+    %post = arith.addf %src, %src : tensor<128x16xf16, #blocked36>
+    tt.return %r, %post : tensor<128x16xf32, #dpas36>, tensor<128x16xf16, #blocked36>
+  }
+}
+
+// -----
+
+
+// COM: Case 37: %cvt's only use opens an inner scf.for; its back edge keeps
+// COM: %cvt live over the tail, so the tail is not charged again: accepted.
+// COM: %post keeps %src read.
+
+#blocked37 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas37 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a37 = #ttg.dot_op<{opIdx = 0, parent = #dpas37, kWidth = 1}>
+#dot_b37 = #ttg.dot_op<{opIdx = 1, parent = #dpas37, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+  // CHECK-LABEL: tt.func @no_double_charge_for_inner_loop_tail
+  tt.func @no_double_charge_for_inner_loop_tail(%arg0: tensor<128x16xf16, #blocked37>, %argB: tensor<16x16xf16, #dot_b37>, %acc0: tensor<128x16xf32, #dpas37>) -> (tensor<128x16xf32, #dpas37>, tensor<128x16xf16, #blocked37>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked37>
+    // CHECK: arith.addf
+    // CHECK-NEXT: %[[CVT:.*]] = ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: scf.for
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas37>) : i32 {
+      %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked37> -> tensor<128x16xf16, #dot_a37>
+      // CHECK: scf.for
+      // CHECK-NOT: ttg.convert_layout
+      // CHECK: tt.dot %[[CVT]]
+      %hot = scf.for %j = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%b = %a) -> (tensor<128x16xf32, #dpas37>) : i32 {
+        %use = tt.dot %cvt, %argB, %b, inputPrecision = tf32 : tensor<128x16xf16, #dot_a37> * tensor<16x16xf16, #dot_b37> -> tensor<128x16xf32, #dpas37>
+        %h1 = arith.addf %use, %use : tensor<128x16xf32, #dpas37>
+        %h2 = arith.addf %h1, %use : tensor<128x16xf32, #dpas37>
+        %h3 = arith.addf %h2, %h1 : tensor<128x16xf32, #dpas37>
+        %h4 = arith.addf %h3, %h2 : tensor<128x16xf32, #dpas37>
+        %h5 = arith.addf %h4, %h3 : tensor<128x16xf32, #dpas37>
+        %h6 = arith.addf %h5, %h1 : tensor<128x16xf32, #dpas37>
+        %h7 = arith.addf %h6, %h2 : tensor<128x16xf32, #dpas37>
+        %h8 = arith.addf %h7, %h3 : tensor<128x16xf32, #dpas37>
+        %h9 = arith.addf %h8, %h4 : tensor<128x16xf32, #dpas37>
+        %h10 = arith.addf %h9, %h5 : tensor<128x16xf32, #dpas37>
+        %h11 = arith.addf %h10, %h6 : tensor<128x16xf32, #dpas37>
+        %h12 = arith.addf %h11, %h7 : tensor<128x16xf32, #dpas37>
+        %h13 = arith.addf %h12, %h8 : tensor<128x16xf32, #dpas37>
+        scf.yield %h13 : tensor<128x16xf32, #dpas37>
+      }
+      scf.yield %hot : tensor<128x16xf32, #dpas37>
+    }
+    %post = arith.addf %src, %src : tensor<128x16xf16, #blocked37>
+    tt.return %r, %post : tensor<128x16xf32, #dpas37>, tensor<128x16xf16, #blocked37>
+  }
+}
+
+// -----
+
+// COM: Case 38: %cvt's only use is two scf.if levels down, so the precise
+// COM: tail does not apply and the whole-region fallback refuses.
+
+#blocked39 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas39 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a39 = #ttg.dot_op<{opIdx = 0, parent = #dpas39, kWidth = 1}>
+#dot_b39 = #ttg.dot_op<{opIdx = 1, parent = #dpas39, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+  // CHECK-LABEL: tt.func @depth2_if_if_use_falls_back_soundly
+  tt.func @depth2_if_if_use_falls_back_soundly(%arg0: tensor<128x16xf16, #blocked39>, %argB: tensor<16x16xf16, #dot_b39>, %acc0: tensor<128x16xf32, #dpas39>, %cond: i1) -> (tensor<128x16xf32, #dpas39>, tensor<128x16xf16, #blocked39>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked39>
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas39>) : i32 {
+      %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked39> -> tensor<128x16xf16, #dot_a39>
+      %hot = scf.if %cond -> (tensor<128x16xf32, #dpas39>) {
+        %u = scf.if %cond -> (tensor<128x16xf32, #dpas39>) {
+          %use = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a39> * tensor<16x16xf16, #dot_b39> -> tensor<128x16xf32, #dpas39>
+          scf.yield %use : tensor<128x16xf32, #dpas39>
+        } else {
+          scf.yield %a : tensor<128x16xf32, #dpas39>
+        }
+        %h1 = arith.addf %u, %u : tensor<128x16xf32, #dpas39>
+        %h2 = arith.addf %h1, %u : tensor<128x16xf32, #dpas39>
+        %h3 = arith.addf %h2, %h1 : tensor<128x16xf32, #dpas39>
+        %h4 = arith.addf %h3, %h2 : tensor<128x16xf32, #dpas39>
+        %h5 = arith.addf %h4, %h3 : tensor<128x16xf32, #dpas39>
+        %h6 = arith.addf %h5, %h1 : tensor<128x16xf32, #dpas39>
+        %h7 = arith.addf %h6, %h2 : tensor<128x16xf32, #dpas39>
+        %h8 = arith.addf %h7, %h3 : tensor<128x16xf32, #dpas39>
+        %h9 = arith.addf %h8, %h4 : tensor<128x16xf32, #dpas39>
+        %h10 = arith.addf %h9, %h5 : tensor<128x16xf32, #dpas39>
+        %h11 = arith.addf %h10, %h6 : tensor<128x16xf32, #dpas39>
+        %h12 = arith.addf %h11, %h7 : tensor<128x16xf32, #dpas39>
+        %h13 = arith.addf %h12, %h8 : tensor<128x16xf32, #dpas39>
+        %h14 = arith.addf %h13, %h9 : tensor<128x16xf32, #dpas39>
+        %h15 = arith.addf %h14, %h10 : tensor<128x16xf32, #dpas39>
+        %h16 = arith.addf %h15, %h11 : tensor<128x16xf32, #dpas39>
+        %h17 = arith.addf %h16, %h12 : tensor<128x16xf32, #dpas39>
+        scf.yield %h17 : tensor<128x16xf32, #dpas39>
+      } else {
+        scf.yield %a : tensor<128x16xf32, #dpas39>
+      }
+      scf.yield %hot : tensor<128x16xf32, #dpas39>
+    }
+    %post = arith.addf %src, %src : tensor<128x16xf16, #blocked39>
+    tt.return %r, %post : tensor<128x16xf32, #dpas39>, tensor<128x16xf16, #blocked39>
+  }
+}
+
+// -----
+
+// COM: Case 39: case 36 with scf.index_switch; the heavy default region is a
+// COM: sibling and refuses.
+
+#blocked41 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas41 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a41 = #ttg.dot_op<{opIdx = 0, parent = #dpas41, kWidth = 1}>
+#dot_b41 = #ttg.dot_op<{opIdx = 1, parent = #dpas41, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+  // CHECK-LABEL: tt.func @price_sibling_case_of_index_switch
+  tt.func @price_sibling_case_of_index_switch(%arg0: tensor<128x16xf16, #blocked41>, %argB: tensor<16x16xf16, #dot_b41>, %acc0: tensor<128x16xf32, #dpas41>, %sel: index) -> (tensor<128x16xf32, #dpas41>, tensor<128x16xf16, #blocked41>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked41>
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas41>) : i32 {
+      %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked41> -> tensor<128x16xf16, #dot_a41>
+      %hot = scf.index_switch %sel -> tensor<128x16xf32, #dpas41>
+      case 0 {
+        %use = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a41> * tensor<16x16xf16, #dot_b41> -> tensor<128x16xf32, #dpas41>
+        scf.yield %use : tensor<128x16xf32, #dpas41>
+      }
+      case 1 {
+        %k = arith.addf %a, %a : tensor<128x16xf32, #dpas41>
+        scf.yield %k : tensor<128x16xf32, #dpas41>
+      }
+      default {
+        %h1 = arith.addf %a, %a : tensor<128x16xf32, #dpas41>
+        %h2 = arith.addf %h1, %a : tensor<128x16xf32, #dpas41>
+        %h3 = arith.addf %h2, %h1 : tensor<128x16xf32, #dpas41>
+        %h4 = arith.addf %h3, %h2 : tensor<128x16xf32, #dpas41>
+        %h5 = arith.addf %h4, %h3 : tensor<128x16xf32, #dpas41>
+        %h6 = arith.addf %h5, %h1 : tensor<128x16xf32, #dpas41>
+        %h7 = arith.addf %h6, %h2 : tensor<128x16xf32, #dpas41>
+        %h8 = arith.addf %h7, %h3 : tensor<128x16xf32, #dpas41>
+        %h9 = arith.addf %h8, %h4 : tensor<128x16xf32, #dpas41>
+        %h10 = arith.addf %h9, %h5 : tensor<128x16xf32, #dpas41>
+        %h11 = arith.addf %h10, %h6 : tensor<128x16xf32, #dpas41>
+        %h12 = arith.addf %h11, %h7 : tensor<128x16xf32, #dpas41>
+        %h13 = arith.addf %h12, %h8 : tensor<128x16xf32, #dpas41>
+        %h14 = arith.addf %h13, %h9 : tensor<128x16xf32, #dpas41>
+        %h15 = arith.addf %h14, %h10 : tensor<128x16xf32, #dpas41>
+        %h16 = arith.addf %h15, %h11 : tensor<128x16xf32, #dpas41>
+        %h17 = arith.addf %h16, %h12 : tensor<128x16xf32, #dpas41>
+        scf.yield %h17 : tensor<128x16xf32, #dpas41>
+      }
+      scf.yield %hot : tensor<128x16xf32, #dpas41>
+    }
+    %post = arith.addf %src, %src : tensor<128x16xf16, #blocked41>
+    tt.return %r, %post : tensor<128x16xf32, #dpas41>, tensor<128x16xf16, #blocked41>
+  }
+}
+
+// -----
+
+// COM: Case 40: %cvt's only use is an inner scf.for init inside an scf.if; a
+// COM: last use holding a region falls back to the if's whole-region peak,
+// COM: which refuses.
+
+#blocked42 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas42 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a42 = #ttg.dot_op<{opIdx = 0, parent = #dpas42, kWidth = 1}>
+#dot_b42 = #ttg.dot_op<{opIdx = 1, parent = #dpas42, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+  // CHECK-LABEL: tt.func @price_tail_after_nested_last_use_holding_a_region
+  tt.func @price_tail_after_nested_last_use_holding_a_region(%arg0: tensor<128x16xf16, #blocked42>, %argB: tensor<16x16xf16, #dot_b42>, %acc0: tensor<128x16xf32, #dpas42>, %cond: i1) -> tensor<128x16xf32, #dpas42> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked42>
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas42>) : i32 {
+      %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked42> -> tensor<128x16xf16, #dot_a42>
+      %hot = scf.if %cond -> (tensor<128x16xf32, #dpas42>) {
+        %inner = scf.for %j = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%c = %cvt) -> (tensor<128x16xf16, #dot_a42>) : i32 {
+          %g1 = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked42>
+          %g2 = arith.addf %g1, %arg0 : tensor<128x16xf16, #blocked42>
+          %g3 = arith.addf %g2, %arg0 : tensor<128x16xf16, #blocked42>
+          %g4 = arith.addf %g3, %g1 : tensor<128x16xf16, #blocked42>
+          %g5 = ttg.convert_layout %g4 : tensor<128x16xf16, #blocked42> -> tensor<128x16xf16, #dot_a42>
+          scf.yield %g5 : tensor<128x16xf16, #dot_a42>
+        }
+        %use = tt.dot %inner, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a42> * tensor<16x16xf16, #dot_b42> -> tensor<128x16xf32, #dpas42>
+        scf.yield %use : tensor<128x16xf32, #dpas42>
+      } else {
+        scf.yield %a : tensor<128x16xf32, #dpas42>
+      }
+      scf.yield %hot : tensor<128x16xf32, #dpas42>
+    }
+    tt.return %r : tensor<128x16xf32, #dpas42>
+  }
+}
+
+// -----
+
+// COM: Case 41: six sibling loops. Loops 6..2 are refused by the peak, loop 1
+// COM: hoists past those twins, and the group {%cvt6..%cvt2} fails the measured
+// COM: peak and is moved back. MERGE: the stamped twins merge into %cvt1.
+// COM: Five siblings would measure under the peak and be accepted.
+
+#blocked45 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas45 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a45 = #ttg.dot_op<{opIdx = 0, parent = #dpas45, kWidth = 1}>
+#dot_b45 = #ttg.dot_op<{opIdx = 1, parent = #dpas45, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @shared_source_joint_over_peak
+  // MERGE-LABEL: tt.func @shared_source_joint_over_peak
+  // MERGE: %[[SRC:[0-9]+]] = arith.addf %arg0, %arg0
+  // MERGE-NEXT: %[[CVT:[0-9]+]] = ttg.convert_layout %[[SRC]] : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+  // MERGE-NEXT: scf.for
+  // MERGE-NOT: ttg.convert_layout
+  // MERGE: tt.dot %[[CVT]],
+  // MERGE: scf.for
+  // MERGE-NOT: ttg.convert_layout
+  // MERGE: tt.dot %[[CVT]],
+  // MERGE: scf.for
+  // MERGE-NOT: ttg.convert_layout
+  // MERGE: tt.dot %[[CVT]],
+  // MERGE: scf.for
+  // MERGE-NOT: ttg.convert_layout
+  // MERGE: tt.dot %[[CVT]],
+  // MERGE: scf.for
+  // MERGE-NOT: ttg.convert_layout
+  // MERGE: tt.dot %[[CVT]],
+  // MERGE: scf.for
+  // MERGE-NOT: ttg.convert_layout
+  // MERGE: tt.dot %[[CVT]],
+  // MERGE-NOT: ttg.convert_layout
+  // MERGE: tt.return
+  tt.func @shared_source_joint_over_peak(%arg0: tensor<128x16xf16, #blocked45>, %argB: tensor<16x16xf16, #dot_b45>,
+      %arg2: tensor<128x16xf32, #dpas45>) -> tensor<128x16xf32, #dpas45> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked45>
+    // CHECK: arith.addf
+    // CHECK-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: scf.for
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.dot
+    %r1 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<128x16xf32, #dpas45>) : i32 {
+      %cvt1 = ttg.convert_layout %src : tensor<128x16xf16, #blocked45> -> tensor<128x16xf16, #dot_a45>
+      %t1 = arith.addf %acc, %acc : tensor<128x16xf32, #dpas45>
+      %t2 = arith.addf %acc, %t1 : tensor<128x16xf32, #dpas45>
+      %t3 = arith.addf %acc, %t2 : tensor<128x16xf32, #dpas45>
+      %t4 = arith.addf %t3, %t1 : tensor<128x16xf32, #dpas45>
+      %t5 = arith.addf %acc, %t2 : tensor<128x16xf32, #dpas45>
+      %t6 = arith.addf %t4, %t5 : tensor<128x16xf32, #dpas45>
+      %d1 = tt.dot %cvt1, %argB, %t6, inputPrecision = tf32 : tensor<128x16xf16, #dot_a45> * tensor<16x16xf16, #dot_b45> -> tensor<128x16xf32, #dpas45>
+      scf.yield %d1 : tensor<128x16xf32, #dpas45>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r2 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r1) -> (tensor<128x16xf32, #dpas45>) : i32 {
+      %cvt2 = ttg.convert_layout %src : tensor<128x16xf16, #blocked45> -> tensor<128x16xf16, #dot_a45>
+      %d2 = tt.dot %cvt2, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a45> * tensor<16x16xf16, #dot_b45> -> tensor<128x16xf32, #dpas45>
+      scf.yield %d2 : tensor<128x16xf32, #dpas45>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r3 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r2) -> (tensor<128x16xf32, #dpas45>) : i32 {
+      %cvt3 = ttg.convert_layout %src : tensor<128x16xf16, #blocked45> -> tensor<128x16xf16, #dot_a45>
+      %d3 = tt.dot %cvt3, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a45> * tensor<16x16xf16, #dot_b45> -> tensor<128x16xf32, #dpas45>
+      scf.yield %d3 : tensor<128x16xf32, #dpas45>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r4 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r3) -> (tensor<128x16xf32, #dpas45>) : i32 {
+      %cvt4 = ttg.convert_layout %src : tensor<128x16xf16, #blocked45> -> tensor<128x16xf16, #dot_a45>
+      %d4 = tt.dot %cvt4, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a45> * tensor<16x16xf16, #dot_b45> -> tensor<128x16xf32, #dpas45>
+      scf.yield %d4 : tensor<128x16xf32, #dpas45>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r5 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r4) -> (tensor<128x16xf32, #dpas45>) : i32 {
+      %cvt5 = ttg.convert_layout %src : tensor<128x16xf16, #blocked45> -> tensor<128x16xf16, #dot_a45>
+      %d5 = tt.dot %cvt5, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a45> * tensor<16x16xf16, #dot_b45> -> tensor<128x16xf32, #dpas45>
+      scf.yield %d5 : tensor<128x16xf32, #dpas45>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r6 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r5) -> (tensor<128x16xf32, #dpas45>) : i32 {
+      %cvt6 = ttg.convert_layout %src : tensor<128x16xf16, #blocked45> -> tensor<128x16xf16, #dot_a45>
+      %d6 = tt.dot %cvt6, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a45> * tensor<16x16xf16, #dot_b45> -> tensor<128x16xf32, #dpas45>
+      scf.yield %d6 : tensor<128x16xf32, #dpas45>
+    }
+    tt.return %r6 : tensor<128x16xf32, #dpas45>
+  }
+}
+
+// -----
+
+// COM: Case 42: %keep reads %src after both loops, so nothing retires it. At
+// COM: 128-GRF both are refused by the loop gate, alone and as a group; at
+// COM: 256-GRF both hoist. The %p chain keeps the peak gate out.
+
+#blocked46 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas46 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a46 = #ttg.dot_op<{opIdx = 0, parent = #dpas46, kWidth = 1}>
+#dot_b46 = #ttg.dot_op<{opIdx = 1, parent = #dpas46, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @shared_source_joint_over_loop_budget
+  tt.func @shared_source_joint_over_loop_budget(%arg0: tensor<128x16xf16, #blocked46>, %argB: tensor<16x16xf16, #dot_b46>,
+      %arg2: tensor<128x16xf32, #dpas46>) -> tensor<128x16xf32, #dpas46> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %p1 = arith.addf %arg2, %arg2 : tensor<128x16xf32, #dpas46>
+    %p2 = arith.addf %arg2, %p1 : tensor<128x16xf32, #dpas46>
+    %p3 = arith.addf %arg2, %p2 : tensor<128x16xf32, #dpas46>
+    %p4 = arith.addf %p3, %p1 : tensor<128x16xf32, #dpas46>
+    %p5 = arith.addf %arg2, %p2 : tensor<128x16xf32, #dpas46>
+    %p6 = arith.addf %p4, %p5 : tensor<128x16xf32, #dpas46>
+    // CHECK: arith.addf %arg0, %arg0
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked46>
+    // GRF256-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // GRF256-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // GRF256-NEXT: scf.for
+    // GRF256-NOT: ttg.convert_layout
+    // GRF256: tt.dot
+    // GRF128-NEXT: scf.for
+    // GRF128-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r1 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %p6) -> (tensor<128x16xf32, #dpas46>) : i32 {
+      %cvt1 = ttg.convert_layout %src : tensor<128x16xf16, #blocked46> -> tensor<128x16xf16, #dot_a46>
+      %d1 = tt.dot %cvt1, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a46> * tensor<16x16xf16, #dot_b46> -> tensor<128x16xf32, #dpas46>
+      scf.yield %d1 : tensor<128x16xf32, #dpas46>
+    }
+    // CHECK: scf.for
+    // GRF256-NOT: ttg.convert_layout
+    // GRF256: tt.dot
+    // GRF128-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r2 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r1) -> (tensor<128x16xf32, #dpas46>) : i32 {
+      %cvt2 = ttg.convert_layout %src : tensor<128x16xf16, #blocked46> -> tensor<128x16xf16, #dot_a46>
+      %d2 = tt.dot %cvt2, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a46> * tensor<16x16xf16, #dot_b46> -> tensor<128x16xf32, #dpas46>
+      scf.yield %d2 : tensor<128x16xf32, #dpas46>
+    }
+    // CHECK: arith.addf
+    %keep = arith.addf %src, %src : tensor<128x16xf16, #blocked46>
+    tt.return %r2 : tensor<128x16xf32, #dpas46>
+  }
+}
+
+// -----
+
+// COM: Case 43: case 16 with a block-argument source. %cvt2 lands between the
+// COM: loops and keeps %arg0 read below loop 1: no credit, refused at 128-GRF.
+// COM: At 256-GRF loop 1 hoists anyway.
+
+#blocked47 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas47 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a47 = #ttg.dot_op<{opIdx = 0, parent = #dpas47, kWidth = 1}>
+#dot_b47 = #ttg.dot_op<{opIdx = 1, parent = #dpas47, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @shared_block_arg_source_two_sibling_loops
+  tt.func @shared_block_arg_source_two_sibling_loops(%arg0: tensor<128x16xf16, #blocked47>, %argB: tensor<16x16xf16, #dot_b47>,
+      %arg2: tensor<128x16xf32, #dpas47>) -> tensor<128x16xf32, #dpas47> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // GRF128: scf.for
+    // GRF128-NEXT: ttg.convert_layout %arg0 {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // GRF256: ttg.convert_layout %arg0 : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // GRF256-NEXT: scf.for
+    // GRF256-NOT: ttg.convert_layout
+    // CHECK: tt.dot
+    %r1 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<128x16xf32, #dpas47>) : i32 {
+      %cvt1 = ttg.convert_layout %arg0 : tensor<128x16xf16, #blocked47> -> tensor<128x16xf16, #dot_a47>
+      %t1 = arith.addf %acc, %acc : tensor<128x16xf32, #dpas47>
+      %t2 = arith.addf %acc, %t1 : tensor<128x16xf32, #dpas47>
+      %t3 = arith.addf %acc, %t2 : tensor<128x16xf32, #dpas47>
+      %t4 = arith.addf %t3, %t1 : tensor<128x16xf32, #dpas47>
+      %t5 = arith.addf %acc, %t2 : tensor<128x16xf32, #dpas47>
+      %t6 = arith.addf %t4, %t5 : tensor<128x16xf32, #dpas47>
+      %d1 = tt.dot %cvt1, %argB, %t6, inputPrecision = tf32 : tensor<128x16xf16, #dot_a47> * tensor<16x16xf16, #dot_b47> -> tensor<128x16xf32, #dpas47>
+      scf.yield %d1 : tensor<128x16xf32, #dpas47>
+    }
+    // CHECK: ttg.convert_layout %arg0 : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: scf.for
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.dot
+    %r2 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r1) -> (tensor<128x16xf32, #dpas47>) : i32 {
+      %cvt2 = ttg.convert_layout %arg0 : tensor<128x16xf16, #blocked47> -> tensor<128x16xf16, #dot_a47>
+      %d2 = tt.dot %cvt2, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a47> * tensor<16x16xf16, #dot_b47> -> tensor<128x16xf32, #dpas47>
+      scf.yield %d2 : tensor<128x16xf32, #dpas47>
+    }
+    tt.return %r2 : tensor<128x16xf32, #dpas47>
+  }
+}
+
+// -----
+
+// COM: Case 44: the twin credit on %cvt1 frees loop 1's budget for %cvtV,
+// COM: hoisted at 128-GRF; without it %cvtV stays stamped (case 45).
+
+#blocked49 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas49 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a49 = #ttg.dot_op<{opIdx = 0, parent = #dpas49, kWidth = 1}>
+#dot_b49 = #ttg.dot_op<{opIdx = 1, parent = #dpas49, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @twin_credit_frees_second_candidate
+  tt.func @twin_credit_frees_second_candidate(%arg0: tensor<128x16xf16, #blocked49>, %argB: tensor<16x16xf16, #dot_b49>,
+      %argV: tensor<16x16xf16, #blocked49>, %arg2: tensor<128x16xf32, #dpas49>)
+      -> (tensor<128x16xf32, #dpas49>, tensor<128x16xf32, #dpas49>, tensor<16x16xf16, #blocked49>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked49>
+    %vs = arith.addf %argV, %argV : tensor<16x16xf16, #blocked49>
+    // CHECK: arith.addf %arg0, %arg0
+    // CHECK-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: arith.addf %arg2, %arg2
+    // CHECK-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.*}}, kWidth = 2}>>
+    // CHECK-NEXT: scf.for
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.dot
+    %r1 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<128x16xf32, #dpas49>) : i32 {
+      %cvt1 = ttg.convert_layout %src : tensor<128x16xf16, #blocked49> -> tensor<128x16xf16, #dot_a49>
+      %cvtV = ttg.convert_layout %vs : tensor<16x16xf16, #blocked49> -> tensor<16x16xf16, #dot_b49>
+      %t1 = arith.addf %acc, %acc : tensor<128x16xf32, #dpas49>
+      %t2 = arith.addf %acc, %t1 : tensor<128x16xf32, #dpas49>
+      %t3 = arith.addf %acc, %t2 : tensor<128x16xf32, #dpas49>
+      %t4 = arith.addf %t3, %t1 : tensor<128x16xf32, #dpas49>
+      %t5 = arith.addf %acc, %t2 : tensor<128x16xf32, #dpas49>
+      %t6 = arith.addf %t4, %t5 : tensor<128x16xf32, #dpas49>
+      %d1 = tt.dot %cvt1, %argB, %t6, inputPrecision = tf32 : tensor<128x16xf16, #dot_a49> * tensor<16x16xf16, #dot_b49> -> tensor<128x16xf32, #dpas49>
+      %e1 = tt.dot %cvt1, %cvtV, %d1, inputPrecision = tf32 : tensor<128x16xf16, #dot_a49> * tensor<16x16xf16, #dot_b49> -> tensor<128x16xf32, #dpas49>
+      scf.yield %e1 : tensor<128x16xf32, #dpas49>
+    }
+    %zB = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #dot_b49>
+    %zC = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #dpas49>
+    // CHECK: scf.for
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.dot
+    %r2 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %zC) -> (tensor<128x16xf32, #dpas49>) : i32 {
+      %cvt2 = ttg.convert_layout %src : tensor<128x16xf16, #blocked49> -> tensor<128x16xf16, #dot_a49>
+      %d2 = tt.dot %cvt2, %zB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a49> * tensor<16x16xf16, #dot_b49> -> tensor<128x16xf32, #dpas49>
+      scf.yield %d2 : tensor<128x16xf32, #dpas49>
+    }
+    %keep = arith.addf %vs, %vs : tensor<16x16xf16, #blocked49>
+    tt.return %r1, %r2, %keep : tensor<128x16xf32, #dpas49>, tensor<128x16xf32, #dpas49>, tensor<16x16xf16, #blocked49>
+  }
+}
+
+// -----
+
+// COM: Case 45: case 44 with %cvt2 retyped (repCluster), so it is no twin: no
+// COM: credit and %cvtV stays stamped at 128-GRF. MERGE keeps both conversions.
+
+#blocked50 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas50 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a50 = #ttg.dot_op<{opIdx = 0, parent = #dpas50, kWidth = 1}>
+#dot_b50 = #ttg.dot_op<{opIdx = 1, parent = #dpas50, kWidth = 2}>
+#dpas50r = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [2, 1], A = [16, 16], B = [16, 16], C = [16, 16]}>
+#dot_a50r = #ttg.dot_op<{opIdx = 0, parent = #dpas50r, kWidth = 1}>
+#dot_b50r = #ttg.dot_op<{opIdx = 1, parent = #dpas50r, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @no_twin_credit_for_different_result_type
+  // MERGE-LABEL: tt.func @no_twin_credit_for_different_result_type
+  // MERGE: %[[SRC:[0-9]+]] = arith.addf %arg0, %arg0
+  // MERGE-NEXT: ttg.convert_layout %[[SRC]] : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+  // MERGE-NEXT: ttg.convert_layout %[[SRC]] : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+  tt.func @no_twin_credit_for_different_result_type(%arg0: tensor<128x16xf16, #blocked50>, %argB: tensor<16x16xf16, #dot_b50>,
+      %argV: tensor<16x16xf16, #blocked50>, %arg2: tensor<128x16xf32, #dpas50>)
+      -> (tensor<128x16xf32, #dpas50>, tensor<128x16xf32, #dpas50r>, tensor<16x16xf16, #blocked50>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked50>
+    %vs = arith.addf %argV, %argV : tensor<16x16xf16, #blocked50>
+    // CHECK: arith.addf %arg0, %arg0
+    // CHECK-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: arith.addf %arg2, %arg2
+    // GRF256-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.*}}, kWidth = 2}>>
+    // CHECK-NEXT: scf.for
+    // GRF256-NOT: ttg.convert_layout
+    // GRF128-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.*}}, kWidth = 2}>>
+    // CHECK: tt.dot
+    %r1 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<128x16xf32, #dpas50>) : i32 {
+      %cvt1 = ttg.convert_layout %src : tensor<128x16xf16, #blocked50> -> tensor<128x16xf16, #dot_a50>
+      %cvtV = ttg.convert_layout %vs : tensor<16x16xf16, #blocked50> -> tensor<16x16xf16, #dot_b50>
+      %t1 = arith.addf %acc, %acc : tensor<128x16xf32, #dpas50>
+      %t2 = arith.addf %acc, %t1 : tensor<128x16xf32, #dpas50>
+      %t3 = arith.addf %acc, %t2 : tensor<128x16xf32, #dpas50>
+      %t4 = arith.addf %t3, %t1 : tensor<128x16xf32, #dpas50>
+      %t5 = arith.addf %acc, %t2 : tensor<128x16xf32, #dpas50>
+      %t6 = arith.addf %t4, %t5 : tensor<128x16xf32, #dpas50>
+      %d1 = tt.dot %cvt1, %argB, %t6, inputPrecision = tf32 : tensor<128x16xf16, #dot_a50> * tensor<16x16xf16, #dot_b50> -> tensor<128x16xf32, #dpas50>
+      %e1 = tt.dot %cvt1, %cvtV, %d1, inputPrecision = tf32 : tensor<128x16xf16, #dot_a50> * tensor<16x16xf16, #dot_b50> -> tensor<128x16xf32, #dpas50>
+      scf.yield %e1 : tensor<128x16xf32, #dpas50>
+    }
+    %zB = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #dot_b50r>
+    %zC = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #dpas50r>
+    // CHECK: scf.for
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.dot
+    %r2 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %zC) -> (tensor<128x16xf32, #dpas50r>) : i32 {
+      %cvt2 = ttg.convert_layout %src : tensor<128x16xf16, #blocked50> -> tensor<128x16xf16, #dot_a50r>
+      %d2 = tt.dot %cvt2, %zB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a50r> * tensor<16x16xf16, #dot_b50r> -> tensor<128x16xf32, #dpas50r>
+      scf.yield %d2 : tensor<128x16xf32, #dpas50r>
+    }
+    %keep = arith.addf %vs, %vs : tensor<16x16xf16, #blocked50>
+    tt.return %r1, %r2, %keep : tensor<128x16xf32, #dpas50>, tensor<128x16xf32, #dpas50r>, tensor<16x16xf16, #blocked50>
+  }
+}
+
+// -----
+
+// COM: Case 46: %cvt1 hoists past five twins whose group then fails; the hoist
+// COM: charges loop 2 the merge (-192), so {%cvtX} fits at 128-GRF. No charge,
+// COM: or a flat +64, leaves %cvtX stamped. %cvtZ is retyped so %cvtX has no
+// COM: twin of its own.
+
+#blocked51 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas51 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a51 = #ttg.dot_op<{opIdx = 0, parent = #dpas51, kWidth = 1}>
+#dot_b51 = #ttg.dot_op<{opIdx = 1, parent = #dpas51, kWidth = 2}>
+#dpas51r = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [2, 1], A = [16, 16], B = [16, 16], C = [16, 16]}>
+#dot_a51r = #ttg.dot_op<{opIdx = 0, parent = #dpas51r, kWidth = 1}>
+#dot_b51r = #ttg.dot_op<{opIdx = 1, parent = #dpas51r, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @merge_charge_outlives_refused_twin_group
+  tt.func @merge_charge_outlives_refused_twin_group(%arg0: tensor<128x16xf16, #blocked51>, %argB: tensor<16x16xf16, #dot_b51>,
+      %argA: tensor<128x16xf16, #dot_a51r>, %argS2: tensor<16x16xf16, #blocked51>,
+      %arg2: tensor<128x16xf32, #dpas51>) -> (tensor<128x16xf32, #dpas51>, tensor<128x16xf32, #dpas51r>, tensor<16x16xf16, #blocked51>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked51>
+    // CHECK: arith.addf %arg0, %arg0
+    // CHECK-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: scf.for
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.dot
+    %r1 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<128x16xf32, #dpas51>) : i32 {
+      %cvt1 = ttg.convert_layout %src : tensor<128x16xf16, #blocked51> -> tensor<128x16xf16, #dot_a51>
+      %t1 = arith.addf %acc, %acc : tensor<128x16xf32, #dpas51>
+      %t2 = arith.addf %acc, %t1 : tensor<128x16xf32, #dpas51>
+      %t3 = arith.addf %acc, %t2 : tensor<128x16xf32, #dpas51>
+      %t4 = arith.addf %t3, %t1 : tensor<128x16xf32, #dpas51>
+      %t5 = arith.addf %acc, %t2 : tensor<128x16xf32, #dpas51>
+      %t6 = arith.addf %t4, %t5 : tensor<128x16xf32, #dpas51>
+      %d1 = tt.dot %cvt1, %argB, %t6, inputPrecision = tf32 : tensor<128x16xf16, #dot_a51> * tensor<16x16xf16, #dot_b51> -> tensor<128x16xf32, #dpas51>
+      scf.yield %d1 : tensor<128x16xf32, #dpas51>
+    }
+    // CHECK: arith.addf %arg3, %arg3
+    // CHECK-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.*}}, kWidth = 2}>>
+    // CHECK-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.*}}, kWidth = 2}>>
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.dot
+    %s2 = arith.addf %argS2, %argS2 : tensor<16x16xf16, #blocked51>
+    %r2 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r1) -> (tensor<128x16xf32, #dpas51>) : i32 {
+      %cvt2 = ttg.convert_layout %src : tensor<128x16xf16, #blocked51> -> tensor<128x16xf16, #dot_a51>
+      %cvtX = ttg.convert_layout %s2 : tensor<16x16xf16, #blocked51> -> tensor<16x16xf16, #dot_b51>
+      %d2 = tt.dot %cvt2, %cvtX, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a51> * tensor<16x16xf16, #dot_b51> -> tensor<128x16xf32, #dpas51>
+      %e2 = tt.dot %cvt2, %argB, %d2, inputPrecision = tf32 : tensor<128x16xf16, #dot_a51> * tensor<16x16xf16, #dot_b51> -> tensor<128x16xf32, #dpas51>
+      scf.yield %e2 : tensor<128x16xf32, #dpas51>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r2b = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r2) -> (tensor<128x16xf32, #dpas51>) : i32 {
+      %cvt2b = ttg.convert_layout %src : tensor<128x16xf16, #blocked51> -> tensor<128x16xf16, #dot_a51>
+      %d2b = tt.dot %cvt2b, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a51> * tensor<16x16xf16, #dot_b51> -> tensor<128x16xf32, #dpas51>
+      scf.yield %d2b : tensor<128x16xf32, #dpas51>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r2c = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r2b) -> (tensor<128x16xf32, #dpas51>) : i32 {
+      %cvt2c = ttg.convert_layout %src : tensor<128x16xf16, #blocked51> -> tensor<128x16xf16, #dot_a51>
+      %d2c = tt.dot %cvt2c, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a51> * tensor<16x16xf16, #dot_b51> -> tensor<128x16xf32, #dpas51>
+      scf.yield %d2c : tensor<128x16xf32, #dpas51>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r2d = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r2c) -> (tensor<128x16xf32, #dpas51>) : i32 {
+      %cvt2d = ttg.convert_layout %src : tensor<128x16xf16, #blocked51> -> tensor<128x16xf16, #dot_a51>
+      %d2d = tt.dot %cvt2d, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a51> * tensor<16x16xf16, #dot_b51> -> tensor<128x16xf32, #dpas51>
+      scf.yield %d2d : tensor<128x16xf32, #dpas51>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r2e = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r2d) -> (tensor<128x16xf32, #dpas51>) : i32 {
+      %cvt2e = ttg.convert_layout %src : tensor<128x16xf16, #blocked51> -> tensor<128x16xf16, #dot_a51>
+      %d2e = tt.dot %cvt2e, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a51> * tensor<16x16xf16, #dot_b51> -> tensor<128x16xf32, #dpas51>
+      scf.yield %d2e : tensor<128x16xf32, #dpas51>
+    }
+    %zC = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #dpas51r>
+    // CHECK: scf.for
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.dot
+    %r3 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %zC) -> (tensor<128x16xf32, #dpas51r>) : i32 {
+      %cvtZ = ttg.convert_layout %s2 : tensor<16x16xf16, #blocked51> -> tensor<16x16xf16, #dot_b51r>
+      %d3 = tt.dot %argA, %cvtZ, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a51r> * tensor<16x16xf16, #dot_b51r> -> tensor<128x16xf32, #dpas51r>
+      scf.yield %d3 : tensor<128x16xf32, #dpas51r>
+    }
+    %keep = arith.addf %s2, %s2 : tensor<16x16xf16, #blocked51>
+    tt.return %r2e, %r3, %keep : tensor<128x16xf32, #dpas51>, tensor<128x16xf32, #dpas51r>, tensor<16x16xf16, #blocked51>
+  }
+}
+
+// -----
+
+// COM: Case 47: case 41 with blocked-parent dot operands, which never merge: no
+// COM: twin credit, all six stamped at 128-GRF. With two loops they would be
+// COM: hoisted jointly and hide a wrong credit.
+
+#blocked52 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#fma52 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dot_a52 = #ttg.dot_op<{opIdx = 0, parent = #fma52}>
+#dot_b52 = #ttg.dot_op<{opIdx = 1, parent = #fma52}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @no_twin_credit_for_blocked_parent_dot_operand
+  tt.func @no_twin_credit_for_blocked_parent_dot_operand(%arg0: tensor<128x16xf16, #blocked52>,
+      %arg2: tensor<128x16xf32, #fma52>) -> tensor<128x16xf32, #fma52> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %zB = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #dot_b52>
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked52>
+    // CHECK: arith.addf %arg0, %arg0
+    // GRF256-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}}>>
+    // CHECK-NEXT: scf.for
+    // GRF256-NOT: ttg.convert_layout
+    // GRF128-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}}>>
+    // CHECK: tt.dot
+    %r1 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<128x16xf32, #fma52>) : i32 {
+      %cvt1 = ttg.convert_layout %src : tensor<128x16xf16, #blocked52> -> tensor<128x16xf16, #dot_a52>
+      %t1 = arith.addf %acc, %acc : tensor<128x16xf32, #fma52>
+      %t2 = arith.addf %acc, %t1 : tensor<128x16xf32, #fma52>
+      %t3 = arith.addf %acc, %t2 : tensor<128x16xf32, #fma52>
+      %t4 = arith.addf %t3, %t1 : tensor<128x16xf32, #fma52>
+      %t5 = arith.addf %acc, %t2 : tensor<128x16xf32, #fma52>
+      %t6 = arith.addf %t4, %t5 : tensor<128x16xf32, #fma52>
+      %d1 = tt.dot %cvt1, %zB, %t6 : tensor<128x16xf16, #dot_a52> * tensor<16x16xf16, #dot_b52> -> tensor<128x16xf32, #fma52>
+      scf.yield %d1 : tensor<128x16xf32, #fma52>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}}>>
+    %r2 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r1) -> (tensor<128x16xf32, #fma52>) : i32 {
+      %cvt2 = ttg.convert_layout %src : tensor<128x16xf16, #blocked52> -> tensor<128x16xf16, #dot_a52>
+      %d2 = tt.dot %cvt2, %zB, %acc : tensor<128x16xf16, #dot_a52> * tensor<16x16xf16, #dot_b52> -> tensor<128x16xf32, #fma52>
+      scf.yield %d2 : tensor<128x16xf32, #fma52>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}}>>
+    %r3 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r2) -> (tensor<128x16xf32, #fma52>) : i32 {
+      %cvt3 = ttg.convert_layout %src : tensor<128x16xf16, #blocked52> -> tensor<128x16xf16, #dot_a52>
+      %d3 = tt.dot %cvt3, %zB, %acc : tensor<128x16xf16, #dot_a52> * tensor<16x16xf16, #dot_b52> -> tensor<128x16xf32, #fma52>
+      scf.yield %d3 : tensor<128x16xf32, #fma52>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}}>>
+    %r4 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r3) -> (tensor<128x16xf32, #fma52>) : i32 {
+      %cvt4 = ttg.convert_layout %src : tensor<128x16xf16, #blocked52> -> tensor<128x16xf16, #dot_a52>
+      %d4 = tt.dot %cvt4, %zB, %acc : tensor<128x16xf16, #dot_a52> * tensor<16x16xf16, #dot_b52> -> tensor<128x16xf32, #fma52>
+      scf.yield %d4 : tensor<128x16xf32, #fma52>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}}>>
+    %r5 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r4) -> (tensor<128x16xf32, #fma52>) : i32 {
+      %cvt5 = ttg.convert_layout %src : tensor<128x16xf16, #blocked52> -> tensor<128x16xf16, #dot_a52>
+      %d5 = tt.dot %cvt5, %zB, %acc : tensor<128x16xf16, #dot_a52> * tensor<16x16xf16, #dot_b52> -> tensor<128x16xf32, #fma52>
+      scf.yield %d5 : tensor<128x16xf32, #fma52>
+    }
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}}>>
+    %r6 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r5) -> (tensor<128x16xf32, #fma52>) : i32 {
+      %cvt6 = ttg.convert_layout %src : tensor<128x16xf16, #blocked52> -> tensor<128x16xf16, #dot_a52>
+      %d6 = tt.dot %cvt6, %zB, %acc : tensor<128x16xf16, #dot_a52> * tensor<16x16xf16, #dot_b52> -> tensor<128x16xf32, #fma52>
+      scf.yield %d6 : tensor<128x16xf32, #fma52>
+    }
+    tt.return %r6 : tensor<128x16xf32, #fma52>
+  }
+}
+
+// -----
+
+// COM: Case 48: block-argument source; loop 1 sits in an scf.if, so its hoist
+// COM: would not dominate loop 2's twin: no credit, refused at 128-GRF. At
+// COM: 256-GRF loop 1 hoists without credit.
+
+#blocked53 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas53 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a53 = #ttg.dot_op<{opIdx = 0, parent = #dpas53, kWidth = 1}>
+#dot_b53 = #ttg.dot_op<{opIdx = 1, parent = #dpas53, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @no_twin_credit_past_a_non_dominated_twin
+  tt.func @no_twin_credit_past_a_non_dominated_twin(%arg0: tensor<128x16xf16, #blocked53>, %argB: tensor<16x16xf16, #dot_b53>,
+      %acc0: tensor<128x16xf32, #dpas53>, %cond: i1) -> tensor<128x16xf32, #dpas53> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK: scf.for
+    // CHECK: scf.if
+    // GRF256-NEXT: ttg.convert_layout %arg0 : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: scf.for
+    // GRF256-NOT: ttg.convert_layout
+    // GRF128-NEXT: ttg.convert_layout %arg0 {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK: tt.dot
+    // CHECK: } else {
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %arg0 {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %out = scf.for %i = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%o = %acc0) -> (tensor<128x16xf32, #dpas53>) : i32 {
+      %r1 = scf.if %cond -> (tensor<128x16xf32, #dpas53>) {
+        %l1 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %o) -> (tensor<128x16xf32, #dpas53>) : i32 {
+          %cvt1 = ttg.convert_layout %arg0 : tensor<128x16xf16, #blocked53> -> tensor<128x16xf16, #dot_a53>
+          %d1 = tt.dot %cvt1, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a53> * tensor<16x16xf16, #dot_b53> -> tensor<128x16xf32, #dpas53>
+          scf.yield %d1 : tensor<128x16xf32, #dpas53>
+        }
+        scf.yield %l1 : tensor<128x16xf32, #dpas53>
+      } else {
+        scf.yield %o : tensor<128x16xf32, #dpas53>
+      }
+      %l2 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r1) -> (tensor<128x16xf32, #dpas53>) : i32 {
+        %cvt2 = ttg.convert_layout %arg0 : tensor<128x16xf16, #blocked53> -> tensor<128x16xf16, #dot_a53>
+        %d2 = tt.dot %cvt2, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a53> * tensor<16x16xf16, #dot_b53> -> tensor<128x16xf32, #dpas53>
+        %t1 = arith.addf %d2, %d2 : tensor<128x16xf32, #dpas53>
+        %t2 = arith.addf %d2, %t1 : tensor<128x16xf32, #dpas53>
+        %t3 = arith.addf %d2, %t2 : tensor<128x16xf32, #dpas53>
+        %t4 = arith.addf %t3, %t1 : tensor<128x16xf32, #dpas53>
+        %t5 = arith.addf %d2, %t2 : tensor<128x16xf32, #dpas53>
+        %t6 = arith.addf %t4, %t5 : tensor<128x16xf32, #dpas53>
+        scf.yield %t6 : tensor<128x16xf32, #dpas53>
+      }
+      scf.yield %l2 : tensor<128x16xf32, #dpas53>
+    }
+    tt.return %out : tensor<128x16xf32, #dpas53>
+  }
+}
+
+// -----
+
+// COM: Case 49: the twin %t was refused by its own loop gate (fatter result),
+// COM: so %h earns no credit past it and is refused at 128-GRF.
+
+#blk54 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas54 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a54 = #ttg.dot_op<{opIdx = 0, parent = #dpas54, kWidth = 1}>
+#dot_b54 = #ttg.dot_op<{opIdx = 1, parent = #dpas54, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @no_twin_credit_past_a_loop_gate_refusal
+  tt.func @no_twin_credit_past_a_loop_gate_refusal(%arg0: tensor<16x16xf16, #blk54>, %w0: tensor<16x16xf16, #blk54>,
+      %a1: tensor<128x16xf16, #dot_a54>, %a2: tensor<128x16xf16, #dot_a54>, %a3: tensor<128x16xf16, #dot_a54>,
+      %argB: tensor<16x16xf16, #dot_b54>, %acc0: tensor<128x16xf32, #dpas54>) -> (tensor<128x16xf32, #dpas54>, tensor<16x16xf16, #blk54>) {
+    %c0 = arith.constant 0 : i32
+    %c8 = arith.constant 8 : i32
+    %c1 = arith.constant 1 : i32
+    // CHECK: arith.addf %arg0, %arg0
+    // GRF256-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.*}}, kWidth = 2}>>
+    // CHECK-NEXT: arith.addf %arg1, %arg1
+    // CHECK-NEXT: scf.for
+    // GRF256-NOT: ttg.convert_layout
+    // GRF128-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.*}}, kWidth = 2}>>
+    // CHECK: tt.dot
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.*}}, kWidth = 2}>>
+    %s = arith.addf %arg0, %arg0 : tensor<16x16xf16, #blk54>
+    %w = arith.addf %w0, %w0 : tensor<16x16xf16, #blk54>
+    %r1 = scf.for %iv = %c0 to %c8 step %c1 iter_args(%acc = %acc0) -> (tensor<128x16xf32, #dpas54>) : i32 {
+      %h = ttg.convert_layout %s : tensor<16x16xf16, #blk54> -> tensor<16x16xf16, #dot_b54>
+      %d = tt.dot %a1, %h, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a54> * tensor<16x16xf16, #dot_b54> -> tensor<128x16xf32, #dpas54>
+      %e = tt.dot %a2, %argB, %d, inputPrecision = tf32 : tensor<128x16xf16, #dot_a54> * tensor<16x16xf16, #dot_b54> -> tensor<128x16xf32, #dpas54>
+      %wx = arith.addf %w, %w : tensor<16x16xf16, #blk54>
+      scf.yield %e : tensor<128x16xf32, #dpas54>
+    }
+    %r2 = scf.for %iv = %c0 to %c8 step %c1 iter_args(%acc = %r1) -> (tensor<128x16xf32, #dpas54>) : i32 {
+      %t = ttg.convert_layout %s : tensor<16x16xf16, #blk54> -> tensor<16x16xf16, #dot_b54>
+      %d = tt.dot %a1, %t, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a54> * tensor<16x16xf16, #dot_b54> -> tensor<128x16xf32, #dpas54>
+      %e = tt.dot %a2, %t, %d, inputPrecision = tf32 : tensor<128x16xf16, #dot_a54> * tensor<16x16xf16, #dot_b54> -> tensor<128x16xf32, #dpas54>
+      %f = tt.dot %a3, %t, %e, inputPrecision = tf32 : tensor<128x16xf16, #dot_a54> * tensor<16x16xf16, #dot_b54> -> tensor<128x16xf32, #dpas54>
+      scf.yield %f : tensor<128x16xf32, #dpas54>
+    }
+    tt.return %r2, %w : tensor<128x16xf32, #dpas54>, tensor<16x16xf16, #blk54>
+  }
+}
+
+// -----
+
+// COM: Case 50: %cvtA and %cvtC are used only in the then-branch, so both
+// COM: projections ask the else-branch peak, in one analysis generation. %cvtA's
+// COM: tail refuses it first; %cvtC is accepted at the ceiling only if the second
+// COM: ask returns the first one's value. %postA and %postC keep both sources read.
+
+#blocked55 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas55 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a55 = #ttg.dot_op<{opIdx = 0, parent = #dpas55, kWidth = 1}>
+#dot_b55 = #ttg.dot_op<{opIdx = 1, parent = #dpas55, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func @second_sibling_query_reuses_block_peak
+  tt.func @second_sibling_query_reuses_block_peak(%arg0: tensor<128x16xf16, #blocked55>, %arg1: tensor<128x16xf16, #blocked55>, %acc0: tensor<128x16xf32, #dpas55>, %cond: i1) -> (tensor<128x16xf32, #dpas55>, tensor<128x16xf16, #blocked55>, tensor<128x16xf16, #blocked55>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %zB = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #dot_b55>
+    %srcA = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked55>
+    %srcC = arith.addf %arg1, %arg1 : tensor<128x16xf16, #blocked55>
+    // CHECK: %[[SRCC:.*]] = arith.addf %arg1, %arg1
+    // CHECK-NEXT: ttg.convert_layout %[[SRCC]] : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: scf.if
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas55>) : i32 {
+      %cvtA = ttg.convert_layout %srcA : tensor<128x16xf16, #blocked55> -> tensor<128x16xf16, #dot_a55>
+      %cvtC = ttg.convert_layout %srcC : tensor<128x16xf16, #blocked55> -> tensor<128x16xf16, #dot_a55>
+      %hot = scf.if %cond -> (tensor<128x16xf32, #dpas55>) {
+        %useA = tt.dot %cvtA, %zB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a55> * tensor<16x16xf16, #dot_b55> -> tensor<128x16xf32, #dpas55>
+        %t1 = arith.addf %a, %a : tensor<128x16xf32, #dpas55>
+        %t2 = arith.addf %t1, %a : tensor<128x16xf32, #dpas55>
+        %t3 = arith.addf %t2, %t1 : tensor<128x16xf32, #dpas55>
+        %t4 = arith.addf %t3, %t2 : tensor<128x16xf32, #dpas55>
+        %t5 = arith.addf %t4, %t3 : tensor<128x16xf32, #dpas55>
+        %t6 = arith.addf %t5, %t1 : tensor<128x16xf32, #dpas55>
+        %useC = tt.dot %cvtC, %zB, %t6, inputPrecision = tf32 : tensor<128x16xf16, #dot_a55> * tensor<16x16xf16, #dot_b55> -> tensor<128x16xf32, #dpas55>
+        scf.yield %useC : tensor<128x16xf32, #dpas55>
+      } else {
+        %e1 = arith.addf %a, %a : tensor<128x16xf32, #dpas55>
+        %e2 = arith.addf %e1, %a : tensor<128x16xf32, #dpas55>
+        %e3 = arith.addf %e2, %e1 : tensor<128x16xf32, #dpas55>
+        %e4 = arith.addf %e3, %e2 : tensor<128x16xf32, #dpas55>
+        %e5 = arith.addf %e4, %e3 : tensor<128x16xf32, #dpas55>
+        %e6 = arith.addf %e5, %e1 : tensor<128x16xf32, #dpas55>
+        scf.yield %e6 : tensor<128x16xf32, #dpas55>
+      }
+      scf.yield %hot : tensor<128x16xf32, #dpas55>
+    }
+    %postA = arith.addf %srcA, %srcA : tensor<128x16xf16, #blocked55>
+    %postC = arith.addf %srcC, %srcC : tensor<128x16xf16, #blocked55>
+    tt.return %r, %postA, %postC : tensor<128x16xf32, #dpas55>, tensor<128x16xf16, #blocked55>, tensor<128x16xf16, #blocked55>
   }
 }

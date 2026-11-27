@@ -1,31 +1,13 @@
-# Model Runner V2 does not yet support: ngram/ngram_gpu speculative decoding: https://github.com/intel/intel-xpu-backend-for-triton/issues/7166
-tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logits]
-tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logprobs]
-tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logits]
-tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logprobs]
-
-# NIXL is not available: https://github.com/intel/intel-xpu-backend-for-triton/issues/7419
-tests/v1/kv_connector/unit/test_nixl_connector.py::test_reqs_to_send_deadline_rebased_to_worker_clock
-
-# GPU mode runner tried to instantiate dummy base class Event: https://github.com/intel/intel-xpu-backend-for-triton/issues/7684
-tests/v1/worker/test_gpu_model_runner.py::test_reasoning_config_without_custom_logitsprocs_does_not_need_output_token_ids
-tests/v1/worker/test_gpu_model_runner.py::test_init_kv_cache_without_kv_sharing
-tests/v1/worker/test_gpu_model_runner.py::test_init_kv_cache_with_kv_sharing_valid
-tests/v1/worker/test_gpu_model_runner.py::test_hybrid_cache_integration
-tests/v1/worker/test_gpu_model_runner.py::test_update_states_new_request
-tests/v1/worker/test_gpu_model_runner.py::test_update_states_request_finished
-tests/v1/worker/test_gpu_model_runner.py::test_update_states_request_resumed
-tests/v1/worker/test_gpu_model_runner.py::test_get_nans_in_logits
-tests/v1/worker/test_gpu_model_runner.py::test_update_states_no_changes
-tests/v1/worker/test_gpu_model_runner.py::test_update_states_request_unscheduled
-tests/v1/worker/test_gpu_model_runner.py::test_update_states_pp_non_async_multi_request_keeps_token_buffers_consistent
-tests/v1/worker/test_gpu_model_runner.py::test_update_states_pp_async_multi_request_keeps_rank_state_consistent
-tests/v1/worker/test_gpu_model_runner.py::test_update_config
-tests/v1/worker/test_gpu_model_runner.py::test_load_model_weights_inplace
-tests/v1/worker/test_gpu_model_runner.py::test_reload_weights_before_load_model
 
 # Nondeterministic top-3 logprobs output mismatch: https://github.com/intel/intel-xpu-backend-for-triton/issues/8321
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logits]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logprobs]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-processed_logits]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-processed_logprobs]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logprobs]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logprobs]
+
+# Hybrid chunked-prefill e2e test times out waiting for device memory left by earlier in-process engines: https://github.com/intel/intel-xpu-backend-for-triton/issues/8406
+tests/v1/e2e/test_hybrid_chunked_prefill.py::test_qwen_mtp_mamba_prefix_cache_hit_is_bounded

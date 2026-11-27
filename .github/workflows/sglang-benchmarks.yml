@@ -34,7 +34,7 @@ on:
 permissions: read-all
 
 env:
-  PYTHON_VERSION: "3.12"
+  PYTHON_VERSION: "3.11"
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   HF_TOKEN: ${{ secrets.HF_TOKEN || '' }}
 
@@ -43,6 +43,7 @@ jobs:
     name: SGLang benchmarks
     runs-on:
       - linux
+      - gpu
       - ${{ inputs.runner_label || 'b580' }}
     timeout-minutes: 720
     defaults:
@@ -172,5 +173,5 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: benchmark-reports
+          name: benchmark-reports-sglang
           path: reports

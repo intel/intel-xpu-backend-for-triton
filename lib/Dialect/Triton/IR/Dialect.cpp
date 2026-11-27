@@ -2,7 +2,10 @@
 #include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -80,20 +83,26 @@ void TritonInlinerInterface::handleTerminator(Operation *op,
     valuesToRepl[it.index()].replaceAllUsesWith(it.value());
 }
 
-Value TritonInlinerInterface::handleResult(OpBuilder &, Operation *call,
+Value TritonInlinerInterface::handleResult(OpBuilder &builder, Operation *call,
                                            Operation *, Value result,
                                            DictionaryAttr) const {
-  Operation *definingOp = result.getDefiningOp();
-  if (!definingOp)
+  // Multi-result calls carry hints on per-result tt.annotate operations.
+  if (call->getNumResults() != 1)
     return result;
 
+  SmallVector<NamedAttribute> hints;
   static constexpr llvm::StringLiteral hintAttrs[] = {
       "tt.divisibility", "tt.contiguity", "tt.constancy"};
   for (StringRef attrName : hintAttrs) {
     if (Attribute attr = call->getDiscardableAttr(attrName))
-      definingOp->setDiscardableAttr(attrName, attr);
+      hints.emplace_back(builder.getStringAttr(attrName), attr);
   }
-  return result;
+  if (hints.empty())
+    return result;
+
+  auto annotate = AnnotateOp::create(builder, result.getLoc(), result);
+  annotate->setAttrs(builder.getDictionaryAttr(hints));
+  return annotate.getResult();
 }
 
 void TritonDialect::initialize() {

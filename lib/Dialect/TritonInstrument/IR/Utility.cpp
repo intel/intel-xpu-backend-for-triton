@@ -18,6 +18,9 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVectorExtras.h"
+
+#include <set>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -172,6 +175,19 @@ LogicalResult verifyConSanCaptureReservation(FuncOp func, int captureCounter,
 } // namespace
 
 namespace mlir::triton::instrument {
+
+uint32_t translateXorMask(uint32_t mask, uint32_t translation, int numCTAs) {
+  uint32_t translated = 0;
+  for (int value = 0; value < numCTAs; ++value) {
+    if (!(mask & (1u << value)))
+      continue;
+    uint32_t target = value ^ translation;
+    assert(target < static_cast<uint32_t>(numCTAs) &&
+           "target CTA exceeds the cluster size");
+    translated |= 1u << target;
+  }
+  return translated;
+}
 
 static Value createCurrentCTAMask(OpBuilder &b, Location loc,
                                   RankedTensorType tensorType);
@@ -409,12 +425,14 @@ FuncOp getEntryPoint(ModuleOp module) {
   return publicFuncs.front();
 }
 
-AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
-                                         const ConSanTargetHooks &hooks) {
+FailureOr<AuxDataMap::ThreadLayout>
+getThreadLayout(FuncOp entryPoint, const ConSanTargetHooks &hooks) {
   AuxDataMap::ThreadLayout layout;
   bool hasTMA = false;
   bool hasTC = false;
+  bool hasTCARead = false;
   bool hasCLC = false;
+  bool hasAsyncCopyMbarrierArrive = false;
 
   entryPoint.walk([&](Operation *op) {
     if (auto wsOp = dyn_cast<WarpSpecializeOp>(op))
@@ -425,7 +443,10 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
           layout.numBaseThreads, wsOp.getPartitionRegions().size() + 1);
     hasTMA |= hooks.isTMAOp(op) || isa<AsyncCopyMbarrierArriveOp>(op);
     hasTC |= isa<MMAv5OpInterface, TCGen5CommitOp, TMEMCopyOp>(op);
+    if (auto commit = dyn_cast<TCGen5CommitOp>(op))
+      hasTCARead |= commit.getEarlyARelease();
     hasCLC |= hooks.isCLCOp(op);
+    hasAsyncCopyMbarrierArrive |= hooks.usesAsyncCopyMbarrierArriveThread(op);
   });
 
   assert(layout.numBaseThreads <= MAX_NUM_BASE_THREADS &&
@@ -440,14 +461,27 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
     layout.tcThreadOffset = nextThread;
     nextThread += layout.numBaseThreads;
   }
+  if (hasTCARead) {
+    layout.tcAReadThreadOffset = nextThread;
+    nextThread += layout.numBaseThreads;
+  }
   if (hasCLC) {
     layout.clcThreadOffset = nextThread;
     nextThread += layout.numBaseThreads;
   }
+  if (hasAsyncCopyMbarrierArrive) {
+    layout.asyncCopyMbarrierArriveThreadOffset = nextThread;
+    nextThread += layout.numBaseThreads;
+  }
   layout.totalNumThreads = nextThread;
+  if (layout.totalNumThreads > 64) {
+    entryPoint.emitError()
+        << "ConSan requires " << layout.totalNumThreads
+        << " tracking identities for " << layout.numBaseThreads
+        << " base execution regions, but supports at most 64";
+    return failure();
+  }
   layout.numThreadSlots = llvm::PowerOf2Ceil(layout.totalNumThreads);
-  assert(layout.totalNumThreads <= 64 &&
-         "ConSan thread bitsets are stored in i64 masks");
   return layout;
 }
 
@@ -497,9 +531,18 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   if (failed(getBuffersAndBarriers(module, entryPoint, barrierRegions, hooks)))
     return failure();
   int numCTAs = lookupNumCTAs(module);
-  threadLayout = getThreadLayout(entryPoint, hooks);
-  entryPoint.walk(
-      [&](AsyncCopyMbarrierArriveOp) { hasAsyncCopyMbarriers = true; });
+  auto layout = getThreadLayout(entryPoint, hooks);
+  if (failed(layout))
+    return failure();
+  threadLayout = *layout;
+  entryPoint.walk([&](Operation *op) {
+    std::optional<MemEffectsOpInfo> info = hooks.getMemEffectsOpInfo(op);
+    if (info && llvm::any_of(info->barriers, [](const auto &barrier) {
+          return barrier.trackingMode ==
+                 MemEffectsOpInfo::BarrierTrackingMode::AsyncCopies;
+        }))
+      hasAsyncCopyMbarriers = true;
+  });
   int frontierBitWidth = threadLayout.totalNumThreads <= 32 ? 32 : 64;
   hasAsyncProxyFenceTracking =
       hooks.needsAsyncProxyFenceTracking(module) &&
@@ -510,7 +553,11 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   Region *entryRegion = &entryPoint.getBody();
 
   int numMBarriers = barrierRegions.size();
-  entryPoint.walk([&](ClusterBarrierOp op) {
+  entryPoint.walk([&](Operation *op) {
+    BarrierStages stages = hooks.getClusterBarrierStages(op);
+    operations.emplace_back(op, stages);
+    if (!stages.hasBarrier() && !isa<ClusterBarrierOp>(op))
+      return;
     Region *group = getClusterBarrierGroupRegion(op);
     clusterBarrierSlots.try_emplace(group,
                                     numMBarriers + clusterBarrierSlots.size());
@@ -622,27 +669,6 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     }
   }
 
-  // Create lock variable allocation
-  Value lockVal = createLockVariable(b);
-  // Initialize the shared-cluster lock once, then synchronize before any CTA
-  // can enter the first instrumented critical section.
-  Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
-  Value zero = arith::ConstantIntOp::create(b, 0, 32);
-  Value isCTA0 =
-      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
-  ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
-  if (numCTAs > 1) {
-    SmallVector<Operation *> clusterBarriers =
-        hooks.createInitClusterBarrier(b);
-    assert(!clusterBarriers.empty() &&
-           "target must provide a cluster initialization barrier");
-    llvm::append_range(internalClusterBarriers, clusterBarriers);
-  } else {
-    BarrierOp::create(b, b.getLoc(), AddrSpace::Local);
-  }
-  lock.insert(entryRegion, {lockVal, lockVal.getType()});
-  passValueToWarpSpecialize(lock.at(entryRegion), lock);
-
   auto createCommitTensor = [&](CommitKind::Kind commitKind) {
     unsigned numLanes = bufferStatePlans[(int)MemType::SHARED_MEM].numLanes;
     int numBufs = numLanes == 0 ? 0 : llvm::NextPowerOf2(numLanes - 1);
@@ -666,6 +692,24 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     if (commits[kind].empty())
       createCommitTensor(kind);
 
+  // Create lock variable allocation
+  Value lockVal = createLockVariable(b);
+  // Initialize the shared-cluster lock once, then synchronize before any CTA
+  // can enter the first instrumented critical section. Other CTAs may use the
+  // state as soon as they pass the barrier, so CTA0 must fill all of it above.
+  Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value zero = arith::ConstantIntOp::create(b, 0, 32);
+  Value isCTA0 =
+      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
+  auto lockRelease = ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
+  lockInitialization = lockRelease;
+  if (numCTAs > 1)
+    startupClusterBarrierAnchor = lockRelease;
+  else
+    BarrierOp::create(b, b.getLoc(), AddrSpace::Local);
+  lock.insert(entryRegion, {lockVal, lockVal.getType()});
+  passValueToWarpSpecialize(lock.at(entryRegion), lock);
+
   // Verify the actual capture count matches the expected one.
   if (captureCounter > 0) {
     int numActiveMemTypes = 0;
@@ -685,6 +729,130 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
                                             captureBytes)))
     return failure();
   return success();
+}
+
+void AuxDataMap::createStartupClusterBarrier(const ConSanTargetHooks &hooks) {
+  if (!startupClusterBarrierAnchor)
+    return;
+  ImplicitLocOpBuilder b(startupClusterBarrierAnchor->getLoc(),
+                         startupClusterBarrierAnchor);
+  b.setInsertionPointAfter(startupClusterBarrierAnchor);
+  startupClusterBarrierAnchor = nullptr;
+  SmallVector<Operation *> barriers = hooks.createInitClusterBarrier(b);
+  assert(!barriers.empty() &&
+         "target must provide a cluster initialization barrier");
+}
+
+namespace {
+
+SmallVector<BufferAccessRegion>
+getTMAAccessRegions(TMALoadLikeOpInterface load,
+                    BufferRegionAnalysis &analysis) {
+  Operation *op = load.getOperation();
+  auto type = cast<MemDescType>(load.getResult().getType());
+  auto gather = dyn_cast<AsyncTMAGatherOp>(op);
+  // Tiled and im2col copies of a full allocation cover the whole local
+  // footprint. Gather can assign those addresses to different issuers.
+  if (!gather && type.getShape() == type.getAllocShape())
+    return {};
+  auto *ctx = op->getContext();
+  auto block = StringAttr::get(ctx, "block");
+  auto dims = standardOutDimNames(ctx, type.getRank());
+  auto shapePerCTA = getShapePerCTA(type);
+  // origins: block -> (rowOrigin, columnOrigin)
+  auto origins = LinearLayout(LinearLayout::BasesT{},
+                              standardOutDimPairs(ctx, shapePerCTA),
+                              /*requireSurjective=*/false) *
+                 getCGALayout(type.getEncoding()).getLinearLayout();
+  auto accessType = type.cloneWith(shapePerCTA, type.getElementType());
+  // Express each issuer's gather rows as a contiguous logical range so
+  // getSubView can compute its footprint.
+  if (gather) {
+    // We have xOffsets and the shared layout
+    // rows: (register, lane, warp, issuerCTA) -> destination row
+    // shared: (shared offset, targetCTA)       -> (destination row, column)
+    //
+    auto rows = toLinearLayout(gather.getXOffsets().getType());
+    // Get the block from offset along X and the block from shared along Y
+    origins = rows.sublayout({block}, {dims[0]})
+                  .concatOuts(origins.sublayout({block}, {dims[1]}));
+    int64_t localRows = rows.getTotalOutDimSize() /
+                        rows.removeZeroBasesAlongDim(block).getInDimSize(block);
+    // {registers=[1, 2, 8, 0, 0], lanes= [0, 0, 0, 0, 0], warps=[0], block=[4]}
+    // transform into a permutation on dim0 that keeps block's bases at the end
+    // {dim0=[1, 2, 8, 4]}
+    rows = rows.reshapeIns({{dims[0], rows.getTotalInDimSize()}})
+               .removeZeroBasesAlongDim(dims[0]);
+    auto allocShape =
+        dropPipeliningDim(type.getAllocShape(), type.getEncoding());
+    // Pad the permutation to the full alloc shape
+    rows =
+        ensureLayoutNotSmallerThan(rows, {dims[0]}, {allocShape[0]}, dims[0]);
+    // Extend to two dimensions, leaving columns unchanged.
+    auto coordinates =
+        rows * LinearLayout::identity1D(allocShape[1], dims[1], dims[1]);
+    // Express shared memory in coordinates where each issuer's rows are
+    // contiguous
+    auto layout = toLinearLayout(type).invertAndCompose(coordinates);
+    auto encoding = SharedLinearEncodingAttr::get(
+        ctx, std::move(layout),
+        cast<SharedEncodingTrait>(type.getEncoding()).getAlignment());
+    accessType = MemDescType::get(
+        {localRows, shapePerCTA[1]}, type.getElementType(), encoding,
+        type.getMemorySpace(), type.getMutableMemory(), allocShape);
+  }
+
+  unsigned numCTAs = lookupNumCTAs(op);
+  uint32_t broadcastMask =
+      toLinearLayout(type).getFreeVariableMasks().lookup(block);
+  // For each issuer, a valid TMA view's base and CTA determine its footprint.
+  std::set<BufferAccessRegion> regions;
+  for (unsigned issuer = 0; issuer < numCTAs; ++issuer) {
+    if (load.getMulticast() && (issuer & broadcastMask))
+      continue;
+    auto coordinates = origins.apply({{block, issuer}});
+    auto origin =
+        llvm::to_vector_of<int64_t>(llvm::make_second_range(coordinates));
+    auto offsets = getMemDescSubsliceUnpaddedOffsets(type, origin);
+    for (const BufferRegionView &view :
+         analysis.getRegionInfo(load.getResult()).views) {
+      auto subview = analysis.getSubView(
+          accessType, view, offsets.storageOffset, offsets.byteOffset,
+          offsets.partitionOffset, offsets.ctaOffset);
+      for (const auto &[target, addresses] : subview.region.ctaAddresses) {
+        // Subviews include every replica; unicast selects the issuer's replica.
+        if (!load.getMulticast() &&
+            ((target ^ view.affineCTAOffset ^ issuer) & broadcastMask))
+          continue;
+        regions.insert({1u << view.affineCTAOffset,
+                        issuer,
+                        {view.region.baseOffset,
+                         view.region.length,
+                         {{target, addresses}}}});
+      }
+    }
+  }
+  return llvm::to_vector(regions);
+}
+
+} // namespace
+
+std::pair<unsigned, const llvm::SmallBitVector &>
+AuxDataMap::getBufferAccessState(
+    const BufferAccessRegion &access,
+    const BufferStateCandidates &candidates) const {
+  auto candidate = llvm::find_if(candidates.cases, [&](const auto &entry) {
+    return entry.baseOffset == access.region.baseOffset &&
+           entry.ctaMask == access.candidateCTAs;
+  });
+  assert(candidate != candidates.cases.end());
+  int index = static_cast<int>(MemType::SHARED_MEM);
+  const auto &regions = bufferRegions[index];
+  auto region = llvm::lower_bound(regions, access.region);
+  assert(region != regions.end() && *region == access.region);
+  return {std::distance(candidates.cases.begin(), candidate),
+          bufferStatePlans[index]
+              .regionMasks[std::distance(regions.begin(), region)]};
 }
 
 LogicalResult
@@ -729,14 +897,17 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
     for (const MemoryAccess &access : getMemoryAccesses(op))
       collectCandidates(access.value);
 
+    if (numCTAs > 1) {
+      if (auto load = dyn_cast<TMALoadLikeOpInterface>(op)) {
+        auto accesses = getTMAAccessRegions(load, *analysis);
+        if (!accesses.empty())
+          bufferAccessRegions[{op, load.getResult()}] = std::move(accesses);
+      }
+    }
+
     auto info = getConSanMemEffectsOpInfo(hooks, op);
     if (!info)
       return;
-    if (info->trackingKind == MemEffectsOpInfo::TrackingKind::CommitCount &&
-        info->commitKind == CommitKind::AsyncCp)
-      hasAsyncCopyReads |= llvm::any_of(
-          info->operandEffects,
-          [](const MemEffectsOpInfo::Effects &e) { return e.rw == RW::Read; });
     for (const auto &barrier : info->barriers)
       collectCandidates(barrier.barrier);
     for (const auto &effect : info->operandEffects)
@@ -757,8 +928,12 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
                           : BufferRegionAnalysis::TENSOR_MEMORY;
     SmallVector<BufferRegion> regions =
         analysis->getAllUsedBufferRegions(regionType);
-    if (memType == MemType::SHARED_MEM)
+    if (memType == MemType::SHARED_MEM) {
       llvm::append_range(regions, staticSharedRegions);
+      for (const auto &[key, accesses] : bufferAccessRegions)
+        for (const auto &access : accesses)
+          regions.push_back(access.region);
+    }
     llvm::sort(regions);
     regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
     bool hasUnknown = analysis->hasUnknownUsedBufferRegions(regionType);
@@ -809,9 +984,24 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
           existing->mask |= bufferStatePlans[iMemType].regionMasks[id];
         }
       }
+      // Hash-table iteration must not determine the order of emitted cases.
+      llvm::sort(stateCandidates.cases, [](const auto &lhs, const auto &rhs) {
+        return std::tie(lhs.baseOffset, lhs.ctaMask) <
+               std::tie(rhs.baseOffset, rhs.ctaMask);
+      });
       bufferCandidates[iMemType].try_emplace(value, std::move(stateCandidates));
     }
   }
+  // Keep descriptor tracking when every issuer covers its full footprint.
+  bufferAccessRegions.remove_if([&](const auto &entry) {
+    const auto &candidates =
+        bufferCandidates[static_cast<int>(MemType::SHARED_MEM)].at(
+            entry.first.second);
+    return llvm::all_of(entry.second, [&](const auto &access) {
+      auto [candidateIndex, mask] = getBufferAccessState(access, candidates);
+      return mask == candidates.cases[candidateIndex].mask;
+    });
+  });
   return success();
 }
 

@@ -1,8 +1,10 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Matchers.h"
+#include "triton/Analysis/Signedness.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -400,6 +402,23 @@ public:
   }
 };
 
+template <typename OpTy>
+class PointerCastOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
+public:
+  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(OpTy op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    if (isa<RankedTensorType>(op.getSrc().getType()))
+      return AxisInfo::getPessimisticValueState(op.getResult());
+    // Scalar pointer casts preserve byte alignment.
+    const AxisInfo &info = operands[0]->getValue();
+    return AxisInfo(/*contiguity=*/{1}, info.getDivisibility(),
+                    /*constancy=*/{1});
+  }
+};
+
 class BitcastOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<triton::BitcastOp> {
 public:
@@ -479,12 +498,8 @@ public:
   getAxisInfo(ub::PoisonOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     unsigned rank = 1;
-    if (auto shape = dyn_cast<RankedTensorType>(op.getType())) {
+    if (auto shape = dyn_cast<RankedTensorType>(op.getType()))
       rank = shape.getRank();
-    } else if (auto ptrTy = dyn_cast<PointerType>(op.getType())) {
-      if (auto tensorType = dyn_cast<RankedTensorType>(ptrTy.getPointeeType()))
-        rank = tensorType.getRank();
-    }
 
     // Poison values are never accessed, thus assume optimistic values.
     return AxisInfo(AxisInfo::DimVectorT(rank, kMaxDivisor),
@@ -664,8 +679,13 @@ private:
     // the minimal constancy is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual constancy.
+    //
+    // NOTE: For signed division (DivSIOp), truncation toward zero breaks the
+    // constancy pattern for negative inputs, so the deduction is taken only
+    // where the dividend is provably non-negative.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        triton::dividendIsNonNegative(op)) {
       constancy = std::max(constancy,
                            gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                                rhs.getDivisibility(dim)));
@@ -719,8 +739,13 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
+    //
+    // NOTE: For signed remainder (RemSIOp), srem produces negative results for
+    // negative dividends, breaking the contiguity pattern, so the deduction is
+    // taken only where the dividend is provably non-negative.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        triton::dividendIsNonNegative(op)) {
       contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                        rhs.getDivisibility(dim));
     }
@@ -1079,6 +1104,10 @@ public:
     if (isa<IntegerType>(op.getOperand(0).getType()))
       return AxisInfo::join(lhsInfo, rhsInfo);
 
+    int64_t elemBytes = 1;
+    if (isa<PointerType>(getElementTypeOrSelf(op.getType())))
+      elemBytes = std::max<int64_t>(1, getPointeeBitWidth(op.getType()) / 8);
+
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
     for (int d = 0; d < lhsInfo.getRank(); ++d) {
       constancy.push_back(gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d),
@@ -1086,12 +1115,16 @@ public:
       contiguity.push_back(gcd(lhsInfo.getContiguity(d),
                                rhsInfo.getContiguity(d),
                                condInfo.getConstancy(d)));
-      // getDivisibilityFromContiguity does not see condConstancy; clamp
-      // by the just-computed output contiguity so the result remains
-      // sound when condConstancy reduces it below the input contiguities.
-      divisibility.push_back(
-          gcd(getDivisibilityFromContiguity(lhsInfo, rhsInfo, d),
-              contiguity.back()));
+      auto divisor =
+          gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d));
+      // Smaller groups introduce new bases inside an input group. Pointer
+      // divisibility measures those offsets in bytes, not elements.
+      if ((lhsInfo.getContiguity(d) != kMaxDivisor &&
+           contiguity.back() < lhsInfo.getContiguity(d)) ||
+          (rhsInfo.getContiguity(d) != kMaxDivisor &&
+           contiguity.back() < rhsInfo.getContiguity(d)))
+        divisor = gcd(divisor, multiplyDivisor(contiguity.back(), elemBytes));
+      divisibility.push_back(divisor);
     }
 
     return AxisInfo(contiguity, divisibility, constancy);
@@ -1215,8 +1248,12 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   visitors.append<IntegerCastOpAxisInfoVisitor<arith::ExtSIOp>,
                   IntegerCastOpAxisInfoVisitor<arith::ExtUIOp>,
                   IntegerCastOpAxisInfoVisitor<arith::TruncIOp>,
+                  IdentityOpAxisInfoVisitor<triton::AnnotateOp>,
                   IdentityOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
+                  IdentityOpAxisInfoVisitor<triton::gpu::ThreadHandoffOp>,
                   BitcastOpAxisInfoVisitor,
+                  PointerCastOpAxisInfoVisitor<triton::IntToPtrOp>,
+                  PointerCastOpAxisInfoVisitor<triton::PtrToIntOp>,
                   IdentityOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();
@@ -1452,7 +1489,7 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
   if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
     elemTy = ptrTy.getPointeeType();
   }
-  return getContiguity(value, elemTy.getIntOrFloatBitWidth());
+  return getContiguity(value, getIntOrFloatOrPtrBitWidth(elemTy));
 }
 
 unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
@@ -1484,7 +1521,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
     elemTy = ptrTy.getPointeeType();
   }
-  return getAlignment(value, elemTy.getIntOrFloatBitWidth());
+  return getAlignment(value, getIntOrFloatOrPtrBitWidth(elemTy));
 }
 
 unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,

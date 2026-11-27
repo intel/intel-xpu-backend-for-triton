@@ -45,7 +45,7 @@ jobs:
   build:
     name: Build benchmarks wheel
     runs-on:
-      - max1100
+      - cpu
       - rolling
       - runner-0.0.22
     strategy:

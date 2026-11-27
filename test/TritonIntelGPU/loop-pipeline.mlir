@@ -92,8 +92,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: ttig.prefetch {{.*}} : tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>
     // CHECK: ttig.prefetch {{.*}} : tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>
     // CHECK: ttig.prefetch {{.*}} : tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>
-    // CHECK: scf.for %[[VAL_92:.*]] = {{.*}} to {{.*}} step {{.*}} iter_args(%[[VAL_93:.*]] = {{.*}}, %[[VAL_94:.*]] = {{.*}}, %[[VAL_95:.*]] = {{.*}}, %[[VAL_96:.*]] = {{.*}}, %[[ARG_13:.*]] = {{.*}}, %[[ARG_14:.*]] = {{.*}}, %[[VAL_97:.*]] = {{.*}}, %[[ARG_16:.*]] = {{.*}}, %[[ARG_17:.*]] = {{.*}}) ->
-    // CHECK-SAME: (tensor<64x256xf32, #[[$DPAS]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<64x32xi1, #[[$BLOCK_0]]>, tensor<64x32xi1, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, i32, i32)  : i32 {
+    // CHECK: scf.for %[[VAL_92:.*]] = {{.*}} to {{.*}} step {{.*}} iter_args(%[[VAL_93:.*]] = {{.*}}, %[[VAL_94:.*]] = {{.*}}, %[[VAL_95:.*]] = {{.*}}, %[[VAL_96:.*]] = {{.*}}, %[[VAL_97:.*]] = {{.*}}, %[[ARG_16:.*]] = {{.*}}, %[[ARG_17:.*]] = {{.*}}) ->
+    // CHECK-SAME: (tensor<64x256xf32, #[[$DPAS]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, i32, i32)  : i32 {
     // CHECK:   %[[VAL_106:.*]] = tt.addptr %[[VAL_94]], {{.*}} : tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<64x32xi32, #[[$BLOCK_0]]>
     // CHECK:   %[[VAL_107:.*]] = tt.addptr %[[VAL_95]], {{.*}} : tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, tensor<32x256xi32, #[[$BLOCK_1]]>
     // CHECK:   %[[VAL_108:.*]] = arith.subi {{.*}} : i32
@@ -105,13 +105,21 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-NEXT: ttig.prefetch %[[VAL_106]], %[[PREFETCH_MASK]] {{.*}} : tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>
     // CHECK:   %[[PREFETCH_MASK:.*]] = tt.splat {{.*}} : i1 -> tensor<32x256xi1, #[[$BLOCK_1]]>
     // CHECK-NEXT: ttig.prefetch %[[VAL_107]], %[[PREFETCH_MASK]] {{.*}} : tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>
-    // CHECK:   %[[VAL_116:.*]] = tt.load %[[VAL_96]], {{.*}}, {{.*}} : tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>
+    // COM: The load's boundary-check mask is recomputed in its own stage, for
+    // COM: its own iteration, rather than carried in from the prefetch's.
+    // CHECK:   %[[LOAD_IV:.*]] = arith.addi %[[VAL_92]], {{.*}} : i32
+    // CHECK-NEXT: %[[LOAD_K:.*]] = arith.muli %[[LOAD_IV]], {{.*}} : i32
+    // CHECK-NEXT: %[[LOAD_BOUND:.*]] = arith.subi {{.*}}, %[[LOAD_K]] : i32
+    // CHECK-NEXT: %[[LOAD_BOUND_1D:.*]] = tt.splat %[[LOAD_BOUND]] : i32 -> tensor<1x32xi32, #blocked>
+    // CHECK-NEXT: %[[LOAD_MASK_1:.*]] = arith.cmpi slt, {{.*}}, %[[LOAD_BOUND_1D]] : tensor<1x32xi32, #blocked>
+    // CHECK-NEXT: %[[LOAD_MASK_2D_2:.*]] = tt.broadcast %[[LOAD_MASK_1]] : tensor<1x32xi1, #blocked> -> tensor<64x32xi1, #blocked>
+    // CHECK-NEXT: %[[VAL_116:.*]] = tt.load %[[VAL_96]], %[[LOAD_MASK_2D_2]], {{.*}} : tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>
     // CHECK:   %[[VAL_120:.*]] = tt.load %[[VAL_97]] {{.*}} : tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>
     // CHECK:   %[[VAL_121:.*]] = ttg.convert_layout %[[VAL_116]] : tensor<64x32xf16, #[[$BLOCK_0]]> -> tensor<64x32xf16, #{{.*}}<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>
     // CHECK:   %[[VAL_122:.*]] = ttg.convert_layout %[[VAL_120]] : tensor<32x256xf16, #[[$BLOCK_1]]> -> tensor<32x256xf16, #{{.*}}<{opIdx = 1, parent = #[[$DPAS]], kWidth = 2}>>
     // CHECK:   %[[VAL_123:.*]] = tt.dot %[[VAL_121]], %[[VAL_122]], %[[VAL_93]], inputPrecision = tf32 : tensor<64x32xf16, #{{.*}}<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>> * tensor<32x256xf16, #{{.*}}<{opIdx = 1, parent = #[[$DPAS]], kWidth = 2}>> -> tensor<64x256xf32, #[[$DPAS]]>
-    // CHECK:   scf.yield %[[VAL_123]], %[[VAL_106]], %[[VAL_107]], %[[VAL_94]], %[[ARG_14]], %[[LOAD_MASK_2D_1]], %[[VAL_95]], %[[ARG_17]], %[[VAL_108]] :
-    // CHECK-SAME: tensor<64x256xf32, #[[$DPAS]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<64x32xi1, #[[$BLOCK_0]]>, tensor<64x32xi1, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, i32, i32
+    // CHECK:   scf.yield %[[VAL_123]], %[[VAL_106]], %[[VAL_107]], %[[VAL_94]], %[[VAL_95]], %[[ARG_17]], %[[VAL_108]] :
+    // CHECK-SAME: tensor<64x256xf32, #[[$DPAS]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, i32, i32
     %53:3 = scf.for %arg9 = %c0_i32 to %50 step %c1_i32 iter_args(%arg10 = %cst_2, %arg11 = %38, %arg12 = %48) -> (tensor<64x256xf32, #dpas>, tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<32x256x!tt.ptr<f16>, #blocked1>)  : i32 {
       %72 = arith.muli %arg9, %c32_i32 : i32
       %73 = arith.subi %arg5, %72 : i32
@@ -341,5 +349,165 @@ module attributes {ttig.support_subgroup_matrix_multiply_accumulate, ttig.suppor
       scf.yield %d, %next_koff : tensor<128x256xf32, #mma>, i32
     }
     tt.return
+  }
+}
+
+// -----
+
+// COM: A rank-3 masked pointer load whose mask is a row limit ANDed with a batch
+// COM: predicate, with the AND below the final broadcast (as `tt-reorder-broadcast`
+// COM: leaves it). Both the load and its prefetch keep the narrow mask; the
+// COM: prefetch lowering expands the narrow batch predicate itself.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [1, 8, 16], B = [1, 16, 16], C = [1, 8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+#sK = #ttg.slice<{dim = 2, parent = #dot0}>
+#sM = #ttg.slice<{dim = 1, parent = #dot0}>
+#sKB = #ttg.slice<{dim = 2, parent = #dot1}>
+#sNB = #ttg.slice<{dim = 1, parent = #dot1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @prefetch_rank3_sunk_and
+  tt.func public @prefetch_rank3_sunk_and(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %bound: i32, %batch_bound: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c8 = arith.constant 8 : i32
+    %zero = arith.constant dense<0.000000e+00> : tensor<4x64x32xf16, #dot0>
+    %acc0 = arith.constant dense<0.000000e+00> : tensor<4x64x64xf32, #dpas>
+    %c32 = arith.constant dense<32> : tensor<1x64x1xi32, #dot0>
+    %c64 = arith.constant dense<64> : tensor<1x32x1xi32, #dot1>
+    %stepA = arith.constant dense<32> : tensor<4x64x32xi32, #dot0>
+    %stepB = arith.constant dense<2048> : tensor<4x32x64xi32, #dot1>
+    %rb = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>>
+    %rm = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+    %ema = tt.expand_dims %rm {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>> -> tensor<1x64xi32, #sK>
+    %em = tt.expand_dims %ema {axis = 2 : i32} : tensor<1x64xi32, #sK> -> tensor<1x64x1xi32, #dot0>
+    %om = arith.muli %em, %c32 : tensor<1x64x1xi32, #dot0>
+    %rk = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sM}>>
+    %eka = tt.expand_dims %rk {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sM}>> -> tensor<1x32xi32, #sM>
+    %ek = tt.expand_dims %eka {axis = 1 : i32} : tensor<1x32xi32, #sM> -> tensor<1x1x32xi32, #dot0>
+    %bm = tt.broadcast %om : tensor<1x64x1xi32, #dot0> -> tensor<4x64x32xi32, #dot0>
+    %bk = tt.broadcast %ek : tensor<1x1x32xi32, #dot0> -> tensor<4x64x32xi32, #dot0>
+    %offA = arith.addi %bm, %bk : tensor<4x64x32xi32, #dot0>
+    %psA = tt.splat %arg0 : !tt.ptr<f16> -> tensor<4x64x32x!tt.ptr<f16>, #dot0>
+    %ptrA = tt.addptr %psA, %offA : tensor<4x64x32x!tt.ptr<f16>, #dot0>, tensor<4x64x32xi32, #dot0>
+    %rkb = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sKB}>>
+    %ekba = tt.expand_dims %rkb {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #sKB}>> -> tensor<1x32xi32, #sKB>
+    %ekb = tt.expand_dims %ekba {axis = 2 : i32} : tensor<1x32xi32, #sKB> -> tensor<1x32x1xi32, #dot1>
+    %okb = arith.muli %ekb, %c64 : tensor<1x32x1xi32, #dot1>
+    %rn = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sNB}>>
+    %ena = tt.expand_dims %rn {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sNB}>> -> tensor<1x64xi32, #sNB>
+    %en = tt.expand_dims %ena {axis = 1 : i32} : tensor<1x64xi32, #sNB> -> tensor<1x1x64xi32, #dot1>
+    %bkb = tt.broadcast %okb : tensor<1x32x1xi32, #dot1> -> tensor<4x32x64xi32, #dot1>
+    %bnb = tt.broadcast %en : tensor<1x1x64xi32, #dot1> -> tensor<4x32x64xi32, #dot1>
+    %offB = arith.addi %bkb, %bnb : tensor<4x32x64xi32, #dot1>
+    %psB = tt.splat %arg1 : !tt.ptr<f16> -> tensor<4x32x64x!tt.ptr<f16>, #dot1>
+    %ptrB = tt.addptr %psB, %offB : tensor<4x32x64x!tt.ptr<f16>, #dot1>, tensor<4x32x64xi32, #dot1>
+    // COM: The prefetch keeps the load's narrow mask, broadcast(and(..)) with the AND on
+    // COM: [4, 64, 1]: no full-shape AND of the row and batch broadcasts is built.
+    // CHECK: %[[NARROW:.*]] = arith.andi {{.*}} : tensor<4x64x1xi1
+    // CHECK-NEXT: %[[PF_MASK:.*]] = tt.broadcast %[[NARROW]] : tensor<4x64x1xi1, {{.*}}> -> tensor<4x64x32xi1
+    // CHECK: ttig.prefetch {{.*}}, %[[PF_MASK]] {{.*}}ttig.block_io = "row_major"
+    // CHECK-NOT: arith.andi {{.*}} : tensor<4x64x32xi1
+    // CHECK: scf.for
+    // COM: In the loop the loop predicate is ANDed on top of the broadcast narrow mask.
+    // CHECK: %[[NARROW_L:.*]] = arith.andi {{.*}} : tensor<4x64x1xi1
+    // CHECK-NEXT: %[[MASK_L:.*]] = tt.broadcast %[[NARROW_L]] : tensor<4x64x1xi1, {{.*}}> -> tensor<4x64x32xi1
+    // CHECK: %[[PF_MASK_L:.*]] = arith.andi {{.*}} : tensor<4x64x32xi1
+    // CHECK: ttig.prefetch {{.*}}, %[[PF_MASK_L]] {{.*}}ttig.block_io = "row_major"
+    %r:3 = scf.for %i = %c0 to %c8 step %c1 iter_args(%acc = %acc0, %pa = %ptrA, %pb = %ptrB) -> (tensor<4x64x64xf32, #dpas>, tensor<4x64x32x!tt.ptr<f16>, #dot0>, tensor<4x32x64x!tt.ptr<f16>, #dot1>) : i32 {
+      %boundsplat = tt.splat %bound : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+      %rowcmp = arith.cmpi slt, %rm, %boundsplat : tensor<64xi32, #ttg.slice<{dim = 0, parent = #sK}>>
+      %rc1 = tt.expand_dims %rowcmp {axis = 0 : i32} : tensor<64xi1, #ttg.slice<{dim = 0, parent = #sK}>> -> tensor<1x64xi1, #sK>
+      %rc2 = tt.expand_dims %rc1 {axis = 2 : i32} : tensor<1x64xi1, #sK> -> tensor<1x64x1xi1, #dot0>
+      %bboundsplat = tt.splat %batch_bound : i32 -> tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>>
+      %batchcmp = arith.cmpi slt, %rb, %bboundsplat : tensor<4xi32, #ttg.slice<{dim = 1, parent = #sK}>>
+      %bc1 = tt.expand_dims %batchcmp {axis = 1 : i32} : tensor<4xi1, #ttg.slice<{dim = 1, parent = #sK}>> -> tensor<4x1xi1, #sK>
+      %bc2 = tt.expand_dims %bc1 {axis = 2 : i32} : tensor<4x1xi1, #sK> -> tensor<4x1x1xi1, #dot0>
+      %rowb = tt.broadcast %rc2 : tensor<1x64x1xi1, #dot0> -> tensor<4x64x1xi1, #dot0>
+      %batchb = tt.broadcast %bc2 : tensor<4x1x1xi1, #dot0> -> tensor<4x64x1xi1, #dot0>
+      %and = arith.andi %rowb, %batchb : tensor<4x64x1xi1, #dot0>
+      %mask = tt.broadcast %and : tensor<4x64x1xi1, #dot0> -> tensor<4x64x32xi1, #dot0>
+      %a = tt.load %pa, %mask, %zero {ttig.block_io = "row_major"} : tensor<4x64x32x!tt.ptr<f16>, #dot0>
+      %b = tt.load %pb {ttig.block_io = "row_major"} : tensor<4x32x64x!tt.ptr<f16>, #dot1>
+      %d = tt.dot %a, %b, %acc, inputPrecision = tf32 : tensor<4x64x32xf16, #dot0> * tensor<4x32x64xf16, #dot1> -> tensor<4x64x64xf32, #dpas>
+      %npa = tt.addptr %pa, %stepA : tensor<4x64x32x!tt.ptr<f16>, #dot0>, tensor<4x64x32xi32, #dot0>
+      %npb = tt.addptr %pb, %stepB : tensor<4x32x64x!tt.ptr<f16>, #dot1>, tensor<4x32x64xi32, #dot1>
+      scf.yield %d, %npa, %npb : tensor<4x64x64xf32, #dpas>, tensor<4x64x32x!tt.ptr<f16>, #dot0>, tensor<4x32x64x!tt.ptr<f16>, #dot1>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// COM: A loop-invariant boundary-check mask is left as is.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: tt.func public @loop_invariant_boundary_mask
+  tt.func public @loop_invariant_boundary_mask(%arg0: tensor<64x32x!tt.ptr<f16>, #blocked>, %arg1: tensor<32x256x!tt.ptr<f16>, #blocked1>, %arg2: i32, %arg3: i32) -> tensor<64x256xf32, #dpas> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #blocked>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x256xf32, #dpas>
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi32, #blocked>
+    %2 = tt.splat %arg3 : i32 -> tensor<64x1xi32, #blocked>
+    %3 = arith.cmpi slt, %1, %2 : tensor<64x1xi32, #blocked>
+    // CHECK: %[[MASK:.*]] = tt.broadcast {{.*}} : tensor<64x1xi1, #{{.*}}> -> tensor<64x32xi1, #{{.*}}>
+    // CHECK: scf.for
+    // CHECK: tt.load {{.*}}, %[[MASK]], {{.*}} : tensor<64x32x!tt.ptr<f16>, #{{.*}}>
+    %4 = tt.broadcast %3 : tensor<64x1xi1, #blocked> -> tensor<64x32xi1, #blocked>
+    %5 = scf.for %arg4 = %c0_i32 to %arg2 step %c1_i32 iter_args(%arg5 = %cst_0) -> (tensor<64x256xf32, #dpas>)  : i32 {
+      %6 = tt.load %arg0, %4, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #blocked>
+      %7 = tt.load %arg1 {ttig.block_io = "row_major"} : tensor<32x256x!tt.ptr<f16>, #blocked1>
+      %8 = ttg.convert_layout %6 : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #dot0>
+      %9 = ttg.convert_layout %7 : tensor<32x256xf16, #blocked1> -> tensor<32x256xf16, #dot1>
+      %10 = tt.dot %8, %9, %arg5, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x256xf16, #dot1> -> tensor<64x256xf32, #dpas>
+      scf.yield %10 : tensor<64x256xf32, #dpas>
+    }
+    tt.return %5 : tensor<64x256xf32, #dpas>
+  }
+}
+
+// -----
+
+// COM: A boundary-check mask whose bound is loop carried keeps reaching the
+// COM: load from the prefetch's stage: a copy would read the bound at the
+// COM: wrong iteration.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: tt.func public @loop_carried_boundary_mask
+  tt.func public @loop_carried_boundary_mask(%arg0: tensor<64x32x!tt.ptr<f16>, #blocked>, %arg1: tensor<32x256x!tt.ptr<f16>, #blocked1>, %arg2: i32, %arg3: i32) -> tensor<64x256xf32, #dpas> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #blocked>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x256xf32, #dpas>
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x32xi32, #blocked>
+    // CHECK: scf.for {{.*}} iter_args(%{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %[[MASK:.*]] = %{{.*}}, %{{.*}} = %{{.*}})
+    // CHECK: tt.load %{{.*}}, %[[MASK]], %{{.*}} {{.*}} : tensor<64x32x!tt.ptr<f16>, #{{.*}}>
+    %2:2 = scf.for %arg4 = %c0_i32 to %arg2 step %c1_i32 iter_args(%arg5 = %cst_0, %rem = %arg3) -> (tensor<64x256xf32, #dpas>, i32)  : i32 {
+      %3 = tt.splat %rem : i32 -> tensor<1x32xi32, #blocked>
+      %4 = arith.cmpi slt, %1, %3 : tensor<1x32xi32, #blocked>
+      %5 = tt.broadcast %4 : tensor<1x32xi1, #blocked> -> tensor<64x32xi1, #blocked>
+      %6 = tt.load %arg0, %5, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #blocked>
+      %7 = tt.load %arg1 {ttig.block_io = "row_major"} : tensor<32x256x!tt.ptr<f16>, #blocked1>
+      %8 = ttg.convert_layout %6 : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #dot0>
+      %9 = ttg.convert_layout %7 : tensor<32x256xf16, #blocked1> -> tensor<32x256xf16, #dot1>
+      %10 = tt.dot %8, %9, %arg5, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x256xf16, #dot1> -> tensor<64x256xf32, #dpas>
+      %11 = arith.subi %rem, %c32_i32 : i32
+      scf.yield %10, %11 : tensor<64x256xf32, #dpas>, i32
+    }
+    tt.return %2#0 : tensor<64x256xf32, #dpas>
   }
 }

@@ -1,0 +1,30 @@
+# Default benchmark catalog. Public product names only.
+version: 1
+defaults:
+  min_drop_pct: 5.0
+  z: 3.0
+  min_history: 8
+  window: 20
+  max_cv_pct: 15.0
+  lock_mad_frac: 0.05
+  improvement_lock_pct: 8.0
+  lock_window: 8
+metrics:
+  tflops: {higher_is_better: true}
+  gbps: {higher_is_better: true}
+  time_us: {higher_is_better: false}
+  time_ms: {higher_is_better: false}
+  ns_per_arg: {higher_is_better: false}
+  cpu_mhz: {higher_is_better: true, gate: false}  # recorded, never gated
+platforms:  # normalize raw gpu_device -> label (regex search)
+  b580: {match: "B580"}
+  max1550: {match: "Max 1550"}
+families:  # glob over benchmark names; inheritance: defaults -> family -> benchmark -> platform
+  flash-attn: {match: ["flash-attn*", "batched-flash-attn*"], min_drop_pct: 8.0}
+  flex-attn: {match: ["flex-attn*"], min_drop_pct: 8.0}
+benchmarks:
+  softmax: {min_drop_pct: 3.0}
+scopes:
+  nightly-b580-micro: {source: micro, platform: b580, tags: [client], benchmarks: ["*"], expected_nightly: true}
+  nightly-b580-vllm: {source: third_party, platform: b580, tags: [ci], groups: ["*"], expected_nightly: true}
+importance: {}  # reserved: routing/priority only, never thresholds

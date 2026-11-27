@@ -1,9 +1,13 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::gpu::intel {
@@ -16,6 +20,31 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
 namespace {
+
+/// Return the op before which the staging buffer replacing \p cvtOp is
+/// allocated, or nullptr to allocate it at \p cvtOp. If \p cvtOp is in a loop
+/// and its source is defined outside it, allocating before the loop runs the
+/// store once. TritonGPUReorderInstructions cannot hoist it past prefetches
+/// (#8283).
+Operation *getLoopInvariantAllocAnchor(ConvertLayoutOp cvtOp) {
+  auto loop = cvtOp->getParentOfType<LoopLikeOpInterface>();
+  if (!loop)
+    return nullptr;
+  Operation *srcDef = cvtOp.getSrc().getDefiningOp();
+  if (!srcDef || loop->isAncestor(srcDef))
+    return nullptr;
+  // Scalar-derived: staging it only costs shared memory (as upstream).
+  if (isa<arith::ConstantOp, triton::SplatOp>(srcDef))
+    return nullptr;
+  Operation *anchor = srcDef->getBlock()->findAncestorOpInBlock(*cvtOp);
+  if (!anchor)
+    return nullptr;
+  // The anchor's body can run before `cvtOp` on some iteration, so it must not
+  // write memory (prefetches excepted).
+  if (intel::mayWriteMemory(anchor))
+    return nullptr;
+  return anchor;
+}
 
 class TritonIntelGPUReduceDataDuplicationPass
     : public intel::impl::TritonIntelGPUReduceDataDuplicationBase<
@@ -71,8 +100,11 @@ public:
               mod.getContext(), dstDotOp, srcType.getShape(), sharedOrder,
               triton::gpu::getCGALayout(srcEncoding), srcType.getElementType()),
           sharedMemorySpace);
+      if (Operation *anchor = getLoopInvariantAllocAnchor(cvtOp))
+        builder.setInsertionPoint(anchor);
       auto tmp = triton::gpu::LocalAllocOp::create(builder, cvtOp.getLoc(),
                                                    tmpType, cvtOp.getSrc());
+      builder.setInsertionPoint(cvtOp);
       auto newConvert = triton::gpu::LocalLoadOp::create(
           builder, cvtOp.getLoc(), dstType, tmp);
       cvtOp.replaceAllUsesWith(newConvert.getResult());

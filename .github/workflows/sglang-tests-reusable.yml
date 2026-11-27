@@ -18,7 +18,7 @@ on:
       python_version:
         description: Python version
         type: string
-        default: "3.12"
+        default: "3.11"
       ignore_errors:
         description: Ignore test errors
         type: boolean
@@ -44,8 +44,8 @@ env:
 jobs:
   setup:
     name: Setup
-    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
-    timeout-minutes: 240
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "gpu", "{0}"]', inputs.runner_label)) }}
+    timeout-minutes: 480
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -89,6 +89,7 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           lts: ${{ inputs.runner_label == 'lts' }}
+          upload_artifact: pytorch-sglang-${{ inputs.python_version }}-${{ inputs.runner_label || 'default' }}
 
       - name: Build Triton wheel
         run: |
@@ -183,7 +184,7 @@ jobs:
         # kernels. See scripts/sglang/README.md.
         exclude:
           - suite: ${{ !inputs.install_sgl_kernel_xpu && 'sglang-e2e' || '' }}
-    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "gpu", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 240
     defaults:
       run:
@@ -231,6 +232,7 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           lts: ${{ inputs.runner_label == 'lts' }}
+          download_artifact: pytorch-sglang-${{ inputs.python_version }}-${{ inputs.runner_label || 'default' }}
 
       # sglang imports torchvision.io at module level and install-sglang.sh strips
       # torch* from its pyproject, so it has to be installed here, from the PyTorch pin.

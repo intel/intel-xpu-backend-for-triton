@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/xxhash.h"
 
 namespace mlir::triton::instrument {
@@ -79,7 +80,8 @@ namespace ProxyAccessBits {
 constexpr unsigned readOffset = MAX_NUM_BASE_THREADS;
 constexpr unsigned fencedOffset = 2 * MAX_NUM_BASE_THREADS;
 constexpr uint64_t writeMask = (1ull << MAX_NUM_BASE_THREADS) - 1;
-constexpr uint64_t seenMask = writeMask | (writeMask << readOffset);
+constexpr uint64_t readMask = writeMask << readOffset;
+constexpr uint64_t seenMask = writeMask | readMask;
 static_assert(2 * fencedOffset <= 64);
 } // namespace ProxyAccessBits
 
@@ -88,6 +90,10 @@ struct AssertInfo {
   StringRef message;
   Type type;
 };
+
+static int getMaxCommitAge(RankedTensorType commitsType) {
+  return llvm::maxIntN(commitsType.getElementTypeBitWidth());
+}
 
 static uint64_t expandActiveMask(uint64_t activeMask, unsigned numBaseThreads) {
   uint64_t expanded = 0;
@@ -187,8 +193,8 @@ Value reduceAll(ImplicitLocOpBuilder &b, Value tensor) {
   if (!tensorType || tensorType.getRank() == 0)
     return tensor;
   if (tensorType.getRank() != 1) {
-    tensor = triton::ReshapeOp::create(b, {tensorType.getNumElements()}, tensor,
-                                       /*allowReorder=*/true);
+    tensor =
+        triton::ReshapeOp::create(b, {tensorType.getNumElements()}, tensor);
   }
   return reduceLastDim<OpTy>(b, tensor);
 }
@@ -984,6 +990,9 @@ Value FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
   SmallVector<Value> args = {pred, waitingVal, barrierStatesVal,
                              activeMasksVal};
   AssertInfo resultInfo{"", b.getI1Type()};
+  // One lane writes each waiting flag or active mask. Its replicas must
+  // see the update before participating in the deadlock check.
+  ttg::BarrierOp::create(b, b.getLoc(), ttg::AddrSpace::GlobalWrite);
   return createCallToCachedFunction(
       b, "check_all_active_waiting", args, resultInfo,
       {waitingGlobalType, barrierStatesGlobalType, activeMasksGlobalType},
@@ -3499,12 +3508,16 @@ void FunctionBuilder::createFenceProxyAccessesCall(ImplicitLocOpBuilder &b,
     pred = arith::ConstantIntOp::create(b, 1, 1);
   ValueType visibility = auxData.proxyAccessVisibility.at(insertPoint);
   auto visibilityType = cast<RankedTensorType>(visibility.type);
+  ValueType writes =
+      auxData.writeVisibility[(int)MemType::SHARED_MEM].at(insertPoint);
+  auto writeType = cast<RankedTensorType>(writes.type);
   SmallVector<Value> args = {arith::ConstantIntOp::create(b, thread, 32), pred,
-                             visibility.value};
+                             visibility.value, writes.value};
   createCallToCachedFunction(
       b, "fence_proxy_accesses", args, /*assertInfo=*/std::nullopt,
-      {visibilityType, (uint64_t)cluster},
-      [visibilityType, cluster](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      {visibilityType, (uint64_t)cluster, writeType},
+      [visibilityType, cluster, writeType](ImplicitLocOpBuilder &fb,
+                                           Block *entryBlock) {
         Value threadVal = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value visibilityPtr = entryBlock->getArgument(2);
@@ -3523,8 +3536,22 @@ void FunctionBuilder::createFenceProxyAccessesCall(ImplicitLocOpBuilder &b,
               fb, mask,
               createCTASetMask(fb, visibilityType, /*dim=*/0, currentCTA));
         }
+        // A fence covers seen reads and writes visible to the fencing thread.
+        Value writes = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), entryBlock->getArgument(3), writeType);
+        Value thread = adjustIntegerWidth(
+            fb, threadVal, cast<IntegerType>(writeType.getElementType()));
+        Value shiftByThread = triton::SplatOp::create(fb, writeType, thread);
+        Value visible = arith::TruncIOp::create(
+            fb, writeType.cloneWith(std::nullopt, fb.getI1Type()),
+            arith::ShRUIOp::create(fb, writes, shiftByThread));
+        Value reads = tti::createConstIntTensor(
+            fb, fb.getLoc(), ProxyAccessBits::readMask, visibilityType);
         Value seenMask = tti::createConstIntTensor(
             fb, fb.getLoc(), ProxyAccessBits::seenMask, visibilityType);
+        seenMask = arith::SelectOp::create(
+            fb, convertAndBroadcast(fb, visible, {0, 1, 2}, visibilityType),
+            seenMask, reads);
         Value seen = arith::AndIOp::create(fb, visibility, seenMask);
         Value shift = tti::createConstIntTensor(
             fb, fb.getLoc(), ProxyAccessBits::fencedOffset, visibilityType);
@@ -4128,13 +4155,11 @@ void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
   ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  bool retainCopies =
-      auxData.hasAsyncCopyMbarriers && commitKind == CommitKind::AsyncCp;
   SmallVector<Value> args = {threadVal, pred, outstandingCommits.value};
   createCallToCachedFunction(
       b, "commit_accesses", args,
-      /*assertInfo=*/std::nullopt, {commitsType, uint64_t(retainCopies)},
-      [commitsType, retainCopies](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, {commitsType},
+      [commitsType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value threadVal = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value outstandingCommitsPtr = entryBlock->getArgument(2);
@@ -4159,14 +4184,12 @@ void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
             fb, commits, zero, arith::CmpIPredicate::sgt);
         commitsGtZero = arith::AndIOp::create(fb, commitsGtZero, threadMask);
         Value commitsPlusOne = arith::AddIOp::create(fb, commits, ones);
-        if (retainCopies) {
-          Value maximum =
-              tti::createConstIntTensor(fb, fb.getLoc(), 127, commitsType);
-          Value saturated = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
-                                                  commits, maximum);
-          commitsPlusOne =
-              arith::SelectOp::create(fb, saturated, commits, commitsPlusOne);
-        }
+        Value maximum = tti::createConstIntTensor(
+            fb, fb.getLoc(), getMaxCommitAge(commitsType), commitsType);
+        Value saturated = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                                commits, maximum);
+        commitsPlusOne =
+            arith::SelectOp::create(fb, saturated, commits, commitsPlusOne);
         commits =
             arith::SelectOp::create(fb, commitsGtZero, commitsPlusOne, commits);
 
@@ -4187,35 +4210,38 @@ void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
 void FunctionBuilder::createClearOutstandingCommitsTransferWritesCall(
     ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
     int outstandingNum, Value pred, CommitKind::Kind commitKind,
-    MemType memType, Operation *insertPoint) {
+    MemType memType, Operation *insertPoint, bool includeStaged) {
   createClearOutstandingCommitsTransferCall(
       b, thread, transferThreadMask, outstandingNum, pred, commitKind, memType,
-      insertPoint, /*transferWrites=*/true, /*transferReads=*/false);
+      insertPoint, includeStaged, /*transferWrites=*/true,
+      /*transferReads=*/false);
 }
 
 void FunctionBuilder::createClearOutstandingCommitsTransferReadsCall(
     ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
     int outstandingNum, Value pred, CommitKind::Kind commitKind,
-    MemType memType, Operation *insertPoint) {
+    MemType memType, Operation *insertPoint, bool includeStaged) {
   createClearOutstandingCommitsTransferCall(
       b, thread, transferThreadMask, outstandingNum, pred, commitKind, memType,
-      insertPoint, /*transferWrites=*/false, /*transferReads=*/true);
+      insertPoint, includeStaged, /*transferWrites=*/false,
+      /*transferReads=*/true);
 }
 
 void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
     ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
     int outstandingNum, Value pred, CommitKind::Kind commitKind,
-    MemType memType, Operation *insertPoint) {
+    MemType memType, Operation *insertPoint, bool includeStaged) {
   createClearOutstandingCommitsTransferCall(
       b, thread, transferThreadMask, outstandingNum, pred, commitKind, memType,
-      insertPoint, /*transferWrites=*/true, /*transferReads=*/true);
+      insertPoint, includeStaged, /*transferWrites=*/true,
+      /*transferReads=*/true);
 }
 
 void FunctionBuilder::createClearOutstandingCommitsTransferCall(
     ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
     int outstandingNum, Value pred, CommitKind::Kind commitKind,
-    MemType memType, Operation *insertPoint, bool transferWrites,
-    bool transferReads) {
+    MemType memType, Operation *insertPoint, bool includeStaged,
+    bool transferWrites, bool transferReads) {
   if (auxData.commits[commitKind].empty())
     return;
   bool hasWriteVisibility =
@@ -4234,10 +4260,14 @@ void FunctionBuilder::createClearOutstandingCommitsTransferCall(
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
   Value transferMaskVal =
       arith::ConstantIntOp::create(b, transferThreadMask, 64);
+  // Clamp negative wait counts to zero to avoid selecting empty entries.
+  // Uncommitted accesses are included separately when includeStaged is true.
+  outstandingNum = std::clamp(outstandingNum, 0, getMaxCommitAge(commitsType));
   Value outstandingNumVal = arith::ConstantIntOp::create(b, outstandingNum, 32);
   SmallVector<Value> args = {threadVal, transferMaskVal, outstandingNumVal,
                              pred, outstandingCommits.value};
-  ManglingArgs specializationArgs{commitsType, uint64_t(retainCopies)};
+  ManglingArgs specializationArgs{commitsType, uint64_t(retainCopies),
+                                  uint64_t(includeStaged)};
 
   RankedTensorType writeVisibilityType;
   if (hasWriteVisibility) {
@@ -4264,8 +4294,8 @@ void FunctionBuilder::createClearOutstandingCommitsTransferCall(
   createCallToCachedFunction(
       b, functionName, args, /*assertInfo=*/std::nullopt, specializationArgs,
       [commitsType, writeVisibilityType, readVisibilityType, hasWriteVisibility,
-       hasReadVisibility,
-       retainCopies](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+       hasReadVisibility, retainCopies,
+       includeStaged](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value threadVal = entryBlock->getArgument(0);
         Value transferMaskVal = entryBlock->getArgument(1);
         Value outstandingNumVal = entryBlock->getArgument(2);
@@ -4293,13 +4323,20 @@ void FunctionBuilder::createClearOutstandingCommitsTransferCall(
                                                createCurrentCTAMask(fb));
         threadColumnMask =
             arith::AndIOp::create(fb, threadColumnMask, commitCTAMask);
-        Value outstandingCommitsGtOutstandingNum =
+        Value clearedCommits =
             createCmpIntTensorScalar(fb, outstandingCommits, outstandingNumElem,
                                      arith::CmpIPredicate::sgt);
-        outstandingCommitsGtOutstandingNum = arith::AndIOp::create(
-            fb, outstandingCommitsGtOutstandingNum, threadColumnMask);
-        Value rowMask =
-            reduceLastDim<arith::OrIOp>(fb, outstandingCommitsGtOutstandingNum);
+        if (includeStaged) {
+          Value staged = arith::ConstantOp::create(
+              fb, elemIntType, fb.getIntegerAttr(elemIntType, -1));
+          Value stagedCommits = createCmpIntTensorScalar(
+              fb, outstandingCommits, staged, arith::CmpIPredicate::eq);
+          clearedCommits =
+              arith::OrIOp::create(fb, clearedCommits, stagedCommits);
+        }
+        clearedCommits =
+            arith::AndIOp::create(fb, clearedCommits, threadColumnMask);
+        Value rowMask = reduceLastDim<arith::OrIOp>(fb, clearedCommits);
 
         if (hasWriteVisibility) {
           Value writeVisibility = tti::createLoadScratchMemory(
@@ -4349,9 +4386,8 @@ void FunctionBuilder::createClearOutstandingCommitsTransferCall(
         Value completed = tti::createConstIntTensor(
             fb, fb.getLoc(), retainCopies ? -2 : 0, commitsType,
             /*isSigned=*/true);
-        outstandingCommits =
-            arith::SelectOp::create(fb, outstandingCommitsGtOutstandingNum,
-                                    completed, outstandingCommits);
+        outstandingCommits = arith::SelectOp::create(
+            fb, clearedCommits, completed, outstandingCommits);
         createMaskedStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
                                        outstandingCommits, commitsType,
                                        commitCTAMask);

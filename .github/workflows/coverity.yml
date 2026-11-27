@@ -22,7 +22,8 @@ jobs:
 
       - name: Install /usr/bin/file
         run: |
-          sudo apt install -y file
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends file
 
       - name: Install Python
         uses: ./.github/actions/setup-python

@@ -105,6 +105,7 @@ Math Ops
     cdiv
     ceil
     clamp
+    clmul
     cos
     div_rn
     erf
@@ -135,6 +136,8 @@ Reduction Ops
     :toctree: generated
     :nosignatures:
 
+    all
+    any
     argmax
     argmin
     max
@@ -226,6 +229,17 @@ Compiler Hint Ops
     max_constancy
     max_contiguous
     multiple_of
+
+
+Floating-Point Sanitization
+--------------------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    fpsan.barrier
+    fpsan.homomorphic_cast
 
 
 Debug Ops

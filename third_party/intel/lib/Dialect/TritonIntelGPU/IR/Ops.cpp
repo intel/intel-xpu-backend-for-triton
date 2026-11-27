@@ -10,6 +10,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
 
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -166,6 +167,26 @@ LogicalResult Subgroup2DBlockLoadFromPtrOp::verify() {
   if (getMask() && !getOther())
     return emitOpError("'other' must be present when 'mask' is present");
 
+  // The lowering derives an X shift from a column-limit width, so it must be
+  // a whole number of granules. Only a constant width can be checked here; a
+  // runtime one is the producer's responsibility (see
+  // ttgi::colLimitIsHWCompatible).
+  if ((*this)->hasAttr(
+          TritonIntelGPUDialect::getBlockIORuntimeColLimitAttrName())) {
+    unsigned elemBits = getIntOrFloatOrPtrBitWidth(resultType.getElementType());
+    if (elemBits % 8 != 0)
+      return emitOpError("column-limit width needs byte-sized elements, got ")
+             << elemBits << "-bit elements";
+    APInt width;
+    if (matchPattern(getBaseWidth(), m_ConstantInt(&width))) {
+      int64_t granule = get2DBlockIOWidthGranuleBytes(elemBits);
+      if (width.isNegative() || width.getSExtValue() % granule != 0)
+        return emitOpError("column-limit width must be a non-negative "
+                           "multiple of ")
+               << granule << " bytes, got " << width.getSExtValue();
+    }
+  }
+
   return success();
 }
 
@@ -181,7 +202,7 @@ static LogicalResult verifyGatherScatterResultType(Operation *op,
            << resultType;
 
   Type dtype = resultType.getElementType();
-  unsigned bitWidth = dtype.getIntOrFloatBitWidth();
+  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(dtype);
   if (bitWidth > 64)
     return op->emitOpError("dtype cannot be greater than 64 bits");
 
@@ -228,7 +249,28 @@ static LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
   return success();
 }
 
+// The lowering reads each row's offset from the lane that owns the row, so the
+// x offsets of an encoded `valueType` must be its dim-1 slice.
+static LogicalResult
+verifyGatherScatterOffsetsEncoding(Operation *op, RankedTensorType valueType,
+                                   RankedTensorType offsetsType,
+                                   StringRef valueName) {
+  Attribute valueEnc = valueType.getEncoding();
+  if (!valueEnc)
+    return success();
+  auto offsetsEnc =
+      dyn_cast_or_null<SliceEncodingAttr>(offsetsType.getEncoding());
+  if (!offsetsEnc || offsetsEnc.getDim() != 1 ||
+      offsetsEnc.getParent() != valueEnc)
+    return op->emitOpError("x offsets must be sliced along dim 1 from the ")
+           << valueName << " encoding, but got " << offsetsType;
+  return success();
+}
+
 LogicalResult DescriptorGatherOp::verify() {
+  if (failed(verifyGatherScatterOffsetsEncoding(
+          *this, getResult().getType(), getXOffsets().getType(), "result")))
+    return failure();
   return intel::verifyGatherScatterOp(
       *this, getDesc().getType().getSignlessBlockType(), getResult().getType(),
       getXOffsets().getType());
@@ -236,6 +278,9 @@ LogicalResult DescriptorGatherOp::verify() {
 
 // -- DescriptorScatterOp --
 LogicalResult DescriptorScatterOp::verify() {
+  if (failed(verifyGatherScatterOffsetsEncoding(
+          *this, getSrc().getType(), getXOffsets().getType(), "source")))
+    return failure();
   return intel::verifyGatherScatterOp(
       *this, getDesc().getType().getSignlessBlockType(), getSrc().getType(),
       getXOffsets().getType());

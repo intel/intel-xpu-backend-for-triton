@@ -8,10 +8,92 @@ import triton.language as tl
 from triton.runtime import interpreter
 
 
+@pytest.mark.parametrize("value, expected_fp32", [
+    (1.0, 1.0),
+    (1.00000001, 1.0),
+    (1.0000001, 1.0000001192092896),
+    (0.99999999, 1.0),
+    (2.0, 2.0),
+])
+def test_implicit_cvt_float_rounds_to_fp32(value, expected_fp32):
+    result = interpreter._implicit_cvt(value)
+    assert isinstance(result, tl.tensor)
+    assert result.dtype == tl.float32
+    assert result.handle.data.dtype == np.float32
+    np.testing.assert_equal(result.handle.data[0], np.float32(expected_fp32))
+
+
+@pytest.mark.parametrize("annotation, dtype", [
+    ("fp16", tl.float16),
+    ("bf16", tl.bfloat16),
+    ("fp32", tl.float32),
+    ("fp64", tl.float64),
+])
+def test_implicit_cvt_float_follows_annotation(annotation, dtype):
+    result = interpreter._implicit_cvt(1.00000001, annotation)
+    assert result.dtype == dtype
+    assert result.handle.data.dtype == interpreter._get_np_dtype(dtype)
+
+
+def test_implicit_cvt_bf16_truncates_like_launcher():
+    # fp32 bits 0x3F80C000: keeping the upper half gives 0x3F80 (1.0); rounding would give 0x3F81.
+    result = interpreter._implicit_cvt(1.005859375, "bf16")
+    assert result.dtype == tl.bfloat16
+    assert result.handle.data[0] == np.uint16(0x3F80)
+
+
+def test_float_arg_precision_follows_annotation():
+    import torch
+
+    def default_fp32(out, x):
+        tl.store(out, x > 1.0)
+
+    def annotated_fp64(out, x: tl.float64):
+        tl.store(out, x > 1.0)
+
+    out = torch.zeros(2, dtype=torch.int32)
+    interpreter.InterpretedFunction(default_fp32)[(1, )](out, 1.00000001)
+    interpreter.InterpretedFunction(annotated_fp64)[(1, )](out[1:], 1.00000001)
+    # 1.00000001 rounds to 1.0 in fp32 but stays above 1.0 in fp64, as in compiled kernels.
+    assert out.tolist() == [0, 1]
+
+
 def _element_ptrs(array: np.ndarray) -> np.ndarray:
     base = np.uint64(array.ctypes.data)
     offsets = np.arange(array.size, dtype=np.uint64) * np.uint64(array.itemsize)
     return (base + offsets).reshape(array.shape)
+
+
+@pytest.mark.parametrize("dtype, prefix", [
+    (tl.float16, "fcmpO"),
+    (tl.float32, "fcmpO"),
+    (tl.float64, "fcmpO"),
+    (tl.float32, "fcmpU"),
+    (tl.int32, "icmpS"),
+    (tl.uint32, "icmpU"),
+    (tl.int1, "icmpU"),
+])
+@pytest.mark.parametrize("op, expected", [
+    ("LT", [True, False, False, False]),
+    ("LE", [True, True, False, True]),
+    ("GT", [False, False, True, False]),
+    ("GE", [False, True, True, True]),
+    ("EQ", [False, True, False, True]),
+    ("NE", [True, False, True, False]),
+])
+def test_compare_op_return_type(dtype, prefix, op, expected):
+    builder = interpreter.InterpreterBuilder()
+    np_dtype = interpreter._get_np_dtype(dtype)
+    lhs = interpreter.TensorHandle(np.array([0, 1, 2, 3], dtype=np_dtype), dtype)
+    rhs = interpreter.TensorHandle(np.array([1, 1, 0, 3], dtype=np_dtype), dtype)
+    if dtype.is_int() and op in ("EQ", "NE"):
+        prefix = "icmp"
+    result = getattr(builder, f"create_{prefix}{op}")(lhs, rhs)
+    assert result.dtype == tl.int1
+    assert result.data.dtype == np.bool_
+    np.testing.assert_array_equal(result.data, expected)
+    converted = builder.create_ui_to_fp(result, tl.float16)
+    np.testing.assert_array_equal(converted.data, np.array(expected, dtype=np.float16))
 
 
 def test_bf16_to_fp16_rounding_and_overflow():
@@ -27,12 +109,50 @@ def test_bf16_to_fp16_rounding_and_overflow():
     np.testing.assert_array_equal(result.data.view(np.uint16), expected)
 
 
+@pytest.mark.parametrize("method, value, expected", [
+    # Just above a tie between two 16-bit values: rounding to fp32 first drops
+    # the 2**-30 that breaks the tie, and the tie rounds down.
+    ("get_fp16", 1 + 2**-11 + 2**-30, 0x3C01),
+    ("get_bf16", 1 + 2**-8 + 2**-30, 0x3F81),
+])
+def test_16bit_float_constant_rounded_once(method, value, expected):
+    result = getattr(interpreter.InterpreterBuilder(), method)(value)
+    assert result.data.view(np.uint16)[0] == expected
+
+
 def test_fp16_to_bf16_exact_values():
     bits = np.array([0x0000, 0x8000, 0x3C00, 0xBC00, 0x3C08, 0x0001, 0x7C00, 0xFC00, 0x7E00], dtype=np.uint16)
     expected = np.array([0x0000, 0x8000, 0x3F80, 0xBF80, 0x3F81, 0x3380, 0x7F80, 0xFF80, 0x7FC0], dtype=np.uint16)
     src = interpreter.TensorHandle(bits.view(np.float16), tl.float16)
     result = interpreter.InterpreterBuilder().create_fp_to_fp(src, tl.bfloat16, ir.ROUNDING_MODE.RTNE)
     np.testing.assert_array_equal(result.data, expected)
+
+
+@pytest.mark.parametrize("src_dtype, dst_dtype, bits, expected", [
+    (tl.float32, tl.bfloat16, [0x00008000, 0x00018000, 0x007F8000, 0x80008000], [0x0000, 0x0002, 0x0080, 0x8000]),
+    (tl.float16, tl.bfloat16, [0x0001, 0x8001], [0x3380, 0xB380]),
+    (tl.float8e4nv, tl.float8e5, [0x01, 0x02, 0x07], [0x18, 0x1C, 0x23]),
+])
+def test_float_conversion_subnormal_rounding(src_dtype, dst_dtype, bits, expected):
+    uint_dtype = getattr(np, f"uint{src_dtype.primitive_bitwidth}")
+    data = np.array(bits, dtype=uint_dtype).view(interpreter._get_np_dtype(src_dtype))
+    result = interpreter._convert_float(data, src_dtype, dst_dtype, ir.ROUNDING_MODE.RTNE)
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("src_dtype, codes, expected", [
+    (tl.float8e4nv, [0x7F, 0xFF, 0x7E], [float('nan'), float('nan'), 448.0]),
+    (tl.float8e5, [0x7C, 0xFC, 0x7D], [float('inf'), float('-inf'), float('nan')]),
+    (tl.float8e4b8, [0x80, 0x7F], [float('nan'), 240.0]),
+    (tl.float8e5b16, [0x80, 0x7F], [float('nan'), 57344.0]),
+    (tl.float8e4b15, [0x7F], [1.875]),
+])
+def test_fp8_upcast_special_codes(src_dtype, codes, expected):
+    # The FP8 Inf/NaN encodings must decode as such, not as finite numbers.
+    data = np.array(codes, dtype=np.uint8)
+    result = interpreter._convert_float(data, src_dtype, tl.float32, ir.ROUNDING_MODE.RTNE)
+    for got, want in zip(result.view(np.float32).tolist(), expected):
+        assert (np.isnan(got) and np.isnan(want)) or got == want
 
 
 def test_atomic_poll_tensor_shares_timeout(monkeypatch) -> None:
@@ -147,3 +267,59 @@ def test_dot_scaled_e8m0_boundaries(compute_type, signed_scale, rhs_scale):
     expected = np.repeat(np.array([minimum, 32.0, 64.0, np.nan], dtype=np.float32), 8)[:, None]
     expected = np.broadcast_to(expected, (32, 32))
     np.testing.assert_array_equal(result.data, expected.T if rhs_scale else expected)
+
+
+@pytest.mark.parametrize("shape", [(), (4, )])
+def test_fpsan_namespace_normal_execution(shape):
+
+    def kernel(shape: tl.constexpr):
+        x = tl.full(shape, 1.0001, tl.float32)
+        return tl.fpsan.barrier(x), tl.fpsan.homomorphic_cast(x, tl.float16)
+
+    barrier = tl.fpsan.barrier
+    cast = tl.fpsan.homomorphic_cast
+    unchanged, narrowed = interpreter.InterpretedFunction(kernel)(shape)
+    expected = np.full(shape, 1.0001, dtype=np.float32)
+    np.testing.assert_array_equal(unchanged.handle.data, expected)
+    np.testing.assert_array_equal(narrowed.handle.data, expected.astype(np.float16))
+    assert unchanged.dtype == tl.float32
+    assert narrowed.dtype == tl.float16
+    assert tl.fpsan.barrier is barrier
+    assert tl.fpsan.homomorphic_cast is cast
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_nested_helper_restores_language(tmp_path, monkeypatch, fail):
+    import importlib.util
+    import torch
+
+    source = tmp_path / "core_helper.py"
+    source.write_text("import triton.language.core as core\n"
+                      "def helper(out, fail):\n"
+                      "    core.store(out, core.full((), 7, core.int32))\n"
+                      "    if fail:\n"
+                      "        raise ValueError('helper failed')\n")
+    spec = importlib.util.spec_from_file_location("core_helper", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    helper = interpreter.InterpretedFunction(module.helper)
+
+    def caller(out, helper: tl.constexpr, fail: tl.constexpr):
+        helper(out, fail)
+        tl.store(out, tl.load(out) + 1)
+
+    original = tl.core.full
+    # Restore module attributes even if the regression assertion fails.
+    for name, value in vars(tl.core).copy().items():
+        monkeypatch.setattr(tl.core, name, value)
+    output = torch.zeros((), dtype=torch.int32)
+    kernel = interpreter.InterpretedFunction(caller)
+    if fail:
+        with pytest.raises(interpreter.InterpreterError, match="helper failed"):
+            kernel[(1, )](output, helper, fail)
+    else:
+        kernel[(1, )](output, helper, fail)
+    assert output.item() == (7 if fail else 8)
+    assert tl.core.full is original
+    with pytest.raises(ValueError, match="_semantic"):
+        tl.core.full((), 7, tl.int32)

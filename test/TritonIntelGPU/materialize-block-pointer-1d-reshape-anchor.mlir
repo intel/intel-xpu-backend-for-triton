@@ -35,7 +35,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: tt.func @test_convert_layout_survives
   // CHECK:      [[PTRS:%.*]] = tt.reshape %{{.*}} : tensor<1024x!tt.ptr<f16>, #{{[a-z0-9_]+}}> -> tensor<32x32x!tt.ptr<f16>, #[[BHW:[a-z0-9_]+]]>
   // CHECK-NOT:  ttg.convert_layout
-  // CHECK:      [[LOAD:%.*]] = tt.load [[PTRS]], %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>, #[[BHW]]>
+  // CHECK:      [[LOAD:%.*]] = tt.load [[PTRS]] {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>, #[[BHW]]>
   // CHECK-NEXT: [[FLAT:%.*]] = tt.reshape [[LOAD]] : tensor<32x32xf16, #[[BHW]]> -> tensor<1024xf16, #[[LIN:[a-z0-9_]+]]>
   // CHECK-NEXT: [[RES:%.*]] = ttg.convert_layout [[FLAT]] : tensor<1024xf16, #[[LIN]]> -> tensor<1024xf16, #[[B1D:[a-z0-9_]+]]>
   // CHECK-NEXT: tt.return [[RES]] : tensor<1024xf16, #[[B1D]]>

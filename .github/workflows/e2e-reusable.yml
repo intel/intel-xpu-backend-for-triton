@@ -46,18 +46,23 @@ on:
         description: TORCH_COMPILE_DEBUG
         type: string
         default: ""
+      pytorch_artifact:
+        description: Artifact with the PyTorch wheel from build-pytorch-reusable.yml, keep empty to build PyTorch here
+        type: string
+        default: ""
 
 permissions: read-all
 
 env:
   TRITON_DISABLE_LINE_INFO: 1
+  # Must match the python_version default in build-pytorch-reusable.yml
   PYTHON_VERSION: "3.11"
   BENCHMARK_REPO: pytorch/benchmark
 
 jobs:
   run_tests:
     name: Test ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }}
-    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1550') || format('["linux", "{0}"]', inputs.runner_label)) }}
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1550') || format('["linux", "gpu", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 720
     defaults:
       run:
@@ -97,6 +102,7 @@ jobs:
         with:
           ref: ${{ inputs.pytorch_ref }}
           lts: ${{ inputs.runner_label == 'lts' }}
+          download_artifact: ${{ inputs.pytorch_artifact }}
 
       - name: Identify pinned versions
         run: |
@@ -141,7 +147,9 @@ jobs:
           pip install pyyaml 'pandas<3.0' scipy psutil
 
       - name: Install transformers package
-        if: ${{ inputs.suite == 'huggingface' }}
+        # torchbench also runs huggingface models (hf_*), so it needs the same
+        # pytorch-pinned transformers version, or those models fail to run.
+        if: ${{ inputs.suite == 'huggingface' || inputs.suite == 'torchbench' }}
         run: |
           cd pytorch
           pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
@@ -187,7 +195,9 @@ jobs:
         if: ${{ inputs.suite == 'torchbench' }}
         run: |
           cd benchmark
-          sed -i 's/^ *pynvml.*//' requirements.txt
+          # torchbench pins its own transformers/timm; drop them so they don't
+          # clobber the pytorch-pinned versions installed above.
+          sed -i -E '/^[[:space:]]*(pynvml|transformers|timm)([[:space:]]*[<>=!~;[].*)?[[:space:]]*$/d' requirements.txt
           pip install -r requirements.txt
           # for dlrm
           pip install pyre-extensions

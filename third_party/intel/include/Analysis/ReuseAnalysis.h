@@ -7,10 +7,26 @@
 
 namespace mlir::triton::gpu::intel {
 
+/// Returns true iff a tensor value read from memory reaches `ptr` through
+/// tensor values, i.e. the load is a gather/indirect access such as
+/// `table[idx]` with `idx` loaded by the kernel. Scalars do not count, whatever
+/// produced them (a scalar load, or a tensor read reduced to a scalar): they
+/// are uniform across the tile, so its address pattern stays structured.
+/// Follows `scf.for` and `scf.while` loop-carried values and the results of
+/// `scf.for`, `scf.while` and `scf.if`.
+bool addressDependsOnLoadedTensor(Value ptr);
+
 /// Thin union of SpatialReuseAnalysis and TemporalReuseAnalysis.
 /// Spatial reuse: warps sharing coordinates on some output axis of the loaded
 /// tensor. Temporal reuse: axes held across an enclosing loop.
-/// `anyReuse(L)` returns true iff either analysis reports reuse for `L`.
+/// `anyReuse(L)` returns true iff either analysis reports reuse for `L`, or,
+/// for `tt.load`, iff the address is data-dependent (see
+/// `addressDependsOnLoadedTensor`). Both legs derive reuse from the address
+/// structure (layout, strides); a gathered address defeats that premise, so
+/// "no reuse found" there means "unknown", and the conservative answer for a
+/// suppress-side query is reuse. Inside loops the temporal leg already gets
+/// this right (unknown strides classify as reuse); outside loops nothing
+/// else catches it.
 /// Consumers needing the richer per-dim or per-loop queries can reach the
 /// underlying analyses via `getSpatial()` / `getTemporal()`.
 class ReuseAnalysis {
@@ -24,7 +40,11 @@ public:
                 OpTy, mlir::triton::LoadOp, mlir::triton::DescriptorLoadOp,
                 mlir::triton::DescriptorGatherOp>::value>>
   bool anyReuse(OpTy op) const {
-    return spatial.hasCrossSubgroupReuse(op) || temporal.hasTemporalReuse(op);
+    if (spatial.hasCrossSubgroupReuse(op) || temporal.hasTemporalReuse(op))
+      return true;
+    if constexpr (std::is_same_v<OpTy, mlir::triton::LoadOp>)
+      return addressDependsOnLoadedTensor(op.getPtr());
+    return false;
   }
 
   /// Known reuse: spatial proves cross-subgroup reuse (non-empty known

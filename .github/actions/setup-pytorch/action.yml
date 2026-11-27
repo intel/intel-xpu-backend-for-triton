@@ -1,5 +1,7 @@
 # Clones PyTorch (or loads from cache) to directory "pytorch".
 # Uses the existing Python.
+# Within one workflow run, one job can upload the wheel (upload_artifact) and the others install it (download_artifact).
+# Across runs, a cache miss installs the wheel that wheels-pytorch-linux.yml built on main when the cache key matches.
 # Sets the following environment variables:
 # * PYTORCH_REPO
 # * PYTORCH_COMMIT_ID
@@ -20,15 +22,23 @@ inputs:
     description: Source or wheels
     default: source
   cache:
-    description: Cache enabled or disabled
+    description: "enabled, read-only (load from cache, never save) or disabled"
     default: enabled
   lts:
     description: Build for LTS driver (limits TORCH_XPU_ARCH_LIST to pvc only)
     default: "false"
+  upload_artifact:
+    description: Upload the PyTorch wheel as an artifact with this name (source mode), keep empty to skip
+    default: ""
+  download_artifact:
+    description: >
+      On a cache miss, install the PyTorch wheel from the artifact with this name instead of building it
+      (source mode); the source tree is cloned without submodules. Keep empty to build.
+    default: ""
 outputs:
   pytorch_cache_key:
-    description: "PyTorch cache key"
-    value: ${{ steps.generate-pytorch-cache-key.outputs.pytorch_cache_key }}
+    description: "PyTorch cache key, the producer's key when the wheel came from download_artifact"
+    value: ${{ steps.find-wheel.outputs.pytorch_cache_key || steps.generate-pytorch-cache-key.outputs.pytorch_cache_key }}
 runs:
   using: "composite"
   steps:
@@ -80,12 +90,12 @@ runs:
       id: generate-pytorch-cache-key
       shell: bash
       env:
-        # Increase this value to reset cache
+        # Increase this value to reset cache, also after changing the Build PyTorch step
         CACHE_NUMBER: 20
       run: |
         ONEAPI_LINK=$(readlink /opt/intel/oneapi || true)
         ONEAPI_KEY=$(sha256sum /opt/intel/installed.txt 2> /dev/null | cut -d\  -f1 || true)
-        PYTORCH_CACHE_KEY=$(echo $PYTHON_VERSION $PYTORCH_COMMIT_ID ${{ hashFiles('scripts/patch-pytorch.sh') }} ${{ inputs.mode }}${ONEAPI_KEY}${ONEAPI_LINK} ${{ inputs.lts }} | sha256sum - | cut -d\  -f1)
+        PYTORCH_CACHE_KEY=$(echo $PYTHON_VERSION $PYTORCH_COMMIT_ID ${{ hashFiles('scripts/patch-pytorch.sh', 'scripts/patch/**') }} ${{ inputs.mode }}${ONEAPI_KEY}${ONEAPI_LINK} ${{ inputs.lts }} | sha256sum - | cut -d\  -f1)
         echo "PYTORCH_CACHE_KEY=$PYTORCH_CACHE_KEY" | tee -a "$GITHUB_ENV"
         echo "pytorch_cache_key=pytorch-$PYTORCH_CACHE_KEY-$CACHE_NUMBER" >> "$GITHUB_OUTPUT"
 
@@ -95,7 +105,74 @@ runs:
       with:
         path: pytorch
         key: ${{ steps.generate-pytorch-cache-key.outputs.pytorch_cache_key }}
-        enabled: ${{ inputs.cache == 'enabled' }}
+        enabled: ${{ inputs.cache != 'disabled' }}
+
+    - name: Download PyTorch wheel
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.mode == 'source' && inputs.download_artifact != '' }}
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.download_artifact }}
+        path: ${{ runner.temp }}/pytorch-wheel
+
+    # Sets found=true when there is a wheel to install instead of building: the download_artifact wheel (from=run),
+    # else the wheel from main (from=main), used only when its key equals this runner's, so it is the wheel a cache hit
+    # would install. A missing download_artifact file fails the step; a failed lookup on main adds a notice and builds.
+    - name: Find PyTorch wheel
+      id: find-wheel
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.mode == 'source' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        LOCAL_KEY="${{ steps.generate-pytorch-cache-key.outputs.pytorch_cache_key }}"
+        if [[ -n "${{ inputs.download_artifact }}" ]]; then
+          WHEEL_DIR="$RUNNER_TEMP/pytorch-wheel"
+          PRODUCER_KEY="$(<"$WHEEL_DIR/pytorch-cache-key.txt")"
+          if [[ "$PRODUCER_KEY" != "$LOCAL_KEY" ]]; then
+            echo "::warning::PyTorch wheel was built with key $PRODUCER_KEY, this runner computes $LOCAL_KEY (different oneAPI or a moved ref)"
+          fi
+          # A branch ref may have moved since the wheel was built, clone the commit the wheel was built from
+          echo "PYTORCH_COMMIT_ID=$(<"$WHEEL_DIR/pytorch-commit.txt")" | tee -a "$GITHUB_ENV"
+          {
+            echo "dir=$WHEEL_DIR"
+            echo "from=run"
+            echo "pytorch_cache_key=$PRODUCER_KEY"
+            echo "found=true"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [[ -n "${{ inputs.ref }}" || "${{ inputs.repository }}" != "pytorch/pytorch" ]]; then
+          exit 0
+        fi
+        # A separate venv keeps triton-utils dependencies out of the job's environment
+        if ! {
+          python -m venv "$RUNNER_TEMP/triton-utils-venv" &&
+          "$RUNNER_TEMP/triton-utils-venv/bin/pip" install "$GITHUB_WORKSPACE/scripts/triton_utils" &&
+          "$RUNNER_TEMP/triton-utils-venv/bin/triton-utils" wheels \
+            --latest-wf-run-pattern .github/workflows/wheels-pytorch-linux.yml \
+            --wheel-set torch \
+            --python-version "$PYTHON_VERSION" \
+            -D "$RUNNER_TEMP/pytorch-main-wheel" \
+            -R "$GITHUB_REPOSITORY"
+        }; then
+          echo "::notice::PyTorch wheel lookup on main failed, building from source"
+          exit 0
+        fi
+        WHEEL_DIR="$RUNNER_TEMP/pytorch-main-wheel/pytorch-py$PYTHON_VERSION"
+        if [[ ! -f "$WHEEL_DIR/pytorch-cache-key.txt" ]]; then
+          echo "::notice::No PyTorch wheel for Python $PYTHON_VERSION on main, building from source"
+          exit 0
+        fi
+        MAIN_KEY="$(<"$WHEEL_DIR/pytorch-cache-key.txt")"
+        if [[ "$MAIN_KEY" != "$LOCAL_KEY" ]]; then
+          echo "::notice::PyTorch wheel on main has key $MAIN_KEY, this runner computes $LOCAL_KEY, building from source"
+          exit 0
+        fi
+        {
+          echo "dir=$WHEEL_DIR"
+          echo "from=main"
+          echo "found=true"
+        } >> "$GITHUB_OUTPUT"
 
     - name: Clone PyTorch repository
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
@@ -103,8 +180,8 @@ runs:
       with:
         repository: ${{ env.PYTORCH_REPO }}
         ref: ${{ env.PYTORCH_COMMIT_ID }}
-        # To build PyTorch from source we need all submodules, they are not required for benchmarks
-        submodules: ${{ inputs.mode == 'source' && 'recursive' || 'false' }}
+        # Building PyTorch from source needs all submodules, benchmarks and a prebuilt wheel do not
+        submodules: ${{ inputs.mode == 'source' && steps.find-wheel.outputs.found != 'true' && 'recursive' || 'false' }}
         path: pytorch
 
     - name: Apply additional PR patches
@@ -115,7 +192,7 @@ runs:
         ../scripts/patch-pytorch.sh
 
     - name: Build PyTorch
-      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.mode == 'source' }}
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.mode == 'source' && steps.find-wheel.outputs.found != 'true' }}
       shell: bash
       run: |
         source ${{ inputs.oneapi }}/setvars.sh
@@ -141,6 +218,16 @@ runs:
         USE_XCCL=1 USE_STATIC_MKL=1 python -m build --wheel --no-isolation 2>&1 | grep -v \
           "Double arithmetic operation is not supported on this platform with FP64 conversion emulation mode (poison FP64 kernels is enabled)." | grep -v '^$'
 
+    - name: Use PyTorch wheel
+      if: ${{ steps.find-wheel.outputs.found == 'true' }}
+      shell: bash
+      run: |
+        mkdir -p pytorch/dist
+        cp "${{ steps.find-wheel.outputs.dir }}"/*.whl pytorch/dist/
+        if [[ "${{ steps.find-wheel.outputs.from }}" == "main" ]]; then
+          echo "::notice::Installing the PyTorch wheel from the latest wheels-pytorch-linux.yml run on main"
+        fi
+
     - name: Install PyTorch (built from source)
       if: ${{ inputs.mode == 'source' }}
       shell: bash
@@ -162,8 +249,29 @@ runs:
         PYTORCH_VERSION="$(python -c 'import torch;print(torch.__version__)')"
         echo "PYTORCH_VERSION=$PYTORCH_VERSION" | tee -a "$GITHUB_ENV"
 
+    - name: Prepare PyTorch wheel artifact
+      if: ${{ inputs.mode == 'source' && inputs.upload_artifact != '' }}
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/pytorch-wheel-upload"
+        cp pytorch/dist/*.whl "$RUNNER_TEMP/pytorch-wheel-upload/"
+        echo "${{ steps.generate-pytorch-cache-key.outputs.pytorch_cache_key }}" > "$RUNNER_TEMP/pytorch-wheel-upload/pytorch-cache-key.txt"
+        echo "$PYTORCH_COMMIT_ID" > "$RUNNER_TEMP/pytorch-wheel-upload/pytorch-commit.txt"
+
+    - name: Upload PyTorch wheel artifact
+      if: ${{ inputs.mode == 'source' && inputs.upload_artifact != '' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.upload_artifact }}
+        path: ${{ runner.temp }}/pytorch-wheel-upload
+        if-no-files-found: error
+        # A wheel is already compressed
+        compression-level: 0
+
+    # A wheel from download_artifact may have another key (a mismatch only warns), keep it out of the cache.
+    # A wheel from main has this runner's key, so its tree (no submodules, no build directory) is cached.
     - name: Save PyTorch to a cache
-      if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && steps.find-wheel.outputs.from != 'run' }}
       uses: ./.github/actions/save
       with:
         path: ${{ steps.pytorch-cache.outputs.path }}

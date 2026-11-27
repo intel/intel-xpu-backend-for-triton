@@ -320,7 +320,7 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [
 }
 
 def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier", "isPerWarp"]>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Signal a barrier of an expected number of bytes to be copied.";
 
@@ -330,6 +330,12 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
     been copied. The optional `fromCTA` attribute is a CTA-ID
     basis-selection mask: set bits are preserved and unset bits are zeroed
     when selecting the CTA that routes the arrival to each per-CTA barrier.
+
+    The compiler-owned `per_warp` flag distributes each contributing CTA's
+    expectation across its execution region's warps. Each warp publishes its
+    prior effects and contributes one arrival and an equal share of the
+    expected bytes. The barrier's initialization count must be scaled to match;
+    `size` remains the byte count per contributing CTA and target barrier.
   }];
 
   let hasVerifier = 1;
@@ -338,13 +344,14 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
     Arg<TTG_MemDescType, "", BarrierSharedWrite>:$alloc,
     I32Attr:$size,
     I1:$pred,
-    OptionalAttr<I32Attr>:$fromCTA
+    OptionalAttr<I32Attr>:$fromCTA,
+    UnitAttr:$per_warp
   );
 
   let builders = [
     OpBuilder<(ins "Value":$alloc, "uint32_t":$size, "Value":$pred), [{
-      build($_builder, $_state, alloc, $_builder.getI32IntegerAttr(size), pred,
-            /*fromCTA=*/IntegerAttr());
+      build($_builder, $_state, alloc, size, pred, /*fromCTA=*/IntegerAttr(),
+            /*per_warp=*/false);
     }]>
   ];
 
@@ -356,7 +363,7 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
 
 def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "wait until the mbarrier phase completes.";
   let hasCanonicalizeMethod = 1;
 
@@ -403,14 +410,20 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
 }
 
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier", "isPerWarp"]>,
+    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "perform the arrive operation on an mbarrier";
   let description = [{
     The `ttng.arrive_barrier` operation performs the "arrive" operation on an
     mbarrier object in shared memory. The operation requires a `count` attribute
     of at least 1 and decreases the pending arrival count of the mbarrier by
     the specified count.
+
+    The compiler-owned `per_warp` flag selects an arrival from each of the
+    execution region's warps. The count is the total decrement per source CTA
+    and target barrier and must be divisible by the warp count. Membar
+    inserts the required warp synchronization before each warp contributes its
+    equal share to every routed target.
 
     When `multicastCTA` is non-zero, the arrive is multicast across the cluster.
     Each bit set in the mask identifies a CTA ID dimension to multicast
@@ -440,7 +453,8 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
     I32Attr:$count,
     Optional<I1>:$pred,
     OptionalAttr<I32Attr>:$fromCTA,
-    DefaultValuedOptionalAttr<I32Attr, "0">:$multicastCTA
+    DefaultValuedOptionalAttr<I32Attr, "0">:$multicastCTA,
+    UnitAttr:$per_warp
   );
 
   let assemblyFormat = [{
@@ -448,13 +462,10 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
   }];
 
   let builders = [
-    OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
-      build($_builder, $_state, alloc, count, /*pred=*/Value(),
-            /*fromCTA=*/IntegerAttr(), /*multicastCTA=*/0u);
-    }]>,
-    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "Value":$pred), [{
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count,
+                   CArg<"Value", "Value()">:$pred), [{
       build($_builder, $_state, alloc, count, pred, /*fromCTA=*/IntegerAttr(),
-            /*multicastCTA=*/0u);
+            /*multicastCTA=*/0u, /*per_warp=*/false);
     }]>
   ];
 
@@ -507,6 +518,110 @@ def TTNG_AsyncSharedStoreOp : TTNG_Op<"async_shared_store", [
   }];
 }
 
+
+// Leave effects opaque, as in NVVM: a read-only op with no results is erased.
+def TTNG_PrefetchBulkOp : TTNG_Op<"prefetch_bulk", [
+    SameOperandsShape, SameOperandsEncoding]> {
+  let summary = "prefetch global-memory ranges into L2";
+  let description = [{
+    For each enabled logical element, issues an asynchronous hint to prefetch
+    numBytes bytes starting at ptr into the GPU's L2 cache. Each source address
+    must be aligned to 16 bytes and each unsigned byte count must be a multiple
+    of 16. Scalar operands specify one range for the program.
+  }];
+  let arguments = (ins TT_PtrLike:$ptr, TT_I32Like:$numBytes, TT_BoolLike:$pred);
+  let assemblyFormat = [{
+    $ptr `,` $numBytes `,` $pred attr-dict `:` type($ptr) `,`
+    type($numBytes) `,` type($pred)
+  }];
+  let hasVerifier = 1;
+}
+
+def TTNG_AsyncBulkCopyGlobalToLocalOp : TTNG_Op<"async_bulk_copy_global_to_local", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>, AsyncLoadOpInterface]> {
+  let summary = "copy a linear global-memory range to shared memory asynchronously";
+  let description = [{
+    Copies numBytes bytes in total, guarded by the scalar predicate, using
+    cp.async.bulk with mbarrier completion. The total is divided equally among
+    the distinct CTA tiles of the destination; replicated CTAs do not increase
+    the total. Each per-CTA count must be a positive multiple of 16 and fit in
+    the contiguous destination view. With multiple CTAs, including replicated
+    layouts, the copy must fill the entire destination view. Partial copies
+    are supported only with one CTA. Source and destination addresses must be
+    16-byte aligned.
+
+    Source tiles are packed in increasing CTA-id order, omitting broadcast
+    bits, with a stride of numBytes / numTiles.
+    This is a raw physical byte copy: a swizzled destination is supported, but
+    the source must already have the desired physical ordering. With multicast,
+    only the representative CTA issues a copy to the destination replicas.
+    The CGA layout may partition, replicate, or combine both; it need not be
+    the identity layout. Each CTA must have its own completion barrier.
+
+    The destination effect conservatively covers the entire view. Completion
+    decrements each barrier's transaction count by numBytes / numTiles; users
+    must wait on the barrier before consuming or reusing the memory.
+  }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", AsyncSharedWrite>:$dst,
+    Arg<TT_Ptr, "", [MemRead<GlobalMemory>]>:$src,
+    I32Attr:$numBytes,
+    Arg<TTG_MemDescType, "", BarrierSharedWrite>:$barrier,
+    I1:$pred,
+    UnitAttr:$multicast
+  );
+  let assemblyFormat = [{
+    $src `,` $dst `,` $numBytes `,` $barrier `,` $pred attr-dict `:`
+    type($src) `,` qualified(type($dst)) `,` qualified(type($barrier))
+  }];
+  let hasVerifier = 1;
+  let hasCanonicalizeMethod = 1;
+  let extraClassDeclaration = [{
+    Value getResult() { return getDst(); }
+    int64_t getNumBytesPerCTA();
+    static bool isSupported(int computeCapability) {
+      return computeCapability >= 90;
+    }
+  }];
+}
+
+def TTNG_AsyncBulkCopyLocalToGlobalOp : TTNG_Op<"async_bulk_copy_local_to_global", [
+    DeclareOpInterfaceMethods<PredicatedOpInterface>, AsyncStoreOpInterface]> {
+  let summary = "copy a linear shared-memory range to global memory asynchronously";
+  let description = [{
+    Copies numBytes bytes in total, guarded by the scalar predicate, using
+    cp.async.bulk with bulk async-group completion. The size and physical
+    layout requirements match async_bulk_copy_global_to_local. Source tiles
+    are packed into global memory in increasing CTA-id order, omitting
+    broadcast bits. Only the representative of each replicated tile issues
+    the store. This is a raw physical byte copy without unswizzling.
+
+    Each executed store commits one group to the same queue as TMA stores.
+    A false predicate neither copies nor commits a group. Wait using
+    async_tma_store_wait before reusing shared memory or accessing the global
+    destination; global visibility requires a wait without read_only.
+    The source effect conservatively covers the entire view.
+  }];
+  let arguments = (ins
+    Arg<TT_Ptr, "", [MemWrite<GlobalMemory>]>:$dst,
+    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src,
+    I32Attr:$numBytes,
+    I1:$pred
+  );
+  let assemblyFormat = [{
+    $dst `,` $src `,` $numBytes `,` $pred attr-dict `:`
+    type($dst) `,` qualified(type($src))
+  }];
+  let hasVerifier = 1;
+  let hasCanonicalizeMethod = 1;
+  let extraClassDeclaration = [{
+    int64_t getNumBytesPerCTA();
+    static bool isSupported(int computeCapability) {
+      return computeCapability >= 90;
+    }
+  }];
+}
 
 def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [
     AttrSizedOperandSegments, DeclareOpInterfaceMethods<MBarrierOpInterface>,
@@ -615,7 +730,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   let hasVerifier = 1;
 }
 
-def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [TMAStoreLikeOpInterface]> {
+def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [AtomicOpInterface, TMAStoreLikeOpInterface]> {
   let summary = "reduce result in gmem based on a TMA descriptor";
 
   let description = [{
@@ -637,6 +752,10 @@ def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [TMAStoreLikeOpInterface
     attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
   }];
   let extraClassDeclaration = [{
+    ::mlir::Value getPtr() { return getDesc(); }
+    ::mlir::triton::MemSemantic getMemSemantic() {
+      return ::mlir::triton::MemSemantic::RELAXED;
+    }
     static bool isSupportedReduceKind(::mlir::triton::DescriptorReduceKind kind,
                                       ::mlir::Type elementType);
   }];
@@ -725,15 +844,21 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [
 }
 
 def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait", [MemWaitOpTrait]> {
-  let summary = "wait for pending TMA store operations.";
-  let arguments = (ins I32Attr:$pendings, UnitAttr:$read_only);
+  let summary = "wait for pending bulk and TMA store operations.";
+  let arguments = (ins I32Attr:$pendings, UnitAttr:$read_only, Variadic<TTG_MemDescType>:$deps);
   let description = [{
     Wait for the associated store operations to complete. When `read_only` is
     set, only wait until their reads from shared memory have completed. This is
-    needed before shared memory can be written to again.
+    needed before shared memory can be written to again. Optional dependencies
+    keep the source buffers live through this wait.
   }];
 
-  let assemblyFormat = "attr-dict";
+  let builders = [
+    OpBuilder<(ins "uint32_t":$pendings, "bool":$readOnly), [{
+      build($_builder, $_state, pendings, readOnly, ValueRange{});
+    }]>
+  ];
+  let assemblyFormat = "attr-dict (`deps` $deps^ `:` type($deps))?";
 }
 
 def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
@@ -775,7 +900,9 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     UnitAttr:$is_async,
     UnitAttr:$two_ctas,
     UnitAttr:$multicast,
-    UnitAttr:$is_unsigned
+    UnitAttr:$is_unsigned,
+    OptionalAttr<TT_ScaleDotElemTypeAttr>:$a_type,
+    OptionalAttr<TT_ScaleDotElemTypeAttr>:$b_type
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -787,7 +914,9 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
       CArg<"ValueRange", "{}">:$barriers,
       CArg<"ValueRange", "{}">:$barrier_preds,
       CArg<"bool", "false">:$is_async,
-      CArg<"bool", "false">:$is_unsigned)>
+      CArg<"bool", "false">:$is_unsigned,
+      CArg<"::mlir::triton::ScaleDotElemTypeAttr", "{}">:$a_type,
+      CArg<"::mlir::triton::ScaleDotElemTypeAttr", "{}">:$b_type)>
   ];
 
   let assemblyFormat = [{
@@ -797,6 +926,10 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     qualified(type($d)) (`,` qualified(type($barriers))^)?
   }];
 
+  let extraClassDeclaration = [{
+    Type getAElementType();
+    Type getBElementType();
+  }];
   let hasVerifier = 1;
 }
 
@@ -880,15 +1013,20 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
 
 def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
   let hasCanonicalizeMethod = 1;
 
   let description = [{
     The `ttng.tc_gen5_commit` is an asynchronous operation that makes the
-    mbarrier object track the completion of all prior asynchronous tcgen5
-    operations. Upon completion of all asynchronous operations, the mbarrier
+    mbarrier object track the completion of prior asynchronous tcgen5
+    operations. Upon completion of the asynchronous operations, the mbarrier
     arrive operation is performed on the mbarrier with a count of 1.
+
+    By default, this operation tracks completion of all prior asynchronous
+    tcgen5 operations. On Rubin, `early_a_release` modifies the operation
+    to track only the completion of the A operand read from shared memory for
+    a tcgen5 MMA operation.
 
     If `descs` are provided, the commit will be multicast across the CTA cluster
     based on the shared layouts of those descriptors. This should be used when
@@ -914,7 +1052,8 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
   let arguments = (ins
     Arg<TTG_MemDescType, "", BarrierSharedWrite>:$barrier,
     Optional<I1>:$pred,
-    Variadic<TTG_MemDescType>:$descs
+    Variadic<TTG_MemDescType>:$descs,
+    UnitAttr:$early_a_release
   );
 
   let assemblyFormat = [{
@@ -1128,13 +1267,16 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
   let hasVerifier = 1;
 }
 
-def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
+def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy", [
+    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Initiate an asynchronous copy operation from shared memory to tensor memory.";
 
   let description = [{
     2D blocks stored contiguously in SMEM are copied into TMEM as specified by the destination address.
     This op lowers to the PTX instruction tcgen05.cp. This supports writing to
     the scales TMEM layout as well as the default TMEM layout.
+    The copy is skipped when the optional predicate is false. An omitted
+    predicate is equivalent to true.
     For the default layout, each contiguous TMEM row segment must contain at
     least 128 bits, the minimum width supported by tcgen05.cp.
     Currently, the semantics are different when writing to the TMEM scale layout.
@@ -1179,10 +1321,14 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", AsyncSharedRead>:$src,
-    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst
+    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
+    Optional<I1>:$pred
   );
 
-  let assemblyFormat = [{$src `,` $dst attr-dict `:` qualified(type(operands))}];
+  let assemblyFormat = [{
+    $src `,` $dst (`,` $pred^)? attr-dict `:`
+    qualified(type($src)) `,` qualified(type($dst))
+  }];
   let hasVerifier = 1;
 }
 

@@ -34,7 +34,7 @@ concurrency:
 permissions: read-all
 
 env:
-  PYTHON_VERSION: "3.12"
+  PYTHON_VERSION: "3.11"
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
 
 jobs:
@@ -44,6 +44,7 @@ jobs:
     if: ${{ !inputs.tests || contains(inputs.tests, 'liger') }}
     runs-on:
       - linux
+      - gpu
       - ${{ inputs.runner_label || 'max1100' }}
     timeout-minutes: 120
     defaults:

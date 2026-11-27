@@ -1,8 +1,8 @@
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
-index be4930052..32744d307 100644
+index 7b729a1f1e..c98db73200 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
-@@ -295,6 +295,21 @@ def fused_moe_kernel_gptq_awq(
+@@ -329,6 +329,21 @@ def fused_moe_kernel_gptq_awq(
      tl.store(c_ptrs, accumulator, mask=c_mask)
  
  
@@ -24,22 +24,19 @@ index be4930052..32744d307 100644
  @triton.jit
  def fused_moe_kernel(
      # Pointers to matrices
-@@ -558,9 +570,9 @@ def fused_moe_kernel(
-                     else:
-                         accumulator = tl.dot(a, b, acc=accumulator)
+@@ -631,7 +646,7 @@ def fused_moe_kernel(
                  else:
--                    accumulator += tl.dot(a, b)
-+                    accumulator = tl.dot(a, b, accumulator)
+                     accumulator += tl.dot(a, b)
          else:
 -            accumulator += tl.dot(a, b)
 +            accumulator = tl.dot(a, b, accumulator)
          if not USE_TD:
              # Advance the ptrs to the next K block.
-             a_ptrs += BLOCK_SIZE_K * stride_ak
-@@ -900,7 +912,7 @@ def invoke_fused_moe_triton_kernel(
-         BLOCK_SIZE_K=BLOCK_SIZE_K,
-         SWAP_AB=SWAP_AB,
-         USE_TD=use_td,
+             if not USE_TMA_A:
+@@ -1077,7 +1092,7 @@ def invoke_fused_moe_triton_kernel(
+         USE_TMA_B=use_tma_b,
+         USE_TMA_A=use_tma_a,
+         C_IS_SORTED=C_is_sorted,
 -        **config,
 +        BLOCK_SIZE_M=config["BLOCK_SIZE_M"],
      )

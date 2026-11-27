@@ -5,17 +5,17 @@
 #include "TritonAMDGPUToLLVM/TypeConverter.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
-#include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
-#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Dialect/AMDGPU/Utils/Chipset.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
-#include "third_party/amd/include/Analysis/AMDGPUAllocation.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Allocation.h"
@@ -72,9 +72,10 @@ public:
 struct ConvertTritonAMDGPUToLLVM
     : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
           ConvertTritonAMDGPUToLLVM> {
-  explicit ConvertTritonAMDGPUToLLVM(StringRef gfxArch, bool ftz) {
+  explicit ConvertTritonAMDGPUToLLVM(StringRef gfxArch, bool ftz, bool cuMode) {
     this->gfxArch = gfxArch.str();
     this->ftz = ftz;
+    this->cuMode = cuMode;
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -87,7 +88,8 @@ struct ConvertTritonAMDGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
-    AMD::TargetInfo targetInfo(this->gfxArch.getValue());
+    AMD::TargetInfo targetInfo(this->gfxArch.getValue(),
+                               this->cuMode.getValue());
     if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::Unknown) {
       mod.emitError("unsupported target: '") << this->gfxArch.getValue() << "'";
       return signalPassFailure();
@@ -98,13 +100,6 @@ struct ConvertTritonAMDGPUToLLVM
 
     TritonAMDGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
-
-    // Allocate shared memory and set barrier
-    auto allocationFn = [&targetInfo](Operation *op) {
-      return AMD::AMDAllocationAnalysisScratchSizeFn(op, targetInfo);
-    };
-    ModuleAllocation allocation(mod, allocationFn,
-                                targetInfo.getSharedMemoryPartitionSize());
 
     // Lower functions
     {
@@ -158,14 +153,12 @@ struct ConvertTritonAMDGPUToLLVM
                                                patterns, AMDBenefit);
     mlir::triton::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, commonBenefit);
-    AMD::populateDotOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
+    AMD::populateDotOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                      AMDBenefit);
-    AMD::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ftz,
-                                             axisInfoAnalysis, allocation,
-                                             targetInfo, AMDBenefit);
-    AMD::populateFpCastOpToLLVMPatterns(typeConverter, patterns, ftz,
-                                        axisInfoAnalysis, allocation,
-                                        targetInfo, AMDBenefit);
+    AMD::populateElementwiseOpToLLVMPatterns(
+        typeConverter, patterns, ftz, axisInfoAnalysis, targetInfo, AMDBenefit);
+    AMD::populateFpCastOpToLLVMPatterns(
+        typeConverter, patterns, axisInfoAnalysis, targetInfo, AMDBenefit);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
                                            axisInfoAnalysis, AMDBenefit);
     AMD::populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
@@ -214,7 +207,7 @@ struct ConvertTritonAMDGPUToLLVM
                                                      patterns, commonBenefit);
 
     FailureOr<mlir::amdgpu::Chipset> maybeChipset =
-        mlir::amdgpu::Chipset::parse(this->gfxArch);
+        mlir::amdgpu::Chipset::parse(targetInfo.getBaseArch());
     if (failed(maybeChipset)) {
       emitError(UnknownLoc::get(&getContext()),
                 "Invalid AMDGPU chipset name: " + this->gfxArch);
@@ -251,18 +244,21 @@ private:
     OpBuilder b(mod.getBodyRegion());
     auto loc = mod.getLoc();
     auto elemTy = typeConverter.convertType(b.getIntegerType(8));
-    // Set array size 0 and external linkage indicates that we use dynamic
-    // shared allocation to allow a larger shared memory size for each kernel.
-    //
     // Ask for 16B alignment on global_smem because that's the largest we should
     // ever need (4xi32).
-    auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
-    LLVM::GlobalOp::create(
-        b, loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
+    auto sharedSize = mod->getAttrOfType<IntegerAttr>("ttg.shared");
+    auto arrayTy =
+        LLVM::LLVMArrayType::get(elemTy, sharedSize ? sharedSize.getInt() : 0);
+    auto global = LLVM::GlobalOp::create(
+        b, loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::Internal,
         "global_smem",
         /*value=*/Attribute(), /*alignment=*/16,
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));
+    Block *initBlock = b.createBlock(&global.getInitializerRegion());
+    b.setInsertionPointToStart(initBlock);
+    Value undef = LLVM::UndefOp::create(b, loc, arrayTy);
+    LLVM::ReturnOp::create(b, loc, undef);
   }
 };
 
@@ -271,8 +267,8 @@ private:
 namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(StringRef gfxArch, bool ftz) {
-  return std::make_unique<ConvertTritonAMDGPUToLLVM>(gfxArch, ftz);
+createConvertTritonAMDGPUToLLVMPass(StringRef gfxArch, bool ftz, bool cuMode) {
+  return std::make_unique<ConvertTritonAMDGPUToLLVM>(gfxArch, ftz, cuMode);
 }
 
 } // namespace mlir::triton

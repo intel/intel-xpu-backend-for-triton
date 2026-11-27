@@ -137,6 +137,7 @@ Math Ops
     cdiv
     ceil
     clamp
+    clmul
     cos
     div_rn
     erf
@@ -166,6 +167,8 @@ Reduction Ops
     :toctree: generated
     :nosignatures:
 
+    all
+    any
     reduce
     reduce_or
     sum

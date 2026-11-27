@@ -72,7 +72,9 @@ arbitrary LLVM version.
 For convenience, use the following command to build LLVM and install Triton with the custom LLVM:
 
 ```shell
-make dev-install-llvm
+make dev-install-llvm                 # Core LLVM (default)
+make dev-install-llvm LLVM_BUILD=amd  # AMD LLVM only
+make dev-install-llvm LLVM_BUILD=all
 ```
 
 <details>
@@ -227,8 +229,20 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
 - `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of disabling fp fusion (mul+add->fma).
-- `TRITON_FORCE_DISABLE_FP_FUSION=1` disables implicit fp fusion even when a kernel
-  requests `enable_fp_fusion=True`. Explicit fused operations such as `tl.fma` are unchanged.
+- `TRITON_ALLOW_FP_FUSION=1` allows kernels to control implicit fp fusion through
+  `enable_fp_fusion`. Without this opt-in, implicit fusion is disabled. Explicit
+  fused operations such as `tl.fma` are unchanged.
+- `TRITON_INTEL_ENABLE_PREFETCH_COST_MODEL=1` (Intel XPU) lets the software pipeliner
+  drop the prefetch of a dot operand whose loads skip most of each fetched cache line
+  (for example A in a split-K GEMM) when its cost model predicts a gain. Off by default:
+  on the B580 it speeds up long split-K loops launched over many waves, but it can be
+  slower on small grids and at some operand row pitches. It is also a kernel option
+  (`prefetch_cost_model=True`, usable as a `triton.Config` key), so the autotuner can
+  try both settings.
+- `TRITON_INTEL_PIPELINE_TILE_BARRIER=0` (Intel XPU) stops the software pipeliner from
+  putting a work-group barrier at the top of a loop that encloses a pipelined `tt.dot`
+  loop. On by default: in a persistent kernel the barrier re-aligns the warps at every
+  tile, which keeps their prefetches useful. It is also a kernel option (`tile_barrier`).
 - `MLIR_ENABLE_DIAGNOSTICS=<comma-separated>` controls diagnostic emission in MLIR.
   Options are: `warnings`, `remarks`, `stacktraces`, `operations`.
   Use comma-separated values to customize output. For example,

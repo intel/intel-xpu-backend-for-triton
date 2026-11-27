@@ -30,6 +30,28 @@ class TT_Op<string mnemonic, list<Trait> traits = []> :
 }
 
 //
+// Value annotations
+//
+def TT_AnnotateOp : TT_Op<"annotate", [Pure, Elementwise,
+                                      SameOperandsAndResultType]> {
+    let summary = "Attach compiler hints to a single value";
+    let description = [{
+        Returns its operand unchanged. Attributes on this operation describe
+        only its result, allowing compiler hints to be attached independently
+        to each result of a multi-result operation, such as a function call.
+        When the operand has a single-result defining operation, the hints can
+        be folded into that operation. Otherwise, the annotation is preserved
+        until lowering to LLVM.
+    }];
+
+    let arguments = (ins TT_Type:$src);
+    let results = (outs TT_Type:$result);
+    let assemblyFormat = "$src attr-dict `:` type($result)";
+    let hasFolder = 1;
+    let hasCanonicalizer = 1;
+}
+
+//
 // Cast Ops
 //
 // Use cast ops in arith:
@@ -142,6 +164,52 @@ def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
 // Math Ops
 //
 
+def TT_FpSanBarrierOp : TT_Op<"fpsan_barrier", [Elementwise,
+                                               SameOperandsAndResultType,
+                                               Pure]> {
+    let summary = "Mark an expression boundary for floating-point sanitization";
+    let description = [{
+        Apply a deterministic, non-homomorphic transformation to the input's
+        FPSan payload. This makes the placement of the boundary observable
+        without changing the input's shape, element type, or layout.
+
+        The frontend emits this operation only when FPSan is enabled. It is
+        neither a synchronization barrier nor a floating-point rounding mode.
+    }];
+    let arguments = (ins TT_FloatLike:$input);
+    let results = (outs TT_FloatLike:$result);
+    let assemblyFormat = "$input attr-dict `:` type($input)";
+}
+
+def TT_FpSanCompactExp2Op : TT_Op<"fpsan_compact_exp2", [Elementwise,
+                                         SameOperandsAndResultType, Pure]> {
+    let summary = "Compute a base-2 exponential with 128 distinct FPSan payloads";
+    let description = [{
+        Raise 1 + 2^25 to the input payload modulo 2^32. The 128 powers
+        can be encoded exactly by an FPSan probability cast.
+    }];
+    let arguments = (ins AnyTypeOf<[F32, RankedTensorOf<[F32]>]>:$input);
+    let results = (outs AnyTypeOf<[F32, RankedTensorOf<[F32]>]>:$result);
+    let assemblyFormat = "$input attr-dict `:` type($input)";
+}
+
+def TT_FpSanHomomorphicCastOp : TT_Op<"fpsan_homomorphic_cast", [Elementwise,
+                                      SameOperandsAndResultShape,
+                                      SameOperandsAndResultEncoding, Pure]> {
+    let summary = "Project an FPSan payload into a same-width or narrower ring";
+    let description = [{
+        Preserve the low bits of the input's FPSan payload in the destination
+        floating-point type. Unlike an ordinary FPSan downcast, this operation
+        preserves addition and multiplication. Widening is not supported.
+
+        The frontend emits this operation only when FPSan is enabled.
+    }];
+    let arguments = (ins TT_FloatLike:$input);
+    let results = (outs TT_FloatLike:$result);
+    let assemblyFormat = "$input attr-dict `:` type($input) `->` type($result)";
+    let hasVerifier = 1;
+}
+
 def TT_PreciseSqrtOp : TT_Op<"precise_sqrt", [Elementwise,
                                               SameOperandsAndResultType,
                                               Pure]> {
@@ -195,6 +263,21 @@ def TT_ApproxDivFOp
   let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
 }
 
+def TT_ClMulOp : TT_Op<"clmul", [Elementwise, Commutative,
+                                 SameOperandsAndResultType, Pure]> {
+  let summary = "Low N bits of the carry-less product of two N-bit integers";
+
+  let description = [{
+        Multiplies the operands as binary polynomials over GF(2), replacing
+        addition with XOR, and returns the low N bits. Signed operands are
+        interpreted by their bit patterns. Tensor operands operate elementwise.
+    }];
+
+  let arguments = (ins TT_IntLike:$x, TT_IntLike:$y);
+  let results = (outs TT_IntLike:$result);
+  let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
+}
+
 def TT_MulhiUIOp : TT_Op<"mulhiui", [Elementwise,
                                      SameOperandsAndResultType,
                                      Pure]> {
@@ -233,6 +316,7 @@ def TT_AddPtrOp : TT_Op<"addptr",
 // Load/Store Ops
 //
 def TT_LoadOp : TT_Op<"load", [
+  FoldTruePredicate,
   SameLoadStoreOperandsAndResultShape,
   SameLoadStoreOperandsAndResultEncoding,
   AttrSizedOperandSegments,
@@ -276,10 +360,11 @@ def TT_LoadOp : TT_Op<"load", [
     }];
 
     let hasVerifier = 1;
-    let hasCanonicalizer = 1;
+    let hasCanonicalizeMethod = 1;
 }
 
 def TT_StoreOp : TT_Op<"store", [
+  FoldTruePredicate,
   SameLoadStoreOperandsShape,
   SameLoadStoreOperandsEncoding,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
@@ -313,7 +398,7 @@ def TT_StoreOp : TT_Op<"store", [
     }];
 
     let hasVerifier = 1;
-    let hasCanonicalizer = 1;
+    let hasCanonicalizeMethod = 1;
 }
 
 //
@@ -334,6 +419,7 @@ def TT_GridDependencyLaunchDependentsOp
 }
 
 def TT_AtomicLoadOp : TT_Op<"atomic_load", [
+  FoldTruePredicate,
   AtomicOpInterface,
   SameLoadStoreOperandsAndResultShape,
   SameLoadStoreOperandsAndResultEncoding,
@@ -367,6 +453,7 @@ def TT_AtomicLoadOp : TT_Op<"atomic_load", [
 }
 
 def TT_AtomicStoreOp : TT_Op<"atomic_store", [
+  FoldTruePredicate,
   AtomicOpInterface,
   SameLoadStoreOperandsShape,
   SameLoadStoreOperandsEncoding,
@@ -397,6 +484,7 @@ def TT_AtomicStoreOp : TT_Op<"atomic_store", [
 }
 
 def TT_AtomicPollOp : TT_Op<"atomic_poll", [
+  AtomicOpInterface,
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches expected type", "expected", "ptr",
                  "getPointerTypeSameShape($_self)">,
@@ -434,6 +522,7 @@ def TT_AtomicPollOp : TT_Op<"atomic_poll", [
 }
 
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
+  FoldTruePredicate,
   AtomicOpInterface,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
@@ -470,6 +559,7 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
       functional-type(operands, $result)
     }];
 
+    let hasVerifier = 1;
 }
 
 def TT_AtomicCASOp : TT_Op<"atomic_cas", [
@@ -556,24 +646,20 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
 def TT_ReshapeOp : TT_Op<"reshape", [Pure,
                                      SameOperandsAndResultElementType,
                                      EfficientLayoutOpInterface]> {
-    let summary = "reinterpret a tensor to a different shape. It may change elements order if the attribute is set.";
+    let summary = "reinterpret a tensor to a different shape.";
     let description = [{
         reinterpret a tensor to a different shape.
-
-        If allow_reorder is set the compiler is free to change the order of
-        elements to generate more efficient code.
 
         If efficient_layout is set, this is a hint that the destination layout should be kept for performance reason.
         The compiler is still free to change it for better performance.
     }];
     let builders = [
-      OpBuilder<(ins "ArrayRef<int64_t>":$shape, "Value":$src,
-                     CArg<"bool", "false">:$allowReorder)>
+      OpBuilder<(ins "ArrayRef<int64_t>":$shape, "Value":$src)>
     ];
 
-    let arguments = (ins TT_Tensor:$src, UnitAttr:$allow_reorder, UnitAttr:$efficient_layout);
+    let arguments = (ins TT_Tensor:$src, UnitAttr:$efficient_layout);
     let results = (outs TT_Tensor:$result);
-    let assemblyFormat = "$src (`allow_reorder` $allow_reorder^)? (`efficient_layout` $efficient_layout^)? attr-dict `:` type($src) `->` type($result)";
+    let assemblyFormat = "$src (`efficient_layout` $efficient_layout^)? attr-dict `:` type($src) `->` type($result)";
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
     let hasVerifier = 1;
@@ -797,10 +883,9 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 
     let arguments = (
       ins
-      // inputs are floats if we have a type for them, otherwise (fp4),
-      // they are packed in pairs in an I8Tensor
-      RankedTensorOf<[TT_Float,I8]>:$a,
-      RankedTensorOf<[TT_Float,I8]>:$b,
+      // FP4 inputs are packed pairs, with I8Tensor retained for compatibility.
+      RankedTensorOf<[TT_Float, I8, TT_FP4E2M1x2]>:$a,
+      RankedTensorOf<[TT_Float, I8, TT_FP4E2M1x2]>:$b,
       TT_FloatTensor:$c,
       Optional<RankedTensorOf<[TT_Float, I8]>>:$a_scale,
       Optional<RankedTensorOf<[TT_Float, I8]>>:$b_scale,
@@ -843,6 +928,11 @@ def TT_ReduceOp: TT_Op<"reduce",
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "Reduction using generic combination algorithm";
+    let description = [{
+      The combiner and its callees may contain memory-effect-free operations,
+      `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+      These operations must lower without shared-memory scratch.
+    }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
     let results = (outs Variadic<TT_Type>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
@@ -852,9 +942,14 @@ def TT_ReduceOp: TT_Op<"reduce",
       llvm::SmallVector<RankedTensorType> getInputTypes();
       llvm::SmallVector<Type> getElementTypes();
 
-      // Returns the CombineOp iff this ReduceOp's region contains only
-      // one CombineOp other than the return, or nullptr if not applicable.
+      // Returns the binary op on the block arguments whose result is returned
+      // directly, or nullptr. The region may contain other operations.
       ::mlir::Operation *getSingleCombiner();
+
+      // Proves that exchanging the two input tuples preserves every result,
+      // comparing pure expression DAGs modulo commutative operand order.
+      // Returns false when the proof fails or the region is unsupported.
+      bool isCommutative();
     }];
 }
 
@@ -875,6 +970,11 @@ def TT_ScanOp: TT_Op<"scan",
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "Associative scan using generic combination algorithm";
+    let description = [{
+      The combiner and its callees may contain memory-effect-free operations,
+      `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+      These operations must lower without shared-memory scratch.
+    }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis, BoolAttr:$reverse);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
@@ -903,6 +1003,11 @@ def TT_MapElementwiseOp: TT_Op<"map_elementwise", [SameOperandsAndResultEncoding
                                                    SameOperandsAndResultShape,
                                                    RecursiveMemoryEffects]> {
     let summary = "Map a scalar subregion over a tensor";
+    let description = [{
+      The scalar function and its callees may contain memory-effect-free
+      operations, `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+      These operations must lower without shared-memory scratch.
+    }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$pack);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region AnyRegion:$scalarOp);
@@ -968,6 +1073,7 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
 
     let hasFolder = 1;
     let hasVerifier = 1;
+    let hasCanonicalizer = 1;
 }
 
 //
@@ -1000,7 +1106,7 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
 //
 // Histogram Op
 //
-def TT_HistogramOp : TT_Op<"histogram", [Pure,
+def TT_HistogramOp : TT_Op<"histogram", [Pure, FoldTruePredicate,
     TypesMatchWith<"mask type matches src type",
                  "src", "mask", "getI1SameShape($_self)",
                  "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
@@ -1209,8 +1315,8 @@ def CallOp : TT_Op<"call", [CallOpInterface, /*MemRefsNormalizable, */DeclareOpI
 
 def FuncOp : TT_Op<"func", [
     AffineScope, AutomaticAllocationScope, CallableOpInterface,
-    FunctionOpInterface, IsolatedFromAbove, OpAsmOpInterface,
-    HasParent<"ModuleOp">
+    SymbolName, SymbolVisibility, FunctionOpInterface, IsolatedFromAbove,
+    OpAsmOpInterface, HasParent<"ModuleOp">
 ]> {
   let summary = "An operation with a name containing a single `SSACFG` region";
   let description = [{
@@ -1380,7 +1486,7 @@ def TT_DescriptorStoreOp : TT_Op<"descriptor_store", [TT_DescriptorStoreLikeOpIn
   let hasVerifier = 1;
 }
 
-def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [TT_DescriptorStoreLikeOpInterface]> {
+def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [AtomicOpInterface, TT_DescriptorStoreLikeOpInterface]> {
   let summary = "performs a reducing store operation based on a descriptor";
   let description = [{
     This operation will be lowered to Nvidia TMA store operation on targets supporting it.
@@ -1399,6 +1505,12 @@ def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [TT_DescriptorStoreLikeOp
     attr-dict `:` qualified(type($desc)) `,` type($src)
   }];
   let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    ::mlir::Value getPtr() { return getDesc(); }
+    ::mlir::triton::MemSemantic getMemSemantic() {
+      return ::mlir::triton::MemSemantic::RELAXED;
+    }
+  }];
 }
 
 def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorLoadLikeOpInterface]> {

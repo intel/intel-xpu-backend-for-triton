@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import atexit
 import builtins
+import copy
 import time
 import inspect
 import hashlib
@@ -14,6 +16,20 @@ from .errors import OutOfResources, PTXASError, AutotunerError
 from .driver import driver
 from .cache import get_cache_manager, triton_key
 from triton._C.libtriton import get_cache_invalidating_env_vars
+
+_warmup_dispatcher = None
+
+
+def _get_warmup_dispatcher(workers: int):
+    global _warmup_dispatcher
+    if _warmup_dispatcher is None:
+        from .._compile_warmup_pool import ProcessPoolWarmupDispatcher
+
+        _warmup_dispatcher = ProcessPoolWarmupDispatcher(max_workers=workers, trace_directory=None,
+                                                         phase="autotune-warmup")
+        # To print TRITON_CI_WARMUP_POOL diagnostic messages
+        atexit.register(_warmup_dispatcher.finish)
+    return _warmup_dispatcher
 
 
 class Autotuner(KernelInterface):
@@ -187,6 +203,41 @@ class Autotuner(KernelInterface):
                 print(f"Autotuning failed with {e}")
             return [float("inf"), float("inf"), float("inf")]
 
+    def _parallel_warmup(self, args, kwargs, configs):
+        """Pre-compile `configs` across a process pool so the serial benchmarking
+        loop below hits a warm disk cache instead of compiling each config in turn.
+
+        Not thread-safe: `dispatch()` temporarily overrides the process-global
+        `knobs.runtime.jit_cache_hook` to capture compilation instead of running it.
+        A kernel launched from another thread while that override is active will
+        silently skip compilation/launch. Safe as long as no other thread launches
+        a Triton kernel concurrently with autotuning."""
+        workers = knobs.autotuning.warmup_workers
+        if workers <= 0:
+            return
+        dispatcher = _get_warmup_dispatcher(workers)
+        grid = kwargs["grid"]
+
+        # `ProcessPoolWarmupDispatcher` handles `warmup` on it's own
+        rest = {k: v for k, v in kwargs.items() if k not in ("grid", "warmup")}
+
+        kernel = copy.copy(self)
+        # There is no point in redoing it in subprocesses.
+        kernel.prune_configs = lambda kwargs: configs
+
+        from .._compile_warmup_pool import _UnsupportedPreloadError
+
+        # FIXME: it's not good to touch internal fields - update dispatcher API.
+        pending_before = len(dispatcher._pending)
+        dispatcher.dispatch(*args, kernel=kernel, grid=grid, test=None, **rest)
+        for future in dispatcher._pending[pending_before:]:
+            try:
+                future.result()
+            except _UnsupportedPreloadError:
+                # Mark the future so `finish()`'s later drain (at process exit)
+                # doesn't raise this same, already-handled failure a second time.
+                dispatcher.tolerate_failure(future)
+
     def check_disk_cache(self, tuning_key, configs, bench_fn):
         # We can't serialize prehooks, so just give up and run the benchmarks.
         if not tuning_key or any(cfg.pre_hook for cfg in configs):
@@ -252,6 +303,7 @@ class Autotuner(KernelInterface):
 
                     def benchmark():
                         bench_start = time.time()
+                        self._parallel_warmup(args, kwargs, pruned_configs)
                         timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
                         bench_end = time.time()
                         self.bench_time = bench_end - bench_start
@@ -267,7 +319,7 @@ class Autotuner(KernelInterface):
 
                     if knobs.autotuning.listener is not None:
                         jit_fn = self.fn
-                        while not isinstance(jit_fn, JITFunction):
+                        while not inspect.isfunction(jit_fn.fn):
                             jit_fn = jit_fn.fn
                         knobs.autotuning.listener(
                             fn=jit_fn,
@@ -447,6 +499,15 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     If the environment variable :code:`TRITON_PRINT_AUTOTUNING` is set to
     :code:`"1"`, Triton will print a message to stdout after autotuning each
     kernel, including the time spent autotuning and the best configuration.
+
+    If the environment variable :code:`TRITON_AUTOTUNE_WARMUP_WORKERS` is set
+    to a positive integer, Triton compiles all of a kernel's pruned configs in
+    a shared process pool of that many workers before benchmarking them, so
+    IR generation for different configs happens in parallel instead of
+    serially. The pool is created once and reused across every autotuned
+    kernel/shape for the life of the process. Benchmarking (timing each
+    config on the GPU) still runs serially afterward. This mode requires the
+    :code:`cloudpickle` package to be installed (:code:`pip install cloudpickle`).
 
     :param configs: a list of :code:`triton.Config` objects
     :type configs: list[triton.Config]

@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 from __future__ import annotations
 
 import csv
@@ -265,8 +266,29 @@ class TestCaseWithResult(
         TestCase,
 ):
 
+    @staticmethod
+    def _collapse_outcome_tags(identity: str, child_tags: list[XMLElement]) -> XMLElement:
+        """Reduce several outcome tags of one testcase to a single failure/error tag.
+
+        E.g. an xdist worker crash in teardown of a failed test yields <failure> and <error> in one testcase.
+        """
+        tag_names = [child_tag.tag for child_tag in child_tags]
+        failing_tags = [child_tag for child_tag in child_tags if child_tag.tag != "skipped"]
+        if not failing_tags:
+            raise ValueError(f"Unexpected number of child tags for the test {identity}: {tag_names}")
+        print(f"WARNING: test {identity} has multiple outcome tags {tag_names}, counting it as failed", file=sys.stderr)
+        collapsed = stdET.Element(failing_tags[0].tag)
+        collapsed.set("message", "\n".join("[" + tag.tag + "] " + tag.get("message", "") for tag in failing_tags))
+        collapsed.text = "\n".join("[" + tag.tag + "] " + (tag.text or "") for tag in failing_tags)
+        return collapsed
+
     @classmethod
-    def from_xml(cls, testsuite: str, xml_element: XMLElement) -> TestCaseWithResult:
+    def from_xml(
+        cls,
+        testsuite: str,
+        xml_element: XMLElement,
+        allow_multiple_outcome_tags: bool = False,
+    ) -> TestCaseWithResult:
         raw_name = xml_element.get("name", "")
         classname = xml_element.get("classname", "")
 
@@ -278,7 +300,13 @@ class TestCaseWithResult(
         child_tags = [child_tag for child_tag in list(xml_element) if child_tag.tag in ["failure", "skipped", "error"]]
         run_result = RunResult.PASSED
         if len(child_tags) > 1:
-            raise ValueError("Unexpected number of child tags for the test")
+            identity = f"{testsuite}::{classname}::{raw_name}"
+            if not allow_multiple_outcome_tags:
+                raise ValueError(
+                    f"Unexpected number of child tags for the test {identity}: {[tag.tag for tag in child_tags]}. "
+                    "Use '--allow-multiple-outcome-tags' flag to allow multiple failure/error tags."
+                )
+            child_tags = [cls._collapse_outcome_tags(identity, child_tags)]
         if len(child_tags) == 1:
             child_element = child_tags[0]
             child_tag = child_element.tag
@@ -443,12 +471,13 @@ class TestReport:
     testname_filter: str = ""
 
     @classmethod
-    def _extract_test_reports(  # pylint: disable=too-many-locals
+    def _extract_test_reports(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
         cls,
         search_folder: str,
         tests_with_multiple_testsuites: bool,
         ignore_testsuites_filter: list[str],
         pattern_matcher: PatternMatcher | None = None,
+        allow_multiple_outcome_tags: bool = False,
     ) -> dict[str, Test]:
         search_folder_path = pathlib.Path(search_folder)
         if not search_folder_path.exists():
@@ -486,6 +515,7 @@ class TestReport:
                 test_case = TestCaseWithResult.from_xml(
                     testsuite=test_suite,
                     xml_element=test_case_xml,
+                    allow_multiple_outcome_tags=allow_multiple_outcome_tags,
                 )
                 if tests_with_multiple_testsuites:
                     key = f"{test_suite}::{test_case.path_without_variant}"
@@ -980,12 +1010,13 @@ class TestReport:
         return comparison_result
 
     @classmethod
-    def from_reports_folder(
+    def from_reports_folder(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         cls,
         folder: str,
         tests_with_multiple_testsuites: bool,
         ignore_testsuites_filter: list[str],
         pattern_matcher: PatternMatcher | None = None,
+        allow_multiple_outcome_tags: bool = False,
     ) -> TestReport:
         return TestReport(
             cls._extract_test_reports(
@@ -993,5 +1024,6 @@ class TestReport:
                 tests_with_multiple_testsuites,
                 ignore_testsuites_filter,
                 pattern_matcher=pattern_matcher,
+                allow_multiple_outcome_tags=allow_multiple_outcome_tags,
             )
         )

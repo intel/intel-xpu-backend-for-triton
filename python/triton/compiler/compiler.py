@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hashlib
+from contextlib import ExitStack
 import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
@@ -7,7 +8,7 @@ from ..backends.compiler import Language
 from ..backends.compiler import BaseBackend, GPUTarget
 from .. import __version__, knobs
 from ..runtime.autotuner import OutOfResources
-from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager, get_cache_key
+from ..runtime.cache import FileCacheManager, get_cache_manager, get_dump_manager, get_override_manager, get_cache_key
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass, get_spvdis
 from pathlib import Path
@@ -237,6 +238,11 @@ class CompileTimer:
 
 
 def compile(src, target=None, options=None, _env_vars=None):
+    with ExitStack() as build_stack:
+        return _compile(src, target, options, _env_vars, build_stack)
+
+
+def _compile(src, target, options, _env_vars, build_stack):
     compilation_listener = knobs.compilation.listener
     if compilation_listener:
         timer = CompileTimer()
@@ -278,7 +284,15 @@ def compile(src, target=None, options=None, _env_vars=None):
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
     always_compile = knobs.compilation.always_compile
+    if (metadata_path is None and not always_compile and type(fn_cache_manager) is FileCacheManager
+            and not enable_override and not enable_ir_dump and knobs.runtime.add_stages_inspection_hook is None):
+        # Concurrent JIT callers can miss the same group before its owner has
+        # published it. Recheck the exact group once the builder releases it.
+        build_stack.enter_context(fn_cache_manager._lock_compile(metadata_filename))
+        metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
+        metadata_path = metadata_group.get(metadata_filename)
     if not always_compile and metadata_path is not None:
+        build_stack.close()
         # cache hit!
         res = CompiledKernel(src, metadata_group, hash)
         if compilation_listener:
@@ -369,6 +383,7 @@ def compile(src, target=None, options=None, _env_vars=None):
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
+    build_stack.close()
 
     # notify any listener
     if compilation_listener:
@@ -481,10 +496,12 @@ class CompiledKernel:
         device = driver.active.get_current_device()
         # create launcher
         self._run = driver.active.launcher_cls(self.src, self.metadata)
+        # Backends may reserve additional shared memory at launch time.
+        shared = getattr(self._run, "shared", self.metadata.shared)
         # not enough shared memory to run the kernel
         max_shared = max_shared_mem(device)
-        if self.metadata.shared > max_shared:
-            raise_(OutOfResources(self.metadata.shared, max_shared, "shared memory"))
+        if shared > max_shared:
+            raise_(OutOfResources(shared, max_shared, "shared memory"))
         if hasattr(self.metadata, "tmem_size") and self.metadata.tmem_size is not None:
             # Use blackwell max tmem size for now, this should be moved in device properties
             max_tmem_size = 512  # tmem size in number of columns
@@ -504,16 +521,22 @@ class CompiledKernel:
             if max_grf_mode is None and isinstance(legacy_arch, dict) and legacy_arch.get("arch") == "cri":
                 max_grf_mode = "512"
             self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
-                self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
-                not self.metadata.generate_native_code, device, max_grf_mode)
+                self.name, self.kernel, shared, self.metadata.build_flags, not self.metadata.generate_native_code,
+                device, max_grf_mode)
             # PyTorch could use the updated build flags in load binary.
             if hasattr(driver.active.utils, "get_last_selected_build_flags"):
                 new_build_flags = driver.active.utils.get_last_selected_build_flags()
                 if new_build_flags != self.metadata.build_flags:
                     self.metadata = self.metadata._replace(build_flags=new_build_flags)
+                    # self.packed_metadata is what actually gets launched (see
+                    # __getitem__) and dumped for repro tooling (e.g.
+                    # TritonKernelRunner) -- keep it in sync so both reflect the
+                    # GRF mode load_binary actually settled on. `backend.pack_metadata`
+                    # is a no-op for XPU, so just rebind the reference.
+                    self.packed_metadata = self.metadata
         else:
             self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
-                self.name, self.kernel, self.metadata.shared, device)
+                self.name, self.kernel, shared, device)
         self._module_pid = os.getpid()
         warp_size = self.metadata.warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:

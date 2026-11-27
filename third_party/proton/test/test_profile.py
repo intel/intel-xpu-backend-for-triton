@@ -361,7 +361,9 @@ def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, 
 
 
 @pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports cudagraph replay", run=False)
-def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str):
+@_skip_cudagraph_test
+@pytest.mark.parametrize("data", ["tree", "trace"])
+def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str, data: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -381,8 +383,9 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     with cuda_graph_without_gc(g):
         fn()
 
-    temp_file = tmp_path / "test_cudagraph_not_captured_by_profiler.hatchet"
-    proton.start(str(temp_file.with_suffix("")), context="shadow")
+    suffix = "chrome_trace" if data == "trace" else "hatchet"
+    temp_file = tmp_path / f"test_cudagraph_not_captured_by_profiler.{suffix}"
+    proton.start(str(temp_file.with_suffix("")), context="shadow", data=data)
     with proton.scope("replay0"):
         g.replay()
     with proton.scope("replay1"):
@@ -393,27 +396,41 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     assert captured.err.count("Cannot find graph for graphExecId:") == 1
     assert "start profiling before the graph is created" in captured.err
 
-    with temp_file.open() as f:
-        data = json.load(f)
-    replay0_frame = None
-    replay1_frame = None
-    for child in data[0]["children"]:
-        if child["frame"]["name"] == "replay0":
-            replay0_frame = child
-        elif child["frame"]["name"] == "replay1":
-            replay1_frame = child
-    assert replay0_frame is not None
-    assert replay1_frame is not None
-    assert len(replay0_frame["children"]) >= 3
-    assert len(replay1_frame["children"]) >= 3
+    if data == "trace":
+        with temp_file.open() as f:
+            trace_events = json.load(f)["traceEvents"]
+        flow_starts = [e for e in trace_events if e.get("cat") == "flow" and e["ph"] == "s"]
+        for replay in ("replay0", "replay1"):
+            kernels = [e for e in trace_events if e.get("cat") == "kernel" and e["args"]["call_stack"][1] == replay]
+            assert len(kernels) == 4
+            assert any(e["dur"] > 0 for e in kernels)
+            # Each kernel's launch arrow starts at the CPU scope around replay.
+            scope = next(e for e in trace_events
+                         if e.get("cat") == "scope" and e["args"]["call_stack"] == ["ROOT", replay])
+            starts = [e for e in flow_starts if e["tid"] == scope["tid"] and e["ts"] == scope["ts"]]
+            assert len(starts) == len(kernels)
+    else:  # "tree"
+        with temp_file.open() as f:
+            data = json.load(f)
+        replay0_frame = None
+        replay1_frame = None
+        for child in data[0]["children"]:
+            if child["frame"]["name"] == "replay0":
+                replay0_frame = child
+            elif child["frame"]["name"] == "replay1":
+                replay1_frame = child
+        assert replay0_frame is not None
+        assert replay1_frame is not None
+        assert len(replay0_frame["children"]) >= 3
+        assert len(replay1_frame["children"]) >= 3
 
-    def has_positive_time_metric(node):
-        if node["metrics"].get("time (ns)", 0) > 0:
-            return True
-        return any(has_positive_time_metric(child) for child in node["children"])
+        def has_positive_time_metric(node):
+            if node["metrics"].get("time (ns)", 0) > 0:
+                return True
+            return any(has_positive_time_metric(child) for child in node["children"])
 
-    assert has_positive_time_metric(replay0_frame)
-    assert has_positive_time_metric(replay1_frame)
+        assert has_positive_time_metric(replay0_frame)
+        assert has_positive_time_metric(replay1_frame)
 
 
 @pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports cudagraph deactivation", run=False)
@@ -1519,6 +1536,10 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str)
     ]
     assert all(event["name"] != "foo" for event in metadata_kernel_events)
 
+    flow_starts = [event for event in trace_events if event.get("cat") == "flow" and event["ph"] == "s"]
+    flow_finishes = [event for event in trace_events if event.get("cat") == "flow" and event["ph"] == "f"]
+    assert {event["id"] for event in flow_starts} == {event["id"] for event in flow_finishes}
+
     test0_scope = next(
         event for event in trace_events
         if event.get("cat") == "scope" and event.get("args", {}).get("call_stack", []) == ["ROOT", "test0"])
@@ -2023,8 +2044,6 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
-    if is_xpu():
-        pytest.skip("FIXME: #5844")
     fresh_knobs.proton.profile_buffer_size = buffer_size
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
     session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
@@ -2056,6 +2075,97 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
         assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
         num_scopes += len(data[0]["children"])
     assert num_scopes == 5000
+
+
+@pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
+def test_periodic_flushing_multithread(tmp_path, fresh_knobs, data_format, device: str):
+    # A phase must not be flushed while a record of a kernel launched into it
+    # by another thread is still outstanding, even if records of later phases
+    # have already arrived.
+    fresh_knobs.proton.profile_buffer_size = 256 * 1024
+    temp_file = tmp_path / f"test_periodic_flushing_multithread.{data_format}"
+    session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
+
+    def worker():
+        with proton.scope("worker"):
+            torch.ones((100), device=device)
+        getattr(torch, device).synchronize()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+    proton.data.advance_phase(session=session)
+    # Fill this thread's activity buffers with records of phase 1.
+    for i in range(3000):
+        with proton.scope(f"test_{i}"):
+            torch.zeros((100), device=device)
+
+    proton.finalize(output_format=data_format)
+
+    import msgpack
+    phase0_file = tmp_path / f"test_periodic_flushing_multithread.part_0.{data_format}"
+    if data_format == "hatchet_msgpack":
+        with open(phase0_file, "rb") as f:
+            data = msgpack.load(f, raw=False, strict_map_key=False)
+    else:
+        with open(phase0_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    worker_frame = _find_frame_by_name(data[0], "worker")
+    assert worker_frame is not None
+    assert any(child["metrics"].get("time (ns)", 0) > 0 for child in worker_frame["children"])
+
+
+@pytest.mark.skipif(not is_xpu(), reason="Only the XPU profiler holds back the phase of an open launch op")
+def test_periodic_flushing_hook_multithread(tmp_path, fresh_knobs, device: str):
+    # A phase must not be flushed while a launch op entered into it is still
+    # open, even if its kernel has not been launched yet.
+    fresh_knobs.proton.profile_buffer_size = 256 * 1024
+    entered = threading.Event()
+    resume = threading.Event()
+
+    class PausingHook(proton_launch.LaunchHook):
+        _instance = None
+
+        def enter(self, metadata):
+            super().enter(metadata)
+            if threading.current_thread() is not threading.main_thread():
+                entered.set()
+                resume.wait(timeout=60)
+
+    @triton.jit
+    def foo(x, y):
+        tl.store(y, tl.load(x) + 1)
+
+    x = torch.ones((1, ), device=device)
+    y = torch.empty((1, ), device=device)
+    foo[(1, )](x, y)
+    temp_file = tmp_path / "test_periodic_flushing_hook_multithread.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), mode="periodic_flushing:format=hatchet", hook=PausingHook())
+
+    def worker():
+        with proton.scope("worker"):
+            foo[(1, )](x, y)
+        getattr(torch, device).synchronize()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    try:
+        assert entered.wait(timeout=60)
+        proton.data.advance_phase(session=session)
+        # Fill this thread's activity buffers with records of phase 1.
+        for i in range(3000):
+            with proton.scope(f"test_{i}"):
+                torch.zeros((100), device=device)
+    finally:
+        resume.set()
+        thread.join()
+        proton.finalize()
+
+    with open(tmp_path / "test_periodic_flushing_hook_multithread.part_0.hatchet", "r", encoding="utf-8") as f:
+        data = json.load(f)
+    worker_frame = _find_frame_by_name(data[0], "worker")
+    assert worker_frame is not None
+    assert any(child["metrics"].get("time (ns)", 0) > 0 for child in worker_frame["children"])
 
 
 @pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs", run=False)

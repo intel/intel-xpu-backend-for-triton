@@ -1,12 +1,14 @@
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -152,6 +154,14 @@ Value getFinalValue(Value value) {
       auto initArgs = forOp.getInitArgs();
       assert(initArgIdx >= 0 && initArgIdx < initArgs.size() &&
              "Unexpected 'initArgIdx' value");
+
+      // The init operand describes this argument on the first iteration. It
+      // describes every iteration only if the loop yields the argument
+      // unchanged; otherwise resolving to it would equate a value that changes
+      // across the loop with where it started (#7990, #8060). Stop at the
+      // argument and let a caller that can reason about the update do so.
+      if (forOp.getTiedLoopYieldedValue(blockArg)->get() != blockArg)
+        return value;
       return getFinalValue(initArgs[initArgIdx]);
     }
 
@@ -198,6 +208,19 @@ Value getFinalValue(Value value) {
   return value;
 }
 
+Value getIterArgIncrement(scf::ForOp forOp, BlockArgument iterArg) {
+  auto addOp = forOp.getTiedLoopYieldedValue(iterArg)
+                   ->get()
+                   .getDefiningOp<arith::AddIOp>();
+  if (!addOp)
+    return {};
+  if (addOp.getLhs() == iterArg)
+    return addOp.getRhs();
+  if (addOp.getRhs() == iterArg)
+    return addOp.getLhs();
+  return {};
+}
+
 void eraseOperations(SmallPtrSetImpl<Operation *> &operations) {
   bool erasedOperation;
   do {
@@ -220,6 +243,37 @@ void eraseOperations(SmallPtrSetImpl<Operation *> &operations) {
       continue;
     op->erase();
   }
+}
+
+bool isProgramUniform(Value root, tt::FuncOp funcOp, bool allowLoopIVs) {
+  SmallVector<Value> worklist{root};
+  DenseSet<Value> seen;
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (!seen.insert(value).second)
+      continue;
+    if (auto arg = dyn_cast<BlockArgument>(value)) {
+      auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp());
+      if (allowLoopIVs && forOp && arg == forOp.getInductionVar()) {
+        worklist.append(
+            {forOp.getLowerBound(), forOp.getUpperBound(), forOp.getStep()});
+        continue;
+      }
+      // Arguments of a private helper may come from a per-warp caller.
+      if (!funcOp.isPublic() || arg.getOwner() != &funcOp.getBody().front())
+        return false;
+      continue;
+    }
+    Operation *def = value.getDefiningOp();
+    if (isa<tt::GetProgramIdOp, tt::GetNumProgramsOp>(def))
+      continue;
+    if (!isa_and_nonnull<arith::ArithDialect, math::MathDialect>(
+            def->getDialect()) ||
+        def->getNumRegions())
+      return false;
+    worklist.append(def->operand_begin(), def->operand_end());
+  }
+  return true;
 }
 
 // True if any region of `op` has no blocks.

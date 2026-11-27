@@ -7,7 +7,8 @@ import torch
 import pathlib
 
 import triton
-from triton._internal_testing import is_xpu
+import triton.language as tl
+from triton._internal_testing import is_compile_warmup, is_xpu
 
 
 @pytest.fixture(autouse=True)
@@ -122,7 +123,10 @@ layouts = [
 @pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
 @pytest.mark.parametrize("layout", layouts)
 @pytest.mark.parametrize("transpose", [True, False])
+@pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
+                   reason="Block loads not supported on this architecture")
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
+@pytest.mark.enable_warmup
 def test_block_io(M, N, dtype_str, layout, transpose, device, tmp_path: pathlib.Path):
     assert os.environ["TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"] == "1"
     warps = warps_per_cta(layout)
@@ -198,7 +202,7 @@ def test_block_io(M, N, dtype_str, layout, transpose, device, tmp_path: pathlib.
     kernel[(1, 1, 1)](a, x)
     assert torch.equal(a, x)
 
-    if support_block_io:
+    if support_block_io and not is_compile_warmup():
         if isinstance(layout, DotOperandLayout):
             if (layout.op_idx == 0 and layout.k_width == 2) and dtype_str == "float32":
                 # The tile width is too large for block load/store
@@ -207,6 +211,66 @@ def test_block_io(M, N, dtype_str, layout, transpose, device, tmp_path: pathlib.
         assert 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
         load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
         assert load_count > 0 or transpose
+
+
+# Row bound 60 has constancy 4, which clamps the operand-C tile to 4 rows (#8895).
+@pytest.mark.parametrize("dtype_str", ["float16", "int8"])
+@pytest.mark.parametrize("layout",
+                         [DpasLayout(8, 8, 16, 1, 16, [1, 4], [1, 2]),
+                          DpasLayout(8, 8, 16, 1, 32, [4, 1], [2, 2])])
+@pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
+                   reason="Block loads not supported on this architecture")
+@pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
+@pytest.mark.enable_warmup
+def test_block_io_masked_dpas_c(dtype_str, layout, device, tmp_path: pathlib.Path):
+    M, N, bound = 64, 64, 60
+    ty = {"float32": "f32", "float16": "f16", "bfloat16": "i16", "int8": "i8"}[dtype_str]
+    zero = "0.000000e+00" if ty.startswith("f") else "0"
+    s0, s1 = "#ttg.slice<{dim = 0, parent = #layout}>", "#ttg.slice<{dim = 1, parent = #layout}>"
+    support_block_io = triton.runtime.driver.active.get_current_target().arch['has_2d_block_io']
+    ir = f"""
+    #layout = {layout}
+    module attributes {{{"ttig.support_2d_block_io," if support_block_io else ""} "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {int(np.prod(warps_per_cta(layout)))} : i32, ttg.target = "xpu", "ttg.threads-per-warp" = {int(np.prod(layout.threads_per_warp))} : i32}} {{
+        tt.func public @k(%src: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %dst: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}) {{
+            %stride_N = arith.constant dense<{N}> : tensor<{M}x1xi32, #layout>
+            %1 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, {s1}>
+            %2 = tt.expand_dims %1 {{axis = 1 : i32}} : tensor<{M}xi32, {s1}> -> tensor<{M}x1xi32, #layout>
+            %row_stride = arith.muli %2, %stride_N : tensor<{M}x1xi32, #layout>
+            %4 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, {s0}>
+            %5 = tt.expand_dims %4 {{axis = 0 : i32}} : tensor<{N}xi32, {s0}> -> tensor<1x{N}xi32, #layout>
+            %6 = tt.broadcast %row_stride : tensor<{M}x1xi32, #layout> -> tensor<{M}x{N}xi32, #layout>
+            %7 = tt.broadcast %5 : tensor<1x{N}xi32, #layout> -> tensor<{M}x{N}xi32, #layout>
+            %off = arith.addi %6, %7 : tensor<{M}x{N}xi32, #layout>
+            %bnd = arith.constant dense<{bound}> : tensor<{M}xi32, {s1}>
+            %m1 = arith.cmpi slt, %1, %bnd : tensor<{M}xi32, {s1}>
+            %m2 = tt.expand_dims %m1 {{axis = 1 : i32}} : tensor<{M}xi1, {s1}> -> tensor<{M}x1xi1, #layout>
+            %mask = tt.broadcast %m2 : tensor<{M}x1xi1, #layout> -> tensor<{M}x{N}xi1, #layout>
+            %other = arith.constant dense<{zero}> : tensor<{M}x{N}x{ty}, #layout>
+            %sb = tt.splat %src : !tt.ptr<{ty}> -> tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
+            %sp = tt.addptr %sb, %off : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>, tensor<{M}x{N}xi32, #layout>
+            %v = tt.load %sp, %mask, %other {{ttig.block_io = "row_major"}} : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
+            %db = tt.splat %dst : !tt.ptr<{ty}> -> tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
+            %dp = tt.addptr %db, %off : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>, tensor<{M}x{N}xi32, #layout>
+            tt.store %dp, %v {{ttig.block_io = "row_major"}} : tensor<{M}x{N}x!tt.ptr<{ty}>, #layout>
+            tt.return
+        }}
+    }}
+    """
+
+    torch_dtype = getattr(torch, dtype_str)
+    if torch_dtype.is_floating_point:
+        a = torch.randn((M, N), dtype=torch_dtype, device=device)
+    else:
+        a = torch.randint(low=-127, high=128, size=(M, N), dtype=torch_dtype, device=device)
+    x = torch.empty_like(a)
+    temp_file = tmp_path / "test_block_io_masked_dpas_c.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+    kernel[(1, 1, 1)](a, x)
+    assert torch.equal(x, torch.where(torch.arange(M, device=device)[:, None] < bound, a, torch.zeros_like(a)))
+    if support_block_io and not is_compile_warmup():
+        llir = kernel.asm["llir"]
+        assert 'spirv_Subgroup2DBlockLoad' in llir or 'GenISA.LSC2DBlockRead' in llir
 
 
 # The 2D block I/O tile covers only the inner two dimensions, so every leading
@@ -218,7 +282,10 @@ def test_block_io(M, N, dtype_str, layout, transpose, device, tmp_path: pathlib.
 @pytest.mark.parametrize("shape", [[64, 64, 32], [128, 128, 16], [4, 64, 64, 32]])
 @pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
 @pytest.mark.parametrize("block_io", ["row_major", "column_major"])
+@pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
+                   reason="Block loads not supported on this architecture")
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
+@pytest.mark.enable_warmup
 def test_block_io_nd(shape, dtype_str, block_io, device, tmp_path: pathlib.Path):
     rank = len(shape)
     ty = {"float32": "f32", "float16": "f16", "bfloat16": "i16", "int8": "i8"}[dtype_str]
@@ -293,7 +360,7 @@ def test_block_io_nd(shape, dtype_str, block_io, device, tmp_path: pathlib.Path)
     tile = a[batch:2 * batch]
     assert torch.equal(tile.transpose(-2, -1) if transpose else tile, x)
 
-    if support_block_io:
+    if support_block_io and not is_compile_warmup():
         llir = kernel.asm["llir"]
         load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
         assert load_count > 0
@@ -334,11 +401,10 @@ def expected_oob_tile(src, pad_value):
 
 
 @pytest.mark.parametrize("padding", ["zero", "nan"])
+@pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
+                   reason="Block loads not supported on this architecture")
 @pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
 def test_block_io_nd_out_of_bounds(padding, device, tmp_path: pathlib.Path):
-    if not triton.runtime.driver.active.get_current_target().arch['has_2d_block_io']:
-        pytest.skip("Target has no 2D block IO support, so the block load path is never taken")
-
     ty, torch_dtype = "f16", torch.float16
     rank = len(OOB_TILE_SHAPE)
     layout = BlockedLayout([1, 1, 1], [1, 2, 16], [8, 4, 1], [2, 1, 0])
@@ -405,3 +471,94 @@ def test_block_io_nd_out_of_bounds(padding, device, tmp_path: pathlib.Path):
     llir = kernel.asm["llir"]
     load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
     assert load_count > 0
+
+
+# A rank-reducing block store must apply its batch index and drop an out-of-range one (issue #8516).
+# An odd plane stride would misalign the rebased 2D block message, so that store stays generic.
+@pytest.mark.parametrize("stride_kind, batch", [("aligned", 1), ("aligned", 5), ("aligned", -1), ("odd", 1)])
+@pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
+                   reason="Block stores not supported on this architecture", run=False)
+@pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
+def test_block_io_rank_reduced_store(batch, stride_kind, device, tmp_path: pathlib.Path):
+    M, N, planes = 32, 32, 4
+    stride = M * N + 8 if stride_kind == "aligned" else M * N + 1
+    layout = DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2, threads_per_warp=16,
+                        warps_per_cta=[1, 1], rep_cluster=[4, 2])
+    tile = f"{M}x{N}xf16"
+
+    # Only the store is tagged; the load carries the desc_padding MaterializeBlockPointer would stamp.
+    ir = f"""
+    #layout = {layout}
+    module attributes {{ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
+        tt.func public @rank_reduced_store(%src: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %dst: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %batch: i32) {{
+            %c0_i32 = arith.constant 0 : i32
+            %planes = arith.constant {planes} : i32
+            %m = arith.constant {M} : i32
+            %n = arith.constant {N} : i32
+            %n_i64 = arith.constant {N} : i64
+            %c1_i64 = arith.constant 1 : i64
+            %stride = arith.constant {stride} : i64
+
+            %src_desc = tt.make_tensor_descriptor %src, [%m, %n], [%n_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<{tile}>
+            %val = tt.descriptor_load %src_desc[%c0_i32, %c0_i32] {{ttig.desc_padding = 1 : i32}} : !tt.tensordesc<{tile}> -> tensor<{tile}, #layout>
+
+            %dst_desc = tt.make_tensor_descriptor %dst, [%planes, %m, %n], [%stride, %n_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<1x{tile}>
+            tt.descriptor_store %dst_desc[%batch, %c0_i32, %c0_i32], %val {{ttig.block_io = "row_major"}} : !tt.tensordesc<1x{tile}>, tensor<{tile}, #layout>
+
+            tt.return
+        }}
+    }}
+    """
+
+    temp_file = tmp_path / "test_block_io_rank_reduced_store.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    # The base sits two dense planes in, so batch -1 still lands inside the buffer.
+    src = torch.arange(M * N, device=device).to(torch.float16).reshape(M, N)
+    buf = torch.full((9 * M * N, ), -1.0, dtype=torch.float16, device=device)
+    base = 2 * M * N
+    kernel[(1, 1, 1)](src, buf[base:], batch)
+
+    expect = torch.full_like(buf, -1.0)
+    if 0 <= batch < planes:
+        start = base + batch * stride
+        expect[start:start + M * N] = src.flatten()
+    hit = (buf != -1).nonzero().flatten().tolist()
+    assert torch.equal(buf, expect), f"wrote [{hit[0]}, {hit[-1]}]" if hit else "wrote nothing"
+
+    # The TTGIR-text path skips MaterializeBlockPointer, so only the LLVM lowering can decline `odd`.
+    llir = kernel.asm["llir"]
+    block_store = 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
+    assert block_store == (stride_kind == "aligned")
+
+
+@triton.jit
+def _rank_reduced_store_kernel(src_ptr, dst_ptr, B, stride_b, batch, M: tl.constexpr, N: tl.constexpr):
+    rows = tl.arange(0, M)[:, None]
+    # dot(I, src) is src exactly, and gives the stored value the DPAS layout a 2D block store takes.
+    eye = (rows == tl.arange(0, M)[None, :]).to(tl.bfloat16)
+    x = tl.dot(eye, tl.load(src_ptr + rows * N + tl.arange(0, N)[None, :])).to(tl.bfloat16)
+    desc = tl.make_tensor_descriptor(dst_ptr, shape=[B, M, N], strides=[stride_b, N, 1], block_shape=[1, M, N])
+    desc.store([batch, 0, 0], x.reshape([1, M, N]))
+
+
+# A runtime plane stride without a divisibility hint is trusted under the 16-byte descriptor contract, which keeps
+# the rebase 4-byte aligned; plane 3 starts 48 bytes past a 64-byte boundary (#8516).
+@pytest.mark.xfail(not torch.xpu.get_device_capability()['has_subgroup_2d_block_io'],
+                   reason="Block stores not supported on this architecture", run=False)
+@pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
+def test_block_io_rank_reduced_store_runtime_stride(device, with_allocator):
+    B, M, N, batch = 4, 32, 64, 3
+    stride_b = M * N + 8
+    # Normal bf16 bit patterns, compared as int16 so the check is exact.
+    src = (torch.arange(M * N, device=device) + 0x3F80).to(torch.int16)
+    buf = torch.full(((B + 1) * stride_b, ), -1, dtype=torch.int16, device=device)
+    kernel = _rank_reduced_store_kernel[(1, )](src.view(torch.bfloat16), buf.view(torch.bfloat16), B, stride_b, batch,
+                                               M, N)
+
+    expect = torch.full_like(buf, -1)
+    expect[batch * stride_b:batch * stride_b + M * N] = src
+    assert torch.equal(buf, expect)
+    llir = kernel.asm["llir"]
+    assert 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir

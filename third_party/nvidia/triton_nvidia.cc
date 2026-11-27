@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Module.h"
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -163,12 +164,6 @@ void init_triton_nvidia_passes_ttgpuir(py::module_ &m) {
           pm.addPass(mlir::triton::createAllocateSharedMemoryNvPass(
               capability, ptxVersion));
         });
-  m.def("add_set_minimum_shared_memory",
-        [](mlir::PassManager &pm, int32_t minimumSize) {
-          mlir::triton::SetMinimumSharedMemoryOptions options;
-          options.minimumSize = minimumSize;
-          pm.addPass(mlir::triton::createSetMinimumSharedMemory(options));
-        });
   ADD_PASS_OPTION_WRAPPER_2("add_membar",
                             mlir::triton::createTritonNvidiaGPUMembar, int32_t,
                             int32_t);
@@ -177,13 +172,6 @@ void init_triton_nvidia_passes_ttgpuir(py::module_ &m) {
           pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
               capability, ptxVersion));
         });
-}
-
-std::unique_ptr<mlir::Pass>
-createTritonGPUFenceInsertionWrapper(int32_t capability) {
-  ttng::TritonGPUFenceInsertionOptions options;
-  options.computeCapability = capability;
-  return ttng::createTritonGPUFenceInsertion(options);
 }
 
 std::unique_ptr<mlir::Pass>
@@ -216,8 +204,6 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
                      ttng::createTritonNvidiaGPUOptimizeCTALocalityPass);
   ADD_PASS_WRAPPER_0("add_to_clc", ttng::createTritonNvidiaGPUToCLCPass);
   ADD_PASS_WRAPPER_0("add_lower_clc", ttng::createTritonNvidiaGPULowerCLCPass);
-  ADD_PASS_WRAPPER_1("add_fence_insertion",
-                     createTritonGPUFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_1("add_proxy_fence_insertion",
                      createTritonGPUProxyFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_1("add_hoist_mbarrier_lifecycle",
@@ -225,8 +211,6 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
                      int32_t);
   ADD_PASS_WRAPPER_0("add_tmem_barrier_insertion",
                      ttng::createTritonNvidiaGPUTMemBarrierInsertionPass);
-  ADD_PASS_WRAPPER_0("add_tmem_wait_insertion",
-                     ttng::createTritonNvidiaGPUTMemWaitInsertionPass);
   ADD_PASS_WRAPPER_0(
       "add_cluster_barrier_mbar_allocator",
       ttng::createTritonNvidiaGPUClusterBarrierMbarAllocatorPass);

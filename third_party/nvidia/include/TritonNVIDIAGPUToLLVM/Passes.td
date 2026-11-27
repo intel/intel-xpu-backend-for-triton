@@ -4,7 +4,7 @@
 include "mlir/Pass/PassBase.td"
 
 def TritonNvidiaGPUMembar : Pass<"triton-nvidia-gpu-membar", "mlir::ModuleOp"> {
-    let summary = "Insert NVIDIA shared-memory synchronization before lowering";
+    let summary = "Place shared-memory barriers and tensor-memory waits before lowering";
 
     let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                              "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
@@ -80,17 +80,6 @@ def AllocateSharedMemoryNv : Pass<"allocate-shared-memory-nv", "mlir::ModuleOp">
              "PTX version">,
   ];
 }
-
-def SetMinimumSharedMemory : Pass<"set-minimum-shared-memory", "mlir::ModuleOp"> {
-  let summary = "Set a lower bound on the module shared memory size";
-
-  let options = [
-      Option<"minimumSize", "minimum-size",
-             "int32_t", /*default*/"0",
-             "minimum shared memory size in bytes">,
-  ];
-}
-
 
 def ConvertWarpSpecializeToLLVM : Pass<"convert-warp-specialize-to-llvm", "mlir::ModuleOp"> {
   let summary = "lower `ttg.warp_specialize` to LLVM";

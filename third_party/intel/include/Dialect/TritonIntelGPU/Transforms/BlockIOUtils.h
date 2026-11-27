@@ -13,6 +13,7 @@
 #include <optional>
 
 namespace mlir::triton::intel {
+class ModuleAxisInfoAnalysis;
 class ModuleStrideAnalysis;
 } // namespace mlir::triton::intel
 
@@ -49,8 +50,13 @@ struct BlockIOTileSizeInfo {
   }
 };
 
+/// Size the 2D block load tile for `ll`. When a non-transposed tile's row
+/// dimension is not fixed by the lanes, it is the dimension whose register
+/// bases give the tallest tile. \p innerRowDimOnly restricts that choice to the
+/// inner two dimensions, for descriptor loads, which can only tile those.
 BlockIOTileSizeInfo getBlockIOLoadTileSize(const LinearLayout &, unsigned,
-                                           unsigned, AxisInfo *, bool);
+                                           unsigned, AxisInfo *, bool,
+                                           bool innerRowDimOnly = false);
 BlockIOTileSizeInfo getBlockIOPrefetchTileSize(const LinearLayout &, unsigned,
                                                unsigned, AxisInfo *,
                                                bool allow256Bytes);
@@ -89,11 +95,13 @@ bool check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
 /// Validate that a load with the given encoding and element size can be
 /// lowered to 2D block I/O. Checks tile size, HW address restrictions,
 /// inner-dim constraints, and transpose shuffle mapping. Returns true if valid.
+/// \p innerRowDimOnly is as for getBlockIOLoadTileSize.
 bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
                              unsigned elemSizeInBits,
                              RankedTensorType tensorType,
                              bool oneMatrixPerLoadForBT = false,
-                             AxisInfo *maskAxisInfo = nullptr);
+                             AxisInfo *maskAxisInfo = nullptr,
+                             bool innerRowDimOnly = false);
 
 /// Validate that a store with the given encoding and element size can be
 /// lowered to 2D block I/O, applying the constraints the store lowering
@@ -105,11 +113,27 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
 /// This is the single source of truth for 2D block store eligibility, shared
 /// by the store lowering patterns in LoadStoreOpToLLVM.cpp so their tile
 /// validation cannot drift.
+///
+/// When \p allowColumnBlockFold is set, a 16-bit SG16 tile with a second
+/// column block may be widened to 32-element rows by reordering register
+/// bases. \p foldedColumnBlockOut reports whether this occurred.
 bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
                               unsigned elemSizeInBits,
                               RankedTensorType tensorType,
                               AxisInfo *maskAxisInfo,
-                              BlockIOTileSizeInfo &sizeInfoOut);
+                              BlockIOTileSizeInfo &sizeInfoOut,
+                              bool &foldedColumnBlockOut,
+                              bool allowColumnBlockFold);
+
+/// Return a blocked layout under which a row-major rank-2 load of \p type
+/// passes validate2DBlockLoadTile, or std::nullopt. Lanes span at most 64
+/// bytes of a row, and warps split the dim other than \p reducedDim (the
+/// columns if none) first, to keep a reduction in a warp. \p type must have an
+/// encoding, whose CGA layout is kept.
+std::optional<triton::gpu::BlockedEncodingAttr>
+pickBlockIOLoadEncoding(RankedTensorType type, unsigned numWarps,
+                        unsigned threadsPerWarp,
+                        std::optional<unsigned> reducedDim);
 
 /// Determine whether memory layout is row-major from the block_io attribute.
 bool isMemoryRowMajor(Operation *op);
@@ -128,6 +152,14 @@ template <typename OpTy,
 bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
   return isBlockIOEligible(loadOp.getOperation(), tensorTy);
 }
+
+/// Return true if LowerTo2DBlockLoad would rewrite \p op to ttig.2d_block_load
+/// with result type \p tensorTy, which may differ from op.getType(). Emits no
+/// diagnostics and skips the 16-byte pitch check, which the pass reports as an
+/// error, so true means "eligible", not "safe to emit" for hand-tagged IR.
+bool isDescriptorLoadLowerableTo2DBlock(
+    triton::DescriptorLoadOp op, RankedTensorType tensorTy,
+    triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis);
 
 /// Estimate the hardware message count for a load with the given type and
 /// encoding. Higher values indicate more HW cost. Used for cost modeling in
@@ -148,9 +180,150 @@ Attribute canonicalCoalescedDescStoreLayout(RankedTensorType type, int numWarps,
 Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
                             Value ptr, unsigned dim);
 
+/// Whether a 2D block surface supports this row pitch. Shared by
+/// MaterializeBlockPointer and LowerTo2DBlockLoad so they cannot drift.
+/// A constant pitch must be >= 64 bytes, a multiple of 16 and fit in 24 bits.
+/// A runtime pitch needs a stride value and a full row of >= 64 bytes.
+bool isBlockPitchSupported(std::optional<int64_t> constPitchBytes,
+                           bool hasRuntimeStride, int64_t fullRowBytes);
+
 /// Build `stride * elemSizeInBytes` as an i32; null for non-integer stride.
 Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
                             unsigned elemSizeInBytes);
+
+/// True when `other` is absent or a positive-zero splat, the only fill value
+/// the 2D block message's HW boundary check can produce. `-0.0` is excluded
+/// to avoid flipping masked-out elements' sign bit.
+bool isZeroFillOther(Value other);
+
+/// A mask of the form `(rowBase + arange(0, N)) < bound`, or the same compare
+/// written `bound > (rowBase + arange(0, N))`, broadcast along every other dim
+/// (contiguous dim and any batch dims). Expressible as a 2D block load's
+/// `base_height` instead of per-element predication.
+///
+/// `extraPred`, if non-null, is a batch-dims-only predicate ANDed into the
+/// original mask (degenerate along the pitch and contiguous dims, so it's
+/// uniform per hardware block-load message); the caller ANDs it into its
+/// own per-message select instead of folding it into `base_height`. When the
+/// AND sits below the final broadcast (`tt-reorder-broadcast`), `extraPred`
+/// has that narrower shape rather than the mask's; use
+/// `materializeExtraPred` to get a full-shape value.
+struct RowLimitMaskInfo {
+  unsigned boundedDim;
+  Value rowBase;
+  Value bound;
+  Value extraPred;
+};
+
+/// Match `mask` against the row-limit pattern above for a tensor of any
+/// rank >= 2: `matchBoundaryCheckMask` with no column bound and at most one
+/// uniform conjunct, the one `extraPred` holds.
+std::optional<RowLimitMaskInfo> matchRowLimitMask(Value mask, Value other,
+                                                  ArrayRef<int64_t> tensorShape,
+                                                  unsigned contiguousDim,
+                                                  bool pitchDimIsBroadcast);
+
+/// A boundary-check mask matched conjunct by conjunct: an AND of bounds
+/// `(base + arange(0, extent)) < bound`, or the same compare written
+/// `bound > (base + arange(0, extent))`, on the pitch dim, the
+/// memory-contiguous dim, or both, and any number of predicates uniform along
+/// both surface dims. The bounds map onto the 2D block message's own
+/// `base_height` and `base_width` clamps, so the mask needs no per-element
+/// predication at all. Both clamps are relative to the tensor's first row and
+/// column, `clamp(bound - base, 0, extent)` (see `computeRowLimitHeight`), and
+/// never exceed the tile.
+///
+/// `rowBound`/`colBound` are null when that dim carries no bound, else the
+/// splat's scalar or, with `allowConstBounds`, the value of a splat constant as
+/// an `IntegerAttr` of the compare's type; `rowBase`/`colBase` are null when
+/// the index is a bare `arange`.
+///
+/// `extraPreds` are the uniform conjuncts (batch-dim predicates, or scalar
+/// flags splatted to the mask's shape), each as `extraPred` in
+/// `RowLimitMaskInfo`: the caller ANDs them into its own per-message select.
+struct BoundaryMaskInfo {
+  unsigned boundedDim; // the pitch dim, as in `RowLimitMaskInfo`
+  Value rowBase;
+  OpFoldResult rowBound;
+  Value colBase;
+  OpFoldResult colBound;
+  SmallVector<Value> extraPreds;
+};
+
+/// Match `mask` against the pattern above for a tensor of any rank >= 2.
+/// Fails unless every conjunct is recognised, `other` is
+/// zero-fill-compatible, and a bound is present; a row bound also needs a
+/// non-broadcast pitch dim. Each bound is i32 or i64 with the base of the
+/// compare's own type (no extension between them), and may be ANDed with
+/// `index >= 0`, which is dropped only if \p loadOp proves the index base
+/// non-negative (see `triton::valueIsNonNegative`); without it only a bare
+/// `arange` qualifies. A splat constant bound is matched only with
+/// \p allowConstBounds.
+std::optional<BoundaryMaskInfo>
+matchBoundaryCheckMask(Value mask, Value other, ArrayRef<int64_t> tensorShape,
+                       unsigned contiguousDim, bool pitchDimIsBroadcast,
+                       Operation *loadOp, bool allowConstBounds = false);
+
+/// Whether a matched column bound can become a runtime `base_width`; true when
+/// \p info has none.
+///
+/// The surface width and the X coordinate both have to be a whole number of
+/// `get2DBlockIOWidthGranuleBytes` granules for the message to be legal, which
+/// is what `satisfies2DBlockReadAlignment` demands of a descriptor's inner
+/// shape and index. The width is `bound - colBase`, so both carry the
+/// requirement, and so does the origin shift the lowering derives from it. An
+/// unknown divisibility refuses: neither value comes with an alignment
+/// contract. Sub-byte elements refuse, as the width is counted in bytes.
+///
+/// Both `ttig.block_io`-stamping in `MaterializeBlockPointer` and the rewrite
+/// in `LowerTo2DBlockLoad` must agree on this, or a load gets de-anchored
+/// without gaining a 2D block read.
+bool colLimitIsHWCompatible(const BoundaryMaskInfo &info,
+                            triton::intel::ModuleAxisInfoAnalysis &axisInfo,
+                            unsigned elemSizeInBits);
+
+/// A store mask's `base + arange(0, extent) < bound` along one surface dim, as
+/// `BoundaryMaskInfo` holds it (`base` null for a bare `arange`).
+struct StoreDimClamp {
+  Value base;
+  OpFoldResult bound;
+  int64_t extent;
+};
+
+/// The dims along which a 2D block store's surface can enforce its mask.
+struct StoreBoundaryClamp {
+  std::optional<StoreDimClamp> row, col;
+};
+
+/// The clamps for the mask of \p op, constant bounds allowed: a dim's base must
+/// be a multiple of `PowerOf2Ceil(extent)`, so `base + arange` cannot wrap, and
+/// a column must pass `colLimitIsHWCompatible`. No dim clamps for a uniform
+/// conjunct, with `TRITON_INTEL_DISABLE_STORE_BOUNDARY_CLAMP` set, or unless
+/// the constant pitch \p pitchBytes covers the widest surface: the tensor's row
+/// bytes, at least 64, plus any base alignment compensation.
+StoreBoundaryClamp
+matchStoreBoundaryClamp(triton::StoreOp op, unsigned contiguousDim,
+                        std::optional<int64_t> pitchBytes,
+                        triton::intel::ModuleAxisInfoAnalysis &axisInfo);
+
+/// Return `extraPred` as a value of type \p maskTy: unchanged if it already has
+/// that shape, else broadcast to it straight from its innermost source (so
+/// no broadcast-of-broadcast is left behind).
+Value materializeExtraPred(OpBuilder &builder, Location loc, Value extraPred,
+                           RankedTensorType maskTy);
+
+/// Compute `clamp(bound - rowBase, 0, rowExtent)` as an i32. `bound` and
+/// `rowBase` are i32 or i64; the result is exact for any value, including i64
+/// inputs whose difference overflows. `rowBase` may be null.
+Value computeRowLimitHeight(OpBuilder &builder, Location loc, Value bound,
+                            Value rowBase, int64_t rowExtent);
+
+/// The column counterpart of `computeRowLimitHeight`, in bytes:
+/// `clamp(bound - colBase, 0, colExtent) * elemSizeInBytes` as an i32.
+/// `colBase` may be null.
+Value computeColLimitWidth(OpBuilder &builder, Location loc, Value bound,
+                           Value colBase, int64_t colExtent,
+                           unsigned elemSizeInBytes);
 
 } // namespace mlir::triton::gpu::intel
 

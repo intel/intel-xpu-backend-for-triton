@@ -4,6 +4,8 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "triton/Analysis/Alias.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -49,6 +51,47 @@ static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
   ExperimentalGSanTensorDescAccessOp::create(builder, op.getLoc(), op.getDesc(),
                                              op.getCoord(), op.getPred(),
                                              /*isStore=*/false);
+}
+
+static void instrumentAsyncBulkCopy(Operation *op, ttg::MemDescType sharedTy,
+                                    Value pointer, int numBytes, Value pred,
+                                    bool leaderOnly, bool isStore) {
+  // Each issuing CTA accesses one contiguous row. Pass its exact byte range to
+  // the runtime instead of materializing a tensor of source pointers.
+  ImplicitLocOpBuilder b(op->getLoc(), op);
+  auto copyLayout = ttng::getBulkCopyLayout(sharedTy);
+  Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value sourceOffset = arith::ConstantIntOp::create(b, 0, 32);
+  unsigned stride = numBytes;
+  for (unsigned bit = 1; bit <= copyLayout.splitMask; bit <<= 1) {
+    if (!(copyLayout.splitMask & bit))
+      continue;
+    Value set = arith::AndIOp::create(b, ctaId,
+                                      arith::ConstantIntOp::create(b, bit, 32));
+    Value index = arith::DivUIOp::create(
+        b, set, arith::ConstantIntOp::create(b, bit, 32));
+    Value delta = arith::MulIOp::create(
+        b, index, arith::ConstantIntOp::create(b, stride, 32));
+    sourceOffset = arith::AddIOp::create(b, sourceOffset, delta);
+    stride *= 2;
+  }
+  Value issuerPred = pred;
+  if (leaderOnly) {
+    Value replica = arith::AndIOp::create(
+        b, ctaId,
+        arith::ConstantIntOp::create(b, copyLayout.broadcastMask, 32));
+    Value leader =
+        arith::CmpIOp::create(b, arith::CmpIPredicate::eq, replica,
+                              arith::ConstantIntOp::create(b, 0, 32));
+    issuerPred = arith::AndIOp::create(b, issuerPred, leader);
+  }
+  auto ptrTy = tt::PointerType::get(b.getI8Type());
+  Value ptr = tt::BitcastOp::create(b, ptrTy, pointer);
+  ptr = tt::AddPtrOp::create(b, ptrTy, ptr, sourceOffset);
+  if (isStore)
+    ExperimentalGSanStoreRangeOp::create(b, ptr, numBytes, issuerPred);
+  else
+    ExperimentalGSanLoadRangeOp::create(b, ptr, numBytes, issuerPred);
 }
 
 static void instrumentAsyncTMAStore(Operation *op, Value descValue,
@@ -225,12 +268,29 @@ getMBarrierArrivals(Operation *op, OpBuilder &builder) {
   return arrivals;
 }
 
-static int64_t getMBarrierCapacity(ModuleOp module) {
-  // Upper bound to the number of simultaneously active mbarriers
+static FailureOr<int64_t> getMBarrierCapacity(ModuleOp module) {
+  SmallVector<Value> barriers;
+  module.walk(
+      [&](ttng::InitBarrierOp op) { barriers.push_back(op.getAlloc()); });
+  if (barriers.empty())
+    return 0;
+
+  auto solver = createDataFlowSolver();
+  auto *analysis = solver->load<SharedMemoryAliasAnalysis>();
+  if (failed(solver->initializeAndRun(module)))
+    return failure();
+
+  // The runtime retains a table entry for every distinct barrier address, even
+  // after invalidation. Count the underlying allocations once, since a single
+  // init in a loop can dynamically index every barrier in an allocation.
+  DenseSet<Value> allocations;
+  for (Value barrier : barriers) {
+    const auto &aliases = analysis->getLatticeElement(barrier)->getValue();
+    allocations.insert(aliases.getAllocs().begin(), aliases.getAllocs().end());
+  }
   int64_t capacity = 0;
-  module.walk([&](ttng::InitBarrierOp op) {
-    capacity += op.getAlloc().getType().getNumElements();
-  });
+  for (Value allocation : allocations)
+    capacity += cast<ttg::MemDescType>(allocation.getType()).getNumElements();
   return capacity;
 }
 
@@ -378,8 +438,15 @@ public:
     DenseSet<StringRef> calledFuncs;
     module.walk(
         [&](tt::CallOp callOp) { calledFuncs.insert(callOp.getCallee()); });
-    int64_t mBarrierCapacity =
-        ttg::lookupNumCTAs(module) > 1 ? getMBarrierCapacity(module) : 0;
+    int64_t mBarrierCapacity = 0;
+    if (ttg::lookupNumCTAs(module) > 1) {
+      auto capacity = getMBarrierCapacity(module);
+      if (failed(capacity)) {
+        signalPassFailure();
+        return;
+      }
+      mBarrierCapacity = *capacity;
+    }
     const bool instrumentMBarriers = mBarrierCapacity > 0;
     DenseMap<tt::FuncOp, Value> mbarrierScratch;
 
@@ -511,6 +578,16 @@ public:
           })
           .Case([&](ttng::AsyncTMACopyGlobalToLocalOp op) {
             instrumentAsyncTMALoad(op);
+          })
+          .Case([&](ttng::AsyncBulkCopyGlobalToLocalOp op) {
+            instrumentAsyncBulkCopy(op, op.getDst().getType(), op.getSrc(),
+                                    op.getNumBytesPerCTA(), op.getPred(),
+                                    op.getMulticast(), /*isStore=*/false);
+          })
+          .Case([&](ttng::AsyncBulkCopyLocalToGlobalOp op) {
+            instrumentAsyncBulkCopy(op, op.getSrc().getType(), op.getDst(),
+                                    op.getNumBytesPerCTA(), op.getPred(),
+                                    /*leaderOnly=*/true, /*isStore=*/true);
           })
           .Case(
               [&](ttng::AsyncTMAGatherOp op) { instrumentAsyncTMAGather(op); })

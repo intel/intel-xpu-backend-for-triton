@@ -167,6 +167,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#wmma_v2 = #ttg.amd_wmma<{version = 2, ctaLayout = {warp = [[0, 1], [1, 0]]}}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @wmma_v2_dot_kwidth_exceeds_k(
+              %arg0: tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #wmma_v2, kWidth = 16}>>,
+              %arg1: tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #wmma_v2, kWidth = 16}>>,
+              %dst: tensor<16x16xf32, #wmma_v2>
+  ) {
+    // expected-error @+1 {{WMMA dot operand kWidth = 16 requires K >= 32, but K = 16}}
+    %0 = tt.dot %arg0, %arg1, %dst : tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #wmma_v2, kWidth = 16}>> * tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #wmma_v2, kWidth = 16}>> -> tensor<16x16xf32, #wmma_v2>
+    tt.return
+  }
+}
+
+// -----
+
 #wmma_acc = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, CGALayout = [[1, 0], [0, 1]], instrShape = [16, 16, 32]}>
 #wmma_dim1 = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, CGALayout = [[1, 0], [0, 0]], instrShape = [16, 16, 32]}>
 #wmma_dim2 = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, CGALayout = [[0, 0], [0, 1]], instrShape = [16, 16, 32]}>
@@ -370,6 +385,101 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// TDM gather only supports partitioning along rows.
+#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 1, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_gather_partitioned_cols(
+    %tensorDesc: !tt.tensordesc<16x64xf16, #partitioned>,
+    %memDesc: !ttg.memdesc<16x64xf16, #partitioned, #smem, mutable>,
+    %row_indices: tensor<16xi32, #slice>
+  ) {
+    // expected-error @+1 {{NYI: TDM gather only supports partitioning along rows (partitionDim 0)}}
+    %token = amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<16xi32, #slice>, !ttg.memdesc<16x64xf16, #partitioned, #smem, mutable> -> !tt.tensordesc<16x64xf16, #partitioned>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 2, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_gather_partitioned_invalid_swizzle(
+    %tensorDesc: !tt.tensordesc<16x64xf16, #partitioned>,
+    %memDesc: !ttg.memdesc<16x64xf16, #partitioned, #smem, mutable>,
+    %row_indices: tensor<16xi32, #slice>
+  ) {
+    // expected-error @+1 {{TDM does not support swizzling in partitioned layout}}
+    %token = amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<16xi32, #slice>, !ttg.memdesc<16x64xf16, #partitioned, #smem, mutable> -> !tt.tensordesc<16x64xf16, #partitioned>
+    tt.return
+  }
+}
+
+// -----
+
+// A TDM store from a column-partitioned layout reads one 32-column piece per
+// warp, so the padding interval must equal the piece width.
+#inner = #ttg.padded_shared<[128:+16] {order = [1, 0], shape = [64, 32]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 1, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_store_partitioned_invalid_padding_interval(
+    %tensorDesc: !tt.tensordesc<64x128xi8, #partitioned>,
+    %memDesc: !ttg.memdesc<64x128xi8, #partitioned, #smem, mutable>
+  ) {
+    // expected-error @+1 {{TDM store padding is only supported when padding interval equals the innermost block dimension (got padInterval=128, innermost dimension=32)}}
+    amdg.async_tdm_copy_local_to_global %tensorDesc from %memDesc: !ttg.memdesc<64x128xi8, #partitioned, #smem, mutable> -> !tt.tensordesc<64x128xi8, #partitioned>
+    tt.return
+  }
+}
+
+// -----
+
+// The inner padded layout of a partitioned TDM store source is checked like an
+// unpartitioned one: 1 f16 of padding is not dword aligned.
+#inner = #ttg.padded_shared<[64:+1] {order = [1, 0], shape = [32, 64]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_store_partitioned_invalid_inner_padding(
+    %tensorDesc: !tt.tensordesc<64x64xf16, #partitioned>,
+    %memDesc: !ttg.memdesc<64x64xf16, #partitioned, #smem, mutable>
+  ) {
+    // expected-error @+1 {{TDM padding must be aligned to dwords}}
+    amdg.async_tdm_copy_local_to_global %tensorDesc from %memDesc: !ttg.memdesc<64x64xf16, #partitioned, #smem, mutable> -> !tt.tensordesc<64x64xf16, #partitioned>
+    tt.return
+  }
+}
+
+// -----
+
+// TDM scatter only supports partitioning along rows.
+#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 1, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_scatter_partitioned_cols(
+    %tensorDesc: !tt.tensordesc<16x64xf16, #partitioned>,
+    %memDesc: !ttg.memdesc<16x64xf16, #partitioned, #smem, mutable>,
+    %row_indices: tensor<16xi32, #slice>
+  ) {
+    // expected-error @+1 {{NYI: TDM scatter only supports partitioning along rows (partitionDim 0)}}
+    %token = amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<16xi32, #slice>, !ttg.memdesc<16x64xf16, #partitioned, #smem, mutable> -> !tt.tensordesc<16x64xf16, #partitioned>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked1 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0], CGALayout = [[0, 0], [0, 0]]}>
 #slice1 = #ttg.slice<{dim = 1, parent = #blocked1}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
@@ -415,6 +525,114 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
     // expected-error @+1 {{TDM scatter only supports single interval paddings}}
     amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<8xi32>, !ttg.memdesc<8x64xf16, #shared_scatter_2_intervals, #smem_scatter, mutable> -> !tt.tensordesc<8x64xf16>
+    tt.return
+  }
+}
+
+// -----
+
+#idx_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#idx = #ttg.slice<{dim = 1, parent = #idx_parent}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @scatter_indices_distributed_across_lanes(
+    %tensorDesc: !tt.tensordesc<32x128xf16>,
+    %memDesc: !ttg.memdesc<32x128xf16, #shared, #smem, mutable>,
+    %row_indices: tensor<32xi32, #idx>
+  ) {
+    // expected-error @+1 {{index layout distributes values across lanes}}
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<32xi32, #idx>, !ttg.memdesc<32x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<32x128xf16>
+    tt.return
+  }
+}
+
+// -----
+
+#idx_parent = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0], [8, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [], block = [], order = [1, 0]}>
+#idx = #ttg.slice<{dim = 1, parent = #idx_parent}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @scatter_missing_index_block_basis(
+    %tensorDesc: !tt.tensordesc<16x64xf16>,
+    %memDesc: !ttg.memdesc<16x64xf16, #shared, #smem, mutable>,
+    %row_indices: tensor<16xi32, #idx>
+  ) {
+    // expected-error @+1 {{TDM scatter index and source layout must both have a block basis or neither have a block basis}}
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<16xi32, #idx>, !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<16x64xf16>
+    tt.return
+  }
+}
+
+// -----
+
+#idx_parent = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1], CGALayout = [[0, 0]]}>
+#idx = #ttg.slice<{dim = 0, parent = #idx_parent}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @scatter_m_split_with_broadcast_indices(
+    %tensorDesc: !tt.tensordesc<8x64xf16>,
+    %memDesc: !ttg.memdesc<8x64xf16, #shared, #smem, mutable>,
+    %row_indices: tensor<8xi32, #idx>
+  ) {
+    // expected-error @+1 {{TDM scatter index and shared encoding must have the same block basis for the row dimension}}
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<8xi32, #idx>, !ttg.memdesc<8x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<8x64xf16>
+    tt.return
+  }
+}
+
+// -----
+
+#idx_parent = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+#idx = #ttg.slice<{dim = 0, parent = #idx_parent}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @scatter_n_split_with_partitioned_indices(
+    %tensorDesc: !tt.tensordesc<8x64xf16>,
+    %memDesc: !ttg.memdesc<8x64xf16, #shared, #smem, mutable>,
+    %row_indices: tensor<8xi32, #idx>
+  ) {
+    // expected-error @+1 {{TDM scatter index and shared encoding must have the same block basis for the row dimension}}
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<8xi32, #idx>, !ttg.memdesc<8x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<8x64xf16>
+    tt.return
+  }
+}
+
+// -----
+
+#idx_parent = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1], CGALayout = [[0, 0], [0, 1]]}>
+#idx = #ttg.slice<{dim = 0, parent = #idx_parent}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0], [0, 1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @scatter_2d_split_with_mismatched_row_basis(
+    %tensorDesc: !tt.tensordesc<8x64xf16>,
+    %memDesc: !ttg.memdesc<8x64xf16, #shared, #smem, mutable>,
+    %row_indices: tensor<8xi32, #idx>
+  ) {
+    // expected-error @+1 {{TDM scatter index and shared encoding must have the same block basis for the row dimension}}
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<8xi32, #idx>, !ttg.memdesc<8x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<8x64xf16>
+    tt.return
+  }
+}
+
+// -----
+
+#idx_parent = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#idx = #ttg.slice<{dim = 1, parent = #idx_parent}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @scatter_column_major_shared_layout(
+    %tensorDesc: !tt.tensordesc<8x64xf16>,
+    %memDesc: !ttg.memdesc<8x64xf16, #shared, #smem, mutable>,
+    %row_indices: tensor<8xi32, #idx>
+  ) {
+    // expected-error @+1 {{TDM scatter only supports row-major shared order}}
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<8xi32, #idx>, !ttg.memdesc<8x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<8x64xf16>
     tt.return
   }
 }
@@ -773,8 +991,208 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %tensorDesc: !tt.tensordesc<2x32xf16, #non_unit_desc>,
     %memDesc: !ttg.memdesc<64xf16, #non_unit_alloc, #smem, mutable>
   ) {
-    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    // expected-error @+1 {{TDM buffer shape must match}}
     %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<2x32xf16, #non_unit_desc> -> !ttg.memdesc<64xf16, #non_unit_alloc, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // Slicing the innermost dimension leaves gaps between rows. TDM requires
+  // the subview to be contiguous before layout padding.
+  tt.func public @tdm_load_column_subview(
+    %tensorDesc: !tt.tensordesc<64x32xbf16, #shared>,
+    %memDesc: !ttg.memdesc<64x32xbf16, #shared, #smem, mutable, 64x64>
+  ) {
+    // expected-error @+1 {{TDM requires the subview to be contiguous in the allocation}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<64x32xbf16, #shared> -> !ttg.memdesc<64x32xbf16, #shared, #smem, mutable, 64x64>
+    tt.return
+  }
+
+  // Every fused member must have a contiguous destination, even if the other
+  // member accesses a whole allocation.
+  tt.func public @tdm_fused_column_subview(
+    %desc0: !tt.tensordesc<64x64xf16, #shared>,
+    %desc1: !tt.tensordesc<64x32xf16, #shared>,
+    %dst0: !ttg.memdesc<64x64xf16, #shared, #smem, mutable>,
+    %dst1: !ttg.memdesc<64x32xf16, #shared, #smem, mutable, 64x64>
+  ) {
+    // expected-error @+1 {{TDM requires the subview to be contiguous in the allocation}}
+    %token = amdg.async_tdm_fused_copy_global_to_local %desc0, %desc1 into %dst0, %dst1 {warp_used_hints = array<i32: 3, 12>} : !tt.tensordesc<64x64xf16, #shared>, !tt.tensordesc<64x32xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x32xf16, #shared, #smem, mutable, 64x64>
+    tt.return
+  }
+
+  // The TDM block would overrun a smaller destination.
+  tt.func public @tdm_load_block_larger_than_destination(
+    %tensorDesc: !tt.tensordesc<128x64xbf16, #shared>,
+    %memDesc: !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+  ) {
+    // expected-error @+1 {{TDM block shape (128, 64) exceeds the shared memory shape (64, 64)}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x64xbf16, #shared> -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // A partial block loaded into the start of the destination must still be
+  // written as consecutive rows.
+  tt.func public @tdm_load_partial_block_narrower_than_destination(
+    %tensorDesc: !tt.tensordesc<64x32xbf16, #shared>,
+    %memDesc: !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+  ) {
+    // expected-error @+1 {{TDM requires the partial block to be contiguous in the allocation}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<64x32xbf16, #shared> -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared_3d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
+#shared_2d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#col_major = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // The subview matches the descriptor after dropping its leading unit
+  // dimension, but store lowering does not yet support the rank difference.
+  tt.func public @tdm_store_rank_reducing_subview(
+    %tensorDesc: !tt.tensordesc<1x64x64xbf16, #shared_3d>
+  ) {
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<128x64xbf16, #shared_2d, #smem, mutable>
+    %subview = ttg.memdesc_subslice %alloc[64, 0] : !ttg.memdesc<128x64xbf16, #shared_2d, #smem, mutable> -> !ttg.memdesc<64x64xbf16, #shared_2d, #smem, mutable, 128x64>
+    // expected-error @+1 {{TDM store requires the tensor descriptor and shared memory source to have the same rank; rank-reducing stores are not yet supported}}
+    %token = amdg.async_tdm_copy_local_to_global %tensorDesc from %subview : !ttg.memdesc<64x64xbf16, #shared_2d, #smem, mutable, 128x64> -> !tt.tensordesc<1x64x64xbf16, #shared_3d>
+    tt.return
+  }
+
+  // Slicing a middle dimension leaves gaps between groups of rows.
+  tt.func public @tdm_load_middle_dim_subview(
+    %tensorDesc: !tt.tensordesc<4x8x64xbf16, #shared_3d>,
+    %memDesc: !ttg.memdesc<4x8x64xbf16, #shared_3d, #smem, mutable, 4x16x64>
+  ) {
+    // expected-error @+1 {{TDM requires the subview to be contiguous in the allocation}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<4x8x64xbf16, #shared_3d> -> !ttg.memdesc<4x8x64xbf16, #shared_3d, #smem, mutable, 4x16x64>
+    tt.return
+  }
+
+  // TDM writes rows of the innermost dimension, so filling a column subview of
+  // a column-major layout would transpose it, even though its columns are
+  // contiguous in the allocation.
+  tt.func public @tdm_load_column_major_column_subview(
+    %tensorDesc: !tt.tensordesc<64x32xbf16, #col_major>,
+    %memDesc: !ttg.memdesc<64x32xbf16, #col_major, #smem, mutable, 64x64>
+  ) {
+    // expected-error @+1 {{TDM requires the subview to be contiguous in the allocation}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<64x32xbf16, #col_major> -> !ttg.memdesc<64x32xbf16, #col_major, #smem, mutable, 64x64>
+    tt.return
+  }
+}
+
+// -----
+
+// TDM addresses each CTA's part of the destination from that CTA's base, so
+// neither a subview nor a partial block may be sliced across CTAs.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tdm_load_subview_sliced_across_ctas(
+    %tensorDesc: !tt.tensordesc<128x64xbf16, #shared>,
+    %memDesc: !ttg.memdesc<128x64xbf16, #shared, #smem, mutable, 256x64>
+  ) {
+    // expected-error @+1 {{mutable, 256x64>': the subview is sliced across CTAs}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x64xbf16, #shared> -> !ttg.memdesc<128x64xbf16, #shared, #smem, mutable, 256x64>
+    tt.return
+  }
+
+  // Each CTA owns one allocation row. The one-row view broadcasts across CTAs,
+  // so its block mapping collapses even though both cross terms are zero.
+  tt.func public @tdm_load_subview_collapsed_cta_mapping(
+    %tensorDesc: !tt.tensordesc<1x64xbf16, #shared>,
+    %memDesc: !ttg.memdesc<1x64xbf16, #shared, #smem, mutable, 2x64>
+  ) {
+    // expected-error @+1 {{mutable, 2x64>': the subview is sliced across CTAs}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<1x64xbf16, #shared> -> !ttg.memdesc<1x64xbf16, #shared, #smem, mutable, 2x64>
+    tt.return
+  }
+
+  // The rows stay on their CTAs, but each CTA's column slice has row gaps.
+  tt.func public @tdm_load_column_subview_row_split_ctas(
+    %tensorDesc: !tt.tensordesc<256x32xbf16, #shared>,
+    %memDesc: !ttg.memdesc<256x32xbf16, #shared, #smem, mutable, 256x64>
+  ) {
+    // expected-error @+1 {{TDM requires the subview to be contiguous in the allocation}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<256x32xbf16, #shared> -> !ttg.memdesc<256x32xbf16, #shared, #smem, mutable, 256x64>
+    tt.return
+  }
+
+  tt.func public @tdm_load_partial_block_across_ctas(
+    %tensorDesc: !tt.tensordesc<64x64xbf16, #shared>,
+    %memDesc: !ttg.memdesc<128x64xbf16, #shared, #smem, mutable>
+  ) {
+    // expected-error @+1 {{the partial block is sliced across CTAs}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<64x64xbf16, #shared> -> !ttg.memdesc<128x64xbf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#padded = #ttg.padded_shared<[64:+4] {order = [1, 0], shape = [64, 64]}>
+#padded_cols = #ttg.padded_shared<[64:+4] {order = [1, 0], shape = [64, 32]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // A column subview of a padded layout is not contiguous in the allocation.
+  tt.func public @tdm_load_padded_column_subview(
+    %tensorDesc: !tt.tensordesc<64x32xf16, #padded_cols>,
+    %memDesc: !ttg.memdesc<64x32xf16, #padded, #smem, mutable, 64x64>
+  ) {
+    // expected-error @+1 {{TDM requires the subview to be contiguous in the allocation}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<64x32xf16, #padded_cols> -> !ttg.memdesc<64x32xf16, #padded, #smem, mutable, 64x64>
+    tt.return
+  }
+}
+
+// -----
+
+// A non-unit pipeline dimension on the operand is not a transfer dimension.
+#desc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [2, 64]}>
+#padded = #ttg.padded_shared<[64:+8] {order = [0], shape = [64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_non_unit_pipeline(%desc: !tt.tensordesc<2x64xf16, #desc>) {
+    %dst = ttg.local_alloc : () -> !ttg.memdesc<2x64xf16, #padded, #smem, mutable>
+    // expected-error @+1 {{TDM buffer must not have an unsliced pipeline dimension; select an individual pipeline buffer before the transfer}}
+    %token = amdg.async_tdm_copy_global_to_local %desc into %dst : !tt.tensordesc<2x64xf16, #desc> -> !ttg.memdesc<2x64xf16, #padded, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Without the dropped dimension, the descriptor's layout must match the
+// allocation's.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+#desc_col_major = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 2, 0], CGALayout = [[0, 0, 1]]}>
+#desc_split_rows = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0], CGALayout = [[0, 1, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tdm_load_rank_reducing_inconsistent_order(
+    %tensorDesc: !tt.tensordesc<1x64x64xbf16, #desc_col_major>,
+    %memDesc: !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+  ) {
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<1x64x64xbf16, #desc_col_major> -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+    tt.return
+  }
+
+  tt.func public @tdm_load_rank_reducing_inconsistent_cga_layout(
+    %tensorDesc: !tt.tensordesc<1x64x64xbf16, #desc_split_rows>,
+    %memDesc: !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+  ) {
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<1x64x64xbf16, #desc_split_rows> -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -879,6 +1297,361 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @tdm_copy_padded_barrier(%desc: !tt.tensordesc<16x64xf16, #shared>, %dst: !ttg.memdesc<16x64xf16, #shared, #smem, mutable>, %barrier: !ttg.memdesc<1xi64, #padded, #smem>) {
     // expected-error @below {{barrier must have a contiguous shared-memory layout}}
     %0 = amdg.async_tdm_copy_global_to_local %desc into %dst, barrier = %barrier : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #padded, #smem> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_load_cache_modifier_and_scope(%arg0: !tt.ptr<f32>, %offsets: tensor<64xi32, #blocked>) {
+    // expected-error @+1 {{a cache modifier can't be combined with scope}}
+    %0 = amdg.buffer_load %arg0[%offsets] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>, scope = 1 : i32} : !tt.ptr<f32> -> tensor<64xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @make_buffer_desc_non_global_base(%arg0: !tt.ptr<f32, "descriptor">, %n: i32) {
+    // expected-error @+1 {{requires a global address space base}}
+    %0 = amdg.make_buffer_desc %arg0, %n : !tt.ptr<f32, "descriptor"> -> !amdg.buffer_desc<f32>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_load_tensor_soffset_shape(%arg0: !tt.ptr<f32>, %offsets: tensor<64xi32, #blocked>, %s: tensor<32xi32, #blocked>, %n: i32) {
+    %desc = amdg.make_buffer_desc %arg0, %n : !tt.ptr<f32> -> !amdg.buffer_desc<f32>
+    // expected-error @+1 {{a tensor soffset must have the type of the offsets}}
+    %0 = amdg.buffer_load %desc[%offsets] soffset = %s : tensor<32xi32, #blocked> : !amdg.buffer_desc<f32> -> tensor<64xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_gather_index_count_less_than_buffer(%desc: !tt.tensordesc<16x64xf16>, %buf: !ttg.memdesc<16x64xf16, #shared, #smem, mutable>, %indices: tensor<8xi32>) {
+    // expected-error @+1 {{TDM gather/scatter buffer shape must match}}
+    amdg.async_tdm_gather %desc[%indices] to %buf : tensor<8xi32>, !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<16x64xf16>
+    tt.return
+  }
+
+  tt.func @tdm_fused_second_member_element_mismatch(%desc: !tt.tensordesc<32x64xf16>, %first: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>, %second: !ttg.memdesc<32x64xbf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{TDM descriptor and buffer element types must match}}
+    amdg.async_tdm_fused_copy_global_to_local %desc, %desc into %first, %second {warp_used_hints = array<i32: 3, 12>} : !tt.tensordesc<32x64xf16>, !tt.tensordesc<32x64xf16> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>, !ttg.memdesc<32x64xbf16, #shared, #smem, mutable>
+    tt.return
+  }
+
+  tt.func @tdm_fused_second_member_immutable(%desc: !tt.tensordesc<32x64xf16>, %first: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>, %immutable: !ttg.memdesc<32x64xf16, #shared, #smem>) {
+    // expected-error @+1 {{Cannot store into immutable memory}}
+    amdg.async_tdm_fused_copy_global_to_local %desc, %desc into %first, %immutable {warp_used_hints = array<i32: 3, 12>} : !tt.tensordesc<32x64xf16>, !tt.tensordesc<32x64xf16> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>, !ttg.memdesc<32x64xf16, #shared, #smem>
+    tt.return
+  }
+
+  tt.func @tdm_store_subview_too_small(%desc: !tt.tensordesc<32x64xf16>, %allocation: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %allocation [0, 0] : !ttg.memdesc<32x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 32x64>
+    // expected-error @+1 {{TDM buffer shape must match}}
+    amdg.async_tdm_copy_local_to_global %desc from %view : !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 32x64> -> !tt.tensordesc<32x64xf16>
+    tt.return
+  }
+
+  tt.func @tdm_load_unsliced_pipeline_dimension(%desc: !tt.tensordesc<2x32x64xf16>, %buf: !ttg.memdesc<2x32x64xf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{TDM buffer must not have an unsliced pipeline dimension; select an individual pipeline buffer before the transfer}}
+    amdg.async_tdm_copy_global_to_local %desc into %buf : !tt.tensordesc<2x32x64xf16> -> !ttg.memdesc<2x32x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.padded_shared<[64:+8, 256:+8] {order = [1, 0], shape = [32, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_multiple_padding_intervals(%desc: !tt.tensordesc<32x64xf16, #shared>, %buf: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{TDM only supports a single padding interval}}
+    amdg.async_tdm_copy_global_to_local %desc into %buf : !tt.tensordesc<32x64xf16, #shared> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.padded_shared<[64:+512] {order = [1, 0], shape = [32, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_padding_amount_too_large(%desc: !tt.tensordesc<32x64xf16, #shared>, %buf: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{TDM padding amount must be at most 128 dwords}}
+    amdg.async_tdm_copy_global_to_local %desc into %buf : !tt.tensordesc<32x64xf16, #shared> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_prefetch_missing_index(%desc: !tt.tensordesc<32x64xf16>, %i: i32, %p: i1) {
+    // expected-error @+1 {{requires one index per descriptor dimension}}
+    amdg.tdm_prefetch %desc[%i], %p, speculative = false : !tt.tensordesc<32x64xf16>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_wait_negative_count() {
+    // expected-error @+1 {{'num' failed to satisfy constraint}}
+    amdg.async_tdm_wait {num = -1 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_intrinsic_wait_negative_count() {
+    // expected-error @+1 {{'count' failed to satisfy constraint}}
+    amdg.async_tdm_intrinsic_wait {count = -1 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+#inner = #ttg.padded_shared<[1024:+8] {order = [1, 0], shape = [16, 64]}>
+#shared = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_partitioned_padding_interval_too_large(%desc: !tt.tensordesc<32x64xf16>, %buf: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{TDM padding interval must be at most 256 dwords}}
+    amdg.async_tdm_copy_global_to_local %desc into %buf : !tt.tensordesc<32x64xf16> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.padded_shared<[64:+1] {order = [1, 0], shape = [32, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_padding_not_dword_aligned(%desc: !tt.tensordesc<32x64xf16, #shared>, %buf: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{TDM padding must be aligned to dwords}}
+    amdg.async_tdm_copy_global_to_local %desc into %buf : !tt.tensordesc<32x64xf16, #shared> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_store_rank_reduction(%desc: !tt.tensordesc<1x64xf16>, %buf: !ttg.memdesc<64xf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{TDM store requires the tensor descriptor and shared memory source to have the same rank; rank-reducing stores are not yet supported}}
+    amdg.async_tdm_copy_local_to_global %desc from %buf : !ttg.memdesc<64xf16, #shared, #smem, mutable> -> !tt.tensordesc<1x64xf16>
+    tt.return
+  }
+}
+
+// -----
+
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#shared = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_indivisible_partition_shape(%desc: !tt.tensordesc<2x64xf16>, %buf: !ttg.memdesc<2x64xf16, #shared, #smem, mutable, 4x64>) {
+    // expected-error @+1 {{partitioned TDM shape per CTA must be divisible}}
+    amdg.async_tdm_copy_global_to_local %desc into %buf : !tt.tensordesc<2x64xf16> -> !ttg.memdesc<2x64xf16, #shared, #smem, mutable, 4x64>
+    tt.return
+  }
+}
+
+// -----
+
+#desc_layout = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [32, 64]}>
+#alloc_layout = #ttg.padded_shared<[64:+8] {order = [0, 1], shape = [32, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_same_padding_different_order(%desc: !tt.tensordesc<32x64xf16, #desc_layout>, %buf: !ttg.memdesc<32x64xf16, #alloc_layout, #smem, mutable>) {
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    amdg.async_tdm_copy_global_to_local %desc into %buf : !tt.tensordesc<32x64xf16, #desc_layout> -> !ttg.memdesc<32x64xf16, #alloc_layout, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_update_wrong_shared_layout_rank(%desc: !tt.tensordesc<32x64xf16, #shared>, %p: i32) {
+    // expected-error @+1 {{TDM descriptor shared layout rank must match}}
+    %updated = amdg.update_tensor_descriptor %desc pred = %p : !tt.tensordesc<32x64xf16, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+#desc_layout = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [32, 64]}>
+#alloc_layout = #ttg.padded_shared<[64:+8] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [2, 0], [1, 0], [4, 0], [8, 0]], block = []}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_gather_different_rows_permuted_layout(%desc: !tt.tensordesc<32x64xf16, #desc_layout>, %buf: !ttg.memdesc<16x64xf16, #alloc_layout, #smem, mutable>, %indices: tensor<16xi32>) {
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    amdg.async_tdm_gather %desc[%indices] to %buf : tensor<16xi32>, !ttg.memdesc<16x64xf16, #alloc_layout, #smem, mutable> -> !tt.tensordesc<32x64xf16, #desc_layout>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_atomic_load_release(%desc: !amdg.buffer_desc<i32>, %offsets: tensor<64xi32, #blocked>) {
+    // expected-error @+1 {{only supports acquire and relaxed semantics}}
+    %0 = amdg.buffer_atomic_load release, gpu, %desc[%offsets] : !amdg.buffer_desc<i32> -> tensor<64xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_atomic_store_acquire(%desc: !amdg.buffer_desc<i32>, %offsets: tensor<64xi32, #blocked>, %value: tensor<64xi32, #blocked>) {
+    // expected-error @+1 {{only supports release and relaxed semantics}}
+    amdg.buffer_atomic_store acquire, gpu, %value, %desc[%offsets] : !amdg.buffer_desc<i32> -> tensor<64xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_atomic_load_i1(%desc: !amdg.buffer_desc<i1>, %offsets: tensor<64xi32, #blocked>) {
+    // expected-error @+1 {{only supports elements of 8 to 64 bits}}
+    %0 = amdg.buffer_atomic_load relaxed, gpu, %desc[%offsets] : !amdg.buffer_desc<i1> -> tensor<64xi1, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_cache_modifier_and_scope(%desc: !tt.tensordesc<32x64xf16, #shared>, %buf: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{a cache modifier can't be combined with a cache policy or scope}}
+    %0 = amdg.async_tdm_copy_global_to_local %desc into %buf {cache = 2 : i32, scope = 1 : i32} : !tt.tensordesc<32x64xf16, #shared> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+
+  tt.func @tdm_store_last_use(%desc: !tt.tensordesc<32x64xf16, #shared>, %buf: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{the last_use temporal hint is only valid for loads}}
+    %0 = amdg.async_tdm_copy_local_to_global %desc from %buf {cachePolicy = #amdg.cache_policy_gfx12<temporal = last_use>} : !ttg.memdesc<32x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<32x64xf16, #shared>
+    tt.return
+  }
+
+  tt.func @tdm_gather_last_use_sys_scope(%desc: !tt.tensordesc<8x64xf16, #shared>, %buf: !ttg.memdesc<8x64xf16, #shared, #smem, mutable>, %indices: tensor<8xi32>) {
+    // expected-error @+1 {{the last_use temporal hint can't be combined with the sys scope}}
+    %0 = amdg.async_tdm_gather %desc[%indices] to %buf {cachePolicy = #amdg.cache_policy_gfx12<temporal = last_use>, scope = 3 : i32} : tensor<8xi32>, !ttg.memdesc<8x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<8x64xf16, #shared>
+    tt.return
+  }
+
+  tt.func @async_copy_local_to_global_cache_modifier_and_scope(%buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, %ptrs: tensor<32x32x!tt.ptr<f32>, #blocked>) {
+    // expected-error @+1 {{a cache modifier can't be combined with scope}}
+    %0 = amdg.async_copy_local_to_global %buf, %ptrs cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal> {scope = 1 : i32} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#desc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [1, 64]}>
+#alloc = #ttg.padded_shared<[64:+8] {order = [0], shape = [64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_unit_pipeline(%desc: !tt.tensordesc<1x64xf16, #desc>, %dst: !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>) {
+    // expected-error @+1 {{TDM buffer must not have an unsliced pipeline dimension}}
+    amdg.async_tdm_copy_global_to_local %desc into %dst : !tt.tensordesc<1x64xf16, #desc> -> !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>
+    tt.return
+  }
+  tt.func @tdm_fused_load_unit_pipeline(%desc: !tt.tensordesc<1x64xf16, #desc>, %dst: !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>, %other: !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>) {
+    // expected-error @+1 {{TDM buffer must not have an unsliced pipeline dimension}}
+    amdg.async_tdm_fused_copy_global_to_local %desc, %desc into %dst, %other {warp_used_hints = array<i32: 3, 12>} : !tt.tensordesc<1x64xf16, #desc>, !tt.tensordesc<1x64xf16, #desc> -> !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>, !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>
+    tt.return
+  }
+  tt.func @tdm_store_unit_pipeline(%desc: !tt.tensordesc<1x64xf16, #desc>, %src: !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>) {
+    // expected-error @+1 {{TDM buffer must not have an unsliced pipeline dimension}}
+    amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<1x64xf16, #alloc, #smem, mutable> -> !tt.tensordesc<1x64xf16, #desc>
+    tt.return
+  }
+  tt.func @tdm_store_unit_pipeline_no_descriptor_layout(%desc: !tt.tensordesc<1x64xf16>, %src: !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>) {
+    // expected-error @+1 {{TDM buffer must not have an unsliced pipeline dimension}}
+    amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<1x64xf16, #alloc, #smem, mutable> -> !tt.tensordesc<1x64xf16>
+    tt.return
+  }
+}
+
+// -----
+
+#desc = #ttg.padded_shared<[64:+4] {order = [1, 0], shape = [128, 64]}>
+#alloc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [256, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_store_padded_row_subview_inconsistent_padding(%desc: !tt.tensordesc<128x64xf16, #desc>, %src: !ttg.memdesc<128x64xf16, #alloc, #smem, mutable, 256x64>) {
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<128x64xf16, #alloc, #smem, mutable, 256x64> -> !tt.tensordesc<128x64xf16, #desc>
+    tt.return
+  }
+}
+
+// -----
+
+#desc = #ttg.padded_shared<[64:+8] {order = [0, 1], shape = [128, 64]}>
+#alloc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [256, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_store_padded_row_subview_inconsistent_order(%desc: !tt.tensordesc<128x64xf16, #desc>, %src: !ttg.memdesc<128x64xf16, #alloc, #smem, mutable, 256x64>) {
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<128x64xf16, #alloc, #smem, mutable, 256x64> -> !tt.tensordesc<128x64xf16, #desc>
+    tt.return
+  }
+}
+
+// -----
+
+#desc = #ttg.padded_shared<[64:+8] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], block = [[0, 32]]}>
+#alloc = #ttg.padded_shared<[64:+8] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], block = [[128, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_store_padded_row_subview_inconsistent_cga(%desc: !tt.tensordesc<128x64xf16, #desc>, %src: !ttg.memdesc<128x64xf16, #alloc, #smem, mutable, 256x64>) {
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<128x64xf16, #alloc, #smem, mutable, 256x64> -> !tt.tensordesc<128x64xf16, #desc>
+    tt.return
+  }
+}
+
+// -----
+
+#desc = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [64, 32]}>
+#alloc = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [64, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_store_padded_column_subview(%desc: !tt.tensordesc<64x32xf16, #desc>, %src: !ttg.memdesc<64x32xf16, #alloc, #smem, mutable, 64x64>) {
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<64x32xf16, #alloc, #smem, mutable, 64x64> -> !tt.tensordesc<64x32xf16, #desc>
     tt.return
   }
 }

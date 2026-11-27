@@ -83,8 +83,3 @@ python/test/unit/language/test_core.py::test_strided_store[float64]
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_store
 python/test/unit/language/test_tensor_descriptor.py::test_make_tensor_descriptor_matmul
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_rank_reducing_matmul
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/8241
-python/test/unit/language/test_core.py::test_enable_fp_fusion[True-False-True]
-python/test/unit/language/test_core.py::test_enable_fp_fusion[True-True-True]
-python/test/unit/language/test_core.py::test_force_disable_fp_fusion[True-False]
-python/test/unit/language/test_core.py::test_force_disable_fp_fusion[True-True]

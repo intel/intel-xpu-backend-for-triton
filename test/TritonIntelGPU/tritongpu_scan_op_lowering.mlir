@@ -104,9 +104,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// COM: Op and element type coverage. `i1` uses the logical group ops; the three
-// COM: `i1` combines whose shared mapping is wrong (add, maxsi, minsi -- #8212)
-// COM: are rejected instead, see the negative cases below.
+// COM: Op and element type coverage. `i1` uses the logical group ops.
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
@@ -324,17 +322,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // -----
 
-// COM: Negative: `i1` add is mod-2 and signed `i1` true is -1, so the shared
-// COM: arith-to-SPIR-V logical map is wrong for these three combines. That is a
-// COM: pre-existing defect on the reduce path; the scan gate refuses them rather
-// COM: than becoming a second consumer of it.
+// COM: `i1` add is mod 2 and signed `i1` true is -1, so add scans with Xor,
+// COM: maxsi with And and minsi with Or.
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @scan_i1_addi
   tt.func public @scan_i1_addi(%f : tensor<32xi1, #blocked>) -> tensor<32xi1, #blocked> {
-    // CHECK-NOT:     GroupNonUniform
-    // CHECK-COUNT-5: llvm.call spir_funccc @_Z20sub_group_shuffle_upcj
+    // SCAN-ON:          [[SUBGROUP:%.*]] = llvm.mlir.constant(3 : i32) : i32
+    // SCAN-ON-NEXT:     [[INCLUSIVE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+    // SCAN-ON-NEXT:     llvm.call spir_funccc @_Z33__spirv_GroupNonUniformLogicalXoriib([[SUBGROUP]], [[INCLUSIVE]], %{{.*}}) {{.*}} : (i32, i32, i1) -> i1
+    // SCAN-OFF-NOT:     GroupNonUniform
+    // SCAN-OFF-COUNT-5: llvm.call spir_funccc @_Z20sub_group_shuffle_upcj
     %g = "tt.scan" (%f) ({
     ^bb0(%a: i1, %b: i1):
       %r = arith.addi %a, %b : i1
@@ -346,8 +345,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
   // CHECK-LABEL: llvm.func spir_kernelcc @scan_i1_maxsi
   tt.func public @scan_i1_maxsi(%f : tensor<32xi1, #blocked>) -> tensor<32xi1, #blocked> {
-    // CHECK-NOT:     GroupNonUniform
-    // CHECK-COUNT-5: llvm.call spir_funccc @_Z20sub_group_shuffle_upcj
+    // SCAN-ON:      [[SUBGROUP:%.*]] = llvm.mlir.constant(3 : i32) : i32
+    // SCAN-ON-NEXT: [[INCLUSIVE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+    // SCAN-ON-NEXT: llvm.call spir_funccc @_Z33__spirv_GroupNonUniformLogicalAndiib([[SUBGROUP]], [[INCLUSIVE]], %{{.*}}) {{.*}} : (i32, i32, i1) -> i1
     %g = "tt.scan" (%f) ({
     ^bb0(%a: i1, %b: i1):
       %r = arith.maxsi %a, %b : i1
@@ -359,8 +359,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
   // CHECK-LABEL: llvm.func spir_kernelcc @scan_i1_minsi
   tt.func public @scan_i1_minsi(%f : tensor<32xi1, #blocked>) -> tensor<32xi1, #blocked> {
-    // CHECK-NOT:     GroupNonUniform
-    // CHECK-COUNT-5: llvm.call spir_funccc @_Z20sub_group_shuffle_upcj
+    // SCAN-ON:      [[SUBGROUP:%.*]] = llvm.mlir.constant(3 : i32) : i32
+    // SCAN-ON-NEXT: [[INCLUSIVE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+    // SCAN-ON-NEXT: llvm.call spir_funccc @_Z32__spirv_GroupNonUniformLogicalOriib([[SUBGROUP]], [[INCLUSIVE]], %{{.*}}) {{.*}} : (i32, i32, i1) -> i1
     %g = "tt.scan" (%f) ({
     ^bb0(%a: i1, %b: i1):
       %r = arith.minsi %a, %b : i1
@@ -373,9 +374,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // -----
 
-// COM: Negative: `arith.maxnumf`/`minnumf` return the numeric operand when exactly
-// COM: one operand is NaN, but SPIR-V leaves the group FMax/FMin choice undefined
-// COM: there. Rejected rather than lowered to an undefined-on-NaN builtin.
+// COM: Negative: SPIR-V group FMax/FMin pick the numeric operand like
+// COM: `arith.maxnumf`/`minnumf`, but leave an all-NaN set undefined, which a scan
+// COM: hits on every leading-NaN prefix. Rejected rather than lowered to them.
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
@@ -403,5 +404,124 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     }) {axis = 0 : i32, reverse = false} : (tensor<32xf32, #blocked>) -> tensor<32xf32, #blocked>
     // CHECK: llvm.return
     tt.return %g : tensor<32xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: The CI `prefix_sums` 32x64 tile scanned along the rows: two lanes, four
+// COM: warps and four register blocks hold the axis. The in-warp phase only shifts
+// COM: lanes by a fixed distance, and one shared-memory round with a single barrier
+// COM: combines the warps and the blocks: no shuffle with a computed lane index
+// COM: and no butterfly exchange of the totals.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @scan_2d_axis0_warps_and_blocks
+  tt.func public @scan_2d_axis0_warps_and_blocks(%f : tensor<32x64xf32, #blocked>) -> tensor<32x64xf32, #blocked> {
+    // CHECK-NOT: sub_group_shuffle_xor
+    // CHECK-NOT: @_Z17sub_group_shufflefj
+    // CHECK:     llvm.call spir_funccc @_Z20sub_group_shuffle_upfj
+    // CHECK-NOT: sub_group_shuffle_xor
+    // CHECK-NOT: @_Z17sub_group_shufflefj
+    // CHECK:     llvm.call spir_funccc @_Z7barrierj
+    // CHECK-NOT: sub_group_shuffle_xor
+    // CHECK-NOT: @_Z17sub_group_shufflefj
+    // CHECK-NOT: @_Z7barrierj
+    %g = "tt.scan" (%f) ({
+    ^bb0(%a: f32, %b: f32):
+      %r = arith.addf %a, %b : f32
+      tt.scan.return %r : f32
+    }) {axis = 0 : i32, reverse = false} : (tensor<32x64xf32, #blocked>) -> tensor<32x64xf32, #blocked>
+    // CHECK: llvm.return
+    tt.return %g : tensor<32x64xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: Layouts other than blocked take core's scan lowering, which shuffles through
+// COM: `TargetInfo::shuffleUp` and `shuffleDown`: a sub-group shuffle by the round's
+// COM: distance d = 1, 2, 4, 8, selected where the source lane is in bounds, which
+// COM: the target derives from the lane id: lane >= d up, lane < 16 - d down.
+
+#linear = #ttg.linear<{register = [], lane = [[1], [2], [4], [8]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @scan_linear_16_lanes(
+  tt.func public @scan_linear_16_lanes(%f : tensor<16xf32, #linear>) -> tensor<16xf32, #linear> {
+    // CHECK-NOT: GroupNonUniform
+    // COM: Skip the index computation of the layout, which also masks with 15.
+    // CHECK:     llvm.xor
+    // CHECK:     [[B1:%.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:     llvm.call spir_funccc @_Z12get_local_idj
+    // CHECK:     [[LANE1:%.*]] = llvm.and %{{.*}}, %{{.*}} : i32
+    // CHECK:     [[IN1:%.*]] = llvm.icmp "sge" [[LANE1]], [[B1]] : i32
+    // CHECK:     llvm.call spir_funccc @_Z20sub_group_shuffle_upfj
+    // CHECK:     llvm.select [[IN1]]
+    // CHECK:     [[B2:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:     llvm.call spir_funccc @_Z12get_local_idj
+    // CHECK:     [[LANE2:%.*]] = llvm.and %{{.*}}, %{{.*}} : i32
+    // CHECK:     [[IN2:%.*]] = llvm.icmp "sge" [[LANE2]], [[B2]] : i32
+    // CHECK:     llvm.call spir_funccc @_Z20sub_group_shuffle_upfj
+    // CHECK:     llvm.select [[IN2]]
+    // CHECK:     [[B4:%.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK:     llvm.call spir_funccc @_Z12get_local_idj
+    // CHECK:     [[LANE4:%.*]] = llvm.and %{{.*}}, %{{.*}} : i32
+    // CHECK:     [[IN4:%.*]] = llvm.icmp "sge" [[LANE4]], [[B4]] : i32
+    // CHECK:     llvm.call spir_funccc @_Z20sub_group_shuffle_upfj
+    // CHECK:     llvm.select [[IN4]]
+    // CHECK:     [[B8:%.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK:     llvm.call spir_funccc @_Z12get_local_idj
+    // CHECK:     [[LANE8:%.*]] = llvm.and %{{.*}}, %{{.*}} : i32
+    // CHECK:     [[IN8:%.*]] = llvm.icmp "sge" [[LANE8]], [[B8]] : i32
+    // CHECK:     llvm.call spir_funccc @_Z20sub_group_shuffle_upfj
+    // CHECK:     llvm.select [[IN8]]
+    // CHECK-NOT: sub_group_shuffle_down
+    // CHECK:     llvm.return
+    %g = "tt.scan" (%f) ({
+    ^bb0(%a: f32, %b: f32):
+      %r = arith.addf %a, %b : f32
+      tt.scan.return %r : f32
+    }) {axis = 0 : i32, reverse = false} : (tensor<16xf32, #linear>) -> tensor<16xf32, #linear>
+    tt.return %g : tensor<16xf32, #linear>
+  }
+
+  // CHECK-LABEL: llvm.func spir_kernelcc @scan_linear_16_lanes_reverse(
+  tt.func public @scan_linear_16_lanes_reverse(%f : tensor<16xf32, #linear>) -> tensor<16xf32, #linear> {
+    // CHECK-NOT: GroupNonUniform
+    // COM: Skip the index computation of the layout, which also masks with 15.
+    // CHECK:     llvm.xor
+    // CHECK:     [[B1:%.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK:     llvm.call spir_funccc @_Z12get_local_idj
+    // CHECK:     [[LANE1:%.*]] = llvm.and %{{.*}}, %{{.*}} : i32
+    // CHECK:     [[IN1:%.*]] = llvm.icmp "ult" [[LANE1]], [[B1]] : i32
+    // CHECK:     llvm.call spir_funccc @_Z22sub_group_shuffle_downfj
+    // CHECK:     llvm.select [[IN1]]
+    // CHECK:     [[B2:%.*]] = llvm.mlir.constant(14 : i32) : i32
+    // CHECK:     llvm.call spir_funccc @_Z12get_local_idj
+    // CHECK:     [[LANE2:%.*]] = llvm.and %{{.*}}, %{{.*}} : i32
+    // CHECK:     [[IN2:%.*]] = llvm.icmp "ult" [[LANE2]], [[B2]] : i32
+    // CHECK:     llvm.call spir_funccc @_Z22sub_group_shuffle_downfj
+    // CHECK:     llvm.select [[IN2]]
+    // CHECK:     [[B4:%.*]] = llvm.mlir.constant(12 : i32) : i32
+    // CHECK:     llvm.call spir_funccc @_Z12get_local_idj
+    // CHECK:     [[LANE4:%.*]] = llvm.and %{{.*}}, %{{.*}} : i32
+    // CHECK:     [[IN4:%.*]] = llvm.icmp "ult" [[LANE4]], [[B4]] : i32
+    // CHECK:     llvm.call spir_funccc @_Z22sub_group_shuffle_downfj
+    // CHECK:     llvm.select [[IN4]]
+    // CHECK:     [[B8:%.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK:     llvm.call spir_funccc @_Z12get_local_idj
+    // CHECK:     [[LANE8:%.*]] = llvm.and %{{.*}}, %{{.*}} : i32
+    // CHECK:     [[IN8:%.*]] = llvm.icmp "ult" [[LANE8]], [[B8]] : i32
+    // CHECK:     llvm.call spir_funccc @_Z22sub_group_shuffle_downfj
+    // CHECK:     llvm.select [[IN8]]
+    // CHECK-NOT: sub_group_shuffle_up
+    // CHECK:     llvm.return
+    %g = "tt.scan" (%f) ({
+    ^bb0(%a: f32, %b: f32):
+      %r = arith.addf %a, %b : f32
+      tt.scan.return %r : f32
+    }) {axis = 0 : i32, reverse = true} : (tensor<16xf32, #linear>) -> tensor<16xf32, #linear>
+    tt.return %g : tensor<16xf32, #linear>
   }
 }

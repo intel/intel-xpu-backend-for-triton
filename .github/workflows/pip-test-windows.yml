@@ -72,6 +72,14 @@ jobs:
           .venv\Scripts\activate.ps1
           pip install torch --index-url https://download.pytorch.org/whl/nightly/xpu
 
+      # Since pytorch/pytorch#202206 (first in torch 2.16.0.dev20261104) `import torch` fails with "DLL load
+      # failed while importing _C" unless the directory the pip runtime packages (intel-sycl-rt, mkl, ...)
+      # install their DLLs into is on PATH; registering it with os.add_dll_directory is not enough.
+      - name: Add the Intel runtime DLLs to PATH
+        run: |
+          $bin = (Resolve-Path .venv\Library\bin).Path
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+
       - name: PyTorch version
         run: |
           .venv\Scripts\activate.ps1
@@ -91,9 +99,10 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           pip install -r python\requirements.txt
-          pip install -U intel-sycl-rt==2026.1.0
+          pip install -U intel-sycl-rt==2026.2.0
           # `build` can't determine that Ninja is already installed.
           # similar issue: https://github.com/pypa/build/issues/506
+          $env:MAX_JOBS = $env:NUMBER_OF_PROCESSORS
           python -m build --wheel --no-isolation --skip-dependency-check
           pip install (Get-Item ${{ env.NEW_WORKSPACE }}\dist\*.whl)
 
@@ -164,9 +173,9 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           bash -c "\
             source ./scripts/capture-hw-details.sh; \
-            triton-utils pass_rate --reports reports --save-to-json pass_rate.json --merge-test-results --tests-with-multiple-testsuites; \
-            triton-utils pass_rate --reports reports --merge-test-results --tests-with-multiple-testsuites --suite tutorials --level testsuite --save-to-json pass_rate_tutorials.json; \
-            triton-utils tests_stats --reports reports --level testsuite --pretty-print --merge-test-results --tests-with-multiple-testsuites; \
+            triton-utils pass_rate --reports reports --save-to-json pass_rate.json --merge-test-results --tests-with-multiple-testsuites --allow-multiple-outcome-tags; \
+            triton-utils pass_rate --reports reports --merge-test-results --tests-with-multiple-testsuites --allow-multiple-outcome-tags --suite tutorials --level testsuite --save-to-json pass_rate_tutorials.json; \
+            triton-utils tests_stats --reports reports --level testsuite --pretty-print --merge-test-results --tests-with-multiple-testsuites --allow-multiple-outcome-tags; \
           "
 
       - name: Upload pass rate report

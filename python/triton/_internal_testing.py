@@ -1,4 +1,5 @@
 import importlib
+import itertools
 import functools
 import multiprocessing
 import os
@@ -32,6 +33,19 @@ torch_float8_dtypes = ['float8_e4m3fn', 'float8_e5m2']
 torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
 _PROCESS_POOL = None
+
+
+def fp6_values(fmt, codes):
+    mantissa, bias = (3, 1) if fmt == "e2m3" else (2, 3)
+    exp = (codes & 31) >> mantissa
+    fraction = (codes & ((1 << mantissa) - 1)).float() / (1 << mantissa)
+    return torch.ldexp(fraction + (exp != 0), exp.clamp_min(1) - bias) * (1 - 2 * (codes >> 5))
+
+
+def pack_fp6(codes):
+    groups = codes.reshape(*codes.shape[:-1], -1, 4)
+    words = groups[..., 0] | groups[..., 1] << 6 | groups[..., 2] << 12 | groups[..., 3] << 18
+    return torch.stack([words, words >> 8, words >> 16], -1).byte().flatten(-2)
 
 
 def is_interpreter():
@@ -149,7 +163,7 @@ def is_hip_rdna4():
     return target is not None and target.backend == 'hip' and 'gfx120' in target.arch
 
 
-def is_hip_gfx1250():
+def is_hip_cdna5():
     target = get_current_target()
     return target is not None and target.backend == 'hip' and 'gfx1250' in target.arch
 
@@ -348,7 +362,9 @@ def tma_skip_msg(byval_only=False):
         return "Requires advanced TMA support (NVIDIA Hopper or higher, CUDA 12.3 or higher)"
 
 
-requires_tma = pytest.mark.skipif(not supports_tma(), reason=tma_skip_msg())
+# Evaluate hardware requirements when pytest runs the test, so importing the
+# process helpers does not initialize CUDA before a worker's startup code.
+requires_tma = pytest.mark.skipif("not __import__('triton')._internal_testing.supports_tma()", reason=tma_skip_msg())
 
 
 def default_alloc_fn(size: int, align: int, _):
@@ -376,6 +392,14 @@ def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_list
     if env is not None:
         os.environ.update(env)
 
+    # Avoid initializing the GPU driver before the callback's startup code.
+    # The HIP build of PyTorch needs abort-on-device-assert disabled.
+    if not is_interpreter() and torch.version.hip is not None:
+        import resource
+
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        os.environ["HIP_SKIP_ABORT_ON_GPU_ERROR"] = "1"
+
     # Capture driver/runtime writes to stderr that bypass Python's file objects.
     with open(stderr_file, "w+b") as tmp_stderr:
         saved_stderr_fd = os.dup(2)
@@ -387,7 +411,8 @@ def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_list
         try:
             client_fn(*args, **kwargs)
             # Raise any asynchronous device errors
-            triton.runtime.driver.active.get_device_interface().synchronize()
+            if not is_interpreter():
+                triton.runtime.driver.active.get_device_interface().synchronize()
         except Exception as e:
             exc = e
         finally:
@@ -548,6 +573,9 @@ def run_in_process(client_fn, args=(), kwargs=None, env=None):
     return ProcessResult(exc, stderr)
 
 
+_fresh_knobs_counter = itertools.count()
+
+
 def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
     from triton import knobs
 
@@ -570,6 +598,17 @@ def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
 
     def fresh_function():
         nonlocal env_to_unset
+        # The in-memory kernel key ignores knobs and env vars (only the disk hash has them),
+        # so a kernel compiled outside this context would be reused here without reaching
+        # `compile`. Give this context its own key namespace; `monkeypatch.undo()` restores it.
+        # Not during warm-up: nothing is launched there, and per-test keys would defeat the
+        # warm-up dispatcher's deduplication (the key is part of the compile-context digest).
+        if not is_compile_warmup():
+            from triton.runtime import jit
+
+            compute_cache_key = jit.compute_cache_key
+            namespace = f"|fresh_knobs-{next(_fresh_knobs_counter)}"
+            monkeypatch.setattr(jit, "compute_cache_key", lambda *args: compute_cache_key(*args) + namespace)
         for name, knobset in knobs_map.items():
             setattr(knobs, name, knobset.copy().reset())
             for knob in knobset.knob_descriptors.values():
@@ -592,3 +631,37 @@ def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
         knobs.propagate_env = prev_propagate_env
 
     return fresh_function, reset_function
+
+
+def assert_no_collectives_in_ptx_loop(ptx):
+    # Block order does not imply a loop: LLVM may place the exit before the
+    # header. Follow branches and fallthroughs to identify actual cycles.
+    lines = [line.partition("//")[0].strip() for line in ptx.splitlines()]
+    labels = {line[:-1]: i for i, line in enumerate(lines) if re.fullmatch(r"\$\w+:", line)}
+    successors = [{i + 1} if i + 1 < len(lines) else set() for i in range(len(lines))]
+    branches = []
+    for i, line in enumerate(lines):
+        branch = re.fullmatch(r"(@!?%\w+\s+)?bra(?:\.uni)?\s+(\$\w+);", line)
+        if branch:
+            successors[i] = {labels[branch[2]]} | (successors[i] if branch[1] else set())
+            branches.append(i)
+        elif re.fullmatch(r"(?:ret|exit)(?:\.uni)?;", line):
+            successors[i] = set()
+
+    def on_cycle(start):
+        pending = list(successors[start])
+        visited = set()
+        while pending:
+            node = pending.pop()
+            if node == start:
+                return True
+            if node not in visited:
+                visited.add(node)
+                pending.extend(successors[node])
+        return False
+
+    assert any(on_cycle(branch) for branch in branches), "Expected a polling loop"
+    for i, line in enumerate(lines):
+        if any(op in line for op in ("bar.sync", "barrier.sync", "barrier.cluster", "bar.warp.sync", "bar.red",
+                                     "barrier.red", "shfl.sync", "vote.sync")):
+            assert not on_cycle(i), "Collective instruction inside a polling loop"

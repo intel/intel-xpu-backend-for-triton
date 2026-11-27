@@ -3,6 +3,7 @@ import torch
 import pytest
 
 import triton
+from triton.language import PropagateNan
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton._internal_testing import (
@@ -11,7 +12,7 @@ from triton._internal_testing import (
     is_compile_warmup,
     is_cuda,
     is_hip,
-    is_hip_gfx1250,
+    is_hip_cdna5,
     is_hopper_or_newer,
     is_xpu,
     skip_if_unsupported_cluster_size,
@@ -88,12 +89,103 @@ def convert_1d_to_2d_slice_cga_kernel(out, HEAD: ttgl.constexpr, NUM_CTAS: ttgl.
     ttgl.store(out + dd, y)
 
 
+def _scan_layouts():
+    linear = ttgl.DistributedLinearLayout
+    lane_bits = THREADS_PER_WARP.bit_length() - 1
+    lane_padding = [[0, 0]] * (lane_bits - 5)
+
+    # Interleave scan and independent bits across registers, lanes, and warps.
+    bases = [[8, 0], [0, 2], [1, 0], [0, 8], [2, 0], [0, 1], [16, 0], [0, 16], [4, 0], [0, 4]]
+    reg_bits = len(bases) - lane_bits - 2
+    ordinary = linear(bases[:reg_bits], bases[reg_bits:-2], bases[-2:], [], [32, 32])
+    broadcast = linear([[0, 0]] + bases[:reg_bits + 2], [[0, 0]] + bases[reg_bits + 2:-1], [[0, 0], bases[-1]], [],
+                       [32, 32])
+    bases = [[16, 0], [0, 16], [8, 0], [0, 8], [4, 0], [0, 4], [2, 0], [0, 2], [1, 0], [0, 1]]
+    warp_minor = linear(bases[:reg_bits], bases[reg_bits:-2], bases[-2:], [], [32, 32])
+    bases = [[1, 0], [2, 0], [0, 1], [4, 0], [8, 0], [0, 2], [16, 0], [0, 4], [0, 8], [0, 16]]
+    register_groups = linear(bases[:reg_bits], bases[reg_bits:-2], bases[-2:], [], [32, 32])
+    scattered_registers = linear([[32, 0], [1, 0], [0, 1], [2, 0]],
+                                 [[4, 0], [8, 0], [0, 2], [0, 4], [0, 8]] + lane_padding, [[16, 0], [0, 16]], [],
+                                 [64, 32])
+    alternating = linear([[1, 0], [4, 0], [0, 1], [0, 2], [0, 4]],
+                         [[8, 0], [2, 0], [16, 0], [0, 8], [0, 16]] + lane_padding, [[0, 0], [0, 0]], [], [32, 32])
+    transpose = linear([[4, 0], [8, 0], [16, 0], [0, 1], [0, 2]],
+                       [[1, 0], [2, 0], [0, 4], [0, 8], [0, 16]] + lane_padding, [[0, 0], [0, 0]], [], [32, 32])
+    thread_only = linear([[1 << bit, 0] for bit in range(5)], [[0, 1 << bit] for bit in range(5)] + lane_padding,
+                         [[0, 0], [0, 0]], [], [32, 32])
+    # Exceed the totals budget while lanes select independent warp segments.
+    grouped = linear([[4, 0], [8, 0], [16, 0], [32, 0], [64, 0], [0, 16]],
+                     [[2, 0], [0, 1], [0, 2], [0, 4], [0, 8]] + lane_padding, [[1, 0], [0, 0]], [], [128, 32])
+    # Two values per segment require an exclusive carry. Warp bits interleave the segments.
+    grouped_carries = linear([[1, 0], [4, 0], [8, 0], [16, 0], [64, 0]], [[0, 1 << bit] for bit in range(lane_bits)],
+                             [[2, 0], [32, 0]], [], [128, THREADS_PER_WARP])
+
+    sliced = ttgl.SliceLayout(1, ttgl.BlockedLayout([1, 2, 2], [4, 1, THREADS_PER_WARP // 4], [2, 1, 2], [2, 0, 1]))
+    mma_v2 = ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 2], instr_shape=[16, 8])
+    mma_v3 = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16])
+    dot_operand = ttgl.DotOperandLayout(parent=mma_v2, operand_index=0, k_width=2)
+    mfma = ttgl.amd.AMDMFMALayout(version=3, instr_shape=[16, 16, 16], transposed=False, warps_per_cta=[2, 2])
+    wmma = ttgl.amd.AMDWMMALayout(version=1, transposed=False, warp_bases=[[1, 0], [0, 1]])
+    layouts = {
+        "permuted_owners": ordinary,
+        "broadcast_owners": broadcast,
+        "warp_minor": warp_minor,
+        "register_groups": register_groups,
+        "scattered_registers": scattered_registers,
+        "alternating_register_lane_bits": alternating,
+        "warp_transpose": transpose,
+        "thread_only": thread_only,
+        "grouped_totals": grouped,
+        "grouped_carries": grouped_carries,
+        "slice": sliced,
+        "mma_v2": mma_v2,
+        "mma_v3": mma_v3,
+        "dot_operand": dot_operand,
+        "mfma": mfma,
+        "wmma": wmma,
+    }
+    cases = [
+        pytest.param(layout, *getattr(layout, "shape", (32, 32)), 0, torch.int32, id=name)
+        for name, layout in layouts.items()
+        if _is_layout_applicable(layout)
+    ]
+    if is_hopper_or_newer():
+        # CTA bits can split contiguous segments, interleave elements, or replicate a scan.
+        cta_major = linear([[1, 0], [2, 0], [0, 16]], [[4, 0], [8, 0], [0, 1], [0, 2], [0, 4]], [[0, 8], [0, 0]],
+                           [[16, 0]], [32, 32])
+        cta_minor = linear([[8, 0], [0, 4], [0, 8]], [[2, 0], [4, 0], [0, 1], [0, 2], [16, 0]], [[0, 0], [0, 0]],
+                           [[0, 16], [1, 0]], [32, 32])
+        cta_replicated = linear([[0, 1], [0, 8], [16, 0]], [[0, 2], [1, 0], [2, 0], [4, 0], [8, 0]], [[0, 4], [0, 0]],
+                                [[0, 0], [0, 16]], [32, 32])
+        # Each lane receives a full sequence of totals in registers. CTA ranks differ from scan order.
+        cta_registers = linear([[2, 0], [8, 0], [16, 0], [32, 0]], [[0, 1 << i] for i in range(5)], [[0, 0], [0, 0]],
+                               [[4, 0], [1, 0]], [64, 32])
+        cases += [
+            pytest.param(cta_major, *cta_major.shape, 0, torch.int8, id="cta_major"),
+            pytest.param(cta_minor, *cta_minor.shape, 0, torch.int32, id="cta_minor"),
+            pytest.param(cta_replicated, *cta_replicated.shape, 1, torch.bool, id="cta_replicated"),
+            pytest.param(cta_registers, *cta_registers.shape, 0, torch.int32, id="cta_registers"),
+        ]
+    cases += [
+        pytest.param(ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [1, 0]), 4, n, 1, torch.int32,
+                     id=f"shuffle_bounds_{n}") for n in (4, THREADS_PER_WARP // 2, THREADS_PER_WARP)
+    ]
+    return cases + [
+        pytest.param(ttgl.BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 4, THREADS_PER_WARP // 4,
+                     1, torch.int32, id="shuffle_bounds_independent_scans"),
+        pytest.param(ordinary, 32, 32, 1, torch.int32, id="permuted_owners_axis1"),
+        pytest.param(transpose, 32, 32, 0, torch.int8, id="mixed_width"),
+        pytest.param(scattered_registers, 64, 32, 0, torch.bool, id="boolean_interwarp_carries"),
+    ]
+
+
 @gluon.jit
-def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr):
+def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
+                reverse: ttgl.constexpr = False):
     x_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
     x_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
     x = ttgl.load(x_ptr + x_offs_m * N + x_offs_n)
-    y = ttgl.associative_scan(x, axis=axis, combine_fn=_combine)
+    y = ttgl.associative_scan(x, axis=axis, combine_fn=_combine, reverse=reverse)
     ttgl.store(z_ptr + x_offs_m * N + x_offs_n, y)
 
 
@@ -117,92 +209,71 @@ def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl
     ]))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("sanitize_overflow", [False, True])
-def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
+@pytest.mark.enable_warmup
+def test_scan_blocked_layouts(M, N, src_layout, axis, sanitize_overflow, device):
 
     torch.manual_seed(0)
 
     x = torch.randint(-100, 100, (M, N), dtype=torch.int32, device=device)
-    z = torch.zeros((M, N), dtype=torch.int32, device=device)
-    z_tri = torch.empty_like(z)
+    z_tri = torch.empty_like(x)
 
     scan_kernel[(1, 1, 1)](x, z_tri, M, N, src_layout, axis, num_warps=4, sanitize_overflow=sanitize_overflow,
                            debug=sanitize_overflow)
 
     z_ref = torch.cumsum(x, dim=axis, dtype=torch.int32)
-    torch.testing.assert_close(z_tri, z_ref)
+    torch.testing.assert_close(z_tri, z_ref, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("M, N, src_layout, axis, num_ctas", [
-    pytest.param(2, 2, ttgl.BlockedLayout([2, 1], [THREADS_PER_WARP, 1], [4, 1], [1, 0]), 0, 1, id="registers"),
-    pytest.param(2, 4 * THREADS_PER_WARP, ttgl.BlockedLayout([1, 2], [1, THREADS_PER_WARP], [1, 4], [0, 1]), 1, 1,
-                 id="multiwarp"),
-    pytest.param(256, 4, ttgl.BlockedLayout([2, 1], [32, 1], [1, 4], [1, 0], [[0, 1]]), 0, 2, id="nonaxis_split"),
-    pytest.param(256, 4, ttgl.BlockedLayout([2, 1], [32, 1], [1, 4], [1, 0], [[0, 0]]), 0, 2, id="broadcast"),
-    pytest.param(1, 64, ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1], [[1, 0]]), 0, 2, id="clipped_axis_split"),
-])
-def test_scan_blocked_shape_clipping(M, N, src_layout, axis, num_ctas, device):
-    if num_ctas > 1 and not is_hopper_or_newer():
-        pytest.xfail("Requires Hopper or newer")
-    x = torch.arange(1, M * N + 1, dtype=torch.int32, device=device).reshape(M, N)
-    y = torch.empty_like(x)
-    scan_kernel[(1, )](x, y, M, N, src_layout, axis, num_warps=4, num_ctas=num_ctas)
-    torch.testing.assert_close(y, x.cumsum(axis, dtype=torch.int32))
+@gluon.jit
+def _scan_tuple_combine(a1, b1, a2, b2):
+    if a1.dtype == ttgl.int1:
+        return a1 | a2, b1 + b2
+    # Compose affine maps to check the ordering of noncommutative operands.
+    return (a1 * a2).to(a1.dtype), b1 * a2 + b2
 
 
-@pytest.mark.xfail(not is_hopper_or_newer(), reason="Requires Hopper or newer", run=False)
-def test_scan_rejects_axis_split_across_ctas(device, capfd):
-    src_layout = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1], [[1, 0]])
-    x = torch.ones((64, 1), dtype=torch.int32, device=device)
-    y = torch.empty_like(x)
-    with pytest.raises(RuntimeError, match="PassManager::run failed"):
-        scan_kernel.warmup(x, y, 64, 1, src_layout, 0, grid=(1, ), num_warps=4, num_ctas=2)
-    captured = capfd.readouterr()
-    assert "unsupported scan layout" in captured.out + captured.err
+@pytest.mark.parametrize("layout, M, N, axis, dtype", _scan_layouts())
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_distributed_layouts(layout, M, N, axis, dtype, reverse, device):
+    if is_xpu() and isinstance(layout, ttgl.amd.AMDMFMALayout):
+        pytest.xfail("AMD MFMA layouts need 64 threads per warp")
+    num_ctas = 2**len(getattr(layout, "block_bases", []))
+    skip_if_unsupported_cluster_size(num_ctas)
 
-
-def test_scan_blocked_broadcast_layout(device):
-    if not is_cuda():
-        pytest.skip("requires CUDA")
-    if THREADS_PER_WARP != 32:
-        pytest.skip("requires 32-thread warps")
-
-    M = 32
-    # Broadcasting in register, lane and warp
-    # - register=1 -> (1, 0)
-    # - lane=1 -> (0, 0)
-    #   lane=2 -> (2, 0)
-    #   lane=4 -> (4, 0)
-    #   lane=8 -> (8, 0)
-    #   lane=16 -> (16, 0)
-    # - warp=1 -> (0, 0)
-    #   warp=2 -> (0, 0)
-    # - block is a size 1 dimension
-    src_layout = ttgl.BlockedLayout([2, 4], [16, 2], [2, 2], [1, 0])
+    @gluon.jit
+    def kernel(A, B, OutA, OutB, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
+               reverse: ttgl.constexpr):
+        m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
+        n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
+        a = ttgl.load(A + m * N + n)
+        b = ttgl.load(B + m * N + n)
+        a, b = ttgl.associative_scan((a, b), axis, _scan_tuple_combine, reverse=reverse)
+        ttgl.store(OutA + m * N + n, a)
+        ttgl.store(OutB + m * N + n, b)
 
     torch.manual_seed(0)
-    x = torch.randn((M, 1), dtype=torch.float32, device=device)
-    y = torch.empty_like(x)
-    scan_kernel[(1, )](x, y, M, 1, src_layout, 0, num_warps=4)
-
-    torch.testing.assert_close(y, torch.cumsum(x, dim=0))
-
-
-def test_scan_blocked_broadcast_layout_multiblock(device):
-    if not is_cuda():
-        pytest.skip("requires CUDA")
-    if THREADS_PER_WARP != 32:
-        pytest.skip("requires 32-thread warps")
-
-    M = 64
-    # Broadcasting in lane for dim1 and multiple scan blocks along axis 0.
-    src_layout = ttgl.BlockedLayout([2, 4], [16, 2], [1, 2], [1, 0])
-
-    torch.manual_seed(0)
-    x = torch.randn((M, 1), dtype=torch.float32, device=device)
-    y = torch.empty_like(x)
-    scan_kernel[(1, )](x, y, M, 1, src_layout, 0, num_warps=2)
-
-    torch.testing.assert_close(y, torch.cumsum(x, dim=0))
+    a = (torch.randint(0, 2, (M, N), dtype=torch.int32) * 2 - 1).to(dtype)
+    if dtype == torch.bool:
+        a.zero_()
+        a[13, 0], a[27, 0] = True, True
+    b = torch.randint(-100, 100, (M, N), dtype=torch.int64)
+    expected_a, expected_b = a.clone(), b.clone()
+    order = list(range(a.shape[axis]))
+    if reverse:
+        order.reverse()
+    for prev, cur in zip(order, order[1:]):
+        if dtype == torch.bool:
+            expected_a.select(axis, cur).copy_(expected_a.select(axis, prev) | a.select(axis, cur))
+            expected_b.select(axis, cur).copy_(expected_b.select(axis, prev) + b.select(axis, cur))
+        else:
+            expected_a.select(axis, cur).copy_(expected_a.select(axis, prev) * a.select(axis, cur))
+            expected_b.select(axis,
+                              cur).copy_(expected_b.select(axis, prev) * a.select(axis, cur) + b.select(axis, cur))
+    a, b = a.to(device), b.to(device)
+    out_a, out_b = torch.empty_like(a), torch.empty_like(b)
+    kernel[(1, )](a, b, out_a, out_b, M, N, layout, axis, reverse, num_warps=4, num_ctas=num_ctas)
+    torch.testing.assert_close(out_a.cpu(), expected_a, rtol=0, atol=0)
+    torch.testing.assert_close(out_b.cpu(), expected_b, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("op", ["cumsum", "cumprod"])
@@ -374,25 +445,24 @@ def test_convert_layout_cross_cta_in_warp_specialize(use_worker_partition, devic
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
-@pytest.mark.skipif(is_hip(), reason="Uses 32-thread NVIDIA layouts")
+@pytest.mark.xfail(not is_hip(), reason="Generic linear layouts are only supported on AMD", run=False)
 @pytest.mark.parametrize("src_warp, dst_warp", [(64, 96), (96, 64)])
 def test_convert_layout_overlapping_identity_dims(src_warp, dst_warp, device):
 
     @gluon.jit
-    def kernel(x_ptr, y_ptr, SRC_WARP: ttgl.constexpr, DST_WARP: ttgl.constexpr):
-        src: ttgl.constexpr = ttgl.DistributedLinearLayout([[32]], [[1], [2], [4], [8], [16]], [[SRC_WARP], [128]], [],
-                                                           [256])
-        dst: ttgl.constexpr = ttgl.DistributedLinearLayout([[32]], [[1], [2], [4], [8], [16]], [[DST_WARP], [128]], [],
-                                                           [256])
+    def kernel(x_ptr, y_ptr, src: ttgl.constexpr, dst: ttgl.constexpr):
         src_offsets = ttgl.arange(0, 256, layout=src)
         x = ttgl.load(x_ptr + src_offsets)
         y = ttgl.convert_layout(x, dst)
         dst_offsets = ttgl.arange(0, 256, layout=dst)
         ttgl.store(y_ptr + dst_offsets, y)
 
+    lane_bases = [[1], [2], [4], [8], [16]] + [[0]] * (THREADS_PER_WARP // 32 - 1)
+    src = ttgl.DistributedLinearLayout([[32]], lane_bases, [[src_warp], [128]], [], [256])
+    dst = ttgl.DistributedLinearLayout([[32]], lane_bases, [[dst_warp], [128]], [], [256])
     x = torch.arange(256, dtype=torch.int32, device=device)
     y = torch.empty_like(x)
-    kernel[(1, )](x, y, src_warp, dst_warp, num_warps=4)
+    kernel[(1, )](x, y, src, dst, num_warps=4)
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
@@ -487,7 +557,11 @@ def _swizzled_warp_layouts():
 
 # ===--- Tests with swizzled/non-injective DistributedLinearLayout ---===
 
+requires_generic_linear = pytest.mark.xfail(not is_hip(), reason="Generic linear layouts are only supported on AMD",
+                                            run=False)
 
+
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 def test_elementwise_generic_linear(src_layout, device):
     shape = src_layout.shape
@@ -524,6 +598,7 @@ def test_elementwise_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x * x + x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts_2d()))
 def test_expand_dims_generic_linear(src_layout, device):
     M, N = src_layout.shape
@@ -544,6 +619,7 @@ def test_expand_dims_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 def test_reshape_generic_linear(src_layout, device):
     shape = src_layout.shape
@@ -587,6 +663,7 @@ def test_reshape_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts_2d()))
 def test_permute_generic_linear(src_layout, device):
     M, N = src_layout.shape
@@ -608,6 +685,7 @@ def test_permute_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 def test_split_join_generic_linear(src_layout, device):
     if any(all(v == 0 for v in b) for b in src_layout.reg_bases):
@@ -658,6 +736,7 @@ def test_split_join_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x + x * 2)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts_2d()))
 def test_broadcast_generic_linear(src_layout, device):
     M, N = src_layout.shape
@@ -708,6 +787,7 @@ def _make_shared_layout(kind, shape):
     raise ValueError(f"Unknown shared layout kind: {kind}")
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 @pytest.mark.parametrize("shared_kind", _shared_layout_kinds())
 def test_local_load_store_generic_linear(src_layout, shared_kind, device):
@@ -742,7 +822,7 @@ def test_local_load_store_generic_linear(src_layout, shared_kind, device):
     torch.testing.assert_close(y, x)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250 FP8 conversion")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5 FP8 conversion")
 def test_generic_linear_fp8_cast(device):
     shape = (128, 256)
     src_layout = ttgl.DistributedLinearLayout(
@@ -989,7 +1069,6 @@ def _reduce_layouts():
         ttgl.BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1]),
         ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 4], instr_shape=[16, 8]),
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 16, 16]),
-        ttgl.amd.AMDMFMALayout(version=1, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=2, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=3, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=4, instr_shape=[32, 32, 16], transposed=True, warps_per_cta=[1, 4]),
@@ -1043,9 +1122,6 @@ def _reduce_cases():
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
 @pytest.mark.enable_warmup(min_capability=9)
 def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, sanitize_overflow, reduce_op, device):
-    if is_xpu() and isinstance(src_layout,
-                               (ttgl.amd.AMDMFMALayout, ttgl.amd.AMDWMMALayout, ttgl.NVMMADistributedLayout)):
-        pytest.xfail("AMD and NVIDIA MMA layouts are not supported on Intel GPUs")
 
     @gluon.jit
     def _add(a, b):
@@ -1197,14 +1273,16 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
             reduce_fn = np.fmin if op == "min" else np.fmax
     else:
         limits = np.iinfo(numpy_dtype)
-        if op in ("and", "or", "xor"):
+        if op in ("and", "or", "xor") or limits.bits == 64:
             # Exercise every bit, including the sign bit, in both groups.
             x[:] = np.frombuffer(rng.bytes(x.nbytes), dtype=x.dtype).reshape(x.shape)
         x[0], x[1] = limits.min, limits.max
         x[2, 0], x[3, -1] = limits.min, limits.max
         if limits.bits == 64:
             # Equal high words and unsigned low-word comparisons.
-            x[4, :4] = [0x100000000, 0x1FFFFFFFF, 0x180000000, 0x17FFFFFFF][:size]
+            low_words = np.resize(np.array([0xFFFFFFFF, 0, 0x80000000, 0x7FFFFFFF], dtype=np.uint64), size)
+            x[4] = (0x100000000 | low_words).view(x.dtype)
+            x[5] = (0x8000000000000000 | low_words).view(x.dtype)
         reduce_fn = {
             "min": np.minimum, "max": np.maximum, "add": np.add, "and": np.bitwise_and, "or": np.bitwise_or, "xor":
             np.bitwise_xor
@@ -1230,13 +1308,16 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
         profitable = group_stride == 1 or (group_stride == 2 and size >= 8)
     else:
         profitable = (group_stride == 1 and size >= 4) or (group_stride == 2 and size == 16)
-    use_redux = size == 32 or (profitable and "64" not in dtype_str)
+    use_redux = size == 32 or profitable
+    if "64" in dtype_str:
+        use_redux = ((group_stride == 1 and size >= (8 if op == "add" else 4))
+                     or (group_stride == 2 and size >= 16 and op != "add"))
     if is_float and major != 10:
         use_redux = False
     if use_redux:
         expected_count = group_stride
         if "64" in dtype_str:
-            expected_count = 3 if op == "add" else 2
+            expected_count *= 3 if op == "add" else 2
         assert ptx.count("redux.sync.") == expected_count
         assert "shfl.sync.bfly" not in ptx
         for line in ptx.splitlines():
@@ -1255,7 +1336,8 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
 
 @pytest.mark.xfail(not is_cuda(), reason="NVIDIA redux instructions", run=False)
 @pytest.mark.parametrize("op", ["add", "xor", "max"])
-def test_reduce_broadcast_across_warps(op, device):
+@pytest.mark.parametrize("dtype_str", ["int32", "int64", "uint64"])
+def test_reduce_broadcast_across_warps(op, dtype_str, device):
     import numpy as np
 
     if torch.cuda.get_device_capability()[0] < 8:
@@ -1273,16 +1355,23 @@ def test_reduce_broadcast_across_warps(op, device):
             y = ttgl.max(x, 0)
         ttgl.store(Y, y)
 
-    values = np.arange(128, dtype=np.int32)
+    values = np.arange(128, dtype=dtype_str)
     values[0] = 257  # Make both the sum and XOR nonzero.
+    if values.dtype.itemsize == 8:
+        values = (values << 32) | (0xFFFFFFFF - values)
+        values[::3] = ~values[::3]
     x = torch.tensor(values, device=device)
-    y = torch.empty((), dtype=torch.int32, device=device)
+    y = torch.empty((), dtype=x.dtype, device=device)
     compiled = kernel[(1, )](x, y, op, num_warps=4)
     reduce_fn = {"add": np.add, "xor": np.bitwise_xor, "max": np.maximum}[op]
-    assert y.item() == reduce_fn.reduce(values)
-    # One full-warp redux, then one redux over four broadcast warp results.
-    assert compiled.asm["ptx"].count("redux.sync.") == 2
-    assert "shfl.sync.bfly" not in compiled.asm["ptx"]
+    assert y.item() == reduce_fn.reduce(values, dtype=values.dtype)
+    # One full-warp reduction, then one over four broadcast warp results.
+    expected_count = 2
+    if values.dtype.itemsize == 8:
+        expected_count = 3 if op == "add" else 4
+    assert compiled.asm["ptx"].count("redux.sync.") == expected_count
+    # Four broadcast values use shuffles for 64-bit addition.
+    assert ("shfl.sync.bfly" in compiled.asm["ptx"]) == (values.dtype.itemsize == 8 and op == "add")
 
 
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
@@ -1504,7 +1593,12 @@ _multi_cta_cga_layout_pairs = [([1, 4], [2, 2]), ([4, 1], [2, 2])]
 _multi_cta_convert2d_layout_cases = [(src_ctas_per_cga, dst_ctas_per_cga, None, src_layout, dst_layout)
                                      for src_ctas_per_cga, dst_ctas_per_cga in _multi_cta_cga_layout_pairs
                                      for src_layout, dst_layout in _multi_cta_2d_layout_pairs]
-_convert2d_layout_cases = _single_cta_convert2d_layout_cases + _multi_cta_convert2d_layout_cases
+_multi_cta_small_convert2d_layout_cases = [
+    pytest.param([2, 1], [2, 1], None, ttgl.BlockedLayout([1, 1], [4, 8], [1, 4], [1, 0]),
+                 ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0]), id="multi-cta-small-shape")
+]
+_convert2d_layout_cases = (_single_cta_convert2d_layout_cases + _multi_cta_convert2d_layout_cases +
+                           _multi_cta_small_convert2d_layout_cases)
 # Warp-dependent broadcast with two f16 elements sharing a shuffle.
 _convert2d_layout_cases.append((None, None, None, ttgl.BlockedLayout([1, 16], [THREADS_PER_WARP, 1], [1, 4], [1, 0]),
                                 ttgl.BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0])))
@@ -1521,9 +1615,9 @@ def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layo
     if src_ctas_per_cga is not None:
         if not is_cuda() or not is_hopper_or_newer():
             pytest.xfail("num_ctas > 1 requires NVIDIA Hopper or newer")
-        if M % src_ctas_per_cga[0] != 0 or N % src_ctas_per_cga[1] != 0:
+        if M % min(M, src_ctas_per_cga[0]) != 0 or N % min(N, src_ctas_per_cga[1]) != 0:
             pytest.xfail("Shape must be divisible by the source CGA shape")
-        if M % dst_ctas_per_cga[0] != 0 or N % dst_ctas_per_cga[1] != 0:
+        if M % min(M, dst_ctas_per_cga[0]) != 0 or N % min(N, dst_ctas_per_cga[1]) != 0:
             pytest.xfail("Shape must be divisible by the destination CGA shape")
         if src_ctas_per_cga[0] * src_ctas_per_cga[1] != dst_ctas_per_cga[0] * dst_ctas_per_cga[1]:
             pytest.xfail("Source and destination CGA shapes must have the same number of CTAs")
@@ -1643,15 +1737,6 @@ _mma_pairs = [
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 128, 16]),
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 64, 16]),
     ],
-    # AMD MFMA v1 layouts
-    [
-        ttgl.amd.AMDMFMALayout(version=1, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[2, 2]),
-        ttgl.amd.AMDMFMALayout(version=1, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[4, 1]),
-    ],
-    [
-        ttgl.amd.AMDMFMALayout(version=1, instr_shape=[16, 16, 8], transposed=True, warps_per_cta=[4, 4]),
-        ttgl.amd.AMDMFMALayout(version=1, instr_shape=[16, 16, 8], transposed=True, warps_per_cta=[16, 1]),
-    ],
     # AMD MFMA v2 layouts
     [
         ttgl.amd.AMDMFMALayout(version=2, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[2, 2]),
@@ -1698,9 +1783,6 @@ _mma_pairs = [
                          [pair for pair in _mma_pairs if all(_is_layout_applicable(layout) for layout in pair)])
 def test_convert_mma2mma_layouts(M, N, mma_pair, dtype, device):
     src_layout, dst_layout = mma_pair
-    if is_xpu() and isinstance(src_layout,
-                               (ttgl.amd.AMDMFMALayout, ttgl.amd.AMDWMMALayout, ttgl.NVMMADistributedLayout)):
-        pytest.xfail("AMD and NVIDIA MMA layouts are not supported on Intel GPUs")
 
     @gluon.jit
     def kernel(x_ptr, y_ptr, M: ttgl.constexpr, N: ttgl.constexpr, src_layout: ttgl.constexpr,
@@ -1793,8 +1875,7 @@ def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device)
 
 
 @pytest.mark.skipif(is_hip(), reason="Assumes 32 threads per warp")
-@pytest.mark.xfail(not is_cuda(), reason="Requires CUDA", run=False)
-def test_regress_warp_shuffle_convert_layout(tmp_path):
+def test_regress_warp_shuffle_convert_layout(tmp_path, device):
     rows = 2
     cols = 8
     # We have previously incorrectly lowered a layout conversion between these
@@ -1833,7 +1914,7 @@ def test_regress_warp_shuffle_convert_layout(tmp_path):
         ttgl.store(out_ptr + out_offsets, y)
 
     torch.manual_seed(0)
-    x = torch.randint(-128, 128, (rows, cols), dtype=torch.int16, device="cuda")
+    x = torch.randint(-128, 128, (rows, cols), dtype=torch.int16, device=device)
     ref = torch.zeros_like(x)
     out = torch.zeros_like(x)
 
@@ -1891,13 +1972,12 @@ _ld_st_shared_layouts = _filter_layouts([
 ])
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
-def test_local_load_transposed_nvmma_zero_swizzle(device):
-    rows = 128
-    cols = 16
+@pytest.mark.xfail(not is_cuda(), reason="Requires CUDA", run=False)
+@pytest.mark.parametrize("rows, cols, swizzle", [(128, 16, 0), (512, 64, 32)])
+def test_local_load_transposed_nvmma(rows, cols, swizzle, device):
     src_layout = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [1, 0])
     dst_layout = ttgl.BlockedLayout([1, 16], [1, 32], [1, 4], [1, 0])
-    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, transposed=False, element_bitwidth=8, rank=2)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzle, transposed=False, element_bitwidth=8, rank=2)
 
     @gluon.jit
     def kernel(x_ptr, y_ptr, rows: ttgl.constexpr, cols: ttgl.constexpr, src_layout: ttgl.constexpr,
@@ -1926,6 +2006,7 @@ def test_local_load_transposed_nvmma_zero_swizzle(device):
 ])
 @pytest.mark.parametrize("dist_layout", _ld_st_dot_layouts + _ld_st_mma_layouts)
 @pytest.mark.parametrize("shared_layout", _ld_st_shared_layouts)
+@pytest.mark.enable_warmup
 def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, device):
     if shared_layout == "shared_linear_layout":
         rank = len(shape)
@@ -1947,7 +2028,7 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
             pytest.xfail("contig_dim too small for swizzle_byte_width in NVMMASharedLayout")
 
     # A simple blocked layout
-    num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(dist_layout, shape))))
+    num_warps = math.prod(ttgl._layouts.warps_per_cta(dist_layout, shape))
     blocked_layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[4, THREADS_PER_WARP // 4],
                                         warps_per_cta=[1, num_warps], order=[0, 1])
 
@@ -1993,8 +2074,8 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
     y = torch.zeros_like(x)
     obj = kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
     _assert_close(y, x)
-    if (is_cuda() and isinstance(shared_layout, ttgl.NVMMASharedLayout) and dist_layout in _ld_st_mma_layouts
-            and dist_layout.version[0] >= 3 and dtype == "float16"):
+    if (not is_compile_warmup() and is_cuda() and isinstance(shared_layout, ttgl.NVMMASharedLayout)
+            and dist_layout in _ld_st_mma_layouts and dist_layout.version[0] >= 3 and dtype == "float16"):
         assert "stmatrix" in obj.asm["ptx"]
 
 
@@ -2661,3 +2742,46 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
 
     # Verify output matches input
     torch.testing.assert_close(output_tensor, input_tensor, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("axis, keep_dims", [(None, False), (0, False), (0, True), (1, False), (1, True)])
+@pytest.mark.parametrize("op", ["max", "min"])
+@pytest.mark.parametrize("propagate_nan", [False, True])
+def test_min_max_nan_keep_dims(axis, keep_dims, op, propagate_nan, device):
+
+    @gluon.jit
+    def kernel(X, Values, AXIS: ttgl.constexpr, KEEP: ttgl.constexpr, OP: ttgl.constexpr, NAN_MODE: ttgl.constexpr,
+               layout: ttgl.constexpr):
+        rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+        x = ttgl.load(X + rows[:, None] * 32 + cols[None, :])
+        if OP == "max":
+            value = ttgl.max(x, AXIS, keep_dims=KEEP, propagate_nan=NAN_MODE)
+        else:
+            value = ttgl.min(x, AXIS, keep_dims=KEEP, propagate_nan=NAN_MODE)
+        if AXIS is None:
+            ttgl.store(Values, ttgl.reshape(value, ()))
+        else:
+            if AXIS == 0:
+                out = cols
+            else:
+                out = rows
+            value = ttgl.convert_layout(ttgl.reshape(value, (out.numel, )), out.type.layout)
+            ttgl.store(Values + out, value)
+
+    torch.manual_seed(9840)
+    x = torch.randint(-3, 4, (8, 32), device=device).float()
+    x[0, :] = torch.nan
+    x[:, 0] = torch.nan
+    source = x.flatten() if axis is None else x
+    dim = 0 if axis is None else axis
+    nan = torch.isnan(source)
+    numeric = source.masked_fill(nan, -torch.inf if op == "max" else torch.inf)
+    extreme = numeric.amax(dim, keepdim=True) if op == "max" else numeric.amin(dim, keepdim=True)
+    nan_wins = nan.any(dim, keepdim=True) if propagate_nan else nan.all(dim, keepdim=True)
+    expected_values = extreme.masked_fill(nan_wins, torch.nan).flatten()
+    values = torch.empty_like(expected_values)
+    mode = PropagateNan.ALL if propagate_nan else PropagateNan.NONE
+    layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0])
+    kernel[(1, )](x, values, axis, keep_dims, op, mode, layout)
+    torch.testing.assert_close(values, expected_values, rtol=0, atol=0, equal_nan=True)

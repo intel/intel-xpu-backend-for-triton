@@ -11,6 +11,7 @@ from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
 from triton.experimental.gluon.language.nvidia import rubin
 from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, clc, mbarrier, tma
+from triton.runtime import _allocation
 from triton._internal_testing import is_compile_warmup, is_cuda, is_rubin, run_in_process
 
 pytestmark = [pytest.mark.enable_warmup(min_capability=9), pytest.mark.usefixtures("process_pool")]
@@ -463,7 +464,7 @@ def test_async_shared_store_proxy_handoff(FENCE, device, run_wrapper, monkeypatc
         if FENCE:
             hopper.fence_async_shared()
         tma.async_store(output_desc, [0, 0], smem)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
 
     @gluon.jit
     def kernel(output_desc, FENCE: ttgl.constexpr):
@@ -929,6 +930,39 @@ def test_remote_shared_load_reader_visibility(PUBLISHED, FAILURE, device, run_wr
     kernel[(1, )](out, PUBLISHED=PUBLISHED, FAILURE=FAILURE, num_warps=4, num_ctas=2)
 
 
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer",
+                   run=False)
+@pytest.mark.parametrize("OP", ["release", "acquire", "reduce"])
+def test_shared_reuse_after_implicit_cluster_barrier(OP, device):
+    knobs.compilation.instrumentation_mode = "consan"
+
+    @gluon.jit(noinline=True)
+    def increment(ptr, order: ttgl.constexpr):
+        ttgl.atomic_add(ptr, 1, sem=order)
+
+    @gluon.jit
+    def kernel(out, aux, OP: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=[[1]])
+        offsets = ttgl.arange(0, 256, layout)
+        old = ttgl.allocate_shared_memory(ttgl.int32, [256], shared, offsets)
+        ttgl.barrier(cluster=True)
+        peer_values = old.gather(offsets ^ 128, axis=0)
+        if OP == "reduce":
+            ttgl.store(aux, ttgl.sum(peer_values, 0))
+        else:
+            increment(aux, OP)
+        # Keep scratch disjoint from old so only the operation's implicit barrier orders reuse.
+        old._keep_alive()
+        new = ttgl.allocate_shared_memory(ttgl.int32, [256], shared, peer_values)
+        ttgl.store(out + offsets, new.load(layout))
+
+    out = torch.empty(256, device=device, dtype=torch.int32)
+    aux = torch.zeros(1, device=device, dtype=torch.int32)
+    kernel[(1, )](out, aux, OP, num_ctas=2)
+    torch.testing.assert_close(out, torch.arange(256, device=device, dtype=torch.int32) ^ 128)
+
+
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
                    run=False)
 @pytest.mark.parametrize("FINISHED", [True, False])
@@ -1095,9 +1129,6 @@ def test_local_indexed_cross_cta_visibility(OP, FAILURE, device, run_wrapper, mo
         values = ttgl.load(inp + offsets)
         smem = ttgl.allocate_shared_memory(ttgl.int32, [2, 32], shared_layout)
         peer_cols = (cols ^ 16)[None, :] + rows[:, None] * 0
-        # Finish ConSan's untracked poison initialization before peer DSM access.
-        ttgl.barrier(cluster=True)
-
         if FAILURE:
             result = smem.gather(peer_cols, axis=1)
             ttgl.store(out + offsets, result)
@@ -1276,7 +1307,7 @@ def test_tma_interleave_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ct
 
         hopper.fence_async_shared()
         tma.async_store(input_desc, [0, 0], smem.index(0))
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
 
     block_m = XBLOCK.value * num_ctas
     input = torch.randn((block_m, XBLOCK.value), device=device, dtype=torch.float16)
@@ -1521,7 +1552,7 @@ def test_tma_overlapping_operations(OP, SYNCHRONIZED, device, run_wrapper, monke
             mbarrier.wait(bars.index(1), 0)
 
         tma.async_store(output_desc, [0, 0], smem)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
         if not SYNCHRONIZED:
             mbarrier.wait(bars.index(0), 0)
         mbarrier.invalidate(bars.index(0))
@@ -1778,10 +1809,10 @@ def test_tma_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
         val = ttgl.full([block_m, XBLOCK], 42, ttgl.float16, blocked_layout)
         tma.async_store(output_desc, [0, 0], smem.index(0))
         tma.async_store(output_desc, [0, 0], smem.index(1))
-        tma.store_wait(pendings=1)
+        tma.store_wait(pendings=1, deps=[smem.index(0)])
         smem.index(0).store(val)
         if not FAILURE:
-            tma.store_wait(pendings=0)
+            tma.store_wait(pendings=0, deps=[smem.index(1)])
         smem.index(1).store(val)
 
     block_m = XBLOCK.value * num_ctas
@@ -1823,6 +1854,7 @@ def test_tma_store_convert_layout_scratch(FAILURE, device, run_wrapper, monkeypa
         persistent_page = ttgl.allocate_shared_memory(ttgl.int32, [128], output_desc.layout)
         if not FAILURE:
             stable_source_page = ttgl.allocate_shared_memory(ttgl.int32, [128], output_desc.layout)
+        store_sources = [persistent_page] if FAILURE else [persistent_page, stable_source_page]
 
         for iteration in range(iterations):
             base = iteration * 128
@@ -1835,12 +1867,12 @@ def test_tma_store_convert_layout_scratch(FAILURE, device, run_wrapper, monkeypa
 
             # Keep an unrelated store pending so wait(1) does not complete the
             # source transfer below.
-            tma.store_wait(1)
+            tma.store_wait(1, deps=[persistent_page])
             persistent_page.store(value)
             hopper.fence_async_shared()
             tma.async_store(output_desc, [2 * base], persistent_page)
 
-            tma.store_wait(1)
+            tma.store_wait(1, deps=store_sources)
             if FAILURE:
                 source_page = ttgl.allocate_shared_memory(ttgl.int32, [128], output_desc.layout, value)
             else:
@@ -1851,10 +1883,7 @@ def test_tma_store_convert_layout_scratch(FAILURE, device, run_wrapper, monkeypa
             if FAILURE:
                 source_page._keep_alive()
 
-        tma.store_wait(0)
-        persistent_page._keep_alive()
-        if not FAILURE:
-            stable_source_page._keep_alive()
+        tma.store_wait(0, deps=store_sources)
 
     iterations = 2
     output = torch.empty(iterations * 2 * 128, dtype=torch.int32, device=device)
@@ -1950,7 +1979,7 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
                 ttgl.NVMMASharedLayout.get_default_for([block_m, block_n], input_desc.dtype,
                                                        cga_layout=acc_layout.cga_layout), res.to(input_desc.dtype))
             tma.async_store(output_desc, [0, 0], smemAcc)
-            tma.store_wait(0)
+            tma.store_wait(0, deps=[smemAcc])
         elif MEM_ACCESS_KIND == "tmem_store":
             acc.store(ttgl.full([block_m, block_n], 42, ttgl.float32, acc_blocked_layout))
 
@@ -1970,14 +1999,200 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
                   num_warps=4, num_ctas=num_ctas)
 
 
+@pytest.mark.xfail(not is_rubin(), reason="Early A release requires Rubin", run=False)
+@pytest.mark.parametrize("completion", ["a_read", "all"])
+@pytest.mark.parametrize("access", ["a", "b", "acc"])
+@pytest.mark.parametrize("warp_specialize", [False, True])
+def test_tcgen5_mma_early_a_release(completion, access, warp_specialize, device, run_wrapper, monkeypatch, num_ctas):
+    if run_wrapper:
+        result = run_in_process(test_tcgen5_mma_early_a_release,
+                                (completion, access, warp_specialize, device, False, monkeypatch, num_ctas))
+        if completion == "a_read" and access != "a":
+            assert_expected_cuda_failure(result.exc)
+            conflict = "writes" if access == "acc" else "reads"
+            assert f"Buffer being accessed has outstanding {conflict}" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def issue(a, b, acc, early, full):
+        blackwell.tcgen05_mma(a, b, acc, use_acc=False, multicast=True)
+        blackwell.tcgen05_commit(early, descs=(a, b), completion="a_read")
+        blackwell.tcgen05_commit(full, descs=(a, b))
+
+    @gluon.jit
+    def overwrite(a, b, acc, early, full, out, COMPLETION: ttgl.constexpr, ACCESS: ttgl.constexpr):
+        if COMPLETION == "a_read":
+            mbarrier.wait(early, 0)
+        else:
+            mbarrier.wait(full, 0)
+        if ACCESS == "a":
+            layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0],
+                                                        cga_layout=a.type.layout.cga_layout)
+            a.store(ttgl.full(a.shape, 0, a.dtype, layout))
+        elif ACCESS == "b":
+            layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0],
+                                                        cga_layout=b.type.layout.cga_layout)
+            b.store(ttgl.full(b.shape, 0, b.dtype, layout))
+        else:
+            value = acc.load()
+        mbarrier.wait(early, 0)
+        mbarrier.wait(full, 0)
+        if ACCESS != "acc":
+            value = acc.load()
+        result_layout: ttgl.constexpr = value.type.layout
+        m = ttgl.arange(0, acc.shape[0], ttgl.SliceLayout(1, result_layout))[:, None]
+        n = ttgl.arange(0, acc.shape[1], ttgl.SliceLayout(0, result_layout))[None, :]
+        ttgl.store(out + m * acc.shape[1] + n, value)
+
+    @gluon.jit
+    def kernel(out, COMPLETION: ttgl.constexpr, ACCESS: ttgl.constexpr, WS: ttgl.constexpr):
+        M: ttgl.constexpr = mma_block_m(ttgl.num_ctas())
+        N: ttgl.constexpr = mma_block_n(ttgl.num_ctas())
+        TWO_CTAS: ttgl.constexpr = ttgl.num_ctas() > 1
+        a_cga: ttgl.constexpr = mma_cga_layout(ttgl.num_ctas(), 0, TWO_CTAS)
+        b_cga: ttgl.constexpr = mma_cga_layout(ttgl.num_ctas(), 1, TWO_CTAS)
+        a_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=a_cga)
+        b_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=b_cga)
+        a = ttgl.allocate_shared_memory(
+            ttgl.float16, [M, 128], ttgl.NVMMASharedLayout.get_default_for([M, 128], ttgl.float16, cga_layout=a_cga),
+            ttgl.full([M, 128], 1, ttgl.float16, a_layout))
+        b = ttgl.allocate_shared_memory(
+            ttgl.float16, [128, N], ttgl.NVMMASharedLayout.get_default_for([128, N], ttgl.float16, cga_layout=b_cga),
+            ttgl.full([128, N], 1, ttgl.float16, b_layout))
+        acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([128, 128], col_stride=1,
+                                                                  cga_layout=mma_cga_layout(ttgl.num_ctas(),
+                                                                                            2), two_ctas=TWO_CTAS)
+        acc = blackwell.allocate_tensor_memory(ttgl.float32, [M, N], acc_layout)
+        early = mbarrier.allocate_mbarrier()
+        full = mbarrier.allocate_mbarrier()
+        count: ttgl.constexpr = blackwell.tcgen05_mma_barrier_count([a, b], True, TWO_CTAS)
+        mbarrier.init(early, count=count)
+        mbarrier.init(full, count=count)
+        hopper.fence_async_shared()
+        if ttgl.num_ctas() > 1:
+            hopper.cluster.barrier(relaxed=True)
+        if WS:
+            ttgl.warp_specialize([(issue, (a, b, acc, early, full)),
+                                  (overwrite, (a, b, acc, early, full, out, COMPLETION, ACCESS))], [4], [32])
+        else:
+            issue(a, b, acc, early, full)
+            overwrite(a, b, acc, early, full, out, COMPLETION, ACCESS)
+        mbarrier.invalidate(early)
+        mbarrier.invalidate(full)
+
+    output = torch.empty((mma_block_m(num_ctas), mma_block_n(num_ctas)), device=device)
+    kernel[(1, )](output, completion, access, warp_specialize, num_ctas=num_ctas, num_warps=4)
+    torch.testing.assert_close(output, torch.full_like(output, 128), atol=0, rtol=0)
+
+
+@pytest.mark.xfail(not is_rubin(), reason="Early A release requires Rubin", run=False)
+@pytest.mark.parametrize("completion", ["a_read", "all"])
+@pytest.mark.parametrize("access",
+                         ["a", "b", "a_scale", "b_scale", "copy_src", "tmem_a", "alias", "stale", "missing_wait"])
+def test_tcgen5_mma_early_a_release_scope(completion, access, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_tcgen5_mma_early_a_release_scope, (completion, access, device, False, monkeypatch))
+        if completion == "a_read" and access != "a":
+            assert_expected_cuda_failure(result.exc)
+            assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(COMPLETION: ttgl.constexpr, ACCESS: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        shared: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 8, rank=2)
+        a = ttgl.allocate_shared_memory(ttgl.float8e5, [128, 128], shared,
+                                        ttgl.full([128, 128], 1, ttgl.float8e5, layout))
+        b = ttgl.allocate_shared_memory(ttgl.float8e5, [128, 128], shared,
+                                        ttgl.full([128, 128], 1, ttgl.float8e5, layout))
+        if ACCESS == "alias":
+            b = a
+        acc = blackwell.allocate_tensor_memory(ttgl.float32, [128, 128],
+                                               blackwell.TensorMemoryLayout([128, 128], col_stride=1))
+        scales: ttgl.constexpr = blackwell.TensorMemoryScalesLayout()
+        a_scale = blackwell.allocate_tensor_memory(ttgl.uint8, [128, 4], scales)
+        b_scale = blackwell.allocate_tensor_memory(ttgl.uint8, [128, 4], scales)
+        a_scale.store(ttgl.full(a_scale.shape, 127, ttgl.uint8, a_scale.get_reg_layout()))
+        b_scale.store(ttgl.full(b_scale.shape, 127, ttgl.uint8, b_scale.get_reg_layout()))
+        if ACCESS == "tmem_a":
+            a_tensor = blackwell.allocate_tensor_memory(ttgl.float8e5, [128, 128],
+                                                        blackwell.TensorMemoryLayout([128, 128], col_stride=1))
+            a_tensor.store(ttgl.full(a_tensor.shape, 1, ttgl.float8e5, a_tensor.get_reg_layout()))
+        if ACCESS == "copy_src":
+            src = ttgl.allocate_shared_memory(ttgl.int32, [128, 32], ttgl.NVMMASharedLayout(128, 32, rank=2),
+                                              ttgl.full([128, 32], 0, ttgl.int32, layout))
+            dst = blackwell.allocate_tensor_memory(ttgl.int32, [128, 32],
+                                                   blackwell.TensorMemoryLayout([128, 32], col_stride=1))
+        early = mbarrier.allocate_mbarrier()
+        full = mbarrier.allocate_mbarrier()
+        mbarrier.init(early, count=1)
+        mbarrier.init(full, count=1)
+        hopper.fence_async_shared()
+        if ACCESS == "copy_src":
+            blackwell.tcgen05_copy(src, dst)
+        if ACCESS == "tmem_a":
+            blackwell.tcgen05_mma_scaled(a_tensor, b, acc, a_scale, b_scale, "e5m2", "e5m2", use_acc=False)
+        else:
+            blackwell.tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, "e5m2", "e5m2", use_acc=False)
+        blackwell.tcgen05_commit(early, completion="a_read")
+        blackwell.tcgen05_commit(full)
+        if ACCESS == "stale":
+            # The first commit must not release a subsequent MMA's A read.
+            blackwell.tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, "e5m2", "e5m2", use_acc=True)
+        if COMPLETION == "a_read":
+            if ACCESS != "missing_wait":
+                mbarrier.wait(early, 0)
+        else:
+            if ACCESS == "stale":
+                blackwell.tcgen05_commit(full)
+                mbarrier.wait(full, 1)
+            else:
+                mbarrier.wait(full, 0)
+        if ACCESS == "a_scale":
+            a_scale.store(ttgl.full(a_scale.shape, 127, ttgl.uint8, a_scale.get_reg_layout()))
+        elif ACCESS == "b_scale":
+            b_scale.store(ttgl.full(b_scale.shape, 127, ttgl.uint8, b_scale.get_reg_layout()))
+        elif ACCESS == "tmem_a":
+            a_tensor.store(ttgl.full(a_tensor.shape, 0, ttgl.float8e5, a_tensor.get_reg_layout()))
+        elif ACCESS == "copy_src":
+            src.store(ttgl.full(src.shape, 0, ttgl.int32, layout))
+        elif ACCESS == "b":
+            b.store(ttgl.full(b.shape, 0, ttgl.float8e5, layout))
+        else:
+            a.store(ttgl.full(a.shape, 0, ttgl.float8e5, layout))
+        mbarrier.wait(early, 0)
+        if ACCESS != "stale":
+            mbarrier.wait(full, 0)
+        mbarrier.invalidate(early)
+        mbarrier.invalidate(full)
+
+    kernel[(1, )](completion, access, num_warps=4)
+
+
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
                    run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("MEM_ACCESS_KIND", ["local_store", "tmem_load"])
-def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch, num_ctas):
+@pytest.mark.parametrize("PRED", [True, False])
+def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, PRED, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
-        result = run_in_process(test_tcgen5_copy, (FAILURE, MEM_ACCESS_KIND, device, False, monkeypatch, num_ctas))
-        if FAILURE:
+        result = run_in_process(test_tcgen5_copy,
+                                (FAILURE, MEM_ACCESS_KIND, PRED, device, False, monkeypatch, num_ctas))
+        if FAILURE and PRED:
             assert_expected_cuda_failure(result.exc)
             if MEM_ACCESS_KIND == "local_store":
                 assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
@@ -1992,8 +2207,8 @@ def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch,
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
 
-    @gluon.jit
-    def kernel(input, output, FAILURE: ttgl.constexpr, MEM_ACCESS_KIND: ttgl.constexpr):
+    @gluon.jit(do_not_specialize=["pred"])
+    def kernel(input, output, pred, FAILURE: ttgl.constexpr, MEM_ACCESS_KIND: ttgl.constexpr):
         block_m: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
         cga_layout: ttgl.constexpr = default_cga_layout(ttgl.num_ctas(), 2)
         tmem_layout: ttgl.constexpr = blackwell.TensorMemoryLayout((128, XBLOCK), col_stride=1, cga_layout=cga_layout)
@@ -2011,7 +2226,7 @@ def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch,
         mbarrier.init(bar, count=1)
         # An earlier synchronous reader must not impersonate the tensor core.
         ttgl.store(output + offs, smem.load(reg_layout))
-        blackwell.tcgen05_copy(smem, tmem)
+        blackwell.tcgen05_copy(smem, tmem, pred=pred)
         blackwell.tcgen05_commit(bar)
         if not FAILURE:
             mbarrier.wait(bar, 0)
@@ -2027,7 +2242,7 @@ def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch,
     input = torch.arange(XBLOCK.value * XBLOCK.value * num_ctas, device=device,
                          dtype=torch.int32).reshape(XBLOCK.value * num_ctas, XBLOCK.value)
     output = torch.empty_like(input)
-    kernel[(1, )](input, output, FAILURE=FAILURE, MEM_ACCESS_KIND=MEM_ACCESS_KIND, num_warps=4, num_ctas=num_ctas)
+    kernel[(1, )](input, output, PRED, FAILURE=FAILURE, MEM_ACCESS_KIND=MEM_ACCESS_KIND, num_warps=4, num_ctas=num_ctas)
 
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
@@ -2161,6 +2376,14 @@ def test_ws_join_write_visibility(device, monkeypatch, num_ctas):
         offsets = ttgl.arange(0, block_x, layout)
         ttgl.store(output + offsets, smem.load(layout))
 
+    if num_ctas == 1:
+        # ConSan must initialize its lock before the worker first acquires it,
+        # including when a user-supplied allocator returns nonzero storage.
+        def allocate(size, alignment, stream):
+            return torch.full((size, ), 1, dtype=torch.int8, device=device)
+
+        monkeypatch.setattr(_allocation._profile_allocator, "_allocator", allocate)
+
     output = torch.empty((XBLOCK.value * num_ctas, ), device=device, dtype=torch.int32)
     kernel[(1, )](output, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(output, torch.full_like(output, 7))
@@ -2196,7 +2419,7 @@ def test_ws_join_publishes_to_async_peer(FENCE_LOCATION, device, monkeypatch):
         if FENCE_LOCATION == "consumer":
             hopper.fence_async_shared()
         tma.async_store(output_desc, [0, 0], smem)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
 
     output = torch.empty((XBLOCK.value, XBLOCK.value), device=device, dtype=torch.float16)
     shared_layout = ttgl.NVMMASharedLayout(128, 16, rank=2)
@@ -2236,7 +2459,7 @@ def test_ws_join_read_read_no_proxy_fence(device, monkeypatch):
         ], [4], [32])
         # TMA store reads smem. A preceding generic read needs no intervening fence.
         tma.async_store(output_desc, [0, 0], smem)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
 
     output = torch.empty((XBLOCK.value, XBLOCK.value), device=device, dtype=torch.float16)
     sink = torch.empty_like(output)
@@ -2594,15 +2817,80 @@ def test_multibuffered_loop(FAILURE, device, run_wrapper, monkeypatch, num_ctas)
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
                    run=False)
+def test_tma_subslice_warp_specialized_reuse(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_tma_subslice_warp_specialized_reuse, (device, False, monkeypatch))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def producer(desc, shared, ready, empty, ITERATIONS: ttgl.constexpr):
+        for iteration in range(ITERATIONS):
+            mbarrier.wait(empty, (iteration + 1) % 2)
+            mbarrier.expect(ready, 2 * desc.nbytes_per_cta)
+            # Each issuer fills 64 rows in each physical CTA's allocation.
+            tma.async_load(desc, [0, 0], ready, shared.slice(0, 128, dim=0))
+            tma.async_load(desc, [128, 0], ready, shared.slice(128, 128, dim=0))
+
+    @gluon.jit
+    def consumer(shared, ready, empty, output, ITERATIONS: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=[[1, 0]])
+        rows = ttgl.arange(0, 256, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))
+        offsets = rows[:, None] * 64 + cols[None, :]
+        for iteration in range(ITERATIONS):
+            mbarrier.wait(ready, iteration % 2)
+            # Both issuers must complete before either consumer reads.
+            ttgl.barrier(cluster=True)
+            values = shared.load(layout)
+            ttgl.store(output + iteration * 256 * 64 + offsets, values)
+            # Fence each owner's reads before publishing them to remote writers.
+            hopper.fence_async_shared()
+            ttgl.barrier(cluster=True)
+            mbarrier.arrive(empty)
+
+    @gluon.jit
+    def kernel(desc, output, ITERATIONS: ttgl.constexpr):
+        shared = ttgl.allocate_shared_memory(ttgl.float16, [256, 64], desc.layout)
+        ready = mbarrier.allocate_mbarrier()
+        empty = mbarrier.allocate_mbarrier()
+        mbarrier.init(ready, count=1)
+        mbarrier.init(empty, count=1)
+        ttgl.warp_specialize([
+            (consumer, (shared, ready, empty, output, ITERATIONS)),
+            (producer, (desc, shared, ready, empty, ITERATIONS)),
+        ], [1], [32])
+        mbarrier.invalidate(ready)
+        mbarrier.invalidate(empty)
+
+    iterations = 16
+    input = torch.randn((256, 64), device=device, dtype=torch.float16)
+    output = torch.empty((iterations, 256, 64), device=device, dtype=torch.float16)
+    layout = ttgl.NVMMASharedLayout(128, 16, rank=2, cga_layout=[[1, 0]])
+    desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [128, 64], layout)
+    kernel[(1, )](desc, output, iterations, num_warps=4, num_ctas=2)
+    torch.testing.assert_close(output, input.unsqueeze(0).expand_as(output), rtol=0, atol=0)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
-def test_tma_tcgen05_mma_multicast_loop(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
+@pytest.mark.parametrize("SPLIT_A", [False, True])
+def test_tma_tcgen05_mma_multicast_loop(FAILURE, SPLIT_A, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
         pytest.skip("Need at least 2 CTAs for 2CTA mode in this test")
     if run_wrapper:
-        result = run_in_process(test_tma_tcgen05_mma_multicast_loop, (FAILURE, device, False, monkeypatch, num_ctas))
+        result = run_in_process(test_tma_tcgen05_mma_multicast_loop,
+                                (FAILURE, SPLIT_A, device, False, monkeypatch, num_ctas))
         if FAILURE:
             assert_expected_cuda_failure(result.exc)
-            assert "Buffer being accessed has outstanding" in result.driver_stderr_output
+            assert re.search(r"Buffer being accessed has outstanding writes\. Operand: [AB]\b",
+                             result.driver_stderr_output)
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -2613,7 +2901,7 @@ def test_tma_tcgen05_mma_multicast_loop(FAILURE, device, run_wrapper, monkeypatc
     knobs.refresh_knobs()
 
     @gluon.jit
-    def kernel(a_desc, b_desc, FAILURE: ttgl.constexpr):
+    def kernel(a_desc, b_desc, FAILURE: ttgl.constexpr, SPLIT_A: ttgl.constexpr):
         num_k_tiles: ttgl.constexpr = 1 if FAILURE else 4
         block_m: ttgl.constexpr = mma_block_m(ttgl.num_ctas())
         block_n: ttgl.constexpr = mma_block_n(ttgl.num_ctas())
@@ -2638,19 +2926,21 @@ def test_tma_tcgen05_mma_multicast_loop(FAILURE, device, run_wrapper, monkeypatc
                                                                             acc.type.layout.two_ctas)
         mbarrier.init(mma_bar, count=mma_bar_count)
 
-        phase_tma = 0
-        phase_mma = 0
         for k in range(num_k_tiles):
             offs_k = k * XBLOCK
-            mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
-            tma.async_load(a_desc, [0, offs_k], tma_bar, smemA, multicast=True)
+            phase = k % 2
+            mbarrier.expect(tma_bar, a_desc.nbytes_per_cta * (2 if SPLIT_A else 1) + b_desc.nbytes_per_cta)
+            if SPLIT_A:
+                # Each issuer writes a disjoint half of each destination CTA's tile.
+                tma.async_load(a_desc, [0, offs_k], tma_bar, smemA.slice(0, block_m // 2))
+                tma.async_load(a_desc, [block_m // 2, offs_k], tma_bar, smemA.slice(block_m // 2, block_m // 2))
+            else:
+                tma.async_load(a_desc, [0, offs_k], tma_bar, smemA, multicast=True)
             tma.async_load(b_desc, [offs_k, 0], tma_bar, smemB, multicast=True)
             if not FAILURE:
-                mbarrier.wait(tma_bar, phase_tma, deps=[smemA, smemB])
+                mbarrier.wait(tma_bar, phase, deps=[smemA, smemB])
             blackwell.tcgen05_mma(smemA, smemB, acc, use_acc=k != 0, multicast=True, mbarriers=[mma_bar])
-            mbarrier.wait(mma_bar, phase_mma, deps=[smemA, smemB])
-            phase_tma = (phase_tma + 1) % 2
-            phase_mma = (phase_mma + 1) % 2
+            mbarrier.wait(mma_bar, phase, deps=[smemA, smemB])
 
         mbarrier.invalidate(tma_bar)
         mbarrier.invalidate(mma_bar)
@@ -2661,14 +2951,14 @@ def test_tma_tcgen05_mma_multicast_loop(FAILURE, device, run_wrapper, monkeypatc
     a = torch.randn((block_m, XBLOCK.value * num_k_tiles), device=device, dtype=torch.float16)
     b = torch.randn((XBLOCK.value * num_k_tiles, block_n), device=device, dtype=torch.float16)
     a_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(
-        a, [block_m, XBLOCK.value],
+        a, [block_m // 2 if SPLIT_A else block_m, XBLOCK.value],
         ttgl.NVMMASharedLayout.get_default_for([block_m, XBLOCK.value], ttgl.float16,
                                                cga_layout=mma_cga_layout(num_ctas, 0, True)))
     b_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(
         b, [XBLOCK.value, block_n],
         ttgl.NVMMASharedLayout.get_default_for([XBLOCK.value, block_n], ttgl.float16,
                                                cga_layout=mma_cga_layout(num_ctas, 1, True)))
-    kernel[(1, )](a_desc, b_desc, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
+    kernel[(1, )](a_desc, b_desc, FAILURE=FAILURE, SPLIT_A=SPLIT_A, num_warps=4, num_ctas=num_ctas)
 
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
@@ -2992,7 +3282,7 @@ def test_fence_async_shared_across_warp_specialize(FENCE_LOCATION, device, run_w
         if FENCE_LOCATION == "consumer":
             hopper.fence_async_shared()
         tma.async_store(output_desc, [0, 0], smem)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
 
     @gluon.jit
     def kernel(output_desc, ready, FENCE_LOCATION: ttgl.constexpr):
@@ -4919,3 +5209,161 @@ def test_mma_read_local_alloc_write(run_wrapper, monkeypatch, num_ctas):
     BLOCK_K = 64
     A = torch.randn((BLOCK_M, K), device="cuda", dtype=torch.float16)
     load_local_alloc_mma_write_after_read_kernel[(1, )](A, K, BLOCK_M, BLOCK_N, BLOCK_K, num_ctas=num_ctas)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer",
+                   run=False)
+@pytest.mark.parametrize("failure", ["none", "read", "write", "copy", "invalidate", "bytes"])
+def test_bulk_async_load_synchronization(failure, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_bulk_async_load_synchronization, (failure, device, False, monkeypatch))
+        if failure == "none":
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert_expected_cuda_failure(result.exc)
+            if failure in ("read", "write", "copy"):
+                assert "outstanding writes" in result.driver_stderr_output
+            elif failure == "invalidate":
+                assert "outstanding" in result.driver_stderr_output
+            else:
+                assert "Deadlock detected" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(src, out, FAILURE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], shared)
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        hopper.mbarrier.expect(bar, 16 if FAILURE == "bytes" else 512)
+        hopper.bulk.async_load(smem, src, 128, bar)
+        if FAILURE == "write":
+            smem.store(ttgl.full((128, ), 0, ttgl.int32, layout))
+        elif FAILURE == "copy":
+            hopper.bulk.async_load(smem, src, 128, bar)
+        elif FAILURE == "invalidate":
+            hopper.mbarrier.invalidate(bar)
+        if FAILURE != "read":
+            hopper.mbarrier.wait(bar, phase=0)
+        values = smem.load(layout)
+        ttgl.store(out + ttgl.arange(0, 128, layout), values)
+        if FAILURE != "invalidate":
+            hopper.mbarrier.invalidate(bar)
+
+    src = torch.arange(128, device=device, dtype=torch.int32)
+    out = torch.empty_like(src)
+    kernel[(1, )](src, out, failure)
+    torch.testing.assert_close(src, out)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer",
+                   run=False)
+def test_bulk_async_load_multicast_reuse_race(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_bulk_async_load_multicast_reuse_race, (device, False, monkeypatch))
+        assert_expected_cuda_failure(result.exc)
+        assert "outstanding reads" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(src, out):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=((0, ), ))
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=((0, ), ))
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], shared)
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        values = ttgl.full((128, ), 0, ttgl.int32, layout)
+        for phase in range(2):
+            hopper.mbarrier.expect(bar, 512)
+            hopper.bulk.async_load(smem, src, 128, bar, multicast=True)
+            hopper.mbarrier.wait(bar, phase)
+            values += smem.load(layout)
+            # Deliberately omit the cluster join before the next multicast.
+        ttgl.store(out + ttgl.arange(0, 128, layout), values)
+        hopper.mbarrier.invalidate(bar)
+
+    src = torch.arange(128, device=device, dtype=torch.int32)
+    out = torch.empty_like(src)
+    kernel[(1, )](src, out, num_ctas=2)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer",
+                   run=False)
+@pytest.mark.parametrize("wait", [False, True])
+@pytest.mark.parametrize("pred", [False, True])
+def test_bulk_async_store_missing_wait(wait, pred, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_bulk_async_store_missing_wait, (wait, pred, device, False, monkeypatch))
+        if wait or not pred:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert_expected_cuda_failure(result.exc)
+            assert "Pending access type: async_copy_shared_to_global" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(out, pred, WAIT: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]),
+                                           ttgl.full((128, ), 7, ttgl.int32, layout))
+        hopper.bulk.async_store(out, smem, 128, pred=pred)
+        if WAIT:
+            hopper.bulk.store_wait(0, deps=[smem])
+        smem.store(ttgl.full((128, ), 9, ttgl.int32, layout))
+        hopper.bulk.store_wait(0, read_only=False, deps=[smem])
+        ttgl.store(out + 128 + ttgl.arange(0, 128, layout), smem.load(layout))
+
+    out = torch.full((256, ), -1, device=device, dtype=torch.int32)
+    kernel[(1, )](out, pred, wait)
+    torch.testing.assert_close(out[:128], torch.full_like(out[:128], 7 if pred else -1))
+    torch.testing.assert_close(out[128:], torch.full_like(out[128:], 9))
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer",
+                   run=False)
+@pytest.mark.parametrize("pendings", [0, 1])
+def test_bulk_async_store_false_predicate_queue(pendings, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_bulk_async_store_false_predicate_queue, (pendings, device, False, monkeypatch))
+        if pendings == 0:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert_expected_cuda_failure(result.exc)
+            assert "Pending access type: async_copy_shared_to_global" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(out, pred, PENDINGS: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]),
+                                           ttgl.full((128, ), 7, ttgl.int32, layout))
+        hopper.bulk.async_store(out, smem, 128)
+        hopper.bulk.async_store(out + 128, smem, 128, pred=pred)
+        hopper.bulk.store_wait(PENDINGS, deps=[smem])
+        smem.store(ttgl.full((128, ), 9, ttgl.int32, layout))
+        hopper.bulk.store_wait(0, read_only=False, deps=[smem])
+        ttgl.store(out + 128 + ttgl.arange(0, 128, layout), smem.load(layout))
+
+    out = torch.empty(256, device=device, dtype=torch.int32)
+    kernel[(1, )](out, False, pendings)
+    torch.testing.assert_close(out[:128], torch.full_like(out[:128], 7))
+    torch.testing.assert_close(out[128:], torch.full_like(out[128:], 9))

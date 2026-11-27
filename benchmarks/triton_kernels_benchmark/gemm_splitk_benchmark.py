@@ -12,6 +12,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.benchmark_testing import DEVICE, get_xpu_extension
+from triton_kernels_benchmark.gemm_tile_utils import load_matrix_tile, make_matrix_tile_ptr, store_matrix_tile
 
 sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
 
@@ -35,7 +36,8 @@ def get_autotune_configs() -> List[triton.Config]:
 @triton.autotune(
     configs=get_autotune_configs(),
     key=['M', 'N', 'K'],
-    restore_value=['C'],
+    # With SPLIT_K > 1 the write-back is an `atomic_add`, so every launch needs C zeroed.
+    reset_to_zero=['C'],
 )
 @triton.jit
 def _kernel(A, B, C,  #
@@ -58,26 +60,20 @@ def _kernel(A, B, C,  #
     pid_m = group_id * GROUP_M + (pid % group_size)
     pid_n = (pid % width) // (group_size)
 
-    # Create tensor descriptors
-    a_desc = tl.make_tensor_descriptor(base=A, shape=(M, K), strides=(stride_am, stride_ak),
-                                       block_shape=(BLOCK_M, BLOCK_K))
-    b_desc = tl.make_tensor_descriptor(base=B, shape=(K, N), strides=(stride_bk, stride_bn),
-                                       block_shape=(BLOCK_K, BLOCK_N))
-
+    a_desc = make_matrix_tile_ptr(A, M, K, stride_am, stride_ak, BLOCK_M, BLOCK_K)
+    b_desc = make_matrix_tile_ptr(B, K, N, stride_bk, stride_bn, BLOCK_K, BLOCK_N)
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
     off_k = pid_z * BLOCK_K
     for _ in range(0, K, BLOCK_K * SPLIT_K):
-        a = a_desc.load([pid_m * BLOCK_M, off_k])
-        b = b_desc.load([off_k, pid_n * BLOCK_N])
+        a = load_matrix_tile(a_desc, M, K, stride_am, stride_ak, pid_m * BLOCK_M, off_k, BLOCK_M, BLOCK_K)
+        b = load_matrix_tile(b_desc, K, N, stride_bk, stride_bn, off_k, pid_n * BLOCK_N, BLOCK_K, BLOCK_N)
         acc = tl.dot(a, b, acc, out_dtype=acc_dtype)
         off_k += BLOCK_K * SPLIT_K
     acc = acc.to(C.dtype.element_ty)
 
     # handles write-back with reduction-splitting
     if SPLIT_K == 1:
-        c_desc = tl.make_tensor_descriptor(base=C, shape=(M, N), strides=(stride_cm, stride_cn),
-                                           block_shape=(BLOCK_M, BLOCK_N))
-        c_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], acc)
+        store_matrix_tile(C, acc, M, N, stride_cm, stride_cn, pid_m * BLOCK_M, pid_n * BLOCK_N, BLOCK_M, BLOCK_N)
     else:
         # rematerialize rm and rn to save registers
         rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -92,13 +88,9 @@ class _matmul(torch.autograd.Function):
 
     @staticmethod
     def _call(a, b, c, acc_dtype):
-        # handle non-contiguous inputs if necessary
-        if a.stride(0) > 1 and a.stride(1) > 1:
-            a = a.contiguous()
-        if b.stride(0) > 1 and b.stride(1) > 1:
-            b = b.contiguous()
         # checks constraints
         assert a.shape[1] == b.shape[0], 'incompatible dimensions'
+        assert all(x.data_ptr() % 16 == 0 for x in (a, b, c)), 'matrix base addresses must be 16-byte aligned'
         M, K = a.shape
         _, N = b.shape
 
@@ -171,13 +163,12 @@ def benchmark(M, N, K, provider):
     b = torch.rand((K, N), device=DEVICE, dtype=torch.bfloat16)
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(a, b))
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.mm(a, b, out_dtype=torch.float32))
     elif provider == 'triton':
         c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
-        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        torch_fn = lambda: torch.mm(a, b, out_dtype=torch.float32)
+        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     elif provider == 'sycl-tla':
         c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
@@ -188,9 +179,8 @@ def benchmark(M, N, K, provider):
             sycl_tla_kernel.gemm_splitk(a, b, c, M, N, K, split_k)
             return c
 
-        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='sycl-tla to torch')
+        torch_fn = lambda: torch.mm(a, b, out_dtype=torch.float32)
+        benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='sycl-tla to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(sycl_tla_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

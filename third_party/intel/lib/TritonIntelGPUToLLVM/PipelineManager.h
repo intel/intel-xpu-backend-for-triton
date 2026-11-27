@@ -222,8 +222,12 @@ public:
                                              strideAnalysis, benefit);
     intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                           benefit);
+    // The Intel scan lowering handles the layouts it supports; core's handles
+    // the rest.
     intel::populateScanOpToLLVMPatterns(typeConverter, patterns, targetInfo,
-                                        benefit);
+                                        benefit + 1);
+    mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
+                                               targetInfo, benefit);
     mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
                                                  targetInfo, benefit);
     mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,

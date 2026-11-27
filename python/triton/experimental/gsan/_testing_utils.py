@@ -5,8 +5,9 @@ import triton
 import triton.language as tl
 
 from ._allocator import get_global_state_pointer
-from triton._C.libtriton.gsan_testing import is_write_once_address, shadow_cell_size, shadow_granularity, thread_state_address, PER_DEVICE_STATE_STRIDE_BYTES, GLOBAL_STATE_SIZE_BYTES, shadow_cell_address, thread_state_stride_bytes
-from ._testing import (decode_global_state_tensor, decode_shadow_cell_tensor, decode_thread_state_tensor)
+from triton._C.libtriton.gsan_testing import thread_state_address, PER_DEVICE_STATE_STRIDE_BYTES, GLOBAL_STATE_SIZE_BYTES, thread_state_stride_bytes
+from ._testing import (decode_global_state_tensor, decode_shadow_cell_tensor, decode_thread_state_tensor,
+                       is_write_once_address, shadow_cell_address, shadow_cell_size, shadow_granularity)
 from ._utils import uint8_cuda_tensor_from_ptr
 
 
@@ -149,7 +150,7 @@ class ExplicitGraph:
         compiled._init_handles()
         self.compiled.append(compiled)
         values = tuple(arg.data_ptr() if hasattr(arg, "data_ptr") else arg for arg in arguments)
-        spec = KernelLaunch(compiled.function, grid, compiled.metadata.num_warps * 32, compiled.metadata.shared,
+        spec = KernelLaunch(compiled.function, grid, compiled.metadata.num_warps * 32, compiled.run.shared,
                             (*values, *self.plan.node_launch_args(index), 0, 0))
         deps = tuple(self.nodes[j] for j in node.dependencies)
         if not node.dependencies and not node.programmatic_dependencies:

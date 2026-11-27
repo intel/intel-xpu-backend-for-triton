@@ -20,7 +20,7 @@ kAlpha = tl.constexpr(math.sqrt(2.0 / math.pi))
 
 @triton.jit
 def tanh(x):
-    return 2 * tl.sigmoid(2 * x) - 1
+    return tl.fma(2.0, tl.sigmoid(2 * x), -1.0)
 
 
 @triton.jit
@@ -30,7 +30,8 @@ def gelu(x):
 
     .. _GeLU: https://arxiv.org/pdf/1606.08415.pdf
     """
-    return 0.5 * x * (1 + tanh(kAlpha * (x + 0.044715 * x * x * x)))
+    half_x = 0.5 * x
+    return tl.fma(half_x, tanh(kAlpha * tl.fma(0.044715 * x * x, x, x)), half_x)
 
 
 @triton.autotune(
@@ -286,9 +287,9 @@ def benchmark(B, M, N, K, provider):
             assert len(a.shape) == 2, 'Expecting shape of length 2'
             c = torch.empty((M, N), device=DEVICE, dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
-        torch_fn = lambda: torch.nn.functional.gelu(torch.matmul(a, b).to(torch.float32))
-        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        torch_mm = torch.bmm if a.dim() == 3 else torch.mm
+        torch_fn = lambda: torch.nn.functional.gelu(torch_mm(a, b, out_dtype=torch.float32))
+        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-3, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

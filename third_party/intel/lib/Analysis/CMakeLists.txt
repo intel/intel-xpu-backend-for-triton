@@ -4,12 +4,14 @@ add_triton_library(TritonIntelAnalysis
     AxisInfoExt.cpp
     Liveness.cpp
     RegisterPressure.cpp
-    SignedDivRemDeduction.cpp
     SignednessProver.cpp
+    SymbolicBounds.cpp
+    ReuseAnalysis.cpp
     SpatialReuseAnalysis.cpp
     StrideInfo.cpp
     TemporalReuseAnalysis.cpp
     Membar.cpp
+    MembarAnalysis.cpp
     Utility.cpp
     Range.cpp
 
@@ -19,6 +21,7 @@ add_triton_library(TritonIntelAnalysis
     TritonGPUOpInterfacesIncGen
 
     LINK_LIBS PUBLIC
+    TritonAnalysis
     TritonIR
     TritonIntelGPUIR
 )

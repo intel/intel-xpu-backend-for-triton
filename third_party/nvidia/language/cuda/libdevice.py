@@ -135,15 +135,6 @@ def saturatef(arg0, _semantic=None):
 
 
 @core.extern
-def fma_rn(arg0, arg1, arg2, _semantic=None):
-    return core.extern_elementwise(
-        "", "", [arg0, arg1, arg2], {
-            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__nv_fmaf_rn", core.dtype("fp32")),
-            (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64")): ("__nv_fma_rn", core.dtype("fp64")),
-        }, is_pure=True, _semantic=_semantic)
-
-
-@core.extern
 def fma_rz(arg0, arg1, arg2, _semantic=None):
     return core.extern_elementwise(
         "", "", [arg0, arg1, arg2], {
@@ -434,28 +425,28 @@ def double2int_ru(arg0, _semantic=None):
 @core.extern
 def double2uint_rn(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp64"), ): ("__nv_double2uint_rn", core.dtype("int32")),
+        (core.dtype("fp64"), ): ("__nv_double2uint_rn", core.dtype("uint32")),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def double2uint_rz(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp64"), ): ("__nv_double2uint_rz", core.dtype("int32")),
+        (core.dtype("fp64"), ): ("__nv_double2uint_rz", core.dtype("uint32")),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def double2uint_rd(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp64"), ): ("__nv_double2uint_rd", core.dtype("int32")),
+        (core.dtype("fp64"), ): ("__nv_double2uint_rd", core.dtype("uint32")),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def double2uint_ru(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp64"), ): ("__nv_double2uint_ru", core.dtype("int32")),
+        (core.dtype("fp64"), ): ("__nv_double2uint_ru", core.dtype("uint32")),
     }, is_pure=True, _semantic=_semantic)
 
 
@@ -504,28 +495,28 @@ def float2int_ru(arg0, _semantic=None):
 @core.extern
 def float2uint_rn(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp32"), ): ("__nv_float2uint_rn", core.dtype("int32")),
+        (core.dtype("fp32"), ): ("__nv_float2uint_rn", core.dtype("uint32")),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def float2uint_rz(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp32"), ): ("__nv_float2uint_rz", core.dtype("int32")),
+        (core.dtype("fp32"), ): ("__nv_float2uint_rz", core.dtype("uint32")),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def float2uint_rd(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp32"), ): ("__nv_float2uint_rd", core.dtype("int32")),
+        (core.dtype("fp32"), ): ("__nv_float2uint_rd", core.dtype("uint32")),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def float2uint_ru(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp32"), ): ("__nv_float2uint_ru", core.dtype("int32")),
+        (core.dtype("fp32"), ): ("__nv_float2uint_ru", core.dtype("uint32")),
     }, is_pure=True, _semantic=_semantic)
 
 
@@ -637,28 +628,28 @@ def float2ll_ru(arg0, _semantic=None):
 @core.extern
 def float2ull_rn(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp32"), ): ("__nv_float2ull_rn", core.dtype("int64")),
+        (core.dtype("fp32"), ): ("__nv_float2ull_rn", core.dtype("uint64")),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def float2ull_rz(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp32"), ): ("__nv_float2ull_rz", core.dtype("int64")),
+        (core.dtype("fp32"), ): ("__nv_float2ull_rz", core.dtype("uint64")),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def float2ull_rd(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp32"), ): ("__nv_float2ull_rd", core.dtype("int64")),
+        (core.dtype("fp32"), ): ("__nv_float2ull_rd", core.dtype("uint64")),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def float2ull_ru(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp32"), ): ("__nv_float2ull_ru", core.dtype("int64")),
+        (core.dtype("fp32"), ): ("__nv_float2ull_ru", core.dtype("uint64")),
     }, is_pure=True, _semantic=_semantic)
 
 
@@ -693,28 +684,28 @@ def double2ll_ru(arg0, _semantic=None):
 @core.extern
 def double2ull_rn(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp64"), ): ("__nv_double2ull_rn", core.dtype("int64")),
+        (core.dtype("fp64"), ): ("__nv_double2ull_rn", core.dtype("uint64")),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def double2ull_rz(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp64"), ): ("__nv_double2ull_rz", core.dtype("int64")),
+        (core.dtype("fp64"), ): ("__nv_double2ull_rz", core.dtype("uint64")),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def double2ull_rd(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp64"), ): ("__nv_double2ull_rd", core.dtype("int64")),
+        (core.dtype("fp64"), ): ("__nv_double2ull_rd", core.dtype("uint64")),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
 def double2ull_ru(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp64"), ): ("__nv_double2ull_ru", core.dtype("int64")),
+        (core.dtype("fp64"), ): ("__nv_double2ull_ru", core.dtype("uint64")),
     }, is_pure=True, _semantic=_semantic)
 
 
@@ -854,7 +845,7 @@ def uint_as_float(arg0, _semantic=None):
 @core.extern
 def float_as_uint(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
-        (core.dtype("fp32"), ): ("__nv_float_as_uint", core.dtype("int32")),
+        (core.dtype("fp32"), ): ("__nv_float_as_uint", core.dtype("uint32")),
     }, is_pure=True, _semantic=_semantic)
 
 
@@ -1545,15 +1536,6 @@ def remainder(arg0, arg1, _semantic=None):
         "", "", [arg0, arg1], {
             (core.dtype("fp32"), core.dtype("fp32")): ("__nv_remainderf", core.dtype("fp32")),
             (core.dtype("fp64"), core.dtype("fp64")): ("__nv_remainder", core.dtype("fp64")),
-        }, is_pure=True, _semantic=_semantic)
-
-
-@core.extern
-def fma(arg0, arg1, arg2, _semantic=None):
-    return core.extern_elementwise(
-        "", "", [arg0, arg1, arg2], {
-            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__nv_fmaf", core.dtype("fp32")),
-            (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64")): ("__nv_fma", core.dtype("fp64")),
         }, is_pure=True, _semantic=_semantic)
 
 

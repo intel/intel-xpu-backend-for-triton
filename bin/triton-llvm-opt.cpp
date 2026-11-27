@@ -79,6 +79,26 @@ static cl::opt<bool> LegalizeI1VectorMemory(
     llvm::cl::desc("rewrite `<N x i1>` loads and stores as integer accesses"),
     cl::init(false));
 
+static cl::opt<bool> ExpandFmaToContractPair(
+    "expand-fma-contract-pair",
+    llvm::cl::desc("rewrite scalar f32 llvm.fma into a contractable "
+                   "fmul/fadd pair (multiply first)"),
+    cl::init(false));
+
+static cl::opt<bool> MergeNVPTXAssertBlocks(
+    "merge-nvptx-assert-blocks",
+    cl::desc("share identical NVPTX assertion failure blocks"));
+
+static cl::opt<bool> NVPTXVectorize(
+    "nvptx-vectorize",
+    llvm::cl::desc("run hardware-aware NVPTX arithmetic vectorization"),
+    cl::init(false));
+
+static cl::opt<unsigned> NVPTXComputeCapability(
+    "nvptx-compute-capability",
+    llvm::cl::desc("NVIDIA compute capability used for vectorization"),
+    cl::init(90));
+
 namespace {
 static std::function<Error(Module *)> makeOptimizingPipeline() {
   return [](Module *m) -> Error {
@@ -106,6 +126,8 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
       mpm.addPass(ExpandSubByteVectorBitcastPass());
     if (LegalizeI1VectorMemory)
       mpm.addPass(LegalizeI1VectorMemoryPass());
+    if (ExpandFmaToContractPair)
+      mpm.addPass(ExpandFmaToContractPairPass());
     llvm::FunctionPassManager fpm;
     if (BreakStructPhiNodes)
       fpm.addPass(BreakStructPhiNodesPass());
@@ -113,6 +135,10 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
       fpm.addPass(GuardMaskedDivRemPass());
     if (ScalarizePtrVectors)
       fpm.addPass(ScalarizePtrVectorsPass());
+    if (MergeNVPTXAssertBlocks)
+      fpm.addPass(MergeNVPTXAssertBlocksPass());
+    if (NVPTXVectorize)
+      fpm.addPass(NVPTXVectorizerPass(NVPTXComputeCapability));
     mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
     mpm.run(*m, mam);
     return Error::success();

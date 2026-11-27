@@ -82,9 +82,10 @@ Module attributes for device capabilities are listed in `intel-gpu-hardware.md` 
 - **AccelerateMatmul** (via DPASAnalysis): `support_subgroup_matrix_multiply_accumulate`
 - **DPASAnalysisFactory** (Xe2 vs Xe3P): `support_subgroup_matrix_multiply_accumulate_bf8`
 - **LoadStoreOpToLLVM**: `support_predicated_io`
-- **isSPVBuiltinAvailable()**: `is_lts`
+- **isSPVBuiltinAvailable()**: `is_lts`, `use_genisa_2d_block_io`
 - **ArithEmulation**: `support_bfloat16_arithmetic`
 - **Type conversion lowering**: `support_bfloat16_conversion`, `support_f8_conversion`, `support_f4_conversion`
+- **bf16 -> f32 as `fpext`** (`convertBf16ToFp32`): `support_bfloat16_arithmetic` and `use_bf16_fpext` (IGC >= 2.43)
 - **AtomicOpLowering**: `support_16bit_atomics`
 
 ### Complete Pass Inventory
@@ -290,8 +291,8 @@ From `conftest.py`:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `TRITON_TEST_SKIPLIST_DIR` | `scripts/skiplist/default` | Skip list directory |
-| `TEST_UNSKIP` | `false` | Ignore skip/xfail decorators |
+| `TRITON_TEST_SKIPLIST_DIR` | `scripts/skiplist/default` | Skip and xfail list directory |
+| `TEST_UNSKIP` | `false` | Ignore skip/xfail decorators and the skip and xfail lists |
 | `TRITON_INTERPRET` | — | Run in interpreter mode (no GPU) |
 | `PYTEST_MAX_PROCESSES` | 8 | Parallel worker count |
 

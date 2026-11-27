@@ -359,13 +359,10 @@ class CodeGenerator(ast.NodeVisitor):
         self.pending_annotations: Dict[str, Any] = {}
         self.dereference_name: Callable[[str], Any] = self._define_name_lookup()
         self.fn = None
-        # Are we currently visiting an ast.arg's default value?  These have some
-        # special handling.
-        self.visiting_arg_default_value = False
 
     builtin_namespace: Dict[str, Any] = {
         _.__name__: _
-        for _ in (len, list, range, float, int, isinstance, getattr, hasattr)
+        for _ in (len, list, range, float, int, bool, isinstance, getattr, hasattr)
     }
     builtin_namespace.update((
         ('print', language.core.device_print),
@@ -410,10 +407,6 @@ class CodeGenerator(ast.NodeVisitor):
                     isinstance(val, language.dtype),  #
                     is_namedtuple(val),
                     self._is_constexpr_global(name),  #
-                    # Allow accesses to globals while visiting an ast.arg
-                    # because you should be able to do
-                    #   @triton.jit def fn(x: tl.constexpr = GLOBAL): ...
-                    self.visiting_arg_default_value,  #
                     knobs.compilation.allow_non_constexpr_globals,
             ]):
                 return val
@@ -593,7 +586,7 @@ class CodeGenerator(ast.NodeVisitor):
         def common_type(a, b):
             if isinstance(a, tl.tuple_type):
                 _check(isinstance(b, tl.tuple_type), lambda: error_msg(a, b))
-                _check(a.fields == b.fields, lambda: error_msg(a, b))
+                _check(len(a.types) == len(b.types) and a.fields == b.fields, lambda: error_msg(a, b))
                 return tl.tuple_type([common_type(ai, bi) for ai, bi in zip(a, b)], fields=a.fields)
             if isinstance(a, tl.constexpr_type):
                 if a == b:
@@ -656,23 +649,6 @@ class CodeGenerator(ast.NodeVisitor):
                 node, "nested function definitions are not allowed inside a @triton.jit kernel. "
                 "Move the helper function to module level and decorate it with @triton.jit.")
         arg_names = self.visit(node.args)
-        # initialize defaults
-        for i, default_value in enumerate(node.args.defaults[::-1]):
-            arg_node = node.args.args[-i - 1]
-            annotation = arg_node.annotation
-            name = arg_node.arg
-            st_target = ast.Name(id=name, ctx=ast.Store())
-            if annotation is None:
-                init_node = ast.Assign(targets=[st_target], value=default_value)
-            else:
-                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation, simple=1)
-            try:
-                assert not self.visiting_arg_default_value
-                self.visiting_arg_default_value = True
-                self.visit(init_node)
-            finally:
-                self.visiting_arg_default_value = False
-
         # initialize function
         visibility = "public" if self.is_kernel else "private"
         fn_ty = self.prototype.serialize(self.builder)
@@ -1327,6 +1303,9 @@ class CodeGenerator(ast.NodeVisitor):
             step = iter_args[2] if len(iter_args) > 2 else self.visit(ast.Constant(1))
         else:
             raise RuntimeError('Only `range` and `static_range` iterators are currently supported')
+
+        if _is_constexpr(step) and step.value == 0:
+            raise ValueError("range() arg 3 (step) must not be zero")
         # handle negative constant step (not supported by scf.for in MLIR).
         # Only a constexpr step can be normalized here; a runtime step must be positive.
         negative_step = False
@@ -1349,15 +1328,10 @@ class CodeGenerator(ast.NodeVisitor):
         iv_type = self.semantic.integer_promote_impl(lb.dtype, ub.dtype)
         iv_type = self.semantic.integer_promote_impl(iv_type, step.dtype)
         iv_ir_type = iv_type.to_ir(self.builder)
-        iv_is_signed = iv_type.int_signedness == language.core.dtype.SIGNEDNESS.SIGNED
-        # lb/ub/step might be constexpr, we need to cast them to tensor
-        lb = lb.handle
-        ub = ub.handle
-        step = step.handle
-        # ForOp can only accept IndexType as lb/ub/step. Cast integer to Index
-        lb = self.builder.create_int_cast(lb, iv_ir_type, iv_is_signed)
-        ub = self.builder.create_int_cast(ub, iv_ir_type, iv_is_signed)
-        step = self.builder.create_int_cast(step, iv_ir_type, iv_is_signed)
+        # Preserve each operand's signedness when widening to the induction type.
+        lb = self.builder.create_int_cast(lb.handle, iv_ir_type, lb.dtype.is_int_signed())
+        ub = self.builder.create_int_cast(ub.handle, iv_ir_type, ub.dtype.is_int_signed())
+        step = self.builder.create_int_cast(step.handle, iv_ir_type, step.dtype.is_int_signed())
         # Create placeholder for the loop induction variable
         iv_placeholder = self.builder.create_poison(iv_ir_type)
         self.set_value(node.target.id, language.core.tensor(iv_placeholder, iv_type))
@@ -1528,6 +1502,9 @@ class CodeGenerator(ast.NodeVisitor):
                 # preserve the traceback of the original error, which may e.g.
                 # be in core.py.
                 raise CompilationError(self.jit_fn.src, node, str(e)) from e
+
+        if fn is bool and any(isinstance(_unwrap_if_constexpr(arg), tensor) for arg in args):
+            raise TypeError("bool() is not supported for tensors")
 
         if fn in self.builtin_namespace.values() or (hasattr(fn, '__self__') and not _is_triton_value(fn.__self__)):
             args = map(_unwrap_if_constexpr, args)
@@ -1783,7 +1760,7 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
                               module_map=module_map, module=module, is_gluon=fn.is_gluon())
     generator.visit(fn.parse())
     module = generator.module
-    # module takes ownership of the context
+    # expose the context on the module for downstream compiler stages
     module.context = context
     if not module.verify():
         if not fn.is_gluon():

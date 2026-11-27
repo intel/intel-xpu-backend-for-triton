@@ -28,6 +28,8 @@
 
 #include <numeric>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
@@ -537,6 +539,8 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
   auto bType = itf.getB().getType();
   auto dType = itf.getAccumulator().getType();
   auto barriers = itf.getCompletionBarriers();
+  if (barriers.size() != itf.getCompletionBarrierPreds().size())
+    return op->emitOpError("expected one predicate per completion barrier");
   if (!itf.isAsync() && !barriers.empty())
     return op->emitOpError("The op is synchronous but a barrier is present.");
   auto encoding = dyn_cast<TensorMemoryEncodingAttr>(dType.getEncoding());
@@ -546,7 +550,8 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
            SwizzledSharedEncodingAttr>(bType.getEncoding()) ||
       cast<LayoutEncodingTrait>(aType.getEncoding()).getRank() != 2 ||
       cast<LayoutEncodingTrait>(bType.getEncoding()).getRank() != 2 ||
-      !bType.getElementType().isIntOrFloat())
+      (!bType.getElementType().isIntOrFloat() &&
+       !isa<PackedFloat4E2M1Type>(bType.getElementType())))
     return op->emitOpError("expected rank-2 MMA operands, a shared-memory RHS, "
                            "and a tensor-memory accumulator");
   if (encoding.getFp4Padded())

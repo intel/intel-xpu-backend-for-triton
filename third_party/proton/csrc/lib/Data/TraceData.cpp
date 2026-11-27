@@ -364,27 +364,12 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
             std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime)),
             timestampOffsetNs);
         auto launchEventId = events.at(eventId).parentEventId;
-        if (isGraphLinked) {
-          // For graph-linked kernels, the parent maybe the <captured_at>
-          // tag. So we need to go one level up to find the actual launch
-          // event
-          launchEventId = events.at(launchEventId).parentEventId;
-        }
-        // FIXME #6645: Walk up to the nearest ancestor that has a
-        // CPU time range. On XPU/PTI kernel names are unavailable at
-        // callback time, so processActivityKernel creates an
-        // intermediate child event (via addOp) that lacks CPU
-        // timestamps.
-        while (launchEventId != Trace::Event::DummyId) {
-          auto it = events.find(launchEventId);
-          if (it == events.end()) {
-            launchEventId = Trace::Event::DummyId;
-            break;
-          }
-          if (it->second.hasCpuTimeRange())
-            break;
+        // Uncaptured graph kernels are recorded under an untimed graph launch
+        // op whose parent is the CPU scope active at replay.
+        if (auto it = events.find(launchEventId);
+            it != events.end() && !isGraphLinked &&
+            it->second.cpuStartTimeNs == 0)
           launchEventId = it->second.parentEventId;
-        }
         kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
                                             contexts, startTimeNs, endTimeNs,
                                             launchEventId, isGraphLinked);

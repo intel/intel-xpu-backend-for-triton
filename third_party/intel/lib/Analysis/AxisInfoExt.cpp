@@ -1,7 +1,10 @@
 #include "intel/include/Analysis/AxisInfoExt.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <numeric>
@@ -146,7 +149,7 @@ makeTensorDescAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
     return strideVal;
   };
 
-  unsigned elemBytes = ceil<unsigned>(elemTy.getIntOrFloatBitWidth(), 8);
+  unsigned elemBytes = ceil<unsigned>(getIntOrFloatOrPtrBitWidth(elemTy), 8);
   for (unsigned dim = 0; dim < rank; ++dim) {
     // The maximum contiguity is the divisibility of boundary shape, which is
     // the case when stride is 1. Take an example of !tt.ptr<tensor<4x4xi8>>: if
@@ -158,8 +161,10 @@ makeTensorDescAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
     //  [base + 8, base + 9, base +10, nullptr,]
     //  [nullptr,  nullptr,  nullptr,  nullptr,]]
     // clang-format on
-    // The contiguity of the two dim should be 1.
-    int64_t contiguous = shapeInfo[dim].getDivisibility(0);
+    // The contiguity of the two dim should be 1. Divisibility hints need not be
+    // powers of two, so only the power-of-two part bounds the contiguity.
+    int64_t shapeDiv = shapeInfo[dim].getDivisibility(0);
+    int64_t contiguous = shapeDiv & -shapeDiv;
     const std::optional<APInt> &stride = strideInfo[dim].getConstantValue();
     contiguity.push_back(
         stride && stride->isOne() ? std::min(contiguous, blkShape[dim]) : 1);
@@ -249,6 +254,60 @@ public:
     });
 
     return axisInfo;
+  }
+};
+
+/// A field of a descriptor read with ttig.extract_desc. The descriptor's
+/// address-level AxisInfo bounds its fields: divisibility[d] (bytes) divides
+/// the base and every stride other than stride[d] (scaled to bytes), and a
+/// contiguous dim has stride 1 and a shape divisible by its contiguity.
+class ExtractDescOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<ttgi::ExtractDescOp> {
+public:
+  using AxisInfoVisitorImpl<ttgi::ExtractDescOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(ttgi::ExtractDescOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    LDBG("ExtractDescOpAxisInfoVisitor: " << *op);
+
+    auto descType = cast<TensorDescType>(op.getDesc().getType());
+    RankedTensorType blockType = descType.getBlockType();
+    const AxisInfo &desc = operands[0]->getValue();
+    unsigned rank = blockType.getRank();
+    if (static_cast<unsigned>(desc.getRank()) != rank)
+      return AxisInfo::getPessimisticValueState(op.getResult());
+
+    int64_t elemBytes = ceil<int64_t>(
+        getIntOrFloatOrPtrBitWidth(blockType.getElementType()), 8);
+    Type resultTy = op.getResult().getType();
+    auto scalar = [&](int64_t divisibility, bool isOne = false) {
+      std::optional<APInt> constant;
+      if (isOne)
+        constant = APInt(resultTy.getIntOrFloatBitWidth(), 1);
+      return AxisInfo({1}, {std::max<int64_t>(divisibility, 1)}, {1}, constant);
+    };
+    // Largest byte divisibility of a contiguous dim. It divides the base and
+    // every stride but that dim's own, which is 1.
+    auto maxDivisibility = [&]() {
+      int64_t div = 1;
+      for (unsigned d = 0; d < rank; ++d)
+        if (desc.getContiguity(d) > 1)
+          div = std::max(div, desc.getDivisibility(d));
+      return div;
+    };
+
+    unsigned field = op.getIndex();
+    if (field == 2 * rank)
+      return scalar(maxDivisibility());
+    if (field >= rank) {
+      unsigned dim = field - rank;
+      if (desc.getContiguity(dim) > 1)
+        return scalar(1, /*isOne=*/true);
+      int64_t div = maxDivisibility();
+      return scalar(div / std::gcd(div, elemBytes));
+    }
+    return scalar(desc.getContiguity(field));
   }
 };
 
@@ -367,6 +426,7 @@ AxisInfoAnalysisExt::AxisInfoAnalysisExt(DataFlowSolver &solver)
     : triton::AxisInfoAnalysis(solver) {
   visitors.append<MakeTensorDescOpAxisInfoVisitor>();
   visitors.append<DescriptorLoadOpAxisInfoVisitor>();
+  visitors.append<ExtractDescOpAxisInfoVisitor>();
   visitors.append<CastOpAxisInfoVisitor<arith::IndexCastOp>>();
   // TODO: Remove rules for LLVM::ConstantOp, LLVM::AddOp
   // when scf.for supports integer induction variables
@@ -480,7 +540,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   // Get the pointee type if we have a tensor of ptrs to compute contiguity for
   if (auto ptrTy = dyn_cast<PointerType>(elemTy))
     elemTy = ptrTy.getPointeeType();
-  auto elemNumBits = elemTy.getIntOrFloatBitWidth();
+  auto elemNumBits = getIntOrFloatOrPtrBitWidth(elemTy);
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
@@ -522,6 +582,35 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
     LDBG("-- " << axisStr);
   });
   return alignment;
+}
+
+unsigned ModuleAxisInfoAnalysis::getDescriptorAlignment(Value desc,
+                                                        unsigned dim,
+                                                        Value index,
+                                                        unsigned elemBits) {
+  AxisInfo *descInfo = getAxisInfo(desc);
+  if (!descInfo || dim >= static_cast<unsigned>(descInfo->getRank()))
+    return 1;
+  // A non-power-of-two hint such as 24 proves only its largest power-of-two
+  // divisor (8), not its floor (16), as for the index (#7990).
+  auto pow2Divisor = [](int64_t v) -> int64_t { return v <= 0 ? 1 : v & -v; };
+  // Divisibility is in bytes; other dims are already folded into it.
+  int64_t elemBytes = std::max(1u, elemBits / 8);
+  int64_t ptrAlign = std::max<int64_t>(
+      1, pow2Divisor(descInfo->getDivisibility(dim)) / elemBytes);
+  // A constant 0 index reports kMaxDivisor.
+  AxisInfo *idxInfo = getAxisInfo(index);
+  int64_t idxDiv = idxInfo ? idxInfo->getDivisibility(0) : 1;
+  return std::min({pow2Divisor(descInfo->getContiguity(dim)), ptrAlign,
+                   pow2Divisor(idxDiv)});
+}
+
+bool ModuleAxisInfoAnalysis::isDescriptorRow16ByteAligned(Value desc,
+                                                          Value yOffset,
+                                                          unsigned elemBits) {
+  constexpr unsigned kAlignBytes = 16;
+  return getDescriptorAlignment(desc, 1, yOffset, elemBits) * (elemBits / 8) >=
+         kAlignBytes;
 }
 
 } // namespace mlir::triton::intel

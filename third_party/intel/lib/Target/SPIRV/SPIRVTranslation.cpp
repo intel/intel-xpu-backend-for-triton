@@ -2,6 +2,9 @@
 
 #include "LLVMSPIRVLib.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -106,6 +109,15 @@ public:
   SmallVectorBuffer(llvm::SmallVectorImpl<char> &O) : OS(O) {}
 };
 
+/// Whether `extension` was confirmed usable by a ground-truth probe (see
+/// `compiler.py`'s `has_spirv_capability`/`ocloc_accepts_*`).
+static bool
+isProbedExtensionAllowed(const std::map<std::string, bool> &probedExtensions,
+                         llvm::StringRef extension) {
+  auto It = probedExtensions.find(extension.str());
+  return It != probedExtensions.end() && It->second;
+}
+
 /// Returns the list of SPIR-V extensions the translator is allowed to use.
 /// Ideally the driver would be queried for the extensions it supports, however
 /// no such query is available yet, therefore extensions that are not supported
@@ -115,18 +127,18 @@ public:
 /// knows about; it can be refreshed for a newer LTS by extracting the extension
 /// names from the shipped compiler library, e.g.:
 ///   strings -a libigc.so.<version> | grep -oE 'SPV_[A-Za-z0-9_]+' | sort -u
-static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
+static llvm::SmallVector<SPIRV::ExtensionID>
+getAllowedExtensions(bool isLTS,
+                     const std::map<std::string, bool> &probedExtensions) {
   llvm::SmallVector<SPIRV::ExtensionID> AllowedExtensions{
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float16_add,
       SPIRV::ExtensionID::SPV_INTEL_2d_block_io,
       SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_integers,
-      SPIRV::ExtensionID::SPV_INTEL_arithmetic_fence,
       SPIRV::ExtensionID::SPV_INTEL_bfloat16_conversion,
       SPIRV::ExtensionID::SPV_INTEL_cache_controls,
       SPIRV::ExtensionID::SPV_INTEL_fp_fast_math_mode,
       SPIRV::ExtensionID::SPV_INTEL_inline_assembly,
-      SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
       SPIRV::ExtensionID::SPV_INTEL_memory_access_aliasing,
       SPIRV::ExtensionID::SPV_INTEL_split_barrier,
       SPIRV::ExtensionID::SPV_INTEL_subgroup_matrix_multiply_accumulate,
@@ -140,7 +152,6 @@ static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
   if (!isLTS) {
     AllowedExtensions.append(
         {SPIRV::ExtensionID::SPV_EXT_float8,
-         SPIRV::ExtensionID::SPV_EXT_long_vector,
          SPIRV::ExtensionID::SPV_EXT_ocp_microscaling_types,
          SPIRV::ExtensionID::SPV_INTEL_16bit_atomics,
          SPIRV::ExtensionID::SPV_INTEL_bfloat16_arithmetic,
@@ -154,14 +165,27 @@ static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
          SPIRV::ExtensionID::
              SPV_INTEL_subgroup_scaled_matrix_multiply_accumulate,
          SPIRV::ExtensionID::SPV_KHR_bfloat16});
-  } else {
-    AllowedExtensions.push_back(SPIRV::ExtensionID::SPV_INTEL_vector_compute);
   }
+
+  AllowedExtensions.push_back(
+      isProbedExtensionAllowed(probedExtensions, "SPV_EXT_long_vector")
+          ? SPIRV::ExtensionID::SPV_EXT_long_vector
+          : SPIRV::ExtensionID::SPV_INTEL_vector_compute);
+
+  if (isProbedExtensionAllowed(probedExtensions, "SPV_INTEL_maximum_registers"))
+    AllowedExtensions.push_back(
+        SPIRV::ExtensionID::SPV_INTEL_maximum_registers);
+
+  if (isProbedExtensionAllowed(probedExtensions,
+                               "SPV_INTEL_subgroup_bitcast_shuffle"))
+    AllowedExtensions.push_back(
+        SPIRV::ExtensionID::SPV_INTEL_subgroup_bitcast_shuffle);
 
   return AllowedExtensions;
 }
 
-static SPIRV::TranslatorOpts getSPIRVOpts(bool isLTS) {
+static SPIRV::TranslatorOpts
+getSPIRVOpts(bool isLTS, const std::map<std::string, bool> &probedExtensions) {
   SPIRV::TranslatorOpts SPIRVOpts{SPIRV::VersionNumber::SPIRV_1_4};
 
   SPIRVOpts.setMemToRegEnabled(true);
@@ -177,12 +201,63 @@ static SPIRV::TranslatorOpts getSPIRVOpts(bool isLTS) {
     SPIRVOpts.setAllowExtraDIExpressionsEnabled(true);
   }
 
-  for (SPIRV::ExtensionID Ext : getAllowedExtensions(isLTS))
+  for (SPIRV::ExtensionID Ext : getAllowedExtensions(isLTS, probedExtensions))
     SPIRVOpts.setAllowedToUseExtension(Ext, true);
   return SPIRVOpts;
 }
 
-std::string translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS) {
+/// The SPIR-V translator has no lowering for `llvm.clmul` (emitted for
+/// `tl.clmul`) and rejects it as an unknown intrinsic. Expand it into shifts,
+/// ANDs and XORs:
+///   clmul(x, y) = XOR over i of ((x << i) & -((y >> i) & 1))
+/// This is done here rather than in `postProcessLLVMIR` so that the LLVM IR
+/// kept as the `llir` stage still contains the intrinsic. Handles scalar iN and
+/// <K x iN> vectors uniformly; i1 becomes a plain AND.
+static void expandClmul(llvm::Module &module) {
+  llvm::SmallVector<llvm::Function *> decls;
+  llvm::SmallVector<llvm::CallInst *> calls;
+  for (llvm::Function &func : module) {
+    if (func.getIntrinsicID() != llvm::Intrinsic::clmul)
+      continue;
+    decls.push_back(&func);
+    for (llvm::User *user : func.users())
+      if (auto *call = llvm::dyn_cast<llvm::CallInst>(user))
+        calls.push_back(call);
+  }
+
+  for (llvm::CallInst *call : calls) {
+    llvm::IRBuilder<> builder(call);
+    llvm::Type *ty = call->getType();
+    llvm::Value *x = call->getArgOperand(0);
+    llvm::Value *y = call->getArgOperand(1);
+    unsigned bits = ty->getScalarSizeInBits();
+    if (bits == 1) {
+      // SPIR-V has no shifts or arithmetic on booleans; clmul on i1 is AND.
+      call->replaceAllUsesWith(builder.CreateAnd(x, y));
+      call->eraseFromParent();
+      continue;
+    }
+    llvm::Value *one = llvm::ConstantInt::get(ty, 1);
+    llvm::Value *result = llvm::Constant::getNullValue(ty);
+    for (unsigned i = 0; i < bits; ++i) {
+      llvm::Value *shift = llvm::ConstantInt::get(ty, i);
+      llvm::Value *bit = builder.CreateAnd(builder.CreateLShr(y, shift), one);
+      llvm::Value *term = builder.CreateAnd(builder.CreateShl(x, shift),
+                                            builder.CreateNeg(bit));
+      result = builder.CreateXor(result, term);
+    }
+    call->replaceAllUsesWith(result);
+    call->eraseFromParent();
+  }
+
+  for (llvm::Function *decl : decls)
+    if (decl->use_empty())
+      decl->eraseFromParent();
+}
+
+std::string
+translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS,
+                       const std::map<std::string, bool> &probedExtensions) {
   llvm::SmallVector<char, 0> buffer;
 
   // verify and store llvm
@@ -197,12 +272,14 @@ std::string translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS) {
     return result;
   }
 
+  expandClmul(module);
+
   // emit
   SmallVectorBuffer StreamBuf(buffer);
   std::ostream OS(&StreamBuf);
   std::string Err;
 
-  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOpts(isLTS);
+  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOpts(isLTS, probedExtensions);
 
 #if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
   int SpvTranslateMode = 0;
