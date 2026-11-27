@@ -14,7 +14,10 @@ unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
   RankedTensorType dstTy = convertLayout.getResult().getType();
   if (gpu::intel::cvtIsSubGroupShuffle(srcTy, dstTy))
     return 0;
-  if (gpu::intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
+  // A forced warp shuffle is never lowered through SLM; leave its sizing to
+  // the default analysis.
+  if (!convertLayout.getForceWarpShuffle() &&
+      gpu::intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
     Type elemTy = srcTy.getElementType();
     unsigned bytesPerElement =
         std::max<int>(8, getIntOrFloatOrPtrBitWidth(elemTy)) / 8;
@@ -25,9 +28,11 @@ unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
     assert(numElements % subGroupSize == 0 &&
            "Sub-group transposable tensors have a number of elements multiple "
            "of the sub-group size");
-    // Add an element at the end of the row that will not be accessed. This
-    // allows us to avoid bank conflicts.
-    unsigned numMatrixCells = (numElements / subGroupSize) * (subGroupSize + 1);
+    // Rows are padded (bank conflicts, dword alignment); see
+    // getSubGroupTransposeRowLength.
+    unsigned numMatrixCells = (numElements / subGroupSize) *
+                              gpu::intel::getSubGroupTransposeRowLength(
+                                  subGroupSize, bytesPerElement);
     return numMatrixCells * bytesPerElement;
   }
   if (gpu::intel::cvtIsSubGroupReinterpret(convertLayout))
@@ -46,6 +51,12 @@ unsigned allocationAnalysisScratchSizeFn(Operation *op) {
       .Case<ReduceOp>([](auto op) {
         ReduceOpHelper helper(op);
         return ttgi::getScratchSizeInBytesOld(helper, op);
+      })
+      .Case<ScanOp>([](ScanOp op) {
+        // The Intel lowering takes blocked layouts, core's the others.
+        if (auto blocked = ttgi::BlockedScanLayout::get(op))
+          return blocked->scratchBytes;
+        return defaultAllocationAnalysisScratchSizeFn(op);
       })
       .Case<HistogramOp>([](HistogramOp op) {
         // The Intel lowering always counts in shared memory, including the

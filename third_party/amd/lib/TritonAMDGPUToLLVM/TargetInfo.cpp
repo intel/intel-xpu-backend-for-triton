@@ -4,6 +4,9 @@
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/IRMapping.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
@@ -15,6 +18,10 @@ void registerTargetInfo() {
   TargetInfoBase::registerFactory("hip", [](ModuleOp moduleOp) {
     return std::make_unique<TargetInfo>(getAMDArch(moduleOp));
   });
+}
+
+void registerROCDLDialect(DialectRegistry &registry) {
+  registry.insert<ROCDL::ROCDLDialect>();
 }
 
 namespace {
@@ -358,9 +365,28 @@ Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
   return LLVM::AMD::shuffleXor(loc, rewriter, val, i, getISAFamily());
 }
 
-Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                            int i) const {
-  return LLVM::AMD::shuffleUp(loc, rewriter, val, i, getISAFamily());
+std::pair<Value, Value> TargetInfo::shuffleUp(RewriterBase &rewriter,
+                                              Location loc, Value val,
+                                              int delta) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value laneId = getLaneId(rewriter, loc);
+  Value offset = b.i32_val(delta);
+  Value sourceInBounds = b.icmp_sge(laneId, offset);
+  Value index = b.select(sourceInBounds, b.sub(laneId, offset), laneId);
+  return {shuffleIdx(rewriter, loc, val, index), sourceInBounds};
+}
+
+std::pair<Value, Value> TargetInfo::shuffleDown(RewriterBase &rewriter,
+                                                Location loc, Value val,
+                                                int delta) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value laneId = getLaneId(rewriter, loc);
+  auto mod = rewriter.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
+  unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  Value source = b.add(laneId, b.i32_val(delta));
+  Value sourceInBounds = b.icmp_ult(source, b.i32_val(warpSize));
+  Value index = b.select(sourceInBounds, source, laneId);
+  return {shuffleIdx(rewriter, loc, val, index), sourceInBounds};
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,

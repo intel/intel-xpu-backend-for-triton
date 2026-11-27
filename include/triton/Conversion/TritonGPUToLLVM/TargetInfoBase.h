@@ -1,14 +1,28 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 
-#include "triton/Conversion/MLIRTypes.h"
+#include "mlir/IR/Location.h"
+#include "mlir/IR/Value.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
 #include <functional>
 #include <memory>
+#include <utility>
 
-namespace mlir::triton {
+namespace mlir {
+class ModuleOp;
+class RewriterBase;
+class ValueRange;
+
+namespace triton {
+class ReduceOp;
+enum class MemSyncScope : uint32_t;
 enum class ProgramIDDim : uint32_t;
+
+namespace gpu {
+enum class AddrSpace : uint32_t;
+} // namespace gpu
 
 class TargetInfoBase {
 public:
@@ -93,8 +107,13 @@ public:
 
   virtual Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
-  virtual Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                          int i) const = 0;
+  // Return the shuffled value and whether the source lane is in bounds.
+  virtual std::pair<Value, Value> shuffleUp(RewriterBase &rewriter,
+                                            Location loc, Value val,
+                                            int delta) const = 0;
+  virtual std::pair<Value, Value> shuffleDown(RewriterBase &rewriter,
+                                              Location loc, Value val,
+                                              int delta) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
@@ -112,14 +131,6 @@ public:
                           SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned reduceLaneIdMask,
                           unsigned broadcastLaneIdMask) const = 0;
-
-  // Lets the target lower the in-warp phase of a scan, updating |acc| in
-  // place. Returns false, leaving |acc| untouched, to use the generic lowering.
-  virtual bool warpScan(RewriterBase &rewriter, Location loc,
-                        SmallVector<Value> &acc, triton::ScanOp op,
-                        unsigned scanDim, unsigned threadStride) const {
-    return false;
-  }
 
   // Emits LLVM code with |rewriter| to print a message following the given
   // format from the device. |formatStrStart| is the pointer to the start of
@@ -193,5 +204,6 @@ public:
 
   virtual ~TargetInfoBase() {}
 };
-} // namespace mlir::triton
+} // namespace triton
+} // namespace mlir
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H

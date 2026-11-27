@@ -22,7 +22,7 @@ on:
       python_version:
         description: Python version
         type: string
-        default: "3.12"
+        default: "3.11"
       ignore_errors:
         description: Ignore test errors
         type: boolean
@@ -88,6 +88,7 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           lts: ${{ inputs.runner_label == 'lts' }}
+          upload_artifact: pytorch-vllm-${{ inputs.python_version }}-${{ inputs.runner_label || 'default' }}
 
       - name: Build Triton wheel
         run: |
@@ -191,6 +192,7 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           lts: ${{ inputs.runner_label == 'lts' }}
+          download_artifact: pytorch-vllm-${{ inputs.python_version }}-${{ inputs.runner_label || 'default' }}
 
       - name: Identify torchvision pin
         if: ${{ matrix.suite == 'vllm-spec-decode' || matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' || matrix.suite == 'vllm-omni' || matrix.suite == 'vllm-mamba' }}

@@ -1039,8 +1039,9 @@ struct TritonMatrix2DBlockStoreLowering
                   ConversionPatternRewriter &rewriter) const override {
     create2DBlockAsserts(op, rewriter, emitter);
 
-    if (!isSPVBuiltinAvailable(op)) {
-      // Fallback to GenISA interface.
+    if (op->hasAttr("triton_gen.genisa_row_layout") ||
+        !isSPVBuiltinAvailable(op)) {
+      // Row-oriented payloads and LTS use the GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
       return success();
     }
@@ -1279,7 +1280,8 @@ struct TritonSubGroupBlockWriteLowering
         /*errnoMem=*/LLVM::ModRefInfo::NoModRef,
         /*targetMem0=*/LLVM::ModRefInfo::NoModRef,
         /*targetMem1=*/LLVM::ModRefInfo::NoModRef);
-    auto funcAttrs = intel::noUnwindWillReturnAttrs;
+    // A sub-group collective: LLVM must not move it into divergent code.
+    auto funcAttrs = intel::convergentNoUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
     LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, funcName, void_ty(ctx), {ptrTy, type},
@@ -1364,12 +1366,17 @@ struct TritonSubGroupGatherLoadLowering
     if (!typeSyntax)
       llvm_unreachable("Unsupported scalar type");
 
+    // Predicated-off channels are zeroed after the load: `RET` has no
+    // early-clobber, so it must not be written before the inputs are read.
     constexpr StringLiteral asmFormat = R"({
   .decl RET v_type=G type={0} num_elts=32 align=wordx32 alias=<$0, 0>
   .decl ADDR v_type=G type=uq num_elts=32 align=wordx32 alias=<$1, 0>
   .decl PRED v_type=P num_elts=32
+  .decl NPRED v_type=P num_elts=32
   cmp.eq (M1_NM, 32) PRED 0x1:b $2(0, 0)<1;1,0>
+  cmp.ne (M1_NM, 32) NPRED 0x1:b $2(0, 0)<1;1,0>
   (PRED) lsc_load.ugm (M1_NM, 32)  RET:d{1}  flat[ADDR]:a64
+  (NPRED) mov (M1_NM, 32) RET(0, 0)<1> 0x0:{0}
 })";
     std::string asmText =
         llvm::formatv(asmFormat.data(), *typeSyntax, loadBits).str();

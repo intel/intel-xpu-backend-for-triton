@@ -70,6 +70,7 @@ on:
     paths:
       - .github/workflows/e2e-accuracy.yml
       - .github/workflows/e2e-reusable.yml
+      - .github/workflows/build-pytorch-reusable.yml
   schedule:
     # twice a week, on Wednesday and Saturday
     - cron: "0 22 * * 3,6"
@@ -121,9 +122,16 @@ jobs:
           ${{ toJSON(steps.set-matrix.outputs) }}
           EOF
 
+  build_pytorch:
+    name: Build PyTorch
+    uses: ./.github/workflows/build-pytorch-reusable.yml
+    with:
+      pytorch_ref: ${{ inputs.pytorch_ref || '' }}
+      runner_label: ${{ inputs.runner_label || 'max1100' }}
+
   run_tests:
     name: Run test matrix
-    needs: setup
+    needs: [setup, build_pytorch]
     strategy:
       matrix:
         suite: ${{ fromJson(needs.setup.outputs.suite) }}
@@ -144,6 +152,7 @@ jobs:
       only_one_model: ${{ inputs.only_one_model || '' }}
       runner_label: ${{ inputs.runner_label || 'max1100' }}
       TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG || '' }}
+      pytorch_artifact: ${{ needs.build_pytorch.outputs.artifact }}
 
   summary:
     name: Aggregate and check results
@@ -160,10 +169,11 @@ jobs:
           python_version: "3.11"
           use_pyenv: false
 
-      - name: Download all artifacts
+      - name: Download test logs
         uses: actions/download-artifact@v8
         with:
           path: separate-reports
+          pattern: logs-*
           merge-multiple: true
 
       - name: Run aggregation script

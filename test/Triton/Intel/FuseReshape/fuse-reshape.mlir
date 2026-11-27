@@ -971,7 +971,7 @@ tt.func public @fuseNegativeCollapsedOffset(%arg0: tensor<16x16xf32>, %arg1: !tt
 // COM: `merged * nonEmpty + floor * (1 - nonEmpty)` with
 // COM: `nonEmpty = extui(cmpi sgt)`, never an `arith.select`: `ttgi::isDivisible`
 // COM: understands `muli` (either operand) and `addi` (both) but not `select`, so
-// COM: a select would silently change what `DescriptorLoadOpConversion` decides
+// COM: a select would silently change what the descriptor-load fallback decides
 // COM: about the emitted shape. That argument is about the stride-one dimension
 // COM: and so does not bite on this case, where the collapse of dimension 0 puts
 // COM: the merged extent in the height; `fuseDynamicCollapsedShapeMiddleDim` is
@@ -1536,7 +1536,7 @@ tt.func public @noFuseMiddleDimFloorPastPitch(%arg0: tensor<32x16xf32>, %arg1: !
 // COM: The middle-dimension counterpart of `fuseDynamicCollapsedShape`, where the
 // COM: `isDivisible` argument for the multiply-based form is load-bearing: the
 // COM: merged extent *is* the stride-one dimension here, so the emitted shape is
-// COM: what `DescriptorLoadOpConversion` asks about when it classifies the mask.
+// COM: what the descriptor-load fallback asks about when it classifies the mask.
 // COM: Both terms stay multiples of the 16-element block extent - `merged`
 // COM: because `shapes[2]` is, and the floor by construction - so the
 // COM: classification is the one the unfused load got.

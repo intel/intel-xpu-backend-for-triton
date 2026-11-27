@@ -4,21 +4,26 @@
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Transforms/WalkPatternRewriteDriver.h"
 
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
 
 #include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Analysis/Membar.h"
-#include "triton/Analysis/Membar.h"
+#include "intel/include/Analysis/MembarAnalysis.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -109,8 +114,40 @@ struct ConvertTritonGPUToLLVM
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(
         mod, ::mlir::triton::intel::allocationAnalysisScratchSizeFn);
-    ModuleMembarAnalysis membarPass(allocation, ::mlir::intel::membarFilter);
-    membarPass.run();
+    mlir::triton::intel::ModuleMembarAnalysis(allocation,
+                                              ::mlir::intel::membarFilter)
+        .run();
+
+    // A gpu-scope release does not evict L1 lines that a store wrote back on
+    // request, because IGC derives the evict from the default store policy
+    // alone (EmitPass::emitMemoryFence). So 2D block stores are only written
+    // back in modules that cannot hand data to another work-group. The check
+    // is deliberately broad: consumer-side ops count too, which also keeps racy
+    // hand-offs through plain stores working; LowerTo2DBlockLoad leaves the
+    // volatile and `.cv` loads in place for it. Ops the check cannot see into
+    // count as well: inline asm and impure extern calls. `.cg` loads do not:
+    // AnnotateCacheControl puts that modifier on ordinary loads. The check
+    // covers the whole module and runs before this pass converts anything,
+    // since a noinline callee is a separate function here. Where write-back is
+    // not allowed this strips the module attribute, which the 2D block-store
+    // patterns read.
+    // TODO: only releases at gpu scope or wider can publish data.
+    StringRef l1WriteBackAttr = triton::gpu::intel::TritonIntelGPUDialect::
+        getStoreL1WriteBackAttrName();
+    if (!mod->hasAttrOfType<UnitAttr>(l1WriteBackAttr) ||
+        mod.walk([](Operation *op) {
+             if (isa<triton::AtomicOpInterface, triton::AtomicPollOp,
+                     triton::ElementwiseInlineAsmOp, triton::gpu::InlineAsmOp>(
+                     op) ||
+                 triton::gpu::intel::isVolatileOrCVLoad(op))
+               return WalkResult::interrupt();
+             if (auto ext = dyn_cast<triton::ExternElementwiseOp>(op))
+               return ext.getPure() ? WalkResult::advance()
+                                    : WalkResult::interrupt();
+             return WalkResult::advance();
+           })
+            .wasInterrupted())
+      mod->removeAttr(l1WriteBackAttr);
 
     // Lower functions
     {

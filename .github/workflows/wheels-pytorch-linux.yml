@@ -1,0 +1,60 @@
+name: PyTorch wheels (Linux)
+
+# Builds the PyTorch wheel at the pin on main for the CI Python version.
+# setup-pytorch installs it from the latest successful run when its cache key matches the runner's,
+# else it builds as before. Keep it to main: setup-pytorch trusts the runs of this workflow on main
+# of this repository.
+# A run carries the wheel of the previous successful run forward when the key matches and builds otherwise.
+# A run counts only when it succeeds; after a failure, re-run its failed jobs.
+# After a oneAPI update on the runners, dispatch this workflow so the wheel's key matches again.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/pins/pytorch.txt
+      - scripts/patch-pytorch.sh
+      - scripts/patch/**
+      - .github/actions/setup-pytorch/**
+      - .github/workflows/wheels-pytorch-linux.yml
+
+permissions: read-all
+
+# One build at a time; a newer queued run replaces an older queued one
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build PyTorch
+    # Rolling max1550, the E2E default; jobs on other runners install the wheel only when their oneAPI matches
+    runs-on:
+      - linux
+      - rolling
+      - max1550
+    timeout-minutes: 720
+    strategy:
+      matrix:
+        python:
+          # Keep in sync with the Python version of the CI jobs that build PyTorch
+          - "3.11"
+      fail-fast: false
+    env:
+      PYTHON_VERSION: ${{ matrix.python }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Python
+        uses: ./.github/actions/setup-python
+        with:
+          python_version: ${{ matrix.python }}
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+        with:
+          # setup-pytorch finds the wheel by this name
+          upload_artifact: pytorch-py${{ matrix.python }}

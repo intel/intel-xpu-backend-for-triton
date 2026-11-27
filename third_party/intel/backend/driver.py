@@ -536,7 +536,10 @@ PEAK_DRAM_GBPS = {
     "Intel(R) Data Center GPU Max 1550": 3276.8,
     "Intel(R) Arc(TM) B580 Graphics": 456.0,
     "Intel(R) Arc(TM) B570 Graphics": 380.0,
-    "Intel(R) Arc(TM) B560 Graphics": 456.0,
+    "Intel(R) Arc(TM) Pro B50 Graphics": 224.0,
+    "Intel(R) Arc(TM) Pro B60 Graphics": 456.0,
+    "Intel(R) Arc(TM) Pro B65 Graphics": 608.0,
+    "Intel(R) Arc(TM) Pro B70 Graphics": 608.0,
 }
 
 
@@ -569,7 +572,8 @@ class XPUUtils(object):
         # ARG_KERNEL = mod.ARG_KERNEL
         # ARG_TUPLE = mod.ARG_TUPLE
         self.load_binary = mod.load_binary
-        self.get_device_properties = mod.get_device_properties
+        self._device_properties = mod.get_device_properties
+        self._dram = {}
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.wait_on_sycl_queue = mod.wait_on_sycl_queue
         self.get_last_selected_build_flags = mod.get_last_selected_build_flags
@@ -600,6 +604,17 @@ class XPUUtils(object):
     def get_bandwidth(self, device):
         import torch
         return PEAK_DRAM_GBPS.get(torch.xpu.get_device_name(device))
+
+    def get_device_properties(self, device):
+        # Core's `triton.testing.get_dram_gbps` computes mem_clock_rate * mem_bus_width * 2 / 1e6 / 8, while Level Zero
+        # reports the memory data rate as the clock (0 if the driver doesn't know it) and NEO the address width as the
+        # bus width. For the devices `get_bandwidth` knows, report values that give its bandwidth through that formula.
+        props = self._device_properties(device)
+        if device not in self._dram:
+            gbps, clock = self.get_bandwidth(device), props["mem_clock_rate"] or 1_000_000
+            self._dram[device] = {"mem_clock_rate": clock, "mem_bus_width": round(gbps * 4e6 / clock)} if gbps else {}
+        props.update(self._dram[device])
+        return props
 
 
 # ------------------------
@@ -742,6 +757,7 @@ class XPULauncher(object):
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
+        self.needs_scratch = self.global_scratch_size > 0 or self.profile_scratch_size > 0
 
     def _resolve_dump_dir(self, cache_dir):
         dump_dir_root = knobs.intel.dump_kernel_args_dir
@@ -791,27 +807,33 @@ class XPULauncher(object):
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
-        active_driver = triton.runtime.driver.active
+        global_scratch = None
+        profile_scratch = None
+        # Most kernels need no scratch memory; skip the allocator setup on the launch hot path for them.
+        if self.needs_scratch:
+            active_driver = triton.runtime.driver.active
 
-        def allocate_scratch(size, align, allocator):
-            if size > 0:
-                grid_size = gridX * gridY * gridZ
-                alloc_fn = allocator.get()
-                return alloc_fn(grid_size * size, align, stream)
-            return None
+            def allocate_scratch(size, align, allocator):
+                if size > 0:
+                    grid_size = gridX * gridY * gridZ
+                    alloc_fn = allocator.get()
+                    return alloc_fn(grid_size * size, align, stream)
+                return None
 
-        def allocate_default_profile_scratch(size, align):
-            if size > 0:
-                grid_size = gridX * gridY * gridZ
-                return active_driver.allocate_default_profile_scratch(grid_size * size, align, stream)
-            return None
+            def allocate_default_profile_scratch(size, align):
+                if size > 0:
+                    grid_size = gridX * gridY * gridZ
+                    return active_driver.allocate_default_profile_scratch(grid_size * size, align, stream)
+                return None
 
-        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
-        if _allocation.has_profile_allocator():
-            profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
-                                               _allocation._profile_allocator)
-        else:
-            profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
+            global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align,
+                                              _allocation._allocator)
+            if _allocation.has_profile_allocator():
+                profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                                   _allocation._profile_allocator)
+            else:
+                profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size,
+                                                                   self.profile_scratch_align)
 
         if self.serialize_kernel_args:
             if self.print_dump_kernel_args_info:

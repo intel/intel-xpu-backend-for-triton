@@ -33,6 +33,26 @@ bool isDivisible(Value value, int64_t divisor);
 // Infers the encoding of the source of op given the result encoding.
 Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 
+/// Convert gather/scatter x offsets to the dim-1 slice of `valueType`.
+Value buildConvertedXOffsets(OpBuilder &builder, Location loc, Value xOffsets,
+                             RankedTensorType valueType);
+
+// One sub-group block write: element i of lane l stores register regs[i]
+// at tile (row, col + l + i * threadsPerWarp), for warp 0, block 0.
+struct ScatterBlockWriteRun {
+  SmallVector<unsigned> regs;
+  int32_t row;
+  int32_t col;
+};
+
+// nullopt unless rank 2, 16- or 32-bit elements, tpw * elemBytes >= 16,
+// lane bases exactly {0,1},{0,2},...,{0,tpw/2}, and
+// isPermutationMatrixLayout. Covers every canonical register exactly once.
+// Canonical means no free-variable bit. Each row's chains of columns tpw apart
+// are cut greedily into runs of 8, 4, 2, 1. srcTy needs a distributed encoding.
+std::optional<SmallVector<ScatterBlockWriteRun>>
+getScatterBlockWriteRuns(RankedTensorType srcTy);
+
 // Retuns true if the operation is an expensive load or store operation.
 bool isExpensiveLoadOrStore(Operation *op);
 
@@ -46,6 +66,11 @@ struct CachePolicy {
 // Cache policies defined by another target carry no meaning for Intel GPUs, so
 // they decode to the hardware default.
 CachePolicy getCachePolicy(Attribute cachePolicy);
+
+// Returns true if `op` is a load that must read memory afresh, as a poll of a
+// flag set by another work-group does: it is volatile or has the `.cv` cache
+// modifier.
+bool isVolatileOrCVLoad(Operation *op);
 
 // Returns true if the tensor type has a dot dpas encoding.
 bool hasDotDpasEncoding(RankedTensorType tensorType);

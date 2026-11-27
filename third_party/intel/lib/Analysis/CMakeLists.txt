@@ -11,6 +11,7 @@ add_triton_library(TritonIntelAnalysis
     StrideInfo.cpp
     TemporalReuseAnalysis.cpp
     Membar.cpp
+    MembarAnalysis.cpp
     Utility.cpp
     Range.cpp
 
@@ -20,6 +21,7 @@ add_triton_library(TritonIntelAnalysis
     TritonGPUOpInterfacesIncGen
 
     LINK_LIBS PUBLIC
+    TritonAnalysis
     TritonIR
     TritonIntelGPUIR
 )

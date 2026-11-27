@@ -5,6 +5,7 @@
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/Debug.h"

@@ -3,6 +3,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir::triton::gpu::intel {
@@ -230,6 +231,21 @@ bool isValidElementTypeForSubGroupTranspose(Type type) {
         return width == 8 || width == 16 || width == 32 || width == 64;
       })
       .Default(false);
+}
+
+unsigned getSubGroupTransposeRowLength(unsigned threadsPerWarp,
+                                       unsigned bytesPerElement) {
+  // One extra element keeps the lanes of a sub-group, which read a column of
+  // the matrix (addresses `rowLength` elements apart), on distinct banks.
+  // Elements narrower than a dword pad up to a whole dword instead: each lane
+  // loads its row as one vector, and the LLVM load carries the row's alignment,
+  // so rows must stay dword-aligned (issue #8749: with a 17-byte pitch the i8
+  // vectors came back shifted by `address % 4`). The pitch in dwords stays odd
+  // for 1-, 2- and 4-byte elements (5, 9 and 17), so columns still spread over
+  // banks; 8-byte elements are unchanged (136 bytes).
+  constexpr unsigned dwordBytes = 4;
+  unsigned padding = std::max(1u, dwordBytes / bytesPerElement);
+  return threadsPerWarp + padding;
 }
 
 bool cvtIsSubGroupTranspose(RankedTensorType srcTy, RankedTensorType dstTy) {
@@ -521,6 +537,63 @@ unsigned getScratchSizeInBytesOld(ReduceOpHelper &helper, triton::ReduceOp op) {
     bytesPerElem += ceil<unsigned>(getIntOrFloatOrPtrBitWidth(ty), 8);
   }
   return bytesPerElem * elems;
+}
+
+std::optional<BlockedScanLayout> BlockedScanLayout::get(triton::ScanOp op) {
+  // All operands share their shape and encoding (SameOperandsAndResult*).
+  auto srcTy = cast<RankedTensorType>(op.getOperands()[0].getType());
+  auto blocked = dyn_cast_or_null<BlockedEncodingAttr>(srcTy.getEncoding());
+  if (!blocked)
+    return std::nullopt;
+  LinearLayout layout = toLinearLayout(srcTy);
+  layout = actionRemoveBroadcastedRegs(layout).apply(layout);
+  BlockedScanLayout s;
+  s.encoding = LinearEncodingAttr::get(op.getContext(), layout);
+  s.order = llvm::to_vector(blocked.getOrder());
+  s.shape = llvm::to_vector(srcTy.getShape());
+  s.axis = op.getAxis();
+  if (getCTASplitNum(s.encoding, s.shape)[s.axis] != 1)
+    return std::nullopt;
+
+  SmallVector<unsigned> contig = s.encoding.getContigPerThread();
+  SmallVector<unsigned> lanes = s.encoding.getThreadsPerWarp();
+  SmallVector<unsigned> warps = s.encoding.getWarpsPerCTA();
+  SmallVector<int64_t> shapePerCTA = getShapePerCTA(s.encoding, s.shape);
+  SmallVector<unsigned> reps;
+  for (auto [dim, size] : llvm::enumerate(shapePerCTA))
+    reps.push_back(ceil<unsigned>(size, contig[dim] * lanes[dim] * warps[dim]));
+  // The product of `values` over the dimensions ahead of the axis in `order`.
+  auto strideOf = [&](ArrayRef<unsigned> order, ArrayRef<unsigned> values) {
+    unsigned stride = 1;
+    for (unsigned dim : order) {
+      if (dim == s.axis)
+        break;
+      stride *= values[dim];
+    }
+    return stride;
+  };
+  s.elemsPerThread = contig[s.axis];
+  s.lanes = lanes[s.axis];
+  s.warps = warps[s.axis];
+  s.blocks = reps[s.axis];
+  s.parallelElemsPerThread = product(contig) / s.elemsPerThread;
+  s.parallelLanesPerWarp = product(lanes) / s.lanes;
+  s.parallelThreads = product(warps) / s.warps * s.parallelLanesPerWarp;
+  s.parallelBlocks = product(reps) / s.blocks;
+  s.elemStride = strideOf(s.encoding.getOrder(), contig);
+  s.blockStride = strideOf(s.order, reps);
+  uint64_t laneBases =
+      getInputBasisMask(layout, StringAttr::get(op.getContext(), "lane"),
+                        {*std::next(layout.getOutDimNames().begin(), s.axis)});
+  s.laneStride = laneBases ? 1u << llvm::countr_zero(laneBases) : 1;
+  s.scratchElems = product(warps) * s.parallelLanesPerWarp *
+                   s.parallelElemsPerThread * s.blocks * s.parallelBlocks;
+  s.scratchBytes = 0;
+  if (s.warps > 1)
+    for (Type ty : op.getElementTypes())
+      s.scratchBytes +=
+          ceil<unsigned>(getIntOrFloatOrPtrBitWidth(ty), 8) * s.scratchElems;
+  return s;
 }
 
 } // namespace mlir::triton::gpu::intel

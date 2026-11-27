@@ -11,6 +11,7 @@
 
 #include "intel/lib/Utils/LibCallEmitter.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 
@@ -52,8 +53,10 @@ public:
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
-  Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                  int i) const override;
+  std::pair<Value, Value> shuffleUp(RewriterBase &rewriter, Location loc,
+                                    Value val, int delta) const override;
+  std::pair<Value, Value> shuffleDown(RewriterBase &rewriter, Location loc,
+                                      Value val, int delta) const override;
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
@@ -80,7 +83,7 @@ public:
   /// builtin walks them in lane order.
   bool warpScan(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
                 triton::ScanOp op, unsigned scanDim,
-                unsigned threadStride) const override;
+                unsigned threadStride) const;
 
   unsigned getReductionTreeArity(Operation *combinerOp) const override;
 

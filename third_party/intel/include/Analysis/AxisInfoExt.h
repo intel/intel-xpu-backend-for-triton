@@ -36,6 +36,15 @@ public:
   unsigned getAlignment(Value value);
 
   unsigned getMaskAlignment(Value mask);
+
+  /// Power-of-two element count proven contiguous and aligned for an access to
+  /// descriptor `desc` along its dim `dim` that starts at `index` on that dim.
+  unsigned getDescriptorAlignment(Value desc, unsigned dim, Value index,
+                                  unsigned elemBits);
+
+  /// Whether a row access to `desc` at `yOffset` is proven 16-byte aligned.
+  bool isDescriptorRow16ByteAligned(Value desc, Value yOffset,
+                                    unsigned elemBits);
 };
 
 } // namespace mlir::triton::intel

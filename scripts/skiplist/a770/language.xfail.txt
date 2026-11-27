@@ -29,3 +29,8 @@ python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-False-none-
 python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-True-none-tf32-float32-float32-1-None0]
 python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-True-none-tf32-float32-float32-1-None1]
 python/test/unit/language/test_core.py::test_dot_max_num_imprecise_acc[r".*-128-128-256-256"]@regexp
+
+# Platform limit on A770: no fp64 support
+python/test/unit/language/test_libdevice.py::test_libdevice_unsigned_conversions[double2uint_rd-3000000000.0-ret_dtype2-3000000000]
+python/test/unit/language/test_libdevice.py::test_libdevice_unsigned_conversions[double2uint_ru-3000000000.0-ret_dtype3-3000000000]
+python/test/unit/language/test_libdevice.py::test_libdevice_unsigned_conversions[double2ull_rz-9.223372036854776e+18-ret_dtype5-9223372036854775808]

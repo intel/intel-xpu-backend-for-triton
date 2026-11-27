@@ -70,6 +70,7 @@ on:
     paths:
       - .github/workflows/e2e-performance.yml
       - .github/workflows/e2e-reusable.yml
+      - .github/workflows/build-pytorch-reusable.yml
   schedule:
     - cron: "0 20 * * 0"
 
@@ -126,9 +127,16 @@ jobs:
           ${{ toJSON(steps.set-matrix.outputs) }}
           EOF
 
+  build_pytorch:
+    name: Build PyTorch
+    uses: ./.github/workflows/build-pytorch-reusable.yml
+    with:
+      pytorch_ref: ${{ inputs.pytorch_ref }}
+      runner_label: ${{ inputs.runner_label }}
+
   run_tests:
     name: Run test matrix
-    needs: setup
+    needs: [setup, build_pytorch]
     strategy:
       matrix:
         suite: ${{ fromJson(needs.setup.outputs.suite) }}
@@ -149,3 +157,4 @@ jobs:
       only_one_model: ${{ inputs.only_one_model }}
       runner_label: ${{ inputs.runner_label }}
       TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
+      pytorch_artifact: ${{ needs.build_pytorch.outputs.artifact }}
